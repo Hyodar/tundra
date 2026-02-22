@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from tdx.image import Image
 
 CompletionMode = Literal["all_required", "any"]
+InitPhase = Literal["disk_encryption", "secrets_delivery", "ssh_authorized_keys", "handoff"]
 GLOBAL_ENV_RELATIVE_PATH = Path("run/tdx-secrets/global.env")
 
 
@@ -38,6 +39,13 @@ class SecretsRuntimeArtifacts:
     file_targets: tuple[Path, ...]
     global_env_path: Path | None
     loads_before: tuple[str, ...] = ("secrets-ready.target",)
+
+
+@dataclass(frozen=True, slots=True)
+class InitPhaseSpec:
+    name: InitPhase
+    description: str
+    blocking: bool = True
 
 
 @dataclass(slots=True)
@@ -151,20 +159,36 @@ class SshKeyDeliveryConfig:
 @dataclass(slots=True)
 class Init:
     _secrets: dict[str, SecretSpec] = field(default_factory=dict)
+    handoff: Literal["systemd"] = "systemd"
     disk_encryption: DiskEncryptionConfig | None = None
     ssh_keys: list[str] = field(default_factory=list)
     ssh_config: SshKeyDeliveryConfig = field(default_factory=SshKeyDeliveryConfig)
     _delivery: HttpPostSecretDelivery | None = None
 
-    def __init__(self, secrets: tuple[SecretSpec, ...] = ()) -> None:
+    def __init__(
+        self,
+        secrets: tuple[SecretSpec, ...] = (),
+        *,
+        handoff: Literal["systemd"] = "systemd",
+    ) -> None:
+        if handoff != "systemd":
+            raise ValidationError(
+                "Unsupported init handoff target.",
+                hint="Only handoff='systemd' is currently supported.",
+                context={"handoff": handoff},
+            )
         self._secrets = {secret.name: secret for secret in secrets}
+        self.handoff = handoff
         self.disk_encryption = None
         self.ssh_keys = []
         self.ssh_config = SshKeyDeliveryConfig()
         self._delivery = None
+        self._ensure_default_delivery()
 
     def add_secret(self, spec: SecretSpec) -> None:
         self._secrets[spec.name] = spec
+        self._ensure_default_delivery()
+        self._refresh_delivery_expected()
 
     def enable_disk_encryption(
         self,
@@ -186,6 +210,7 @@ class Init:
 
     def attach_secret_delivery(self, delivery: HttpPostSecretDelivery) -> None:
         self._delivery = delivery
+        self._refresh_delivery_expected()
 
     def secrets_delivery(
         self,
@@ -201,7 +226,47 @@ class Init:
         self._delivery = delivery
         return delivery
 
+    def runtime_phases(self) -> tuple[InitPhaseSpec, ...]:
+        phases: list[InitPhaseSpec] = []
+        if self.disk_encryption is not None:
+            phases.append(
+                InitPhaseSpec(
+                    name="disk_encryption",
+                    description=(
+                        "Disk setup and optional LUKS2 formatting/opening before runtime services."
+                    ),
+                ),
+            )
+        if self._delivery is not None:
+            phases.append(
+                InitPhaseSpec(
+                    name="secrets_delivery",
+                    description=(
+                        "Wait for runtime secret payload submission and validate completion policy."
+                    ),
+                ),
+            )
+        if self.ssh_keys:
+            phases.append(
+                InitPhaseSpec(
+                    name="ssh_authorized_keys",
+                    description="Write authorized SSH keys before handoff.",
+                ),
+            )
+        phases.append(
+            InitPhaseSpec(
+                name="handoff",
+                description=f"Exec handoff to {self.handoff} after init phases complete.",
+            ),
+        )
+        return tuple(phases)
+
+    def apply(self, image: Image) -> None:
+        self.setup(image)
+        self.install(image)
+
     def setup(self, image: Image) -> None:
+        self._sync_declared_secrets(image)
         if self.disk_encryption is not None:
             image.install("cryptsetup")
         if self.ssh_keys:
@@ -210,6 +275,7 @@ class Init:
             image.install("python3")
 
     def install(self, image: Image) -> None:
+        self._sync_declared_secrets(image)
         if self.disk_encryption is not None:
             payload = json.dumps(
                 {
@@ -236,6 +302,22 @@ class Init:
             )
             image.file("/etc/tdx/init/secrets-delivery.json", content=payload + "\n")
             image.service("secrets-ready.target", enabled=True)
+        phase_payload = json.dumps(
+            {
+                "handoff": self.handoff,
+                "phases": [
+                    {
+                        "name": phase.name,
+                        "description": phase.description,
+                        "blocking": phase.blocking,
+                    }
+                    for phase in self.runtime_phases()
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        image.file("/etc/tdx/init/phases.json", content=phase_payload + "\n")
 
     def validate_and_materialize(
         self,
@@ -249,6 +331,49 @@ class Init:
         if not validation.ready:
             return validation, None
         return validation, self._delivery.materialize_runtime(runtime_root)
+
+    def _refresh_delivery_expected(self) -> None:
+        if self._delivery is None:
+            return
+        self._delivery.expected = dict(self._secrets)
+
+    def _sync_declared_secrets(self, image: Image) -> None:
+        merged = dict(self._secrets)
+        source_profile: dict[str, str] = {}
+        for profile_name in sorted(image.state.profiles):
+            profile = image.state.profiles[profile_name]
+            for secret in profile.secrets:
+                existing = merged.get(secret.name)
+                if existing is None:
+                    merged[secret.name] = secret
+                    source_profile[secret.name] = profile_name
+                    continue
+                if existing != secret:
+                    raise ValidationError(
+                        "Init cannot infer conflicting secret declarations across profiles.",
+                        hint=(
+                            "Keep the same schema/targets for a shared secret name, "
+                            "or use unique names."
+                        ),
+                        context={
+                            "secret": secret.name,
+                            "profile": profile_name,
+                            "existing_profile": source_profile.get(secret.name, "module"),
+                        },
+                    )
+        self._secrets = merged
+        self._ensure_default_delivery()
+        self._refresh_delivery_expected()
+
+    def _ensure_default_delivery(self) -> None:
+        if self._delivery is not None:
+            return
+        if not self._secrets:
+            return
+        self._delivery = HttpPostSecretDelivery(
+            expected=dict(self._secrets),
+            config=HttpPostDeliveryConfig(),
+        )
 
 
 def _validate_schema(schema: SecretSchema | None, value: object) -> str | None:

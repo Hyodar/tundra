@@ -48,7 +48,7 @@ def test_invalid_phase_dependency_order_is_rejected() -> None:
 
 def test_run_alias_records_hook() -> None:
     image = Image()
-    image.run("prepare", "echo", "hello")
+    image.run("echo", "hello", phase="prepare")
 
     profile = image.state.profiles["default"]
     assert profile.hooks[0].phase == "prepare"

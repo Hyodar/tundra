@@ -17,6 +17,9 @@ from tdx.image import Image
 class ExampleModule:
     enabled: bool = True
 
+    def required_host_commands(self) -> tuple[str, ...]:
+        return ("mkosi",)
+
     def setup(self, image: Image) -> None:
         if self.enabled:
             image.install("example-package")
@@ -27,9 +30,12 @@ class ExampleModule:
             image.service("example.service", enabled=True)
 ```
 
+`img.use(module)` validates `required_host_commands()` first and raises `E_VALIDATION`
+if any command is missing from `PATH`.
+
 ## Lifecycle Phase Mapping
 
-Use `image.hook(phase, ...)` (or `image.run(phase, ...)`) for phase-bound logic.
+Use `image.hook(phase, ...)` (or `image.run(..., phase=phase)`) for phase-bound logic.
 
 | Phase | Typical Use |
 | --- | --- |

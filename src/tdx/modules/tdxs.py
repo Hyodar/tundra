@@ -40,6 +40,10 @@ class Tdxs:
         package = "tdx-attestation-issuer" if self.mode == "issuer" else "tdx-attestation-validator"
         image.install(package)
 
+    def apply(self, image: Image) -> None:
+        self.setup(image)
+        self.install(image)
+
     def install(self, image: Image) -> None:
         image.service(self.config.service_name, enabled=True)
         config_payload = json.dumps(

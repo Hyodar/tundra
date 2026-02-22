@@ -15,7 +15,8 @@ def test_bake_respects_global_and_profile_output_targets(tmp_path: Path) -> None
         image.output_targets("gcp")
 
     with image.all_profiles():
-        result = image.bake()
+        with pytest.warns(RuntimeWarning, match="simulated"):
+            result = image.bake()
 
     default_qemu = result.artifact_for(profile="default", target="qemu")
     azure_vhd = result.artifact_for(profile="azure", target="azure")
@@ -33,10 +34,12 @@ def test_bake_respects_global_and_profile_output_targets(tmp_path: Path) -> None
 def test_deploy_fails_when_target_artifact_not_baked(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build")
     image.output_targets("qemu")
-    image.bake()
+    with pytest.warns(RuntimeWarning, match="simulated"):
+        image.bake()
 
-    with pytest.raises(DeploymentError) as excinfo:
-        image.deploy(target="azure")
+    with pytest.warns(RuntimeWarning, match="simulated"):
+        with pytest.raises(DeploymentError) as excinfo:
+            image.deploy(target="azure")
 
     assert "not baked" in str(excinfo.value).lower()
     assert excinfo.value.code == "E_DEPLOYMENT"
@@ -45,15 +48,18 @@ def test_deploy_fails_when_target_artifact_not_baked(tmp_path: Path) -> None:
 def test_deploy_returns_result_when_target_was_baked(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build")
     image.output_targets("qemu")
-    image.bake()
+    with pytest.warns(RuntimeWarning, match="simulated"):
+        image.bake()
 
-    result = image.deploy(target="qemu", parameters={"region": "local"})
+    with pytest.warns(RuntimeWarning, match="simulated"):
+        result = image.deploy(target="qemu", parameters={"region": "local"})
     artifact_path = Path(result.metadata["artifact_path"])
 
     assert result.target == "qemu"
     assert result.deployment_id == "qemu-default"
     assert result.endpoint == "qemu://local/qemu-default"
     assert artifact_path.exists()
+    assert result.metadata["implementation_mode"] == "simulated"
     assert result.metadata["region"] == "local"
 
 
@@ -64,11 +70,14 @@ def test_deploy_requires_explicit_profile_for_multi_profile_scope(tmp_path: Path
     with image.profile("prod"):
         image.output_targets("qemu")
     with image.all_profiles():
-        image.bake()
+        with pytest.warns(RuntimeWarning, match="simulated"):
+            image.bake()
 
     with image.profiles("dev", "prod"):
-        with pytest.raises(ValidationError):
-            image.deploy(target="qemu")
-        result = image.deploy(target="qemu", profile="dev")
+        with pytest.warns(RuntimeWarning, match="simulated"):
+            with pytest.raises(ValidationError):
+                image.deploy(target="qemu")
+        with pytest.warns(RuntimeWarning, match="simulated"):
+            result = image.deploy(target="qemu", profile="dev")
 
     assert result.deployment_id == "qemu-dev"

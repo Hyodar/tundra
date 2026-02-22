@@ -13,7 +13,11 @@ class QemuDeployAdapter:
 
     def deploy(self, request: DeployRequest) -> DeployResult:
         deployment_id = f"qemu-{request.profile}"
-        metadata = {"artifact_path": str(request.artifact_path), **dict(request.parameters)}
+        metadata = {
+            "artifact_path": str(request.artifact_path),
+            "implementation_mode": "simulated",
+            **dict(request.parameters),
+        }
         return DeployResult(
             target="qemu",
             deployment_id=deployment_id,

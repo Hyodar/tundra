@@ -9,13 +9,13 @@ def test_repeated_bakes_with_same_recipe_have_stable_artifact_digests(tmp_path: 
     first = Image(build_dir=tmp_path / "build-a")
     first.install("curl")
     first.output_targets("qemu", "azure")
-    first.run("prepare", "echo", "hello")
+    first.run("echo", "hello", phase="prepare")
     first_result = first.bake()
 
     second = Image(build_dir=tmp_path / "build-b")
     second.install("curl")
     second.output_targets("qemu", "azure")
-    second.run("prepare", "echo", "hello")
+    second.run("echo", "hello", phase="prepare")
     second_result = second.bake()
 
     assert _artifact_digest_map(first_result, profile="default") == _artifact_digest_map(
