@@ -29,6 +29,9 @@ from .models import (
     ProfileState,
     RecipeState,
     RepositorySpec,
+    SecretSchema,
+    SecretSpec,
+    SecretTarget,
     ServiceSpec,
     TemplateEntry,
     UserSpec,
@@ -183,6 +186,23 @@ class Image:
         entry = PartitionSpec(name=name, size=size, mount=mount, fs=fs)
         for profile in self._iter_active_profiles():
             profile.partitions.append(entry)
+        return self
+
+    def secret(
+        self,
+        name: str,
+        *,
+        required: bool = True,
+        schema: SecretSchema | None = None,
+        targets: tuple[SecretTarget, ...] = (),
+    ) -> Self:
+        if not name:
+            raise ValidationError("secret() requires a non-empty secret name.")
+        if not targets:
+            raise ValidationError("secret() requires at least one delivery target.")
+        entry = SecretSpec(name=name, required=required, schema=schema, targets=targets)
+        for profile in self._iter_active_profiles():
+            profile.secrets.append(entry)
         return self
 
     def output_targets(self, *targets: OutputTarget) -> Self:
@@ -488,6 +508,31 @@ class Image:
                     ),
                 )
             ]
+            secrets = [
+                {
+                    "name": secret.name,
+                    "required": secret.required,
+                    "schema": None
+                    if secret.schema is None
+                    else {
+                        "kind": secret.schema.kind,
+                        "min_length": secret.schema.min_length,
+                        "max_length": secret.schema.max_length,
+                        "pattern": secret.schema.pattern,
+                        "enum": list(secret.schema.enum),
+                    },
+                    "targets": [
+                        {
+                            "kind": target.kind,
+                            "location": target.location,
+                            "mode": target.mode,
+                            "scope": target.scope,
+                        }
+                        for target in secret.targets
+                    ],
+                }
+                for secret in sorted(profile.secrets, key=lambda item: item.name)
+            ]
             profiles_data[profile_name] = {
                 "packages": sorted(profile.packages),
                 "build_packages": sorted(profile.build_packages),
@@ -500,6 +545,7 @@ class Image:
                 "services": services,
                 "partitions": partitions,
                 "hooks": hooks,
+                "secrets": secrets,
             }
 
         return {

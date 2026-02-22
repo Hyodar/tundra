@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from .init import (
+    HttpPostDeliveryConfig,
+    HttpPostSecretDelivery,
+    Init,
+    SecretDeliveryValidation,
+)
+
 if TYPE_CHECKING:
     from tdx.image import Image
 
@@ -16,4 +23,10 @@ class Module(Protocol):
         """Per-image runtime configuration for a module."""
 
 
-__all__ = ["Module"]
+__all__ = [
+    "HttpPostDeliveryConfig",
+    "HttpPostSecretDelivery",
+    "Init",
+    "Module",
+    "SecretDeliveryValidation",
+]
