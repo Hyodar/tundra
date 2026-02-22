@@ -195,6 +195,7 @@ class BakeResult:
 class DeployRequest:
     profile: str
     target: OutputTarget
+    artifact_path: Path
     parameters: Mapping[str, str] = field(default_factory=dict)
 
 
