@@ -55,4 +55,4 @@ def test_scoped_operations_only_emit_for_selected_profiles(tmp_path: Path) -> No
     assert not (tmp_path / "build" / "default").exists()
 
     payload = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert sorted(payload["profiles"].keys()) == ["dev", "prod"]
+    assert sorted(payload["recipe"]["profiles"].keys()) == ["dev", "prod"]

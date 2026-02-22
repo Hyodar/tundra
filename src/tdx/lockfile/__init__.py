@@ -1,14 +1,16 @@
-"""Lockfile model types."""
+"""Lockfile APIs."""
 
-from __future__ import annotations
+from .io import parse_lockfile, read_lockfile, serialize_lockfile, write_lockfile
+from .model import LockedFetch, Lockfile
+from .resolve import build_lockfile, recipe_digest
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True, slots=True)
-class LockEntry:
-    source: str
-    digest: str
-
-
-__all__ = ["LockEntry"]
+__all__ = [
+    "LockedFetch",
+    "Lockfile",
+    "build_lockfile",
+    "parse_lockfile",
+    "read_lockfile",
+    "recipe_digest",
+    "serialize_lockfile",
+    "write_lockfile",
+]
