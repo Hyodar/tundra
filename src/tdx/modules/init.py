@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from tdx.errors import ValidationError
 from tdx.models import SecretSchema, SecretSpec
 
 CompletionMode = Literal["all_required", "any"]
+GLOBAL_ENV_RELATIVE_PATH = Path("run/tdx-secrets/global.env")
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +28,13 @@ class SecretDeliveryValidation:
     errors: tuple[str, ...]
     missing_required: tuple[str, ...]
     received: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SecretsRuntimeArtifacts:
+    file_targets: tuple[Path, ...]
+    global_env_path: Path | None
+    loads_before: tuple[str, ...] = ("secrets-ready.target",)
 
 
 @dataclass(slots=True)
@@ -67,6 +76,53 @@ class HttpPostSecretDelivery:
             errors=tuple(errors),
             missing_required=missing_required,
             received=tuple(sorted(self._received)),
+        )
+
+    def materialize_runtime(self, runtime_root: str | Path) -> SecretsRuntimeArtifacts:
+        missing_required = tuple(
+            sorted(
+                name
+                for name, spec in self.expected.items()
+                if spec.required and name not in self._received
+            ),
+        )
+        if self.config.completion == "all_required" and missing_required:
+            raise ValidationError(
+                (
+                    "Cannot materialize secrets runtime artifacts before all required "
+                    "secrets are received."
+                ),
+                hint="Submit payloads for all required secrets first.",
+                context={"missing_required": ",".join(missing_required)},
+            )
+
+        root = Path(runtime_root)
+        file_targets: list[Path] = []
+        global_env: dict[str, str] = {}
+
+        for name, spec in self.expected.items():
+            if name not in self._received:
+                continue
+            value = _to_secret_text(self._received[name])
+            for target in spec.targets:
+                if target.kind == "file":
+                    path = root / target.location.lstrip("/")
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(value, encoding="utf-8")
+                    file_targets.append(path)
+                elif target.kind == "env" and target.scope == "global":
+                    global_env[target.location] = value
+
+        global_env_path: Path | None = None
+        if global_env:
+            global_env_path = root / GLOBAL_ENV_RELATIVE_PATH
+            global_env_path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [f"{name}={value}" for name, value in sorted(global_env.items())]
+            global_env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        return SecretsRuntimeArtifacts(
+            file_targets=tuple(sorted(file_targets)),
+            global_env_path=global_env_path,
         )
 
     def _is_ready(self, *, missing_required: tuple[str, ...], has_errors: bool) -> bool:
@@ -128,3 +184,9 @@ def _validate_schema(schema: SecretSchema | None, value: object) -> str | None:
         return "expected JSON object/list or valid JSON string"
 
     return f"unsupported schema kind: {schema.kind}"
+
+
+def _to_secret_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True)

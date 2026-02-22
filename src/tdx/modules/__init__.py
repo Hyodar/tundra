@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from .init import (
+    GLOBAL_ENV_RELATIVE_PATH,
     HttpPostDeliveryConfig,
     HttpPostSecretDelivery,
     Init,
     SecretDeliveryValidation,
+    SecretsRuntimeArtifacts,
 )
 
 if TYPE_CHECKING:
@@ -28,5 +30,7 @@ __all__ = [
     "HttpPostSecretDelivery",
     "Init",
     "Module",
+    "GLOBAL_ENV_RELATIVE_PATH",
     "SecretDeliveryValidation",
+    "SecretsRuntimeArtifacts",
 ]
