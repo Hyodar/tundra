@@ -8,7 +8,7 @@ from tdx.errors import ValidationError
 
 def test_recipe_primitives_are_recorded() -> None:
     image = Image()
-    image.repository("debian-security", "https://deb.example/security", priority=10)
+    image.repository("https://deb.example/security", name="debian-security", priority=10)
     image.file("/etc/example.conf", content="key=value\n")
     image.template(
         "/etc/app/env",

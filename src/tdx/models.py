@@ -9,6 +9,66 @@ from typing import Literal
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
+SecurityProfile = Literal["strict", "default", "none"]
+RestartPolicy = Literal["always", "on-failure", "no"]
+
+DEFAULT_DEBLOAT_PATHS_REMOVE = (
+    "/etc/machine-id",
+    "/etc/ssh/ssh_host_*_key*",
+    "/usr/lib/modules",
+    "/usr/lib/pcrlock.d",
+    "/usr/lib/systemd/catalog",
+    "/usr/lib/systemd/network",
+    "/usr/lib/systemd/user",
+    "/usr/lib/systemd/user-generators",
+    "/usr/lib/tmpfiles.d",
+    "/usr/lib/udev/hwdb.bin",
+    "/usr/lib/udev/hwdb.d",
+    "/usr/share/bash-completion",
+    "/usr/share/bug",
+    "/usr/share/debconf",
+    "/usr/share/doc",
+    "/usr/share/gcc",
+    "/usr/share/gdb",
+    "/usr/share/info",
+    "/usr/share/initramfs-tools",
+    "/usr/share/lintian",
+    "/usr/share/locale",
+    "/usr/share/man",
+    "/usr/share/menu",
+    "/usr/share/mime",
+    "/usr/share/perl5/debconf",
+    "/usr/share/polkit-1",
+    "/usr/share/systemd",
+    "/usr/share/zsh",
+    "/etc/credstore",
+    "/etc/systemd/network",
+)
+
+DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP = (
+    "basic.target",
+    "local-fs-pre.target",
+    "local-fs.target",
+    "minimal.target",
+    "network-online.target",
+    "slices.target",
+    "sockets.target",
+    "sysinit.target",
+    "systemd-journald-dev-log.socket",
+    "systemd-journald.service",
+    "systemd-journald.socket",
+    "systemd-remount-fs.service",
+    "systemd-sysctl.service",
+)
+
+DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP = (
+    "journalctl",
+    "systemctl",
+    "systemd",
+    "systemd-tty-ask-password-agent",
+)
+
+# Legacy aliases for backward compatibility with existing tests
 DEFAULT_DEBLOAT_REMOVE = (
     "cloud-init",
     "man-db",
@@ -18,6 +78,7 @@ DEFAULT_DEBLOAT_MASK = (
     "debug-shell.service",
     "systemd-networkd-wait-online.service",
 )
+
 Phase = Literal[
     "sync",
     "skeleton",
@@ -45,6 +106,9 @@ class CommandSpec:
 class RepositorySpec:
     name: str
     url: str
+    suite: str | None = None
+    components: tuple[str, ...] = ()
+    keyring: str | None = None
     priority: int = 100
 
 
@@ -67,16 +131,26 @@ class TemplateEntry:
 @dataclass(frozen=True, slots=True)
 class UserSpec:
     name: str
+    system: bool = False
+    home: str | None = None
+    shell: str = "/usr/sbin/nologin"
     uid: int | None = None
     gid: int | None = None
-    shell: str = "/usr/sbin/nologin"
+    groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ServiceSpec:
     name: str
-    enabled: bool = True
+    exec: tuple[str, ...] = ()
+    user: str | None = None
+    after: tuple[str, ...] = ()
+    requires: tuple[str, ...] = ()
     wants: tuple[str, ...] = ()
+    restart: RestartPolicy = "no"
+    enabled: bool = True
+    extra_unit: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    security_profile: SecurityProfile = "default"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,10 +183,17 @@ class SecretTarget:
     location: str
     mode: str = "0400"
     scope: Literal["service", "global"] = "service"
+    owner: str | None = None
 
     @classmethod
-    def file(cls, path: str, *, mode: str = "0400") -> SecretTarget:
-        return cls(kind="file", location=path, mode=mode, scope="service")
+    def file(
+        cls,
+        path: str,
+        *,
+        mode: str = "0400",
+        owner: str | None = None,
+    ) -> SecretTarget:
+        return cls(kind="file", location=path, mode=mode, scope="service", owner=owner)
 
     @classmethod
     def env(cls, name: str, *, scope: Literal["service", "global"] = "service") -> SecretTarget:
@@ -125,6 +206,50 @@ class SecretSpec:
     required: bool = True
     schema: SecretSchema | None = None
     targets: tuple[SecretTarget, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DebloatConfig:
+    enabled: bool = True
+    paths_remove: tuple[str, ...] = DEFAULT_DEBLOAT_PATHS_REMOVE
+    paths_skip: tuple[str, ...] = ()
+    paths_remove_extra: tuple[str, ...] = ()
+    systemd_minimize: bool = True
+    systemd_units_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP
+    systemd_units_keep_extra: tuple[str, ...] = ()
+    systemd_bins_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP
+
+    @property
+    def effective_paths_remove(self) -> tuple[str, ...]:
+        """Paths to remove = default + extra - skipped."""
+        skip_set = set(self.paths_skip)
+        combined = list(self.paths_remove) + list(self.paths_remove_extra)
+        return tuple(sorted(set(p for p in combined if p not in skip_set)))
+
+    @property
+    def effective_units_keep(self) -> tuple[str, ...]:
+        """Units to keep = default + extra."""
+        return tuple(sorted(set(self.systemd_units_keep) | set(self.systemd_units_keep_extra)))
+
+
+@dataclass(frozen=True, slots=True)
+class Kernel:
+    version: str | None = None
+    config_file: str | None = None
+    cmdline: str | None = None
+    tdx: bool = False
+
+    @classmethod
+    def generic(cls, version: str, *, cmdline: str | None = None) -> Kernel:
+        return cls(version=version, cmdline=cmdline)
+
+    @classmethod
+    def from_config(cls, config_file: str) -> Kernel:
+        return cls(config_file=config_file)
+
+    @classmethod
+    def tdx_kernel(cls, version: str, *, cmdline: str | None = None) -> Kernel:
+        return cls(version=version, tdx=True, cmdline=cmdline)
 
 
 @dataclass(slots=True)
@@ -142,6 +267,8 @@ class ProfileState:
     partitions: list[PartitionSpec] = field(default_factory=list)
     hooks: list[HookSpec] = field(default_factory=list)
     secrets: list[SecretSpec] = field(default_factory=list)
+    debloat: DebloatConfig = field(default_factory=DebloatConfig)
+    # Legacy fields kept for backward compat during transition
     debloat_enabled: bool = True
     debloat_remove: tuple[str, ...] = DEFAULT_DEBLOAT_REMOVE
     debloat_mask: tuple[str, ...] = DEFAULT_DEBLOAT_MASK
@@ -225,12 +352,17 @@ __all__ = [
     "BakeRequest",
     "BakeResult",
     "CommandSpec",
+    "DebloatConfig",
+    "DEFAULT_DEBLOAT_MASK",
+    "DEFAULT_DEBLOAT_PATHS_REMOVE",
+    "DEFAULT_DEBLOAT_REMOVE",
+    "DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP",
+    "DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP",
     "DeployRequest",
     "DeployResult",
-    "DEFAULT_DEBLOAT_MASK",
-    "DEFAULT_DEBLOAT_REMOVE",
     "FileEntry",
     "HookSpec",
+    "Kernel",
     "OutputTarget",
     "PartitionSpec",
     "Phase",
@@ -238,9 +370,11 @@ __all__ = [
     "ProfileState",
     "RepositorySpec",
     "RecipeState",
+    "RestartPolicy",
     "SecretSchema",
     "SecretSpec",
     "SecretTarget",
+    "SecurityProfile",
     "ServiceSpec",
     "TemplateEntry",
     "UserSpec",

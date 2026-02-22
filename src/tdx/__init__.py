@@ -11,20 +11,35 @@ from .errors import (
     ValidationError,
 )
 from .image import Image
-from .models import BakeRequest, BakeResult, ProfileState, RecipeState
+from .models import (
+    BakeRequest,
+    BakeResult,
+    DebloatConfig,
+    Kernel,
+    ProfileState,
+    RecipeState,
+    SecretSchema,
+    SecretSpec,
+    SecretTarget,
+)
 
 __all__ = [
     "BackendExecutionError",
     "BakeRequest",
     "BakeResult",
+    "DebloatConfig",
     "DeploymentError",
     "Image",
+    "Kernel",
     "LockfileError",
     "MeasurementError",
     "PolicyError",
     "ProfileState",
     "RecipeState",
     "ReproducibilityError",
+    "SecretSchema",
+    "SecretSpec",
+    "SecretTarget",
     "TdxError",
     "ValidationError",
 ]

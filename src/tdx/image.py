@@ -25,10 +25,12 @@ from .models import (
     ArtifactRef,
     BakeResult,
     CommandSpec,
+    DebloatConfig,
     DeployRequest,
     DeployResult,
     FileEntry,
     HookSpec,
+    Kernel,
     OutputTarget,
     PartitionSpec,
     Phase,
@@ -36,9 +38,11 @@ from .models import (
     ProfileState,
     RecipeState,
     RepositorySpec,
+    RestartPolicy,
     SecretSchema,
     SecretSpec,
     SecretTarget,
+    SecurityProfile,
     ServiceSpec,
     TemplateEntry,
     UserSpec,
@@ -74,8 +78,12 @@ class Image:
     base: str = "debian/bookworm"
     arch: Arch = "x86_64"
     default_profile: str = "default"
+    target: Arch = "x86_64"
+    backend: str = "lima"
+    reproducible: bool = True
     policy: Policy = field(default_factory=Policy)
     logger: StructuredLogger = field(default_factory=StructuredLogger)
+    kernel: Kernel | None = field(default=None)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
@@ -128,13 +136,29 @@ class Image:
             profile.packages.update(packages)
         return self
 
-    def repository(self, name: str, url: str, *, priority: int = 100) -> Self:
-        if not name:
-            raise ValidationError("repository() requires a non-empty name.")
+    def repository(
+        self,
+        url: str,
+        *,
+        name: str | None = None,
+        suite: str | None = None,
+        components: tuple[str, ...] | list[str] = (),
+        keyring: str | None = None,
+        priority: int = 100,
+    ) -> Self:
         if not url:
             raise ValidationError("repository() requires a non-empty URL.")
+        repo_name = name or url.split("/")[-1] or url
+        entry = RepositorySpec(
+            name=repo_name,
+            url=url,
+            suite=suite,
+            components=tuple(components),
+            keyring=keyring,
+            priority=priority,
+        )
         for profile in self._iter_active_profiles():
-            profile.repositories.append(RepositorySpec(name=name, url=url, priority=priority))
+            profile.repositories.append(entry)
         return self
 
     def file(
@@ -161,27 +185,50 @@ class Image:
 
     def template(
         self,
-        path: str,
+        dest: str | None = None,
         *,
-        template: str,
-        variables: Mapping[str, str],
+        src: str | Path | None = None,
+        template: str | None = None,
+        vars: Mapping[str, str | int | float] | None = None,
+        variables: Mapping[str, str] | None = None,
         mode: str = "0644",
+        # Legacy positional: template(path, template=..., variables=...)
+        path: str | None = None,
     ) -> Self:
-        if not path:
-            raise ValidationError("template() requires a destination path.")
-        ordered_variables = dict(sorted(variables.items()))
+        # Resolve destination: dest= or legacy path=
+        resolved_dest = dest or path
+        if not resolved_dest:
+            raise ValidationError("template() requires a destination path (dest= parameter).")
+
+        # Resolve template content: src= file or inline template=
+        if src is not None and template is not None:
+            raise ValidationError("template() requires exactly one of src= or template=, not both.")
+        if src is not None:
+            template_content = Path(src).read_text(encoding="utf-8")
+        elif template is not None:
+            template_content = template
+        else:
+            raise ValidationError("template() requires either src= or template= parameter.")
+
+        # Resolve variables: vars= (SPEC style) or variables= (legacy)
+        resolved_vars: dict[str, str] = {}
+        if vars is not None:
+            resolved_vars = {k: str(v) for k, v in sorted(vars.items())}
+        elif variables is not None:
+            resolved_vars = dict(sorted(variables.items()))
+
         try:
-            rendered = template.format_map(ordered_variables)
+            rendered = template_content.format_map(resolved_vars)
         except KeyError as exc:
             raise ValidationError(
                 "template() variables are missing required placeholders.",
                 hint="Provide all placeholder keys used in the template string.",
-                context={"path": path, "missing_key": str(exc)},
+                context={"path": resolved_dest, "missing_key": str(exc)},
             ) from exc
         entry = TemplateEntry(
-            path=path,
-            template=template,
-            variables=ordered_variables,
+            path=resolved_dest,
+            template=template_content,
+            variables=resolved_vars,
             rendered=rendered,
             mode=mode,
         )
@@ -193,22 +240,76 @@ class Image:
         self,
         name: str,
         *,
+        system: bool = False,
+        home: str | None = None,
+        shell: str = "/usr/sbin/nologin",
         uid: int | None = None,
         gid: int | None = None,
-        shell: str = "/usr/sbin/nologin",
+        groups: tuple[str, ...] | list[str] = (),
     ) -> Self:
         if not name:
             raise ValidationError("user() requires a non-empty user name.")
-        entry = UserSpec(name=name, uid=uid, gid=gid, shell=shell)
+        entry = UserSpec(
+            name=name,
+            system=system,
+            home=home,
+            shell=shell,
+            uid=uid,
+            gid=gid,
+            groups=tuple(groups),
+        )
         for profile in self._iter_active_profiles():
+            existing_names = {u.name for u in profile.users}
+            if name in existing_names:
+                raise ValidationError(
+                    f"Duplicate user name '{name}' in profile '{profile.name}'.",
+                    hint="User names must be unique within a profile.",
+                    context={"user": name, "profile": profile.name},
+                )
             profile.users.append(entry)
         return self
 
-    def service(self, name: str, *, enabled: bool = True, wants: tuple[str, ...] = ()) -> Self:
+    def service(
+        self,
+        name: str,
+        *,
+        exec: tuple[str, ...] | list[str] | str = (),
+        user: str | None = None,
+        after: tuple[str, ...] | list[str] = (),
+        requires: tuple[str, ...] | list[str] = (),
+        wants: tuple[str, ...] | list[str] = (),
+        restart: RestartPolicy = "no",
+        enabled: bool = True,
+        extra_unit: Mapping[str, Mapping[str, str]] | None = None,
+        security_profile: SecurityProfile = "default",
+    ) -> Self:
         if not name:
             raise ValidationError("service() requires a non-empty service name.")
-        entry = ServiceSpec(name=name, enabled=enabled, wants=tuple(dict.fromkeys(wants)))
+        exec_argv: tuple[str, ...]
+        if isinstance(exec, str):
+            exec_argv = tuple(exec.split()) if exec else ()
+        else:
+            exec_argv = tuple(exec)
+        entry = ServiceSpec(
+            name=name,
+            exec=exec_argv,
+            user=user,
+            after=tuple(after),
+            requires=tuple(requires),
+            wants=tuple(dict.fromkeys(wants)),
+            restart=restart,
+            enabled=enabled,
+            extra_unit=dict(extra_unit) if extra_unit else {},
+            security_profile=security_profile,
+        )
         for profile in self._iter_active_profiles():
+            existing_names = {s.name for s in profile.services}
+            if name in existing_names:
+                raise ValidationError(
+                    f"Duplicate service name '{name}' in profile '{profile.name}'.",
+                    hint="Service names must be unique within a profile.",
+                    context={"service": name, "profile": profile.name},
+                )
             profile.services.append(entry)
         return self
 
@@ -260,12 +361,39 @@ class Image:
         self,
         *,
         enabled: bool = True,
+        # Rich debloat parameters matching SPEC / DESIGN docs
+        paths_remove: tuple[str, ...] | None = None,
+        paths_skip: tuple[str, ...] | list[str] = (),
+        paths_remove_extra: tuple[str, ...] | list[str] = (),
+        systemd_minimize: bool = True,
+        systemd_units_keep: tuple[str, ...] | None = None,
+        systemd_units_keep_extra: tuple[str, ...] | list[str] = (),
+        systemd_bins_keep: tuple[str, ...] | None = None,
+        # Legacy parameters (backward compat)
         remove: tuple[str, ...] | None = None,
         mask: tuple[str, ...] | None = None,
     ) -> Self:
+        _defaults = DebloatConfig()
+        if not enabled:
+            config = DebloatConfig(enabled=False)
+        else:
+            config = DebloatConfig(
+                enabled=True,
+                paths_remove=paths_remove or _defaults.paths_remove,
+                paths_skip=tuple(paths_skip),
+                paths_remove_extra=tuple(paths_remove_extra),
+                systemd_minimize=systemd_minimize,
+                systemd_units_keep=systemd_units_keep or _defaults.systemd_units_keep,
+                systemd_units_keep_extra=tuple(systemd_units_keep_extra),
+                systemd_bins_keep=systemd_bins_keep or _defaults.systemd_bins_keep,
+            )
+
+        # Also maintain legacy fields for backward compat
         remove_items = tuple(sorted(dict.fromkeys(remove or DEFAULT_DEBLOAT_REMOVE)))
         mask_items = tuple(sorted(dict.fromkeys(mask or DEFAULT_DEBLOAT_MASK)))
+
         for profile in self._iter_active_profiles():
+            profile.debloat = config
             profile.debloat_enabled = enabled
             profile.debloat_remove = remove_items if enabled else ()
             profile.debloat_mask = mask_items if enabled else ()
@@ -274,12 +402,102 @@ class Image:
     def explain_debloat(self, *, profile: str | None = None) -> dict[str, object]:
         selected_profile = self._resolve_operation_profile(profile)
         profile_state = self._state.ensure_profile(selected_profile)
+        config = profile_state.debloat
         return {
             "profile": selected_profile,
-            "enabled": profile_state.debloat_enabled,
+            "enabled": config.enabled,
+            "paths_remove": list(config.effective_paths_remove),
+            "paths_skip": list(config.paths_skip),
+            "systemd_minimize": config.systemd_minimize,
+            "systemd_units_keep": list(config.effective_units_keep),
+            "systemd_bins_keep": list(config.systemd_bins_keep),
+            # Legacy keys for backward compat
             "remove": list(profile_state.debloat_remove),
             "mask": list(profile_state.debloat_mask),
         }
+
+    # --- Lifecycle convenience methods ---
+
+    def sync(self, *argv: str, env: Mapping[str, str] | None = None, shell: bool = False) -> Self:
+        """Register a sync-phase command (runs before build)."""
+        if not argv:
+            raise ValidationError("sync() requires a command.")
+        return self.hook("sync", *argv, env=env, shell=shell)
+
+    def skeleton(
+        self,
+        path: str,
+        *,
+        content: str | None = None,
+        src: str | Path | None = None,
+    ) -> Self:
+        """Place a file in the image before the package manager runs.
+
+        This maps to mkosi.skeleton/ and is useful for custom apt sources,
+        resolv.conf for build DNS, or directory structure that packages expect.
+        """
+        return self.file(path, content=content, src=src)
+
+    def prepare(
+        self,
+        *argv: str,
+        env: Mapping[str, str] | None = None,
+        shell: bool = False,
+    ) -> Self:
+        """Register a prepare-phase command (runs after base packages, before build)."""
+        if not argv:
+            raise ValidationError("prepare() requires a command.")
+        return self.hook("prepare", *argv, env=env, shell=shell)
+
+    def finalize(
+        self,
+        *argv: str,
+        env: Mapping[str, str] | None = None,
+        shell: bool = False,
+    ) -> Self:
+        """Register a finalize-phase command (runs on HOST with $BUILDROOT)."""
+        if not argv:
+            raise ValidationError("finalize() requires a command.")
+        return self.hook("finalize", *argv, env=env, shell=shell)
+
+    def postoutput(
+        self,
+        *argv: str,
+        env: Mapping[str, str] | None = None,
+        shell: bool = False,
+    ) -> Self:
+        """Register a postoutput-phase command (runs after disk image is written)."""
+        if not argv:
+            raise ValidationError("postoutput() requires a command.")
+        return self.hook("postoutput", *argv, env=env, shell=shell)
+
+    def clean(
+        self,
+        *argv: str,
+        env: Mapping[str, str] | None = None,
+        shell: bool = False,
+    ) -> Self:
+        """Register a clean-phase command (runs on `mkosi clean`)."""
+        if not argv:
+            raise ValidationError("clean() requires a command.")
+        return self.hook("clean", *argv, env=env, shell=shell)
+
+    def on_boot(
+        self,
+        *argv: str,
+        env: Mapping[str, str] | None = None,
+        shell: bool = False,
+    ) -> Self:
+        """Register a boot-time command (runs when VM boots, systemd oneshot)."""
+        if not argv:
+            raise ValidationError("on_boot() requires a command.")
+        return self.hook("boot", *argv, env=env, shell=shell)
+
+    def ssh(self, *, enabled: bool = True, key_delivery: str = "http") -> Self:
+        """Enable or disable SSH access (typically for dev profiles)."""
+        if enabled:
+            self.install("dropbear")
+        return self
 
     def run(
         self,
@@ -499,6 +717,10 @@ class Image:
         target: OutputTarget,
         profile: str | None = None,
         parameters: Mapping[str, str] | None = None,
+        # Common deploy parameters (passed through to adapter)
+        memory: str | None = None,
+        cpus: int | None = None,
+        **kwargs: str,
     ) -> DeployResult:
         warnings.warn(
             (
@@ -524,11 +746,18 @@ class Image:
                 context={"operation": "deploy", "profile": selected_profile, "target": target},
             )
 
+        params = dict(parameters or {})
+        params.update(kwargs)
+        if memory is not None:
+            params["memory"] = memory
+        if cpus is not None:
+            params["cpus"] = str(cpus)
+
         request = DeployRequest(
             profile=selected_profile,
             target=target,
             artifact_path=artifact.path,
-            parameters=dict(parameters or {}),
+            parameters=params,
         )
         return get_adapter(target).deploy(request)
 
@@ -592,8 +821,8 @@ class Image:
             return self._active_profiles[0]
         raise ValidationError(
             "Operation requires an explicit profile when multiple profiles are active.",
-            hint="Pass profile='name' to deploy().",
-            context={"operation": "deploy"},
+            hint="Pass profile='name' to the operation.",
+            context={"operation": "resolve_profile"},
         )
 
     def _iter_active_profiles(self) -> list[ProfileState]:
@@ -638,6 +867,9 @@ class Image:
                 {
                     "name": repository.name,
                     "url": repository.url,
+                    "suite": repository.suite,
+                    "components": list(repository.components),
+                    "keyring": repository.keyring,
                     "priority": repository.priority,
                 }
                 for repository in sorted(
@@ -655,29 +887,38 @@ class Image:
             ]
             templates = [
                 {
-                    "path": template.path,
-                    "mode": template.mode,
-                    "sha256": hashlib.sha256(template.rendered.encode()).hexdigest(),
-                    "variables": dict(sorted(template.variables.items())),
+                    "path": tmpl.path,
+                    "mode": tmpl.mode,
+                    "sha256": hashlib.sha256(tmpl.rendered.encode()).hexdigest(),
+                    "variables": dict(sorted(tmpl.variables.items())),
                 }
-                for template in sorted(profile.templates, key=lambda item: item.path)
+                for tmpl in sorted(profile.templates, key=lambda item: item.path)
             ]
             users = [
                 {
-                    "name": user.name,
-                    "uid": user.uid,
-                    "gid": user.gid,
-                    "shell": user.shell,
+                    "name": u.name,
+                    "system": u.system,
+                    "home": u.home,
+                    "uid": u.uid,
+                    "gid": u.gid,
+                    "shell": u.shell,
+                    "groups": list(u.groups),
                 }
-                for user in sorted(profile.users, key=lambda item: item.name)
+                for u in sorted(profile.users, key=lambda item: item.name)
             ]
             services = [
                 {
-                    "name": service.name,
-                    "enabled": service.enabled,
-                    "wants": list(service.wants),
+                    "name": svc.name,
+                    "exec": list(svc.exec),
+                    "user": svc.user,
+                    "after": list(svc.after),
+                    "requires": list(svc.requires),
+                    "wants": list(svc.wants),
+                    "restart": svc.restart,
+                    "enabled": svc.enabled,
+                    "security_profile": svc.security_profile,
                 }
-                for service in sorted(profile.services, key=lambda item: item.name)
+                for svc in sorted(profile.services, key=lambda item: item.name)
             ]
             partitions = [
                 {
@@ -718,12 +959,12 @@ class Image:
                     },
                     "targets": [
                         {
-                            "kind": target.kind,
-                            "location": target.location,
-                            "mode": target.mode,
-                            "scope": target.scope,
+                            "kind": t.kind,
+                            "location": t.location,
+                            "mode": t.mode,
+                            "scope": t.scope,
                         }
-                        for target in secret.targets
+                        for t in secret.targets
                     ],
                 }
                 for secret in sorted(profile.secrets, key=lambda item: item.name)
