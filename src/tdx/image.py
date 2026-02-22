@@ -41,6 +41,7 @@ from .models import (
     TemplateEntry,
     UserSpec,
 )
+from .policy import Policy, ensure_bake_policy
 
 
 @dataclass(slots=True)
@@ -51,6 +52,7 @@ class Image:
     base: str = "debian/bookworm"
     arch: Arch = "x86_64"
     default_profile: str = "default"
+    policy: Policy = field(default_factory=Policy)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
@@ -66,6 +68,10 @@ class Image:
     @property
     def state(self) -> RecipeState:
         return self._state
+
+    def set_policy(self, policy: Policy) -> Self:
+        self.policy = policy
+        return self
 
     @contextmanager
     def profile(self, name: str) -> Iterator[Self]:
@@ -300,6 +306,7 @@ class Image:
         return destination
 
     def bake(self, output_dir: str | Path | None = None, *, frozen: bool = False) -> BakeResult:
+        ensure_bake_policy(policy=self.policy, frozen=frozen)
         if frozen:
             self._assert_frozen_lock(profile_names=self._active_profiles)
         destination = self._normalize_path(output_dir, fallback=self.build_dir)

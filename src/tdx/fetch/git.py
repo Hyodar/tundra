@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from tdx.errors import ReproducibilityError, ValidationError
+from tdx.errors import PolicyError, ReproducibilityError, ValidationError
+from tdx.policy import Policy, ensure_network_allowed, mutable_ref_policy_from
 
 MutableRefPolicy = Literal["warn", "error", "allow"]
 
@@ -34,15 +35,21 @@ def fetch_git(
     repo: str,
     *,
     ref: str,
-    tree_hash: str,
+    tree_hash: str | None,
     cache_dir: str | Path,
-    mutable_ref_policy: MutableRefPolicy = "warn",
+    mutable_ref_policy: MutableRefPolicy | None = None,
+    policy: Policy | None = None,
 ) -> GitFetchResult:
     """Fetch git content, verify tree hash, and cache by commit/tree identity."""
+    if policy is not None:
+        ensure_network_allowed(policy=policy, operation="fetch_git")
     if not ref:
         raise ValidationError("fetch_git() requires a ref.")
-    if not tree_hash:
-        raise ValidationError("fetch_git() requires a tree_hash.")
+    if mutable_ref_policy is None:
+        mutable_ref_policy = mutable_ref_policy_from(policy) if policy is not None else "warn"
+    expected_tree_hash = tree_hash or ""
+    if not expected_tree_hash and (policy is None or policy.require_integrity):
+        raise ValidationError("fetch_git() requires a tree_hash when integrity policy is enabled.")
 
     mutable_ref = not COMMIT_PATTERN.fullmatch(ref)
     _enforce_mutable_ref_policy(ref=ref, policy=mutable_ref_policy, mutable_ref=mutable_ref)
@@ -50,18 +57,20 @@ def fetch_git(
     resolved_commit = _resolve_commit(repo=repo, ref=ref)
     cache_root = Path(cache_dir)
     cache_root.mkdir(parents=True, exist_ok=True)
-    checkout_path = cache_root / f"{resolved_commit}-{tree_hash}"
+    checkout_path = (
+        cache_root / f"{resolved_commit}-{expected_tree_hash}" if expected_tree_hash else None
+    )
 
-    if checkout_path.exists():
+    if checkout_path is not None and checkout_path.exists():
         _verify_cached_checkout(
             checkout_path=checkout_path,
-            tree_hash=tree_hash,
+            tree_hash=expected_tree_hash,
             commit=resolved_commit,
         )
         return GitFetchResult(
             path=checkout_path,
             commit=resolved_commit,
-            tree_hash=tree_hash,
+            tree_hash=expected_tree_hash,
             mutable_ref=mutable_ref,
         )
 
@@ -70,7 +79,7 @@ def fetch_git(
         _run_git(["clone", "--quiet", repo, str(temp_root)])
         _run_git(["checkout", "--quiet", resolved_commit], cwd=temp_root)
         actual_tree = _run_git(["rev-parse", "HEAD^{tree}"], cwd=temp_root)
-        if actual_tree != tree_hash:
+        if expected_tree_hash and actual_tree != expected_tree_hash:
             raise ReproducibilityError(
                 "Git tree hash mismatch.",
                 hint="Pin the expected tree hash to the resolved immutable revision.",
@@ -79,19 +88,32 @@ def fetch_git(
                     "repo": repo,
                     "ref": ref,
                     "commit": resolved_commit,
-                    "expected": tree_hash,
+                    "expected": expected_tree_hash,
                     "actual": actual_tree,
                 },
             )
-        shutil.move(str(temp_root), checkout_path)
+        resolved_tree_hash = expected_tree_hash or actual_tree
+        final_checkout_path = cache_root / f"{resolved_commit}-{resolved_tree_hash}"
+        if final_checkout_path.exists():
+            _verify_cached_checkout(
+                checkout_path=final_checkout_path,
+                tree_hash=resolved_tree_hash,
+                commit=resolved_commit,
+            )
+        else:
+            shutil.move(str(temp_root), final_checkout_path)
     finally:
         if temp_root.exists():
             shutil.rmtree(temp_root, ignore_errors=True)
 
+    resolved_tree_hash = expected_tree_hash or _run_git(
+        ["rev-parse", "HEAD^{tree}"],
+        cwd=final_checkout_path,
+    )
     return GitFetchResult(
-        path=checkout_path,
+        path=final_checkout_path,
         commit=resolved_commit,
-        tree_hash=tree_hash,
+        tree_hash=resolved_tree_hash,
         mutable_ref=mutable_ref,
     )
 
@@ -109,7 +131,7 @@ def _enforce_mutable_ref_policy(*, ref: str, policy: MutableRefPolicy, mutable_r
         )
         return
     if policy == "error":
-        raise ReproducibilityError(
+        raise PolicyError(
             "Mutable git refs are not allowed by policy.",
             hint="Use a full 40-char commit SHA or relax mutable_ref_policy.",
             context={"operation": "fetch_git", "ref": ref, "policy": policy},

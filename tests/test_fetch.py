@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tdx.errors import ReproducibilityError, ValidationError
+from tdx.errors import PolicyError, ReproducibilityError, ValidationError
 from tdx.fetch import MutableRefWarning, fetch, fetch_git
 
 
@@ -66,7 +66,7 @@ def test_fetch_git_warns_on_mutable_ref_by_default(tmp_path: Path) -> None:
 def test_fetch_git_can_escalate_mutable_ref_to_error(tmp_path: Path) -> None:
     repo, _, tree_hash = _create_repo(tmp_path / "repo")
 
-    with pytest.raises(ReproducibilityError) as excinfo:
+    with pytest.raises(PolicyError) as excinfo:
         fetch_git(
             str(repo),
             ref="main",
