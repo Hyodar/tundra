@@ -1,23 +1,53 @@
-"""Measurement model and backend protocol."""
+"""Measurement backend dispatch and model exports."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Protocol
+import hashlib
+from pathlib import Path
+from typing import Literal
+
+from tdx.errors import MeasurementError
+from tdx.measure.model import MeasurementMismatch, Measurements, VerificationResult
+from tdx.models import ProfileBuildResult
+
+from . import azure, gcp, rtmr
 
 
-@dataclass(frozen=True, slots=True)
-class Measurements:
-    backend: str
-    values: Mapping[str, str] = field(default_factory=dict)
+def derive_measurements(
+    *,
+    backend: Literal["rtmr", "azure", "gcp"],
+    profile: str,
+    profile_result: ProfileBuildResult,
+) -> Measurements:
+    artifact_digests = _artifact_digests(profile_result)
+    if not artifact_digests:
+        raise MeasurementError(
+            "No artifacts are available for measurement derivation.",
+            hint="Bake profile artifacts before requesting measurements.",
+            context={"profile": profile, "backend": backend},
+        )
+    if backend == "rtmr":
+        values = rtmr.derive(profile, artifact_digests)
+    elif backend == "azure":
+        values = azure.derive(profile, artifact_digests)
+    elif backend == "gcp":
+        values = gcp.derive(profile, artifact_digests)
+    else:
+        raise MeasurementError("Unsupported measurement backend.", context={"backend": backend})
+    return Measurements(backend=backend, values=values)
 
 
-class MeasurementBackend(Protocol):
-    name: str
+def _artifact_digests(profile_result: ProfileBuildResult) -> dict[str, str]:
+    digests: dict[str, str] = {}
+    for target, artifact in sorted(profile_result.artifacts.items()):
+        payload = Path(artifact.path).read_bytes()
+        digests[target] = hashlib.sha256(payload).hexdigest()
+    return digests
 
-    def derive(self) -> Measurements:
-        """Derive measurements for a built image."""
 
-
-__all__ = ["MeasurementBackend", "Measurements"]
+__all__ = [
+    "MeasurementMismatch",
+    "Measurements",
+    "VerificationResult",
+    "derive_measurements",
+]
