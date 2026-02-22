@@ -32,6 +32,59 @@ class CommandSpec:
     shell: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class RepositorySpec:
+    name: str
+    url: str
+    priority: int = 100
+
+
+@dataclass(frozen=True, slots=True)
+class FileEntry:
+    path: str
+    content: str
+    mode: str = "0644"
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateEntry:
+    path: str
+    template: str
+    variables: Mapping[str, str] = field(default_factory=dict)
+    rendered: str = ""
+    mode: str = "0644"
+
+
+@dataclass(frozen=True, slots=True)
+class UserSpec:
+    name: str
+    uid: int | None = None
+    gid: int | None = None
+    shell: str = "/usr/sbin/nologin"
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceSpec:
+    name: str
+    enabled: bool = True
+    wants: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PartitionSpec:
+    name: str
+    size: str
+    mount: str
+    fs: str = "ext4"
+
+
+@dataclass(frozen=True, slots=True)
+class HookSpec:
+    phase: Phase
+    command: CommandSpec
+    after_phase: Phase | None = None
+
+
 @dataclass(slots=True)
 class ProfileState:
     name: str
@@ -39,6 +92,13 @@ class ProfileState:
     build_packages: set[str] = field(default_factory=set)
     output_targets: tuple[OutputTarget, ...] = ("qemu",)
     phases: dict[Phase, list[CommandSpec]] = field(default_factory=dict)
+    repositories: list[RepositorySpec] = field(default_factory=list)
+    files: list[FileEntry] = field(default_factory=list)
+    templates: list[TemplateEntry] = field(default_factory=list)
+    users: list[UserSpec] = field(default_factory=list)
+    services: list[ServiceSpec] = field(default_factory=list)
+    partitions: list[PartitionSpec] = field(default_factory=list)
+    hooks: list[HookSpec] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -120,9 +180,16 @@ __all__ = [
     "CommandSpec",
     "DeployRequest",
     "DeployResult",
+    "FileEntry",
+    "HookSpec",
     "OutputTarget",
+    "PartitionSpec",
     "Phase",
     "ProfileBuildResult",
     "ProfileState",
+    "RepositorySpec",
     "RecipeState",
+    "ServiceSpec",
+    "TemplateEntry",
+    "UserSpec",
 ]
