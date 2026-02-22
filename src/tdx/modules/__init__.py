@@ -6,12 +6,15 @@ from typing import TYPE_CHECKING, Protocol
 
 from .init import (
     GLOBAL_ENV_RELATIVE_PATH,
+    DiskEncryptionConfig,
     HttpPostDeliveryConfig,
     HttpPostSecretDelivery,
     Init,
     SecretDeliveryValidation,
     SecretsRuntimeArtifacts,
+    SshKeyDeliveryConfig,
 )
+from .tdxs import Tdxs, TdxsMode, TdxsServiceConfig
 
 if TYPE_CHECKING:
     from tdx.image import Image
@@ -30,7 +33,12 @@ __all__ = [
     "HttpPostSecretDelivery",
     "Init",
     "Module",
+    "DiskEncryptionConfig",
     "GLOBAL_ENV_RELATIVE_PATH",
     "SecretDeliveryValidation",
     "SecretsRuntimeArtifacts",
+    "SshKeyDeliveryConfig",
+    "Tdxs",
+    "TdxsMode",
+    "TdxsServiceConfig",
 ]

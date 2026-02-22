@@ -6,10 +6,13 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from tdx.errors import ValidationError
 from tdx.models import SecretSchema, SecretSpec
+
+if TYPE_CHECKING:
+    from tdx.image import Image
 
 CompletionMode = Literal["all_required", "any"]
 GLOBAL_ENV_RELATIVE_PATH = Path("run/tdx-secrets/global.env")
@@ -133,15 +136,56 @@ class HttpPostSecretDelivery:
         return bool(self._received)
 
 
+@dataclass(frozen=True, slots=True)
+class DiskEncryptionConfig:
+    device: str = "/dev/vda3"
+    mapper_name: str = "cryptroot"
+    format: str = "luks2"
+
+
+@dataclass(frozen=True, slots=True)
+class SshKeyDeliveryConfig:
+    authorized_keys_path: str = "/root/.ssh/authorized_keys"
+
+
 @dataclass(slots=True)
 class Init:
     _secrets: dict[str, SecretSpec] = field(default_factory=dict)
+    disk_encryption: DiskEncryptionConfig | None = None
+    ssh_keys: list[str] = field(default_factory=list)
+    ssh_config: SshKeyDeliveryConfig = field(default_factory=SshKeyDeliveryConfig)
+    _delivery: HttpPostSecretDelivery | None = None
 
     def __init__(self, secrets: tuple[SecretSpec, ...] = ()) -> None:
         self._secrets = {secret.name: secret for secret in secrets}
+        self.disk_encryption = None
+        self.ssh_keys = []
+        self.ssh_config = SshKeyDeliveryConfig()
+        self._delivery = None
 
     def add_secret(self, spec: SecretSpec) -> None:
         self._secrets[spec.name] = spec
+
+    def enable_disk_encryption(
+        self,
+        *,
+        device: str = "/dev/vda3",
+        mapper_name: str = "cryptroot",
+        format: str = "luks2",
+    ) -> None:
+        self.disk_encryption = DiskEncryptionConfig(
+            device=device,
+            mapper_name=mapper_name,
+            format=format,
+        )
+
+    def add_ssh_authorized_key(self, key: str) -> None:
+        if not key:
+            raise ValidationError("SSH key must be non-empty.")
+        self.ssh_keys.append(key)
+
+    def attach_secret_delivery(self, delivery: HttpPostSecretDelivery) -> None:
+        self._delivery = delivery
 
     def secrets_delivery(
         self,
@@ -153,7 +197,58 @@ class Init:
         if method != "http_post":
             raise ValidationError("Unsupported secret delivery method.", context={"method": method})
         config = HttpPostDeliveryConfig(completion=completion, reject_unknown=reject_unknown)
-        return HttpPostSecretDelivery(expected=dict(self._secrets), config=config)
+        delivery = HttpPostSecretDelivery(expected=dict(self._secrets), config=config)
+        self._delivery = delivery
+        return delivery
+
+    def setup(self, image: Image) -> None:
+        if self.disk_encryption is not None:
+            image.install("cryptsetup")
+        if self.ssh_keys:
+            image.install("openssh-server")
+        if self._delivery is not None:
+            image.install("python3")
+
+    def install(self, image: Image) -> None:
+        if self.disk_encryption is not None:
+            payload = json.dumps(
+                {
+                    "device": self.disk_encryption.device,
+                    "mapper_name": self.disk_encryption.mapper_name,
+                    "format": self.disk_encryption.format,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            image.file("/etc/tdx/init/disk-encryption.json", content=payload + "\n")
+        if self.ssh_keys:
+            keys = "\n".join(self.ssh_keys) + "\n"
+            image.file(self.ssh_config.authorized_keys_path, content=keys, mode="0600")
+        if self._delivery is not None:
+            payload = json.dumps(
+                {
+                    "method": "http_post",
+                    "completion": self._delivery.config.completion,
+                    "reject_unknown": self._delivery.config.reject_unknown,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            image.file("/etc/tdx/init/secrets-delivery.json", content=payload + "\n")
+            image.service("secrets-ready.target", enabled=True)
+
+    def validate_and_materialize(
+        self,
+        payload: dict[str, object],
+        *,
+        runtime_root: str | Path,
+    ) -> tuple[SecretDeliveryValidation, SecretsRuntimeArtifacts | None]:
+        if self._delivery is None:
+            raise ValidationError("Secret delivery is not configured for Init.")
+        validation = self._delivery.validate_payload(payload)
+        if not validation.ready:
+            return validation, None
+        return validation, self._delivery.materialize_runtime(runtime_root)
 
 
 def _validate_schema(schema: SecretSchema | None, value: object) -> str | None:
