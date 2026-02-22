@@ -51,7 +51,8 @@ def test_deploy_returns_result_when_target_was_baked(tmp_path: Path) -> None:
     artifact_path = Path(result.metadata["artifact_path"])
 
     assert result.target == "qemu"
-    assert result.deployment_id == "local-default-qemu"
+    assert result.deployment_id == "qemu-default"
+    assert result.endpoint == "qemu://local/qemu-default"
     assert artifact_path.exists()
     assert result.metadata["region"] == "local"
 
@@ -70,4 +71,4 @@ def test_deploy_requires_explicit_profile_for_multi_profile_scope(tmp_path: Path
             image.deploy(target="qemu")
         result = image.deploy(target="qemu", profile="dev")
 
-    assert result.deployment_id == "local-dev-qemu"
+    assert result.deployment_id == "qemu-dev"

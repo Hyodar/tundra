@@ -12,6 +12,7 @@ from typing import Literal, Self
 
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
 from .compiler import PHASE_ORDER, emit_mkosi_tree
+from .deploy import get_adapter
 from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
 from .measure import Measurements, derive_measurements
@@ -20,6 +21,7 @@ from .models import (
     ArtifactRef,
     BakeResult,
     CommandSpec,
+    DeployRequest,
     DeployResult,
     FileEntry,
     HookSpec,
@@ -376,15 +378,13 @@ class Image:
                 context={"operation": "deploy", "profile": selected_profile, "target": target},
             )
 
-        deployment_id = f"local-{selected_profile}-{target}"
-        metadata: dict[str, str] = {"artifact_path": str(artifact.path)}
-        if parameters is not None:
-            metadata.update(parameters)
-        return DeployResult(
+        request = DeployRequest(
+            profile=selected_profile,
             target=target,
-            deployment_id=deployment_id,
-            metadata=metadata,
+            artifact_path=artifact.path,
+            parameters=dict(parameters or {}),
         )
+        return get_adapter(target).deploy(request)
 
     def _artifact_filename(self, target: OutputTarget) -> str:
         mapping: dict[OutputTarget, str] = {
