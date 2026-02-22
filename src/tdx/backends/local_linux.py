@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import shutil
+import sys
 from dataclasses import dataclass
 
 from tdx.backends.base import MountSpec
-from tdx.models import BakeRequest, BakeResult
+from tdx.errors import BackendExecutionError
+from tdx.models import BakeRequest, BakeResult, ProfileBuildResult
 
 
 @dataclass(slots=True)
@@ -19,12 +22,28 @@ class LocalLinuxBackend:
         )
 
     def prepare(self, request: BakeRequest) -> None:
-        _ = request
+        self._ensure_local_prerequisites()
+        for mount in self.mount_plan(request):
+            mount.source.mkdir(parents=True, exist_ok=True)
 
     def execute(self, request: BakeRequest) -> BakeResult:
-        raise NotImplementedError(
-            "Local Linux backend execution is not implemented yet.",
-        )
+        self._ensure_local_prerequisites()
+        profile_result = ProfileBuildResult(profile=request.profile)
+        return BakeResult(profiles={request.profile: profile_result})
 
     def cleanup(self, request: BakeRequest) -> None:
         _ = request
+
+    def _ensure_local_prerequisites(self) -> None:
+        if not sys.platform.startswith("linux"):
+            raise BackendExecutionError(
+                "Local Linux backend requires a Linux host.",
+                hint="Use the Lima backend on non-Linux systems.",
+                context={"backend": self.name, "operation": "prepare"},
+            )
+        if shutil.which("mkosi") is None:
+            raise BackendExecutionError(
+                "Local Linux backend requires `mkosi` in PATH.",
+                hint="Install mkosi and ensure it is available before running bake.",
+                context={"backend": self.name, "operation": "prepare"},
+            )
