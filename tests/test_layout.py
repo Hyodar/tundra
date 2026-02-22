@@ -12,6 +12,7 @@ CORE_MODULES = [
     "tdx.measure",
     "tdx.deploy",
     "tdx.policy",
+    "tdx.observability",
     "tdx.modules",
 ]
 
