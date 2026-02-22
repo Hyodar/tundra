@@ -85,6 +85,39 @@ class HookSpec:
     after_phase: Phase | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SecretSchema:
+    kind: Literal["string", "json"] = "string"
+    min_length: int | None = None
+    max_length: int | None = None
+    pattern: str | None = None
+    enum: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SecretTarget:
+    kind: Literal["file", "env"]
+    location: str
+    mode: str = "0400"
+    scope: Literal["service", "global"] = "service"
+
+    @classmethod
+    def file(cls, path: str, *, mode: str = "0400") -> SecretTarget:
+        return cls(kind="file", location=path, mode=mode, scope="service")
+
+    @classmethod
+    def env(cls, name: str, *, scope: Literal["service", "global"] = "service") -> SecretTarget:
+        return cls(kind="env", location=name, mode="0400", scope=scope)
+
+
+@dataclass(frozen=True, slots=True)
+class SecretSpec:
+    name: str
+    required: bool = True
+    schema: SecretSchema | None = None
+    targets: tuple[SecretTarget, ...] = ()
+
+
 @dataclass(slots=True)
 class ProfileState:
     name: str
@@ -99,6 +132,7 @@ class ProfileState:
     services: list[ServiceSpec] = field(default_factory=list)
     partitions: list[PartitionSpec] = field(default_factory=list)
     hooks: list[HookSpec] = field(default_factory=list)
+    secrets: list[SecretSpec] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -189,6 +223,9 @@ __all__ = [
     "ProfileState",
     "RepositorySpec",
     "RecipeState",
+    "SecretSchema",
+    "SecretSpec",
+    "SecretTarget",
     "ServiceSpec",
     "TemplateEntry",
     "UserSpec",
