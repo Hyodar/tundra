@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
@@ -45,6 +46,28 @@ class Image:
     def state(self) -> RecipeState:
         return self._state
 
+    @contextmanager
+    def profile(self, name: str) -> Iterator[Self]:
+        with self.profiles(name):
+            yield self
+
+    @contextmanager
+    def profiles(self, *names: str) -> Iterator[Self]:
+        selected = self._normalize_profile_names(names)
+        previous_profiles = self._active_profiles
+        for profile_name in selected:
+            self._state.ensure_profile(profile_name)
+        self._active_profiles = selected
+        try:
+            yield self
+        finally:
+            self._active_profiles = previous_profiles
+
+    @contextmanager
+    def all_profiles(self) -> Iterator[Self]:
+        with self.profiles(*tuple(sorted(self._state.profiles))):
+            yield self
+
     def install(self, *packages: str) -> Self:
         if not packages:
             raise ValidationError("install() requires at least one package.")
@@ -77,7 +100,7 @@ class Image:
         for profile in self._iter_active_profiles():
             command = CommandSpec(
                 argv=tuple(argv),
-                env=env_data,
+                env=dict(env_data),
                 cwd=cwd,
                 shell=shell,
             )
@@ -87,14 +110,14 @@ class Image:
     def lock(self, path: str | Path | None = None) -> Path:
         lock_path = self._normalize_path(path, fallback=self.build_dir / "tdx.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = self._recipe_payload()
+        payload = self._recipe_payload(profile_names=self._active_profiles)
         lock_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return lock_path
 
     def emit_mkosi(self, path: str | Path) -> Path:
         destination = self._normalize_path(path)
         destination.mkdir(parents=True, exist_ok=True)
-        for profile_name in sorted(self._state.profiles):
+        for profile_name in self._sorted_active_profile_names():
             profile = self._state.profiles[profile_name]
             packages = " ".join(sorted(profile.packages))
             lines = [
@@ -115,7 +138,7 @@ class Image:
         destination = self._normalize_path(output_dir, fallback=self.build_dir)
         destination.mkdir(parents=True, exist_ok=True)
         profiles_result: dict[str, ProfileBuildResult] = {}
-        for profile_name in sorted(self._state.profiles):
+        for profile_name in self._sorted_active_profile_names():
             profile = self._state.profiles[profile_name]
             profile_dir = destination / profile_name
             profile_dir.mkdir(parents=True, exist_ok=True)
@@ -145,15 +168,29 @@ class Image:
             return fallback
         return Path(path)
 
+    def _normalize_profile_names(self, names: tuple[str, ...]) -> tuple[str, ...]:
+        if not names:
+            raise ValidationError("At least one profile name is required.")
+        normalized: list[str] = []
+        for name in names:
+            if not name:
+                raise ValidationError("Profile names must be non-empty.")
+            if name not in normalized:
+                normalized.append(name)
+        return tuple(normalized)
+
+    def _sorted_active_profile_names(self) -> list[str]:
+        return sorted(self._active_profiles)
+
     def _iter_active_profiles(self) -> list[ProfileState]:
         profiles: list[ProfileState] = []
         for profile_name in self._active_profiles:
             profiles.append(self._state.ensure_profile(profile_name))
         return profiles
 
-    def _recipe_payload(self) -> dict[str, object]:
+    def _recipe_payload(self, *, profile_names: tuple[str, ...]) -> dict[str, object]:
         profiles_data: dict[str, dict[str, object]] = {}
-        for profile_name in sorted(self._state.profiles):
+        for profile_name in sorted(profile_names):
             profile = self._state.profiles[profile_name]
             phases = {
                 phase: [
