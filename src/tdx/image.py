@@ -8,12 +8,13 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
 from .compiler import PHASE_ORDER, emit_mkosi_tree
-from .errors import DeploymentError, LockfileError, ValidationError
+from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
+from .measure import Measurements, derive_measurements
 from .models import (
     Arch,
     ArtifactRef,
@@ -325,6 +326,32 @@ class Image:
         bake_result = BakeResult(profiles=profiles_result)
         self._last_bake_result = bake_result
         return bake_result
+
+    def measure(
+        self,
+        *,
+        backend: Literal["rtmr", "azure", "gcp"],
+        profile: str | None = None,
+    ) -> Measurements:
+        selected_profile = self._resolve_operation_profile(profile)
+        if self._last_bake_result is None:
+            raise MeasurementError(
+                "No baked artifacts are available for measurement.",
+                hint="Run bake() before measure().",
+                context={"operation": "measure", "profile": selected_profile, "backend": backend},
+            )
+        profile_result = self._last_bake_result.profiles.get(selected_profile)
+        if profile_result is None:
+            raise MeasurementError(
+                "Profile has no baked artifacts for measurement.",
+                hint="Bake the selected profile before measure().",
+                context={"operation": "measure", "profile": selected_profile, "backend": backend},
+            )
+        return derive_measurements(
+            backend=backend,
+            profile=selected_profile,
+            profile_result=profile_result,
+        )
 
     def deploy(
         self,

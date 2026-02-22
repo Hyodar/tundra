@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "TDX VM SDK Contributors" }]
-dependencies = []
+dependencies = ["cbor2>=5.6.5"]
 
 [project.urls]
 Homepage = "https://github.com/flashbots/tdxvm"
