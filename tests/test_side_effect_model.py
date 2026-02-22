@@ -29,7 +29,7 @@ def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
 
     generated = image.emit_mkosi(emit_dir)
     assert generated == emit_dir
-    assert (emit_dir / "mkosi.default.conf").exists()
+    assert (emit_dir / "default" / "mkosi.conf").exists()
 
     result = image.bake()
     assert result.artifact_for(profile="default", target="qemu") is not None

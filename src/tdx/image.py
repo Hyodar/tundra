@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
+from .compiler import emit_mkosi_tree
 from .errors import ValidationError
 from .models import (
     Arch,
@@ -116,22 +117,12 @@ class Image:
 
     def emit_mkosi(self, path: str | Path) -> Path:
         destination = self._normalize_path(path)
-        destination.mkdir(parents=True, exist_ok=True)
-        for profile_name in self._sorted_active_profile_names():
-            profile = self._state.profiles[profile_name]
-            packages = " ".join(sorted(profile.packages))
-            lines = [
-                "[Distribution]",
-                f"Base={self.base}",
-                "",
-                "[Output]",
-                f"ImageId={profile_name}",
-                "",
-                "[Content]",
-                f"Packages={packages}",
-            ]
-            conf_path = destination / f"mkosi.{profile_name}.conf"
-            conf_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        emit_mkosi_tree(
+            recipe=self._state,
+            destination=destination,
+            profile_names=self._active_profiles,
+            base=self.base,
+        )
         return destination
 
     def bake(self, output_dir: str | Path | None = None) -> BakeResult:
