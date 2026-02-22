@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Self
 
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
-from .compiler import emit_mkosi_tree
+from .compiler import PHASE_ORDER, emit_mkosi_tree
 from .errors import DeploymentError, LockfileError, ValidationError
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
 from .models import (
@@ -20,11 +20,18 @@ from .models import (
     BakeResult,
     CommandSpec,
     DeployResult,
+    FileEntry,
+    HookSpec,
     OutputTarget,
+    PartitionSpec,
     Phase,
     ProfileBuildResult,
     ProfileState,
     RecipeState,
+    RepositorySpec,
+    ServiceSpec,
+    TemplateEntry,
+    UserSpec,
 )
 
 
@@ -84,6 +91,100 @@ class Image:
             profile.packages.update(packages)
         return self
 
+    def repository(self, name: str, url: str, *, priority: int = 100) -> Self:
+        if not name:
+            raise ValidationError("repository() requires a non-empty name.")
+        if not url:
+            raise ValidationError("repository() requires a non-empty URL.")
+        for profile in self._iter_active_profiles():
+            profile.repositories.append(RepositorySpec(name=name, url=url, priority=priority))
+        return self
+
+    def file(
+        self,
+        path: str,
+        *,
+        content: str | None = None,
+        src: str | Path | None = None,
+        mode: str = "0644",
+    ) -> Self:
+        if not path:
+            raise ValidationError("file() requires a destination path.")
+        if (content is None) == (src is None):
+            raise ValidationError("file() requires exactly one of content= or src=.")
+        if content is not None:
+            resolved_content = content
+        else:
+            if src is None:
+                raise ValidationError("file() requires src when content is not provided.")
+            resolved_content = Path(src).read_text(encoding="utf-8")
+        for profile in self._iter_active_profiles():
+            profile.files.append(FileEntry(path=path, content=resolved_content, mode=mode))
+        return self
+
+    def template(
+        self,
+        path: str,
+        *,
+        template: str,
+        variables: Mapping[str, str],
+        mode: str = "0644",
+    ) -> Self:
+        if not path:
+            raise ValidationError("template() requires a destination path.")
+        ordered_variables = dict(sorted(variables.items()))
+        try:
+            rendered = template.format_map(ordered_variables)
+        except KeyError as exc:
+            raise ValidationError(
+                "template() variables are missing required placeholders.",
+                hint="Provide all placeholder keys used in the template string.",
+                context={"path": path, "missing_key": str(exc)},
+            ) from exc
+        entry = TemplateEntry(
+            path=path,
+            template=template,
+            variables=ordered_variables,
+            rendered=rendered,
+            mode=mode,
+        )
+        for profile in self._iter_active_profiles():
+            profile.templates.append(entry)
+        return self
+
+    def user(
+        self,
+        name: str,
+        *,
+        uid: int | None = None,
+        gid: int | None = None,
+        shell: str = "/usr/sbin/nologin",
+    ) -> Self:
+        if not name:
+            raise ValidationError("user() requires a non-empty user name.")
+        entry = UserSpec(name=name, uid=uid, gid=gid, shell=shell)
+        for profile in self._iter_active_profiles():
+            profile.users.append(entry)
+        return self
+
+    def service(self, name: str, *, enabled: bool = True, wants: tuple[str, ...] = ()) -> Self:
+        if not name:
+            raise ValidationError("service() requires a non-empty service name.")
+        entry = ServiceSpec(name=name, enabled=enabled, wants=tuple(dict.fromkeys(wants)))
+        for profile in self._iter_active_profiles():
+            profile.services.append(entry)
+        return self
+
+    def partition(self, name: str, *, size: str, mount: str, fs: str = "ext4") -> Self:
+        if not name:
+            raise ValidationError("partition() requires a non-empty name.")
+        if not size or not mount:
+            raise ValidationError("partition() requires both size and mount values.")
+        entry = PartitionSpec(name=name, size=size, mount=mount, fs=fs)
+        for profile in self._iter_active_profiles():
+            profile.partitions.append(entry)
+        return self
+
     def output_targets(self, *targets: OutputTarget) -> Self:
         if not targets:
             raise ValidationError("output_targets() requires at least one target.")
@@ -100,8 +201,26 @@ class Image:
         cwd: str | None = None,
         shell: bool = False,
     ) -> Self:
+        return self.hook(
+            phase,
+            *argv,
+            env=env,
+            cwd=cwd,
+            shell=shell,
+        )
+
+    def hook(
+        self,
+        phase: Phase,
+        *argv: str,
+        env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
+        shell: bool = False,
+        after_phase: Phase | None = None,
+    ) -> Self:
         if not argv:
-            raise ValidationError("run() requires a command argv.")
+            raise ValidationError("hook() requires a command argv.")
+        self._validate_phase_order(phase=phase, after_phase=after_phase)
         env_data = dict(env or {})
         for profile in self._iter_active_profiles():
             command = CommandSpec(
@@ -111,6 +230,7 @@ class Image:
                 shell=shell,
             )
             profile.phases.setdefault(phase, []).append(command)
+            profile.hooks.append(HookSpec(phase=phase, command=command, after_phase=after_phase))
         return self
 
     def lock(self, path: str | Path | None = None) -> Path:
@@ -245,6 +365,18 @@ class Image:
                 normalized.append(name)
         return tuple(normalized)
 
+    def _validate_phase_order(self, *, phase: Phase, after_phase: Phase | None) -> None:
+        if after_phase is None:
+            return
+        phase_index = PHASE_ORDER.index(phase)
+        after_index = PHASE_ORDER.index(after_phase)
+        if after_index >= phase_index:
+            raise ValidationError(
+                "Invalid phase hook dependency order.",
+                hint="after_phase must be earlier than the hook phase.",
+                context={"phase": phase, "after_phase": after_phase},
+            )
+
     def _sorted_active_profile_names(self) -> list[str]:
         return sorted(self._active_profiles)
 
@@ -287,11 +419,87 @@ class Image:
                 ]
                 for phase, commands in sorted(profile.phases.items())
             }
+            repositories = [
+                {
+                    "name": repository.name,
+                    "url": repository.url,
+                    "priority": repository.priority,
+                }
+                for repository in sorted(
+                    profile.repositories,
+                    key=lambda item: (item.priority, item.name, item.url),
+                )
+            ]
+            files = [
+                {
+                    "path": file_entry.path,
+                    "mode": file_entry.mode,
+                    "sha256": hashlib.sha256(file_entry.content.encode()).hexdigest(),
+                }
+                for file_entry in sorted(profile.files, key=lambda item: item.path)
+            ]
+            templates = [
+                {
+                    "path": template.path,
+                    "mode": template.mode,
+                    "sha256": hashlib.sha256(template.rendered.encode()).hexdigest(),
+                    "variables": dict(sorted(template.variables.items())),
+                }
+                for template in sorted(profile.templates, key=lambda item: item.path)
+            ]
+            users = [
+                {
+                    "name": user.name,
+                    "uid": user.uid,
+                    "gid": user.gid,
+                    "shell": user.shell,
+                }
+                for user in sorted(profile.users, key=lambda item: item.name)
+            ]
+            services = [
+                {
+                    "name": service.name,
+                    "enabled": service.enabled,
+                    "wants": list(service.wants),
+                }
+                for service in sorted(profile.services, key=lambda item: item.name)
+            ]
+            partitions = [
+                {
+                    "name": partition.name,
+                    "size": partition.size,
+                    "mount": partition.mount,
+                    "fs": partition.fs,
+                }
+                for partition in sorted(profile.partitions, key=lambda item: item.name)
+            ]
+            hooks = [
+                {
+                    "phase": hook.phase,
+                    "after_phase": hook.after_phase,
+                    "argv": list(hook.command.argv),
+                }
+                for hook in sorted(
+                    profile.hooks,
+                    key=lambda item: (
+                        PHASE_ORDER.index(item.phase),
+                        item.after_phase or "",
+                        item.command.argv,
+                    ),
+                )
+            ]
             profiles_data[profile_name] = {
                 "packages": sorted(profile.packages),
                 "build_packages": sorted(profile.build_packages),
                 "output_targets": list(profile.output_targets),
                 "phases": phases,
+                "repositories": repositories,
+                "files": files,
+                "templates": templates,
+                "users": users,
+                "services": services,
+                "partitions": partitions,
+                "hooks": hooks,
             }
 
         return {
