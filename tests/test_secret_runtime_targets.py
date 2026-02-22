@@ -56,7 +56,7 @@ def test_materialization_requires_all_required_when_completion_all_required(tmp_
 
 def test_secret_values_are_not_persisted_in_lockfile(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build")
-    image.secret(
+    secret = image.secret(
         "api_token",
         required=True,
         schema=SecretSchema(kind="string", min_length=4),
@@ -66,7 +66,6 @@ def test_secret_values_are_not_persisted_in_lockfile(tmp_path: Path) -> None:
         ),
     )
 
-    secret = image.state.profiles["default"].secrets[0]
     delivery = Init(secrets=(secret,)).secrets_delivery("http_post")
     delivery.validate_payload({"api_token": "super-secret-value"})
     delivery.materialize_runtime(tmp_path / "runtime")

@@ -7,7 +7,7 @@ from tdx.modules import Init
 
 def configure_strict_secrets() -> None:
     img = Image()
-    img.secret(
+    api_token = img.secret(
         "api_token",
         required=True,
         schema=SecretSchema(kind="string", min_length=10, pattern="^tok_"),
@@ -17,13 +17,13 @@ def configure_strict_secrets() -> None:
         ),
     )
 
-    secret_spec = img.state.profiles["default"].secrets[0]
-    init = Init(secrets=(secret_spec,))
+    init = Init(secrets=(api_token,))
     delivery = init.secrets_delivery(
         "http_post",
         completion="all_required",
         reject_unknown=True,
     )
+    img.use(init)
 
     validation = delivery.validate_payload({"api_token": "tok_0123456789"})
     if validation.ready:

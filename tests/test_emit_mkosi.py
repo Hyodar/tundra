@@ -11,8 +11,8 @@ from tdx.models import Phase
 def test_emit_mkosi_golden_output(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.install("jq", "curl")
-    image.run("prepare", "echo", "prep", env={"B": "2", "A": "1"}, cwd="/work")
-    image.run("build", "echo", "build")
+    image.run("echo", "prep", phase="prepare", env={"B": "2", "A": "1"}, cwd="/work")
+    image.run("echo", "build", phase="build")
 
     output_dir = image.emit_mkosi(tmp_path / "mkosi")
 
@@ -52,7 +52,7 @@ def test_emit_mkosi_golden_output(tmp_path: Path) -> None:
 def test_emit_mkosi_is_deterministic(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.install("curl")
-    image.run("prepare", "echo", "hello")
+    image.run("echo", "hello", phase="prepare")
 
     output_a = image.emit_mkosi(tmp_path / "mkosi-a")
     output_b = image.emit_mkosi(tmp_path / "mkosi-b")

@@ -52,6 +52,7 @@ def test_init_supports_disk_encryption_ssh_and_secret_delivery() -> None:
     assert any(file.path == "/etc/tdx/init/disk-encryption.json" for file in profile.files)
     assert any(file.path == "/root/.ssh/authorized_keys" for file in profile.files)
     assert any(file.path == "/etc/tdx/init/secrets-delivery.json" for file in profile.files)
+    assert any(file.path == "/etc/tdx/init/phases.json" for file in profile.files)
     assert any(service.name == "secrets-ready.target" for service in profile.services)
 
 
@@ -78,3 +79,26 @@ def test_init_secret_delivery_integration_materializes_runtime(tmp_path: Path) -
     assert (tmp_path / "run/secrets/api-token").exists()
     assert artifacts.global_env_path is not None
     assert artifacts.global_env_path.exists()
+
+
+def test_image_use_applies_module_setup_and_install_and_infers_declared_secrets() -> None:
+    image = Image()
+    image.secret(
+        "jwt_secret",
+        required=True,
+        schema=SecretSchema(kind="string", min_length=64, max_length=64),
+        targets=(SecretTarget.file("/run/tdx-secrets/jwt.hex"),),
+    )
+
+    init = Init()
+    delivery = init.secrets_delivery("http_post")
+    image.use(init, Tdxs.issuer())
+
+    profile = image.state.profiles["default"]
+    assert "python3" in profile.packages
+    assert "tdx-attestation-issuer" in profile.packages
+    assert any(file.path == "/etc/tdx/init/phases.json" for file in profile.files)
+    assert any(service.name == "tdxs.service" for service in profile.services)
+
+    validation = delivery.validate_payload({"jwt_secret": "a" * 64})
+    assert validation.ready is True
