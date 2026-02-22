@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -10,7 +9,8 @@ from pathlib import Path
 from typing import Self
 
 from .compiler import emit_mkosi_tree
-from .errors import DeploymentError, ValidationError
+from .errors import DeploymentError, LockfileError, ValidationError
+from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
 from .models import (
     Arch,
     ArtifactRef,
@@ -111,11 +111,10 @@ class Image:
         return self
 
     def lock(self, path: str | Path | None = None) -> Path:
-        lock_path = self._normalize_path(path, fallback=self.build_dir / "tdx.lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self._normalize_path(path, fallback=self._default_lock_path())
         payload = self._recipe_payload(profile_names=self._active_profiles)
-        lock_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return lock_path
+        lock = build_lockfile(recipe=payload)
+        return write_lockfile(lock, lock_path)
 
     def emit_mkosi(self, path: str | Path) -> Path:
         destination = self._normalize_path(path)
@@ -127,7 +126,9 @@ class Image:
         )
         return destination
 
-    def bake(self, output_dir: str | Path | None = None) -> BakeResult:
+    def bake(self, output_dir: str | Path | None = None, *, frozen: bool = False) -> BakeResult:
+        if frozen:
+            self._assert_frozen_lock(profile_names=self._active_profiles)
         destination = self._normalize_path(output_dir, fallback=self.build_dir)
         destination.mkdir(parents=True, exist_ok=True)
         profiles_result: dict[str, ProfileBuildResult] = {}
@@ -215,6 +216,9 @@ class Image:
     def _sorted_active_profile_names(self) -> list[str]:
         return sorted(self._active_profiles)
 
+    def _default_lock_path(self) -> Path:
+        return self.build_dir / "tdx.lock"
+
     def _resolve_operation_profile(self, profile: str | None) -> str:
         if profile is not None:
             return profile
@@ -261,6 +265,24 @@ class Image:
             "default_profile": self._state.default_profile,
             "profiles": profiles_data,
         }
+
+    def _assert_frozen_lock(self, *, profile_names: tuple[str, ...]) -> None:
+        lock_path = self._default_lock_path()
+        lock = read_lockfile(lock_path)
+        current_recipe = self._recipe_payload(profile_names=profile_names)
+        current_digest = recipe_digest(current_recipe)
+        if lock.recipe_digest != current_digest:
+            raise LockfileError(
+                "Frozen bake lockfile is stale for current recipe state.",
+                hint="Re-run img.lock() and commit the updated lockfile.",
+                context={
+                    "operation": "bake",
+                    "mode": "frozen",
+                    "expected": current_digest,
+                    "actual": lock.recipe_digest,
+                    "path": str(lock_path),
+                },
+            )
 
     def _convert_artifact(
         self,
