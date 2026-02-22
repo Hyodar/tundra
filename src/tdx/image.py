@@ -17,6 +17,8 @@ from .errors import DeploymentError, LockfileError, MeasurementError, Validation
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
 from .measure import Measurements, derive_measurements
 from .models import (
+    DEFAULT_DEBLOAT_MASK,
+    DEFAULT_DEBLOAT_REMOVE,
     Arch,
     ArtifactRef,
     BakeResult,
@@ -216,6 +218,31 @@ class Image:
             profile.output_targets = deduped
         return self
 
+    def debloat(
+        self,
+        *,
+        enabled: bool = True,
+        remove: tuple[str, ...] | None = None,
+        mask: tuple[str, ...] | None = None,
+    ) -> Self:
+        remove_items = tuple(sorted(dict.fromkeys(remove or DEFAULT_DEBLOAT_REMOVE)))
+        mask_items = tuple(sorted(dict.fromkeys(mask or DEFAULT_DEBLOAT_MASK)))
+        for profile in self._iter_active_profiles():
+            profile.debloat_enabled = enabled
+            profile.debloat_remove = remove_items if enabled else ()
+            profile.debloat_mask = mask_items if enabled else ()
+        return self
+
+    def explain_debloat(self, *, profile: str | None = None) -> dict[str, object]:
+        selected_profile = self._resolve_operation_profile(profile)
+        profile_state = self._state.ensure_profile(selected_profile)
+        return {
+            "profile": selected_profile,
+            "enabled": profile_state.debloat_enabled,
+            "remove": list(profile_state.debloat_remove),
+            "mask": list(profile_state.debloat_mask),
+        }
+
     def run(
         self,
         phase: Phase,
@@ -290,7 +317,12 @@ class Image:
             cache_misses: list[str] = []
             source_artifact = profile_dir / "image.raw"
             source_artifact.write_text(
-                f"tdxvm base artifact: profile={profile_name}\n",
+                (
+                    f"tdxvm base artifact: profile={profile_name}\n"
+                    f"debloat_enabled={profile.debloat_enabled}\n"
+                    f"debloat_remove={','.join(profile.debloat_remove)}\n"
+                    f"debloat_mask={','.join(profile.debloat_mask)}\n"
+                ),
                 encoding="utf-8",
             )
             for target in profile.output_targets:
@@ -314,6 +346,7 @@ class Image:
                     "hits": cache_hits,
                     "misses": cache_misses,
                 },
+                "debloat": self.explain_debloat(profile=profile_name),
                 "artifacts": {
                     target: str(artifact.path)
                     for target, artifact in profile_result.artifacts.items()
@@ -573,6 +606,11 @@ class Image:
                 "partitions": partitions,
                 "hooks": hooks,
                 "secrets": secrets,
+                "debloat": {
+                    "enabled": profile.debloat_enabled,
+                    "remove": list(profile.debloat_remove),
+                    "mask": list(profile.debloat_mask),
+                },
             }
 
         return {
