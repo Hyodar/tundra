@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Self
 
 from .compiler import emit_mkosi_tree
-from .errors import ValidationError
+from .errors import DeploymentError, ValidationError
 from .models import (
     Arch,
     ArtifactRef,
     BakeResult,
     CommandSpec,
+    DeployResult,
     OutputTarget,
     Phase,
     ProfileBuildResult,
@@ -34,6 +35,7 @@ class Image:
     default_profile: str = "default"
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
+    _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._state = RecipeState.initialize(
@@ -134,15 +136,55 @@ class Image:
             profile_dir = destination / profile_name
             profile_dir.mkdir(parents=True, exist_ok=True)
             profile_result = ProfileBuildResult(profile=profile_name)
+            source_artifact = profile_dir / "image.raw"
+            source_artifact.write_text(
+                f"tdxvm base artifact: profile={profile_name}\n",
+                encoding="utf-8",
+            )
             for target in profile.output_targets:
-                artifact_path = profile_dir / self._artifact_filename(target)
-                artifact_path.write_text(
-                    f"tdxvm placeholder artifact: profile={profile_name}, target={target}\n",
-                    encoding="utf-8",
+                artifact_ref = self._convert_artifact(
+                    source_artifact=source_artifact,
+                    profile_name=profile_name,
+                    target=target,
                 )
-                profile_result.artifacts[target] = ArtifactRef(target=target, path=artifact_path)
+                profile_result.artifacts[target] = artifact_ref
             profiles_result[profile_name] = profile_result
-        return BakeResult(profiles=profiles_result)
+        bake_result = BakeResult(profiles=profiles_result)
+        self._last_bake_result = bake_result
+        return bake_result
+
+    def deploy(
+        self,
+        *,
+        target: OutputTarget,
+        profile: str | None = None,
+        parameters: Mapping[str, str] | None = None,
+    ) -> DeployResult:
+        selected_profile = self._resolve_operation_profile(profile)
+        if self._last_bake_result is None:
+            raise DeploymentError(
+                "No baked artifacts are available for deployment.",
+                hint="Run bake() before deploy().",
+                context={"operation": "deploy", "profile": selected_profile, "target": target},
+            )
+
+        artifact = self._last_bake_result.artifact_for(profile=selected_profile, target=target)
+        if artifact is None:
+            raise DeploymentError(
+                "Requested deploy target artifact was not baked.",
+                hint="Add the target via output_targets(...) and rerun bake().",
+                context={"operation": "deploy", "profile": selected_profile, "target": target},
+            )
+
+        deployment_id = f"local-{selected_profile}-{target}"
+        metadata: dict[str, str] = {"artifact_path": str(artifact.path)}
+        if parameters is not None:
+            metadata.update(parameters)
+        return DeployResult(
+            target=target,
+            deployment_id=deployment_id,
+            metadata=metadata,
+        )
 
     def _artifact_filename(self, target: OutputTarget) -> str:
         mapping: dict[OutputTarget, str] = {
@@ -172,6 +214,17 @@ class Image:
 
     def _sorted_active_profile_names(self) -> list[str]:
         return sorted(self._active_profiles)
+
+    def _resolve_operation_profile(self, profile: str | None) -> str:
+        if profile is not None:
+            return profile
+        if len(self._active_profiles) == 1:
+            return self._active_profiles[0]
+        raise ValidationError(
+            "Operation requires an explicit profile when multiple profiles are active.",
+            hint="Pass profile='name' to deploy().",
+            context={"operation": "deploy"},
+        )
 
     def _iter_active_profiles(self) -> list[ProfileState]:
         profiles: list[ProfileState] = []
@@ -208,3 +261,22 @@ class Image:
             "default_profile": self._state.default_profile,
             "profiles": profiles_data,
         }
+
+    def _convert_artifact(
+        self,
+        *,
+        source_artifact: Path,
+        profile_name: str,
+        target: OutputTarget,
+    ) -> ArtifactRef:
+        artifact_path = source_artifact.parent / self._artifact_filename(target)
+        artifact_path.write_text(
+            (
+                "tdxvm converted artifact:\n"
+                f"profile={profile_name}\n"
+                f"target={target}\n"
+                f"source={source_artifact.name}\n"
+            ),
+            encoding="utf-8",
+        )
+        return ArtifactRef(target=target, path=artifact_path)
