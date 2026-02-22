@@ -9,6 +9,15 @@ from typing import Literal
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
+DEFAULT_DEBLOAT_REMOVE = (
+    "cloud-init",
+    "man-db",
+    "info",
+)
+DEFAULT_DEBLOAT_MASK = (
+    "debug-shell.service",
+    "systemd-networkd-wait-online.service",
+)
 Phase = Literal[
     "sync",
     "skeleton",
@@ -133,6 +142,9 @@ class ProfileState:
     partitions: list[PartitionSpec] = field(default_factory=list)
     hooks: list[HookSpec] = field(default_factory=list)
     secrets: list[SecretSpec] = field(default_factory=list)
+    debloat_enabled: bool = True
+    debloat_remove: tuple[str, ...] = DEFAULT_DEBLOAT_REMOVE
+    debloat_mask: tuple[str, ...] = DEFAULT_DEBLOAT_MASK
 
 
 @dataclass(slots=True)
@@ -215,6 +227,8 @@ __all__ = [
     "CommandSpec",
     "DeployRequest",
     "DeployResult",
+    "DEFAULT_DEBLOAT_MASK",
+    "DEFAULT_DEBLOAT_REMOVE",
     "FileEntry",
     "HookSpec",
     "OutputTarget",
