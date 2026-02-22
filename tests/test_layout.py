@@ -11,6 +11,7 @@ CORE_MODULES = [
     "tdx.lockfile",
     "tdx.measure",
     "tdx.deploy",
+    "tdx.policy",
     "tdx.modules",
 ]
 

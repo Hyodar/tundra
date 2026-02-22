@@ -15,6 +15,7 @@ class ErrorCode(StrEnum):
     BACKEND_EXECUTION = "E_BACKEND_EXECUTION"
     MEASUREMENT = "E_MEASUREMENT"
     DEPLOYMENT = "E_DEPLOYMENT"
+    POLICY = "E_POLICY"
 
 
 class TdxError(Exception):
@@ -114,12 +115,24 @@ class DeploymentError(TdxError):
         super().__init__(message, code=ErrorCode.DEPLOYMENT, hint=hint, context=context)
 
 
+class PolicyError(TdxError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        hint: str | None = None,
+        context: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(message, code=ErrorCode.POLICY, hint=hint, context=context)
+
+
 __all__ = [
     "BackendExecutionError",
     "DeploymentError",
     "ErrorCode",
     "LockfileError",
     "MeasurementError",
+    "PolicyError",
     "ReproducibilityError",
     "TdxError",
     "ValidationError",
