@@ -2,6 +2,7 @@ import importlib
 
 CORE_MODULES = [
     "tdx.image",
+    "tdx.cache",
     "tdx.ir",
     "tdx.compiler",
     "tdx.backends",

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
+from .cache import BuildCacheInput, BuildCacheStore, cache_key
 from .compiler import emit_mkosi_tree
 from .errors import DeploymentError, LockfileError, ValidationError
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
@@ -131,24 +134,53 @@ class Image:
             self._assert_frozen_lock(profile_names=self._active_profiles)
         destination = self._normalize_path(output_dir, fallback=self.build_dir)
         destination.mkdir(parents=True, exist_ok=True)
+        recipe_lock_digest = recipe_digest(
+            self._recipe_payload(profile_names=self._active_profiles),
+        )
         profiles_result: dict[str, ProfileBuildResult] = {}
         for profile_name in self._sorted_active_profile_names():
             profile = self._state.profiles[profile_name]
             profile_dir = destination / profile_name
             profile_dir.mkdir(parents=True, exist_ok=True)
             profile_result = ProfileBuildResult(profile=profile_name)
+            cache_hits: list[str] = []
+            cache_misses: list[str] = []
             source_artifact = profile_dir / "image.raw"
             source_artifact.write_text(
                 f"tdxvm base artifact: profile={profile_name}\n",
                 encoding="utf-8",
             )
             for target in profile.output_targets:
-                artifact_ref = self._convert_artifact(
+                artifact_ref, cache_hit = self._convert_artifact(
                     source_artifact=source_artifact,
                     profile_name=profile_name,
                     target=target,
+                    dependencies=tuple(sorted(profile.packages)),
                 )
                 profile_result.artifacts[target] = artifact_ref
+                if cache_hit:
+                    cache_hits.append(target)
+                else:
+                    cache_misses.append(target)
+
+            report_path = profile_dir / "report.json"
+            report_payload = {
+                "profile": profile_name,
+                "lock_digest": recipe_lock_digest,
+                "cache": {
+                    "hits": cache_hits,
+                    "misses": cache_misses,
+                },
+                "artifacts": {
+                    target: str(artifact.path)
+                    for target, artifact in profile_result.artifacts.items()
+                },
+            }
+            report_path.write_text(
+                json.dumps(report_payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            profile_result.report_path = report_path
             profiles_result[profile_name] = profile_result
         bake_result = BakeResult(profiles=profiles_result)
         self._last_bake_result = bake_result
@@ -218,6 +250,9 @@ class Image:
 
     def _default_lock_path(self) -> Path:
         return self.build_dir / "tdx.lock"
+
+    def _cache_store(self) -> BuildCacheStore:
+        return BuildCacheStore(self.build_dir / ".cache" / "conversion")
 
     def _resolve_operation_profile(self, profile: str | None) -> str:
         if profile is not None:
@@ -290,15 +325,32 @@ class Image:
         source_artifact: Path,
         profile_name: str,
         target: OutputTarget,
-    ) -> ArtifactRef:
+        dependencies: tuple[str, ...],
+    ) -> tuple[ArtifactRef, bool]:
         artifact_path = source_artifact.parent / self._artifact_filename(target)
-        artifact_path.write_text(
-            (
-                "tdxvm converted artifact:\n"
-                f"profile={profile_name}\n"
-                f"target={target}\n"
-                f"source={source_artifact.name}\n"
-            ),
-            encoding="utf-8",
+        source_hash = hashlib.sha256(source_artifact.read_bytes()).hexdigest()
+        inputs = BuildCacheInput(
+            source_hash=source_hash,
+            source_tree=source_hash,
+            toolchain="converter-v1",
+            flags=(f"target={target}",),
+            dependencies=dependencies,
+            env={},
+            target=target,
         )
-        return ArtifactRef(target=target, path=artifact_path)
+        key = cache_key(inputs)
+        cache_store = self._cache_store()
+        cached_payload = cache_store.load(key=key, expected_inputs=inputs)
+        if cached_payload is not None:
+            artifact_path.write_bytes(cached_payload)
+            return ArtifactRef(target=target, path=artifact_path), True
+
+        payload = (
+            "tdxvm converted artifact:\n"
+            f"profile={profile_name}\n"
+            f"target={target}\n"
+            f"source={source_artifact.name}\n"
+        ).encode()
+        artifact_path.write_bytes(payload)
+        cache_store.save(inputs=inputs, artifact=payload)
+        return ArtifactRef(target=target, path=artifact_path), False
