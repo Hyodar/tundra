@@ -41,6 +41,7 @@ from .models import (
     TemplateEntry,
     UserSpec,
 )
+from .observability import StructuredLogger
 from .policy import Policy, ensure_bake_policy
 
 
@@ -53,6 +54,7 @@ class Image:
     arch: Arch = "x86_64"
     default_profile: str = "default"
     policy: Policy = field(default_factory=Policy)
+    logger: StructuredLogger = field(default_factory=StructuredLogger)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
@@ -314,12 +316,21 @@ class Image:
         recipe_lock_digest = recipe_digest(
             self._recipe_payload(profile_names=self._active_profiles),
         )
+        lock_digest = self._compute_lock_digest(recipe_lock_digest)
         profiles_result: dict[str, ProfileBuildResult] = {}
         for profile_name in self._sorted_active_profile_names():
             profile = self._state.profiles[profile_name]
             profile_dir = destination / profile_name
             profile_dir.mkdir(parents=True, exist_ok=True)
             profile_result = ProfileBuildResult(profile=profile_name)
+            self.logger.log(
+                operation="bake_profile_start",
+                profile=profile_name,
+                phase="build",
+                module="image",
+                builder="converter",
+                message="Starting profile bake.",
+            )
             cache_hits: list[str] = []
             cache_misses: list[str] = []
             source_artifact = profile_dir / "image.raw"
@@ -344,20 +355,46 @@ class Image:
                     cache_hits.append(target)
                 else:
                     cache_misses.append(target)
+                self.logger.log(
+                    operation="convert_artifact",
+                    profile=profile_name,
+                    phase="build",
+                    module="image",
+                    builder="converter",
+                    message="Converted target artifact.",
+                    extra={"target": target, "cache_hit": cache_hit},
+                )
+
+            emission_root = profile_dir / "mkosi"
+            emission = emit_mkosi_tree(
+                recipe=self._state,
+                destination=emission_root,
+                profile_names=(profile_name,),
+                base=self.base,
+            )
+            script_checksums = self._script_checksums(emission.script_paths.get(profile_name, {}))
+            artifact_digests = {
+                target: hashlib.sha256(Path(artifact.path).read_bytes()).hexdigest()
+                for target, artifact in sorted(profile_result.artifacts.items())
+            }
+            profile_logs = self.logger.records_for_profile(profile_name)
 
             report_path = profile_dir / "report.json"
             report_payload = {
                 "profile": profile_name,
-                "lock_digest": recipe_lock_digest,
+                "lock_digest": lock_digest,
                 "cache": {
                     "hits": cache_hits,
                     "misses": cache_misses,
                 },
                 "debloat": self.explain_debloat(profile=profile_name),
+                "artifact_digests": artifact_digests,
+                "emitted_scripts": script_checksums,
                 "artifacts": {
                     target: str(artifact.path)
                     for target, artifact in profile_result.artifacts.items()
                 },
+                "logs": profile_logs,
             }
             report_path.write_text(
                 json.dumps(report_payload, indent=2, sort_keys=True) + "\n",
@@ -365,6 +402,14 @@ class Image:
             )
             profile_result.report_path = report_path
             profiles_result[profile_name] = profile_result
+            self.logger.log(
+                operation="bake_profile_complete",
+                profile=profile_name,
+                phase="build",
+                module="image",
+                builder="converter",
+                message="Completed profile bake.",
+            )
         bake_result = BakeResult(profiles=profiles_result)
         self._last_bake_result = bake_result
         return bake_result
@@ -469,6 +514,12 @@ class Image:
 
     def _default_lock_path(self) -> Path:
         return self.build_dir / "tdx.lock"
+
+    def _compute_lock_digest(self, fallback_digest: str) -> str:
+        lock_path = self._default_lock_path()
+        if not lock_path.exists():
+            return fallback_digest
+        return hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
     def _cache_store(self) -> BuildCacheStore:
         return BuildCacheStore(self.build_dir / ".cache" / "conversion")
@@ -626,6 +677,13 @@ class Image:
             "default_profile": self._state.default_profile,
             "profiles": profiles_data,
         }
+
+    def _script_checksums(self, scripts: dict[Phase, Path]) -> dict[str, str]:
+        checksums: dict[str, str] = {}
+        for phase, path in sorted(scripts.items(), key=lambda item: PHASE_ORDER.index(item[0])):
+            checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+            checksums[f"{phase}:{path.name}"] = checksum
+        return checksums
 
     def _assert_frozen_lock(self, *, profile_names: tuple[str, ...]) -> None:
         lock_path = self._default_lock_path()
