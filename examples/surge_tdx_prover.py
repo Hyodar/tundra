@@ -18,7 +18,6 @@ kernel/, surge-tdx-prover/, services/, and profiles/.
 from __future__ import annotations
 
 from examples.nethermind_tdx import build_nethermind_base
-
 from tdx import Image
 from tdx.modules import Nethermind, Raiko, TaikoClient, TdxInit
 from tdx.profiles import apply_azure_profile, apply_devtools_profile, apply_gcp_profile
