@@ -16,6 +16,7 @@ from .init import (
     SecretsRuntimeArtifacts,
     SshKeyDeliveryConfig,
 )
+from .tdx_init import TdxInit
 from .tdxs import Tdxs
 
 if TYPE_CHECKING:
@@ -42,5 +43,6 @@ __all__ = [
     "SecretDeliveryValidation",
     "SecretsRuntimeArtifacts",
     "SshKeyDeliveryConfig",
+    "TdxInit",
     "Tdxs",
 ]
