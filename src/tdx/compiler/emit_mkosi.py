@@ -836,6 +836,19 @@ class DeterministicMkosiEmitter:
             for path in sorted(paths):
                 lines.append(f"rm -rf \"$BUILDROOT{path}\"")
 
+        # Profile-conditional path removal: paths removed only when profile is NOT active
+        conditional = config.profile_conditional_paths
+        if conditional:
+            lines.append("")
+            lines.append("# Debloat: profile-conditional path removal")
+            for profile_name in sorted(conditional):
+                for path in conditional[profile_name]:
+                    lines.append(
+                        f'if [[ ! "${{PROFILES:-}}" == *"{profile_name}"* ]]; then'
+                    )
+                    lines.append(f"    rm -rf \"$BUILDROOT{path}\"")
+                    lines.append("fi")
+
         return lines
 
     def _render_postinst_script(

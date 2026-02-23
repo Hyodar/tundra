@@ -744,6 +744,54 @@ def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
     assert "debian-backports.sources" in conf
 
 
+def test_compile_debloat_profile_conditional_paths(tmp_path: Path) -> None:
+    """Profile-conditional debloat emits if-guard in finalize script."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.debloat(
+        enabled=True,
+        paths_skip_for_profiles={
+            "devtools": ("/usr/share/bash-completion",),
+        },
+    )
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    finalize = output_dir / "default" / "scripts" / "07-finalize.sh"
+    assert finalize.exists()
+    content = finalize.read_text(encoding="utf-8")
+
+    # /usr/share/bash-completion should NOT appear in unconditional rm -rf section
+    unconditional_section = content.split("# Debloat: profile-conditional")[0]
+    assert "/usr/share/bash-completion" not in unconditional_section
+
+    # It should appear in the conditional section with profile guard
+    assert '${PROFILES:-}' in content
+    assert '"devtools"' in content
+    assert "/usr/share/bash-completion" in content
+    assert 'if [[ ! "${PROFILES:-}" == *"devtools"* ]]; then' in content
+
+
+def test_compile_debloat_profile_conditional_unconditional_coexist(
+    tmp_path: Path,
+) -> None:
+    """Unconditional paths are still removed alongside conditional ones."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.debloat(
+        enabled=True,
+        paths_skip_for_profiles={
+            "devtools": ("/usr/share/bash-completion",),
+        },
+    )
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    finalize = output_dir / "default" / "scripts" / "07-finalize.sh"
+    content = finalize.read_text(encoding="utf-8")
+
+    # Unconditional paths still present (e.g. /usr/share/doc)
+    assert 'rm -rf "$BUILDROOT/usr/share/doc"' in content
+    # Conditional path is guarded
+    assert 'rm -rf "$BUILDROOT/usr/share/bash-completion"' in content
+
+
 def _snapshot_tree(root: Path) -> dict[str, str]:
     snapshot: dict[str, str] = {}
     for path in sorted(root.rglob("*")):

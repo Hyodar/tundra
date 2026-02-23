@@ -386,6 +386,7 @@ class Image:
         paths_remove: tuple[str, ...] | None = None,
         paths_skip: tuple[str, ...] | list[str] = (),
         paths_remove_extra: tuple[str, ...] | list[str] = (),
+        paths_skip_for_profiles: dict[str, tuple[str, ...]] | None = None,
         systemd_minimize: bool = True,
         systemd_units_keep: tuple[str, ...] | None = None,
         systemd_units_keep_extra: tuple[str, ...] | list[str] = (),
@@ -398,11 +399,18 @@ class Image:
         if not enabled:
             config = DebloatConfig(enabled=False)
         else:
+            # Convert dict to frozen tuple-of-tuples for the frozen dataclass
+            profile_skips: tuple[tuple[str, tuple[str, ...]], ...] = ()
+            if paths_skip_for_profiles:
+                profile_skips = tuple(
+                    (k, v) for k, v in sorted(paths_skip_for_profiles.items())
+                )
             config = DebloatConfig(
                 enabled=True,
                 paths_remove=paths_remove or _defaults.paths_remove,
                 paths_skip=tuple(paths_skip),
                 paths_remove_extra=tuple(paths_remove_extra),
+                paths_skip_for_profiles=profile_skips,
                 systemd_minimize=systemd_minimize,
                 systemd_units_keep=systemd_units_keep or _defaults.systemd_units_keep,
                 systemd_units_keep_extra=tuple(systemd_units_keep_extra),

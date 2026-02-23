@@ -214,6 +214,7 @@ class DebloatConfig:
     paths_remove: tuple[str, ...] = DEFAULT_DEBLOAT_PATHS_REMOVE
     paths_skip: tuple[str, ...] = ()
     paths_remove_extra: tuple[str, ...] = ()
+    paths_skip_for_profiles: tuple[tuple[str, tuple[str, ...]], ...] = ()
     systemd_minimize: bool = True
     systemd_units_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP
     systemd_units_keep_extra: tuple[str, ...] = ()
@@ -222,10 +223,24 @@ class DebloatConfig:
 
     @property
     def effective_paths_remove(self) -> tuple[str, ...]:
-        """Paths to remove = default + extra - skipped."""
+        """Paths to remove = default + extra - skipped - profile-conditional."""
         skip_set = set(self.paths_skip)
+        # Also exclude paths that are conditionally skipped for profiles
+        for _profile, paths in self.paths_skip_for_profiles:
+            skip_set.update(paths)
         combined = list(self.paths_remove) + list(self.paths_remove_extra)
         return tuple(sorted(set(p for p in combined if p not in skip_set)))
+
+    @property
+    def profile_conditional_paths(self) -> dict[str, tuple[str, ...]]:
+        """Paths that should only be removed when a specific profile is NOT active."""
+        result: dict[str, list[str]] = {}
+        all_paths = set(self.paths_remove) | set(self.paths_remove_extra)
+        for profile_name, paths in self.paths_skip_for_profiles:
+            for p in paths:
+                if p in all_paths:
+                    result.setdefault(profile_name, []).append(p)
+        return {k: tuple(sorted(v)) for k, v in result.items()}
 
     @property
     def effective_units_keep(self) -> tuple[str, ...]:
