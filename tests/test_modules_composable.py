@@ -155,7 +155,8 @@ def test_secret_delivery_writes_config_from_declared_secrets() -> None:
     from tdx.models import SecretSchema, SecretTarget
 
     image = Image(reproducible=False)
-    image.secret(
+    delivery = SecretDelivery(method="http_post", port=9090)
+    delivery.secret(
         "jwt_secret",
         required=True,
         schema=SecretSchema(kind="string", min_length=64, max_length=64),
@@ -164,12 +165,12 @@ def test_secret_delivery_writes_config_from_declared_secrets() -> None:
             SecretTarget.env("JWT_SECRET", scope="global"),
         ),
     )
-    image.secret(
+    delivery.secret(
         "api_key",
         required=False,
         targets=(SecretTarget.file("/run/secrets/api-key"),),
     )
-    SecretDelivery(method="http_post", port=9090).apply(image)
+    delivery.apply(image)
 
     profile = image.state.profiles["default"]
     config_files = [f for f in profile.files if f.path == "/etc/tdx/secrets.json"]

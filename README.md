@@ -136,10 +136,11 @@ img.compile("build/mkosi")
 ## Secrets
 
 ```python
-from tdx.models import SecretSchema, SecretTarget
+from tdx import SecretSchema, SecretTarget
 from tdx.modules import SecretDelivery
 
-img.secret(
+delivery = SecretDelivery(method="http_post")
+delivery.secret(
     "api_token",
     required=True,
     schema=SecretSchema(kind="string", min_length=8, pattern="^tok_"),
@@ -148,10 +149,7 @@ img.secret(
         SecretTarget.env("API_TOKEN", scope="global"),
     ),
 )
-
-# SecretDelivery builds the Go binary that validates and materializes
-# secrets at boot time after attestation.
-SecretDelivery(method="http_post").apply(img)
+delivery.apply(img)  # builds Go binary, writes /etc/tdx/secrets.json
 ```
 
 ## Policy

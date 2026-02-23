@@ -11,10 +11,11 @@ to write values at boot.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from tdx.models import SecretSpec
+from tdx.errors import ValidationError
+from tdx.models import SecretSchema, SecretSpec, SecretTarget
 
 if TYPE_CHECKING:
     from tdx.image import Image
@@ -34,19 +35,45 @@ SECRET_DELIVERY_CONFIG_PATH = "/etc/tdx/secrets.json"
 class SecretDelivery:
     """Boot-time secret delivery phase.
 
-    Builds a Go binary from source and registers its invocation in the
-    runtime-init script.  Collects ``img.secret()`` declarations and writes
-    ``/etc/tdx/secrets.json`` — the Go binary reads this at boot to know
-    which secrets to expect, how to validate them, and where to write them.
+    Declare secrets via ``.secret()``, then call ``.apply(img)`` to build
+    the Go binary, write ``/etc/tdx/secrets.json``, and register the
+    init script.  The Go binary reads the config at boot to validate
+    incoming secrets and write them to the declared targets.
     """
 
     method: Literal["http_post"] = "http_post"
     port: int = 8080
     source_repo: str = SECRET_DELIVERY_DEFAULT_REPO
     source_branch: str = SECRET_DELIVERY_DEFAULT_BRANCH
+    _secrets: list[SecretSpec] = field(
+        default_factory=list, init=False, repr=False,
+    )
+
+    def secret(
+        self,
+        name: str,
+        *,
+        required: bool = True,
+        schema: SecretSchema | None = None,
+        targets: tuple[SecretTarget, ...] = (),
+    ) -> SecretSpec:
+        """Declare an expected secret with validation schema and targets."""
+        if not name:
+            raise ValidationError(
+                "secret() requires a non-empty secret name.",
+            )
+        if not targets:
+            raise ValidationError(
+                "secret() requires at least one delivery target.",
+            )
+        entry = SecretSpec(
+            name=name, required=required, schema=schema, targets=targets,
+        )
+        self._secrets.append(entry)
+        return entry
 
     def apply(self, image: Image) -> None:
-        """Add build hook, packages, config file, and init script to *image*."""
+        """Add build hook, packages, config file, and init script."""
         image.build_install(*SECRET_DELIVERY_BUILD_PACKAGES)
         image.install("python3")
 
@@ -78,13 +105,16 @@ class SecretDelivery:
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
     def _add_config(self, image: Image) -> None:
-        """Collect declared secrets and write the JSON config file."""
-        secrets: dict[str, SecretSpec] = {}
+        """Write the JSON config file and register secrets on the image."""
+        # Push secrets into the profile state for lockfile hashing
         for profile in image._iter_active_profiles():
-            for spec in profile.secrets:
-                secrets[spec.name] = spec
+            for spec in self._secrets:
+                profile.secrets.append(spec)
 
-        config = _render_config(secrets, method=self.method, port=self.port)
+        secrets = {s.name: s for s in self._secrets}
+        config = _render_config(
+            secrets, method=self.method, port=self.port,
+        )
         image.file(SECRET_DELIVERY_CONFIG_PATH, content=config)
 
 

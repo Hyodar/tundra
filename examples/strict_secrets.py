@@ -1,17 +1,18 @@
 """Strict secret schema validation example.
 
-Declares secrets with schema constraints. The Go secret-delivery binary
+Declares secrets with schema constraints on SecretDelivery. The Go binary
 validates and materializes them at boot time.
 """
 
-from tdx import Image
-from tdx.models import SecretSchema, SecretTarget
+from tdx import Image, SecretSchema, SecretTarget
 from tdx.modules import SecretDelivery
 
 
 def configure_strict_secrets() -> None:
     img = Image()
-    img.secret(
+
+    delivery = SecretDelivery(method="http_post")
+    delivery.secret(
         "api_token",
         required=True,
         schema=SecretSchema(kind="string", min_length=10, pattern="^tok_"),
@@ -20,10 +21,7 @@ def configure_strict_secrets() -> None:
             SecretTarget.env("API_TOKEN", scope="global"),
         ),
     )
-
-    SecretDelivery(
-        method="http_post",
-    ).apply(img)
+    delivery.apply(img)
 
 
 if __name__ == "__main__":

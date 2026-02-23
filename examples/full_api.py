@@ -61,7 +61,13 @@ def build_full_api_recipe() -> None:
     img.run("sysctl", "--system")  # default phase is postinst
     img.sync("git", "submodule", "update", "--init")
 
-    img.secret(
+    # Composable init modules
+    KeyGeneration(strategy="tpm").apply(img)          # priority 10
+    DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
+
+    # Secret delivery: declare secrets then apply
+    delivery = SecretDelivery(method="http_post")
+    delivery.secret(
         "jwt_secret",
         required=True,
         schema=SecretSchema(kind="string", min_length=64, max_length=64),
@@ -70,15 +76,7 @@ def build_full_api_recipe() -> None:
             SecretTarget.env("JWT_SECRET", scope="global"),
         ),
     )
-
-    # Composable init modules: each builds a Go binary and registers its
-    # invocation via image.add_init_script() with priority ordering.
-    KeyGeneration(strategy="tpm").apply(img)          # priority 10
-    DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
-    SecretDelivery(method="http_post").apply(img)      # priority 30
-
-    # Image owns Init — compile() auto-generates runtime-init + service
-    # and injects After/Requires deps into all services.
+    delivery.apply(img)                                # priority 30
 
     Tdxs(issuer_type="dcap").apply(img)
 

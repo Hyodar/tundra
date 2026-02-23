@@ -48,9 +48,6 @@ from .models import (
     RecipeState,
     RepositorySpec,
     RestartPolicy,
-    SecretSchema,
-    SecretSpec,
-    SecretTarget,
     SecurityProfile,
     ServiceSpec,
     TemplateEntry,
@@ -355,23 +352,6 @@ class Image:
         for profile in self._iter_active_profiles():
             profile.partitions.append(entry)
         return self
-
-    def secret(
-        self,
-        name: str,
-        *,
-        required: bool = True,
-        schema: SecretSchema | None = None,
-        targets: tuple[SecretTarget, ...] = (),
-    ) -> SecretSpec:
-        if not name:
-            raise ValidationError("secret() requires a non-empty secret name.")
-        if not targets:
-            raise ValidationError("secret() requires at least one delivery target.")
-        entry = SecretSpec(name=name, required=required, schema=schema, targets=targets)
-        for profile in self._iter_active_profiles():
-            profile.secrets.append(entry)
-        return entry
 
     def output_targets(self, *targets: OutputTarget) -> Self:
         if not targets:
