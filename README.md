@@ -40,15 +40,18 @@ result = img.bake(frozen=True)        # build with lockfile enforcement
 
 | | |
 |---|---|
-| **Declarative recipes** | Packages, files, templates, users, services, secrets, partitions |
+| **Declarative recipes** | Packages, build packages, files, templates, skeletons, users, services, secrets, partitions |
 | **Deterministic emission** | Generates buildable mkosi v26 project trees matching [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) |
 | **Profile system** | Per-profile packages, output targets, and overrides with context managers |
+| **Platform profiles** | Azure, GCP, and devtools profile helpers (`apply_azure_profile`, `apply_gcp_profile`, `apply_devtools_profile`) |
+| **Reproducibility hooks** | EFI stub pinning (`efi_stub`), backports source generation (`backports`), image version stripping (`strip_image_version`) |
 | **Systemd debloat** | `mkosi-chroot dpkg-query` based binary/unit cleanup with configurable whitelists |
 | **Cloud targets** | Auto-generated GCP (ESP+GPT tar.gz) and Azure (VHD) postoutput scripts |
 | **Custom init** | Built-in TDX init script (mount + pivot_root + `minimal.target`) |
 | **Lockfile + policy** | Frozen bakes, mutable-ref enforcement, integrity checks |
 | **Measurement** | RTMR / Azure / GCP attestation measurement interfaces |
-| **Modules** | Composable `Init` and `Tdxs` modules via `module.apply(img)` |
+| **Modules** | Composable service modules via `module.apply(img)` — `Init`, `Tdxs`, `TdxInit`, `Raiko`, `TaikoClient`, `Nethermind` |
+| **Phase hooks** | `prepare`, `postinst`, `finalize`, `postoutput`, `on_boot`, `sync` convenience methods |
 | **Backends** | `local_linux` (direct mkosi), `lima` (macOS VM), `inprocess` (testing) |
 
 ## mkosi Alignment
@@ -62,39 +65,46 @@ The emission pipeline generates configs that match the nethermind-tdx reference:
 - `ManifestFormat=json`, `CleanPackageMetadata=true`, `WithNetwork=true|false`
 - Git-based `mkosi.version` script (`YYYY-MM-DD.hash[-dirty]`)
 - Native profiles mode: root `mkosi.conf` + `mkosi.profiles/<name>/`
+- EFI stub pinning from Debian snapshot archives for reproducible boot
+- Dynamic backports source generation via `mkosi.prepare` hooks
+- Environment variable passthrough (`Environment=`, `EnvironmentFiles=`)
 
 ```python
+from tdx import Image, Kernel
+
 img = Image(
-    base="debian/bookworm",
+    base="debian/trixie",
+    reproducible=True,
     init_script=Image.DEFAULT_TDX_INIT,
-    generate_version_script=True,
+    environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
 )
+img.kernel = Kernel.tdx_kernel("6.13.12", cmdline="console=tty0", config_file="kernel/config")
+img.efi_stub(snapshot_url="https://snapshot.debian.org/archive/debian/...", package_version="255.4-1")
+img.backports()
 img.install("systemd", "kmod")
+img.build_install("build-essential", "git")
 img.debloat(enabled=True)
 img.output_targets("qemu", "gcp", "azure")
 img.compile("build/mkosi")
-# build/mkosi/mkosi.version
-# build/mkosi/default/mkosi.conf
-# build/mkosi/default/mkosi.skeleton/init
-# build/mkosi/default/scripts/gcp-postoutput.sh
-# build/mkosi/default/scripts/azure-postoutput.sh
 ```
 
 ## Multi-Profile Builds
 
 ```python
 from tdx import Image
+from tdx.profiles import apply_azure_profile, apply_gcp_profile, apply_devtools_profile
 
 img = Image()
 img.output_targets("qemu")
 
 with img.profile("azure"):
-    img.output_targets("azure")
-    img.install("waagent")
+    apply_azure_profile(img)
 
 with img.profile("gcp"):
-    img.output_targets("gcp")
-    img.install("google-guest-agent")
+    apply_gcp_profile(img)
+
+with img.profile("devtools"):
+    apply_devtools_profile(img)
 
 with img.all_profiles():
     results = img.bake()
@@ -173,21 +183,25 @@ Lock / cache / policy     src/tdx/lockfile.py, cache.py, policy.py
 Measure + deploy          src/tdx/measure.py, deploy.py
   |
   v
-Built-in modules          src/tdx/modules/ (Init, Tdxs)
+Service modules           src/tdx/modules/ (Init, Tdxs, TdxInit, Raiko, TaikoClient, Nethermind)
+  |
+  v
+Platform profiles         src/tdx/profiles/ (Azure, GCP, Devtools)
 ```
 
 ## Examples
 
 | Example | Description |
 |---|---|
-| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Reproduces the [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) base layer — TDX kernel, full debloat, skeleton files, Tdxs module |
+| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer for [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) — TDX kernel build, EFI stub pinning, backports, full debloat, skeleton files, Tdxs module |
+| [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with TdxInit, Raiko, TaikoClient, Nethermind modules, monitoring, and Azure/GCP/devtools profiles |
 | [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, Init + Tdxs modules, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
 | [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |
 | [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas with pattern validation and delivery |
 | [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU-only recipe |
 
-The nethermind-tdx example is verified by integration tests that compare SDK output against reference files from the upstream repo (`integration_tests/`).
+The `nethermind_tdx` + `surge_tdx_prover` pair reproduces the full upstream [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) repo. Integration tests verify SDK output matches the upstream reference across all directories (`integration_tests/`).
 
 ## Troubleshooting
 
