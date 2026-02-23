@@ -4,7 +4,6 @@
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # Add src to path
@@ -51,7 +50,8 @@ def main() -> None:
 
     # Check extra tree has our service unit
     unit_path = (
-        emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "hello.service"
+        emit_dir / "default" / "mkosi.extra"
+        / "usr" / "lib" / "systemd" / "system" / "hello.service"
     )
     if unit_path.exists():
         print(f"Service unit generated: {unit_path}")
@@ -84,9 +84,9 @@ def main() -> None:
                 capture_output=True, text=True, check=True,
             ).stdout
             assert content.strip() == "integration-test", f"Unexpected content: {content!r}"
-            print(f"  /etc/tdx-test content verified!")
+            print("  /etc/tdx-test content verified!")
         else:
-            print(f"  WARNING: /etc/tdx-test not found in rootfs")
+            print("  WARNING: /etc/tdx-test not found in rootfs")
 
         # Check that the user was created
         passwd_file = rootfs / "etc" / "passwd"
@@ -96,16 +96,16 @@ def main() -> None:
                 capture_output=True, text=True, check=True,
             ).stdout
             if "appuser" in passwd:
-                print(f"  User 'appuser' verified in /etc/passwd!")
+                print("  User 'appuser' verified in /etc/passwd!")
             else:
-                print(f"  WARNING: 'appuser' not found in /etc/passwd")
+                print("  WARNING: 'appuser' not found in /etc/passwd")
 
         # Check service unit
         svc_file = rootfs / "usr" / "lib" / "systemd" / "system" / "hello.service"
         if svc_file.exists():
-            print(f"  hello.service verified in rootfs!")
+            print("  hello.service verified in rootfs!")
         else:
-            print(f"  WARNING: hello.service not found in rootfs")
+            print("  WARNING: hello.service not found in rootfs")
 
     except Exception as e:
         print(f"\nBake failed: {type(e).__name__}: {e}")

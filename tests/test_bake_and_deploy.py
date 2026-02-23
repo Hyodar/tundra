@@ -60,7 +60,7 @@ def test_deploy_returns_result_when_target_was_baked(
     from tdx.deploy import qemu as qemu_mod
     from tdx.models import DeployRequest, DeployResult
 
-    def mock_deploy(self, request: DeployRequest) -> DeployResult:
+    def mock_deploy(self: object, request: DeployRequest) -> DeployResult:
         return DeployResult(
             target="qemu",
             deployment_id=f"qemu-{request.profile}",
@@ -98,7 +98,7 @@ def test_deploy_requires_explicit_profile_for_multi_profile_scope(
     from tdx.deploy import qemu as qemu_mod
     from tdx.models import DeployRequest, DeployResult
 
-    def mock_deploy(self, request: DeployRequest) -> DeployResult:
+    def mock_deploy(self: object, request: DeployRequest) -> DeployResult:
         return DeployResult(
             target="qemu",
             deployment_id=f"qemu-{request.profile}",
