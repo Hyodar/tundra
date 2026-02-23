@@ -40,8 +40,8 @@ Core layers:
 - Dev/test:
   - `ruff`, `mypy`, `pytest` (installed by `uv sync --dev`)
 - Host tools (operation-dependent):
-  - `mkosi` for `local_linux` backend preflight checks.
-  - `limactl` for `lima` backend preflight checks.
+  - `mkosi >= 25` for `local_linux` backend (v26 recommended; install via `pip install 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'`).
+  - `limactl` for `lima` backend.
 - Module host prerequisites:
   - Modules can declare `required_host_commands()`.
   - `img.use(...)` validates those commands and raises `E_VALIDATION` if missing.
@@ -65,18 +65,6 @@ img = Image()
 img.use(SignedArtifactModule())  # raises ValidationError when `cosign` is missing
 ```
 
-## ⚠️ Simulated vs Real
-
-- Real today:
-  - Recipe declaration and deterministic emission.
-  - Lock/policy/fetch/cache validation logic.
-  - Secret schema and runtime delivery validation logic.
-- Simulated today:
-  - `Image.bake()` currently creates deterministic placeholder artifacts and reports.
-  - Deploy adapters return typed synthetic deployment metadata (no cloud API calls yet).
-  - Measurement backends derive deterministic digest sets from artifact bytes (not hardware RTMR/PCR extraction).
-  - Backend executors (`lima`, `local_linux`) exist with prereq checks, but are not yet wired into `Image.bake()`.
-
 ## Quickstart
 
 ### 1. Install and sync
@@ -90,17 +78,20 @@ uv sync
 ```python
 from tdx import Image
 
-img = Image(base="debian/bookworm", arch="x86_64")
-img.install("curl", "jq")
+img = Image(base="debian/bookworm", arch="x86_64", backend="local_linux")
+img.install("systemd", "curl", "jq")
 img.file("/etc/motd", content="TDX node\n")
-img.run("echo", "preparing", phase="prepare")
+img.user("app", system=True, shell="/bin/false")
+img.service("app", exec="/usr/bin/app", enabled=True)
+img.debloat(enabled=True)
 img.output_targets("qemu")
 ```
 
-### 3. Lock + bake + measure + deploy
+### 3. Emit, lock, bake
 
 ```python
-img.lock()                      # writes build/tdx.lock
+img.emit_mkosi("build/mkosi")   # inspect generated mkosi tree
+img.lock()                       # writes build/tdx.lock
 bake_result = img.bake(frozen=True)
 
 measurements = img.measure(backend="rtmr")
@@ -108,6 +99,42 @@ print(measurements.to_json())
 
 deploy_result = img.deploy(target="qemu")
 print(deploy_result.deployment_id, deploy_result.endpoint)
+```
+
+## mkosi Emission and nethermind-tdx Alignment
+
+The emission pipeline generates buildable mkosi v26 project trees that match
+the [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) reference.
+
+Key features:
+- **Architecture mapping**: `x86_64` → `x86-64`, `aarch64` → `arm64`
+- **mkosi-chroot**: user creation and service enablement use `mkosi-chroot` (not raw shell)
+- **dpkg-query debloat**: systemd binary cleanup and unit masking via `mkosi-chroot dpkg-query -L systemd`
+- **Custom init**: `Image.DEFAULT_TDX_INIT` provides the standard TDX init script (mount + pivot_root + minimal.target)
+- **Cloud postoutput**: GCP (ESP → GPT → tar.gz) and Azure (ESP → VHD) scripts auto-emitted per output target
+- **Version script**: `mkosi.version` with git-based `YYYY-MM-DD.hash[-dirty]` format
+- **Native profiles**: `emit_mode="native_profiles"` generates root `mkosi.conf` + `mkosi.profiles/<name>/`
+
+```python
+from tdx import Image
+
+img = Image(
+    base="debian/bookworm",
+    init_script=Image.DEFAULT_TDX_INIT,
+    generate_version_script=True,
+    with_network=True,
+)
+img.install("systemd", "kmod")
+img.debloat(enabled=True)
+img.output_targets("qemu", "gcp", "azure")
+
+img.emit_mkosi("build/mkosi")
+# Generates:
+#   build/mkosi/mkosi.version
+#   build/mkosi/default/mkosi.conf
+#   build/mkosi/default/mkosi.skeleton/init
+#   build/mkosi/default/scripts/gcp-postoutput.sh
+#   build/mkosi/default/scripts/azure-postoutput.sh
 ```
 
 ## Multi-Profile and Output Targets

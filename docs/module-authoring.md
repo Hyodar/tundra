@@ -44,8 +44,8 @@ Use `image.hook(phase, ...)` (or `image.run(..., phase=phase)`) for phase-bound 
 | `prepare` | pre-build setup |
 | `build` | compilation steps |
 | `extra` | optional source additions |
-| `postinst` | package post-install adjustments |
-| `finalize` | final image tweaks |
+| `postinst` | user creation, service enablement, systemd debloat (runs in chroot via `mkosi-chroot`) |
+| `finalize` | path removal, final image tweaks (runs on host with `$BUILDROOT`) |
 | `postoutput` | post-output metadata |
 | `clean` | cleanup hooks |
 | `repart` | partition/layout hooks |

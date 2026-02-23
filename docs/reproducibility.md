@@ -11,6 +11,25 @@ uv run pytest
 
 The repository includes reproducibility-focused tests that run two equivalent bake flows and assert artifact digest stability.
 
+## mkosi v26 Requirements
+
+The SDK requires mkosi >= 25 (v26 recommended). The `local_linux` backend
+checks the installed version at prepare time and raises `E_BACKEND_EXECUTION`
+if the version is too old.
+
+Install mkosi v26:
+
+```bash
+pip install --break-system-packages 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
+```
+
+Reproducibility settings emitted in `mkosi.conf`:
+- `SourceDateEpoch=0` and `Environment=SOURCE_DATE_EPOCH=0`
+- `Seed=<stable-uuid>` for deterministic partition UUIDs
+- `CompressOutput=zstd`
+- `ManifestFormat=json` for reproducible manifest output
+- `CleanPackageMetadata=yes` to strip volatile package metadata
+
 ## CI Mode
 
 For strict CI reproducibility, combine frozen bakes and strict policy:
