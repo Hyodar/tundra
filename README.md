@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="tdxvm-sdk" width="600"/>
+  <img src="docs/logo.svg" alt="tdxvm-sdk" width="420"/>
 </p>
 
 <p align="center">
@@ -59,7 +59,7 @@ The emission pipeline generates configs that match the nethermind-tdx reference:
 - `mkosi-chroot useradd` and `mkosi-chroot systemctl enable` (not raw shell)
 - `mkosi-chroot dpkg-query -L systemd` for binary cleanup and unit masking
 - `default.target` symlinked to `minimal.target`
-- `ManifestFormat=json`, `CleanPackageMetadata=yes`, `WithNetwork=yes|no`
+- `ManifestFormat=json`, `CleanPackageMetadata=true`, `WithNetwork=true|false`
 - Git-based `mkosi.version` script (`YYYY-MM-DD.hash[-dirty]`)
 - Native profiles mode: root `mkosi.conf` + `mkosi.profiles/<name>/`
 
@@ -175,6 +175,19 @@ Measure + deploy          src/tdx/measure.py, deploy.py
   v
 Built-in modules          src/tdx/modules/ (Init, Tdxs)
 ```
+
+## Examples
+
+| Example | Description |
+|---|---|
+| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Reproduces the [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) base layer — TDX kernel, full debloat, skeleton files, Tdxs module |
+| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, Init + Tdxs modules, multi-profile cloud deploys |
+| [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
+| [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |
+| [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas with pattern validation and delivery |
+| [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU-only recipe |
+
+The nethermind-tdx example is verified by integration tests that compare SDK output against reference files from the upstream repo (`integration_tests/`).
 
 ## Troubleshooting
 
