@@ -43,7 +43,7 @@ class TaikoClient:
     build_path: str = TAIKO_CLIENT_DEFAULT_BUILD_PATH
     user: str = "taiko-client"
     group: str = "eth"
-    after: tuple[str, ...] = ("runtime-init.service",)
+    after: tuple[str, ...] = ()
 
     def setup(self, image: Image) -> None:
         """Declare build-time package dependencies for compiling taiko-client."""
@@ -77,11 +77,21 @@ class TaikoClient:
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
+    def _resolve_after(self, image: Image) -> tuple[str, ...]:
+        """Build the After= list, prepending the init service if available."""
+        after = list(self.after)
+        if image.init is not None and image.init.has_scripts:
+            init_svc = image.init.service_name
+            if init_svc not in after:
+                after.insert(0, init_svc)
+        return tuple(after)
+
     def _add_runtime_config(self, image: Image) -> None:
         """Add runtime config, unit file, and user creation."""
+        resolved_after = self._resolve_after(image)
         image.file(
             "/usr/lib/systemd/system/taiko-client.service",
-            content=self._render_service_unit(),
+            content=self._render_service_unit(after=resolved_after),
         )
 
         image.run(
@@ -93,10 +103,11 @@ class TaikoClient:
             phase="postinst",
         )
 
-    def _render_service_unit(self) -> str:
+    def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render taiko-client.service systemd unit."""
-        after_line = " ".join(self.after)
-        requires_line = " ".join(self.after)
+        effective = after if after is not None else self.after
+        after_line = " ".join(effective)
+        requires_line = " ".join(effective)
         return dedent(f"""\
             [Unit]
             Description=Taiko Client

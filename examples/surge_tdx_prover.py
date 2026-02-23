@@ -24,7 +24,6 @@ from tdx import Image
 from tdx.modules import (
     Devtools,
     DiskEncryption,
-    Init,
     KeyGeneration,
     SecretDelivery,
 )
@@ -192,8 +191,6 @@ def build_surge_tdx_prover() -> Image:
         mount_point="/persistent",
     ).apply(img)
     SecretDelivery(method="http_post").apply(img)
-
-    Init().apply(img)
 
     # ── 4. Service modules ────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import pytest
 from tdx import Image
 from tdx.errors import ValidationError
 from tdx.models import SecretSchema, SecretSpec, SecretTarget
-from tdx.modules import GLOBAL_ENV_RELATIVE_PATH, Init
+from tdx.modules import GLOBAL_ENV_RELATIVE_PATH, SecretDelivery
 
 
 def test_secret_target_helpers_support_file_and_global_env() -> None:
@@ -28,7 +28,7 @@ def test_runtime_materialization_writes_file_and_global_env(tmp_path: Path) -> N
             SecretTarget.env("API_TOKEN", scope="global"),
         ),
     )
-    delivery = Init(secrets=(secret,)).secrets_delivery("http_post")
+    delivery = SecretDelivery(expected={"api_token": secret})
     validation = delivery.validate_payload({"api_token": "tok_1234"})
     runtime = delivery.materialize_runtime(tmp_path)
 
@@ -48,7 +48,10 @@ def test_materialization_requires_all_required_when_completion_all_required(tmp_
         required=True,
         targets=(SecretTarget.file("/run/secrets/required-token"),),
     )
-    delivery = Init(secrets=(secret,)).secrets_delivery("http_post", completion="all_required")
+    delivery = SecretDelivery(
+        expected={"required_token": secret},
+        completion="all_required",
+    )
 
     with pytest.raises(ValidationError):
         delivery.materialize_runtime(tmp_path)
@@ -66,7 +69,7 @@ def test_secret_values_are_not_persisted_in_lockfile(tmp_path: Path) -> None:
         ),
     )
 
-    delivery = Init(secrets=(secret,)).secrets_delivery("http_post")
+    delivery = SecretDelivery(expected={"api_token": secret})
     delivery.validate_payload({"api_token": "super-secret-value"})
     delivery.materialize_runtime(tmp_path / "runtime")
 

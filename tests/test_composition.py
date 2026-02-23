@@ -12,7 +12,6 @@ from examples.modules import Nethermind, Raiko, TaikoClient
 from tdx import Image
 from tdx.modules import (
     DiskEncryption,
-    Init,
     KeyGeneration,
     SecretDelivery,
     Tdxs,
@@ -43,7 +42,6 @@ def _apply_app_layer(img: Image) -> Image:
     KeyGeneration(strategy="tpm").apply(img)
     DiskEncryption(device="/dev/vda3").apply(img)
     SecretDelivery(method="http_post").apply(img)
-    Init().apply(img)
 
     Tdxs(issuer_type="dcap").apply(img)
 
@@ -62,6 +60,7 @@ def _apply_app_layer(img: Image) -> Image:
         version="1.32.3",
     ).apply(img)
 
+    img._apply_init()
     return img
 
 

@@ -42,7 +42,7 @@ class Tdxs:
     socket_path: str = "/var/tdxs.sock"
     user: str = "tdxs"
     group: str = "tdx"
-    after: tuple[str, ...] = ("runtime-init.service",)
+    after: tuple[str, ...] = ()
     source_repo: str = TDXS_DEFAULT_REPO
     source_branch: str = TDXS_DEFAULT_BRANCH
 
@@ -76,17 +76,27 @@ class Tdxs:
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
+    def _resolve_after(self, image: Image) -> tuple[str, ...]:
+        """Build the After= list, prepending the init service if available."""
+        after = list(self.after)
+        if image.init is not None and image.init.has_scripts:
+            init_svc = image.init.service_name
+            if init_svc not in after:
+                after.insert(0, init_svc)
+        return tuple(after)
+
     def _add_runtime_config(self, image: Image) -> None:
         """Add runtime config, unit files, user/group, and service enablement."""
+        resolved_after = self._resolve_after(image)
         image.file("/etc/tdxs/config.yaml", content=self._render_config())
 
         image.file(
             "/usr/lib/systemd/system/tdxs.service",
-            content=self._render_service_unit(),
+            content=self._render_service_unit(after=resolved_after),
         )
         image.file(
             "/usr/lib/systemd/system/tdxs.socket",
-            content=self._render_socket_unit(),
+            content=self._render_socket_unit(after=resolved_after),
         )
 
         image.run(
@@ -118,10 +128,11 @@ class Tdxs:
               type: {self.issuer_type}
         """)
 
-    def _render_service_unit(self) -> str:
+    def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render tdxs.service systemd unit."""
-        after_line = " ".join(self.after)
-        requires_line = " ".join((*self.after, "tdxs.socket"))
+        effective = after if after is not None else self.after
+        after_line = " ".join(effective)
+        requires_line = " ".join((*effective, "tdxs.socket"))
         return dedent(f"""\
             [Unit]
             Description=TDXS
@@ -141,10 +152,11 @@ class Tdxs:
             WantedBy=default.target
         """)
 
-    def _render_socket_unit(self) -> str:
+    def _render_socket_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render tdxs.socket systemd unit."""
-        after_line = " ".join(self.after)
-        requires_line = " ".join(self.after)
+        effective = after if after is not None else self.after
+        after_line = " ".join(effective)
+        requires_line = " ".join(effective)
         return dedent(f"""\
             [Unit]
             Description=TDXS Socket

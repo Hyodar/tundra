@@ -113,12 +113,14 @@ with img.all_profiles():
 
 ## Composable Init Modules
 
-Modules register boot-time steps via `image.add_init_script()` with priority ordering.
-`Init` collects them and generates `/usr/bin/runtime-init` + a systemd service.
+Image owns an `Init` instance that collects boot-time scripts and generates
+`/usr/bin/runtime-init` + a systemd service. Modules register their steps via
+`image.add_init_script()` with priority ordering. At `compile()` time, Init
+auto-applies and injects `After/Requires=runtime-init.service` into all services.
 
 ```python
 from tdx import Image
-from tdx.modules import DiskEncryption, Init, KeyGeneration, SecretDelivery
+from tdx.modules import DiskEncryption, KeyGeneration, SecretDelivery
 
 img = Image(base="debian/trixie", reproducible=True)
 
@@ -127,17 +129,17 @@ KeyGeneration(strategy="tpm").apply(img)          # priority 10
 DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
 SecretDelivery(method="http_post").apply(img)      # priority 30
 
-# Init reads registered init_scripts, sorts by priority, emits runtime-init
-Init().apply(img)
+# No manual Init().apply() needed — Image owns Init and applies it at compile()
+img.compile("build/mkosi")
 ```
 
 ## Secrets
 
 ```python
 from tdx.models import SecretSchema, SecretTarget
-from tdx.modules import Init
+from tdx.modules import SecretDelivery
 
-secret = img.secret(
+img.secret(
     "api_token",
     required=True,
     schema=SecretSchema(kind="string", min_length=8, pattern="^tok_"),
@@ -146,9 +148,15 @@ secret = img.secret(
         SecretTarget.env("API_TOKEN", scope="global"),
     ),
 )
-init = Init(secrets=(secret,))
-delivery = init.secrets_delivery("http_post", completion="all_required")
+
+# SecretDelivery handles build-time setup and runtime validation
+delivery = SecretDelivery(method="http_post", completion="all_required")
+delivery.apply(img)  # builds Go binary, registers init script, captures secrets
+
+# After attestation/boot: validate and materialize
 validation = delivery.validate_payload({"api_token": "tok_123456"})
+if validation.ready:
+    delivery.materialize_runtime("/run")
 ```
 
 ## Policy
@@ -219,7 +227,7 @@ Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
 |---|---|
 | [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer for [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) — TDX kernel build, EFI stub pinning, backports, full debloat, skeleton files, Tdxs module |
 | [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with Init + composable modules (KeyGeneration, DiskEncryption, SecretDelivery), Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles |
-| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, composable init modules (KeyGeneration, DiskEncryption, SecretDelivery) + Init + Tdxs, multi-profile cloud deploys |
+| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, composable init modules (KeyGeneration, DiskEncryption, SecretDelivery) + Tdxs, runtime secret delivery, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
 | [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |
 | [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas with pattern validation and delivery |

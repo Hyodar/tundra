@@ -3,7 +3,12 @@
 from pathlib import Path
 
 from tdx import Image, Kernel, SecretSchema, SecretTarget
-from tdx.modules import DiskEncryption, Init, KeyGeneration, SecretDelivery, Tdxs
+from tdx.modules import (
+    DiskEncryption,
+    KeyGeneration,
+    SecretDelivery,
+    Tdxs,
+)
 
 
 def build_full_api_recipe() -> None:
@@ -56,7 +61,7 @@ def build_full_api_recipe() -> None:
     img.run("sysctl", "--system")  # default phase is postinst
     img.sync("git", "submodule", "update", "--init")
 
-    jwt_secret = img.secret(
+    img.secret(
         "jwt_secret",
         required=True,
         schema=SecretSchema(kind="string", min_length=64, max_length=64),
@@ -70,16 +75,15 @@ def build_full_api_recipe() -> None:
     # invocation via image.add_init_script() with priority ordering.
     KeyGeneration(strategy="tpm").apply(img)          # priority 10
     DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
-    SecretDelivery(method="http_post").apply(img)      # priority 30
 
-    # Init collects registered init_scripts, generates runtime-init + service.
-    # It also manages config files (disk encryption config, SSH keys, secrets
-    # delivery policy) and Python-side secret validation/materialization.
-    init = Init(secrets=(jwt_secret,), handoff="systemd")
-    init.enable_disk_encryption(device="/dev/vda3", mapper_name="cryptroot")
-    init.add_ssh_authorized_key("ssh-ed25519 AAAATEST full-api")
-    delivery = init.secrets_delivery("http_post", completion="all_required", reject_unknown=True)
-    init.apply(img)
+    # SecretDelivery builds the Go binary, registers init script, and
+    # captures image secrets for optional runtime validation.
+    delivery = SecretDelivery(method="http_post")
+    delivery.apply(img)                                # priority 30
+
+    # Image owns Init — no need to manually apply Init().
+    # compile() calls _apply_init() which generates runtime-init + service
+    # and auto-injects After/Requires deps into all services.
 
     Tdxs(issuer_type="dcap").apply(img)
 

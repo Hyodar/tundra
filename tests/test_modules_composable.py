@@ -3,7 +3,6 @@
 from tdx import Image
 from tdx.modules import (
     DiskEncryption,
-    Init,
     KeyGeneration,
     SecretDelivery,
 )
@@ -156,7 +155,7 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
     KeyGeneration(strategy="tpm").apply(image)
     DiskEncryption(device="/dev/vda3").apply(image)
     SecretDelivery(method="http_post").apply(image)
-    Init().apply(image)
+    image._apply_init()
 
     profile = image.state.profiles["default"]
 
@@ -198,7 +197,7 @@ def test_init_scripts_sorted_by_priority() -> None:
     SecretDelivery(method="http_post").apply(image)  # priority 30
     KeyGeneration(strategy="tpm").apply(image)  # priority 10
     DiskEncryption(device="/dev/vda3").apply(image)  # priority 20
-    Init().apply(image)
+    image._apply_init()
 
     profile = image.state.profiles["default"]
     script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
@@ -214,7 +213,7 @@ def test_init_scripts_sorted_by_priority() -> None:
 
 def test_init_without_init_scripts_does_not_generate_runtime_init() -> None:
     image = Image(reproducible=False)
-    Init().apply(image)
+    image._apply_init()
 
     profile = image.state.profiles["default"]
     script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]

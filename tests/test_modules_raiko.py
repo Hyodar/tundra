@@ -70,8 +70,9 @@ def test_raiko_service_unit_content() -> None:
     svc_content = svc_files[0].content
     assert "User=raiko" in svc_content
     assert "Group=tdx" in svc_content
-    assert "After=runtime-init.service tdxs.service" in svc_content
-    assert "Requires=runtime-init.service tdxs.service" in svc_content
+    # No init scripts registered, so no runtime-init.service; just tdxs.service
+    assert "After=tdxs.service" in svc_content
+    assert "Requires=tdxs.service" in svc_content
     assert "Restart=on-failure" in svc_content
     assert "ExecStart=/usr/bin/raiko" in svc_content
 

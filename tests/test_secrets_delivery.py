@@ -1,6 +1,6 @@
 from tdx import Image
 from tdx.models import SecretSchema, SecretSpec, SecretTarget
-from tdx.modules import Init
+from tdx.modules import SecretDelivery
 
 
 def test_secret_declaration_supports_schema_and_multiple_targets() -> None:
@@ -32,9 +32,8 @@ def test_http_post_reject_unknown_when_enabled() -> None:
         schema=SecretSchema(kind="string", min_length=4),
         targets=(SecretTarget.file("/run/secrets/api-token"),),
     )
-    delivery = Init(secrets=(secret,)).secrets_delivery(
-        "http_post",
-        completion="all_required",
+    delivery = SecretDelivery(
+        expected={"api_token": secret},
         reject_unknown=True,
     )
 
@@ -48,7 +47,9 @@ def test_http_post_reject_unknown_when_enabled() -> None:
 def test_completion_all_required_blocks_until_all_required_secrets_received() -> None:
     secret_a = SecretSpec(name="token_a", required=True, targets=(SecretTarget.file("/run/a"),))
     secret_b = SecretSpec(name="token_b", required=True, targets=(SecretTarget.file("/run/b"),))
-    delivery = Init(secrets=(secret_a, secret_b)).secrets_delivery("http_post")
+    delivery = SecretDelivery(
+        expected={"token_a": secret_a, "token_b": secret_b},
+    )
 
     first = delivery.validate_payload({"token_a": "value-a"})
     second = delivery.validate_payload({"token_b": "value-b"})
@@ -69,7 +70,9 @@ def test_schema_validation_blocks_ready_until_valid() -> None:
         schema=schema,
         targets=(SecretTarget.file("/run/token"),),
     )
-    delivery = Init(secrets=(secret,)).secrets_delivery("http_post")
+    delivery = SecretDelivery(
+        expected={"token": secret},
+    )
 
     bad = delivery.validate_payload({"token": "bad"})
     good = delivery.validate_payload({"token": "tok_1234"})

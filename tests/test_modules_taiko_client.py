@@ -71,8 +71,8 @@ def test_taiko_client_service_unit_content() -> None:
     svc_content = svc_files[0].content
     assert "User=taiko-client" in svc_content
     assert "Group=eth" in svc_content
-    assert "After=runtime-init.service" in svc_content
-    assert "Requires=runtime-init.service" in svc_content
+    # No init scripts registered, so no runtime-init.service dependency
+    assert "runtime-init" not in svc_content
     assert "Restart=on-failure" in svc_content
     assert "ExecStart=/usr/bin/taiko-client" in svc_content
 

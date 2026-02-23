@@ -56,6 +56,7 @@ from .models import (
     TemplateEntry,
     UserSpec,
 )
+from .modules.init import Init
 from .observability import StructuredLogger
 from .policy import Policy, ensure_bake_policy
 
@@ -90,6 +91,7 @@ class Image:
     environment: dict[str, str] | None = None
     environment_passthrough: tuple[str, ...] | None = None
     emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
+    init: Init = field(default_factory=Init)
     _backend_override: object | None = field(init=False, default=None, repr=False)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
@@ -647,6 +649,7 @@ class Image:
         """
         if not script:
             raise ValidationError("add_init_script() requires non-empty script content.")
+        self.init.add_script(script, priority=priority)
         entry = InitScriptEntry(script=script, priority=priority)
         for profile in self._iter_active_profiles():
             profile.init_scripts.append(entry)
@@ -706,6 +709,7 @@ class Image:
 
     def compile(self, path: str | Path, *, force: bool = False) -> Path:
         destination = self._normalize_path(path)
+        self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
         if (
             not force
@@ -1017,6 +1021,44 @@ class Image:
             hint="Pass profile='name' to the operation.",
             context={"operation": "resolve_profile"},
         )
+
+    def _apply_init(self) -> None:
+        """Apply Init: generate runtime-init files and inject deps into services."""
+        if self.init is None:
+            return
+        for profile in self._iter_active_profiles():
+            self.init.apply(profile)
+        if not self.init.has_scripts:
+            return
+        init_svc = self.init.service_name
+        # Inject After/Requires runtime-init.service into all profile services
+        for profile in self._iter_active_profiles():
+            patched: list[ServiceSpec] = []
+            for svc in profile.services:
+                if svc.name == init_svc or svc.name.endswith(".target"):
+                    patched.append(svc)
+                    continue
+                after = svc.after if init_svc in svc.after else (init_svc, *svc.after)
+                requires = (
+                    svc.requires if init_svc in svc.requires
+                    else (init_svc, *svc.requires)
+                )
+                patched.append(ServiceSpec(
+                    name=svc.name, exec=svc.exec, user=svc.user,
+                    after=after, requires=requires, wants=svc.wants,
+                    restart=svc.restart, enabled=svc.enabled,
+                    extra_unit=svc.extra_unit, security_profile=svc.security_profile,
+                ))
+            profile.services = patched
+        # Enable runtime-init.service in postinst
+        enable_argv = ("mkosi-chroot", "systemctl", "enable", init_svc)
+        for profile in self._iter_active_profiles():
+            already = any(
+                cmd.argv == enable_argv for cmd in profile.phases.get("postinst", [])
+            )
+            if not already:
+                self.run(*enable_argv, phase="postinst")
+                break  # run() appends to all active profiles
 
     def _iter_active_profiles(self) -> list[ProfileState]:
         profiles: list[ProfileState] = []

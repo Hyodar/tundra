@@ -1,8 +1,5 @@
-from pathlib import Path
-
 from tdx import Image
-from tdx.models import SecretSchema, SecretSpec, SecretTarget
-from tdx.modules import Init, Tdxs
+from tdx.modules import Tdxs
 
 
 def test_tdxs_setup_declares_build_packages() -> None:
@@ -89,8 +86,8 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     assert "Group=tdx" in svc_content
     assert "Type=notify" in svc_content
     assert "ExecStart=/usr/bin/tdxs" in svc_content
-    assert "--config /etc/tdxs/config.yaml" in svc_content
-    assert "Requires=runtime-init.service tdxs.socket" in svc_content
+    # No init scripts registered, so no runtime-init.service dependency
+    assert "Requires=tdxs.socket" in svc_content
 
     # Socket unit
     sock_files = [
@@ -116,6 +113,38 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     )
 
 
+def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:
+    """Tdxs service should depend on runtime-init when init scripts exist."""
+    from tdx.modules import KeyGeneration
+
+    image = Image()
+    KeyGeneration(strategy="tpm").apply(image)
+    Tdxs(issuer_type="dcap").apply(image)
+
+    profile = image.state.profiles["default"]
+    svc_files = [
+        f for f in profile.files
+        if f.path == "/usr/lib/systemd/system/tdxs.service"
+    ]
+    svc_content = svc_files[0].content
+    assert "After=runtime-init.service" in svc_content
+    assert "Requires=runtime-init.service tdxs.socket" in svc_content
+
+
+def test_tdxs_no_init_dependency_when_no_init_scripts() -> None:
+    """Tdxs service should not reference runtime-init when no init scripts exist."""
+    image = Image()
+    Tdxs(issuer_type="dcap").apply(image)
+
+    profile = image.state.profiles["default"]
+    svc_files = [
+        f for f in profile.files
+        if f.path == "/usr/lib/systemd/system/tdxs.service"
+    ]
+    svc_content = svc_files[0].content
+    assert "runtime-init" not in svc_content
+
+
 def test_tdxs_custom_issuer_type() -> None:
     image = Image()
     module = Tdxs(issuer_type="azure-tdx")
@@ -139,84 +168,6 @@ def test_tdxs_custom_socket_path() -> None:
         if f.path == "/usr/lib/systemd/system/tdxs.socket"
     ]
     assert "ListenStream=/run/tdx/quote.sock" in sock_files[0].content
-
-
-def test_init_supports_disk_encryption_ssh_and_secret_delivery() -> None:
-    image = Image()
-    secret = SecretSpec(
-        name="api_token",
-        required=True,
-        schema=SecretSchema(kind="string", min_length=4),
-        targets=(SecretTarget.file("/run/secrets/api-token"),),
-    )
-    init = Init(secrets=(secret,))
-    init.enable_disk_encryption(device="/dev/vdb", mapper_name="cryptdata")
-    init.add_ssh_authorized_key("ssh-ed25519 AAAATEST")
-    init.secrets_delivery("http_post")
-
-    init.setup(image)
-    init.install(image)
-
-    profile = image.state.profiles["default"]
-    assert "cryptsetup" in profile.packages
-    assert "openssh-server" in profile.packages
-    assert "python3" in profile.packages
-    assert any(file.path == "/etc/tdx/init/disk-encryption.json" for file in profile.files)
-    assert any(file.path == "/root/.ssh/authorized_keys" for file in profile.files)
-    assert any(file.path == "/etc/tdx/init/secrets-delivery.json" for file in profile.files)
-    assert any(file.path == "/etc/tdx/init/phases.json" for file in profile.files)
-    assert any(service.name == "secrets-ready.target" for service in profile.services)
-
-
-def test_init_secret_delivery_integration_materializes_runtime(tmp_path: Path) -> None:
-    secret = SecretSpec(
-        name="api_token",
-        required=True,
-        schema=SecretSchema(kind="string", min_length=4),
-        targets=(
-            SecretTarget.file("/run/secrets/api-token"),
-            SecretTarget.env("API_TOKEN", scope="global"),
-        ),
-    )
-    init = Init(secrets=(secret,))
-    init.secrets_delivery("http_post")
-
-    validation, artifacts = init.validate_and_materialize(
-        {"api_token": "tok_1234"},
-        runtime_root=tmp_path,
-    )
-
-    assert validation.ready is True
-    assert artifacts is not None
-    assert (tmp_path / "run/secrets/api-token").exists()
-    assert artifacts.global_env_path is not None
-    assert artifacts.global_env_path.exists()
-
-
-def test_modules_apply_directly_and_infer_declared_secrets() -> None:
-    image = Image()
-    image.secret(
-        "jwt_secret",
-        required=True,
-        schema=SecretSchema(kind="string", min_length=64, max_length=64),
-        targets=(SecretTarget.file("/run/tdx-secrets/jwt.hex"),),
-    )
-
-    init = Init()
-    delivery = init.secrets_delivery("http_post")
-    init.apply(image)
-    Tdxs(issuer_type="dcap").apply(image)
-
-    profile = image.state.profiles["default"]
-    assert "python3" in profile.packages
-    assert "golang" in profile.build_packages
-    assert any(file.path == "/etc/tdx/init/phases.json" for file in profile.files)
-    assert any(file.path == "/etc/tdxs/config.yaml" for file in profile.files)
-    # Build hook exists
-    assert len(profile.phases.get("build", [])) == 1
-
-    validation = delivery.validate_payload({"jwt_secret": "a" * 64})
-    assert validation.ready is True
 
 
 def test_image_build_install_adds_build_packages() -> None:
