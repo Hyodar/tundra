@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, Self, runtime_checkable
+from typing import Literal, Self
 
 from .backends.inprocess import InProcessBackend
 from .backends.lima import LimaBackend
@@ -52,25 +51,6 @@ from .models import (
 )
 from .observability import StructuredLogger
 from .policy import Policy, ensure_bake_policy
-
-
-@runtime_checkable
-class ImageModule(Protocol):
-    """Runtime protocol for modules that support setup/install composition."""
-
-    def setup(self, image: Image) -> None:
-        """Apply one-time module setup to the recipe."""
-
-    def install(self, image: Image) -> None:
-        """Apply module installation/runtime declarations to the recipe."""
-
-
-@runtime_checkable
-class DependencyAwareImageModule(ImageModule, Protocol):
-    """Optional protocol for modules with host command prerequisites."""
-
-    def required_host_commands(self) -> tuple[str, ...]:
-        """Return host commands that must exist before this module can be used."""
 
 
 @dataclass(slots=True)
@@ -354,15 +334,6 @@ class Image:
         for profile in self._iter_active_profiles():
             profile.secrets.append(entry)
         return entry
-
-    def use(self, *modules: ImageModule) -> Self:
-        if not modules:
-            raise ValidationError("use() requires at least one module instance.")
-        for module in modules:
-            self._ensure_module_host_dependencies(module)
-            module.setup(self)
-            module.install(self)
-        return self
 
     def output_targets(self, *targets: OutputTarget) -> Self:
         if not targets:
@@ -854,22 +825,6 @@ class Image:
         for profile_name in self._active_profiles:
             profiles.append(self._state.ensure_profile(profile_name))
         return profiles
-
-    def _ensure_module_host_dependencies(self, module: ImageModule) -> None:
-        if not isinstance(module, DependencyAwareImageModule):
-            return
-        commands = tuple(dict.fromkeys(module.required_host_commands()))
-        missing = tuple(command for command in commands if shutil.which(command) is None)
-        if not missing:
-            return
-        raise ValidationError(
-            "Module host dependencies are missing.",
-            hint="Install required commands before applying the module.",
-            context={
-                "module": type(module).__name__,
-                "missing_commands": ",".join(missing),
-            },
-        )
 
     def _recipe_payload(self, *, profile_names: tuple[str, ...]) -> dict[str, object]:
         profiles_data: dict[str, dict[str, object]] = {}

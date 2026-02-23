@@ -16,7 +16,7 @@ from .init import (
     SecretsRuntimeArtifacts,
     SshKeyDeliveryConfig,
 )
-from .tdxs import Tdxs, TdxsMode, TdxsServiceConfig
+from .tdxs import Tdxs
 
 if TYPE_CHECKING:
     from tdx.image import Image
@@ -43,6 +43,4 @@ __all__ = [
     "SecretsRuntimeArtifacts",
     "SshKeyDeliveryConfig",
     "Tdxs",
-    "TdxsMode",
-    "TdxsServiceConfig",
 ]

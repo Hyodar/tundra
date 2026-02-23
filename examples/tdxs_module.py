@@ -10,7 +10,7 @@ def build_with_tdxs() -> None:
     img.output_targets("qemu")
 
     # Module declarations are recipe-only; no filesystem side effects until lock/emit/bake.
-    img.use(Tdxs.issuer())
+    Tdxs(issuer_type="dcap").apply(img)
 
     img.lock()
     img.bake(frozen=True)

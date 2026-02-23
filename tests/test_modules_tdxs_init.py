@@ -5,28 +5,85 @@ from tdx.models import SecretSchema, SecretSpec, SecretTarget
 from tdx.modules import Init, Tdxs
 
 
-def test_tdxs_issuer_mode_configures_package_and_service() -> None:
+def test_tdxs_generates_config_yaml_and_units() -> None:
     image = Image()
-    module = Tdxs.issuer()
+    module = Tdxs(issuer_type="dcap")
 
-    module.setup(image)
-    module.install(image)
+    module.apply(image)
 
     profile = image.state.profiles["default"]
-    assert "tdx-attestation-issuer" in profile.packages
-    assert any(service.name == "tdxs.service" for service in profile.services)
-    assert any(file.path == "/etc/tdx/tdxs.json" for file in profile.files)
+
+    # Config file
+    config_files = [f for f in profile.files if f.path == "/etc/tdxs/config.yaml"]
+    assert len(config_files) == 1
+    config_content = config_files[0].content
+    assert "transport:" in config_content
+    assert "type: socket" in config_content
+    assert "systemd: true" in config_content
+    assert "issuer:" in config_content
+    assert "type: dcap" in config_content
+
+    # Service unit
+    svc_files = [
+        f for f in profile.files
+        if f.path == "/usr/lib/systemd/system/tdxs.service"
+    ]
+    assert len(svc_files) == 1
+    svc_content = svc_files[0].content
+    assert "User=tdxs" in svc_content
+    assert "Group=tdx" in svc_content
+    assert "Type=notify" in svc_content
+    assert "ExecStart=/usr/bin/tdxs" in svc_content
+    assert "--config /etc/tdxs/config.yaml" in svc_content
+    assert "Requires=runtime-init.service tdxs.socket" in svc_content
+
+    # Socket unit
+    sock_files = [
+        f for f in profile.files
+        if f.path == "/usr/lib/systemd/system/tdxs.socket"
+    ]
+    assert len(sock_files) == 1
+    sock_content = sock_files[0].content
+    assert "ListenStream=/var/tdxs.sock" in sock_content
+    assert "SocketMode=0660" in sock_content
+    assert "SocketGroup=tdx" in sock_content
+
+    # Postinst hooks: groupadd, useradd, systemctl enable
+    postinst_commands = profile.phases.get("postinst", [])
+    assert len(postinst_commands) == 3
+    assert postinst_commands[0].argv == (
+        "mkosi-chroot", "groupadd", "--system", "tdx",
+    )
+    assert postinst_commands[1].argv[:3] == ("mkosi-chroot", "useradd", "--system")
+    assert "tdxs" in postinst_commands[1].argv
+    assert postinst_commands[2].argv == (
+        "mkosi-chroot", "systemctl", "enable", "tdxs.socket",
+    )
 
 
-def test_tdxs_validator_mode_configures_validator_package() -> None:
+def test_tdxs_custom_issuer_type() -> None:
     image = Image()
-    module = Tdxs.validator()
+    module = Tdxs(issuer_type="azure-tdx")
 
-    module.setup(image)
-    module.install(image)
+    module.apply(image)
 
     profile = image.state.profiles["default"]
-    assert "tdx-attestation-validator" in profile.packages
+    config_files = [f for f in profile.files if f.path == "/etc/tdxs/config.yaml"]
+    assert "type: azure-tdx" in config_files[0].content
+
+
+def test_tdxs_custom_socket_path() -> None:
+    image = Image()
+    module = Tdxs(socket_path="/run/tdx/quote.sock")
+
+    module.apply(image)
+
+    profile = image.state.profiles["default"]
+    sock_files = [
+        f for f in profile.files
+        if f.path == "/usr/lib/systemd/system/tdxs.socket"
+    ]
+    assert "ListenStream=/run/tdx/quote.sock" in sock_files[0].content
 
 
 def test_init_supports_disk_encryption_ssh_and_secret_delivery() -> None:
@@ -81,7 +138,7 @@ def test_init_secret_delivery_integration_materializes_runtime(tmp_path: Path) -
     assert artifacts.global_env_path.exists()
 
 
-def test_image_use_applies_module_setup_and_install_and_infers_declared_secrets() -> None:
+def test_modules_apply_directly_and_infer_declared_secrets() -> None:
     image = Image()
     image.secret(
         "jwt_secret",
@@ -92,13 +149,13 @@ def test_image_use_applies_module_setup_and_install_and_infers_declared_secrets(
 
     init = Init()
     delivery = init.secrets_delivery("http_post")
-    image.use(init, Tdxs.issuer())
+    init.apply(image)
+    Tdxs(issuer_type="dcap").apply(image)
 
     profile = image.state.profiles["default"]
     assert "python3" in profile.packages
-    assert "tdx-attestation-issuer" in profile.packages
     assert any(file.path == "/etc/tdx/init/phases.json" for file in profile.files)
-    assert any(service.name == "tdxs.service" for service in profile.services)
+    assert any(file.path == "/etc/tdxs/config.yaml" for file in profile.files)
 
     validation = delivery.validate_payload({"jwt_secret": "a" * 64})
     assert validation.ready is True

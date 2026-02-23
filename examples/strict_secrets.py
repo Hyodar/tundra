@@ -23,7 +23,7 @@ def configure_strict_secrets() -> None:
         completion="all_required",
         reject_unknown=True,
     )
-    img.use(init)
+    init.apply(img)
 
     validation = delivery.validate_payload({"api_token": "tok_0123456789"})
     if validation.ready:

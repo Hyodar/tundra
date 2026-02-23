@@ -48,7 +48,7 @@ result = img.bake(frozen=True)        # build with lockfile enforcement
 | **Custom init** | Built-in TDX init script (mount + pivot_root + `minimal.target`) |
 | **Lockfile + policy** | Frozen bakes, mutable-ref enforcement, integrity checks |
 | **Measurement** | RTMR / Azure / GCP attestation measurement interfaces |
-| **Modules** | Composable `Init` and `Tdxs` modules via `img.use(...)` |
+| **Modules** | Composable `Init` and `Tdxs` modules via `module.apply(img)` |
 | **Backends** | `local_linux` (direct mkosi), `lima` (macOS VM), `inprocess` (testing) |
 
 ## mkosi Alignment

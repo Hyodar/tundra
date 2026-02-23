@@ -1,58 +1,128 @@
-"""Built-in TDX quote service module."""
+"""Built-in TDX quote service (tdxs) module.
+
+Generates config, systemd units, and user/group matching the NethermindEth/tdxs
+reference layout used in nethermind-tdx images.
+"""
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from typing import Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from tdx.errors import ValidationError
-from tdx.image import Image
-
-TdxsMode = Literal["issuer", "validator"]
-
-
-@dataclass(frozen=True, slots=True)
-class TdxsServiceConfig:
-    service_name: str = "tdxs.service"
-    socket_path: str = "/run/tdx/quote.sock"
-    extra_args: tuple[str, ...] = ()
+if TYPE_CHECKING:
+    from tdx.image import Image
 
 
 @dataclass(slots=True)
 class Tdxs:
-    mode: TdxsMode = "issuer"
-    config: TdxsServiceConfig = field(default_factory=TdxsServiceConfig)
+    """Configures the tdxs TDX quote issuer/validator service.
 
-    def __post_init__(self) -> None:
-        if self.mode not in {"issuer", "validator"}:
-            raise ValidationError("Invalid Tdxs mode.", context={"mode": self.mode})
+    Generates:
+      - /etc/tdxs/config.yaml (YAML config)
+      - /usr/lib/systemd/system/tdxs.service
+      - /usr/lib/systemd/system/tdxs.socket
+      - User/group creation and socket enablement via postinst hooks
+    """
 
-    @classmethod
-    def issuer(cls, config: TdxsServiceConfig | None = None) -> Tdxs:
-        return cls(mode="issuer", config=config or TdxsServiceConfig())
-
-    @classmethod
-    def validator(cls, config: TdxsServiceConfig | None = None) -> Tdxs:
-        return cls(mode="validator", config=config or TdxsServiceConfig())
+    issuer_type: str = "dcap"
+    socket_path: str = "/var/tdxs.sock"
+    user: str = "tdxs"
+    group: str = "tdx"
+    after: tuple[str, ...] = ("runtime-init.service",)
 
     def setup(self, image: Image) -> None:
-        package = "tdx-attestation-issuer" if self.mode == "issuer" else "tdx-attestation-validator"
-        image.install(package)
+        """Declare build-time package dependencies."""
+
+    def install(self, image: Image) -> None:
+        """Apply tdxs runtime configuration to the image."""
+        # Config file
+        image.file("/etc/tdxs/config.yaml", content=self._render_config())
+
+        # Systemd unit files
+        image.file(
+            "/usr/lib/systemd/system/tdxs.service",
+            content=self._render_service_unit(),
+        )
+        image.file(
+            "/usr/lib/systemd/system/tdxs.socket",
+            content=self._render_socket_unit(),
+        )
+
+        # Group, user creation, and socket enablement (postinst phase)
+        image.run(
+            "mkosi-chroot", "groupadd", "--system", self.group,
+            phase="postinst",
+        )
+        image.run(
+            "mkosi-chroot", "useradd", "--system",
+            "--home-dir", f"/home/{self.user}",
+            "--shell", "/usr/sbin/nologin",
+            "--gid", self.group,
+            self.user,
+            phase="postinst",
+        )
+        image.run(
+            "mkosi-chroot", "systemctl", "enable", "tdxs.socket",
+            phase="postinst",
+        )
 
     def apply(self, image: Image) -> None:
+        """Convenience: call setup() then install()."""
         self.setup(image)
         self.install(image)
 
-    def install(self, image: Image) -> None:
-        image.service(self.config.service_name, enabled=True)
-        config_payload = json.dumps(
-            {
-                "mode": self.mode,
-                "socket_path": self.config.socket_path,
-                "extra_args": list(self.config.extra_args),
-            },
-            indent=2,
-            sort_keys=True,
+    def _render_config(self) -> str:
+        """Render /etc/tdxs/config.yaml content."""
+        return (
+            "transport:\n"
+            "  type: socket\n"
+            "  config:\n"
+            "    systemd: true\n"
+            "\n"
+            "issuer:\n"
+            f"  type: {self.issuer_type}\n"
         )
-        image.file("/etc/tdx/tdxs.json", content=config_payload + "\n")
+
+    def _render_service_unit(self) -> str:
+        """Render tdxs.service systemd unit."""
+        after_line = " ".join(self.after)
+        requires_line = " ".join((*self.after, "tdxs.socket"))
+        return (
+            "[Unit]\n"
+            "Description=TDXS\n"
+            f"After={after_line}\n"
+            f"Requires={requires_line}\n"
+            "\n"
+            "[Service]\n"
+            f"User={self.user}\n"
+            f"Group={self.group}\n"
+            f"WorkingDirectory=/home/{self.user}\n"
+            "Type=notify\n"
+            "ExecStart=/usr/bin/tdxs \\\n"
+            "    --config /etc/tdxs/config.yaml\n"
+            "Restart=on-failure\n"
+            "\n"
+            "[Install]\n"
+            "WantedBy=default.target\n"
+        )
+
+    def _render_socket_unit(self) -> str:
+        """Render tdxs.socket systemd unit."""
+        after_line = " ".join(self.after)
+        requires_line = " ".join(self.after)
+        return (
+            "[Unit]\n"
+            "Description=TDXS Socket\n"
+            f"After={after_line}\n"
+            f"Requires={requires_line}\n"
+            "\n"
+            "[Socket]\n"
+            f"ListenStream={self.socket_path}\n"
+            "SocketMode=0660\n"
+            "SocketUser=root\n"
+            f"SocketGroup={self.group}\n"
+            "Accept=false\n"
+            "\n"
+            "[Install]\n"
+            "WantedBy=sockets.target\n"
+        )

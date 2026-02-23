@@ -5,6 +5,9 @@ This SDK uses a two-phase module pattern:
 - `setup(image)`: one-time package/build prerequisites.
 - `install(image)`: runtime configuration (files, services, users, hooks).
 
+Modules call the Image API directly to declare packages, files, services, etc.
+This ensures that all required binaries are available in the built image.
+
 ## Recommended Pattern
 
 ```python
@@ -17,9 +20,6 @@ from tdx.image import Image
 class ExampleModule:
     enabled: bool = True
 
-    def required_host_commands(self) -> tuple[str, ...]:
-        return ("mkosi",)
-
     def setup(self, image: Image) -> None:
         if self.enabled:
             image.install("example-package")
@@ -28,10 +28,20 @@ class ExampleModule:
         if self.enabled:
             image.file("/etc/example/config.toml", content="enabled=true\n")
             image.service("example.service", enabled=True)
+
+    def apply(self, image: Image) -> None:
+        self.setup(image)
+        self.install(image)
 ```
 
-`img.use(module)` validates `required_host_commands()` first and raises `E_VALIDATION`
-if any command is missing from `PATH`.
+Usage:
+
+```python
+from tdx import Image
+
+img = Image()
+ExampleModule().apply(img)
+```
 
 ## Lifecycle Phase Mapping
 

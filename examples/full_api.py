@@ -71,7 +71,8 @@ def build_full_api_recipe() -> None:
     init.add_ssh_authorized_key("ssh-ed25519 AAAATEST full-api")
     delivery = init.secrets_delivery("http_post", completion="all_required", reject_unknown=True)
 
-    img.use(init, Tdxs.issuer())
+    init.apply(img)
+    Tdxs(issuer_type="dcap").apply(img)
 
     with img.profile("azure"):
         img.output_targets("azure")
