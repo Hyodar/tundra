@@ -66,16 +66,21 @@ def build_full_api_recipe() -> None:
         ),
     )
 
-    # Composable init modules apply to image directly
-    KeyGeneration(strategy="tpm").apply(img)
-    DiskEncryption(device="/dev/vda3").apply(img)
-    SecretDelivery(method="http_post").apply(img)
+    # Composable init modules: each builds a Go binary and registers its
+    # invocation via image.add_init_script() with priority ordering.
+    KeyGeneration(strategy="tpm").apply(img)          # priority 10
+    DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
+    SecretDelivery(method="http_post").apply(img)      # priority 30
 
+    # Init collects registered init_scripts, generates runtime-init + service.
+    # It also manages config files (disk encryption config, SSH keys, secrets
+    # delivery policy) and Python-side secret validation/materialization.
     init = Init(secrets=(jwt_secret,), handoff="systemd")
     init.enable_disk_encryption(device="/dev/vda3", mapper_name="cryptroot")
     init.add_ssh_authorized_key("ssh-ed25519 AAAATEST full-api")
     delivery = init.secrets_delivery("http_post", completion="all_required", reject_unknown=True)
     init.apply(img)
+
     Tdxs(issuer_type="dcap").apply(img)
 
     with img.profile("azure"):

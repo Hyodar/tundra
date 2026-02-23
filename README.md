@@ -111,6 +111,26 @@ with img.all_profiles():
     results = img.bake()
 ```
 
+## Composable Init Modules
+
+Modules register boot-time steps via `image.add_init_script()` with priority ordering.
+`Init` collects them and generates `/usr/bin/runtime-init` + a systemd service.
+
+```python
+from tdx import Image
+from tdx.modules import DiskEncryption, Init, KeyGeneration, SecretDelivery
+
+img = Image(base="debian/trixie", reproducible=True)
+
+# Each module builds a Go binary and registers its invocation on the image
+KeyGeneration(strategy="tpm").apply(img)          # priority 10
+DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
+SecretDelivery(method="http_post").apply(img)      # priority 30
+
+# Init reads registered init_scripts, sorts by priority, emits runtime-init
+Init().apply(img)
+```
+
 ## Secrets
 
 ```python
@@ -196,7 +216,7 @@ Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
 |---|---|
 | [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer for [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) — TDX kernel build, EFI stub pinning, backports, full debloat, skeleton files, Tdxs module |
 | [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with Init + composable modules (KeyGeneration, DiskEncryption, SecretDelivery), Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles |
-| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, Init + Tdxs modules, multi-profile cloud deploys |
+| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, composable init modules (KeyGeneration, DiskEncryption, SecretDelivery) + Init + Tdxs, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
 | [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |
 | [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas with pattern validation and delivery |
