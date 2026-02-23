@@ -14,7 +14,13 @@ from .backends.inprocess import InProcessBackend
 from .backends.lima import LimaBackend
 from .backends.local_linux import LocalLinuxBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
-from .compiler import DEFAULT_TDX_INIT_SCRIPT, PHASE_ORDER, EmitConfig, emit_mkosi_tree
+from .compiler import (
+    DEFAULT_TDX_INIT_SCRIPT,
+    PHASE_ORDER,
+    EmitConfig,
+    MkosiEmission,
+    emit_mkosi_tree,
+)
 from .deploy import get_adapter
 from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
@@ -82,6 +88,9 @@ class Image:
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
+    _last_compile_digest: str | None = field(init=False, default=None, repr=False)
+    _last_compile_path: Path | None = field(init=False, default=None, repr=False)
+    _last_compile_emission: MkosiEmission | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._state = RecipeState.initialize(
@@ -550,18 +559,38 @@ class Image:
         lock = build_lockfile(recipe=payload)
         return write_lockfile(lock, lock_path)
 
-    def emit_mkosi(self, path: str | Path) -> Path:
+    def compile(self, path: str | Path, *, force: bool = False) -> Path:
         destination = self._normalize_path(path)
-        emit_mkosi_tree(
+        digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
+        if (
+            not force
+            and self._last_compile_digest == digest
+            and self._last_compile_path == destination
+            and destination.exists()
+        ):
+            return destination
+        self._last_compile_emission = emit_mkosi_tree(
             recipe=self._state,
             destination=destination,
             profile_names=self._active_profiles,
             base=self.base,
             config=self._emit_config(),
         )
+        self._last_compile_digest = digest
+        self._last_compile_path = destination
         return destination
 
-    def bake(self, output_dir: str | Path | None = None, *, frozen: bool = False) -> BakeResult:
+    def emit_mkosi(self, path: str | Path) -> Path:
+        """Deprecated: use compile() instead."""
+        return self.compile(path)
+
+    def bake(
+        self,
+        output_dir: str | Path | None = None,
+        *,
+        frozen: bool = False,
+        force: bool = False,
+    ) -> BakeResult:
         ensure_bake_policy(policy=self.policy, frozen=frozen)
         if frozen:
             self._assert_frozen_lock(profile_names=self._active_profiles)
@@ -572,15 +601,11 @@ class Image:
         )
         lock_digest = self._compute_lock_digest(recipe_lock_digest)
 
-        # Emit the mkosi tree for all profiles
+        # Compile the mkosi tree (skips if unchanged)
         emission_root = destination / "mkosi"
-        emission = emit_mkosi_tree(
-            recipe=self._state,
-            destination=emission_root,
-            profile_names=self._active_profiles,
-            base=self.base,
-            config=self._emit_config(),
-        )
+        self.compile(emission_root, force=force)
+        emission = self._last_compile_emission
+        assert emission is not None
 
         # Get the build backend
         backend = self._get_backend()

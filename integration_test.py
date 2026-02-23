@@ -43,7 +43,7 @@ def main() -> None:
 
     # Emit and inspect
     emit_dir = build_dir / "mkosi"
-    img.emit_mkosi(emit_dir)
+    img.compile(emit_dir)
 
     conf_path = emit_dir / "default" / "mkosi.conf"
     print(f"\nmkosi.conf:\n{conf_path.read_text()}")
@@ -133,7 +133,7 @@ def main() -> None:
     Tdxs(issuer_type="dcap").apply(img_tdxs)
 
     emit_tdxs = tdxs_dir / "mkosi"
-    img_tdxs.emit_mkosi(emit_tdxs)
+    img_tdxs.compile(emit_tdxs)
 
     # Verify mkosi.conf has BuildPackages
     tdxs_conf = (emit_tdxs / "default" / "mkosi.conf").read_text()

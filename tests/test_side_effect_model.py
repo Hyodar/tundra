@@ -27,7 +27,7 @@ def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     assert lock_path == build_dir / "tdx.lock"
     assert lock_path.exists()
 
-    generated = image.emit_mkosi(emit_dir)
+    generated = image.compile(emit_dir)
     assert generated == emit_dir
     assert (emit_dir / "default" / "mkosi.conf").exists()
 

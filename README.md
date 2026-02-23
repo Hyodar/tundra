@@ -31,7 +31,7 @@ img.service("app", exec="/usr/bin/app", enabled=True)
 img.debloat(enabled=True)
 img.output_targets("qemu")
 
-img.emit_mkosi("build/mkosi")        # inspect the generated mkosi tree
+img.compile("build/mkosi")           # compile recipe into mkosi project tree
 img.lock()                            # write build/tdx.lock
 result = img.bake(frozen=True)        # build with lockfile enforcement
 ```
@@ -72,7 +72,7 @@ img = Image(
 img.install("systemd", "kmod")
 img.debloat(enabled=True)
 img.output_targets("qemu", "gcp", "azure")
-img.emit_mkosi("build/mkosi")
+img.compile("build/mkosi")
 # build/mkosi/mkosi.version
 # build/mkosi/default/mkosi.conf
 # build/mkosi/default/mkosi.skeleton/init
