@@ -149,14 +149,9 @@ img.secret(
     ),
 )
 
-# SecretDelivery handles build-time setup and runtime validation
-delivery = SecretDelivery(method="http_post", completion="all_required")
-delivery.apply(img)  # builds Go binary, registers init script, captures secrets
-
-# After attestation/boot: validate and materialize
-validation = delivery.validate_payload({"api_token": "tok_123456"})
-if validation.ready:
-    delivery.materialize_runtime("/run")
+# SecretDelivery builds the Go binary that validates and materializes
+# secrets at boot time after attestation.
+SecretDelivery(method="http_post").apply(img)
 ```
 
 ## Policy

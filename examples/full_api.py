@@ -75,15 +75,10 @@ def build_full_api_recipe() -> None:
     # invocation via image.add_init_script() with priority ordering.
     KeyGeneration(strategy="tpm").apply(img)          # priority 10
     DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
+    SecretDelivery(method="http_post").apply(img)      # priority 30
 
-    # SecretDelivery builds the Go binary, registers init script, and
-    # captures image secrets for optional runtime validation.
-    delivery = SecretDelivery(method="http_post")
-    delivery.apply(img)                                # priority 30
-
-    # Image owns Init — no need to manually apply Init().
-    # compile() calls _apply_init() which generates runtime-init + service
-    # and auto-injects After/Requires deps into all services.
+    # Image owns Init — compile() auto-generates runtime-init + service
+    # and injects After/Requires deps into all services.
 
     Tdxs(issuer_type="dcap").apply(img)
 
@@ -102,11 +97,6 @@ def build_full_api_recipe() -> None:
 
     img.lock()
     img.bake(frozen=True)
-
-    # Runtime step after attestation/boot: validate and materialize secret payload.
-    validation = delivery.validate_payload({"jwt_secret": "a" * 64})
-    if validation.ready:
-        delivery.materialize_runtime("runtime")
 
     print(img.measure(backend="rtmr").to_json())
     print(img.deploy(target="qemu").deployment_id)

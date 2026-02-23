@@ -1,4 +1,8 @@
-"""Strict secret schema validation with global env injection."""
+"""Strict secret schema validation example.
+
+Declares secrets with schema constraints. The Go secret-delivery binary
+validates and materializes them at boot time.
+"""
 
 from tdx import Image
 from tdx.models import SecretSchema, SecretTarget
@@ -17,17 +21,9 @@ def configure_strict_secrets() -> None:
         ),
     )
 
-    # SecretDelivery handles both build-time setup and runtime validation.
-    delivery = SecretDelivery(
+    SecretDelivery(
         method="http_post",
-        completion="all_required",
-        reject_unknown=True,
-    )
-    delivery.apply(img)
-
-    validation = delivery.validate_payload({"api_token": "tok_0123456789"})
-    if validation.ready:
-        delivery.materialize_runtime("runtime")
+    ).apply(img)
 
 
 if __name__ == "__main__":
