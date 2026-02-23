@@ -113,13 +113,99 @@ def main() -> None:
             print(f"  Context: {e.context}")
         sys.exit(1)
 
-    # --- Test 2: Raw disk format (artifact collection) ---
+    # --- Test 2: Tdxs module emission (config + units + build pipeline) ---
     print("\n" + "=" * 60)
-    print("TEST 2: Raw disk format — validates artifact collection")
+    print("TEST 2: Tdxs module — validates emitted config, units, build script")
+    print("=" * 60)
+
+    from tdx.modules import Tdxs
+
+    tdxs_dir = build_dir / "test-tdxs"
+    tdxs_dir.mkdir(parents=True, exist_ok=True)
+
+    img_tdxs = Image(
+        build_dir=tdxs_dir,
+        base="debian/bookworm",
+        backend="local_linux",
+        reproducible=True,
+    )
+    img_tdxs.install("systemd")
+    Tdxs(issuer_type="dcap").apply(img_tdxs)
+
+    emit_tdxs = tdxs_dir / "mkosi"
+    img_tdxs.emit_mkosi(emit_tdxs)
+
+    # Verify mkosi.conf has BuildPackages
+    tdxs_conf = (emit_tdxs / "default" / "mkosi.conf").read_text()
+    print(f"\nmkosi.conf:\n{tdxs_conf}")
+    assert "BuildPackages=" in tdxs_conf, "Missing BuildPackages in mkosi.conf"
+    assert "golang" in tdxs_conf, "Missing golang in BuildPackages"
+    assert "git" in tdxs_conf, "Missing git in BuildPackages"
+    print("  BuildPackages verified (golang, git, build-essential)")
+
+    # Verify config.yaml
+    config_yaml = (
+        emit_tdxs / "default" / "mkosi.extra" / "etc" / "tdxs" / "config.yaml"
+    )
+    assert config_yaml.exists(), "config.yaml not emitted"
+    config_content = config_yaml.read_text()
+    assert "type: dcap" in config_content
+    assert "systemd: true" in config_content
+    print(f"  config.yaml verified:\n{config_content}")
+
+    # Verify service unit
+    svc_unit = (
+        emit_tdxs / "default" / "mkosi.extra"
+        / "usr" / "lib" / "systemd" / "system" / "tdxs.service"
+    )
+    assert svc_unit.exists(), "tdxs.service not emitted"
+    svc_text = svc_unit.read_text()
+    assert "User=tdxs" in svc_text
+    assert "Group=tdx" in svc_text
+    assert "Type=notify" in svc_text
+    assert "ExecStart=/usr/bin/tdxs" in svc_text
+    print("  tdxs.service verified (User=tdxs, Group=tdx, Type=notify)")
+
+    # Verify socket unit
+    sock_unit = (
+        emit_tdxs / "default" / "mkosi.extra"
+        / "usr" / "lib" / "systemd" / "system" / "tdxs.socket"
+    )
+    assert sock_unit.exists(), "tdxs.socket not emitted"
+    sock_text = sock_unit.read_text()
+    assert "ListenStream=/var/tdxs.sock" in sock_text
+    assert "SocketGroup=tdx" in sock_text
+    print("  tdxs.socket verified (ListenStream=/var/tdxs.sock, SocketGroup=tdx)")
+
+    # Verify build script exists and contains go build
+    import glob
+
+    build_scripts = glob.glob(
+        str(emit_tdxs / "default" / "scripts" / "*build*")
+    )
+    assert build_scripts, "No build script emitted"
+    build_text = Path(build_scripts[0]).read_text()
+    assert "go build" in build_text
+    assert "NethermindEth/tdxs" in build_text
+    assert "-trimpath" in build_text
+    print(f"  Build script verified: {Path(build_scripts[0]).name}")
+
+    # Verify postinst has groupadd, useradd, systemctl enable
+    postinst_tdxs = emit_tdxs / "default" / "scripts" / "06-postinst.sh"
+    assert postinst_tdxs.exists(), "postinst not emitted"
+    postinst_text = postinst_tdxs.read_text()
+    assert "groupadd --system tdx" in postinst_text
+    assert "useradd --system" in postinst_text
+    assert "systemctl enable tdxs.socket" in postinst_text
+    print("  Postinst verified (groupadd tdx, useradd tdxs, enable tdxs.socket)")
+
+    # --- Test 3: Raw disk format (artifact collection) ---
+    print("\n" + "=" * 60)
+    print("TEST 3: Raw disk format — validates artifact collection")
     print("=" * 60)
 
     img2 = Image(
-        build_dir=build_dir / "test2",
+        build_dir=build_dir / "test3",
         base="debian/bookworm",
         backend="local_linux",
         reproducible=True,
@@ -133,7 +219,7 @@ def main() -> None:
     img2.set_backend(backend2)
 
     try:
-        bake_result2 = img2.bake(output_dir=build_dir / "test2" / "output")
+        bake_result2 = img2.bake(output_dir=build_dir / "test3" / "output")
         print("Bake succeeded!")
         for pname, presult in bake_result2.profiles.items():
             print(f"  Profile: {pname}")
