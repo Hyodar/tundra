@@ -16,6 +16,7 @@ from .init import (
     SecretsRuntimeArtifacts,
     SshKeyDeliveryConfig,
 )
+from .nethermind import Nethermind
 from .raiko import Raiko
 from .taiko_client import TaikoClient
 from .tdx_init import TdxInit
@@ -40,6 +41,7 @@ __all__ = [
     "InitPhase",
     "InitPhaseSpec",
     "Module",
+    "Nethermind",
     "DiskEncryptionConfig",
     "GLOBAL_ENV_RELATIVE_PATH",
     "SecretDeliveryValidation",
