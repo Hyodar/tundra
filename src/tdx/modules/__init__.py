@@ -17,6 +17,7 @@ from .init import (
     SshKeyDeliveryConfig,
 )
 from .raiko import Raiko
+from .taiko_client import TaikoClient
 from .tdx_init import TdxInit
 from .tdxs import Tdxs
 
@@ -45,6 +46,7 @@ __all__ = [
     "SecretsRuntimeArtifacts",
     "SshKeyDeliveryConfig",
     "Raiko",
+    "TaikoClient",
     "TdxInit",
     "Tdxs",
 ]
