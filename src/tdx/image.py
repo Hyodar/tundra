@@ -86,6 +86,8 @@ class Image:
     init_script: str | None = None
     generate_version_script: bool = False
     generate_cloud_postoutput: bool = True
+    environment: dict[str, str] | None = None
+    environment_passthrough: tuple[str, ...] | None = None
     emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
     _backend_override: object | None = field(init=False, default=None, repr=False)
     _state: RecipeState = field(init=False, repr=False)
@@ -816,6 +818,8 @@ class Image:
             "generate_version_script": self.generate_version_script,
             "generate_cloud_postoutput": self.generate_cloud_postoutput,
             "emit_mode": self.emit_mode,
+            "environment": self.environment,
+            "environment_passthrough": self.environment_passthrough,
         }
         if self.compress_output is not None:
             emit_kwargs["compress_output"] = self.compress_output

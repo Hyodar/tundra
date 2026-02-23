@@ -318,6 +318,87 @@ def test_compile_native_profiles_mode(tmp_path: Path) -> None:
     assert (output_dir / "mkosi.profiles" / "prod" / "mkosi.conf").exists()
 
 
+def test_compile_environment_key_value(tmp_path: Path) -> None:
+    """Environment=KEY=VALUE pairs are emitted in [Build] section."""
+    image = Image(
+        base="debian/bookworm",
+        environment={"MY_VAR": "hello", "OTHER": "world"},
+        reproducible=False,
+    )
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+
+    assert "Environment=MY_VAR=hello" in conf_text
+    assert "Environment=OTHER=world" in conf_text
+
+
+def test_compile_environment_passthrough(tmp_path: Path) -> None:
+    """Environment=KEY (passthrough without value) is emitted in [Build] section."""
+    image = Image(
+        base="debian/bookworm",
+        environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
+        reproducible=False,
+    )
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+
+    assert "Environment=KERNEL_IMAGE\n" in conf_text
+    assert "Environment=KERNEL_VERSION\n" in conf_text
+
+
+def test_compile_environment_both_forms(tmp_path: Path) -> None:
+    """Both key=value and passthrough forms coexist in [Build] section."""
+    image = Image(
+        base="debian/bookworm",
+        environment={"SOURCE_DATE_EPOCH": "0"},
+        environment_passthrough=("KERNEL_IMAGE",),
+    )
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+
+    assert "Environment=SOURCE_DATE_EPOCH=0" in conf_text
+    assert "Environment=KERNEL_IMAGE\n" in conf_text
+
+
+def test_compile_reproducible_auto_adds_source_date_epoch(tmp_path: Path) -> None:
+    """When reproducible=True, SOURCE_DATE_EPOCH=0 is auto-added to environment."""
+    image = Image(
+        base="debian/bookworm",
+        reproducible=True,
+        environment={"MY_VAR": "test"},
+    )
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+
+    # Both the user env and the auto-added SOURCE_DATE_EPOCH
+    assert "Environment=SOURCE_DATE_EPOCH=0" in conf_text
+    assert "Environment=MY_VAR=test" in conf_text
+
+
+def test_compile_reproducible_no_override_user_epoch(tmp_path: Path) -> None:
+    """User-provided SOURCE_DATE_EPOCH is not overridden by reproducible=True."""
+    image = Image(
+        base="debian/bookworm",
+        reproducible=True,
+        environment={"SOURCE_DATE_EPOCH": "1234"},
+    )
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+
+    assert "Environment=SOURCE_DATE_EPOCH=1234" in conf_text
+    assert "Environment=SOURCE_DATE_EPOCH=0" not in conf_text
+
+
 def _snapshot_tree(root: Path) -> dict[str, str]:
     snapshot: dict[str, str] = {}
     for path in sorted(root.rglob("*")):

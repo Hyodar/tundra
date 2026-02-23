@@ -259,6 +259,8 @@ class EmitConfig:
     init_script: str | None = None
     generate_version_script: bool = False
     generate_cloud_postoutput: bool = True
+    environment: dict[str, str] | None = None
+    environment_passthrough: tuple[str, ...] | None = None
     emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
 
 
@@ -859,8 +861,14 @@ class DeterministicMkosiEmitter:
 
         # [Build] - reproducibility + network + sandbox settings
         build_lines: list[str] = []
+        env_vars: dict[str, str] = dict(config.environment) if config.environment else {}
         if config.reproducible:
-            build_lines.append("Environment=SOURCE_DATE_EPOCH=0")
+            env_vars.setdefault("SOURCE_DATE_EPOCH", "0")
+        for key in sorted(env_vars):
+            build_lines.append(f"Environment={key}={env_vars[key]}")
+        if config.environment_passthrough:
+            for key in config.environment_passthrough:
+                build_lines.append(f"Environment={key}")
         build_lines.append(f"WithNetwork={'true' if config.with_network else 'false'}")
         if config.sandbox_trees:
             for tree in config.sandbox_trees:
