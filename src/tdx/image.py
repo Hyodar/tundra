@@ -527,6 +527,28 @@ class Image:
             raise ValidationError("on_boot() requires a command.")
         return self.hook("boot", *argv, env=env, shell=shell)
 
+    def efi_stub(self, *, snapshot_url: str, package_version: str) -> Self:
+        """Pin systemd-boot-efi from a specific Debian snapshot for reproducible EFI stub."""
+        if not snapshot_url:
+            raise ValidationError("efi_stub() requires a non-empty snapshot_url.")
+        if not package_version:
+            raise ValidationError("efi_stub() requires a non-empty package_version.")
+        script = (
+            f'EFI_SNAPSHOT_URL="{snapshot_url}"\n'
+            f'EFI_PACKAGE_VERSION="{package_version}"\n'
+            'DEB_URL="${EFI_SNAPSHOT_URL}/pool/main/s/systemd/'
+            'systemd-boot-efi_${EFI_PACKAGE_VERSION}_amd64.deb"\n'
+            'WORK_DIR=$(mktemp -d)\n'
+            'curl -sSfL -o "$WORK_DIR/systemd-boot-efi.deb" "$DEB_URL"\n'
+            'cp "$WORK_DIR/systemd-boot-efi.deb" "$BUILDROOT/tmp/"\n'
+            'mkosi-chroot dpkg -i /tmp/systemd-boot-efi.deb\n'
+            'cp "$BUILDROOT/usr/lib/systemd/boot/efi/systemd-bootx64.efi" '
+            '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
+            'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
+        )
+        self.run("bash", "-c", script, phase="postinst")
+        return self
+
     def ssh(self, *, enabled: bool = True, key_delivery: str = "http") -> Self:
         """Enable or disable SSH access (typically for dev profiles)."""
         if enabled:

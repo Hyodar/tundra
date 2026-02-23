@@ -527,6 +527,51 @@ def test_compile_kernel_custom_source_repo(tmp_path: Path) -> None:
     assert "https://github.com/custom/linux" in script_text
 
 
+def test_compile_efi_stub_postinst_hook(tmp_path: Path) -> None:
+    """efi_stub() registers a postinst hook that downloads and installs pinned EFI stub."""
+    image = Image(base="debian/bookworm")
+    image.install("systemd")
+    image.efi_stub(
+        snapshot_url="https://snapshot.debian.org/archive/debian/20251113T083151Z",
+        package_version="255.4-1",
+    )
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    postinst = output_dir / "default" / "scripts" / "06-postinst.sh"
+
+    assert postinst.exists()
+    content = postinst.read_text(encoding="utf-8")
+
+    # Verify script contains the snapshot URL and package version
+    assert "https://snapshot.debian.org/archive/debian/20251113T083151Z" in content
+    assert "255.4-1" in content
+    # Verify it downloads and installs the .deb
+    assert "systemd-boot-efi" in content
+    assert "dpkg -i" in content
+    # Verify EFI file copy from /usr/lib/systemd/boot/efi
+    assert "/usr/lib/systemd/boot/efi" in content
+
+
+def test_compile_efi_stub_registered_in_postinst_phase() -> None:
+    """efi_stub() registers the hook in the postinst phase of the profile state."""
+    image = Image(base="debian/bookworm")
+    image.efi_stub(
+        snapshot_url="https://snapshot.example.com",
+        package_version="255.4-1",
+    )
+
+    profile = image.state.profiles["default"]
+    assert "postinst" in profile.phases
+    commands = profile.phases["postinst"]
+    assert len(commands) >= 1
+    # The hook should contain the EFI stub script via bash -c
+    efi_command = commands[-1]
+    assert efi_command.argv[0] == "bash"
+    assert efi_command.argv[1] == "-c"
+    assert "snapshot.example.com" in efi_command.argv[2]
+    assert "255.4-1" in efi_command.argv[2]
+
+
 def _snapshot_tree(root: Path) -> dict[str, str]:
     snapshot: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
