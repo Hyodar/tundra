@@ -1,5 +1,6 @@
+from examples.modules import TaikoClient
+
 from tdx import Image
-from tdx.modules import TaikoClient
 
 
 def test_taiko_client_setup_declares_build_packages() -> None:

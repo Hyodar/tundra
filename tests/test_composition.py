@@ -7,15 +7,14 @@ scripts, and config files on top.
 
 from __future__ import annotations
 
+from examples.modules import Nethermind, Raiko, TaikoClient
+
 from tdx import Image
 from tdx.modules import (
     DiskEncryption,
     Init,
     KeyGeneration,
-    Nethermind,
-    Raiko,
     SecretDelivery,
-    TaikoClient,
     Tdxs,
 )
 

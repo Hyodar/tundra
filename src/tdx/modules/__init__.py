@@ -19,10 +19,7 @@ from .init import (
     SshKeyDeliveryConfig,
 )
 from .key_generation import KeyGeneration
-from .nethermind import Nethermind
-from .raiko import Raiko
 from .secret_delivery import SecretDelivery
-from .taiko_client import TaikoClient
 from .tdxs import Tdxs
 
 if TYPE_CHECKING:
@@ -49,12 +46,9 @@ __all__ = [
     "InitPhaseSpec",
     "KeyGeneration",
     "Module",
-    "Nethermind",
-    "Raiko",
     "SecretDelivery",
     "SecretDeliveryValidation",
     "SecretsRuntimeArtifacts",
     "SshKeyDeliveryConfig",
-    "TaikoClient",
     "Tdxs",
 ]

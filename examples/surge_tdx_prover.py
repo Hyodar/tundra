@@ -18,6 +18,7 @@ kernel/, surge-tdx-prover/, services/, and profiles/.
 
 from __future__ import annotations
 
+from examples.modules import Nethermind, Raiko, TaikoClient
 from examples.nethermind_tdx import build_nethermind_base
 from tdx import Image
 from tdx.modules import (
@@ -25,10 +26,7 @@ from tdx.modules import (
     DiskEncryption,
     Init,
     KeyGeneration,
-    Nethermind,
-    Raiko,
     SecretDelivery,
-    TaikoClient,
 )
 from tdx.platforms import AzurePlatform, GcpPlatform
 

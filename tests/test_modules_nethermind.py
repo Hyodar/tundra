@@ -1,5 +1,6 @@
+from examples.modules import Nethermind
+
 from tdx import Image
-from tdx.modules import Nethermind
 
 
 def test_nethermind_setup_declares_build_packages() -> None:

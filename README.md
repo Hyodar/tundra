@@ -50,7 +50,7 @@ result = img.bake(frozen=True)        # build with lockfile enforcement
 | **Custom init** | Built-in TDX init script (mount + pivot_root + `minimal.target`) |
 | **Lockfile + policy** | Frozen bakes, mutable-ref enforcement, integrity checks |
 | **Measurement** | RTMR / Azure / GCP attestation measurement interfaces |
-| **Modules** | Composable service modules via `module.apply(img)` — `Init`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Raiko`, `TaikoClient`, `Nethermind`, `Devtools` |
+| **Modules** | Composable modules via `module.apply(img)` — `Init`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools` |
 | **Phase hooks** | `prepare`, `postinst`, `finalize`, `postoutput`, `on_boot`, `sync` convenience methods |
 | **Backends** | `local_linux` (direct mkosi), `lima` (macOS VM), `inprocess` (testing) |
 
@@ -204,7 +204,10 @@ Lock / cache / policy     src/tdx/lockfile.py, cache.py, policy.py
 Measure + deploy          src/tdx/measure.py, deploy.py
   |
   v
-Service modules           src/tdx/modules/ (Init, KeyGeneration, DiskEncryption, SecretDelivery, Tdxs, Raiko, TaikoClient, Nethermind, Devtools)
+Core modules              src/tdx/modules/ (Init, KeyGeneration, DiskEncryption, SecretDelivery, Tdxs, Devtools)
+  |
+  v
+Example modules           examples/modules/ (Nethermind, Raiko, TaikoClient)
   |
   v
 Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
