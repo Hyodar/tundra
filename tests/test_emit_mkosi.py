@@ -572,6 +572,77 @@ def test_compile_efi_stub_registered_in_postinst_phase() -> None:
     assert "255.4-1" in efi_command.argv[2]
 
 
+def test_compile_strip_image_version_finalize_hook(tmp_path: Path) -> None:
+    """strip_image_version() registers a finalize hook that strips IMAGE_VERSION."""
+    image = Image(base="debian/bookworm")
+    image.install("systemd")
+    # reproducible=True by default, so strip_image_version is auto-called
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    finalize = output_dir / "default" / "scripts" / "07-finalize.sh"
+
+    assert finalize.exists()
+    content = finalize.read_text(encoding="utf-8")
+
+    # Verify script strips IMAGE_VERSION from os-release
+    assert "IMAGE_VERSION" in content
+    assert "$BUILDROOT/etc/os-release" in content
+    assert "sed -i" in content
+
+
+def test_compile_strip_image_version_registered_in_finalize_phase() -> None:
+    """strip_image_version() registers the hook in the finalize phase."""
+    image = Image(base="debian/bookworm")
+    # reproducible=True by default, so strip_image_version is auto-called
+
+    profile = image.state.profiles["default"]
+    assert "finalize" in profile.phases
+    commands = profile.phases["finalize"]
+    assert len(commands) >= 1
+    strip_command = commands[-1]
+    assert strip_command.argv[0] == "bash"
+    assert strip_command.argv[1] == "-c"
+    assert "IMAGE_VERSION" in strip_command.argv[2]
+
+
+def test_compile_strip_image_version_auto_called_when_reproducible() -> None:
+    """When reproducible=True (default), strip_image_version is auto-called."""
+    image = Image(base="debian/bookworm", reproducible=True)
+
+    profile = image.state.profiles["default"]
+    assert "finalize" in profile.phases
+    assert any(
+        cmd.argv[0] == "bash" and len(cmd.argv) >= 3 and "IMAGE_VERSION" in cmd.argv[2]
+        for cmd in profile.phases["finalize"]
+    )
+
+
+def test_compile_strip_image_version_not_called_when_not_reproducible() -> None:
+    """When reproducible=False, strip_image_version is NOT auto-called."""
+    image = Image(base="debian/bookworm", reproducible=False)
+
+    profile = image.state.profiles["default"]
+    finalize_cmds = profile.phases.get("finalize", [])
+    assert not any(
+        cmd.argv[0] == "bash" and len(cmd.argv) >= 3 and "IMAGE_VERSION" in cmd.argv[2]
+        for cmd in finalize_cmds
+    )
+
+
+def test_compile_strip_image_version_can_be_disabled() -> None:
+    """strip_image_version(enabled=False) removes the auto-registered hook."""
+    image = Image(base="debian/bookworm", reproducible=True)
+    # Auto-called in __post_init__, now disable it
+    image.strip_image_version(enabled=False)
+
+    profile = image.state.profiles["default"]
+    finalize_cmds = profile.phases.get("finalize", [])
+    assert not any(
+        cmd.argv[0] == "bash" and len(cmd.argv) >= 3 and "IMAGE_VERSION" in cmd.argv[2]
+        for cmd in finalize_cmds
+    )
+
+
 def _snapshot_tree(root: Path) -> dict[str, str]:
     snapshot: dict[str, str] = {}
     for path in sorted(root.rglob("*")):

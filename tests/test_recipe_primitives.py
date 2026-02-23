@@ -7,7 +7,7 @@ from tdx.errors import ValidationError
 
 
 def test_recipe_primitives_are_recorded() -> None:
-    image = Image()
+    image = Image(reproducible=False)
     image.repository("https://deb.example/security", name="debian-security", priority=10)
     image.file("/etc/example.conf", content="key=value\n")
     image.template(
@@ -47,7 +47,7 @@ def test_invalid_phase_dependency_order_is_rejected() -> None:
 
 
 def test_run_alias_records_hook() -> None:
-    image = Image()
+    image = Image(reproducible=False)
     image.run("echo", "hello", phase="prepare")
 
     profile = image.state.profiles["default"]

@@ -104,6 +104,8 @@ class Image:
             default_profile=self.default_profile,
         )
         self._active_profiles = (self.default_profile,)
+        if self.reproducible:
+            self.strip_image_version()
 
     @property
     def state(self) -> RecipeState:
@@ -526,6 +528,36 @@ class Image:
         if not argv:
             raise ValidationError("on_boot() requires a command.")
         return self.hook("boot", *argv, env=env, shell=shell)
+
+    def strip_image_version(self, *, enabled: bool = True) -> Self:
+        """Strip IMAGE_VERSION from /etc/os-release for reproducible attestation."""
+        if not enabled:
+            # Remove any existing finalize hooks that match the strip command
+            for profile in self._iter_active_profiles():
+                if "finalize" in profile.phases:
+                    profile.phases["finalize"] = [
+                        cmd
+                        for cmd in profile.phases["finalize"]
+                        if not (
+                            cmd.argv[0] == "bash"
+                            and len(cmd.argv) >= 3
+                            and "IMAGE_VERSION" in cmd.argv[2]
+                        )
+                    ]
+                    profile.hooks = [
+                        h
+                        for h in profile.hooks
+                        if not (
+                            h.phase == "finalize"
+                            and h.command.argv[0] == "bash"
+                            and len(h.command.argv) >= 3
+                            and "IMAGE_VERSION" in h.command.argv[2]
+                        )
+                    ]
+            return self
+        script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/etc/os-release\""""
+        self.hook("finalize", "bash", "-c", script)
+        return self
 
     def efi_stub(self, *, snapshot_url: str, package_version: str) -> Self:
         """Pin systemd-boot-efi from a specific Debian snapshot for reproducible EFI stub."""
