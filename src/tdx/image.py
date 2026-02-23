@@ -581,6 +581,54 @@ class Image:
         self.run("bash", "-c", script, phase="postinst")
         return self
 
+    def backports(self, *, mirror: str | None = None, release: str | None = None) -> Self:
+        """Generate Debian backports sources dynamically at sync time.
+
+        Registers a sync phase hook matching upstream add-backports.sh behavior.
+        """
+        lines: list[str] = []
+        if mirror is not None:
+            lines.append(f'MIRROR="{mirror}"')
+        else:
+            lines.append('MIRROR=$(jq -r .Mirror /work/config.json)')
+            lines.append('if [ "$MIRROR" = "null" ]; then')
+            lines.append('    MIRROR="http://deb.debian.org/debian"')
+            lines.append("fi")
+
+        if release is not None:
+            lines.append(f'RELEASE="{release}"')
+
+        lines.append(
+            'cat > "$SRCDIR/mkosi.builddir/debian-backports.sources" <<EOF\n'
+            "Types: deb deb-src\n"
+            "URIs: $MIRROR\n"
+            "Suites: ${RELEASE}-backports\n"
+            "Components: main\n"
+            "Enabled: yes\n"
+            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+            "\n"
+            "Types: deb deb-src\n"
+            "URIs: $MIRROR\n"
+            "Suites: sid\n"
+            "Components: main\n"
+            "Enabled: yes\n"
+            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+            "EOF"
+        )
+
+        script = "\n".join(lines)
+        self.hook("sync", "bash", "-c", script)
+
+        # Auto-add sandbox_trees entry for the generated file
+        backports_entry = (
+            "mkosi.builddir/debian-backports.sources"
+            ":/etc/apt/sources.list.d/debian-backports.sources"
+        )
+        if backports_entry not in self.sandbox_trees:
+            self.sandbox_trees = (*self.sandbox_trees, backports_entry)
+
+        return self
+
     def ssh(self, *, enabled: bool = True, key_delivery: str = "http") -> Self:
         """Enable or disable SSH access (typically for dev profiles)."""
         if enabled:

@@ -643,6 +643,107 @@ def test_compile_strip_image_version_can_be_disabled() -> None:
     )
 
 
+def test_compile_backports_sync_hook(tmp_path: Path) -> None:
+    """backports() registers a sync hook that generates debian-backports.sources."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.install("systemd")
+    image.backports(mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    sync_script = output_dir / "default" / "scripts" / "01-sync.sh"
+
+    assert sync_script.exists()
+    content = sync_script.read_text(encoding="utf-8")
+    assert "debian-backports.sources" in content
+    assert "snapshot.debian.org" in content
+    assert "${RELEASE}-backports" in content
+    assert "sid" in content
+    assert "debian-archive-keyring.gpg" in content
+
+
+def test_compile_backports_registered_in_sync_phase() -> None:
+    """backports() registers the hook in the sync phase of the profile state."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.backports(mirror="https://example.com/debian")
+
+    profile = image.state.profiles["default"]
+    assert "sync" in profile.phases
+    commands = profile.phases["sync"]
+    assert len(commands) >= 1
+
+    sync_command = commands[0]
+    assert sync_command.argv[0] == "bash"
+    assert sync_command.argv[1] == "-c"
+    assert "example.com/debian" in sync_command.argv[2]
+    assert "debian-backports.sources" in sync_command.argv[2]
+
+
+def test_compile_backports_auto_adds_sandbox_trees() -> None:
+    """backports() auto-adds sandbox_trees entry for the generated file."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.backports()
+
+    expected_entry = (
+        "mkosi.builddir/debian-backports.sources"
+        ":/etc/apt/sources.list.d/debian-backports.sources"
+    )
+    assert expected_entry in image.sandbox_trees
+
+
+def test_compile_backports_no_duplicate_sandbox_trees() -> None:
+    """backports() does not duplicate sandbox_trees entry if already present."""
+    image = Image(
+        base="debian/bookworm",
+        reproducible=False,
+        sandbox_trees=(
+            "mkosi.builddir/debian-backports.sources"
+            ":/etc/apt/sources.list.d/debian-backports.sources",
+        ),
+    )
+    image.backports()
+
+    expected_entry = (
+        "mkosi.builddir/debian-backports.sources"
+        ":/etc/apt/sources.list.d/debian-backports.sources"
+    )
+    assert image.sandbox_trees.count(expected_entry) == 1
+
+
+def test_compile_backports_jq_fallback_when_no_mirror() -> None:
+    """When mirror is not provided, script reads from /work/config.json via jq."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.backports()
+
+    profile = image.state.profiles["default"]
+    sync_command = profile.phases["sync"][0]
+    script = sync_command.argv[2]
+    assert "jq -r .Mirror /work/config.json" in script
+    assert 'MIRROR="http://deb.debian.org/debian"' in script
+
+
+def test_compile_backports_custom_release() -> None:
+    """backports() accepts a custom release parameter."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.backports(release="trixie")
+
+    profile = image.state.profiles["default"]
+    sync_command = profile.phases["sync"][0]
+    script = sync_command.argv[2]
+    assert 'RELEASE="trixie"' in script
+
+
+def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
+    """backports() sandbox_trees entry appears in emitted mkosi.conf."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.install("systemd")
+    image.backports()
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    conf = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+    assert "SandboxTrees=" in conf
+    assert "debian-backports.sources" in conf
+
+
 def _snapshot_tree(root: Path) -> dict[str, str]:
     snapshot: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
