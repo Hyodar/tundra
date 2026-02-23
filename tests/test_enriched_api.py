@@ -277,7 +277,7 @@ class TestLifecycleMethods:
     def test_skeleton_as_file(self, tmp_path: Path) -> None:
         img = Image()
         img.skeleton("/etc/resolv.conf", content="nameserver 1.1.1.1\n")
-        assert img.state.profiles["default"].files[0].path == "/etc/resolv.conf"
+        assert img.state.profiles["default"].skeleton_files[0].path == "/etc/resolv.conf"
 
     def test_ssh_installs_dropbear(self) -> None:
         img = Image()

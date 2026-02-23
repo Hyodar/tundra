@@ -36,7 +36,7 @@ def test_compile_golden_output(tmp_path: Path) -> None:
     assert "@Format" not in conf_text
     assert "@ImageId" not in conf_text
     assert "[Content]" in conf_text
-    assert "CleanPackageMetadata=yes" in conf_text
+    assert "CleanPackageMetadata=true" in conf_text
     assert "curl" in conf_text
     assert "jq" in conf_text
     # Script references are in [Content] section (no separate [Scripts] section in mkosi v20+)
@@ -48,7 +48,7 @@ def test_compile_golden_output(tmp_path: Path) -> None:
     assert "Seed=" in conf_text
 
     # Verify build settings
-    assert "WithNetwork=yes" in conf_text
+    assert "WithNetwork=true" in conf_text
 
     assert prepare_script.read_text(encoding="utf-8") == (
         "#!/usr/bin/env bash\n"
@@ -180,7 +180,7 @@ def test_compile_architecture_field(tmp_path: Path) -> None:
 
 def test_compile_with_network_configurable(tmp_path: Path) -> None:
     """WithNetwork can be set to True or False."""
-    for with_net, expected in [(True, "WithNetwork=yes"), (False, "WithNetwork=no")]:
+    for with_net, expected in [(True, "WithNetwork=true"), (False, "WithNetwork=false")]:
         image = Image(base="debian/bookworm", with_network=with_net)
         image.install("curl")
         output_dir = image.compile(tmp_path / f"mkosi-net-{with_net}")

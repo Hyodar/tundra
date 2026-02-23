@@ -78,6 +78,9 @@ class Image:
     with_network: bool = True
     clean_package_metadata: bool = True
     manifest_format: str = "json"
+    compress_output: str | None = None
+    output_directory: str | None = None
+    seed: str | None = None
     sandbox_trees: tuple[str, ...] = ()
     package_cache_directory: str | None = None
     init_script: str | None = None
@@ -444,13 +447,28 @@ class Image:
         *,
         content: str | None = None,
         src: str | Path | None = None,
+        mode: str = "0644",
     ) -> Self:
         """Place a file in the image before the package manager runs.
 
         This maps to mkosi.skeleton/ and is useful for custom apt sources,
         resolv.conf for build DNS, or directory structure that packages expect.
         """
-        return self.file(path, content=content, src=src)
+        if not path:
+            raise ValidationError("skeleton() requires a destination path.")
+        if (content is None) == (src is None):
+            raise ValidationError("skeleton() requires exactly one of content= or src=.")
+        if content is not None:
+            resolved_content = content
+        else:
+            if src is None:
+                raise ValidationError("skeleton() requires src when content is not provided.")
+            resolved_content = Path(src).read_text(encoding="utf-8")
+        for profile in self._iter_active_profiles():
+            profile.skeleton_files.append(
+                FileEntry(path=path, content=resolved_content, mode=mode)
+            )
+        return self
 
     def prepare(
         self,
@@ -784,21 +802,28 @@ class Image:
 
     def _emit_config(self) -> EmitConfig:
         """Build an EmitConfig from the Image's settings."""
-        return EmitConfig(
-            base=self.base,
-            arch=self.arch,
-            reproducible=self.reproducible,
-            kernel=self.kernel,
-            with_network=self.with_network,
-            clean_package_metadata=self.clean_package_metadata,
-            manifest_format=self.manifest_format,
-            sandbox_trees=self.sandbox_trees,
-            package_cache_directory=self.package_cache_directory,
-            init_script=self.init_script,
-            generate_version_script=self.generate_version_script,
-            generate_cloud_postoutput=self.generate_cloud_postoutput,
-            emit_mode=self.emit_mode,
-        )
+        emit_kwargs: dict[str, object] = {
+            "base": self.base,
+            "arch": self.arch,
+            "reproducible": self.reproducible,
+            "kernel": self.kernel,
+            "with_network": self.with_network,
+            "clean_package_metadata": self.clean_package_metadata,
+            "manifest_format": self.manifest_format,
+            "sandbox_trees": self.sandbox_trees,
+            "package_cache_directory": self.package_cache_directory,
+            "init_script": self.init_script,
+            "generate_version_script": self.generate_version_script,
+            "generate_cloud_postoutput": self.generate_cloud_postoutput,
+            "emit_mode": self.emit_mode,
+        }
+        if self.compress_output is not None:
+            emit_kwargs["compress_output"] = self.compress_output
+        if self.output_directory is not None:
+            emit_kwargs["output_directory"] = self.output_directory
+        if self.seed is not None:
+            emit_kwargs["seed"] = self.seed
+        return EmitConfig(**emit_kwargs)  # type: ignore[arg-type]
 
     def _artifact_filename(self, target: OutputTarget) -> str:
         mapping: dict[OutputTarget, str] = {
@@ -992,6 +1017,14 @@ class Image:
                 }
                 for secret in sorted(profile.secrets, key=lambda item: item.name)
             ]
+            skeleton_files = [
+                {
+                    "path": file_entry.path,
+                    "mode": file_entry.mode,
+                    "sha256": hashlib.sha256(file_entry.content.encode()).hexdigest(),
+                }
+                for file_entry in sorted(profile.skeleton_files, key=lambda item: item.path)
+            ]
             profiles_data[profile_name] = {
                 "packages": sorted(profile.packages),
                 "build_packages": sorted(profile.build_packages),
@@ -1000,6 +1033,7 @@ class Image:
                 "phases": phases,
                 "repositories": repositories,
                 "files": files,
+                "skeleton_files": skeleton_files,
                 "templates": templates,
                 "users": users,
                 "services": services,

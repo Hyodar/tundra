@@ -87,6 +87,19 @@ DEFAULT_TDX_INIT_SCRIPT = textwrap.dedent("""\
         exec chroot . /lib/systemd/systemd systemd.unit=minimal.target'
 """)
 
+# Minimal systemd target matching nethermind-tdx base/mkosi.skeleton
+MINIMAL_TARGET_UNIT = (
+    "[Unit]\n"
+    "Description=Minimal System\n"
+    "Requires=basic.target\n"
+    "Conflicts=rescue.service rescue.target\n"
+    "After=basic.target rescue.service rescue.target\n"
+    "AllowIsolate=yes\n"
+    "\n"
+    "[Install]\n"
+    "WantedBy=default.target"
+)
+
 # GCP postoutput: creates ESP image, GPT disk, wraps in deterministic tar.gz
 GCP_POSTOUTPUT_SCRIPT = textwrap.dedent("""\
     #!/bin/bash
@@ -236,6 +249,8 @@ class EmitConfig:
     kernel: Kernel | None = None
     output_format: str = "uki"
     seed: str = DEFAULT_SEED
+    compress_output: str | None = None
+    output_directory: str | None = None
     with_network: bool = True
     clean_package_metadata: bool = True
     manifest_format: str = "json"
@@ -610,6 +625,19 @@ class DeterministicMkosiEmitter:
             init_path.write_text(config.init_script, encoding="utf-8")
             init_path.chmod(0o755)
 
+        # Write skeleton files from img.skeleton()
+        for entry in profile.skeleton_files:
+            dest = skeleton_dir / entry.path.lstrip("/")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(entry.content, encoding="utf-8")
+
+        # Auto-emit minimal.target when systemd debloat sets it as default
+        if profile.debloat.enabled and profile.debloat.systemd_minimize:
+            target_path = skeleton_dir / "etc" / "systemd" / "system" / "minimal.target"
+            if not target_path.exists():
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(MINIMAL_TARGET_UNIT, encoding="utf-8")
+
     def _emit_all_scripts(
         self,
         *,
@@ -695,9 +723,16 @@ class DeterministicMkosiEmitter:
 
         lines: list[str] = []
 
+        # Clean files in var directories (preserve directory structure)
+        if config.clean_var_dirs:
+            lines.append("# Debloat: clean files in var directories")
+            for var_dir in sorted(config.clean_var_dirs):
+                lines.append(f'find "$BUILDROOT{var_dir}" -type f -delete')
+
         # Path removal (remains in finalize — runs on host with $BUILDROOT)
         paths = config.effective_paths_remove
         if paths:
+            lines.append("")
             lines.append("# Debloat: remove unnecessary paths")
             for path in sorted(paths):
                 lines.append(f"rm -rf \"$BUILDROOT{path}\"")
@@ -814,17 +849,19 @@ class DeterministicMkosiEmitter:
         lines.append(f"Format={config.output_format}")
         lines.append(f"ImageId={profile_name}")
         lines.append(f"ManifestFormat={config.manifest_format}")
+        if config.compress_output:
+            lines.append(f"CompressOutput={config.compress_output}")
+        if config.output_directory:
+            lines.append(f"OutputDirectory={config.output_directory}")
         if config.reproducible:
-            lines.append("CompressOutput=zstd")
             lines.append(f"Seed={config.seed}")
         lines.append("")
 
         # [Build] - reproducibility + network + sandbox settings
         build_lines: list[str] = []
         if config.reproducible:
-            build_lines.append("SourceDateEpoch=0")
             build_lines.append("Environment=SOURCE_DATE_EPOCH=0")
-        build_lines.append(f"WithNetwork={'yes' if config.with_network else 'no'}")
+        build_lines.append(f"WithNetwork={'true' if config.with_network else 'false'}")
         if config.sandbox_trees:
             for tree in config.sandbox_trees:
                 build_lines.append(f"SandboxTrees={tree}")
@@ -837,7 +874,9 @@ class DeterministicMkosiEmitter:
 
         # [Content]
         lines.append("[Content]")
-        lines.append(f"CleanPackageMetadata={'yes' if config.clean_package_metadata else 'no'}")
+        if config.reproducible:
+            lines.append("SourceDateEpoch=0")
+        lines.append(f"CleanPackageMetadata={'true' if config.clean_package_metadata else 'false'}")
         if packages:
             pkg_lines = "\n".join(f"    {p}" for p in packages)
             lines.append(f"Packages=\n{pkg_lines}")

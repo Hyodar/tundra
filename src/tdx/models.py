@@ -218,6 +218,7 @@ class DebloatConfig:
     systemd_units_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP
     systemd_units_keep_extra: tuple[str, ...] = ()
     systemd_bins_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP
+    clean_var_dirs: tuple[str, ...] = ("/var/log", "/var/cache")
 
     @property
     def effective_paths_remove(self) -> tuple[str, ...]:
@@ -262,6 +263,7 @@ class ProfileState:
     phases: dict[Phase, list[CommandSpec]] = field(default_factory=dict)
     repositories: list[RepositorySpec] = field(default_factory=list)
     files: list[FileEntry] = field(default_factory=list)
+    skeleton_files: list[FileEntry] = field(default_factory=list)
     templates: list[TemplateEntry] = field(default_factory=list)
     users: list[UserSpec] = field(default_factory=list)
     services: list[ServiceSpec] = field(default_factory=list)

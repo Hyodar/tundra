@@ -26,12 +26,15 @@ dev = [
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra"
-testpaths = ["tests"]
+testpaths = ["tests", "integration_tests"]
+markers = [
+    "integration: integration tests (deselect with '-m \"not integration\"')",
+]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "integration_tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
