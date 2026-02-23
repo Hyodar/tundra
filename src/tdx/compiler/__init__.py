@@ -3,6 +3,7 @@
 from .emit_mkosi import (
     PHASE_ORDER,
     DeterministicMkosiEmitter,
+    EmitConfig,
     MkosiEmission,
     MkosiEmitter,
     emit_mkosi_tree,
@@ -11,6 +12,7 @@ from .emit_scripts import ScriptEmission
 
 __all__ = [
     "DeterministicMkosiEmitter",
+    "EmitConfig",
     "MkosiEmission",
     "MkosiEmitter",
     "PHASE_ORDER",

@@ -28,7 +28,7 @@ def test_lockfile_roundtrip_parser_serializer() -> None:
 
 
 def test_image_lock_writes_dependency_and_recipe_metadata(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.install("curl")
     with image.profile("dev"):
         image.install("jq")
@@ -45,13 +45,13 @@ def test_image_lock_writes_dependency_and_recipe_metadata(tmp_path: Path) -> Non
 
 
 def test_bake_frozen_fails_when_lock_missing(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     with pytest.raises(LockfileError):
         image.bake(frozen=True)
 
 
 def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.install("curl")
     image.lock()
     image.install("jq")
@@ -63,7 +63,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
 
 
 def test_bake_frozen_succeeds_with_current_lock(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.install("curl")
     image.lock()
 

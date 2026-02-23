@@ -6,6 +6,10 @@ from tdx import Image
 from tdx.errors import MeasurementError
 
 
+def _image_with_backend(tmp_path: Path) -> Image:
+    return Image(build_dir=tmp_path / "build", backend="inprocess")
+
+
 def test_measure_requires_baked_artifacts() -> None:
     image = Image()
     with pytest.raises(MeasurementError):
@@ -13,17 +17,13 @@ def test_measure_requires_baked_artifacts() -> None:
 
 
 def test_measure_supports_rtmr_azure_and_gcp(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = _image_with_backend(tmp_path)
     image.output_targets("qemu")
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        image.bake()
+    image.bake()
 
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        rtmr = image.measure(backend="rtmr")
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        azure = image.measure(backend="azure")
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        gcp = image.measure(backend="gcp")
+    rtmr = image.measure(backend="rtmr")
+    azure = image.measure(backend="azure")
+    gcp = image.measure(backend="gcp")
 
     assert rtmr.backend == "rtmr"
     assert azure.backend == "azure"
@@ -34,12 +34,10 @@ def test_measure_supports_rtmr_azure_and_gcp(tmp_path: Path) -> None:
 
 
 def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = _image_with_backend(tmp_path)
     image.output_targets("qemu")
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        image.bake()
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        measurements = image.measure(backend="rtmr")
+    image.bake()
+    measurements = image.measure(backend="rtmr")
 
     json_first = measurements.to_json()
     json_second = measurements.to_json()
@@ -58,12 +56,10 @@ def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
 
 
 def test_measure_verification_reports_actionable_mismatches(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = _image_with_backend(tmp_path)
     image.output_targets("qemu")
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        image.bake()
-    with pytest.warns(RuntimeWarning, match="simulated"):
-        measurements = image.measure(backend="rtmr")
+    image.bake()
+    measurements = image.measure(backend="rtmr")
 
     result = measurements.verify(
         {

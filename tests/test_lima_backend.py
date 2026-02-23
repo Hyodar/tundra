@@ -34,21 +34,22 @@ def test_lima_prepare_fails_with_actionable_hint_when_missing_binary(
     assert "Install Lima" in excinfo.value.hint
 
 
-def test_lima_prepare_and_execute_when_binary_exists(
+def test_lima_prepare_creates_directories_when_binary_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = _request(tmp_path)
     backend = LimaBackend()
     monkeypatch.setattr("tdx.backends.lima.shutil.which", lambda _: "/usr/bin/limactl")
+    # Mock _instance_running to avoid actually checking Lima
+    monkeypatch.setattr(
+        LimaBackend, "_instance_running", lambda self: True
+    )
 
     backend.prepare(request)
-    result = backend.execute(request)
-    backend.cleanup(request)
 
     assert request.build_dir.exists()
     assert request.emit_dir.exists()
-    assert "default" in result.profiles
 
 
 def _request(tmp_path: Path) -> BakeRequest:

@@ -26,7 +26,7 @@ def test_debloat_profile_override_is_supported() -> None:
 
 
 def test_bake_report_contains_debloat_section(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.output_targets("qemu")
     with image.profile("prod"):
         image.output_targets("qemu")

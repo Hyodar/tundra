@@ -54,19 +54,17 @@ def test_cache_manifest_verification_detects_mismatch(tmp_path: Path) -> None:
         store.load(key=key, expected_inputs=inputs)
 
 
-def test_bake_reports_cache_hits_and_misses(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+def test_bake_produces_build_report(tmp_path: Path) -> None:
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.output_targets("qemu")
 
-    first = image.bake()
-    first_report = _read_report(first.profiles["default"].report_path)
-    assert first_report["cache"]["misses"] == ["qemu"]
-    assert first_report["cache"]["hits"] == []
+    result = image.bake()
+    report = _read_report(result.profiles["default"].report_path)
 
-    second = image.bake()
-    second_report = _read_report(second.profiles["default"].report_path)
-    assert second_report["cache"]["hits"] == ["qemu"]
-    assert second_report["cache"]["misses"] == []
+    assert report["profile"] == "default"
+    assert report["backend"] == "inprocess"
+    assert "artifact_digests" in report
+    assert "debloat" in report
 
 
 def _read_report(path: Path | None) -> dict[str, Any]:

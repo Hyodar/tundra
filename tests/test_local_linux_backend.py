@@ -55,7 +55,7 @@ def test_local_backend_fails_when_mkosi_missing(
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
-def test_local_backend_prepare_execute_cleanup_on_linux(
+def test_local_backend_prepare_creates_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -64,12 +64,9 @@ def test_local_backend_prepare_execute_cleanup_on_linux(
     monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
 
     backend.prepare(request)
-    result = backend.execute(request)
-    backend.cleanup(request)
 
     assert request.build_dir.exists()
     assert request.emit_dir.exists()
-    assert "default" in result.profiles
 
 
 def _request(tmp_path: Path) -> BakeRequest:

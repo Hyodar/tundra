@@ -6,7 +6,7 @@ from tdx import Image
 
 
 def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.output_targets("qemu")
     image.run("echo", "hello", phase="prepare")
     result = image.bake()
@@ -15,11 +15,11 @@ def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> Non
     assert report_path is not None
     report = _read_json(report_path)
 
-    assert "cache" in report
     assert "artifact_digests" in report
     assert "lock_digest" in report
     assert "emitted_scripts" in report
     assert "logs" in report
+    assert "backend" in report
 
     artifact_digests = cast(dict[str, str], report["artifact_digests"])
     assert "qemu" in artifact_digests
@@ -31,7 +31,7 @@ def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> Non
 
 
 def test_structured_logs_include_profile_phase_module_and_builder(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
+    image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.output_targets("qemu")
     image.bake()
 

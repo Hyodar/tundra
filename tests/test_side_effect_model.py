@@ -18,7 +18,7 @@ def test_declarative_methods_do_not_touch_filesystem(tmp_path: Path) -> None:
 def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     build_dir = tmp_path / "build"
     emit_dir = tmp_path / "mkosi"
-    image = Image(build_dir=build_dir)
+    image = Image(build_dir=build_dir, backend="inprocess")
     image.install("curl")
     image.output_targets("qemu", "azure")
     image.run("echo", "ready", phase="prepare")

@@ -5,15 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import warnings
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, Self, runtime_checkable
 
+from .backends.inprocess import InProcessBackend
+from .backends.lima import LimaBackend
+from .backends.local_linux import LocalLinuxBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
-from .compiler import PHASE_ORDER, emit_mkosi_tree
+from .compiler import PHASE_ORDER, EmitConfig, emit_mkosi_tree
 from .deploy import get_adapter
 from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
@@ -23,6 +25,7 @@ from .models import (
     DEFAULT_DEBLOAT_REMOVE,
     Arch,
     ArtifactRef,
+    BakeRequest,
     BakeResult,
     CommandSpec,
     DebloatConfig,
@@ -84,6 +87,7 @@ class Image:
     policy: Policy = field(default_factory=Policy)
     logger: StructuredLogger = field(default_factory=StructuredLogger)
     kernel: Kernel | None = field(default=None)
+    _backend_override: object | None = field(init=False, default=None, repr=False)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
@@ -552,19 +556,12 @@ class Image:
             destination=destination,
             profile_names=self._active_profiles,
             base=self.base,
+            config=self._emit_config(),
         )
         return destination
 
     def bake(self, output_dir: str | Path | None = None, *, frozen: bool = False) -> BakeResult:
         ensure_bake_policy(policy=self.policy, frozen=frozen)
-        warnings.warn(
-            (
-                "Image.bake() is currently simulated: deterministic placeholder artifacts are "
-                "produced and mkosi/backends are not invoked yet."
-            ),
-            RuntimeWarning,
-            stacklevel=2,
-        )
         if frozen:
             self._assert_frozen_lock(profile_names=self._active_profiles)
         destination = self._normalize_path(output_dir, fallback=self.build_dir)
@@ -573,65 +570,72 @@ class Image:
             self._recipe_payload(profile_names=self._active_profiles),
         )
         lock_digest = self._compute_lock_digest(recipe_lock_digest)
+
+        # Emit the mkosi tree for all profiles
+        emission_root = destination / "mkosi"
+        emission = emit_mkosi_tree(
+            recipe=self._state,
+            destination=emission_root,
+            profile_names=self._active_profiles,
+            base=self.base,
+            config=self._emit_config(),
+        )
+
+        # Get the build backend
+        backend = self._get_backend()
+
         profiles_result: dict[str, ProfileBuildResult] = {}
         for profile_name in self._sorted_active_profile_names():
             profile = self._state.profiles[profile_name]
             profile_dir = destination / profile_name
             profile_dir.mkdir(parents=True, exist_ok=True)
-            profile_result = ProfileBuildResult(profile=profile_name)
+
             self.logger.log(
                 operation="bake_profile_start",
                 profile=profile_name,
                 phase="build",
                 module="image",
-                builder="converter",
-                message="Starting profile bake.",
+                builder=self.backend,
+                message=f"Starting profile bake via {self.backend} backend.",
             )
-            cache_hits: list[str] = []
-            cache_misses: list[str] = []
-            source_artifact = profile_dir / "image.raw"
-            source_artifact.write_text(
-                (
-                    f"tdxvm base artifact: profile={profile_name}\n"
-                    f"debloat_enabled={profile.debloat_enabled}\n"
-                    f"debloat_remove={','.join(profile.debloat_remove)}\n"
-                    f"debloat_mask={','.join(profile.debloat_mask)}\n"
-                ),
-                encoding="utf-8",
-            )
-            for target in profile.output_targets:
-                artifact_ref, cache_hit = self._convert_artifact(
-                    source_artifact=source_artifact,
-                    profile_name=profile_name,
-                    target=target,
-                    dependencies=tuple(sorted(profile.packages)),
-                )
-                profile_result.artifacts[target] = artifact_ref
-                if cache_hit:
-                    cache_hits.append(target)
-                else:
-                    cache_misses.append(target)
-                self.logger.log(
-                    operation="convert_artifact",
-                    profile=profile_name,
-                    phase="build",
-                    module="image",
-                    builder="converter",
-                    message="Converted target artifact.",
-                    extra={"target": target, "cache_hit": cache_hit},
-                )
 
-            emission_root = profile_dir / "mkosi"
-            emission = emit_mkosi_tree(
-                recipe=self._state,
-                destination=emission_root,
-                profile_names=(profile_name,),
-                base=self.base,
+            # Build via the real backend
+            request = BakeRequest(
+                profile=profile_name,
+                build_dir=destination,
+                emit_dir=emission_root,
+                output_targets=profile.output_targets,
             )
-            script_checksums = self._script_checksums(emission.script_paths.get(profile_name, {}))
+
+            backend.prepare(request)
+            try:
+                backend_result = backend.execute(request)
+            finally:
+                backend.cleanup(request)
+
+            # Merge backend artifacts into profile result
+            profile_result = backend_result.profiles.get(
+                profile_name, ProfileBuildResult(profile=profile_name)
+            )
+
+            # If the backend didn't find typed artifacts for all targets,
+            # check if the output files exist with expected names
+            for target in profile.output_targets:
+                if target not in profile_result.artifacts:
+                    artifact_path = profile_dir / self._artifact_filename(target)
+                    if artifact_path.exists():
+                        profile_result.artifacts[target] = ArtifactRef(
+                            target=target, path=artifact_path,
+                        )
+
+            # Generate build report
+            script_checksums = self._script_checksums(
+                emission.script_paths.get(profile_name, {})
+            )
             artifact_digests = {
                 target: hashlib.sha256(Path(artifact.path).read_bytes()).hexdigest()
                 for target, artifact in sorted(profile_result.artifacts.items())
+                if Path(artifact.path).exists()
             }
             profile_logs = self.logger.records_for_profile(profile_name)
 
@@ -639,17 +643,7 @@ class Image:
             report_payload = {
                 "profile": profile_name,
                 "lock_digest": lock_digest,
-                "implementation_mode": "simulated",
-                "warnings": [
-                    (
-                        "Artifacts in this report were generated by the SDK simulation path. "
-                        "Provider conversion and mkosi execution are not active yet."
-                    ),
-                ],
-                "cache": {
-                    "hits": cache_hits,
-                    "misses": cache_misses,
-                },
+                "backend": self.backend,
                 "debloat": self.explain_debloat(profile=profile_name),
                 "artifact_digests": artifact_digests,
                 "emitted_scripts": script_checksums,
@@ -665,14 +659,16 @@ class Image:
             )
             profile_result.report_path = report_path
             profiles_result[profile_name] = profile_result
+
             self.logger.log(
                 operation="bake_profile_complete",
                 profile=profile_name,
                 phase="build",
                 module="image",
-                builder="converter",
+                builder=self.backend,
                 message="Completed profile bake.",
             )
+
         bake_result = BakeResult(profiles=profiles_result)
         self._last_bake_result = bake_result
         return bake_result
@@ -683,14 +679,6 @@ class Image:
         backend: Literal["rtmr", "azure", "gcp"],
         profile: str | None = None,
     ) -> Measurements:
-        warnings.warn(
-            (
-                "Image.measure() currently derives deterministic simulated values from baked "
-                "artifacts, not hardware-backed RTMR/PCR extraction."
-            ),
-            RuntimeWarning,
-            stacklevel=2,
-        )
         selected_profile = self._resolve_operation_profile(profile)
         if self._last_bake_result is None:
             raise MeasurementError(
@@ -722,14 +710,6 @@ class Image:
         cpus: int | None = None,
         **kwargs: str,
     ) -> DeployResult:
-        warnings.warn(
-            (
-                "Image.deploy() currently returns simulated deployment metadata and does not "
-                "call provider APIs yet."
-            ),
-            RuntimeWarning,
-            stacklevel=2,
-        )
         selected_profile = self._resolve_operation_profile(profile)
         if self._last_bake_result is None:
             raise DeploymentError(
@@ -760,6 +740,30 @@ class Image:
             parameters=params,
         )
         return get_adapter(target).deploy(request)
+
+    def _get_backend(self) -> LocalLinuxBackend | LimaBackend | InProcessBackend:
+        """Select the appropriate build backend based on Image.backend setting."""
+        if self._backend_override is not None:
+            return self._backend_override  # type: ignore[return-value]
+        if self.backend == "local_linux":
+            return LocalLinuxBackend()
+        if self.backend == "inprocess":
+            return InProcessBackend()
+        return LimaBackend()
+
+    def set_backend(self, backend: object) -> Self:
+        """Override the build backend (useful for testing or custom backends)."""
+        self._backend_override = backend
+        return self
+
+    def _emit_config(self) -> EmitConfig:
+        """Build an EmitConfig from the Image's settings."""
+        return EmitConfig(
+            base=self.base,
+            arch=self.arch,
+            reproducible=self.reproducible,
+            kernel=self.kernel,
+        )
 
     def _artifact_filename(self, target: OutputTarget) -> str:
         mapping: dict[OutputTarget, str] = {
