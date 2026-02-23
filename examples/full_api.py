@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from tdx import Image, Kernel, SecretSchema, SecretTarget
-from tdx.modules import Init, Tdxs
+from tdx.modules import DiskEncryption, Init, KeyGeneration, SecretDelivery, Tdxs
 
 
 def build_full_api_recipe() -> None:
@@ -70,6 +70,11 @@ def build_full_api_recipe() -> None:
     init.enable_disk_encryption(device="/dev/vda3", mapper_name="cryptroot")
     init.add_ssh_authorized_key("ssh-ed25519 AAAATEST full-api")
     delivery = init.secrets_delivery("http_post", completion="all_required", reject_unknown=True)
+
+    # Composable modules plug into init
+    KeyGeneration(strategy="tpm").apply(init)
+    DiskEncryption(device="/dev/vda3").apply(init)
+    SecretDelivery(method="http_post").apply(init)
 
     init.apply(img)
     Tdxs(issuer_type="dcap").apply(img)

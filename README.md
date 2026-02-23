@@ -50,7 +50,7 @@ result = img.bake(frozen=True)        # build with lockfile enforcement
 | **Custom init** | Built-in TDX init script (mount + pivot_root + `minimal.target`) |
 | **Lockfile + policy** | Frozen bakes, mutable-ref enforcement, integrity checks |
 | **Measurement** | RTMR / Azure / GCP attestation measurement interfaces |
-| **Modules** | Composable service modules via `module.apply(img)` — `Init`, `Tdxs`, `TdxInit`, `Raiko`, `TaikoClient`, `Nethermind`, `Devtools` |
+| **Modules** | Composable service modules via `module.apply(img)` — `Init`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Raiko`, `TaikoClient`, `Nethermind`, `Devtools` |
 | **Phase hooks** | `prepare`, `postinst`, `finalize`, `postoutput`, `on_boot`, `sync` convenience methods |
 | **Backends** | `local_linux` (direct mkosi), `lima` (macOS VM), `inprocess` (testing) |
 
@@ -184,7 +184,7 @@ Lock / cache / policy     src/tdx/lockfile.py, cache.py, policy.py
 Measure + deploy          src/tdx/measure.py, deploy.py
   |
   v
-Service modules           src/tdx/modules/ (Init, Tdxs, TdxInit, Raiko, TaikoClient, Nethermind, Devtools)
+Service modules           src/tdx/modules/ (Init, KeyGeneration, DiskEncryption, SecretDelivery, Tdxs, Raiko, TaikoClient, Nethermind, Devtools)
   |
   v
 Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
@@ -195,7 +195,7 @@ Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
 | Example | Description |
 |---|---|
 | [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer for [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) — TDX kernel build, EFI stub pinning, backports, full debloat, skeleton files, Tdxs module |
-| [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with TdxInit, Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles |
+| [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with Init + composable modules (KeyGeneration, DiskEncryption, SecretDelivery), Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles |
 | [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, Init + Tdxs modules, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
 | [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |

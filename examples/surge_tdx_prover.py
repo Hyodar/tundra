@@ -7,7 +7,8 @@ upstream NethermindEth/nethermind-tdx repository.
 Layers:
   1. Base layer (build_nethermind_base): Debian Trixie, kernel build,
      reproducibility hooks, debloat, Tdxs quote service
-  2. Application layer: TdxInit, Raiko, TaikoClient, Nethermind modules,
+  2. Application layer: Init with composable modules (KeyGeneration,
+     DiskEncryption, SecretDelivery), Raiko, TaikoClient, Nethermind,
      plus monitoring, networking, and platform profiles
 
 The SDK's integration tests verify this configuration produces output that
@@ -19,7 +20,16 @@ from __future__ import annotations
 
 from examples.nethermind_tdx import build_nethermind_base
 from tdx import Image
-from tdx.modules import Devtools, Nethermind, Raiko, TaikoClient, TdxInit
+from tdx.modules import (
+    Devtools,
+    DiskEncryption,
+    Init,
+    KeyGeneration,
+    Nethermind,
+    Raiko,
+    SecretDelivery,
+    TaikoClient,
+)
 from tdx.platforms import AzurePlatform, GcpPlatform
 
 # ── Upstream constants ────────────────────────────────────────────────
@@ -162,7 +172,8 @@ def build_surge_tdx_prover() -> Image:
     Composes:
       - Base layer (nethermind-tdx base: kernel, debloat, Tdxs)
       - Application layer runtime + build packages
-      - TdxInit, Raiko, TaikoClient, Nethermind modules
+      - Init with composable modules (KeyGeneration, DiskEncryption, SecretDelivery)
+      - Raiko, TaikoClient, Nethermind service modules
       - System config files (dropbear, sysctl, udev, env files)
       - Azure, GCP, and devtools platform profiles
     """
@@ -173,30 +184,22 @@ def build_surge_tdx_prover() -> Image:
     img.install(*RUNTIME_PACKAGES)
     img.build_install(*BUILD_PACKAGES)
 
-    # ── 3. Service modules ────────────────────────────────────────────
+    # ── 3. Init with composable modules ───────────────────────────────
 
-    # TDX Init: runtime initialization with SSH, key, and disk config
-    TdxInit(
-        ssh_strategy="webserver",
-        key_strategy="tpm",
-        disk_strategy="luks",
+    init = Init()
+
+    KeyGeneration(strategy="tpm", output="/persistent/key").apply(init)
+    DiskEncryption(
+        device="/dev/vda3",
+        mapper_name="cryptroot",
+        key_path="/persistent/key",
         mount_point="/persistent",
-        runtime_users=(
-            "nethermind-surge",
-            "raiko",
-            "taiko-client",
-        ),
-        runtime_directories=(
-            "/persistent/nethermind",
-            "/persistent/raiko",
-            "/persistent/taiko-client",
-            "/persistent/jwt",
-        ),
-        runtime_devices=(
-            "/dev/tpm0",
-            "/dev/tdx_guest",
-        ),
-    ).apply(img)
+    ).apply(init)
+    SecretDelivery(method="http_post").apply(init)
+
+    init.apply(img)
+
+    # ── 4. Service modules ────────────────────────────────────────────
 
     # Raiko: TDX prover service (Rust)
     Raiko(
@@ -217,7 +220,7 @@ def build_surge_tdx_prover() -> Image:
         version="1.32.3",
     ).apply(img)
 
-    # ── 4. Config files & systemd units ───────────────────────────────
+    # ── 5. Config files & systemd units ───────────────────────────────
 
     # Dropbear SSH daemon configuration
     img.file("/etc/default/dropbear", content=DROPBEAR_CONFIG)
@@ -271,7 +274,7 @@ def build_surge_tdx_prover() -> Image:
         phase="postinst",
     )
 
-    # ── 5. Platform profiles ──────────────────────────────────────────
+    # ── 6. Platform profiles ──────────────────────────────────────────
 
     with img.profile("azure"):
         AzurePlatform().apply(img)

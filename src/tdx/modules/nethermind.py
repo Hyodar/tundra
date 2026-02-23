@@ -11,6 +11,7 @@ Runtime: systemd service, user creation, config file mapping.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from textwrap import dedent
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -99,17 +100,14 @@ class Nethermind:
 
     def _add_runtime_config(self, image: Image) -> None:
         """Add runtime config, unit file, and user creation."""
-        # Systemd unit file
         image.file(
             "/usr/lib/systemd/system/nethermind-surge.service",
             content=self._render_service_unit(),
         )
 
-        # Config files if provided
         for src_path, dest_path in self.config_files.items():
             image.file(dest_path, src=src_path)
 
-        # User creation (postinst phase)
         image.run(
             "mkosi-chroot", "useradd", "--system",
             "--home-dir", f"/home/{self.user}",
@@ -123,24 +121,24 @@ class Nethermind:
         """Render nethermind-surge.service systemd unit."""
         after_line = " ".join(self.after)
         requires_line = " ".join(self.after)
-        return (
-            "[Unit]\n"
-            "Description=Nethermind Surge\n"
-            f"After={after_line}\n"
-            f"Requires={requires_line}\n"
-            "\n"
-            "[Service]\n"
-            f"User={self.user}\n"
-            f"Group={self.group}\n"
-            "Restart=on-failure\n"
-            "LimitNOFILE=1048576\n"
-            "EnvironmentFile=/etc/nethermind-surge/env\n"
-            "ExecStart=/usr/bin/nethermind "
-            "--config /etc/nethermind-surge/config.json "
-            "--datadir /home/nethermind-surge/data "
-            "--JsonRpc.EngineHost 0.0.0.0 "
-            "--JsonRpc.EnginePort 8551\n"
-            "\n"
-            "[Install]\n"
-            "WantedBy=default.target\n"
-        )
+        return dedent(f"""\
+            [Unit]
+            Description=Nethermind Surge
+            After={after_line}
+            Requires={requires_line}
+
+            [Service]
+            User={self.user}
+            Group={self.group}
+            Restart=on-failure
+            LimitNOFILE=1048576
+            EnvironmentFile=/etc/nethermind-surge/env
+            ExecStart=/usr/bin/nethermind \
+            --config /etc/nethermind-surge/config.json \
+            --datadir /home/nethermind-surge/data \
+            --JsonRpc.EngineHost 0.0.0.0 \
+            --JsonRpc.EnginePort 8551
+
+            [Install]
+            WantedBy=default.target
+        """)

@@ -1,4 +1,4 @@
-"""Init module primitives including secret delivery validation."""
+"""Init module — runtime-init script builder and secret delivery validation."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from textwrap import dedent
 from typing import TYPE_CHECKING, Literal
 
 from tdx.errors import ValidationError
@@ -156,14 +157,43 @@ class SshKeyDeliveryConfig:
     authorized_keys_path: str = "/root/.ssh/authorized_keys"
 
 
+# ── _BashBlock: internal storage for runtime-init script fragments ───
+
+
+@dataclass(frozen=True, slots=True)
+class _BashBlock:
+    script: str
+    comment: str
+
+
+# ── _BuildHook: internal storage for build-phase hooks ───────────────
+
+
+@dataclass(frozen=True, slots=True)
+class _BuildHook:
+    argv: tuple[str, ...]
+    shell: bool
+
+
 @dataclass(slots=True)
 class Init:
+    """Runtime-init script builder and secrets coordinator.
+
+    Collects bash fragments from small composable modules (KeyGeneration,
+    DiskEncryption, SecretDelivery) and from service modules, then
+    generates ``/usr/bin/runtime-init`` and ``runtime-init.service``.
+    """
+
     _secrets: dict[str, SecretSpec] = field(default_factory=dict)
     handoff: Literal["systemd"] = "systemd"
     disk_encryption: DiskEncryptionConfig | None = None
     ssh_keys: list[str] = field(default_factory=list)
     ssh_config: SshKeyDeliveryConfig = field(default_factory=SshKeyDeliveryConfig)
     _delivery: HttpPostSecretDelivery | None = None
+    _bash_blocks: list[_BashBlock] = field(default_factory=list)
+    _build_hooks: list[_BuildHook] = field(default_factory=list)
+    _build_packages: list[str] = field(default_factory=list)
+    _packages: list[str] = field(default_factory=list)
 
     def __init__(
         self,
@@ -183,7 +213,31 @@ class Init:
         self.ssh_keys = []
         self.ssh_config = SshKeyDeliveryConfig()
         self._delivery = None
+        self._bash_blocks = []
+        self._build_hooks = []
+        self._build_packages = []
+        self._packages = []
         self._ensure_default_delivery()
+
+    # ── Public API: composable module interface ──────────────────────
+
+    def add_bash(self, script: str, *, comment: str = "") -> None:
+        """Append bash commands to the runtime-init script."""
+        self._bash_blocks.append(_BashBlock(script=script, comment=comment))
+
+    def add_build_packages(self, *packages: str) -> None:
+        """Register build-time packages needed by sub-modules."""
+        self._build_packages.extend(packages)
+
+    def add_build_hook(self, *argv: str, shell: bool = False) -> None:
+        """Register a build-phase hook."""
+        self._build_hooks.append(_BuildHook(argv=argv, shell=shell))
+
+    def add_packages(self, *packages: str) -> None:
+        """Register runtime packages needed by sub-modules."""
+        self._packages.extend(packages)
+
+    # ── Legacy convenience methods (still usable directly) ───────────
 
     def add_secret(self, spec: SecretSpec) -> None:
         self._secrets[spec.name] = spec
@@ -261,6 +315,8 @@ class Init:
         )
         return tuple(phases)
 
+    # ── Image application ────────────────────────────────────────────
+
     def apply(self, image: Image) -> None:
         self.setup(image)
         self.install(image)
@@ -273,9 +329,21 @@ class Init:
             image.install("openssh-server")
         if self._delivery is not None:
             image.install("python3")
+        # Packages requested by sub-modules
+        for pkg in self._packages:
+            image.install(pkg)
+        # Build packages requested by sub-modules
+        if self._build_packages:
+            image.build_install(*self._build_packages)
 
     def install(self, image: Image) -> None:
         self._sync_declared_secrets(image)
+
+        # Build hooks from sub-modules
+        for hook in self._build_hooks:
+            image.hook("build", *hook.argv, shell=hook.shell)
+
+        # Legacy disk encryption config file
         if self.disk_encryption is not None:
             payload = json.dumps(
                 {
@@ -287,9 +355,13 @@ class Init:
                 sort_keys=True,
             )
             image.file("/etc/tdx/init/disk-encryption.json", content=payload + "\n")
+
+        # Legacy SSH keys
         if self.ssh_keys:
             keys = "\n".join(self.ssh_keys) + "\n"
             image.file(self.ssh_config.authorized_keys_path, content=keys, mode="0600")
+
+        # Legacy secrets delivery config
         if self._delivery is not None:
             payload = json.dumps(
                 {
@@ -302,6 +374,8 @@ class Init:
             )
             image.file("/etc/tdx/init/secrets-delivery.json", content=payload + "\n")
             image.service("secrets-ready.target", enabled=True)
+
+        # Phases config
         phase_payload = json.dumps(
             {
                 "handoff": self.handoff,
@@ -319,6 +393,24 @@ class Init:
         )
         image.file("/etc/tdx/init/phases.json", content=phase_payload + "\n")
 
+        # Runtime-init script (generated from bash blocks)
+        if self._bash_blocks:
+            image.file(
+                "/usr/bin/runtime-init",
+                content=self._render_runtime_init_script(),
+                mode="0755",
+            )
+            image.file(
+                "/usr/lib/systemd/system/runtime-init.service",
+                content=self._render_service_unit(),
+            )
+            image.run(
+                "mkosi-chroot", "systemctl", "enable", "runtime-init.service",
+                phase="postinst",
+            )
+
+    # ── Runtime validation ───────────────────────────────────────────
+
     def validate_and_materialize(
         self,
         payload: dict[str, object],
@@ -331,6 +423,34 @@ class Init:
         if not validation.ready:
             return validation, None
         return validation, self._delivery.materialize_runtime(runtime_root)
+
+    # ── Private helpers ──────────────────────────────────────────────
+
+    def _render_runtime_init_script(self) -> str:
+        parts = [
+            dedent("""\
+                #!/bin/bash
+                set -euo pipefail
+            """),
+        ]
+        for block in self._bash_blocks:
+            parts.append(block.script)
+        return "\n".join(parts)
+
+    def _render_service_unit(self) -> str:
+        return dedent("""\
+            [Unit]
+            Description=Runtime Init
+            After=network.target network-setup.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/bin/runtime-init
+            RemainAfterExit=yes
+
+            [Install]
+            WantedBy=default.target
+        """)
 
     def _refresh_delivery_expected(self) -> None:
         if self._delivery is None:

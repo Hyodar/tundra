@@ -10,6 +10,7 @@ Runtime: config.yaml, systemd service + socket activation, user/group.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from textwrap import dedent
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -77,10 +78,8 @@ class Tdxs:
 
     def _add_runtime_config(self, image: Image) -> None:
         """Add runtime config, unit files, user/group, and service enablement."""
-        # Config file
         image.file("/etc/tdxs/config.yaml", content=self._render_config())
 
-        # Systemd unit files
         image.file(
             "/usr/lib/systemd/system/tdxs.service",
             content=self._render_service_unit(),
@@ -90,7 +89,6 @@ class Tdxs:
             content=self._render_socket_unit(),
         )
 
-        # Group, user creation, and socket enablement (postinst phase)
         image.run(
             "mkosi-chroot", "groupadd", "--system", self.group,
             phase="postinst",
@@ -110,56 +108,56 @@ class Tdxs:
 
     def _render_config(self) -> str:
         """Render /etc/tdxs/config.yaml content."""
-        return (
-            "transport:\n"
-            "  type: socket\n"
-            "  config:\n"
-            "    systemd: true\n"
-            "\n"
-            "issuer:\n"
-            f"  type: {self.issuer_type}\n"
-        )
+        return dedent(f"""\
+            transport:
+              type: socket
+              config:
+                systemd: true
+
+            issuer:
+              type: {self.issuer_type}
+        """)
 
     def _render_service_unit(self) -> str:
         """Render tdxs.service systemd unit."""
         after_line = " ".join(self.after)
         requires_line = " ".join((*self.after, "tdxs.socket"))
-        return (
-            "[Unit]\n"
-            "Description=TDXS\n"
-            f"After={after_line}\n"
-            f"Requires={requires_line}\n"
-            "\n"
-            "[Service]\n"
-            f"User={self.user}\n"
-            f"Group={self.group}\n"
-            f"WorkingDirectory=/home/{self.user}\n"
-            "Type=notify\n"
-            "ExecStart=/usr/bin/tdxs \\\n"
-            "    --config /etc/tdxs/config.yaml\n"
-            "Restart=on-failure\n"
-            "\n"
-            "[Install]\n"
-            "WantedBy=default.target\n"
-        )
+        return dedent(f"""\
+            [Unit]
+            Description=TDXS
+            After={after_line}
+            Requires={requires_line}
+
+            [Service]
+            User={self.user}
+            Group={self.group}
+            WorkingDirectory=/home/{self.user}
+            Type=notify
+            ExecStart=/usr/bin/tdxs \\
+                --config /etc/tdxs/config.yaml
+            Restart=on-failure
+
+            [Install]
+            WantedBy=default.target
+        """)
 
     def _render_socket_unit(self) -> str:
         """Render tdxs.socket systemd unit."""
         after_line = " ".join(self.after)
         requires_line = " ".join(self.after)
-        return (
-            "[Unit]\n"
-            "Description=TDXS Socket\n"
-            f"After={after_line}\n"
-            f"Requires={requires_line}\n"
-            "\n"
-            "[Socket]\n"
-            f"ListenStream={self.socket_path}\n"
-            "SocketMode=0660\n"
-            "SocketUser=root\n"
-            f"SocketGroup={self.group}\n"
-            "Accept=false\n"
-            "\n"
-            "[Install]\n"
-            "WantedBy=sockets.target\n"
-        )
+        return dedent(f"""\
+            [Unit]
+            Description=TDXS Socket
+            After={after_line}
+            Requires={requires_line}
+
+            [Socket]
+            ListenStream={self.socket_path}
+            SocketMode=0660
+            SocketUser=root
+            SocketGroup={self.group}
+            Accept=false
+
+            [Install]
+            WantedBy=sockets.target
+        """)

@@ -8,7 +8,16 @@ scripts, and config files on top.
 from __future__ import annotations
 
 from tdx import Image
-from tdx.modules import Nethermind, Raiko, TaikoClient, TdxInit, Tdxs
+from tdx.modules import (
+    DiskEncryption,
+    Init,
+    KeyGeneration,
+    Nethermind,
+    Raiko,
+    SecretDelivery,
+    TaikoClient,
+    Tdxs,
+)
 
 
 def _build_base_image() -> Image:
@@ -32,11 +41,11 @@ def _apply_app_layer(img: Image) -> Image:
     img.install("prometheus", "rclone", "curl", "jq")
     img.hook("build", "sh", "-c", "echo app-build-hook", shell=True)
 
-    TdxInit(
-        ssh_strategy="webserver",
-        key_strategy="tpm",
-        disk_strategy="luks",
-    ).apply(img)
+    init = Init()
+    KeyGeneration(strategy="tpm").apply(init)
+    DiskEncryption(device="/dev/vda3").apply(init)
+    SecretDelivery(method="http_post").apply(init)
+    init.apply(img)
 
     Tdxs(issuer_type="dcap").apply(img)
 
@@ -86,18 +95,24 @@ def test_module_build_hooks_ordered_by_application_sequence() -> None:
     build_commands = profile.phases.get("build", [])
     scripts = [cmd.argv[-1] for cmd in build_commands]
 
-    # Find module-specific build hooks by their unique build artifacts
-    tdx_init_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/tdx-init" in s)
+    # Init sub-modules come first (key-generation, disk-encryption, secret-delivery)
+    # then Tdxs, Raiko, TaikoClient, Nethermind
+    key_gen_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/key-generation" in s)
+    disk_enc_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/disk-encryption" in s)
+    secret_del_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/secret-delivery" in s)
     tdxs_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/tdxs" in s)
     raiko_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/raiko" in s)
     taiko_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/taiko-client" in s)
     nethermind_idx = next(i for i, s in enumerate(scripts) if "dotnet publish" in s)
 
-    # Application order: TdxInit → Tdxs → Raiko → TaikoClient → Nethermind
-    assert tdx_init_idx < tdxs_idx, "TdxInit hook before Tdxs hook"
-    assert tdxs_idx < raiko_idx, "Tdxs hook before Raiko hook"
-    assert raiko_idx < taiko_idx, "Raiko hook before TaikoClient hook"
-    assert taiko_idx < nethermind_idx, "TaikoClient hook before Nethermind hook"
+    # Init sub-modules before service modules
+    assert key_gen_idx < tdxs_idx
+    assert disk_enc_idx < tdxs_idx
+    assert secret_del_idx < tdxs_idx
+    # Service modules in application order
+    assert tdxs_idx < raiko_idx
+    assert raiko_idx < taiko_idx
+    assert taiko_idx < nethermind_idx
 
 
 # -- Postinst coexistence tests --
@@ -122,9 +137,9 @@ def test_postinst_has_both_base_and_app_commands() -> None:
     )
 
     # App-layer postinst commands from modules (user creation, service enablement)
-    # TdxInit enables runtime-init.service
+    # Init enables runtime-init.service
     assert any("runtime-init" in a for a in all_argv), (
-        f"TdxInit service enablement should be in postinst:\n{full_text}"
+        f"Init service enablement should be in postinst:\n{full_text}"
     )
 
     # Tdxs creates tdx group and tdxs user
@@ -161,9 +176,9 @@ def test_multiple_modules_have_distinct_build_hooks() -> None:
     profile = img.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
 
-    # base hook + app hook + 5 module hooks = at least 7
-    assert len(build_commands) >= 7, (
-        f"Expected at least 7 build hooks (2 manual + 5 modules), got {len(build_commands)}"
+    # base hook + app hook + 3 init sub-module hooks + 4 service module hooks = 9
+    assert len(build_commands) >= 9, (
+        f"Expected at least 9 build hooks, got {len(build_commands)}"
     )
 
 
@@ -174,7 +189,7 @@ def test_all_module_packages_present() -> None:
 
     profile = img.state.profiles["default"]
 
-    # TdxInit + Tdxs + TaikoClient require golang
+    # Init sub-modules + Tdxs + TaikoClient require golang
     assert "golang" in profile.build_packages
 
     # Raiko requires clang
@@ -201,8 +216,7 @@ def test_all_module_files_present() -> None:
     profile = img.state.profiles["default"]
     file_paths = {f.path for f in profile.files}
 
-    # TdxInit emits config.yaml and runtime-init script
-    assert "/etc/tdx-init/config.yaml" in file_paths
+    # Init generates runtime-init script
     assert "/usr/bin/runtime-init" in file_paths
 
     # Modules emit service units as files in /usr/lib/systemd/system/
@@ -271,7 +285,7 @@ def test_full_composition_produces_valid_state() -> None:
 
     # Has build hooks for all modules
     build_commands = profile.phases.get("build", [])
-    assert len(build_commands) >= 7
+    assert len(build_commands) >= 9
 
     # Has postinst phase with commands
     postinst_commands = profile.phases.get("postinst", [])

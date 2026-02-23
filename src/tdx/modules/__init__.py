@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from .devtools import Devtools
+from .disk_encryption import DiskEncryption
 from .init import (
     GLOBAL_ENV_RELATIVE_PATH,
     DiskEncryptionConfig,
@@ -17,10 +18,11 @@ from .init import (
     SecretsRuntimeArtifacts,
     SshKeyDeliveryConfig,
 )
+from .key_generation import KeyGeneration
 from .nethermind import Nethermind
 from .raiko import Raiko
+from .secret_delivery import SecretDelivery
 from .taiko_client import TaikoClient
-from .tdx_init import TdxInit
 from .tdxs import Tdxs
 
 if TYPE_CHECKING:
@@ -36,21 +38,23 @@ class Module(Protocol):
 
 
 __all__ = [
+    "DiskEncryption",
+    "DiskEncryptionConfig",
+    "Devtools",
+    "GLOBAL_ENV_RELATIVE_PATH",
     "HttpPostDeliveryConfig",
     "HttpPostSecretDelivery",
     "Init",
     "InitPhase",
     "InitPhaseSpec",
-    "Devtools",
+    "KeyGeneration",
     "Module",
     "Nethermind",
-    "DiskEncryptionConfig",
-    "GLOBAL_ENV_RELATIVE_PATH",
+    "Raiko",
+    "SecretDelivery",
     "SecretDeliveryValidation",
     "SecretsRuntimeArtifacts",
     "SshKeyDeliveryConfig",
-    "Raiko",
     "TaikoClient",
-    "TdxInit",
     "Tdxs",
 ]

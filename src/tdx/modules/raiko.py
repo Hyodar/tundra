@@ -10,6 +10,7 @@ Runtime: systemd service, user/group creation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from textwrap import dedent
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -83,19 +84,16 @@ class Raiko:
 
     def _add_runtime_config(self, image: Image) -> None:
         """Add runtime config, unit file, and user/group creation."""
-        # Systemd unit file
         image.file(
             "/usr/lib/systemd/system/raiko.service",
             content=self._render_service_unit(),
         )
 
-        # Config files if provided
         if self.config_path is not None:
             image.file("/etc/raiko/config.json", src=self.config_path)
         if self.chain_spec_path is not None:
             image.file("/etc/raiko/chain-spec.json", src=self.chain_spec_path)
 
-        # User creation (postinst phase)
         image.run(
             "mkosi-chroot", "useradd", "--system",
             "--home-dir", f"/home/{self.user}",
@@ -109,18 +107,18 @@ class Raiko:
         """Render raiko.service systemd unit."""
         after_line = " ".join(self.after)
         requires_line = " ".join(self.after)
-        return (
-            "[Unit]\n"
-            "Description=Raiko\n"
-            f"After={after_line}\n"
-            f"Requires={requires_line}\n"
-            "\n"
-            "[Service]\n"
-            f"User={self.user}\n"
-            f"Group={self.group}\n"
-            "Restart=on-failure\n"
-            "ExecStart=/usr/bin/raiko\n"
-            "\n"
-            "[Install]\n"
-            "WantedBy=default.target\n"
-        )
+        return dedent(f"""\
+            [Unit]
+            Description=Raiko
+            After={after_line}
+            Requires={requires_line}
+
+            [Service]
+            User={self.user}
+            Group={self.group}
+            Restart=on-failure
+            ExecStart=/usr/bin/raiko
+
+            [Install]
+            WantedBy=default.target
+        """)
