@@ -425,6 +425,7 @@ class DeterministicMkosiEmitter:
                 config=config,
                 packages=sorted(profile.packages),
                 build_packages=sorted(profile.build_packages),
+                build_sources=profile.build_sources or None,
                 repositories=profile.repositories,
                 phase_scripts=phase_scripts,
             )
@@ -524,6 +525,7 @@ class DeterministicMkosiEmitter:
                 config=config,
                 packages=sorted(profile.packages),
                 build_packages=sorted(profile.build_packages),
+                build_sources=profile.build_sources or None,
                 repositories=profile.repositories,
                 phase_scripts=phase_scripts,
             )
@@ -790,6 +792,7 @@ class DeterministicMkosiEmitter:
         config: EmitConfig,
         packages: list[str],
         build_packages: list[str],
+        build_sources: list[tuple[str, str]] | None = None,
         repositories: list[RepositorySpec],
         phase_scripts: dict[Phase, Path],
     ) -> str:
@@ -841,6 +844,10 @@ class DeterministicMkosiEmitter:
         if build_packages:
             bpkg_lines = "\n".join(f"    {p}" for p in build_packages)
             lines.append(f"BuildPackages=\n{bpkg_lines}")
+        if build_sources:
+            for host_path, target in build_sources:
+                entry = f"{host_path}:{target}" if target else host_path
+                lines.append(f"BuildSources={entry}")
 
         # Kernel configuration
         if config.kernel:

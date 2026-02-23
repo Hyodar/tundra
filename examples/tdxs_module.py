@@ -9,7 +9,8 @@ def build_with_tdxs() -> None:
     img.install("ca-certificates")
     img.output_targets("qemu")
 
-    # Module declarations are recipe-only; no filesystem side effects until lock/emit/bake.
+    # Module sets up build packages (golang, git), build hook (clone + compile),
+    # config.yaml, systemd units, user/group creation, and socket enablement.
     Tdxs(issuer_type="dcap").apply(img)
 
     img.lock()

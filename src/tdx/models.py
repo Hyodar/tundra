@@ -257,6 +257,7 @@ class ProfileState:
     name: str
     packages: set[str] = field(default_factory=set)
     build_packages: set[str] = field(default_factory=set)
+    build_sources: list[tuple[str, str]] = field(default_factory=list)
     output_targets: tuple[OutputTarget, ...] = ("qemu",)
     phases: dict[Phase, list[CommandSpec]] = field(default_factory=dict)
     repositories: list[RepositorySpec] = field(default_factory=list)

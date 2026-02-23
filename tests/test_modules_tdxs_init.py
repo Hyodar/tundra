@@ -5,6 +5,58 @@ from tdx.models import SecretSchema, SecretSpec, SecretTarget
 from tdx.modules import Init, Tdxs
 
 
+def test_tdxs_setup_declares_build_packages() -> None:
+    image = Image()
+    module = Tdxs(issuer_type="dcap")
+
+    module.setup(image)
+
+    profile = image.state.profiles["default"]
+    assert "golang" in profile.build_packages
+    assert "git" in profile.build_packages
+    assert "build-essential" in profile.build_packages
+
+
+def test_tdxs_install_adds_build_hook() -> None:
+    image = Image()
+    module = Tdxs(issuer_type="dcap")
+
+    module.install(image)
+
+    profile = image.state.profiles["default"]
+    build_commands = profile.phases.get("build", [])
+    assert len(build_commands) == 1
+    # The build hook should clone and compile tdxs
+    build_argv = build_commands[0].argv
+    assert "sh" in build_argv
+    assert "-c" in build_argv
+    # Verify the build command contains key elements
+    build_script = build_argv[-1]
+    assert "git clone" in build_script
+    assert "NethermindEth/tdxs" in build_script
+    assert "go build" in build_script
+    assert "$DESTDIR/usr/bin/tdxs" in build_script
+    assert "-trimpath" in build_script
+    assert "-buildid=" in build_script
+
+
+def test_tdxs_custom_source_repo_and_branch() -> None:
+    image = Image()
+    module = Tdxs(
+        issuer_type="dcap",
+        source_repo="https://github.com/custom/tdxs-fork",
+        source_branch="v2.0",
+    )
+
+    module.install(image)
+
+    profile = image.state.profiles["default"]
+    build_commands = profile.phases.get("build", [])
+    build_script = build_commands[0].argv[-1]
+    assert "custom/tdxs-fork" in build_script
+    assert "-b v2.0" in build_script
+
+
 def test_tdxs_generates_config_yaml_and_units() -> None:
     image = Image()
     module = Tdxs(issuer_type="dcap")
@@ -12,6 +64,9 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     module.apply(image)
 
     profile = image.state.profiles["default"]
+
+    # Build packages
+    assert "golang" in profile.build_packages
 
     # Config file
     config_files = [f for f in profile.files if f.path == "/etc/tdxs/config.yaml"]
@@ -154,8 +209,28 @@ def test_modules_apply_directly_and_infer_declared_secrets() -> None:
 
     profile = image.state.profiles["default"]
     assert "python3" in profile.packages
+    assert "golang" in profile.build_packages
     assert any(file.path == "/etc/tdx/init/phases.json" for file in profile.files)
     assert any(file.path == "/etc/tdxs/config.yaml" for file in profile.files)
+    # Build hook exists
+    assert len(profile.phases.get("build", [])) == 1
 
     validation = delivery.validate_payload({"jwt_secret": "a" * 64})
     assert validation.ready is True
+
+
+def test_image_build_install_adds_build_packages() -> None:
+    image = Image()
+    image.build_install("golang", "git")
+
+    profile = image.state.profiles["default"]
+    assert "golang" in profile.build_packages
+    assert "git" in profile.build_packages
+
+
+def test_image_build_source_adds_build_sources() -> None:
+    image = Image()
+    image.build_source("../services/tdxs", "tdxs")
+
+    profile = image.state.profiles["default"]
+    assert ("../services/tdxs", "tdxs") in profile.build_sources

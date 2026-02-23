@@ -131,6 +131,25 @@ class Image:
             profile.packages.update(packages)
         return self
 
+    def build_install(self, *packages: str) -> Self:
+        """Declare packages required at build time (removed after build)."""
+        if not packages:
+            raise ValidationError("build_install() requires at least one package.")
+        for package in packages:
+            if not package:
+                raise ValidationError("Package names must be non-empty.")
+        for profile in self._iter_active_profiles():
+            profile.build_packages.update(packages)
+        return self
+
+    def build_source(self, host_path: str, target: str = "") -> Self:
+        """Mount a host directory into the build environment (mkosi BuildSources)."""
+        if not host_path:
+            raise ValidationError("build_source() requires a non-empty host path.")
+        for profile in self._iter_active_profiles():
+            profile.build_sources.append((host_path, target))
+        return self
+
     def repository(
         self,
         url: str,
@@ -951,6 +970,7 @@ class Image:
             profiles_data[profile_name] = {
                 "packages": sorted(profile.packages),
                 "build_packages": sorted(profile.build_packages),
+                "build_sources": profile.build_sources,
                 "output_targets": list(profile.output_targets),
                 "phases": phases,
                 "repositories": repositories,
