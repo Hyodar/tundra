@@ -1,10 +1,10 @@
 """Tests for Azure platform profile helper."""
 
 from tdx import Image
-from tdx.profiles.azure import (
+from tdx.platforms.azure import (
     AZURE_PROVISIONING_SCRIPT,
     AZURE_PROVISIONING_SERVICE,
-    apply_azure_profile,
+    AzurePlatform,
 )
 
 
@@ -12,7 +12,7 @@ def test_azure_profile_adds_dmidecode_package() -> None:
     image = Image(reproducible=False)
 
     with image.profile("azure"):
-        apply_azure_profile(image)
+        AzurePlatform().apply(image)
 
     profile = image.state.profiles["azure"]
     assert "dmidecode" in profile.packages
@@ -22,7 +22,7 @@ def test_azure_profile_emits_provisioning_script() -> None:
     image = Image(reproducible=False)
 
     with image.profile("azure"):
-        apply_azure_profile(image)
+        AzurePlatform().apply(image)
 
     profile = image.state.profiles["azure"]
     file_paths = {f.path for f in profile.files}
@@ -50,7 +50,7 @@ def test_azure_profile_emits_service_unit() -> None:
     image = Image(reproducible=False)
 
     with image.profile("azure"):
-        apply_azure_profile(image)
+        AzurePlatform().apply(image)
 
     profile = image.state.profiles["azure"]
     file_paths = {f.path for f in profile.files}
@@ -79,7 +79,7 @@ def test_azure_profile_enables_service_in_postinst() -> None:
     image = Image(reproducible=False)
 
     with image.profile("azure"):
-        apply_azure_profile(image)
+        AzurePlatform().apply(image)
 
     profile = image.state.profiles["azure"]
     postinst_commands = profile.phases.get("postinst", [])
@@ -101,7 +101,7 @@ def test_azure_profile_symlinks_to_minimal_target() -> None:
     image = Image(reproducible=False)
 
     with image.profile("azure"):
-        apply_azure_profile(image)
+        AzurePlatform().apply(image)
 
     profile = image.state.profiles["azure"]
     postinst_commands = profile.phases.get("postinst", [])
@@ -119,7 +119,7 @@ def test_azure_profile_sets_output_target() -> None:
     image = Image(reproducible=False)
 
     with image.profile("azure"):
-        apply_azure_profile(image)
+        AzurePlatform().apply(image)
 
     profile = image.state.profiles["azure"]
     assert "azure" in profile.output_targets
@@ -129,7 +129,7 @@ def test_azure_profile_does_not_affect_default_profile() -> None:
     image = Image(reproducible=False)
 
     with image.profile("azure"):
-        apply_azure_profile(image)
+        AzurePlatform().apply(image)
 
     default_profile = image.state.profiles["default"]
     assert "dmidecode" not in default_profile.packages

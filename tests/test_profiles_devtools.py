@@ -1,11 +1,11 @@
 """Tests for devtools platform profile helper."""
 
 from tdx import Image
-from tdx.profiles.devtools import (
+from tdx.modules.devtools import (
     DEVTOOLS_PACKAGES,
     DEVTOOLS_POSTINST_SCRIPT,
     SERIAL_CONSOLE_SERVICE,
-    apply_devtools_profile,
+    Devtools,
 )
 
 
@@ -13,7 +13,7 @@ def test_devtools_profile_adds_debug_packages() -> None:
     image = Image(reproducible=False)
 
     with image.profile("devtools"):
-        apply_devtools_profile(image)
+        Devtools().apply(image)
 
     profile = image.state.profiles["devtools"]
     for pkg in DEVTOOLS_PACKAGES:
@@ -34,7 +34,7 @@ def test_devtools_profile_emits_serial_console_service() -> None:
     image = Image(reproducible=False)
 
     with image.profile("devtools"):
-        apply_devtools_profile(image)
+        Devtools().apply(image)
 
     profile = image.state.profiles["devtools"]
     file_paths = {f.path for f in profile.files}
@@ -59,7 +59,7 @@ def test_devtools_profile_enables_serial_console_in_postinst() -> None:
     image = Image(reproducible=False)
 
     with image.profile("devtools"):
-        apply_devtools_profile(image)
+        Devtools().apply(image)
 
     profile = image.state.profiles["devtools"]
     postinst_commands = profile.phases.get("postinst", [])
@@ -99,7 +99,7 @@ def test_devtools_profile_registers_postinst_password_hook() -> None:
     image = Image(reproducible=False)
 
     with image.profile("devtools"):
-        apply_devtools_profile(image)
+        Devtools().apply(image)
 
     profile = image.state.profiles["devtools"]
     postinst_commands = profile.phases.get("postinst", [])
@@ -117,7 +117,7 @@ def test_devtools_profile_does_not_affect_default_profile() -> None:
     image = Image(reproducible=False)
 
     with image.profile("devtools"):
-        apply_devtools_profile(image)
+        Devtools().apply(image)
 
     default_profile = image.state.profiles["default"]
     assert "vim" not in default_profile.packages
@@ -135,7 +135,7 @@ def test_devtools_profile_bash_completion_in_debloat_skip() -> None:
     )
 
     with image.profile("devtools"):
-        apply_devtools_profile(image)
+        Devtools().apply(image)
 
     # Verify bash-completion is in the devtools profile packages
     profile = image.state.profiles["devtools"]

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from examples.nethermind_tdx import build_nethermind_base
 from tdx import Image
-from tdx.modules import Nethermind, Raiko, TaikoClient, TdxInit
-from tdx.profiles import apply_azure_profile, apply_devtools_profile, apply_gcp_profile
+from tdx.modules import Devtools, Nethermind, Raiko, TaikoClient, TdxInit
+from tdx.platforms import AzurePlatform, GcpPlatform
 
 # ── Upstream constants ────────────────────────────────────────────────
 
@@ -274,13 +274,13 @@ def build_surge_tdx_prover() -> Image:
     # ── 5. Platform profiles ──────────────────────────────────────────
 
     with img.profile("azure"):
-        apply_azure_profile(img)
+        AzurePlatform().apply(img)
 
     with img.profile("gcp"):
-        apply_gcp_profile(img)
+        GcpPlatform().apply(img)
 
     with img.profile("devtools"):
-        apply_devtools_profile(img)
+        Devtools().apply(img)
 
     return img
 

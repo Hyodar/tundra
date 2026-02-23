@@ -1,12 +1,12 @@
 """Tests for GCP platform profile helper."""
 
 from tdx import Image
-from tdx.profiles.gcp import (
+from tdx.platforms.gcp import (
     GCE_DISK_NAMING_RULES,
     GCP_HOSTS,
     GCP_RESOLV_CONF,
     GOOGLE_NVME_ID,
-    apply_gcp_profile,
+    GcpPlatform,
 )
 
 
@@ -14,7 +14,7 @@ def test_gcp_profile_adds_udev_package() -> None:
     image = Image(reproducible=False)
 
     with image.profile("gcp"):
-        apply_gcp_profile(image)
+        GcpPlatform().apply(image)
 
     profile = image.state.profiles["gcp"]
     assert "udev" in profile.packages
@@ -24,7 +24,7 @@ def test_gcp_profile_emits_hosts_file() -> None:
     image = Image(reproducible=False)
 
     with image.profile("gcp"):
-        apply_gcp_profile(image)
+        GcpPlatform().apply(image)
 
     profile = image.state.profiles["gcp"]
     file_paths = {f.path for f in profile.files}
@@ -44,7 +44,7 @@ def test_gcp_profile_emits_resolv_conf() -> None:
     image = Image(reproducible=False)
 
     with image.profile("gcp"):
-        apply_gcp_profile(image)
+        GcpPlatform().apply(image)
 
     profile = image.state.profiles["gcp"]
     file_paths = {f.path for f in profile.files}
@@ -64,7 +64,7 @@ def test_gcp_profile_emits_udev_rules() -> None:
     image = Image(reproducible=False)
 
     with image.profile("gcp"):
-        apply_gcp_profile(image)
+        GcpPlatform().apply(image)
 
     profile = image.state.profiles["gcp"]
     file_paths = {f.path for f in profile.files}
@@ -97,7 +97,7 @@ def test_gcp_profile_emits_nvme_id_script() -> None:
     image = Image(reproducible=False)
 
     with image.profile("gcp"):
-        apply_gcp_profile(image)
+        GcpPlatform().apply(image)
 
     profile = image.state.profiles["gcp"]
     file_paths = {f.path for f in profile.files}
@@ -121,7 +121,7 @@ def test_gcp_profile_sets_output_target() -> None:
     image = Image(reproducible=False)
 
     with image.profile("gcp"):
-        apply_gcp_profile(image)
+        GcpPlatform().apply(image)
 
     profile = image.state.profiles["gcp"]
     assert "gcp" in profile.output_targets
@@ -131,7 +131,7 @@ def test_gcp_profile_does_not_affect_default_profile() -> None:
     image = Image(reproducible=False)
 
     with image.profile("gcp"):
-        apply_gcp_profile(image)
+        GcpPlatform().apply(image)
 
     default_profile = image.state.profiles["default"]
     assert "udev" not in default_profile.packages

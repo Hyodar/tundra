@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from .devtools import Devtools
 from .init import (
     GLOBAL_ENV_RELATIVE_PATH,
     DiskEncryptionConfig,
@@ -40,6 +41,7 @@ __all__ = [
     "Init",
     "InitPhase",
     "InitPhaseSpec",
+    "Devtools",
     "Module",
     "Nethermind",
     "DiskEncryptionConfig",

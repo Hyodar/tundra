@@ -1,4 +1,4 @@
-"""GCP platform profile helper.
+"""GCP platform profile.
 
 Adds GCP-specific DNS configuration, udev rules, and tar.gz postoutput to an
 Image within an ``img.profile("gcp")`` context.  The tar.gz postoutput script
@@ -8,6 +8,7 @@ and the profile's output_targets include ``"gcp"``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -81,13 +82,9 @@ echo "${SERIAL}" | sed 's/[[:space:]]*$//'
 """
 
 
-def apply_gcp_profile(image: Image) -> None:
-    """Populate the active GCP profile on *image*.
-
-    Must be called inside an ``img.profile("gcp")`` context::
-
-        with img.profile("gcp"):
-            apply_gcp_profile(img)
+@dataclass(slots=True)
+class GcpPlatform:
+    """GCP platform profile.
 
     Adds:
     * ``udev`` runtime package
@@ -97,25 +94,34 @@ def apply_gcp_profile(image: Image) -> None:
     * ``/usr/lib/udev/google_nvme_id`` NVMe disk ID helper script
     * ``"gcp"`` output target (triggers tar.gz postoutput auto-generation)
     """
-    # Runtime package
-    image.install("udev")
 
-    # DNS / metadata configuration files
-    image.file("/etc/hosts", content=GCP_HOSTS)
-    image.file("/etc/resolv.conf", content=GCP_RESOLV_CONF)
+    def apply(self, image: Image) -> None:
+        """Populate the active GCP profile on *image*.
 
-    # Udev rules for GCE disk naming
-    image.file(
-        "/usr/lib/udev/rules.d/65-gce-disk-naming.rules",
-        content=GCE_DISK_NAMING_RULES,
-    )
+        Must be called inside an ``img.profile("gcp")`` context::
 
-    # NVMe ID helper script
-    image.file(
-        "/usr/lib/udev/google_nvme_id",
-        content=GOOGLE_NVME_ID,
-        mode="0755",
-    )
+            with img.profile("gcp"):
+                GcpPlatform().apply(img)
+        """
+        # Runtime package
+        image.install("udev")
 
-    # Output target — triggers tar.gz postoutput script auto-generation
-    image.output_targets("gcp")
+        # DNS / metadata configuration files
+        image.file("/etc/hosts", content=GCP_HOSTS)
+        image.file("/etc/resolv.conf", content=GCP_RESOLV_CONF)
+
+        # Udev rules for GCE disk naming
+        image.file(
+            "/usr/lib/udev/rules.d/65-gce-disk-naming.rules",
+            content=GCE_DISK_NAMING_RULES,
+        )
+
+        # NVMe ID helper script
+        image.file(
+            "/usr/lib/udev/google_nvme_id",
+            content=GOOGLE_NVME_ID,
+            mode="0755",
+        )
+
+        # Output target — triggers tar.gz postoutput script auto-generation
+        image.output_targets("gcp")

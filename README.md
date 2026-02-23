@@ -43,14 +43,14 @@ result = img.bake(frozen=True)        # build with lockfile enforcement
 | **Declarative recipes** | Packages, build packages, files, templates, skeletons, users, services, secrets, partitions |
 | **Deterministic emission** | Generates buildable mkosi v26 project trees matching [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) |
 | **Profile system** | Per-profile packages, output targets, and overrides with context managers |
-| **Platform profiles** | Azure, GCP, and devtools profile helpers (`apply_azure_profile`, `apply_gcp_profile`, `apply_devtools_profile`) |
+| **Platform profiles** | Class-based Azure and GCP platform profiles via `AzurePlatform().apply(img)`, `GcpPlatform().apply(img)` |
 | **Reproducibility hooks** | EFI stub pinning (`efi_stub`), backports source generation (`backports`), image version stripping (`strip_image_version`) |
 | **Systemd debloat** | `mkosi-chroot dpkg-query` based binary/unit cleanup with configurable whitelists |
 | **Cloud targets** | Auto-generated GCP (ESP+GPT tar.gz) and Azure (VHD) postoutput scripts |
 | **Custom init** | Built-in TDX init script (mount + pivot_root + `minimal.target`) |
 | **Lockfile + policy** | Frozen bakes, mutable-ref enforcement, integrity checks |
 | **Measurement** | RTMR / Azure / GCP attestation measurement interfaces |
-| **Modules** | Composable service modules via `module.apply(img)` — `Init`, `Tdxs`, `TdxInit`, `Raiko`, `TaikoClient`, `Nethermind` |
+| **Modules** | Composable service modules via `module.apply(img)` — `Init`, `Tdxs`, `TdxInit`, `Raiko`, `TaikoClient`, `Nethermind`, `Devtools` |
 | **Phase hooks** | `prepare`, `postinst`, `finalize`, `postoutput`, `on_boot`, `sync` convenience methods |
 | **Backends** | `local_linux` (direct mkosi), `lima` (macOS VM), `inprocess` (testing) |
 
@@ -92,19 +92,20 @@ img.compile("build/mkosi")
 
 ```python
 from tdx import Image
-from tdx.profiles import apply_azure_profile, apply_gcp_profile, apply_devtools_profile
+from tdx.modules import Devtools
+from tdx.platforms import AzurePlatform, GcpPlatform
 
 img = Image()
 img.output_targets("qemu")
 
 with img.profile("azure"):
-    apply_azure_profile(img)
+    AzurePlatform().apply(img)
 
 with img.profile("gcp"):
-    apply_gcp_profile(img)
+    GcpPlatform().apply(img)
 
 with img.profile("devtools"):
-    apply_devtools_profile(img)
+    Devtools().apply(img)
 
 with img.all_profiles():
     results = img.bake()
@@ -183,10 +184,10 @@ Lock / cache / policy     src/tdx/lockfile.py, cache.py, policy.py
 Measure + deploy          src/tdx/measure.py, deploy.py
   |
   v
-Service modules           src/tdx/modules/ (Init, Tdxs, TdxInit, Raiko, TaikoClient, Nethermind)
+Service modules           src/tdx/modules/ (Init, Tdxs, TdxInit, Raiko, TaikoClient, Nethermind, Devtools)
   |
   v
-Platform profiles         src/tdx/profiles/ (Azure, GCP, Devtools)
+Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
 ```
 
 ## Examples
@@ -194,7 +195,7 @@ Platform profiles         src/tdx/profiles/ (Azure, GCP, Devtools)
 | Example | Description |
 |---|---|
 | [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer for [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) — TDX kernel build, EFI stub pinning, backports, full debloat, skeleton files, Tdxs module |
-| [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with TdxInit, Raiko, TaikoClient, Nethermind modules, monitoring, and Azure/GCP/devtools profiles |
+| [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with TdxInit, Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles |
 | [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, Init + Tdxs modules, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
 | [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |

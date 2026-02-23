@@ -1,4 +1,4 @@
-"""Azure platform profile helper.
+"""Azure platform profile.
 
 Adds Azure-specific provisioning, dmidecode, and VHD postoutput to an Image
 within an ``img.profile("azure")`` context.  The VHD postoutput script is
@@ -8,6 +8,7 @@ and the profile's output_targets include ``"azure"``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -132,13 +133,9 @@ WantedBy=minimal.target
 """
 
 
-def apply_azure_profile(image: Image) -> None:
-    """Populate the active Azure profile on *image*.
-
-    Must be called inside an ``img.profile("azure")`` context::
-
-        with img.profile("azure"):
-            apply_azure_profile(img)
+@dataclass(slots=True)
+class AzurePlatform:
+    """Azure platform profile.
 
     Adds:
     * ``dmidecode`` runtime package
@@ -147,39 +144,48 @@ def apply_azure_profile(image: Image) -> None:
     * Service enablement + symlink into ``minimal.target.wants/``
     * ``"azure"`` output target (triggers VHD postoutput auto-generation)
     """
-    # Runtime package
-    image.install("dmidecode")
 
-    # Provisioning completion script
-    image.file(
-        "/usr/bin/azure-complete-provisioning",
-        content=AZURE_PROVISIONING_SCRIPT,
-        mode="0755",
-    )
+    def apply(self, image: Image) -> None:
+        """Populate the active Azure profile on *image*.
 
-    # Systemd service unit
-    image.file(
-        "/usr/lib/systemd/system/azure-complete-provisioning.service",
-        content=AZURE_PROVISIONING_SERVICE,
-    )
+        Must be called inside an ``img.profile("azure")`` context::
 
-    # Enable the service and symlink into minimal.target.wants
-    image.run(
-        "mkosi-chroot", "systemctl", "enable",
-        "azure-complete-provisioning.service",
-        phase="postinst",
-    )
-    image.run(
-        "mkosi-chroot", "mkdir", "-p",
-        "/etc/systemd/system/minimal.target.wants",
-        phase="postinst",
-    )
-    image.run(
-        "mkosi-chroot", "ln", "-sf",
-        "/usr/lib/systemd/system/azure-complete-provisioning.service",
-        "/etc/systemd/system/minimal.target.wants/azure-complete-provisioning.service",
-        phase="postinst",
-    )
+            with img.profile("azure"):
+                AzurePlatform().apply(img)
+        """
+        # Runtime package
+        image.install("dmidecode")
 
-    # Output target — triggers VHD postoutput script auto-generation
-    image.output_targets("azure")
+        # Provisioning completion script
+        image.file(
+            "/usr/bin/azure-complete-provisioning",
+            content=AZURE_PROVISIONING_SCRIPT,
+            mode="0755",
+        )
+
+        # Systemd service unit
+        image.file(
+            "/usr/lib/systemd/system/azure-complete-provisioning.service",
+            content=AZURE_PROVISIONING_SERVICE,
+        )
+
+        # Enable the service and symlink into minimal.target.wants
+        image.run(
+            "mkosi-chroot", "systemctl", "enable",
+            "azure-complete-provisioning.service",
+            phase="postinst",
+        )
+        image.run(
+            "mkosi-chroot", "mkdir", "-p",
+            "/etc/systemd/system/minimal.target.wants",
+            phase="postinst",
+        )
+        image.run(
+            "mkosi-chroot", "ln", "-sf",
+            "/usr/lib/systemd/system/azure-complete-provisioning.service",
+            "/etc/systemd/system/minimal.target.wants/azure-complete-provisioning.service",
+            phase="postinst",
+        )
+
+        # Output target — triggers VHD postoutput script auto-generation
+        image.output_targets("azure")

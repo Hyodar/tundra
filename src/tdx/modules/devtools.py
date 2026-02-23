@@ -1,12 +1,13 @@
-"""Devtools platform profile helper.
+"""Built-in Devtools module.
 
 Adds debugging packages, serial console access, and password-based root login
-to an Image within an ``img.profile("devtools")`` context.  This profile is
-intended for development/debugging and should **not** be used in production.
+to an Image.  This module is intended for development/debugging and should
+**not** be used in production.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -69,19 +70,15 @@ fi
 # Enable password authentication for openssh
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/99-devtools.conf << 'SSHEOF'
-PermitRootLogin yes
-PasswordAuthentication yes
+ PermitRootLogin yes
+ PasswordAuthentication yes
 SSHEOF
 """
 
 
-def apply_devtools_profile(image: Image) -> None:
-    """Populate the active devtools profile on *image*.
-
-    Must be called inside an ``img.profile("devtools")`` context::
-
-        with img.profile("devtools"):
-            apply_devtools_profile(img)
+@dataclass(slots=True)
+class Devtools:
+    """Devtools module for development and debugging.
 
     Adds:
     * Debug/diagnostic runtime packages (bash-completion, curl, vim, etc.)
@@ -95,25 +92,36 @@ def apply_devtools_profile(image: Image) -> None:
         pass ``paths_skip_for_profiles={"devtools": ("/usr/share/bash-completion",)}``
         to :meth:`Image.debloat`.
     """
-    # Debug runtime packages
-    for pkg in DEVTOOLS_PACKAGES:
-        image.install(pkg)
 
-    # Serial console service
-    image.file(
-        "/usr/lib/systemd/system/serial-console.service",
-        content=SERIAL_CONSOLE_SERVICE,
-    )
+    def setup(self, image: Image) -> None:
+        """No build-time dependencies for devtools."""
 
-    # Enable serial-console service
-    image.run(
-        "mkosi-chroot", "systemctl", "enable",
-        "serial-console.service",
-        phase="postinst",
-    )
+    def install(self, image: Image) -> None:
+        """Apply devtools configuration to the image."""
+        # Debug runtime packages
+        for pkg in DEVTOOLS_PACKAGES:
+            image.install(pkg)
 
-    # Root password + auth configuration
-    image.run(
-        "bash", "-c", DEVTOOLS_POSTINST_SCRIPT,
-        phase="postinst",
-    )
+        # Serial console service
+        image.file(
+            "/usr/lib/systemd/system/serial-console.service",
+            content=SERIAL_CONSOLE_SERVICE,
+        )
+
+        # Enable serial-console service
+        image.run(
+            "mkosi-chroot", "systemctl", "enable",
+            "serial-console.service",
+            phase="postinst",
+        )
+
+        # Root password + auth configuration
+        image.run(
+            "bash", "-c", DEVTOOLS_POSTINST_SCRIPT,
+            phase="postinst",
+        )
+
+    def apply(self, image: Image) -> None:
+        """Convenience: call setup() then install()."""
+        self.setup(image)
+        self.install(image)
