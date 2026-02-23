@@ -38,6 +38,7 @@ from .models import (
     DeployResult,
     FileEntry,
     HookSpec,
+    InitScriptEntry,
     Kernel,
     OutputTarget,
     PartitionSpec,
@@ -635,6 +636,20 @@ class Image:
         if backports_entry not in self.sandbox_trees:
             self.sandbox_trees = (*self.sandbox_trees, backports_entry)
 
+        return self
+
+    def add_init_script(self, script: str, *, priority: int = 100) -> Self:
+        """Append a bash fragment to the runtime-init script.
+
+        Fragments are ordered by *priority* (lower runs first) when Init
+        generates ``/usr/bin/runtime-init``.  Modules should use this to
+        register their binary invocations into the boot sequence.
+        """
+        if not script:
+            raise ValidationError("add_init_script() requires non-empty script content.")
+        entry = InitScriptEntry(script=script, priority=priority)
+        for profile in self._iter_active_profiles():
+            profile.init_scripts.append(entry)
         return self
 
     def ssh(self, *, enabled: bool = True, key_delivery: str = "http") -> Self:

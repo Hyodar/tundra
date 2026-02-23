@@ -1,8 +1,8 @@
 """Secret delivery module.
 
 Builds a Go binary (placeholder: tdx-init repo) that handles secret
-delivery at runtime, and registers the binary invocation into Init's
-runtime-init script.
+delivery at runtime, and registers the binary invocation into the
+runtime-init script via ``image.add_init_script()``.
 
 The Python-side validation/materialization logic stays in Init — this
 module only contributes the shell-level boot phase.
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from tdx.modules.init import Init
+    from tdx.image import Image
 
 SECRET_DELIVERY_BUILD_PACKAGES = (
     "golang",
@@ -39,14 +39,11 @@ class SecretDelivery:
     source_repo: str = SECRET_DELIVERY_DEFAULT_REPO
     source_branch: str = SECRET_DELIVERY_DEFAULT_BRANCH
 
-    def apply(self, init: Init) -> None:
-        """Register build artifacts and runtime invocation with *init*."""
-        self._add_build(init)
-        self._add_bash(init)
-        init.add_packages("python3")
+    def apply(self, image: Image) -> None:
+        """Add build hook, packages, and init script to *image*."""
+        image.build_install(*SECRET_DELIVERY_BUILD_PACKAGES)
+        image.install("python3")
 
-    def _add_build(self, init: Init) -> None:
-        init.add_build_packages(*SECRET_DELIVERY_BUILD_PACKAGES)
         build_cmd = (
             f"SECRET_DEL_SRC=$BUILDDIR/secret-delivery-src && "
             f"if [ ! -d \"$SECRET_DEL_SRC\" ]; then "
@@ -60,11 +57,11 @@ class SecretDelivery:
             f"install -m 0755 ./build/secret-delivery "
             f"\"$DESTDIR/usr/bin/secret-delivery\""
         )
-        init.add_build_hook("sh", "-c", build_cmd, shell=True)
+        image.hook("build", "sh", "-c", build_cmd, shell=True)
 
-    def _add_bash(self, init: Init) -> None:
-        init.add_bash(
-            f"/usr/bin/secret-delivery --method {self.method}"
+        image.add_init_script(
+            f"/usr/bin/secret-delivery"
+            f" --method {self.method}"
             f" --port {self.port}\n",
-            comment="secret delivery",
+            priority=30,
         )

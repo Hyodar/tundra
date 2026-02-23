@@ -10,7 +10,7 @@ from textwrap import dedent
 from typing import TYPE_CHECKING, Literal
 
 from tdx.errors import ValidationError
-from tdx.models import SecretSchema, SecretSpec
+from tdx.models import FileEntry, SecretSchema, SecretSpec
 
 if TYPE_CHECKING:
     from tdx.image import Image
@@ -157,31 +157,13 @@ class SshKeyDeliveryConfig:
     authorized_keys_path: str = "/root/.ssh/authorized_keys"
 
 
-# ── _BashBlock: internal storage for runtime-init script fragments ───
-
-
-@dataclass(frozen=True, slots=True)
-class _BashBlock:
-    script: str
-    comment: str
-
-
-# ── _BuildHook: internal storage for build-phase hooks ───────────────
-
-
-@dataclass(frozen=True, slots=True)
-class _BuildHook:
-    argv: tuple[str, ...]
-    shell: bool
-
-
 @dataclass(slots=True)
 class Init:
     """Runtime-init script builder and secrets coordinator.
 
-    Collects bash fragments from small composable modules (KeyGeneration,
-    DiskEncryption, SecretDelivery) and from service modules, then
-    generates ``/usr/bin/runtime-init`` and ``runtime-init.service``.
+    Reads ``init_scripts`` registered on the image (via
+    ``image.add_init_script()``) by composable modules, then generates
+    ``/usr/bin/runtime-init`` and ``runtime-init.service``.
     """
 
     _secrets: dict[str, SecretSpec] = field(default_factory=dict)
@@ -190,10 +172,6 @@ class Init:
     ssh_keys: list[str] = field(default_factory=list)
     ssh_config: SshKeyDeliveryConfig = field(default_factory=SshKeyDeliveryConfig)
     _delivery: HttpPostSecretDelivery | None = None
-    _bash_blocks: list[_BashBlock] = field(default_factory=list)
-    _build_hooks: list[_BuildHook] = field(default_factory=list)
-    _build_packages: list[str] = field(default_factory=list)
-    _packages: list[str] = field(default_factory=list)
 
     def __init__(
         self,
@@ -213,31 +191,9 @@ class Init:
         self.ssh_keys = []
         self.ssh_config = SshKeyDeliveryConfig()
         self._delivery = None
-        self._bash_blocks = []
-        self._build_hooks = []
-        self._build_packages = []
-        self._packages = []
         self._ensure_default_delivery()
 
-    # ── Public API: composable module interface ──────────────────────
-
-    def add_bash(self, script: str, *, comment: str = "") -> None:
-        """Append bash commands to the runtime-init script."""
-        self._bash_blocks.append(_BashBlock(script=script, comment=comment))
-
-    def add_build_packages(self, *packages: str) -> None:
-        """Register build-time packages needed by sub-modules."""
-        self._build_packages.extend(packages)
-
-    def add_build_hook(self, *argv: str, shell: bool = False) -> None:
-        """Register a build-phase hook."""
-        self._build_hooks.append(_BuildHook(argv=argv, shell=shell))
-
-    def add_packages(self, *packages: str) -> None:
-        """Register runtime packages needed by sub-modules."""
-        self._packages.extend(packages)
-
-    # ── Legacy convenience methods (still usable directly) ───────────
+    # ── Secret management ────────────────────────────────────────────
 
     def add_secret(self, spec: SecretSpec) -> None:
         self._secrets[spec.name] = spec
@@ -274,9 +230,16 @@ class Init:
         reject_unknown: bool = True,
     ) -> HttpPostSecretDelivery:
         if method != "http_post":
-            raise ValidationError("Unsupported secret delivery method.", context={"method": method})
-        config = HttpPostDeliveryConfig(completion=completion, reject_unknown=reject_unknown)
-        delivery = HttpPostSecretDelivery(expected=dict(self._secrets), config=config)
+            raise ValidationError(
+                "Unsupported secret delivery method.",
+                context={"method": method},
+            )
+        config = HttpPostDeliveryConfig(
+            completion=completion, reject_unknown=reject_unknown,
+        )
+        delivery = HttpPostSecretDelivery(
+            expected=dict(self._secrets), config=config,
+        )
         self._delivery = delivery
         return delivery
 
@@ -287,7 +250,8 @@ class Init:
                 InitPhaseSpec(
                     name="disk_encryption",
                     description=(
-                        "Disk setup and optional LUKS2 formatting/opening before runtime services."
+                        "Disk setup and optional LUKS2 formatting/opening "
+                        "before runtime services."
                     ),
                 ),
             )
@@ -296,7 +260,8 @@ class Init:
                 InitPhaseSpec(
                     name="secrets_delivery",
                     description=(
-                        "Wait for runtime secret payload submission and validate completion policy."
+                        "Wait for runtime secret payload submission and "
+                        "validate completion policy."
                     ),
                 ),
             )
@@ -329,21 +294,10 @@ class Init:
             image.install("openssh-server")
         if self._delivery is not None:
             image.install("python3")
-        # Packages requested by sub-modules
-        for pkg in self._packages:
-            image.install(pkg)
-        # Build packages requested by sub-modules
-        if self._build_packages:
-            image.build_install(*self._build_packages)
 
     def install(self, image: Image) -> None:
         self._sync_declared_secrets(image)
 
-        # Build hooks from sub-modules
-        for hook in self._build_hooks:
-            image.hook("build", *hook.argv, shell=hook.shell)
-
-        # Legacy disk encryption config file
         if self.disk_encryption is not None:
             payload = json.dumps(
                 {
@@ -354,14 +308,19 @@ class Init:
                 indent=2,
                 sort_keys=True,
             )
-            image.file("/etc/tdx/init/disk-encryption.json", content=payload + "\n")
+            image.file(
+                "/etc/tdx/init/disk-encryption.json",
+                content=payload + "\n",
+            )
 
-        # Legacy SSH keys
         if self.ssh_keys:
             keys = "\n".join(self.ssh_keys) + "\n"
-            image.file(self.ssh_config.authorized_keys_path, content=keys, mode="0600")
+            image.file(
+                self.ssh_config.authorized_keys_path,
+                content=keys,
+                mode="0600",
+            )
 
-        # Legacy secrets delivery config
         if self._delivery is not None:
             payload = json.dumps(
                 {
@@ -372,10 +331,12 @@ class Init:
                 indent=2,
                 sort_keys=True,
             )
-            image.file("/etc/tdx/init/secrets-delivery.json", content=payload + "\n")
+            image.file(
+                "/etc/tdx/init/secrets-delivery.json",
+                content=payload + "\n",
+            )
             image.service("secrets-ready.target", enabled=True)
 
-        # Phases config
         phase_payload = json.dumps(
             {
                 "handoff": self.handoff,
@@ -393,19 +354,42 @@ class Init:
         )
         image.file("/etc/tdx/init/phases.json", content=phase_payload + "\n")
 
-        # Runtime-init script (generated from bash blocks)
-        if self._bash_blocks:
-            image.file(
-                "/usr/bin/runtime-init",
-                content=self._render_runtime_init_script(),
+        # Collect init_scripts from the profile, sort by priority, emit
+        # runtime-init script + service if any fragments exist.
+        for profile in image._iter_active_profiles():
+            if not profile.init_scripts:
+                continue
+            sorted_scripts = sorted(
+                profile.init_scripts, key=lambda e: e.priority,
+            )
+            parts = [dedent("""\
+                #!/bin/bash
+                set -euo pipefail
+            """)]
+            for entry in sorted_scripts:
+                parts.append(entry.script)
+            script_content = "\n".join(parts)
+
+            profile.files.append(FileEntry(
+                path="/usr/bin/runtime-init",
+                content=script_content,
                 mode="0755",
-            )
-            image.file(
-                "/usr/lib/systemd/system/runtime-init.service",
+            ))
+            profile.files.append(FileEntry(
+                path="/usr/lib/systemd/system/runtime-init.service",
                 content=self._render_service_unit(),
-            )
+                mode="0644",
+            ))
+
+        # Only add postinst enablement if there are init scripts
+        has_scripts = any(
+            bool(p.init_scripts)
+            for p in image._iter_active_profiles()
+        )
+        if has_scripts:
             image.run(
-                "mkosi-chroot", "systemctl", "enable", "runtime-init.service",
+                "mkosi-chroot", "systemctl", "enable",
+                "runtime-init.service",
                 phase="postinst",
             )
 
@@ -418,24 +402,15 @@ class Init:
         runtime_root: str | Path,
     ) -> tuple[SecretDeliveryValidation, SecretsRuntimeArtifacts | None]:
         if self._delivery is None:
-            raise ValidationError("Secret delivery is not configured for Init.")
+            raise ValidationError(
+                "Secret delivery is not configured for Init.",
+            )
         validation = self._delivery.validate_payload(payload)
         if not validation.ready:
             return validation, None
         return validation, self._delivery.materialize_runtime(runtime_root)
 
     # ── Private helpers ──────────────────────────────────────────────
-
-    def _render_runtime_init_script(self) -> str:
-        parts = [
-            dedent("""\
-                #!/bin/bash
-                set -euo pipefail
-            """),
-        ]
-        for block in self._bash_blocks:
-            parts.append(block.script)
-        return "\n".join(parts)
 
     def _render_service_unit(self) -> str:
         return dedent("""\
@@ -470,15 +445,18 @@ class Init:
                     continue
                 if existing != secret:
                     raise ValidationError(
-                        "Init cannot infer conflicting secret declarations across profiles.",
+                        "Init cannot infer conflicting secret "
+                        "declarations across profiles.",
                         hint=(
-                            "Keep the same schema/targets for a shared secret name, "
-                            "or use unique names."
+                            "Keep the same schema/targets for a shared "
+                            "secret name, or use unique names."
                         ),
                         context={
                             "secret": secret.name,
                             "profile": profile_name,
-                            "existing_profile": source_profile.get(secret.name, "module"),
+                            "existing_profile": source_profile.get(
+                                secret.name, "module",
+                            ),
                         },
                     )
         self._secrets = merged

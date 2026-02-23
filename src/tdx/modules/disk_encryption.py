@@ -1,8 +1,8 @@
 """Disk encryption module.
 
 Builds a Go binary (placeholder: tdx-init repo) that handles LUKS
-format/open at runtime, and registers the binary invocation into Init's
-runtime-init script.
+format/open at runtime, and registers the binary invocation into the
+runtime-init script via ``image.add_init_script()``.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tdx.modules.init import Init
+    from tdx.image import Image
 
 DISK_ENCRYPTION_BUILD_PACKAGES = (
     "golang",
@@ -38,14 +38,11 @@ class DiskEncryption:
     source_repo: str = DISK_ENCRYPTION_DEFAULT_REPO
     source_branch: str = DISK_ENCRYPTION_DEFAULT_BRANCH
 
-    def apply(self, init: Init) -> None:
-        """Register build artifacts and runtime invocation with *init*."""
-        self._add_build(init)
-        self._add_bash(init)
-        init.add_packages("cryptsetup")
+    def apply(self, image: Image) -> None:
+        """Add build hook, packages, and init script to *image*."""
+        image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
+        image.install("cryptsetup")
 
-    def _add_build(self, init: Init) -> None:
-        init.add_build_packages(*DISK_ENCRYPTION_BUILD_PACKAGES)
         build_cmd = (
             f"DISK_ENC_SRC=$BUILDDIR/disk-encryption-src && "
             f"if [ ! -d \"$DISK_ENC_SRC\" ]; then "
@@ -59,13 +56,13 @@ class DiskEncryption:
             f"install -m 0755 ./build/disk-encryption "
             f"\"$DESTDIR/usr/bin/disk-encryption\""
         )
-        init.add_build_hook("sh", "-c", build_cmd, shell=True)
+        image.hook("build", "sh", "-c", build_cmd, shell=True)
 
-    def _add_bash(self, init: Init) -> None:
-        init.add_bash(
-            f"/usr/bin/disk-encryption --device {self.device}"
+        image.add_init_script(
+            f"/usr/bin/disk-encryption"
+            f" --device {self.device}"
             f" --mapper {self.mapper_name}"
             f" --key {self.key_path}"
             f" --mount {self.mount_point}\n",
-            comment="disk encryption",
+            priority=20,
         )

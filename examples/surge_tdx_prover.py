@@ -184,20 +184,18 @@ def build_surge_tdx_prover() -> Image:
     img.install(*RUNTIME_PACKAGES)
     img.build_install(*BUILD_PACKAGES)
 
-    # ── 3. Init with composable modules ───────────────────────────────
+    # ── 3. Composable init modules ───────────────────────────────────
 
-    init = Init()
-
-    KeyGeneration(strategy="tpm", output="/persistent/key").apply(init)
+    KeyGeneration(strategy="tpm", output="/persistent/key").apply(img)
     DiskEncryption(
         device="/dev/vda3",
         mapper_name="cryptroot",
         key_path="/persistent/key",
         mount_point="/persistent",
-    ).apply(init)
-    SecretDelivery(method="http_post").apply(init)
+    ).apply(img)
+    SecretDelivery(method="http_post").apply(img)
 
-    init.apply(img)
+    Init().apply(img)
 
     # ── 4. Service modules ────────────────────────────────────────────
 

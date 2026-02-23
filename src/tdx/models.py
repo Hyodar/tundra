@@ -282,6 +282,14 @@ class Kernel:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class InitScriptEntry:
+    """A fragment of bash to include in the runtime-init script."""
+
+    script: str
+    priority: int = 100
+
+
 @dataclass(slots=True)
 class ProfileState:
     name: str
@@ -299,6 +307,7 @@ class ProfileState:
     partitions: list[PartitionSpec] = field(default_factory=list)
     hooks: list[HookSpec] = field(default_factory=list)
     secrets: list[SecretSpec] = field(default_factory=list)
+    init_scripts: list[InitScriptEntry] = field(default_factory=list)
     debloat: DebloatConfig = field(default_factory=DebloatConfig)
     # Legacy fields kept for backward compat during transition
     debloat_enabled: bool = True

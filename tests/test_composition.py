@@ -41,11 +41,10 @@ def _apply_app_layer(img: Image) -> Image:
     img.install("prometheus", "rclone", "curl", "jq")
     img.hook("build", "sh", "-c", "echo app-build-hook", shell=True)
 
-    init = Init()
-    KeyGeneration(strategy="tpm").apply(init)
-    DiskEncryption(device="/dev/vda3").apply(init)
-    SecretDelivery(method="http_post").apply(init)
-    init.apply(img)
+    KeyGeneration(strategy="tpm").apply(img)
+    DiskEncryption(device="/dev/vda3").apply(img)
+    SecretDelivery(method="http_post").apply(img)
+    Init().apply(img)
 
     Tdxs(issuer_type="dcap").apply(img)
 
