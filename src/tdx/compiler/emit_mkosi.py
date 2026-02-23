@@ -10,6 +10,7 @@ Generates complete, buildable mkosi project directories per profile, including:
 
 from __future__ import annotations
 
+import hashlib
 import shlex
 import textwrap
 from dataclasses import dataclass, field
@@ -361,6 +362,52 @@ def _useradd_argv(user: UserSpec) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _render_kernel_build_script(kernel: Kernel) -> str:
+    """Render a build script that clones, configures, and compiles the Linux kernel."""
+    version = kernel.version or "unknown"
+    config_hash = hashlib.sha256(str(kernel.config_file).encode()).hexdigest()[:12]
+    cache_key = f"kernel-{version}-{config_hash}"
+    return textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        KERNEL_CACHE="${{BUILDDIR}}/{cache_key}"
+        KERNEL_VERSION="{version}"
+
+        if [ -d "$KERNEL_CACHE/done" ]; then
+            echo "Using cached kernel build: {cache_key}"
+        else
+            rm -rf "$KERNEL_CACHE"
+            mkdir -p "$KERNEL_CACHE"
+
+            git clone --depth 1 --branch "v${{KERNEL_VERSION}}" \\
+                {kernel.source_repo} "$KERNEL_CACHE/src"
+
+            cp kernel/kernel.config "$KERNEL_CACHE/src/.config"
+            cd "$KERNEL_CACHE/src"
+
+            # Reproducibility environment
+            export KBUILD_BUILD_TIMESTAMP="1970-01-01"
+            export KBUILD_BUILD_USER="tdxvm"
+            export KBUILD_BUILD_HOST="tdxvm"
+
+            make olddefconfig
+            make -j"$(nproc)" bzImage ARCH=x86_64
+
+            mkdir -p "$KERNEL_CACHE/done"
+        fi
+
+        # Install kernel to destination
+        INSTALL_DIR="${{DESTDIR}}/usr/lib/modules/${{KERNEL_VERSION}}"
+        mkdir -p "$INSTALL_DIR"
+        cp "$KERNEL_CACHE/src/arch/x86/boot/bzImage" "$INSTALL_DIR/vmlinuz"
+
+        # Export for downstream phases
+        export KERNEL_IMAGE="$INSTALL_DIR/vmlinuz"
+        export KERNEL_VERSION="{version}"
+    """)
+
+
 class DeterministicMkosiEmitter:
     """Emit real, buildable mkosi project trees per profile."""
 
@@ -428,12 +475,16 @@ class DeterministicMkosiEmitter:
             # Generate mkosi.skeleton/ tree
             self._emit_skeleton_tree(profile_dir, profile, config)
 
+            # Copy kernel config file if kernel has one
+            self._emit_kernel_config(profile_dir, config)
+
             # Generate phase scripts + synthetic postinst/finalize
             phase_scripts = self._emit_all_scripts(
                 profile_name=profile_name,
                 profile_dir=profile_dir,
                 profile=profile,
                 recipe=recipe,
+                config=config,
             )
 
             # Generate mkosi.conf
@@ -528,12 +579,16 @@ class DeterministicMkosiEmitter:
             # Profile-specific extra tree
             self._emit_extra_tree(profile_dir, profile)
 
+            # Copy kernel config file if kernel has one
+            self._emit_kernel_config(profile_dir, config)
+
             # Generate phase scripts
             phase_scripts = self._emit_all_scripts(
                 profile_name=profile_name,
                 profile_dir=profile_dir,
                 profile=profile,
                 recipe=recipe,
+                config=config,
             )
 
             # Profile-specific mkosi.conf override
@@ -640,6 +695,25 @@ class DeterministicMkosiEmitter:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(MINIMAL_TARGET_UNIT, encoding="utf-8")
 
+    def _emit_kernel_config(self, profile_dir: Path, config: EmitConfig) -> None:
+        """Copy kernel config file into the output tree if present."""
+        if config.kernel and config.kernel.config_file:
+            kernel_dir = profile_dir / "kernel"
+            kernel_dir.mkdir(parents=True, exist_ok=True)
+            config_src = Path(config.kernel.config_file)
+            config_dest = kernel_dir / "kernel.config"
+            if config_src.exists():
+                config_dest.write_text(
+                    config_src.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            else:
+                # Write a placeholder referencing the expected config file
+                config_dest.write_text(
+                    f"# Kernel config: {config.kernel.config_file}\n"
+                    f"# Place the actual config file at this path before building.\n",
+                    encoding="utf-8",
+                )
+
     def _emit_all_scripts(
         self,
         *,
@@ -647,6 +721,7 @@ class DeterministicMkosiEmitter:
         profile_dir: Path,
         profile: ProfileState,
         recipe: RecipeState,
+        config: EmitConfig | None = None,
     ) -> dict[Phase, Path]:
         """Emit phase scripts + synthetic postinst/finalize."""
         scripts_dir = profile_dir / "scripts"
@@ -687,6 +762,28 @@ class DeterministicMkosiEmitter:
                     )
                     script_path.chmod(0o755)
                     phase_scripts[phase] = script_path
+                continue
+
+            # For build: prepend kernel build script if kernel has config_file
+            if phase == "build" and config and config.kernel and config.kernel.config_file:
+                kernel_script = _render_kernel_build_script(config.kernel)
+                if commands:
+                    # Combine kernel build + user-defined build commands
+                    user_script = self._render_script(commands)
+                    # Remove the shebang from user script to avoid duplicate
+                    user_lines = user_script.split("\n")
+                    user_body = "\n".join(
+                        line for line in user_lines
+                        if not line.startswith("#!") and line != "set -euo pipefail"
+                    ).strip()
+                    combined = kernel_script.rstrip() + "\n\n" + user_body + "\n"
+                else:
+                    combined = kernel_script
+                script_name = f"{index:02d}-{phase}.sh"
+                script_path = scripts_dir / script_name
+                script_path.write_text(combined, encoding="utf-8")
+                script_path.chmod(0o755)
+                phase_scripts[phase] = script_path
                 continue
 
             if not commands:
@@ -866,9 +963,15 @@ class DeterministicMkosiEmitter:
             env_vars.setdefault("SOURCE_DATE_EPOCH", "0")
         for key in sorted(env_vars):
             build_lines.append(f"Environment={key}={env_vars[key]}")
-        if config.environment_passthrough:
-            for key in config.environment_passthrough:
-                build_lines.append(f"Environment={key}")
+        # Collect environment passthrough keys
+        passthrough_keys = list(config.environment_passthrough or ())
+        # Auto-add kernel env vars when kernel has config_file
+        if config.kernel and config.kernel.config_file:
+            for kvar in ("KERNEL_IMAGE", "KERNEL_VERSION"):
+                if kvar not in passthrough_keys:
+                    passthrough_keys.append(kvar)
+        for key in passthrough_keys:
+            build_lines.append(f"Environment={key}")
         build_lines.append(f"WithNetwork={'true' if config.with_network else 'false'}")
         if config.sandbox_trees:
             for tree in config.sandbox_trees:

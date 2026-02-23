@@ -321,6 +321,26 @@ class TestKernel:
         assert img.kernel.tdx is True
         assert img.kernel.cmdline == "console=ttyS0"
 
+    def test_kernel_tdx_with_config_file(self) -> None:
+        k = Kernel.tdx_kernel("6.13.12", config_file="kernel/kernel-yocto.config")
+        assert k.version == "6.13.12"
+        assert k.tdx is True
+        assert k.config_file == "kernel/kernel-yocto.config"
+        assert k.source_repo == "https://github.com/gregkh/linux"
+
+    def test_kernel_tdx_with_custom_source_repo(self) -> None:
+        k = Kernel.tdx_kernel(
+            "6.13.12",
+            config_file="kernel.config",
+            source_repo="https://github.com/custom/linux",
+        )
+        assert k.source_repo == "https://github.com/custom/linux"
+        assert k.config_file == "kernel.config"
+
+    def test_kernel_default_source_repo(self) -> None:
+        k = Kernel.tdx_kernel("6.8")
+        assert k.source_repo == "https://github.com/gregkh/linux"
+
 
 # --- Public exports ---
 

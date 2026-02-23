@@ -6,7 +6,7 @@ import pytest
 from tdx import Image
 from tdx.compiler.emit_mkosi import ARCH_TO_MKOSI
 from tdx.errors import ValidationError
-from tdx.models import Phase
+from tdx.models import Kernel, Phase
 
 
 def test_compile_golden_output(tmp_path: Path) -> None:
@@ -397,6 +397,134 @@ def test_compile_reproducible_no_override_user_epoch(tmp_path: Path) -> None:
 
     assert "Environment=SOURCE_DATE_EPOCH=1234" in conf_text
     assert "Environment=SOURCE_DATE_EPOCH=0" not in conf_text
+
+
+def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
+    """When kernel has config_file, a real build script is emitted."""
+    # Create a fake kernel config file
+    config_file = tmp_path / "kernel-yocto.config"
+    config_file.write_text("# CONFIG_LOCALVERSION is not set\n", encoding="utf-8")
+
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.kernel = Kernel.tdx_kernel(
+        "6.13.12", config_file=str(config_file)
+    )
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    build_script = output_dir / "default" / "scripts" / "04-build.sh"
+
+    assert build_script.exists()
+    script_text = build_script.read_text(encoding="utf-8")
+
+    # Verify key build steps
+    assert "git clone --depth 1 --branch" in script_text
+    assert 'KERNEL_VERSION="6.13.12"' in script_text
+    assert "v${KERNEL_VERSION}" in script_text
+    assert "https://github.com/gregkh/linux" in script_text
+    assert "make olddefconfig" in script_text
+    assert "make -j" in script_text
+    assert "bzImage ARCH=x86_64" in script_text
+    assert "KBUILD_BUILD_TIMESTAMP" in script_text
+    assert "KBUILD_BUILD_USER" in script_text
+    assert "KBUILD_BUILD_HOST" in script_text
+    assert "${DESTDIR}/usr/lib/modules/" in script_text
+    assert "vmlinuz" in script_text
+    assert "kernel/kernel.config" in script_text
+
+
+def test_compile_kernel_config_file_copied(tmp_path: Path) -> None:
+    """Kernel config file is copied into the output tree."""
+    config_file = tmp_path / "my.config"
+    config_file.write_text("CONFIG_TDX_GUEST=y\n", encoding="utf-8")
+
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    kernel_config = output_dir / "default" / "kernel" / "kernel.config"
+
+    assert kernel_config.exists()
+    assert "CONFIG_TDX_GUEST=y" in kernel_config.read_text(encoding="utf-8")
+
+
+def test_compile_kernel_config_auto_adds_env_passthrough(tmp_path: Path) -> None:
+    """When kernel has config_file, KERNEL_IMAGE and KERNEL_VERSION are auto-added."""
+    config_file = tmp_path / "my.config"
+    config_file.write_text("# kernel config\n", encoding="utf-8")
+
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+
+    assert "Environment=KERNEL_IMAGE\n" in conf_text
+    assert "Environment=KERNEL_VERSION\n" in conf_text
+
+
+def test_compile_kernel_without_config_no_build_script(tmp_path: Path) -> None:
+    """When kernel does not have config_file, no kernel build script is emitted."""
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.kernel = Kernel.tdx_kernel("6.8")
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+
+    # No build script should exist (no build hooks registered)
+    build_script = output_dir / "default" / "scripts" / "04-build.sh"
+    assert not build_script.exists()
+
+    # No kernel dir should be created
+    kernel_dir = output_dir / "default" / "kernel"
+    assert not kernel_dir.exists()
+
+    # mkosi.conf should still have comment-only kernel config
+    conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
+    assert "# KernelVersion=6.8" in conf_text
+
+
+def test_compile_kernel_build_script_with_user_hooks(tmp_path: Path) -> None:
+    """Kernel build script is combined with user-defined build hooks."""
+    config_file = tmp_path / "my.config"
+    config_file.write_text("# config\n", encoding="utf-8")
+
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
+    image.install("curl")
+    image.run("echo", "custom-build-step", phase="build")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    build_script = output_dir / "default" / "scripts" / "04-build.sh"
+
+    assert build_script.exists()
+    script_text = build_script.read_text(encoding="utf-8")
+
+    # Both kernel build and user hook should be present
+    assert "git clone" in script_text
+    assert "custom-build-step" in script_text
+
+
+def test_compile_kernel_custom_source_repo(tmp_path: Path) -> None:
+    """Kernel build script uses the custom source repo."""
+    config_file = tmp_path / "my.config"
+    config_file.write_text("# config\n", encoding="utf-8")
+
+    image = Image(base="debian/bookworm", reproducible=False)
+    image.kernel = Kernel.tdx_kernel(
+        "6.13.12",
+        config_file=str(config_file),
+        source_repo="https://github.com/custom/linux",
+    )
+    image.install("curl")
+
+    output_dir = image.compile(tmp_path / "mkosi")
+    build_script = output_dir / "default" / "scripts" / "04-build.sh"
+
+    script_text = build_script.read_text(encoding="utf-8")
+    assert "https://github.com/custom/linux" in script_text
 
 
 def _snapshot_tree(root: Path) -> dict[str, str]:

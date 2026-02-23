@@ -236,9 +236,10 @@ class DebloatConfig:
 @dataclass(frozen=True, slots=True)
 class Kernel:
     version: str | None = None
-    config_file: str | None = None
+    config_file: str | Path | None = None
     cmdline: str | None = None
     tdx: bool = False
+    source_repo: str = "https://github.com/gregkh/linux"
 
     @classmethod
     def generic(cls, version: str, *, cmdline: str | None = None) -> Kernel:
@@ -249,8 +250,21 @@ class Kernel:
         return cls(config_file=config_file)
 
     @classmethod
-    def tdx_kernel(cls, version: str, *, cmdline: str | None = None) -> Kernel:
-        return cls(version=version, tdx=True, cmdline=cmdline)
+    def tdx_kernel(
+        cls,
+        version: str,
+        *,
+        cmdline: str | None = None,
+        config_file: str | Path | None = None,
+        source_repo: str = "https://github.com/gregkh/linux",
+    ) -> Kernel:
+        return cls(
+            version=version,
+            tdx=True,
+            cmdline=cmdline,
+            config_file=config_file,
+            source_repo=source_repo,
+        )
 
 
 @dataclass(slots=True)
