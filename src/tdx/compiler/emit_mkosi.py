@@ -11,9 +11,10 @@ Generates complete, buildable mkosi project directories per profile, including:
 from __future__ import annotations
 
 import shlex
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from tdx.errors import ValidationError
 from tdx.models import (
@@ -59,6 +60,171 @@ PHASE_TO_MKOSI_KEY: dict[Phase, str] = {
 # Stable seed for reproducible partition UUIDs
 DEFAULT_SEED = "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d"
 
+# Map Python arch names to mkosi architecture values
+ARCH_TO_MKOSI: dict[str, str] = {
+    "x86_64": "x86-64",
+    "aarch64": "arm64",
+}
+
+# Custom init script matching nethermind-tdx base/mkosi.skeleton/init
+DEFAULT_TDX_INIT_SCRIPT = textwrap.dedent("""\
+    #!/bin/sh
+
+    # Mount essential filesystems
+    mkdir -p /dev /proc /sys /run
+    mount -t proc none /proc
+    mount -t sysfs none /sys
+    mount -t devtmpfs none /dev
+    mount -t tmpfs none /run
+    mount -t configfs none /sys/kernel/config
+
+    # Workaround to make pivot_root work
+    # https://aconz2.github.io/2024/07/29/container-from-initramfs.html
+    exec unshare --mount sh -c '
+        mkdir /@
+        mount --rbind / /@
+        cd /@ && mount --move . /
+        exec chroot . /lib/systemd/systemd systemd.unit=minimal.target'
+""")
+
+# GCP postoutput: creates ESP image, GPT disk, wraps in deterministic tar.gz
+GCP_POSTOUTPUT_SCRIPT = textwrap.dedent("""\
+    #!/bin/bash
+    set -euxo pipefail
+
+    EFI="${OUTPUTDIR}/${IMAGE_ID}_${IMAGE_VERSION}.efi"
+    TAR="${OUTPUTDIR}/${IMAGE_ID}_${IMAGE_VERSION}.tar.gz"
+    TMP="${OUTPUTDIR}/gcp-tmp"
+
+    [ ! -f "$EFI" ] && echo "Error: $EFI not found" && exit 1
+
+    mkdir -p "$TMP"
+
+    # Fixed GUIDs and IDs
+    DISK_GUID="12345678-1234-5678-1234-567812345678"
+    PARTITION_GUID="87654321-4321-8765-4321-876543218765"
+    FAT_SERIAL="12345678"
+
+    # Create 500MB ESP
+    dd if=/dev/zero of="$TMP/esp.img" bs=1M count=500
+
+    # Format with fixed volume serial number and label
+    mformat -i "$TMP/esp.img" -F -v "ESP" -N "$FAT_SERIAL" ::
+
+    # Create directory structure
+    mmd -i "$TMP/esp.img" ::EFI ::EFI/BOOT
+
+    # Copy files with deterministic timestamps
+    # -D o sets file times to 1980-01-01 (DOS epoch)
+    mcopy -D o -i "$TMP/esp.img" "$EFI" ::EFI/BOOT/BOOTX64.EFI
+
+    # Create 1GB disk with GPT
+    dd if=/dev/zero of="$TMP/disk.raw" bs=1M count=1024
+    sgdisk --disk-guid="$DISK_GUID" "$TMP/disk.raw"
+
+    # Create ESP partition
+    # -n creates partition (number:start:end)
+    # -t sets type (1:ef00 for ESP)
+    # -u sets partition GUID
+    # -c sets partition name
+    sgdisk -n 1:2048:1026047 \\
+            -t 1:ef00 \\
+            -u 1:"$PARTITION_GUID" \\
+            -c 1:"ESP" \\
+            -A 1:set:0 \\
+            "$TMP/disk.raw"
+
+    # Write ESP image to partition area
+    dd if="$TMP/esp.img" of="$TMP/disk.raw" bs=512 seek=2048 conv=notrunc
+    touch -d "2024-01-01 00:00:00 UTC" "$TMP/disk.raw" 2>/dev/null || true
+
+    # Create GCP tar.gz
+    tar --format=oldgnu -Sczf "$TAR" -C "$TMP" disk.raw
+
+    rm -rf "$TMP"
+""")
+
+# Azure postoutput: converts EFI to VHD with ESP partition
+AZURE_POSTOUTPUT_SCRIPT = textwrap.dedent("""\
+    #!/bin/bash
+    set -euxo pipefail
+
+    EFI_FILE="${OUTPUTDIR}/${IMAGE_ID}_${IMAGE_VERSION}.efi"
+    VHD_FILE="${OUTPUTDIR}/${IMAGE_ID}_${IMAGE_VERSION}.vhd"
+    WORK_DIR="${OUTPUTDIR}/azure-tmp"
+
+    if [ ! -f "$EFI_FILE" ]; then
+        echo "Error: EFI file not found at $EFI_FILE"
+        exit 1
+    fi
+
+    echo "Converting $EFI_FILE to VHD format..."
+
+    # Create working directory
+    mkdir -p "$WORK_DIR"
+
+    # Create ESP filesystem image (500MB should be plenty)
+    ESP_SIZE_MB=500
+    ESP_IMAGE="$WORK_DIR/esp.img"
+
+    # Create empty ESP image and format it as FAT32
+    dd if=/dev/zero of="$ESP_IMAGE" bs=1M count=$ESP_SIZE_MB
+    mformat -i "$ESP_IMAGE" -F -v "ESP" ::
+
+    # Create EFI directory structure and copy the UKI file using mtools
+    mmd -i "$ESP_IMAGE" ::EFI
+    mmd -i "$ESP_IMAGE" ::EFI/BOOT
+    mcopy -i "$ESP_IMAGE" "$EFI_FILE" ::EFI/BOOT/BOOTX64.EFI
+
+    # Create the final disk image with GPT
+    DISK_SIZE_MB=$((ESP_SIZE_MB + 2))  # ESP + 1MB for GPT headers
+    DISK_IMAGE="$WORK_DIR/azure_image.raw"
+
+    # Create empty disk
+    dd if=/dev/zero of="$DISK_IMAGE" bs=1M count=$DISK_SIZE_MB
+
+    # Create GPT partition table and ESP partition
+    # Use sector size of 512 bytes, so 1MB = 2048 sectors
+    parted "$DISK_IMAGE" --script -- \\
+      mklabel gpt \\
+      mkpart ESP fat32 2048s $(($ESP_SIZE_MB * 2048 + 2047))s \\
+      set 1 boot on
+
+    # Copy the ESP filesystem into the partition
+    # Skip first 1MB (2048 sectors) to account for GPT header
+    dd if="$ESP_IMAGE" of="$DISK_IMAGE" bs=512 seek=2048 conv=notrunc
+
+    # Convert to VHD
+    truncate -s %1MiB "$DISK_IMAGE"
+    qemu-img convert -O vpc -o subformat=fixed,force_size "$DISK_IMAGE" "$VHD_FILE"
+
+    # Clean up
+    rm -rf "$WORK_DIR"
+
+    echo "Successfully created VHD: $VHD_FILE"
+""")
+
+# mkosi.version: git-based version script
+MKOSI_VERSION_SCRIPT = textwrap.dedent("""\
+    #!/bin/bash
+    set -euo pipefail
+
+    # Add current directory to git safe directories if not already present
+    if ! git config --global --get-all safe.directory | grep -Fxq "$PWD"; then
+        git config --global --add safe.directory "$PWD"
+    fi
+
+    commit_date=$(TZ=UTC0 git show -s --date=format:'%Y-%m-%d' --format='%ad')
+    commit_hash=$(git rev-parse --short=6 HEAD)
+    dirty_suffix=""
+    if [ -n "$(git status --porcelain)" ]; then
+        dirty_suffix="-dirty"
+    fi
+
+    # example value: 2025-06-26.a1b2c3d-dirty
+    echo "${commit_date}.${commit_hash}${dirty_suffix}"
+""")
+
 
 @dataclass(frozen=True, slots=True)
 class EmitConfig:
@@ -70,6 +236,15 @@ class EmitConfig:
     kernel: Kernel | None = None
     output_format: str = "uki"
     seed: str = DEFAULT_SEED
+    with_network: bool = True
+    clean_package_metadata: bool = True
+    manifest_format: str = "json"
+    sandbox_trees: tuple[str, ...] = ()
+    package_cache_directory: str | None = None
+    init_script: str | None = None
+    generate_version_script: bool = False
+    generate_cloud_postoutput: bool = True
+    emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,9 +325,9 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
     return "\n".join(lines)
 
 
-def _useradd_command(user: UserSpec) -> str:
-    """Generate a useradd command from a UserSpec."""
-    parts = ["useradd"]
+def _useradd_argv(user: UserSpec) -> tuple[str, ...]:
+    """Generate a useradd argv tuple from a UserSpec."""
+    parts: list[str] = ["mkosi-chroot", "useradd"]
     if user.system:
         parts.append("--system")
     if user.home:
@@ -166,7 +341,7 @@ def _useradd_command(user: UserSpec) -> str:
     if user.groups:
         parts.extend(["--groups", ",".join(user.groups)])
     parts.append(user.name)
-    return " ".join(parts)
+    return tuple(parts)
 
 
 class DeterministicMkosiEmitter:
@@ -184,9 +359,38 @@ class DeterministicMkosiEmitter:
         if config is None:
             config = EmitConfig(base=base)
 
+        if config.emit_mode == "native_profiles":
+            return self._emit_native_profiles(
+                recipe=recipe,
+                destination=destination,
+                profile_names=profile_names,
+                config=config,
+            )
+
+        return self._emit_per_directory(
+            recipe=recipe,
+            destination=destination,
+            profile_names=profile_names,
+            config=config,
+        )
+
+    def _emit_per_directory(
+        self,
+        *,
+        recipe: RecipeState,
+        destination: Path,
+        profile_names: tuple[str, ...],
+        config: EmitConfig,
+    ) -> MkosiEmission:
         destination.mkdir(parents=True, exist_ok=True)
         profile_paths: dict[str, Path] = {}
         script_paths: dict[str, dict[Phase, Path]] = {}
+
+        # Emit mkosi.version at emission root when enabled
+        if config.generate_version_script:
+            version_path = destination / "mkosi.version"
+            version_path.write_text(MKOSI_VERSION_SCRIPT, encoding="utf-8")
+            version_path.chmod(0o755)
 
         for profile_name in sorted(profile_names):
             profile = recipe.profiles.get(profile_name)
@@ -205,7 +409,7 @@ class DeterministicMkosiEmitter:
             self._emit_extra_tree(profile_dir, profile)
 
             # Generate mkosi.skeleton/ tree
-            self._emit_skeleton_tree(profile_dir, profile)
+            self._emit_skeleton_tree(profile_dir, profile, config)
 
             # Generate phase scripts + synthetic postinst/finalize
             phase_scripts = self._emit_all_scripts(
@@ -228,6 +432,10 @@ class DeterministicMkosiEmitter:
             conf_path = profile_dir / "mkosi.conf"
             conf_path.write_text(conf_content, encoding="utf-8")
 
+            # Emit cloud postoutput scripts based on output_targets
+            if config.generate_cloud_postoutput:
+                self._emit_cloud_postoutput(profile_dir, profile)
+
             profile_paths[profile_name] = conf_path
             script_paths[profile_name] = phase_scripts
 
@@ -236,6 +444,118 @@ class DeterministicMkosiEmitter:
             profile_paths=profile_paths,
             script_paths=script_paths,
         )
+
+    def _emit_native_profiles(
+        self,
+        *,
+        recipe: RecipeState,
+        destination: Path,
+        profile_names: tuple[str, ...],
+        config: EmitConfig,
+    ) -> MkosiEmission:
+        """Emit a single root mkosi.conf with mkosi.profiles/<name>/ overrides."""
+        destination.mkdir(parents=True, exist_ok=True)
+        profile_paths: dict[str, Path] = {}
+        script_paths: dict[str, dict[Phase, Path]] = {}
+
+        # Emit mkosi.version at emission root when enabled
+        if config.generate_version_script:
+            version_path = destination / "mkosi.version"
+            version_path.write_text(MKOSI_VERSION_SCRIPT, encoding="utf-8")
+            version_path.chmod(0o755)
+
+        # Root mkosi.conf with shared configuration (use first profile as base)
+        first_profile_name = sorted(profile_names)[0]
+        first_profile = recipe.profiles.get(first_profile_name)
+        if first_profile is None:
+            raise ValidationError(
+                "Profile does not exist for mkosi emission.",
+                hint="Create the profile before calling emit_mkosi().",
+                context={"profile": first_profile_name, "operation": "emit_mkosi"},
+            )
+
+        # Shared skeleton and extra at root level
+        self._emit_skeleton_tree(destination, first_profile, config)
+        self._emit_extra_tree(destination, first_profile)
+
+        # Root mkosi.conf with shared settings (no profile-specific packages)
+        root_conf_content = self._render_conf(
+            profile_name=first_profile_name,
+            config=config,
+            packages=[],
+            build_packages=[],
+            repositories=[],
+            phase_scripts={},
+        )
+        root_conf_path = destination / "mkosi.conf"
+        root_conf_path.write_text(root_conf_content, encoding="utf-8")
+
+        # Per-profile overrides under mkosi.profiles/<name>/
+        profiles_dir = destination / "mkosi.profiles"
+        profiles_dir.mkdir(parents=True, exist_ok=True)
+
+        for profile_name in sorted(profile_names):
+            profile = recipe.profiles.get(profile_name)
+            if profile is None:
+                raise ValidationError(
+                    "Profile does not exist for mkosi emission.",
+                    hint="Create the profile before calling emit_mkosi().",
+                    context={"profile": profile_name, "operation": "emit_mkosi"},
+                )
+            self._validate_profile_phases(profile_name=profile_name, recipe=recipe)
+
+            profile_dir = profiles_dir / profile_name
+            profile_dir.mkdir(parents=True, exist_ok=True)
+
+            # Profile-specific extra tree
+            self._emit_extra_tree(profile_dir, profile)
+
+            # Generate phase scripts
+            phase_scripts = self._emit_all_scripts(
+                profile_name=profile_name,
+                profile_dir=profile_dir,
+                profile=profile,
+                recipe=recipe,
+            )
+
+            # Profile-specific mkosi.conf override
+            conf_content = self._render_conf(
+                profile_name=profile_name,
+                config=config,
+                packages=sorted(profile.packages),
+                build_packages=sorted(profile.build_packages),
+                repositories=profile.repositories,
+                phase_scripts=phase_scripts,
+            )
+            conf_path = profile_dir / "mkosi.conf"
+            conf_path.write_text(conf_content, encoding="utf-8")
+
+            # Emit cloud postoutput scripts
+            if config.generate_cloud_postoutput:
+                self._emit_cloud_postoutput(profile_dir, profile)
+
+            profile_paths[profile_name] = conf_path
+            script_paths[profile_name] = phase_scripts
+
+        return MkosiEmission(
+            root=destination,
+            profile_paths=profile_paths,
+            script_paths=script_paths,
+        )
+
+    def _emit_cloud_postoutput(self, profile_dir: Path, profile: ProfileState) -> None:
+        """Emit cloud-specific postoutput scripts based on output_targets."""
+        targets = profile.output_targets
+        if "gcp" in targets:
+            gcp_script = profile_dir / "scripts" / "gcp-postoutput.sh"
+            gcp_script.parent.mkdir(parents=True, exist_ok=True)
+            gcp_script.write_text(GCP_POSTOUTPUT_SCRIPT, encoding="utf-8")
+            gcp_script.chmod(0o755)
+        if "azure" in targets:
+            azure_script = profile_dir / "scripts" / "azure-postoutput.sh"
+            azure_script.parent.mkdir(parents=True, exist_ok=True)
+            azure_script.write_text(AZURE_POSTOUTPUT_SCRIPT, encoding="utf-8")
+            azure_script.chmod(0o755)
 
     def _validate_profile_phases(self, *, profile_name: str, recipe: RecipeState) -> None:
         profile = recipe.profiles[profile_name]
@@ -275,13 +595,18 @@ class DeterministicMkosiEmitter:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(_systemd_unit_content(svc), encoding="utf-8")
 
-    def _emit_skeleton_tree(self, profile_dir: Path, profile: ProfileState) -> None:
+    def _emit_skeleton_tree(
+        self, profile_dir: Path, profile: ProfileState, config: EmitConfig
+    ) -> None:
         """Generate mkosi.skeleton/ with pre-package-manager files."""
-        # Skeleton files are just files that need to exist before apt runs.
-        # The SDK doesn't have a separate skeleton list yet - skeleton() maps to file().
-        # If we add skeleton support later, emit them here.
         skeleton_dir = profile_dir / "mkosi.skeleton"
         skeleton_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write custom init script if configured
+        if config.init_script:
+            init_path = skeleton_dir / "init"
+            init_path.write_text(config.init_script, encoding="utf-8")
+            init_path.chmod(0o755)
 
     def _emit_all_scripts(
         self,
@@ -304,7 +629,10 @@ class DeterministicMkosiEmitter:
             if phase == "postinst":
                 synthetic = self._synthetic_postinst_commands(profile)
                 all_commands = synthetic + list(commands)
-                if all_commands:
+                needs_debloat = (
+                    profile.debloat.enabled and profile.debloat.systemd_minimize
+                )
+                if all_commands or needs_debloat:
                     script_name = f"{index:02d}-{phase}.sh"
                     script_path = scripts_dir / script_name
                     script_path.write_text(
@@ -343,23 +671,16 @@ class DeterministicMkosiEmitter:
         """Create synthetic commands for user creation and service enablement."""
         commands: list[CommandSpec] = []
 
-        # User creation
+        # User creation via mkosi-chroot
         for user in profile.users:
-            cmd = _useradd_command(user)
-            commands.append(CommandSpec(argv=("sh", "-c", cmd)))
+            commands.append(CommandSpec(argv=_useradd_argv(user)))
 
-        # Service enablement via symlink in /etc (writable in chroot)
+        # Service enablement via mkosi-chroot systemctl enable
         for svc in profile.services:
             if svc.enabled:
                 unit_name = svc.name if "." in svc.name else f"{svc.name}.service"
-                wants_dir = "/etc/systemd/system/multi-user.target.wants"
                 commands.append(
-                    CommandSpec(argv=(
-                        "sh", "-c",
-                        f"mkdir -p {wants_dir} && "
-                        f"ln -sf /usr/lib/systemd/system/{unit_name} "
-                        f"{wants_dir}/{unit_name}",
-                    ))
+                    CommandSpec(argv=("mkosi-chroot", "systemctl", "enable", unit_name))
                 )
 
         return commands
@@ -372,70 +693,76 @@ class DeterministicMkosiEmitter:
 
         lines: list[str] = []
 
-        # Path removal
+        # Path removal (remains in finalize — runs on host with $BUILDROOT)
         paths = config.effective_paths_remove
         if paths:
             lines.append("# Debloat: remove unnecessary paths")
             for path in sorted(paths):
                 lines.append(f"rm -rf \"$BUILDROOT{path}\"")
 
-        # Systemd binary cleanup
-        if config.systemd_minimize:
-            bins_keep = set(config.systemd_bins_keep)
-            lines.append("")
-            lines.append("# Debloat: remove unwanted systemd binaries")
-            lines.append("for bin in \"$BUILDROOT\"/usr/lib/systemd/system-generators/*; do")
-            lines.append("    rm -f \"$bin\"")
-            lines.append("done")
-            lines.append("for bin in \"$BUILDROOT\"/usr/lib/systemd/*; do")
-            lines.append("    [ -d \"$bin\" ] && continue")
-            lines.append("    name=$(basename \"$bin\")")
-            keep_check = " || ".join(
-                f'[ "$name" = "{b}" ]' for b in sorted(bins_keep)
-            )
-            if keep_check:
-                lines.append(f"    if ! ({keep_check}); then")
-                lines.append("        rm -f \"$bin\"")
-                lines.append("    fi")
-            lines.append("done")
-
         return lines
 
     def _render_postinst_script(
         self, commands: list[CommandSpec], profile: ProfileState
     ) -> str:
-        """Render postinst script with user creation, service enablement, and masking."""
+        """Render postinst script with user creation, service enablement, and debloat."""
         lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
 
         # Render all commands (synthetic + user-defined)
         for command in commands:
             lines.append(self._render_command_line(command))
 
-        # Systemd unit masking for debloat (symlink to /dev/null in /etc)
+        # Systemd debloat via dpkg-query (matching nethermind-tdx debloat-systemd.sh)
         config = profile.debloat
         if config.enabled and config.systemd_minimize:
-            units_keep = set(config.effective_units_keep)
+            bins_keep = sorted(config.systemd_bins_keep)
+            units_keep = sorted(config.effective_units_keep)
+
+            # Binary cleanup via mkosi-chroot dpkg-query
+            lines.append("")
+            lines.append("# Debloat: remove unwanted systemd binaries")
+            bins_keep_list = " ".join(f'"{b}"' for b in bins_keep)
+            lines.append(f"systemd_bin_whitelist=({bins_keep_list})")
+            lines.append(
+                "mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | "
+                "while read -r bin_path; do"
+            )
+            lines.append("    bin_name=$(basename \"$bin_path\")")
+            lines.append(
+                "    if ! printf '%s\\n' \"${systemd_bin_whitelist[@]}\" | "
+                "grep -qx \"$bin_name\"; then"
+            )
+            lines.append("        rm -f \"$BUILDROOT$bin_path\"")
+            lines.append("    fi")
+            lines.append("done")
+
+            # Unit masking via mkosi-chroot dpkg-query
             lines.append("")
             lines.append("# Debloat: mask unwanted systemd units")
-            lines.append("mkdir -p /etc/systemd/system")
+            keep_list = " ".join(f'"{u}"' for u in units_keep)
+            lines.append(f"systemd_svc_whitelist=({keep_list})")
+            lines.append("SYSTEMD_DIR=\"$BUILDROOT/etc/systemd/system\"")
+            lines.append("mkdir -p \"$SYSTEMD_DIR\"")
             lines.append(
-                "for unit in /usr/lib/systemd/system/*.target "
-                "/usr/lib/systemd/system/*.service "
-                "/usr/lib/systemd/system/*.socket; do"
+                "mkosi-chroot dpkg-query -L systemd | "
+                "grep -E '\\.service$|\\.socket$|\\.timer$|\\.target$|\\.mount$' | "
+                "sed 's|.*/||' | while read -r unit; do"
             )
-            lines.append("    [ -e \"$unit\" ] || continue")
-            lines.append("    name=$(basename \"$unit\")")
-            keep_list = " ".join(f'"{u}"' for u in sorted(units_keep))
-            lines.append(f"    keep=({keep_list})")
-            lines.append("    found=0")
-            lines.append("    for k in \"${keep[@]}\"; do")
-            lines.append("        [ \"$name\" = \"$k\" ] && found=1 && break")
-            lines.append("    done")
             lines.append(
-                "    [ \"$found\" = \"0\" ] && "
-                "ln -sf /dev/null \"/etc/systemd/system/$name\" 2>/dev/null || true"
+                "    if ! printf '%s\\n' \"${systemd_svc_whitelist[@]}\" | "
+                "grep -qx \"$unit\"; then"
             )
+            lines.append("        ln -sf /dev/null \"$SYSTEMD_DIR/$unit\"")
+            lines.append("    fi")
             lines.append("done")
+
+            # Set default target
+            lines.append("")
+            lines.append("# Set default systemd target")
+            lines.append(
+                "ln -sf minimal.target "
+                "\"$BUILDROOT/etc/systemd/system/default.target\""
+            )
 
         lines.append("")
         return "\n".join(lines)
@@ -474,26 +801,40 @@ class DeterministicMkosiEmitter:
         lines.append(f"Distribution={distribution}")
         if release:
             lines.append(f"Release={release}")
+        mkosi_arch = ARCH_TO_MKOSI.get(config.arch)
+        if mkosi_arch:
+            lines.append(f"Architecture={mkosi_arch}")
         lines.append("")
 
         # [Output]
         lines.append("[Output]")
-        lines.append(f"@Format={config.output_format}")
-        lines.append(f"@ImageId={profile_name}")
+        lines.append(f"Format={config.output_format}")
+        lines.append(f"ImageId={profile_name}")
+        lines.append(f"ManifestFormat={config.manifest_format}")
         if config.reproducible:
             lines.append("CompressOutput=zstd")
             lines.append(f"Seed={config.seed}")
         lines.append("")
 
-        # [Build] - reproducibility settings
+        # [Build] - reproducibility + network + sandbox settings
+        build_lines: list[str] = []
         if config.reproducible:
+            build_lines.append("SourceDateEpoch=0")
+            build_lines.append("Environment=SOURCE_DATE_EPOCH=0")
+        build_lines.append(f"WithNetwork={'yes' if config.with_network else 'no'}")
+        if config.sandbox_trees:
+            for tree in config.sandbox_trees:
+                build_lines.append(f"SandboxTrees={tree}")
+        if config.package_cache_directory:
+            build_lines.append(f"PackageCacheDirectory={config.package_cache_directory}")
+        if build_lines:
             lines.append("[Build]")
-            lines.append("SourceDateEpoch=0")
-            lines.append("Environment=SOURCE_DATE_EPOCH=0")
+            lines.extend(build_lines)
             lines.append("")
 
         # [Content]
         lines.append("[Content]")
+        lines.append(f"CleanPackageMetadata={'yes' if config.clean_package_metadata else 'no'}")
         if packages:
             pkg_lines = "\n".join(f"    {p}" for p in packages)
             lines.append(f"Packages=\n{pkg_lines}")

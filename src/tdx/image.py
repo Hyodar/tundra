@@ -15,7 +15,7 @@ from .backends.inprocess import InProcessBackend
 from .backends.lima import LimaBackend
 from .backends.local_linux import LocalLinuxBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
-from .compiler import PHASE_ORDER, EmitConfig, emit_mkosi_tree
+from .compiler import DEFAULT_TDX_INIT_SCRIPT, PHASE_ORDER, EmitConfig, emit_mkosi_tree
 from .deploy import get_adapter
 from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
@@ -77,6 +77,8 @@ class DependencyAwareImageModule(ImageModule, Protocol):
 class Image:
     """Represents an image recipe root."""
 
+    DEFAULT_TDX_INIT = DEFAULT_TDX_INIT_SCRIPT
+
     build_dir: Path = field(default_factory=lambda: Path("build"))
     base: str = "debian/bookworm"
     arch: Arch = "x86_64"
@@ -87,6 +89,15 @@ class Image:
     policy: Policy = field(default_factory=Policy)
     logger: StructuredLogger = field(default_factory=StructuredLogger)
     kernel: Kernel | None = field(default=None)
+    with_network: bool = True
+    clean_package_metadata: bool = True
+    manifest_format: str = "json"
+    sandbox_trees: tuple[str, ...] = ()
+    package_cache_directory: str | None = None
+    init_script: str | None = None
+    generate_version_script: bool = False
+    generate_cloud_postoutput: bool = True
+    emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
     _backend_override: object | None = field(init=False, default=None, repr=False)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
@@ -763,6 +774,15 @@ class Image:
             arch=self.arch,
             reproducible=self.reproducible,
             kernel=self.kernel,
+            with_network=self.with_network,
+            clean_package_metadata=self.clean_package_metadata,
+            manifest_format=self.manifest_format,
+            sandbox_trees=self.sandbox_trees,
+            package_cache_directory=self.package_cache_directory,
+            init_script=self.init_script,
+            generate_version_script=self.generate_version_script,
+            generate_cloud_postoutput=self.generate_cloud_postoutput,
+            emit_mode=self.emit_mode,
         )
 
     def _artifact_filename(self, target: OutputTarget) -> str:

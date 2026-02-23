@@ -79,7 +79,15 @@ class LimaBackend:
         guest_emit = next(m.target for m in mounts if "emit" in m.target)
         guest_build = next(m.target for m in mounts if "build" in m.target)
 
-        mkosi_dir = f"{guest_emit}/{request.profile}"
+        # Detect native profiles mode
+        native_profiles_dir = request.emit_dir / "mkosi.profiles" / request.profile
+        if native_profiles_dir.exists():
+            mkosi_dir = guest_emit
+            profile_flag = f"--profile={request.profile} "
+        else:
+            mkosi_dir = f"{guest_emit}/{request.profile}"
+            profile_flag = ""
+
         output_dir = f"{guest_build}/{request.profile}/output"
 
         # Run mkosi inside the Lima VM
@@ -88,6 +96,7 @@ class LimaBackend:
             f"cd {mkosi_dir} && "
             f"mkosi --force --image-id={request.profile} "
             f"--output-dir={output_dir} "
+            f"{profile_flag}"
             f"{' '.join(self.mkosi_args)} build"
         )
 

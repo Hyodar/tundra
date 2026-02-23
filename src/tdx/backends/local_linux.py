@@ -20,6 +20,8 @@ from tdx.backends.base import MountSpec
 from tdx.errors import BackendExecutionError
 from tdx.models import ArtifactRef, BakeRequest, BakeResult, OutputTarget, ProfileBuildResult
 
+MINIMUM_MKOSI_VERSION = (25, 0)
+
 
 @dataclass(slots=True)
 class LocalLinuxBackend:
@@ -41,11 +43,17 @@ class LocalLinuxBackend:
     def execute(self, request: BakeRequest) -> BakeResult:
         self._ensure_local_prerequisites()
 
-        # Determine the mkosi project directory for this profile
-        mkosi_dir = request.emit_dir / request.profile
-        if not mkosi_dir.exists():
-            # Fall back to emit_dir itself if no profile subdirectory
+        # Determine the mkosi project directory for this profile.
+        # Native profiles mode: mkosi.profiles/<name>/ under emit_dir root
+        native_profiles_dir = request.emit_dir / "mkosi.profiles" / request.profile
+        if native_profiles_dir.exists():
+            # Native profiles mode: cwd is the emission root
             mkosi_dir = request.emit_dir
+        else:
+            # Per-directory mode: cwd is the profile subdirectory
+            mkosi_dir = request.emit_dir / request.profile
+            if not mkosi_dir.exists():
+                mkosi_dir = request.emit_dir
 
         output_dir = request.build_dir / request.profile / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -62,6 +70,13 @@ class LocalLinuxBackend:
             "--force",
             f"--image-id={request.profile}",
             f"--output-dir={output_dir}",
+        ])
+
+        # In native profiles mode, use --profile flag
+        if native_profiles_dir.exists():
+            cmd.append(f"--profile={request.profile}")
+
+        cmd.extend([
             *self.mkosi_args,
             "build",
         ])
@@ -142,4 +157,35 @@ class LocalLinuxBackend:
                 "Local Linux backend requires `mkosi` in PATH.",
                 hint="Install mkosi and ensure it is available before running bake.",
                 context={"backend": self.name, "operation": "prepare"},
+            )
+        self._check_mkosi_version()
+
+    def _check_mkosi_version(self) -> None:
+        """Verify mkosi version meets the minimum requirement."""
+        result = subprocess.run(
+            ["mkosi", "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return  # Can't determine version, let mkosi itself fail later
+        version_str = result.stdout.strip()
+        # mkosi --version outputs something like "mkosi 25.3" or just "25.3"
+        parts = version_str.replace("mkosi", "").strip().split(".")
+        try:
+            version_tuple = tuple(int(p) for p in parts[:2])
+        except (ValueError, IndexError):
+            return
+        if version_tuple < MINIMUM_MKOSI_VERSION:
+            raise BackendExecutionError(
+                f"mkosi version {version_str} is below minimum "
+                f"{'.'.join(str(v) for v in MINIMUM_MKOSI_VERSION)}.",
+                hint="Upgrade mkosi: pip install --break-system-packages mkosi",
+                context={
+                    "backend": self.name,
+                    "operation": "prepare",
+                    "version": version_str,
+                    "minimum": ".".join(str(v) for v in MINIMUM_MKOSI_VERSION),
+                },
             )

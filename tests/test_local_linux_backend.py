@@ -62,11 +62,66 @@ def test_local_backend_prepare_creates_directories(
     backend = LocalLinuxBackend()
     request = _request(tmp_path)
     monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+    # Patch version check to avoid hitting real mkosi binary
+    monkeypatch.setattr(
+        "tdx.backends.local_linux.subprocess.run",
+        lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "mkosi 26.0", "stderr": ""})(),
+    )
 
     backend.prepare(request)
 
     assert request.build_dir.exists()
     assert request.emit_dir.exists()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
+def test_local_backend_mkosi_version_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that _check_mkosi_version rejects old mkosi versions."""
+    backend = LocalLinuxBackend()
+    monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+
+    # Mock subprocess.run to return an old version
+    class FakeResult:
+        returncode = 0
+        stdout = "mkosi 20.2"
+        stderr = ""
+
+    monkeypatch.setattr(
+        "tdx.backends.local_linux.subprocess.run",
+        lambda *a, **kw: FakeResult(),
+    )
+
+    with pytest.raises(BackendExecutionError) as excinfo:
+        backend._check_mkosi_version()
+
+    assert "below minimum" in str(excinfo.value)
+    assert excinfo.value.context["version"] == "mkosi 20.2"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
+def test_local_backend_mkosi_version_check_passes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that _check_mkosi_version accepts valid mkosi versions."""
+    backend = LocalLinuxBackend()
+    monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+
+    class FakeResult:
+        returncode = 0
+        stdout = "mkosi 26.1"
+        stderr = ""
+
+    monkeypatch.setattr(
+        "tdx.backends.local_linux.subprocess.run",
+        lambda *a, **kw: FakeResult(),
+    )
+
+    # Should not raise
+    backend._check_mkosi_version()
 
 
 def _request(tmp_path: Path) -> BakeRequest:
