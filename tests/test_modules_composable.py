@@ -135,7 +135,9 @@ def test_secret_delivery_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    assert "/usr/bin/secret-delivery --method http_post --port 9090" in entry.script
+    expected = "/usr/bin/secret-delivery --config /etc/tdx/secrets.json"
+    assert expected in entry.script
+    assert "--method http_post --port 9090" in entry.script
     assert entry.priority == 30
 
 
@@ -145,6 +147,56 @@ def test_secret_delivery_installs_python3() -> None:
 
     profile = image.state.profiles["default"]
     assert "python3" in profile.packages
+
+
+def test_secret_delivery_writes_config_from_declared_secrets() -> None:
+    import json
+
+    from tdx.models import SecretSchema, SecretTarget
+
+    image = Image(reproducible=False)
+    image.secret(
+        "jwt_secret",
+        required=True,
+        schema=SecretSchema(kind="string", min_length=64, max_length=64),
+        targets=(
+            SecretTarget.file("/run/secrets/jwt.hex", owner="app", mode="0440"),
+            SecretTarget.env("JWT_SECRET", scope="global"),
+        ),
+    )
+    image.secret(
+        "api_key",
+        required=False,
+        targets=(SecretTarget.file("/run/secrets/api-key"),),
+    )
+    SecretDelivery(method="http_post", port=9090).apply(image)
+
+    profile = image.state.profiles["default"]
+    config_files = [f for f in profile.files if f.path == "/etc/tdx/secrets.json"]
+    assert len(config_files) == 1
+    config = json.loads(config_files[0].content)
+
+    assert config["method"] == "http_post"
+    assert config["port"] == 9090
+    assert len(config["secrets"]) == 2
+
+    # Sorted by name
+    api_key = config["secrets"][0]
+    assert api_key["name"] == "api_key"
+    assert api_key["required"] is False
+    assert api_key["targets"] == [
+        {"kind": "file", "location": "/run/secrets/api-key", "mode": "0400"},
+    ]
+
+    jwt = config["secrets"][1]
+    assert jwt["name"] == "jwt_secret"
+    assert jwt["required"] is True
+    assert jwt["schema"] == {"kind": "string", "min_length": 64, "max_length": 64}
+    assert len(jwt["targets"]) == 2
+    assert jwt["targets"][0] == {
+        "kind": "file", "location": "/run/secrets/jwt.hex", "mode": "0440", "owner": "app",
+    }
+    assert jwt["targets"][1] == {"kind": "env", "location": "JWT_SECRET", "scope": "global"}
 
 
 # ── Composition with Init ────────────────────────────────────────────
