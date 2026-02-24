@@ -1,0 +1,16 @@
+[Unit]
+Description=TDXS
+After=
+Requires=tdxs.socket
+
+[Service]
+User=tdxs
+Group=tdx
+WorkingDirectory=/home/tdxs
+Type=notify
+ExecStart=/usr/bin/tdxs \
+    --config /etc/tdxs/config.yaml
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

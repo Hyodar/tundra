@@ -1,0 +1,5 @@
+# TDX guest device permissions
+KERNEL=="tdx_guest", MODE="0660", GROUP="tdx"
+KERNEL=="tdx-guest", MODE="0660", GROUP="tdx"
+KERNEL=="tpm0", MODE="0660", GROUP="tdx"
+KERNEL=="tpmrm0", MODE="0660", GROUP="tdx"

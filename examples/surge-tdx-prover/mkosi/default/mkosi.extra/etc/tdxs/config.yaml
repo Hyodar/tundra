@@ -1,0 +1,7 @@
+transport:
+  type: socket
+  config:
+    systemd: true
+
+issuer:
+  type: dcap

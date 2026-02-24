@@ -1,0 +1,15 @@
+[Unit]
+Description=Nethermind Surge
+After=runtime-init.service
+Requires=runtime-init.service
+
+[Service]
+User=nethermind-surge
+Group=eth
+Restart=on-failure
+LimitNOFILE=1048576
+EnvironmentFile=/etc/nethermind-surge/env
+ExecStart=/usr/bin/nethermind             --config /etc/nethermind-surge/config.json             --datadir /home/nethermind-surge/data             --JsonRpc.EngineHost 0.0.0.0             --JsonRpc.EnginePort 8551
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+/usr/bin/key-generation --strategy tpm --output /persistent/key
+
+/usr/bin/key-generation --strategy tpm --output /persistent/key
+
+/usr/bin/disk-encryption --device /dev/vda3 --mapper cryptroot --key /persistent/key --mount /persistent
+
+/usr/bin/disk-encryption --device /dev/vda3 --mapper cryptroot --key /persistent/key --mount /persistent
+
+/usr/bin/secret-delivery --config /etc/tdx/secrets.json --method http_post --port 8080
+
+/usr/bin/secret-delivery --config /etc/tdx/secrets.json --method http_post --port 8080
