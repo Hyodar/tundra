@@ -80,6 +80,8 @@ class Image:
     compress_output: str | None = None
     output_directory: str | None = None
     seed: str | None = None
+    mirror: str | None = None
+    tools_tree_mirror: str | None = None
     sandbox_trees: tuple[str, ...] = ()
     package_cache_directory: str | None = None
     init_script: str | None = None
@@ -533,7 +535,7 @@ class Image:
                         if not (h.phase == "finalize" and "IMAGE_VERSION" in h.command.argv[0])
                     ]
             return self
-        script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/etc/os-release\""""
+        script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release\""""
         self.hook("finalize", script)
         return self
 
@@ -902,6 +904,8 @@ class Image:
             "arch": self.arch,
             "reproducible": self.reproducible,
             "kernel": self.kernel,
+            "mirror": self.mirror,
+            "tools_tree_mirror": self.tools_tree_mirror,
             "with_network": self.with_network,
             "clean_package_metadata": self.clean_package_metadata,
             "manifest_format": self.manifest_format,

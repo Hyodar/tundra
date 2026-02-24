@@ -248,6 +248,8 @@ class EmitConfig:
     arch: Arch = "x86_64"
     reproducible: bool = True
     kernel: Kernel | None = None
+    mirror: str | None = None
+    tools_tree_mirror: str | None = None
     output_format: str = "uki"
     seed: str = DEFAULT_SEED
     compress_output: str | None = None
@@ -943,6 +945,8 @@ class DeterministicMkosiEmitter:
         mkosi_arch = ARCH_TO_MKOSI.get(config.arch)
         if mkosi_arch:
             lines.append(f"Architecture={mkosi_arch}")
+        if config.mirror:
+            lines.append(f"Mirror={config.mirror}")
         lines.append("")
 
         # [Output]
@@ -974,6 +978,8 @@ class DeterministicMkosiEmitter:
                     passthrough_keys.append(kvar)
         for key in passthrough_keys:
             build_lines.append(f"Environment={key}")
+        if config.tools_tree_mirror:
+            build_lines.append(f"ToolsTreeMirror={config.tools_tree_mirror}")
         build_lines.append(f"WithNetwork={'true' if config.with_network else 'false'}")
         if config.sandbox_trees:
             for tree in config.sandbox_trees:

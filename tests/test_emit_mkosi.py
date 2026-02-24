@@ -583,7 +583,7 @@ def test_compile_strip_image_version_finalize_hook(tmp_path: Path) -> None:
 
     # Verify script strips IMAGE_VERSION from os-release
     assert "IMAGE_VERSION" in content
-    assert "$BUILDROOT/etc/os-release" in content
+    assert "$BUILDROOT/usr/lib/os-release" in content
     assert "sed -i" in content
 
 

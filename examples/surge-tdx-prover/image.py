@@ -68,11 +68,7 @@ fs.file-max=1048576"""
 # ── TDX guest udev rule ──────────────────────────────────────────────
 
 TDX_GUEST_UDEV_RULE = """\
-# TDX guest device permissions
-KERNEL=="tdx_guest", MODE="0660", GROUP="tdx"
-KERNEL=="tdx-guest", MODE="0660", GROUP="tdx"
-KERNEL=="tpm0", MODE="0660", GROUP="tdx"
-KERNEL=="tpmrm0", MODE="0660", GROUP="tdx"
+KERNEL=="tdx_guest", SYMLINK+="tdx-guest"
 """
 
 # ── OpenNTPD configuration ───────────────────────────────────────────
@@ -178,6 +174,10 @@ def build_surge_tdx_prover() -> Image:
     # ── 1. Base layer ─────────────────────────────────────────────────
     img = build_nethermind_base()
 
+    # Reproducibility: pin Debian snapshot mirror
+    img.mirror = PINNED_MIRROR
+    img.tools_tree_mirror = PINNED_MIRROR
+
     # ── 2. Application-layer packages ─────────────────────────────────
     img.install(*RUNTIME_PACKAGES)
     img.build_install(*BUILD_PACKAGES)
@@ -193,7 +193,9 @@ def build_surge_tdx_prover() -> Image:
     ).apply(img)
     SecretDelivery(method="http_post").apply(img)
 
-    # ── 4. Service modules ────────────────────────────────────────────
+    # ── 4. Groups and service modules ─────────────────────────────────
+    # Create groups BEFORE modules that reference them (upstream pattern)
+    img.run("mkosi-chroot groupadd -r eth", phase="postinst")
 
     # Raiko: TDX prover service (Rust)
     Raiko(
@@ -214,6 +216,9 @@ def build_surge_tdx_prover() -> Image:
         version="1.32.3",
     ).apply(img)
 
+    # Add nethermind-surge to tdx group (upstream has it in both eth and tdx)
+    img.run("mkosi-chroot usermod -a -G tdx nethermind-surge", phase="postinst")
+
     # ── 5. Config files & systemd units ───────────────────────────────
 
     # Dropbear SSH daemon configuration
@@ -222,9 +227,9 @@ def build_surge_tdx_prover() -> Image:
     # Sysctl hardening
     img.file("/etc/sysctl.d/99-surge.conf", content=SYSCTL_CONF)
 
-    # TDX guest device permissions
+    # TDX guest udev symlink (upstream pattern)
     img.file(
-        "/etc/udev/rules.d/65-tdx-guest.rules",
+        "/etc/udev/rules.d/99-tdx-symlink.rules",
         content=TDX_GUEST_UDEV_RULE,
     )
 
@@ -239,19 +244,36 @@ def build_surge_tdx_prover() -> Image:
     img.file("/etc/raiko/env", content=RAIKO_ENV)
     img.file("/etc/taiko-client/env", content=TAIKO_CLIENT_ENV)
 
-    # Enable services in postinst
-    img.run("mkosi-chroot systemctl enable prometheus.service", phase="postinst")
-    img.run("mkosi-chroot systemctl enable prometheus-node-exporter.service", phase="postinst")
-    img.run("mkosi-chroot systemctl enable openntpd.service", phase="postinst")
-    img.run("mkosi-chroot systemctl enable dropbear.service", phase="postinst")
-
-    # Create eth group (shared by nethermind-surge and taiko-client)
+    # ── 6. Service enablement (matching upstream mkosi.postinst) ──────
+    SERVICES = (
+        "network-setup.service",
+        "openntpd.service",
+        "logrotate.service",
+        "runtime-init.service",
+        "dropbear.service",
+        "nethermind-surge.service",
+        "taiko-client.service",
+        "raiko.service",
+        "tdxs.service",
+        "tdxs.socket",
+    )
     img.run(
-        "mkosi-chroot bash -c 'getent group eth >/dev/null 2>&1 || groupadd -r eth'",
+        'mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"',
         phase="postinst",
     )
+    for svc in SERVICES:
+        img.run(f"mkosi-chroot systemctl enable {svc}", phase="postinst")
+        img.run(
+            f'ln -sf "/etc/systemd/system/{svc}" '
+            f'"$BUILDROOT/etc/systemd/system/minimal.target.wants/"',
+            phase="postinst",
+        )
 
-    # ── 6. Platform profiles ──────────────────────────────────────────
+    # SSH hardening: free port 22 for dropbear
+    img.run("mkosi-chroot systemctl disable ssh.service ssh.socket", phase="postinst")
+    img.run("mkosi-chroot systemctl mask ssh.service ssh.socket", phase="postinst")
+
+    # ── 7. Platform profiles ──────────────────────────────────────────
 
     with img.profile("azure"):
         AzurePlatform().apply(img)

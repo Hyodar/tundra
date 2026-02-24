@@ -13,15 +13,34 @@ rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"
 mkosi-chroot groupadd --system tdx
 mkosi-chroot useradd --system --home-dir /home/tdxs --shell /usr/sbin/nologin --gid tdx tdxs
 mkosi-chroot systemctl enable tdxs.socket
+mkosi-chroot groupadd -r eth
 mkosi-chroot useradd --system --home-dir /home/raiko --shell /usr/sbin/nologin --gid tdx raiko
 mkosi-chroot useradd --system --home-dir /home/taiko-client --shell /usr/sbin/nologin --groups eth taiko-client
 mkosi-chroot useradd --system --home-dir /home/nethermind-surge --shell /usr/sbin/nologin --groups eth nethermind-surge
-mkosi-chroot systemctl enable prometheus.service
-mkosi-chroot systemctl enable prometheus-node-exporter.service
+mkosi-chroot usermod -a -G tdx nethermind-surge
+mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
+mkosi-chroot systemctl enable network-setup.service
+ln -sf "/etc/systemd/system/network-setup.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 mkosi-chroot systemctl enable openntpd.service
-mkosi-chroot systemctl enable dropbear.service
-mkosi-chroot bash -c 'getent group eth >/dev/null 2>&1 || groupadd -r eth'
+ln -sf "/etc/systemd/system/openntpd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl enable logrotate.service
+ln -sf "/etc/systemd/system/logrotate.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 mkosi-chroot systemctl enable runtime-init.service
+ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl enable dropbear.service
+ln -sf "/etc/systemd/system/dropbear.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl enable nethermind-surge.service
+ln -sf "/etc/systemd/system/nethermind-surge.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl enable taiko-client.service
+ln -sf "/etc/systemd/system/taiko-client.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl enable raiko.service
+ln -sf "/etc/systemd/system/raiko.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl enable tdxs.service
+ln -sf "/etc/systemd/system/tdxs.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl enable tdxs.socket
+ln -sf "/etc/systemd/system/tdxs.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkosi-chroot systemctl disable ssh.service ssh.socket
+mkosi-chroot systemctl mask ssh.service ssh.socket
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")
