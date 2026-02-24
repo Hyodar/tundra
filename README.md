@@ -11,8 +11,7 @@
 
 ---
 
-Python SDK for declaratively building, measuring, and deploying TDX-enabled VM images.
-Library-first (no CLI required), designed for reproducible recipes, profile-aware orchestration, and policy-driven CI.
+Python SDK for declaratively building, measuring, and deploying TDX-enabled VM images. Define your image as code, compile it to a reproducible [mkosi](https://github.com/systemd/mkosi) project tree, and bake it into a bootable disk for QEMU, Azure, or GCP.
 
 ## Quickstart
 
@@ -27,68 +26,31 @@ img = Image(base="debian/bookworm", arch="x86_64", backend="local_linux")
 img.install("systemd", "curl", "jq")
 img.file("/etc/motd", content="TDX node\n")
 img.user("app", system=True, shell="/bin/false")
-img.service("app", exec="/usr/bin/app", enabled=True)
+img.service("app", exec="/usr/bin/app")
 img.debloat(enabled=True)
 img.output_targets("qemu")
 
-img.compile("build/mkosi")           # compile recipe into mkosi project tree
+img.compile("build/mkosi")           # emit mkosi project tree
 img.lock()                            # write build/tdx.lock
 result = img.bake(frozen=True)        # build with lockfile enforcement
 ```
 
-## Features
+`compile()` produces a standard mkosi directory you can inspect, diff, or build manually with `mkosi build`. `bake()` runs the full pipeline.
 
-| | |
-|---|---|
-| **Declarative recipes** | Packages, build packages, files, templates, skeletons, users, services, secrets, partitions |
-| **Deterministic emission** | Generates buildable mkosi v26 project trees matching [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) |
-| **Profile system** | Per-profile packages, output targets, and overrides with context managers |
-| **Platform profiles** | Class-based Azure and GCP platform profiles via `AzurePlatform().apply(img)`, `GcpPlatform().apply(img)` |
-| **Reproducibility hooks** | EFI stub pinning (`efi_stub`), backports source generation (`backports`), image version stripping (`strip_image_version`) |
-| **Systemd debloat** | `mkosi-chroot dpkg-query` based binary/unit cleanup with configurable whitelists |
-| **Cloud targets** | Auto-generated GCP (ESP+GPT tar.gz) and Azure (VHD) postoutput scripts |
-| **Custom init** | Built-in TDX init script (mount + pivot_root + `minimal.target`) |
-| **Lockfile + policy** | Frozen bakes, mutable-ref enforcement, integrity checks |
-| **Measurement** | RTMR / Azure / GCP attestation measurement interfaces |
-| **Modules** | Composable modules via `module.apply(img)` — `Init`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools` |
-| **Phase hooks** | `prepare`, `postinst`, `finalize`, `postoutput`, `on_boot`, `sync` convenience methods |
-| **Backends** | `local_linux` (direct mkosi), `lima` (macOS VM), `inprocess` (testing) |
+## Why
 
-## mkosi Alignment
+Hand-maintained mkosi trees for TDX images are hard to review, easy to drift, and painful to keep reproducible across cloud targets. This SDK lets you express the same image as a short Python script and get:
 
-The emission pipeline generates configs that match the nethermind-tdx reference:
+- **Deterministic output** — the same recipe always produces the same mkosi tree, byte-for-byte
+- **Multi-cloud from one definition** — Azure VHD, GCP tar.gz, and QEMU qcow2 from a single `Image`
+- **Composable modules** — drop in `KeyGeneration`, `DiskEncryption`, `SecretDelivery` and they wire themselves into the boot sequence
+- **Lockfile + policy** — frozen bakes, mutable-ref enforcement, integrity checks for CI
 
-- `Architecture=x86-64` / `arm64` mapped from Python arch types
-- `mkosi-chroot useradd` and `mkosi-chroot systemctl enable` (not raw shell)
-- `mkosi-chroot dpkg-query -L systemd` for binary cleanup and unit masking
-- `default.target` symlinked to `minimal.target`
-- `ManifestFormat=json`, `CleanPackageMetadata=true`, `WithNetwork=true|false`
-- Git-based `mkosi.version` script (`YYYY-MM-DD.hash[-dirty]`)
-- Native profiles mode: root `mkosi.conf` + `mkosi.profiles/<name>/`
-- EFI stub pinning from Debian snapshot archives for reproducible boot
-- Dynamic backports source generation via `mkosi.prepare` hooks
-- Environment variable passthrough (`Environment=`, `EnvironmentFiles=`)
+The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) repository from ~250 lines of Python. Integration tests verify the SDK output matches the upstream tree.
 
-```python
-from tdx import Image, Kernel
+## Profiles
 
-img = Image(
-    base="debian/trixie",
-    reproducible=True,
-    init_script=Image.DEFAULT_TDX_INIT,
-    environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
-)
-img.kernel = Kernel.tdx_kernel("6.13.12", cmdline="console=tty0", config_file="kernel/config")
-img.efi_stub(snapshot_url="https://snapshot.debian.org/archive/debian/...", package_version="255.4-1")
-img.backports()
-img.install("systemd", "kmod")
-img.build_install("build-essential", "git")
-img.debloat(enabled=True)
-img.output_targets("qemu", "gcp", "azure")
-img.compile("build/mkosi")
-```
-
-## Multi-Profile Builds
+Profiles let you customize packages, services, and output targets per deployment environment. Anything inside a `with img.profile(...)` block only applies to that profile.
 
 ```python
 from tdx import Image
@@ -111,12 +73,21 @@ with img.all_profiles():
     results = img.bake()
 ```
 
-## Composable Init Modules
+## Modules
 
-Image owns an `Init` instance that collects boot-time scripts and generates
-`/usr/bin/runtime-init` + a systemd service. Modules register their steps via
-`image.add_init_script()` with priority ordering. At `compile()` time, Init
-auto-applies and injects `After/Requires=runtime-init.service` into all services.
+Modules are composable units that add build steps, config files, systemd services, and init scripts to an image. Call `module.apply(img)` and the module handles the rest.
+
+**Built-in modules** (`tdx.modules`):
+
+| Module | What it does |
+|---|---|
+| `KeyGeneration` | TPM-based key derivation at boot |
+| `DiskEncryption` | LUKS2 disk encryption with key from KeyGeneration |
+| `SecretDelivery` | Runtime secret injection (HTTP POST, file, env) |
+| `Tdxs` | TDX quote issuer/validator service (socket-activated) |
+| `Devtools` | Serial console, root password, SSH for dev profiles |
+
+**Init ordering** — modules register boot-time scripts with priority. At `compile()`, the SDK generates `/usr/bin/runtime-init` and a systemd service that runs them in order, then injects `After=runtime-init.service` into all other services automatically.
 
 ```python
 from tdx import Image
@@ -124,14 +95,14 @@ from tdx.modules import DiskEncryption, KeyGeneration, SecretDelivery
 
 img = Image(base="debian/trixie", reproducible=True)
 
-# Each module builds a Go binary and registers its invocation on the image
 KeyGeneration(strategy="tpm").apply(img)          # priority 10
 DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
 SecretDelivery(method="http_post").apply(img)      # priority 30
 
-# No manual Init().apply() needed — Image owns Init and applies it at compile()
 img.compile("build/mkosi")
 ```
+
+See [`docs/module-authoring.md`](docs/module-authoring.md) for writing your own modules.
 
 ## Secrets
 
@@ -149,8 +120,20 @@ delivery.secret(
         SecretTarget.env("API_TOKEN", scope="global"),
     ),
 )
-delivery.apply(img)  # builds Go binary, writes /etc/tdx/secrets.json
+delivery.apply(img)
 ```
+
+## Reproducibility
+
+The SDK has first-class support for reproducible builds:
+
+- **Debian snapshot mirrors** — pin `img.mirror` to a snapshot URL so package resolution is deterministic
+- **EFI stub pinning** — `img.efi_stub()` fetches a specific systemd-boot-efi version from Debian snapshots
+- **Lockfiles** — `img.lock()` captures the recipe digest; `bake(frozen=True)` refuses to build if the recipe changed
+- **Systemd debloat** — strips unused binaries and units via `dpkg-query`, masks the rest, replaces `default.target` with a minimal target
+- **IMAGE_VERSION stripping** — removes the non-deterministic version string from os-release
+
+See [`docs/reproducibility.md`](docs/reproducibility.md) for details.
 
 ## Policy
 
@@ -167,66 +150,44 @@ img.set_policy(Policy(
 
 See [`docs/policy.md`](docs/policy.md) for the full reference.
 
-## Dependencies
-
-| | |
-|---|---|
-| **Runtime** | Python >= 3.12, `cbor2` |
-| **Dev** | `ruff`, `mypy`, `pytest` (via `uv sync`) |
-| **mkosi** | >= 25 required, v26 recommended |
-| **Lima** | `limactl` for macOS builds |
-
-Install mkosi v26:
-
-```bash
-pip install --break-system-packages 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
-```
-
-## Architecture
-
-```
-Image recipe API          src/tdx/image.py
-  |
-  v
-Typed models              src/tdx/models.py
-  |
-  v
-Compiler / emission       src/tdx/compiler/
-  |
-  +-> mkosi.conf, phase scripts, skeleton, extra trees
-  |
-  v
-Execution backends        src/tdx/backends/
-  |                         local_linux  |  lima  |  inprocess
-  v
-Lock / cache / policy     src/tdx/lockfile.py, cache.py, policy.py
-  |
-  v
-Measure + deploy          src/tdx/measure.py, deploy.py
-  |
-  v
-Core modules              src/tdx/modules/ (Init, KeyGeneration, DiskEncryption, SecretDelivery, Tdxs, Devtools)
-  |
-  v
-Example modules           examples/modules/ (Nethermind, Raiko, TaikoClient)
-  |
-  v
-Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
-```
-
 ## Examples
 
 | Example | Description |
 |---|---|
-| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer for [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) — TDX kernel build, EFI stub pinning, backports, full debloat, skeleton files, Tdxs module |
-| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | Complete nethermind-tdx image — composes the base layer with Init + composable modules (KeyGeneration, DiskEncryption, SecretDelivery), Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles. Run `python examples/surge-tdx-prover compile` or `bake`. |
-| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, composable init modules (KeyGeneration, DiskEncryption, SecretDelivery) + Tdxs, runtime secret delivery, multi-profile cloud deploys |
+| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | Full [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image with all modules and Azure/GCP/devtools profiles |
+| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer: TDX kernel, EFI stub pinning, backports, debloat, Tdxs |
+| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, secrets, init modules, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
-| [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |
-| [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas with pattern validation and delivery |
-| [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU-only recipe |
+| [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU-only image |
 
-The `nethermind_tdx` + `surge_tdx_prover` pair reproduces the full upstream [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) repo. Integration tests verify SDK output matches the upstream reference across all directories (`integration_tests/`).
+Run the surge-tdx-prover example:
+
+```bash
+python -m examples.surge-tdx-prover compile    # emit mkosi tree to examples/surge-tdx-prover/mkosi/
+python -m examples.surge-tdx-prover bake        # compile + lock + build
+```
+
+## Requirements
+
+| | |
+|---|---|
+| **Python** | >= 3.12 |
+| **mkosi** | >= 25 (v26 recommended) |
+| **Lima** | `limactl` for macOS builds |
+
+```bash
+# Install mkosi v26
+pip install --break-system-packages 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
+```
+
+## Development
+
+```bash
+uv sync
+uv run ruff check .
+uv run mypy .
+uv run pytest
+```
 
 ## Troubleshooting
 
@@ -237,12 +198,3 @@ The `nethermind_tdx` + `surge_tdx_prover` pair reproduces the full upstream [net
 | `E_DEPLOYMENT` | Ensure `output_targets(...)` includes target, rerun `bake()` |
 | `E_MEASUREMENT` | Run `bake()` before `measure(...)` |
 | `E_BACKEND_EXECUTION` | Check mkosi version (`>= 25`), platform, and tool availability |
-
-## Development
-
-```bash
-uv sync
-uv run ruff check .
-uv run mypy .
-uv run pytest
-```
