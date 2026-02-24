@@ -24,8 +24,7 @@ def test_tdxs_install_adds_build_hook() -> None:
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
     # The build hook is a shell script
-    build_script = build_commands[0].argv[-1]
-    assert build_commands[0].shell is True
+    build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
     assert "NethermindEth/tdxs" in build_script
     assert "mkosi-chroot bash -c" in build_script
@@ -47,7 +46,7 @@ def test_tdxs_custom_source_repo_and_branch() -> None:
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
-    build_script = build_commands[0].argv[-1]
+    build_script = build_commands[0].argv[0]
     assert "custom/tdxs-fork" in build_script
     assert "-b v2.0" in build_script
 
@@ -95,20 +94,10 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     # Postinst hooks: groupadd, useradd, systemctl enable
     postinst_commands = profile.phases.get("postinst", [])
     assert len(postinst_commands) == 3
-    assert postinst_commands[0].argv == (
-        "mkosi-chroot",
-        "groupadd",
-        "--system",
-        "tdx",
-    )
-    assert postinst_commands[1].argv[:3] == ("mkosi-chroot", "useradd", "--system")
-    assert "tdxs" in postinst_commands[1].argv
-    assert postinst_commands[2].argv == (
-        "mkosi-chroot",
-        "systemctl",
-        "enable",
-        "tdxs.socket",
-    )
+    assert postinst_commands[0].argv[0] == "mkosi-chroot groupadd --system tdx"
+    assert "mkosi-chroot useradd --system" in postinst_commands[1].argv[0]
+    assert "tdxs" in postinst_commands[1].argv[0]
+    assert postinst_commands[2].argv[0] == "mkosi-chroot systemctl enable tdxs.socket"
 
 
 def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:

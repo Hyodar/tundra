@@ -110,15 +110,12 @@ class Devtools:
 
         # Enable serial-console service
         image.run(
-            "mkosi-chroot",
-            "systemctl",
-            "enable",
-            "serial-console.service",
+            "mkosi-chroot systemctl enable serial-console.service",
             phase="postinst",
         )
 
         # Root password + auth configuration
-        image.run(DEVTOOLS_POSTINST_SCRIPT, phase="postinst", shell=True)
+        image.run(DEVTOOLS_POSTINST_SCRIPT, phase="postinst")
 
     def apply(self, image: Image) -> None:
         """Convenience: call setup() then install()."""

@@ -102,7 +102,7 @@ class Raiko:
             f" --package {self.workspace_package}"
             "'"
         )
-        image.hook("build", cache.wrap(build_cmd), shell=True)
+        image.hook("build", cache.wrap(build_cmd))
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         """Build the After= list, prepending the init service if available."""
@@ -127,16 +127,8 @@ class Raiko:
             image.file("/etc/raiko/chain-spec.json", src=self.chain_spec_path)
 
         image.run(
-            "mkosi-chroot",
-            "useradd",
-            "--system",
-            "--home-dir",
-            f"/home/{self.user}",
-            "--shell",
-            "/usr/sbin/nologin",
-            "--gid",
-            self.group,
-            self.user,
+            f"mkosi-chroot useradd --system --home-dir /home/{self.user} "
+            f"--shell /usr/sbin/nologin --gid {self.group} {self.user}",
             phase="postinst",
         )
 

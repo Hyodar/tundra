@@ -17,7 +17,7 @@ def test_key_generation_adds_build_hook() -> None:
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
-    build_script = build_commands[0].argv[-1]
+    build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
     assert "NethermindEth/nethermind-tdx" in build_script
     assert "mkosi-chroot bash -c" in build_script
@@ -53,7 +53,7 @@ def test_key_generation_custom_repo_and_branch() -> None:
     ).apply(image)
 
     profile = image.state.profiles["default"]
-    build_script = profile.phases["build"][0].argv[-1]
+    build_script = profile.phases["build"][0].argv[0]
     assert "custom/fork" in build_script
     assert "-b v2.0" in build_script
 
@@ -68,7 +68,7 @@ def test_disk_encryption_adds_build_hook() -> None:
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
-    build_script = build_commands[0].argv[-1]
+    build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
     assert "mkosi-chroot bash -c" in build_script
     assert "$DESTDIR/usr/bin/disk-encryption" in build_script
@@ -110,7 +110,7 @@ def test_disk_encryption_custom_repo() -> None:
     ).apply(image)
 
     profile = image.state.profiles["default"]
-    build_script = profile.phases["build"][0].argv[-1]
+    build_script = profile.phases["build"][0].argv[0]
     assert "custom/disk" in build_script
     assert "-b v3" in build_script
 
@@ -125,7 +125,7 @@ def test_secret_delivery_adds_build_hook() -> None:
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
-    build_script = build_commands[0].argv[-1]
+    build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
     assert "mkosi-chroot bash -c" in build_script
     assert "$DESTDIR/usr/bin/secret-delivery" in build_script

@@ -428,11 +428,11 @@ class Image:
 
     # --- Lifecycle convenience methods ---
 
-    def sync(self, *argv: str, env: Mapping[str, str] | None = None, shell: bool = False) -> Self:
+    def sync(self, command: str, *, env: Mapping[str, str] | None = None) -> Self:
         """Register a sync-phase command (runs before build)."""
-        if not argv:
+        if not command:
             raise ValidationError("sync() requires a command.")
-        return self.hook("sync", *argv, env=env, shell=shell)
+        return self.hook("sync", command, env=env)
 
     def skeleton(
         self,
@@ -463,58 +463,58 @@ class Image:
 
     def prepare(
         self,
-        *argv: str,
+        command: str,
+        *,
         env: Mapping[str, str] | None = None,
-        shell: bool = False,
     ) -> Self:
         """Register a prepare-phase command (runs after base packages, before build)."""
-        if not argv:
+        if not command:
             raise ValidationError("prepare() requires a command.")
-        return self.hook("prepare", *argv, env=env, shell=shell)
+        return self.hook("prepare", command, env=env)
 
     def finalize(
         self,
-        *argv: str,
+        command: str,
+        *,
         env: Mapping[str, str] | None = None,
-        shell: bool = False,
     ) -> Self:
         """Register a finalize-phase command (runs on HOST with $BUILDROOT)."""
-        if not argv:
+        if not command:
             raise ValidationError("finalize() requires a command.")
-        return self.hook("finalize", *argv, env=env, shell=shell)
+        return self.hook("finalize", command, env=env)
 
     def postoutput(
         self,
-        *argv: str,
+        command: str,
+        *,
         env: Mapping[str, str] | None = None,
-        shell: bool = False,
     ) -> Self:
         """Register a postoutput-phase command (runs after disk image is written)."""
-        if not argv:
+        if not command:
             raise ValidationError("postoutput() requires a command.")
-        return self.hook("postoutput", *argv, env=env, shell=shell)
+        return self.hook("postoutput", command, env=env)
 
     def clean(
         self,
-        *argv: str,
+        command: str,
+        *,
         env: Mapping[str, str] | None = None,
-        shell: bool = False,
     ) -> Self:
         """Register a clean-phase command (runs on `mkosi clean`)."""
-        if not argv:
+        if not command:
             raise ValidationError("clean() requires a command.")
-        return self.hook("clean", *argv, env=env, shell=shell)
+        return self.hook("clean", command, env=env)
 
     def on_boot(
         self,
-        *argv: str,
+        command: str,
+        *,
         env: Mapping[str, str] | None = None,
-        shell: bool = False,
     ) -> Self:
         """Register a boot-time command (runs when VM boots, systemd oneshot)."""
-        if not argv:
+        if not command:
             raise ValidationError("on_boot() requires a command.")
-        return self.hook("boot", *argv, env=env, shell=shell)
+        return self.hook("boot", command, env=env)
 
     def strip_image_version(self, *, enabled: bool = True) -> Self:
         """Strip IMAGE_VERSION from /etc/os-release for reproducible attestation."""
@@ -525,20 +525,16 @@ class Image:
                     profile.phases["finalize"] = [
                         cmd
                         for cmd in profile.phases["finalize"]
-                        if not (cmd.shell and "IMAGE_VERSION" in cmd.argv[0])
+                        if "IMAGE_VERSION" not in cmd.argv[0]
                     ]
                     profile.hooks = [
                         h
                         for h in profile.hooks
-                        if not (
-                            h.phase == "finalize"
-                            and h.command.shell
-                            and "IMAGE_VERSION" in h.command.argv[0]
-                        )
+                        if not (h.phase == "finalize" and "IMAGE_VERSION" in h.command.argv[0])
                     ]
             return self
         script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/etc/os-release\""""
-        self.hook("finalize", script, shell=True)
+        self.hook("finalize", script)
         return self
 
     def efi_stub(self, *, snapshot_url: str, package_version: str) -> Self:
@@ -560,7 +556,7 @@ class Image:
             '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
             'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
         )
-        self.run(script, phase="postinst", shell=True)
+        self.run(script, phase="postinst")
         return self
 
     def backports(self, *, mirror: str | None = None, release: str | None = None) -> Self:
@@ -599,7 +595,7 @@ class Image:
         )
 
         script = "\n".join(lines)
-        self.hook("sync", script, shell=True)
+        self.hook("sync", script)
 
         # Auto-add sandbox_trees entry for the generated file
         backports_entry = (
@@ -634,42 +630,40 @@ class Image:
 
     def run(
         self,
-        *argv: str,
+        command: str,
+        *,
         phase: Phase = "postinst",
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
-        shell: bool = False,
     ) -> Self:
         return self.hook(
             phase,
-            *argv,
+            command,
             env=env,
             cwd=cwd,
-            shell=shell,
         )
 
     def hook(
         self,
         phase: Phase,
-        *argv: str,
+        command: str,
+        *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
-        shell: bool = False,
         after_phase: Phase | None = None,
     ) -> Self:
-        if not argv:
-            raise ValidationError("hook() requires a command argv.")
+        if not command:
+            raise ValidationError("hook() requires a command.")
         self._validate_phase_order(phase=phase, after_phase=after_phase)
         env_data = dict(env or {})
         for profile in self._iter_active_profiles():
-            command = CommandSpec(
-                argv=tuple(argv),
+            spec = CommandSpec(
+                argv=(command,),
                 env=dict(env_data),
                 cwd=cwd,
-                shell=shell,
             )
-            profile.phases.setdefault(phase, []).append(command)
-            profile.hooks.append(HookSpec(phase=phase, command=command, after_phase=after_phase))
+            profile.phases.setdefault(phase, []).append(spec)
+            profile.hooks.append(HookSpec(phase=phase, command=spec, after_phase=after_phase))
         return self
 
     def lock(self, path: str | Path | None = None) -> Path:
@@ -1026,11 +1020,11 @@ class Image:
                 )
             profile.services = patched
         # Enable runtime-init.service in postinst
-        enable_argv = ("mkosi-chroot", "systemctl", "enable", init_svc)
+        enable_cmd = f"mkosi-chroot systemctl enable {init_svc}"
         for profile in self._iter_active_profiles():
-            already = any(cmd.argv == enable_argv for cmd in profile.phases.get("postinst", []))
+            already = any(cmd.argv[0] == enable_cmd for cmd in profile.phases.get("postinst", []))
             if not already:
-                self.run(*enable_argv, phase="postinst")
+                self.run(enable_cmd, phase="postinst")
                 break  # run() appends to all active profiles
 
     def _iter_active_profiles(self) -> list[ProfileState]:
@@ -1049,7 +1043,6 @@ class Image:
                         "argv": list(command.argv),
                         "env": dict(command.env),
                         "cwd": command.cwd,
-                        "shell": command.shell,
                     }
                     for command in commands
                 ]

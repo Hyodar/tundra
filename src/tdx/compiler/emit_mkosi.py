@@ -345,9 +345,9 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
     return "\n".join(lines)
 
 
-def _useradd_argv(user: UserSpec) -> tuple[str, ...]:
-    """Generate a useradd argv tuple from a UserSpec."""
-    parts: list[str] = ["mkosi-chroot", "useradd"]
+def _useradd_command(user: UserSpec) -> str:
+    """Generate a useradd shell command from a UserSpec."""
+    parts: list[str] = ["mkosi-chroot useradd"]
     if user.system:
         parts.append("--system")
     if user.home:
@@ -361,7 +361,7 @@ def _useradd_argv(user: UserSpec) -> tuple[str, ...]:
     if user.groups:
         parts.extend(["--groups", ",".join(user.groups)])
     parts.append(user.name)
-    return tuple(parts)
+    return " ".join(parts)
 
 
 def _render_kernel_build_script(kernel: Kernel) -> str:
@@ -801,15 +801,13 @@ class DeterministicMkosiEmitter:
 
         # User creation via mkosi-chroot
         for user in profile.users:
-            commands.append(CommandSpec(argv=_useradd_argv(user)))
+            commands.append(CommandSpec(argv=(_useradd_command(user),)))
 
         # Service enablement via mkosi-chroot systemctl enable
         for svc in profile.services:
             if svc.enabled:
                 unit_name = svc.name if "." in svc.name else f"{svc.name}.service"
-                commands.append(
-                    CommandSpec(argv=("mkosi-chroot", "systemctl", "enable", unit_name))
-                )
+                commands.append(CommandSpec(argv=(f"mkosi-chroot systemctl enable {unit_name}",)))
 
         return commands
 
@@ -1048,11 +1046,7 @@ class DeterministicMkosiEmitter:
 
     def _render_command_line(self, command: CommandSpec) -> str:
         """Render a single CommandSpec to a shell line."""
-        if command.shell:
-            # argv is a single shell string — emit it directly into the script.
-            rendered = command.argv[0]
-        else:
-            rendered = " ".join(shlex.quote(part) for part in command.argv)
+        rendered = command.argv[0]
         env_prefix = " ".join(
             f"{key}={shlex.quote(value)}" for key, value in sorted(command.env.items())
         )

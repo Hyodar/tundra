@@ -12,8 +12,8 @@ from tdx.models import Kernel, Phase
 def test_compile_golden_output(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.install("jq", "curl")
-    image.run("echo", "prep", phase="prepare", env={"B": "2", "A": "1"}, cwd="/work")
-    image.run("echo", "build", phase="build")
+    image.run("echo prep", phase="prepare", env={"B": "2", "A": "1"}, cwd="/work")
+    image.run("echo build", phase="build")
 
     output_dir = image.compile(tmp_path / "mkosi")
 
@@ -61,7 +61,7 @@ def test_compile_golden_output(tmp_path: Path) -> None:
 def test_compile_is_deterministic(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.install("curl")
-    image.run("echo", "hello", phase="prepare")
+    image.run("echo hello", phase="prepare")
 
     output_a = image.compile(tmp_path / "mkosi-a")
     output_b = image.compile(tmp_path / "mkosi-b")
@@ -492,7 +492,7 @@ def test_compile_kernel_build_script_with_user_hooks(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm", reproducible=False)
     image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
     image.install("curl")
-    image.run("echo", "custom-build-step", phase="build")
+    image.run("echo custom-build-step", phase="build")
 
     output_dir = image.compile(tmp_path / "mkosi")
     build_script = output_dir / "default" / "scripts" / "04-build.sh"
@@ -564,7 +564,6 @@ def test_compile_efi_stub_registered_in_postinst_phase() -> None:
     assert len(commands) >= 1
     # The hook should contain the EFI stub script as a shell command
     efi_command = commands[-1]
-    assert efi_command.shell is True
     script = efi_command.argv[0]
     assert "snapshot.example.com" in script
     assert "255.4-1" in script
@@ -598,7 +597,6 @@ def test_compile_strip_image_version_registered_in_finalize_phase() -> None:
     commands = profile.phases["finalize"]
     assert len(commands) >= 1
     strip_command = commands[-1]
-    assert strip_command.shell is True
     assert "IMAGE_VERSION" in strip_command.argv[0]
 
 
@@ -608,7 +606,7 @@ def test_compile_strip_image_version_auto_called_when_reproducible() -> None:
 
     profile = image.state.profiles["default"]
     assert "finalize" in profile.phases
-    assert any(cmd.shell and "IMAGE_VERSION" in cmd.argv[0] for cmd in profile.phases["finalize"])
+    assert any("IMAGE_VERSION" in cmd.argv[0] for cmd in profile.phases["finalize"])
 
 
 def test_compile_strip_image_version_not_called_when_not_reproducible() -> None:
@@ -617,7 +615,7 @@ def test_compile_strip_image_version_not_called_when_not_reproducible() -> None:
 
     profile = image.state.profiles["default"]
     finalize_cmds = profile.phases.get("finalize", [])
-    assert not any(cmd.shell and "IMAGE_VERSION" in cmd.argv[0] for cmd in finalize_cmds)
+    assert not any("IMAGE_VERSION" in cmd.argv[0] for cmd in finalize_cmds)
 
 
 def test_compile_strip_image_version_can_be_disabled() -> None:
@@ -628,10 +626,7 @@ def test_compile_strip_image_version_can_be_disabled() -> None:
 
     profile = image.state.profiles["default"]
     finalize_cmds = profile.phases.get("finalize", [])
-    assert not any(
-        cmd.argv[0] == "bash" and len(cmd.argv) >= 3 and "IMAGE_VERSION" in cmd.argv[2]
-        for cmd in finalize_cmds
-    )
+    assert not any("IMAGE_VERSION" in cmd.argv[0] for cmd in finalize_cmds)
 
 
 def test_compile_backports_sync_hook(tmp_path: Path) -> None:
@@ -663,7 +658,6 @@ def test_compile_backports_registered_in_sync_phase() -> None:
     assert len(commands) >= 1
 
     sync_command = commands[0]
-    assert sync_command.shell is True
     script = sync_command.argv[0]
     assert "example.com/debian" in script
     assert "debian-backports.sources" in script

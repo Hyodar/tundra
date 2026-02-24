@@ -23,7 +23,7 @@ def test_taiko_client_install_adds_build_hook_with_cgo_flags() -> None:
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
-    build_script = build_commands[0].argv[-1]
+    build_script = build_commands[0].argv[0]
     # Verify source cloning (host-side)
     assert "git clone" in build_script
     assert "NethermindEth/surge-taiko-mono" in build_script
@@ -54,7 +54,7 @@ def test_taiko_client_custom_source_and_build_path() -> None:
     module.install(image)
 
     profile = image.state.profiles["default"]
-    build_script = profile.phases["build"][0].argv[-1]
+    build_script = profile.phases["build"][0].argv[0]
     assert "custom/taiko-fork" in build_script
     assert "-b main" in build_script
     assert "cmd/client" in build_script
@@ -89,11 +89,11 @@ def test_taiko_client_creates_system_user_in_postinst() -> None:
     profile = image.state.profiles["default"]
     postinst_commands = profile.phases.get("postinst", [])
     assert len(postinst_commands) == 1
-    argv = postinst_commands[0].argv
-    assert argv[:3] == ("mkosi-chroot", "useradd", "--system")
-    assert "--groups" in argv
-    assert "eth" in argv
-    assert "taiko-client" in argv
+    cmd = postinst_commands[0].argv[0]
+    assert "mkosi-chroot useradd --system" in cmd
+    assert "--groups" in cmd
+    assert "eth" in cmd
+    assert "taiko-client" in cmd
 
 
 def test_taiko_client_apply_combines_setup_and_install() -> None:

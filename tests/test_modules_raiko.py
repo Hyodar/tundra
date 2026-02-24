@@ -23,7 +23,7 @@ def test_raiko_install_adds_build_hook_with_correct_flags() -> None:
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
-    build_script = build_commands[0].argv[-1]
+    build_script = build_commands[0].argv[0]
     # Verify source cloning (host-side)
     assert "git clone" in build_script
     assert "NethermindEth/raiko.git" in build_script
@@ -60,7 +60,7 @@ def test_raiko_custom_source_repo_and_branch() -> None:
     module.install(image)
 
     profile = image.state.profiles["default"]
-    build_script = profile.phases["build"][0].argv[-1]
+    build_script = profile.phases["build"][0].argv[0]
     assert "custom/raiko-fork.git" in build_script
     assert "-b main" in build_script
 
@@ -93,11 +93,11 @@ def test_raiko_creates_system_user_in_postinst() -> None:
     profile = image.state.profiles["default"]
     postinst_commands = profile.phases.get("postinst", [])
     assert len(postinst_commands) == 1
-    argv = postinst_commands[0].argv
-    assert argv[:3] == ("mkosi-chroot", "useradd", "--system")
-    assert "--gid" in argv
-    assert "tdx" in argv
-    assert "raiko" in argv
+    cmd = postinst_commands[0].argv[0]
+    assert "mkosi-chroot useradd --system" in cmd
+    assert "--gid" in cmd
+    assert "tdx" in cmd
+    assert "raiko" in cmd
 
 
 def test_raiko_apply_combines_setup_and_install() -> None:

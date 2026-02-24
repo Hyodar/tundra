@@ -240,33 +240,30 @@ class TestDebloatConfig:
 class TestLifecycleMethods:
     def test_sync(self) -> None:
         img = Image()
-        img.sync("git", "submodule", "update", "--init")
+        img.sync("git submodule update --init")
         assert "sync" in img.state.profiles["default"].phases
         assert img.state.profiles["default"].phases["sync"][0].argv == (
-            "git",
-            "submodule",
-            "update",
-            "--init",
+            "git submodule update --init",
         )
 
     def test_prepare(self) -> None:
         img = Image()
-        img.prepare("pip", "install", "pyyaml")
+        img.prepare("pip install pyyaml")
         assert "prepare" in img.state.profiles["default"].phases
 
     def test_finalize(self) -> None:
         img = Image()
-        img.finalize("du", "-sh", "$BUILDROOT")
+        img.finalize("du -sh $BUILDROOT")
         assert "finalize" in img.state.profiles["default"].phases
 
     def test_postoutput(self) -> None:
         img = Image()
-        img.postoutput("sha256sum", "$OUTPUTDIR/latest.efi")
+        img.postoutput("sha256sum $OUTPUTDIR/latest.efi")
         assert "postoutput" in img.state.profiles["default"].phases
 
     def test_clean(self) -> None:
         img = Image()
-        img.clean("rm", "-rf", "./tmp-cache")
+        img.clean("rm -rf ./tmp-cache")
         assert "clean" in img.state.profiles["default"].phases
 
     def test_on_boot(self) -> None:
@@ -286,13 +283,13 @@ class TestLifecycleMethods:
 
     def test_sync_requires_command(self) -> None:
         img = Image()
-        with pytest.raises(ValidationError):
-            img.sync()
+        with pytest.raises(TypeError):
+            img.sync()  # type: ignore[call-arg]
 
     def test_prepare_requires_command(self) -> None:
         img = Image()
-        with pytest.raises(ValidationError):
-            img.prepare()
+        with pytest.raises(TypeError):
+            img.prepare()  # type: ignore[call-arg]
 
 
 # --- Kernel model ---

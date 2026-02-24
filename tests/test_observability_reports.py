@@ -8,7 +8,7 @@ from tdx import Image
 def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build", backend="inprocess")
     image.output_targets("qemu")
-    image.run("echo", "hello", phase="prepare")
+    image.run("echo hello", phase="prepare")
     result = image.bake()
 
     report_path = result.profiles["default"].report_path

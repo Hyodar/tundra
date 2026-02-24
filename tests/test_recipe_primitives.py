@@ -18,7 +18,7 @@ def test_recipe_primitives_are_recorded() -> None:
     image.user("app", uid=1000, gid=1000, shell="/bin/bash")
     image.service("app.service", enabled=True, wants=("network-online.target",))
     image.partition("data", size="4G", mount="/data", fs="ext4")
-    image.hook("build", "echo", "build", after_phase="prepare")
+    image.hook("build", "echo build", after_phase="prepare")
 
     profile = image.state.profiles["default"]
     assert profile.repositories[0].name == "debian-security"
@@ -43,13 +43,13 @@ def test_file_src_snapshot_is_deterministic(tmp_path: Path) -> None:
 def test_invalid_phase_dependency_order_is_rejected() -> None:
     image = Image()
     with pytest.raises(ValidationError):
-        image.hook("prepare", "echo", "wrong", after_phase="build")
+        image.hook("prepare", "echo wrong", after_phase="build")
 
 
 def test_run_alias_records_hook() -> None:
     image = Image(reproducible=False)
-    image.run("echo", "hello", phase="prepare")
+    image.run("echo hello", phase="prepare")
 
     profile = image.state.profiles["default"]
     assert profile.hooks[0].phase == "prepare"
-    assert profile.phases["prepare"][0].argv == ("echo", "hello")
+    assert profile.phases["prepare"][0].argv == ("echo hello",)

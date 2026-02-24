@@ -67,7 +67,7 @@ class DiskEncryption:
             "-o ./build/disk-encryption ./cmd/main.go"
             "'"
         )
-        image.hook("build", cache.wrap(build_cmd), shell=True)
+        image.hook("build", cache.wrap(build_cmd))
 
         image.add_init_script(
             f"/usr/bin/disk-encryption"

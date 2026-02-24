@@ -9,7 +9,7 @@ def test_declarative_methods_do_not_touch_filesystem(tmp_path: Path) -> None:
 
     image.install("curl", "jq")
     image.output_targets("qemu")
-    image.run("echo", "hello", phase="prepare")
+    image.run("echo hello", phase="prepare")
 
     assert image.state.profiles["default"].packages == {"curl", "jq"}
     assert not build_dir.exists()
@@ -21,7 +21,7 @@ def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     image = Image(build_dir=build_dir, backend="inprocess")
     image.install("curl")
     image.output_targets("qemu", "azure")
-    image.run("echo", "ready", phase="prepare")
+    image.run("echo ready", phase="prepare")
 
     lock_path = image.lock()
     assert lock_path == build_dir / "tdx.lock"

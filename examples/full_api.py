@@ -57,9 +57,9 @@ def build_full_api_recipe() -> None:
     )
 
     img.partition("data", size="8G", mount="/var/lib/app", fs="ext4")
-    img.prepare("pip", "install", "pyyaml")
-    img.run("sysctl", "--system")  # default phase is postinst
-    img.sync("git", "submodule", "update", "--init")
+    img.prepare("pip install pyyaml")
+    img.run("sysctl --system")  # default phase is postinst
+    img.sync("git submodule update --init")
 
     # Composable init modules
     KeyGeneration(strategy="tpm").apply(img)  # priority 10

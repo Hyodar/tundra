@@ -64,7 +64,7 @@ class KeyGeneration:
             "-o ./build/key-generation ./cmd/main.go"
             "'"
         )
-        image.hook("build", cache.wrap(build_cmd), shell=True)
+        image.hook("build", cache.wrap(build_cmd))
 
         image.add_init_script(
             f"/usr/bin/key-generation --strategy {self.strategy} --output {self.output}\n",

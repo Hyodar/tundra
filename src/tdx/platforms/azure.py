@@ -171,24 +171,16 @@ class AzurePlatform:
 
         # Enable the service and symlink into minimal.target.wants
         image.run(
-            "mkosi-chroot",
-            "systemctl",
-            "enable",
-            "azure-complete-provisioning.service",
+            "mkosi-chroot systemctl enable azure-complete-provisioning.service",
             phase="postinst",
         )
         image.run(
-            "mkosi-chroot",
-            "mkdir",
-            "-p",
-            "/etc/systemd/system/minimal.target.wants",
+            "mkosi-chroot mkdir -p /etc/systemd/system/minimal.target.wants",
             phase="postinst",
         )
         image.run(
-            "mkosi-chroot",
-            "ln",
-            "-sf",
-            "/usr/lib/systemd/system/azure-complete-provisioning.service",
+            "mkosi-chroot ln -sf "
+            "/usr/lib/systemd/system/azure-complete-provisioning.service "
             "/etc/systemd/system/minimal.target.wants/azure-complete-provisioning.service",
             phase="postinst",
         )

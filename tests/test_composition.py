@@ -30,14 +30,14 @@ def _build_base_image() -> Image:
     img.debloat(
         paths_skip_for_profiles={"devtools": ("/usr/share/bash-completion",)},
     )
-    img.hook("build", "echo base-build-hook", shell=True)
+    img.hook("build", "echo base-build-hook")
     return img
 
 
 def _apply_app_layer(img: Image) -> Image:
     """Apply application-layer packages, hooks, and modules."""
     img.install("prometheus", "rclone", "curl", "jq")
-    img.hook("build", "echo app-build-hook", shell=True)
+    img.hook("build", "echo app-build-hook")
 
     KeyGeneration(strategy="tpm").apply(img)
     DiskEncryption(device="/dev/vda3").apply(img)
@@ -76,7 +76,7 @@ def test_base_build_hooks_appear_before_app_build_hooks() -> None:
     build_commands = profile.phases.get("build", [])
 
     # Extract the inline script from each build command
-    scripts = [cmd.argv[-1] for cmd in build_commands]
+    scripts = [cmd.argv[0] for cmd in build_commands]
 
     base_idx = scripts.index("echo base-build-hook")
     app_idx = scripts.index("echo app-build-hook")
@@ -90,7 +90,7 @@ def test_module_build_hooks_ordered_by_application_sequence() -> None:
 
     profile = img.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
-    scripts = [cmd.argv[-1] for cmd in build_commands]
+    scripts = [cmd.argv[0] for cmd in build_commands]
 
     # Init sub-modules come first (key-generation, disk-encryption, secret-delivery)
     # then Tdxs, Raiko, TaikoClient, Nethermind
@@ -119,7 +119,7 @@ def test_postinst_has_both_base_and_app_commands() -> None:
     """Postinst phase should contain commands from both base and app layers."""
     img = _build_base_image()
     # Add a base-layer postinst command
-    img.run("echo base-postinst", phase="postinst", shell=True)
+    img.run("echo base-postinst", phase="postinst")
     _apply_app_layer(img)
 
     profile = img.state.profiles["default"]

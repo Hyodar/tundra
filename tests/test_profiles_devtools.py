@@ -74,10 +74,10 @@ def test_devtools_profile_enables_serial_console_in_postinst() -> None:
     postinst_commands = profile.phases.get("postinst", [])
 
     enable_cmds = [
-        cmd for cmd in postinst_commands if "systemctl" in cmd.argv and "enable" in cmd.argv
+        cmd for cmd in postinst_commands if "systemctl" in cmd.argv[0] and "enable" in cmd.argv[0]
     ]
     assert len(enable_cmds) >= 1
-    assert any("serial-console.service" in cmd.argv for cmd in enable_cmds)
+    assert any("serial-console.service" in cmd.argv[0] for cmd in enable_cmds)
 
 
 def test_devtools_postinst_sets_root_password() -> None:

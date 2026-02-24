@@ -85,10 +85,10 @@ def test_azure_profile_enables_service_in_postinst() -> None:
 
     # Check that systemctl enable is called
     enable_cmds = [
-        cmd for cmd in postinst_commands if "systemctl" in cmd.argv and "enable" in cmd.argv
+        cmd for cmd in postinst_commands if "systemctl" in cmd.argv[0] and "enable" in cmd.argv[0]
     ]
     assert len(enable_cmds) >= 1
-    assert any("azure-complete-provisioning.service" in cmd.argv for cmd in enable_cmds)
+    assert any("azure-complete-provisioning.service" in cmd.argv[0] for cmd in enable_cmds)
 
 
 def test_azure_profile_symlinks_to_minimal_target() -> None:
@@ -101,10 +101,10 @@ def test_azure_profile_symlinks_to_minimal_target() -> None:
     postinst_commands = profile.phases.get("postinst", [])
 
     # Check symlink into minimal.target.wants
-    link_cmds = [cmd for cmd in postinst_commands if "ln" in cmd.argv]
+    link_cmds = [cmd for cmd in postinst_commands if "ln" in cmd.argv[0]]
     assert len(link_cmds) >= 1
     link_cmd = link_cmds[0]
-    assert "minimal.target.wants/azure-complete-provisioning.service" in " ".join(link_cmd.argv)
+    assert "minimal.target.wants/azure-complete-provisioning.service" in link_cmd.argv[0]
 
 
 def test_azure_profile_sets_output_target() -> None:

@@ -99,7 +99,6 @@ class CommandSpec:
     argv: tuple[str, ...]
     env: Mapping[str, str] = field(default_factory=dict)
     cwd: str | None = None
-    shell: bool = False
 
 
 @dataclass(frozen=True, slots=True)
