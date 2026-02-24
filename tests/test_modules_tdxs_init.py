@@ -31,6 +31,7 @@ def test_tdxs_install_adds_build_hook() -> None:
     build_script = build_argv[-1]
     assert "git clone" in build_script
     assert "NethermindEth/tdxs" in build_script
+    assert "mkosi-chroot bash -c" in build_script
     assert "go build" in build_script
     assert "$DESTDIR/usr/bin/tdxs" in build_script
     assert "-trimpath" in build_script

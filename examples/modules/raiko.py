@@ -44,6 +44,8 @@ class Raiko:
 
     source_repo: str = RAIKO_DEFAULT_REPO
     source_branch: str = RAIKO_DEFAULT_BRANCH
+    features: str = "tdx"
+    workspace_package: str = "raiko-host"
     config_path: str | None = None
     chain_spec_path: str | None = None
     user: str = "raiko"
@@ -66,13 +68,14 @@ class Raiko:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles raiko from source."""
-        clone = f"raiko-{self.source_branch}"
-        clone_dir = Build.build_path(clone)
+        clone_dir = Build.build_path("raiko")
+        chroot_dir = Build.chroot_path("raiko")
+        features_flag = f" --features {self.features}" if self.features else ""
         cache = Cache.declare(
             f"raiko-{self.source_branch}",
             (
                 Cache.file(
-                    src=Build.build_path(f"{clone}/target/release/raiko-host"),
+                    src=Build.build_path(f"raiko/target/release/{self.workspace_package}"),
                     dest=Build.dest_path("usr/bin/raiko"),
                     name="raiko",
                 ),
@@ -82,14 +85,22 @@ class Raiko:
         build_cmd = (
             f"git clone --depth=1 -b {self.source_branch} "
             f'{self.source_repo} "{clone_dir}" && '
-            f'cd "{clone_dir}" && '
-            f"CARGO_HOME={Build.output_path('cargo-home')} "
-            f"CARGO_PROFILE_RELEASE_LTO=thin "
-            f"CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 "
-            f"CARGO_PROFILE_RELEASE_PANIC=abort "
-            f"CARGO_PROFILE_RELEASE_OPT_LEVEL=3 "
-            f'RUSTFLAGS="-C target-cpu=generic -C link-arg=-Wl,--build-id=none" '
-            f"cargo build --release -p raiko-host"
+            "mkosi-chroot bash -c '"
+            "export "
+            'RUSTFLAGS="-C target-cpu=generic -C link-arg=-Wl,--build-id=none '
+            '-C symbol-mangling-version=v0 -L /usr/lib/x86_64-linux-gnu" '
+            "CARGO_HOME=/build/.cargo "
+            "CARGO_PROFILE_RELEASE_LTO=thin "
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 "
+            "CARGO_PROFILE_RELEASE_PANIC=abort "
+            "CARGO_PROFILE_RELEASE_INCREMENTAL=false "
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL=3 "
+            "CARGO_TERM_COLOR=never "
+            f"&& cd {chroot_dir} "
+            "&& cargo fetch "
+            f"&& cargo build --release --frozen{features_flag}"
+            f" --package {self.workspace_package}"
+            "'"
         )
         image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 

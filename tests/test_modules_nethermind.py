@@ -24,19 +24,31 @@ def test_nethermind_install_adds_build_hook_with_dotnet_properties() -> None:
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[-1]
-    # Verify source cloning
+    # Verify source cloning (host-side)
     assert "git clone" in build_script
     assert "NethermindEth/nethermind.git" in build_script
     assert "-b 1.32.3" in build_script
+    # Verify build runs inside mkosi-chroot
+    assert "mkosi-chroot bash -c" in build_script
+    # Verify dotnet environment
+    assert "DOTNET_CLI_TELEMETRY_OPTOUT=1" in build_script
+    assert "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1" in build_script
+    assert "DOTNET_NOLOGO=1" in build_script
+    # Verify dotnet restore before publish
+    assert "dotnet restore" in build_script
+    assert "--disable-parallel" in build_script
     # Verify .NET deterministic build properties
-    assert "/p:Deterministic=true" in build_script
-    assert "/p:ContinuousIntegrationBuild=true" in build_script
-    assert "/p:PublishSingleFile=true" in build_script
-    assert "/p:BuildTimestamp=0" in build_script
-    assert "/p:Commit=0000000000000000000000000000000000000000" in build_script
+    assert "-p:Deterministic=true" in build_script
+    assert "-p:ContinuousIntegrationBuild=true" in build_script
+    assert "-p:PublishSingleFile=true" in build_script
+    assert "-p:BuildTimestamp=0" in build_script
+    assert "-p:Commit=0000000000000000000000000000000000000000" in build_script
+    assert "-p:PublishReadyToRun=false" in build_script
+    assert "-p:DebugType=none" in build_script
+    assert "--self-contained true" in build_script
     # Verify project path and runtime
     assert "src/Nethermind/Nethermind.Runner" in build_script
-    assert "-r linux-x64" in build_script
+    assert "--runtime linux-x64" in build_script
     # Verify artifact installation
     assert "$DESTDIR/usr/bin/nethermind" in build_script
     assert "etc/nethermind-surge/NLog.config" in build_script
@@ -151,4 +163,4 @@ def test_nethermind_custom_runtime() -> None:
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[-1]
-    assert "-r linux-arm64" in build_script
+    assert "--runtime linux-arm64" in build_script

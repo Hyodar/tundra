@@ -20,6 +20,7 @@ def test_key_generation_adds_build_hook() -> None:
     build_script = build_commands[0].argv[-1]
     assert "git clone" in build_script
     assert "NethermindEth/nethermind-tdx" in build_script
+    assert "mkosi-chroot bash -c" in build_script
     assert "go build" in build_script
     assert "$DESTDIR/usr/bin/key-generation" in build_script
 
@@ -69,6 +70,7 @@ def test_disk_encryption_adds_build_hook() -> None:
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[-1]
     assert "git clone" in build_script
+    assert "mkosi-chroot bash -c" in build_script
     assert "$DESTDIR/usr/bin/disk-encryption" in build_script
 
 
@@ -125,6 +127,7 @@ def test_secret_delivery_adds_build_hook() -> None:
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[-1]
     assert "git clone" in build_script
+    assert "mkosi-chroot bash -c" in build_script
     assert "$DESTDIR/usr/bin/secret-delivery" in build_script
 
 

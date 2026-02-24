@@ -45,13 +45,13 @@ class DiskEncryption:
         image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
         image.install("cryptsetup")
 
-        clone = f"disk-encryption-{self.source_branch}"
-        clone_dir = Build.build_path(clone)
+        clone_dir = Build.build_path("disk-encryption")
+        chroot_dir = Build.chroot_path("disk-encryption")
         cache = Cache.declare(
             f"disk-encryption-{self.source_branch}",
             (
                 Cache.file(
-                    src=Build.build_path(f"{clone}/init/build/disk-encryption"),
+                    src=Build.build_path("disk-encryption/init/build/disk-encryption"),
                     dest=Build.dest_path("usr/bin/disk-encryption"),
                     name="disk-encryption",
                 ),
@@ -61,10 +61,11 @@ class DiskEncryption:
         build_cmd = (
             f"git clone --depth=1 -b {self.source_branch} "
             f'{self.source_repo} "{clone_dir}" && '
-            f'cd "{clone_dir}/init" && '
-            f"GOCACHE={Build.output_path('go-cache')} "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/disk-encryption ./cmd/main.go"
+            "mkosi-chroot bash -c '"
+            f"cd {chroot_dir}/init && "
+            'go build -trimpath -ldflags "-s -w -buildid=" '
+            "-o ./build/disk-encryption ./cmd/main.go"
+            "'"
         )
         image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 

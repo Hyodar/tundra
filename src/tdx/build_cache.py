@@ -46,6 +46,16 @@ class OutPath:
         return f"$BUILDDIR/{self.rel}"
 
 
+@dataclass(frozen=True, slots=True)
+class ChrootPath:
+    """A path under ``/build/`` (inside mkosi-chroot)."""
+
+    rel: str
+
+    def __str__(self) -> str:
+        return f"/build/{self.rel}"
+
+
 class Build:
     """Namespace for typed mkosi path constructors."""
 
@@ -63,6 +73,11 @@ class Build:
     def output_path(path: str) -> OutPath:
         """Return a typed ``$BUILDDIR/{path}`` reference."""
         return OutPath(path)
+
+    @staticmethod
+    def chroot_path(path: str) -> ChrootPath:
+        """Return a typed ``/build/{path}`` reference (inside mkosi-chroot)."""
+        return ChrootPath(path)
 
 
 # ── Cache artifact declarations ─────────────────────────────────────
@@ -162,5 +177,9 @@ class Cache:
         key: str,
         artifacts: tuple[CacheFile | CacheDir, ...],
     ) -> CacheDecl:
-        """Create a cache declaration with the given *key* and *artifacts*."""
-        return CacheDecl(key=key, artifacts=artifacts)
+        """Create a cache declaration with the given *key* and *artifacts*.
+
+        Slashes in *key* are replaced with underscores to avoid nested paths.
+        """
+        safe_key = key.replace("/", "_")
+        return CacheDecl(key=safe_key, artifacts=artifacts)

@@ -42,13 +42,13 @@ class KeyGeneration:
         """Add build hook, packages, and init script to *image*."""
         image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
 
-        clone = f"key-generation-{self.source_branch}"
-        clone_dir = Build.build_path(clone)
+        clone_dir = Build.build_path("key-generation")
+        chroot_dir = Build.chroot_path("key-generation")
         cache = Cache.declare(
             f"key-generation-{self.source_branch}",
             (
                 Cache.file(
-                    src=Build.build_path(f"{clone}/init/build/key-generation"),
+                    src=Build.build_path("key-generation/init/build/key-generation"),
                     dest=Build.dest_path("usr/bin/key-generation"),
                     name="key-generation",
                 ),
@@ -58,10 +58,11 @@ class KeyGeneration:
         build_cmd = (
             f"git clone --depth=1 -b {self.source_branch} "
             f'{self.source_repo} "{clone_dir}" && '
-            f'cd "{clone_dir}/init" && '
-            f"GOCACHE={Build.output_path('go-cache')} "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/key-generation ./cmd/main.go"
+            "mkosi-chroot bash -c '"
+            f"cd {chroot_dir}/init && "
+            'go build -trimpath -ldflags "-s -w -buildid=" '
+            "-o ./build/key-generation ./cmd/main.go"
+            "'"
         )
         image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 

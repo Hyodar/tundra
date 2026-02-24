@@ -24,13 +24,17 @@ def test_taiko_client_install_adds_build_hook_with_cgo_flags() -> None:
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[-1]
-    # Verify source cloning
+    # Verify source cloning (host-side)
     assert "git clone" in build_script
     assert "NethermindEth/surge-taiko-mono" in build_script
     assert "-b feat/tdx-proving" in build_script
+    # Verify build runs inside mkosi-chroot
+    assert "mkosi-chroot bash -c" in build_script
     # Verify CGO flags
     assert 'CGO_CFLAGS="-O -D__BLST_PORTABLE__"' in build_script
     assert 'CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__"' in build_script
+    # Verify Go module mode
+    assert "GO111MODULE=on" in build_script
     # Verify Go build flags
     assert "-trimpath" in build_script
     assert '-ldflags "-s -w -buildid="' in build_script

@@ -63,13 +63,13 @@ class TaikoClient:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles taiko-client from source."""
-        clone = f"taiko-client-{self.source_branch}"
-        clone_dir = Build.build_path(clone)
+        clone_dir = Build.build_path("taiko-client")
+        chroot_dir = Build.chroot_path("taiko-client")
         cache = Cache.declare(
             f"taiko-client-{self.source_branch}",
             (
                 Cache.file(
-                    src=Build.build_path(f"{clone}/{self.build_path}/build/taiko-client"),
+                    src=Build.build_path(f"taiko-client/{self.build_path}/bin/taiko-client"),
                     dest=Build.dest_path("usr/bin/taiko-client"),
                     name="taiko-client",
                 ),
@@ -79,12 +79,13 @@ class TaikoClient:
         build_cmd = (
             f"git clone --depth=1 -b {self.source_branch} "
             f'{self.source_repo} "{clone_dir}" && '
-            f'cd "{clone_dir}/{self.build_path}" && '
-            f"GOCACHE={Build.output_path('go-cache')} "
-            f'CGO_CFLAGS="-O -D__BLST_PORTABLE__" '
-            f'CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__" '
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/taiko-client ."
+            "mkosi-chroot bash -c '"
+            f"cd {chroot_dir}/{self.build_path} && "
+            'GO111MODULE=on CGO_CFLAGS="-O -D__BLST_PORTABLE__" '
+            'CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__" '
+            'go build -trimpath -ldflags "-s -w -buildid=" '
+            "-o bin/taiko-client cmd/main.go"
+            "'"
         )
         image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 

@@ -95,13 +95,13 @@ class SecretDelivery:
         )
 
     def _add_build_hook(self, image: Image) -> None:
-        clone = f"secret-delivery-{self.source_branch}"
-        clone_dir = Build.build_path(clone)
+        clone_dir = Build.build_path("secret-delivery")
+        chroot_dir = Build.chroot_path("secret-delivery")
         cache = Cache.declare(
             f"secret-delivery-{self.source_branch}",
             (
                 Cache.file(
-                    src=Build.build_path(f"{clone}/init/build/secret-delivery"),
+                    src=Build.build_path("secret-delivery/init/build/secret-delivery"),
                     dest=Build.dest_path("usr/bin/secret-delivery"),
                     name="secret-delivery",
                 ),
@@ -111,10 +111,11 @@ class SecretDelivery:
         build_cmd = (
             f"git clone --depth=1 -b {self.source_branch} "
             f'{self.source_repo} "{clone_dir}" && '
-            f'cd "{clone_dir}/init" && '
-            f"GOCACHE={Build.output_path('go-cache')} "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/secret-delivery ./cmd/main.go"
+            "mkosi-chroot bash -c '"
+            f"cd {chroot_dir}/init && "
+            'go build -trimpath -ldflags "-s -w -buildid=" '
+            "-o ./build/secret-delivery ./cmd/main.go"
+            "'"
         )
         image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 

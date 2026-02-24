@@ -24,19 +24,29 @@ def test_raiko_install_adds_build_hook_with_correct_flags() -> None:
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[-1]
-    # Verify source cloning
+    # Verify source cloning (host-side)
     assert "git clone" in build_script
     assert "NethermindEth/raiko.git" in build_script
     assert "-b feat/tdx" in build_script
+    # Verify build runs inside mkosi-chroot
+    assert "mkosi-chroot bash -c" in build_script
     # Verify Rust reproducibility flags
     assert "CARGO_PROFILE_RELEASE_LTO=thin" in build_script
     assert "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1" in build_script
     assert "CARGO_PROFILE_RELEASE_PANIC=abort" in build_script
+    assert "CARGO_PROFILE_RELEASE_INCREMENTAL=false" in build_script
     assert "CARGO_PROFILE_RELEASE_OPT_LEVEL=3" in build_script
+    assert "CARGO_TERM_COLOR=never" in build_script
+    assert "CARGO_HOME=/build/.cargo" in build_script
     assert "-C target-cpu=generic" in build_script
     assert "-C link-arg=-Wl,--build-id=none" in build_script
-    # Verify build target
-    assert "cargo build --release -p raiko-host" in build_script
+    assert "-C symbol-mangling-version=v0" in build_script
+    assert "-L /usr/lib/x86_64-linux-gnu" in build_script
+    # Verify cargo fetch + frozen build
+    assert "cargo fetch" in build_script
+    assert "cargo build --release --frozen" in build_script
+    assert "--features tdx" in build_script
+    assert "--package raiko-host" in build_script
     assert "$DESTDIR/usr/bin/raiko" in build_script
 
 

@@ -64,13 +64,13 @@ class Tdxs:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles tdxs from source."""
-        clone = f"tdxs-{self.source_branch}"
-        clone_dir = Build.build_path(clone)
+        clone_dir = Build.build_path("tdxs")
+        chroot_dir = Build.chroot_path("tdxs")
         cache = Cache.declare(
             f"tdxs-{self.source_branch}",
             (
                 Cache.file(
-                    src=Build.build_path(f"{clone}/build/tdxs"),
+                    src=Build.build_path("tdxs/build/tdxs"),
                     dest=Build.dest_path("usr/bin/tdxs"),
                     name="tdxs",
                 ),
@@ -80,11 +80,12 @@ class Tdxs:
         build_cmd = (
             f"git clone --depth=1 -b {self.source_branch} "
             f'{self.source_repo} "{clone_dir}" && '
-            f'cd "{clone_dir}" && '
-            f"make sync-constellation && "
-            f"GOCACHE={Build.output_path('go-cache')} "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/tdxs ./cmd/tdxs/main.go"
+            "mkosi-chroot bash -c '"
+            f"cd {chroot_dir} && "
+            "make sync-constellation && "
+            'go build -trimpath -ldflags "-s -w -buildid=" '
+            "-o ./build/tdxs ./cmd/tdxs/main.go"
+            "'"
         )
         image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 

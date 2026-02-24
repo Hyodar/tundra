@@ -1,6 +1,16 @@
 """Public package entrypoint for the TDX VM SDK."""
 
-from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile, DestPath, OutPath, SrcPath
+from .build_cache import (
+    Build,
+    Cache,
+    CacheDecl,
+    CacheDir,
+    CacheFile,
+    ChrootPath,
+    DestPath,
+    OutPath,
+    SrcPath,
+)
 from .errors import (
     BackendExecutionError,
     DeploymentError,
@@ -33,6 +43,7 @@ __all__ = [
     "CacheDecl",
     "CacheDir",
     "CacheFile",
+    "ChrootPath",
     "DestPath",
     "DebloatConfig",
     "DeploymentError",

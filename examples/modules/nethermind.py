@@ -69,27 +69,26 @@ class Nethermind:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles nethermind from source."""
-        clone = f"nethermind-{self.version}"
-        clone_dir = Build.build_path(clone)
-        out_dir = Build.build_path(f"{clone}/out")
+        clone_dir = Build.build_path("nethermind")
+        chroot_dir = Build.chroot_path("nethermind")
         svc = self.user  # service name for dest paths
 
         cache = Cache.declare(
             f"nethermind-{self.version}-{self.runtime}",
             (
                 Cache.file(
-                    src=Build.build_path(f"{clone}/out/nethermind"),
+                    src=Build.build_path("nethermind/publish/nethermind"),
                     dest=Build.dest_path("usr/bin/nethermind"),
                     name="nethermind",
                 ),
                 Cache.file(
-                    src=Build.build_path(f"{clone}/out/NLog.config"),
+                    src=Build.build_path("nethermind/publish/NLog.config"),
                     dest=Build.dest_path(f"etc/{svc}/NLog.config"),
                     name="NLog.config",
                     mode="0644",
                 ),
                 Cache.dir(
-                    src=Build.build_path(f"{clone}/out/plugins"),
+                    src=Build.build_path("nethermind/publish/plugins"),
                     dest=Build.dest_path(f"etc/{svc}/plugins"),
                     name="plugins",
                 ),
@@ -99,17 +98,35 @@ class Nethermind:
         build_cmd = (
             f"git clone --depth=1 -b {self.version} "
             f'{self.source_repo} "{clone_dir}" && '
-            f'cd "{clone_dir}" && '
-            f"DOTNET_CLI_TELEMETRY_OPTOUT=1 "
-            f"dotnet publish {self.project_path} "
-            f"-c Release "
-            f"-r {self.runtime} "
-            f'-o "{out_dir}" '
-            f"/p:Deterministic=true "
-            f"/p:ContinuousIntegrationBuild=true "
-            f"/p:PublishSingleFile=true "
-            f"/p:BuildTimestamp=0 "
-            f"/p:Commit=0000000000000000000000000000000000000000"
+            "mkosi-chroot bash -c '"
+            "export "
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 "
+            "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 "
+            "DOTNET_NOLOGO=1 "
+            "DOTNET_CLI_HOME=/tmp/dotnet "
+            "NUGET_PACKAGES=/tmp/nuget "
+            f"&& cd {chroot_dir} "
+            f"&& dotnet restore {self.project_path} "
+            f"--runtime {self.runtime} "
+            "--disable-parallel "
+            "--force "
+            f"&& dotnet publish {self.project_path} "
+            f"--configuration Release "
+            f"--runtime {self.runtime} "
+            "--self-contained true "
+            f"--output {chroot_dir}/publish "
+            "-p:Deterministic=true "
+            "-p:ContinuousIntegrationBuild=true "
+            "-p:PublishSingleFile=true "
+            "-p:BuildTimestamp=0 "
+            "-p:Commit=0000000000000000000000000000000000000000 "
+            "-p:PublishReadyToRun=false "
+            "-p:DebugType=none "
+            "-p:IncludeAllContentForSelfExtract=true "
+            "-p:IncludePackageReferencesDuringMarkupCompilation=true "
+            "-p:EmbedUntrackedSources=true "
+            "-p:PublishRepositoryUrl=true"
+            "'"
         )
         image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 

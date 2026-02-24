@@ -1,6 +1,16 @@
 """Tests for Cache / Build / CacheDecl shell fragment generation."""
 
-from tdx.build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile, DestPath, OutPath, SrcPath
+from tdx.build_cache import (
+    Build,
+    Cache,
+    CacheDecl,
+    CacheDir,
+    CacheFile,
+    ChrootPath,
+    DestPath,
+    OutPath,
+    SrcPath,
+)
 
 # ── Path helpers ────────────────────────────────────────────────────
 
@@ -17,10 +27,15 @@ def test_output_path_str() -> None:
     assert str(Build.output_path("go-cache")) == "$BUILDDIR/go-cache"
 
 
+def test_chroot_path_str() -> None:
+    assert str(Build.chroot_path("raiko")) == "/build/raiko"
+
+
 def test_path_types() -> None:
     assert isinstance(Build.build_path("x"), SrcPath)
     assert isinstance(Build.dest_path("x"), DestPath)
     assert isinstance(Build.output_path("x"), OutPath)
+    assert isinstance(Build.chroot_path("x"), ChrootPath)
 
 
 # ── Cache.file / Cache.dir ──────────────────────────────────────────
@@ -74,6 +89,20 @@ def test_declare_returns_cache_decl() -> None:
     assert isinstance(decl, CacheDecl)
     assert decl.key == "pkg-v1"
     assert len(decl.artifacts) == 1
+
+
+def test_declare_sanitizes_slashes_in_key() -> None:
+    decl = Cache.declare(
+        "raiko-feat/tdx",
+        (
+            Cache.file(
+                src=Build.build_path("raiko/target/release/raiko-host"),
+                dest=Build.dest_path("usr/bin/raiko"),
+                name="raiko",
+            ),
+        ),
+    )
+    assert decl.key == "raiko-feat_tdx"
 
 
 # ── CacheDecl.wrap ──────────────────────────────────────────────────
