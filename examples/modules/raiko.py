@@ -131,6 +131,7 @@ class Raiko:
             f"--shell /usr/sbin/nologin --gid {self.group} {self.user}",
             phase="postinst",
         )
+        image.service("raiko", enabled=True)
 
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render raiko.service systemd unit."""

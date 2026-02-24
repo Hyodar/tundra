@@ -665,6 +665,9 @@ class DeterministicMkosiEmitter:
 
         # Systemd service unit files from img.service()
         for svc in profile.services:
+            # Skip enablement-only registrations (no exec = no unit file to generate)
+            if not svc.exec:
+                continue
             unit_name = svc.name if svc.name.endswith(".service") else f"{svc.name}.service"
             # Skip non-service targets (like secrets-ready.target)
             if svc.name.endswith(".target"):
@@ -805,11 +808,27 @@ class DeterministicMkosiEmitter:
         for user in profile.users:
             commands.append(CommandSpec(argv=(_useradd_command(user),)))
 
-        # Service enablement via mkosi-chroot systemctl enable
+        # Service enablement via mkosi-chroot systemctl enable + minimal.target.wants
+        enabled_units: list[str] = []
         for svc in profile.services:
             if svc.enabled:
                 unit_name = svc.name if "." in svc.name else f"{svc.name}.service"
                 commands.append(CommandSpec(argv=(f"mkosi-chroot systemctl enable {unit_name}",)))
+                enabled_units.append(unit_name)
+
+        if enabled_units:
+            commands.append(
+                CommandSpec(argv=('mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"',))
+            )
+            for unit_name in enabled_units:
+                commands.append(
+                    CommandSpec(
+                        argv=(
+                            f'ln -sf "/etc/systemd/system/{unit_name}" '
+                            f'"$BUILDROOT/etc/systemd/system/minimal.target.wants/"',
+                        )
+                    )
+                )
 
         return commands
 

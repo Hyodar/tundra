@@ -91,13 +91,17 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     assert "SocketMode=0660" in sock_content
     assert "SocketGroup=tdx" in sock_content
 
-    # Postinst hooks: groupadd, useradd, systemctl enable
+    # Postinst hooks: groupadd, useradd
     postinst_commands = profile.phases.get("postinst", [])
-    assert len(postinst_commands) == 3
+    assert len(postinst_commands) == 2
     assert postinst_commands[0].argv[0] == "mkosi-chroot groupadd --system tdx"
     assert "mkosi-chroot useradd --system" in postinst_commands[1].argv[0]
     assert "tdxs" in postinst_commands[1].argv[0]
-    assert postinst_commands[2].argv[0] == "mkosi-chroot systemctl enable tdxs.socket"
+
+    # Service enablement via img.service()
+    service_names = {s.name for s in profile.services}
+    assert "tdxs.service" in service_names
+    assert "tdxs.socket" in service_names
 
 
 def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:

@@ -155,6 +155,7 @@ class Nethermind:
             f"--shell /usr/sbin/nologin --groups {self.group} {self.user}",
             phase="postinst",
         )
+        image.service("nethermind-surge", enabled=True)
 
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render nethermind-surge.service systemd unit."""

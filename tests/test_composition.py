@@ -133,10 +133,10 @@ def test_postinst_has_both_base_and_app_commands() -> None:
         "Base-layer postinst command should be present"
     )
 
-    # App-layer postinst commands from modules (user creation, service enablement)
-    # Init enables runtime-init.service
-    assert any("runtime-init" in a for a in all_argv), (
-        f"Init service enablement should be in postinst:\n{full_text}"
+    # App-layer service enablement via img.service()
+    service_names = {s.name for s in profile.services}
+    assert "runtime-init.service" in service_names, (
+        f"Init service should be registered via img.service():\n{service_names}"
     )
 
     # Tdxs creates tdx group and tdxs user
@@ -154,11 +154,13 @@ def test_debloat_masking_coexists_with_module_postinst() -> None:
     postinst_cmds = profile.phases.get("postinst", [])
     all_argv = [" ".join(cmd.argv) for cmd in postinst_cmds]
 
-    # Modules add user creation / service enablement via postinst
-    has_module_commands = any(
-        "useradd" in a or "groupadd" in a or "systemctl" in a for a in all_argv
-    )
-    assert has_module_commands, "Module postinst commands (user/group/service) should be present"
+    # Modules add user/group creation via postinst commands
+    has_module_commands = any("useradd" in a or "groupadd" in a for a in all_argv)
+    assert has_module_commands, "Module postinst commands (user/group) should be present"
+
+    # Service enablement is tracked via img.service()
+    service_names = {s.name for s in profile.services}
+    assert len(service_names) > 0, "Modules should register services via img.service()"
 
 
 # -- Multiple modules without conflicts --

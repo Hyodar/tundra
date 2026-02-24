@@ -111,6 +111,7 @@ class TaikoClient:
             f"--shell /usr/sbin/nologin --groups {self.group} {self.user}",
             phase="postinst",
         )
+        image.service("taiko-client", enabled=True)
 
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render taiko-client.service systemd unit."""

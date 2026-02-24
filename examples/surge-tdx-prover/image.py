@@ -65,9 +65,17 @@ vm.max_map_count=262144
 # File descriptor limits
 fs.file-max=1048576"""
 
-# ── TDX guest udev rule ──────────────────────────────────────────────
+# ── TDX guest udev rules ─────────────────────────────────────────────
 
-TDX_GUEST_UDEV_RULE = """\
+TDX_GUEST_PERMISSIONS = """\
+# TDX guest device permissions
+KERNEL=="tdx_guest", MODE="0660", GROUP="tdx"
+KERNEL=="tdx-guest", MODE="0660", GROUP="tdx"
+KERNEL=="tpm0", MODE="0660", GROUP="tdx"
+KERNEL=="tpmrm0", MODE="0660", GROUP="tdx"
+"""
+
+TDX_GUEST_SYMLINK = """\
 KERNEL=="tdx_guest", SYMLINK+="tdx-guest"
 """
 
@@ -227,11 +235,9 @@ def build_surge_tdx_prover() -> Image:
     # Sysctl hardening
     img.file("/etc/sysctl.d/99-surge.conf", content=SYSCTL_CONF)
 
-    # TDX guest udev symlink (upstream pattern)
-    img.file(
-        "/etc/udev/rules.d/99-tdx-symlink.rules",
-        content=TDX_GUEST_UDEV_RULE,
-    )
+    # TDX guest udev rules (permissions + symlink)
+    img.file("/etc/udev/rules.d/65-tdx-guest.rules", content=TDX_GUEST_PERMISSIONS)
+    img.file("/etc/udev/rules.d/99-tdx-symlink.rules", content=TDX_GUEST_SYMLINK)
 
     # OpenNTPD configuration
     img.file("/etc/openntpd/ntpd.conf", content=OPENNTPD_CONF)
@@ -244,30 +250,11 @@ def build_surge_tdx_prover() -> Image:
     img.file("/etc/raiko/env", content=RAIKO_ENV)
     img.file("/etc/taiko-client/env", content=TAIKO_CLIENT_ENV)
 
-    # ── 6. Service enablement (matching upstream mkosi.postinst) ──────
-    SERVICES = (
-        "network-setup.service",
-        "openntpd.service",
-        "logrotate.service",
-        "runtime-init.service",
-        "dropbear.service",
-        "nethermind-surge.service",
-        "taiko-client.service",
-        "raiko.service",
-        "tdxs.service",
-        "tdxs.socket",
-    )
-    img.run(
-        'mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"',
-        phase="postinst",
-    )
-    for svc in SERVICES:
-        img.run(f"mkosi-chroot systemctl enable {svc}", phase="postinst")
-        img.run(
-            f'ln -sf "/etc/systemd/system/{svc}" '
-            f'"$BUILDROOT/etc/systemd/system/minimal.target.wants/"',
-            phase="postinst",
-        )
+    # ── 6. Package-provided services (modules handle their own) ────────
+    img.service("network-setup", enabled=True)
+    img.service("openntpd", enabled=True)
+    img.service("logrotate", enabled=True)
+    img.service("dropbear", enabled=True)
 
     # SSH hardening: free port 22 for dropbear
     img.run("mkosi-chroot systemctl disable ssh.service ssh.socket", phase="postinst")

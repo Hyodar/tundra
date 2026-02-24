@@ -121,10 +121,8 @@ class Tdxs:
             f"--shell /usr/sbin/nologin --gid {self.group} {self.user}",
             phase="postinst",
         )
-        image.run(
-            "mkosi-chroot systemctl enable tdxs.socket",
-            phase="postinst",
-        )
+        image.service("tdxs.service", enabled=True)
+        image.service("tdxs.socket", enabled=True)
 
     def _render_config(self) -> str:
         """Render /etc/tdxs/config.yaml content."""

@@ -1023,13 +1023,11 @@ class Image:
                     )
                 )
             profile.services = patched
-        # Enable runtime-init.service in postinst
-        enable_cmd = f"mkosi-chroot systemctl enable {init_svc}"
+        # Register runtime-init for enablement (systemctl enable + minimal.target.wants)
         for profile in self._iter_active_profiles():
-            already = any(cmd.argv[0] == enable_cmd for cmd in profile.phases.get("postinst", []))
-            if not already:
-                self.run(enable_cmd, phase="postinst")
-                break  # run() appends to all active profiles
+            if not any(s.name == init_svc for s in profile.services):
+                self.service(init_svc, enabled=True)
+                break  # service() appends to all active profiles
 
     def _iter_active_profiles(self) -> list[ProfileState]:
         profiles: list[ProfileState] = []
