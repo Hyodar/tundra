@@ -76,10 +76,7 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     assert "type: dcap" in config_content
 
     # Service unit
-    svc_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/tdxs.service"
-    ]
+    svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.service"]
     assert len(svc_files) == 1
     svc_content = svc_files[0].content
     assert "User=tdxs" in svc_content
@@ -90,10 +87,7 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     assert "Requires=tdxs.socket" in svc_content
 
     # Socket unit
-    sock_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/tdxs.socket"
-    ]
+    sock_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.socket"]
     assert len(sock_files) == 1
     sock_content = sock_files[0].content
     assert "ListenStream=/var/tdxs.sock" in sock_content
@@ -104,12 +98,18 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     postinst_commands = profile.phases.get("postinst", [])
     assert len(postinst_commands) == 3
     assert postinst_commands[0].argv == (
-        "mkosi-chroot", "groupadd", "--system", "tdx",
+        "mkosi-chroot",
+        "groupadd",
+        "--system",
+        "tdx",
     )
     assert postinst_commands[1].argv[:3] == ("mkosi-chroot", "useradd", "--system")
     assert "tdxs" in postinst_commands[1].argv
     assert postinst_commands[2].argv == (
-        "mkosi-chroot", "systemctl", "enable", "tdxs.socket",
+        "mkosi-chroot",
+        "systemctl",
+        "enable",
+        "tdxs.socket",
     )
 
 
@@ -122,10 +122,7 @@ def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:
     Tdxs(issuer_type="dcap").apply(image)
 
     profile = image.state.profiles["default"]
-    svc_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/tdxs.service"
-    ]
+    svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.service"]
     svc_content = svc_files[0].content
     assert "After=runtime-init.service" in svc_content
     assert "Requires=runtime-init.service tdxs.socket" in svc_content
@@ -137,10 +134,7 @@ def test_tdxs_no_init_dependency_when_no_init_scripts() -> None:
     Tdxs(issuer_type="dcap").apply(image)
 
     profile = image.state.profiles["default"]
-    svc_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/tdxs.service"
-    ]
+    svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.service"]
     svc_content = svc_files[0].content
     assert "runtime-init" not in svc_content
 
@@ -163,10 +157,7 @@ def test_tdxs_custom_socket_path() -> None:
     module.apply(image)
 
     profile = image.state.profiles["default"]
-    sock_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/tdxs.socket"
-    ]
+    sock_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.socket"]
     assert "ListenStream=/run/tdx/quote.sock" in sock_files[0].content
 
 

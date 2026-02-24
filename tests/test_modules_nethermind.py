@@ -66,8 +66,7 @@ def test_nethermind_service_unit_content() -> None:
 
     profile = image.state.profiles["default"]
     svc_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/nethermind-surge.service"
+        f for f in profile.files if f.path == "/usr/lib/systemd/system/nethermind-surge.service"
     ]
     assert len(svc_files) == 1
     svc_content = svc_files[0].content
@@ -112,10 +111,7 @@ def test_nethermind_apply_combines_setup_and_install() -> None:
     assert "dotnet-sdk-10.0" in profile.build_packages
     assert "dotnet-runtime-10.0" in profile.build_packages
     # Files from install()
-    assert any(
-        f.path == "/usr/lib/systemd/system/nethermind-surge.service"
-        for f in profile.files
-    )
+    assert any(f.path == "/usr/lib/systemd/system/nethermind-surge.service" for f in profile.files)
     # Build hook
     assert len(profile.phases.get("build", [])) == 1
     # Postinst hook (user creation)

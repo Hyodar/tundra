@@ -42,22 +42,20 @@ class KeyGeneration:
 
         build_cmd = (
             f"KEY_GEN_SRC=$BUILDDIR/key-generation-src && "
-            f"if [ ! -d \"$KEY_GEN_SRC\" ]; then "
+            f'if [ ! -d "$KEY_GEN_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f"{self.source_repo} \"$KEY_GEN_SRC\"; "
+            f'{self.source_repo} "$KEY_GEN_SRC"; '
             f"fi && "
-            f"cd \"$KEY_GEN_SRC/init\" && "
+            f'cd "$KEY_GEN_SRC/init" && '
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/key-generation ./cmd/main.go && "
             f"install -m 0755 ./build/key-generation "
-            f"\"$DESTDIR/usr/bin/key-generation\""
+            f'"$DESTDIR/usr/bin/key-generation"'
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
         image.add_init_script(
-            f"/usr/bin/key-generation"
-            f" --strategy {self.strategy}"
-            f" --output {self.output}\n",
+            f"/usr/bin/key-generation --strategy {self.strategy} --output {self.output}\n",
             priority=10,
         )

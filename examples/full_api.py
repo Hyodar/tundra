@@ -62,8 +62,8 @@ def build_full_api_recipe() -> None:
     img.sync("git", "submodule", "update", "--init")
 
     # Composable init modules
-    KeyGeneration(strategy="tpm").apply(img)          # priority 10
-    DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
+    KeyGeneration(strategy="tpm").apply(img)  # priority 10
+    DiskEncryption(device="/dev/vda3").apply(img)  # priority 20
 
     # Secret delivery: declare secrets then apply
     delivery = SecretDelivery(method="http_post")
@@ -76,7 +76,7 @@ def build_full_api_recipe() -> None:
             SecretTarget.env("JWT_SECRET", scope="global"),
         ),
     )
-    delivery.apply(img)                                # priority 30
+    delivery.apply(img)  # priority 30
 
     Tdxs(issuer_type="dcap").apply(img)
 

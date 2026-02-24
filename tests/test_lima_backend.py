@@ -42,9 +42,7 @@ def test_lima_prepare_creates_directories_when_binary_exists(
     backend = LimaBackend()
     monkeypatch.setattr("tdx.backends.lima.shutil.which", lambda _: "/usr/bin/limactl")
     # Mock _instance_running to avoid actually checking Lima
-    monkeypatch.setattr(
-        LimaBackend, "_instance_running", lambda self: True
-    )
+    monkeypatch.setattr(LimaBackend, "_instance_running", lambda self: True)
 
     backend.prepare(request)
 

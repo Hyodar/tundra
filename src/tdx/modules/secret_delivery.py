@@ -46,7 +46,9 @@ class SecretDelivery:
     source_repo: str = SECRET_DELIVERY_DEFAULT_REPO
     source_branch: str = SECRET_DELIVERY_DEFAULT_BRANCH
     _secrets: list[SecretSpec] = field(
-        default_factory=list, init=False, repr=False,
+        default_factory=list,
+        init=False,
+        repr=False,
     )
 
     def secret(
@@ -67,7 +69,10 @@ class SecretDelivery:
                 "secret() requires at least one delivery target.",
             )
         entry = SecretSpec(
-            name=name, required=required, schema=schema, targets=targets,
+            name=name,
+            required=required,
+            schema=schema,
+            targets=targets,
         )
         self._secrets.append(entry)
         return entry
@@ -91,16 +96,16 @@ class SecretDelivery:
     def _add_build_hook(self, image: Image) -> None:
         build_cmd = (
             f"SECRET_DEL_SRC=$BUILDDIR/secret-delivery-src && "
-            f"if [ ! -d \"$SECRET_DEL_SRC\" ]; then "
+            f'if [ ! -d "$SECRET_DEL_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f"{self.source_repo} \"$SECRET_DEL_SRC\"; "
+            f'{self.source_repo} "$SECRET_DEL_SRC"; '
             f"fi && "
-            f"cd \"$SECRET_DEL_SRC/init\" && "
+            f'cd "$SECRET_DEL_SRC/init" && '
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/secret-delivery ./cmd/main.go && "
             f"install -m 0755 ./build/secret-delivery "
-            f"\"$DESTDIR/usr/bin/secret-delivery\""
+            f'"$DESTDIR/usr/bin/secret-delivery"'
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
@@ -113,7 +118,9 @@ class SecretDelivery:
 
         secrets = {s.name: s for s in self._secrets}
         config = _render_config(
-            secrets, method=self.method, port=self.port,
+            secrets,
+            method=self.method,
+            port=self.port,
         )
         image.file(SECRET_DELIVERY_CONFIG_PATH, content=config)
 

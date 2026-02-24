@@ -71,9 +71,7 @@ def test_gcp_profile_emits_udev_rules() -> None:
     assert "/usr/lib/udev/rules.d/65-gce-disk-naming.rules" in file_paths
 
     rules_entry = next(
-        f
-        for f in profile.files
-        if f.path == "/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
+        f for f in profile.files if f.path == "/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
     )
     assert rules_entry.content == GCE_DISK_NAMING_RULES
 
@@ -103,9 +101,7 @@ def test_gcp_profile_emits_nvme_id_script() -> None:
     file_paths = {f.path for f in profile.files}
     assert "/usr/lib/udev/google_nvme_id" in file_paths
 
-    nvme_entry = next(
-        f for f in profile.files if f.path == "/usr/lib/udev/google_nvme_id"
-    )
+    nvme_entry = next(f for f in profile.files if f.path == "/usr/lib/udev/google_nvme_id")
     assert nvme_entry.mode == "0755"
     assert nvme_entry.content == GOOGLE_NVME_ID
 

@@ -50,15 +50,25 @@ class AzureDeployAdapter:
         # Create VM from the uploaded VHD
         vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"
         cmd = [
-            "az", "vm", "create",
-            "--resource-group", resource_group,
-            "--name", vm_name,
-            "--location", location,
-            "--size", vm_size,
-            "--image", blob_url,
-            "--security-type", "ConfidentialVM",
-            "--os-disk-security-encryption-type", "VMGuestStateOnly",
-            "--output", "json",
+            "az",
+            "vm",
+            "create",
+            "--resource-group",
+            resource_group,
+            "--name",
+            vm_name,
+            "--location",
+            location,
+            "--size",
+            vm_size,
+            "--image",
+            blob_url,
+            "--security-type",
+            "ConfidentialVM",
+            "--os-disk-security-encryption-type",
+            "VMGuestStateOnly",
+            "--output",
+            "json",
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -89,21 +99,28 @@ class AzureDeployAdapter:
             metadata=metadata,
         )
 
-    def _upload_vhd(
-        self, artifact_path: Path, *, storage_account: str, resource_group: str
-    ) -> str:
+    def _upload_vhd(self, artifact_path: Path, *, storage_account: str, resource_group: str) -> str:
         """Upload VHD to Azure blob storage."""
         container = "tdx-images"
         blob_name = f"{artifact_path.stem}-{uuid.uuid4().hex[:8]}.vhd"
 
         cmd = [
-            "az", "storage", "blob", "upload",
-            "--account-name", storage_account,
-            "--container-name", container,
-            "--name", blob_name,
-            "--file", str(artifact_path),
-            "--type", "page",
-            "--output", "json",
+            "az",
+            "storage",
+            "blob",
+            "upload",
+            "--account-name",
+            storage_account,
+            "--container-name",
+            container,
+            "--name",
+            blob_name,
+            "--file",
+            str(artifact_path),
+            "--type",
+            "page",
+            "--output",
+            "json",
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)

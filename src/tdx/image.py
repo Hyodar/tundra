@@ -385,9 +385,7 @@ class Image:
             # Convert dict to frozen tuple-of-tuples for the frozen dataclass
             profile_skips: tuple[tuple[str, tuple[str, ...]], ...] = ()
             if paths_skip_for_profiles:
-                profile_skips = tuple(
-                    (k, v) for k, v in sorted(paths_skip_for_profiles.items())
-                )
+                profile_skips = tuple((k, v) for k, v in sorted(paths_skip_for_profiles.items()))
             config = DebloatConfig(
                 enabled=True,
                 paths_remove=paths_remove or _defaults.paths_remove,
@@ -460,9 +458,7 @@ class Image:
                 raise ValidationError("skeleton() requires src when content is not provided.")
             resolved_content = Path(src).read_text(encoding="utf-8")
         for profile in self._iter_active_profiles():
-            profile.skeleton_files.append(
-                FileEntry(path=path, content=resolved_content, mode=mode)
-            )
+            profile.skeleton_files.append(FileEntry(path=path, content=resolved_content, mode=mode))
         return self
 
     def prepare(
@@ -561,10 +557,10 @@ class Image:
             f'EFI_PACKAGE_VERSION="{package_version}"\n'
             'DEB_URL="${EFI_SNAPSHOT_URL}/pool/main/s/systemd/'
             'systemd-boot-efi_${EFI_PACKAGE_VERSION}_amd64.deb"\n'
-            'WORK_DIR=$(mktemp -d)\n'
+            "WORK_DIR=$(mktemp -d)\n"
             'curl -sSfL -o "$WORK_DIR/systemd-boot-efi.deb" "$DEB_URL"\n'
             'cp "$WORK_DIR/systemd-boot-efi.deb" "$BUILDROOT/tmp/"\n'
-            'mkosi-chroot dpkg -i /tmp/systemd-boot-efi.deb\n'
+            "mkosi-chroot dpkg -i /tmp/systemd-boot-efi.deb\n"
             'cp "$BUILDROOT/usr/lib/systemd/boot/efi/systemd-bootx64.efi" '
             '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
             'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
@@ -581,7 +577,7 @@ class Image:
         if mirror is not None:
             lines.append(f'MIRROR="{mirror}"')
         else:
-            lines.append('MIRROR=$(jq -r .Mirror /work/config.json)')
+            lines.append("MIRROR=$(jq -r .Mirror /work/config.json)")
             lines.append('if [ "$MIRROR" = "null" ]; then')
             lines.append('    MIRROR="http://deb.debian.org/debian"')
             lines.append("fi")
@@ -780,13 +776,12 @@ class Image:
                     artifact_path = profile_dir / self._artifact_filename(target)
                     if artifact_path.exists():
                         profile_result.artifacts[target] = ArtifactRef(
-                            target=target, path=artifact_path,
+                            target=target,
+                            path=artifact_path,
                         )
 
             # Generate build report
-            script_checksums = self._script_checksums(
-                emission.script_paths.get(profile_name, {})
-            )
+            script_checksums = self._script_checksums(emission.script_paths.get(profile_name, {}))
             artifact_digests = {
                 target: hashlib.sha256(Path(artifact.path).read_bytes()).hexdigest()
                 for target, artifact in sorted(profile_result.artifacts.items())
@@ -1019,23 +1014,26 @@ class Image:
                     patched.append(svc)
                     continue
                 after = svc.after if init_svc in svc.after else (init_svc, *svc.after)
-                requires = (
-                    svc.requires if init_svc in svc.requires
-                    else (init_svc, *svc.requires)
+                requires = svc.requires if init_svc in svc.requires else (init_svc, *svc.requires)
+                patched.append(
+                    ServiceSpec(
+                        name=svc.name,
+                        exec=svc.exec,
+                        user=svc.user,
+                        after=after,
+                        requires=requires,
+                        wants=svc.wants,
+                        restart=svc.restart,
+                        enabled=svc.enabled,
+                        extra_unit=svc.extra_unit,
+                        security_profile=svc.security_profile,
+                    )
                 )
-                patched.append(ServiceSpec(
-                    name=svc.name, exec=svc.exec, user=svc.user,
-                    after=after, requires=requires, wants=svc.wants,
-                    restart=svc.restart, enabled=svc.enabled,
-                    extra_unit=svc.extra_unit, security_profile=svc.security_profile,
-                ))
             profile.services = patched
         # Enable runtime-init.service in postinst
         enable_argv = ("mkosi-chroot", "systemctl", "enable", init_svc)
         for profile in self._iter_active_profiles():
-            already = any(
-                cmd.argv == enable_argv for cmd in profile.phases.get("postinst", [])
-            )
+            already = any(cmd.argv == enable_argv for cmd in profile.phases.get("postinst", []))
             if not already:
                 self.run(*enable_argv, phase="postinst")
                 break  # run() appends to all active profiles

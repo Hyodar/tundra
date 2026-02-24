@@ -47,9 +47,7 @@ def test_debloat_paths_skip_for_profiles_excludes_from_effective() -> None:
     from tdx.models import DebloatConfig
 
     config = DebloatConfig(
-        paths_skip_for_profiles=(
-            ("devtools", ("/usr/share/bash-completion",)),
-        ),
+        paths_skip_for_profiles=(("devtools", ("/usr/share/bash-completion",)),),
     )
     # /usr/share/bash-completion is in DEFAULT_DEBLOAT_PATHS_REMOVE
     assert "/usr/share/bash-completion" not in config.effective_paths_remove

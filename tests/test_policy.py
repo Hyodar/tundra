@@ -11,9 +11,9 @@ from tdx.policy import Policy
 
 
 def test_policy_requires_frozen_lock_for_bake(tmp_path: Path) -> None:
-    image = Image(
-        build_dir=tmp_path / "build", backend="inprocess"
-    ).set_policy(Policy(require_frozen_lock=True))
+    image = Image(build_dir=tmp_path / "build", backend="inprocess").set_policy(
+        Policy(require_frozen_lock=True)
+    )
 
     with pytest.raises(PolicyError):
         image.bake()

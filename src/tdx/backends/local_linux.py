@@ -65,21 +65,25 @@ class LocalLinuxBackend:
         elif self.privilege == "sudo" and os.getuid() != 0:
             cmd.append("sudo")
 
-        cmd.extend([
-            "mkosi",
-            "--force",
-            f"--image-id={request.profile}",
-            f"--output-dir={output_dir}",
-        ])
+        cmd.extend(
+            [
+                "mkosi",
+                "--force",
+                f"--image-id={request.profile}",
+                f"--output-dir={output_dir}",
+            ]
+        )
 
         # In native profiles mode, use --profile flag
         if native_profiles_dir.exists():
             cmd.append(f"--profile={request.profile}")
 
-        cmd.extend([
-            *self.mkosi_args,
-            "build",
-        ])
+        cmd.extend(
+            [
+                *self.mkosi_args,
+                "build",
+            ]
+        )
 
         result = subprocess.run(
             cmd,

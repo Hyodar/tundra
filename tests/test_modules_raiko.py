@@ -62,10 +62,7 @@ def test_raiko_service_unit_content() -> None:
     module.install(image)
 
     profile = image.state.profiles["default"]
-    svc_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/raiko.service"
-    ]
+    svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/raiko.service"]
     assert len(svc_files) == 1
     svc_content = svc_files[0].content
     assert "User=raiko" in svc_content
@@ -104,10 +101,7 @@ def test_raiko_apply_combines_setup_and_install() -> None:
     assert "build-essential" in profile.build_packages
     assert "clang" in profile.build_packages
     # Files from install()
-    assert any(
-        f.path == "/usr/lib/systemd/system/raiko.service"
-        for f in profile.files
-    )
+    assert any(f.path == "/usr/lib/systemd/system/raiko.service" for f in profile.files)
     # Build hook
     assert len(profile.phases.get("build", [])) == 1
     # Postinst hook (user creation)

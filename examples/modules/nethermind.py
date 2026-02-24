@@ -69,31 +69,31 @@ class Nethermind:
         """Add build phase hook that clones and compiles nethermind from source."""
         build_cmd = (
             f"NETHERMIND_SRC=$BUILDDIR/nethermind-src && "
-            f"if [ ! -d \"$NETHERMIND_SRC\" ]; then "
+            f'if [ ! -d "$NETHERMIND_SRC" ]; then '
             f"git clone --depth=1 -b {self.version} "
-            f"{self.source_repo} \"$NETHERMIND_SRC\"; "
+            f'{self.source_repo} "$NETHERMIND_SRC"; '
             f"fi && "
-            f"cd \"$NETHERMIND_SRC\" && "
+            f'cd "$NETHERMIND_SRC" && '
             f"DOTNET_CLI_TELEMETRY_OPTOUT=1 "
             f"dotnet publish {self.project_path} "
             f"-c Release "
             f"-r {self.runtime} "
-            f"-o \"$BUILDDIR/nethermind-out\" "
+            f'-o "$BUILDDIR/nethermind-out" '
             f"/p:Deterministic=true "
             f"/p:ContinuousIntegrationBuild=true "
             f"/p:PublishSingleFile=true "
             f"/p:BuildTimestamp=0 "
             f"/p:Commit=0000000000000000000000000000000000000000 && "
-            f"install -m 0755 \"$BUILDDIR/nethermind-out/nethermind\" "
-            f"\"$DESTDIR/usr/bin/nethermind\" && "
-            f"install -d \"$DESTDIR/etc/nethermind-surge\" && "
-            f"if [ -f \"$BUILDDIR/nethermind-out/NLog.config\" ]; then "
-            f"install -m 0644 \"$BUILDDIR/nethermind-out/NLog.config\" "
-            f"\"$DESTDIR/etc/nethermind-surge/NLog.config\"; "
+            f'install -m 0755 "$BUILDDIR/nethermind-out/nethermind" '
+            f'"$DESTDIR/usr/bin/nethermind" && '
+            f'install -d "$DESTDIR/etc/nethermind-surge" && '
+            f'if [ -f "$BUILDDIR/nethermind-out/NLog.config" ]; then '
+            f'install -m 0644 "$BUILDDIR/nethermind-out/NLog.config" '
+            f'"$DESTDIR/etc/nethermind-surge/NLog.config"; '
             f"fi && "
-            f"if [ -d \"$BUILDDIR/nethermind-out/plugins\" ]; then "
-            f"cp -r \"$BUILDDIR/nethermind-out/plugins\" "
-            f"\"$DESTDIR/etc/nethermind-surge/plugins\"; "
+            f'if [ -d "$BUILDDIR/nethermind-out/plugins" ]; then '
+            f'cp -r "$BUILDDIR/nethermind-out/plugins" '
+            f'"$DESTDIR/etc/nethermind-surge/plugins"; '
             f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
@@ -119,10 +119,15 @@ class Nethermind:
             image.file(dest_path, src=src_path)
 
         image.run(
-            "mkosi-chroot", "useradd", "--system",
-            "--home-dir", f"/home/{self.user}",
-            "--shell", "/usr/sbin/nologin",
-            "--groups", self.group,
+            "mkosi-chroot",
+            "useradd",
+            "--system",
+            "--home-dir",
+            f"/home/{self.user}",
+            "--shell",
+            "/usr/sbin/nologin",
+            "--groups",
+            self.group,
             self.user,
             phase="postinst",
         )

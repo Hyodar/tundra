@@ -110,14 +110,18 @@ class Devtools:
 
         # Enable serial-console service
         image.run(
-            "mkosi-chroot", "systemctl", "enable",
+            "mkosi-chroot",
+            "systemctl",
+            "enable",
             "serial-console.service",
             phase="postinst",
         )
 
         # Root password + auth configuration
         image.run(
-            "bash", "-c", DEVTOOLS_POSTINST_SCRIPT,
+            "bash",
+            "-c",
+            DEVTOOLS_POSTINST_SCRIPT,
             phase="postinst",
         )
 

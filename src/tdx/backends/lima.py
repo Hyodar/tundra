@@ -101,8 +101,13 @@ class LimaBackend:
         )
 
         cmd = [
-            "limactl", "shell", self.instance_name, "--",
-            "bash", "-c", mkosi_cmd,
+            "limactl",
+            "shell",
+            self.instance_name,
+            "--",
+            "bash",
+            "-c",
+            mkosi_cmd,
         ]
 
         result = subprocess.run(

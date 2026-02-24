@@ -318,17 +318,19 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
 
     # Security hardening for strict profile
     if svc.security_profile == "strict":
-        lines.extend([
-            "ProtectSystem=strict",
-            "ProtectHome=yes",
-            "PrivateTmp=yes",
-            "NoNewPrivileges=yes",
-            "ProtectKernelModules=yes",
-            "ProtectKernelTunables=yes",
-            "ProtectControlGroups=yes",
-            "RestrictSUIDSGID=yes",
-            "MemoryDenyWriteExecute=yes",
-        ])
+        lines.extend(
+            [
+                "ProtectSystem=strict",
+                "ProtectHome=yes",
+                "PrivateTmp=yes",
+                "NoNewPrivileges=yes",
+                "ProtectKernelModules=yes",
+                "ProtectKernelTunables=yes",
+                "ProtectControlGroups=yes",
+                "RestrictSUIDSGID=yes",
+                "MemoryDenyWriteExecute=yes",
+            ]
+        )
 
     # Extra unit directives
     if svc.extra_unit and "Service" in svc.extra_unit:
@@ -703,9 +705,7 @@ class DeterministicMkosiEmitter:
             config_src = Path(config.kernel.config_file)
             config_dest = kernel_dir / "kernel.config"
             if config_src.exists():
-                config_dest.write_text(
-                    config_src.read_text(encoding="utf-8"), encoding="utf-8"
-                )
+                config_dest.write_text(config_src.read_text(encoding="utf-8"), encoding="utf-8")
             else:
                 # Write a placeholder referencing the expected config file
                 config_dest.write_text(
@@ -736,9 +736,7 @@ class DeterministicMkosiEmitter:
             if phase == "postinst":
                 synthetic = self._synthetic_postinst_commands(profile)
                 all_commands = synthetic + list(commands)
-                needs_debloat = (
-                    profile.debloat.enabled and profile.debloat.systemd_minimize
-                )
+                needs_debloat = profile.debloat.enabled and profile.debloat.systemd_minimize
                 if all_commands or needs_debloat:
                     script_name = f"{index:02d}-{phase}.sh"
                     script_path = scripts_dir / script_name
@@ -773,7 +771,8 @@ class DeterministicMkosiEmitter:
                     # Remove the shebang from user script to avoid duplicate
                     user_lines = user_script.split("\n")
                     user_body = "\n".join(
-                        line for line in user_lines
+                        line
+                        for line in user_lines
                         if not line.startswith("#!") and line != "set -euo pipefail"
                     ).strip()
                     combined = kernel_script.rstrip() + "\n\n" + user_body + "\n"
@@ -834,7 +833,7 @@ class DeterministicMkosiEmitter:
             lines.append("")
             lines.append("# Debloat: remove unnecessary paths")
             for path in sorted(paths):
-                lines.append(f"rm -rf \"$BUILDROOT{path}\"")
+                lines.append(f'rm -rf "$BUILDROOT{path}"')
 
         # Profile-conditional path removal: paths removed only when profile is NOT active
         conditional = config.profile_conditional_paths
@@ -843,17 +842,13 @@ class DeterministicMkosiEmitter:
             lines.append("# Debloat: profile-conditional path removal")
             for profile_name in sorted(conditional):
                 for path in conditional[profile_name]:
-                    lines.append(
-                        f'if [[ ! "${{PROFILES:-}}" == *"{profile_name}"* ]]; then'
-                    )
-                    lines.append(f"    rm -rf \"$BUILDROOT{path}\"")
+                    lines.append(f'if [[ ! "${{PROFILES:-}}" == *"{profile_name}"* ]]; then')
+                    lines.append(f'    rm -rf "$BUILDROOT{path}"')
                     lines.append("fi")
 
         return lines
 
-    def _render_postinst_script(
-        self, commands: list[CommandSpec], profile: ProfileState
-    ) -> str:
+    def _render_postinst_script(self, commands: list[CommandSpec], profile: ProfileState) -> str:
         """Render postinst script with user creation, service enablement, and debloat."""
         lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
 
@@ -876,12 +871,12 @@ class DeterministicMkosiEmitter:
                 "mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | "
                 "while read -r bin_path; do"
             )
-            lines.append("    bin_name=$(basename \"$bin_path\")")
+            lines.append('    bin_name=$(basename "$bin_path")')
             lines.append(
                 "    if ! printf '%s\\n' \"${systemd_bin_whitelist[@]}\" | "
-                "grep -qx \"$bin_name\"; then"
+                'grep -qx "$bin_name"; then'
             )
-            lines.append("        rm -f \"$BUILDROOT$bin_path\"")
+            lines.append('        rm -f "$BUILDROOT$bin_path"')
             lines.append("    fi")
             lines.append("done")
 
@@ -890,28 +885,24 @@ class DeterministicMkosiEmitter:
             lines.append("# Debloat: mask unwanted systemd units")
             keep_list = " ".join(f'"{u}"' for u in units_keep)
             lines.append(f"systemd_svc_whitelist=({keep_list})")
-            lines.append("SYSTEMD_DIR=\"$BUILDROOT/etc/systemd/system\"")
-            lines.append("mkdir -p \"$SYSTEMD_DIR\"")
+            lines.append('SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"')
+            lines.append('mkdir -p "$SYSTEMD_DIR"')
             lines.append(
                 "mkosi-chroot dpkg-query -L systemd | "
                 "grep -E '\\.service$|\\.socket$|\\.timer$|\\.target$|\\.mount$' | "
                 "sed 's|.*/||' | while read -r unit; do"
             )
             lines.append(
-                "    if ! printf '%s\\n' \"${systemd_svc_whitelist[@]}\" | "
-                "grep -qx \"$unit\"; then"
+                '    if ! printf \'%s\\n\' "${systemd_svc_whitelist[@]}" | grep -qx "$unit"; then'
             )
-            lines.append("        ln -sf /dev/null \"$SYSTEMD_DIR/$unit\"")
+            lines.append('        ln -sf /dev/null "$SYSTEMD_DIR/$unit"')
             lines.append("    fi")
             lines.append("done")
 
             # Set default target
             lines.append("")
             lines.append("# Set default systemd target")
-            lines.append(
-                "ln -sf minimal.target "
-                "\"$BUILDROOT/etc/systemd/system/default.target\""
-            )
+            lines.append('ln -sf minimal.target "$BUILDROOT/etc/systemd/system/default.target"')
 
         lines.append("")
         return "\n".join(lines)

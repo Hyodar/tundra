@@ -195,7 +195,10 @@ def test_secret_delivery_writes_config_from_declared_secrets() -> None:
     assert jwt["schema"] == {"kind": "string", "min_length": 64, "max_length": 64}
     assert len(jwt["targets"]) == 2
     assert jwt["targets"][0] == {
-        "kind": "file", "location": "/run/secrets/jwt.hex", "mode": "0440", "owner": "app",
+        "kind": "file",
+        "location": "/run/secrets/jwt.hex",
+        "mode": "0440",
+        "owner": "app",
     }
     assert jwt["targets"][1] == {"kind": "env", "location": "JWT_SECRET", "scope": "global"}
 
@@ -227,8 +230,7 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
 
     # Service unit
     svc_files = [
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/runtime-init.service"
+        f for f in profile.files if f.path == "/usr/lib/systemd/system/runtime-init.service"
     ]
     assert len(svc_files) == 1
     svc = svc_files[0].content

@@ -43,8 +43,14 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
 
     # Verify emitted service unit
     unit_path = (
-        emit_dir / "default" / "mkosi.extra"
-        / "usr" / "lib" / "systemd" / "system" / "hello.service"
+        emit_dir
+        / "default"
+        / "mkosi.extra"
+        / "usr"
+        / "lib"
+        / "systemd"
+        / "system"
+        / "hello.service"
     )
     assert unit_path.exists(), "hello.service not emitted"
 
@@ -52,7 +58,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
     bake_result = img.bake(output_dir=output_dir)
 
-    for pname, presult in bake_result.profiles.items():
+    for _pname, presult in bake_result.profiles.items():
         if presult.report_path and presult.report_path.exists():
             report = json.loads(presult.report_path.read_text())
             assert "backend" in report
@@ -82,9 +88,7 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
     assert "git" in conf_text
 
     # config.yaml
-    config_yaml = (
-        emit_dir / "default" / "mkosi.extra" / "etc" / "tdxs" / "config.yaml"
-    )
+    config_yaml = emit_dir / "default" / "mkosi.extra" / "etc" / "tdxs" / "config.yaml"
     assert config_yaml.exists(), "config.yaml not emitted"
     config_content = config_yaml.read_text()
     assert "type: dcap" in config_content
@@ -92,8 +96,7 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
 
     # Service unit
     svc_unit = (
-        emit_dir / "default" / "mkosi.extra"
-        / "usr" / "lib" / "systemd" / "system" / "tdxs.service"
+        emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.service"
     )
     assert svc_unit.exists(), "tdxs.service not emitted"
     svc_text = svc_unit.read_text()
@@ -104,8 +107,7 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
 
     # Socket unit
     sock_unit = (
-        emit_dir / "default" / "mkosi.extra"
-        / "usr" / "lib" / "systemd" / "system" / "tdxs.socket"
+        emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.socket"
     )
     assert sock_unit.exists(), "tdxs.socket not emitted"
     sock_text = sock_unit.read_text()

@@ -64,15 +64,15 @@ class Tdxs:
         """Add build phase hook that clones and compiles tdxs from source."""
         build_cmd = (
             f"TDXS_SRC=$BUILDDIR/tdxs-src && "
-            f"if [ ! -d \"$TDXS_SRC\" ]; then "
+            f'if [ ! -d "$TDXS_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f"{self.source_repo} \"$TDXS_SRC\"; "
+            f'{self.source_repo} "$TDXS_SRC"; '
             f"fi && "
-            f"cd \"$TDXS_SRC\" && "
+            f'cd "$TDXS_SRC" && '
             f"make sync-constellation && "
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o \"$DESTDIR/usr/bin/tdxs\" ./cmd/tdxs/main.go"
+            f'-o "$DESTDIR/usr/bin/tdxs" ./cmd/tdxs/main.go'
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
@@ -100,19 +100,30 @@ class Tdxs:
         )
 
         image.run(
-            "mkosi-chroot", "groupadd", "--system", self.group,
+            "mkosi-chroot",
+            "groupadd",
+            "--system",
+            self.group,
             phase="postinst",
         )
         image.run(
-            "mkosi-chroot", "useradd", "--system",
-            "--home-dir", f"/home/{self.user}",
-            "--shell", "/usr/sbin/nologin",
-            "--gid", self.group,
+            "mkosi-chroot",
+            "useradd",
+            "--system",
+            "--home-dir",
+            f"/home/{self.user}",
+            "--shell",
+            "/usr/sbin/nologin",
+            "--gid",
+            self.group,
             self.user,
             phase="postinst",
         )
         image.run(
-            "mkosi-chroot", "systemctl", "enable", "tdxs.socket",
+            "mkosi-chroot",
+            "systemctl",
+            "enable",
+            "tdxs.socket",
             phase="postinst",
         )
 

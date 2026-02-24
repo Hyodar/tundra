@@ -45,16 +45,16 @@ class DiskEncryption:
 
         build_cmd = (
             f"DISK_ENC_SRC=$BUILDDIR/disk-encryption-src && "
-            f"if [ ! -d \"$DISK_ENC_SRC\" ]; then "
+            f'if [ ! -d "$DISK_ENC_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f"{self.source_repo} \"$DISK_ENC_SRC\"; "
+            f'{self.source_repo} "$DISK_ENC_SRC"; '
             f"fi && "
-            f"cd \"$DISK_ENC_SRC/init\" && "
+            f'cd "$DISK_ENC_SRC/init" && '
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/disk-encryption ./cmd/main.go && "
             f"install -m 0755 ./build/disk-encryption "
-            f"\"$DESTDIR/usr/bin/disk-encryption\""
+            f'"$DESTDIR/usr/bin/disk-encryption"'
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 

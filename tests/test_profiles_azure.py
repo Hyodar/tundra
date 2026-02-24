@@ -54,9 +54,7 @@ def test_azure_profile_emits_service_unit() -> None:
 
     profile = image.state.profiles["azure"]
     file_paths = {f.path for f in profile.files}
-    assert (
-        "/usr/lib/systemd/system/azure-complete-provisioning.service" in file_paths
-    )
+    assert "/usr/lib/systemd/system/azure-complete-provisioning.service" in file_paths
 
     svc_entry = next(
         f
@@ -87,14 +85,10 @@ def test_azure_profile_enables_service_in_postinst() -> None:
 
     # Check that systemctl enable is called
     enable_cmds = [
-        cmd
-        for cmd in postinst_commands
-        if "systemctl" in cmd.argv and "enable" in cmd.argv
+        cmd for cmd in postinst_commands if "systemctl" in cmd.argv and "enable" in cmd.argv
     ]
     assert len(enable_cmds) >= 1
-    assert any(
-        "azure-complete-provisioning.service" in cmd.argv for cmd in enable_cmds
-    )
+    assert any("azure-complete-provisioning.service" in cmd.argv for cmd in enable_cmds)
 
 
 def test_azure_profile_symlinks_to_minimal_target() -> None:
@@ -110,9 +104,7 @@ def test_azure_profile_symlinks_to_minimal_target() -> None:
     link_cmds = [cmd for cmd in postinst_commands if "ln" in cmd.argv]
     assert len(link_cmds) >= 1
     link_cmd = link_cmds[0]
-    assert "minimal.target.wants/azure-complete-provisioning.service" in " ".join(
-        link_cmd.argv
-    )
+    assert "minimal.target.wants/azure-complete-provisioning.service" in " ".join(link_cmd.argv)
 
 
 def test_azure_profile_sets_output_target() -> None:
@@ -133,7 +125,4 @@ def test_azure_profile_does_not_affect_default_profile() -> None:
 
     default_profile = image.state.profiles["default"]
     assert "dmidecode" not in default_profile.packages
-    assert not any(
-        f.path == "/usr/bin/azure-complete-provisioning"
-        for f in default_profile.files
-    )
+    assert not any(f.path == "/usr/bin/azure-complete-provisioning" for f in default_profile.files)

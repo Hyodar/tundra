@@ -47,24 +47,30 @@ class Init:
             return
         sorted_scripts = sorted(all_scripts, key=lambda e: e.priority)
 
-        parts = [dedent("""\
+        parts = [
+            dedent("""\
             #!/bin/bash
             set -euo pipefail
-        """)]
+        """)
+        ]
         for entry in sorted_scripts:
             parts.append(entry.script)
         script_content = "\n".join(parts)
 
-        profile.files.append(FileEntry(
-            path="/usr/bin/runtime-init",
-            content=script_content,
-            mode="0755",
-        ))
-        profile.files.append(FileEntry(
-            path="/usr/lib/systemd/system/runtime-init.service",
-            content=self._render_service_unit(),
-            mode="0644",
-        ))
+        profile.files.append(
+            FileEntry(
+                path="/usr/bin/runtime-init",
+                content=script_content,
+                mode="0755",
+            )
+        )
+        profile.files.append(
+            FileEntry(
+                path="/usr/lib/systemd/system/runtime-init.service",
+                content=self._render_service_unit(),
+                mode="0644",
+            )
+        )
 
     def _render_service_unit(self) -> str:
         return dedent("""\

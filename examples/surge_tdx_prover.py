@@ -240,29 +240,39 @@ def build_surge_tdx_prover() -> Image:
 
     # Enable services in postinst
     img.run(
-        "mkosi-chroot", "systemctl", "enable",
+        "mkosi-chroot",
+        "systemctl",
+        "enable",
         "prometheus.service",
         phase="postinst",
     )
     img.run(
-        "mkosi-chroot", "systemctl", "enable",
+        "mkosi-chroot",
+        "systemctl",
+        "enable",
         "prometheus-node-exporter.service",
         phase="postinst",
     )
     img.run(
-        "mkosi-chroot", "systemctl", "enable",
+        "mkosi-chroot",
+        "systemctl",
+        "enable",
         "openntpd.service",
         phase="postinst",
     )
     img.run(
-        "mkosi-chroot", "systemctl", "enable",
+        "mkosi-chroot",
+        "systemctl",
+        "enable",
         "dropbear.service",
         phase="postinst",
     )
 
     # Create eth group (shared by nethermind-surge and taiko-client)
     img.run(
-        "mkosi-chroot", "bash", "-c",
+        "mkosi-chroot",
+        "bash",
+        "-c",
         "getent group eth >/dev/null 2>&1 || groupadd -r eth",
         phase="postinst",
     )

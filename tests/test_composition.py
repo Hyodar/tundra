@@ -156,8 +156,7 @@ def test_debloat_masking_coexists_with_module_postinst() -> None:
 
     # Modules add user creation / service enablement via postinst
     has_module_commands = any(
-        "useradd" in a or "groupadd" in a or "systemctl" in a
-        for a in all_argv
+        "useradd" in a or "groupadd" in a or "systemctl" in a for a in all_argv
     )
     assert has_module_commands, "Module postinst commands (user/group/service) should be present"
 
@@ -174,9 +173,7 @@ def test_multiple_modules_have_distinct_build_hooks() -> None:
     build_commands = profile.phases.get("build", [])
 
     # base hook + app hook + 3 init sub-module hooks + 4 service module hooks = 9
-    assert len(build_commands) >= 9, (
-        f"Expected at least 9 build hooks, got {len(build_commands)}"
-    )
+    assert len(build_commands) >= 9, f"Expected at least 9 build hooks, got {len(build_commands)}"
 
 
 def test_all_module_packages_present() -> None:
@@ -299,8 +296,12 @@ def test_full_composition_produces_valid_state() -> None:
 
     # Build packages are a superset of all module requirements
     assert profile.build_packages >= {
-        "golang", "git", "build-essential", "clang",
-        "dotnet-sdk-10.0", "dotnet-runtime-10.0",
+        "golang",
+        "git",
+        "build-essential",
+        "clang",
+        "dotnet-sdk-10.0",
+        "dotnet-runtime-10.0",
     }
 
     # Runtime packages include both base and app layer

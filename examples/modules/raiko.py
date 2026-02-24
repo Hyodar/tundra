@@ -66,11 +66,11 @@ class Raiko:
         """Add build phase hook that clones and compiles raiko from source."""
         build_cmd = (
             f"RAIKO_SRC=$BUILDDIR/raiko-src && "
-            f"if [ ! -d \"$RAIKO_SRC\" ]; then "
+            f'if [ ! -d "$RAIKO_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f"{self.source_repo} \"$RAIKO_SRC\"; "
+            f'{self.source_repo} "$RAIKO_SRC"; '
             f"fi && "
-            f"cd \"$RAIKO_SRC\" && "
+            f'cd "$RAIKO_SRC" && '
             f"CARGO_HOME=$BUILDDIR/cargo-home "
             f"CARGO_PROFILE_RELEASE_LTO=thin "
             f"CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 "
@@ -78,7 +78,7 @@ class Raiko:
             f"CARGO_PROFILE_RELEASE_OPT_LEVEL=3 "
             f'RUSTFLAGS="-C target-cpu=generic -C link-arg=-Wl,--build-id=none" '
             f"cargo build --release -p raiko-host && "
-            f"install -m 0755 target/release/raiko-host \"$DESTDIR/usr/bin/raiko\""
+            f'install -m 0755 target/release/raiko-host "$DESTDIR/usr/bin/raiko"'
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
@@ -105,10 +105,15 @@ class Raiko:
             image.file("/etc/raiko/chain-spec.json", src=self.chain_spec_path)
 
         image.run(
-            "mkosi-chroot", "useradd", "--system",
-            "--home-dir", f"/home/{self.user}",
-            "--shell", "/usr/sbin/nologin",
-            "--gid", self.group,
+            "mkosi-chroot",
+            "useradd",
+            "--system",
+            "--home-dir",
+            f"/home/{self.user}",
+            "--shell",
+            "/usr/sbin/nologin",
+            "--gid",
+            self.group,
             self.user,
             phase="postinst",
         )

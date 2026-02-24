@@ -23,9 +23,19 @@ def test_devtools_profile_adds_debug_packages() -> None:
 def test_devtools_profile_includes_expected_packages() -> None:
     """Verify the exact package list matches the upstream devtools profile."""
     expected = {
-        "apt", "bash-completion", "curl", "dnsutils", "iputils-ping",
-        "net-tools", "netcat-openbsd", "openssh-server", "socat",
-        "strace", "tcpdump", "tcpflow", "vim",
+        "apt",
+        "bash-completion",
+        "curl",
+        "dnsutils",
+        "iputils-ping",
+        "net-tools",
+        "netcat-openbsd",
+        "openssh-server",
+        "socat",
+        "strace",
+        "tcpdump",
+        "tcpflow",
+        "vim",
     }
     assert set(DEVTOOLS_PACKAGES) == expected
 
@@ -41,8 +51,7 @@ def test_devtools_profile_emits_serial_console_service() -> None:
     assert "/usr/lib/systemd/system/serial-console.service" in file_paths
 
     svc_entry = next(
-        f for f in profile.files
-        if f.path == "/usr/lib/systemd/system/serial-console.service"
+        f for f in profile.files if f.path == "/usr/lib/systemd/system/serial-console.service"
     )
     assert svc_entry.content == SERIAL_CONSOLE_SERVICE
 
@@ -65,13 +74,10 @@ def test_devtools_profile_enables_serial_console_in_postinst() -> None:
     postinst_commands = profile.phases.get("postinst", [])
 
     enable_cmds = [
-        cmd for cmd in postinst_commands
-        if "systemctl" in cmd.argv and "enable" in cmd.argv
+        cmd for cmd in postinst_commands if "systemctl" in cmd.argv and "enable" in cmd.argv
     ]
     assert len(enable_cmds) >= 1
-    assert any(
-        "serial-console.service" in cmd.argv for cmd in enable_cmds
-    )
+    assert any("serial-console.service" in cmd.argv for cmd in enable_cmds)
 
 
 def test_devtools_postinst_sets_root_password() -> None:
@@ -107,9 +113,7 @@ def test_devtools_profile_registers_postinst_password_hook() -> None:
     assert len(postinst_commands) >= 2
 
     # Check that the password/auth setup script is in postinst
-    all_args = " ".join(
-        " ".join(cmd.argv) for cmd in postinst_commands
-    )
+    all_args = " ".join(" ".join(cmd.argv) for cmd in postinst_commands)
     assert "openssl passwd" in all_args or "bash" in all_args
 
 
@@ -122,8 +126,7 @@ def test_devtools_profile_does_not_affect_default_profile() -> None:
     default_profile = image.state.profiles["default"]
     assert "vim" not in default_profile.packages
     assert not any(
-        f.path == "/usr/lib/systemd/system/serial-console.service"
-        for f in default_profile.files
+        f.path == "/usr/lib/systemd/system/serial-console.service" for f in default_profile.files
     )
 
 

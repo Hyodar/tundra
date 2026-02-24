@@ -63,17 +63,17 @@ class TaikoClient:
         """Add build phase hook that clones and compiles taiko-client from source."""
         build_cmd = (
             f"TAIKO_SRC=$BUILDDIR/taiko-client-src && "
-            f"if [ ! -d \"$TAIKO_SRC\" ]; then "
+            f'if [ ! -d "$TAIKO_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f"{self.source_repo} \"$TAIKO_SRC\"; "
+            f'{self.source_repo} "$TAIKO_SRC"; '
             f"fi && "
-            f"cd \"$TAIKO_SRC/{self.build_path}\" && "
+            f'cd "$TAIKO_SRC/{self.build_path}" && '
             f"GOCACHE=$BUILDDIR/go-cache "
             f'CGO_CFLAGS="-O -D__BLST_PORTABLE__" '
             f'CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__" '
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/taiko-client . && "
-            f"install -m 0755 ./build/taiko-client \"$DESTDIR/usr/bin/taiko-client\""
+            f'install -m 0755 ./build/taiko-client "$DESTDIR/usr/bin/taiko-client"'
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 
@@ -95,10 +95,15 @@ class TaikoClient:
         )
 
         image.run(
-            "mkosi-chroot", "useradd", "--system",
-            "--home-dir", f"/home/{self.user}",
-            "--shell", "/usr/sbin/nologin",
-            "--groups", self.group,
+            "mkosi-chroot",
+            "useradd",
+            "--system",
+            "--home-dir",
+            f"/home/{self.user}",
+            "--shell",
+            "/usr/sbin/nologin",
+            "--groups",
+            self.group,
             self.user,
             phase="postinst",
         )

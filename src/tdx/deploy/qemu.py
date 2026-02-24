@@ -77,12 +77,17 @@ class QemuDeployAdapter:
         # Build QEMU command
         cmd: list[str] = [
             self.qemu_binary,
-            "-machine", "q35,accel=kvm",
-            "-cpu", "host",
-            "-m", memory,
-            "-smp", cpus,
+            "-machine",
+            "q35,accel=kvm",
+            "-cpu",
+            "host",
+            "-m",
+            memory,
+            "-smp",
+            cpus,
             "-nographic",
-            "-serial", "mon:stdio",
+            "-serial",
+            "mon:stdio",
             "-no-reboot",
         ]
 
@@ -90,29 +95,45 @@ class QemuDeployAdapter:
         if is_uki:
             ovmf_code = _find_firmware(OVMF_CODE_PATHS, "OVMF_CODE")
             ovmf_vars = _find_firmware(OVMF_VARS_PATHS, "OVMF_VARS")
-            cmd.extend([
-                "-drive", f"file={ovmf_code},if=pflash,format=raw,readonly=on",
-                "-drive", f"file={ovmf_vars},if=pflash,format=raw",
-                "-kernel", str(artifact_path),
-            ])
+            cmd.extend(
+                [
+                    "-drive",
+                    f"file={ovmf_code},if=pflash,format=raw,readonly=on",
+                    "-drive",
+                    f"file={ovmf_vars},if=pflash,format=raw",
+                    "-kernel",
+                    str(artifact_path),
+                ]
+            )
         else:
             # Disk image boot
-            cmd.extend([
-                "-drive", f"file={artifact_path},format=raw,if=virtio",
-            ])
+            cmd.extend(
+                [
+                    "-drive",
+                    f"file={artifact_path},format=raw,if=virtio",
+                ]
+            )
 
         # Networking with port forwarding
-        cmd.extend([
-            "-netdev", f"user,id=net0,hostfwd=tcp::{ssh_port}-:22",
-            "-device", "virtio-net-pci,netdev=net0",
-        ])
+        cmd.extend(
+            [
+                "-netdev",
+                f"user,id=net0,hostfwd=tcp::{ssh_port}-:22",
+                "-device",
+                "virtio-net-pci,netdev=net0",
+            ]
+        )
 
         # TDX support
         if enable_tdx:
-            cmd.extend([
-                "-object", "tdx-guest,id=tdx0",
-                "-machine", "confidential-guest-support=tdx0",
-            ])
+            cmd.extend(
+                [
+                    "-object",
+                    "tdx-guest,id=tdx0",
+                    "-machine",
+                    "confidential-guest-support=tdx0",
+                ]
+            )
 
         # Daemonize
         if daemonize:

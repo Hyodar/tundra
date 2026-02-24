@@ -55,14 +55,24 @@ class GcpDeployAdapter:
         # Create VM instance
         vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"
         cmd = [
-            "gcloud", "compute", "instances", "create", vm_name,
-            "--project", project,
-            "--zone", zone,
-            "--machine-type", machine_type,
-            "--image", image_name,
+            "gcloud",
+            "compute",
+            "instances",
+            "create",
+            vm_name,
+            "--project",
+            project,
+            "--zone",
+            zone,
+            "--machine-type",
+            machine_type,
+            "--image",
+            image_name,
             "--confidential-compute",
-            "--maintenance-policy", "TERMINATE",
-            "--format", "json",
+            "--maintenance-policy",
+            "TERMINATE",
+            "--format",
+            "json",
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -110,10 +120,17 @@ class GcpDeployAdapter:
 
     def _create_image(self, image_name: str, *, gcs_uri: str, project: str) -> None:
         cmd = [
-            "gcloud", "compute", "images", "create", image_name,
-            "--project", project,
-            "--source-uri", gcs_uri,
-            "--guest-os-features", "UEFI_COMPATIBLE,SEV_SNP_CAPABLE",
+            "gcloud",
+            "compute",
+            "images",
+            "create",
+            image_name,
+            "--project",
+            project,
+            "--source-uri",
+            gcs_uri,
+            "--guest-os-features",
+            "UEFI_COMPATIBLE,SEV_SNP_CAPABLE",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:

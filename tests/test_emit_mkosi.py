@@ -51,16 +51,10 @@ def test_compile_golden_output(tmp_path: Path) -> None:
     assert "WithNetwork=true" in conf_text
 
     assert prepare_script.read_text(encoding="utf-8") == (
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "\n"
-        "(cd /work && A=1 B=2 echo prep)\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\n\n(cd /work && A=1 B=2 echo prep)\n"
     )
     assert build_script.read_text(encoding="utf-8") == (
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "\n"
-        "echo build\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\n\necho build\n"
     )
 
 
@@ -117,8 +111,14 @@ def test_compile_generates_service_units(tmp_path: Path) -> None:
     output_dir = image.compile(tmp_path / "mkosi")
 
     unit_path = (
-        output_dir / "default" / "mkosi.extra"
-        / "usr" / "lib" / "systemd" / "system" / "app.service"
+        output_dir
+        / "default"
+        / "mkosi.extra"
+        / "usr"
+        / "lib"
+        / "systemd"
+        / "system"
+        / "app.service"
     )
     assert unit_path.exists()
     content = unit_path.read_text(encoding="utf-8")
@@ -406,9 +406,7 @@ def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
     config_file.write_text("# CONFIG_LOCALVERSION is not set\n", encoding="utf-8")
 
     image = Image(base="debian/bookworm", reproducible=False)
-    image.kernel = Kernel.tdx_kernel(
-        "6.13.12", config_file=str(config_file)
-    )
+    image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
     image.install("curl")
 
     output_dir = image.compile(tmp_path / "mkosi")
@@ -684,8 +682,7 @@ def test_compile_backports_auto_adds_sandbox_trees() -> None:
     image.backports()
 
     expected_entry = (
-        "mkosi.builddir/debian-backports.sources"
-        ":/etc/apt/sources.list.d/debian-backports.sources"
+        "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
     )
     assert expected_entry in image.sandbox_trees
 
@@ -703,8 +700,7 @@ def test_compile_backports_no_duplicate_sandbox_trees() -> None:
     image.backports()
 
     expected_entry = (
-        "mkosi.builddir/debian-backports.sources"
-        ":/etc/apt/sources.list.d/debian-backports.sources"
+        "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
     )
     assert image.sandbox_trees.count(expected_entry) == 1
 
@@ -764,7 +760,7 @@ def test_compile_debloat_profile_conditional_paths(tmp_path: Path) -> None:
     assert "/usr/share/bash-completion" not in unconditional_section
 
     # It should appear in the conditional section with profile guard
-    assert '${PROFILES:-}' in content
+    assert "${PROFILES:-}" in content
     assert '"devtools"' in content
     assert "/usr/share/bash-completion" in content
     assert 'if [[ ! "${PROFILES:-}" == *"devtools"* ]]; then' in content
