@@ -117,7 +117,7 @@ class SecretDelivery:
             "-o ./build/secret-delivery ./cmd/main.go"
             "'"
         )
-        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
+        image.hook("build", cache.wrap(build_cmd), shell=True)
 
     def _add_config(self, image: Image) -> None:
         """Write the JSON config file and register secrets on the image."""

@@ -562,12 +562,12 @@ def test_compile_efi_stub_registered_in_postinst_phase() -> None:
     assert "postinst" in profile.phases
     commands = profile.phases["postinst"]
     assert len(commands) >= 1
-    # The hook should contain the EFI stub script via bash -c
+    # The hook should contain the EFI stub script as a shell command
     efi_command = commands[-1]
-    assert efi_command.argv[0] == "bash"
-    assert efi_command.argv[1] == "-c"
-    assert "snapshot.example.com" in efi_command.argv[2]
-    assert "255.4-1" in efi_command.argv[2]
+    assert efi_command.shell is True
+    script = efi_command.argv[0]
+    assert "snapshot.example.com" in script
+    assert "255.4-1" in script
 
 
 def test_compile_strip_image_version_finalize_hook(tmp_path: Path) -> None:
@@ -598,9 +598,8 @@ def test_compile_strip_image_version_registered_in_finalize_phase() -> None:
     commands = profile.phases["finalize"]
     assert len(commands) >= 1
     strip_command = commands[-1]
-    assert strip_command.argv[0] == "bash"
-    assert strip_command.argv[1] == "-c"
-    assert "IMAGE_VERSION" in strip_command.argv[2]
+    assert strip_command.shell is True
+    assert "IMAGE_VERSION" in strip_command.argv[0]
 
 
 def test_compile_strip_image_version_auto_called_when_reproducible() -> None:
@@ -609,10 +608,7 @@ def test_compile_strip_image_version_auto_called_when_reproducible() -> None:
 
     profile = image.state.profiles["default"]
     assert "finalize" in profile.phases
-    assert any(
-        cmd.argv[0] == "bash" and len(cmd.argv) >= 3 and "IMAGE_VERSION" in cmd.argv[2]
-        for cmd in profile.phases["finalize"]
-    )
+    assert any(cmd.shell and "IMAGE_VERSION" in cmd.argv[0] for cmd in profile.phases["finalize"])
 
 
 def test_compile_strip_image_version_not_called_when_not_reproducible() -> None:
@@ -621,10 +617,7 @@ def test_compile_strip_image_version_not_called_when_not_reproducible() -> None:
 
     profile = image.state.profiles["default"]
     finalize_cmds = profile.phases.get("finalize", [])
-    assert not any(
-        cmd.argv[0] == "bash" and len(cmd.argv) >= 3 and "IMAGE_VERSION" in cmd.argv[2]
-        for cmd in finalize_cmds
-    )
+    assert not any(cmd.shell and "IMAGE_VERSION" in cmd.argv[0] for cmd in finalize_cmds)
 
 
 def test_compile_strip_image_version_can_be_disabled() -> None:
@@ -670,10 +663,10 @@ def test_compile_backports_registered_in_sync_phase() -> None:
     assert len(commands) >= 1
 
     sync_command = commands[0]
-    assert sync_command.argv[0] == "bash"
-    assert sync_command.argv[1] == "-c"
-    assert "example.com/debian" in sync_command.argv[2]
-    assert "debian-backports.sources" in sync_command.argv[2]
+    assert sync_command.shell is True
+    script = sync_command.argv[0]
+    assert "example.com/debian" in script
+    assert "debian-backports.sources" in script
 
 
 def test_compile_backports_auto_adds_sandbox_trees() -> None:
@@ -712,7 +705,7 @@ def test_compile_backports_jq_fallback_when_no_mirror() -> None:
 
     profile = image.state.profiles["default"]
     sync_command = profile.phases["sync"][0]
-    script = sync_command.argv[2]
+    script = sync_command.argv[0]
     assert "jq -r .Mirror /work/config.json" in script
     assert 'MIRROR="http://deb.debian.org/debian"' in script
 
@@ -724,7 +717,7 @@ def test_compile_backports_custom_release() -> None:
 
     profile = image.state.profiles["default"]
     sync_command = profile.phases["sync"][0]
-    script = sync_command.argv[2]
+    script = sync_command.argv[0]
     assert 'RELEASE="trixie"' in script
 
 

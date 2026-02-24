@@ -87,7 +87,7 @@ class TaikoClient:
             "-o bin/taiko-client cmd/main.go"
             "'"
         )
-        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
+        image.hook("build", cache.wrap(build_cmd), shell=True)
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         """Build the After= list, prepending the init service if available."""

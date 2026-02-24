@@ -23,12 +23,9 @@ def test_tdxs_install_adds_build_hook() -> None:
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
     assert len(build_commands) == 1
-    # The build hook should clone and compile tdxs
-    build_argv = build_commands[0].argv
-    assert "sh" in build_argv
-    assert "-c" in build_argv
-    # Verify the build command contains key elements
-    build_script = build_argv[-1]
+    # The build hook is a shell script
+    build_script = build_commands[0].argv[-1]
+    assert build_commands[0].shell is True
     assert "git clone" in build_script
     assert "NethermindEth/tdxs" in build_script
     assert "mkosi-chroot bash -c" in build_script

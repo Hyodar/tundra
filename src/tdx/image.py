@@ -525,25 +525,20 @@ class Image:
                     profile.phases["finalize"] = [
                         cmd
                         for cmd in profile.phases["finalize"]
-                        if not (
-                            cmd.argv[0] == "bash"
-                            and len(cmd.argv) >= 3
-                            and "IMAGE_VERSION" in cmd.argv[2]
-                        )
+                        if not (cmd.shell and "IMAGE_VERSION" in cmd.argv[0])
                     ]
                     profile.hooks = [
                         h
                         for h in profile.hooks
                         if not (
                             h.phase == "finalize"
-                            and h.command.argv[0] == "bash"
-                            and len(h.command.argv) >= 3
-                            and "IMAGE_VERSION" in h.command.argv[2]
+                            and h.command.shell
+                            and "IMAGE_VERSION" in h.command.argv[0]
                         )
                     ]
             return self
         script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/etc/os-release\""""
-        self.hook("finalize", "bash", "-c", script)
+        self.hook("finalize", script, shell=True)
         return self
 
     def efi_stub(self, *, snapshot_url: str, package_version: str) -> Self:
@@ -565,7 +560,7 @@ class Image:
             '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
             'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
         )
-        self.run("bash", "-c", script, phase="postinst")
+        self.run(script, phase="postinst", shell=True)
         return self
 
     def backports(self, *, mirror: str | None = None, release: str | None = None) -> Self:
@@ -604,7 +599,7 @@ class Image:
         )
 
         script = "\n".join(lines)
-        self.hook("sync", "bash", "-c", script)
+        self.hook("sync", script, shell=True)
 
         # Auto-add sandbox_trees entry for the generated file
         backports_entry = (

@@ -118,12 +118,7 @@ class Devtools:
         )
 
         # Root password + auth configuration
-        image.run(
-            "bash",
-            "-c",
-            DEVTOOLS_POSTINST_SCRIPT,
-            phase="postinst",
-        )
+        image.run(DEVTOOLS_POSTINST_SCRIPT, phase="postinst", shell=True)
 
     def apply(self, image: Image) -> None:
         """Convenience: call setup() then install()."""

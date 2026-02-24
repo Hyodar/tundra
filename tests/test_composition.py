@@ -30,14 +30,14 @@ def _build_base_image() -> Image:
     img.debloat(
         paths_skip_for_profiles={"devtools": ("/usr/share/bash-completion",)},
     )
-    img.hook("build", "sh", "-c", "echo base-build-hook", shell=True)
+    img.hook("build", "echo base-build-hook", shell=True)
     return img
 
 
 def _apply_app_layer(img: Image) -> Image:
     """Apply application-layer packages, hooks, and modules."""
     img.install("prometheus", "rclone", "curl", "jq")
-    img.hook("build", "sh", "-c", "echo app-build-hook", shell=True)
+    img.hook("build", "echo app-build-hook", shell=True)
 
     KeyGeneration(strategy="tpm").apply(img)
     DiskEncryption(device="/dev/vda3").apply(img)
@@ -119,7 +119,7 @@ def test_postinst_has_both_base_and_app_commands() -> None:
     """Postinst phase should contain commands from both base and app layers."""
     img = _build_base_image()
     # Add a base-layer postinst command
-    img.run("bash", "-c", "echo base-postinst", phase="postinst")
+    img.run("echo base-postinst", phase="postinst", shell=True)
     _apply_app_layer(img)
 
     profile = img.state.profiles["default"]
