@@ -7,13 +7,19 @@ and report differences.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from examples.surge_tdx_prover import build_surge_tdx_prover
+
+_IMAGE_PATH = Path(__file__).resolve().parent.parent / "examples" / "surge-tdx-prover" / "image.py"
+_spec = importlib.util.spec_from_file_location("surge_tdx_prover_image", _IMAGE_PATH)
+_mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(_mod)  # type: ignore[union-attr]
+build_surge_tdx_prover = _mod.build_surge_tdx_prover
 
 pytestmark = pytest.mark.integration
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from examples.modules import Nethermind, Raiko, TaikoClient
 from examples.nethermind_tdx import build_nethermind_base
+
 from tdx import Image
 from tdx.modules import (
     Devtools,
@@ -262,10 +263,3 @@ def build_surge_tdx_prover() -> Image:
         Devtools().apply(img)
 
     return img
-
-
-if __name__ == "__main__":
-    img = build_surge_tdx_prover()
-    img.compile("build/mkosi")
-    img.lock()
-    img.bake(frozen=True)

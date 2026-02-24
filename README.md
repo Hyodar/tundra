@@ -219,7 +219,7 @@ Platform profiles         src/tdx/platforms/ (AzurePlatform, GcpPlatform)
 | Example | Description |
 |---|---|
 | [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer for [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) — TDX kernel build, EFI stub pinning, backports, full debloat, skeleton files, Tdxs module |
-| [`surge_tdx_prover.py`](examples/surge_tdx_prover.py) | Complete nethermind-tdx image — composes the base layer with Init + composable modules (KeyGeneration, DiskEncryption, SecretDelivery), Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles |
+| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | Complete nethermind-tdx image — composes the base layer with Init + composable modules (KeyGeneration, DiskEncryption, SecretDelivery), Raiko, TaikoClient, Nethermind, Devtools modules, and Azure/GCP platform profiles. Run `python examples/surge-tdx-prover compile` or `bake`. |
 | [`full_api.py`](examples/full_api.py) | End-to-end: kernel, repos, secrets, composable init modules (KeyGeneration, DiskEncryption, SecretDelivery) + Tdxs, runtime secret delivery, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
 | [`tdxs_module.py`](examples/tdxs_module.py) | Minimal Tdxs quote service integration |
