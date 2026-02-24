@@ -62,7 +62,15 @@ class Tdxs:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles tdxs from source."""
+        cache_name = f"tdxs-{self.source_branch}"
+        c = image.caches
+        restore = c.get(cache_name).copy_file("tdxs", "$DESTDIR/usr/bin/tdxs")
+        store = c.create(cache_name).add_file("tdxs", "./build/tdxs")
         build_cmd = (
+            f"if {c.has(cache_name)}; then "
+            f'echo "Using cached tdxs"; '
+            f"{restore}; "
+            f"else "
             f"TDXS_SRC=$BUILDDIR/tdxs-src && "
             f'if [ ! -d "$TDXS_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
@@ -72,7 +80,10 @@ class Tdxs:
             f"make sync-constellation && "
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f'-o "$DESTDIR/usr/bin/tdxs" ./cmd/tdxs/main.go'
+            f"-o ./build/tdxs ./cmd/tdxs/main.go && "
+            f"{store} && "
+            f'install -m 0755 ./build/tdxs "$DESTDIR/usr/bin/tdxs"; '
+            f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 

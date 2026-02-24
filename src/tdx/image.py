@@ -13,6 +13,7 @@ from typing import Literal, Self
 from .backends.inprocess import InProcessBackend
 from .backends.lima import LimaBackend
 from .backends.local_linux import LocalLinuxBackend
+from .build_cache import BuildCaches
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
 from .compiler import (
     DEFAULT_TDX_INIT_SCRIPT,
@@ -110,6 +111,11 @@ class Image:
     @property
     def state(self) -> RecipeState:
         return self._state
+
+    @property
+    def caches(self) -> BuildCaches:
+        """Shell fragment builder for ``$BUILDDIR``-based build artifact caching."""
+        return BuildCaches()
 
     def set_policy(self, policy: Policy) -> Self:
         self.policy = policy

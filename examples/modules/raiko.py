@@ -64,7 +64,15 @@ class Raiko:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles raiko from source."""
+        cache_name = f"raiko-{self.source_branch}"
+        c = image.caches
+        restore = c.get(cache_name).copy_file("raiko", "$DESTDIR/usr/bin/raiko")
+        store = c.create(cache_name).add_file("raiko", "target/release/raiko-host")
         build_cmd = (
+            f"if {c.has(cache_name)}; then "
+            f'echo "Using cached raiko"; '
+            f"{restore}; "
+            f"else "
             f"RAIKO_SRC=$BUILDDIR/raiko-src && "
             f'if [ ! -d "$RAIKO_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
@@ -78,7 +86,9 @@ class Raiko:
             f"CARGO_PROFILE_RELEASE_OPT_LEVEL=3 "
             f'RUSTFLAGS="-C target-cpu=generic -C link-arg=-Wl,--build-id=none" '
             f"cargo build --release -p raiko-host && "
-            f'install -m 0755 target/release/raiko-host "$DESTDIR/usr/bin/raiko"'
+            f"{store} && "
+            f'install -m 0755 target/release/raiko-host "$DESTDIR/usr/bin/raiko"; '
+            f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 

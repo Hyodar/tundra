@@ -67,7 +67,29 @@ class Nethermind:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles nethermind from source."""
+        cache_name = f"nethermind-{self.version}-{self.runtime}"
+        c = image.caches
+        entry = c.get(cache_name)
+        restore_bin = entry.copy_file("nethermind", "$DESTDIR/usr/bin/nethermind")
+        restore_nlog = entry.copy_file(
+            "NLog.config", "$DESTDIR/etc/nethermind-surge/NLog.config", mode="0644"
+        )
+        restore_plugins = entry.copy_dir("plugins", "$DESTDIR/etc/nethermind-surge/plugins")
+        store_bin = c.create(cache_name).add_file(
+            "nethermind", "$BUILDDIR/nethermind-out/nethermind"
+        )
+        store_nlog = c.create(cache_name).add_file(
+            "NLog.config", "$BUILDDIR/nethermind-out/NLog.config", mode="0644"
+        )
+        store_plugins = c.create(cache_name).add_dir("plugins", "$BUILDDIR/nethermind-out/plugins")
         build_cmd = (
+            f"if {c.has(cache_name)}; then "
+            f'echo "Using cached nethermind-{self.version}"; '
+            f"{restore_bin} && "
+            f'install -d "$DESTDIR/etc/nethermind-surge" && '
+            f"{restore_nlog} && "
+            f"{restore_plugins}; "
+            f"else "
             f"NETHERMIND_SRC=$BUILDDIR/nethermind-src && "
             f'if [ ! -d "$NETHERMIND_SRC" ]; then '
             f"git clone --depth=1 -b {self.version} "
@@ -84,8 +106,10 @@ class Nethermind:
             f"/p:PublishSingleFile=true "
             f"/p:BuildTimestamp=0 "
             f"/p:Commit=0000000000000000000000000000000000000000 && "
-            f'install -m 0755 "$BUILDDIR/nethermind-out/nethermind" '
-            f'"$DESTDIR/usr/bin/nethermind" && '
+            f"{store_bin} && "
+            f"{store_nlog} && "
+            f"{store_plugins} && "
+            f"{restore_bin} && "
             f'install -d "$DESTDIR/etc/nethermind-surge" && '
             f'if [ -f "$BUILDDIR/nethermind-out/NLog.config" ]; then '
             f'install -m 0644 "$BUILDDIR/nethermind-out/NLog.config" '
@@ -94,6 +118,7 @@ class Nethermind:
             f'if [ -d "$BUILDDIR/nethermind-out/plugins" ]; then '
             f'cp -r "$BUILDDIR/nethermind-out/plugins" '
             f'"$DESTDIR/etc/nethermind-surge/plugins"; '
+            f"fi; "
             f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)

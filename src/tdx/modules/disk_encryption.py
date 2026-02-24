@@ -43,7 +43,15 @@ class DiskEncryption:
         image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
         image.install("cryptsetup")
 
+        cache_name = f"disk-encryption-{self.source_branch}"
+        c = image.caches
+        restore = c.get(cache_name).copy_file("disk-encryption", "$DESTDIR/usr/bin/disk-encryption")
+        store = c.create(cache_name).add_file("disk-encryption", "./build/disk-encryption")
         build_cmd = (
+            f"if {c.has(cache_name)}; then "
+            f'echo "Using cached disk-encryption"; '
+            f"{restore}; "
+            f"else "
             f"DISK_ENC_SRC=$BUILDDIR/disk-encryption-src && "
             f'if [ ! -d "$DISK_ENC_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
@@ -53,8 +61,9 @@ class DiskEncryption:
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/disk-encryption ./cmd/main.go && "
-            f"install -m 0755 ./build/disk-encryption "
-            f'"$DESTDIR/usr/bin/disk-encryption"'
+            f"{store} && "
+            f'install -m 0755 ./build/disk-encryption "$DESTDIR/usr/bin/disk-encryption"; '
+            f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 

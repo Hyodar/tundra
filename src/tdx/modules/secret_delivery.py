@@ -94,7 +94,15 @@ class SecretDelivery:
         )
 
     def _add_build_hook(self, image: Image) -> None:
+        cache_name = f"secret-delivery-{self.source_branch}"
+        c = image.caches
+        restore = c.get(cache_name).copy_file("secret-delivery", "$DESTDIR/usr/bin/secret-delivery")
+        store = c.create(cache_name).add_file("secret-delivery", "./build/secret-delivery")
         build_cmd = (
+            f"if {c.has(cache_name)}; then "
+            f'echo "Using cached secret-delivery"; '
+            f"{restore}; "
+            f"else "
             f"SECRET_DEL_SRC=$BUILDDIR/secret-delivery-src && "
             f'if [ ! -d "$SECRET_DEL_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
@@ -104,8 +112,9 @@ class SecretDelivery:
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/secret-delivery ./cmd/main.go && "
-            f"install -m 0755 ./build/secret-delivery "
-            f'"$DESTDIR/usr/bin/secret-delivery"'
+            f"{store} && "
+            f'install -m 0755 ./build/secret-delivery "$DESTDIR/usr/bin/secret-delivery"; '
+            f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 

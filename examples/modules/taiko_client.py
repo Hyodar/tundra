@@ -61,7 +61,15 @@ class TaikoClient:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles taiko-client from source."""
+        cache_name = f"taiko-client-{self.source_branch}"
+        c = image.caches
+        restore = c.get(cache_name).copy_file("taiko-client", "$DESTDIR/usr/bin/taiko-client")
+        store = c.create(cache_name).add_file("taiko-client", "./build/taiko-client")
         build_cmd = (
+            f"if {c.has(cache_name)}; then "
+            f'echo "Using cached taiko-client"; '
+            f"{restore}; "
+            f"else "
             f"TAIKO_SRC=$BUILDDIR/taiko-client-src && "
             f'if [ ! -d "$TAIKO_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
@@ -73,7 +81,9 @@ class TaikoClient:
             f'CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__" '
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/taiko-client . && "
-            f'install -m 0755 ./build/taiko-client "$DESTDIR/usr/bin/taiko-client"'
+            f"{store} && "
+            f'install -m 0755 ./build/taiko-client "$DESTDIR/usr/bin/taiko-client"; '
+            f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 

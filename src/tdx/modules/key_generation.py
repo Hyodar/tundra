@@ -40,7 +40,15 @@ class KeyGeneration:
         """Add build hook, packages, and init script to *image*."""
         image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
 
+        cache_name = f"key-generation-{self.source_branch}"
+        c = image.caches
+        restore = c.get(cache_name).copy_file("key-generation", "$DESTDIR/usr/bin/key-generation")
+        store = c.create(cache_name).add_file("key-generation", "./build/key-generation")
         build_cmd = (
+            f"if {c.has(cache_name)}; then "
+            f'echo "Using cached key-generation"; '
+            f"{restore}; "
+            f"else "
             f"KEY_GEN_SRC=$BUILDDIR/key-generation-src && "
             f'if [ ! -d "$KEY_GEN_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
@@ -50,8 +58,9 @@ class KeyGeneration:
             f"GOCACHE=$BUILDDIR/go-cache "
             f'go build -trimpath -ldflags "-s -w -buildid=" '
             f"-o ./build/key-generation ./cmd/main.go && "
-            f"install -m 0755 ./build/key-generation "
-            f'"$DESTDIR/usr/bin/key-generation"'
+            f"{store} && "
+            f'install -m 0755 ./build/key-generation "$DESTDIR/usr/bin/key-generation"; '
+            f"fi"
         )
         image.hook("build", "sh", "-c", build_cmd, shell=True)
 

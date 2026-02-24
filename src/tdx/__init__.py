@@ -1,5 +1,6 @@
 """Public package entrypoint for the TDX VM SDK."""
 
+from .build_cache import BuildCaches, CacheEntry
 from .errors import (
     BackendExecutionError,
     DeploymentError,
@@ -26,6 +27,8 @@ from .models import (
 __all__ = [
     "BackendExecutionError",
     "BakeRequest",
+    "BuildCaches",
+    "CacheEntry",
     "BakeResult",
     "DebloatConfig",
     "DeploymentError",
