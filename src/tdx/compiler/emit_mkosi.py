@@ -1048,15 +1048,18 @@ class DeterministicMkosiEmitter:
 
     def _render_command_line(self, command: CommandSpec) -> str:
         """Render a single CommandSpec to a shell line."""
+        if command.shell:
+            # argv is a single shell string — emit it directly into the script.
+            rendered = command.argv[0]
+        else:
+            rendered = " ".join(shlex.quote(part) for part in command.argv)
         env_prefix = " ".join(
             f"{key}={shlex.quote(value)}" for key, value in sorted(command.env.items())
         )
-        rendered_argv = " ".join(shlex.quote(part) for part in command.argv)
-        rendered = rendered_argv if not env_prefix else f"{env_prefix} {rendered_argv}"
+        if env_prefix:
+            rendered = f"{env_prefix} {rendered}"
         if command.cwd is not None:
             rendered = f"(cd {shlex.quote(command.cwd)} && {rendered})"
-        if command.shell:
-            rendered = f"bash -lc {shlex.quote(rendered)}"
         return rendered
 
 
