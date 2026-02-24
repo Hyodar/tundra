@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+from tdx.build_cache import Build, Cache
+
 if TYPE_CHECKING:
     from tdx.image import Image
 
@@ -61,31 +63,30 @@ class TaikoClient:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles taiko-client from source."""
-        cache_name = f"taiko-client-{self.source_branch}"
-        c = image.caches
-        restore = c.get(cache_name).copy_file("taiko-client", "$DESTDIR/usr/bin/taiko-client")
-        store = c.create(cache_name).add_file("taiko-client", "./build/taiko-client")
+        clone = f"taiko-client-{self.source_branch}"
+        clone_dir = Build.build_path(clone)
+        cache = Cache.declare(
+            f"taiko-client-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path(f"{clone}/{self.build_path}/build/taiko-client"),
+                    dest=Build.dest_path("usr/bin/taiko-client"),
+                    name="taiko-client",
+                ),
+            ),
+        )
+
         build_cmd = (
-            f"if {c.has(cache_name)}; then "
-            f'echo "Using cached taiko-client"; '
-            f"{restore}; "
-            f"else "
-            f"TAIKO_SRC=$BUILDDIR/taiko-client-src && "
-            f'if [ ! -d "$TAIKO_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "$TAIKO_SRC"; '
-            f"fi && "
-            f'cd "$TAIKO_SRC/{self.build_path}" && '
-            f"GOCACHE=$BUILDDIR/go-cache "
+            f'{self.source_repo} "{clone_dir}" && '
+            f'cd "{clone_dir}/{self.build_path}" && '
+            f"GOCACHE={Build.output_path('go-cache')} "
             f'CGO_CFLAGS="-O -D__BLST_PORTABLE__" '
             f'CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__" '
             f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/taiko-client . && "
-            f"{store} && "
-            f'install -m 0755 ./build/taiko-client "$DESTDIR/usr/bin/taiko-client"; '
-            f"fi"
+            f"-o ./build/taiko-client ."
         )
-        image.hook("build", "sh", "-c", build_cmd, shell=True)
+        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         """Build the After= list, prepending the init service if available."""

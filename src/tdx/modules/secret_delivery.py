@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from tdx.build_cache import Build, Cache
 from tdx.errors import ValidationError
 from tdx.models import SecretSchema, SecretSpec, SecretTarget
 
@@ -94,29 +95,28 @@ class SecretDelivery:
         )
 
     def _add_build_hook(self, image: Image) -> None:
-        cache_name = f"secret-delivery-{self.source_branch}"
-        c = image.caches
-        restore = c.get(cache_name).copy_file("secret-delivery", "$DESTDIR/usr/bin/secret-delivery")
-        store = c.create(cache_name).add_file("secret-delivery", "./build/secret-delivery")
-        build_cmd = (
-            f"if {c.has(cache_name)}; then "
-            f'echo "Using cached secret-delivery"; '
-            f"{restore}; "
-            f"else "
-            f"SECRET_DEL_SRC=$BUILDDIR/secret-delivery-src && "
-            f'if [ ! -d "$SECRET_DEL_SRC" ]; then '
-            f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "$SECRET_DEL_SRC"; '
-            f"fi && "
-            f'cd "$SECRET_DEL_SRC/init" && '
-            f"GOCACHE=$BUILDDIR/go-cache "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/secret-delivery ./cmd/main.go && "
-            f"{store} && "
-            f'install -m 0755 ./build/secret-delivery "$DESTDIR/usr/bin/secret-delivery"; '
-            f"fi"
+        clone = f"secret-delivery-{self.source_branch}"
+        clone_dir = Build.build_path(clone)
+        cache = Cache.declare(
+            f"secret-delivery-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path(f"{clone}/init/build/secret-delivery"),
+                    dest=Build.dest_path("usr/bin/secret-delivery"),
+                    name="secret-delivery",
+                ),
+            ),
         )
-        image.hook("build", "sh", "-c", build_cmd, shell=True)
+
+        build_cmd = (
+            f"git clone --depth=1 -b {self.source_branch} "
+            f'{self.source_repo} "{clone_dir}" && '
+            f'cd "{clone_dir}/init" && '
+            f"GOCACHE={Build.output_path('go-cache')} "
+            f'go build -trimpath -ldflags "-s -w -buildid=" '
+            f"-o ./build/secret-delivery ./cmd/main.go"
+        )
+        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 
     def _add_config(self, image: Image) -> None:
         """Write the JSON config file and register secrets on the image."""

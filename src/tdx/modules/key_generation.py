@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from tdx.build_cache import Build, Cache
+
 if TYPE_CHECKING:
     from tdx.image import Image
 
@@ -40,29 +42,28 @@ class KeyGeneration:
         """Add build hook, packages, and init script to *image*."""
         image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
 
-        cache_name = f"key-generation-{self.source_branch}"
-        c = image.caches
-        restore = c.get(cache_name).copy_file("key-generation", "$DESTDIR/usr/bin/key-generation")
-        store = c.create(cache_name).add_file("key-generation", "./build/key-generation")
-        build_cmd = (
-            f"if {c.has(cache_name)}; then "
-            f'echo "Using cached key-generation"; '
-            f"{restore}; "
-            f"else "
-            f"KEY_GEN_SRC=$BUILDDIR/key-generation-src && "
-            f'if [ ! -d "$KEY_GEN_SRC" ]; then '
-            f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "$KEY_GEN_SRC"; '
-            f"fi && "
-            f'cd "$KEY_GEN_SRC/init" && '
-            f"GOCACHE=$BUILDDIR/go-cache "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/key-generation ./cmd/main.go && "
-            f"{store} && "
-            f'install -m 0755 ./build/key-generation "$DESTDIR/usr/bin/key-generation"; '
-            f"fi"
+        clone = f"key-generation-{self.source_branch}"
+        clone_dir = Build.build_path(clone)
+        cache = Cache.declare(
+            f"key-generation-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path(f"{clone}/init/build/key-generation"),
+                    dest=Build.dest_path("usr/bin/key-generation"),
+                    name="key-generation",
+                ),
+            ),
         )
-        image.hook("build", "sh", "-c", build_cmd, shell=True)
+
+        build_cmd = (
+            f"git clone --depth=1 -b {self.source_branch} "
+            f'{self.source_repo} "{clone_dir}" && '
+            f'cd "{clone_dir}/init" && '
+            f"GOCACHE={Build.output_path('go-cache')} "
+            f'go build -trimpath -ldflags "-s -w -buildid=" '
+            f"-o ./build/key-generation ./cmd/main.go"
+        )
+        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 
         image.add_init_script(
             f"/usr/bin/key-generation --strategy {self.strategy} --output {self.output}\n",

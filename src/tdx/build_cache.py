@@ -1,56 +1,166 @@
-"""Shell fragment builder for $BUILDDIR-based build artifact caching.
+"""Declarative build cache and typed mkosi path helpers.
 
-Generates shell snippets that modules embed in their build scripts to
-cache compiled binaries under ``$BUILDDIR/{name}/``, matching the
-upstream nethermind-tdx caching pattern (``make_git_package.sh``,
-``build_rust_package.sh``).
+Provides ``Cache.declare()`` for defining cached build artifacts and
+``Cache.wrap()`` for generating shell scripts with automatic cache
+check/restore/store logic matching the upstream nethermind-tdx pattern.
+
+Path helpers (``Build.build_path``, ``Build.dest_path``, ``Build.output_path``)
+produce typed wrappers for ``$BUILDROOT/build/``, ``$DESTDIR/``, and
+``$BUILDDIR/`` respectively, enforced in ``Cache.file()`` / ``Cache.dir()``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+# ── Typed mkosi path helpers ────────────────────────────────────────
+
 
 @dataclass(frozen=True, slots=True)
-class CacheEntry:
-    """A single cache entry under ``$BUILDDIR/{name}/``."""
+class SrcPath:
+    """A path under ``$BUILDROOT/build/``."""
 
+    rel: str
+
+    def __str__(self) -> str:
+        return f"$BUILDROOT/build/{self.rel}"
+
+
+@dataclass(frozen=True, slots=True)
+class DestPath:
+    """A path under ``$DESTDIR/``."""
+
+    rel: str
+
+    def __str__(self) -> str:
+        return f"$DESTDIR/{self.rel}"
+
+
+@dataclass(frozen=True, slots=True)
+class OutPath:
+    """A path under ``$BUILDDIR/``."""
+
+    rel: str
+
+    def __str__(self) -> str:
+        return f"$BUILDDIR/{self.rel}"
+
+
+class Build:
+    """Namespace for typed mkosi path constructors."""
+
+    @staticmethod
+    def build_path(path: str) -> SrcPath:
+        """Return a typed ``$BUILDROOT/build/{path}`` reference."""
+        return SrcPath(path)
+
+    @staticmethod
+    def dest_path(path: str) -> DestPath:
+        """Return a typed ``$DESTDIR/{path}`` reference."""
+        return DestPath(path)
+
+    @staticmethod
+    def output_path(path: str) -> OutPath:
+        """Return a typed ``$BUILDDIR/{path}`` reference."""
+        return OutPath(path)
+
+
+# ── Cache artifact declarations ─────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class CacheFile:
+    """A single file artifact to cache."""
+
+    src: SrcPath | OutPath
+    dest: DestPath
+    name: str
+    mode: str = "0755"
+
+
+@dataclass(frozen=True, slots=True)
+class CacheDir:
+    """A directory artifact to cache."""
+
+    src: SrcPath | OutPath
+    dest: DestPath
     name: str
 
-    def add_file(self, artifact: str, src: str, *, mode: str = "0755") -> str:
-        """Shell command: copy *src* into the cache directory."""
-        return (
-            f'mkdir -p "$BUILDDIR/{self.name}" && '
-            f'install -m {mode} {src} "$BUILDDIR/{self.name}/{artifact}"'
-        )
 
-    def add_dir(self, artifact: str, src: str) -> str:
-        """Shell command: copy directory *src* into the cache directory."""
-        return (
-            f'mkdir -p "$BUILDDIR/{self.name}/{artifact}" && '
-            f'cp -r {src}/* "$BUILDDIR/{self.name}/{artifact}/"'
-        )
+@dataclass(frozen=True, slots=True)
+class CacheDecl:
+    """A declared cache with a key and artifact list.
 
-    def copy_file(self, artifact: str, dest: str, *, mode: str = "0755") -> str:
-        """Shell command: install cached artifact to *dest*."""
-        return f'install -m {mode} "$BUILDDIR/{self.name}/{artifact}" {dest}'
+    Use :meth:`wrap` to generate a shell script that checks the cache,
+    restores on hit, or runs the build command and stores on miss.
+    """
 
-    def copy_dir(self, artifact: str, dest: str) -> str:
-        """Shell command: copy cached directory to *dest*."""
-        return f'mkdir -p {dest} && cp -r "$BUILDDIR/{self.name}/{artifact}"/* {dest}/'
+    key: str
+    artifacts: tuple[CacheFile | CacheDir, ...]
+
+    def wrap(self, build_cmd: str) -> str:
+        """Wrap *build_cmd* with cache check/store/restore logic.
+
+        Generates::
+
+            if ! (cache_exists); then
+                {build_cmd} && store artifacts
+            fi && restore artifacts
+        """
+        cache_dir = f'"$BUILDDIR/{self.key}"'
+        check = f'[ -d {cache_dir} ] && [ "$(ls -A {cache_dir} 2>/dev/null)" ]'
+
+        store_parts: list[str] = [f"mkdir -p {cache_dir}"]
+        for a in self.artifacts:
+            if isinstance(a, CacheFile):
+                store_parts.append(f'install -D -m {a.mode} "{a.src}" {cache_dir}/{a.name}')
+            else:
+                store_parts.append(
+                    f'mkdir -p {cache_dir}/{a.name} && cp -r "{a.src}"/* {cache_dir}/{a.name}/'
+                )
+        store_cmd = " && ".join(store_parts)
+
+        restore_parts: list[str] = []
+        for a in self.artifacts:
+            if isinstance(a, CacheFile):
+                restore_parts.append(f'install -D -m {a.mode} {cache_dir}/{a.name} "{a.dest}"')
+            else:
+                restore_parts.append(
+                    f'mkdir -p "{a.dest}" && cp -r {cache_dir}/{a.name}/* "{a.dest}"/'
+                )
+        restore_cmd = " && ".join(restore_parts)
+
+        return f"if ! ({check}); then {build_cmd} && {store_cmd}; fi && {restore_cmd}"
 
 
-class BuildCaches:
-    """Shell fragment builder for ``$BUILDDIR``-based build artifact caching."""
+class Cache:
+    """Declarative build cache API."""
 
-    def has(self, name: str) -> str:
-        """Shell expression that evaluates true when *name* cache exists and is non-empty."""
-        return f'[ -d "$BUILDDIR/{name}" ] && [ "$(ls -A "$BUILDDIR/{name}" 2>/dev/null)" ]'
+    @staticmethod
+    def file(
+        src: SrcPath | OutPath,
+        dest: DestPath,
+        *,
+        name: str,
+        mode: str = "0755",
+    ) -> CacheFile:
+        """Declare a file artifact to cache."""
+        return CacheFile(src=src, dest=dest, name=name, mode=mode)
 
-    def create(self, name: str) -> CacheEntry:
-        """Return a :class:`CacheEntry` for storing artifacts."""
-        return CacheEntry(name)
+    @staticmethod
+    def dir(
+        src: SrcPath | OutPath,
+        dest: DestPath,
+        *,
+        name: str,
+    ) -> CacheDir:
+        """Declare a directory artifact to cache."""
+        return CacheDir(src=src, dest=dest, name=name)
 
-    def get(self, name: str) -> CacheEntry:
-        """Return a :class:`CacheEntry` for restoring artifacts."""
-        return CacheEntry(name)
+    @staticmethod
+    def declare(
+        key: str,
+        artifacts: tuple[CacheFile | CacheDir, ...],
+    ) -> CacheDecl:
+        """Create a cache declaration with the given *key* and *artifacts*."""
+        return CacheDecl(key=key, artifacts=artifacts)

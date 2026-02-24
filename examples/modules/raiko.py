@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+from tdx.build_cache import Build, Cache
+
 if TYPE_CHECKING:
     from tdx.image import Image
 
@@ -64,33 +66,32 @@ class Raiko:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles raiko from source."""
-        cache_name = f"raiko-{self.source_branch}"
-        c = image.caches
-        restore = c.get(cache_name).copy_file("raiko", "$DESTDIR/usr/bin/raiko")
-        store = c.create(cache_name).add_file("raiko", "target/release/raiko-host")
+        clone = f"raiko-{self.source_branch}"
+        clone_dir = Build.build_path(clone)
+        cache = Cache.declare(
+            f"raiko-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path(f"{clone}/target/release/raiko-host"),
+                    dest=Build.dest_path("usr/bin/raiko"),
+                    name="raiko",
+                ),
+            ),
+        )
+
         build_cmd = (
-            f"if {c.has(cache_name)}; then "
-            f'echo "Using cached raiko"; '
-            f"{restore}; "
-            f"else "
-            f"RAIKO_SRC=$BUILDDIR/raiko-src && "
-            f'if [ ! -d "$RAIKO_SRC" ]; then '
             f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "$RAIKO_SRC"; '
-            f"fi && "
-            f'cd "$RAIKO_SRC" && '
-            f"CARGO_HOME=$BUILDDIR/cargo-home "
+            f'{self.source_repo} "{clone_dir}" && '
+            f'cd "{clone_dir}" && '
+            f"CARGO_HOME={Build.output_path('cargo-home')} "
             f"CARGO_PROFILE_RELEASE_LTO=thin "
             f"CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 "
             f"CARGO_PROFILE_RELEASE_PANIC=abort "
             f"CARGO_PROFILE_RELEASE_OPT_LEVEL=3 "
             f'RUSTFLAGS="-C target-cpu=generic -C link-arg=-Wl,--build-id=none" '
-            f"cargo build --release -p raiko-host && "
-            f"{store} && "
-            f'install -m 0755 target/release/raiko-host "$DESTDIR/usr/bin/raiko"; '
-            f"fi"
+            f"cargo build --release -p raiko-host"
         )
-        image.hook("build", "sh", "-c", build_cmd, shell=True)
+        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         """Build the After= list, prepending the init service if available."""

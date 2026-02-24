@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+from tdx.build_cache import Build, Cache
+
 if TYPE_CHECKING:
     from tdx.image import Image
 
@@ -62,30 +64,29 @@ class Tdxs:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles tdxs from source."""
-        cache_name = f"tdxs-{self.source_branch}"
-        c = image.caches
-        restore = c.get(cache_name).copy_file("tdxs", "$DESTDIR/usr/bin/tdxs")
-        store = c.create(cache_name).add_file("tdxs", "./build/tdxs")
-        build_cmd = (
-            f"if {c.has(cache_name)}; then "
-            f'echo "Using cached tdxs"; '
-            f"{restore}; "
-            f"else "
-            f"TDXS_SRC=$BUILDDIR/tdxs-src && "
-            f'if [ ! -d "$TDXS_SRC" ]; then '
-            f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "$TDXS_SRC"; '
-            f"fi && "
-            f'cd "$TDXS_SRC" && '
-            f"make sync-constellation && "
-            f"GOCACHE=$BUILDDIR/go-cache "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/tdxs ./cmd/tdxs/main.go && "
-            f"{store} && "
-            f'install -m 0755 ./build/tdxs "$DESTDIR/usr/bin/tdxs"; '
-            f"fi"
+        clone = f"tdxs-{self.source_branch}"
+        clone_dir = Build.build_path(clone)
+        cache = Cache.declare(
+            f"tdxs-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path(f"{clone}/build/tdxs"),
+                    dest=Build.dest_path("usr/bin/tdxs"),
+                    name="tdxs",
+                ),
+            ),
         )
-        image.hook("build", "sh", "-c", build_cmd, shell=True)
+
+        build_cmd = (
+            f"git clone --depth=1 -b {self.source_branch} "
+            f'{self.source_repo} "{clone_dir}" && '
+            f'cd "{clone_dir}" && '
+            f"make sync-constellation && "
+            f"GOCACHE={Build.output_path('go-cache')} "
+            f'go build -trimpath -ldflags "-s -w -buildid=" '
+            f"-o ./build/tdxs ./cmd/tdxs/main.go"
+        )
+        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         """Build the After= list, prepending the init service if available."""

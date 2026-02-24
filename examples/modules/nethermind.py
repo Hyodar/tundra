@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+from tdx.build_cache import Build, Cache
+
 if TYPE_CHECKING:
     from tdx.image import Image
 
@@ -67,61 +69,49 @@ class Nethermind:
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles nethermind from source."""
-        cache_name = f"nethermind-{self.version}-{self.runtime}"
-        c = image.caches
-        entry = c.get(cache_name)
-        restore_bin = entry.copy_file("nethermind", "$DESTDIR/usr/bin/nethermind")
-        restore_nlog = entry.copy_file(
-            "NLog.config", "$DESTDIR/etc/nethermind-surge/NLog.config", mode="0644"
+        clone = f"nethermind-{self.version}"
+        clone_dir = Build.build_path(clone)
+        out_dir = Build.build_path(f"{clone}/out")
+        svc = self.user  # service name for dest paths
+
+        cache = Cache.declare(
+            f"nethermind-{self.version}-{self.runtime}",
+            (
+                Cache.file(
+                    src=Build.build_path(f"{clone}/out/nethermind"),
+                    dest=Build.dest_path("usr/bin/nethermind"),
+                    name="nethermind",
+                ),
+                Cache.file(
+                    src=Build.build_path(f"{clone}/out/NLog.config"),
+                    dest=Build.dest_path(f"etc/{svc}/NLog.config"),
+                    name="NLog.config",
+                    mode="0644",
+                ),
+                Cache.dir(
+                    src=Build.build_path(f"{clone}/out/plugins"),
+                    dest=Build.dest_path(f"etc/{svc}/plugins"),
+                    name="plugins",
+                ),
+            ),
         )
-        restore_plugins = entry.copy_dir("plugins", "$DESTDIR/etc/nethermind-surge/plugins")
-        store_bin = c.create(cache_name).add_file(
-            "nethermind", "$BUILDDIR/nethermind-out/nethermind"
-        )
-        store_nlog = c.create(cache_name).add_file(
-            "NLog.config", "$BUILDDIR/nethermind-out/NLog.config", mode="0644"
-        )
-        store_plugins = c.create(cache_name).add_dir("plugins", "$BUILDDIR/nethermind-out/plugins")
+
         build_cmd = (
-            f"if {c.has(cache_name)}; then "
-            f'echo "Using cached nethermind-{self.version}"; '
-            f"{restore_bin} && "
-            f'install -d "$DESTDIR/etc/nethermind-surge" && '
-            f"{restore_nlog} && "
-            f"{restore_plugins}; "
-            f"else "
-            f"NETHERMIND_SRC=$BUILDDIR/nethermind-src && "
-            f'if [ ! -d "$NETHERMIND_SRC" ]; then '
             f"git clone --depth=1 -b {self.version} "
-            f'{self.source_repo} "$NETHERMIND_SRC"; '
-            f"fi && "
-            f'cd "$NETHERMIND_SRC" && '
+            f'{self.source_repo} "{clone_dir}" && '
+            f'cd "{clone_dir}" && '
             f"DOTNET_CLI_TELEMETRY_OPTOUT=1 "
             f"dotnet publish {self.project_path} "
             f"-c Release "
             f"-r {self.runtime} "
-            f'-o "$BUILDDIR/nethermind-out" '
+            f'-o "{out_dir}" '
             f"/p:Deterministic=true "
             f"/p:ContinuousIntegrationBuild=true "
             f"/p:PublishSingleFile=true "
             f"/p:BuildTimestamp=0 "
-            f"/p:Commit=0000000000000000000000000000000000000000 && "
-            f"{store_bin} && "
-            f"{store_nlog} && "
-            f"{store_plugins} && "
-            f"{restore_bin} && "
-            f'install -d "$DESTDIR/etc/nethermind-surge" && '
-            f'if [ -f "$BUILDDIR/nethermind-out/NLog.config" ]; then '
-            f'install -m 0644 "$BUILDDIR/nethermind-out/NLog.config" '
-            f'"$DESTDIR/etc/nethermind-surge/NLog.config"; '
-            f"fi && "
-            f'if [ -d "$BUILDDIR/nethermind-out/plugins" ]; then '
-            f'cp -r "$BUILDDIR/nethermind-out/plugins" '
-            f'"$DESTDIR/etc/nethermind-surge/plugins"; '
-            f"fi; "
-            f"fi"
+            f"/p:Commit=0000000000000000000000000000000000000000"
         )
-        image.hook("build", "sh", "-c", build_cmd, shell=True)
+        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         """Build the After= list, prepending the init service if available."""

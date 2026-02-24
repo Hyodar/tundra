@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from tdx.build_cache import Build, Cache
+
 if TYPE_CHECKING:
     from tdx.image import Image
 
@@ -43,29 +45,28 @@ class DiskEncryption:
         image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
         image.install("cryptsetup")
 
-        cache_name = f"disk-encryption-{self.source_branch}"
-        c = image.caches
-        restore = c.get(cache_name).copy_file("disk-encryption", "$DESTDIR/usr/bin/disk-encryption")
-        store = c.create(cache_name).add_file("disk-encryption", "./build/disk-encryption")
-        build_cmd = (
-            f"if {c.has(cache_name)}; then "
-            f'echo "Using cached disk-encryption"; '
-            f"{restore}; "
-            f"else "
-            f"DISK_ENC_SRC=$BUILDDIR/disk-encryption-src && "
-            f'if [ ! -d "$DISK_ENC_SRC" ]; then '
-            f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "$DISK_ENC_SRC"; '
-            f"fi && "
-            f'cd "$DISK_ENC_SRC/init" && '
-            f"GOCACHE=$BUILDDIR/go-cache "
-            f'go build -trimpath -ldflags "-s -w -buildid=" '
-            f"-o ./build/disk-encryption ./cmd/main.go && "
-            f"{store} && "
-            f'install -m 0755 ./build/disk-encryption "$DESTDIR/usr/bin/disk-encryption"; '
-            f"fi"
+        clone = f"disk-encryption-{self.source_branch}"
+        clone_dir = Build.build_path(clone)
+        cache = Cache.declare(
+            f"disk-encryption-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path(f"{clone}/init/build/disk-encryption"),
+                    dest=Build.dest_path("usr/bin/disk-encryption"),
+                    name="disk-encryption",
+                ),
+            ),
         )
-        image.hook("build", "sh", "-c", build_cmd, shell=True)
+
+        build_cmd = (
+            f"git clone --depth=1 -b {self.source_branch} "
+            f'{self.source_repo} "{clone_dir}" && '
+            f'cd "{clone_dir}/init" && '
+            f"GOCACHE={Build.output_path('go-cache')} "
+            f'go build -trimpath -ldflags "-s -w -buildid=" '
+            f"-o ./build/disk-encryption ./cmd/main.go"
+        )
+        image.hook("build", "sh", "-c", cache.wrap(build_cmd), shell=True)
 
         image.add_init_script(
             f"/usr/bin/disk-encryption"
