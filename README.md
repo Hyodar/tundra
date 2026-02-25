@@ -165,38 +165,13 @@ python -m examples.surge-tdx-prover bake        # compile + lock + build
 
 ## Setup
 
-### Lima
-
-[Lima](https://lima-vm.io/) runs mkosi inside a Linux VM. This is the default backend and the recommended way to build images — it ensures a consistent build environment regardless of host OS or distro, which is required for reproducible images.
-
-**macOS:**
-
-```bash
-brew install lima
-```
-
-**Linux:**
-
-```bash
-# Download from https://github.com/lima-vm/lima/releases
-# or install via your package manager (e.g. pacman -S lima, nix-env -i lima)
-```
-
-Verify with `limactl --version`.
-
-### mkosi
-
-[mkosi](https://github.com/systemd/mkosi) is the image builder that runs inside Lima. Install v26:
-
-```bash
-pip install 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
-```
-
-### Python SDK
+Install [Lima](https://lima-vm.io/docs/installation/) and [mkosi](https://github.com/systemd/mkosi) (v26), then:
 
 ```bash
 uv sync
 ```
+
+Lima runs mkosi inside a Linux VM — this is the default backend and the recommended way to build images, as it ensures a consistent environment required for reproducible builds.
 
 ## Development
 
