@@ -9,7 +9,7 @@
   <a href="https://github.com/systemd/mkosi"><img src="https://img.shields.io/badge/mkosi-v26-8b5cf6.svg" alt="mkosi v26"/></a>
 </p>
 
----
+<br>
 
 Python SDK for declaratively building, measuring, and deploying TDX-enabled VM images. Define your image as code, compile it to a reproducible [mkosi](https://github.com/systemd/mkosi) project tree, and bake it into a bootable disk for QEMU, Azure, or GCP.
 
