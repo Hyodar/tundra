@@ -58,6 +58,8 @@ class LocalLinuxBackend:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Build the mkosi command with privilege escalation
+        # Resolve absolute path so sudo (which resets PATH) can find it
+        mkosi_bin = shutil.which("mkosi") or "mkosi"
         cmd: list[str] = []
         if self.privilege == "unshare" and shutil.which("unshare"):
             cmd.extend(["unshare", "--map-auto", "--map-current-user"])
@@ -66,7 +68,7 @@ class LocalLinuxBackend:
 
         cmd.extend(
             [
-                "mkosi",
+                mkosi_bin,
                 "--force",
                 f"--image-id={request.profile}",
                 f"--output-dir={output_dir}",
