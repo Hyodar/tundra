@@ -18,6 +18,9 @@ def build_full_api_recipe() -> None:
         arch="x86_64",
         target="x86_64",
         reproducible=True,
+        lima_cpus=6,
+        lima_memory="12GiB",
+        lima_disk="100GiB",
     )
 
     img.kernel = Kernel.tdx_kernel("6.8")

@@ -4,7 +4,7 @@ from tdx import Image
 
 
 def build_cloud_profiles() -> None:
-    img = Image()
+    img = Image(lima_cpus=6, lima_memory="12GiB", lima_disk="100GiB")
 
     with img.profile("azure"):
         img.install("waagent")

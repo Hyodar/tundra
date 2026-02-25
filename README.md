@@ -53,7 +53,7 @@ from tdx import Image
 from tdx.modules import Devtools
 from tdx.platforms import AzurePlatform, GcpPlatform
 
-img = Image()
+img = Image(lima_cpus=6, lima_memory="12GiB", lima_disk="100GiB")
 img.output_targets("qemu")
 
 with img.profile("azure"):

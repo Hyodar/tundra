@@ -63,6 +63,9 @@ def build_nethermind_base() -> Image:
         output_directory="build",
         package_cache_directory="mkosi.cache",
         environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
+        lima_cpus=6,
+        lima_memory="12GiB",
+        lima_disk="100GiB",
     )
 
     # Real kernel build from source with hardened command line
