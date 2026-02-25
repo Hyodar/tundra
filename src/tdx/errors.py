@@ -38,6 +38,16 @@ class TdxError(Exception):
         self.hint = hint
         self.context = dict(context or {})
 
+    def __str__(self) -> str:
+        parts = [super().__str__()]
+        if self.hint:
+            parts.append(f"Hint: {self.hint}")
+        if self.context:
+            for k, v in self.context.items():
+                if v:
+                    parts.append(f"  {k}: {v}")
+        return "\n".join(parts)
+
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
             "code": self.code,

@@ -36,4 +36,4 @@ jobs:
         run: uv run mypy .
 
       - name: Tests
-        run: uv run pytest -m "not integration"
+        run: uv run pytest
