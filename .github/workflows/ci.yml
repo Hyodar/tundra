@@ -23,7 +23,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap debian-archive-keyring
-          pipx install mkosi
+          pipx install git+https://github.com/systemd/mkosi.git
           mkosi --version
 
       - name: Sync dependencies
