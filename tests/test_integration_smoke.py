@@ -13,12 +13,10 @@ from tdx import Image
 from tdx.backends.local_linux import LocalLinuxBackend
 from tdx.modules import Tdxs
 
-pytestmark = pytest.mark.integration
-
-
 # ── Test 1: Directory format ────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_directory_format_pipeline(tmp_path: Path) -> None:
     """Emit + bake a minimal Debian image in directory format."""
     img = Image(
@@ -134,6 +132,7 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
 # ── Test 3: Raw disk format ─────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_raw_disk_format(tmp_path: Path) -> None:
     """Bake a raw disk image and verify artifact collection."""
     img = Image(
