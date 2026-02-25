@@ -13,8 +13,8 @@ authors = [{ name = "TDX VM SDK Contributors" }]
 dependencies = ["cbor2>=5.6.5"]
 
 [project.urls]
-Homepage = "https://github.com/flashbots/tdxvm"
-Repository = "https://github.com/flashbots/tdxvm"
+Homepage = "https://github.com/Hyodar/tdxvm"
+Repository = "https://github.com/Hyodar/tdxvm"
 
 [dependency-groups]
 dev = [
