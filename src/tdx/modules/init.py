@@ -57,6 +57,13 @@ class Init:
             parts.append(entry.script)
         script_content = "\n".join(parts)
 
+        # Remove previous runtime-init entries to stay idempotent
+        init_paths = {
+            "/usr/bin/runtime-init",
+            "/usr/lib/systemd/system/runtime-init.service",
+        }
+        profile.files = [f for f in profile.files if f.path not in init_paths]
+
         profile.files.append(
             FileEntry(
                 path="/usr/bin/runtime-init",
