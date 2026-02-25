@@ -3,10 +3,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from tdx import Image
+from tdx.backends import InProcessBackend
 
 
 def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     image.output_targets("qemu")
     image.run("echo hello", phase="prepare")
     result = image.bake()
@@ -31,7 +32,7 @@ def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> Non
 
 
 def test_structured_logs_include_profile_phase_module_and_builder(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     image.output_targets("qemu")
     image.bake()
 

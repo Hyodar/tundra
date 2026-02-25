@@ -24,7 +24,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     img = Image(
         build_dir=tmp_path,
         base="debian/bookworm",
-        backend="local_linux",
+        backend=LocalLinuxBackend(),
         reproducible=True,
     )
     img.install("systemd", "udev")
@@ -36,7 +36,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
         privilege="sudo",
         mkosi_args=["--format=directory", "--bootable=no"],
     )
-    img.set_backend(backend)
+    img.backend = backend
 
     emit_dir = tmp_path / "mkosi"
     img.compile(emit_dir)
@@ -72,7 +72,7 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
     img = Image(
         build_dir=tmp_path,
         base="debian/bookworm",
-        backend="local_linux",
+        backend=LocalLinuxBackend(),
         reproducible=True,
     )
     img.install("systemd")
@@ -139,7 +139,7 @@ def test_raw_disk_format(tmp_path: Path) -> None:
     img = Image(
         build_dir=tmp_path,
         base="debian/bookworm",
-        backend="local_linux",
+        backend=LocalLinuxBackend(),
         reproducible=True,
     )
     img.install("systemd")
@@ -148,7 +148,7 @@ def test_raw_disk_format(tmp_path: Path) -> None:
         privilege="sudo",
         mkosi_args=["--format=disk", "--bootable=no"],
     )
-    img.set_backend(backend)
+    img.backend = backend
 
     output_dir = tmp_path / "output"
     bake_result = img.bake(output_dir=output_dir)

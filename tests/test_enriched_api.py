@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from tdx import Image, Kernel, SecretTarget, ValidationError
+from tdx.backends import LocalLinuxBackend
 
 # --- Rich service() parameters ---
 
@@ -373,9 +374,9 @@ class TestPublicExports:
 
 class TestImageConstructor:
     def test_image_target_and_backend(self) -> None:
-        img = Image(target="aarch64", backend="local_linux", reproducible=False)
+        img = Image(target="aarch64", backend=LocalLinuxBackend(), reproducible=False)
         assert img.target == "aarch64"
-        assert img.backend == "local_linux"
+        assert isinstance(img.backend, LocalLinuxBackend)
         assert img.reproducible is False
 
 

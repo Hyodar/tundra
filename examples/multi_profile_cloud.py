@@ -1,10 +1,11 @@
 """Multi-profile cloud recipe example."""
 
 from tdx import Image
+from tdx.backends import LimaMkosiBackend
 
 
 def build_cloud_profiles() -> None:
-    img = Image(lima_cpus=6, lima_memory="12GiB", lima_disk="100GiB")
+    img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 
     with img.profile("azure"):
         img.install("waagent")

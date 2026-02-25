@@ -2,14 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from tdx.backends.lima import LimaBackend
+from tdx.backends.lima import LimaMkosiBackend
 from tdx.errors import BackendExecutionError
 from tdx.models import BakeRequest
 
 
 def test_lima_mount_plan_single_mount(tmp_path: Path) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     mounts = backend.mount_plan(request)
 
@@ -20,7 +20,7 @@ def test_lima_mount_plan_single_mount(tmp_path: Path) -> None:
 
 def test_lima_mount_plan_is_deterministic(tmp_path: Path) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     first = backend.mount_plan(request)
     second = backend.mount_plan(request)
@@ -30,7 +30,7 @@ def test_lima_mount_plan_is_deterministic(tmp_path: Path) -> None:
 
 def test_lima_instance_name_is_hash_based(tmp_path: Path) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     name = backend._resolve_instance_name(request)
 
@@ -40,7 +40,7 @@ def test_lima_instance_name_is_hash_based(tmp_path: Path) -> None:
 
 def test_lima_instance_name_deterministic(tmp_path: Path) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     first = backend._resolve_instance_name(request)
     second = backend._resolve_instance_name(request)
@@ -51,14 +51,14 @@ def test_lima_instance_name_deterministic(tmp_path: Path) -> None:
 def test_lima_instance_name_differs_per_path(tmp_path: Path) -> None:
     r1 = BakeRequest(profile="default", build_dir=tmp_path / "a", emit_dir=tmp_path / "a" / "emit")
     r2 = BakeRequest(profile="default", build_dir=tmp_path / "b", emit_dir=tmp_path / "b" / "emit")
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     assert backend._resolve_instance_name(r1) != backend._resolve_instance_name(r2)
 
 
 def test_lima_instance_name_override(tmp_path: Path) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB", instance_name="my-vm")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", instance_name="my-vm")
 
     assert backend._resolve_instance_name(request) == "my-vm"
 
@@ -68,7 +68,7 @@ def test_lima_prepare_fails_with_actionable_hint_when_missing_binary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
     monkeypatch.setattr("tdx.backends.lima.shutil.which", lambda _: None)
 
     with pytest.raises(BackendExecutionError) as excinfo:
@@ -84,9 +84,9 @@ def test_lima_prepare_creates_directories_when_binary_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
     monkeypatch.setattr("tdx.backends.lima.shutil.which", lambda _: "/usr/bin/limactl")
-    monkeypatch.setattr(LimaBackend, "_instance_running", lambda self, inst: True)
+    monkeypatch.setattr(LimaMkosiBackend, "_instance_running", lambda self, inst: True)
 
     backend.prepare(request)
 
@@ -96,7 +96,7 @@ def test_lima_prepare_creates_directories_when_binary_exists(
 
 def test_lima_build_mkosi_command_per_directory(tmp_path: Path) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB")
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     cmd = backend._build_mkosi_command(request)
 
@@ -109,7 +109,7 @@ def test_lima_build_mkosi_command_per_directory(tmp_path: Path) -> None:
 
 def test_lima_build_mkosi_command_extra_args(tmp_path: Path) -> None:
     request = _request(tmp_path)
-    backend = LimaBackend(cpus=6, memory="12GiB", disk="100GiB", mkosi_args=["--debug"])
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", mkosi_args=["--debug"])
 
     cmd = backend._build_mkosi_command(request)
 
@@ -117,7 +117,7 @@ def test_lima_build_mkosi_command_extra_args(tmp_path: Path) -> None:
 
 
 def test_lima_resources_are_configurable() -> None:
-    backend = LimaBackend(cpus=4, memory="8GiB", disk="50GiB")
+    backend = LimaMkosiBackend(cpus=4, memory="8GiB", disk="50GiB")
 
     assert backend.cpus == 4
     assert backend.memory == "8GiB"

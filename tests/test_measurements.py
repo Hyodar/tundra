@@ -3,11 +3,12 @@ from pathlib import Path
 import pytest
 
 from tdx import Image
+from tdx.backends import InProcessBackend
 from tdx.errors import MeasurementError
 
 
 def _image_with_backend(tmp_path: Path) -> Image:
-    return Image(build_dir=tmp_path / "build", backend="inprocess")
+    return Image(build_dir=tmp_path / "build", backend=InProcessBackend())
 
 
 def test_measure_requires_baked_artifacts() -> None:

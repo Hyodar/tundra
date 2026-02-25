@@ -5,6 +5,7 @@ from typing import Any, cast
 import pytest
 
 from tdx import Image
+from tdx.backends import InProcessBackend
 from tdx.cache import BuildCacheInput, BuildCacheStore, cache_key
 from tdx.errors import ReproducibilityError
 
@@ -55,7 +56,7 @@ def test_cache_manifest_verification_detects_mismatch(tmp_path: Path) -> None:
 
 
 def test_bake_produces_build_report(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     image.output_targets("qemu")
 
     result = image.bake()

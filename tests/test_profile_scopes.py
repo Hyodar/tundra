@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from tdx import Image
+from tdx.backends import InProcessBackend
 
 
 def test_profile_scope_isolates_declarations() -> None:
@@ -41,7 +42,7 @@ def test_all_profiles_scope_applies_to_every_profile() -> None:
 
 
 def test_scoped_operations_only_emit_for_selected_profiles(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     with image.profile("dev"):
         image.output_targets("azure")
     with image.profile("prod"):

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from tdx import Image, Kernel, SecretSchema, SecretTarget
+from tdx.backends import LimaMkosiBackend
 from tdx.modules import (
     DiskEncryption,
     KeyGeneration,
@@ -18,9 +19,7 @@ def build_full_api_recipe() -> None:
         arch="x86_64",
         target="x86_64",
         reproducible=True,
-        lima_cpus=6,
-        lima_memory="12GiB",
-        lima_disk="100GiB",
+        backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
     )
 
     img.kernel = Kernel.tdx_kernel("6.8")

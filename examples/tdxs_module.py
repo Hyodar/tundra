@@ -1,6 +1,7 @@
 """Core TDX quote service module usage."""
 
 from tdx import Image
+from tdx.backends import LimaMkosiBackend
 from tdx.modules import Tdxs
 
 
@@ -8,9 +9,7 @@ def build_with_tdxs() -> None:
     img = Image(
         base="debian/bookworm",
         arch="x86_64",
-        lima_cpus=6,
-        lima_memory="12GiB",
-        lima_disk="100GiB",
+        backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
     )
     img.install("ca-certificates")
     img.output_targets("qemu")

@@ -13,12 +13,11 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal
 
-from tdx.backends.base import MountSpec
+from tdx.backends.base import MountSpec, collect_artifacts
 from tdx.errors import BackendExecutionError
-from tdx.models import ArtifactRef, BakeRequest, BakeResult, OutputTarget, ProfileBuildResult
+from tdx.models import BakeRequest, BakeResult, ProfileBuildResult
 
 MINIMUM_MKOSI_VERSION = (25, 0)
 
@@ -109,45 +108,12 @@ class LocalLinuxBackend:
 
         # Collect output artifacts
         profile_result = ProfileBuildResult(profile=request.profile)
-        artifacts = self._collect_artifacts(output_dir, request)
-        profile_result.artifacts = artifacts
+        profile_result.artifacts = collect_artifacts(output_dir)
 
         return BakeResult(profiles={request.profile: profile_result})
 
     def cleanup(self, request: BakeRequest) -> None:
         pass
-
-    def _collect_artifacts(
-        self, output_dir: Path, request: BakeRequest
-    ) -> dict[OutputTarget, ArtifactRef]:
-        """Find and catalog output artifacts from mkosi build."""
-        artifacts: dict[OutputTarget, ArtifactRef] = {}
-
-        # UKI format: look for .efi file (may be compressed)
-        for efi in sorted(output_dir.glob("*.efi*")):
-            artifacts["qemu"] = ArtifactRef(target="qemu", path=efi)
-            break
-
-        # Disk image formats (may be compressed with .zst, .xz, etc.)
-        for raw in sorted(output_dir.glob("*.raw*")):
-            if "qemu" not in artifacts:
-                artifacts["qemu"] = ArtifactRef(target="qemu", path=raw)
-            break
-
-        for qcow2 in sorted(output_dir.glob("*.qcow2*")):
-            artifacts["qemu"] = ArtifactRef(target="qemu", path=qcow2)
-            break
-
-        # For Azure/GCP, look for converted formats
-        for vhd in sorted(output_dir.glob("*.vhd*")):
-            artifacts["azure"] = ArtifactRef(target="azure", path=vhd)
-            break
-
-        for tar_gz in sorted(output_dir.glob("*.tar.gz*")):
-            artifacts["gcp"] = ArtifactRef(target="gcp", path=tar_gz)
-            break
-
-        return artifacts
 
     def _ensure_local_prerequisites(self) -> None:
         if not sys.platform.startswith("linux"):

@@ -3,12 +3,13 @@ from pathlib import Path
 import pytest
 
 from tdx import Image
+from tdx.backends import InProcessBackend
 from tdx.errors import DeploymentError, ValidationError
 
 
 def _image_with_backend(tmp_path: Path) -> Image:
     """Create an Image with the inprocess backend for testing."""
-    img = Image(build_dir=tmp_path / "build", backend="inprocess")
+    img = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     return img
 
 

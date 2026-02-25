@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from tdx import Image
+from tdx.backends import InProcessBackend
 from tdx.errors import LockfileError
 from tdx.lockfile import (
     LockedFetch,
@@ -28,7 +29,7 @@ def test_lockfile_roundtrip_parser_serializer() -> None:
 
 
 def test_image_lock_writes_dependency_and_recipe_metadata(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     image.install("curl")
     with image.profile("dev"):
         image.install("jq")
@@ -45,13 +46,13 @@ def test_image_lock_writes_dependency_and_recipe_metadata(tmp_path: Path) -> Non
 
 
 def test_bake_frozen_fails_when_lock_missing(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     with pytest.raises(LockfileError):
         image.bake(frozen=True)
 
 
 def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     image.install("curl")
     image.lock()
     image.install("jq")
@@ -63,7 +64,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
 
 
 def test_bake_frozen_succeeds_with_current_lock(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess")
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     image.install("curl")
     image.lock()
 

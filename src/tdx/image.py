@@ -10,9 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Self
 
-from .backends.inprocess import InProcessBackend
-from .backends.lima import LimaBackend
-from .backends.local_linux import LocalLinuxBackend
+from .backends.base import BuildBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
 from .compiler import (
     DEFAULT_TDX_INIT_SCRIPT,
@@ -69,7 +67,7 @@ class Image:
     arch: Arch = "x86_64"
     default_profile: str = "default"
     target: Arch = "x86_64"
-    backend: str = "lima"
+    backend: BuildBackend | None = None
     reproducible: bool = True
     policy: Policy = field(default_factory=Policy)
     logger: StructuredLogger = field(default_factory=StructuredLogger)
@@ -90,11 +88,7 @@ class Image:
     environment: dict[str, str] | None = None
     environment_passthrough: tuple[str, ...] | None = None
     emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
-    lima_cpus: int | None = None
-    lima_memory: str | None = None
-    lima_disk: str | None = None
     init: Init = field(default_factory=Init)
-    _backend_override: object | None = field(init=False, default=None, repr=False)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
@@ -726,8 +720,16 @@ class Image:
         emission = self._last_compile_emission
         assert emission is not None
 
-        # Get the build backend
-        backend = self._get_backend()
+        # Validate backend
+        if self.backend is None:
+            raise ValidationError(
+                "No build backend configured.",
+                hint=(
+                    "Pass a backend to Image(), e.g. "
+                    "backend=LimaMkosiBackend(cpus=6, memory='12GiB', disk='100GiB')"
+                ),
+            )
+        backend = self.backend
 
         profiles_result: dict[str, ProfileBuildResult] = {}
         for profile_name in self._sorted_active_profile_names():
@@ -740,8 +742,8 @@ class Image:
                 profile=profile_name,
                 phase="build",
                 module="image",
-                builder=self.backend,
-                message=f"Starting profile bake via {self.backend} backend.",
+                builder=backend.name,
+                message=f"Starting profile bake via {backend.name} backend.",
             )
 
             # Build via the real backend
@@ -787,7 +789,7 @@ class Image:
             report_payload = {
                 "profile": profile_name,
                 "lock_digest": lock_digest,
-                "backend": self.backend,
+                "backend": backend.name,
                 "debloat": self.explain_debloat(profile=profile_name),
                 "artifact_digests": artifact_digests,
                 "emitted_scripts": script_checksums,
@@ -809,7 +811,7 @@ class Image:
                 profile=profile_name,
                 phase="build",
                 module="image",
-                builder=self.backend,
+                builder=backend.name,
                 message="Completed profile bake.",
             )
 
@@ -884,30 +886,6 @@ class Image:
             parameters=params,
         )
         return get_adapter(target).deploy(request)
-
-    def _get_backend(self) -> LocalLinuxBackend | LimaBackend | InProcessBackend:
-        """Select the appropriate build backend based on Image.backend setting."""
-        if self._backend_override is not None:
-            return self._backend_override  # type: ignore[return-value]
-        if self.backend == "local_linux":
-            return LocalLinuxBackend()
-        if self.backend == "inprocess":
-            return InProcessBackend()
-        cpus = self.lima_cpus
-        memory = self.lima_memory
-        disk = self.lima_disk
-        if cpus is None or memory is None or disk is None:
-            raise ValidationError(
-                "Lima backend requires explicit resource configuration.",
-                hint="Set lima_cpus, lima_memory, and lima_disk on the Image.",
-                context={"cpus": str(cpus), "memory": str(memory), "disk": str(disk)},
-            )
-        return LimaBackend(cpus=cpus, memory=memory, disk=disk)
-
-    def set_backend(self, backend: object) -> Self:
-        """Override the build backend (useful for testing or custom backends)."""
-        self._backend_override = backend
-        return self
 
     def _emit_config(self) -> EmitConfig:
         """Build an EmitConfig from the Image's settings."""

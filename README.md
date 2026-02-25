@@ -17,8 +17,9 @@ Python SDK for declaratively building, measuring, and deploying TDX-enabled VM i
 
 ```python
 from tdx import Image
+from tdx.backends import LimaMkosiBackend
 
-img = Image(base="debian/bookworm", arch="x86_64", backend="local_linux")
+img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 img.install("systemd", "curl", "jq")
 img.file("/etc/motd", content="TDX node\n")
 img.user("app", system=True, shell="/bin/false")
@@ -44,16 +45,40 @@ Hand-maintained mkosi trees for TDX images are hard to review, easy to drift, an
 
 The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) repository from ~250 lines of Python. Integration tests verify the SDK output matches the upstream tree.
 
+## Backends
+
+The SDK provides three build backends:
+
+| Backend | When to use |
+|---|---|
+| `LimaMkosiBackend` | Default. Runs mkosi inside a Lima VM with Nix. Works on macOS and Linux. |
+| `NixMkosiBackend` | Native Linux with [Nix](https://nixos.org/download.html) installed. Runs mkosi via `nix develop` directly on the host. |
+| `LocalLinuxBackend` | Direct `mkosi` invocation on Linux with `sudo` or `unshare`. No Nix required. |
+
+```python
+from tdx.backends import LimaMkosiBackend, NixMkosiBackend, LocalLinuxBackend
+
+# Lima (recommended — reproducible, cross-platform)
+Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
+
+# Native Nix (Linux only, faster — no VM overhead)
+Image(backend=NixMkosiBackend())
+
+# Direct mkosi (Linux only, requires mkosi in PATH)
+Image(backend=LocalLinuxBackend())
+```
+
 ## Profiles
 
 Profiles let you customize packages, services, and output targets per deployment environment. Anything inside a `with img.profile(...)` block only applies to that profile.
 
 ```python
 from tdx import Image
+from tdx.backends import LimaMkosiBackend
 from tdx.modules import Devtools
 from tdx.platforms import AzurePlatform, GcpPlatform
 
-img = Image(lima_cpus=6, lima_memory="12GiB", lima_disk="100GiB")
+img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 img.output_targets("qemu")
 
 with img.profile("azure"):
@@ -165,13 +190,11 @@ python -m examples.surge-tdx-prover bake        # compile + lock + build
 
 ## Setup
 
-Install [Lima](https://lima-vm.io/docs/installation/) and [mkosi](https://github.com/systemd/mkosi) (v26), then:
+**Lima backend** (recommended): Install [Lima](https://lima-vm.io/docs/installation/), then `uv sync`. Lima runs mkosi inside a Linux VM with Nix — this ensures a consistent environment for reproducible builds.
 
-```bash
-uv sync
-```
+**Nix backend**: Install [Nix](https://nixos.org/download.html) with flakes enabled, then `uv sync`. Runs mkosi directly on your Linux host via `nix develop`.
 
-Lima runs mkosi inside a Linux VM — this is the default backend and the recommended way to build images, as it ensures a consistent environment required for reproducible builds.
+**Local backend**: Install [mkosi](https://github.com/systemd/mkosi) (v25+) on Linux, then `uv sync`.
 
 ## Development
 

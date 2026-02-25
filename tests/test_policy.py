@@ -5,13 +5,14 @@ from pathlib import Path
 import pytest
 
 from tdx import Image
+from tdx.backends import InProcessBackend
 from tdx.errors import PolicyError, ValidationError
 from tdx.fetch import fetch, fetch_git
 from tdx.policy import Policy
 
 
 def test_policy_requires_frozen_lock_for_bake(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend="inprocess").set_policy(
+    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend()).set_policy(
         Policy(require_frozen_lock=True)
     )
 
