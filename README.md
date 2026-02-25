@@ -173,7 +173,7 @@ python -m examples.surge-tdx-prover bake        # compile + lock + build
 |---|---|
 | **Python** | >= 3.12 |
 | **mkosi** | >= 25 (v26 recommended) |
-| **Lima** | `limactl` for macOS builds |
+| **Lima** | `limactl` — runs mkosi inside a Linux VM (default backend) |
 
 ```bash
 # Install mkosi v26

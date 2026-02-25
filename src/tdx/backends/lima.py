@@ -1,8 +1,8 @@
 """Lima-backed build execution.
 
-Manages a Lima VM instance for running mkosi builds on non-Linux hosts
-(macOS, etc.), following the nethermind-tdx pattern of using a Debian VM
-with mounted source directories.
+Manages a Lima VM instance for running mkosi builds, following the
+nethermind-tdx pattern of using a Debian VM with mounted source directories.
+This is the default backend.
 """
 
 from __future__ import annotations

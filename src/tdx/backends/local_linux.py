@@ -153,7 +153,7 @@ class LocalLinuxBackend:
         if not sys.platform.startswith("linux"):
             raise BackendExecutionError(
                 "Local Linux backend requires a Linux host.",
-                hint="Use the Lima backend on non-Linux systems.",
+                hint="Use the Lima backend (default) instead.",
                 context={"backend": self.name, "operation": "prepare"},
             )
         if shutil.which("mkosi") is None:
