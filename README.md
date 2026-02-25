@@ -15,10 +15,6 @@ Python SDK for declaratively building, measuring, and deploying TDX-enabled VM i
 
 ## Quickstart
 
-```bash
-uv sync
-```
-
 ```python
 from tdx import Image
 
@@ -167,17 +163,39 @@ python -m examples.surge-tdx-prover compile    # emit mkosi tree to examples/sur
 python -m examples.surge-tdx-prover bake        # compile + lock + build
 ```
 
-## Requirements
+## Setup
 
-| | |
-|---|---|
-| **Python** | >= 3.12 |
-| **mkosi** | >= 25 (v26 recommended) |
-| **Lima** | `limactl` — runs mkosi inside a Linux VM (default backend) |
+### Lima
+
+[Lima](https://lima-vm.io/) runs mkosi inside a Linux VM. This is the default backend and the recommended way to build images — it ensures a consistent build environment regardless of host OS or distro, which is required for reproducible images.
+
+**macOS:**
 
 ```bash
-# Install mkosi v26
-pip install --break-system-packages 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
+brew install lima
+```
+
+**Linux:**
+
+```bash
+# Download from https://github.com/lima-vm/lima/releases
+# or install via your package manager (e.g. pacman -S lima, nix-env -i lima)
+```
+
+Verify with `limactl --version`.
+
+### mkosi
+
+[mkosi](https://github.com/systemd/mkosi) is the image builder that runs inside Lima. Install v26:
+
+```bash
+pip install 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
+```
+
+### Python SDK
+
+```bash
+uv sync
 ```
 
 ## Development
