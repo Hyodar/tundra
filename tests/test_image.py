@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tdx import Image
+from tundravm import Image
 
 
 def test_image_default_build_dir() -> None:

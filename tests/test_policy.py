@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from tdx import Image
-from tdx.backends import InProcessBackend
-from tdx.errors import PolicyError, ValidationError
-from tdx.fetch import fetch, fetch_git
-from tdx.policy import Policy
+from tundravm import Image
+from tundravm.backends import InProcessBackend
+from tundravm.errors import PolicyError, ValidationError
+from tundravm.fetch import fetch, fetch_git
+from tundravm.policy import Policy
 
 
 def test_policy_requires_frozen_lock_for_bake(tmp_path: Path) -> None:

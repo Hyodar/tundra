@@ -1,7 +1,7 @@
 """Multi-profile cloud recipe example."""
 
-from tdx import Image
-from tdx.backends import LimaMkosiBackend
+from tundravm import Image
+from tundravm.backends import LimaMkosiBackend
 
 
 def build_cloud_profiles() -> None:

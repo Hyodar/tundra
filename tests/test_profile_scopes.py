@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from tdx import Image
-from tdx.backends import InProcessBackend
+from tundravm import Image
+from tundravm.backends import InProcessBackend
 
 
 def test_profile_scope_isolates_declarations() -> None:

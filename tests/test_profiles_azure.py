@@ -1,7 +1,7 @@
 """Tests for Azure platform profile helper."""
 
-from tdx import Image
-from tdx.platforms.azure import (
+from tundravm import Image
+from tundravm.platforms.azure import (
     AZURE_PROVISIONING_SCRIPT,
     AZURE_PROVISIONING_SERVICE,
     AzurePlatform,

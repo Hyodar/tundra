@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from tdx import Image
-from tdx.backends import InProcessBackend
-from tdx.errors import MeasurementError
+from tundravm import Image
+from tundravm.backends import InProcessBackend
+from tundravm.errors import MeasurementError
 
 
 def _image_with_backend(tmp_path: Path) -> Image:

@@ -18,8 +18,8 @@ else
 
     # Reproducibility environment
     export KBUILD_BUILD_TIMESTAMP="1970-01-01"
-    export KBUILD_BUILD_USER="tdxvm"
-    export KBUILD_BUILD_HOST="tdxvm"
+    export KBUILD_BUILD_USER="tundravm"
+    export KBUILD_BUILD_HOST="tundravm"
 
     make olddefconfig
     make -j"$(nproc)" bzImage ARCH=x86_64

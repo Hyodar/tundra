@@ -1,6 +1,6 @@
 """Tests for Cache / Build / CacheDecl shell fragment generation."""
 
-from tdx.build_cache import (
+from tundravm.build_cache import (
     Build,
     Cache,
     CacheDecl,

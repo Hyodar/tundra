@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from tdx import Image
-from tdx.models import SecretSchema, SecretTarget
-from tdx.modules import SecretDelivery
+from tundravm import Image
+from tundravm.models import SecretSchema, SecretTarget
+from tundravm.modules import SecretDelivery
 
 
 def test_secret_target_helpers_support_file_and_global_env() -> None:

@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from tdx import Image
-from tdx.backends import InProcessBackend
-from tdx.errors import LockfileError
-from tdx.lockfile import (
+from tundravm import Image
+from tundravm.backends import InProcessBackend
+from tundravm.errors import LockfileError
+from tundravm.lockfile import (
     LockedFetch,
     build_lockfile,
     parse_lockfile,

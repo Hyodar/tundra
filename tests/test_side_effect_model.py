@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from tdx import Image
-from tdx.backends import InProcessBackend
+from tundravm import Image
+from tundravm.backends import InProcessBackend
 
 
 def test_declarative_methods_do_not_touch_filesystem(tmp_path: Path) -> None:
@@ -25,7 +25,7 @@ def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     image.run("echo ready", phase="prepare")
 
     lock_path = image.lock()
-    assert lock_path == build_dir / "tdx.lock"
+    assert lock_path == build_dir / "tundravm.lock"
     assert lock_path.exists()
 
     generated = image.compile(emit_dir)

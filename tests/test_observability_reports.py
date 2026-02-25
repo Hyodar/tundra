@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from tdx import Image
-from tdx.backends import InProcessBackend
+from tundravm import Image
+from tundravm.backends import InProcessBackend
 
 
 def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> None:

@@ -4,8 +4,8 @@ Declares secrets with schema constraints on SecretDelivery. The Go binary
 validates and materializes them at boot time.
 """
 
-from tdx import Image, SecretSchema, SecretTarget
-from tdx.modules import SecretDelivery
+from tundravm import Image, SecretSchema, SecretTarget
+from tundravm.modules import SecretDelivery
 
 
 def configure_strict_secrets() -> None:

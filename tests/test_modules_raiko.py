@@ -1,6 +1,6 @@
 from examples.modules import Raiko
 
-from tdx import Image
+from tundravm import Image
 
 
 def test_raiko_setup_declares_build_packages() -> None:

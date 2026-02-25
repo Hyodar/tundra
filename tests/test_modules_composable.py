@@ -1,7 +1,7 @@
 """Tests for composable init modules: KeyGeneration, DiskEncryption, SecretDelivery."""
 
-from tdx import Image
-from tdx.modules import (
+from tundravm import Image
+from tundravm.modules import (
     DiskEncryption,
     KeyGeneration,
     SecretDelivery,
@@ -155,7 +155,7 @@ def test_secret_delivery_installs_python3() -> None:
 def test_secret_delivery_writes_config_from_declared_secrets() -> None:
     import json
 
-    from tdx.models import SecretSchema, SecretTarget
+    from tundravm.models import SecretSchema, SecretTarget
 
     image = Image(reproducible=False)
     delivery = SecretDelivery(method="http_post", port=9090)

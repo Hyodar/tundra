@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from tdx.errors import PolicyError, ReproducibilityError, ValidationError
-from tdx.fetch import MutableRefWarning, fetch, fetch_git
+from tundravm.errors import PolicyError, ReproducibilityError, ValidationError
+from tundravm.fetch import MutableRefWarning, fetch, fetch_git
 
 
 def test_fetch_requires_sha256(tmp_path: Path) -> None:

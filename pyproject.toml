@@ -3,18 +3,18 @@ requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tdxvm-sdk"
+name = "tundravm"
 version = "0.1.0"
 description = "Python SDK for declarative TDX-enabled VM image workflows."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
-authors = [{ name = "TDX VM SDK Contributors" }]
+authors = [{ name = "tundravm contributors" }]
 dependencies = ["cbor2>=5.6.5"]
 
 [project.urls]
-Homepage = "https://github.com/Hyodar/tdxvm"
-Repository = "https://github.com/Hyodar/tdxvm"
+Homepage = "https://github.com/Hyodar/tundravm"
+Repository = "https://github.com/Hyodar/tundravm"
 
 [dependency-groups]
 dev = [
@@ -42,7 +42,7 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 # Udev rules are single-line domain content that cannot be reformatted
-"src/tdx/platforms/gcp.py" = ["E501"]
+"src/tundravm/platforms/gcp.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -50,8 +50,8 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.12"
 mypy_path = ["src"]
-packages = ["tdx"]
+packages = ["tundravm"]
 strict = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tdx"]
+packages = ["src/tundravm"]

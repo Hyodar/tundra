@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from tdx import Image, Kernel, SecretSchema, SecretTarget
-from tdx.backends import LimaMkosiBackend
-from tdx.modules import (
+from tundravm import Image, Kernel, SecretSchema, SecretTarget
+from tundravm.backends import LimaMkosiBackend
+from tundravm.modules import (
     DiskEncryption,
     KeyGeneration,
     SecretDelivery,

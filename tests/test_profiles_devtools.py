@@ -1,7 +1,7 @@
 """Tests for devtools platform profile helper."""
 
-from tdx import Image
-from tdx.modules.devtools import (
+from tundravm import Image
+from tundravm.modules.devtools import (
     DEVTOOLS_PACKAGES,
     DEVTOOLS_POSTINST_SCRIPT,
     SERIAL_CONSOLE_SERVICE,

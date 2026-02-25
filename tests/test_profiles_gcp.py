@@ -1,7 +1,7 @@
 """Tests for GCP platform profile helper."""
 
-from tdx import Image
-from tdx.platforms.gcp import (
+from tundravm import Image
+from tundravm.platforms.gcp import (
     GCE_DISK_NAMING_RULES,
     GCP_HOSTS,
     GCP_RESOLV_CONF,

@@ -4,10 +4,10 @@ from typing import Any, cast
 
 import pytest
 
-from tdx import Image
-from tdx.backends import InProcessBackend
-from tdx.cache import BuildCacheInput, BuildCacheStore, cache_key
-from tdx.errors import ReproducibilityError
+from tundravm import Image
+from tundravm.backends import InProcessBackend
+from tundravm.cache import BuildCacheInput, BuildCacheStore, cache_key
+from tundravm.errors import ReproducibilityError
 
 
 def test_cache_key_includes_all_canonical_inputs() -> None:

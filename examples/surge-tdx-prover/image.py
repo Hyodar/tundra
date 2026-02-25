@@ -21,14 +21,14 @@ from __future__ import annotations
 from examples.modules import Nethermind, Raiko, TaikoClient
 from examples.nethermind_tdx import build_nethermind_base
 
-from tdx import Image
-from tdx.modules import (
+from tundravm import Image
+from tundravm.modules import (
     Devtools,
     DiskEncryption,
     KeyGeneration,
     SecretDelivery,
 )
-from tdx.platforms import AzurePlatform, GcpPlatform
+from tundravm.platforms import AzurePlatform, GcpPlatform
 
 # ── Upstream constants ────────────────────────────────────────────────
 

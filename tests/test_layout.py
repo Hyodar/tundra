@@ -1,19 +1,19 @@
 import importlib
 
 CORE_MODULES = [
-    "tdx.image",
-    "tdx.cache",
-    "tdx.ir",
-    "tdx.compiler",
-    "tdx.backends",
-    "tdx.builders",
-    "tdx.fetch",
-    "tdx.lockfile",
-    "tdx.measure",
-    "tdx.deploy",
-    "tdx.policy",
-    "tdx.observability",
-    "tdx.modules",
+    "tundravm.image",
+    "tundravm.cache",
+    "tundravm.ir",
+    "tundravm.compiler",
+    "tundravm.backends",
+    "tundravm.builders",
+    "tundravm.fetch",
+    "tundravm.lockfile",
+    "tundravm.measure",
+    "tundravm.deploy",
+    "tundravm.policy",
+    "tundravm.observability",
+    "tundravm.modules",
 ]
 
 

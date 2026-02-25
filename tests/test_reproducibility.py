@@ -1,9 +1,9 @@
 import hashlib
 from pathlib import Path
 
-from tdx import Image
-from tdx.backends import InProcessBackend
-from tdx.models import BakeResult
+from tundravm import Image
+from tundravm.backends import InProcessBackend
+from tundravm.models import BakeResult
 
 
 def test_repeated_bakes_with_same_recipe_have_stable_artifact_digests(tmp_path: Path) -> None:

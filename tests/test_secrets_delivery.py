@@ -1,5 +1,5 @@
-from tdx.models import SecretSchema, SecretTarget
-from tdx.modules import SecretDelivery
+from tundravm.models import SecretSchema, SecretTarget
+from tundravm.modules import SecretDelivery
 
 
 def test_secret_declaration_supports_schema_and_multiple_targets() -> None:

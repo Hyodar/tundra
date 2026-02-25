@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tdx.errors import (
+from tundravm.errors import (
     BackendExecutionError,
     DeploymentError,
     ErrorCode,
@@ -9,7 +9,7 @@ from tdx.errors import (
     ReproducibilityError,
     ValidationError,
 )
-from tdx.models import (
+from tundravm.models import (
     ArtifactRef,
     BakeResult,
     ProfileBuildResult,

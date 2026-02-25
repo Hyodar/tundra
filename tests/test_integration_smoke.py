@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from tdx import Image
-from tdx.backends.local_linux import LocalLinuxBackend
-from tdx.modules import Tdxs
+from tundravm import Image
+from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.modules import Tdxs
 
 # ── Test 1: Directory format ────────────────────────────────────────
 

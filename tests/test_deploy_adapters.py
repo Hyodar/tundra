@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from tdx.deploy import get_adapter
-from tdx.deploy.azure import AzureDeployAdapter
-from tdx.deploy.gcp import GcpDeployAdapter
-from tdx.deploy.qemu import QemuDeployAdapter
-from tdx.errors import DeploymentError
-from tdx.models import DeployRequest, OutputTarget
+from tundravm.deploy import get_adapter
+from tundravm.deploy.azure import AzureDeployAdapter
+from tundravm.deploy.gcp import GcpDeployAdapter
+from tundravm.deploy.qemu import QemuDeployAdapter
+from tundravm.errors import DeploymentError
+from tundravm.models import DeployRequest, OutputTarget
 
 
 def test_qemu_adapter_requires_qemu_binary(
@@ -16,7 +16,7 @@ def test_qemu_adapter_requires_qemu_binary(
 ) -> None:
     """QEMU adapter raises when qemu-system-x86_64 is not found."""
     request = _request(tmp_path, target="qemu")
-    monkeypatch.setattr("tdx.deploy.qemu.shutil.which", lambda _: None)
+    monkeypatch.setattr("tundravm.deploy.qemu.shutil.which", lambda _: None)
 
     with pytest.raises(DeploymentError, match="QEMU binary not found"):
         QemuDeployAdapter().deploy(request)
@@ -28,7 +28,7 @@ def test_azure_adapter_requires_az_cli(
 ) -> None:
     """Azure adapter raises when az CLI is not found."""
     request = _request(tmp_path, target="azure")
-    monkeypatch.setattr("tdx.deploy.azure.shutil.which", lambda _: None)
+    monkeypatch.setattr("tundravm.deploy.azure.shutil.which", lambda _: None)
 
     with pytest.raises(DeploymentError, match="Azure CLI"):
         AzureDeployAdapter().deploy(request)
@@ -40,7 +40,7 @@ def test_gcp_adapter_requires_gcloud_cli(
 ) -> None:
     """GCP adapter raises when gcloud is not found."""
     request = _request(tmp_path, target="gcp")
-    monkeypatch.setattr("tdx.deploy.gcp.shutil.which", lambda _: None)
+    monkeypatch.setattr("tundravm.deploy.gcp.shutil.which", lambda _: None)
 
     with pytest.raises(DeploymentError, match="gcloud"):
         GcpDeployAdapter().deploy(request)
@@ -52,7 +52,7 @@ def test_gcp_adapter_requires_project(
 ) -> None:
     """GCP adapter raises when no project is specified."""
     request = _request(tmp_path, target="gcp")
-    monkeypatch.setattr("tdx.deploy.gcp.shutil.which", lambda _: "/usr/bin/gcloud")
+    monkeypatch.setattr("tundravm.deploy.gcp.shutil.which", lambda _: "/usr/bin/gcloud")
 
     with pytest.raises(DeploymentError, match="project is required"):
         GcpDeployAdapter().deploy(request)

@@ -15,9 +15,9 @@ The SDK's integration tests verify this configuration produces output that
 matches the upstream repo file-for-file (see integration_tests/).
 """
 
-from tdx import Image, Kernel
-from tdx.backends import LimaMkosiBackend
-from tdx.modules.tdxs import Tdxs
+from tundravm import Image, Kernel
+from tundravm.backends import LimaMkosiBackend
+from tundravm.modules.tdxs import Tdxs
 
 # ── Upstream constants ────────────────────────────────────────────────
 

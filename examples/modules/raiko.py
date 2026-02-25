@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
-from tdx.build_cache import Build, Cache
+from tundravm.build_cache import Build, Cache
 
 if TYPE_CHECKING:
-    from tdx.image import Image
+    from tundravm.image import Image
 
 # Build packages required to compile raiko from source
 RAIKO_BUILD_PACKAGES = (

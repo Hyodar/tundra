@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from tdx import Image, Kernel, SecretTarget, ValidationError
-from tdx.backends import LocalLinuxBackend
+from tundravm import Image, Kernel, SecretTarget, ValidationError
+from tundravm.backends import LocalLinuxBackend
 
 # --- Rich service() parameters ---
 
@@ -345,25 +345,25 @@ class TestKernel:
 
 class TestPublicExports:
     def test_secret_schema_importable(self) -> None:
-        from tdx import SecretSchema
+        from tundravm import SecretSchema
 
         schema = SecretSchema(kind="string", min_length=8)
         assert schema.min_length == 8
 
     def test_secret_target_importable(self) -> None:
-        from tdx import SecretTarget
+        from tundravm import SecretTarget
 
         t = SecretTarget.file("/run/secrets/key")
         assert t.kind == "file"
 
     def test_kernel_importable(self) -> None:
-        from tdx import Kernel
+        from tundravm import Kernel
 
         k = Kernel(version="6.8")
         assert k.version == "6.8"
 
     def test_debloat_config_importable(self) -> None:
-        from tdx import DebloatConfig
+        from tundravm import DebloatConfig
 
         c = DebloatConfig()
         assert c.enabled is True

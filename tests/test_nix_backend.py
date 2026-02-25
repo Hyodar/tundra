@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from tdx.backends.nix import NixMkosiBackend
-from tdx.errors import BackendExecutionError
-from tdx.models import BakeRequest
+from tundravm.backends.nix import NixMkosiBackend
+from tundravm.errors import BackendExecutionError
+from tundravm.models import BakeRequest
 
 
 def test_nix_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
@@ -23,7 +23,7 @@ def test_nix_backend_fails_on_non_linux(
 ) -> None:
     request = _request(tmp_path)
     backend = NixMkosiBackend()
-    monkeypatch.setattr("tdx.backends.nix.sys.platform", "darwin")
+    monkeypatch.setattr("tundravm.backends.nix.sys.platform", "darwin")
 
     with pytest.raises(BackendExecutionError) as excinfo:
         backend.prepare(request)
@@ -37,7 +37,7 @@ def test_nix_backend_fails_when_nix_missing(
 ) -> None:
     request = _request(tmp_path)
     backend = NixMkosiBackend()
-    monkeypatch.setattr("tdx.backends.nix.shutil.which", lambda _: None)
+    monkeypatch.setattr("tundravm.backends.nix.shutil.which", lambda _: None)
 
     with pytest.raises(BackendExecutionError) as excinfo:
         backend.prepare(request)
@@ -51,7 +51,7 @@ def test_nix_backend_prepare_creates_directories(
 ) -> None:
     request = _request(tmp_path)
     backend = NixMkosiBackend()
-    monkeypatch.setattr("tdx.backends.nix.shutil.which", lambda _: "/usr/bin/nix")
+    monkeypatch.setattr("tundravm.backends.nix.shutil.which", lambda _: "/usr/bin/nix")
 
     backend.prepare(request)
 
@@ -65,7 +65,7 @@ def test_nix_backend_prepare_writes_flake_nix(
 ) -> None:
     request = _request(tmp_path)
     backend = NixMkosiBackend()
-    monkeypatch.setattr("tdx.backends.nix.shutil.which", lambda _: "/usr/bin/nix")
+    monkeypatch.setattr("tundravm.backends.nix.shutil.which", lambda _: "/usr/bin/nix")
 
     backend.prepare(request)
 

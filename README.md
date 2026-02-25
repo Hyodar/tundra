@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="tdxvm-sdk" width="420"/>
+  <img src="docs/logo.svg" alt="tundravm" width="420"/>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Hyodar/tdxvm/actions/workflows/ci.yml"><img src="https://github.com/Hyodar/tdxvm/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="https://github.com/Hyodar/tundravm/actions/workflows/ci.yml"><img src="https://github.com/Hyodar/tundravm/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue.svg" alt="Python 3.12+"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
   <a href="https://github.com/systemd/mkosi"><img src="https://img.shields.io/badge/mkosi-v26-8b5cf6.svg" alt="mkosi v26"/></a>
@@ -16,8 +16,8 @@ Python SDK for declaratively building, measuring, and deploying TDX-enabled VM i
 ## Quickstart
 
 ```python
-from tdx import Image
-from tdx.backends import LimaMkosiBackend
+from tundravm import Image
+from tundravm.backends import LimaMkosiBackend
 
 img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 img.install("systemd", "curl", "jq")
@@ -28,7 +28,7 @@ img.debloat(enabled=True)
 img.output_targets("qemu")
 
 img.compile("build/mkosi")           # emit mkosi project tree
-img.lock()                            # write build/tdx.lock
+img.lock()                            # write build/tundravm.lock
 result = img.bake(frozen=True)        # build with lockfile enforcement
 ```
 
@@ -56,7 +56,7 @@ The SDK provides three build backends:
 | `LocalLinuxBackend` | Direct `mkosi` invocation on Linux with `sudo` or `unshare`. No Nix required. |
 
 ```python
-from tdx.backends import LimaMkosiBackend, NixMkosiBackend, LocalLinuxBackend
+from tundravm.backends import LimaMkosiBackend, NixMkosiBackend, LocalLinuxBackend
 
 # Lima (recommended — reproducible, cross-platform)
 Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
@@ -73,10 +73,10 @@ Image(backend=LocalLinuxBackend())
 Profiles let you customize packages, services, and output targets per deployment environment. Anything inside a `with img.profile(...)` block only applies to that profile.
 
 ```python
-from tdx import Image
-from tdx.backends import LimaMkosiBackend
-from tdx.modules import Devtools
-from tdx.platforms import AzurePlatform, GcpPlatform
+from tundravm import Image
+from tundravm.backends import LimaMkosiBackend
+from tundravm.modules import Devtools
+from tundravm.platforms import AzurePlatform, GcpPlatform
 
 img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 img.output_targets("qemu")
@@ -111,8 +111,8 @@ Modules are composable units that add build steps, config files, systemd service
 **Init ordering** — modules register boot-time scripts with priority. At `compile()`, the SDK generates `/usr/bin/runtime-init` and a systemd service that runs them in order, then injects `After=runtime-init.service` into all other services automatically.
 
 ```python
-from tdx import Image
-from tdx.modules import DiskEncryption, KeyGeneration, SecretDelivery
+from tundravm import Image
+from tundravm.modules import DiskEncryption, KeyGeneration, SecretDelivery
 
 img = Image(base="debian/trixie", reproducible=True)
 
@@ -128,8 +128,8 @@ See [`docs/module-authoring.md`](docs/module-authoring.md) for writing your own 
 ## Secrets
 
 ```python
-from tdx import SecretSchema, SecretTarget
-from tdx.modules import SecretDelivery
+from tundravm import SecretSchema, SecretTarget
+from tundravm.modules import SecretDelivery
 
 delivery = SecretDelivery(method="http_post")
 delivery.secret(
@@ -159,7 +159,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md) for details.
 ## Policy
 
 ```python
-from tdx.policy import Policy
+from tundravm.policy import Policy
 
 img.set_policy(Policy(
     require_frozen_lock=True,

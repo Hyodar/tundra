@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from tdx.builders import CBuilder, DotNetBuilder, GoBuilder, RustBuilder, ScriptBuilder
-from tdx.builders.base import Builder, BuildSpec
+from tundravm.builders import CBuilder, DotNetBuilder, GoBuilder, RustBuilder, ScriptBuilder
+from tundravm.builders.base import Builder, BuildSpec
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,5 @@
-from tdx import Image
-from tdx.modules import Tdxs
+from tundravm import Image
+from tundravm.modules import Tdxs
 
 
 def test_tdxs_setup_declares_build_packages() -> None:
@@ -106,7 +106,7 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
 
 def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:
     """Tdxs service should depend on runtime-init when init scripts exist."""
-    from tdx.modules import KeyGeneration
+    from tundravm.modules import KeyGeneration
 
     image = Image()
     KeyGeneration(strategy="tpm").apply(image)

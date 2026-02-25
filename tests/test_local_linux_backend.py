@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from tdx.backends.local_linux import LocalLinuxBackend
-from tdx.errors import BackendExecutionError
-from tdx.models import BakeRequest
+from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.errors import BackendExecutionError
+from tundravm.models import BakeRequest
 
 
 def test_local_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
@@ -28,8 +28,8 @@ def test_local_backend_fails_on_non_linux_host(
 ) -> None:
     backend = LocalLinuxBackend()
     request = _request(tmp_path)
-    monkeypatch.setattr("tdx.backends.local_linux.sys.platform", "darwin")
-    monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+    monkeypatch.setattr("tundravm.backends.local_linux.sys.platform", "darwin")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
 
     with pytest.raises(BackendExecutionError) as excinfo:
         backend.prepare(request)
@@ -44,8 +44,8 @@ def test_local_backend_fails_when_mkosi_missing(
 ) -> None:
     backend = LocalLinuxBackend()
     request = _request(tmp_path)
-    monkeypatch.setattr("tdx.backends.local_linux.sys.platform", "linux")
-    monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: None)
+    monkeypatch.setattr("tundravm.backends.local_linux.sys.platform", "linux")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: None)
 
     with pytest.raises(BackendExecutionError) as excinfo:
         backend.prepare(request)
@@ -61,10 +61,10 @@ def test_local_backend_prepare_creates_directories(
 ) -> None:
     backend = LocalLinuxBackend()
     request = _request(tmp_path)
-    monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
     # Patch version check to avoid hitting real mkosi binary
     monkeypatch.setattr(
-        "tdx.backends.local_linux.subprocess.run",
+        "tundravm.backends.local_linux.subprocess.run",
         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "mkosi 26.0", "stderr": ""})(),
     )
 
@@ -81,7 +81,7 @@ def test_local_backend_mkosi_version_check(
 ) -> None:
     """Verify that _check_mkosi_version rejects old mkosi versions."""
     backend = LocalLinuxBackend()
-    monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
 
     # Mock subprocess.run to return an old version
     class FakeResult:
@@ -90,7 +90,7 @@ def test_local_backend_mkosi_version_check(
         stderr = ""
 
     monkeypatch.setattr(
-        "tdx.backends.local_linux.subprocess.run",
+        "tundravm.backends.local_linux.subprocess.run",
         lambda *a, **kw: FakeResult(),
     )
 
@@ -108,7 +108,7 @@ def test_local_backend_mkosi_version_check_passes(
 ) -> None:
     """Verify that _check_mkosi_version accepts valid mkosi versions."""
     backend = LocalLinuxBackend()
-    monkeypatch.setattr("tdx.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
 
     class FakeResult:
         returncode = 0
@@ -116,7 +116,7 @@ def test_local_backend_mkosi_version_check_passes(
         stderr = ""
 
     monkeypatch.setattr(
-        "tdx.backends.local_linux.subprocess.run",
+        "tundravm.backends.local_linux.subprocess.run",
         lambda *a, **kw: FakeResult(),
     )
 

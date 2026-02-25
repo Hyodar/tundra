@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 120">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#0c1222"/>
@@ -19,17 +19,17 @@
   </defs>
 
   <!-- Background -->
-  <rect width="480" height="120" rx="14" fill="url(#bg)"/>
+  <rect width="520" height="120" rx="14" fill="url(#bg)"/>
 
   <!-- Ambient glow shapes -->
-  <rect width="480" height="120" rx="14" fill="url(#glow1)"/>
-  <rect width="480" height="120" rx="14" fill="url(#glow2)"/>
+  <rect width="520" height="120" rx="14" fill="url(#glow1)"/>
+  <rect width="520" height="120" rx="14" fill="url(#glow2)"/>
 
   <!-- Subtle geometric forms -->
   <circle cx="90" cy="60" r="72" fill="#6366f1" opacity="0.04"/>
-  <circle cx="380" cy="95" r="50" fill="#3b82f6" opacity="0.03"/>
-  <path d="M300 0 L360 0 L300 60 Z" fill="#818cf8" opacity="0.025"/>
-  <path d="M420 120 L480 60 L480 120 Z" fill="#60a5fa" opacity="0.025"/>
+  <circle cx="420" cy="95" r="50" fill="#3b82f6" opacity="0.03"/>
+  <path d="M340 0 L400 0 L340 60 Z" fill="#818cf8" opacity="0.025"/>
+  <path d="M460 120 L520 60 L520 120 Z" fill="#60a5fa" opacity="0.025"/>
 
   <!-- Shield mark -->
   <g transform="translate(24, 12)">
@@ -53,9 +53,9 @@
     <rect x="46.5" y="53" width="3" height="6" rx="1" fill="#c7d2fe"/>
   </g>
 
-  <!-- Wordmark: "tdx" bold white, "vm" lighter blue-gray, no gap -->
+  <!-- Wordmark: "tundra" bold white, "vm" lighter blue-gray -->
   <text y="72" font-family="system-ui, -apple-system, sans-serif" font-size="52" letter-spacing="-2">
-    <tspan x="140" font-weight="700" fill="#f1f5f9">tdx</tspan><tspan font-weight="300" fill="#818cf8">vm</tspan>
+    <tspan x="140" font-weight="700" fill="#f1f5f9">tundra</tspan><tspan font-weight="300" fill="#818cf8">vm</tspan>
   </text>
 
   <!-- Tagline -->

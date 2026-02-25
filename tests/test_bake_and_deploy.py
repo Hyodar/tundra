@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from tdx import Image
-from tdx.backends import InProcessBackend
-from tdx.errors import DeploymentError, ValidationError
+from tundravm import Image
+from tundravm.backends import InProcessBackend
+from tundravm.errors import DeploymentError, ValidationError
 
 
 def _image_with_backend(tmp_path: Path) -> Image:
@@ -58,8 +58,8 @@ def test_deploy_returns_result_when_target_was_baked(
     image.bake()
 
     # Mock the QEMU adapter to not require actual QEMU
-    from tdx.deploy import qemu as qemu_mod
-    from tdx.models import DeployRequest, DeployResult
+    from tundravm.deploy import qemu as qemu_mod
+    from tundravm.models import DeployRequest, DeployResult
 
     def mock_deploy(self: object, request: DeployRequest) -> DeployResult:
         return DeployResult(
@@ -96,8 +96,8 @@ def test_deploy_requires_explicit_profile_for_multi_profile_scope(
         image.bake()
 
     # Mock QEMU adapter
-    from tdx.deploy import qemu as qemu_mod
-    from tdx.models import DeployRequest, DeployResult
+    from tundravm.deploy import qemu as qemu_mod
+    from tundravm.models import DeployRequest, DeployResult
 
     def mock_deploy(self: object, request: DeployRequest) -> DeployResult:
         return DeployResult(

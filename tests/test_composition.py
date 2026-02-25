@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from examples.modules import Nethermind, Raiko, TaikoClient
 
-from tdx import Image
-from tdx.modules import (
+from tundravm import Image
+from tundravm.modules import (
     DiskEncryption,
     KeyGeneration,
     SecretDelivery,

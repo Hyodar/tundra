@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from tdx.backends.lima import LimaMkosiBackend
-from tdx.errors import BackendExecutionError
-from tdx.models import BakeRequest
+from tundravm.backends.lima import LimaMkosiBackend
+from tundravm.errors import BackendExecutionError
+from tundravm.models import BakeRequest
 
 
 def test_lima_mount_plan_single_mount(tmp_path: Path) -> None:
@@ -69,7 +69,7 @@ def test_lima_prepare_fails_with_actionable_hint_when_missing_binary(
 ) -> None:
     request = _request(tmp_path)
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
-    monkeypatch.setattr("tdx.backends.lima.shutil.which", lambda _: None)
+    monkeypatch.setattr("tundravm.backends.lima.shutil.which", lambda _: None)
 
     with pytest.raises(BackendExecutionError) as excinfo:
         backend.prepare(request)
@@ -85,7 +85,7 @@ def test_lima_prepare_creates_directories_when_binary_exists(
 ) -> None:
     request = _request(tmp_path)
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
-    monkeypatch.setattr("tdx.backends.lima.shutil.which", lambda _: "/usr/bin/limactl")
+    monkeypatch.setattr("tundravm.backends.lima.shutil.which", lambda _: "/usr/bin/limactl")
     monkeypatch.setattr(LimaMkosiBackend, "_instance_running", lambda self, inst: True)
 
     backend.prepare(request)

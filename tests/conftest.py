@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tdx.backends.inprocess import InProcessBackend
+from tundravm.backends.inprocess import InProcessBackend
 
 
 @pytest.fixture

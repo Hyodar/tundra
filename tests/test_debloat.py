@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from tdx import Image
-from tdx.backends import InProcessBackend
+from tundravm import Image
+from tundravm.backends import InProcessBackend
 
 
 def test_debloat_default_is_enabled_and_deterministic() -> None:
@@ -45,7 +45,7 @@ def test_bake_report_contains_debloat_section(tmp_path: Path) -> None:
 
 def test_debloat_paths_skip_for_profiles_excludes_from_effective() -> None:
     """Paths in paths_skip_for_profiles are excluded from effective_paths_remove."""
-    from tdx.models import DebloatConfig
+    from tundravm.models import DebloatConfig
 
     config = DebloatConfig(
         paths_skip_for_profiles=(("devtools", ("/usr/share/bash-completion",)),),

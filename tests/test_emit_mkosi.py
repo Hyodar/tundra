@@ -3,10 +3,10 @@ from typing import cast
 
 import pytest
 
-from tdx import Image
-from tdx.compiler.emit_mkosi import ARCH_TO_MKOSI
-from tdx.errors import ValidationError
-from tdx.models import Kernel, Phase
+from tundravm import Image
+from tundravm.compiler.emit_mkosi import ARCH_TO_MKOSI
+from tundravm.errors import ValidationError
+from tundravm.models import Kernel, Phase
 
 
 def test_compile_golden_output(tmp_path: Path) -> None:

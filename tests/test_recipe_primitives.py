@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from tdx import Image
-from tdx.errors import ValidationError
+from tundravm import Image
+from tundravm.errors import ValidationError
 
 
 def test_recipe_primitives_are_recorded() -> None:

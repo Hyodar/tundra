@@ -1,8 +1,8 @@
 """Core TDX quote service module usage."""
 
-from tdx import Image
-from tdx.backends import LimaMkosiBackend
-from tdx.modules import Tdxs
+from tundravm import Image
+from tundravm.backends import LimaMkosiBackend
+from tundravm.modules import Tdxs
 
 
 def build_with_tdxs() -> None:

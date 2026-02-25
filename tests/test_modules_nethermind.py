@@ -1,6 +1,6 @@
 from examples.modules import Nethermind
 
-from tdx import Image
+from tundravm import Image
 
 
 def test_nethermind_setup_declares_build_packages() -> None:

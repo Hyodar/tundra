@@ -1,7 +1,7 @@
 """Minimal QEMU-focused recipe."""
 
-from tdx import Image
-from tdx.backends import LimaMkosiBackend
+from tundravm import Image
+from tundravm.backends import LimaMkosiBackend
 
 
 def build_qemu_image() -> None:
