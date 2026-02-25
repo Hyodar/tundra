@@ -90,6 +90,9 @@ class Image:
     environment: dict[str, str] | None = None
     environment_passthrough: tuple[str, ...] | None = None
     emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
+    lima_cpus: int | None = None
+    lima_memory: str | None = None
+    lima_disk: str | None = None
     init: Init = field(default_factory=Init)
     _backend_override: object | None = field(init=False, default=None, repr=False)
     _state: RecipeState = field(init=False, repr=False)
@@ -890,7 +893,16 @@ class Image:
             return LocalLinuxBackend()
         if self.backend == "inprocess":
             return InProcessBackend()
-        return LimaBackend()
+        cpus = self.lima_cpus
+        memory = self.lima_memory
+        disk = self.lima_disk
+        if cpus is None or memory is None or disk is None:
+            raise ValidationError(
+                "Lima backend requires explicit resource configuration.",
+                hint="Set lima_cpus, lima_memory, and lima_disk on the Image.",
+                context={"cpus": str(cpus), "memory": str(memory), "disk": str(disk)},
+            )
+        return LimaBackend(cpus=cpus, memory=memory, disk=disk)
 
     def set_backend(self, backend: object) -> Self:
         """Override the build backend (useful for testing or custom backends)."""
