@@ -6,8 +6,6 @@ import hashlib
 import re
 import shlex
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
-from textwrap import dedent
 from typing import TYPE_CHECKING, Literal
 
 from tundravm.build_cache import Build, Cache
@@ -25,8 +23,6 @@ KEY_GENERATION_BUILD_PACKAGES = (
 KEY_GENERATION_DEFAULT_REPO = "https://github.com/Hyodar/tundra-tools.git"
 KEY_GENERATION_DEFAULT_BRANCH = "master"
 KEY_GENERATION_DEFAULT_CONFIG_PATH = "/etc/tdx/key-gen.yaml"
-KEY_GENERATION_TPM_NV_INDEX = "0x1500016"
-KEY_GENERATION_TPM_TCTI = "device:/dev/tpmrm0"
 ENTRY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -105,7 +101,7 @@ class KeyGeneration:
         return spec
 
     def apply(self, image: Image) -> None:
-        """Add build hook, config files, and init script to *image*."""
+        """Add build hook, aggregate config, and init script to *image*."""
         self._validate()
         image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
         image.install("tpm2-tools")
@@ -135,8 +131,6 @@ class KeyGeneration:
         )
         image.hook("build", cache.wrap(build_cmd))
         image.file(self.config_path, content=self._render_config())
-        for spec in self._keys:
-            image.file(self._entry_config_path(spec.name), content=self._render_config((spec,)))
         image.add_init_script(self._render_init_script(), priority=10)
 
     def _append_key(self, spec: KeySpec) -> None:
@@ -151,21 +145,6 @@ class KeyGeneration:
 
         output_paths: set[str] = set()
         for spec in self._keys:
-            if spec.tpm_enabled() and spec.output is None:
-                raise ValidationError(
-                    "TPM-backed keys require output paths in the module layer.",
-                    hint=(
-                        "This module captures each key from the shared TPM NV index "
-                        "immediately after generation."
-                    ),
-                    context={"key": spec.name},
-                )
-            if spec.output is not None and not spec.tpm_enabled():
-                raise ValidationError(
-                    "Non-TPM keys cannot be materialized to output paths by this module.",
-                    hint="Use persist_in_tpm=True for keys that need file outputs.",
-                    context={"key": spec.name},
-                )
             if spec.output is not None:
                 if spec.output in output_paths:
                     raise ValidationError(
@@ -177,14 +156,6 @@ class KeyGeneration:
     def _cache_key(self) -> str:
         repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]
         return f"key-generation-{repo_hash}-{self.source_branch}"
-
-    def _entry_config_path(self, name: str) -> str:
-        config_dir = (
-            f"{self.config_path[:-5]}.d"
-            if self.config_path.endswith(".yaml")
-            else f"{self.config_path}.d"
-        )
-        return f"{config_dir}/{name}.yaml"
 
     def _render_config(self, keys: tuple[KeySpec, ...] | None = None) -> str:
         key_specs = keys or tuple(self._keys)
@@ -201,35 +172,26 @@ class KeyGeneration:
                 lines.append(f"    size: {spec.size}")
             elif spec.pipe_path:
                 lines.append(f'    pipe_path: "{spec.pipe_path}"')
+            if spec.output is not None:
+                lines.append(f'    output_path: "{spec.output}"')
         return "\n".join(lines) + "\n"
 
     def _render_init_script(self) -> str:
-        lines: list[str] = []
-        for spec in self._keys:
-            config_path = shlex.quote(self._entry_config_path(spec.name))
-            lines.append(f"/usr/bin/key-gen setup {config_path}")
-            if spec.output is None:
-                lines.append("")
-                continue
-
-            output_path = shlex.quote(spec.output)
-            output_dir = shlex.quote(str(PurePosixPath(spec.output).parent))
-            variable_name = _shell_var_name(spec.name)
+        lines = [f"/usr/bin/key-gen setup {shlex.quote(self.config_path)}"]
+        primary = next((spec for spec in self._keys if spec.name == self.key_name), None)
+        if primary is not None and primary.output is not None:
+            output_path = shlex.quote(primary.output)
             lines.extend(
                 (
-                    f"install -d -m 0700 {output_dir}",
-                    f'export {variable_name}="$(',
-                    f"    tpm2_nvread -C o -T {KEY_GENERATION_TPM_TCTI} \\",
-                    f"        {KEY_GENERATION_TPM_NV_INDEX} | tr -d '\\n'",
-                    ')"',
-                    f"printf '%s\\n' \"${{{variable_name}}}\" > {output_path}",
-                    f"chmod 0600 {output_path}",
+                    f"if [ -f {output_path} ]; then",
+                    f'    export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < {output_path})"',
+                    "else",
+                    f'    echo "missing generated key output: {primary.output}" >&2',
+                    "    exit 1",
+                    "fi",
                 )
             )
-            if spec.name == self.key_name:
-                lines.append(f'export DISK_ENCRYPTION_KEY="${{{variable_name}}}"')
-            lines.append("")
-        return dedent("\n".join(lines)).rstrip() + "\n"
+        return "\n".join(lines) + "\n"
 
     def _validate_name(self, name: str, *, kind: str) -> None:
         if not name:
@@ -239,7 +201,3 @@ class KeyGeneration:
                 f"Invalid {kind} name {name!r}.",
                 hint="Use only letters, numbers, dot, underscore, and dash.",
             )
-
-
-def _shell_var_name(name: str) -> str:
-    return "KEY_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper()

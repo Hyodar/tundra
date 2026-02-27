@@ -98,7 +98,7 @@ class DiskEncryption:
         return spec
 
     def apply(self, image: Image) -> None:
-        """Add build hook, config files, and init script to *image*."""
+        """Add build hook, aggregate config, and init script to *image*."""
         self._validate()
         image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
         image.install("cryptsetup")
@@ -128,11 +128,6 @@ class DiskEncryption:
         )
         image.hook("build", cache.wrap(build_cmd))
         image.file(self.config_path, content=self._render_config())
-        for spec in self._disks:
-            image.file(
-                self._entry_config_path(spec.name),
-                content=self._render_config((spec,)),
-            )
         image.add_init_script(self._render_init_script(), priority=20)
 
     def _append_disk(self, spec: DiskSpec) -> None:
@@ -147,6 +142,7 @@ class DiskEncryption:
 
         mount_points: set[str] = set()
         mapper_names: set[str] = set()
+        env_key_names: set[str] = set()
         for spec in self._disks:
             if spec.mount_point in mount_points:
                 raise ValidationError(
@@ -155,7 +151,7 @@ class DiskEncryption:
                 )
             mount_points.add(spec.mount_point)
 
-            if spec.key_name is None:
+            if not self._is_encrypted(spec):
                 if spec.mapper_name is not None:
                     raise ValidationError(
                         "Plain disks cannot request custom mapper names.",
@@ -168,6 +164,9 @@ class DiskEncryption:
                     )
                 continue
 
+            if spec.key_path is None and spec.key_name is not None:
+                env_key_names.add(spec.key_name)
+
             effective_mapper = spec.mapper_name or self._generated_mapper_name(spec.name)
             if effective_mapper in mapper_names:
                 raise ValidationError(
@@ -176,17 +175,18 @@ class DiskEncryption:
                 )
             mapper_names.add(effective_mapper)
 
+        if len(env_key_names) > 1:
+            raise ValidationError(
+                "Multiple encrypted disks with distinct keys require key_path values.",
+                hint=(
+                    "disk-setup can only consume one environment-provided fallback key "
+                    "per aggregate setup run."
+                ),
+            )
+
     def _cache_key(self) -> str:
         repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]
         return f"disk-encryption-{repo_hash}-{self.source_branch}"
-
-    def _entry_config_path(self, name: str) -> str:
-        config_dir = (
-            f"{self.config_path[:-5]}.d"
-            if self.config_path.endswith(".yaml")
-            else f"{self.config_path}.d"
-        )
-        return f"{config_dir}/{name}.yaml"
 
     def _render_config(self, disks: tuple[DiskSpec, ...] | None = None) -> str:
         disk_specs = disks or tuple(self._disks)
@@ -203,6 +203,8 @@ class DiskEncryption:
             )
             if spec.key_name is not None:
                 lines.append(f'    encryption_key: "{spec.key_name}"')
+            if spec.key_path is not None:
+                lines.append(f'    encryption_key_path: "{spec.key_path}"')
         return "\n".join(lines) + "\n"
 
     def _strategy_lines(self, spec: DiskSpec) -> tuple[str, ...]:
@@ -218,36 +220,9 @@ class DiskEncryption:
         return f"crypt_disk_{name}"
 
     def _render_init_script(self) -> str:
-        lines: list[str] = []
+        lines = [f"/usr/bin/disk-setup setup {shlex.quote(self.config_path)}"]
         for spec in self._disks:
-            if spec.key_name is None:
-                lines.append("unset DISK_ENCRYPTION_KEY")
-            elif spec.key_path is None:
-                lines.extend(
-                    (
-                        'if [ -z "${DISK_ENCRYPTION_KEY:-}" ]; then',
-                        f'    echo "missing DISK_ENCRYPTION_KEY for disk {spec.name}" >&2',
-                        "    exit 1",
-                        "fi",
-                    )
-                )
-            else:
-                key_path = shlex.quote(spec.key_path)
-                lines.extend(
-                    (
-                        f"if [ ! -f {key_path} ]; then",
-                        f'    echo "missing disk key file for {spec.name}: {spec.key_path}" >&2',
-                        "    exit 1",
-                        "fi",
-                        f'export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < {key_path})"',
-                    )
-                )
-
-            lines.append(
-                f"/usr/bin/disk-setup setup {shlex.quote(self._entry_config_path(spec.name))}"
-            )
-
-            if spec.key_name is not None and spec.mapper_name:
+            if self._is_encrypted(spec) and spec.mapper_name:
                 generated_mapper = self._generated_mapper_name(spec.name)
                 if spec.mapper_name != generated_mapper:
                     generated_mapper_path = shlex.quote(f"/dev/mapper/{generated_mapper}")
@@ -261,9 +236,7 @@ class DiskEncryption:
                             "fi",
                         )
                     )
-            lines.append("")
-
-        return "\n".join(lines).rstrip() + "\n"
+        return "\n".join(lines) + "\n"
 
     def _validate_name(self, name: str, *, kind: str) -> None:
         if not name:
@@ -273,3 +246,6 @@ class DiskEncryption:
                 f"Invalid {kind} name {name!r}.",
                 hint="Use only letters, numbers, dot, underscore, and dash.",
             )
+
+    def _is_encrypted(self, spec: DiskSpec) -> bool:
+        return spec.key_name is not None or spec.key_path is not None

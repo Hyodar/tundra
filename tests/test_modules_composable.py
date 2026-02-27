@@ -37,15 +37,19 @@ def test_key_generation_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/key_persistent.yaml" in entry.script
-    assert "tpm2_nvread" in entry.script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
+    assert 'export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < /persistent/key)"' in entry.script
     assert "/persistent/key" in entry.script
     assert entry.priority == 10
 
 
-def test_key_generation_rejects_output_for_non_tpm_keys() -> None:
-    with pytest.raises(ValidationError, match="Non-TPM keys cannot be materialized"):
-        KeyGeneration(strategy="random", output="/tmp/key").apply(Image(reproducible=False))
+def test_key_generation_allows_output_for_non_tpm_keys() -> None:
+    image = Image(reproducible=False)
+    KeyGeneration(strategy="random", output="/tmp/key").apply(image)
+
+    profile = image.state.profiles["default"]
+    config = next(f.content for f in profile.files if f.path == "/etc/tdx/key-gen.yaml")
+    assert 'output_path: "/tmp/key"' in config
 
 
 def test_key_generation_pipe_strategy_renders_pipe_config() -> None:
@@ -97,23 +101,12 @@ def test_key_generation_supports_multiple_keys() -> None:
     assert "root:" in config
     assert "data:" in config
     assert 'pipe_path: "/run/keys/data.pipe"' in config
-
-    root_config = next(
-        f.content for f in profile.files if f.path == "/etc/tdx/key-gen.d/root.yaml"
-    )
-    data_config = next(
-        f.content for f in profile.files if f.path == "/etc/tdx/key-gen.d/data.yaml"
-    )
-    assert "root:" in root_config
-    assert "data:" not in root_config
-    assert "data:" in data_config
+    assert 'output_path: "/persistent/root.key"' in config
+    assert 'output_path: "/persistent/data.key"' in config
 
     script = profile.init_scripts[0].script
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/root.yaml" in script
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/data.yaml" in script
-    assert 'export DISK_ENCRYPTION_KEY="${KEY_ROOT}"' in script
+    assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
     assert "/persistent/root.key" in script
-    assert "/persistent/data.key" in script
 
 
 # ── DiskEncryption ───────────────────────────────────────────────────
@@ -147,8 +140,7 @@ def test_disk_encryption_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/disk_persistent.yaml" in entry.script
-    assert "/persistent/key" in entry.script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in entry.script
     assert "cryptsetup rename crypt_disk_disk_persistent cryptdata" in entry.script
     assert entry.priority == 20
 
@@ -233,22 +225,13 @@ def test_disk_encryption_supports_multiple_disks() -> None:
     assert "scratch:" in config
     assert 'encryption_key: "data_key"' in config
     assert 'encryption_key: "logs_key"' in config
+    assert 'encryption_key_path: "/persistent/data.key"' in config
+    assert 'encryption_key_path: "/persistent/logs.key"' in config
     assert 'mount_at: "/scratch"' in config
     assert 'dirs: ["cache"]' in config
 
-    scratch_config = next(
-        f.content for f in profile.files if f.path == "/etc/tdx/disk-setup.d/scratch.yaml"
-    )
-    assert 'strategy: "largest"' in scratch_config
-    assert "encryption_key" not in scratch_config
-
     script = profile.init_scripts[0].script
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/data.yaml" in script
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/logs.yaml" in script
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/scratch.yaml" in script
-    assert 'export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < /persistent/data.key)"' in script
-    assert 'export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < /persistent/logs.key)"' in script
-    assert "unset DISK_ENCRYPTION_KEY" in script
+    assert script.count("/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml") == 1
     assert "cryptsetup rename crypt_disk_logs cryptlogs" in script
 
 
@@ -386,8 +369,8 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
     assert len(script_files) == 1
     script = script_files[0].content
     assert "#!/bin/bash" in script
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/key_persistent.yaml" in script
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/disk_persistent.yaml" in script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in script
     assert "/usr/bin/secret-delivery" in script
 
     svc_files = [
