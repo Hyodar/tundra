@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="tundravm" width="420"/>
+  <img src="docs/logo.svg" alt="tundravm" width="700"/>
 </p>
 
 <p align="center">
