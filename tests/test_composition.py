@@ -92,20 +92,14 @@ def test_module_build_hooks_ordered_by_application_sequence() -> None:
     build_commands = profile.phases.get("build", [])
     scripts = [cmd.argv[0] for cmd in build_commands]
 
-    # Init sub-modules come first (key-generation, disk-encryption, secret-delivery)
-    # then Tdxs, Raiko, TaikoClient, Nethermind
-    key_gen_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/key-generation" in s)
-    disk_enc_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/disk-encryption" in s)
-    secret_del_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/secret-delivery" in s)
+    # Shared init build hook appears before service modules
+    tdx_init_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/tdx-init" in s)
     tdxs_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/tdxs" in s)
     raiko_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/raiko" in s)
     taiko_idx = next(i for i, s in enumerate(scripts) if "/usr/bin/taiko-client" in s)
     nethermind_idx = next(i for i, s in enumerate(scripts) if "dotnet publish" in s)
 
-    # Init sub-modules before service modules
-    assert key_gen_idx < tdxs_idx
-    assert disk_enc_idx < tdxs_idx
-    assert secret_del_idx < tdxs_idx
+    assert tdx_init_idx < tdxs_idx
     # Service modules in application order
     assert tdxs_idx < raiko_idx
     assert raiko_idx < taiko_idx
@@ -174,8 +168,8 @@ def test_multiple_modules_have_distinct_build_hooks() -> None:
     profile = img.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
 
-    # base hook + app hook + 3 init sub-module hooks + 4 service module hooks = 9
-    assert len(build_commands) >= 9, f"Expected at least 9 build hooks, got {len(build_commands)}"
+    # base hook + app hook + shared tdx-init hook + 4 service module hooks = 7
+    assert len(build_commands) >= 7, f"Expected at least 7 build hooks, got {len(build_commands)}"
 
 
 def test_all_module_packages_present() -> None:
@@ -281,7 +275,7 @@ def test_full_composition_produces_valid_state() -> None:
 
     # Has build hooks for all modules
     build_commands = profile.phases.get("build", [])
-    assert len(build_commands) >= 9
+    assert len(build_commands) >= 7
 
     # Has postinst phase with commands
     postinst_commands = profile.phases.get("postinst", [])

@@ -22,7 +22,7 @@ def test_key_generation_adds_build_hook() -> None:
     assert "NethermindEth/nethermind-tdx" in build_script
     assert "mkosi-chroot bash -c" in build_script
     assert "go build" in build_script
-    assert "$DESTDIR/usr/bin/key-generation" in build_script
+    assert "$DESTDIR/usr/bin/tdx-init" in build_script
 
 
 def test_key_generation_registers_init_script() -> None:
@@ -71,7 +71,7 @@ def test_disk_encryption_adds_build_hook() -> None:
     build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
     assert "mkosi-chroot bash -c" in build_script
-    assert "$DESTDIR/usr/bin/disk-encryption" in build_script
+    assert "$DESTDIR/usr/bin/tdx-init" in build_script
 
 
 def test_disk_encryption_registers_init_script() -> None:
@@ -128,7 +128,7 @@ def test_secret_delivery_adds_build_hook() -> None:
     build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
     assert "mkosi-chroot bash -c" in build_script
-    assert "$DESTDIR/usr/bin/secret-delivery" in build_script
+    assert "$DESTDIR/usr/bin/tdx-init" in build_script
 
 
 def test_secret_delivery_registers_init_script() -> None:
@@ -218,9 +218,9 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
 
     profile = image.state.profiles["default"]
 
-    # All three build hooks from modules
+    # Shared tdx-init build hook emitted once
     build_commands = profile.phases.get("build", [])
-    assert len(build_commands) == 3
+    assert len(build_commands) == 1
 
     # Init collected init_scripts and generated runtime-init
     script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
@@ -238,7 +238,8 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
     assert len(svc_files) == 1
     svc = svc_files[0].content
     assert "Type=oneshot" in svc
-    assert "ExecStart=/usr/bin/runtime-init" in svc
+    assert "ExecStart=/usr/bin/tdx-init setup /etc/tdx-init/config.yaml" in svc
+    assert "ExecStartPost=/usr/bin/runtime-init" in svc
 
     # Runtime packages from modules directly on image
     assert "cryptsetup" in profile.packages

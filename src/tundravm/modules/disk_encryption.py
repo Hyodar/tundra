@@ -1,8 +1,7 @@
 """Disk encryption module.
 
-Builds a Go binary (placeholder: tdx-init repo) that handles LUKS
-format/open at runtime, and registers the binary invocation into the
-runtime-init script via ``image.add_init_script()``.
+Configures ``tdx-init`` disk settings and installs a compatibility shim
+command for runtime-init ordering.
 """
 
 from __future__ import annotations
@@ -10,16 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from tundravm.build_cache import Build, Cache
+from tundravm.modules._tdx_init import (
+    ensure_tdx_init_build,
+    ensure_tdx_init_config,
+    write_tdx_init_config,
+)
 
 if TYPE_CHECKING:
     from tundravm.image import Image
-
-DISK_ENCRYPTION_BUILD_PACKAGES = (
-    "golang",
-    "git",
-    "build-essential",
-)
 
 DISK_ENCRYPTION_DEFAULT_REPO = "https://github.com/NethermindEth/nethermind-tdx"
 DISK_ENCRYPTION_DEFAULT_BRANCH = "main"
@@ -29,8 +26,8 @@ DISK_ENCRYPTION_DEFAULT_BRANCH = "main"
 class DiskEncryption:
     """LUKS2 disk encryption at boot time.
 
-    Builds a Go binary from source (currently the tdx-init repo as a
-    placeholder) and registers its invocation in the runtime-init script.
+    Configures disk strategy in ``/etc/tdx-init/config.yaml`` and registers
+    a compatibility command in runtime-init ordering.
     """
 
     device: str = "/dev/vda3"
@@ -41,33 +38,32 @@ class DiskEncryption:
     source_branch: str = DISK_ENCRYPTION_DEFAULT_BRANCH
 
     def apply(self, image: Image) -> None:
-        """Add build hook, packages, and init script to *image*."""
-        image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
+        """Ensure tdx-init is built and disk settings are configured."""
+        ensure_tdx_init_build(
+            image,
+            source_repo=self.source_repo,
+            source_ref=self.source_branch,
+        )
         image.install("cryptsetup")
 
-        clone_dir = Build.build_path("disk-encryption")
-        chroot_dir = Build.chroot_path("disk-encryption")
-        cache = Cache.declare(
-            f"disk-encryption-{self.source_branch}",
-            (
-                Cache.file(
-                    src=Build.build_path("disk-encryption/init/build/disk-encryption"),
-                    dest=Build.dest_path("usr/bin/disk-encryption"),
-                    name="disk-encryption",
-                ),
-            ),
-        )
+        config = ensure_tdx_init_config(image)
+        disks = config.setdefault("disks", {})
+        disk_persistent = disks.setdefault("disk_persistent", {})
+        disk_persistent["strategy"] = "pathglob" if self.device else "largest"
+        if self.device:
+            disk_persistent["strategy_config"] = {"path_glob": self.device}
+        else:
+            disk_persistent["strategy_config"] = {}
+        disk_persistent["format"] = "on_fail"
+        disk_persistent["encryption_key"] = "key_persistent"
+        disk_persistent["mount_at"] = self.mount_point
+        write_tdx_init_config(image, config)
 
-        build_cmd = (
-            f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            f"cd {chroot_dir}/init && "
-            'go build -trimpath -ldflags "-s -w -buildid=" '
-            "-o ./build/disk-encryption ./cmd/main.go"
-            "'"
+        image.file(
+            "/usr/bin/disk-encryption",
+            content=_compat_disk_encryption_script(),
+            mode="0755",
         )
-        image.hook("build", cache.wrap(build_cmd))
 
         image.add_init_script(
             f"/usr/bin/disk-encryption"
@@ -77,3 +73,12 @@ class DiskEncryption:
             f" --mount {self.mount_point}\n",
             priority=20,
         )
+
+
+def _compat_disk_encryption_script() -> str:
+    return (
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "# Compatibility shim: disk setup is handled by tdx-init.\n"
+        "exit 0\n"
+    )

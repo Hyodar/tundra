@@ -16,6 +16,7 @@ import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
+from urllib.parse import urlparse
 
 from tundravm.errors import ValidationError
 from tundravm.models import (
@@ -295,6 +296,18 @@ def _parse_base(base: str) -> tuple[str, str]:
     return base, ""
 
 
+def _parse_mode(mode: str) -> int:
+    """Parse an octal file mode string."""
+    try:
+        return int(mode, 8)
+    except ValueError as exc:
+        raise ValidationError(
+            "Invalid file mode value.",
+            hint="Use a valid octal string such as 0644 or 0755.",
+            context={"mode": mode},
+        ) from exc
+
+
 def _systemd_unit_content(svc: ServiceSpec) -> str:
     """Generate a real systemd .service unit file from a ServiceSpec."""
     lines: list[str] = ["[Unit]", f"Description={svc.name}"]
@@ -369,7 +382,12 @@ def _useradd_command(user: UserSpec) -> str:
 def _render_kernel_build_script(kernel: Kernel) -> str:
     """Render a build script that clones, configures, and compiles the Linux kernel."""
     version = kernel.version or "unknown"
-    config_hash = hashlib.sha256(str(kernel.config_file).encode()).hexdigest()[:12]
+    config_hash_source = str(kernel.config_file)
+    if kernel.config_file:
+        config_path = Path(kernel.config_file)
+        if config_path.exists():
+            config_hash_source = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    config_hash = hashlib.sha256(config_hash_source.encode()).hexdigest()[:12]
     cache_key = f"kernel-{version}-{config_hash}"
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash
@@ -491,6 +509,8 @@ class DeterministicMkosiEmitter:
                 config=config,
             )
 
+            cloud_scripts: tuple[Path, ...] = ()
+
             # Generate mkosi.conf
             conf_content = self._render_conf(
                 profile_name=profile_name,
@@ -500,6 +520,7 @@ class DeterministicMkosiEmitter:
                 build_sources=profile.build_sources or None,
                 repositories=profile.repositories,
                 phase_scripts=phase_scripts,
+                cloud_postoutput_scripts=cloud_scripts,
             )
 
             conf_path = profile_dir / "mkosi.conf"
@@ -507,7 +528,18 @@ class DeterministicMkosiEmitter:
 
             # Emit cloud postoutput scripts based on output_targets
             if config.generate_cloud_postoutput:
-                self._emit_cloud_postoutput(profile_dir, profile)
+                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
+                conf_content = self._render_conf(
+                    profile_name=profile_name,
+                    config=config,
+                    packages=sorted(profile.packages),
+                    build_packages=sorted(profile.build_packages),
+                    build_sources=profile.build_sources or None,
+                    repositories=profile.repositories,
+                    phase_scripts=phase_scripts,
+                    cloud_postoutput_scripts=cloud_scripts,
+                )
+                conf_path.write_text(conf_content, encoding="utf-8")
 
             profile_paths[profile_name] = conf_path
             script_paths[profile_name] = phase_scripts
@@ -594,6 +626,7 @@ class DeterministicMkosiEmitter:
                 recipe=recipe,
                 config=config,
             )
+            cloud_scripts: tuple[Path, ...] = ()
 
             # Profile-specific mkosi.conf override
             conf_content = self._render_conf(
@@ -604,13 +637,25 @@ class DeterministicMkosiEmitter:
                 build_sources=profile.build_sources or None,
                 repositories=profile.repositories,
                 phase_scripts=phase_scripts,
+                cloud_postoutput_scripts=cloud_scripts,
             )
             conf_path = profile_dir / "mkosi.conf"
             conf_path.write_text(conf_content, encoding="utf-8")
 
             # Emit cloud postoutput scripts
             if config.generate_cloud_postoutput:
-                self._emit_cloud_postoutput(profile_dir, profile)
+                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
+                conf_content = self._render_conf(
+                    profile_name=profile_name,
+                    config=config,
+                    packages=sorted(profile.packages),
+                    build_packages=sorted(profile.build_packages),
+                    build_sources=profile.build_sources or None,
+                    repositories=profile.repositories,
+                    phase_scripts=phase_scripts,
+                    cloud_postoutput_scripts=cloud_scripts,
+                )
+                conf_path.write_text(conf_content, encoding="utf-8")
 
             profile_paths[profile_name] = conf_path
             script_paths[profile_name] = phase_scripts
@@ -621,19 +666,23 @@ class DeterministicMkosiEmitter:
             script_paths=script_paths,
         )
 
-    def _emit_cloud_postoutput(self, profile_dir: Path, profile: ProfileState) -> None:
+    def _emit_cloud_postoutput(self, profile_dir: Path, profile: ProfileState) -> tuple[Path, ...]:
         """Emit cloud-specific postoutput scripts based on output_targets."""
+        emitted: list[Path] = []
         targets = profile.output_targets
         if "gcp" in targets:
             gcp_script = profile_dir / "scripts" / "gcp-postoutput.sh"
             gcp_script.parent.mkdir(parents=True, exist_ok=True)
             gcp_script.write_text(GCP_POSTOUTPUT_SCRIPT, encoding="utf-8")
             gcp_script.chmod(0o755)
+            emitted.append(gcp_script)
         if "azure" in targets:
             azure_script = profile_dir / "scripts" / "azure-postoutput.sh"
             azure_script.parent.mkdir(parents=True, exist_ok=True)
             azure_script.write_text(AZURE_POSTOUTPUT_SCRIPT, encoding="utf-8")
             azure_script.chmod(0o755)
+            emitted.append(azure_script)
+        return tuple(emitted)
 
     def _validate_profile_phases(self, *, profile_name: str, recipe: RecipeState) -> None:
         profile = recipe.profiles[profile_name]
@@ -656,12 +705,14 @@ class DeterministicMkosiEmitter:
             dest = extra_dir / entry.path.lstrip("/")
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(entry.content, encoding="utf-8")
+            dest.chmod(_parse_mode(entry.mode))
 
         # Rendered templates from img.template()
         for tmpl in profile.templates:
             dest = extra_dir / tmpl.path.lstrip("/")
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(tmpl.rendered, encoding="utf-8")
+            dest.chmod(_parse_mode(tmpl.mode))
 
         # Systemd service unit files from img.service()
         for svc in profile.services:
@@ -694,6 +745,46 @@ class DeterministicMkosiEmitter:
             dest = skeleton_dir / entry.path.lstrip("/")
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(entry.content, encoding="utf-8")
+            dest.chmod(_parse_mode(entry.mode))
+
+        # Additional apt repositories from image.repository(...)
+        distribution, release = _parse_base(config.base)
+        for repo in profile.repositories:
+            safe_name = repo.name.lower().replace("/", "-").replace(" ", "-")
+            suite = repo.suite or release or distribution
+            components = " ".join(repo.components or ("main",))
+            source_lines = [
+                "Types: deb deb-src",
+                f"URIs: {repo.url}",
+                f"Suites: {suite}",
+                f"Components: {components}",
+                "Enabled: yes",
+            ]
+            if repo.keyring:
+                source_lines.append(f"Signed-By: {repo.keyring}")
+
+            source_path = skeleton_dir / "etc" / "apt" / "sources.list.d" / f"{safe_name}.sources"
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
+            source_path.chmod(0o644)
+
+            if repo.priority != 100:
+                host = urlparse(repo.url).netloc or repo.url
+                pref_lines = [
+                    "Package: *",
+                    f'Pin: origin "{host}"',
+                    f"Pin-Priority: {repo.priority}",
+                ]
+                pref_path = (
+                    skeleton_dir
+                    / "etc"
+                    / "apt"
+                    / "preferences.d"
+                    / f"{safe_name}.pref"
+                )
+                pref_path.parent.mkdir(parents=True, exist_ok=True)
+                pref_path.write_text("\n".join(pref_lines) + "\n", encoding="utf-8")
+                pref_path.chmod(0o644)
 
         # Auto-emit minimal.target when systemd debloat sets it as default
         if profile.debloat.enabled and profile.debloat.systemd_minimize:
@@ -709,15 +800,13 @@ class DeterministicMkosiEmitter:
             kernel_dir.mkdir(parents=True, exist_ok=True)
             config_src = Path(config.kernel.config_file)
             config_dest = kernel_dir / "kernel.config"
-            if config_src.exists():
-                config_dest.write_text(config_src.read_text(encoding="utf-8"), encoding="utf-8")
-            else:
-                # Write a placeholder referencing the expected config file
-                config_dest.write_text(
-                    f"# Kernel config: {config.kernel.config_file}\n"
-                    f"# Place the actual config file at this path before building.\n",
-                    encoding="utf-8",
+            if not config_src.exists():
+                raise ValidationError(
+                    "Kernel config file does not exist.",
+                    hint="Provide a valid kernel config file before compiling.",
+                    context={"path": str(config.kernel.config_file)},
                 )
+            config_dest.write_text(config_src.read_text(encoding="utf-8"), encoding="utf-8")
 
     def _emit_all_scripts(
         self,
@@ -952,6 +1041,7 @@ class DeterministicMkosiEmitter:
         build_sources: list[tuple[str, str]] | None = None,
         repositories: list[RepositorySpec],
         phase_scripts: dict[Phase, Path],
+        cloud_postoutput_scripts: tuple[Path, ...] = (),
     ) -> str:
         distribution, release = _parse_base(config.base)
         lines: list[str] = []
@@ -1041,15 +1131,6 @@ class DeterministicMkosiEmitter:
         lines.append("ExtraTrees=mkosi.extra")
         lines.append("SkeletonTrees=mkosi.skeleton")
 
-        # Repositories
-        if repositories:
-            lines.append("")
-            lines.append("# Additional repositories")
-            for repo in repositories:
-                lines.append(f"# repo: {repo.name} = {repo.url}")
-                if repo.suite:
-                    lines.append(f"# suite: {repo.suite}")
-
         # Script references (part of [Content] section)
         if phase_scripts:
             lines.append("")
@@ -1058,6 +1139,13 @@ class DeterministicMkosiEmitter:
                 if script_path is None:
                     continue
                 lines.append(f"{PHASE_TO_MKOSI_KEY[phase]}=scripts/{script_path.name}")
+
+        # Additional cloud conversion postoutput scripts.
+        if cloud_postoutput_scripts:
+            if not phase_scripts:
+                lines.append("")
+            for script_path in cloud_postoutput_scripts:
+                lines.append(f"PostOutputScripts=scripts/{script_path.name}")
 
         return "\n".join(lines) + "\n"
 

@@ -37,15 +37,23 @@ class AzureDeployAdapter:
                 context={"adapter": self.name},
             )
 
-        # Upload VHD to Azure blob storage
-        if storage_account:
-            blob_url = self._upload_vhd(
-                request.artifact_path,
-                storage_account=storage_account,
-                resource_group=resource_group,
+        if not request.artifact_path.exists():
+            raise DeploymentError(
+                "Artifact path does not exist.",
+                hint="Run bake() successfully before deploy().",
+                context={"artifact_path": str(request.artifact_path)},
             )
-        else:
-            blob_url = str(request.artifact_path)
+        if not storage_account:
+            raise DeploymentError(
+                "Azure deployment requires a storage_account for VHD upload.",
+                hint="Pass storage_account=... in deploy parameters.",
+                context={"adapter": self.name},
+            )
+        blob_url = self._upload_vhd(
+            request.artifact_path,
+            storage_account=storage_account,
+            resource_group=resource_group,
+        )
 
         # Create VM from the uploaded VHD
         vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"

@@ -43,14 +43,23 @@ class GcpDeployAdapter:
                 hint="Pass project= in deploy parameters.",
                 context={"adapter": self.name},
             )
+        if not bucket:
+            raise DeploymentError(
+                "GCP deployment requires a GCS bucket for image upload.",
+                hint="Pass bucket=... in deploy parameters.",
+                context={"adapter": self.name},
+            )
+        if not request.artifact_path.exists():
+            raise DeploymentError(
+                "Artifact path does not exist.",
+                hint="Run bake() successfully before deploy().",
+                context={"artifact_path": str(request.artifact_path)},
+            )
 
         # Upload image to GCS
         image_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:8]}"
-        if bucket:
-            gcs_uri = self._upload_image(request.artifact_path, bucket=bucket)
-            self._create_image(image_name, gcs_uri=gcs_uri, project=project)
-        else:
-            gcs_uri = str(request.artifact_path)
+        gcs_uri = self._upload_image(request.artifact_path, bucket=bucket)
+        self._create_image(image_name, gcs_uri=gcs_uri, project=project)
 
         # Create VM instance
         vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"
@@ -130,7 +139,7 @@ class GcpDeployAdapter:
             "--source-uri",
             gcs_uri,
             "--guest-os-features",
-            "UEFI_COMPATIBLE,SEV_SNP_CAPABLE",
+            "UEFI_COMPATIBLE",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Self
@@ -95,6 +97,8 @@ class Image:
     _last_compile_digest: str | None = field(init=False, default=None, repr=False)
     _last_compile_path: Path | None = field(init=False, default=None, repr=False)
     _last_compile_emission: MkosiEmission | None = field(init=False, default=None, repr=False)
+    _tdx_init_config: dict[str, object] | None = field(init=False, default=None, repr=False)
+    _tdx_init_source: tuple[str, str] | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._state = RecipeState.initialize(
@@ -124,7 +128,7 @@ class Image:
         selected = self._normalize_profile_names(names)
         previous_profiles = self._active_profiles
         for profile_name in selected:
-            self._state.ensure_profile(profile_name)
+            self._ensure_profile(profile_name)
         self._active_profiles = selected
         try:
             yield self
@@ -316,7 +320,7 @@ class Image:
             raise ValidationError("service() requires a non-empty service name.")
         exec_argv: tuple[str, ...]
         if isinstance(exec, str):
-            exec_argv = tuple(exec.split()) if exec else ()
+            exec_argv = tuple(shlex.split(exec)) if exec else ()
         else:
             exec_argv = tuple(exec)
         entry = ServiceSpec(
@@ -358,6 +362,7 @@ class Image:
         deduped = tuple(dict.fromkeys(targets))
         for profile in self._iter_active_profiles():
             profile.output_targets = deduped
+            profile.output_targets_explicit = True
         return self
 
     def debloat(
@@ -403,6 +408,7 @@ class Image:
 
         for profile in self._iter_active_profiles():
             profile.debloat = config
+            profile.debloat_explicit = True
             profile.debloat_enabled = enabled
             profile.debloat_remove = remove_items if enabled else ()
             profile.debloat_mask = mask_items if enabled else ()
@@ -410,6 +416,7 @@ class Image:
 
     def explain_debloat(self, *, profile: str | None = None) -> dict[str, object]:
         selected_profile = self._resolve_operation_profile(profile)
+        self._apply_profile_fallbacks((selected_profile,))
         profile_state = self._state.ensure_profile(selected_profile)
         config = profile_state.debloat
         return {
@@ -532,7 +539,7 @@ class Image:
                         if not (h.phase == "finalize" and "IMAGE_VERSION" in h.command.argv[0])
                     ]
             return self
-        script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release\""""
+        script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release" """
         self.hook("finalize", script)
         return self
 
@@ -615,10 +622,10 @@ class Image:
         """
         if not script:
             raise ValidationError("add_init_script() requires non-empty script content.")
-        self.init.add_script(script, priority=priority)
         entry = InitScriptEntry(script=script, priority=priority)
         for profile in self._iter_active_profiles():
             profile.init_scripts.append(entry)
+        self.init.add_script(script, priority=priority)
         return self
 
     def ssh(self, *, enabled: bool = True, key_delivery: str = "http") -> Self:
@@ -673,6 +680,7 @@ class Image:
 
     def compile(self, path: str | Path, *, force: bool = False) -> Path:
         destination = self._normalize_path(path)
+        self._apply_profile_fallbacks(self._active_profiles)
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
         if (
@@ -704,6 +712,7 @@ class Image:
         frozen: bool = False,
         force: bool = False,
     ) -> BakeResult:
+        self._apply_profile_fallbacks(self._active_profiles)
         ensure_bake_policy(policy=self.policy, frozen=frozen)
         if frozen:
             self._assert_frozen_lock(profile_names=self._active_profiles)
@@ -1022,13 +1031,33 @@ class Image:
     def _iter_active_profiles(self) -> list[ProfileState]:
         profiles: list[ProfileState] = []
         for profile_name in self._active_profiles:
-            profiles.append(self._state.ensure_profile(profile_name))
+            profiles.append(self._ensure_profile(profile_name))
         return profiles
 
+    def _ensure_profile(self, name: str) -> ProfileState:
+        return self._state.ensure_profile(name)
+
+    def _apply_profile_fallbacks(self, profile_names: tuple[str, ...]) -> None:
+        """Apply default profile output/debloat only when a profile did not set them explicitly."""
+        default_name = self._state.default_profile
+        default_profile = self._state.ensure_profile(default_name)
+        for profile_name in profile_names:
+            profile = self._state.ensure_profile(profile_name)
+            if profile_name == default_name:
+                continue
+            if not profile.output_targets_explicit:
+                profile.output_targets = default_profile.output_targets
+            if not profile.debloat_explicit:
+                profile.debloat = deepcopy(default_profile.debloat)
+                profile.debloat_enabled = default_profile.debloat_enabled
+                profile.debloat_remove = default_profile.debloat_remove
+                profile.debloat_mask = default_profile.debloat_mask
+
     def _recipe_payload(self, *, profile_names: tuple[str, ...]) -> dict[str, object]:
+        self._apply_profile_fallbacks(profile_names)
         profiles_data: dict[str, dict[str, object]] = {}
         for profile_name in sorted(profile_names):
-            profile = self._state.profiles[profile_name]
+            profile = self._ensure_profile(profile_name)
             phases = {
                 phase: [
                     {
@@ -1180,6 +1209,13 @@ class Image:
             "base": self._state.base,
             "arch": self._state.arch,
             "default_profile": self._state.default_profile,
+            "init_scripts": [
+                {
+                    "priority": entry.priority,
+                    "sha256": hashlib.sha256(entry.script.encode()).hexdigest(),
+                }
+                for entry in sorted(self.init._scripts, key=lambda item: (item.priority, item.script))
+            ],
             "profiles": profiles_data,
         }
 

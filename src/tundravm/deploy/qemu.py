@@ -62,6 +62,12 @@ class QemuDeployAdapter:
         enable_tdx = params.pop("tdx", "false").lower() == "true"
         daemonize = params.pop("daemonize", "true").lower() == "true"
         artifact_path = request.artifact_path
+        if not artifact_path.exists():
+            raise DeploymentError(
+                "Artifact path does not exist.",
+                hint="Run bake() successfully before deploy().",
+                context={"artifact_path": str(artifact_path)},
+            )
 
         # Check if QEMU is available
         if shutil.which(self.qemu_binary) is None:
@@ -72,13 +78,17 @@ class QemuDeployAdapter:
             )
 
         # Determine if this is a UKI (.efi) or disk image
-        is_uki = str(artifact_path).endswith(".efi")
+        suffixes = artifact_path.suffixes
+        is_uki = ".efi" in suffixes or artifact_path.suffix == ".efi"
+        machine = "q35,accel=kvm"
+        if enable_tdx:
+            machine = f"{machine},confidential-guest-support=tdx0"
 
         # Build QEMU command
         cmd: list[str] = [
             self.qemu_binary,
             "-machine",
-            "q35,accel=kvm",
+            machine,
             "-cpu",
             "host",
             "-m",
@@ -107,10 +117,11 @@ class QemuDeployAdapter:
             )
         else:
             # Disk image boot
+            disk_format = _disk_format_for_path(artifact_path)
             cmd.extend(
                 [
                     "-drive",
-                    f"file={artifact_path},format=raw,if=virtio",
+                    f"file={artifact_path},format={disk_format},if=virtio",
                 ]
             )
 
@@ -130,8 +141,6 @@ class QemuDeployAdapter:
                 [
                     "-object",
                     "tdx-guest,id=tdx0",
-                    "-machine",
-                    "confidential-guest-support=tdx0",
                 ]
             )
 
@@ -178,3 +187,12 @@ class QemuDeployAdapter:
             endpoint=f"ssh://localhost:{ssh_port}",
             metadata=metadata,
         )
+
+
+def _disk_format_for_path(path: Path) -> str:
+    lower = path.name.lower()
+    if lower.endswith(".qcow2"):
+        return "qcow2"
+    if lower.endswith(".vhd"):
+        return "vpc"
+    return "raw"

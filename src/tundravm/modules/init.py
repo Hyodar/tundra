@@ -42,10 +42,18 @@ class Init:
 
     def apply(self, profile: ProfileState) -> None:
         """Generate runtime-init script + service unit into *profile*.files."""
-        all_scripts = list(self._scripts) + list(profile.init_scripts)
-        if not all_scripts:
+        merged_scripts = list(self._scripts) + list(profile.init_scripts)
+        if not merged_scripts:
             return
-        sorted_scripts = sorted(all_scripts, key=lambda e: e.priority)
+        deduped: list[InitScriptEntry] = []
+        seen: set[tuple[int, str]] = set()
+        for entry in merged_scripts:
+            key = (entry.priority, entry.script)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(entry)
+        sorted_scripts = sorted(deduped, key=lambda e: e.priority)
 
         parts = [
             dedent("""\
@@ -84,12 +92,14 @@ class Init:
             [Unit]
             Description=Runtime Init
             After=network.target network-setup.service
+            Requires=network-setup.service
 
             [Service]
             Type=oneshot
-            ExecStart=/usr/bin/runtime-init
+            ExecStart=/usr/bin/tdx-init setup /etc/tdx-init/config.yaml
+            ExecStartPost=/usr/bin/runtime-init
             RemainAfterExit=yes
 
             [Install]
-            WantedBy=default.target
+            WantedBy=minimal.target
         """)

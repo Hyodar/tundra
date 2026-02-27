@@ -14,7 +14,11 @@ import subprocess
 from pathlib import Path
 
 
-def derive(profile: str, artifact_digests: dict[str, str]) -> dict[str, str]:
+def derive(
+    profile: str,
+    artifact_digests: dict[str, str],
+    artifact_paths: tuple[Path, ...] = (),
+) -> dict[str, str]:
     """Derive RTMR values from artifact digests.
 
     If `measured-boot` is available and there's a UKI artifact path in the
@@ -24,10 +28,8 @@ def derive(profile: str, artifact_digests: dict[str, str]) -> dict[str, str]:
     # Try to use measured-boot tool for real RTMR prediction
     measured_boot = shutil.which("measured-boot")
     if measured_boot is not None:
-        # Look for an artifact path (the digests dict may contain paths as keys)
-        for key in artifact_digests:
-            candidate = Path(key)
-            if candidate.exists() and candidate.suffix in (".efi", ".raw"):
+        for candidate in _measurement_candidates(artifact_paths, artifact_digests):
+            if candidate.suffix in (".efi", ".raw"):
                 values = _measure_with_tool(measured_boot, candidate)
                 if values:
                     return values
@@ -35,9 +37,8 @@ def derive(profile: str, artifact_digests: dict[str, str]) -> dict[str, str]:
     # Try dstack-mr as an alternative
     dstack_mr = shutil.which("dstack-mr")
     if dstack_mr is not None:
-        for key in artifact_digests:
-            candidate = Path(key)
-            if candidate.exists() and candidate.suffix == ".efi":
+        for candidate in _measurement_candidates(artifact_paths, artifact_digests):
+            if candidate.suffix == ".efi":
                 values = _measure_with_dstack(dstack_mr, candidate)
                 if values:
                     return values
@@ -96,3 +97,24 @@ def _derive_deterministic(profile: str, artifact_digests: dict[str, str]) -> dic
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _measurement_candidates(
+    artifact_paths: tuple[Path, ...],
+    artifact_digests: dict[str, str],
+) -> tuple[Path, ...]:
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+
+    for path in artifact_paths:
+        if path.exists() and path not in seen:
+            candidates.append(path)
+            seen.add(path)
+
+    for key in artifact_digests:
+        candidate = Path(key)
+        if candidate.exists() and candidate not in seen:
+            candidates.append(candidate)
+            seen.add(candidate)
+
+    return tuple(candidates)

@@ -296,6 +296,7 @@ class ProfileState:
     build_packages: set[str] = field(default_factory=set)
     build_sources: list[tuple[str, str]] = field(default_factory=list)
     output_targets: tuple[OutputTarget, ...] = ("qemu",)
+    output_targets_explicit: bool = False
     phases: dict[Phase, list[CommandSpec]] = field(default_factory=dict)
     repositories: list[RepositorySpec] = field(default_factory=list)
     files: list[FileEntry] = field(default_factory=list)
@@ -308,6 +309,7 @@ class ProfileState:
     secrets: list[SecretSpec] = field(default_factory=list)
     init_scripts: list[InitScriptEntry] = field(default_factory=list)
     debloat: DebloatConfig = field(default_factory=DebloatConfig)
+    debloat_explicit: bool = False
     # Legacy fields kept for backward compat during transition
     debloat_enabled: bool = True
     debloat_remove: tuple[str, ...] = DEFAULT_DEBLOAT_REMOVE
