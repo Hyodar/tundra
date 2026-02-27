@@ -4,6 +4,7 @@ disks:
     strategy_config:
       pattern: "/dev/vda3"
     format: "on_fail"
-    encryption_key: "key_persistent"
     mount_at: "/persistent"
     dirs: ["ssh", "data", "logs"]
+    encryption_key: "key_persistent"
+    encryption_key_path: "/persistent/key"

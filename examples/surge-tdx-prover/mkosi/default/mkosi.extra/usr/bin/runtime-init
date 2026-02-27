@@ -2,16 +2,13 @@
 set -euo pipefail
 
 /usr/bin/key-gen setup /etc/tdx/key-gen.yaml
-install -d -m 0700 "$(dirname "/persistent/key")"
-export DISK_ENCRYPTION_KEY="$(
-    tpm2_nvread -C o -T device:/dev/tpmrm0                         0x1500016 | tr -d '\n'
-)"
-printf '%s\n' "$DISK_ENCRYPTION_KEY" > "/persistent/key"
-chmod 0600 "/persistent/key"
-
-if [ -z "${DISK_ENCRYPTION_KEY:-}" ] && [ -f "/persistent/key" ]; then
-    export DISK_ENCRYPTION_KEY="$(tr -d '\n' < "/persistent/key")"
+if [ -f /persistent/key ]; then
+    export DISK_ENCRYPTION_KEY="$(tr -d '\n' < /persistent/key)"
+else
+    echo "missing generated key output: /persistent/key" >&2
+    exit 1
 fi
+
 /usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml
 if [ -e /dev/mapper/crypt_disk_disk_persistent ]; then
     cryptsetup rename crypt_disk_disk_persistent cryptroot

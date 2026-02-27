@@ -3,3 +3,4 @@ keys:
     strategy: "random"
     tpm: true
     size: 64
+    output_path: "/persistent/key"
