@@ -38,4 +38,4 @@ rm -rf "$BUILDROOT/usr/share/systemd"
 rm -rf "$BUILDROOT/usr/share/zsh"
 
 # User-defined finalize commands
-sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release"
+sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release" 

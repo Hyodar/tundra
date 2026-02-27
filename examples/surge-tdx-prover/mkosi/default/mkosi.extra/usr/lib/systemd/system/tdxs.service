@@ -9,7 +9,8 @@ Group=tdx
 WorkingDirectory=/home/tdxs
 Type=notify
 ExecStart=/usr/bin/tdxs \
-    --config /etc/tdxs/config.yaml
+    --config /etc/tdxs/config.yaml \
+    --log-level info
 Restart=on-failure
 
 [Install]

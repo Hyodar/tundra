@@ -1,6 +1,7 @@
 [Unit]
 Description=Runtime Init
 After=network.target network-setup.service
+Requires=network-setup.service
 
 [Service]
 Type=oneshot
@@ -8,4 +9,4 @@ ExecStart=/usr/bin/runtime-init
 RemainAfterExit=yes
 
 [Install]
-WantedBy=default.target
+WantedBy=minimal.target

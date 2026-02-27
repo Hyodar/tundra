@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KERNEL_CACHE="${BUILDDIR}/kernel-6.13.12-48d53398a43c"
+KERNEL_CACHE="${BUILDDIR}/kernel-6.13.12-4efb76d1c52f"
 KERNEL_VERSION="6.13.12"
 
 if [ -d "$KERNEL_CACHE/done" ]; then
-    echo "Using cached kernel build: kernel-6.13.12-48d53398a43c"
+    echo "Using cached kernel build: kernel-6.13.12-4efb76d1c52f"
 else
     rm -rf "$KERNEL_CACHE"
     mkdir -p "$KERNEL_CACHE"
