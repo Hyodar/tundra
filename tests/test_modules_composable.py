@@ -86,9 +86,13 @@ def test_key_generation_registers_init_script() -> None:
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
     assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
-    assert 'export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < /persistent/key)"' in entry.script
-    assert "/persistent/key" in entry.script
     assert entry.priority == 10
+
+    # output_path is in the config file, not the init script
+    config_files = [f for f in profile.files if f.path == "/etc/tdx/key-gen.yaml"]
+    assert len(config_files) == 1
+    assert 'output_path: "/persistent/key"' in config_files[0].content
+    assert "tpm: true" in config_files[0].content
 
 
 def test_key_generation_allows_output_for_non_tpm_keys() -> None:
@@ -98,6 +102,7 @@ def test_key_generation_allows_output_for_non_tpm_keys() -> None:
     profile = image.state.profiles["default"]
     config = next(f.content for f in profile.files if f.path == "/etc/tdx/key-gen.yaml")
     assert 'output_path: "/tmp/key"' in config
+    assert "tpm: false" in config
 
 
 def test_key_generation_pipe_strategy_renders_pipe_config() -> None:
@@ -157,7 +162,6 @@ def test_key_generation_supports_multiple_keys() -> None:
 
     script = profile.init_scripts[0].script
     assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
-    assert "/persistent/root.key" in script
 
 
 # ── DiskEncryption ───────────────────────────────────────────────────
@@ -194,6 +198,13 @@ def test_disk_encryption_registers_init_script() -> None:
     assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in entry.script
     assert "cryptsetup rename crypt_disk_disk_persistent cryptdata" in entry.script
     assert entry.priority == 20
+
+    # key_path and mount_point are in the config file
+    config_files = [f for f in profile.files if f.path == "/etc/tdx/disk-setup.yaml"]
+    assert len(config_files) == 1
+    assert 'encryption_key_path: "/persistent/key"' in config_files[0].content
+    assert 'mount_at: "/data"' in config_files[0].content
+    assert 'pattern: "/dev/vdb"' in config_files[0].content
 
 
 def test_disk_encryption_renders_custom_disk_config() -> None:

@@ -678,7 +678,6 @@ class Image:
 
     def compile(self, path: str | Path, *, force: bool = False) -> Path:
         destination = self._normalize_path(path)
-        self._apply_profile_fallbacks(self._active_profiles)
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
         if (
@@ -710,7 +709,6 @@ class Image:
         frozen: bool = False,
         force: bool = False,
     ) -> BakeResult:
-        self._apply_profile_fallbacks(self._active_profiles)
         ensure_bake_policy(policy=self.policy, frozen=frozen)
         if frozen:
             self._assert_frozen_lock(profile_names=self._active_profiles)

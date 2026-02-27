@@ -1,10 +1,8 @@
 disks:
   disk_persistent:
-    strategy: "pathglob"
-    strategy_config:
-      pattern: "/dev/vda3"
+    strategy: "largest"
     format: "on_fail"
     mount_at: "/persistent"
     dirs: ["ssh", "data", "logs"]
     encryption_key: "key_persistent"
-    encryption_key_path: "/persistent/key"
+    encryption_key_path: "/tmp/key_persistent"

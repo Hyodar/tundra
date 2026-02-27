@@ -37,9 +37,11 @@ PINNED_MIRROR = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
 # ── Dropbear SSH configuration ────────────────────────────────────────
 
 DROPBEAR_CONFIG = """\
-DROPBEAR_PORT=22
-DROPBEAR_EXTRA_ARGS="-s -w -g"
-NO_START=0"""
+DROPBEAR_EXTRA_ARGS="-s -w -g -m -j -k"
+DROPBEAR_RECEIVE_WINDOW=6291456
+DROPBEAR_PORT=0.0.0.0:22
+DROPBEAR_SUBSYSTEM="sftp /usr/lib/openssh/sftp-server"
+"""
 
 # ── Sysctl hardening ─────────────────────────────────────────────────
 
@@ -60,7 +62,7 @@ net.ipv4.conf.default.rp_filter=1
 
 # VM tuning
 vm.swappiness=1
-vm.max_map_count=262144
+vm.max_map_count=2097152
 
 # File descriptor limits
 fs.file-max=1048576"""
@@ -193,15 +195,15 @@ def build_surge_tdx_prover() -> Image:
     # ── 3. Composable init modules ───────────────────────────────────
 
     keys = KeyGeneration()
-    keys.key("key_persistent", strategy="tpm", output="/persistent/key")
+    keys.key("key_persistent", strategy="tpm", output="/tmp/key_persistent")
     keys.apply(img)
 
     disks = DiskEncryption()
     disks.disk(
         "disk_persistent",
-        device="/dev/vda3",
+        device="",
+        key_path="/tmp/key_persistent",
         mapper_name="cryptroot",
-        key_path="/persistent/key",
         mount_point="/persistent",
     )
     disks.apply(img)

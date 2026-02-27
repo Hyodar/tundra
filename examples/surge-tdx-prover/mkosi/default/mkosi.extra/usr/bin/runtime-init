@@ -2,12 +2,6 @@
 set -euo pipefail
 
 /usr/bin/key-gen setup /etc/tdx/key-gen.yaml
-if [ -f /persistent/key ]; then
-    export DISK_ENCRYPTION_KEY="$(tr -d '\n' < /persistent/key)"
-else
-    echo "missing generated key output: /persistent/key" >&2
-    exit 1
-fi
 
 /usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml
 if [ -e /dev/mapper/crypt_disk_disk_persistent ]; then
