@@ -1,6 +1,9 @@
 """Tests for composable init modules: KeyGeneration, DiskEncryption, SecretDelivery."""
 
+import pytest
+
 from tundravm import Image
+from tundravm.errors import ValidationError
 from tundravm.modules import (
     DiskEncryption,
     KeyGeneration,
@@ -34,21 +37,15 @@ def test_key_generation_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/key_persistent.yaml" in entry.script
     assert "tpm2_nvread" in entry.script
     assert "/persistent/key" in entry.script
     assert entry.priority == 10
 
 
-def test_key_generation_random_strategy_emits_missing_key_guidance() -> None:
-    image = Image(reproducible=False)
-    KeyGeneration(strategy="random", output="/tmp/key").apply(image)
-
-    profile = image.state.profiles["default"]
-    entry = profile.init_scripts[0]
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
-    assert "persist_in_tpm=True" in entry.script
-    assert "/tmp/key" in entry.script
+def test_key_generation_rejects_output_for_non_tpm_keys() -> None:
+    with pytest.raises(ValidationError, match="Non-TPM keys cannot be materialized"):
+        KeyGeneration(strategy="random", output="/tmp/key").apply(Image(reproducible=False))
 
 
 def test_key_generation_pipe_strategy_renders_pipe_config() -> None:
@@ -83,6 +80,42 @@ def test_key_generation_custom_repo_and_branch() -> None:
     assert "-b v2.0" in build_script
 
 
+def test_key_generation_supports_multiple_keys() -> None:
+    image = Image(reproducible=False)
+    module = KeyGeneration(strategy="tpm", output="/persistent/root.key", key_name="root")
+    module.key(
+        "data",
+        strategy="pipe",
+        pipe_path="/run/keys/data.pipe",
+        persist_in_tpm=True,
+        output="/persistent/data.key",
+    )
+    module.apply(image)
+
+    profile = image.state.profiles["default"]
+    config = next(f.content for f in profile.files if f.path == "/etc/tdx/key-gen.yaml")
+    assert "root:" in config
+    assert "data:" in config
+    assert 'pipe_path: "/run/keys/data.pipe"' in config
+
+    root_config = next(
+        f.content for f in profile.files if f.path == "/etc/tdx/key-gen.d/root.yaml"
+    )
+    data_config = next(
+        f.content for f in profile.files if f.path == "/etc/tdx/key-gen.d/data.yaml"
+    )
+    assert "root:" in root_config
+    assert "data:" not in root_config
+    assert "data:" in data_config
+
+    script = profile.init_scripts[0].script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/root.yaml" in script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/data.yaml" in script
+    assert 'export DISK_ENCRYPTION_KEY="${KEY_ROOT}"' in script
+    assert "/persistent/root.key" in script
+    assert "/persistent/data.key" in script
+
+
 # ── DiskEncryption ───────────────────────────────────────────────────
 
 
@@ -114,7 +147,7 @@ def test_disk_encryption_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in entry.script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/disk_persistent.yaml" in entry.script
     assert "/persistent/key" in entry.script
     assert "cryptsetup rename crypt_disk_disk_persistent cryptdata" in entry.script
     assert entry.priority == 20
@@ -162,6 +195,68 @@ def test_disk_encryption_custom_repo() -> None:
     build_script = profile.phases["build"][0].argv[0]
     assert "custom/disk" in build_script
     assert "-b v3" in build_script
+
+
+def test_disk_encryption_supports_multiple_disks() -> None:
+    image = Image(reproducible=False)
+    module = DiskEncryption(
+        device="/dev/vdb",
+        disk_name="data",
+        key_name="data_key",
+        key_path="/persistent/data.key",
+        mount_point="/data",
+    )
+    module.disk(
+        "logs",
+        device="/dev/vdc",
+        key_name="logs_key",
+        key_path="/persistent/logs.key",
+        mount_point="/var/log/app",
+        mapper_name="cryptlogs",
+        dirs=("logs", "archive"),
+    )
+    module.disk(
+        "scratch",
+        device="",
+        key_name=None,
+        key_path=None,
+        mount_point="/scratch",
+        format_policy="on_initialize",
+        dirs=("cache",),
+    )
+    module.apply(image)
+
+    profile = image.state.profiles["default"]
+    config = next(f.content for f in profile.files if f.path == "/etc/tdx/disk-setup.yaml")
+    assert "data:" in config
+    assert "logs:" in config
+    assert "scratch:" in config
+    assert 'encryption_key: "data_key"' in config
+    assert 'encryption_key: "logs_key"' in config
+    assert 'mount_at: "/scratch"' in config
+    assert 'dirs: ["cache"]' in config
+
+    scratch_config = next(
+        f.content for f in profile.files if f.path == "/etc/tdx/disk-setup.d/scratch.yaml"
+    )
+    assert 'strategy: "largest"' in scratch_config
+    assert "encryption_key" not in scratch_config
+
+    script = profile.init_scripts[0].script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/data.yaml" in script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/logs.yaml" in script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/scratch.yaml" in script
+    assert 'export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < /persistent/data.key)"' in script
+    assert 'export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < /persistent/logs.key)"' in script
+    assert "unset DISK_ENCRYPTION_KEY" in script
+    assert "cryptsetup rename crypt_disk_logs cryptlogs" in script
+
+
+def test_disk_encryption_rejects_mapper_name_for_plain_disks() -> None:
+    with pytest.raises(ValidationError, match="Plain disks cannot request custom mapper names"):
+        DiskEncryption(key_name=None, key_path=None, mapper_name="plain").apply(
+            Image(reproducible=False)
+        )
 
 
 # ── SecretDelivery ───────────────────────────────────────────────────
@@ -291,8 +386,8 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
     assert len(script_files) == 1
     script = script_files[0].content
     assert "#!/bin/bash" in script
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in script
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.d/key_persistent.yaml" in script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.d/disk_persistent.yaml" in script
     assert "/usr/bin/secret-delivery" in script
 
     svc_files = [

@@ -102,8 +102,8 @@ Modules are composable units that add build steps, config files, systemd service
 
 | Module | What it does |
 |---|---|
-| `KeyGeneration` | Key generation via TPM-backed random or named-pipe strategies |
-| `DiskEncryption` | LUKS2 disk setup with disk naming, format policy, and mount-dir controls |
+| `KeyGeneration` | Key generation via TPM-backed random or named-pipe strategies, including multiple named keys |
+| `DiskEncryption` | LUKS2 disk setup with disk naming, format policy, mount-dir controls, and multiple disks |
 | `SecretDelivery` | SSH key and secret delivery with configurable bind address, paths, and storage target |
 | `Tdxs` | `tundra-tools` issuer/validator service with socket and validator config controls |
 | `Devtools` | Serial console, root password, SSH for dev profiles |
@@ -121,6 +121,18 @@ DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
 SecretDelivery(method="http_post", host="0.0.0.0", port=8080).apply(img)  # priority 30
 
 img.compile("build/mkosi")
+```
+
+Additional keys and disks can be registered on the same module instance:
+
+```python
+keys = KeyGeneration(strategy="tpm", key_name="root", output="/persistent/root.key")
+keys.key("data", strategy="pipe", pipe_path="/run/keys/data.pipe", persist_in_tpm=True, output="/persistent/data.key")
+keys.apply(img)
+
+disks = DiskEncryption(disk_name="data", device="/dev/vdb", key_name="data", key_path="/persistent/data.key", mount_point="/data")
+disks.disk("scratch", device="", key_name=None, key_path=None, mount_point="/scratch", format_policy="on_initialize")
+disks.apply(img)
 ```
 
 See [`docs/module-authoring.md`](docs/module-authoring.md) for writing your own modules.
