@@ -13,8 +13,6 @@ from tundravm import Image
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.modules import Tdxs
 
-# ── Test 1: Directory format ────────────────────────────────────────
-
 
 @pytest.mark.integration
 def test_directory_format_pipeline(tmp_path: Path) -> None:
@@ -39,7 +37,6 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     emit_dir = tmp_path / "mkosi"
     img.compile(emit_dir)
 
-    # Verify emitted service unit
     unit_path = (
         emit_dir
         / "default"
@@ -52,7 +49,6 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     )
     assert unit_path.exists(), "hello.service not emitted"
 
-    # Bake
     output_dir = tmp_path / "output"
     bake_result = img.bake(output_dir=output_dir)
 
@@ -60,9 +56,6 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
         if presult.report_path and presult.report_path.exists():
             report = json.loads(presult.report_path.read_text())
             assert "backend" in report
-
-
-# ── Test 2: Tdxs module emission ────────────────────────────────────
 
 
 def test_tdxs_module_emission(tmp_path: Path) -> None:
@@ -74,25 +67,22 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
         reproducible=True,
     )
     img.install("systemd")
-    Tdxs(issuer_type="dcap").apply(img)
+    Tdxs().apply(img)
 
     emit_dir = tmp_path / "mkosi"
     img.compile(emit_dir)
 
-    # mkosi.conf has BuildPackages
     conf_text = (emit_dir / "default" / "mkosi.conf").read_text()
     assert "BuildPackages=" in conf_text
     assert "golang" in conf_text
     assert "git" in conf_text
 
-    # config.yaml
     config_yaml = emit_dir / "default" / "mkosi.extra" / "etc" / "tdxs" / "config.yaml"
     assert config_yaml.exists(), "config.yaml not emitted"
     config_content = config_yaml.read_text()
-    assert "type: dcap" in config_content
+    assert "type: tdx" in config_content
     assert "systemd: true" in config_content
 
-    # Service unit
     svc_unit = (
         emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.service"
     )
@@ -102,8 +92,8 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
     assert "Group=tdx" in svc_text
     assert "Type=notify" in svc_text
     assert "ExecStart=/usr/bin/tdxs" in svc_text
+    assert "--log-level info" in svc_text
 
-    # Socket unit
     sock_unit = (
         emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.socket"
     )
@@ -112,24 +102,21 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
     assert "ListenStream=/var/tdxs.sock" in sock_text
     assert "SocketGroup=tdx" in sock_text
 
-    # Build script
     build_scripts = list((emit_dir / "default" / "scripts").glob("*build*"))
     assert build_scripts, "No build script emitted"
     build_text = build_scripts[0].read_text()
     assert "go build" in build_text
-    assert "NethermindEth/tdxs" in build_text
+    assert "Hyodar/tundra-tools" in build_text
+    assert "./cmd/tdxs" in build_text
+    assert "sync-constellation" not in build_text
     assert "-trimpath" in build_text
 
-    # Postinst
     postinst = emit_dir / "default" / "scripts" / "06-postinst.sh"
     assert postinst.exists(), "postinst not emitted"
     postinst_text = postinst.read_text()
     assert "groupadd --system tdx" in postinst_text
     assert "useradd --system" in postinst_text
     assert "systemctl enable tdxs.socket" in postinst_text
-
-
-# ── Test 3: Raw disk format ─────────────────────────────────────────
 
 
 @pytest.mark.integration

@@ -102,10 +102,10 @@ Modules are composable units that add build steps, config files, systemd service
 
 | Module | What it does |
 |---|---|
-| `KeyGeneration` | TPM-based key derivation at boot |
-| `DiskEncryption` | LUKS2 disk encryption with key from KeyGeneration |
-| `SecretDelivery` | Runtime secret injection (HTTP POST, file, env) |
-| `Tdxs` | TDX quote issuer/validator service (socket-activated) |
+| `KeyGeneration` | Key generation via TPM-backed random or named-pipe strategies |
+| `DiskEncryption` | LUKS2 disk setup with disk naming, format policy, and mount-dir controls |
+| `SecretDelivery` | SSH key and secret delivery with configurable bind address, paths, and storage target |
+| `Tdxs` | `tundra-tools` issuer/validator service with socket and validator config controls |
 | `Devtools` | Serial console, root password, SSH for dev profiles |
 
 **Init ordering** — modules register boot-time scripts with priority. At `compile()`, the SDK generates `/usr/bin/runtime-init` and a systemd service that runs them in order, then injects `After=runtime-init.service` into all other services automatically.
@@ -118,7 +118,7 @@ img = Image(base="debian/trixie", reproducible=True)
 
 KeyGeneration(strategy="tpm").apply(img)          # priority 10
 DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
-SecretDelivery(method="http_post").apply(img)      # priority 30
+SecretDelivery(method="http_post", host="0.0.0.0", port=8080).apply(img)  # priority 30
 
 img.compile("build/mkosi")
 ```
@@ -131,7 +131,7 @@ See [`docs/module-authoring.md`](docs/module-authoring.md) for writing your own 
 from tundravm import SecretSchema, SecretTarget
 from tundravm.modules import SecretDelivery
 
-delivery = SecretDelivery(method="http_post")
+delivery = SecretDelivery(method="http_post", host="0.0.0.0", port=8080)
 delivery.secret(
     "api_token",
     required=True,

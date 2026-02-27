@@ -16,7 +16,7 @@ def build_with_tdxs() -> None:
 
     # Module sets up build packages (golang, git), build hook (clone + compile),
     # config.yaml, systemd units, user/group creation, and socket enablement.
-    Tdxs(issuer_type="dcap").apply(img)
+    Tdxs().apply(img)
 
     img.lock()
     img.bake(frozen=True)

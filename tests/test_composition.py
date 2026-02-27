@@ -43,7 +43,7 @@ def _apply_app_layer(img: Image) -> Image:
     DiskEncryption(device="/dev/vda3").apply(img)
     SecretDelivery(method="http_post").apply(img)
 
-    Tdxs(issuer_type="dcap").apply(img)
+    Tdxs().apply(img)
 
     Raiko(
         source_repo="NethermindEth/raiko.git",

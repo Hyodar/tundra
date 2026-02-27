@@ -127,7 +127,7 @@ def build_nethermind_base() -> Image:
     img.debloat(enabled=True)
 
     # TDX quote service: builds from source, adds config + systemd units
-    Tdxs(issuer_type="dcap").apply(img)
+    Tdxs().apply(img)
 
     return img
 

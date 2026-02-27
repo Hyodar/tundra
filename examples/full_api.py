@@ -80,7 +80,7 @@ def build_full_api_recipe() -> None:
     )
     delivery.apply(img)  # priority 30
 
-    Tdxs(issuer_type="dcap").apply(img)
+    Tdxs().apply(img)
 
     with img.profile("azure"):
         img.output_targets("azure")

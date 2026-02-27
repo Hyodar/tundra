@@ -4,4 +4,4 @@ transport:
     systemd: true
 
 issuer:
-  type: dcap
+  type: tdx

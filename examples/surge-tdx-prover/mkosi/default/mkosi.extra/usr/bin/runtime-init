@@ -1,14 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-/usr/bin/key-generation --strategy tpm --output /persistent/key
+/usr/bin/key-gen setup /etc/tdx/key-gen.yaml
+install -d -m 0700 "$(dirname "/persistent/key")"
+export DISK_ENCRYPTION_KEY="$(
+    tpm2_nvread -C o -T device:/dev/tpmrm0                         0x1500016 | tr -d '\n'
+)"
+printf '%s\n' "$DISK_ENCRYPTION_KEY" > "/persistent/key"
+chmod 0600 "/persistent/key"
 
-/usr/bin/key-generation --strategy tpm --output /persistent/key
+if [ -z "${DISK_ENCRYPTION_KEY:-}" ] && [ -f "/persistent/key" ]; then
+    export DISK_ENCRYPTION_KEY="$(tr -d '\n' < "/persistent/key")"
+fi
+/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml
+if [ -e /dev/mapper/crypt_disk_disk_persistent ]; then
+    cryptsetup rename crypt_disk_disk_persistent cryptroot
+fi
 
-/usr/bin/disk-encryption --device /dev/vda3 --mapper cryptroot --key /persistent/key --mount /persistent
-
-/usr/bin/disk-encryption --device /dev/vda3 --mapper cryptroot --key /persistent/key --mount /persistent
-
-/usr/bin/secret-delivery --config /etc/tdx/secrets.json --method http_post --port 8080
-
-/usr/bin/secret-delivery --config /etc/tdx/secrets.json --method http_post --port 8080
+/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml

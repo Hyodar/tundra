@@ -1,0 +1,5 @@
+keys:
+  key_persistent:
+    strategy: "random"
+    tpm: true
+    size: 64

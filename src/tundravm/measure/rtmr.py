@@ -1,8 +1,8 @@
 """RTMR measurement derivation.
 
 Uses the `measured-boot` tool when available to predict RTMR register
-values from UKI artifacts. Falls back to deterministic SHA-256 derivation
-from artifact digests when the tool is not available.
+values from UKI or disk-image artifacts. Falls back to deterministic
+SHA-256 derivation from artifact digests when the tool is not available.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -19,22 +20,14 @@ def derive(
     artifact_digests: dict[str, str],
     artifact_paths: tuple[Path, ...] = (),
 ) -> dict[str, str]:
-    """Derive RTMR values from artifact digests.
-
-    If `measured-boot` is available and there's a UKI artifact path in the
-    digests, uses it for real measurement prediction. Otherwise falls back
-    to deterministic derivation.
-    """
-    # Try to use measured-boot tool for real RTMR prediction
+    """Derive RTMR values from artifact digests."""
     measured_boot = shutil.which("measured-boot")
     if measured_boot is not None:
         for candidate in _measurement_candidates(artifact_paths, artifact_digests):
-            if candidate.suffix in (".efi", ".raw"):
-                values = _measure_with_tool(measured_boot, candidate)
-                if values:
-                    return values
+            values = _measure_with_tool(measured_boot, candidate)
+            if values:
+                return values
 
-    # Try dstack-mr as an alternative
     dstack_mr = shutil.which("dstack-mr")
     if dstack_mr is not None:
         for candidate in _measurement_candidates(artifact_paths, artifact_digests):
@@ -43,33 +36,50 @@ def derive(
                 if values:
                     return values
 
-    # Deterministic fallback: derive from artifact content hashes
     return _derive_deterministic(profile, artifact_digests)
 
 
 def _measure_with_tool(tool_path: str, artifact: Path) -> dict[str, str]:
-    """Use measured-boot to predict RTMR values from a UKI artifact."""
-    result = subprocess.run(
-        [tool_path, "--format=json", str(artifact)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
+    if artifact.suffix not in {".efi", ".raw", ".img"}:
         return {}
-    try:
-        data = json.loads(result.stdout)
-        values: dict[str, str] = {}
-        for key, value in data.items():
-            if key.startswith("RTMR"):
-                values[key] = value
-        return values
-    except (json.JSONDecodeError, KeyError):
+
+    command = [tool_path, str(artifact)]
+
+    with tempfile.NamedTemporaryFile(suffix=".json") as output_file:
+        command.append(output_file.name)
+        if artifact.suffix == ".efi":
+            command.append("--direct-uki")
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {}
+        try:
+            data = json.loads(Path(output_file.name).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+    return _extract_measured_boot_rtmrs(data)
+
+
+def _extract_measured_boot_rtmrs(data: dict[str, object]) -> dict[str, str]:
+    raw_rtmr = data.get("rtmr")
+    if not isinstance(raw_rtmr, dict):
         return {}
+
+    values: dict[str, str] = {}
+    for index, payload in raw_rtmr.items():
+        if not isinstance(payload, dict):
+            continue
+        expected = payload.get("expected")
+        if isinstance(expected, str):
+            values[f"RTMR{index}"] = expected
+    return values
 
 
 def _measure_with_dstack(tool_path: str, artifact: Path) -> dict[str, str]:
-    """Use dstack-mr to compute RTMR values."""
     result = subprocess.run(
         [tool_path, str(artifact)],
         capture_output=True,
@@ -86,7 +96,6 @@ def _measure_with_dstack(tool_path: str, artifact: Path) -> dict[str, str]:
 
 
 def _derive_deterministic(profile: str, artifact_digests: dict[str, str]) -> dict[str, str]:
-    """Deterministic fallback: derive RTMR-like values from artifact digests."""
     digest_payload = "|".join(f"{key}:{value}" for key, value in sorted(artifact_digests.items()))
     return {
         "RTMR0": _sha256(digest_payload),
