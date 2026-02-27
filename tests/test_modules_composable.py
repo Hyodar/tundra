@@ -19,10 +19,11 @@ def test_key_generation_adds_build_hook() -> None:
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
-    assert "NethermindEth/nethermind-tdx" in build_script
+    assert "Hyodar/tundra-tools" in build_script
     assert "mkosi-chroot bash -c" in build_script
     assert "go build" in build_script
-    assert "$DESTDIR/usr/bin/tdx-init" in build_script
+    assert "./cmd/key-gen" in build_script
+    assert "$DESTDIR/usr/bin/key-gen" in build_script
 
 
 def test_key_generation_registers_init_script() -> None:
@@ -32,7 +33,8 @@ def test_key_generation_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    assert "/usr/bin/key-generation --strategy tpm --output /persistent/key" in entry.script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
+    assert "/persistent/key" in entry.script
     assert entry.priority == 10
 
 
@@ -42,7 +44,8 @@ def test_key_generation_random_strategy() -> None:
 
     profile = image.state.profiles["default"]
     entry = profile.init_scripts[0]
-    assert "/usr/bin/key-generation --strategy random --output /tmp/key" in entry.script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
+    assert "/tmp/key" in entry.script
 
 
 def test_key_generation_custom_repo_and_branch() -> None:
@@ -70,8 +73,10 @@ def test_disk_encryption_adds_build_hook() -> None:
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
+    assert "Hyodar/tundra-tools" in build_script
     assert "mkosi-chroot bash -c" in build_script
-    assert "$DESTDIR/usr/bin/tdx-init" in build_script
+    assert "./cmd/disk-setup" in build_script
+    assert "$DESTDIR/usr/bin/disk-setup" in build_script
 
 
 def test_disk_encryption_registers_init_script() -> None:
@@ -86,11 +91,8 @@ def test_disk_encryption_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    assert "/usr/bin/disk-encryption" in entry.script
-    assert "--device /dev/vdb" in entry.script
-    assert "--mapper cryptdata" in entry.script
-    assert "--key /persistent/key" in entry.script
-    assert "--mount /data" in entry.script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in entry.script
+    assert "/persistent/key" in entry.script
     assert entry.priority == 20
 
 
@@ -127,8 +129,10 @@ def test_secret_delivery_adds_build_hook() -> None:
     assert len(build_commands) == 1
     build_script = build_commands[0].argv[0]
     assert "git clone" in build_script
+    assert "Hyodar/tundra-tools" in build_script
     assert "mkosi-chroot bash -c" in build_script
-    assert "$DESTDIR/usr/bin/tdx-init" in build_script
+    assert "./cmd/secret-delivery" in build_script
+    assert "$DESTDIR/usr/bin/secret-delivery" in build_script
 
 
 def test_secret_delivery_registers_init_script() -> None:
@@ -138,18 +142,17 @@ def test_secret_delivery_registers_init_script() -> None:
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
     entry = profile.init_scripts[0]
-    expected = "/usr/bin/secret-delivery --config /etc/tdx/secrets.json"
+    expected = "/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml"
     assert expected in entry.script
-    assert "--method http_post --port 9090" in entry.script
     assert entry.priority == 30
 
 
-def test_secret_delivery_installs_python3() -> None:
+def test_secret_delivery_does_not_add_runtime_packages() -> None:
     image = Image(reproducible=False)
     SecretDelivery().apply(image)
 
     profile = image.state.profiles["default"]
-    assert "python3" in profile.packages
+    assert "python3" not in profile.packages
 
 
 def test_secret_delivery_writes_config_from_declared_secrets() -> None:
@@ -176,9 +179,13 @@ def test_secret_delivery_writes_config_from_declared_secrets() -> None:
     delivery.apply(image)
 
     profile = image.state.profiles["default"]
-    config_files = [f for f in profile.files if f.path == "/etc/tdx/secrets.json"]
-    assert len(config_files) == 1
-    config = json.loads(config_files[0].content)
+    manifest_files = [f for f in profile.files if f.path == "/etc/tdx/secrets.json"]
+    assert len(manifest_files) == 1
+    config = json.loads(manifest_files[0].content)
+
+    yaml_files = [f for f in profile.files if f.path == "/etc/tdx/secrets.yaml"]
+    assert len(yaml_files) == 1
+    assert 'server_url: "0.0.0.0:9090"' in yaml_files[0].content
 
     assert config["method"] == "http_post"
     assert config["port"] == 9090
@@ -218,17 +225,17 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
 
     profile = image.state.profiles["default"]
 
-    # Shared tdx-init build hook emitted once
+    # All three build hooks from modules
     build_commands = profile.phases.get("build", [])
-    assert len(build_commands) == 1
+    assert len(build_commands) == 3
 
     # Init collected init_scripts and generated runtime-init
     script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
     assert len(script_files) == 1
     script = script_files[0].content
     assert "#!/bin/bash" in script
-    assert "/usr/bin/key-generation" in script
-    assert "/usr/bin/disk-encryption" in script
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in script
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in script
     assert "/usr/bin/secret-delivery" in script
 
     # Service unit
@@ -238,12 +245,11 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
     assert len(svc_files) == 1
     svc = svc_files[0].content
     assert "Type=oneshot" in svc
-    assert "ExecStart=/usr/bin/tdx-init setup /etc/tdx-init/config.yaml" in svc
-    assert "ExecStartPost=/usr/bin/runtime-init" in svc
+    assert "ExecStart=/usr/bin/runtime-init" in svc
 
     # Runtime packages from modules directly on image
     assert "cryptsetup" in profile.packages
-    assert "python3" in profile.packages
+    assert "python3" not in profile.packages
 
     # Build packages from modules directly on image
     assert "golang" in profile.build_packages
@@ -262,10 +268,10 @@ def test_init_scripts_sorted_by_priority() -> None:
     script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
     script = script_files[0].content
 
-    # key-generation (10) should appear before disk-encryption (20)
+    # key-gen (10) should appear before disk-setup (20)
     # which should appear before secret-delivery (30)
-    key_pos = script.index("key-generation")
-    disk_pos = script.index("disk-encryption")
+    key_pos = script.index("key-gen setup")
+    disk_pos = script.index("disk-setup setup")
     secret_pos = script.index("secret-delivery")
     assert key_pos < disk_pos < secret_pos
 

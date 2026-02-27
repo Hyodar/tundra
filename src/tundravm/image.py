@@ -97,8 +97,6 @@ class Image:
     _last_compile_digest: str | None = field(init=False, default=None, repr=False)
     _last_compile_path: Path | None = field(init=False, default=None, repr=False)
     _last_compile_emission: MkosiEmission | None = field(init=False, default=None, repr=False)
-    _tdx_init_config: dict[str, object] | None = field(init=False, default=None, repr=False)
-    _tdx_init_source: tuple[str, str] | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._state = RecipeState.initialize(

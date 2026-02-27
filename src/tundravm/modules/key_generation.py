@@ -1,34 +1,30 @@
-"""Key generation module.
-
-Configures ``tdx-init`` key settings and installs a compatibility shim command
-for runtime-init ordering.
-"""
+"""Key generation module."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from textwrap import dedent
 from typing import TYPE_CHECKING, Literal
 
-from tundravm.modules._tdx_init import (
-    ensure_tdx_init_build,
-    ensure_tdx_init_config,
-    write_tdx_init_config,
-)
+from tundravm.build_cache import Build, Cache
 
 if TYPE_CHECKING:
     from tundravm.image import Image
 
-KEY_GENERATION_DEFAULT_REPO = "https://github.com/NethermindEth/nethermind-tdx"
+KEY_GENERATION_BUILD_PACKAGES = (
+    "golang",
+    "git",
+    "build-essential",
+)
+
+KEY_GENERATION_DEFAULT_REPO = "https://github.com/Hyodar/tundra-tools.git"
 KEY_GENERATION_DEFAULT_BRANCH = "main"
+KEY_GENERATION_CONFIG_PATH = "/etc/tdx/key-gen.yaml"
 
 
 @dataclass(slots=True)
 class KeyGeneration:
-    """Generate a cryptographic key at boot time.
-
-    Configures key strategy in ``/etc/tdx-init/config.yaml`` and registers
-    a compatibility command in runtime-init ordering.
-    """
+    """Generate a cryptographic key at boot time."""
 
     strategy: Literal["tpm", "random"] = "tpm"
     output: str = "/persistent/key"
@@ -36,36 +32,59 @@ class KeyGeneration:
     source_branch: str = KEY_GENERATION_DEFAULT_BRANCH
 
     def apply(self, image: Image) -> None:
-        """Ensure tdx-init is built and key settings are configured."""
-        ensure_tdx_init_build(
-            image,
-            source_repo=self.source_repo,
-            source_ref=self.source_branch,
+        """Add build hook, config file, and init script to *image*."""
+        image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
+        image.install("tpm2-tools")
+
+        clone_dir = Build.build_path("key-generation")
+        chroot_dir = Build.chroot_path("key-generation")
+        cache = Cache.declare(
+            f"key-generation-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path("key-generation/build/key-gen"),
+                    dest=Build.dest_path("usr/bin/key-gen"),
+                    name="key-gen",
+                ),
+            ),
         )
 
-        config = ensure_tdx_init_config(image)
-        keys = config.setdefault("keys", {})
-        key_persistent = keys.setdefault("key_persistent", {})
-        key_persistent["strategy"] = "random"
-        key_persistent["tpm"] = self.strategy == "tpm"
-        write_tdx_init_config(image, config)
-
-        image.file(
-            "/usr/bin/key-generation",
-            content=_compat_key_generation_script(),
-            mode="0755",
+        build_cmd = (
+            f"git clone --depth=1 -b {self.source_branch} "
+            f'{self.source_repo} "{clone_dir}" && '
+            "mkosi-chroot bash -c '"
+            f"cd {chroot_dir} && "
+            'go build -trimpath -ldflags "-s -w -buildid=" '
+            "-o ./build/key-gen ./cmd/key-gen"
+            "'"
         )
+        image.hook("build", cache.wrap(build_cmd))
+        image.file(KEY_GENERATION_CONFIG_PATH, content=self._render_config())
 
-        image.add_init_script(
-            f"/usr/bin/key-generation --strategy {self.strategy} --output {self.output}\n",
-            priority=10,
-        )
+        image.add_init_script(self._render_init_script(), priority=10)
 
+    def _render_config(self) -> str:
+        return dedent(f"""\
+            keys:
+              key_persistent:
+                strategy: "random"
+                tpm: {"true" if self.strategy == "tpm" else "false"}
+                size: 64
+        """)
 
-def _compat_key_generation_script() -> str:
-    return (
-        "#!/bin/sh\n"
-        "set -eu\n"
-        "# Compatibility shim: key setup is handled by tdx-init.\n"
-        "exit 0\n"
-    )
+    def _render_init_script(self) -> str:
+        output_path = self.output
+        if self.strategy == "tpm":
+            return dedent(f"""\
+                /usr/bin/key-gen setup {KEY_GENERATION_CONFIG_PATH}
+                install -d -m 0700 "$(dirname "{output_path}")"
+                export DISK_ENCRYPTION_KEY="$(tpm2_nvread -C o -T device:/dev/tpmrm0 0x1500016 | tr -d '\\n')"
+                printf '%s\\n' "$DISK_ENCRYPTION_KEY" > "{output_path}"
+                chmod 0600 "{output_path}"
+            """)
+        return dedent(f"""\
+            /usr/bin/key-gen setup {KEY_GENERATION_CONFIG_PATH}
+            if [ -f "{output_path}" ]; then
+                export DISK_ENCRYPTION_KEY="$(tr -d '\\n' < "{output_path}")"
+            fi
+        """)

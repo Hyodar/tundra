@@ -96,8 +96,7 @@ class Init:
 
             [Service]
             Type=oneshot
-            ExecStart=/usr/bin/tdx-init setup /etc/tdx-init/config.yaml
-            ExecStartPost=/usr/bin/runtime-init
+            ExecStart=/usr/bin/runtime-init
             RemainAfterExit=yes
 
             [Install]

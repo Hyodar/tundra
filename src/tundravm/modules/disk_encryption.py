@@ -1,34 +1,30 @@
-"""Disk encryption module.
-
-Configures ``tdx-init`` disk settings and installs a compatibility shim
-command for runtime-init ordering.
-"""
+"""Disk encryption module."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from textwrap import dedent
 from typing import TYPE_CHECKING
 
-from tundravm.modules._tdx_init import (
-    ensure_tdx_init_build,
-    ensure_tdx_init_config,
-    write_tdx_init_config,
-)
+from tundravm.build_cache import Build, Cache
 
 if TYPE_CHECKING:
     from tundravm.image import Image
 
-DISK_ENCRYPTION_DEFAULT_REPO = "https://github.com/NethermindEth/nethermind-tdx"
+DISK_ENCRYPTION_BUILD_PACKAGES = (
+    "golang",
+    "git",
+    "build-essential",
+)
+
+DISK_ENCRYPTION_DEFAULT_REPO = "https://github.com/Hyodar/tundra-tools.git"
 DISK_ENCRYPTION_DEFAULT_BRANCH = "main"
+DISK_ENCRYPTION_CONFIG_PATH = "/etc/tdx/disk-setup.yaml"
 
 
 @dataclass(slots=True)
 class DiskEncryption:
-    """LUKS2 disk encryption at boot time.
-
-    Configures disk strategy in ``/etc/tdx-init/config.yaml`` and registers
-    a compatibility command in runtime-init ordering.
-    """
+    """LUKS2 disk encryption at boot time."""
 
     device: str = "/dev/vda3"
     mapper_name: str = "cryptroot"
@@ -38,47 +34,67 @@ class DiskEncryption:
     source_branch: str = DISK_ENCRYPTION_DEFAULT_BRANCH
 
     def apply(self, image: Image) -> None:
-        """Ensure tdx-init is built and disk settings are configured."""
-        ensure_tdx_init_build(
-            image,
-            source_repo=self.source_repo,
-            source_ref=self.source_branch,
-        )
+        """Add build hook, config file, and init script to *image*."""
+        image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
         image.install("cryptsetup")
 
-        config = ensure_tdx_init_config(image)
-        disks = config.setdefault("disks", {})
-        disk_persistent = disks.setdefault("disk_persistent", {})
-        disk_persistent["strategy"] = "pathglob" if self.device else "largest"
+        clone_dir = Build.build_path("disk-encryption")
+        chroot_dir = Build.chroot_path("disk-encryption")
+        cache = Cache.declare(
+            f"disk-encryption-{self.source_branch}",
+            (
+                Cache.file(
+                    src=Build.build_path("disk-encryption/build/disk-setup"),
+                    dest=Build.dest_path("usr/bin/disk-setup"),
+                    name="disk-setup",
+                ),
+            ),
+        )
+
+        build_cmd = (
+            f"git clone --depth=1 -b {self.source_branch} "
+            f'{self.source_repo} "{clone_dir}" && '
+            "mkosi-chroot bash -c '"
+            f"cd {chroot_dir} && "
+            'go build -trimpath -ldflags "-s -w -buildid=" '
+            "-o ./build/disk-setup ./cmd/disk-setup"
+            "'"
+        )
+        image.hook("build", cache.wrap(build_cmd))
+        image.file(DISK_ENCRYPTION_CONFIG_PATH, content=self._render_config())
+
+        image.add_init_script(self._render_init_script(), priority=20)
+
+    def _render_config(self) -> str:
+        strategy_block = dedent("""\
+            strategy: "largest"
+            format: "on_fail"
+            encryption_key: "key_persistent"
+            mount_at: "{mount_point}"
+            dirs: ["ssh", "data", "logs"]
+        """).format(mount_point=self.mount_point)
         if self.device:
-            disk_persistent["strategy_config"] = {"path_glob": self.device}
-        else:
-            disk_persistent["strategy_config"] = {}
-        disk_persistent["format"] = "on_fail"
-        disk_persistent["encryption_key"] = "key_persistent"
-        disk_persistent["mount_at"] = self.mount_point
-        write_tdx_init_config(image, config)
+            strategy_block = dedent("""\
+                strategy: "pathglob"
+                strategy_config:
+                  pattern: "{device}"
+                format: "on_fail"
+                encryption_key: "key_persistent"
+                mount_at: "{mount_point}"
+                dirs: ["ssh", "data", "logs"]
+            """).format(device=self.device, mount_point=self.mount_point)
 
-        image.file(
-            "/usr/bin/disk-encryption",
-            content=_compat_disk_encryption_script(),
-            mode="0755",
-        )
+        return dedent(
+            f"""\
+            disks:
+              disk_persistent:
+            """
+        ) + "\n".join(f"    {line}" for line in strategy_block.strip().splitlines()) + "\n"
 
-        image.add_init_script(
-            f"/usr/bin/disk-encryption"
-            f" --device {self.device}"
-            f" --mapper {self.mapper_name}"
-            f" --key {self.key_path}"
-            f" --mount {self.mount_point}\n",
-            priority=20,
-        )
-
-
-def _compat_disk_encryption_script() -> str:
-    return (
-        "#!/bin/sh\n"
-        "set -eu\n"
-        "# Compatibility shim: disk setup is handled by tdx-init.\n"
-        "exit 0\n"
-    )
+    def _render_init_script(self) -> str:
+        return dedent(f"""\
+            if [ -z "${{DISK_ENCRYPTION_KEY:-}}" ] && [ -f "{self.key_path}" ]; then
+                export DISK_ENCRYPTION_KEY="$(tr -d '\\n' < "{self.key_path}")"
+            fi
+            /usr/bin/disk-setup setup {DISK_ENCRYPTION_CONFIG_PATH}
+        """)
