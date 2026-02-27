@@ -1212,7 +1212,10 @@ class Image:
                     "priority": entry.priority,
                     "sha256": hashlib.sha256(entry.script.encode()).hexdigest(),
                 }
-                for entry in sorted(self.init._scripts, key=lambda item: (item.priority, item.script))
+                for entry in sorted(
+                    self.init._scripts,
+                    key=lambda item: (item.priority, item.script),
+                )
             ],
             "profiles": profiles_data,
         }

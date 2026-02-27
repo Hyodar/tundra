@@ -41,7 +41,9 @@ def derive_measurements(
     return Measurements(backend=backend, values=values)
 
 
-def _artifact_data(profile_result: ProfileBuildResult) -> tuple[tuple[Path, ...], dict[str, str], dict[str, str]]:
+def _artifact_data(
+    profile_result: ProfileBuildResult,
+) -> tuple[tuple[Path, ...], dict[str, str], dict[str, str]]:
     artifact_paths: list[Path] = []
     digests_by_target: dict[str, str] = {}
     digests_by_path: dict[str, str] = {}

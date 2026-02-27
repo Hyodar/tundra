@@ -85,7 +85,7 @@ class DiskEncryption:
             """).format(device=self.device, mount_point=self.mount_point)
 
         return dedent(
-            f"""\
+            """\
             disks:
               disk_persistent:
             """

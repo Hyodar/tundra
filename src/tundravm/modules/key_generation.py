@@ -78,7 +78,9 @@ class KeyGeneration:
             return dedent(f"""\
                 /usr/bin/key-gen setup {KEY_GENERATION_CONFIG_PATH}
                 install -d -m 0700 "$(dirname "{output_path}")"
-                export DISK_ENCRYPTION_KEY="$(tpm2_nvread -C o -T device:/dev/tpmrm0 0x1500016 | tr -d '\\n')"
+                export DISK_ENCRYPTION_KEY="$(
+                    tpm2_nvread -C o -T device:/dev/tpmrm0 0x1500016 | tr -d '\\n'
+                )"
                 printf '%s\\n' "$DISK_ENCRYPTION_KEY" > "{output_path}"
                 chmod 0600 "{output_path}"
             """)
