@@ -509,7 +509,10 @@ class DeterministicMkosiEmitter:
                 config=config,
             )
 
+            # Emit cloud postoutput scripts based on output_targets
             cloud_scripts: tuple[Path, ...] = ()
+            if config.generate_cloud_postoutput:
+                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
 
             # Generate mkosi.conf
             conf_content = self._render_conf(
@@ -525,21 +528,6 @@ class DeterministicMkosiEmitter:
 
             conf_path = profile_dir / "mkosi.conf"
             conf_path.write_text(conf_content, encoding="utf-8")
-
-            # Emit cloud postoutput scripts based on output_targets
-            if config.generate_cloud_postoutput:
-                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
-                conf_content = self._render_conf(
-                    profile_name=profile_name,
-                    config=config,
-                    packages=sorted(profile.packages),
-                    build_packages=sorted(profile.build_packages),
-                    build_sources=profile.build_sources or None,
-                    repositories=profile.repositories,
-                    phase_scripts=phase_scripts,
-                    cloud_postoutput_scripts=cloud_scripts,
-                )
-                conf_path.write_text(conf_content, encoding="utf-8")
 
             profile_paths[profile_name] = conf_path
             script_paths[profile_name] = phase_scripts
@@ -626,7 +614,10 @@ class DeterministicMkosiEmitter:
                 recipe=recipe,
                 config=config,
             )
+            # Emit cloud postoutput scripts
             cloud_scripts: tuple[Path, ...] = ()
+            if config.generate_cloud_postoutput:
+                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
 
             # Profile-specific mkosi.conf override
             conf_content = self._render_conf(
@@ -641,21 +632,6 @@ class DeterministicMkosiEmitter:
             )
             conf_path = profile_dir / "mkosi.conf"
             conf_path.write_text(conf_content, encoding="utf-8")
-
-            # Emit cloud postoutput scripts
-            if config.generate_cloud_postoutput:
-                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
-                conf_content = self._render_conf(
-                    profile_name=profile_name,
-                    config=config,
-                    packages=sorted(profile.packages),
-                    build_packages=sorted(profile.build_packages),
-                    build_sources=profile.build_sources or None,
-                    repositories=profile.repositories,
-                    phase_scripts=phase_scripts,
-                    cloud_postoutput_scripts=cloud_scripts,
-                )
-                conf_path.write_text(conf_content, encoding="utf-8")
 
             profile_paths[profile_name] = conf_path
             script_paths[profile_name] = phase_scripts

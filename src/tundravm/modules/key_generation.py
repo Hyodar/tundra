@@ -86,7 +86,8 @@ class KeyGeneration:
         """Add build hook, aggregate config, and init script to *image*."""
         self._validate()
         image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
-        image.install("tpm2-tools")
+        if any(spec.tpm_enabled() for spec in self._keys):
+            image.install("tpm2-tools")
 
         clone_dir = Build.build_path("key-generation")
         chroot_dir = Build.chroot_path("key-generation")
@@ -159,21 +160,7 @@ class KeyGeneration:
         return "\n".join(lines) + "\n"
 
     def _render_init_script(self) -> str:
-        lines = [f"/usr/bin/key-gen setup {shlex.quote(self.config_path)}"]
-        primary = next((spec for spec in self._keys if spec.output is not None), None)
-        if primary is not None and primary.output is not None:
-            output_path = shlex.quote(primary.output)
-            lines.extend(
-                (
-                    f"if [ -f {output_path} ]; then",
-                    f'    export DISK_ENCRYPTION_KEY="$(tr -d \'\\n\' < {output_path})"',
-                    "else",
-                    f'    echo "missing generated key output: {primary.output}" >&2',
-                    "    exit 1",
-                    "fi",
-                )
-            )
-        return "\n".join(lines) + "\n"
+        return f"/usr/bin/key-gen setup {shlex.quote(self.config_path)}\n"
 
     def _validate_name(self, name: str, *, kind: str) -> None:
         if not name:
