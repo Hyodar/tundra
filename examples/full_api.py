@@ -64,8 +64,13 @@ def build_full_api_recipe() -> None:
     img.sync("git submodule update --init")
 
     # Composable init modules
-    KeyGeneration(strategy="tpm").apply(img)  # priority 10
-    DiskEncryption(device="/dev/vda3").apply(img)  # priority 20
+    keys = KeyGeneration()
+    keys.key("key_persistent", strategy="tpm")  # priority 10
+    keys.apply(img)
+
+    disks = DiskEncryption()
+    disks.disk("disk_persistent", device="/dev/vda3")  # priority 20
+    disks.apply(img)
 
     # Secret delivery: declare secrets then apply
     delivery = SecretDelivery(method="http_post")

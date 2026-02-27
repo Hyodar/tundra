@@ -192,13 +192,19 @@ def build_surge_tdx_prover() -> Image:
 
     # ── 3. Composable init modules ───────────────────────────────────
 
-    KeyGeneration(strategy="tpm", output="/persistent/key").apply(img)
-    DiskEncryption(
+    keys = KeyGeneration()
+    keys.key("key_persistent", strategy="tpm", output="/persistent/key")
+    keys.apply(img)
+
+    disks = DiskEncryption()
+    disks.disk(
+        "disk_persistent",
         device="/dev/vda3",
         mapper_name="cryptroot",
         key_path="/persistent/key",
         mount_point="/persistent",
-    ).apply(img)
+    )
+    disks.apply(img)
     SecretDelivery(method="http_post").apply(img)
 
     # ── 4. Groups and service modules ─────────────────────────────────

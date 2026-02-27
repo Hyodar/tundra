@@ -55,28 +55,10 @@ class KeyGeneration:
     is kept as a compatibility alias for ``random`` with TPM persistence.
     """
 
-    strategy: Literal["tpm", "random", "pipe"] = "tpm"
-    output: str | None = "/persistent/key"
-    key_name: str = "key_persistent"
-    size: int = 64
-    pipe_path: str | None = None
-    persist_in_tpm: bool | None = None
     config_path: str = KEY_GENERATION_DEFAULT_CONFIG_PATH
     source_repo: str = KEY_GENERATION_DEFAULT_REPO
     source_branch: str = KEY_GENERATION_DEFAULT_BRANCH
     _keys: list[KeySpec] = field(default_factory=list, init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self._append_key(
-            KeySpec(
-                name=self.key_name,
-                strategy=self.strategy,
-                output=self.output,
-                size=self.size,
-                pipe_path=self.pipe_path,
-                persist_in_tpm=self.persist_in_tpm,
-            )
-        )
 
     def key(
         self,
@@ -178,7 +160,7 @@ class KeyGeneration:
 
     def _render_init_script(self) -> str:
         lines = [f"/usr/bin/key-gen setup {shlex.quote(self.config_path)}"]
-        primary = next((spec for spec in self._keys if spec.name == self.key_name), None)
+        primary = next((spec for spec in self._keys if spec.output is not None), None)
         if primary is not None and primary.output is not None:
             output_path = shlex.quote(primary.output)
             lines.extend(

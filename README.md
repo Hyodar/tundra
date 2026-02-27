@@ -116,8 +116,13 @@ from tundravm.modules import DiskEncryption, KeyGeneration, SecretDelivery
 
 img = Image(base="debian/trixie", reproducible=True)
 
-KeyGeneration(strategy="tpm").apply(img)          # priority 10
-DiskEncryption(device="/dev/vda3").apply(img)      # priority 20
+keys = KeyGeneration()
+keys.key("key_persistent", strategy="tpm")
+keys.apply(img)                                    # priority 10
+
+disks = DiskEncryption()
+disks.disk("disk_persistent", device="/dev/vda3")
+disks.apply(img)                                   # priority 20
 SecretDelivery(method="http_post", host="0.0.0.0", port=8080).apply(img)  # priority 30
 
 img.compile("build/mkosi")
@@ -126,11 +131,13 @@ img.compile("build/mkosi")
 Additional keys and disks can be registered on the same module instance:
 
 ```python
-keys = KeyGeneration(strategy="tpm", key_name="root", output="/persistent/root.key")
+keys = KeyGeneration()
+keys.key("root", strategy="tpm", output="/persistent/root.key")
 keys.key("data", strategy="pipe", pipe_path="/run/keys/data.pipe", persist_in_tpm=True, output="/persistent/data.key")
 keys.apply(img)
 
-disks = DiskEncryption(disk_name="data", device="/dev/vdb", key_name="data", key_path="/persistent/data.key", mount_point="/data")
+disks = DiskEncryption()
+disks.disk("data", device="/dev/vdb", key_name="data", key_path="/persistent/data.key", mount_point="/data")
 disks.disk("scratch", device="", key_name=None, key_path=None, mount_point="/scratch", format_policy="on_initialize")
 disks.apply(img)
 ```

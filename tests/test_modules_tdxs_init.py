@@ -102,7 +102,9 @@ def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:
     from tundravm.modules import KeyGeneration
 
     image = Image()
-    KeyGeneration(strategy="tpm").apply(image)
+    keys = KeyGeneration()
+    keys.key("key_persistent", strategy="tpm")
+    keys.apply(image)
     Tdxs().apply(image)
 
     profile = image.state.profiles["default"]

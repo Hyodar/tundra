@@ -1,5 +1,7 @@
 """Tests for composable init modules: KeyGeneration, DiskEncryption, SecretDelivery."""
 
+from typing import Literal
+
 import pytest
 
 from tundravm import Image
@@ -13,9 +15,55 @@ from tundravm.modules import (
 # ── KeyGeneration ────────────────────────────────────────────────────
 
 
+def _module_with_key(
+    name: str = "key_persistent",
+    *,
+    strategy: Literal["tpm", "random", "pipe"] = "tpm",
+    output: str | None = None,
+    size: int = 64,
+    pipe_path: str | None = None,
+    persist_in_tpm: bool | None = None,
+) -> KeyGeneration:
+    module = KeyGeneration()
+    module.key(
+        name,
+        strategy=strategy,
+        output=output,
+        size=size,
+        pipe_path=pipe_path,
+        persist_in_tpm=persist_in_tpm,
+    )
+    return module
+
+
+def _module_with_disk(
+    name: str = "disk_persistent",
+    *,
+    device: str = "/dev/vda3",
+    mapper_name: str | None = None,
+    key_path: str | None = "/persistent/key",
+    mount_point: str = "/persistent",
+    key_name: str | None = "key_persistent",
+    format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail",
+    dirs: tuple[str, ...] = ("ssh", "data", "logs"),
+) -> DiskEncryption:
+    module = DiskEncryption()
+    module.disk(
+        name,
+        device=device,
+        mapper_name=mapper_name,
+        key_path=key_path,
+        mount_point=mount_point,
+        key_name=key_name,
+        format_policy=format_policy,
+        dirs=dirs,
+    )
+    return module
+
+
 def test_key_generation_adds_build_hook() -> None:
     image = Image(reproducible=False)
-    KeyGeneration(strategy="tpm").apply(image)
+    _module_with_key(strategy="tpm").apply(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -32,7 +80,7 @@ def test_key_generation_adds_build_hook() -> None:
 
 def test_key_generation_registers_init_script() -> None:
     image = Image(reproducible=False)
-    KeyGeneration(strategy="tpm", output="/persistent/key").apply(image)
+    _module_with_key(strategy="tpm", output="/persistent/key").apply(image)
 
     profile = image.state.profiles["default"]
     assert len(profile.init_scripts) == 1
@@ -45,7 +93,7 @@ def test_key_generation_registers_init_script() -> None:
 
 def test_key_generation_allows_output_for_non_tpm_keys() -> None:
     image = Image(reproducible=False)
-    KeyGeneration(strategy="random", output="/tmp/key").apply(image)
+    _module_with_key(strategy="random", output="/tmp/key").apply(image)
 
     profile = image.state.profiles["default"]
     config = next(f.content for f in profile.files if f.path == "/etc/tdx/key-gen.yaml")
@@ -54,11 +102,11 @@ def test_key_generation_allows_output_for_non_tpm_keys() -> None:
 
 def test_key_generation_pipe_strategy_renders_pipe_config() -> None:
     image = Image(reproducible=False)
-    KeyGeneration(
+    _module_with_key(
+        "rootfs_key",
         strategy="pipe",
         pipe_path="/run/tdx/passphrase",
         persist_in_tpm=True,
-        key_name="rootfs_key",
     ).apply(image)
 
     profile = image.state.profiles["default"]
@@ -73,10 +121,12 @@ def test_key_generation_pipe_strategy_renders_pipe_config() -> None:
 
 def test_key_generation_custom_repo_and_branch() -> None:
     image = Image(reproducible=False)
-    KeyGeneration(
+    module = KeyGeneration(
         source_repo="https://github.com/custom/fork",
         source_branch="v2.0",
-    ).apply(image)
+    )
+    module.key("key_persistent", strategy="tpm")
+    module.apply(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
@@ -86,7 +136,8 @@ def test_key_generation_custom_repo_and_branch() -> None:
 
 def test_key_generation_supports_multiple_keys() -> None:
     image = Image(reproducible=False)
-    module = KeyGeneration(strategy="tpm", output="/persistent/root.key", key_name="root")
+    module = KeyGeneration()
+    module.key("root", strategy="tpm", output="/persistent/root.key")
     module.key(
         "data",
         strategy="pipe",
@@ -114,7 +165,7 @@ def test_key_generation_supports_multiple_keys() -> None:
 
 def test_disk_encryption_adds_build_hook() -> None:
     image = Image(reproducible=False)
-    DiskEncryption(device="/dev/vda3").apply(image)
+    _module_with_disk(device="/dev/vda3").apply(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -130,7 +181,7 @@ def test_disk_encryption_adds_build_hook() -> None:
 
 def test_disk_encryption_registers_init_script() -> None:
     image = Image(reproducible=False)
-    DiskEncryption(
+    _module_with_disk(
         device="/dev/vdb",
         mapper_name="cryptdata",
         key_path="/persistent/key",
@@ -147,9 +198,9 @@ def test_disk_encryption_registers_init_script() -> None:
 
 def test_disk_encryption_renders_custom_disk_config() -> None:
     image = Image(reproducible=False)
-    DiskEncryption(
+    _module_with_disk(
+        "scratch",
         device="",
-        disk_name="scratch",
         key_name="rootfs_key",
         format_policy="on_initialize",
         dirs=("data", "cache"),
@@ -170,7 +221,7 @@ def test_disk_encryption_renders_custom_disk_config() -> None:
 
 def test_disk_encryption_installs_cryptsetup() -> None:
     image = Image(reproducible=False)
-    DiskEncryption().apply(image)
+    _module_with_disk().apply(image)
 
     profile = image.state.profiles["default"]
     assert "cryptsetup" in profile.packages
@@ -178,10 +229,12 @@ def test_disk_encryption_installs_cryptsetup() -> None:
 
 def test_disk_encryption_custom_repo() -> None:
     image = Image(reproducible=False)
-    DiskEncryption(
+    module = DiskEncryption(
         source_repo="https://github.com/custom/disk",
         source_branch="v3",
-    ).apply(image)
+    )
+    module.disk("disk_persistent")
+    module.apply(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
@@ -191,9 +244,10 @@ def test_disk_encryption_custom_repo() -> None:
 
 def test_disk_encryption_supports_multiple_disks() -> None:
     image = Image(reproducible=False)
-    module = DiskEncryption(
+    module = DiskEncryption()
+    module.disk(
+        "data",
         device="/dev/vdb",
-        disk_name="data",
         key_name="data_key",
         key_path="/persistent/data.key",
         mount_point="/data",
@@ -237,7 +291,7 @@ def test_disk_encryption_supports_multiple_disks() -> None:
 
 def test_disk_encryption_rejects_mapper_name_for_plain_disks() -> None:
     with pytest.raises(ValidationError, match="Plain disks cannot request custom mapper names"):
-        DiskEncryption(key_name=None, key_path=None, mapper_name="plain").apply(
+        _module_with_disk(key_name=None, key_path=None, mapper_name="plain").apply(
             Image(reproducible=False)
         )
 
@@ -355,8 +409,8 @@ def test_secret_delivery_writes_config_from_declared_secrets() -> None:
 
 def test_init_generates_runtime_init_from_init_scripts() -> None:
     image = Image(reproducible=False)
-    KeyGeneration(strategy="tpm").apply(image)
-    DiskEncryption(device="/dev/vda3").apply(image)
+    _module_with_key(strategy="tpm").apply(image)
+    _module_with_disk(device="/dev/vda3").apply(image)
     SecretDelivery(method="http_post").apply(image)
     image._apply_init()
 
@@ -391,8 +445,8 @@ def test_init_generates_runtime_init_from_init_scripts() -> None:
 def test_init_scripts_sorted_by_priority() -> None:
     image = Image(reproducible=False)
     SecretDelivery(method="http_post").apply(image)
-    KeyGeneration(strategy="tpm").apply(image)
-    DiskEncryption(device="/dev/vda3").apply(image)
+    _module_with_key(strategy="tpm").apply(image)
+    _module_with_disk(device="/dev/vda3").apply(image)
     image._apply_init()
 
     profile = image.state.profiles["default"]

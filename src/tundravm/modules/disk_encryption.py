@@ -44,32 +44,10 @@ class DiskSpec:
 class DiskEncryption:
     """Configure one or more disks via ``tundra-tools`` ``disk-setup``."""
 
-    device: str = "/dev/vda3"
-    mapper_name: str | None = None
-    key_path: str | None = "/persistent/key"
-    mount_point: str = "/persistent"
-    disk_name: str = "disk_persistent"
-    key_name: str | None = "key_persistent"
-    format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail"
-    dirs: tuple[str, ...] = DEFAULT_DISK_DIRS
     config_path: str = DISK_ENCRYPTION_DEFAULT_CONFIG_PATH
     source_repo: str = DISK_ENCRYPTION_DEFAULT_REPO
     source_branch: str = DISK_ENCRYPTION_DEFAULT_BRANCH
     _disks: list[DiskSpec] = field(default_factory=list, init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self._append_disk(
-            DiskSpec(
-                name=self.disk_name,
-                device=self.device,
-                mapper_name=self.mapper_name,
-                key_path=self.key_path,
-                mount_point=self.mount_point,
-                key_name=self.key_name,
-                format_policy=self.format_policy,
-                dirs=self.dirs,
-            )
-        )
 
     def disk(
         self,
