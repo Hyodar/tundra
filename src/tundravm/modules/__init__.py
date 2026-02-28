@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 
 
 class Module(Protocol):
+    """Two-phase module: setup() for build-time, install() for runtime.
+
+    Modules like Tdxs, Devtools, Raiko, TaikoClient, and Nethermind
+    conform to this protocol. They also provide a convenience ``apply()``
+    method that calls both phases.
+    """
+
     def setup(self, image: Image) -> None:
         """One-time build/package setup for a module."""
 
@@ -23,10 +30,23 @@ class Module(Protocol):
         """Per-image runtime configuration for a module."""
 
 
+class InitModule(Protocol):
+    """Single-phase module for boot-time init scripts.
+
+    Init modules like KeyGeneration, DiskEncryption, and SecretDelivery
+    use ``apply()`` to register config files and init script fragments
+    that are composed into ``/usr/bin/runtime-init`` at compile time.
+    """
+
+    def apply(self, image: Image) -> None:
+        """Register config and init script fragments on the image."""
+
+
 __all__ = [
     "DiskEncryption",
     "Devtools",
     "Init",
+    "InitModule",
     "KeyGeneration",
     "Module",
     "SecretDelivery",
