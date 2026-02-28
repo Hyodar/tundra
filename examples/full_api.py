@@ -17,7 +17,6 @@ def build_full_api_recipe() -> None:
         build_dir=Path("build"),
         base="debian/bookworm",
         arch="x86_64",
-        target="x86_64",
         reproducible=True,
         backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
     )

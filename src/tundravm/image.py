@@ -68,7 +68,6 @@ class Image:
     base: str = "debian/bookworm"
     arch: Arch = "x86_64"
     default_profile: str = "default"
-    target: Arch = "x86_64"
     backend: BuildBackend | None = None
     reproducible: bool = True
     policy: Policy = field(default_factory=Policy)

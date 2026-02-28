@@ -373,9 +373,9 @@ class TestPublicExports:
 
 
 class TestImageConstructor:
-    def test_image_target_and_backend(self) -> None:
-        img = Image(target="aarch64", backend=LocalLinuxBackend(), reproducible=False)
-        assert img.target == "aarch64"
+    def test_image_arch_and_backend(self) -> None:
+        img = Image(arch="aarch64", backend=LocalLinuxBackend(), reproducible=False)
+        assert img.arch == "aarch64"
         assert isinstance(img.backend, LocalLinuxBackend)
         assert img.reproducible is False
 

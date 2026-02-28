@@ -204,7 +204,7 @@ def test_tdxs_custom_socket_and_service_names() -> None:
 
 def test_tdxs_rejects_invalid_issuer_type() -> None:
     with pytest.raises(ValidationError, match="Unsupported tdxs type"):
-        Tdxs(issuer_type="invalid").apply(Image())
+        Tdxs(issuer_type="invalid").apply(Image())  # type: ignore[arg-type]
 
 
 def test_tdxs_rejects_no_roles() -> None:
