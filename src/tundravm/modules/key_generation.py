@@ -28,6 +28,8 @@ ENTRY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 @dataclass(frozen=True, slots=True)
 class KeySpec:
+    """Specification for a cryptographic key generated at boot time."""
+
     name: str
     strategy: Literal["tpm", "random", "pipe"] = "tpm"
     output: str | None = None
