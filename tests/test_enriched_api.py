@@ -125,16 +125,6 @@ class TestTemplateSrc:
         entry = img.state.profiles["default"].templates[0]
         assert entry.rendered == "Welcome to TDX VM\n"
 
-    def test_template_legacy_variables_param(self) -> None:
-        img = Image()
-        img.template(
-            "/etc/app/env",
-            template="A={a}\n",
-            variables={"a": "1"},
-        )
-        entry = img.state.profiles["default"].templates[0]
-        assert entry.rendered == "A=1\n"
-
     def test_template_src_and_template_mutually_exclusive(self, tmp_path: Path) -> None:
         tmpl = tmp_path / "t.j2"
         tmpl.write_text("x", encoding="utf-8")

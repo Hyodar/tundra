@@ -215,22 +215,16 @@ class Image:
 
     def template(
         self,
-        dest: str | None = None,
+        dest: str,
         *,
         src: str | Path | None = None,
         template: str | None = None,
         vars: Mapping[str, str | int | float] | None = None,
-        variables: Mapping[str, str] | None = None,
         mode: str = "0644",
-        # Legacy positional: template(path, template=..., variables=...)
-        path: str | None = None,
     ) -> Self:
-        # Resolve destination: dest= or legacy path=
-        resolved_dest = dest or path
-        if not resolved_dest:
+        if not dest:
             raise ValidationError("template() requires a destination path (dest= parameter).")
 
-        # Resolve template content: src= file or inline template=
         if src is not None and template is not None:
             raise ValidationError("template() requires exactly one of src= or template=, not both.")
         if src is not None:
@@ -240,12 +234,9 @@ class Image:
         else:
             raise ValidationError("template() requires either src= or template= parameter.")
 
-        # Resolve variables: vars= (SPEC style) or variables= (legacy)
         resolved_vars: dict[str, str] = {}
         if vars is not None:
             resolved_vars = {k: str(v) for k, v in sorted(vars.items())}
-        elif variables is not None:
-            resolved_vars = dict(sorted(variables.items()))
 
         try:
             rendered = template_content.format_map(resolved_vars)
@@ -253,10 +244,10 @@ class Image:
             raise ValidationError(
                 "template() variables are missing required placeholders.",
                 hint="Provide all placeholder keys used in the template string.",
-                context={"path": resolved_dest, "missing_key": str(exc)},
+                context={"path": dest, "missing_key": str(exc)},
             ) from exc
         entry = TemplateEntry(
-            path=resolved_dest,
+            path=dest,
             template=template_content,
             variables=resolved_vars,
             rendered=rendered,
