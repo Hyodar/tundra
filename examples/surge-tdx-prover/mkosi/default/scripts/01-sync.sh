@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MIRROR=$(jq -r .Mirror /work/config.json)
-if [ "$MIRROR" = "null" ]; then
+MIRROR=$(jq -r .Mirror "$BUILDDIR/config.json" 2>/dev/null || echo "")
+if [ -z "$MIRROR" ] || [ "$MIRROR" = "null" ]; then
     MIRROR="http://deb.debian.org/debian"
 fi
-cat > "$SRCDIR/mkosi.builddir/debian-backports.sources" <<EOF
+cat > "$BUILDDIR/debian-backports.sources" <<EOF
 Types: deb deb-src
 URIs: $MIRROR
 Suites: ${RELEASE}-backports

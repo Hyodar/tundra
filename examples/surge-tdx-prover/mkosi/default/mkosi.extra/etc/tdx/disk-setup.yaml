@@ -4,5 +4,4 @@ disks:
     format: "on_fail"
     mount_at: "/persistent"
     dirs: ["ssh", "data", "logs"]
-    encryption_key: "key_persistent"
     encryption_key_path: "/tmp/key_persistent"
