@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import shlex
 from dataclasses import dataclass
-from textwrap import dedent
 from typing import TYPE_CHECKING, Literal
 
 from tundravm.build_cache import Build, Cache
@@ -184,46 +183,46 @@ class Tdxs:
 
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         effective = after if after is not None else self.after
-        after_line = " ".join(effective)
         requires = [*effective, self.socket_name]
-        requires_line = " ".join(requires)
-        return dedent(f"""\
-            [Unit]
-            Description=TDXS
-            After={after_line}
-            Requires={requires_line}
-
-            [Service]
-            User={self.user}
-            Group={self.group}
-            WorkingDirectory=/home/{self.user}
-            Type=notify
-            ExecStart=/usr/bin/tdxs \\
-                --config {self.config_path} \\
-                --log-level {self.log_level}
-            Restart=on-failure
-
-            [Install]
-            WantedBy=default.target
-        """)
+        lines = ["[Unit]", "Description=TDXS"]
+        if effective:
+            lines.append(f"After={' '.join(effective)}")
+        lines.append(f"Requires={' '.join(requires)}")
+        lines.append("")
+        lines.extend([
+            "[Service]",
+            f"User={self.user}",
+            f"Group={self.group}",
+            f"WorkingDirectory=/home/{self.user}",
+            "Type=notify",
+            "ExecStart=/usr/bin/tdxs \\",
+            f"    --config {self.config_path} \\",
+            f"    --log-level {self.log_level}",
+            "Restart=on-failure",
+            "",
+            "[Install]",
+            "WantedBy=default.target",
+            "",
+        ])
+        return "\n".join(lines)
 
     def _render_socket_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         effective = after if after is not None else self.after
-        after_line = " ".join(effective)
-        requires_line = " ".join(effective)
-        return dedent(f"""\
-            [Unit]
-            Description=TDXS Socket
-            After={after_line}
-            Requires={requires_line}
-
-            [Socket]
-            ListenStream={self.socket_path}
-            SocketMode={self.socket_mode}
-            SocketUser={self.socket_user}
-            SocketGroup={self.group}
-            Accept=false
-
-            [Install]
-            WantedBy=sockets.target
-        """)
+        lines = ["[Unit]", "Description=TDXS Socket"]
+        if effective:
+            lines.append(f"After={' '.join(effective)}")
+            lines.append(f"Requires={' '.join(effective)}")
+        lines.append("")
+        lines.extend([
+            "[Socket]",
+            f"ListenStream={self.socket_path}",
+            f"SocketMode={self.socket_mode}",
+            f"SocketUser={self.socket_user}",
+            f"SocketGroup={self.group}",
+            "Accept=false",
+            "",
+            "[Install]",
+            "WantedBy=sockets.target",
+            "",
+        ])
+        return "\n".join(lines)

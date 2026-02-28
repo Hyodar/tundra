@@ -10,7 +10,6 @@ Runtime: systemd service, user/group creation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from tundravm.build_cache import Build, Cache
@@ -131,20 +130,20 @@ class Raiko:
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render raiko.service systemd unit."""
         effective = after if after is not None else self.after
-        after_line = " ".join(effective)
-        requires_line = " ".join(effective)
-        return dedent(f"""\
-            [Unit]
-            Description=Raiko
-            After={after_line}
-            Requires={requires_line}
-
-            [Service]
-            User={self.user}
-            Group={self.group}
-            Restart=on-failure
-            ExecStart=/usr/bin/raiko
-
-            [Install]
-            WantedBy=default.target
-        """)
+        lines = ["[Unit]", "Description=Raiko"]
+        if effective:
+            lines.append(f"After={' '.join(effective)}")
+            lines.append(f"Requires={' '.join(effective)}")
+        lines.append("")
+        lines.extend([
+            "[Service]",
+            f"User={self.user}",
+            f"Group={self.group}",
+            "Restart=on-failure",
+            "ExecStart=/usr/bin/raiko",
+            "",
+            "[Install]",
+            "WantedBy=default.target",
+            "",
+        ])
+        return "\n".join(lines)
