@@ -626,6 +626,7 @@ class Image:
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
     ) -> Self:
+        """Run a shell command during the given build phase (default: postinst)."""
         return self.hook(
             phase,
             command,
@@ -642,6 +643,7 @@ class Image:
         cwd: str | None = None,
         after_phase: Phase | None = None,
     ) -> Self:
+        """Register a shell command to run during a specific build phase."""
         if not command:
             raise ValidationError("hook() requires a command.")
         if phase not in VALID_PHASES:
