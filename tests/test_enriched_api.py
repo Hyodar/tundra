@@ -109,7 +109,7 @@ class TestTemplateSrc:
         img.template(
             "/etc/app/config.toml",
             src=tmpl,
-            vars={"network": "mainnet", "port": 8545},
+            variables={"network": "mainnet", "port": 8545},
         )
         entry = img.state.profiles["default"].templates[0]
         assert entry.path == "/etc/app/config.toml"
@@ -120,7 +120,7 @@ class TestTemplateSrc:
         img.template(
             "/etc/motd",
             template="Welcome to {name}\n",
-            vars={"name": "TDX VM"},
+            variables={"name": "TDX VM"},
         )
         entry = img.state.profiles["default"].templates[0]
         assert entry.rendered == "Welcome to TDX VM\n"

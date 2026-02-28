@@ -42,7 +42,7 @@ def build_full_api_recipe() -> None:
     img.template(
         "/etc/app/runtime.env",
         template="NETWORK={network}\nRPC_PORT={rpc_port}\n",
-        vars={"network": "mainnet", "rpc_port": 8545},
+        variables={"network": "mainnet", "rpc_port": 8545},
     )
 
     img.user("app", system=True, home="/var/lib/app", uid=1000, groups=["tdx"])

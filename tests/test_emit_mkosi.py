@@ -85,7 +85,7 @@ def test_compile_generates_extra_tree(tmp_path: Path) -> None:
     image.template(
         "/etc/app/config.toml",
         template="network={network}\n",
-        vars={"network": "mainnet"},
+        variables={"network": "mainnet"},
     )
 
     output_dir = image.compile(tmp_path / "mkosi")

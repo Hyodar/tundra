@@ -301,7 +301,7 @@ img.file("/etc/app/config.toml", src="./config.toml")
 img.template(
     src="./templates/app.toml.j2",
     dest="/etc/app/config.toml",
-    vars={"network": "mainnet", "rpc_port": 8545},
+    variables={"network": "mainnet", "rpc_port": 8545},
 )
 ```
 
@@ -584,7 +584,7 @@ class Nethermind:
         image.template(
             src=_data("nethermind.cfg.j2"),
             dest=f"/etc/{name}/config.json",
-            vars={"network": network, "datadir": datadir, "rpc_port": rpc_port},
+            variables={"network": network, "datadir": datadir, "rpc_port": rpc_port},
         )
         image.service(
             name=name,
@@ -1417,7 +1417,7 @@ class MetricsAgent:
         image.template(
             src=_data("config.yaml.j2"),
             dest=f"/etc/{name}/config.yaml",
-            vars={"port": port},
+            variables={"port": port},
         )
         image.service(
             name=name,

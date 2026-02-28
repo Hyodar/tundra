@@ -232,7 +232,7 @@ class Image:
         *,
         src: str | Path | None = None,
         template: str | None = None,
-        vars: Mapping[str, str | int | float] | None = None,
+        variables: Mapping[str, str | int | float] | None = None,
         mode: str = "0644",
     ) -> Self:
         if not dest:
@@ -248,8 +248,8 @@ class Image:
             raise ValidationError("template() requires either src= or template= parameter.")
 
         resolved_vars: dict[str, str] = {}
-        if vars is not None:
-            resolved_vars = {k: str(v) for k, v in sorted(vars.items())}
+        if variables is not None:
+            resolved_vars = {k: str(v) for k, v in sorted(variables.items())}
 
         try:
             rendered = template_content.format_map(resolved_vars)

@@ -13,7 +13,7 @@ def test_recipe_primitives_are_recorded() -> None:
     image.template(
         "/etc/app/env",
         template="A={a}\nB={b}\n",
-        vars={"b": "2", "a": "1"},
+        variables={"b": "2", "a": "1"},
     )
     image.user("app", uid=1000, gid=1000, shell="/bin/bash")
     image.service("app.service", enabled=True, wants=("network-online.target",))
