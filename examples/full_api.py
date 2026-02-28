@@ -68,7 +68,12 @@ def build_full_api_recipe() -> None:
     keys.apply(img)
 
     disks = DiskEncryption()
-    disks.disk("disk_persistent", device="/dev/vda3")  # priority 20
+    disks.disk(
+        "disk_persistent",
+        device="/dev/vda3",
+        key_name="key_persistent",
+        key_path="/persistent/key",
+    )  # priority 20
     disks.apply(img)
 
     # Secret delivery: declare secrets then apply

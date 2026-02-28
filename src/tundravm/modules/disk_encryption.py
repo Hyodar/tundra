@@ -33,9 +33,9 @@ class DiskSpec:
     name: str
     device: str = "/dev/vda3"
     mapper_name: str | None = None
-    key_path: str | None = "/persistent/key"
+    key_path: str | None = None
     mount_point: str = "/persistent"
-    key_name: str | None = "key_persistent"
+    key_name: str | None = None
     format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail"
     dirs: tuple[str, ...] = DEFAULT_DISK_DIRS
 
@@ -55,9 +55,9 @@ class DiskEncryption:
         *,
         device: str = "/dev/vda3",
         mapper_name: str | None = None,
-        key_path: str | None = "/persistent/key",
+        key_path: str | None = None,
         mount_point: str = "/persistent",
-        key_name: str | None = "key_persistent",
+        key_name: str | None = None,
         format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail",
         dirs: tuple[str, ...] = DEFAULT_DISK_DIRS,
     ) -> DiskSpec:
