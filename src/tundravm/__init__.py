@@ -11,6 +11,7 @@ from .errors import (
     ValidationError,
 )
 from .image import Image
+from .measure.model import Measurements
 from .models import (
     BakeRequest,
     BakeResult,
@@ -23,6 +24,7 @@ from .models import (
     SecretSpec,
     SecretTarget,
 )
+from .policy import Policy
 
 __all__ = [
     "BackendExecutionError",
@@ -35,7 +37,9 @@ __all__ = [
     "Kernel",
     "LockfileError",
     "MeasurementError",
+    "Measurements",
     "PolicyError",
+    "Policy",
     "ProfileState",
     "RecipeState",
     "ReproducibilityError",
