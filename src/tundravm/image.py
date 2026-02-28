@@ -58,7 +58,20 @@ from .policy import Policy, ensure_bake_policy
 
 @dataclass(slots=True)
 class Image:
-    """Represents an image recipe root."""
+    """Declarative recipe for a TDX-enabled VM image.
+
+    An Image accumulates configuration (packages, files, services, modules)
+    through a fluent API and then emits a build tree via ``compile()``,
+    executes the build via ``bake()``, and optionally produces measurements
+    or deployments.
+
+    Typical lifecycle::
+
+        img = Image(base="debian/bookworm", backend=LimaMkosiBackend())
+        img.install("curl")
+        Tdxs().apply(img)
+        img.bake()
+    """
 
     DEFAULT_TDX_INIT = DEFAULT_TDX_INIT_SCRIPT
 
@@ -302,6 +315,7 @@ class Image:
         extra_unit: Mapping[str, Mapping[str, str]] | None = None,
         security_profile: SecurityProfile = "default",
     ) -> Self:
+        """Register a systemd service unit in the current profile(s)."""
         if not name:
             raise ValidationError("service() requires a non-empty service name.")
         exec_argv: tuple[str, ...]
@@ -364,6 +378,7 @@ class Image:
         systemd_units_keep_extra: tuple[str, ...] | list[str] = (),
         systemd_bins_keep: tuple[str, ...] | None = None,
     ) -> Self:
+        """Configure image debloating — removal of unnecessary files and systemd units."""
         _defaults = DebloatConfig()
         if not enabled:
             config = DebloatConfig(enabled=False)
@@ -650,6 +665,7 @@ class Image:
         return write_lockfile(lock, lock_path)
 
     def compile(self, path: str | Path, *, force: bool = False) -> Path:
+        """Emit the mkosi build tree to *path* and return the output directory."""
         destination = self._normalize_path(path)
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
@@ -682,6 +698,7 @@ class Image:
         frozen: bool = False,
         force: bool = False,
     ) -> BakeResult:
+        """Compile, build, and package the image via the configured backend."""
         ensure_bake_policy(policy=self.policy, frozen=frozen)
         if frozen:
             self._assert_frozen_lock(profile_names=self._active_profiles)
@@ -803,6 +820,7 @@ class Image:
         backend: Literal["rtmr", "azure", "gcp"],
         profile: str | None = None,
     ) -> Measurements:
+        """Derive expected TDX measurements from the last bake result."""
         selected_profile = self._resolve_operation_profile(profile)
         if self._last_bake_result is None:
             raise MeasurementError(
@@ -834,6 +852,7 @@ class Image:
         cpus: int | None = None,
         **kwargs: str,
     ) -> DeployResult:
+        """Deploy baked artifacts to the specified target platform."""
         selected_profile = self._resolve_operation_profile(profile)
         if self._last_bake_result is None:
             raise DeploymentError(
