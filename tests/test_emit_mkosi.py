@@ -812,6 +812,13 @@ def test_compile_debloat_profile_conditional_unconditional_coexist(
     assert 'rm -rf "$BUILDROOT/usr/share/bash-completion"' in content
 
 
+def test_emit_mkosi_deprecation_warning(tmp_path: Path) -> None:
+    image = Image(base="debian/bookworm")
+    image.install("curl")
+    with pytest.warns(DeprecationWarning, match="emit_mkosi.*deprecated"):
+        image.emit_mkosi(tmp_path / "mkosi")
+
+
 def _snapshot_tree(root: Path) -> dict[str, str]:
     snapshot: dict[str, str] = {}
     for path in sorted(root.rglob("*")):

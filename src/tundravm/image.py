@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shlex
+import warnings
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
@@ -704,6 +705,11 @@ class Image:
 
     def emit_mkosi(self, path: str | Path) -> CompileResult:
         """Deprecated: use compile() instead."""
+        warnings.warn(
+            "emit_mkosi() is deprecated, use compile() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self.compile(path)
 
     def bake(
