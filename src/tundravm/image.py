@@ -214,14 +214,14 @@ class Image:
     ) -> Self:
         if not path:
             raise ValidationError("file() requires a destination path.")
-        if (content is None) == (src is None):
-            raise ValidationError("file() requires exactly one of content= or src=.")
+        if content is None and src is None:
+            raise ValidationError("file() requires content= or src=.")
+        if content is not None and src is not None:
+            raise ValidationError("file() accepts content= or src=, not both.")
         if content is not None:
             resolved_content = content
         else:
-            if src is None:
-                raise ValidationError("file() requires src when content is not provided.")
-            resolved_content = Path(src).read_text(encoding="utf-8")
+            resolved_content = Path(src).read_text(encoding="utf-8")  # type: ignore[arg-type]
         for profile in self._iter_active_profiles():
             profile.files.append(FileEntry(path=path, content=resolved_content, mode=mode))
         return self
