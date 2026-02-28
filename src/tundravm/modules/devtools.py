@@ -99,8 +99,7 @@ class Devtools:
     def install(self, image: Image) -> None:
         """Apply devtools configuration to the image."""
         # Debug runtime packages
-        for pkg in DEVTOOLS_PACKAGES:
-            image.install(pkg)
+        image.install(*DEVTOOLS_PACKAGES)
 
         # Serial console service
         image.file(
