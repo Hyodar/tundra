@@ -1,6 +1,5 @@
 [Unit]
 Description=TDXS
-After=
 Requires=tdxs.socket
 
 [Service]

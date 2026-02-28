@@ -1,7 +1,5 @@
 [Unit]
 Description=TDXS Socket
-After=
-Requires=
 
 [Socket]
 ListenStream=/var/tdxs.sock
