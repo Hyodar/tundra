@@ -26,8 +26,6 @@ from .errors import DeploymentError, LockfileError, MeasurementError, Validation
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
 from .measure import Measurements, derive_measurements
 from .models import (
-    DEFAULT_DEBLOAT_MASK,
-    DEFAULT_DEBLOAT_REMOVE,
     Arch,
     ArtifactRef,
     BakeRequest,
@@ -357,7 +355,6 @@ class Image:
         self,
         *,
         enabled: bool = True,
-        # Rich debloat parameters matching SPEC / DESIGN docs
         paths_remove: tuple[str, ...] | None = None,
         paths_skip: tuple[str, ...] | list[str] = (),
         paths_remove_extra: tuple[str, ...] | list[str] = (),
@@ -366,15 +363,11 @@ class Image:
         systemd_units_keep: tuple[str, ...] | None = None,
         systemd_units_keep_extra: tuple[str, ...] | list[str] = (),
         systemd_bins_keep: tuple[str, ...] | None = None,
-        # Legacy parameters (backward compat)
-        remove: tuple[str, ...] | None = None,
-        mask: tuple[str, ...] | None = None,
     ) -> Self:
         _defaults = DebloatConfig()
         if not enabled:
             config = DebloatConfig(enabled=False)
         else:
-            # Convert dict to frozen tuple-of-tuples for the frozen dataclass
             profile_skips: tuple[tuple[str, tuple[str, ...]], ...] = ()
             if paths_skip_for_profiles:
                 profile_skips = tuple((k, v) for k, v in sorted(paths_skip_for_profiles.items()))
@@ -390,16 +383,9 @@ class Image:
                 systemd_bins_keep=systemd_bins_keep or _defaults.systemd_bins_keep,
             )
 
-        # Also maintain legacy fields for backward compat
-        remove_items = tuple(sorted(dict.fromkeys(remove or DEFAULT_DEBLOAT_REMOVE)))
-        mask_items = tuple(sorted(dict.fromkeys(mask or DEFAULT_DEBLOAT_MASK)))
-
         for profile in self._iter_active_profiles():
             profile.debloat = config
             profile.debloat_explicit = True
-            profile.debloat_enabled = enabled
-            profile.debloat_remove = remove_items if enabled else ()
-            profile.debloat_mask = mask_items if enabled else ()
         return self
 
     def explain_debloat(self, *, profile: str | None = None) -> dict[str, object]:
@@ -415,9 +401,6 @@ class Image:
             "systemd_minimize": config.systemd_minimize,
             "systemd_units_keep": list(config.effective_units_keep),
             "systemd_bins_keep": list(config.systemd_bins_keep),
-            # Legacy keys for backward compat
-            "remove": list(profile_state.debloat_remove),
-            "mask": list(profile_state.debloat_mask),
         }
 
     # --- Lifecycle convenience methods ---
@@ -1035,9 +1018,6 @@ class Image:
                 profile.output_targets = default_profile.output_targets
             if not profile.debloat_explicit:
                 profile.debloat = deepcopy(default_profile.debloat)
-                profile.debloat_enabled = default_profile.debloat_enabled
-                profile.debloat_remove = default_profile.debloat_remove
-                profile.debloat_mask = default_profile.debloat_mask
 
     def _recipe_payload(self, *, profile_names: tuple[str, ...]) -> dict[str, object]:
         self._apply_profile_fallbacks(profile_names)
@@ -1185,9 +1165,9 @@ class Image:
                 "hooks": hooks,
                 "secrets": secrets,
                 "debloat": {
-                    "enabled": profile.debloat_enabled,
-                    "remove": list(profile.debloat_remove),
-                    "mask": list(profile.debloat_mask),
+                    "enabled": profile.debloat.enabled,
+                    "paths_remove": list(profile.debloat.effective_paths_remove),
+                    "systemd_minimize": profile.debloat.systemd_minimize,
                 },
             }
 

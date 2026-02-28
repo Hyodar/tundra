@@ -13,8 +13,7 @@ def test_debloat_default_is_enabled_and_deterministic() -> None:
 
     assert first["enabled"] is True
     assert first == second
-    assert first["remove"]
-    assert first["mask"]
+    assert first["paths_remove"]
 
 
 def test_debloat_profile_override_is_supported() -> None:

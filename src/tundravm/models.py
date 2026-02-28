@@ -310,10 +310,6 @@ class ProfileState:
     init_scripts: list[InitScriptEntry] = field(default_factory=list)
     debloat: DebloatConfig = field(default_factory=DebloatConfig)
     debloat_explicit: bool = False
-    # Legacy fields kept for backward compat during transition
-    debloat_enabled: bool = True
-    debloat_remove: tuple[str, ...] = DEFAULT_DEBLOAT_REMOVE
-    debloat_mask: tuple[str, ...] = DEFAULT_DEBLOAT_MASK
 
 
 @dataclass(slots=True)
