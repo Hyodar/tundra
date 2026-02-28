@@ -32,6 +32,7 @@ from .models import (
     BakeRequest,
     BakeResult,
     CommandSpec,
+    CompileResult,
     DebloatConfig,
     DeployRequest,
     DeployResult,
@@ -675,8 +676,8 @@ class Image:
         lock = build_lockfile(recipe=payload)
         return write_lockfile(lock, lock_path)
 
-    def compile(self, path: str | Path, *, force: bool = False) -> Path:
-        """Emit the mkosi build tree to *path* and return the output directory."""
+    def compile(self, path: str | Path, *, force: bool = False) -> CompileResult:
+        """Emit the mkosi build tree to *path* and return a CompileResult."""
         destination = self._normalize_path(path)
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
@@ -686,7 +687,11 @@ class Image:
             and self._last_compile_path == destination
             and destination.exists()
         ):
-            return destination
+            return CompileResult(
+                path=destination,
+                profiles=self._active_profiles,
+                digest=digest,
+            )
         self._last_compile_emission = emit_mkosi_tree(
             recipe=self._state,
             destination=destination,
@@ -696,9 +701,13 @@ class Image:
         )
         self._last_compile_digest = digest
         self._last_compile_path = destination
-        return destination
+        return CompileResult(
+            path=destination,
+            profiles=self._active_profiles,
+            digest=digest,
+        )
 
-    def emit_mkosi(self, path: str | Path) -> Path:
+    def emit_mkosi(self, path: str | Path) -> CompileResult:
         """Deprecated: use compile() instead."""
         return self.compile(path)
 

@@ -66,7 +66,7 @@ def test_compile_is_deterministic(tmp_path: Path) -> None:
     output_a = image.compile(tmp_path / "mkosi-a")
     output_b = image.compile(tmp_path / "mkosi-b")
 
-    assert _snapshot_tree(output_a) == _snapshot_tree(output_b)
+    assert _snapshot_tree(output_a.path) == _snapshot_tree(output_b.path)
 
 
 def test_compile_rejects_invalid_phase(tmp_path: Path) -> None:

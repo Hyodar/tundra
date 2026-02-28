@@ -14,6 +14,7 @@ from .image import Image
 from .models import (
     BakeRequest,
     BakeResult,
+    CompileResult,
     DebloatConfig,
     Kernel,
     ProfileState,
@@ -27,6 +28,7 @@ __all__ = [
     "BackendExecutionError",
     "BakeRequest",
     "BakeResult",
+    "CompileResult",
     "DebloatConfig",
     "DeploymentError",
     "Image",

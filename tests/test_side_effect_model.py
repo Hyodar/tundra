@@ -29,7 +29,7 @@ def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     assert lock_path.exists()
 
     generated = image.compile(emit_dir)
-    assert generated == emit_dir
+    assert generated.path == emit_dir
     assert (emit_dir / "default" / "mkosi.conf").exists()
 
     result = image.bake()

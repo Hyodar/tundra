@@ -358,6 +358,27 @@ class ProfileBuildResult:
     report_path: Path | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CompileResult:
+    """Result of compile(), behaves as a Path for backward compatibility."""
+
+    path: Path
+    profiles: tuple[str, ...]
+    digest: str
+
+    def __fspath__(self) -> str:
+        return str(self.path)
+
+    def __truediv__(self, other: str) -> Path:
+        return self.path / other
+
+    def __str__(self) -> str:
+        return str(self.path)
+
+    def exists(self) -> bool:
+        return self.path.exists()
+
+
 @dataclass(slots=True)
 class BakeResult:
     profiles: dict[str, ProfileBuildResult] = field(default_factory=dict)
@@ -391,6 +412,7 @@ __all__ = [
     "BakeRequest",
     "BakeResult",
     "CommandSpec",
+    "CompileResult",
     "DebloatConfig",
     "DEFAULT_DEBLOAT_MASK",
     "DEFAULT_DEBLOAT_PATHS_REMOVE",
