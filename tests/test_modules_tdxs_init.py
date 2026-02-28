@@ -1,4 +1,6 @@
-from tundravm import Image
+import pytest
+
+from tundravm import Image, ValidationError
 from tundravm.modules import Tdxs
 
 
@@ -198,6 +200,16 @@ def test_tdxs_custom_socket_and_service_names() -> None:
     service_names = {s.name for s in profile.services}
     assert "quote-issuer.service" in service_names
     assert "quote-issuer.socket" in service_names
+
+
+def test_tdxs_rejects_invalid_issuer_type() -> None:
+    with pytest.raises(ValidationError, match="Unsupported tdxs type"):
+        Tdxs(issuer_type="invalid").apply(Image())
+
+
+def test_tdxs_rejects_no_roles() -> None:
+    with pytest.raises(ValidationError, match="at least one of issuer_type or validator_type"):
+        Tdxs(issuer_type=None, validator_type=None).apply(Image())
 
 
 def test_image_build_install_adds_build_packages() -> None:

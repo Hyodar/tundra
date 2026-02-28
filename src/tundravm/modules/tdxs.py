@@ -9,6 +9,7 @@ from textwrap import dedent
 from typing import TYPE_CHECKING, Literal
 
 from tundravm.build_cache import Build, Cache
+from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -84,7 +85,10 @@ class Tdxs:
         canonical = TDXS_ROLE_TYPE_ALIASES.get(value, value)
         if canonical not in TDXS_VALID_TYPES:
             choices = ", ".join(sorted(TDXS_VALID_TYPES | set(TDXS_ROLE_TYPE_ALIASES)))
-            raise ValueError(f"Unsupported tdxs type {value!r}; expected one of: {choices}")
+            raise ValidationError(
+                f"Unsupported tdxs type {value!r}.",
+                hint=f"Expected one of: {choices}",
+            )
         return canonical
 
     def _add_build_hook(self, image: Image) -> None:
@@ -152,7 +156,10 @@ class Tdxs:
         issuer_type = self._canonical_role_type(self.issuer_type)
         validator_type = self._canonical_role_type(self.validator_type)
         if issuer_type is None and validator_type is None:
-            raise ValueError("Tdxs requires at least one of issuer_type or validator_type.")
+            raise ValidationError(
+                "Tdxs requires at least one of issuer_type or validator_type.",
+                hint="Set issuer_type and/or validator_type when constructing Tdxs.",
+            )
         if issuer_type is not None:
             lines.extend(("issuer:", f"  type: {issuer_type}"))
         if validator_type is not None:
