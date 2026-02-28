@@ -39,7 +39,7 @@ def _module_with_key(
 def _module_with_disk(
     name: str = "disk_persistent",
     *,
-    device: str = "/dev/vda3",
+    device: str | None = "/dev/vda3",
     mapper_name: str | None = None,
     key_path: str | None = "/persistent/key",
     mount_point: str = "/persistent",
@@ -211,7 +211,7 @@ def test_disk_encryption_renders_custom_disk_config() -> None:
     image = Image(reproducible=False)
     _module_with_disk(
         "scratch",
-        device="",
+        device=None,
         key_name="rootfs_key",
         format_policy="on_initialize",
         dirs=("data", "cache"),
@@ -274,7 +274,7 @@ def test_disk_encryption_supports_multiple_disks() -> None:
     )
     module.disk(
         "scratch",
-        device="",
+        device=None,
         key_name=None,
         key_path=None,
         mount_point="/scratch",

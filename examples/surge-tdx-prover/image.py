@@ -201,7 +201,7 @@ def build_surge_tdx_prover() -> Image:
     disks = DiskEncryption()
     disks.disk(
         "disk_persistent",
-        device="",
+        device=None,
         key_path="/tmp/key_persistent",
         mapper_name="cryptroot",
         mount_point="/persistent",

@@ -31,7 +31,7 @@ ENTRY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 @dataclass(frozen=True, slots=True)
 class DiskSpec:
     name: str
-    device: str = "/dev/vda3"
+    device: str | None = "/dev/vda3"
     mapper_name: str | None = None
     key_path: str | None = None
     mount_point: str = "/persistent"
@@ -53,7 +53,7 @@ class DiskEncryption:
         self,
         name: str,
         *,
-        device: str = "/dev/vda3",
+        device: str | None = "/dev/vda3",
         mapper_name: str | None = None,
         key_path: str | None = None,
         mount_point: str = "/persistent",
@@ -186,7 +186,7 @@ class DiskEncryption:
         return "\n".join(lines) + "\n"
 
     def _strategy_lines(self, spec: DiskSpec) -> tuple[str, ...]:
-        if spec.device:
+        if spec.device is not None:
             return (
                 '    strategy: "pathglob"',
                 "    strategy_config:",

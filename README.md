@@ -138,7 +138,7 @@ keys.apply(img)
 
 disks = DiskEncryption()
 disks.disk("data", device="/dev/vdb", key_name="data", key_path="/persistent/data.key", mount_point="/data")
-disks.disk("scratch", device="", key_name=None, key_path=None, mount_point="/scratch", format_policy="on_initialize")
+disks.disk("scratch", device=None, key_name=None, key_path=None, mount_point="/scratch", format_policy="on_initialize")
 disks.apply(img)
 ```
 
