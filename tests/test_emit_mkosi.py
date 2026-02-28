@@ -693,14 +693,14 @@ def test_compile_backports_no_duplicate_sandbox_trees() -> None:
 
 
 def test_compile_backports_jq_fallback_when_no_mirror() -> None:
-    """When mirror is not provided, script reads from /work/config.json via jq."""
+    """When mirror is not provided, script reads from $BUILDDIR/config.json via jq."""
     image = Image(base="debian/bookworm", reproducible=False)
     image.backports()
 
     profile = image.state.profiles["default"]
     sync_command = profile.phases["sync"][0]
     script = sync_command.argv[0]
-    assert "jq -r .Mirror /work/config.json" in script
+    assert 'jq -r .Mirror "$BUILDDIR/config.json"' in script
     assert 'MIRROR="http://deb.debian.org/debian"' in script
 
 

@@ -562,8 +562,8 @@ class Image:
         if mirror is not None:
             lines.append(f'MIRROR="{mirror}"')
         else:
-            lines.append("MIRROR=$(jq -r .Mirror /work/config.json)")
-            lines.append('if [ "$MIRROR" = "null" ]; then')
+            lines.append('MIRROR=$(jq -r .Mirror "$BUILDDIR/config.json" 2>/dev/null || echo "")')
+            lines.append('if [ -z "$MIRROR" ] || [ "$MIRROR" = "null" ]; then')
             lines.append('    MIRROR="http://deb.debian.org/debian"')
             lines.append("fi")
 
@@ -571,7 +571,7 @@ class Image:
             lines.append(f'RELEASE="{release}"')
 
         lines.append(
-            'cat > "$SRCDIR/mkosi.builddir/debian-backports.sources" <<EOF\n'
+            'cat > "$BUILDDIR/debian-backports.sources" <<EOF\n'
             "Types: deb deb-src\n"
             "URIs: $MIRROR\n"
             "Suites: ${RELEASE}-backports\n"
