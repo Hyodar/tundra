@@ -318,6 +318,9 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
         lines.append(f"Requires={' '.join(svc.requires)}")
     if svc.wants:
         lines.append(f"Wants={' '.join(svc.wants)}")
+    if svc.extra_unit and "Unit" in svc.extra_unit:
+        for key, value in sorted(svc.extra_unit["Unit"].items()):
+            lines.append(f"{key}={value}")
 
     lines.append("")
     lines.append("[Service]")
@@ -347,7 +350,6 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
             ]
         )
 
-    # Extra unit directives
     if svc.extra_unit and "Service" in svc.extra_unit:
         for key, value in sorted(svc.extra_unit["Service"].items()):
             lines.append(f"{key}={value}")
@@ -355,6 +357,9 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
     lines.append("")
     lines.append("[Install]")
     lines.append("WantedBy=minimal.target")
+    if svc.extra_unit and "Install" in svc.extra_unit:
+        for key, value in sorted(svc.extra_unit["Install"].items()):
+            lines.append(f"{key}={value}")
     lines.append("")
 
     return "\n".join(lines)

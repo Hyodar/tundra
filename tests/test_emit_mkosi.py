@@ -130,6 +130,43 @@ def test_compile_generates_service_units(tmp_path: Path) -> None:
     assert "WantedBy=minimal.target" in content
 
 
+def test_compile_generates_extra_unit_all_sections(tmp_path: Path) -> None:
+    image = Image(base="debian/bookworm")
+    image.service(
+        "app",
+        command=["/usr/bin/app"],
+        extra_unit={
+            "Unit": {"Documentation": "man:app(1)"},
+            "Service": {"MemoryMax": "4G"},
+            "Install": {"Also": "app.socket"},
+        },
+    )
+
+    output_dir = image.compile(tmp_path / "mkosi")
+
+    unit_path = (
+        output_dir
+        / "default"
+        / "mkosi.extra"
+        / "usr"
+        / "lib"
+        / "systemd"
+        / "system"
+        / "app.service"
+    )
+    content = unit_path.read_text(encoding="utf-8")
+    assert "Documentation=man:app(1)" in content
+    assert "MemoryMax=4G" in content
+    assert "Also=app.socket" in content
+    # Verify sections are in the right order
+    unit_idx = content.index("[Unit]")
+    service_idx = content.index("[Service]")
+    install_idx = content.index("[Install]")
+    assert unit_idx < content.index("Documentation=man:app(1)") < service_idx
+    assert service_idx < content.index("MemoryMax=4G") < install_idx
+    assert install_idx < content.index("Also=app.socket")
+
+
 def test_compile_generates_postinst_with_users(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.user("app", system=True, home="/var/lib/app", uid=1000, groups=["tdx"])
