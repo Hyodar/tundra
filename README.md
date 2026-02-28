@@ -23,7 +23,7 @@ img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 img.install("systemd", "curl", "jq")
 img.file("/etc/motd", content="TDX node\n")
 img.user("app", system=True, shell="/bin/false")
-img.service("app", exec="/usr/bin/app")
+img.service("app", command="/usr/bin/app")
 img.debloat(enabled=True)
 img.output_targets("qemu")
 
