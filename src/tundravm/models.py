@@ -68,17 +68,6 @@ DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP = (
     "systemd-tty-ask-password-agent",
 )
 
-# Legacy aliases for backward compatibility with existing tests
-DEFAULT_DEBLOAT_REMOVE = (
-    "cloud-init",
-    "man-db",
-    "info",
-)
-DEFAULT_DEBLOAT_MASK = (
-    "debug-shell.service",
-    "systemd-networkd-wait-online.service",
-)
-
 Phase = Literal[
     "sync",
     "skeleton",
@@ -414,9 +403,7 @@ __all__ = [
     "CommandSpec",
     "CompileResult",
     "DebloatConfig",
-    "DEFAULT_DEBLOAT_MASK",
     "DEFAULT_DEBLOAT_PATHS_REMOVE",
-    "DEFAULT_DEBLOAT_REMOVE",
     "DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP",
     "DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP",
     "DeployRequest",
