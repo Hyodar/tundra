@@ -1,16 +1,5 @@
 """Public package entrypoint for the TDX VM SDK."""
 
-from .build_cache import (
-    Build,
-    Cache,
-    CacheDecl,
-    CacheDir,
-    CacheFile,
-    ChrootPath,
-    DestPath,
-    OutPath,
-    SrcPath,
-)
 from .errors import (
     BackendExecutionError,
     DeploymentError,
@@ -38,20 +27,12 @@ __all__ = [
     "BackendExecutionError",
     "BakeRequest",
     "BakeResult",
-    "Build",
-    "Cache",
-    "CacheDecl",
-    "CacheDir",
-    "CacheFile",
-    "ChrootPath",
-    "DestPath",
     "DebloatConfig",
     "DeploymentError",
     "Image",
     "Kernel",
     "LockfileError",
     "MeasurementError",
-    "OutPath",
     "PolicyError",
     "ProfileState",
     "RecipeState",
@@ -59,7 +40,6 @@ __all__ = [
     "SecretSchema",
     "SecretSpec",
     "SecretTarget",
-    "SrcPath",
     "TdxError",
     "ValidationError",
 ]
