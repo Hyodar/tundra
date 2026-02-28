@@ -26,6 +26,7 @@ from .errors import DeploymentError, LockfileError, MeasurementError, Validation
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
 from .measure import Measurements, derive_measurements
 from .models import (
+    VALID_PHASES,
     Arch,
     ArtifactRef,
     BakeRequest,
@@ -646,6 +647,16 @@ class Image:
     ) -> Self:
         if not command:
             raise ValidationError("hook() requires a command.")
+        if phase not in VALID_PHASES:
+            raise ValidationError(
+                f"Invalid phase {phase!r}.",
+                hint=f"Expected one of: {', '.join(sorted(VALID_PHASES))}",
+            )
+        if after_phase is not None and after_phase not in VALID_PHASES:
+            raise ValidationError(
+                f"Invalid after_phase {after_phase!r}.",
+                hint=f"Expected one of: {', '.join(sorted(VALID_PHASES))}",
+            )
         self._validate_phase_order(phase=phase, after_phase=after_phase)
         env_data = dict(env or {})
         for profile in self._iter_active_profiles():

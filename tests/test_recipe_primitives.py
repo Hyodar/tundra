@@ -46,6 +46,12 @@ def test_invalid_phase_dependency_order_is_rejected() -> None:
         image.hook("prepare", "echo wrong", after_phase="build")
 
 
+def test_hook_rejects_invalid_phase_name() -> None:
+    image = Image()
+    with pytest.raises(ValidationError, match="Invalid phase"):
+        image.hook("nonexistent", "echo bad")  # type: ignore[arg-type]
+
+
 def test_run_alias_records_hook() -> None:
     image = Image(reproducible=False)
     image.run("echo hello", phase="prepare")

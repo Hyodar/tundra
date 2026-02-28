@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
@@ -92,6 +92,7 @@ Phase = Literal[
     "repart",
     "boot",
 ]
+VALID_PHASES: frozenset[str] = frozenset(get_args(Phase))
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +405,7 @@ __all__ = [
     "OutputTarget",
     "PartitionSpec",
     "Phase",
+    "VALID_PHASES",
     "ProfileBuildResult",
     "ProfileState",
     "RepositorySpec",
