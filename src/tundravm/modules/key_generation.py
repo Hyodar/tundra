@@ -135,6 +135,16 @@ class KeyGeneration:
                         context={"key": spec.name, "path": spec.output},
                     )
                 output_paths.add(spec.output)
+            if spec.strategy == "pipe" and not spec.pipe_path:
+                raise ValidationError(
+                    "pipe strategy requires pipe_path.",
+                    context={"key": spec.name},
+                )
+            if spec.strategy != "pipe" and spec.pipe_path is not None:
+                raise ValidationError(
+                    "pipe_path is only valid with strategy='pipe'.",
+                    context={"key": spec.name, "strategy": spec.strategy},
+                )
 
     def _cache_key(self) -> str:
         repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]

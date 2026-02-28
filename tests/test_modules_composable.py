@@ -164,6 +164,20 @@ def test_key_generation_supports_multiple_keys() -> None:
     assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
 
 
+def test_key_generation_pipe_strategy_requires_pipe_path() -> None:
+    module = KeyGeneration()
+    module.key("bad", strategy="pipe")
+    with pytest.raises(ValidationError, match="pipe strategy requires pipe_path"):
+        module.apply(Image(reproducible=False))
+
+
+def test_key_generation_pipe_path_only_valid_with_pipe_strategy() -> None:
+    module = KeyGeneration()
+    module.key("bad", strategy="tpm", pipe_path="/run/keys/x.pipe")
+    with pytest.raises(ValidationError, match="pipe_path is only valid"):
+        module.apply(Image(reproducible=False))
+
+
 # ── DiskEncryption ───────────────────────────────────────────────────
 
 
