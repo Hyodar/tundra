@@ -100,7 +100,7 @@ def build_full_api_recipe() -> None:
         img.install("google-guest-agent")
 
     with img.profile("dev"):
-        img.ssh(enabled=True)
+        img.ssh()
         img.install("strace", "gdb", "vim")
         img.debloat(enabled=False)
 

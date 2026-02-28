@@ -269,7 +269,7 @@ class TestLifecycleMethods:
 
     def test_ssh_installs_dropbear(self) -> None:
         img = Image()
-        img.ssh(enabled=True)
+        img.ssh()
         assert "dropbear" in img.state.profiles["default"].packages
 
     def test_sync_requires_command(self) -> None:

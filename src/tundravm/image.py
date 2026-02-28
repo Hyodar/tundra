@@ -612,10 +612,9 @@ class Image:
         self.init.add_script(script, priority=priority)
         return self
 
-    def ssh(self, *, enabled: bool = True) -> Self:
-        """Enable or disable SSH access via dropbear (typically for dev profiles)."""
-        if enabled:
-            self.install("dropbear")
+    def ssh(self) -> Self:
+        """Enable SSH access via dropbear (typically used inside dev profiles)."""
+        self.install("dropbear")
         return self
 
     def run(
