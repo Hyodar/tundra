@@ -15,6 +15,7 @@ from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from tundravm.build_cache import Build, Cache
+from tundravm.modules.resolve import resolve_after
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -131,13 +132,7 @@ class Nethermind:
         image.hook("build", cache.wrap(build_cmd))
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
-        """Build the After= list, prepending the init service if available."""
-        after = list(self.after)
-        if image.init is not None and image.init.has_scripts:
-            init_svc = image.init.service_name
-            if init_svc not in after:
-                after.insert(0, init_svc)
-        return tuple(after)
+        return resolve_after(self.after, image)
 
     def _add_runtime_config(self, image: Image) -> None:
         """Add runtime config, unit file, and user creation."""
