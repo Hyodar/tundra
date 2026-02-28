@@ -141,7 +141,7 @@ class UserSpec:
 @dataclass(frozen=True, slots=True)
 class ServiceSpec:
     name: str
-    exec: tuple[str, ...] = ()
+    command: tuple[str, ...] = ()
     user: str | None = None
     after: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()

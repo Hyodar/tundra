@@ -11,11 +11,11 @@ from tundravm.backends import LocalLinuxBackend
 
 
 class TestServiceSpec:
-    def test_service_with_exec_and_user(self) -> None:
+    def test_service_with_command_and_user(self) -> None:
         img = Image()
         img.service(
             "nethermind",
-            exec=["/opt/nethermind/nethermind", "--config", "/etc/nm/config.json"],
+            command=["/opt/nethermind/nethermind", "--config", "/etc/nm/config.json"],
             user="nethermind",
             after=["network-online.target"],
             requires=["network-online.target"],
@@ -23,23 +23,23 @@ class TestServiceSpec:
         )
         svc = img.state.profiles["default"].services[0]
         assert svc.name == "nethermind"
-        assert svc.exec == ("/opt/nethermind/nethermind", "--config", "/etc/nm/config.json")
+        assert svc.command == ("/opt/nethermind/nethermind", "--config", "/etc/nm/config.json")
         assert svc.user == "nethermind"
         assert svc.after == ("network-online.target",)
         assert svc.requires == ("network-online.target",)
         assert svc.restart == "always"
 
-    def test_service_exec_string_split(self) -> None:
+    def test_service_command_string_split(self) -> None:
         img = Image()
-        img.service("app", exec="/usr/bin/app --flag value")
+        img.service("app", command="/usr/bin/app --flag value")
         svc = img.state.profiles["default"].services[0]
-        assert svc.exec == ("/usr/bin/app", "--flag", "value")
+        assert svc.command == ("/usr/bin/app", "--flag", "value")
 
     def test_service_extra_unit(self) -> None:
         img = Image()
         img.service(
             "heavy",
-            exec=["/usr/bin/heavy"],
+            command=["/usr/bin/heavy"],
             extra_unit={"Service": {"MemoryMax": "8G", "LimitNOFILE": "65535"}},
         )
         svc = img.state.profiles["default"].services[0]
@@ -47,7 +47,7 @@ class TestServiceSpec:
 
     def test_service_security_profile_strict(self) -> None:
         img = Image()
-        img.service("secure", exec=["/usr/bin/secure"], security_profile="strict")
+        img.service("secure", command=["/usr/bin/secure"], security_profile="strict")
         svc = img.state.profiles["default"].services[0]
         assert svc.security_profile == "strict"
 

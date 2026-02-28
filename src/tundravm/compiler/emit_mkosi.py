@@ -323,8 +323,8 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
     lines.append("[Service]")
     lines.append("Type=simple")
 
-    if svc.exec:
-        lines.append(f"ExecStart={' '.join(svc.exec)}")
+    if svc.command:
+        lines.append(f"ExecStart={' '.join(svc.command)}")
     if svc.user:
         lines.append(f"User={svc.user}")
     if svc.restart != "no":
@@ -692,8 +692,8 @@ class DeterministicMkosiEmitter:
 
         # Systemd service unit files from img.service()
         for svc in profile.services:
-            # Skip enablement-only registrations (no exec = no unit file to generate)
-            if not svc.exec:
+            # Skip enablement-only registrations (no command = no unit file to generate)
+            if not svc.command:
                 continue
             unit_name = svc.name if svc.name.endswith(".service") else f"{svc.name}.service"
             # Skip non-service targets (like secrets-ready.target)

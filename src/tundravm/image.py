@@ -303,7 +303,7 @@ class Image:
         self,
         name: str,
         *,
-        exec: tuple[str, ...] | list[str] | str = (),
+        command: tuple[str, ...] | list[str] | str = (),
         user: str | None = None,
         after: tuple[str, ...] | list[str] = (),
         requires: tuple[str, ...] | list[str] = (),
@@ -316,13 +316,13 @@ class Image:
         if not name:
             raise ValidationError("service() requires a non-empty service name.")
         exec_argv: tuple[str, ...]
-        if isinstance(exec, str):
-            exec_argv = tuple(shlex.split(exec)) if exec else ()
+        if isinstance(command, str):
+            exec_argv = tuple(shlex.split(command)) if command else ()
         else:
-            exec_argv = tuple(exec)
+            exec_argv = tuple(command)
         entry = ServiceSpec(
             name=name,
-            exec=exec_argv,
+            command=exec_argv,
             user=user,
             after=tuple(after),
             requires=tuple(requires),
@@ -1005,7 +1005,7 @@ class Image:
                 patched.append(
                     ServiceSpec(
                         name=svc.name,
-                        exec=svc.exec,
+                        command=svc.command,
                         user=svc.user,
                         after=after,
                         requires=requires,
@@ -1110,7 +1110,7 @@ class Image:
             services = [
                 {
                     "name": svc.name,
-                    "exec": list(svc.exec),
+                    "command": list(svc.command),
                     "user": svc.user,
                     "after": list(svc.after),
                     "requires": list(svc.requires),

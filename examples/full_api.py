@@ -48,7 +48,7 @@ def build_full_api_recipe() -> None:
     img.user("app", system=True, home="/var/lib/app", uid=1000, groups=["tdx"])
     img.service(
         "app.service",
-        exec=["/usr/local/bin/app", "--config", "/etc/app/runtime.env"],
+        command=["/usr/local/bin/app", "--config", "/etc/app/runtime.env"],
         user="app",
         after=["network-online.target", "secrets-ready.target"],
         requires=["secrets-ready.target"],

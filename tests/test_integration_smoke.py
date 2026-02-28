@@ -25,7 +25,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     )
     img.install("systemd", "udev")
     img.file("/etc/tdx-test", content="integration-test\n")
-    img.service("hello", exec="/bin/true", restart="no", enabled=True)
+    img.service("hello", command="/bin/true", restart="no", enabled=True)
     img.user("appuser", system=True, shell="/bin/false")
 
     backend = LocalLinuxBackend(

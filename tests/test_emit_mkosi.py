@@ -101,7 +101,7 @@ def test_compile_generates_service_units(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.service(
         "app",
-        exec=["/usr/bin/app", "--config", "/etc/app.toml"],
+        command=["/usr/bin/app", "--config", "/etc/app.toml"],
         user="app",
         after=["network-online.target"],
         restart="always",
@@ -203,7 +203,7 @@ def test_compile_no_at_prefix(tmp_path: Path) -> None:
 def test_compile_service_enablement_uses_mkosi_chroot(tmp_path: Path) -> None:
     """Service enablement uses mkosi-chroot systemctl enable."""
     image = Image(base="debian/bookworm")
-    image.service("myapp", exec="/usr/bin/myapp", enabled=True)
+    image.service("myapp", command="/usr/bin/myapp", enabled=True)
 
     output_dir = image.compile(tmp_path / "mkosi")
     postinst = output_dir / "default" / "scripts" / "06-postinst.sh"
