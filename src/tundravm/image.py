@@ -38,7 +38,6 @@ from .models import (
     DeployResult,
     FileEntry,
     HookSpec,
-    InitScriptEntry,
     Kernel,
     OutputTarget,
     PartitionSpec,
@@ -610,9 +609,6 @@ class Image:
         """
         if not script:
             raise ValidationError("add_init_script() requires non-empty script content.")
-        entry = InitScriptEntry(script=script, priority=priority)
-        for profile in self._iter_active_profiles():
-            profile.init_scripts.append(entry)
         self.init.add_script(script, priority=priority)
         return self
 

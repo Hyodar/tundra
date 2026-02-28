@@ -83,8 +83,8 @@ def test_key_generation_registers_init_script() -> None:
     _module_with_key(strategy="tpm", output="/persistent/key").apply(image)
 
     profile = image.state.profiles["default"]
-    assert len(profile.init_scripts) == 1
-    entry = profile.init_scripts[0]
+    assert len(image.init._scripts) == 1
+    entry = image.init._scripts[0]
     assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
     assert entry.priority == 10
 
@@ -160,7 +160,7 @@ def test_key_generation_supports_multiple_keys() -> None:
     assert 'output_path: "/persistent/root.key"' in config
     assert 'output_path: "/persistent/data.key"' in config
 
-    script = profile.init_scripts[0].script
+    script = image.init._scripts[0].script
     assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
 
 
@@ -193,8 +193,8 @@ def test_disk_encryption_registers_init_script() -> None:
     ).apply(image)
 
     profile = image.state.profiles["default"]
-    assert len(profile.init_scripts) == 1
-    entry = profile.init_scripts[0]
+    assert len(image.init._scripts) == 1
+    entry = image.init._scripts[0]
     assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in entry.script
     assert "cryptsetup rename crypt_disk_disk_persistent cryptdata" in entry.script
     assert entry.priority == 20
@@ -295,7 +295,7 @@ def test_disk_encryption_supports_multiple_disks() -> None:
     assert 'mount_at: "/scratch"' in config
     assert 'dirs: ["cache"]' in config
 
-    script = profile.init_scripts[0].script
+    script = image.init._scripts[0].script
     assert script.count("/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml") == 1
     assert "cryptsetup rename crypt_disk_logs cryptlogs" in script
 
@@ -330,9 +330,8 @@ def test_secret_delivery_registers_init_script() -> None:
     image = Image(reproducible=False)
     SecretDelivery(method="http_post", port=9090).apply(image)
 
-    profile = image.state.profiles["default"]
-    assert len(profile.init_scripts) == 1
-    entry = profile.init_scripts[0]
+    assert len(image.init._scripts) == 1
+    entry = image.init._scripts[0]
     expected = "/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml"
     assert expected in entry.script
     assert entry.priority == 30
