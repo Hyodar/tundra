@@ -871,7 +871,6 @@ class Image:
         # Common deploy parameters (passed through to adapter)
         memory: str | None = None,
         cpus: int | None = None,
-        **kwargs: str,
     ) -> DeployResult:
         """Deploy baked artifacts to the specified target platform."""
         selected_profile = self._resolve_operation_profile(profile)
@@ -891,7 +890,6 @@ class Image:
             )
 
         params = dict(parameters or {})
-        params.update(kwargs)
         if memory is not None:
             params["memory"] = memory
         if cpus is not None:
