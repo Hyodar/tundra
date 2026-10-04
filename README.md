@@ -33,6 +33,8 @@ tundravm check node.py                    # lint the recipe
 tundravm compile node.py                  # emit build/mkosi
 tundravm bake node.py --lock              # write build/tundravm.lock, then build
 tundravm bake node.py -v                  # stream mkosi output; -q summary only, --json-logs for CI
+tundravm ci node.py --out mkosi           # check --strict + compile --check + lock --check, for CI
+tundravm init . --name node --ci github   # bootstrap a project with a GitHub Actions workflow
 tundravm measure node.py --backend rtmr   # expected TDX measurements
 tundravm deploy node.py --target qemu     # boot the artifact
 ```

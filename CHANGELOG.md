@@ -30,6 +30,9 @@
 - `KeyGeneration.with_key()`, `DiskEncryption.with_disk()`, `SecretDelivery.with_secret()` return the module; `DiskEncryption.disk(key=KeySpec)`; `SecretDelivery.store_at` accepts a `DiskSpec` with the `secret-store-undefined` rule.
 - `Image.init_scripts(profile=None)`, `Image.has_init_scripts()`, `Profile.applied_modules(inherited=)`.
 - `LintError` (`E_LINT`) for a bake refused by the linter.
+- `tundravm init [DIR]` bootstraps a recipe project (`NAME.py`, a `build/` `.gitignore` block that keeps the lockfile, and with `--ci github` a GitHub Actions workflow). Templates live in `tundravm.templates`.
+- `tundravm ci RECIPE` runs `check --strict`, `compile --check` and `lock --check` with one verdict line per step, exit 1 at the first failure.
+- `--format` for review output: `explain` (`text|json|markdown`), `check` (`auto|text|json|github|markdown`), `diff` (`auto|text|stat|markdown|github`), `compile --check` and `lock --check` (`auto|text|github|markdown`). `auto`, the default, emits GitHub workflow annotations under `GITHUB_ACTIONS=true`. New APIs: `explain.render_markdown()`, `check.render_github()`/`render_markdown()`, `TreeDiff.markdown()`/`github()`, `LockDrift.github()`/`markdown()`.
 - Live bake progress: `Event`/`Reporter` (`TextReporter`, `JsonReporter`, `NullReporter`) in `tundravm.observability`, backends stream mkosi output line by line, `Image.bake(reporter=)`, and `tundravm bake -v/-q/--json-logs/--color` with a summary table. `bake-result.json` records artifact digests.
 - The unused `tundravm.cache` package (and the never-called artifact converter) is removed.
 - Docs: concepts, tutorial, API, CLI, module authoring, testing.

@@ -54,16 +54,18 @@ With neither `--profile` nor `--all-profiles`, commands use the default profile.
 
 | Command | Options | Does |
 | --- | --- | --- |
-| `explain RECIPE` | `--json` | Dry run. Prints `Image.summary()` per selected profile, or `{profile: Image.explain()}` as JSON |
+| `explain RECIPE` | `--format text\|json\|markdown`, `--json` | Dry run. Prints `Image.summary()` per selected profile, or `{profile: Image.explain()}` as JSON; `--format markdown` prints one section per profile with tables for packages, files, users, services, units, hooks, sources and init scripts (tables over 20 rows collapse) |
 | `digest RECIPE` | | Prints the 64-hex recipe digest used by lockfiles. Profile-sensitive; useful for CI diffs |
-| `compile RECIPE` | `--out DIR`, `--force`, `--check` | Emits the mkosi tree (default `<build_dir>/mkosi`). Prints path, profiles, digest. `--check` writes nothing and exits 1 if the tree at `--out` is stale, listing the files that differ |
-| `check RECIPE` | `--json`, `--strict` | Lints the recipe (`Image.check()`): services running as undeclared users, relative file paths, shadowed files, platform/output-target mismatches, init priority collisions, missing backend. Exit 1 on errors, or on warnings with `--strict` |
-| `diff RECIPE` | `--against DIR`, `--stat`, `--color auto\|always\|never` | Compiles to a temp dir and shows a unified diff against an existing tree (default `<build_dir>/mkosi`). Exit 1 when they differ |
-| `lock RECIPE` | `--path FILE`, `--check`, `--explain` | Writes the lockfile (default `<build_dir>/tundravm.lock`). `--check` compares it with the recipe without writing: prints `lock is up to date` and exits 0, or one line per drifted section and exits 1. `--explain` prints the drifted sections, then writes the new lockfile; with `--check` it only reports |
+| `compile RECIPE` | `--out DIR`, `--force`, `--check`, `--format auto\|text\|markdown\|github` | Emits the mkosi tree (default `<build_dir>/mkosi`). Prints path, profiles, digest. `--check` writes nothing and exits 1 if the tree at `--out` is stale, listing the files that differ |
+| `check RECIPE` | `--format auto\|text\|json\|github\|markdown`, `--json`, `--strict` | Lints the recipe (`Image.check()`): services running as undeclared users, relative file paths, shadowed files, platform/output-target mismatches, init priority collisions, missing backend. Exit 1 on errors, or on warnings with `--strict` |
+| `diff RECIPE` | `--against DIR`, `--format auto\|text\|stat\|markdown\|github`, `--stat`, `--color auto\|always\|never` | Compiles to a temp dir and shows a unified diff against an existing tree (default `<build_dir>/mkosi`). Exit 1 when they differ |
+| `lock RECIPE` | `--path FILE`, `--check`, `--explain`, `--format auto\|text\|github\|markdown` | Writes the lockfile (default `<build_dir>/tundravm.lock`). `--check` compares it with the recipe without writing: prints `lock is up to date` and exits 0, or one line per drifted section and exits 1. `--explain` prints the drifted sections, then writes the new lockfile; with `--check` it only reports |
 | `bake RECIPE` | `--out DIR`, `--frozen`, `--lock`, `--force`, `-v/--verbose`, `-q/--quiet`, `--json-logs`, `--color auto\|always\|never` | Compile and build with the recipe's backend. `--lock` writes the lockfile first, then bakes with `--frozen` semantics. Prints per-profile artifacts, the `report.json` path, and a `next: tundravm deploy ...` line. Also writes `bake-result.json` (see below) |
 | `measure RECIPE` | `--backend rtmr\|azure\|gcp`, `--json`, `--out DIR` | Derives expected TDX measurements for one profile from `bake-result.json`. Prints a table, or `{schema_version, backend, values}` as JSON. `--out` reads the bake made with `bake --out DIR` |
 | `deploy RECIPE` | `--target qemu\|azure\|gcp`, `--out DIR`, `--memory 4G`, `--cpus N`, `--param KEY=VALUE` | Deploys one profile's baked artifact from `bake-result.json` and prints the deployment id, endpoint, and adapter metadata. `--param` is repeatable and passed to the adapter (e.g. `ssh_port`, `tdx=true`, `daemonize=false` for QEMU). `--out` reads the bake made with `bake --out DIR` |
 | `doctor [RECIPE]` | `--attr NAME`, `--pythonpath DIR` | Prints Python and tundravm versions and probes backend tools (`limactl`, `nix`, `mkosi`, `sudo`/`unshare`). Without `RECIPE` it reports every real backend as available or unavailable. With `RECIPE` it probes only that recipe's backend, then prints the `check` summary line. Exit 1 when the recipe's backend is missing a required tool |
+| `ci RECIPE` | `--out DIR`, `--lockfile FILE`, `--format auto\|text\|github` | Runs `check --strict` (all profiles), `compile --check` and `lock --check`; prints `ok`/`FAIL`/`skip` per step and exits 1 at the first failure |
+| `init [DIR]` | `--name NAME`, `--base X`, `--backend lima\|nix\|local\|inprocess`, `--ci github\|none`, `--force` | Writes `NAME.py`, a `.gitignore` block for `build/` that keeps `build/tundravm.lock`, and with `--ci github` a `.github/workflows/tundravm.yml` (explain summary to the job page + `tundravm ci`). Refuses to overwrite without `--force` |
 | `new PATH` | `--base X`, `--backend lima\|nix\|local\|inprocess`, `--force` | Writes a starter recipe file; refuses to overwrite without `--force` |
 
 ## Bake results
@@ -82,6 +84,16 @@ The lockfile records one digest per recipe section: `base`, `arch`, `default_pro
 `~` is a changed section, `+` a section only in the recipe, `-` a section only in the lockfile. Item detail (`+htop -jq`) is shown when the lockfile's embedded recipe still matches the section digest.
 
 `bake --frozen` (and `bake(frozen=True)`) fails with `E_LOCKFILE` and lists the drifted sections, at most 15, then points to `lock --check`. Run `tundravm lock RECIPE` to accept the changes, or revert them.
+
+## Output formats
+
+`check`, `diff`, `compile --check`, `lock --check` and `ci` take `--format`. Precedence: an explicit `--format`, then the `--json`/`--stat` shorthands (not combinable with `--format`), then `auto`, the default, which is `github` when `GITHUB_ACTIONS=true` and `text` otherwise. `github` prints workflow commands (`::error file=RECIPE,title=CODE::message (hint)`, `::warning` per changed file, one `::error` per drifted lock section) so findings show inline on the pull request; `markdown` prints tables (and a `diff` fence cut at 400 lines) for job summaries and PR descriptions. `explain --format markdown` does the same for the whole image.
+
+A new project gets all of this from one command:
+
+```bash
+tundravm init . --name node --ci github
+```
 
 ## Bake output
 
