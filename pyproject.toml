@@ -15,6 +15,9 @@ dependencies = ["cbor2>=5.6.5"]
 [project.scripts]
 tundravm = "tundravm.cli:main"
 
+[project.entry-points.pytest11]
+tundravm = "tundravm.testing.pytest_plugin"
+
 [project.urls]
 Homepage = "https://github.com/Hyodar/tundravm"
 Repository = "https://github.com/Hyodar/tundravm"

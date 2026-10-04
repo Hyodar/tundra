@@ -204,39 +204,26 @@ Init-script fragments are the exception: `add_init_script()` stores them on `img
 
 `hook(..., after_phase=...)` must name a phase earlier than `phase`.
 
-## Testing a module
+## Testing your module
 
-Tests build an `Image` with no backend, apply the module, and either inspect `image.state` or `compile()` to `tmp_path`. No mkosi is needed. Pattern from `tests/test_modules_composable.py`:
+`tundravm.testing` provides compile, lint, golden-tree, and CLI helpers, and its pytest plugin provides the `image`, `inprocess_image`, `compiled`, and `run_cli` fixtures automatically. No mkosi is needed. See [`testing.md`](testing.md) for the full reference. Using the `Agent` example above:
 
 ```python
-from pathlib import Path
-
 from tundravm import Image
 from tundravm.modules import KeyGeneration
+from tundravm.testing import FakeModule, assert_diagnostic, compile_tree
 
 
-def test_agent_registers_init_script(tmp_path: Path) -> None:
-    image = Image(reproducible=False)
+def test_agent(image: Image) -> None:  # `image` comes from the tundravm pytest plugin
     keys = KeyGeneration()
     keys.key("agent", strategy="tpm", output="/persistent/agent.key")
-    image.apply(keys, Agent())
+    db = FakeModule("db", init_script="echo db-ready", init_priority=30)
+    image.apply(keys, Agent(key_name="other"), db)
 
-    profile = image.state.profiles["default"]
-    assert any(f.path == "/etc/agent/config.toml" for f in profile.files)
-    assert [type(m) for m in image.applied_modules()] == [KeyGeneration, Agent]
-    assert not [d for d in image.check() if d.level == "error"]
-
-    out = image.compile(tmp_path / "mkosi")
-    init = (out.path / "default/mkosi.extra/usr/bin/runtime-init").read_text()
-    assert "install -d -m 0750 -o agent /run/agent" in init
+    assert_diagnostic(image, "agent-key-undefined", level="error", subject="other")
+    init = compile_tree(image).runtime_init()
+    assert init.index("/run/agent") < init.index("echo db-ready")  # 25 runs before 30
+    assert db.applied_to == ["default"]
 ```
 
-Useful assertions:
-
-- `profile.packages`, `profile.build_packages`: sets of package names.
-- `profile.files`: `FileEntry(path, content, mode)`.
-- `profile.services`: `ServiceSpec`; check `after`/`requires` for `runtime-init.service` after `compile()`.
-- `profile.phases["build"]`, `profile.phases["postinst"]`: lists of `CommandSpec`; the script is `argv[0]`.
-- Compiled tree: `<path>/<profile>/mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/NN-<phase>.sh`.
-
-`reproducible=False` skips the default `strip_image_version()` finalize hook so `profile.phases` only contains what the module added.
+`FakeModule` stands in for the modules yours composes with. Use it to check `requires` ordering and init priorities. `image.state.profiles[name]` still exposes the raw declarations (`packages`, `files`, `services`, `phases`) when you need them. Pass `Image(reproducible=False)` to leave out the default `strip_image_version()` finalize hook, so `phases` holds only what the module added.
