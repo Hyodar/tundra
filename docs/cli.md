@@ -315,7 +315,7 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
 - A bootable variant's artifact is the UKI `OUT/<variant>/output/<variant>.efi`, next to the other files mkosi writes there; `bake-result.json` records it with its sha256.
 - mkosi's workspace, package cache and tools tree live in `OUT/.mkosi/` (`workspace/`, `cache/`, `mkosi.tools`), never in the compiled tree. A recipe that sets `WorkspaceDirectory` or `CacheDirectory` keeps its own.
 - Under `sudo`, what mkosi wrote (`OUT/<variant>/output/`, `OUT/.mkosi/`) is chowned back to you, so the build directory holds no root-owned files. If that fails, a `warning` names the `sudo chown -R UID:GID OUT` to run.
-- mkosi builds a UKI with the host's `ukify` unless it uses a tools tree. When the host has no `ukify` and the recipe sets no `ToolsTree`, the backend adds `--tools-tree=default` to the mkosi command (the compiled tree is unchanged) and says so on a `note` line, which `-q` hides:
+- mkosi builds a UKI with the host's `ukify` unless it uses a tools tree. When the host has no `ukify` and the recipe sets no `ToolsTree`, the backend adds `--tools-tree=default` for a variant that builds a UKI (`Format=uki` or a bootable disk) to the mkosi command (the compiled tree is unchanged) and says so on a `note` line, which `-q` hides:
 
   ```
   [default] note ukify not found on the host; building with mkosi's default tools tree (--tools-tree=default). Install systemd-ukify to use the host tools.
