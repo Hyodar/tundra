@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tundravm.backends.inprocess import InProcessBackend
@@ -30,3 +32,9 @@ def _no_network_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(source_module, "default_resolver", _refuse)
+
+
+@pytest.fixture
+def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run from *tmp_path*: lowering reads ``./build/tundravm.lock``; keep the repository's out."""
+    monkeypatch.chdir(tmp_path)

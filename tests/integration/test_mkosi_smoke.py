@@ -1,0 +1,147 @@
+"""Integration smoke tests: emit + build via local_linux backend.
+
+These tests require mkosi >= 25 and sudo privileges.
+Run with: uv run pytest tests/integration/test_mkosi_smoke.py -m integration
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from tundravm import File, Fragment, Package, Recipe, Service, User, compile
+from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.declarative import lower
+from tundravm.declarative.lifecycle import bake_image
+from tundravm.declarative.utils import Tdxs
+from tundravm.models import BakeResult
+
+
+def _bake(recipe: Recipe, backend: LocalLinuxBackend, output_dir: Path) -> BakeResult:
+    result, _ = bake_image(
+        lower(recipe), ("default",), locked=None, backend=backend, out=output_dir
+    )
+    return result
+
+
+@pytest.mark.integration
+def test_directory_format_pipeline(tmp_path: Path) -> None:
+    """Emit + bake a minimal Debian image in directory format."""
+    recipe = Recipe(
+        "smoke",
+        Fragment(
+            "common",
+            items=(
+                Package("systemd"),
+                Package("udev"),
+                File("/etc/tdx-test", "integration-test\n"),
+                Service("hello", "/bin/true", restart="no"),
+                User("appuser", system=True, shell="/bin/false"),
+            ),
+        ),
+        base="debian/bookworm",
+    )
+
+    emit_dir = tmp_path / "mkosi"
+    compile(recipe).write(emit_dir)
+
+    unit_path = (
+        emit_dir
+        / "default"
+        / "mkosi.extra"
+        / "usr"
+        / "lib"
+        / "systemd"
+        / "system"
+        / "hello.service"
+    )
+    assert unit_path.exists(), "hello.service not emitted"
+
+    backend = LocalLinuxBackend(
+        privilege="sudo",
+        mkosi_args=["--format=directory", "--bootable=no"],
+    )
+    bake_result = _bake(recipe, backend, tmp_path / "output")
+
+    for _pname, presult in bake_result.profiles.items():
+        if presult.report_path and presult.report_path.exists():
+            report = json.loads(presult.report_path.read_text())
+            assert "backend" in report
+
+
+def test_tdxs_fragment_emission(tmp_path: Path) -> None:
+    """Emit the tdxs fragment and verify config, units, and build script."""
+    recipe = Recipe(
+        "smoke",
+        Fragment("common", items=(Package("systemd"), Tdxs())),
+        base="debian/bookworm",
+    )
+
+    emit_dir = tmp_path / "mkosi"
+    compile(recipe).write(emit_dir)
+
+    conf_text = (emit_dir / "default" / "mkosi.conf").read_text()
+    assert "BuildPackages=" in conf_text
+    assert "golang" in conf_text
+    assert "git" in conf_text
+
+    config_yaml = emit_dir / "default" / "mkosi.extra" / "etc" / "tdxs" / "config.yaml"
+    assert config_yaml.exists(), "config.yaml not emitted"
+    config_content = config_yaml.read_text()
+    assert "type: tdx" in config_content
+    assert "systemd: true" in config_content
+
+    svc_unit = (
+        emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.service"
+    )
+    assert svc_unit.exists(), "tdxs.service not emitted"
+    svc_text = svc_unit.read_text()
+    assert "User=tdxs" in svc_text
+    assert "Group=tdx" in svc_text
+    assert "Type=notify" in svc_text
+    assert "ExecStart=/usr/bin/tdxs" in svc_text
+    assert "--log-level info" in svc_text
+
+    sock_unit = (
+        emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.socket"
+    )
+    assert sock_unit.exists(), "tdxs.socket not emitted"
+    sock_text = sock_unit.read_text()
+    assert "ListenStream=/var/tdxs.sock" in sock_text
+    assert "SocketGroup=tdx" in sock_text
+
+    build_scripts = list((emit_dir / "default" / "scripts").glob("*build*"))
+    assert build_scripts, "No build script emitted"
+    build_text = build_scripts[0].read_text()
+    assert "go build" in build_text
+    assert "Hyodar/tundra-tools" in build_text
+    assert "./cmd/tdxs" in build_text
+    assert "sync-constellation" not in build_text
+    assert "-trimpath" in build_text
+
+    postinst = emit_dir / "default" / "scripts" / "06-postinst.sh"
+    assert postinst.exists(), "postinst not emitted"
+    postinst_text = postinst.read_text()
+    assert "groupadd --system tdx" in postinst_text
+    assert "useradd --system" in postinst_text
+    assert "systemctl enable tdxs.socket" in postinst_text
+
+
+@pytest.mark.integration
+def test_raw_disk_format(tmp_path: Path) -> None:
+    """Bake a raw disk image and verify artifact collection."""
+    recipe = Recipe(
+        "smoke", Fragment("common", items=(Package("systemd"),)), base="debian/bookworm"
+    )
+
+    backend = LocalLinuxBackend(
+        privilege="sudo",
+        mkosi_args=["--format=disk", "--bootable=no"],
+    )
+    bake_result = _bake(recipe, backend, tmp_path / "output")
+
+    for _pname, presult in bake_result.profiles.items():
+        for _target, artifact in presult.artifacts.items():
+            art_path = Path(artifact.path)
+            assert art_path.exists(), f"Artifact not found: {art_path}"
+            assert art_path.stat().st_size > 0, f"Empty artifact: {art_path}"

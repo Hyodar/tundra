@@ -3,7 +3,7 @@
 Strings keep their trailing newline only where the shipped file has one. Unit bodies
 omit the ``After=``/``Requires=runtime-init.service`` that ``after_init`` adds.
 The base layer and the service fragments own their files; they are re-exported
-here so ``tests/test_surge_contents.py`` checks every constant against ``mkosi/default/``.
+here so ``tests/compiler/test_surge_contents.py`` checks every constant against ``mkosi/default/``.
 """
 
 from __future__ import annotations
