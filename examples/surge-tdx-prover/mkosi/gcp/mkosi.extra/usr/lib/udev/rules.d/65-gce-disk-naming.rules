@@ -1,0 +1,17 @@
+# Google Compute Engine persistent disk naming rules
+
+# SCSI persistent disks
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*[!0-9]", IMPORT{program}="scsi_id --export --whitelisted -d /dev/%k", ENV{ID_SERIAL_SHORT}=="?*", SYMLINK+="disk/by-id/google-$env{ID_SERIAL_SHORT}"
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*", ATTR{partition}=="?*", IMPORT{parent}=="ID_SERIAL_SHORT", ENV{ID_SERIAL_SHORT}=="?*", SYMLINK+="disk/by-id/google-$env{ID_SERIAL_SHORT}-part%n"
+
+# SCSI local SSDs
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*[!0-9]", ATTRS{model}=="EphemeralDisk   ", PROGRAM="scsi_id --whitelisted --export -d /dev/%k", SYMLINK+="disk/by-id/google-local-ssd-$env{ID_SERIAL_SHORT}"
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*", ATTRS{model}=="EphemeralDisk   ", ATTR{partition}=="?*", PROGRAM="scsi_id --whitelisted --export -d /dev/%k", SYMLINK+="disk/by-id/google-local-ssd-$env{ID_SERIAL_SHORT}-part%n"
+
+# NVMe persistent disks
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*", ATTRS{model}=="nvme_card-pd", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-%c"
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*p*", ATTRS{model}=="nvme_card-pd", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-%c-part%n"
+
+# NVMe local SSDs
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*", ATTRS{model}=="nvme_card        ", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-local-nvme-ssd-%c"
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*p*", ATTRS{model}=="nvme_card        ", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-local-nvme-ssd-%c-part%n"

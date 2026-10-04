@@ -1,0 +1,13 @@
+[Unit]
+Description=Taiko Client
+After=runtime-init.service
+Requires=runtime-init.service
+
+[Service]
+User=taiko-client
+Group=eth
+Restart=on-failure
+ExecStart=/usr/bin/taiko-client
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Raiko
+After=runtime-init.service tdxs.service
+Requires=runtime-init.service tdxs.service
+
+[Service]
+User=raiko
+Group=tdx
+Restart=on-failure
+ExecStart=/usr/bin/raiko
+
+[Install]
+WantedBy=default.target

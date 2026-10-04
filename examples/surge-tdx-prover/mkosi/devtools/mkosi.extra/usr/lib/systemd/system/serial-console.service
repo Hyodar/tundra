@@ -1,0 +1,12 @@
+[Unit]
+Description=Serial Console
+After=systemd-logind.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl enable serial-getty@ttyS0.service
+ExecStartPost=/bin/systemctl start serial-getty@ttyS0.service
+RemainAfterExit=yes
+
+[Install]
+WantedBy=minimal.target

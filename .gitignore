@@ -205,3 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Golden mkosi trees must keep their usr/lib contents
+!examples/surge-tdx-prover/mkosi/**/lib/
