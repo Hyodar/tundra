@@ -176,7 +176,7 @@ def test_new_refuses_overwrite_without_force(
     assert "Refusing to overwrite" in capsys.readouterr().err
     code, _ = run("new", str(target), "--force")
     assert code == EXIT_OK
-    assert "from tundravm import Image" in target.read_text(encoding="utf-8")
+    assert "recipe = Recipe(" in target.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("backend", ["lima", "nix", "local", "inprocess"])

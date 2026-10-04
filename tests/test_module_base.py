@@ -9,7 +9,8 @@ from typing import ClassVar
 
 import pytest
 
-from tundravm import Diagnostic, Image, ValidationError
+from tundravm import Image, ValidationError
+from tundravm.check import Diagnostic
 from tundravm.lockfile import recipe_digest
 from tundravm.models import InitScriptEntry
 from tundravm.modules import (

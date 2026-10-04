@@ -821,3 +821,50 @@ The three biggest risks are:
 **A cleaned-up fluent builder.** Explicit profile objects and better annotations would improve today’s API, but modules would still receive mutation authority over a shared recipe. Source registration, generated service dependencies, and lifecycle state would remain sensitive to operation order. Removing those effects would effectively turn the builder into a verbose frontend for the immutable model anyway.
 
 **TOML/YAML with Python escape hatches.** Static manifests suit package lists but handle typed key-to-disk references, reusable source builds, conditional composition, and custom lint checks poorly. Adding references, overlays, interpolation, includes, and callable extensions creates a second language alongside Python. Frozen Python values supply those capabilities with normal functions, imports, type checking, and test tooling.
+## Implementation notes
+
+Stage 1 (2026-10-04) lives in `src/tundravm/declarative/` and is exported from `tundravm`:
+
+- `model.py`: every section-2 declaration as a frozen, slotted dataclass with the field names and defaults above; `__post_init__` validates at construction (absolute paths, names, phases, modes, `Disk.key` is a `Key`/`Path`, `Secrets.store` is a `Disk`) and freezes lists into tuples.
+- `resolve.py`: `resolve`, `resolve_all`, `lint`, `identity`, `order_hooks`, `order_inits`.
+- `lower.py`: `lower(recipe, *, variants=None) -> Image`. The fluent `Image`/`RecipeState` is now an internal lowering target, so compile, check, diff, lock, bake and explain run unchanged.
+- `load.py`: `load(path, *, attribute="recipe")`. `tundravm.recipe.load_recipe()` also finds and lowers a `Recipe` (the CLI path). A module-level `backend` holding a backend instance becomes the image's backend.
+
+Semantics chosen where this document leaves room:
+
+- Identity: equal repeated declarations dedupe. Unequal ones with the same identity fail with `identity-collision`, both within one level and between a variant's `add` and what it inherits (use `replace`). A variant applies `replace`/`remove` to its inherited items before adding its own.
+- `Init` names `keys`/`disks`/`secrets` are reserved for the built-in steps (priorities 10/20/30), which `after=` may reference. `Hook.after` names hooks only. A dependency on a later phase or a higher priority is an error.
+- `Unit(after_init=True)` prepends `runtime-init.service` to the unit text's `[Unit]` `After=`/`Requires=` (or adds them), matching what modules render through `resolve_after`. If the variant has no init step, `lint` warns (`unit-after-init-without-init`) and the text is left unchanged.
+- A missing `Debloat` means the compiler default (debloat enabled), not "no debloating". A missing `RuntimeTools` means the `tundra-tools` master default with the default config paths.
+- `epoch=0` is reproducible output (Seed, `SOURCE_DATE_EPOCH=0`, IMAGE_VERSION strip). `None` is non-reproducible. Any other value sets `SOURCE_DATE_EPOCH`.
+- `Recipe.base` defaults to `debian/trixie` as designed (the fluent default is bookworm). `Mkosi.dialect` is accepted, but both dialects lower identically because the compiler has a single emission today.
+- `Install(directory=True)` requires `mode=None`, mirroring `Install.tree()`. `Unit` without content must enable, disable or mask. `Unit` with content needs a type suffix.
+- Top-level `tundravm.Kernel` is still the fluent kernel spec, because `examples/nethermind_tdx.py` imports it. The declarative one is `tundravm.declarative.Kernel`. Top-level `Diagnostic` and `Install` are now the declarative types; the fluent ones live in `tundravm.check` and `tundravm.source`.
+
+Lowering limits (each raises `ValidationError`):
+
+- A variant whose parent is another non-default variant.
+- A `parent="base"` sibling of a default variant that has its own overlay.
+- `remove`, or `replace` of anything but File/User/Group/Partition/Repository/Debloat, in a variant that extends the default.
+- Keys, disks or secrets changed in an extending variant when the default already declares some.
+- More than one `Secrets` per variant.
+- `Setting`/`Kernel` that differ per variant.
+- `Setting`s without a `MkosiOptions` mapping (supported: Output.Seed/OutputDirectory/CompressOutput/ManifestFormat, Build.PackageCacheDirectory/WithNetwork/Environment/SandboxTrees, Content.CleanPackageMetadata).
+- A `Kernel` from `Http` or a git ref other than `v<version>`.
+
+`SecretEnv.service` lowers to the fluent `scope="service"`, which carries no service name.
+
+Fluent-only features with no declarative equivalent yet:
+
+- `service()` unit generation (env, limits, security profiles); its replacement is `Unit` text.
+- `template()`, which has its own lockfile section.
+- `mount_build_source()` (`BuildSources=`).
+- `strip_image_version()` separate from `epoch`.
+- The `efi_stub()`/`backports()` methods and the `Tdxs`/`DevTools` modules. The `efi_stub`/`backports`/`tdxs`/`devtools` fragment functions do not exist yet.
+- Language builders (`GoBuild`/`CargoBuild`/`DotnetBuild`) and `SourceBuild.cache_key`/`mark_unpinned`. `Build` lowers to `ScriptBuild` with the default cache key, so the surge builds are not byte-identical yet.
+- `DebloatConfig.paths_skip_for_profiles`/`extra_keep_units`.
+- `MkosiOptions.init_script`, `generate_version_script` and `generate_cloud_postoutput`.
+- `Policy`, `build_dir`, several output targets per profile, and a replaceable runtime-init generator.
+- The section-2 lifecycle functions (`compile`/`lock`/`bake`/`measure`/`deploy`/`Backend`/`Lock`/`Tree`/`Artifact`). The CLI reaches them through lowering.
+
+The CLI `check`/`ci` commands run the fluent rules on the lowered image. Warnings from `declarative.lint` and `Fragment.checks` are not surfaced there yet, though errors fail at load.

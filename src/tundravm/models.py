@@ -139,7 +139,7 @@ class UserSpec:
     home: str | None = None
     shell: str = "/usr/sbin/nologin"
     uid: int | None = None
-    gid: int | None = None
+    gid: int | str | None = None
     groups: tuple[str, ...] = ()
 
 

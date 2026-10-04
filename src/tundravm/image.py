@@ -161,6 +161,29 @@ def _normalize_limits(service: str, limits: Mapping[str, str | int] | None) -> d
     return dict(sorted(normalized.items()))
 
 
+def _walk_tree(root: Path, exclude: Sequence[str]) -> list[tuple[str, Path]]:
+    """``(relative posix path, host path)`` of every file under *root* not *exclude*d.
+
+    *exclude* holds fnmatch globs matched against the relative path (``*`` also
+    matches ``/``); a matching directory is skipped whole. Symlinked directories
+    are not followed.
+    """
+    patterns = (exclude,) if isinstance(exclude, str) else tuple(exclude)
+
+    def excluded(rel: str) -> bool:
+        return any(fnmatch.fnmatchcase(rel, pattern) for pattern in patterns)
+
+    found: list[tuple[str, Path]] = []
+    for current, dirnames, filenames in os.walk(root):
+        base = Path(current).relative_to(root)
+        dirnames[:] = sorted(d for d in dirnames if not excluded((base / d).as_posix()))
+        for filename in sorted(filenames):
+            rel = (base / filename).as_posix()
+            if not excluded(rel) and (Path(current) / filename).is_file():
+                found.append((rel, Path(current) / filename))
+    return found
+
+
 def _short_sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
@@ -485,19 +508,7 @@ class Image:
                 "copy_tree() src must be an existing directory.",
                 context={"src": str(root)},
             )
-        patterns = (exclude,) if isinstance(exclude, str) else tuple(exclude)
-
-        def excluded(rel: str) -> bool:
-            return any(fnmatch.fnmatchcase(rel, pattern) for pattern in patterns)
-
-        found: list[tuple[str, Path]] = []
-        for current, dirnames, filenames in os.walk(root):
-            base = Path(current).relative_to(root)
-            dirnames[:] = sorted(d for d in dirnames if not excluded((base / d).as_posix()))
-            for filename in sorted(filenames):
-                rel = (base / filename).as_posix()
-                if not excluded(rel) and (Path(current) / filename).is_file():
-                    found.append((rel, Path(current) / filename))
+        found = _walk_tree(root, exclude)
         if not found:
             raise ValidationError(
                 "copy_tree() found no files to copy.",
@@ -584,9 +595,10 @@ class Image:
         home: str | None = None,
         shell: str = "/usr/sbin/nologin",
         uid: int | None = None,
-        gid: int | None = None,
+        gid: int | str | None = None,
         groups: tuple[str, ...] | list[str] = (),
     ) -> Self:
+        """Create user *name* in postinst; *gid* is its primary group, by number or name."""
         if not name:
             raise ValidationError("user() requires a non-empty user name.")
         entry = UserSpec(
@@ -849,7 +861,7 @@ class Image:
         self,
         dest: str,
         *,
-        content: str | None = None,
+        content: str | bytes | None = None,
         src: str | Path | None = None,
         mode: str = "0644",
     ) -> Self:
@@ -862,6 +874,7 @@ class Image:
             raise ValidationError("skeleton() requires a destination path.")
         if (content is None) == (src is None):
             raise ValidationError("skeleton() requires exactly one of content= or src=.")
+        resolved_content: str | bytes
         if content is not None:
             resolved_content = content
         else:

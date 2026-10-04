@@ -1,8 +1,52 @@
-"""Public package entrypoint for the TDX VM SDK."""
+"""Public package entrypoint for the TDX VM SDK.
+
+The declarative API (``Recipe``, ``Fragment``, ``Variant``, the declarations,
+``resolve``/``lint``/``lower``/``load``) is the public surface. The fluent
+``Image``/``Profile`` names below it remain importable while the compiler is
+reached through them; ``Kernel`` is still the fluent kernel spec (the
+declarative one is ``tundravm.declarative.Kernel``).
+"""
 
 __version__ = "0.1.0"
 
-from .check import Diagnostic
+from .declarative import (
+    Build,
+    Debloat,
+    Declaration,
+    Diagnostic,
+    Directory,
+    Disk,
+    File,
+    Fragment,
+    Git,
+    Group,
+    Hook,
+    Http,
+    Init,
+    Install,
+    Key,
+    Mkosi,
+    Package,
+    Partition,
+    Recipe,
+    Repository,
+    Resolved,
+    RuntimeTools,
+    Schema,
+    Secret,
+    SecretEnv,
+    SecretFile,
+    Secrets,
+    Setting,
+    Unit,
+    User,
+    Variant,
+    lint,
+    load,
+    lower,
+    resolve,
+    resolve_all,
+)
 from .diff import FileChange, TreeDiff
 from .errors import (
     BackendExecutionError,
@@ -41,12 +85,49 @@ from .source import (
     GitSource,
     GoBuild,
     HttpSource,
-    Install,
     ScriptBuild,
     SourceBuild,
 )
 
 __all__ = [
+    # Declarative API
+    "Build",
+    "Debloat",
+    "Declaration",
+    "Diagnostic",
+    "Directory",
+    "Disk",
+    "File",
+    "Fragment",
+    "Git",
+    "Group",
+    "Hook",
+    "Http",
+    "Init",
+    "Install",
+    "Key",
+    "Mkosi",
+    "Package",
+    "Partition",
+    "Recipe",
+    "Repository",
+    "Resolved",
+    "RuntimeTools",
+    "Schema",
+    "Secret",
+    "SecretEnv",
+    "SecretFile",
+    "Secrets",
+    "Setting",
+    "Unit",
+    "User",
+    "Variant",
+    "lint",
+    "load",
+    "lower",
+    "resolve",
+    "resolve_all",
+    # Fluent frontend (internal lowering target; removed in a later stage)
     "BackendExecutionError",
     "BakeRequest",
     "BakeResult",
@@ -54,13 +135,11 @@ __all__ = [
     "CompileResult",
     "DebloatConfig",
     "DeploymentError",
-    "Diagnostic",
     "DotnetBuild",
     "FileChange",
     "GitSource",
     "GoBuild",
     "HttpSource",
-    "Install",
     "Image",
     "Kernel",
     "LintError",

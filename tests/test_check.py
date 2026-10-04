@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Diagnostic, Image, LintError
+from tundravm import Image, LintError
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.check import render
+from tundravm.check import Diagnostic, render
 from tundravm.cli import main
 from tundravm.models import SecretSpec
 from tundravm.modules.secret_delivery import SecretDelivery

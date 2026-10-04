@@ -224,11 +224,15 @@ class DotnetBuild:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ScriptBuild:
-    """Run *script* in the source tree; *output* is the produced file, relative to it."""
+    """Run *script* in the source tree; *output* is the produced file, relative to it.
+
+    *env* is exported before the script runs.
+    """
 
     script: str
     output: str
     packages: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict, metadata=_since({}))
 
     kind: Literal["script"] = field(default="script", init=False, repr=False)
 
@@ -237,7 +241,8 @@ class ScriptBuild:
         return self.output
 
     def command(self, workdir: str) -> str:
-        return f"cd {workdir} && {self.script}"
+        env = f"export {_env_assignments(self.env)} && " if self.env else ""
+        return f"{env}cd {workdir} && {self.script}"
 
 
 BuildRecipe = GoBuild | CargoBuild | DotnetBuild | ScriptBuild

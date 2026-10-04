@@ -15,28 +15,51 @@ BACKEND_SNIPPETS: dict[str, tuple[str, str]] = {
     ),
 }
 
-RECIPE_TEMPLATE = '''"""{title} image recipe.
+RECIPE_TEMPLATE = """\"\"\"{title} image recipe.
 
 Inspect:  tundravm explain {filename}
 Compile:  tundravm compile {filename}
 Build:    tundravm bake {filename} --lock
-"""
+\"\"\"
 
-from tundravm import Image
+from tundravm import Debloat, File, Fragment, Package, Recipe, Unit, User, Variant
 {backend_import}
-from tundravm.modules import DevTools
 
-img = Image(base="{base}", backend={backend_expr})
-img.install("systemd", "curl", "jq")
-img.file("/etc/motd", content="{title}\\n")
-img.user("app", system=True, shell="/bin/false")
-img.service("app", command="/usr/bin/true")
-img.debloat(enabled=True)
-img.targets("qemu")
+APP_UNIT = \"\"\"\\
+[Unit]
+Description=app
 
-with img.profile("dev"):
-    img.apply(DevTools())
-'''
+[Service]
+User=app
+ExecStart=/usr/bin/true
+
+[Install]
+WantedBy=minimal.target
+\"\"\"
+
+backend = {backend_expr}
+
+recipe = Recipe(
+    name="{title}",
+    base="{base}",
+    common=Fragment(
+        "{title}",
+        items=(
+            Package("systemd"),
+            Package("curl"),
+            Package("jq"),
+            File("/etc/motd", "{title}\\n"),
+            User("app", shell="/bin/false"),
+            Unit("app.service", APP_UNIT, enabled=True),
+            Debloat(),
+        ),
+    ),
+    variants=(
+        Variant("default", target="qemu"),
+        Variant("dev", parent="default", add=Fragment("dev", items=(Package("strace"),))),
+    ),
+)
+"""
 
 GITIGNORE_MARKER = "/build/*"
 
