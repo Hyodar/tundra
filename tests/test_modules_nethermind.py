@@ -14,11 +14,11 @@ def test_nethermind_setup_declares_build_packages() -> None:
         assert pkg in profile.build_packages
 
 
-def test_nethermind_install_adds_build_hook_with_dotnet_properties() -> None:
+def test_nethermind_setup_adds_build_hook_with_dotnet_properties() -> None:
     image = Image(reproducible=False)
     module = Nethermind()
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -62,7 +62,7 @@ def test_nethermind_custom_version_and_repo() -> None:
         version="2.0.0",
     )
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
@@ -159,7 +159,7 @@ def test_nethermind_custom_runtime() -> None:
     image = Image(reproducible=False)
     module = Nethermind(runtime="linux-arm64")
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]

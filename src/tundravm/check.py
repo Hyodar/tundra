@@ -1,7 +1,8 @@
 """Recipe diagnostics: ``Image.check()`` and ``tundravm check``.
 
 Each rule is a small function ``(image, profile_name, state) -> Iterator[Diagnostic]``
-registered in ``RULES``. Rules read each profile on its own: the compiler emits
+registered in ``RULES``; ``_rule_module_checks`` adds each applied module's own
+``Module.check()`` findings. Rules read each profile on its own: the compiler emits
 every profile tree from that profile's declarations only, so nothing declared in
 the default profile reaches another profile's image (output targets and debloat
 are the only fallbacks, see ``Image._apply_profile_fallbacks``).
@@ -183,6 +184,11 @@ def _effective_debloat(image: Image, state: ProfileState) -> DebloatConfig:
     return default.debloat
 
 
+def effective_output_targets(image: Image, profile: str) -> tuple[OutputTarget, ...]:
+    """Output targets *profile* compiles to, after the default-profile fallback."""
+    return _effective_targets(image, image.state.ensure_profile(profile))
+
+
 def _unit_name(name: str) -> str:
     return name if "." in name else f"{name}.service"
 
@@ -338,21 +344,6 @@ def _rule_output_target_platform_mismatch(
                     f"Apply {platform}().apply(img) inside "
                     f"`with img.profile({profile_name!r}):`; {why}. Installing a guest "
                     f"agent ({', '.join(sorted(agents))}) also silences this."
-                ),
-                profile=profile_name,
-                subject=target,
-            )
-        elif has_platform and target not in targets:
-            yield Diagnostic(
-                level="warning",
-                code="output-target-platform-mismatch",
-                message=(
-                    f"{platform} files are present but output targets are "
-                    f"{', '.join(targets)}; no {target} artifact will be produced"
-                ),
-                hint=(
-                    f"Call img.output_targets({target!r}, ...) after applying {platform}, "
-                    "or move the platform into its own profile."
                 ),
                 profile=profile_name,
                 subject=target,
@@ -538,6 +529,13 @@ def _rule_secret_undelivered(
         )
 
 
+def _rule_module_checks(
+    image: Image, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    for module in image.applied_modules(profile_name):
+        yield from module.check(image, profile_name)
+
+
 RULES: list[Rule] = [
     _rule_service_user_missing,
     _rule_file_path_duplicate,
@@ -550,6 +548,7 @@ RULES: list[Rule] = [
     _rule_debloat_removes_needed_unit,
     _rule_debloat_removes_declared_file,
     _rule_secret_undelivered,
+    _rule_module_checks,
 ]
 
 
@@ -617,4 +616,13 @@ def cmd_check(args: argparse.Namespace, out: TextIO, img: Image) -> int:
     return 1 if any(d.level in failing for d in diagnostics) else 0
 
 
-__all__ = ["RULES", "Diagnostic", "Rule", "check", "cmd_check", "render", "summarize"]
+__all__ = [
+    "RULES",
+    "Diagnostic",
+    "Rule",
+    "check",
+    "cmd_check",
+    "effective_output_targets",
+    "render",
+    "summarize",
+]

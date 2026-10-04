@@ -21,7 +21,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tundravm.backends.base import MountSpec, collect_artifacts, write_flake_nix
+from tundravm.backends.base import MountSpec, Requirement, collect_artifacts, write_flake_nix
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -32,6 +32,15 @@ class NixMkosiBackend:
 
     name: str = "nix_mkosi"
     mkosi_args: list[str] = field(default_factory=list)
+
+    def requirements(self) -> tuple[Requirement, ...]:
+        return (
+            Requirement(
+                tool="nix",
+                probe=("nix", "--version"),
+                hint="Install Nix with flakes enabled: https://nixos.org/download.html",
+            ),
+        )
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         """Local mounts — both directories live on the host."""

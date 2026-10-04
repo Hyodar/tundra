@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from tundravm.build_cache import Build, Cache
+from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
+from tundravm.modules.base import Module
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -49,13 +52,15 @@ class KeySpec:
 
 
 @dataclass(slots=True)
-class KeyGeneration:
+class KeyGeneration(Module):
     """Generate one or more cryptographic keys at boot time.
 
     The underlying ``tundra-tools`` binary supports the ``random`` and ``pipe``
     strategies, with TPM persistence controlled separately. ``strategy='tpm'``
     is kept as a compatibility alias for ``random`` with TPM persistence.
     """
+
+    init_priority: ClassVar[int | None] = 10
 
     config_path: str = KEY_GENERATION_DEFAULT_CONFIG_PATH
     source_repo: str = KEY_GENERATION_DEFAULT_REPO
@@ -84,12 +89,15 @@ class KeyGeneration:
         self._append_key(spec)
         return spec
 
-    def apply(self, image: Image) -> None:
-        """Add build hook, aggregate config, and init script to *image*."""
+    @property
+    def keys(self) -> tuple[KeySpec, ...]:
+        """Registered key definitions, in declaration order."""
+        return tuple(self._keys)
+
+    def setup(self, image: Image) -> None:
+        """Validate keys, declare build packages and the key-gen build hook."""
         self._validate()
         image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
-        if any(spec.tpm_enabled() for spec in self._keys):
-            image.install("tpm2-tools")
 
         clone_dir = Build.build_path("key-generation")
         chroot_dir = Build.chroot_path("key-generation")
@@ -115,8 +123,31 @@ class KeyGeneration:
             "'"
         )
         image.hook("build", cache.wrap(build_cmd))
+
+    def install(self, image: Image) -> None:
+        """Install tpm2-tools when needed and write the aggregate key config."""
+        if any(spec.tpm_enabled() for spec in self._keys):
+            image.install("tpm2-tools")
         image.file(self.config_path, content=self._render_config())
-        image.add_init_script(self._render_init_script(), priority=10)
+
+    def init_script(self, image: Image) -> str:
+        return self._render_init_script()
+
+    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+        for spec in self._keys:
+            if spec.pipe_path is None or spec.pipe_path.startswith("/run/"):
+                continue
+            yield Diagnostic(
+                level="info",
+                code="key-pipe-outside-run",
+                message=f"key {spec.name!r} reads its pipe from {spec.pipe_path}, outside /run",
+                hint=(
+                    "Place pipes under /run (tmpfs): a FIFO on persistent storage "
+                    "survives reboots and can be replaced by a regular file."
+                ),
+                profile=profile,
+                subject=spec.name,
+            )
 
     def _append_key(self, spec: KeySpec) -> None:
         self._validate_name(spec.name, kind="key")
@@ -160,7 +191,7 @@ class KeyGeneration:
                 (
                     f"  {spec.name}:",
                     f'    strategy: "{spec.tool_strategy()}"',
-                    f'    tpm: {"true" if spec.tpm_enabled() else "false"}',
+                    f"    tpm: {'true' if spec.tpm_enabled() else 'false'}",
                 )
             )
             if spec.tool_strategy() == "random":

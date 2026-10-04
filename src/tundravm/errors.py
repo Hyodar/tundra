@@ -16,6 +16,7 @@ class ErrorCode(StrEnum):
     MEASUREMENT = "E_MEASUREMENT"
     DEPLOYMENT = "E_DEPLOYMENT"
     POLICY = "E_POLICY"
+    STATE = "E_STATE"
 
 
 class TdxError(Exception):
@@ -136,6 +137,19 @@ class PolicyError(TdxError):
         super().__init__(message, code=ErrorCode.POLICY, hint=hint, context=context)
 
 
+class StateError(TdxError):
+    """Persisted SDK state (such as ``bake-result.json``) is missing or unreadable."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        hint: str | None = None,
+        context: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(message, code=ErrorCode.STATE, hint=hint, context=context)
+
+
 __all__ = [
     "BackendExecutionError",
     "DeploymentError",
@@ -144,6 +158,7 @@ __all__ = [
     "MeasurementError",
     "PolicyError",
     "ReproducibilityError",
+    "StateError",
     "TdxError",
     "ValidationError",
 ]

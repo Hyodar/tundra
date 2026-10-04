@@ -1,6 +1,6 @@
 """Build backend interfaces and implementations."""
 
-from .base import BuildBackend, MountSpec, collect_artifacts
+from .base import BuildBackend, MountSpec, Requirement, collect_artifacts
 from .inprocess import InProcessBackend
 from .lima import LimaMkosiBackend
 from .local_linux import LocalLinuxBackend
@@ -17,5 +17,6 @@ __all__ = [
     "LocalLinuxBackend",
     "MountSpec",
     "NixMkosiBackend",
+    "Requirement",
     "collect_artifacts",
 ]

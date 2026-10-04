@@ -6,11 +6,12 @@ import hashlib
 import json
 import shlex
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from tundravm.build_cache import Build, Cache
 from tundravm.errors import ValidationError
 from tundravm.models import SecretSchema, SecretSpec, SecretTarget
+from tundravm.modules.base import Module
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -28,8 +29,10 @@ SECRET_DELIVERY_DEFAULT_MANIFEST_PATH = "/etc/tdx/secrets.json"
 
 
 @dataclass(slots=True)
-class SecretDelivery:
+class SecretDelivery(Module):
     """Boot-time secret delivery phase."""
+
+    init_priority: ClassVar[int | None] = 30
 
     method: Literal["http_post"] = "http_post"
     host: str = "0.0.0.0"
@@ -69,8 +72,8 @@ class SecretDelivery:
         self._secrets.append(entry)
         return entry
 
-    def apply(self, image: Image) -> None:
-        """Add build hook, configs, and init script."""
+    def setup(self, image: Image) -> None:
+        """Declare build packages and the secret-delivery build hook."""
         image.build_install(*SECRET_DELIVERY_BUILD_PACKAGES)
 
         clone_dir = Build.build_path("secret-delivery")
@@ -97,12 +100,13 @@ class SecretDelivery:
             "'"
         )
         image.hook("build", cache.wrap(build_cmd))
+
+    def install(self, image: Image) -> None:
+        """Record the secrets on the active profiles and write the configs."""
         self._add_config(image)
 
-        image.add_init_script(
-            f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n",
-            priority=30,
-        )
+    def init_script(self, image: Image) -> str:
+        return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
 
     def _cache_key(self) -> str:
         repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]

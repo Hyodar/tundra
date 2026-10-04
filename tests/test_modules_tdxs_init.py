@@ -16,11 +16,11 @@ def test_tdxs_setup_declares_build_packages() -> None:
     assert "build-essential" in profile.build_packages
 
 
-def test_tdxs_install_adds_build_hook() -> None:
+def test_tdxs_setup_adds_build_hook() -> None:
     image = Image()
     module = Tdxs()
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -45,7 +45,7 @@ def test_tdxs_custom_source_repo_and_branch() -> None:
         source_branch="v2.0",
     )
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]

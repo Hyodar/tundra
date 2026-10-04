@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from tundravm.build_cache import Build, Cache
+from tundravm.modules.base import Module
 from tundravm.modules.resolve import resolve_after
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ NETHERMIND_DEFAULT_RUNTIME = "linux-x64"
 
 
 @dataclass(slots=True)
-class Nethermind:
+class Nethermind(Module):
     """Configures the Nethermind .NET execution client service.
 
     Handles the full lifecycle:
@@ -54,18 +55,13 @@ class Nethermind:
     after: tuple[str, ...] = ()
 
     def setup(self, image: Image) -> None:
-        """Declare build-time package dependencies for compiling nethermind."""
+        """Declare build packages and the nethermind build hook."""
         image.build_install(*NETHERMIND_BUILD_PACKAGES)
+        self._add_build_hook(image)
 
     def install(self, image: Image) -> None:
-        """Apply nethermind build hook and runtime configuration to the image."""
-        self._add_build_hook(image)
+        """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
-
-    def apply(self, image: Image) -> None:
-        """Convenience: call setup() then install()."""
-        self.setup(image)
-        self.install(image)
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles nethermind from source."""
@@ -159,21 +155,23 @@ class Nethermind:
             lines.append(f"After={' '.join(effective)}")
             lines.append(f"Requires={' '.join(effective)}")
         lines.append("")
-        lines.extend([
-            "[Service]",
-            f"User={self.user}",
-            f"Group={self.group}",
-            "Restart=on-failure",
-            "LimitNOFILE=1048576",
-            "EnvironmentFile=/etc/nethermind-surge/env",
-            "ExecStart=/usr/bin/nethermind \\",
-            "--config /etc/nethermind-surge/config.json \\",
-            "--datadir /home/nethermind-surge/data \\",
-            "--JsonRpc.EngineHost 0.0.0.0 \\",
-            "--JsonRpc.EnginePort 8551",
-            "",
-            "[Install]",
-            "WantedBy=default.target",
-            "",
-        ])
+        lines.extend(
+            [
+                "[Service]",
+                f"User={self.user}",
+                f"Group={self.group}",
+                "Restart=on-failure",
+                "LimitNOFILE=1048576",
+                "EnvironmentFile=/etc/nethermind-surge/env",
+                "ExecStart=/usr/bin/nethermind \\",
+                "--config /etc/nethermind-surge/config.json \\",
+                "--datadir /home/nethermind-surge/data \\",
+                "--JsonRpc.EngineHost 0.0.0.0 \\",
+                "--JsonRpc.EnginePort 8551",
+                "",
+                "[Install]",
+                "WantedBy=default.target",
+                "",
+            ]
+        )
         return "\n".join(lines)

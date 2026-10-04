@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Any, Literal, cast, get_args
+
+from .errors import StateError
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
@@ -368,15 +371,114 @@ class CompileResult:
         return self.path.exists()
 
 
+BAKE_RESULT_FILENAME = "bake-result.json"
+BAKE_RESULT_SCHEMA_VERSION = 1
+
+
 @dataclass(slots=True)
 class BakeResult:
     profiles: dict[str, ProfileBuildResult] = field(default_factory=dict)
+    lock_digest: str | None = None
+    backend: str | None = None
+    created_at: str | None = None
 
     def artifact_for(self, *, profile: str, target: OutputTarget) -> ArtifactRef | None:
         profile_result = self.profiles.get(profile)
         if profile_result is None:
             return None
         return profile_result.artifacts.get(target)
+
+    def save(self, build_dir: str | Path) -> Path:
+        """Write ``<build_dir>/bake-result.json``; paths inside build_dir are stored relative."""
+        base = Path(build_dir)
+        base.mkdir(parents=True, exist_ok=True)
+        profiles: dict[str, object] = {}
+        for name, result in sorted(self.profiles.items()):
+            artifacts = sorted(result.artifacts.items())
+            entry: dict[str, object] = {
+                "artifacts": {target: _portable_path(ref.path, base) for target, ref in artifacts},
+                "report_path": (
+                    None if result.report_path is None else _portable_path(result.report_path, base)
+                ),
+            }
+            digests = {target: ref.digest for target, ref in artifacts if ref.digest is not None}
+            if digests:
+                entry["artifact_digests"] = digests
+            profiles[name] = entry
+        payload = {
+            "schema_version": BAKE_RESULT_SCHEMA_VERSION,
+            "created_at": self.created_at,
+            "backend": self.backend,
+            "lock_digest": self.lock_digest,
+            "profiles": profiles,
+        }
+        path = base / BAKE_RESULT_FILENAME
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
+
+    @classmethod
+    def load(cls, build_dir: str | Path) -> BakeResult:
+        """Read ``<build_dir>/bake-result.json`` written by :meth:`save`."""
+        base = Path(build_dir)
+        path = base / BAKE_RESULT_FILENAME
+        context = {"path": str(path)}
+        if not path.is_file():
+            raise StateError(
+                "No bake result found.",
+                hint="Run bake() / tundravm bake first.",
+                context=context,
+            )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return cls._from_payload(payload, base)
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise StateError(
+                f"Unreadable bake result: {exc}",
+                hint="Run bake() / tundravm bake again to regenerate it.",
+                context=context,
+            ) from exc
+
+    @classmethod
+    def _from_payload(cls, payload: Any, base: Path) -> BakeResult:
+        if payload.get("schema_version") != BAKE_RESULT_SCHEMA_VERSION:
+            raise ValueError(f"unsupported schema_version {payload.get('schema_version')!r}")
+        profiles: dict[str, ProfileBuildResult] = {}
+        for name, entry in payload["profiles"].items():
+            digests: dict[str, str] = entry.get("artifact_digests", {})
+            artifacts: dict[OutputTarget, ArtifactRef] = {}
+            for target, raw_path in entry["artifacts"].items():
+                if target not in get_args(OutputTarget):
+                    raise ValueError(f"unknown output target {target!r}")
+                typed = cast(OutputTarget, target)
+                artifacts[typed] = ArtifactRef(
+                    target=typed,
+                    path=_resolve_path(raw_path, base),
+                    digest=digests.get(target),
+                )
+            report = entry.get("report_path")
+            profiles[str(name)] = ProfileBuildResult(
+                profile=str(name),
+                artifacts=artifacts,
+                report_path=None if report is None else _resolve_path(report, base),
+            )
+        return cls(
+            profiles=profiles,
+            lock_digest=payload.get("lock_digest"),
+            backend=payload.get("backend"),
+            created_at=payload.get("created_at"),
+        )
+
+
+def _portable_path(path: Path, base: Path) -> str:
+    try:
+        return Path(path).resolve().relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return str(Path(path).resolve())
+
+
+def _resolve_path(raw: str, base: Path) -> Path:
+    path = Path(raw)
+    return path if path.is_absolute() else base / path
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +501,7 @@ __all__ = [
     "Arch",
     "ArtifactRef",
     "BakeRequest",
+    "BAKE_RESULT_FILENAME",
     "BakeResult",
     "CommandSpec",
     "CompileResult",

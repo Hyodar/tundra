@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from tundravm.build_cache import Build, Cache
+from tundravm.modules.base import Module
 from tundravm.modules.resolve import resolve_after
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ TAIKO_CLIENT_DEFAULT_BUILD_PATH = "packages/taiko-client"
 
 
 @dataclass(slots=True)
-class TaikoClient:
+class TaikoClient(Module):
     """Configures the Taiko Client service.
 
     Handles the full lifecycle:
@@ -48,18 +49,13 @@ class TaikoClient:
     after: tuple[str, ...] = ()
 
     def setup(self, image: Image) -> None:
-        """Declare build-time package dependencies for compiling taiko-client."""
+        """Declare build packages and the taiko-client build hook."""
         image.build_install(*TAIKO_CLIENT_BUILD_PACKAGES)
+        self._add_build_hook(image)
 
     def install(self, image: Image) -> None:
-        """Apply taiko-client build hook and runtime configuration to the image."""
-        self._add_build_hook(image)
+        """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
-
-    def apply(self, image: Image) -> None:
-        """Convenience: call setup() then install()."""
-        self.setup(image)
-        self.install(image)
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles taiko-client from source."""
@@ -115,15 +111,17 @@ class TaikoClient:
             lines.append(f"After={' '.join(effective)}")
             lines.append(f"Requires={' '.join(effective)}")
         lines.append("")
-        lines.extend([
-            "[Service]",
-            f"User={self.user}",
-            f"Group={self.group}",
-            "Restart=on-failure",
-            "ExecStart=/usr/bin/taiko-client",
-            "",
-            "[Install]",
-            "WantedBy=default.target",
-            "",
-        ])
+        lines.extend(
+            [
+                "[Service]",
+                f"User={self.user}",
+                f"Group={self.group}",
+                "Restart=on-failure",
+                "ExecStart=/usr/bin/taiko-client",
+                "",
+                "[Install]",
+                "WantedBy=default.target",
+                "",
+            ]
+        )
         return "\n".join(lines)

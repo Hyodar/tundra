@@ -10,9 +10,10 @@ Runtime: systemd service, user/group creation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from tundravm.build_cache import Build, Cache
+from tundravm.modules import Module, Tdxs
 from tundravm.modules.resolve import resolve_after
 
 if TYPE_CHECKING:
@@ -33,14 +34,19 @@ RAIKO_DEFAULT_BRANCH = "feat/tdx"
 
 
 @dataclass(slots=True)
-class Raiko:
+class Raiko(Module):
     """Configures the Raiko TDX prover service.
 
     Handles the full lifecycle:
       1. Build: declares build packages, adds build hook to clone
          and compile the raiko-host binary from source with reproducibility flags.
       2. Runtime: generates systemd service unit and creates system user.
+
+    Requires ``Tdxs``: the default unit orders after ``tdxs.service`` and the
+    service user joins the ``tdx`` group that ``Tdxs`` creates.
     """
+
+    requires: ClassVar[tuple[type[Module], ...]] = (Tdxs,)
 
     source_repo: str = RAIKO_DEFAULT_REPO
     source_branch: str = RAIKO_DEFAULT_BRANCH
@@ -53,18 +59,13 @@ class Raiko:
     after: tuple[str, ...] = ("tdxs.service",)
 
     def setup(self, image: Image) -> None:
-        """Declare build-time package dependencies for compiling raiko."""
+        """Declare build packages and the raiko build hook."""
         image.build_install(*RAIKO_BUILD_PACKAGES)
+        self._add_build_hook(image)
 
     def install(self, image: Image) -> None:
-        """Apply raiko build hook and runtime configuration to the image."""
-        self._add_build_hook(image)
+        """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
-
-    def apply(self, image: Image) -> None:
-        """Convenience: call setup() then install()."""
-        self.setup(image)
-        self.install(image)
 
     def _add_build_hook(self, image: Image) -> None:
         """Add build phase hook that clones and compiles raiko from source."""
@@ -135,15 +136,17 @@ class Raiko:
             lines.append(f"After={' '.join(effective)}")
             lines.append(f"Requires={' '.join(effective)}")
         lines.append("")
-        lines.extend([
-            "[Service]",
-            f"User={self.user}",
-            f"Group={self.group}",
-            "Restart=on-failure",
-            "ExecStart=/usr/bin/raiko",
-            "",
-            "[Install]",
-            "WantedBy=default.target",
-            "",
-        ])
+        lines.extend(
+            [
+                "[Service]",
+                f"User={self.user}",
+                f"Group={self.group}",
+                "Restart=on-failure",
+                "ExecStart=/usr/bin/raiko",
+                "",
+                "[Install]",
+                "WantedBy=default.target",
+                "",
+            ]
+        )
         return "\n".join(lines)

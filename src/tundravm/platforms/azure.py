@@ -8,8 +8,12 @@ and the profile's output_targets include ``"azure"``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from tundravm.check import Diagnostic, effective_output_targets
+from tundravm.modules.base import Module
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -134,7 +138,7 @@ WantedBy=minimal.target
 
 
 @dataclass(slots=True)
-class AzurePlatform:
+class AzurePlatform(Module):
     """Azure platform profile.
 
     Adds:
@@ -145,7 +149,7 @@ class AzurePlatform:
     * ``"azure"`` output target (triggers VHD postoutput auto-generation)
     """
 
-    def apply(self, image: Image) -> None:
+    def install(self, image: Image) -> None:
         """Populate the active Azure profile on *image*.
 
         Must be called inside an ``img.profile("azure")`` context::
@@ -187,3 +191,22 @@ class AzurePlatform:
 
         # Output target — triggers VHD postoutput script auto-generation
         image.output_targets("azure")
+
+    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+        targets = effective_output_targets(image, profile)
+        if "azure" in targets:
+            return
+        yield Diagnostic(
+            level="warning",
+            code="platform-target-missing",
+            message=(
+                f"AzurePlatform is applied but output targets are {', '.join(targets)}; "
+                "no azure artifact will be produced"
+            ),
+            hint=(
+                'Call img.output_targets("azure", ...) after applying AzurePlatform, '
+                "or move the platform into its own profile."
+            ),
+            profile=profile,
+            subject="azure",
+        )

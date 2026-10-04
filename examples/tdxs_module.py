@@ -1,11 +1,14 @@
-"""Core TDX quote service module usage."""
+"""Core TDX quote service module usage.
+
+tundravm explain examples/tdxs_module.py
+"""
 
 from tundravm import Image
 from tundravm.backends import LimaMkosiBackend
 from tundravm.modules import Tdxs
 
 
-def build_with_tdxs() -> None:
+def build() -> Image:
     img = Image(
         base="debian/bookworm",
         arch="x86_64",
@@ -16,11 +19,11 @@ def build_with_tdxs() -> None:
 
     # Module sets up build packages (golang, git), build hook (clone + compile),
     # config.yaml, systemd units, user/group creation, and socket enablement.
-    Tdxs().apply(img)
-
-    img.lock()
-    img.bake(frozen=True)
+    img.apply(Tdxs())
+    return img
 
 
 if __name__ == "__main__":
-    build_with_tdxs()
+    img = build()
+    img.lock()
+    img.bake(frozen=True)

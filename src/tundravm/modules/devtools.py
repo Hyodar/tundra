@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from tundravm.modules.base import Module
+
 if TYPE_CHECKING:
     from tundravm.image import Image
 
@@ -77,7 +79,7 @@ SSHEOF
 
 
 @dataclass(slots=True)
-class Devtools:
+class Devtools(Module):
     """Devtools module for development and debugging.
 
     Adds:
@@ -92,9 +94,6 @@ class Devtools:
         pass ``paths_skip_for_profiles={"devtools": ("/usr/share/bash-completion",)}``
         to :meth:`Image.debloat`.
     """
-
-    def setup(self, image: Image) -> None:
-        """No build-time dependencies for devtools."""
 
     def install(self, image: Image) -> None:
         """Apply devtools configuration to the image."""
@@ -115,8 +114,3 @@ class Devtools:
 
         # Root password + auth configuration
         image.run(DEVTOOLS_POSTINST_SCRIPT, phase="postinst")
-
-    def apply(self, image: Image) -> None:
-        """Convenience: call setup() then install()."""
-        self.setup(image)
-        self.install(image)

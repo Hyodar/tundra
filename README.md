@@ -43,6 +43,9 @@ tundravm explain recipe.py --profile azure   # dry run: what the recipe produces
 tundravm digest recipe.py                    # recipe digest used by lockfiles
 tundravm compile recipe.py --out build/mkosi
 tundravm bake recipe.py --lock --all-profiles
+tundravm measure recipe.py --backend rtmr       # expected TDX measurements of the last bake
+tundravm deploy recipe.py --target qemu         # boot the last baked artifact
+tundravm doctor recipe.py                       # check host tools for the recipe's backend
 tundravm check recipe.py --strict               # lint: undeclared users, shadowed files, ...
 tundravm diff recipe.py --against build/mkosi    # what a recipe change does to the tree
 tundravm new recipes/node.py --backend nix   # starter recipe file
@@ -112,7 +115,7 @@ with img.all_profiles():
 
 ## Modules
 
-Modules are composable units that add build steps, config files, systemd services, and init scripts to an image. Call `module.apply(img)`, or `img.apply(KeyGeneration(), DiskEncryption())` to apply several in order, and the module handles the rest.
+Modules are composable units that add build steps, config files, systemd services, and init scripts to an image. Call `module.apply(img)`, or `img.apply(KeyGeneration(), DiskEncryption())` to apply several in order, and the module handles the rest. Every module subclasses `tundravm.modules.Module`: `apply()` refuses to run before the modules it `requires`, records it in `img.applied_modules()`, and `img.check()` runs the module's own checks (e.g. a disk `key_name` that no `KeyGeneration` declares).
 
 **Built-in modules** (`tundravm.modules`):
 
@@ -124,7 +127,7 @@ Modules are composable units that add build steps, config files, systemd service
 | `Tdxs` | `tundra-tools` issuer/validator service with socket and validator config controls |
 | `Devtools` | Serial console, root password, SSH for dev profiles |
 
-**Init ordering** — modules register boot-time scripts with priority. At `compile()`, the SDK generates `/usr/bin/runtime-init` and a systemd service that runs them in order, then injects `After=runtime-init.service` into all other services automatically.
+**Init ordering** — each init module declares its `init_priority` on the class (`KeyGeneration` 10, `DiskEncryption` 20, `SecretDelivery` 30) and `apply()` registers its boot script at that priority. At `compile()`, the SDK generates `/usr/bin/runtime-init` and a systemd service that runs them in order, then injects `After=runtime-init.service` into all other services automatically.
 
 ```python
 from tundravm import Image
@@ -213,7 +216,7 @@ See [`docs/policy.md`](docs/policy.md) for the full reference.
 | [`docs/concepts.md`](docs/concepts.md) | Recipe vs compiled tree vs artifact, profiles, build phases, runtime-init, lockfile, backends, measurements, deploy |
 | [`docs/api.md`](docs/api.md) | `Image` method reference, public models, error codes |
 | [`docs/cli.md`](docs/cli.md) | `tundravm` command: recipe loading, commands, exit codes |
-| [`docs/module-authoring.md`](docs/module-authoring.md) | Writing `Module` and `InitModule` classes, priorities, testing |
+| [`docs/module-authoring.md`](docs/module-authoring.md) | Subclassing `Module`: `requires`, init priorities, checks, testing |
 | [`docs/policy.md`](docs/policy.md) | Policy options and CI settings |
 | [`docs/reproducibility.md`](docs/reproducibility.md) | Reproducible build settings and mkosi requirements |
 

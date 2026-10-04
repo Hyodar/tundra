@@ -1,4 +1,10 @@
-"""End-to-end example covering the major SDK API surfaces."""
+"""End-to-end example covering the major SDK API surfaces.
+
+Run it directly, or drive it with the CLI:
+
+    tundravm check examples/full_api.py --all-profiles
+    tundravm bake examples/full_api.py --lock --all-profiles
+"""
 
 from pathlib import Path
 
@@ -12,7 +18,7 @@ from tundravm.modules import (
 )
 
 
-def build_full_api_recipe() -> None:
+def build() -> Image:
     img = Image(
         build_dir=Path("build"),
         base="debian/bookworm",
@@ -50,8 +56,7 @@ def build_full_api_recipe() -> None:
         "app.service",
         command=["/usr/local/bin/app", "--config", "/etc/app/runtime.env"],
         user="app",
-        after=["network-online.target", "secrets-ready.target"],
-        requires=["secrets-ready.target"],
+        after=["network-online.target"],
         restart="always",
         extra_unit={"Service": {"MemoryMax": "4G"}},
         security_profile="strict",
@@ -64,7 +69,7 @@ def build_full_api_recipe() -> None:
 
     # Composable init modules
     keys = KeyGeneration()
-    keys.key("key_persistent", strategy="tpm")  # priority 10
+    keys.key("key_persistent", strategy="tpm", output="/persistent/key")  # priority 10
     keys.apply(img)
 
     disks = DiskEncryption()
@@ -104,12 +109,12 @@ def build_full_api_recipe() -> None:
         img.install("strace", "gdb", "vim")
         img.debloat(enabled=False)
 
-    img.lock()
-    img.bake(frozen=True)
-
-    print(img.measure(backend="rtmr").to_json())
-    print(img.deploy(target="qemu").deployment_id)
+    return img
 
 
 if __name__ == "__main__":
-    build_full_api_recipe()
+    img = build()
+    img.lock()
+    img.bake(frozen=True)
+    print(img.measure(backend="rtmr").to_json())
+    print(img.deploy(target="qemu").deployment_id)

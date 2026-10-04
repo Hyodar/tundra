@@ -1,6 +1,8 @@
+import pytest
 from examples.modules import Raiko
 
-from tundravm import Image
+from tundravm import Image, ValidationError
+from tundravm.modules import Tdxs
 
 
 def test_raiko_setup_declares_build_packages() -> None:
@@ -14,11 +16,11 @@ def test_raiko_setup_declares_build_packages() -> None:
         assert pkg in profile.build_packages
 
 
-def test_raiko_install_adds_build_hook_with_correct_flags() -> None:
+def test_raiko_setup_adds_build_hook_with_correct_flags() -> None:
     image = Image(reproducible=False)
     module = Raiko()
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -57,7 +59,7 @@ def test_raiko_custom_source_repo_and_branch() -> None:
         source_branch="main",
     )
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
@@ -104,7 +106,7 @@ def test_raiko_apply_combines_setup_and_install() -> None:
     image = Image(reproducible=False)
     module = Raiko()
 
-    module.apply(image)
+    image.apply(Tdxs(), module)
 
     profile = image.state.profiles["default"]
     # Build packages from setup()
@@ -112,7 +114,21 @@ def test_raiko_apply_combines_setup_and_install() -> None:
     assert "clang" in profile.build_packages
     # Files from install()
     assert any(f.path == "/usr/lib/systemd/system/raiko.service" for f in profile.files)
-    # Build hook
-    assert len(profile.phases.get("build", [])) == 1
+    # Build hooks: tdxs, then raiko
+    build = [cmd.argv[0] for cmd in profile.phases.get("build", [])]
+    assert len(build) == 2
+    assert "raiko-host" in build[1]
     # Postinst hook (user creation)
-    assert len(profile.phases.get("postinst", [])) == 1
+    postinst = [cmd.argv[0] for cmd in profile.phases.get("postinst", [])]
+    assert any("useradd" in cmd and "raiko" in cmd for cmd in postinst)
+    assert [type(m) for m in image.applied_modules()] == [Tdxs, Raiko]
+
+
+def test_raiko_requires_tdxs() -> None:
+    image = Image(reproducible=False)
+
+    with pytest.raises(ValidationError) as excinfo:
+        Raiko().apply(image)
+
+    assert "Module Raiko requires Tdxs; apply Tdxs first." in str(excinfo.value)
+    assert excinfo.value.hint == "img.apply(Tdxs(), Raiko())"

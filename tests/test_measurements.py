@@ -4,7 +4,7 @@ import pytest
 
 from tundravm import Image
 from tundravm.backends import InProcessBackend
-from tundravm.errors import MeasurementError
+from tundravm.errors import StateError
 from tundravm.measure import rtmr
 
 
@@ -18,9 +18,9 @@ def _image_with_backend(tmp_path: Path) -> Image:
     return Image(build_dir=tmp_path / "build", backend=InProcessBackend())
 
 
-def test_measure_requires_baked_artifacts() -> None:
-    image = Image()
-    with pytest.raises(MeasurementError):
+def test_measure_requires_baked_artifacts(tmp_path: Path) -> None:
+    image = Image(build_dir=tmp_path / "build")
+    with pytest.raises(StateError, match="No bake result found"):
         image.measure(backend="rtmr")
 
 

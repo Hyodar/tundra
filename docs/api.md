@@ -120,7 +120,8 @@ Hooks run on the host with mkosi variables (`$BUILDROOT`, `$DESTDIR`, `$BUILDDIR
 
 | Method | Description |
 | --- | --- |
-| `apply(*modules) -> Self` | Call `module.apply(img)` for each argument in order; chainable. Accepts any `Applicable` |
+| `apply(*modules) -> Self` | Call `module.apply(img)` for each argument in order; chainable. Accepts any `Applicable`; `Module` subclasses are recorded |
+| `applied_modules(profile=None) -> tuple[Module, ...]` | `Module` instances applied to one profile, in apply order |
 | `explain(*, profile=None) -> dict[str, object]` | Dry-run description of the recipe for one profile |
 | `summary(*, profile=None) -> str` | Human-readable form of `explain()` |
 
@@ -163,7 +164,7 @@ The same views are available from the shell: `tundravm explain RECIPE` (`python 
 
 Other useful imports:
 
-- `tundravm.modules`: `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools`, `Init`, protocols `Module` and `InitModule`.
+- `tundravm.modules`: `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools`, `Init`, and the `Module` base class (`name`, `requires`, `init_priority`; `setup`, `install`, `init_script`, `check`; final `apply`). See [module-authoring.md](module-authoring.md).
 - `tundravm.backends`: `LimaMkosiBackend`, `NixMkosiBackend`, `LocalLinuxBackend`, `InProcessBackend` (tests), `BuildBackend`.
 - `tundravm.platforms`: `AzurePlatform`, `GcpPlatform`.
 - `tundravm.build_cache`: `Build`, `Cache` for cached source builds in `build` hooks.

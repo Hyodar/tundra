@@ -2,7 +2,7 @@
 
 .. warning::
     This module is **experimental** and not yet integrated with the
-    module system (``Module`` / ``InitModule`` protocols). The API may
+    module system (the ``Module`` base class). The API may
     change in future releases.
 """
 

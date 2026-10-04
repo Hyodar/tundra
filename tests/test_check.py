@@ -161,8 +161,19 @@ def test_platform_applied_but_target_overridden() -> None:
         AzurePlatform().apply(img)
         img.output_targets("qemu")
     [diag] = img.check(profiles=["azure"])
-    assert diag.code == "output-target-platform-mismatch"
+    assert diag.code == "platform-target-missing"
+    assert diag.subject == "azure"
     assert "no azure artifact" in diag.message
+
+
+def test_gcp_platform_applied_but_target_overridden() -> None:
+    img = clean_image()
+    with img.profile("gcp"):
+        GcpPlatform().apply(img)
+        img.output_targets("qemu")
+    assert [(d.code, d.subject) for d in img.check(profiles=["gcp"])] == [
+        ("platform-target-missing", "gcp")
+    ]
 
 
 # f. profile-empty

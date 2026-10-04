@@ -8,8 +8,12 @@ and the profile's output_targets include ``"gcp"``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from tundravm.check import Diagnostic, effective_output_targets
+from tundravm.modules.base import Module
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -83,7 +87,7 @@ echo "${SERIAL}" | sed 's/[[:space:]]*$//'
 
 
 @dataclass(slots=True)
-class GcpPlatform:
+class GcpPlatform(Module):
     """GCP platform profile.
 
     Adds:
@@ -95,7 +99,7 @@ class GcpPlatform:
     * ``"gcp"`` output target (triggers tar.gz postoutput auto-generation)
     """
 
-    def apply(self, image: Image) -> None:
+    def install(self, image: Image) -> None:
         """Populate the active GCP profile on *image*.
 
         Must be called inside an ``img.profile("gcp")`` context::
@@ -125,3 +129,22 @@ class GcpPlatform:
 
         # Output target — triggers tar.gz postoutput script auto-generation
         image.output_targets("gcp")
+
+    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+        targets = effective_output_targets(image, profile)
+        if "gcp" in targets:
+            return
+        yield Diagnostic(
+            level="warning",
+            code="platform-target-missing",
+            message=(
+                f"GcpPlatform is applied but output targets are {', '.join(targets)}; "
+                "no gcp artifact will be produced"
+            ),
+            hint=(
+                'Call img.output_targets("gcp", ...) after applying GcpPlatform, '
+                "or move the platform into its own profile."
+            ),
+            profile=profile,
+            subject="gcp",
+        )

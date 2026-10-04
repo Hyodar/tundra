@@ -15,7 +15,7 @@ import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tundravm.backends.base import MountSpec, collect_artifacts, write_flake_nix
+from tundravm.backends.base import MountSpec, Requirement, collect_artifacts, write_flake_nix
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -85,6 +85,15 @@ class LimaMkosiBackend:
     instance_name: str | None = None
     mkosi_args: list[str] = field(default_factory=list)
     _last_instance: str | None = field(init=False, default=None, repr=False)
+
+    def requirements(self) -> tuple[Requirement, ...]:
+        return (
+            Requirement(
+                tool="limactl",
+                probe=("limactl", "--version"),
+                hint="Install Lima: https://lima-vm.io/docs/installation/",
+            ),
+        )
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         """Single mount: build_dir -> /home/debian/mnt."""

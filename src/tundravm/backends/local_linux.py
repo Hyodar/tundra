@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Literal
 
-from tundravm.backends.base import MountSpec, collect_artifacts
+from tundravm.backends.base import MountSpec, Requirement, collect_artifacts
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -27,6 +27,29 @@ class LocalLinuxBackend:
     name: str = "local_linux"
     privilege: Literal["sudo", "unshare", "none"] = "sudo"
     mkosi_args: list[str] = field(default_factory=list)
+
+    def requirements(self) -> tuple[Requirement, ...]:
+        mkosi = Requirement(
+            tool="mkosi",
+            probe=("mkosi", "--version"),
+            hint="Install mkosi v25+ (e.g. pip install mkosi) and put it on PATH.",
+        )
+        if self.privilege == "sudo":
+            sudo = Requirement(
+                tool="sudo",
+                probe=("sudo", "--version"),
+                hint="Install sudo, or use LocalLinuxBackend(privilege='unshare').",
+                optional=os.getuid() == 0,
+            )
+            return (mkosi, sudo)
+        if self.privilege == "unshare":
+            unshare = Requirement(
+                tool="unshare",
+                probe=("unshare", "--version"),
+                hint="Install util-linux for rootless `unshare --map-auto`.",
+            )
+            return (mkosi, unshare)
+        return (mkosi,)
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         return (

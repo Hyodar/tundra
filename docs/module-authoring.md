@@ -1,30 +1,40 @@
 # Module Authoring Guide
 
-A module is a plain Python object that calls the `Image` API to declare packages, files, services, build hooks, and init scripts. There is no registry: you construct the module, then call `module.apply(img)`.
+A module is a class that subclasses `tundravm.modules.Module` and calls the `Image` API to declare packages, files, services, build hooks, and init scripts. Construct it, then call `module.apply(img)` or `img.apply(module, ...)`. Every built-in (`KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools`, `AzurePlatform`, `GcpPlatform`) and the example modules in `examples/modules/` use the same base class.
 
-Two protocols are defined in `tundravm.modules`:
+| Member | Kind | Default | Purpose |
+| --- | --- | --- | --- |
+| `name` | `ClassVar[str]` | kebab-case class name (`KeyGeneration` -> `key-generation`) | Stable identifier |
+| `requires` | `ClassVar[tuple[type[Module], ...]]` | `()` | Module classes that must already be applied to the same profile(s) |
+| `init_priority` | `ClassVar[int \| None]` | `None` | When set, `init_script()` is registered with `add_init_script(script, priority=...)` |
+| `setup(image)` | method | no-op | Build-time: build packages, build sources, build hooks |
+| `install(image)` | method | no-op | Runtime: packages, files, users, services |
+| `init_script(image)` | method | `None` | Bash fragment for `/usr/bin/runtime-init` |
+| `check(image, profile)` | method | no findings | Module-specific diagnostics, run by `img.check()` / `tundravm check` |
+| `apply(image)` | final method | | Runs the steps below; do not override |
 
-| Protocol | Methods | Use for |
-| --- | --- | --- |
-| `Module` | `setup(image)`, `install(image)`, `apply(image)` | Services and binaries: build packages, build hook, unit file, user |
-| `InitModule` | `apply(image)` | Boot-time steps that must run in order before other services |
+`apply(image)` does, for the active profiles:
 
-Both are `typing.Protocol`s. You do not subclass them; matching the method names is enough.
+1. Verifies `requires` against `image.applied_modules(profile)` for every active profile. A missing dependency raises `ValidationError("Module X requires Y; apply Y first.")` with the hint `img.apply(Y(), X())`.
+2. Calls `setup(image)`, then `install(image)`.
+3. If `init_priority` is set and `init_script(image)` returns a non-empty string, registers it at that priority.
+4. Records the module on each active profile; `img.applied_modules(profile)` lists them in apply order.
 
-## `Module` (two-phase)
+The base class has `__slots__ = ()` and only class variables, so `@dataclass(slots=True)` subclasses work as-is. `img.apply()` also accepts any object with an `apply(image)` method, but only `Module` subclasses are recorded, checked by `requires`, and linted.
 
-- `setup(image)`: build-time prerequisites. Usually `image.build_install(...)`.
-- `install(image)`: runtime configuration. Files, services, users, `postinst` hooks.
-- `apply(image)`: convenience that calls `setup` then `install`.
+## Example
 
-Built-in examples: `Devtools`, `Tdxs`; `examples/modules/raiko.py`, `nethermind.py`, `taiko_client.py`.
+`Agent` builds a service that reads a boot-generated key. It needs `KeyGeneration` in the same profile (`requires`), prepares its runtime directory after keys and disks are ready (`init_priority = 25`), and reports a key name that no `KeyGeneration` declares (`check`).
 
 ```python
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
+from tundravm.check import Diagnostic
+from tundravm.modules import KeyGeneration, Module
 from tundravm.modules.resolve import resolve_after
 
 if TYPE_CHECKING:
@@ -46,9 +56,13 @@ WantedBy=default.target
 
 
 @dataclass(slots=True)
-class Agent:
+class Agent(Module):
+    requires: ClassVar[tuple[type[Module], ...]] = (KeyGeneration,)
+    init_priority: ClassVar[int | None] = 25
+
     user: str = "agent"
-    log_level: str = "info"
+    key_name: str = "agent"
+    key_path: str = "/persistent/agent.key"
     after: tuple[str, ...] = ("network-online.target",)
 
     def setup(self, image: Image) -> None:
@@ -58,7 +72,7 @@ class Agent:
         image.install("ca-certificates")
         image.file(
             "/etc/agent/config.toml",
-            content=f'log_level = "{self.log_level}"\n',
+            content=f'key_path = "{self.key_path}"\n',
         )
         image.file(
             "/usr/lib/systemd/system/agent.service",
@@ -73,9 +87,37 @@ class Agent:
         )
         image.service("agent", enabled=True)
 
-    def apply(self, image: Image) -> None:
-        self.setup(image)
-        self.install(image)
+    def init_script(self, image: Image) -> str:
+        return f"install -d -m 0750 -o {self.user} /run/agent\n"
+
+    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+        declared = {
+            spec.name
+            for module in image.applied_modules(profile)
+            if isinstance(module, KeyGeneration)
+            for spec in module.keys
+        }
+        if self.key_name not in declared:
+            yield Diagnostic(
+                level="error",
+                code="agent-key-undefined",
+                message=f"Agent reads key {self.key_name!r}, which is never generated",
+                hint=f"Add keys.key({self.key_name!r}, output={self.key_path!r}).",
+                profile=profile,
+                subject=self.key_name,
+            )
+```
+
+```python
+from tundravm import Image
+from tundravm.modules import KeyGeneration
+
+img = Image()
+keys = KeyGeneration()
+keys.key("agent", strategy="tpm", output="/persistent/agent.key")
+img.apply(keys, Agent())       # Agent() alone raises: requires KeyGeneration
+errors = [d for d in img.check() if d.level == "error"]
+assert errors == []            # Agent(key_name="other") reports agent-key-undefined
 ```
 
 Notes on the example:
@@ -83,7 +125,8 @@ Notes on the example:
 - `image.run(cmd, phase="postinst")` runs inside the build. Prefix with `mkosi-chroot` to execute inside the image root.
 - `image.service("agent", enabled=True)` with no `command=` only enables an existing unit file. Pass `command=` to have the SDK generate the unit instead.
 - `resolve_after(after, image)` prepends `runtime-init.service` when any init scripts are registered. Hand-written unit files need this; units generated by `image.service(command=...)` get `After=`/`Requires=runtime-init.service` injected automatically at `compile()`.
-- Build order matters: apply init modules (`KeyGeneration`, etc.) before modules that render their own unit with `resolve_after`, otherwise `image.init.has_scripts` is still `False`.
+- Build order matters: apply init modules (`KeyGeneration`, etc.) before modules that render their own unit with `resolve_after`, otherwise `image.init.has_scripts` is still `False`. Declaring them in `requires` enforces that order.
+- Use `requires` only for dependencies that always hold. Conditional ones (a disk that names a key, a key path that must match) belong in `check()`, which sees every module applied to the profile regardless of order.
 
 ### Compiling a binary at build time
 
@@ -105,47 +148,18 @@ image.hook("build", cache.wrap(
 ))
 ```
 
-## `InitModule` (single-phase)
+## Init priorities
 
-An init module registers a bash fragment with `image.add_init_script(script, priority=N)`. At `compile()` the SDK sorts all fragments by priority (lower first), writes `/usr/bin/runtime-init` and `runtime-init.service`, and makes every other service wait on it.
+`init_priority` orders boot scripts: at `compile()` the SDK sorts all fragments by priority (lower first), writes `/usr/bin/runtime-init` and `runtime-init.service`, and makes every other service wait on it.
 
-Built-in examples: `KeyGeneration` (10), `DiskEncryption` (20), `SecretDelivery` (30).
-
-| Priority | Convention |
+| Priority | Module |
 | --- | --- |
-| 10 | Key generation (`KeyGeneration`) |
-| 20 | Disk setup / encryption (`DiskEncryption`) |
-| 30 | Secret delivery (`SecretDelivery`) |
-| 100 | Default for `add_init_script()` when no priority is given |
+| 10 | `KeyGeneration` |
+| 20 | `DiskEncryption` |
+| 30 | `SecretDelivery` |
+| 100 | Default for a bare `img.add_init_script()` call |
 
-Pick a priority relative to what your script depends on. Needs a key: `> 10`. Needs a mounted encrypted disk: `> 20`. Needs secrets: `> 30`.
-
-```python
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tundravm.image import Image
-
-
-@dataclass(slots=True)
-class MountScratch:
-    mount_point: str = "/scratch"
-    size: str = "512M"
-
-    def apply(self, image: Image) -> None:
-        image.file(
-            "/etc/tdx/scratch.conf",
-            content=f"MOUNT_POINT={self.mount_point}\nSIZE={self.size}\n",
-        )
-        image.add_init_script(
-            f"mkdir -p {self.mount_point}\n"
-            f"mount -t tmpfs -o size={self.size} tmpfs {self.mount_point}\n",
-            priority=25,
-        )
-```
+Pick a priority relative to what your script depends on. Needs a key: `> 10`. Needs a mounted encrypted disk: `> 20`. Needs secrets: `> 30`. Two fragments with the same priority run in registration order and `img.check()` reports `init-priority-collision`.
 
 Fragments run under `set -euo pipefail`; a failing fragment aborts `runtime-init` and every dependent service.
 
@@ -198,19 +212,23 @@ Tests build an `Image` with no backend, apply the module, and either inspect `im
 from pathlib import Path
 
 from tundravm import Image
+from tundravm.modules import KeyGeneration
 
 
-def test_mount_scratch_registers_init_script(tmp_path: Path) -> None:
+def test_agent_registers_init_script(tmp_path: Path) -> None:
     image = Image(reproducible=False)
-    MountScratch(mount_point="/scratch").apply(image)
+    keys = KeyGeneration()
+    keys.key("agent", strategy="tpm", output="/persistent/agent.key")
+    image.apply(keys, Agent())
 
     profile = image.state.profiles["default"]
-    assert any(f.path == "/etc/tdx/scratch.conf" for f in profile.files)
-    assert image.init.has_scripts
+    assert any(f.path == "/etc/agent/config.toml" for f in profile.files)
+    assert [type(m) for m in image.applied_modules()] == [KeyGeneration, Agent]
+    assert not [d for d in image.check() if d.level == "error"]
 
     out = image.compile(tmp_path / "mkosi")
     init = (out.path / "default/mkosi.extra/usr/bin/runtime-init").read_text()
-    assert "mount -t tmpfs" in init
+    assert "install -d -m 0750 -o agent /run/agent" in init
 ```
 
 Useful assertions:

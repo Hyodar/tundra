@@ -13,6 +13,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,6 +36,9 @@ OVMF_VARS_PATHS = (
 )
 
 
+QemuRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
+
+
 def _find_firmware(paths: tuple[str, ...], name: str) -> str:
     for path in paths:
         if Path(path).exists():
@@ -51,6 +55,8 @@ class QemuDeployAdapter:
     name: str = "qemu"
     qemu_binary: str = "qemu-system-x86_64"
     extra_args: list[str] = field(default_factory=list)
+    # None: require qemu_binary on PATH and launch via subprocess.run.
+    runner: QemuRunner | None = None
 
     def deploy(self, request: DeployRequest) -> DeployResult:
         deployment_id = f"qemu-{request.profile}-{uuid.uuid4().hex[:8]}"
@@ -70,7 +76,7 @@ class QemuDeployAdapter:
             )
 
         # Check if QEMU is available
-        if shutil.which(self.qemu_binary) is None:
+        if self.runner is None and shutil.which(self.qemu_binary) is None:
             raise DeploymentError(
                 f"QEMU binary not found: {self.qemu_binary}",
                 hint="Install QEMU and ensure it is in PATH.",
@@ -153,12 +159,8 @@ class QemuDeployAdapter:
         cmd.extend(self.extra_args)
 
         # Launch
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        runner = self.runner if self.runner is not None else _run
+        result = runner(cmd)
 
         if result.returncode != 0:
             raise DeploymentError(
@@ -187,6 +189,10 @@ class QemuDeployAdapter:
             endpoint=f"ssh://localhost:{ssh_port}",
             metadata=metadata,
         )
+
+
+def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(list(cmd), capture_output=True, text=True, check=False)
 
 
 def _disk_format_for_path(path: Path) -> str:

@@ -17,8 +17,21 @@ class MountSpec:
     read_only: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class Requirement:
+    """A host tool a backend needs; ``probe`` is run by ``tundravm doctor``."""
+
+    tool: str
+    probe: tuple[str, ...]
+    hint: str
+    optional: bool = False
+
+
 class BuildBackend(Protocol):
     name: str
+
+    def requirements(self) -> tuple[Requirement, ...]:
+        """Host tools this backend needs (optional; ``doctor`` treats a missing method as none)."""
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         """Return deterministic host/guest mount mapping for this request."""

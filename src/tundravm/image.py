@@ -10,6 +10,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, Self
 
@@ -57,6 +58,7 @@ from .models import (
     TemplateEntry,
     UserSpec,
 )
+from .modules.base import Module
 from .modules.init import Init
 from .observability import StructuredLogger
 from .policy import Policy, ensure_bake_policy
@@ -115,6 +117,7 @@ class Image:
     init: Init = field(default_factory=Init)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
+    _modules: dict[str, list[Module]] = field(init=False, default_factory=dict, repr=False)
     _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
     _last_compile_digest: str | None = field(init=False, default=None, repr=False)
     _last_compile_path: Path | None = field(init=False, default=None, repr=False)
@@ -145,6 +148,9 @@ class Image:
         Equivalent to ``module.apply(self)`` for each module, but chainable::
 
             img.apply(KeyGeneration(), DiskEncryption(), Tdxs())
+
+        ``Module`` subclasses record themselves in ``applied_modules()``; any
+        other object with an ``apply(image)`` method is called but not recorded.
         """
         if not modules:
             raise ValidationError("apply() requires at least one module.")
@@ -153,10 +159,14 @@ class Image:
             if not callable(apply_fn):
                 raise ValidationError(
                     f"{type(module).__name__} is not a module: it has no apply(image) method.",
-                    hint="See docs/module-authoring.md for the module protocols.",
+                    hint="Subclass tundravm.modules.Module; see docs/module-authoring.md.",
                 )
             apply_fn(self)
         return self
+
+    def applied_modules(self, profile: str | None = None) -> tuple[Module, ...]:
+        """``Module`` instances applied to *profile* (default: the active profile), in order."""
+        return tuple(self._modules.get(self._resolve_operation_profile(profile), ()))
 
     @contextmanager
     def profile(self, name: str) -> Iterator[Self]:
@@ -889,7 +899,13 @@ class Image:
                 message="Completed profile bake.",
             )
 
-        bake_result = BakeResult(profiles=profiles_result)
+        bake_result = BakeResult(
+            profiles=profiles_result,
+            lock_digest=lock_digest,
+            backend=backend.name,
+            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
+        bake_result.save(destination)
         self._last_bake_result = bake_result
         return bake_result
 
@@ -901,13 +917,7 @@ class Image:
     ) -> Measurements:
         """Derive expected TDX measurements from the last bake result."""
         selected_profile = self._resolve_operation_profile(profile)
-        if self._last_bake_result is None:
-            raise MeasurementError(
-                "No baked artifacts are available for measurement.",
-                hint="Run bake() before measure().",
-                context={"operation": "measure", "profile": selected_profile, "backend": backend},
-            )
-        profile_result = self._last_bake_result.profiles.get(selected_profile)
+        profile_result = self.last_bake().profiles.get(selected_profile)
         if profile_result is None:
             raise MeasurementError(
                 "Profile has no baked artifacts for measurement.",
@@ -932,14 +942,7 @@ class Image:
     ) -> DeployResult:
         """Deploy baked artifacts to the specified target platform."""
         selected_profile = self._resolve_operation_profile(profile)
-        if self._last_bake_result is None:
-            raise DeploymentError(
-                "No baked artifacts are available for deployment.",
-                hint="Run bake() before deploy().",
-                context={"operation": "deploy", "profile": selected_profile, "target": target},
-            )
-
-        artifact = self._last_bake_result.artifact_for(profile=selected_profile, target=target)
+        artifact = self.last_bake().artifact_for(profile=selected_profile, target=target)
         if artifact is None:
             raise DeploymentError(
                 "Requested deploy target artifact was not baked.",
@@ -960,6 +963,20 @@ class Image:
             parameters=params,
         )
         return get_adapter(target).deploy(request)
+
+    def last_bake(self, build_dir: str | Path | None = None) -> BakeResult:
+        """Return the latest bake result, loading ``bake-result.json`` from disk if needed.
+
+        With *build_dir* the result is (re)loaded from that directory, which is how a
+        bake made with ``bake(output_dir=...)`` is picked up by ``measure()`` and
+        ``deploy()`` in a later process. Raises ``StateError`` (``E_STATE``) when
+        nothing has been baked yet.
+        """
+        if build_dir is not None:
+            self._last_bake_result = BakeResult.load(build_dir)
+        elif self._last_bake_result is None:
+            self._last_bake_result = BakeResult.load(self.build_dir)
+        return self._last_bake_result
 
     def _emit_config(self) -> EmitConfig:
         """Build an EmitConfig from the Image's settings."""
@@ -1099,6 +1116,12 @@ class Image:
         for profile_name in missing:
             with self.profiles(profile_name):
                 self.service(init_svc, enabled=True)
+
+    def _record_module(self, module: Module) -> None:
+        for profile_name in self._active_profiles:
+            applied = self._modules.setdefault(profile_name, [])
+            if not any(existing is module for existing in applied):
+                applied.append(module)
 
     def _iter_active_profiles(self) -> list[ProfileState]:
         profiles: list[ProfileState] = []

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal
 
 from tundravm.build_cache import Build, Cache
 from tundravm.errors import ValidationError
+from tundravm.modules.base import Module
 from tundravm.modules.resolve import resolve_after
 
 if TYPE_CHECKING:
@@ -32,16 +33,14 @@ TDXS_VALID_TYPES = {"azure", "gcp", "simulator", "tdx"}
 
 
 @dataclass(slots=True)
-class Tdxs:
+class Tdxs(Module):
     """Configure the ``tundra-tools`` TDX attestation service."""
 
     issuer_type: (
-        Literal["tdx", "azure", "gcp", "simulator", "dcap", "azure-tdx", "gcp-tdx"]
-        | None
+        Literal["tdx", "azure", "gcp", "simulator", "dcap", "azure-tdx", "gcp-tdx"] | None
     ) = "tdx"
     validator_type: (
-        Literal["tdx", "azure", "gcp", "simulator", "dcap", "azure-tdx", "gcp-tdx"]
-        | None
+        Literal["tdx", "azure", "gcp", "simulator", "dcap", "azure-tdx", "gcp-tdx"] | None
     ) = None
     socket_path: str = "/var/tdxs.sock"
     socket_mode: str = "0660"
@@ -62,18 +61,13 @@ class Tdxs:
     source_branch: str = TDXS_DEFAULT_BRANCH
 
     def setup(self, image: Image) -> None:
-        """Declare build-time package dependencies for compiling tdxs."""
+        """Declare build packages and the tdxs build hook."""
         image.build_install(*TDXS_BUILD_PACKAGES)
+        self._add_build_hook(image)
 
     def install(self, image: Image) -> None:
-        """Apply tdxs build hook and runtime configuration to the image."""
-        self._add_build_hook(image)
+        """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
-
-    def apply(self, image: Image) -> None:
-        """Convenience: call setup() then install()."""
-        self.setup(image)
-        self.install(image)
 
     def _cache_key(self) -> str:
         repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]
@@ -170,7 +164,7 @@ class Tdxs:
         if self.expected_measurements:
             lines.append("expected_measurements:")
             for key, value in sorted(self.expected_measurements.items()):
-                lines.append(f"  {key}: \"{value}\"")
+                lines.append(f'  {key}: "{value}"')
         if self.check_revocations:
             lines.append("check_revocations: true")
         if self.get_collateral:
@@ -189,21 +183,23 @@ class Tdxs:
             lines.append(f"After={' '.join(effective)}")
         lines.append(f"Requires={' '.join(requires)}")
         lines.append("")
-        lines.extend([
-            "[Service]",
-            f"User={self.user}",
-            f"Group={self.group}",
-            f"WorkingDirectory=/home/{self.user}",
-            "Type=notify",
-            "ExecStart=/usr/bin/tdxs \\",
-            f"    --config {self.config_path} \\",
-            f"    --log-level {self.log_level}",
-            "Restart=on-failure",
-            "",
-            "[Install]",
-            "WantedBy=default.target",
-            "",
-        ])
+        lines.extend(
+            [
+                "[Service]",
+                f"User={self.user}",
+                f"Group={self.group}",
+                f"WorkingDirectory=/home/{self.user}",
+                "Type=notify",
+                "ExecStart=/usr/bin/tdxs \\",
+                f"    --config {self.config_path} \\",
+                f"    --log-level {self.log_level}",
+                "Restart=on-failure",
+                "",
+                "[Install]",
+                "WantedBy=default.target",
+                "",
+            ]
+        )
         return "\n".join(lines)
 
     def _render_socket_unit(self, *, after: tuple[str, ...] | None = None) -> str:
@@ -213,16 +209,18 @@ class Tdxs:
             lines.append(f"After={' '.join(effective)}")
             lines.append(f"Requires={' '.join(effective)}")
         lines.append("")
-        lines.extend([
-            "[Socket]",
-            f"ListenStream={self.socket_path}",
-            f"SocketMode={self.socket_mode}",
-            f"SocketUser={self.socket_user}",
-            f"SocketGroup={self.group}",
-            "Accept=false",
-            "",
-            "[Install]",
-            "WantedBy=sockets.target",
-            "",
-        ])
+        lines.extend(
+            [
+                "[Socket]",
+                f"ListenStream={self.socket_path}",
+                f"SocketMode={self.socket_mode}",
+                f"SocketUser={self.socket_user}",
+                f"SocketGroup={self.group}",
+                "Accept=false",
+                "",
+                "[Install]",
+                "WantedBy=sockets.target",
+                "",
+            ]
+        )
         return "\n".join(lines)

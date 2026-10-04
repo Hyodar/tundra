@@ -39,7 +39,7 @@ with img.profile("dev"):
 
 ## Common options
 
-Every command except `new` accepts:
+Every command except `new` and `doctor` accepts the options below. `doctor` takes only `--attr` and `--pythonpath`:
 
 | Option | Meaning |
 | --- | --- |
@@ -60,8 +60,15 @@ With neither `--profile` nor `--all-profiles`, commands use the default profile.
 | `check RECIPE` | `--json`, `--strict` | Lints the recipe (`Image.check()`): services running as undeclared users, relative file paths, shadowed files, platform/output-target mismatches, init priority collisions, missing backend. Exit 1 on errors, or on warnings with `--strict` |
 | `diff RECIPE` | `--against DIR`, `--stat`, `--color auto\|always\|never` | Compiles to a temp dir and shows a unified diff against an existing tree (default `<build_dir>/mkosi`). Exit 1 when they differ |
 | `lock RECIPE` | `--path FILE` | Writes the lockfile (default `<build_dir>/tundravm.lock`) |
-| `bake RECIPE` | `--out DIR`, `--frozen`, `--lock`, `--force` | Compile and build with the recipe's backend. `--lock` writes the lockfile first, then bakes with `--frozen` semantics. Prints per-profile artifacts and `report.json` path |
+| `bake RECIPE` | `--out DIR`, `--frozen`, `--lock`, `--force` | Compile and build with the recipe's backend. `--lock` writes the lockfile first, then bakes with `--frozen` semantics. Prints per-profile artifacts, the `report.json` path, and a `next: tundravm deploy ...` line. Also writes `bake-result.json` (see below) |
+| `measure RECIPE` | `--backend rtmr\|azure\|gcp`, `--json` | Derives expected TDX measurements for one profile from `bake-result.json`. Prints a table, or `{schema_version, backend, values}` as JSON |
+| `deploy RECIPE` | `--target qemu\|azure\|gcp`, `--memory 4GiB`, `--cpus N`, `--param KEY=VALUE` | Deploys one profile's baked artifact from `bake-result.json` and prints the deployment id, endpoint, and adapter metadata. `--param` is repeatable and passed to the adapter (e.g. `ssh_port`, `tdx=true`, `daemonize=false` for QEMU) |
+| `doctor [RECIPE]` | `--attr NAME`, `--pythonpath DIR` | Prints Python and tundravm versions and probes backend tools (`limactl`, `nix`, `mkosi`, `sudo`/`unshare`). Without `RECIPE` it reports every real backend as available or unavailable. With `RECIPE` it probes only that recipe's backend, then prints the `check` summary line. Exit 1 when the recipe's backend is missing a required tool |
 | `new PATH` | `--base X`, `--backend lima\|nix\|local\|inprocess`, `--force` | Writes a starter recipe file; refuses to overwrite without `--force` |
+
+## Bake results
+
+`bake` writes `<build_dir>/bake-result.json` (or `<--out>/bake-result.json`): per-profile artifacts `{target: path}`, the `report.json` path, the lock digest, the backend name, and a UTC timestamp. Paths inside the build directory are stored relative to it, so the file survives moving the checkout. `measure` and `deploy` (and `Image.measure()`/`Image.deploy()` via `Image.last_bake()`) read it in a new process; if it is missing they fail with `E_STATE` and the hint to bake first. `measure` and `deploy` look in the recipe's `build_dir`, so a bake with a different `--out` is not picked up.
 
 ## Exit codes
 
@@ -79,6 +86,9 @@ tundravm explain examples/surge-tdx-prover/image.py --profile azure
 tundravm digest recipe.py --all-profiles
 tundravm compile recipe.py --out build/mkosi
 tundravm bake recipe.py --lock --all-profiles
+tundravm measure recipe.py --backend rtmr --json
+tundravm deploy recipe.py --target qemu --memory 4GiB --cpus 4 --param ssh_port=2223
+tundravm doctor recipe.py
 tundravm check recipe.py --strict
 tundravm diff recipe.py --against build/mkosi
 tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check  # CI drift gate

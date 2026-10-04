@@ -6,11 +6,15 @@ import hashlib
 import json
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from tundravm.build_cache import Build, Cache
+from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
+from tundravm.modules.base import Module
+from tundravm.modules.key_generation import KeyGeneration, KeySpec
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -43,8 +47,14 @@ class DiskSpec:
 
 
 @dataclass(slots=True)
-class DiskEncryption:
-    """Configure one or more disks via ``tundra-tools`` ``disk-setup``."""
+class DiskEncryption(Module):
+    """Configure one or more disks via ``tundra-tools`` ``disk-setup``.
+
+    Disks may be plain, keyed by ``key_path`` alone, or keyed by a
+    ``KeyGeneration`` key via ``key_name``; ``check()`` verifies the latter.
+    """
+
+    init_priority: ClassVar[int | None] = 20
 
     config_path: str = DISK_ENCRYPTION_DEFAULT_CONFIG_PATH
     source_repo: str = DISK_ENCRYPTION_DEFAULT_REPO
@@ -77,11 +87,15 @@ class DiskEncryption:
         self._append_disk(spec)
         return spec
 
-    def apply(self, image: Image) -> None:
-        """Add build hook, aggregate config, and init script to *image*."""
+    @property
+    def disks(self) -> tuple[DiskSpec, ...]:
+        """Registered disk definitions, in declaration order."""
+        return tuple(self._disks)
+
+    def setup(self, image: Image) -> None:
+        """Validate disks, declare build packages and the disk-setup build hook."""
         self._validate()
         image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
-        image.install("cryptsetup")
 
         clone_dir = Build.build_path("disk-encryption")
         chroot_dir = Build.chroot_path("disk-encryption")
@@ -107,8 +121,53 @@ class DiskEncryption:
             "'"
         )
         image.hook("build", cache.wrap(build_cmd))
+
+    def install(self, image: Image) -> None:
+        """Install cryptsetup and write the aggregate disk config."""
+        image.install("cryptsetup")
         image.file(self.config_path, content=self._render_config())
-        image.add_init_script(self._render_init_script(), priority=20)
+
+    def init_script(self, image: Image) -> str:
+        return self._render_init_script()
+
+    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+        keys: dict[str, KeySpec] = {}
+        for module in image.applied_modules(profile):
+            if isinstance(module, KeyGeneration):
+                keys.update((spec.name, spec) for spec in module.keys)
+        for disk in self._disks:
+            if disk.key_name is None:
+                continue
+            key = keys.get(disk.key_name)
+            if key is None:
+                declared = ", ".join(sorted(keys)) or "none"
+                yield Diagnostic(
+                    level="error",
+                    code="disk-key-undefined",
+                    message=(
+                        f"disk {disk.name!r} uses key {disk.key_name!r}, which no "
+                        "KeyGeneration in this profile declares"
+                    ),
+                    hint=(
+                        f"Declared keys: {declared}. Add keys.key({disk.key_name!r}, ...) "
+                        "to a KeyGeneration applied to this profile, or fix key_name."
+                    ),
+                    profile=profile,
+                    subject=disk.name,
+                )
+            elif disk.key_path is not None and key.output != disk.key_path:
+                written = key.output or "no file (output is unset)"
+                yield Diagnostic(
+                    level="warning",
+                    code="disk-key-path-mismatch",
+                    message=(
+                        f"disk {disk.name!r} reads its key from {disk.key_path}, but key "
+                        f"{key.name!r} is written to {written}"
+                    ),
+                    hint=f"Set keys.key({key.name!r}, output={disk.key_path!r}) or align key_path.",
+                    profile=profile,
+                    subject=disk.name,
+                )
 
     def _append_disk(self, spec: DiskSpec) -> None:
         self._validate_name(spec.name, kind="disk")

@@ -14,11 +14,11 @@ def test_taiko_client_setup_declares_build_packages() -> None:
         assert pkg in profile.build_packages
 
 
-def test_taiko_client_install_adds_build_hook_with_cgo_flags() -> None:
+def test_taiko_client_setup_adds_build_hook_with_cgo_flags() -> None:
     image = Image(reproducible=False)
     module = TaikoClient()
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -51,7 +51,7 @@ def test_taiko_client_custom_source_and_build_path() -> None:
         build_path="cmd/client",
     )
 
-    module.install(image)
+    module.setup(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]

@@ -33,6 +33,10 @@ class Measurements:
     values: dict[str, str] = field(default_factory=dict)
     schema_version: int = 1
 
+    def to_dict(self) -> dict[str, object]:
+        """Return the JSON-ready payload (schema_version, backend, sorted values)."""
+        return self._payload()
+
     def to_json(self, path: str | Path | None = None) -> str:
         payload = self._payload()
         encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"

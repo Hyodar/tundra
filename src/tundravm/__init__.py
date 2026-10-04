@@ -11,6 +11,7 @@ from .errors import (
     MeasurementError,
     PolicyError,
     ReproducibilityError,
+    StateError,
     TdxError,
     ValidationError,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "SecretSchema",
     "SecretSpec",
     "SecretTarget",
+    "StateError",
     "TdxError",
     "TreeDiff",
     "ValidationError",

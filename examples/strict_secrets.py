@@ -8,7 +8,7 @@ from tundravm import Image, SecretSchema, SecretTarget
 from tundravm.modules import SecretDelivery
 
 
-def configure_strict_secrets() -> None:
+def build() -> Image:
     img = Image()
 
     delivery = SecretDelivery(method="http_post")
@@ -21,8 +21,9 @@ def configure_strict_secrets() -> None:
             SecretTarget.env("API_TOKEN", scope="global"),
         ),
     )
-    delivery.apply(img)
+    img.apply(delivery)
+    return img
 
 
 if __name__ == "__main__":
-    configure_strict_secrets()
+    print(build().summary())

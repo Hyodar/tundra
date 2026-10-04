@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from tundravm.backends.base import MountSpec
+from tundravm.backends.base import MountSpec, Requirement
 from tundravm.models import ArtifactRef, BakeRequest, BakeResult, ProfileBuildResult
 
 # Map output targets to artifact filenames
@@ -29,6 +29,9 @@ class InProcessBackend:
     """Backend that produces deterministic placeholder artifacts in-process."""
 
     name: str = "inprocess"
+
+    def requirements(self) -> tuple[Requirement, ...]:
+        return ()
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         return (
