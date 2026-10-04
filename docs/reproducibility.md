@@ -48,7 +48,7 @@ tundravm compile node.py --out mkosi --check    # in CI: exit 1 and list the sta
 
 In tests, `assert_tree(compile(recipe, lock=locked), "mkosi")` compares every path, byte, exec bit and symlink, and `TUNDRAVM_UPDATE_GOLDEN=1` rewrites the golden tree (see [testing](testing.md#golden-trees)).
 
-The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`python -m examples.surge-tdx-prover compile --check`, and `tests/test_declarative_utils.py`).
+The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`python -m examples.surge-tdx-prover compile --check`, and `tests/compiler/test_surge_golden.py`).
 
 ## The lockfile
 
@@ -87,8 +87,9 @@ The recipe records what you asked for (`Git(url, "master")`), never the commit, 
 `compile`, `diff` and `bake` read `build/tundravm.lock` and fetch exactly the pinned commit or verify the pinned hash. In Python, `compile(recipe, lock=locked)` applies the pins and `compile(recipe)` uses the refs.
 
 - `lock` keeps every existing pin whose source is unchanged; `--update NAME` re-resolves one source.
-- `lock --offline` reuses the pins and fails naming any source that would need the network.
-- An unpinned build is the `source-unpinned` lint warning. Drift shows as `+ sources.<name>` or `~ sources.<name>: <old> -> <new>`.
+- `lock` tries every source and writes nothing unless all resolve; one `E_LOCKFILE` error lists each failure as `<name>: git <url> @ <ref>: <reason>` (`ref '<ref>' not found`, `repository unreachable: <git stderr>`, `HTTP <status>`, `timed out after 60s`). A dead upstream ref therefore shows up at `lock` together with every other failure, not one per run.
+- `lock --offline` reuses the pins and lists every source without one in a single error: `Cannot lock offline: N sources need the network to resolve:`.
+- An unpinned build is the `source-unpinned` lint warning. `lock --check` never uses the network; drift shows as `+ sources.<name>: source <name> is not pinned` or `~ sources.<name>: <old> -> <new>`.
 - A `Git` ref that is already a 40-hex commit, or an `Http` source with `sha256`, is immutable and needs no resolution.
 
 ## Frozen bakes

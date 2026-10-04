@@ -791,7 +791,7 @@ The golden contract needs two distinct checks:
 
 A pinned fetch cannot simultaneously have the bytes of the historical branch-clone command. Compatibility belongs in versioned compiler lowering: script ordering, cache labels, account-command spelling, whitespace, modes, symlinks, and cloud conversion templates. For example, it can lower the Nethermind group membership into the historical `useradd` followed by `usermod`.
 
-The inspected [upstream comparison test](/home/franco/tundra/tests/test_nethermind_tdx_golden.py) currently permits semantic differences; it does not establish whole-tree equality. The proposed `assert_tree` must compare every relative path, byte sequence, mode, and symlink target. The committed tree I inspected contains only `default`, so cloud variants need their own exact fixtures.
+The inspected [upstream comparison test](../../tests/integration/test_nethermind_tdx_golden.py) currently permits semantic differences; it does not establish whole-tree equality. The proposed `assert_tree` must compare every relative path, byte sequence, mode, and symlink target. The committed tree I inspected contains only `default`, so cloud variants need their own exact fixtures.
 
 **6. Migration and three risks**
 
@@ -876,7 +876,7 @@ Stage 2 (2026-10-04): the surge recipe is declarative.
 - `Mkosi(dialect="nethermind-v1")` rules, all in `lower.py`: `Group`/`User` lower to postinst lines at their declaration position (`mkosi-chroot groupadd [--system] [--gid N] <name>`; `mkosi-chroot useradd [--system] [--home-dir H] --shell S [--uid N] [--gid G] [--groups a,b] <name>`, no `--create-home`) instead of the account prelude, and an extending variant may not replace a `Group`/`User`; `Build` never emits the `# unpinned: <ref>` marker. The `current` dialect keeps the prelude spelling (`--create-home`) and the marker.
 - The surge quirks that no rule produces stay `Hook`s in the recipe: `groupadd -r eth` and `usermod -a -G tdx nethermind-surge` (so `nethermind()` declares `groups=("eth",)` only).
 - `examples/nethermind_tdx.py` is `nethermind_base(*, snapshot=PINNED_MIRROR) -> Fragment` plus `NETHERMIND_V1 = Mkosi(dialect="nethermind-v1")` and its own `recipe`; it stays in `examples/` because it reads the repository's kernel config. `examples/modules` holds `raiko(*, source)`, `taiko_client(*, source)` and `nethermind(*, source)`, each with its build, user, unit and env file; `contents.py` re-exports their literals. The fluent `Raiko`/`TaikoClient`/`Nethermind` classes and their tests are gone; `tests/fixtures/surge_fluent.py` keeps the fluent recipe (modules inlined) as the equivalence reference.
-- The CLI now compiles every declared variant, so `examples/surge-tdx-prover/mkosi/` also commits `azure/`, `gcp/` and `devtools/`, byte-identical to the fluent recipe's trees (`tests/test_declarative_modules.py`).
+- The CLI now compiles every declared variant, so `examples/surge-tdx-prover/mkosi/` also commits `azure/`, `gcp/` and `devtools/`, byte-identical to the fluent recipe's trees (`tests/compiler/test_surge_golden.py`).
 
 Stage 3 (2026-10-04): the lifecycle functions and the CLI grammar.
 

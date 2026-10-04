@@ -45,7 +45,7 @@ tundravm measure build --variant default        # expected RTMRs of the baked ar
 tundravm deploy build --variant default --target qemu
 ```
 
-Commands run on every declared variant unless you pass `--variant NAME` (repeatable). `uv add tundravm` (or `uv sync` in this repo) installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). Commands run on every declared variant unless you pass `--variant NAME` (repeatable). `uv add tundravm` (or `uv sync` in this repo) installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
 
 ## Why
 
@@ -149,7 +149,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 
 | Command | Does |
 |---|---|
-| `init [DIR]` | Write a starter recipe and a `.gitignore` block (`--ci github` adds a workflow) |
+| `init [DIR]` | Scaffold a recipe, tests, `pyproject.toml` and a `.gitignore` block, then probe the backend (`--ci github` adds a workflow) |
 | `inspect RECIPE` | Dry run per variant (`--format text\|json\|markdown`) |
 | `lint RECIPE` | Every diagnostic; exit 1 on errors (`--strict`: also warnings) |
 | `compile RECIPE` | Emit the mkosi tree; `--check` exits 1 if the tree at `--out` is stale |
@@ -160,6 +160,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`) |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
+| `completion SHELL` | Print a bash, zsh or fish completion script; `inspect RECIPE --diff-variants A B` lists what differs between two variants |
 
 `--variant NAME` is repeatable on every recipe command; omitting it selects every variant. See [`docs/cli.md`](docs/cli.md) for flags, recipe loading, output formats and exit codes.
 

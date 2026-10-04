@@ -4,7 +4,7 @@ What the `nethermind-v1` dialect must emit to reproduce `examples/surge-tdx-prov
 byte for byte from the declarations of `declarative-api.md` section 3. Derived from
 `src/tundravm/compiler/emit_mkosi.py`, `src/tundravm/image.py`, the built-in modules, the
 example modules and the committed tree. Literal contents live in
-`examples/surge-tdx-prover/contents.py` (checked by `tests/test_surge_contents.py`).
+`examples/surge-tdx-prover/contents.py` (checked by `tests/compiler/test_surge_contents.py`).
 Section 7 lists every place where the natural lowering of a declaration differs from the golden bytes.
 
 ## 1. Tree layout and modes
@@ -205,7 +205,7 @@ registered first when the recipe is reproducible, with a trailing space before t
   appended to the end of `[Unit]`, `After=` before `Requires=`. Golden results:
   `After=runtime-init.service tdxs.service` / `Requires=runtime-init.service tdxs.service`
   (raiko), and `After=runtime-init.service` / `Requires=runtime-init.service` inserted after
-  `Description=` (taiko-client, nethermind-surge). `tests/test_surge_contents.py::after_init` is
+  `Description=` (taiko-client, nethermind-surge). `tests/compiler/test_surge_contents.py::after_init` is
   the reference implementation.
 - Today the injection happens in two places. Generated units (`img.service()`) get
   `runtime-init.service` prepended to their `after`/`requires` tuples by `Image._apply_init` at

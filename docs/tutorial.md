@@ -10,15 +10,32 @@ You need Python 3.12+ and tundravm installed (`uv add tundravm`, or `uv sync` in
 $ mkdir node && cd node
 $ tundravm init . --backend inprocess
 created node.py
+created tests/test_node.py
+created pyproject.toml
+created README.md
 created .gitignore
+lint node.py: no findings
 next:
-  tundravm compile node.py --out mkosi
-  tundravm lock node.py
-  tundravm ci node.py --out mkosi
+  1. tundravm compile node.py --out mkosi  write the mkosi tree; commit it
+  2. uv run pytest tests                   run test_node.py against mkosi/
+  3. tundravm lock node.py                 pin packages and sources in build/tundravm.lock
+  4. tundravm ci node.py --out mkosi       the lint, tree and lockfile checks CI runs
+  5. tundravm bake node.py --out build     build the image
+
+checking the inprocess backend (tundravm doctor --backend inprocess):
+tundravm 0.1.0
+python 3.12.3
+backend inprocess: available
+  no external tools required
+measurement tools:
+  missing (optional) measured-boot — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
+  missing (optional) dstack-mr — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
 [exit 0]
 ```
 
-The recipe is named after the directory (`--name` overrides it). `node.py` binds a `Recipe` to `recipe` and a backend to `backend`:
+The recipe is named after the directory (`--name` overrides it). `init` writes the `service` starter (`--template` picks another, `tundravm init --list-templates` lists them), a tests module for it, and `pyproject.toml` and `README.md` when they are absent. It lints the recipe, prints the next steps, and ends with `tundravm doctor --backend inprocess`, which needs no tools; the measurement tools are optional (see [Measure](#8-measure)). `--no-doctor` skips the probe. For tab completion of verbs and flags, see [CLI: Shell completion](cli.md#shell-completion).
+
+This walk-through uses a smaller recipe. Replace `node.py` with this one, which binds a `Recipe` to `recipe` and a backend to `backend`:
 
 ```python
 from tundravm import Debloat, File, Fragment, Package, Recipe, Unit, User, Variant
@@ -407,6 +424,8 @@ $ uv run pytest -q test_node.py
 - `assert_tree` compares every path, byte, exec bit and symlink with a committed tree. `compile(recipe)` without `lock=` ignores the lockfile, so pass the lock when the committed tree was compiled with pins. Run with `TUNDRAVM_UPDATE_GOLDEN=1` to rewrite the golden tree instead.
 
 Run the tests from the project directory: `lint()` reads `build/tundravm.lock` relative to it for `source-unpinned`.
+
+The `tests/test_node.py` that `init` wrote follows the same pattern for its starter recipe (strict lint, every variant compiles, `mkosi/` is current). In a project of your own, the loop is: edit the recipe, `tundravm compile node.py --out mkosi`, `uv run pytest tests`, `tundravm lock node.py`.
 
 ## 12. CI
 

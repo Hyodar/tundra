@@ -154,8 +154,8 @@ A test module that defines its own `recipe` fixture overrides the plugin's.
 
 ```bash
 uv run pytest                                  # everything
-uv run pytest tests/test_declarative_utils.py    # the surge recipe against its committed tree
-uv run pytest tests/test_public_surface.py       # tundravm.__all__ against the frozen list
+uv run pytest tests/compiler/test_surge_golden.py  # the surge recipe against its committed tree
+uv run pytest tests/unit/test_public_surface.py    # tundravm.__all__ against the frozen list
 ```
 
-`tests/test_public_surface.py` freezes `tundravm.__all__` and checks that every name in the `__all__` of `tundravm`, `tundravm.declarative` and `tundravm.declarative.utils` imports. Adding, renaming or removing a public name means updating its `EXPECTED_TOP_LEVEL` list in the same change, so the API change is visible in review.
+`tests/unit/test_public_surface.py` freezes `tundravm.__all__` and checks that every name in the `__all__` of `tundravm`, `tundravm.declarative` and `tundravm.declarative.utils` imports. Adding, renaming or removing a public name means updating its `EXPECTED_TOP_LEVEL` list in the same change, so the API change is visible in review.

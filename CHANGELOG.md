@@ -27,7 +27,9 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `examples/surge-tdx-prover` is a declarative recipe that compiles byte-for-byte to the committed nethermind-tdx tree for `default`, `azure`, `gcp` and `devtools`; `examples/fragments` holds `Raiko`, `TaikoClient` and `Nethermind`, and `examples/nethermind_tdx.py` holds `NethermindBase`.
 
 - `tundravm completion bash|zsh|fish` prints a completion script generated from the parser; bare `tundravm` prints help plus a quickstart; unknown verbs and flags exit 2 with a "did you mean" suggestion; `init` ends with a `doctor` probe of the chosen backend (`--no-doctor` skips it); `inspect --diff-variants A B` lists declarations that differ between two variants; `main(runner=)` for tests.
-- Every error raised by the package carries a hint; `tests/test_error_hints.py` enforces it.
+- Every error raised by the package carries a hint; `tests/lint/test_error_hints.py` enforces it.
+- `tundravm lock` tries every source and reports all failures in one `E_LOCKFILE` error (`<name>: git <url> @ <ref>: <reason>` lines, `K of M sources resolved; nothing written.`); `LockfileError.failures` maps names to the new `SourceError` (`E_SOURCE`, `.source`, `.reason`). `lock --format github` adds an `::error title=E_SOURCE::` line per failure, and `lock --offline` lists every unpinned source at once.
+- `init --template minimal|service|cloud|prover` and `init --list-templates`. `init` scaffolds a project: the recipe, `tests/test_NAME.py` (`--with-tests`/`--no-tests`), and `pyproject.toml` and `README.md` when absent.
 
 ### Changed
 
@@ -42,6 +44,8 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `Mkosi(layout="native")` refuses a recipe with standalone variants in one error that lists each offending variant with its reason (`'solo' (it is parentless)`).
 - `inspect --format json`: the kernel's `source_repo` key is replaced by a `source` object (`repo`, `ref`, `subdir`, `submodules` for git; `url`, `sha256` for a tarball).
 - The hint for a `Build` that passes `packages`/`env` beside a `recipe` names `Go`, `Cargo` or `Dotnet`, not the internal build class.
+- `default_resolver` raises `SourceError` (was `ValidationError`), never prompts for git credentials, and times out network calls after 60s. An unpinned source drifts as `+ sources.<name>: source <name> is not pinned`.
+- `init` starts from the `service` template by default; it prints the lint summary, then a numbered `next:` list, then the backend probe. The `uv sync` note is replaced by a note when `pyproject.toml` already exists (`uv add tundravm`, `uv add --dev pytest`).
 
 ### Removed
 
