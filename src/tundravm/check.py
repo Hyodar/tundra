@@ -80,6 +80,55 @@ _BASE_USERS = frozenset(
     }
 )
 
+# Groups from Debian's base-passwd plus the ones systemd's sysusers creates.
+_BASE_GROUPS = frozenset(
+    {
+        "adm",
+        "audio",
+        "backup",
+        "bin",
+        "cdrom",
+        "daemon",
+        "dialout",
+        "dip",
+        "disk",
+        "fax",
+        "floppy",
+        "games",
+        "input",
+        "irc",
+        "kmem",
+        "kvm",
+        "list",
+        "lp",
+        "mail",
+        "man",
+        "news",
+        "nogroup",
+        "operator",
+        "plugdev",
+        "proxy",
+        "render",
+        "root",
+        "sasl",
+        "sgx",
+        "shadow",
+        "src",
+        "staff",
+        "sudo",
+        "sys",
+        "systemd-journal",
+        "tape",
+        "tty",
+        "users",
+        "utmp",
+        "uucp",
+        "video",
+        "voice",
+        "www-data",
+    }
+)
+
 # Binaries from Essential: yes packages that every base image ships in /usr/bin.
 _ESSENTIAL_BINARIES = frozenset(
     {
@@ -157,7 +206,7 @@ def _command_text(state: ProfileState) -> str:
 def _init_entries(image: Image, state: ProfileState) -> list[InitScriptEntry]:
     merged: list[InitScriptEntry] = []
     seen: set[tuple[int, str]] = set()
-    for entry in (*image.init.scripts, *state.init_scripts):
+    for entry in state.init_scripts:
         key = (entry.priority, entry.script)
         if key not in seen:
             seen.add(key)
@@ -204,6 +253,33 @@ def _rule_service_user_missing(
             profile=profile_name,
             subject=svc.name,
         )
+
+
+def _rule_user_group_undefined(
+    image: Image, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    declared = {g.name for g in state.groups}
+    # useradd creates a same-named private group unless the user has a primary gid.
+    declared.update(u.name for u in state.users if u.gid is None)
+    commands = _command_text(state)
+    for user in state.users:
+        for group in user.groups:
+            if group in declared or group in _BASE_GROUPS:
+                continue
+            if re.search(rf"\b(groupadd|addgroup)\b[^\n;&|]*\b{re.escape(group)}\b", commands):
+                continue
+            yield Diagnostic(
+                level="error",
+                code="user-group-undefined",
+                message=f"user {user.name!r} joins group {group!r}, which is never created",
+                hint=(
+                    f"Declare it with img.group({group!r}, system=True) in profile "
+                    f"{profile_name!r}, or drop it from groups=; useradd fails on an "
+                    "unknown group."
+                ),
+                profile=profile_name,
+                subject=user.name,
+            )
 
 
 def _rule_file_path_duplicate(
@@ -276,7 +352,7 @@ def _rule_service_command_not_shipped(
     if state.packages:
         return
     provided = _declared_paths(state)
-    if image.init.has_scripts or state.init_scripts:
+    if state.init_scripts:
         provided.update(_INIT_FILE_PATHS)
     mentions = _command_text(state) + "\n" + "\n".join(t for _, t in state.build_sources)
     for svc in state.services:
@@ -342,8 +418,10 @@ def _rule_profile_empty(
         [f for f in state.files if not _is_init_file(f.path)],
         state.skeleton_files,
         state.templates,
+        state.groups,
         state.users,
         [s for s in state.services if s.name != _INIT_SERVICE],
+        state.unit_states,
         state.partitions,
         state.hooks,
         state.secrets,
@@ -525,6 +603,7 @@ def _rule_module_checks(
 
 RULES: list[Rule] = [
     _rule_service_user_missing,
+    _rule_user_group_undefined,
     _rule_file_path_duplicate,
     _rule_file_path_relative,
     _rule_service_command_not_shipped,

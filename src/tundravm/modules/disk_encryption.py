@@ -8,7 +8,7 @@ import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 from tundravm.build_cache import Build, Cache
 from tundravm.check import Diagnostic
@@ -44,14 +44,17 @@ class DiskSpec:
     key_name: str | None = None
     format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail"
     dirs: tuple[str, ...] = DEFAULT_DISK_DIRS
+    key: KeySpec | None = None
 
 
 @dataclass(slots=True)
 class DiskEncryption(Module):
     """Configure one or more disks via ``tundra-tools`` ``disk-setup``.
 
-    Disks may be plain, keyed by ``key_path`` alone, or keyed by a
-    ``KeyGeneration`` key via ``key_name``; ``check()`` verifies the latter.
+    Disks may be plain, keyed by ``key_path`` alone, keyed by a ``KeyGeneration``
+    key spec via ``key=`` (reads ``key.output``), or by key name via ``key_name``
+    (also written to the config as ``encryption_key``); ``check()`` verifies that
+    ``key=`` and ``key_name`` keys are declared for the profile.
     """
 
     init_priority: ClassVar[int | None] = 20
@@ -72,8 +75,33 @@ class DiskEncryption(Module):
         key_name: str | None = None,
         format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail",
         dirs: tuple[str, ...] = DEFAULT_DISK_DIRS,
+        key: KeySpec | None = None,
     ) -> DiskSpec:
-        """Register an additional disk definition."""
+        """Register an additional disk definition.
+
+        *key* is a spec returned by ``KeyGeneration.key()``: the disk reads it from
+        ``key.output`` (so *key_path* defaults to it) and ``check()`` reports it when no
+        ``KeyGeneration`` applied to the profile declares it.
+        """
+        if key is not None:
+            if key.output is None:
+                raise ValidationError(
+                    f"disk {name!r}: key {key.name!r} has no output path to read.",
+                    hint=f"Declare the key with output=..., e.g. keys.key({key.name!r}, "
+                    "output='/run/keys/disk').",
+                )
+            if key_path is not None and key_path != key.output:
+                raise ValidationError(
+                    f"disk {name!r}: key_path {key_path!r} differs from key "
+                    f"{key.name!r} output {key.output!r}.",
+                    hint="Drop key_path=; it defaults to key.output.",
+                )
+            if key_name is not None and key_name != key.name:
+                raise ValidationError(
+                    f"disk {name!r}: key_name {key_name!r} differs from key {key.name!r}.",
+                    hint="Pass key= or key_name=, not both.",
+                )
+            key_path = key.output
         spec = DiskSpec(
             name=name,
             device=device,
@@ -83,9 +111,37 @@ class DiskEncryption(Module):
             key_name=key_name,
             format_policy=format_policy,
             dirs=dirs,
+            key=key,
         )
         self._append_disk(spec)
         return spec
+
+    def with_disk(
+        self,
+        name: str,
+        *,
+        device: str | None = "/dev/vda3",
+        mapper_name: str | None = None,
+        key_path: str | None = None,
+        mount_point: str = "/persistent",
+        key_name: str | None = None,
+        format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail",
+        dirs: tuple[str, ...] = DEFAULT_DISK_DIRS,
+        key: KeySpec | None = None,
+    ) -> Self:
+        """Like :meth:`disk`, but return the module so declarations chain inline."""
+        self.disk(
+            name,
+            device=device,
+            mapper_name=mapper_name,
+            key_path=key_path,
+            mount_point=mount_point,
+            key_name=key_name,
+            format_policy=format_policy,
+            dirs=dirs,
+            key=key,
+        )
+        return self
 
     @property
     def disks(self) -> tuple[DiskSpec, ...]:
@@ -136,21 +192,22 @@ class DiskEncryption(Module):
             if isinstance(module, KeyGeneration):
                 keys.update((spec.name, spec) for spec in module.keys)
         for disk in self._disks:
-            if disk.key_name is None:
+            key_ref = disk.key_name or (disk.key.name if disk.key is not None else None)
+            if key_ref is None:
                 continue
-            key = keys.get(disk.key_name)
+            key = keys.get(key_ref)
             if key is None:
                 declared = ", ".join(sorted(keys)) or "none"
                 yield Diagnostic(
                     level="error",
                     code="disk-key-undefined",
                     message=(
-                        f"disk {disk.name!r} uses key {disk.key_name!r}, which no "
+                        f"disk {disk.name!r} uses key {key_ref!r}, which no "
                         "KeyGeneration in this profile declares"
                     ),
                     hint=(
-                        f"Declared keys: {declared}. Add keys.key({disk.key_name!r}, ...) "
-                        "to a KeyGeneration applied to this profile, or fix key_name."
+                        f"Declared keys: {declared}. Add keys.key({key_ref!r}, ...) "
+                        "to a KeyGeneration applied to this profile, or fix the key."
                     ),
                     profile=profile,
                     subject=disk.name,

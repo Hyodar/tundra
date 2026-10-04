@@ -7,7 +7,7 @@ import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 from tundravm.build_cache import Build, Cache
 from tundravm.check import Diagnostic
@@ -88,6 +88,27 @@ class KeyGeneration(Module):
         )
         self._append_key(spec)
         return spec
+
+    def with_key(
+        self,
+        name: str,
+        *,
+        strategy: Literal["tpm", "random", "pipe"] = "tpm",
+        output: str | None = None,
+        size: int = 64,
+        pipe_path: str | None = None,
+        persist_in_tpm: bool | None = None,
+    ) -> Self:
+        """Like :meth:`key`, but return the module so declarations chain inline."""
+        self.key(
+            name,
+            strategy=strategy,
+            output=output,
+            size=size,
+            pipe_path=pipe_path,
+            persist_in_tpm=persist_in_tpm,
+        )
+        return self
 
     @property
     def keys(self) -> tuple[KeySpec, ...]:

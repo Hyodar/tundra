@@ -124,8 +124,13 @@ class Profile:
     file = _scoped(Image.file)
     directory = _scoped(Image.directory)
     template = _scoped(Image.template)
+    group = _scoped(Image.group)
     user = _scoped(Image.user)
     service = _scoped(Image.service)
+    enable = _scoped(Image.enable)
+    disable = _scoped(Image.disable)
+    mask = _scoped(Image.mask)
+    pin_mirror = _scoped(Image.pin_mirror)
     apply = _scoped(Image.apply)
     output_targets = _scoped(Image.output_targets)
     debloat = _scoped(Image.debloat)
@@ -142,8 +147,9 @@ class Profile:
         """This profile's recorded state."""
         return self.image.state.ensure_profile(self.name)
 
-    def applied_modules(self) -> tuple[Module, ...]:
-        return self.image.applied_modules(profile=self.name)
+    def applied_modules(self, *, inherited: bool = False) -> tuple[Module, ...]:
+        """Modules applied to this profile; with *inherited*, its base profile's first."""
+        return self.image.applied_modules(profile=self.name, inherited=inherited)
 
     def explain(self) -> dict[str, object]:
         return self.image.explain(profile=self.name)

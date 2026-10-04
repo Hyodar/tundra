@@ -7,6 +7,7 @@ from .diff import FileChange, TreeDiff
 from .errors import (
     BackendExecutionError,
     DeploymentError,
+    LintError,
     LockfileError,
     MeasurementError,
     PolicyError,
@@ -45,6 +46,7 @@ __all__ = [
     "FileChange",
     "Image",
     "Kernel",
+    "LintError",
     "LockfileError",
     "MeasurementError",
     "Measurements",

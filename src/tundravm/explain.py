@@ -10,10 +10,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import fields
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, get_args
 
 from .compiler import PHASE_ORDER
-from .models import InitScriptEntry, ProfileState
+from .models import InitScriptEntry, ProfileState, UnitAction, unit_name
 
 if TYPE_CHECKING:
     from .image import Image
@@ -47,10 +47,12 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
         "extends": extends,
         "extends_modules": [] if extends is None else _module_names(image, extends),
         "files": _describe_files(profile_state.files),
+        "groups": [
+            {"gid": g.gid, "name": g.name, "system": g.system}
+            for g in sorted(profile_state.groups, key=lambda item: item.name)
+        ],
         "hooks": _describe_hooks(profile_state),
-        "init_scripts": _describe_init_scripts(
-            list(image.init._scripts) + list(profile_state.init_scripts)
-        ),
+        "init_scripts": _describe_init_scripts(profile_state.init_scripts),
         "kernel": None
         if kernel is None
         else {
@@ -109,6 +111,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             for svc in sorted(profile_state.services, key=lambda item: item.name)
         ],
         "skeleton_files": _describe_files(profile_state.skeleton_files),
+        "units": _describe_units(profile_state),
         "templates": [
             {
                 "mode": tmpl.mode,
@@ -179,6 +182,17 @@ def render(description: dict[str, object]) -> str:
             variables = ",".join(tmpl["variables"]) or "-"
             lines.append(f"  {tmpl['path']:<{width}}  {tmpl['mode']}  vars={variables}")
 
+    groups = _as_list(description.get("groups"))
+    if groups:
+        lines.append(f"Groups ({len(groups)}):")
+        for group in groups:
+            parts = [str(group["name"])]
+            if group.get("system"):
+                parts.append("system")
+            if group.get("gid") is not None:
+                parts.append(f"gid={group['gid']}")
+            lines.append("  " + "  ".join(parts))
+
     users = _as_list(description.get("users"))
     if users:
         lines.append(f"Users ({len(users)}):")
@@ -193,7 +207,13 @@ def render(description: dict[str, object]) -> str:
                 parts.append("groups=" + ",".join(user["groups"]))
             lines.append("  " + "  ".join(parts))
 
-    services = _as_list(description.get("services"))
+    units = _as_dict(description.get("units"))
+    states = [f"{action} {', '.join(names)}" for action, names in units.items() if names]
+    if states:
+        lines.append("Units: " + "; ".join(states))
+
+    # Command-less services only enable a shipped unit; "Units:" lists them.
+    services = [s for s in _as_list(description.get("services")) if s.get("command")]
     if services:
         lines.append(f"Services ({len(services)}):")
         width = _column_width(services, "name")
@@ -202,8 +222,12 @@ def render(description: dict[str, object]) -> str:
             if svc.get("command"):
                 parts.append(_truncate(" ".join(svc["command"])))
             parts.append(f"restart={svc['restart']}")
+            if svc.get("type"):
+                parts.append(f"type={svc['type']}")
             if svc.get("user"):
                 parts.append(f"user={svc['user']}")
+            if svc.get("group"):
+                parts.append(f"group={svc['group']}")
             if svc.get("working_dir"):
                 parts.append(f"cwd={svc['working_dir']}")
             if svc.get("env"):
@@ -213,6 +237,12 @@ def render(description: dict[str, object]) -> str:
             for key in ("after", "requires", "wants"):
                 if svc.get(key):
                     parts.append(f"{key}=" + ",".join(svc[key]))
+            if svc.get("limits"):
+                parts.append(
+                    "limits=" + ",".join(f"{k}={v}" for k, v in sorted(svc["limits"].items()))
+                )
+            if svc.get("wanted_by"):
+                parts.append(f"wanted_by={svc['wanted_by']}")
             if not svc.get("enabled", True):
                 parts.append("disabled")
             if svc.get("security_profile", "default") != "default":
@@ -284,6 +314,17 @@ def _describe_hooks(profile_state: ProfileState) -> dict[str, list[str]]:
         if previews:
             grouped[phase] = previews
     return grouped
+
+
+def _describe_units(profile_state: ProfileState) -> dict[str, list[str]]:
+    """Unit state by action: ``enable`` lists command-less enabled services."""
+    enabled = [unit_name(s.name) for s in profile_state.services if s.enabled and not s.command]
+    units: dict[str, list[str]] = {"enable": list(dict.fromkeys(enabled))}
+    for action in get_args(UnitAction):
+        units[action] = list(
+            dict.fromkeys(s.unit for s in profile_state.unit_states if s.action == action)
+        )
+    return units
 
 
 def _first_command_line(script: str) -> str:

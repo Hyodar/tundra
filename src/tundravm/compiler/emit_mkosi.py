@@ -16,7 +16,7 @@ import shutil
 import textwrap
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, get_args
 from urllib.parse import urlparse
 
 from tundravm.errors import ValidationError
@@ -25,12 +25,14 @@ from tundravm.models import (
     CommandSpec,
     DebloatConfig,
     FileEntry,
+    GroupSpec,
     Kernel,
     Phase,
     ProfileState,
     RecipeState,
     RepositorySpec,
     ServiceSpec,
+    UnitAction,
     UserSpec,
 )
 
@@ -345,7 +347,7 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
 
     lines.append("")
     lines.append("[Service]")
-    lines.append("Type=simple")
+    lines.append(f"Type={svc.type or 'simple'}")
 
     for pre in svc.exec_start_pre:
         lines.append(f"ExecStartPre={pre}")
@@ -353,6 +355,8 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
         lines.append(f"ExecStart={' '.join(svc.command)}")
     if svc.user:
         lines.append(f"User={svc.user}")
+    if svc.group:
+        lines.append(f"Group={svc.group}")
     if svc.working_dir:
         lines.append(f"WorkingDirectory={svc.working_dir}")
     if svc.env_file:
@@ -362,6 +366,12 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
     if svc.restart != "no":
         lines.append(f"Restart={svc.restart}")
         lines.append("RestartSec=5")
+    for resource, value in sorted(svc.limits.items()):
+        lines.append(f"Limit{resource}={value}")
+    if svc.kill_mode:
+        lines.append(f"KillMode={svc.kill_mode}")
+    if svc.timeout_stop:
+        lines.append(f"TimeoutStopSec={svc.timeout_stop}")
 
     # Security hardening for strict profile
     if svc.security_profile == "strict":
@@ -385,13 +395,35 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
 
     lines.append("")
     lines.append("[Install]")
-    lines.append("WantedBy=minimal.target")
+    lines.append(f"WantedBy={svc.wanted_by or 'minimal.target'}")
     if svc.extra_unit and "Install" in svc.extra_unit:
         for key, value in sorted(svc.extra_unit["Install"].items()):
             lines.append(f"{key}={value}")
     lines.append("")
 
     return "\n".join(lines)
+
+
+def _groupadd_command(group: GroupSpec) -> str:
+    """Generate a groupadd shell command from a GroupSpec."""
+    parts: list[str] = ["mkosi-chroot groupadd"]
+    if group.system:
+        parts.append("--system")
+    if group.gid is not None:
+        parts.extend(["--gid", str(group.gid)])
+    parts.append(group.name)
+    return " ".join(parts)
+
+
+def _unit_state_commands(profile: ProfileState) -> list[CommandSpec]:
+    """``systemctl disable`` then ``systemctl mask``, one line each, units in declaration order."""
+    commands: list[CommandSpec] = []
+    for action in get_args(UnitAction):
+        units = dict.fromkeys(s.unit for s in profile.unit_states if s.action == action)
+        if units:
+            line = f"mkosi-chroot systemctl {action} {' '.join(units)}"
+            commands.append(CommandSpec(argv=(line,)))
+    return commands
 
 
 def _useradd_command(user: UserSpec) -> str:
@@ -826,7 +858,7 @@ class DeterministicMkosiEmitter:
             # For postinst: prepend user creation, service enablement, debloat masking
             if phase == "postinst":
                 synthetic = self._synthetic_postinst_commands(profile)
-                all_commands = synthetic + list(commands)
+                all_commands = synthetic + list(commands) + _unit_state_commands(profile)
                 needs_debloat = profile.debloat.enabled and profile.debloat.systemd_minimize
                 if all_commands or needs_debloat:
                     script_name = f"{index:02d}-{phase}.sh"
@@ -889,6 +921,10 @@ class DeterministicMkosiEmitter:
     def _synthetic_postinst_commands(self, profile: ProfileState) -> list[CommandSpec]:
         """Create synthetic commands for user creation and service enablement."""
         commands: list[CommandSpec] = []
+
+        # Group creation, before any user that joins them
+        for group in profile.groups:
+            commands.append(CommandSpec(argv=(_groupadd_command(group),)))
 
         # User creation via mkosi-chroot
         for user in profile.users:
@@ -1200,6 +1236,8 @@ def _native_overlay(recipe: RecipeState, name: str) -> ProfileState:
         own,
         files=[f for f in own.files if f not in default.files],
         services=[s for s in own.services if s not in default.services],
+        groups=[g for g in own.groups if g not in default.groups],
+        unit_states=[u for u in own.unit_states if u not in default.unit_states],
         output_targets=tuple(t for t in targets if t not in default.output_targets),
         debloat=own.debloat if own.debloat_explicit else DebloatConfig(enabled=False),
     )

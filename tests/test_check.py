@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Diagnostic, Image, ValidationError
+from tundravm import Diagnostic, Image, LintError
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.check import render
 from tundravm.cli import main
@@ -289,7 +289,7 @@ def test_secret_delivery_applied_is_fine() -> None:
     from tundravm import SecretTarget
 
     img = clean_image()
-    delivery = SecretDelivery()
+    delivery = SecretDelivery(store_at=None)  # no DiskEncryption: secret-store-undefined
     delivery.secret("token", targets=(SecretTarget.file("/run/token"),))
     delivery.apply(img)
     assert img.check() == []
@@ -415,8 +415,9 @@ def test_cli_profile_selection(tmp_path: Path) -> None:
 def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
     img = clean_image(tmp_path)
     img.file("relative/path", content="x")
-    with pytest.raises(ValidationError) as excinfo:
+    with pytest.raises(LintError) as excinfo:
         img.bake(tmp_path / "out")
+    assert excinfo.value.code == "E_LINT"
     assert "1 error-level diagnostics" in str(excinfo.value)
     assert excinfo.value.context["codes"] == "file-path-relative"
 

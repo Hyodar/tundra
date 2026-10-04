@@ -1,61 +1,42 @@
 """Init — minimal runtime-init script builder.
 
-Collects bash script fragments (registered via ``image.add_init_script()``),
-sorts them by priority, and generates ``/usr/bin/runtime-init`` plus
-``runtime-init.service``.  Image owns an Init instance and applies it
-automatically during ``compile()``.
+Bash fragments are registered per profile via ``image.add_init_script()``
+(``ProfileState.init_scripts``); during ``compile()`` the Image hands each
+profile's merged fragments to its Init, which sorts them by priority and
+generates ``/usr/bin/runtime-init`` plus ``runtime-init.service``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from textwrap import dedent
 
-from tundravm.errors import ValidationError
 from tundravm.models import FileEntry, InitScriptEntry, ProfileState
 
 
 @dataclass(slots=True)
 class Init:
-    """Default runtime-init implementation.
+    """Default runtime-init generator.
 
-    Collects bash script fragments, sorts by priority, and generates:
+    Holds no fragments itself; ``apply()`` renders the ones it is given into:
     - ``/usr/bin/runtime-init`` (executable shell script)
     - ``/usr/lib/systemd/system/runtime-init.service`` (oneshot unit)
     """
 
-    _scripts: list[InitScriptEntry] = field(default_factory=list)
-
     @property
     def service_name(self) -> str:
         return "runtime-init.service"
-
-    @property
-    def has_scripts(self) -> bool:
-        return bool(self._scripts)
-
-    @property
-    def scripts(self) -> tuple[InitScriptEntry, ...]:
-        """Registered fragments in registration order."""
-        return tuple(self._scripts)
-
-    def add_script(self, script: str, *, priority: int = 100) -> None:
-        """Register a bash fragment with the given priority (lower runs first)."""
-        if not script:
-            raise ValidationError("add_script() requires non-empty script content.")
-        self._scripts.append(InitScriptEntry(script=script, priority=priority))
 
     def apply(
         self, profile: ProfileState, *, scripts: Sequence[InitScriptEntry] | None = None
     ) -> None:
         """Generate runtime-init script + service unit into *profile*.files.
 
-        *scripts* replaces ``profile.init_scripts`` as the profile's own fragments,
-        e.g. with the merged fragments of a profile that extends another.
+        *scripts* replaces ``profile.init_scripts`` as the fragments to render, e.g.
+        with the merged fragments of a profile that extends another.
         """
-        own = profile.init_scripts if scripts is None else scripts
-        merged_scripts = list(self._scripts) + list(own)
+        merged_scripts = list(profile.init_scripts if scripts is None else scripts)
         if not merged_scripts:
             return
         deduped: list[InitScriptEntry] = []

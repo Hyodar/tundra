@@ -17,6 +17,7 @@ class ErrorCode(StrEnum):
     DEPLOYMENT = "E_DEPLOYMENT"
     POLICY = "E_POLICY"
     STATE = "E_STATE"
+    LINT = "E_LINT"
 
 
 class TdxError(Exception):
@@ -150,10 +151,24 @@ class StateError(TdxError):
         super().__init__(message, code=ErrorCode.STATE, hint=hint, context=context)
 
 
+class LintError(TdxError):
+    """``bake()`` refused: ``Image.check()`` reported error-level diagnostics."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        hint: str | None = None,
+        context: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(message, code=ErrorCode.LINT, hint=hint, context=context)
+
+
 __all__ = [
     "BackendExecutionError",
     "DeploymentError",
     "ErrorCode",
+    "LintError",
     "LockfileError",
     "MeasurementError",
     "PolicyError",

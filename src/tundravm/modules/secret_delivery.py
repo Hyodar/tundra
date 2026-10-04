@@ -5,13 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 from tundravm.build_cache import Build, Cache
+from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.models import SecretSchema, SecretSpec, SecretTarget
 from tundravm.modules.base import Module
+from tundravm.modules.disk_encryption import DiskEncryption, DiskSpec
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -30,7 +33,12 @@ SECRET_DELIVERY_DEFAULT_MANIFEST_PATH = "/etc/tdx/secrets.json"
 
 @dataclass(slots=True)
 class SecretDelivery(Module):
-    """Boot-time secret delivery phase."""
+    """Boot-time secret delivery phase.
+
+    *store_at* names the ``DiskEncryption`` disk (a name or the ``DiskSpec``) that
+    received secrets are stored on; ``check()`` warns when no disk applied to the
+    profile has that name (``secret-store-undefined``).
+    """
 
     init_priority: ClassVar[int | None] = 30
 
@@ -39,7 +47,7 @@ class SecretDelivery(Module):
     port: int = 8080
     ssh_dir: str = "/root/.ssh"
     key_path: str | None = "/etc/root_key"
-    store_at: str | None = "disk_persistent"
+    store_at: str | DiskSpec | None = "disk_persistent"
     config_path: str = SECRET_DELIVERY_DEFAULT_CONFIG_PATH
     manifest_path: str = SECRET_DELIVERY_DEFAULT_MANIFEST_PATH
     source_repo: str = SECRET_DELIVERY_DEFAULT_REPO
@@ -71,6 +79,54 @@ class SecretDelivery(Module):
         )
         self._secrets.append(entry)
         return entry
+
+    def with_secret(
+        self,
+        name: str,
+        *,
+        required: bool = True,
+        schema: SecretSchema | None = None,
+        targets: tuple[SecretTarget, ...] = (),
+    ) -> Self:
+        """Like :meth:`secret`, but return the module so declarations chain inline."""
+        self.secret(name, required=required, schema=schema, targets=targets)
+        return self
+
+    @property
+    def store_disk(self) -> str | None:
+        """Name of the disk secrets are stored on (``store_at`` as a name)."""
+        if isinstance(self.store_at, DiskSpec):
+            return self.store_at.name
+        return self.store_at or None
+
+    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+        store = self.store_disk
+        if store is None:
+            return
+        disks = {
+            disk.name
+            for module in image.applied_modules(profile, inherited=True)
+            if isinstance(module, DiskEncryption)
+            for disk in module.disks
+        }
+        if store in disks:
+            return
+        declared = ", ".join(sorted(disks)) or "none"
+        yield Diagnostic(
+            level="warning",
+            code="secret-store-undefined",
+            message=(
+                f"secrets are stored on disk {store!r}, which no DiskEncryption "
+                "in this profile declares"
+            ),
+            hint=(
+                f"Declared disks: {declared}. Apply a DiskEncryption with "
+                f"disk({store!r}, ...) to this profile, pass store_at= one of the declared "
+                "disks, or store_at=None."
+            ),
+            profile=profile,
+            subject=store,
+        )
 
     def setup(self, image: Image) -> None:
         """Declare build packages and the secret-delivery build hook."""
@@ -141,8 +197,8 @@ class SecretDelivery(Module):
         ]
         if self.key_path:
             lines.append(f'  key_path: "{self.key_path}"')
-        if self.store_at:
-            lines.append(f'  store_at: "{self.store_at}"')
+        if self.store_disk:
+            lines.append(f'  store_at: "{self.store_disk}"')
         return "\n".join(lines) + "\n"
 
 

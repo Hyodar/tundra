@@ -72,7 +72,7 @@ def test_requires_rejects_missing_dependency() -> None:
     )
     assert excinfo.value.hint == "img.apply(_Marker(), _NeedsMarker())"
     assert img.applied_modules() == ()
-    assert not img.init.has_scripts
+    assert not img.has_init_scripts()
 
 
 def test_requires_is_checked_per_active_profile() -> None:
@@ -91,7 +91,7 @@ def test_apply_in_dependency_order_records_modules() -> None:
     assert img.applied_modules() == (marker, needs)
     assert img.applied_modules("default") == (marker, needs)
     assert "marker-pkg" in img.state.profiles["default"].packages
-    assert img.init.scripts == (InitScriptEntry(script="echo needs-marker\n", priority=42),)
+    assert img.init_scripts() == (InitScriptEntry(script="echo needs-marker\n", priority=42),)
 
 
 def test_applying_the_same_instance_twice_records_it_once() -> None:
@@ -135,7 +135,7 @@ def test_init_priority_registers_the_same_runtime_init(tmp_path: Path) -> None:
     disks.disk("data", key_name="root", key_path="/persistent/root.key")
     img.apply(disks, SecretDelivery())
 
-    assert img.init.scripts == (
+    assert img.init_scripts() == (
         InitScriptEntry(script="/usr/bin/key-gen setup /etc/tdx/key-gen.yaml\n", priority=10),
         InitScriptEntry(script="/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml\n", priority=20),
         InitScriptEntry(

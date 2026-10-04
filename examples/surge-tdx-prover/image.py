@@ -153,10 +153,7 @@ def build() -> Image:
 
 def _base() -> Image:
     """The nethermind-tdx base layer, resolving packages from a pinned Debian snapshot."""
-    img = build_nethermind_base()
-    img.mirror = PINNED_MIRROR
-    img.tools_tree_mirror = PINNED_MIRROR
-    return img
+    return build_nethermind_base().pin_mirror(PINNED_MIRROR)
 
 
 def _packages(img: Image) -> None:
@@ -173,12 +170,12 @@ def _boot_init(img: Image) -> None:
     disk = disks.disk(
         "disk_persistent",
         device=None,  # no fixed path: use the largest unpartitioned disk
-        key_path=key.output,
+        key=key,  # reads key.output; check() verifies the key is declared
         mapper_name="cryptroot",
         mount_point="/persistent",
     )
 
-    img.apply(keys, disks, SecretDelivery(method="http_post", store_at=disk.name))
+    img.apply(keys, disks, SecretDelivery(method="http_post", store_at=disk))
 
 
 def _prover_stack(img: Image) -> None:
@@ -217,10 +214,8 @@ def _system_config(img: Image) -> None:
 
 def _system_services(img: Image) -> None:
     """Enable packaged daemons; disable and mask OpenSSH so dropbear owns port 22."""
-    for unit in ("network-setup", "openntpd", "logrotate", "dropbear"):
-        img.service(unit, enabled=True)
-    img.run("mkosi-chroot systemctl disable ssh.service ssh.socket", phase="postinst")
-    img.run("mkosi-chroot systemctl mask ssh.service ssh.socket", phase="postinst")
+    img.enable("network-setup", "openntpd", "logrotate", "dropbear")
+    img.disable("ssh.service", "ssh.socket").mask("ssh.service", "ssh.socket")
 
 
 def _cloud_profiles(img: Image) -> None:

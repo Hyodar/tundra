@@ -30,7 +30,13 @@ from .compiler import (
 )
 from .deploy import get_adapter
 from .diff import TreeDiff, diff_against
-from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
+from .errors import (
+    DeploymentError,
+    LintError,
+    LockfileError,
+    MeasurementError,
+    ValidationError,
+)
 from .explain import describe, render
 from .lockfile import (
     LockDrift,
@@ -53,8 +59,11 @@ from .models import (
     DeployRequest,
     DeployResult,
     FileEntry,
+    GroupSpec,
     HookSpec,
+    InitScriptEntry,
     Kernel,
+    KillMode,
     OutputTarget,
     PartitionSpec,
     Phase,
@@ -65,8 +74,12 @@ from .models import (
     RestartPolicy,
     SecurityProfile,
     ServiceSpec,
+    ServiceType,
     TemplateEntry,
+    UnitAction,
+    UnitStateSpec,
     UserSpec,
+    unit_name,
 )
 from .modules.base import Module
 from .modules.init import Init
@@ -77,6 +90,29 @@ if TYPE_CHECKING:
     from .profile import Profile
 
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+")
+_GROUP_NAME = re.compile(r"[a-z_][a-z0-9_-]*\$?")
+# systemd resource limits (``Limit<RESOURCE>=``), see systemd.exec(5).
+_LIMIT_RESOURCES = frozenset(
+    {
+        "AS",
+        "CORE",
+        "CPU",
+        "DATA",
+        "FSIZE",
+        "LOCKS",
+        "MEMLOCK",
+        "MSGQUEUE",
+        "NICE",
+        "NOFILE",
+        "NPROC",
+        "RSS",
+        "RTPRIO",
+        "RTTIME",
+        "SIGPENDING",
+        "STACK",
+    }
+)
 
 
 class _Unset(Enum):
@@ -94,6 +130,49 @@ def _read_source(path: Path) -> str | bytes:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         return data
+
+
+def _normalize_limits(service: str, limits: Mapping[str, str | int] | None) -> dict[str, str]:
+    """``{"NOFILE": 1048576}`` (or ``LimitNOFILE``) as ``{"NOFILE": "1048576"}``."""
+    normalized: dict[str, str] = {}
+    for key, value in (limits or {}).items():
+        resource = key.removeprefix("Limit").upper()
+        if resource not in _LIMIT_RESOURCES:
+            raise ValidationError(
+                f"Unknown resource limit {key!r} for service '{service}'.",
+                hint=f"Expected one of: {', '.join(sorted(_LIMIT_RESOURCES))}.",
+            )
+        text = str(value)
+        if not text or any(ch.isspace() for ch in text):
+            raise ValidationError(
+                f"Invalid value {value!r} for limit {key!r} in service '{service}'.",
+                hint="Use a number, 'infinity', or soft:hard.",
+            )
+        normalized[resource] = text
+    return dict(sorted(normalized.items()))
+
+
+def _is_strip_hook(hook: HookSpec) -> bool:
+    return hook.phase == "finalize" and "IMAGE_VERSION" in hook.command.argv[0]
+
+
+def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, object]]:
+    return [
+        {"priority": entry.priority, "sha256": hashlib.sha256(entry.script.encode()).hexdigest()}
+        for entry in sorted(entries, key=lambda item: (item.priority, item.script))
+    ]
+
+
+def _validate_units(action: str, units: tuple[str, ...]) -> tuple[str, ...]:
+    if not units:
+        raise ValidationError(f"{action}() requires at least one unit.")
+    for unit in units:
+        if not unit or not _UNIT_NAME.fullmatch(unit):
+            raise ValidationError(
+                f"Invalid unit name {unit!r} for {action}().",
+                hint="Pass systemd unit names such as 'ssh.service' or 'ssh.socket'.",
+            )
+    return tuple(dict.fromkeys(units))
 
 
 class Applicable(Protocol):
@@ -418,6 +497,28 @@ class Image:
             profile.templates.append(entry)
         return self
 
+    def group(self, name: str, *, system: bool = False, gid: int | None = None) -> Self:
+        """Create group *name* in postinst (``groupadd``), before any user is created.
+
+        Users join it with ``user(..., groups=(name,))``; ``check()`` reports users that
+        list a group nobody declares (``user-group-undefined``).
+        """
+        if not name or not _GROUP_NAME.fullmatch(name):
+            raise ValidationError(
+                f"Invalid group name {name!r}.",
+                hint="Use lowercase letters, digits, '_' and '-', starting with a letter or '_'.",
+            )
+        entry = GroupSpec(name=name, system=system, gid=gid)
+        for profile in self._iter_active_profiles():
+            if any(g.name == name for g in profile.groups):
+                raise ValidationError(
+                    f"Duplicate group name '{name}' in profile '{profile.name}'.",
+                    hint="Group names must be unique within a profile.",
+                    context={"group": name, "profile": profile.name},
+                )
+            profile.groups.append(entry)
+        return self
+
     def user(
         self,
         name: str,
@@ -469,16 +570,28 @@ class Image:
         enabled: bool = True,
         extra_unit: Mapping[str, Mapping[str, str]] | None = None,
         security_profile: SecurityProfile = "default",
+        group: str | None = None,
+        wanted_by: str | None = None,
+        type: ServiceType | None = None,
+        limits: Mapping[str, str | int] | None = None,
+        kill_mode: KillMode | None = None,
+        timeout_stop: str | None = None,
     ) -> Self:
         """Register a systemd service unit in the current profile(s).
 
         *env* becomes ``Environment=`` lines (sorted, quoted when needed), *env_file*
         ``EnvironmentFile=``, *working_dir* ``WorkingDirectory=``, each *exec_start_pre*
         command an ``ExecStartPre=`` line, and *description* ``Description=``
-        (default: the service name).
+        (default: the service name). *group* sets ``Group=``, *type* ``Type=`` (default
+        ``simple``), *wanted_by* ``WantedBy=`` (default ``minimal.target``), *limits*
+        one ``Limit<RESOURCE>=`` line each (``{"NOFILE": 1048576}``, sorted),
+        *kill_mode* ``KillMode=`` and *timeout_stop* ``TimeoutStopSec=``.
+
+        To enable a unit that a package or ``file()`` already ships, use :meth:`enable`.
         """
         if not name:
             raise ValidationError("service() requires a non-empty service name.")
+        limit_data = _normalize_limits(name, limits)
         env_data = dict(env or {})
         for key, value in env_data.items():
             if not _ENV_KEY.fullmatch(key):
@@ -513,6 +626,12 @@ class Image:
             env_file=env_file or None,
             working_dir=working_dir or None,
             exec_start_pre=tuple(pre_commands),
+            group=group or None,
+            wanted_by=wanted_by or None,
+            type=type,
+            limits=limit_data,
+            kill_mode=kill_mode,
+            timeout_stop=timeout_stop or None,
         )
         for profile in self._iter_active_profiles():
             existing_names = {s.name for s in profile.services}
@@ -523,6 +642,57 @@ class Image:
                     context={"service": name, "profile": profile.name},
                 )
             profile.services.append(entry)
+        return self
+
+    def enable(self, *units: str) -> Self:
+        """Enable units that a package or ``file()`` ships (``systemctl enable``).
+
+        Each unit is enabled in postinst together with the units of ``service()``, in
+        declaration order, and linked into ``minimal.target.wants``. ``foo`` means
+        ``foo.service``. Enabling a unit twice, or one a ``service()`` already enables,
+        is a no-op.
+        """
+        for unit in _validate_units("enable", units):
+            for profile in self._iter_active_profiles():
+                key = unit_name(unit)
+                index = next(
+                    (i for i, s in enumerate(profile.services) if unit_name(s.name) == key),
+                    None,
+                )
+                if index is None:
+                    profile.services.append(ServiceSpec(name=unit, enabled=True))
+                elif not profile.services[index].enabled:
+                    profile.services[index] = replace(profile.services[index], enabled=True)
+        return self
+
+    def disable(self, *units: str) -> Self:
+        """``systemctl disable`` installed units, after every postinst hook ran."""
+        return self._unit_state("disable", units)
+
+    def mask(self, *units: str) -> Self:
+        """``systemctl mask`` installed units, after every postinst hook and ``disable()``."""
+        return self._unit_state("mask", units)
+
+    def _unit_state(self, action: UnitAction, units: tuple[str, ...]) -> Self:
+        names = [unit_name(unit) for unit in _validate_units(action, units)]
+        for profile in self._iter_active_profiles():
+            for name in names:
+                spec = UnitStateSpec(action=action, unit=name)
+                if spec not in profile.unit_states:
+                    profile.unit_states.append(spec)
+        return self
+
+    def pin_mirror(self, url: str, *, tools_tree: bool = True) -> Self:
+        """Resolve packages from *url* (``Mirror=``), and the tools tree too by default.
+
+        Equivalent to setting ``img.mirror`` (and ``img.tools_tree_mirror``); applies to
+        every profile.
+        """
+        if not url:
+            raise ValidationError("pin_mirror() requires a non-empty URL.")
+        self.mirror = url
+        if tools_tree:
+            self.tools_tree_mirror = url
         return self
 
     def partition(self, name: str, *, size: str, mount: str, fs: str = "ext4") -> Self:
@@ -796,16 +966,33 @@ class Image:
         return self
 
     def add_init_script(self, script: str, *, priority: int = 100) -> Self:
-        """Append a bash fragment to the runtime-init script.
+        """Append a bash fragment to the active profiles' runtime-init script.
 
         Fragments are ordered by *priority* (lower runs first) when Init
-        generates ``/usr/bin/runtime-init``.  Modules should use this to
-        register their binary invocations into the boot sequence.
+        generates ``/usr/bin/runtime-init``. Profiles that extend the default
+        profile run its fragments too; standalone profiles only their own.
+        Modules use this to register their binary invocations into the boot
+        sequence.
         """
         if not script:
             raise ValidationError("add_init_script() requires non-empty script content.")
-        self.init.add_script(script, priority=priority)
+        entry = InitScriptEntry(script=script, priority=priority)
+        for profile in self._iter_active_profiles():
+            profile.init_scripts.append(entry)
         return self
+
+    def init_scripts(self, profile: str | None = None) -> tuple[InitScriptEntry, ...]:
+        """Runtime-init fragments *profile* (default: the active one) runs, deduplicated.
+
+        Registration order, the default profile's first for a profile that extends it.
+        """
+        selected = self._resolve_operation_profile(profile)
+        entries = self._state.effective_profile(selected).init_scripts
+        return tuple({(e.priority, e.script): e for e in entries}.values())
+
+    def has_init_scripts(self) -> bool:
+        """Whether any active profile runs runtime-init fragments."""
+        return any(self.init_scripts(name) for name in self._active_profiles)
 
     def ssh(self) -> Self:
         """Enable SSH access via dropbear (typically used inside dev profiles)."""
@@ -940,7 +1127,7 @@ class Image:
         ensure_bake_policy(policy=self.policy, frozen=frozen)
         errors = [d for d in self.check() if d.level == "error"]
         if errors:
-            raise ValidationError(
+            raise LintError(
                 f"Recipe has {len(errors)} error-level diagnostics.",
                 hint="Run `tundravm check RECIPE` or img.check() to see them.",
                 context={"codes": ", ".join(d.code for d in errors[:3])},
@@ -1243,18 +1430,18 @@ class Image:
         targets = [self._ensure_profile(n) for n in dict.fromkeys(names)]
         generators: list[ProfileState] = []
         for profile in targets:
-            if profile.extends is None:
-                self.init.apply(profile)
-                generators.append(profile)
-            elif profile.init_scripts:
-                merged = self._state.effective_profile(profile.name).init_scripts
+            if profile.extends is not None and not profile.init_scripts:
+                continue  # inherits the default profile's runtime-init files
+            merged = self.init_scripts(profile.name)
+            if merged:
                 self.init.apply(profile, scripts=merged)
                 generators.append(profile)
-        if not self.init.has_scripts:
-            return
         init_svc = self.init.service_name
-        # Inject After/Requires runtime-init.service into all profile services
+        # Inject After/Requires runtime-init.service into the services of every
+        # profile that runs runtime-init
         for profile in targets:
+            if not self.init_scripts(profile.name):
+                continue
             patched: list[ServiceSpec] = []
             for svc in profile.services:
                 if svc.name == init_svc or svc.name.endswith(".target"):
@@ -1294,7 +1481,27 @@ class Image:
     ) -> ProfileState:
         if extends is not _UNSET:
             self._state.set_extends(name, extends)
+            self._sync_strip_hook(name)
         return self._state.ensure_profile(name)
+
+    def _sync_strip_hook(self, name: str) -> None:
+        """Give a standalone profile the default profile's IMAGE_VERSION strip hook.
+
+        Extending profiles inherit it through the merge; a standalone one would
+        otherwise silently lose it.
+        """
+        default = self._state.ensure_profile(self._state.default_profile)
+        profile = self._state.ensure_profile(name)
+        if profile is default:
+            return
+        strip = next((h for h in default.hooks if _is_strip_hook(h)), None)
+        own = [h for h in profile.hooks if _is_strip_hook(h)]
+        if profile.extends is None and strip is not None and not own:
+            profile.phases.setdefault("finalize", []).append(strip.command)
+            profile.hooks.append(strip)
+        elif profile.extends is not None and strip is not None and strip in own:
+            profile.hooks.remove(strip)
+            profile.phases["finalize"].remove(strip.command)
 
     def _recipe_payload(self, *, profile_names: tuple[str, ...]) -> dict[str, object]:
         profiles_data: dict[str, dict[str, object]] = {}
@@ -1431,8 +1638,26 @@ class Image:
             inheritance: dict[str, object] = (
                 {} if profile_name == self._state.default_profile else {"extends": profile.extends}
             )
+            # Groups and unit states are keyed only when declared so older recipes keep
+            # their digests.
+            declared: dict[str, object] = {}
+            if profile.groups:
+                declared["groups"] = [
+                    {"name": g.name, "system": g.system, "gid": g.gid}
+                    for g in sorted(profile.groups, key=lambda item: item.name)
+                ]
+            # The default profile's fragments are the top-level "init_scripts".
+            own_init = self._state.ensure_profile(profile_name).init_scripts
+            if profile_name != self._state.default_profile and own_init:
+                declared["init_scripts"] = _init_scripts_payload(own_init)
+            if profile.unit_states:
+                declared["unit_states"] = {
+                    action: [s.unit for s in profile.unit_states if s.action == action]
+                    for action in sorted({s.action for s in profile.unit_states})
+                }
             profiles_data[profile_name] = {
                 **inheritance,
+                **declared,
                 "packages": sorted(profile.packages),
                 "build_packages": sorted(profile.build_packages),
                 "build_sources": profile.build_sources,
@@ -1458,16 +1683,9 @@ class Image:
             "base": self._state.base,
             "arch": self._state.arch,
             "default_profile": self._state.default_profile,
-            "init_scripts": [
-                {
-                    "priority": entry.priority,
-                    "sha256": hashlib.sha256(entry.script.encode()).hexdigest(),
-                }
-                for entry in sorted(
-                    self.init._scripts,
-                    key=lambda item: (item.priority, item.script),
-                )
-            ],
+            "init_scripts": _init_scripts_payload(
+                self._state.ensure_profile(self._state.default_profile).init_scripts
+            ),
             "profiles": profiles_data,
         }
 

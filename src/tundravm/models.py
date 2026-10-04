@@ -15,6 +15,9 @@ Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
 SecurityProfile = Literal["strict", "default", "none"]
 RestartPolicy = Literal["always", "on-failure", "no"]
+ServiceType = Literal["simple", "exec", "oneshot", "notify", "forking"]
+KillMode = Literal["control-group", "mixed", "process", "none"]
+UnitAction = Literal["disable", "mask"]
 
 DEFAULT_DEBLOAT_PATHS_REMOVE = (
     "/etc/machine-id",
@@ -138,6 +141,23 @@ class UserSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class GroupSpec:
+    """A group created in postinst before any user (``groupadd``)."""
+
+    name: str
+    system: bool = False
+    gid: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UnitStateSpec:
+    """A ``systemctl disable|mask`` of an already-installed unit."""
+
+    action: UnitAction
+    unit: str
+
+
+@dataclass(frozen=True, slots=True)
 class ServiceSpec:
     name: str
     command: tuple[str, ...] = ()
@@ -154,6 +174,12 @@ class ServiceSpec:
     env_file: str | None = None
     working_dir: str | None = None
     exec_start_pre: tuple[str, ...] = ()
+    group: str | None = None
+    wanted_by: str | None = None
+    type: ServiceType | None = None
+    limits: Mapping[str, str] = field(default_factory=dict)
+    kill_mode: KillMode | None = None
+    timeout_stop: str | None = None
 
     def extras(self) -> dict[str, object]:
         """Optional unit fields that are set, keyed by name (empty for a plain service)."""
@@ -162,6 +188,12 @@ class ServiceSpec:
             "env": dict(sorted(self.env.items())),
             "env_file": self.env_file,
             "exec_start_pre": list(self.exec_start_pre),
+            "group": self.group,
+            "kill_mode": self.kill_mode,
+            "limits": dict(sorted(self.limits.items())),
+            "timeout_stop": self.timeout_stop,
+            "type": self.type,
+            "wanted_by": self.wanted_by,
             "working_dir": self.working_dir,
         }
         return {key: value for key, value in optional.items() if value}
@@ -326,8 +358,10 @@ class ProfileState:
     files: list[FileEntry] = field(default_factory=list)
     skeleton_files: list[FileEntry] = field(default_factory=list)
     templates: list[TemplateEntry] = field(default_factory=list)
+    groups: list[GroupSpec] = field(default_factory=list)
     users: list[UserSpec] = field(default_factory=list)
     services: list[ServiceSpec] = field(default_factory=list)
+    unit_states: list[UnitStateSpec] = field(default_factory=list)
     partitions: list[PartitionSpec] = field(default_factory=list)
     hooks: list[HookSpec] = field(default_factory=list)
     secrets: list[SecretSpec] = field(default_factory=list)
@@ -432,8 +466,10 @@ def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
         templates=_override(
             base.templates, own.templates, lambda t: _norm_path(t.path), extra_paths
         ),
+        groups=_override(base.groups, own.groups, lambda g: g.name),
         users=_override(base.users, own.users, lambda u: u.name),
         services=_override(base.services, own.services, lambda s: unit_name(s.name)),
+        unit_states=list(dict.fromkeys((*base.unit_states, *own.unit_states))),
         partitions=_override(base.partitions, own.partitions, lambda p: p.name),
         hooks=[*base.hooks, *own.hooks],
         secrets=_override(base.secrets, own.secrets, lambda s: s.name),
@@ -657,8 +693,10 @@ __all__ = [
     "DeployRequest",
     "DeployResult",
     "FileEntry",
+    "GroupSpec",
     "HookSpec",
     "Kernel",
+    "KillMode",
     "OutputTarget",
     "PartitionSpec",
     "Phase",
@@ -675,6 +713,9 @@ __all__ = [
     "SecretTarget",
     "SecurityProfile",
     "ServiceSpec",
+    "ServiceType",
     "TemplateEntry",
+    "UnitAction",
+    "UnitStateSpec",
     "UserSpec",
 ]
