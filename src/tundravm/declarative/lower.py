@@ -8,9 +8,10 @@ Variants map onto compiler profiles. The default variant (the one named
 every declaration it resolves to. A variant whose parent is ``base`` or the
 default variant becomes a profile that extends the default one and declares
 only what it adds (or replaces, for types the profile merge overrides by
-identity). Every other variant (parentless, chained onto another variant, or
-removing/replacing what the extending merge cannot express) is lowered
-standalone from its own resolved declarations.
+identity). Every other variant (parentless, chained onto another variant, with
+its own settings or kernel, or removing/replacing what the extending merge
+cannot express) is lowered standalone from its own resolved declarations, with
+its own mkosi options and kernel.
 
 Lowering is deterministic and never touches the network; ``Path`` contents
 are read here.
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from tundravm._image import Image, _read_source, _walk_tree
@@ -35,6 +36,7 @@ from tundravm._modules.base import TUNDRA_TOOLS
 from tundravm._options import MkosiOptions
 from tundravm._source import BuildRecipe, GitSource, HttpSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as FluentInstall
+from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel as FluentKernel
 from tundravm.models import SecretSchema, SecretSpec, SecretTarget
@@ -51,6 +53,7 @@ from .model import (
     Git,
     Group,
     Hook,
+    Http,
     Init,
     Kernel,
     Key,
@@ -103,13 +106,35 @@ _BOOL_SETTINGS: dict[tuple[str, str], str] = {
     ("Build", "WithNetwork"): "with_network",
     ("Content", "CleanPackageMetadata"): "clean_package_metadata",
 }
+_COMPILER_KEYS: dict[str, str] = {
+    "Distribution": "Recipe.base",
+    "Release": "Recipe.base",
+    "Architecture": "Recipe.arch",
+    "Mirror": "Recipe.mirror",
+    "ToolsTreeMirror": "Recipe.tools_mirror",
+    "SourceDateEpoch": "Recipe.epoch",
+    "Format": "Variant targets (the compiler always builds a UKI)",
+    "ImageId": "the variant name",
+    "Packages": "Package(name)",
+    "BuildPackages": "Package(name, role='build')",
+    "Bootable": "Kernel(...)",
+    "KernelCommandLine": "Kernel(cmdline=...)",
+    "ExtraTrees": "File/Directory/Template(stage='extra')",
+    "SkeletonTrees": "File/Directory/Template(stage='skeleton')",
+    **{key: "Hook(name, phase, script)" for key in PHASE_TO_MKOSI_KEY.values()},
+}
+"""mkosi keys the compiler writes itself, and the declaration that sets each."""
 _BUILD_SOURCES = ("Build", "BuildSources")
 """Per-variant ``Setting``: ``src[:dest]`` host directories mounted into the build."""
+_LIST_SETTINGS = (("Build", "Environment"), ("Build", "SandboxTrees"), _BUILD_SOURCES)
 _TRUE = frozenset({"true", "yes", "1"})
 
 
 class _Standalone(Exception):
-    """The extending-profile merge cannot express a variant; lower it standalone."""
+    """The extending-profile merge cannot express a variant; lower it standalone.
+
+    The message says why, completing "it ...".
+    """
 
 
 _FALSE = frozenset({"false", "no", "0"})
@@ -119,19 +144,20 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
     """Build the compiler's image *recipe* describes, with *variants* (default: all).
 
     The default variant is always lowered: the other profiles build on it.
-    Raises ``ValidationError`` for an unresolvable recipe and for variants that
-    change recipe-wide declarations (settings other than ``BuildSources``, the
-    kernel).
+    Variants whose settings or kernel differ from the default variant's get
+    their own. Raises ``ValidationError`` for an unresolvable recipe, for
+    declarations the compiler cannot express, and for variants the native
+    layout cannot emit.
     """
     default = _default_variant(recipe)
     selected = _selected(recipe, variants, default)
     resolved = {variant.name: resolve(recipe, variant=variant.name) for variant in selected}
     base = resolved[default.name]
-
-    recipe_wide = [item for item in base.items if _recipe_wide(item)]
-    for variant in selected[1:]:
-        _check_recipe_wide(resolved[variant.name], recipe_wide)
-    kernel = next((item for item in recipe_wide if isinstance(item, Kernel)), None)
+    options = {
+        name: _mkosi_options(recipe, [i for i in r.items if isinstance(i, Setting)])
+        for name, r in resolved.items()
+    }
+    kernels = {name: _variant_kernel(r.items) for name, r in resolved.items()}
     extra: dict[str, Any] = {} if recipe.policy is None else {"policy": recipe.policy}
     img = Image(
         base=recipe.base,
@@ -140,8 +166,8 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
         tools_tree_mirror=recipe.tools_mirror,
         reproducible=recipe.epoch is not None,
         default_profile=default.name,
-        mkosi=_mkosi_options(recipe, [s for s in recipe_wide if isinstance(s, Setting)]),
-        kernel=None if kernel is None else _kernel(kernel),
+        mkosi=options[default.name],
+        kernel=kernels[default.name],
         **extra,
     )
     strip = recipe.mkosi.strip_os_release
@@ -153,22 +179,31 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
         _declare(img, base.items, full=base.items, dialect=dialect)
     _apply_target(img, default.name, base.targets, inherited=(DEFAULT_TARGET,))
 
+    rejected: list[tuple[str, str]] = []
     for variant in selected[1:]:
         child = resolved[variant.name]
         try:
             if variant.parent not in (BASE_PARENT, default.name):
-                raise _Standalone
+                raise _Standalone(
+                    "is parentless"
+                    if variant.parent is None
+                    else f"is chained onto variant {variant.parent!r}"
+                )
+            if any(t in CLOUD_TARGETS for t in base.targets) and child.targets != base.targets:
+                raise _Standalone(
+                    f"targets {', '.join(child.targets)} without the default variant's "
+                    f"{', '.join(base.targets)} integration"
+                )
+            _same_configuration(base, child)
             own, reemit = _overlay(base, child, dialect=dialect)
-        except _Standalone:
+        except _Standalone as why:
             if recipe.mkosi.layout == "native":
-                raise ValidationError(
-                    f"Variant {variant.name!r} is not a pure overlay of the default variant "
-                    f"{default.name!r} (it is parentless, chained, or removes or replaces "
-                    "declarations), and the native layout builds every variant on top of the "
-                    "default one.",
-                    hint="Use Mkosi(layout='directories') for this recipe.",
-                    context={"variant": variant.name},
-                ) from None
+                rejected.append((variant.name, str(why)))
+                continue
+            if options[variant.name] != options[default.name]:
+                img.profile_mkosi[variant.name] = options[variant.name]
+            if kernels[variant.name] != kernels[default.name]:
+                img.profile_kernels[variant.name] = kernels[variant.name]
             img.profile(variant.name, extends=None)
             with img.profiles(variant.name):
                 _declare(img, child.items, full=child.items, dialect=dialect)
@@ -182,25 +217,49 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
         with img.profiles(variant.name):
             _declare(img, own, full=child.items, reemit=reemit, dialect=dialect)
         _apply_target(img, variant.name, child.targets, inherited=base.targets)
+    if rejected:
+        plural = "s" if len(rejected) > 1 else ""
+        listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)
+        raise ValidationError(
+            f"Mkosi(layout='native') cannot emit variant{plural} {listed}: mkosi "
+            f"applies the root mkosi.conf (the default variant {default.name!r}) to every "
+            "profile, so a native profile can only add to it.",
+            hint=f"Use Mkosi(layout='directories'), or make each a pure addition to "
+            f"{default.name!r}: parent {BASE_PARENT!r} or {default.name!r}, nothing removed, "
+            f"{default.name!r}'s settings and kernel, and replace= limited to File, User, "
+            "Group, Partition, Repository and Debloat.",
+            context={"variants": ", ".join(name for name, _ in rejected)},
+        )
     return img
 
 
-def _recipe_wide(item: Declaration) -> bool:
-    if isinstance(item, Setting):
-        return (item.section, item.key) != _BUILD_SOURCES
-    return isinstance(item, Kernel)
+def _wide(items: Sequence[Declaration]) -> dict[tuple[str, ...], Declaration]:
+    """The settings (but ``BuildSources``) and the kernel: the per-tree configuration."""
+    return {
+        identity(item): item
+        for item in items
+        if isinstance(item, Kernel)
+        or (isinstance(item, Setting) and (item.section, item.key) != _BUILD_SOURCES)
+    }
+
+
+def _same_configuration(base: Resolved, child: Resolved) -> None:
+    """Raise ``_Standalone`` when *child*'s settings or kernel differ from *base*'s."""
+    mine, theirs = _wide(child.items), _wide(base.items)
+    changed = sorted(key for key in mine.keys() | theirs.keys() if mine.get(key) != theirs.get(key))
+    if changed:
+        raise _Standalone(f"has its own {', '.join(describe(key) for key in changed)}")
 
 
 def _default_variant(recipe: Recipe) -> Variant:
+    """The variant called ``default``, else the first root variant.
+
+    It may itself be chained onto another variant: it is lowered from its
+    resolved declarations either way.
+    """
     named = [v for v in recipe.variants if v.name == "default"]
     roots = [v for v in recipe.variants if v.parent in (BASE_PARENT, None)]
-    variant = named[0] if named else (roots[0] if roots else recipe.variants[0])
-    if variant.parent not in (BASE_PARENT, None):
-        raise ValidationError(
-            f"The default variant {variant.name!r} must have parent {BASE_PARENT!r} or None.",
-            context={"variant": variant.name},
-        )
-    return variant
+    return named[0] if named else (roots[0] if roots else recipe.variants[0])
 
 
 def _selected(recipe: Recipe, names: Sequence[str] | None, default: Variant) -> list[Variant]:
@@ -209,27 +268,6 @@ def _selected(recipe: Recipe, names: Sequence[str] | None, default: Variant) -> 
     else:
         chosen = [recipe.variant(name) for name in dict.fromkeys(names)]
     return [default, *(v for v in chosen if v.name != default.name)]
-
-
-def _check_recipe_wide(child: Resolved, recipe_wide: Sequence[Declaration]) -> None:
-    known = {identity(item): item for item in recipe_wide}
-    present = {identity(item) for item in child.items if _recipe_wide(item)}
-    missing = [describe(key) for key in known if key not in present]
-    if missing:
-        raise ValidationError(
-            f"Variant {child.variant!r} removes {', '.join(missing)}; settings and the kernel "
-            "are recipe-wide.",
-            hint="Declare them in Recipe.common (or the default variant).",
-            context={"variant": child.variant},
-        )
-    for item in child.items:
-        if _recipe_wide(item) and known.get(identity(item)) != item:
-            raise ValidationError(
-                f"Variant {child.variant!r} declares its own {describe(identity(item))}; "
-                "settings and the kernel are recipe-wide.",
-                hint="Declare them in Recipe.common (or the default variant).",
-                context={"variant": child.variant},
-            )
 
 
 def _overlay(
@@ -242,8 +280,9 @@ def _overlay(
     """
     inherited = {identity(item): item for item in base.items}
     present = {identity(item) for item in child.items}
-    if any(key not in present for key in inherited):
-        raise _Standalone  # the merge only adds
+    missing = [describe(key) for key in inherited if key not in present]
+    if missing:
+        raise _Standalone(f"removes {', '.join(missing)}")  # the merge only adds
     own: list[Declaration] = []
     for item in child.items:
         previous = inherited.get(identity(item))
@@ -253,16 +292,17 @@ def _overlay(
             if not isinstance(item, _OVERRIDABLE) or (
                 dialect == HISTORICAL and isinstance(item, (Group, User))
             ):
-                raise _Standalone  # the merge cannot replace this type
+                raise _Standalone(f"replaces {describe(identity(item))}")
             own.append(item)
     if any(isinstance(item, _RUNTIME) for item in own) and any(
         isinstance(item, (Key, Disk, Secrets)) for item in base.items
     ):
-        raise _Standalone  # runtime tools are configured once per profile
+        # runtime tools are configured once per profile
+        raise _Standalone("changes the keys, disks or secrets the default variant configures")
     if any(isinstance(item, Setting) for item in own):
-        raise _Standalone  # build-source mounts merge per profile
+        raise _Standalone("has its own Build.BuildSources")  # mounts merge per profile
     if any(isinstance(item, Debloat) and item.keep_paths_by_variant for item in own):
-        raise _Standalone
+        raise _Standalone("declares per-variant debloat paths")
     reemit: list[Unit] = []
     if has_init(child.items) and not has_init(base.items):
         reemit = [
@@ -362,8 +402,10 @@ def _declare(
                     runtime_done = True
             case Build():
                 img.build_from(_source_build(item, mark_unpinned=not historical))
+            case Kernel(source=Http()):
+                img.build_packages("curl")  # the build hook downloads the archive
             case Init() | Setting() | Kernel() | RuntimeTools():
-                pass  # inits register below; the rest is recipe-wide or configuration
+                pass  # inits register below; the rest is per-tree configuration
     for unit in reemit:
         _unit(img, replace(unit, enabled=None, masked=None), after_init=True)
     inits = order_inits(
@@ -376,15 +418,13 @@ def _declare(
 def _apply_target(
     img: Image, name: str, targets: Sequence[Target], *, inherited: Sequence[Target] | None
 ) -> None:
-    """Set *targets* on profile *name* plus their platform integration, unless inherited."""
+    """Set *targets* on profile *name* plus their platform integration, unless inherited.
+
+    ``lower`` extends a cloud-targeted profile only with the same targets.
+    """
     if inherited is not None and tuple(targets) == tuple(inherited):
         return
-    if inherited is not None and any(t in CLOUD_TARGETS for t in inherited):
-        raise ValidationError(
-            f"Variant {name!r} targets {', '.join(targets)} but extends a "
-            f"{', '.join(inherited)} profile.",
-            context={"variant": name},
-        )
+    assert inherited is None or not any(t in CLOUD_TARGETS for t in inherited)
     with img.profiles(name):
         img.targets(*targets)
         for target in targets:
@@ -670,11 +710,7 @@ def _runtime_tools(img: Image, items: Sequence[Declaration]) -> None:
     keys = [item for item in items if isinstance(item, Key)]
     disks = [item for item in items if isinstance(item, Disk)]
     secrets = [item for item in items if isinstance(item, Secrets)]
-    if len(secrets) > 1:
-        raise ValidationError(
-            f"Only one Secrets declaration per variant lowers; got "
-            f"{', '.join(s.name for s in secrets)}.",
-        )
+    secret_paths = _secret_paths(paths, secrets)
     if keys:
         img.apply(
             KeyGeneration(
@@ -691,7 +727,7 @@ def _runtime_tools(img: Image, items: Sequence[Declaration]) -> None:
                 source=source,
             )
         )
-    for entry in secrets:
+    for entry, (config_path, manifest_path) in zip(secrets, secret_paths, strict=True):
         img.apply(
             SecretDelivery(
                 secrets=tuple(_secret_spec(s) for s in entry.entries),
@@ -700,32 +736,87 @@ def _runtime_tools(img: Image, items: Sequence[Declaration]) -> None:
                 ssh_dir=entry.ssh_directory,
                 key_path=entry.ssh_key_path,
                 store_at=None if entry.store is None else entry.store.name,
-                config_path=paths.secret_config,
-                manifest_path=paths.secret_manifest,
+                config_path=config_path,
+                manifest_path=manifest_path,
                 source=source,
             )
         )
 
 
+def _secret_paths(tools: RuntimeTools, secrets: Sequence[Secrets]) -> list[tuple[str, str]]:
+    """Config and manifest path of each of *secrets*.
+
+    One ``Secrets`` uses the ``RuntimeTools`` paths; several get ``-<name>``
+    appended to their stems (``/etc/tdx/secrets-api.yaml``). Raises when two
+    paths coincide, or a file target is delivered by two of them.
+    """
+    if len(secrets) == 1:
+        return [(tools.secret_config, tools.secret_manifest)]
+    result = [
+        (_suffixed(tools.secret_config, entry.name), _suffixed(tools.secret_manifest, entry.name))
+        for entry in secrets
+    ]
+    owners: dict[str, str] = {tools.key_config: "RuntimeTools.key_config"}
+    owners.setdefault(tools.disk_config, "RuntimeTools.disk_config")
+    for entry, written in zip(secrets, result, strict=True):
+        for path in written:
+            if path in owners:
+                raise ValidationError(
+                    f"Secrets({entry.name}) writes {path}, which {owners[path]} also writes.",
+                    hint="Rename one of them, or move the RuntimeTools paths apart.",
+                    context={"path": path},
+                )
+            owners[path] = f"Secrets({entry.name})"
+    delivered: dict[str, str] = {}
+    for entry in secrets:
+        for secret in entry.entries:
+            for target in secret.targets:
+                if isinstance(target, SecretEnv):
+                    continue
+                if delivered.setdefault(target.path, entry.name) != entry.name:
+                    raise ValidationError(
+                        f"Secrets({entry.name}) and Secrets({delivered[target.path]}) both "
+                        f"deliver a secret to {target.path}.",
+                        hint="Give each delivered file its own path.",
+                        context={"path": target.path},
+                    )
+    return result
+
+
+def _suffixed(path: str, name: str) -> str:
+    """*path* with ``-<name>`` appended to its stem."""
+    pure = PurePosixPath(path)
+    return str(pure.with_name(f"{pure.stem}-{name}{pure.suffix}"))
+
+
+def _variant_kernel(items: Sequence[Declaration]) -> FluentKernel | None:
+    kernel = next((item for item in items if isinstance(item, Kernel)), None)
+    return None if kernel is None else _kernel(kernel)
+
+
 def _kernel(kernel: Kernel) -> FluentKernel:
+    """The compiler's kernel: tag ``v<version>`` stays ``source_ref=None``."""
+    common: dict[str, Any] = {
+        "version": kernel.version,
+        "config_file": kernel.config,
+        "cmdline": kernel.cmdline or None,
+        "tdx": kernel.tdx,
+    }
     source = kernel.source
-    if (
-        not isinstance(source, Git)
-        or source.ref != f"v{kernel.version}"
-        or source.subdir is not None
-        or source.submodules
-    ):
-        raise ValidationError(
-            f"Kernel {kernel.version}: the compiler clones tag v{kernel.version} of a git "
-            f"repository; {source!r} does not lower yet.",
-            hint=f"Use Git(url, 'v{kernel.version}').",
-        )
+    if isinstance(source, Http):
+        if source.sha256 is None:
+            raise ValidationError(
+                f"Kernel {kernel.version}: Http({source.url!r}) needs sha256=; the kernel "
+                "archive is not a lockfile source, so its digest is pinned in the recipe.",
+                hint="Pass Http(url, sha256=...), or use Git(url, ref).",
+            )
+        return FluentKernel(**common, source_archive=source.url, source_sha256=source.sha256)
     return FluentKernel(
-        version=kernel.version,
-        config_file=kernel.config,
-        cmdline=kernel.cmdline or None,
-        tdx=kernel.tdx,
+        **common,
         source_repo=source.url,
+        source_ref=None if source.ref == f"v{kernel.version}" else source.ref,
+        source_subdir=source.subdir,
+        source_submodules=source.submodules,
     )
 
 
@@ -739,7 +830,11 @@ def _setting_bool(setting: Setting, value: str) -> bool:
 
 
 def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
-    """``MkosiOptions`` for the recipe-wide fields and *settings*."""
+    """``MkosiOptions`` for the recipe-wide fields and one variant's *settings*.
+
+    Settings without a compiler field are written verbatim, unless the compiler
+    writes that key itself.
+    """
     config = recipe.mkosi
     changes: dict[str, Any] = {
         "emit_mode": "native_profiles" if config.layout == "native" else "per_directory",
@@ -749,10 +844,13 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
     }
     environment: dict[str, str] = {}
     passthrough: list[str] = []
+    verbatim: list[tuple[str, str, tuple[str, ...]]] = []
     if recipe.epoch:
         environment["SOURCE_DATE_EPOCH"] = str(recipe.epoch)
     for setting in settings:
         key = (setting.section, setting.key)
+        if key == _BUILD_SOURCES:
+            continue  # per-profile mounts, declared by _declare
         if key == ("Build", "Environment"):
             for value in setting.values:
                 name, sep, assigned = value.partition("=")
@@ -766,16 +864,21 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
             continue
         field = _SINGLE_SETTINGS.get(key) or _BOOL_SETTINGS.get(key)
         if field is None:
-            known = sorted(
-                f"{s}.{k}"
-                for s, k in (*_SINGLE_SETTINGS, *_BOOL_SETTINGS, ("Build", "Environment"))
-            )
-            raise ValidationError(
-                f"Setting {setting.section}.{setting.key} has no compiler mapping.",
-                hint=f"Supported: {', '.join(known)}, Build.SandboxTrees, Build.BuildSources. "
-                "Mirrors, the epoch, the layout and the generated helper files are Recipe "
-                "and Mkosi fields.",
-            )
+            mapped = [
+                f"Setting({s!r}, {k!r}, ...)"
+                for s, k in (*_SINGLE_SETTINGS, *_BOOL_SETTINGS, *_LIST_SETTINGS)
+                if k == setting.key
+            ]
+            if mapped or setting.key in _COMPILER_KEYS:
+                alternative = mapped[0] if mapped else _COMPILER_KEYS[setting.key]
+                raise ValidationError(
+                    f"Setting {setting.section}.{setting.key}: the compiler writes "
+                    f"{setting.key}= itself.",
+                    hint=f"Declare it with {alternative}.",
+                    context={"setting": f"{setting.section}.{setting.key}"},
+                )
+            verbatim.append((setting.section, setting.key, setting.values or ("",)))
+            continue
         if len(setting.values) != 1:
             raise ValidationError(
                 f"Setting {setting.section}.{setting.key} takes exactly one value.",
@@ -786,6 +889,8 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
         changes["environment"] = environment
     if passthrough:
         changes["environment_passthrough"] = tuple(passthrough)
+    if verbatim:
+        changes["settings"] = tuple(verbatim)
     return MkosiOptions(**changes)
 
 

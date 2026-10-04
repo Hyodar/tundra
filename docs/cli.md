@@ -78,7 +78,7 @@ The text form prints one block per variant:
 
 ```
 Image: debian/trixie (x86_64)  variant=dev  reproducible=yes
-Policy: mutable_ref_policy=warn network_mode=online require_frozen_lock=no require_integrity=yes
+Policy: mutable_ref_policy=warn network_mode=online require_frozen_lock=no
 Parent: default
 Fragments (2): node dev
 Packages (4): curl jq strace systemd

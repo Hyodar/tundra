@@ -44,9 +44,12 @@ class MkosiOptions:
     """Emit ``mkosi.version``."""
     generate_cloud_postoutput: bool = True
     """Emit the Azure/GCP disk conversion postoutput scripts."""
+    settings: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    """``(section, key, values)`` written verbatim to ``mkosi.conf``, one line per value."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sandbox_trees", tuple(self.sandbox_trees))
+        object.__setattr__(self, "settings", tuple(self.settings))
         object.__setattr__(self, "environment", dict(self.environment))
         if self.environment_passthrough is not None:
             object.__setattr__(self, "environment_passthrough", tuple(self.environment_passthrough))

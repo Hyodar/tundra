@@ -95,9 +95,14 @@ class SecretDelivery(Module):
         )
 
     def configure(self, image: Image) -> None:
-        """Build secret-delivery, record the secrets, write the configs, run it at boot."""
-        image.build_packages(*SECRET_DELIVERY_BUILD_PACKAGES)
-        image.build_from(self.source_spec())
+        """Build secret-delivery, record the secrets, write the configs, run it at boot.
+
+        A second delivery on the same profiles reuses the first one's binary.
+        """
+        spec = self.source_spec()
+        if not all(spec.name in p.source_builds for p in image._iter_active_profiles()):
+            image.build_packages(*SECRET_DELIVERY_BUILD_PACKAGES)
+            image.build_from(spec)
         self._add_config(image)
         image.runtime_init(
             f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n",

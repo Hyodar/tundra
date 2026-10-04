@@ -15,7 +15,6 @@ NetworkMode = Literal["online", "offline"]
 class Policy:
     require_frozen_lock: bool = False
     mutable_ref_policy: MutableRefPolicy = "warn"
-    require_integrity: bool = True
     network_mode: NetworkMode = "online"
 
 

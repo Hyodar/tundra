@@ -23,6 +23,7 @@ from tundravm.declarative import (
     Git,
     Group,
     Hook,
+    Http,
     Init,
     Install,
     Kernel,
@@ -272,10 +273,10 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
         Setting("Distribution", "Mirror", ("https://x",)),
         Setting("Output", "Seed", ("a", "b")),
         Setting("Build", "WithNetwork", ("maybe",)),
-        Kernel("6.1", Git("https://example.com/linux", "main")),
+        Kernel("6.1", Http("https://example.com/linux-6.1.tar.xz")),
     ],
 )
-def test_lowering_rejects_unmapped_recipe_wide_items(item: Setting | Kernel) -> None:
+def test_lowering_rejects_inexpressible_settings_and_kernels(item: Setting | Kernel) -> None:
     with pytest.raises(ValidationError):
         lower(Recipe("r", Fragment("c", items=(item,))))
 
@@ -332,14 +333,15 @@ def test_chained_variant_inherits_its_parents_target() -> None:
     assert img.state.effective_profile("b").output_targets == ("azure",)
 
 
-def test_variant_changing_recipe_wide_settings_raises() -> None:
+def test_variant_with_its_own_settings_lowers_standalone() -> None:
     common = Fragment("c", items=(Package("curl"),))
     variants = (
         Variant("default"),
         Variant("v", add=Fragment("s", items=(Setting("Output", "Seed", ("x",)),))),
     )
-    with pytest.raises(ValidationError, match="recipe-wide"):
-        lower(Recipe("r", common, variants=variants))
+    img = lower(Recipe("r", common, variants=variants))
+    assert img.state.profiles["v"].extends is None
+    assert img.mkosi_for("v").seed == "x" and img.mkosi.seed is None
 
 
 def test_lowering_selected_variants_keeps_the_default() -> None:

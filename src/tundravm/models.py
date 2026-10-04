@@ -300,11 +300,23 @@ class DebloatConfig:
 
 @dataclass(frozen=True, slots=True)
 class Kernel:
+    """The kernel the build phase compiles when ``config_file`` is set.
+
+    The source is the git repository ``source_repo`` at ``source_ref`` (``None``:
+    tag ``v<version>``), optionally a ``source_subdir`` of it with submodules, or
+    the tarball ``source_archive`` checked against ``source_sha256`` instead.
+    """
+
     version: str | None = None
     config_file: str | Path | None = None
     cmdline: str | None = None
     tdx: bool = False
     source_repo: str = "https://github.com/gregkh/linux"
+    source_ref: str | None = None
+    source_subdir: str | None = None
+    source_submodules: bool = False
+    source_archive: str | None = None
+    source_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

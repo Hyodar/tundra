@@ -528,3 +528,19 @@ def test_cli_bake_one_variant_against_a_lock_of_every_variant(cli_recipe: Path) 
         )
         assert code == 0, err
         assert "E_LOCKFILE" not in err
+
+
+def test_cli_bake_keeps_a_different_lockfile_in_out(cli_recipe: Path, tmp_path: Path) -> None:
+    assert run_cli("lock", cli_recipe)[0] == 0  # build/tundravm.lock: every variant
+    committed = (tmp_path / "build" / "tundravm.lock").read_text()
+    assert run_cli("lock", cli_recipe, "--path", "app.lock", "--variant", "default")[0] == 0
+    assert (tmp_path / "app.lock").read_text() != committed
+    code, _, err = run_cli("bake", cli_recipe, "--lockfile", "app.lock", "--variant", "default")
+    assert code == 0, err
+    assert (tmp_path / "build" / "tundravm.lock").read_text() == committed
+    payload = json.loads((tmp_path / "build" / "bake-result.json").read_text())
+    assert payload["declarative"]["lockfile"] == "app.lock"
+
+    code, _, err = run_cli("bake", cli_recipe, "--out", "fresh", "--lockfile", "app.lock", "-q")
+    assert code == 2 and "E_LOCKFILE" in err  # the subset lock is still what the bake reads
+    assert (tmp_path / "fresh" / "tundravm.lock").read_text() == (tmp_path / "app.lock").read_text()

@@ -89,7 +89,6 @@ def test_explain_structure() -> None:
     assert info["policy"] == {
         "require_frozen_lock": False,
         "mutable_ref_policy": "warn",
-        "require_integrity": True,
         "network_mode": "online",
     }
 
@@ -190,7 +189,12 @@ def test_explain_includes_kernel() -> None:
     assert info["kernel"] == {
         "cmdline": "quiet",
         "config_file": None,
-        "source_repo": "https://github.com/gregkh/linux",
+        "source": {
+            "ref": "v6.12.1",
+            "repo": "https://github.com/gregkh/linux",
+            "subdir": None,
+            "submodules": False,
+        },
         "tdx": True,
         "version": "6.12.1",
     }

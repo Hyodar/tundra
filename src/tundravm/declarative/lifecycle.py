@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal, get_args
@@ -628,28 +628,33 @@ def bake_image(
     backend: BuildBackend | None,
     out: Path,
     reporter: Reporter | None = None,
+    lock_source: Path | None = None,
 ) -> tuple[BakeResult, tuple[Artifact, ...]]:
     """Bake *img* into *out*, frozen against *locked*, and record the artifact manifest.
 
-    *locked* is written to ``out/tundravm.lock`` first; ``None`` bakes unfrozen
-    with whatever lockfile ``out`` already holds.
+    *locked* (read from *lock_source*, when it came from a file) is written to
+    ``out/tundravm.lock`` when that file is absent or identical. A different
+    lockfile already there is left alone: the bake reads *lock_source* (or a
+    scratch copy of *locked*) instead, and ``bake-result.json`` records which
+    lockfile it used. ``None`` bakes unfrozen with whatever lockfile ``out`` holds.
     """
     destination = Path(out)
     destination.mkdir(parents=True, exist_ok=True)
     lock_path = destination / LOCK_FILENAME
-    if locked is not None:
-        write_lock(locked, lock_path)
-    saved = (img.build_dir, img.backend)
-    img.build_dir = destination
-    if backend is not None:
-        img.backend = backend
-    try:
-        result = img.bake(
-            destination, frozen=locked is not None, reporter=reporter, profiles=profiles
-        )
-        simulated = img.backend is not None and img.backend.name == INPROCESS
-    finally:
-        img.build_dir, img.backend = saved
+    with ExitStack() as stack:
+        used = _bake_lock(locked, lock_path, lock_source, stack)
+        saved = (img.build_dir, img.backend, img.lock_file)
+        img.build_dir = destination
+        img.lock_file = None if used == lock_path else used
+        if backend is not None:
+            img.backend = backend
+        try:
+            result = img.bake(
+                destination, frozen=locked is not None, reporter=reporter, profiles=profiles
+            )
+            simulated = img.backend is not None and img.backend.name == INPROCESS
+        finally:
+            img.build_dir, img.backend, img.lock_file = saved
     tree = read_tree(destination / "mkosi")
     recipe_digest = (
         locked.recipe_digest
@@ -663,8 +668,32 @@ def bake_image(
         "simulated": simulated,
         "tree_digest": tree.digest,
     }
+    if locked is not None:
+        source = lock_source if lock_source is not None else lock_path
+        # None: an in-memory Lock read through a scratch copy
+        payload[MANIFEST_KEY]["lockfile"] = (
+            str(source) if lock_source is not None or used == lock_path else None
+        )
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result, read_artifacts(manifest)
+
+
+def _bake_lock(
+    locked: Lock | None, lock_path: Path, lock_source: Path | None, stack: ExitStack
+) -> Path:
+    """The lockfile a bake into ``lock_path.parent`` reads; never replaces a different one."""
+    if locked is None:
+        return lock_path
+    text = locked.text()
+    if not lock_path.is_file() or lock_path.read_text(encoding="utf-8") == text:
+        write_lock(locked, lock_path)
+        return lock_path
+    if lock_source is not None and lock_source.is_file():
+        if lock_source.read_text(encoding="utf-8") == text:
+            return lock_source
+    scratch = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="tundravm-lock-")))
+    write_lock(locked, scratch / LOCK_FILENAME)
+    return scratch / LOCK_FILENAME
 
 
 def bake(

@@ -59,6 +59,11 @@ def _fail(owner: object, message: str, *, hint: str | None = None) -> Validation
     return ValidationError(f"{type(owner).__name__}: {message}", hint=hint)
 
 
+def _recipe_name(recipe: Go | Cargo | Dotnet) -> str:
+    """The public alias of a build recipe (its class is the internal ``GoBuild``, ...)."""
+    return "Go" if isinstance(recipe, Go) else "Cargo" if isinstance(recipe, Cargo) else "Dotnet"
+
+
 def _freeze(owner: object, *names: str) -> None:
     """Turn list values of the tuple fields *names* into tuples."""
     for name in names:
@@ -905,7 +910,7 @@ class Build:
                 raise _fail(
                     self,
                     f"build {self.name!r} takes packages and env on its recipe.",
-                    hint=f"Pass them to {type(self.recipe).__name__}(packages=..., env=...).",
+                    hint=f"Pass them to {_recipe_name(self.recipe)}(packages=..., env=...).",
                 )
         if self.cache_key is not None and (
             not isinstance(self.cache_key, str) or not _CACHE_KEY.fullmatch(self.cache_key)

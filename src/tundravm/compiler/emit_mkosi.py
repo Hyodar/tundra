@@ -11,9 +11,11 @@ Generates complete, buildable mkosi project directories per profile, including:
 from __future__ import annotations
 
 import hashlib
+import re
 import shlex
 import shutil
 import textwrap
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol, get_args
@@ -271,6 +273,14 @@ class EmitConfig:
     environment: dict[str, str] | None = None
     environment_passthrough: tuple[str, ...] | None = None
     emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
+    settings: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    """Verbatim ``[section] key=value`` lines the compiler does not write itself."""
+    profiles: Mapping[str, EmitConfig] = field(default_factory=dict)
+    """Profiles with their own settings or kernel; the rest use this configuration."""
+
+    def for_profile(self, name: str) -> EmitConfig:
+        """The configuration profile *name* is emitted with."""
+        return self.profiles.get(name, self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,16 +455,95 @@ def _useradd_command(user: UserSpec) -> str:
     return " ".join(parts)
 
 
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+"""A full commit hash: fetched by hash, since ``git clone --branch`` takes names only."""
+
+
+def _tagged_kernel(kernel: Kernel) -> bool:
+    """Whether *kernel* is tag ``v<version>`` of a repository, the historical clone."""
+    ref = kernel.source_ref
+    return (
+        kernel.source_archive is None
+        and (ref is None or ref == f"v{kernel.version or 'unknown'}")
+        and not (kernel.source_subdir or kernel.source_submodules)
+    )
+
+
+def _kernel_fetch(kernel: Kernel) -> list[str]:
+    """Shell lines that put the kernel tree at ``$KERNEL_CACHE/src``."""
+    version = kernel.version or "unknown"
+    if kernel.source_archive is not None:
+        archive = '"$KERNEL_CACHE/linux.tar"'
+        lines = [f"curl -fsSL {shlex.quote(kernel.source_archive)} -o {archive}"]
+        if kernel.source_sha256 is not None:
+            lines.append(f'echo "{kernel.source_sha256}  $KERNEL_CACHE/linux.tar" | sha256sum -c -')
+        lines.extend(
+            (
+                'mkdir -p "$KERNEL_CACHE/src"',
+                f'tar -xf {archive} -C "$KERNEL_CACHE/src" --strip-components=1',
+            )
+        )
+        return lines
+    if _tagged_kernel(kernel):
+        return [
+            'git clone --depth 1 --branch "v${KERNEL_VERSION}" \\',
+            f'    {kernel.source_repo} "$KERNEL_CACHE/src"',
+        ]
+    ref = kernel.source_ref or f"v{version}"
+    repo = shlex.quote(kernel.source_repo)
+    dest = '"$KERNEL_CACHE/repo"' if kernel.source_subdir else '"$KERNEL_CACHE/src"'
+    if _COMMIT.fullmatch(ref):
+        lines = [
+            f"git init -q {dest}",
+            f"git -C {dest} fetch --depth 1 {repo} {ref}",
+            f"git -C {dest} checkout -q FETCH_HEAD",
+        ]
+        if kernel.source_submodules:
+            lines.append(f"git -C {dest} submodule update --init --recursive --depth 1")
+    else:
+        submodules = (
+            " --recurse-submodules --shallow-submodules" if kernel.source_submodules else ""
+        )
+        lines = [
+            f"git clone --depth 1{submodules} --branch {shlex.quote(ref)} \\",
+            f"    {repo} {dest}",
+        ]
+    if kernel.source_subdir:
+        lines.append(f'ln -s {shlex.quote("repo/" + kernel.source_subdir)} "$KERNEL_CACHE/src"')
+    return lines
+
+
+def _kernel_source_identity(kernel: Kernel) -> str:
+    """What the cache key adds for a source other than tag ``v<version>`` of a repository."""
+    if _tagged_kernel(kernel):
+        return ""
+    if kernel.source_archive is not None:
+        return f"archive:{kernel.source_archive}:{kernel.source_sha256}"
+    return ":".join(
+        (
+            "git",
+            kernel.source_repo,
+            kernel.source_ref or "",
+            kernel.source_subdir or "",
+            str(kernel.source_submodules),
+        )
+    )
+
+
 def _render_kernel_build_script(kernel: Kernel) -> str:
-    """Render a build script that clones, configures, and compiles the Linux kernel."""
+    """Render a build script that fetches, configures, and compiles the Linux kernel."""
     version = kernel.version or "unknown"
     config_hash_source = str(kernel.config_file)
     if kernel.config_file:
         config_path = Path(kernel.config_file)
         if config_path.exists():
             config_hash_source = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    source_identity = _kernel_source_identity(kernel)
+    if source_identity:
+        config_hash_source += "\n" + source_identity
     config_hash = hashlib.sha256(config_hash_source.encode()).hexdigest()[:12]
     cache_key = f"kernel-{version}-{config_hash}"
+    fetch = ("\n" + " " * 12).join(_kernel_fetch(kernel))
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash
         set -euo pipefail
@@ -468,8 +557,7 @@ def _render_kernel_build_script(kernel: Kernel) -> str:
             rm -rf "$KERNEL_CACHE"
             mkdir -p "$KERNEL_CACHE"
 
-            git clone --depth 1 --branch "v${{KERNEL_VERSION}}" \\
-                {kernel.source_repo} "$KERNEL_CACHE/src"
+            {fetch}
 
             cp kernel/kernel.config "$KERNEL_CACHE/src/.config"
             cd "$KERNEL_CACHE/src"
@@ -553,15 +641,16 @@ class DeterministicMkosiEmitter:
 
             profile_dir = destination / profile_name
             _reset_dir(profile_dir)
+            profile_config = config.for_profile(profile_name)
 
             # Generate mkosi.extra/ overlay tree (files, templates, service units)
             self._emit_extra_tree(profile_dir, profile)
 
             # Generate mkosi.skeleton/ tree
-            self._emit_skeleton_tree(profile_dir, profile, config)
+            self._emit_skeleton_tree(profile_dir, profile, profile_config)
 
             # Copy kernel config file if kernel has one
-            self._emit_kernel_config(profile_dir, config)
+            self._emit_kernel_config(profile_dir, profile_config)
 
             # Generate phase scripts + synthetic postinst/finalize
             phase_scripts = self._emit_all_scripts(
@@ -569,7 +658,7 @@ class DeterministicMkosiEmitter:
                 profile_dir=profile_dir,
                 profile=profile,
                 recipe=recipe,
-                config=config,
+                config=profile_config,
             )
 
             # Emit cloud postoutput scripts based on output_targets
@@ -580,7 +669,7 @@ class DeterministicMkosiEmitter:
             # Generate mkosi.conf
             conf_content = self._render_conf(
                 profile_name=profile_name,
-                config=config,
+                config=profile_config,
                 packages=sorted(profile.packages),
                 build_packages=sorted(profile.build_packages),
                 build_sources=profile.build_sources or None,
@@ -627,6 +716,16 @@ class DeterministicMkosiEmitter:
         for profile_name in profile_names:
             _require_profile(recipe, profile_name)
         default_name = recipe.default_profile
+        own_config = sorted(name for name in config.profiles if name != default_name)
+        if own_config:
+            raise ValidationError(
+                "native_profiles mode cannot give a profile its own settings or kernel.",
+                hint=(
+                    "mkosi applies the root mkosi.conf (the default profile) to every profile; "
+                    "use emit_mode='per_directory'."
+                ),
+                context={"profiles": ", ".join(own_config), "operation": "emit_mkosi"},
+            )
         default = recipe.effective_profile(default_name)
         self._validate_profile_phases(profile_name=default_name, profile=default)
 
@@ -1078,6 +1177,9 @@ class DeterministicMkosiEmitter:
     ) -> str:
         distribution, release = _parse_base(config.base)
         lines: list[str] = []
+        extra: dict[str, list[str]] = {}
+        for section, key, values in config.settings:
+            extra.setdefault(section, []).extend(f"{key}={value}" for value in values)
 
         # [Distribution]
         lines.append("[Distribution]")
@@ -1089,6 +1191,7 @@ class DeterministicMkosiEmitter:
             lines.append(f"Architecture={mkosi_arch}")
         if config.mirror:
             lines.append(f"Mirror={config.mirror}")
+        lines.extend(extra.pop("Distribution", ()))
         lines.append("")
 
         # [Output]
@@ -1102,6 +1205,7 @@ class DeterministicMkosiEmitter:
             lines.append(f"OutputDirectory={config.output_directory}")
         if config.reproducible:
             lines.append(f"Seed={config.seed}")
+        lines.extend(extra.pop("Output", ()))
         lines.append("")
 
         # [Build] - reproducibility + network + sandbox settings
@@ -1128,6 +1232,7 @@ class DeterministicMkosiEmitter:
                 build_lines.append(f"SandboxTrees={tree}")
         if config.package_cache_directory:
             build_lines.append(f"PackageCacheDirectory={config.package_cache_directory}")
+        build_lines.extend(extra.pop("Build", ()))
         if build_lines:
             lines.append("[Build]")
             lines.extend(build_lines)
@@ -1160,6 +1265,8 @@ class DeterministicMkosiEmitter:
             if config.kernel.tdx:
                 lines.append("# TDX-enabled kernel required")
 
+        lines.extend(extra.pop("Content", ()))
+
         # Extra trees and skeleton
         lines.append("ExtraTrees=mkosi.extra")
         lines.append("SkeletonTrees=mkosi.skeleton")
@@ -1179,6 +1286,9 @@ class DeterministicMkosiEmitter:
                 lines.append("")
             for script_path in cloud_postoutput_scripts:
                 lines.append(f"PostOutputScripts=scripts/{script_path.name}")
+
+        for section, entries in extra.items():
+            lines.extend(("", f"[{section}]", *entries))
 
         return "\n".join(lines) + "\n"
 

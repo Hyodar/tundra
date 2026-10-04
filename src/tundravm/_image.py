@@ -225,6 +225,12 @@ class Image:
     tools_tree_mirror: str | None = None
     default_profile: str = "default"
     mkosi: MkosiOptions = field(default_factory=MkosiOptions)
+    profile_mkosi: dict[str, MkosiOptions] = field(default_factory=dict)
+    """Profiles whose mkosi options differ from ``mkosi``."""
+    profile_kernels: dict[str, Kernel | None] = field(default_factory=dict)
+    """Profiles whose kernel differs from ``kernel`` (``None``: no kernel)."""
+    lock_file: Path | None = None
+    """The lockfile to read instead of ``<build_dir>/tundravm.lock``."""
     logger: StructuredLogger = field(init=False, default_factory=StructuredLogger, repr=False)
     init: Init = field(init=False, default_factory=Init, repr=False)
     _state: RecipeState = field(init=False, repr=False)
@@ -1165,14 +1171,34 @@ class Image:
             )
         return bake_result
 
+    def mkosi_for(self, profile: str) -> MkosiOptions:
+        """The mkosi options profile *profile* is emitted with."""
+        return self.profile_mkosi.get(profile, self.mkosi)
+
+    def kernel_for(self, profile: str) -> Kernel | None:
+        """The kernel profile *profile* builds."""
+        return self.profile_kernels.get(profile, self.kernel)
+
     def _emit_config(self) -> EmitConfig:
-        """Build an EmitConfig from the Image's settings and ``self.mkosi``."""
-        options = self.mkosi
+        """Build an EmitConfig from the Image's settings and ``self.mkosi``.
+
+        Profiles with their own options or kernel get their own configuration.
+        """
+        own = sorted(set(self.profile_mkosi) | set(self.profile_kernels))
+        return replace(
+            self._emit_config_for(self.mkosi, self.kernel),
+            profiles={
+                name: self._emit_config_for(self.mkosi_for(name), self.kernel_for(name))
+                for name in own
+            },
+        )
+
+    def _emit_config_for(self, options: MkosiOptions, kernel: Kernel | None) -> EmitConfig:
         emit_kwargs: dict[str, object] = {
             "base": self.base,
             "arch": self.arch,
             "reproducible": self.reproducible,
-            "kernel": self.kernel,
+            "kernel": kernel,
             "mirror": self.mirror,
             "tools_tree_mirror": self.tools_tree_mirror,
             "with_network": options.with_network,
@@ -1188,6 +1214,7 @@ class Image:
             "emit_mode": options.emit_mode,
             "environment": dict(options.environment) or None,
             "environment_passthrough": options.environment_passthrough,
+            "settings": options.settings,
         }
         if options.seed is not None:
             emit_kwargs["seed"] = options.seed
@@ -1245,7 +1272,7 @@ class Image:
         return sorted(self._active_profiles)
 
     def _default_lock_path(self) -> Path:
-        return self.build_dir / "tundravm.lock"
+        return self.lock_file if self.lock_file is not None else self.build_dir / "tundravm.lock"
 
     def _compute_lock_digest(self, fallback_digest: str) -> str:
         lock_path = self._default_lock_path()

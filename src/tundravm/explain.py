@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 from ._options import MkosiOptions
 from .compiler import PHASE_ORDER
 from .formats import md_cell, md_table
-from .models import InitScriptEntry, ProfileState, UnitAction, unit_name
+from .models import InitScriptEntry, Kernel, ProfileState, UnitAction, unit_name
 
 if TYPE_CHECKING:
     from ._image import Image
@@ -50,11 +50,11 @@ def describe(
     selected = image._resolve_operation_profile(profile)
     state = image.state
     profile_state = state.effective_profile(selected)
-    kernel = image.kernel
+    kernel = image.kernel_for(selected)
     return {
         "arch": state.arch,
         "base": state.base,
-        "build_options": _describe_build_options(image.mkosi),
+        "build_options": _describe_build_options(image.mkosi_for(selected)),
         "build_packages": sorted(profile_state.build_packages),
         "build_source_mounts": [
             {"dest": dest, "src": src} for src, dest in sorted(profile_state.build_sources)
@@ -72,7 +72,7 @@ def describe(
         else {
             "cmdline": kernel.cmdline,
             "config_file": None if kernel.config_file is None else str(kernel.config_file),
-            "source_repo": kernel.source_repo,
+            "source": _describe_kernel_source(kernel),
             "tdx": kernel.tdx,
             "version": kernel.version,
         },
@@ -549,6 +549,17 @@ def _describe_build_options(options: MkosiOptions) -> dict[str, object]:
         else:
             described[name] = value
     return described
+
+
+def _describe_kernel_source(kernel: Kernel) -> dict[str, object]:
+    if kernel.source_archive is not None:
+        return {"sha256": kernel.source_sha256, "url": kernel.source_archive}
+    return {
+        "ref": kernel.source_ref or f"v{kernel.version}",
+        "repo": kernel.source_repo,
+        "subdir": kernel.source_subdir,
+        "submodules": kernel.source_submodules,
+    }
 
 
 def _render_kernel(kernel: dict[str, Any]) -> str:

@@ -676,7 +676,13 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
             extra = {"source": "cli", "path": str(lock_path)}
             reporter.emit(Event("log", None, f"frozen against {lock_path}", 0.0, extra))
         result, artifacts = bake_image(
-            img, names, locked=locked, backend=backend, out=destination, reporter=reporter
+            img,
+            names,
+            locked=locked,
+            backend=backend,
+            out=destination,
+            reporter=reporter,
+            lock_source=None if locked is None else lock_path,
         )
     finally:
         reporter.close()
