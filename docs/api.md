@@ -48,9 +48,11 @@ from tundravm import Image
 | --- | --- |
 | `state -> RecipeState` | Property. Raw recipe state; `state.profiles[name]` is a `ProfileState` |
 | `profile_names -> tuple[str, ...]` | Property. Every declared profile, sorted |
-| `profile(name) -> Profile` | Declare profile `name` and return its handle (see below) |
-| `profiles(*names) -> ContextManager[Self]` | Scope declarations to several profiles at once |
+| `profile(name, *, extends=<default profile>) -> Profile` | Declare profile `name` and return its handle (see below). A new profile extends the default profile; `extends=None` makes it standalone |
+| `profiles(*names, extends=<default profile>) -> ContextManager[Self]` | Scope declarations to several profiles at once |
 | `all_profiles() -> ContextManager[Self]` | Scope to every profile declared so far (sorted by name) |
+
+A profile extends the default profile: it compiles to the default's packages, files, users, services, hooks, init scripts and modules plus its own declarations, and its own declaration wins on the same file path, unit, user, partition or repository name. `output_targets` and `debloat` fall back to the default when unset.
 
 `Profile` (`from tundravm import Profile`) works two ways. As a context manager, `with img.profile("azure"):` scopes every `img.*` call inside the block to that profile (the `as` target is the `Image`). As an object, it carries the declaration API bound to that profile, and each call returns the `Profile`, so chains stay on it:
 
@@ -66,7 +68,7 @@ azure.service("agent", command="/usr/bin/agent", env={"LOG": "info"})
 | `install`, `file`, `directory`, `template`, `user`, `service`, `apply`, `output_targets`, `debloat`, `run`, `hook`, `repository`, `partition`, `add_init_script` | Same signatures as on `Image`, run with only this profile active; return the `Profile` |
 | any other `Image` method returning `Self` (`backports`, `skeleton`, `build_install`, `ssh`, ...) | Same, resolved dynamically (typed as `(...) -> Profile`) |
 | `state -> ProfileState` | Property. This profile's state |
-| `explain()`, `summary()`, `explain_debloat()`, `applied_modules()` | `Image` counterparts with `profile=name` |
+| `explain()`, `summary()`, `explain_debloat()`, `applied_modules()` | `Image` counterparts with `profile=name` (`applied_modules()` lists only the profile's own modules) |
 | `check() -> list[Diagnostic]` | Diagnostics for this profile only |
 | `compile(path, *, force=False)`, `lock(path=None)`, `diff(against)`, `bake(output_dir=None, *, frozen=False, force=False)` | Run with only this profile active |
 | `measure(*, backend)`, `deploy(*, target, parameters=None, memory=None, cpus=None)` | `Image` counterparts with `profile=name` |
@@ -142,11 +144,13 @@ Hooks run on the host with mkosi variables (`$BUILDROOT`, `$DESTDIR`, `$BUILDDIR
 | Method | Description |
 | --- | --- |
 | `apply(*modules) -> Self` | Call `module.apply(img)` for each argument in order; chainable. Accepts any `Applicable`; `Module` subclasses are recorded |
-| `applied_modules(profile=None) -> tuple[Module, ...]` | `Module` instances applied to one profile, in apply order |
+| `applied_modules(profile=None, *, inherited=False) -> tuple[Module, ...]` | `Module` instances applied to one profile, in apply order; `inherited=True` puts the extended profile's modules first |
 | `explain(*, profile=None) -> dict[str, object]` | Dry-run description of the recipe for one profile |
 | `summary(*, profile=None) -> str` | Human-readable form of `explain()` |
+| `check(*, profiles=None) -> list[Diagnostic]` | Lint the active profiles (or `profiles`); see [Diagnostics](#diagnostics) |
+| `diff(against) -> TreeDiff` | Compile the active profiles to a temp dir and diff against the tree at `against`; writes nothing |
 
-The same views are available from the shell: `tundravm explain RECIPE` (`python -m tundravm --help`). See [cli.md](cli.md).
+The same views are available from the shell: `tundravm explain`, `check` and `diff`. See [cli.md](cli.md).
 
 ### Lifecycle
 
@@ -154,11 +158,13 @@ The same views are available from the shell: `tundravm explain RECIPE` (`python 
 | --- | --- |
 | `set_policy(policy) -> Self` | Replace the `Policy` |
 | `lock(path=None) -> Path` | Write the lockfile for the active profiles; default `build_dir / "tundravm.lock"` |
-| `compile(path, *, force=False) -> CompileResult` | Emit the mkosi tree for the active profiles; skipped when digest and path are unchanged |
+| `lock_status(path=None) -> LockDrift` | Compare the lockfile with the recipe section by section; never writes. `LockfileError` if the lockfile is missing |
+| `compile(path, *, force=False) -> CompileResult` | Emit the mkosi tree for the active profiles; skipped when digest and path are unchanged. Each profile directory is recreated, so files dropped from the recipe disappear |
 | `emit_mkosi(path) -> CompileResult` | Deprecated alias of `compile()` |
-| `bake(output_dir=None, *, frozen=False, force=False) -> BakeResult` | `compile()` into `<output_dir>/mkosi`, then build each active profile with the backend into `<output_dir>/<profile>/`; `frozen=True` fails on a stale lockfile |
-| `measure(*, backend, profile=None) -> Measurements` | Derive measurements from the last `bake()`; `backend` is `"rtmr"`, `"azure"` or `"gcp"` |
-| `deploy(*, target, profile=None, parameters=None, memory=None, cpus=None) -> DeployResult` | Deploy an artifact from the last `bake()`; `parameters` are adapter-specific strings |
+| `bake(output_dir=None, *, frozen=False, force=False) -> BakeResult` | Run `check()` (error-level findings raise `ValidationError`), `compile()` into `<output_dir>/mkosi`, then build each active profile with the backend into `<output_dir>/<profile>/` and write `<output_dir>/bake-result.json`; `frozen=True` fails on a stale lockfile with `LockfileError` listing the drifted sections |
+| `measure(*, backend, profile=None) -> Measurements` | Derive measurements from `last_bake()`; `backend` is `"rtmr"`, `"azure"` or `"gcp"` |
+| `deploy(*, target, profile=None, parameters=None, memory=None, cpus=None) -> DeployResult` | Deploy an artifact from `last_bake()`; `parameters` are adapter-specific strings |
+| `last_bake(build_dir=None) -> BakeResult` | The latest bake result, loaded from `<build_dir>/bake-result.json` when this process has not baked. With `build_dir` it reloads from that directory (for a bake made with `output_dir`). `StateError` if there is none |
 
 `profile=None` is accepted only when exactly one profile is active.
 
@@ -181,13 +187,17 @@ The same views are available from the shell: `tundravm explain RECIPE` (`python 
 | `RecipeState` | `base`, `arch`, `default_profile`, `profiles` |
 | `CompileResult` | `path`, `profiles`, `digest`; behaves like a `Path` (`/`, `exists()`) |
 | `BakeRequest` | `profile`, `build_dir`, `emit_dir`, `output_targets`; passed to backends |
-| `BakeResult` | `profiles: dict[str, ProfileBuildResult]`; `artifact_for(profile=, target=) -> ArtifactRef \| None` |
+| `BakeResult` | `profiles: dict[str, ProfileBuildResult]`, `lock_digest`, `backend`, `created_at`; `artifact_for(profile=, target=) -> ArtifactRef \| None`; `save(build_dir)`, `BakeResult.load(build_dir)` for `bake-result.json` |
+| `Diagnostic` | One lint finding: `level` (`error`/`warning`/`info`), `code`, `message`, `hint`, `profile`, `subject`; `to_dict()` |
+| `TreeDiff`, `FileChange` | Result of `Image.diff()`: the changed files and their unified diffs |
 | `Measurements` | `backend`, `values`; `to_json(path=None)`, `to_cbor(path=None)`, `verify(expected) -> VerificationResult` |
 
 Other useful imports:
 
 - `tundravm.modules`: `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools`, `Init`, and the `Module` base class (`name`, `requires`, `init_priority`; `setup`, `install`, `init_script`, `check`; final `apply`). See [module-authoring.md](module-authoring.md).
-- `tundravm.backends`: `LimaMkosiBackend`, `NixMkosiBackend`, `LocalLinuxBackend`, `InProcessBackend` (tests), `BuildBackend`.
+- `tundravm.backends`: `LimaMkosiBackend`, `NixMkosiBackend`, `LocalLinuxBackend`, `InProcessBackend` (tests), `BuildBackend` (`name`, `requirements()`, `mount_plan()`, `prepare()`, `execute()`, `cleanup()`), `Requirement`.
+- `tundravm.lockfile`: `LockDrift` (`changed`, `added`, `removed`, `is_clean`, `render()`), `compare_lock`, `section_digests`.
+- `tundravm.testing`: test helpers and pytest fixtures; see [testing.md](testing.md).
 - `tundravm.platforms`: `AzurePlatform`, `GcpPlatform`.
 - `tundravm.build_cache`: `Build`, `Cache` for cached source builds in `build` hooks.
 
@@ -197,12 +207,37 @@ All errors derive from `TdxError(message, *, code, hint=None, context=None)` and
 
 | Class | Code | Raised when |
 | --- | --- | --- |
-| `ValidationError` | `E_VALIDATION` | Bad arguments, duplicate names, missing backend |
+| `ValidationError` | `E_VALIDATION` | Bad arguments, duplicate names, missing backend, unmet module `requires`, `bake()` with error-level lint findings |
 | `LockfileError` | `E_LOCKFILE` | `bake(frozen=True)` with a missing or stale lockfile |
 | `ReproducibilityError` | `E_REPRODUCIBILITY` | Artifact digests differ between equivalent builds |
 | `BackendExecutionError` | `E_BACKEND_EXECUTION` | mkosi/backend failure, unsupported mkosi version |
-| `MeasurementError` | `E_MEASUREMENT` | `measure()` without artifacts or unknown backend |
-| `DeploymentError` | `E_DEPLOYMENT` | `deploy()` without a baked artifact for the target |
+| `MeasurementError` | `E_MEASUREMENT` | `measure()` for a profile the last bake did not build, or unknown backend |
+| `DeploymentError` | `E_DEPLOYMENT` | `deploy()` without a baked artifact for the target, or a missing deploy tool |
+| `StateError` | `E_STATE` | `measure()`/`deploy()`/`last_bake()` with no `bake-result.json` |
 | `PolicyError` | `E_POLICY` | Policy violation (non-frozen bake, mutable ref, offline network) |
 
 `ErrorCode` is a `StrEnum` of the codes above.
+
+## Diagnostics
+
+`Image.check()` and `tundravm check` return `Diagnostic`s. Codes are stable.
+
+| Code | Level | Finding |
+| --- | --- | --- |
+| `service-user-missing` | error | A service runs as a user the profile never creates |
+| `file-path-duplicate` | error | Two files at the same path |
+| `file-path-relative` | error | A file path that is not absolute |
+| `service-command-not-shipped` | warning | A service command that no package or file provides |
+| `output-target-platform-mismatch` | warning | An `azure`/`gcp` target without its platform module |
+| `profile-empty` | info | A profile with no declarations of its own |
+| `init-priority-collision` | warning | Two init scripts at the same priority |
+| `backend-missing` | warning | No backend, so `bake()` cannot run |
+| `debloat-removes-needed-unit` | warning | Debloat masks a unit a declared service needs |
+| `debloat-removes-declared-file` | warning | Debloat deletes a declared file |
+| `secret-undelivered` | warning | A secret with no delivery target, or secrets declared with no delivery at boot |
+| `disk-key-undefined` | error | `DiskEncryption` reads a key no `KeyGeneration` declares |
+| `disk-key-path-mismatch` | warning | A disk reads a key path the key never writes |
+| `key-pipe-outside-run` | info | A pipe-strategy key whose pipe is not under `/run` |
+| `platform-target-missing` | warning | `AzurePlatform`/`GcpPlatform` applied without its output target |
+
+`bake()` refuses recipes with any error-level finding.

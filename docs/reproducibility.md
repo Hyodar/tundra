@@ -51,3 +51,18 @@ img.set_policy(policy)
 img.lock()
 img.bake(frozen=True)
 ```
+
+## Lockfile sections
+
+Lockfile schema v2 adds `sections`: a SHA-256 per recipe section (`base`, `arch`, `default_profile`, `init_scripts`, `profiles.<name>.<section>`), computed over the same canonical JSON as `recipe_digest`. The whole-recipe digest is unchanged and is still what frozen bakes enforce. The sections only explain a mismatch.
+
+```python
+drift = img.lock_status()      # reads <build_dir>/tundravm.lock, never writes
+drift.is_clean                 # False when anything changed
+drift.changed, drift.added, drift.removed
+print(drift.render())          # "~ profiles.default.packages: +htop" or "lock is up to date"
+```
+
+`lock_status(path=None)` returns a `LockDrift` and raises `LockfileError` when the lockfile is missing or unreadable. Item detail comes from the recipe payload embedded in the lockfile, and only when it still matches the recorded section digest. From the shell: `tundravm lock RECIPE --check`.
+
+Lockfiles written before v2 still pass frozen bakes, but `lock --check` reports every section as `+` until you re-lock.

@@ -11,237 +11,216 @@
 
 <br>
 
-Python SDK for declaratively building, measuring, and deploying TDX-enabled VM images. Define your image as code, compile it to a reproducible [mkosi](https://github.com/systemd/mkosi) project tree, and bake it into a bootable disk for QEMU, Azure, or GCP.
+Python SDK for building, measuring, and deploying TDX-enabled VM images. Write the image as a Python recipe, compile it to a reproducible [mkosi](https://github.com/systemd/mkosi) project tree, and bake it into a bootable disk for QEMU, Azure, or GCP.
 
 ## Quickstart
 
 ```python
+# node.py
 from tundravm import Image
 from tundravm.backends import LimaMkosiBackend
 
-img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
+img = Image(base="debian/trixie", backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 img.install("systemd", "curl", "jq")
-img.file("/etc/motd", content="TDX node\n")
 img.user("app", system=True, shell="/bin/false")
-img.service("app", command="/usr/bin/app")
-img.debloat(enabled=True)
+img.service("app", command="/usr/bin/app", user="app", env={"LOG_LEVEL": "info"})
 img.output_targets("qemu")
-
-img.compile("build/mkosi")           # emit mkosi project tree
-img.lock()                            # write build/tundravm.lock
-result = img.bake(frozen=True)        # build with lockfile enforcement
 ```
-
-`compile()` produces a standard mkosi directory you can inspect, diff, or build manually with `mkosi build`. `bake()` runs the full pipeline.
-
-## CLI
-
-`uv sync` installs a `tundravm` command (also `python -m tundravm`). Point it at a Python file that binds an `Image` to `img` or defines `build() -> Image`:
 
 ```bash
-tundravm explain recipe.py --profile azure   # dry run: what the recipe produces
-tundravm digest recipe.py                    # recipe digest used by lockfiles
-tundravm compile recipe.py --out build/mkosi
-tundravm bake recipe.py --lock --all-profiles
-tundravm measure recipe.py --backend rtmr       # expected TDX measurements of the last bake
-tundravm deploy recipe.py --target qemu         # boot the last baked artifact
-tundravm doctor recipe.py                       # check host tools for the recipe's backend
-tundravm check recipe.py --strict               # lint: undeclared users, shadowed files, ...
-tundravm diff recipe.py --against build/mkosi    # what a recipe change does to the tree
-tundravm new recipes/node.py --backend nix   # starter recipe file
+tundravm explain node.py                  # dry run: what the image will contain
+tundravm check node.py                    # lint the recipe
+tundravm compile node.py                  # emit build/mkosi
+tundravm bake node.py --lock              # write build/tundravm.lock, then build
+tundravm measure node.py --backend rtmr   # expected TDX measurements
+tundravm deploy node.py --target qemu     # boot the artifact
 ```
 
-See [`docs/cli.md`](docs/cli.md) for recipe resolution rules, options, and exit codes.
+`uv add tundravm` (or `uv sync` in this repo) installs the `tundravm` command. `tundravm new node.py` writes a starter recipe. The [tutorial](docs/tutorial.md) walks through every step with real output.
 
 ## Why
 
-Hand-maintained mkosi trees for TDX images are hard to review, easy to drift, and painful to keep reproducible across cloud targets. This SDK lets you express the same image as a short Python script and get:
+Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and are painful to keep reproducible across cloud targets. A recipe is a short Python file that gives you:
 
-- **Deterministic output** — the same recipe always produces the same mkosi tree, byte-for-byte
-- **Multi-cloud from one definition** — Azure VHD, GCP tar.gz, and QEMU qcow2 from a single `Image`
-- **Composable modules** — drop in `KeyGeneration`, `DiskEncryption`, `SecretDelivery` and they wire themselves into the boot sequence
-- **Lockfile + policy** — frozen bakes, mutable-ref enforcement, integrity checks for CI
+- **Deterministic output.** The same recipe always produces the same mkosi tree, byte for byte.
+- **Multi-cloud from one definition.** Azure VHD, GCP tar.gz, and QEMU qcow2 from one `Image`.
+- **Composable modules.** `KeyGeneration`, `DiskEncryption`, `SecretDelivery` wire themselves into the boot sequence.
+- **Lockfile and policy.** Frozen bakes, mutable-ref enforcement, integrity checks for CI.
 
-The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) repository from ~250 lines of Python. Integration tests verify the SDK output matches the upstream tree.
+The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) repository in under 250 lines of Python. A golden test checks the output against the upstream tree.
 
-## Backends
+## What you get
 
-The SDK provides three build backends:
-
-| Backend | When to use |
-|---|---|
-| `LimaMkosiBackend` | Default. Runs mkosi inside a Lima VM with Nix. Works on macOS and Linux. |
-| `NixMkosiBackend` | Native Linux with [Nix](https://nixos.org/download.html) installed. Runs mkosi via `nix develop` directly on the host. |
-| `LocalLinuxBackend` | Direct `mkosi` invocation on Linux with `sudo` or `unshare`. No Nix required. |
-
-```python
-from tundravm.backends import LimaMkosiBackend, NixMkosiBackend, LocalLinuxBackend
-
-# Lima (recommended — reproducible, cross-platform)
-Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
-
-# Native Nix (Linux only, faster — no VM overhead)
-Image(backend=NixMkosiBackend())
-
-# Direct mkosi (Linux only, requires mkosi in PATH)
-Image(backend=LocalLinuxBackend())
-```
+- **Dry-run explain.** `tundravm explain` / `img.explain()` lists packages, files with digests, users, services, hooks, init scripts and modules per profile, without compiling.
+- **Linter.** `tundravm check` / `img.check()` returns `Diagnostic`s: services running as undeclared users, duplicate or relative file paths, missing platform modules, init priority collisions, undelivered secrets, and module-specific checks. `bake()` refuses recipes with errors.
+- **Drift diff.** `tundravm diff` shows a recipe change as a unified diff of the compiled tree. `compile --check` fails CI when the committed tree is stale.
+- **Lockfile.** `tundravm lock` pins the recipe digest per section. `lock --check` names what drifted (`~ profiles.default.packages: +htop`). `bake --frozen` refuses a stale lock.
+- **Multi-cloud.** Per-profile output targets, measurements (`rtmr`, `azure`, `gcp`) and deploy adapters (`qemu`, `azure`, `gcp`).
+- **Modules.** One `Module` base class with `requires`, init priorities and checks.
+- **Testing toolkit.** `tundravm.testing` and a pytest plugin: compiled-tree readers, lint asserts, golden trees, in-process bakes.
 
 ## Profiles
 
-Profiles let you customize packages, services, and output targets per deployment environment. Anything inside a `with img.profile(...)` block only applies to that profile. `img.profile(name)` also returns a `Profile` handle you can declare on directly.
+A profile is a variant of the image, such as one per cloud. A profile extends the default profile: its image is everything declared on the default plus its own additions. On a conflict (same file path, unit, user) the profile wins. `output_targets` and `debloat` fall back to the default when the profile does not set them.
 
 ```python
-from tundravm import Image
-from tundravm.backends import LimaMkosiBackend
 from tundravm.modules import Devtools
 from tundravm.platforms import AzurePlatform, GcpPlatform
 
-img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
-img.output_targets("qemu")
-
-with img.profile("azure"):
-    AzurePlatform().apply(img)
+azure = img.profile("azure")
+azure.apply(AzurePlatform()).install("waagent")
 
 img.profile("gcp").apply(GcpPlatform())
-img.profile("devtools").apply(Devtools())
+
+with img.profile("dev"):
+    img.apply(Devtools())
 
 with img.all_profiles():
-    results = img.bake()
+    img.bake()
 ```
+
+`img.profile(name)` returns a `Profile`. Calls on it declare into that profile and chain. `with img.profile(name):` scopes every `img.*` call in the block. Pass `extends=None` for a standalone profile. On the CLI, select profiles with `--profile NAME` (repeatable) or `--all-profiles`.
 
 ## Modules
 
-Modules are composable units that add build steps, config files, systemd services, and init scripts to an image. Call `module.apply(img)`, or `img.apply(KeyGeneration(), DiskEncryption())` to apply several in order, and the module handles the rest. Every module subclasses `tundravm.modules.Module`: `apply()` refuses to run before the modules it `requires`, records it in `img.applied_modules()`, and `img.check()` runs the module's own checks (e.g. a disk `key_name` that no `KeyGeneration` declares).
-
-**Built-in modules** (`tundravm.modules`):
-
-| Module | What it does |
-|---|---|
-| `KeyGeneration` | Key generation via TPM-backed random or named-pipe strategies, including multiple named keys |
-| `DiskEncryption` | LUKS2 disk setup with disk naming, format policy, mount-dir controls, and multiple disks |
-| `SecretDelivery` | SSH key and secret delivery with configurable bind address, paths, and storage target |
-| `Tdxs` | `tundra-tools` issuer/validator service with socket and validator config controls |
-| `Devtools` | Serial console, root password, SSH for dev profiles |
-
-**Init ordering** — each init module declares its `init_priority` on the class (`KeyGeneration` 10, `DiskEncryption` 20, `SecretDelivery` 30) and `apply()` registers its boot script at that priority. At `compile()`, the SDK generates `/usr/bin/runtime-init` and a systemd service that runs them in order, then injects `After=runtime-init.service` into all other services automatically.
+A module bundles packages, files, services, build hooks and a boot script. Apply one or more in order with `img.apply(...)`:
 
 ```python
-from tundravm import Image
 from tundravm.modules import DiskEncryption, KeyGeneration, SecretDelivery
-
-img = Image(base="debian/trixie", reproducible=True)
 
 keys = KeyGeneration()
 keys.key("key_persistent", strategy="tpm")
-keys.apply(img)                                    # priority 10
 
 disks = DiskEncryption()
 disks.disk("disk_persistent", device="/dev/vda3")
-disks.apply(img)                                   # priority 20
-SecretDelivery(method="http_post", host="0.0.0.0", port=8080).apply(img)  # priority 30
 
-img.compile("build/mkosi")
+img.apply(keys, disks, SecretDelivery(method="http_post", host="0.0.0.0", port=8080))
 ```
 
-Additional keys and disks can be registered on the same module instance:
+Every module subclasses `tundravm.modules.Module` and overrides `setup()`, `install()`, `init_script()` and `check()` as needed. Class attributes declare `requires` (modules that must be applied first) and `init_priority` (where its boot script runs in `/usr/bin/runtime-init`). See [`docs/module-authoring.md`](docs/module-authoring.md).
 
-```python
-keys = KeyGeneration()
-keys.key("root", strategy="tpm", output="/persistent/root.key")
-keys.key("data", strategy="pipe", pipe_path="/run/keys/data.pipe", persist_in_tpm=True, output="/persistent/data.key")
-keys.apply(img)
+| Module | What it does | Init priority |
+|---|---|---|
+| `KeyGeneration` | Keys from TPM-backed random or a named pipe; several named keys | 10 |
+| `DiskEncryption` | LUKS2 disks with naming, format policy and mount controls | 20 |
+| `SecretDelivery` | SSH key and secret delivery over HTTP, with schemas and targets | 30 |
+| `Tdxs` | `tundra-tools` issuer/validator service, socket and validator config | |
+| `Devtools` | Serial console, root password, SSH and debugging tools for dev profiles | |
 
-disks = DiskEncryption()
-disks.disk("data", device="/dev/vdb", key_name="data", key_path="/persistent/data.key", mount_point="/data")
-disks.disk("scratch", device=None, key_name=None, key_path=None, mount_point="/scratch", format_policy="on_initialize")
-disks.apply(img)
-```
+`tundravm.platforms` adds `AzurePlatform` and `GcpPlatform`. At `compile()` the SDK writes `/usr/bin/runtime-init` with the boot scripts in priority order, a `runtime-init.service`, and `After=`/`Requires=runtime-init.service` on every other service.
 
-See [`docs/module-authoring.md`](docs/module-authoring.md) for writing your own modules.
-
-## Secrets
+Secrets are declared on `SecretDelivery`:
 
 ```python
 from tundravm import SecretSchema, SecretTarget
-from tundravm.modules import SecretDelivery
 
 delivery = SecretDelivery(method="http_post", host="0.0.0.0", port=8080)
 delivery.secret(
     "api_token",
     required=True,
     schema=SecretSchema(kind="string", min_length=8, pattern="^tok_"),
-    targets=(
-        SecretTarget.file("/run/secrets/api-token"),
-        SecretTarget.env("API_TOKEN", scope="global"),
-    ),
+    targets=(SecretTarget.file("/run/secrets/api-token"), SecretTarget.env("API_TOKEN", scope="global")),
 )
-delivery.apply(img)
+img.apply(delivery)
 ```
+
+Files and directories come from strings, bytes or the host:
+
+```python
+img.file("/etc/app/config.toml", src="config/app.toml")
+img.directory("/opt/app", src="dist/", exclude=["*.pyc", "tests"])
+```
+
+## CLI
+
+Every command takes a recipe file: a Python file that binds an `Image` to `img` or defines `build() -> Image`.
+
+| Command | Does |
+|---|---|
+| `new PATH` | Write a starter recipe (`--backend lima\|nix\|local\|inprocess`) |
+| `explain` | Dry run; `--json` for machine output |
+| `check` | Lint; exit 1 on errors (`--strict`: also warnings) |
+| `compile` | Emit the mkosi tree; `--check` exits 1 if the tree at `--out` is stale |
+| `diff` | Unified diff between the recipe and a compiled tree |
+| `digest` | Recipe digest used by lockfiles |
+| `lock` | Write the lockfile; `--check` reports drift, `--explain` reports then writes |
+| `bake` | Compile and build; `--lock`, `--frozen`, `--out` |
+| `measure` | Expected measurements from the last bake (`--backend rtmr\|azure\|gcp`) |
+| `deploy` | Deploy the last baked artifact (`--target qemu\|azure\|gcp`) |
+| `doctor` | Probe host tools for each backend, or for one recipe's backend |
+
+See [`docs/cli.md`](docs/cli.md) for options, recipe loading rules and exit codes.
+
+## Backends
+
+| Backend | When to use |
+|---|---|
+| `LimaMkosiBackend` | Default. Runs mkosi inside a Lima VM with Nix. macOS and Linux. |
+| `NixMkosiBackend` | Linux with [Nix](https://nixos.org/download.html). Runs mkosi via `nix develop` on the host. |
+| `LocalLinuxBackend` | Linux with `mkosi` (v25+) on `PATH` and `sudo` or `unshare`. No Nix. |
+| `InProcessBackend` | Tests and tutorials. Writes placeholder artifacts, needs no tools. |
+
+```python
+from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend
+
+Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
+Image(backend=NixMkosiBackend())
+Image(backend=LocalLinuxBackend())
+```
+
+`compile()`, `lock()`, `explain()` and `check()` never need a backend. `tundravm doctor` reports which backends your host can run.
 
 ## Reproducibility
 
-The SDK has first-class support for reproducible builds:
+- **Snapshot mirrors.** Pin `img.mirror` to a Debian snapshot URL.
+- **EFI stub pinning.** `img.efi_stub()` installs a fixed systemd-boot-efi version.
+- **Lockfiles.** `img.lock()` records the recipe digest; `bake(frozen=True)` refuses a changed recipe.
+- **Debloat.** Strips unused binaries and units and installs a minimal default target.
+- **IMAGE_VERSION stripping.** On by default with `reproducible=True`.
 
-- **Debian snapshot mirrors** — pin `img.mirror` to a snapshot URL so package resolution is deterministic
-- **EFI stub pinning** — `img.efi_stub()` fetches a specific systemd-boot-efi version from Debian snapshots
-- **Lockfiles** — `img.lock()` captures the recipe digest; `bake(frozen=True)` refuses to build if the recipe changed
-- **Systemd debloat** — strips unused binaries and units via `dpkg-query`, masks the rest, replaces `default.target` with a minimal target
-- **IMAGE_VERSION stripping** — removes the non-deterministic version string from os-release
-
-See [`docs/reproducibility.md`](docs/reproducibility.md) for details.
+See [`docs/reproducibility.md`](docs/reproducibility.md).
 
 ## Policy
 
 ```python
-from tundravm.policy import Policy
+from tundravm import Policy
 
-img.set_policy(Policy(
-    require_frozen_lock=True,
-    mutable_ref_policy="error",
-    require_integrity=True,
-    network_mode="online",
-))
+img.set_policy(Policy(require_frozen_lock=True, mutable_ref_policy="error", require_integrity=True))
 ```
 
-See [`docs/policy.md`](docs/policy.md) for the full reference.
-
-## Documentation
-
-| Doc | Contents |
-|---|---|
-| [`docs/concepts.md`](docs/concepts.md) | Recipe vs compiled tree vs artifact, profiles, build phases, runtime-init, lockfile, backends, measurements, deploy |
-| [`docs/api.md`](docs/api.md) | `Image` method reference, public models, error codes |
-| [`docs/cli.md`](docs/cli.md) | `tundravm` command: recipe loading, commands, exit codes |
-| [`docs/module-authoring.md`](docs/module-authoring.md) | Subclassing `Module`: `requires`, init priorities, checks, testing |
-| [`docs/testing.md`](docs/testing.md) | `tundravm.testing` helpers and pytest fixtures: compiled-tree readers, lint asserts, golden trees, `FakeModule`, CLI runs |
-| [`docs/policy.md`](docs/policy.md) | Policy options and CI settings |
-| [`docs/reproducibility.md`](docs/reproducibility.md) | Reproducible build settings and mkosi requirements |
+See [`docs/policy.md`](docs/policy.md).
 
 ## Examples
 
 | Example | Description |
 |---|---|
-| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | Full [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image with all modules and Azure/GCP/devtools profiles |
+| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | Full [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image: all modules, Azure/GCP/devtools profiles |
 | [`nethermind_tdx.py`](examples/nethermind_tdx.py) | Base layer: TDX kernel, EFI stub pinning, backports, debloat, Tdxs |
-| [`full_api.py`](examples/full_api.py) | End-to-end: kernel, secrets, init modules, multi-profile cloud deploys |
+| [`full_api.py`](examples/full_api.py) | End to end: kernel, secrets, init modules, multi-profile cloud deploys |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Per-profile Azure / GCP / QEMU output targets |
 | [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU-only image |
+| [`tdxs_module.py`](examples/tdxs_module.py) | Applying the `Tdxs` module |
+| [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas on `SecretDelivery`, validated at boot |
 
-Run the surge-tdx-prover example:
+Every example loads with the CLI, e.g. `tundravm explain examples/qemu_basic.py` or `tundravm explain examples/surge-tdx-prover/image.py --profile azure`.
 
 ```bash
-python -m examples.surge-tdx-prover compile    # emit mkosi tree to examples/surge-tdx-prover/mkosi/
-python -m examples.surge-tdx-prover bake        # compile + lock + build
+python -m examples.surge-tdx-prover compile   # tundravm compile --out examples/surge-tdx-prover/mkosi
+python -m examples.surge-tdx-prover bake      # tundravm bake --lock
 ```
 
-## Setup
+## Documentation
 
-**Lima backend** (recommended): Install [Lima](https://lima-vm.io/docs/installation/), then `uv sync`. Lima runs mkosi inside a Linux VM with Nix — this ensures a consistent environment for reproducible builds.
-
-**Nix backend**: Install [Nix](https://nixos.org/download.html) with flakes enabled, then `uv sync`. Runs mkosi directly on your Linux host via `nix develop`.
-
-**Local backend**: Install [mkosi](https://github.com/systemd/mkosi) (v25+) on Linux, then `uv sync`.
+| Doc | Contents |
+|---|---|
+| [`docs/concepts.md`](docs/concepts.md) | Recipe vs tree vs artifact, profiles, build phases, runtime-init, lockfile, backends, measurements, deploy |
+| [`docs/tutorial.md`](docs/tutorial.md) | From `tundravm new` to bake, measure, deploy, CI and tests, with real output |
+| [`docs/cli.md`](docs/cli.md) | Commands, options, recipe loading, exit codes |
+| [`docs/api.md`](docs/api.md) | `Image` and `Profile` reference, models, diagnostics, errors |
+| [`docs/module-authoring.md`](docs/module-authoring.md) | Subclassing `Module`: `requires`, init priorities, checks |
+| [`docs/testing.md`](docs/testing.md) | `tundravm.testing` helpers and pytest fixtures |
+| [`docs/policy.md`](docs/policy.md) | Policy options and CI settings |
+| [`docs/reproducibility.md`](docs/reproducibility.md) | Reproducible build settings, lockfile sections, mkosi requirements |
 
 ## Development
 
@@ -256,8 +235,10 @@ uv run pytest
 
 | Error | Fix |
 |---|---|
-| `E_LOCKFILE` | Run `img.lock()` with current recipe, then `bake(frozen=True)` |
-| `E_POLICY` | Update policy config or invocation mode |
-| `E_DEPLOYMENT` | Ensure `output_targets(...)` includes target, rerun `bake()` |
-| `E_MEASUREMENT` | Run `bake()` before `measure(...)` |
-| `E_BACKEND_EXECUTION` | Check mkosi version (`>= 25`), platform, and tool availability |
+| `E_VALIDATION` from `bake` | The linter found errors. Run `tundravm check RECIPE` |
+| `E_LOCKFILE` | Recipe changed since the lock. `tundravm lock RECIPE --check` shows what; `tundravm lock RECIPE` accepts it |
+| `E_STATE` | No `bake-result.json`. Run `tundravm bake` first, or pass the bake's `--out DIR` to `measure`/`deploy` |
+| `E_POLICY` | Update the policy or bake with `--frozen` |
+| `E_DEPLOYMENT` | Add the target with `output_targets(...)` and rebake, or install the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
+| `E_MEASUREMENT` | Bake the profile you are measuring |
+| `E_BACKEND_EXECUTION` | Run `tundravm doctor RECIPE`; check mkosi version (>= 25) and platform |

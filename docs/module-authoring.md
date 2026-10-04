@@ -174,15 +174,15 @@ from tundravm.modules import Devtools, KeyGeneration
 img = Image()
 keys = KeyGeneration()
 keys.key("key_persistent", strategy="tpm")
-keys.apply(img)                 # default profile only
+keys.apply(img)                 # default profile, inherited by dev
 
 with img.profile("dev"):
     Devtools().apply(img)       # dev profile only
 ```
 
-Packages, files, services, and hooks are not inherited between profiles. A module needed in two profiles must be applied in both, or inside `with img.profiles("a", "b"):`. Only `output_targets` and `debloat` fall back to the default profile when a profile did not set them.
+A profile extends the default profile, so a module applied to the default reaches every extending profile: `dev` above gets key generation too. `requires` and `check()` see inherited modules, and `img.applied_modules("dev", inherited=True)` lists them first. A module applied inside a profile stays in that profile. A profile declared with `extends=None` inherits no declarations or modules; apply what it needs there.
 
-Init-script fragments are the exception: `add_init_script()` stores them on `img.init`, which is shared by all profiles, so `/usr/bin/runtime-init` has the same content in every compiled profile. The module's config files and build hooks remain scoped to the profile it was applied in.
+Init-script fragments are stored on `img.init`, which is shared by the whole image, so `/usr/bin/runtime-init` has the same content in every compiled profile, standalone ones included.
 
 ## Build phases
 
