@@ -25,7 +25,7 @@ _IMAGE_PATH = Path(__file__).resolve().parent.parent / "examples" / "surge-tdx-p
 _spec = importlib.util.spec_from_file_location("surge_tdx_prover_image", _IMAGE_PATH)
 _mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
-build_surge_tdx_prover = _mod.build_surge_tdx_prover
+build_surge_tdx_prover = _mod.build
 
 pytestmark = pytest.mark.integration
 
@@ -251,9 +251,12 @@ def test_compare_with_upstream(
     # 5. Summary
     total_checked = (
         len(pkg_shared)
-        + len(unit_matches) + len(unit_diffs)
-        + len(extra_matches) + len(extra_diffs)
-        + len(skel_matches) + len(skel_diffs)
+        + len(unit_matches)
+        + len(unit_diffs)
+        + len(extra_matches)
+        + len(extra_diffs)
+        + len(skel_matches)
+        + len(skel_diffs)
     )
     total_matches = len(pkg_shared) + len(unit_matches) + len(extra_matches) + len(skel_matches)
     total_diffs = len(unit_diffs) + len(extra_diffs) + len(skel_diffs)
