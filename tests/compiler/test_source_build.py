@@ -11,7 +11,7 @@ from typing import Literal
 
 import pytest
 
-from tests.helpers import REPO_ROOT
+from tests.helpers import write_recipe_file
 from tundravm._source import (
     GitSource,
     ScriptBuild,
@@ -60,7 +60,28 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 REPO = "https://example.com/acme/tool.git"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-QEMU_BASIC = REPO_ROOT / "examples" / "qemu_basic.py"
+# The former examples/qemu_basic.py, kept verbatim: its digest predates source builds.
+QEMU_BASIC = '''\
+"""Minimal QEMU-focused recipe.
+
+tundravm inspect examples/qemu_basic.py
+tundravm bake examples/qemu_basic.py
+"""
+
+from tundravm.backends import LimaMkosiBackend
+from tundravm.declarative import File, Fragment, Package, Recipe
+
+recipe = Recipe(
+    name="qemu-basic",
+    base="debian/bookworm",
+    common=Fragment(
+        "qemu-basic",
+        items=(Package("curl"), Package("jq"), File("/etc/motd", "QEMU profile\\n")),
+    ),
+)
+
+backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
+'''
 QEMU_BASIC_DIGEST = "571668210b9086615b19fde56a4b86cf0aa65f2ec480b2497a42641739d15c8e"
 GO_SCRIPT = (
     'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
@@ -198,9 +219,10 @@ def test_payload_has_source_builds_only_when_declared() -> None:
     assert entry["build"]["kind"] == "script"
 
 
-def test_existing_digest_is_unchanged() -> None:
+def test_existing_digest_is_unchanged(tmp_path: Path) -> None:
+    recipe = write_recipe_file(tmp_path, QEMU_BASIC)
     out = io.StringIO()
-    assert main(["inspect", str(QEMU_BASIC), "--json"], stdout=out) == EXIT_OK
+    assert main(["inspect", str(recipe), "--json"], stdout=out) == EXIT_OK
     assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST
 
 
@@ -296,7 +318,7 @@ def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
 def _runtime_recipe() -> Recipe:
     key = Key("key_persistent", output="/tmp/key_persistent")
     disk = Disk("disk_persistent", "/persistent", key=key)
-    return _recipe(key, disk, Secrets(store=disk))
+    return _recipe(Package("linux-image-amd64"), key, disk, Secrets(store=disk))
 
 
 def _assert_runtime_tool_hook(name: str, binary: str) -> None:
@@ -394,7 +416,7 @@ def test_lockfile_roundtrips_fetch_name_and_ref() -> None:
 
 
 def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
-    recipe = _recipe(_build())
+    recipe = _recipe(_build(), Package("linux-image-amd64"))
     pinned = lock(recipe, resolver=_Fixed(SHA_A))
     unpinned = Lock.of(build_lockfile(recipe=pinned.lockfile.recipe))
     with pytest.raises(LockfileError, match="unpinned: tool") as excinfo:

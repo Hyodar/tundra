@@ -37,7 +37,7 @@ Debugging(gdb=True)
 True
 ```
 
-The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are written this way, and so are `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/) and `NethermindBase` in [`examples/nethermind_tdx.py`](../examples/nethermind_tdx.py).
+The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are written this way, and so are `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/) and `NethermindBase` in [`examples/nethermind_base.py`](../examples/nethermind_base.py).
 
 ## Writing a `Composite`
 

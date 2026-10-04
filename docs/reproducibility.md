@@ -48,7 +48,7 @@ tundravm compile node.py --out mkosi --check    # in CI: exit 1 and list the sta
 
 In tests, `assert_tree(compile(recipe, lock=locked), "mkosi")` compares every path, byte, exec bit and symlink, and `TUNDRAVM_UPDATE_GOLDEN=1` rewrites the golden tree (see [testing](testing.md#golden-trees)).
 
-The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`python -m examples.surge-tdx-prover compile --check`, and `tests/compiler/test_surge_golden.py`).
+The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check`, and `tests/compiler/test_surge_golden.py`).
 
 ## The lockfile
 

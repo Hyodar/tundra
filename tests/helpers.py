@@ -12,6 +12,10 @@ from tundravm.models import BakeRequest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SURGE_EXAMPLE = REPO_ROOT / "examples" / "surge-tdx-prover"
+EXAMPLE_RECIPES = tuple(
+    path for path in sorted((REPO_ROOT / "examples").glob("*.py")) if path.name != "__init__.py"
+)
+"""The top-level example recipe files (the surge flagship lives in its own directory)."""
 
 
 def run_main(*argv: str) -> tuple[int, str]:

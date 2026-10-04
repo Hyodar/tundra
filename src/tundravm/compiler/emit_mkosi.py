@@ -275,6 +275,8 @@ class EmitConfig:
     emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
     settings: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
     """Verbatim ``[section] key=value`` lines the compiler does not write itself."""
+    bootable: bool = True
+    """``False`` writes ``Bootable=no`` and ``Format=disk``: mkosi needs a kernel for a UKI."""
     profiles: Mapping[str, EmitConfig] = field(default_factory=dict)
     """Profiles with their own settings or kernel; the rest use this configuration."""
 
@@ -1196,7 +1198,10 @@ class DeterministicMkosiEmitter:
 
         # [Output]
         lines.append("[Output]")
-        lines.append(f"Format={config.output_format}")
+        output_format = config.output_format
+        if not config.bootable and output_format == "uki":
+            output_format = "disk"
+        lines.append(f"Format={output_format}")
         lines.append(f"ImageId={profile_name}")
         lines.append(f"ManifestFormat={config.manifest_format}")
         if config.compress_output:
@@ -1255,9 +1260,11 @@ class DeterministicMkosiEmitter:
                 lines.append(f"BuildSources={entry}")
 
         # Kernel configuration
+        if not config.bootable:
+            lines.append("Bootable=no")
+        elif config.kernel and config.output_format == "uki":
+            lines.append("Bootable=yes")
         if config.kernel:
-            if config.output_format == "uki":
-                lines.append("Bootable=yes")
             if config.kernel.cmdline:
                 lines.append(f"KernelCommandLine={config.kernel.cmdline}")
             if config.kernel.version:

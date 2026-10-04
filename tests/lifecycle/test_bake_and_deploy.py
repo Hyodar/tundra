@@ -24,7 +24,11 @@ from tundravm.models import DeployRequest, DeployResult
 
 def _bake(tmp_path: Path, *variants: Variant) -> tuple[Artifact, ...]:
     """Bake *variants* with the in-process backend into ``tmp_path / "build"``."""
-    recipe = Recipe("deploy", Fragment("deploy", items=(Package("curl"),)), variants=variants)
+    recipe = Recipe(
+        "deploy",
+        Fragment("deploy", items=(Package("curl"), Package("linux-image-amd64"))),
+        variants=variants,
+    )
     return bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build")
 
 

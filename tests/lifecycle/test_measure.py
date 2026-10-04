@@ -35,7 +35,9 @@ def _measured_boot(name: str) -> str | None:
 
 
 def _baked(tmp_path: Path) -> Artifact:
-    recipe = Recipe("measured", Fragment("measured", items=(Package("curl"),)))
+    recipe = Recipe(
+        "measured", Fragment("measured", items=(Package("curl"), Package("linux-image-amd64")))
+    )
     (artifact,) = bake(
         recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
     )

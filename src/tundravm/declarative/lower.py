@@ -117,13 +117,16 @@ _COMPILER_KEYS: dict[str, str] = {
     "ImageId": "the variant name",
     "Packages": "Package(name)",
     "BuildPackages": "Package(name, role='build')",
-    "Bootable": "Kernel(...)",
+    "Bootable": "Kernel(...) or Package('linux-image-amd64'); only Bootable=no is accepted",
     "KernelCommandLine": "Kernel(cmdline=...)",
     "ExtraTrees": "File/Directory/Template(stage='extra')",
     "SkeletonTrees": "File/Directory/Template(stage='skeleton')",
     **{key: "Hook(name, phase, script)" for key in PHASE_TO_MKOSI_KEY.values()},
 }
 """mkosi keys the compiler writes itself, and the declaration that sets each."""
+_BOOTABLE = ("Content", "Bootable")
+"""``Setting("Content", "Bootable", ("no",))``: a non-bootable image; any other value is the
+compiler's to write."""
 _BUILD_SOURCES = ("Build", "BuildSources")
 """Per-variant ``Setting``: ``src[:dest]`` host directories mounted into the build."""
 _LIST_SETTINGS = (("Build", "Environment"), ("Build", "SandboxTrees"), _BUILD_SOURCES)
@@ -873,6 +876,9 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
             continue
         if key == ("Build", "SandboxTrees"):
             changes["sandbox_trees"] = setting.values
+            continue
+        if key == _BOOTABLE and len(setting.values) == 1 and setting.values[0].lower() in _FALSE:
+            changes["bootable"] = False
             continue
         field = _SINGLE_SETTINGS.get(key) or _BOOL_SETTINGS.get(key)
         if field is None:

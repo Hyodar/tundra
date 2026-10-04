@@ -177,21 +177,19 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 
 ## Examples
 
-| Example | Description |
+| Example | What it teaches |
 |---|---|
-| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The full [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image: Raiko, Taiko client and Nethermind built from source, TPM-sealed key, encrypted disk, secrets. Compiles byte-for-byte to the committed upstream tree, all four variants. |
-| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | The base layer as a fragment, `NethermindBase()`: TDX kernel, EFI stub pinning, backports, debloat, `Tdxs()` |
-| [`fragments/`](examples/fragments/) | `Raiko()`, `TaikoClient()`, `Nethermind()`: fragments with a `Build`, a user, a unit and an env file |
-| [`full_api.py`](examples/full_api.py) | Most declaration types in one recipe: kernel, keys, disks, secrets, builds, variants |
-| [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Standalone variants per target, each with its own guest agent |
-| [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU image |
-| [`tdxs_fragment.py`](examples/tdxs_fragment.py) | The `Tdxs()` fragment |
-| [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas and delivery targets, validated at boot |
+| [`01_minimal.py`](examples/01_minimal.py) | The smallest recipe: a base, packages and a file in one `common` fragment; no variants means one QEMU `default` |
+| [`02_variants.py`](examples/02_variants.py) | `Variant` overlays: `add`, `replace`/`remove` by identity, `parent` chains, a standalone `parent=None` variant, `targets=("azure", "gcp")` |
+| [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment` and a `Composite` with fields, `requires=` and a lint `checks=` rule |
+| [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | TPM-sealed `Key`, encrypted `Disk`, `Secrets` with `Schema`s and file/env targets, `RuntimeTools`, `Partition` |
+| [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball with the `Go` recipe and from a `Git` tag with a script; file and directory installs; `cache_key` |
+| [`06_attestation.py`](examples/06_attestation.py) | `Tdxs()` as attester and as verifier with `expected_measurements`, and `Policy(require_frozen_lock=True)` |
+| [`nethermind_base.py`](examples/nethermind_base.py) | The nethermind-tdx base layer as one `Composite`: TDX kernel, EFI stub, backports, debloat, `Tdxs()` |
+| [`fragments/`](examples/fragments/) | `Raiko()`, `TaikoClient()`, `Nethermind()`: each with a `Build`, a user, a unit and an env file |
+| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The flagship: the full nethermind-tdx image, byte-identical to the committed tree for all four variants |
 
-```bash
-tundravm inspect examples/surge-tdx-prover/image.py --variant azure
-python -m examples.surge-tdx-prover compile --check   # compare with the committed mkosi/ tree
-```
+Every example loads, lints without errors and compiles deterministically; `tests/lint/test_examples_api.py` enforces it. Check the flagship against its golden tree with `tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check`.
 
 ## Documentation
 

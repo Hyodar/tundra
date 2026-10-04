@@ -1,6 +1,7 @@
 """Nethermind TDX base layer: the NethermindEth/nethermind-tdx base image as a fragment.
 
-``NethermindBase`` declares what every nethermind-tdx image shares:
+Teaches building a real base image as one ``Composite``. ``NethermindBase`` declares
+what every nethermind-tdx image shares:
 
 - a TDX kernel built from source with the repository's config and a hardened command line
 - reproducible output (fixed seed, ``SOURCE_DATE_EPOCH=0``) and a pinned EFI stub
@@ -9,8 +10,12 @@
 - full systemd debloat (binary stripping, unit masking, path removal)
 - the ``tdxs`` attestation service
 
-Recipes built on it set ``mkosi=NETHERMIND_V1`` to emit the historical tree byte for byte.
-``recipe`` below is the base layer on its own.
+Recipes built on it (``surge-tdx-prover/image.py``) set ``mkosi=NETHERMIND_V1`` to emit
+the historical tree byte for byte. ``recipe`` below is the base layer on its own.
+
+    tundravm inspect examples/nethermind_base.py
+    tundravm lint examples/nethermind_base.py   # source-unpinned until locked
+    tundravm compile examples/nethermind_base.py --out build/nethermind-base/mkosi
 """
 
 from __future__ import annotations
@@ -18,7 +23,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import (
     Debloat,
     File,
@@ -162,5 +166,3 @@ class NethermindBase(Composite):
 
 
 recipe = Recipe(name="nethermind-tdx", common=NethermindBase(), mkosi=NETHERMIND_V1)
-
-backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

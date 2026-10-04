@@ -162,6 +162,9 @@ _ESSENTIAL_BINARIES = frozenset(
 
 _SHIPPED_PREFIXES = ("/usr/local/bin/", "/opt/", "/usr/bin/")
 
+# Ubuntu kernel metapackages outside the linux-image* namespace.
+_KERNEL_METAPACKAGES = frozenset({"linux-generic", "linux-kvm", "linux-virtual"})
+
 
 def _norm(path: str) -> str:
     return posixpath.normpath("/" + path.lstrip("/"))
@@ -515,6 +518,40 @@ def _rule_source_unpinned(
         )
 
 
+def _installs_kernel(packages: Iterable[str]) -> bool:
+    for package in packages:
+        name = re.split(r"[/=]", package, maxsplit=1)[0]
+        if name == "linux-image" or name.startswith("linux-image-"):
+            return True
+        if name in _KERNEL_METAPACKAGES:
+            return True
+    return False
+
+
+def _rule_kernel_missing(
+    image: Image, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    if not image.mkosi_for(profile_name).bootable or image.kernel_for(profile_name) is not None:
+        return
+    if _installs_kernel(state.packages):
+        return
+    yield Diagnostic(
+        level="error",
+        code="kernel-missing",
+        message=(
+            "variant builds a bootable UKI but installs no kernel, so mkosi stops with "
+            "'A kernel must be installed in the image to build a UKI'"
+        ),
+        hint=(
+            'Add Package("linux-image-amd64") for the distribution kernel, declare '
+            'Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a '
+            "non-bootable image."
+        ),
+        profile=profile_name,
+        subject=None,
+    )
+
+
 def _rule_module_checks(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -533,6 +570,7 @@ RULES: list[Rule] = [
     _rule_debloat_removes_needed_unit,
     _rule_debloat_removes_declared_file,
     _rule_source_unpinned,
+    _rule_kernel_missing,
     _rule_module_checks,
 ]
 

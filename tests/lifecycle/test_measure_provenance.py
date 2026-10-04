@@ -88,7 +88,7 @@ def _baked(tmp_path: Path, *, simulated: bool = False) -> tuple[Artifact, ...]:
     """
     recipe = Recipe(
         "measured",
-        Fragment("measured", items=(Package("curl"),)),
+        Fragment("measured", items=(Package("curl"), Package("linux-image-amd64"))),
         variants=(Variant("default", target="qemu"), Variant("gcp", target="gcp")),
     )
     artifacts = bake(
@@ -312,7 +312,7 @@ from tundravm.declarative import Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "measured",
-    Fragment("measured", items=(Package("curl"),)),
+    Fragment("measured", items=(Package("curl"), Package("linux-image-amd64"))),
     variants=(Variant("default", target="qemu"),),
 )
 backend = InProcessBackend()

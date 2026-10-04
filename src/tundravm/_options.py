@@ -46,6 +46,8 @@ class MkosiOptions:
     """Emit the Azure/GCP disk conversion postoutput scripts."""
     settings: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
     """``(section, key, values)`` written verbatim to ``mkosi.conf``, one line per value."""
+    bootable: bool = True
+    """``False`` writes ``Bootable=no`` and a plain disk image instead of a UKI."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sandbox_trees", tuple(self.sandbox_trees))

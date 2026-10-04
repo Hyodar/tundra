@@ -24,7 +24,7 @@ VARIANTS = ("default", "dev")
 def _recipe(*items: Declaration) -> Recipe:
     return Recipe(
         "reset",
-        Fragment("common", items=(Package("curl"), *items)),
+        Fragment("common", items=(Package("linux-image-amd64"), Package("curl"), *items)),
         variants=(
             Variant("default", target="qemu"),
             Variant("dev", add=Fragment("dev", items=(Package("vim"),))),
@@ -66,7 +66,14 @@ def test_compile_of_one_variant_leaves_other_variants_alone(tmp_path: Path) -> N
 def _init_recipe(extra: Variant) -> Recipe:
     return Recipe(
         "init",
-        Fragment("common", items=(Init("hello", "echo hi", priority=10), Package("curl"))),
+        Fragment(
+            "common",
+            items=(
+                Init("hello", "echo hi", priority=10),
+                Package("linux-image-amd64"),
+                Package("curl"),
+            ),
+        ),
         variants=(Variant("default", target="qemu"), extra),
     )
 

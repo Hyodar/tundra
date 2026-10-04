@@ -65,6 +65,7 @@ SHA = "a" * 40
 def _recipe(*, motd: str = "hi\n", build: bool = False) -> Recipe:
     items: list[object] = [
         Package("curl"),
+        Package("linux-image-amd64"),
         File("/etc/motd", motd),
         User("app", shell="/bin/false"),
         Unit("app.service", APP_UNIT, enabled=True),

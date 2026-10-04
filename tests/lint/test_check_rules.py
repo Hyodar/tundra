@@ -19,8 +19,10 @@ from tundravm import (
     Declaration,
     File,
     Fragment,
+    Git,
     Hook,
     Init,
+    Kernel,
     LintError,
     Package,
     Recipe,
@@ -28,6 +30,7 @@ from tundravm import (
     SecretFile,
     Secrets,
     Service,
+    Setting,
     Template,
     User,
     ValidationError,
@@ -42,7 +45,11 @@ from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import check_report
 
 DEFAULT = Variant("default", target="qemu")
+KERNEL = Package("linux-image-amd64")
+NOT_BOOTABLE = Setting("Content", "Bootable", ("no",))
+"""Quiets kernel-missing in the ``clean=False`` recipes, which test package-less variants."""
 CLEAN: tuple[Declaration, ...] = (
+    KERNEL,
     Package("curl"),
     User("app", system=True),
     Service("app", "/usr/bin/app", user="app"),
@@ -53,7 +60,7 @@ CLEAN: tuple[Declaration, ...] = (
 def recipe(
     *items: Declaration, variants: tuple[Variant, ...] = (DEFAULT,), clean: bool = True
 ) -> Recipe:
-    common = (*CLEAN, *items) if clean else items
+    common = (*CLEAN, *items) if clean else (NOT_BOOTABLE, *items)
     return Recipe("check", Fragment("common", items=common), variants=variants)
 
 
@@ -87,7 +94,7 @@ def test_service_user_inherited_from_default() -> None:
 
 
 def test_service_user_not_inherited_by_standalone_variant() -> None:
-    items = (Package("curl"), Service("app", "/usr/bin/app", user="app"))
+    items = (KERNEL, Package("curl"), Service("app", "/usr/bin/app", user="app"))
     dev = Variant("dev", parent=None, add=Fragment("dev", items=items))
     [diag] = report(recipe(variants=(DEFAULT, dev)), "dev")
     assert diag.code == "service-user-missing"
@@ -275,6 +282,50 @@ def test_secret_delivery_applied_is_fine() -> None:
     assert [d for d in report(recipe(secrets)) if d.code != "source-unpinned"] == []
 
 
+# k. kernel-missing
+
+
+def test_kernel_missing() -> None:
+    subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT,))
+    [diag] = report(subject)
+    assert (diag.level, diag.code, diag.profile) == ("error", "kernel-missing", "default")
+    assert "A kernel must be installed" in diag.message
+    for fix in ("linux-image-amd64", "Kernel(...)", '"Bootable", ("no",)'):
+        assert fix in (diag.hint or "")
+
+
+@pytest.mark.parametrize(
+    "boot",
+    [
+        Package("linux-image-amd64"),
+        Package("linux-image-cloud-amd64"),
+        Package("linux-image-6.12.48+deb13-amd64"),
+        Package("linux-image-arm64/trixie-backports"),
+        Package("linux-generic"),
+        Kernel("6.12.1", Git("https://example.com/linux", "a" * 40)),
+        NOT_BOOTABLE,
+    ],
+    ids=lambda item: getattr(item, "name", None) or type(item).__name__,
+)
+def test_kernel_package_kernel_or_not_bootable_is_fine(boot: Declaration) -> None:
+    subject = Recipe("check", Fragment("common", items=(*CLEAN[1:], boot)), variants=(DEFAULT,))
+    assert "kernel-missing" not in codes(subject)
+
+
+def test_kernel_missing_is_per_variant() -> None:
+    booted = Variant("booted", parent=None, add=Fragment("booted", items=(KERNEL,)))
+    subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT, booted))
+    assert [(d.profile, d.code) for d in report(subject, "default", "booted")] == [
+        ("default", "kernel-missing")
+    ]
+
+
+def test_bootable_setting_takes_only_no() -> None:
+    subject = recipe(Setting("Content", "Bootable", ("yes",)))
+    with pytest.raises(ValidationError, match="writes Bootable= itself"):
+        lower(subject)
+
+
 # rendering + ordering
 
 
@@ -341,7 +392,12 @@ from tundravm import Fragment, Init, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
-items = [Package("curl"), User("app", system=True), Service("app", "/usr/bin/app", user="app")]
+items = [
+    Package("linux-image-amd64"),
+    Package("curl"),
+    User("app", system=True),
+    Service("app", "/usr/bin/app", user="app"),
+]
 variants = [Variant("default", target="qemu")]
 """
 

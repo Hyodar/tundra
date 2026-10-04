@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
+from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
 from tundravm import Package, Recipe, ValidationError, load_recipe
 from tundravm.recipe import load_image
 
@@ -171,19 +171,8 @@ def test_surge_example_recipe_loads() -> None:
     assert {"default", "azure", "gcp", "devtools"} == set(img.state.profiles)
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "qemu_basic.py",
-        "multi_profile_cloud.py",
-        "full_api.py",
-        "tdxs_fragment.py",
-        "strict_secrets.py",
-        "nethermind_tdx.py",
-    ],
-)
-def test_small_examples_are_loadable_recipes(name: str) -> None:
-    path = REPO_ROOT / "examples" / name
+@pytest.mark.parametrize("path", EXAMPLE_RECIPES, ids=lambda path: path.name)
+def test_examples_are_loadable_recipes(path: Path) -> None:
     assert isinstance(load_recipe(path, extra_paths=[REPO_ROOT]), Recipe)
     img = load_image(path, extra_paths=[REPO_ROOT])
     assert img.state.profiles

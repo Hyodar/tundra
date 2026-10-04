@@ -19,7 +19,7 @@ from tundravm.models import BakeResult, DebloatConfig
 def _recipe(*variants: Variant) -> Recipe:
     return Recipe(
         "debloat",
-        Fragment("common", items=(Package("curl"),)),
+        Fragment("common", items=(Package("linux-image-amd64"), Package("curl"))),
         variants=(Variant("default", target="qemu"), *variants),
     )
 

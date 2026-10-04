@@ -6,7 +6,7 @@ import inspect
 from dataclasses import dataclass
 
 import pytest
-from examples.nethermind_tdx import EFI_STUB_VERSION, PINNED_MIRROR
+from examples.nethermind_base import EFI_STUB_VERSION, PINNED_MIRROR
 
 from tests.helpers import SURGE_EXAMPLE
 from tundravm.declarative import (

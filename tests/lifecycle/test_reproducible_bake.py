@@ -18,7 +18,14 @@ from tundravm.declarative import (
 def _recipe() -> Recipe:
     return Recipe(
         "repro",
-        Fragment("common", items=(Package("curl"), Hook("hello", "prepare", "echo hello"))),
+        Fragment(
+            "common",
+            items=(
+                Package("curl"),
+                Package("linux-image-amd64"),
+                Hook("hello", "prepare", "echo hello"),
+            ),
+        ),
         variants=(Variant("default", targets=("qemu", "azure")),),
     )
 

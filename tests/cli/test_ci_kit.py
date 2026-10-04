@@ -21,6 +21,7 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 PACKAGES = ("curl", "jq")
 ITEMS = [
+    Package("linux-image-amd64"),
     File("/etc/motd", "hello\\n"),
     User("app", system=True),
     Service("app", "/usr/bin/app", user="app"),
@@ -187,6 +188,7 @@ def test_lint_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
         "from tundravm import Fragment, Init, Package, Recipe\n"
         "recipe = Recipe('warn', Fragment('common', items=(\n"
         "    Package('curl'),\n"
+        "    Package('linux-image-amd64'),\n"
         "    Init('one', 'echo 1\\n', priority=5),\n"
         "    Init('two', 'echo 2\\n', priority=5),\n"
         ")))\n"
@@ -311,8 +313,8 @@ def test_ci_pass_prints_three_ok_lines(recipe: Path, tmp_path: Path) -> None:
 
 RUNTIME_RECIPE = """
 from tundravm import (
-    Disk, Fragment, Git, Key, Recipe, RuntimeTools, Secret, SecretFile, Secrets, Service,
-    Variant,
+    Disk, Fragment, Git, Key, Package, Recipe, RuntimeTools, Secret, SecretFile, Secrets,
+    Service, Variant,
 )
 from tundravm.backends.inprocess import InProcessBackend
 
@@ -320,6 +322,7 @@ backend = InProcessBackend()
 TOOLS = RuntimeTools(Git("https://github.com/Hyodar/tundra-tools", "{sha}"))
 KEY = Key("key_persistent")
 ITEMS = (
+    Package("linux-image-amd64"),
     TOOLS,
     KEY,
     Disk("disk_persistent", "/persistent", key=KEY),

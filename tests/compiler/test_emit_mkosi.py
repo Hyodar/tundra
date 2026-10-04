@@ -305,6 +305,24 @@ def test_compile_no_at_prefix(tmp_path: Path) -> None:
     assert "ImageId=default" in conf_text
 
 
+def test_compile_not_bootable_writes_a_disk_without_uki(tmp_path: Path) -> None:
+    """Bootable=no swaps the UKI for a plain disk; mkosi needs a kernel for a UKI."""
+    off = Setting("Content", "Bootable", ("no",))
+    conf_text = _conf(_compile(_recipe(Package("curl"), off), tmp_path / "off"))
+    assert "Format=disk" in conf_text.splitlines()
+    assert "Bootable=no" in conf_text.splitlines()
+    assert "Format=uki" not in conf_text
+    assert "Bootable=yes" not in conf_text
+    with_kernel = _compile(_recipe(_kernel("6.1.2"), off), tmp_path / "kernel")
+    assert "Bootable=yes" not in _conf(with_kernel)
+    assert "Bootable=no" in _conf(with_kernel).splitlines()
+    plain = _conf(_compile(_recipe(Package("curl")), tmp_path / "plain"))
+    assert "Format=uki" in plain
+    assert "Bootable" not in plain
+    with pytest.raises(ValidationError, match="writes Bootable= itself"):
+        compile(_recipe(Package("curl"), Setting("Content", "Bootable", ("yes",))))
+
+
 def test_compile_service_enablement_uses_mkosi_chroot(tmp_path: Path) -> None:
     """Service enablement uses mkosi-chroot systemctl enable."""
     recipe = _recipe(Service("myapp", "/usr/bin/myapp"))

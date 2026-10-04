@@ -22,13 +22,15 @@ def test_plugin_is_registered_by_entry_point(request: pytest.FixtureRequest) -> 
 def test_recipe_fixture_is_minimal_and_clean(recipe: Recipe) -> None:
     assert isinstance(recipe, Recipe)
     assert recipe.name == "test"
-    assert recipe.common == Fragment("test")
+    assert recipe.common == Fragment("test", (Package("linux-image-amd64"),))
     assert [(v.name, v.outputs) for v in recipe.variants] == [("default", ("qemu",))]
     assert lint(recipe) == ()
 
 
 def test_recipe_fixture_bakes_in_process(recipe: Recipe, tmp_path: Path) -> None:
-    curl = dataclasses.replace(recipe, common=Fragment("test", (Package("curl"),)))
+    curl = dataclasses.replace(
+        recipe, common=Fragment("test", (Package("curl"), Package("linux-image-amd64")))
+    )
     assert_clean(curl, strict=True)
 
     (artifact,) = bake_in_process(curl, out=tmp_path / "build")

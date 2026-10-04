@@ -17,6 +17,7 @@ from tundravm import (
     Recipe,
     Resolved,
     Service,
+    Setting,
     User,
     Variant,
     compile,
@@ -41,6 +42,9 @@ from tundravm.testing import (
 )
 
 AZURE = Variant("azure", target="azure", add=Fragment("azure", (Package("jq"),)))
+KERNEL = Package("linux-image-amd64")
+NOT_BOOTABLE = Setting("Content", "Bootable", ("no",))
+"""Keeps a package-free recipe free of ``kernel-missing``, so its own findings stand alone."""
 
 
 def _recipe(*extra: Package | File) -> Recipe:
@@ -48,6 +52,7 @@ def _recipe(*extra: Package | File) -> Recipe:
         "app",
         (
             Package("curl"),
+            KERNEL,
             File("/etc/motd", "hello\n"),
             User("app", system=True),
             Service("app", "/usr/bin/app", user="app"),
@@ -60,7 +65,7 @@ def _recipe(*extra: Package | File) -> Recipe:
 
 
 def _single(*items: Package | File | User | Service) -> Recipe:
-    return Recipe(name="demo", common=Fragment("app", items))
+    return Recipe(name="demo", common=Fragment("app", (NOT_BOOTABLE, *items)))
 
 
 def _ghost(*, where: str = "common") -> Recipe:
@@ -71,7 +76,7 @@ def _ghost(*, where: str = "common") -> Recipe:
     variant = Variant("azure", target="azure", add=Fragment("azure", (service,)))
     return Recipe(
         name="demo",
-        common=Fragment("app"),
+        common=Fragment("app", (KERNEL,)),
         variants=(Variant("default", target="qemu"), variant),
     )
 
@@ -374,14 +379,14 @@ def test_fake_fragment_requires_other_fragments() -> None:
     alone = Recipe(name="demo", common=Fragment("app", (b,)))
     found = assert_diagnostic(lint(alone), "fragment-requires-missing", subject="b")
     assert "'a'" in found.message
-    assert_clean(lint(Recipe(name="demo", common=Fragment("app", (a, b)))))
+    assert_clean(lint(Recipe(name="demo", common=Fragment("app", (KERNEL, a, b)))))
 
 
 def test_fake_fragment_requires_a_fragment_by_name() -> None:
     dep = fake_fragment("dep", requires=("base-tools",))
     with pytest.raises(AssertionError, match="fragment-requires-missing"):
         assert_clean(Recipe(name="demo", common=Fragment("app", (dep,))))
-    tools = Fragment("base-tools", (Package("curl"),))
+    tools = Fragment("base-tools", (Package("curl"), KERNEL))
     assert_clean(Recipe(name="demo", common=Fragment("app", (tools, dep))), strict=True)
 
 
@@ -436,7 +441,10 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
         """
         from tundravm import Fragment, Package, Recipe
 
-        recipe = Recipe(name="demo", common=Fragment("demo", (Package("curl"),)))
+        recipe = Recipe(
+            name="demo",
+            common=Fragment("demo", (Package("curl"), Package("linux-image-amd64"))),
+        )
         """,
     )
     assert path == tmp_path / "recipe.py"

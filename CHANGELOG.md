@@ -24,12 +24,15 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - Several `Secrets` per variant. With more than one, each writes `<stem>-<name>` config and manifest paths (`/etc/tdx/secrets-api.yaml`) and gets its own runtime-init step; overlapping paths raise naming both declarations.
 - The default variant may have any parent; the parent lowers like any other variant.
 - A `base`-parented variant may leave a cloud-targeted default variant's targets; it lowers standalone.
-- `examples/surge-tdx-prover` is a declarative recipe that compiles byte-for-byte to the committed nethermind-tdx tree for `default`, `azure`, `gcp` and `devtools`; `examples/fragments` holds `Raiko`, `TaikoClient` and `Nethermind`, and `examples/nethermind_tdx.py` holds `NethermindBase`.
+- `examples/surge-tdx-prover` is a declarative recipe that compiles byte-for-byte to the committed nethermind-tdx tree for `default`, `azure`, `gcp` and `devtools`; `examples/fragments` holds `Raiko`, `TaikoClient` and `Nethermind`, and `examples/nethermind_base.py` holds `NethermindBase`.
 
 - `tundravm completion bash|zsh|fish` prints a completion script generated from the parser; bare `tundravm` prints help plus a quickstart; unknown verbs and flags exit 2 with a "did you mean" suggestion; `init` ends with a `doctor` probe of the chosen backend (`--no-doctor` skips it); `inspect --diff-variants A B` lists declarations that differ between two variants; `main(runner=)` for tests.
 - Every error raised by the package carries a hint; `tests/lint/test_error_hints.py` enforces it.
 - `tundravm lock` tries every source and reports all failures in one `E_LOCKFILE` error (`<name>: git <url> @ <ref>: <reason>` lines, `K of M sources resolved; nothing written.`); `LockfileError.failures` maps names to the new `SourceError` (`E_SOURCE`, `.source`, `.reason`). `lock --format github` adds an `::error title=E_SOURCE::` line per failure, and `lock --offline` lists every unpinned source at once.
 - `init --template minimal|service|cloud|prover` and `init --list-templates`. `init` scaffolds a project: the recipe, `tests/test_NAME.py` (`--with-tests`/`--no-tests`), and `pyproject.toml` and `README.md` when absent.
+
+- `kernel-missing` lint error: a bootable variant must declare `Kernel(...)` or install a `linux-image-*` package; `Setting("Content", "Bootable", ("no",))` builds a non-bootable disk instead. `init` templates install the Debian kernel (`linux-image-amd64`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`) so they bake a bootable UKI.
+- Examples consolidated into six numbered teaching recipes (`01_minimal` … `06_attestation`) plus `nethermind_base.py`, `fragments/` and the flagship; `examples/*.py` are loaded, linted and compiled by the test suite.
 
 ### Changed
 

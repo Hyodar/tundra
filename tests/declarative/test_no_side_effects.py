@@ -50,7 +50,7 @@ def test_declarative_values_do_not_touch_filesystem(
 def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     build_dir = tmp_path / "build"
     emit_dir = tmp_path / "mkosi"
-    recipe = _recipe("curl")
+    recipe = _recipe("linux-image-amd64", "curl")
 
     locked = lock(recipe)
     lock_path = build_dir / "tundravm.lock"

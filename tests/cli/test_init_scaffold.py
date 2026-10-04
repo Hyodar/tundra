@@ -87,6 +87,19 @@ def test_template_loads_lints_and_compiles_deterministically(
 
 
 @pytest.mark.parametrize("template", list(TEMPLATES))
+def test_every_template_installs_the_distribution_kernel(tmp_path: Path, template: str) -> None:
+    scaffold(tmp_path, "--template", template)
+    recipe = tundravm.load_recipe(tmp_path / f"{NAME}.py")
+    kernel = tundravm.Package("linux-image-amd64")
+    for variant in recipe.variants:
+        assert kernel in tundravm.resolve(recipe, variant=variant.name).items, variant.name
+
+    items = tuple(item for item in recipe.common.items if item != kernel)
+    stripped = dataclasses.replace(recipe, common=dataclasses.replace(recipe.common, items=items))
+    assert "kernel-missing" in {d.code for d in tundravm.lint(stripped)}
+
+
+@pytest.mark.parametrize("template", list(TEMPLATES))
 def test_render_is_a_pure_function_of_its_arguments(template: str) -> None:
     args = {"title": "n", "filename": "n.py", "base": "debian/trixie", "backend": "lima"}
     first = render_recipe_template(**args, template=template)

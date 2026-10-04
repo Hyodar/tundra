@@ -2,13 +2,13 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from tundravm.declarative import Backend, Fragment, Hook, Recipe, bake, lock
+from tundravm.declarative import Backend, Fragment, Hook, Package, Recipe, bake, lock
 from tundravm.models import BakeResult
 
 
 def _bake(tmp_path: Path, *items: Hook) -> Path:
     """Bake a qemu recipe in-process; return the default variant's ``report.json``."""
-    recipe = Recipe("report", Fragment("report", items=items))
+    recipe = Recipe("report", Fragment("report", items=(Package("linux-image-amd64"), *items)))
     out = tmp_path / "build"
     bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=out)
     report_path = BakeResult.load(out).profiles["default"].report_path

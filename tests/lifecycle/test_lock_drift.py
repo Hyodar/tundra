@@ -43,7 +43,12 @@ recipe = Recipe(
     "drift",
     Fragment(
         "drift",
-        items=(Package("curl"), Package("jq"), File("/etc/motd", "hello\\n")),
+        items=(
+            Package("curl"),
+            Package("linux-image-amd64"),
+            Package("jq"),
+            File("/etc/motd", "hello\\n"),
+        ),
     ),
 )
 backend = InProcessBackend()
@@ -53,7 +58,13 @@ HTOP = 'Package("jq"), Package("htop")'
 
 
 def _recipe(*extra: Package | File) -> Recipe:
-    items = (Package("curl"), Package("jq"), File("/etc/motd", "hello\n"), *extra)
+    items = (
+        Package("curl"),
+        Package("linux-image-amd64"),
+        Package("jq"),
+        File("/etc/motd", "hello\n"),
+        *extra,
+    )
     return Recipe("drift", Fragment("drift", items=items))
 
 
@@ -360,7 +371,7 @@ from tundravm.declarative import Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "drift",
-    Fragment("drift", items=(Package("curl"),)),
+    Fragment("drift", items=(Package("curl"), Package("linux-image-amd64"))),
     variants=(
         Variant("default", target="qemu"),
         Variant("dev", add=Fragment("dev", items=(Package("vim"),))),

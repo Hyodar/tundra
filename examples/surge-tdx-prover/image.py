@@ -18,7 +18,7 @@ from contents import (
     TDX_GUEST_SYMLINK,
 )
 from examples.fragments import Nethermind, Raiko, TaikoClient
-from examples.nethermind_tdx import NETHERMIND_V1, PINNED_MIRROR, NethermindBase
+from examples.nethermind_base import NETHERMIND_V1, PINNED_MIRROR, NethermindBase
 
 from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import (

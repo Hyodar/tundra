@@ -11,7 +11,7 @@ from __future__ import annotations
 from examples.fragments.nethermind import NETHERMIND_ENV, NETHERMIND_UNIT
 from examples.fragments.raiko import RAIKO_ENV, RAIKO_UNIT
 from examples.fragments.taiko_client import TAIKO_CLIENT_ENV, TAIKO_CLIENT_UNIT
-from examples.nethermind_tdx import NETWORK_SETUP_SERVICE, RESOLV_CONF, TDX_INIT
+from examples.nethermind_base import NETWORK_SETUP_SERVICE, RESOLV_CONF, TDX_INIT
 
 # ── System configuration (mkosi.extra/etc/) ───────────────────────────
 

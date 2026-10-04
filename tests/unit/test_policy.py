@@ -24,7 +24,7 @@ from tundravm.declarative import Fragment, Package, Policy, Recipe
 
 recipe = Recipe(
     "frozen",
-    Fragment("frozen", items=(Package("curl"),)),
+    Fragment("frozen", items=(Package("curl"), Package("linux-image-amd64"))),
     policy=Policy(require_frozen_lock=True),
 )
 backend = InProcessBackend()

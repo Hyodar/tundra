@@ -86,7 +86,7 @@ def test_load_corrupt_file_raises_state_error(tmp_path: Path) -> None:
 
 
 def test_bake_saves_and_a_fresh_read_measures_and_finds_it(tmp_path: Path) -> None:
-    recipe = Recipe("io", Fragment("io", items=(Package("curl"),)))
+    recipe = Recipe("io", Fragment("io", items=(Package("curl"), Package("linux-image-amd64"))))
     build_dir = tmp_path / "build"
 
     baked = bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=build_dir)

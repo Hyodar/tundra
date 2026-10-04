@@ -1286,6 +1286,7 @@ class Image:
             "environment": dict(options.environment) or None,
             "environment_passthrough": options.environment_passthrough,
             "settings": options.settings,
+            "bootable": options.bootable,
         }
         if options.seed is not None:
             emit_kwargs["seed"] = options.seed

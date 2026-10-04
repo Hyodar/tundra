@@ -277,7 +277,7 @@ class Debugging(Composite):
 - `compose()` must return a `Fragment` (anything else is a `ValidationError`); it may raise `ValidationError` for bad field values. A subclass without `compose()` raises `NotImplementedError` when constructed.
 - The configuration fields alone are the instance's `repr` and equality: `Debugging()` prints as `Debugging(gdb=True)`, and two equal configurations are the same fragment, so including both expands once. Lists passed for fields are frozen into tuples.
 
-The examples ship more: `NethermindBase(*, snapshot=PINNED_MIRROR)` in [`examples/nethermind_tdx.py`](../examples/nethermind_tdx.py), and `Raiko(*, source)`, `TaikoClient(*, source)`, `Nethermind(*, source)` in [`examples/fragments/`](../examples/fragments/).
+The examples ship more: `NethermindBase(*, snapshot=PINNED_MIRROR)` in [`examples/nethermind_base.py`](../examples/nethermind_base.py), and `Raiko(*, source)`, `TaikoClient(*, source)`, `Nethermind(*, source)` in [`examples/fragments/`](../examples/fragments/).
 
 ## Errors
 
@@ -334,6 +334,7 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `disk-key-path-mismatch` | warning | A disk reads a key file the key does not write |
 | `key-pipe-outside-run` | info | A pipe key's path is outside `/run` |
 | `variant-empty` | info | A variant declares nothing of its own |
+| `kernel-missing` | error | A bootable variant has no `Kernel` and installs no `linux-image-*` package; mkosi cannot build its UKI. `Setting("Content", "Bootable", ("no",))` disables both |
 
 Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`, `lock-removed` (each with the section as `subject`), and `lock-stale` when every section matches but the whole-recipe digest does not. Host tools (from `doctor`): `tool-missing`.
 

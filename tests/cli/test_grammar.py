@@ -23,6 +23,7 @@ recipe = Recipe(
         items=(
             Package("curl"),
             Package("jq"),
+            Package("linux-image-amd64"),
             File("/etc/motd", "hello\\n"),
             User("app", system=True),
             Service("app", "/usr/bin/app"),

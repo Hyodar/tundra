@@ -72,7 +72,13 @@ recipe = Recipe(
     common=Fragment(
         "base",
         items=(
+            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+            Package("linux-image-amd64"),
             Package("systemd"),
+            Package("systemd-sysv"),
+            Package("udev"),
+            Package("kmod"),
+            Package("systemd-boot-efi"),
             Package("ca-certificates"),
             File("/etc/motd", "$title\n"),
             Unit("hello.service", HELLO_UNIT, enabled=True),
@@ -201,7 +207,13 @@ recipe = Recipe(
     common=Fragment(
         "base",
         items=(
+            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+            Package("linux-image-amd64"),
             Package("systemd"),
+            Package("systemd-sysv"),
+            Package("udev"),
+            Package("kmod"),
+            Package("systemd-boot-efi"),
             Package("ca-certificates"),
             App(version=APP_VERSION, port=APP_PORT),
         ),
@@ -228,7 +240,12 @@ recipe = Recipe(
     common=Fragment(
         "base",
         items=(
+            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+            Package("linux-image-amd64"),
             Package("systemd"),
+            Package("systemd-sysv"),
+            Package("udev"),
+            Package("kmod"),
             Package("systemd-boot-efi"),
             Package("ca-certificates"),
             Package("curl", role="build"),
@@ -263,7 +280,12 @@ recipe = Recipe(
     common=Fragment(
         "base",
         items=(
+            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+            Package("linux-image-amd64"),
             Package("systemd"),
+            Package("systemd-sysv"),
+            Package("udev"),
+            Package("kmod"),
             Package("systemd-boot-efi"),
             Package("ca-certificates"),
             Package("cryptsetup"),

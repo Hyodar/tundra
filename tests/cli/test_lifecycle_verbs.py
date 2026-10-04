@@ -22,7 +22,7 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "lifecycle",
-    Fragment("common", items=(Package("curl"),)),
+    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
     variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
 )
 """

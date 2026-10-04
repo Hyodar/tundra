@@ -23,7 +23,8 @@ backend = InProcessBackend()
 recipe = Recipe(
     "demo",
     Fragment("common", items=(
-        Package("curl"), File("/etc/motd", "hi\\n"), User("app", shell="/bin/false"),
+        Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\\n"),
+        User("app", shell="/bin/false"),
         Unit("app.service", APP, enabled=True),
     )),
     variants=(
@@ -74,6 +75,7 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
 
     recipe = Recipe("demo", Fragment("common", items=(
         Fragment("tool", items=(Package("curl"),), checks=(warn,)),
+        Package("linux-image-amd64"),
         File("/etc/motd", "hi\\n"),
         Debloat(extra_remove=("/etc/motd",)),
     )))

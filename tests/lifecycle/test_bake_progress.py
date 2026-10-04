@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Backend, File, Fragment, Recipe, bake, lock
+from tundravm import Backend, File, Fragment, Package, Recipe, bake, lock
 from tundravm.backends.base import StreamResult, failure_message, run_streaming
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.backends.local_linux import LocalLinuxBackend
@@ -230,7 +230,7 @@ def test_local_backend_maps_streamed_failure_to_backend_error(
 
 
 def _recipe(*items: File) -> Recipe:
-    return Recipe("bake", Fragment("common", items=items))
+    return Recipe("bake", Fragment("common", items=(Package("linux-image-amd64"), *items)))
 
 
 def _bake(tmp_path: Path, recipe: Recipe, reporter: Capture | None) -> BakeResult:
@@ -410,11 +410,11 @@ from tundravm import Fragment, Package, Recipe
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
-recipe = Recipe("bake", Fragment("common", items=(Package("curl"),)))
+recipe = Recipe("bake", Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))))
 """
 
 FAILING_RECIPE = """
-from tundravm import Fragment, Recipe
+from tundravm import Fragment, Package, Recipe
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.errors import BackendExecutionError
 
@@ -427,7 +427,7 @@ class FlakyBackend(InProcessBackend):
 
 
 backend = FlakyBackend(name="flaky")
-recipe = Recipe("flaky", Fragment("common"))
+recipe = Recipe("flaky", Fragment("common", items=(Package("linux-image-amd64"),)))
 """
 
 
