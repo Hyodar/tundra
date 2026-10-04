@@ -20,6 +20,7 @@ def serialize_lockfile(lockfile: Lockfile) -> str:
             {"source": item.source, "kind": item.kind, "digest": item.digest}
             for item in lockfile.fetches
         ],
+        "sections": lockfile.sections,
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -47,6 +48,7 @@ def parse_lockfile(raw: str) -> Lockfile:
         recipe=recipe,
         dependencies=dependencies,
         fetches=fetches,
+        sections=_optional_sections(payload, "sections"),
     )
 
 
@@ -57,7 +59,7 @@ def read_lockfile(path: str | Path) -> Lockfile:
     except FileNotFoundError as exc:
         raise LockfileError(
             "Lockfile does not exist.",
-            hint="Run img.lock() before using frozen mode.",
+            hint="Run img.lock() or `tundravm lock RECIPE` to create it.",
             context={"path": str(lock_path)},
         ) from exc
     return parse_lockfile(raw)
@@ -113,3 +115,12 @@ def _required_dependencies(payload: dict[str, Any], key: str) -> dict[str, list[
             raise LockfileError("Invalid lockfile dependency package list.")
         parsed[profile] = list(packages)
     return parsed
+
+
+def _optional_sections(payload: dict[str, Any], key: str) -> dict[str, str]:
+    value = payload.get(key, {})
+    if not isinstance(value, dict) or not all(
+        isinstance(name, str) and isinstance(digest, str) for name, digest in value.items()
+    ):
+        raise LockfileError(f"Invalid lockfile `{key}` value.")
+    return dict(value)

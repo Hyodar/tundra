@@ -32,7 +32,14 @@ from .deploy import get_adapter
 from .diff import TreeDiff, diff_against
 from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from .explain import describe, render
-from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
+from .lockfile import (
+    LockDrift,
+    build_lockfile,
+    compare_lock,
+    read_lockfile,
+    recipe_digest,
+    write_lockfile,
+)
 from .measure import Measurements, derive_measurements
 from .models import (
     VALID_PHASES,
@@ -70,6 +77,7 @@ if TYPE_CHECKING:
     from .profile import Profile
 
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_DRIFT_MESSAGE_LINES = 15
 
 
 def _read_source(path: Path) -> str | bytes:
@@ -832,10 +840,31 @@ class Image:
         return self
 
     def lock(self, path: str | Path | None = None) -> Path:
+        """Write the lockfile for the active profiles and return its path.
+
+        The default path is ``<build_dir>/tundravm.lock``. Besides the whole
+        recipe digest that ``bake(frozen=True)`` enforces, the lockfile records a
+        digest per section (``base``, ``profiles.<name>.packages``, ...) so
+        :meth:`lock_status` and stale frozen bakes can say what changed.
+        """
         lock_path = self._normalize_path(path, fallback=self._default_lock_path())
         payload = self._recipe_payload(profile_names=self._active_profiles)
         lock = build_lockfile(recipe=payload)
         return write_lockfile(lock, lock_path)
+
+    def lock_status(self, path: str | Path | None = None) -> LockDrift:
+        """Compare the lockfile at *path* with the current recipe, section by section.
+
+        Reads ``<build_dir>/tundravm.lock`` by default and never writes. The
+        returned :class:`~tundravm.lockfile.LockDrift` lists changed, added and
+        removed sections; ``render()`` prints them (``~ profiles.default.packages:
+        +htop``) or ``lock is up to date``. A lockfile written before section
+        digests existed reports every section as added. Raises
+        :class:`LockfileError` when the lockfile is missing or unreadable.
+        """
+        lock_path = self._normalize_path(path, fallback=self._default_lock_path())
+        lock = read_lockfile(lock_path)
+        return compare_lock(lock, self._recipe_payload(profile_names=self._active_profiles))
 
     def compile(self, path: str | Path, *, force: bool = False) -> CompileResult:
         """Emit the mkosi build tree to *path* and return a CompileResult."""
@@ -1417,19 +1446,26 @@ class Image:
         lock_path = self._default_lock_path()
         lock = read_lockfile(lock_path)
         current_recipe = self._recipe_payload(profile_names=profile_names)
-        current_digest = recipe_digest(current_recipe)
-        if lock.recipe_digest != current_digest:
-            raise LockfileError(
-                "Frozen bake lockfile is stale for current recipe state.",
-                hint="Re-run img.lock() and commit the updated lockfile.",
-                context={
-                    "operation": "bake",
-                    "mode": "frozen",
-                    "expected": current_digest,
-                    "actual": lock.recipe_digest,
-                    "path": str(lock_path),
-                },
-            )
+        if lock.recipe_digest == recipe_digest(current_recipe):
+            return
+        drift = compare_lock(lock, current_recipe)
+        lines = drift.render().splitlines()
+        if len(lines) > _DRIFT_MESSAGE_LINES:
+            hidden = len(lines) - _DRIFT_MESSAGE_LINES
+            lines = [
+                *lines[:_DRIFT_MESSAGE_LINES],
+                f"... {hidden} more; run `tundravm lock RECIPE --check` for the full list",
+            ]
+        sections = drift.sections
+        changed = ", ".join(sections[:_DRIFT_MESSAGE_LINES])
+        if len(sections) > _DRIFT_MESSAGE_LINES:
+            changed += f", ... ({len(sections) - _DRIFT_MESSAGE_LINES} more)"
+        raise LockfileError(
+            "Frozen bake lockfile is stale for current recipe state:\n"
+            + "\n".join(f"  {line}" for line in lines),
+            hint="Run tundravm lock RECIPE to accept these changes, or revert them.",
+            context={"lock": str(lock_path), "changed": changed},
+        )
 
     def _convert_artifact(
         self,

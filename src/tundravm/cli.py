@@ -4,7 +4,8 @@ Every command loads an ``Image`` from a Python recipe file via
 :func:`tundravm.recipe.load_recipe`, applies the requested profile selection,
 and runs one lifecycle step. ``measure`` and ``deploy`` read the
 ``bake-result.json`` a previous ``bake`` wrote. Exit codes: 0 success, 2 SDK
-error (``E_*`` codes), 1 unexpected failure.
+error (``E_*`` codes), 1 for a failed check (``check``, ``compile --check``, ``lock --check``,
+``diff``) or an unexpected failure.
 """
 
 from __future__ import annotations
@@ -94,11 +95,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     lock = _add_command(sub, "lock", _cmd_lock, help="Write the lockfile for the recipe.")
+    lock.epilog = (
+        "Drift is reported one section per line: `~` changed, `+` only in the recipe, "
+        "`-` only in the lockfile, e.g. `~ profiles.default.packages: +htop -jq`. "
+        "A lockfile from before section digests reports every section as `+`."
+    )
     lock.add_argument(
         "--path",
         type=Path,
         default=None,
         help="Lockfile path (default: <build_dir>/tundravm.lock).",
+    )
+    lock.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Do not write; print the drift and exit 1 if the lockfile is stale, "
+            "or print `lock is up to date` and exit 0."
+        ),
+    )
+    lock.add_argument(
+        "--explain",
+        action="store_true",
+        help=(
+            "Print which sections changed since the existing lockfile before writing it "
+            "(with --check, print the drift without writing)."
+        ),
     )
 
     bake = _add_command(sub, "bake", _cmd_bake, help="Compile and build the image.")
@@ -343,6 +365,16 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
 def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
     with _selected(img, args):
+        if args.check:
+            drift = img.lock_status(args.path)
+            print(drift.render(), file=out)
+            return EXIT_OK if drift.is_clean else EXIT_FAILURE
+        if args.explain:
+            current = args.path if args.path is not None else Path(img.build_dir) / "tundravm.lock"
+            if current.exists():
+                print(img.lock_status(current).render(), file=out)
+            else:
+                print(f"no lockfile at {current}; every section is new", file=out)
         path = img.lock(args.path)
     print(f"locked {path}", file=out)
     return EXIT_OK
