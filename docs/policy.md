@@ -19,7 +19,7 @@ The SDK policy engine controls strictness without changing recipe code.
 For CI, use:
 
 ```python
-from tdx.policy import Policy
+from tundravm.policy import Policy
 
 ci_policy = Policy(
     require_frozen_lock=True,

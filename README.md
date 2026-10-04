@@ -34,6 +34,20 @@ result = img.bake(frozen=True)        # build with lockfile enforcement
 
 `compile()` produces a standard mkosi directory you can inspect, diff, or build manually with `mkosi build`. `bake()` runs the full pipeline.
 
+## CLI
+
+`uv sync` installs a `tundravm` command (also `python -m tundravm`). Point it at a Python file that binds an `Image` to `img` or defines `build() -> Image`:
+
+```bash
+tundravm explain recipe.py --profile azure   # dry run: what the recipe produces
+tundravm digest recipe.py                    # recipe digest used by lockfiles
+tundravm compile recipe.py --out build/mkosi
+tundravm bake recipe.py --lock --all-profiles
+tundravm new recipes/node.py --backend nix   # starter recipe file
+```
+
+See [`docs/cli.md`](docs/cli.md) for recipe resolution rules, options, and exit codes.
+
 ## Why
 
 Hand-maintained mkosi trees for TDX images are hard to review, easy to drift, and painful to keep reproducible across cloud targets. This SDK lets you express the same image as a short Python script and get:
@@ -96,9 +110,9 @@ with img.all_profiles():
 
 ## Modules
 
-Modules are composable units that add build steps, config files, systemd services, and init scripts to an image. Call `module.apply(img)` and the module handles the rest.
+Modules are composable units that add build steps, config files, systemd services, and init scripts to an image. Call `module.apply(img)`, or `img.apply(KeyGeneration(), DiskEncryption())` to apply several in order, and the module handles the rest.
 
-**Built-in modules** (`tdx.modules`):
+**Built-in modules** (`tundravm.modules`):
 
 | Module | What it does |
 |---|---|
@@ -189,6 +203,17 @@ img.set_policy(Policy(
 ```
 
 See [`docs/policy.md`](docs/policy.md) for the full reference.
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [`docs/concepts.md`](docs/concepts.md) | Recipe vs compiled tree vs artifact, profiles, build phases, runtime-init, lockfile, backends, measurements, deploy |
+| [`docs/api.md`](docs/api.md) | `Image` method reference, public models, error codes |
+| [`docs/cli.md`](docs/cli.md) | `tundravm` command: recipe loading, commands, exit codes |
+| [`docs/module-authoring.md`](docs/module-authoring.md) | Writing `Module` and `InitModule` classes, priorities, testing |
+| [`docs/policy.md`](docs/policy.md) | Policy options and CI settings |
+| [`docs/reproducibility.md`](docs/reproducibility.md) | Reproducible build settings and mkosi requirements |
 
 ## Examples
 

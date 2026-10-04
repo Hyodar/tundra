@@ -35,7 +35,7 @@ Reproducibility settings emitted in `mkosi.conf`:
 For strict CI reproducibility, combine frozen bakes and strict policy:
 
 ```python
-from tdx.policy import Policy
+from tundravm.policy import Policy
 
 policy = Policy(
     require_frozen_lock=True,
