@@ -30,6 +30,7 @@ from .models import (
     SecretTarget,
 )
 from .policy import Policy
+from .profile import Profile
 from .recipe import load_recipe
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "Measurements",
     "PolicyError",
     "Policy",
+    "Profile",
     "ProfileState",
     "RecipeState",
     "ReproducibilityError",

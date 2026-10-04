@@ -107,8 +107,13 @@ class RepositorySpec:
 @dataclass(frozen=True, slots=True)
 class FileEntry:
     path: str
-    content: str
+    content: str | bytes
     mode: str = "0644"
+
+    @property
+    def data(self) -> bytes:
+        """File content as bytes (text is UTF-8 encoded)."""
+        return self.content.encode() if isinstance(self.content, str) else self.content
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +148,22 @@ class ServiceSpec:
     enabled: bool = True
     extra_unit: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     security_profile: SecurityProfile = "default"
+    description: str | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
+    env_file: str | None = None
+    working_dir: str | None = None
+    exec_start_pre: tuple[str, ...] = ()
+
+    def extras(self) -> dict[str, object]:
+        """Optional unit fields that are set, keyed by name (empty for a plain service)."""
+        optional: dict[str, object] = {
+            "description": self.description,
+            "env": dict(sorted(self.env.items())),
+            "env_file": self.env_file,
+            "exec_start_pre": list(self.exec_start_pre),
+            "working_dir": self.working_dir,
+        }
+        return {key: value for key, value in optional.items() if value}
 
 
 @dataclass(frozen=True, slots=True)

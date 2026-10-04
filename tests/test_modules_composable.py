@@ -476,6 +476,7 @@ def test_init_scripts_sorted_by_priority() -> None:
     profile = image.state.profiles["default"]
     script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
     script = script_files[0].content
+    assert isinstance(script, str)
 
     key_pos = script.index("key-gen setup")
     disk_pos = script.index("disk-setup setup")

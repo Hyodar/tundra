@@ -89,7 +89,7 @@ Image(backend=LocalLinuxBackend())
 
 ## Profiles
 
-Profiles let you customize packages, services, and output targets per deployment environment. Anything inside a `with img.profile(...)` block only applies to that profile.
+Profiles let you customize packages, services, and output targets per deployment environment. Anything inside a `with img.profile(...)` block only applies to that profile. `img.profile(name)` also returns a `Profile` handle you can declare on directly.
 
 ```python
 from tundravm import Image
@@ -103,11 +103,8 @@ img.output_targets("qemu")
 with img.profile("azure"):
     AzurePlatform().apply(img)
 
-with img.profile("gcp"):
-    GcpPlatform().apply(img)
-
-with img.profile("devtools"):
-    Devtools().apply(img)
+img.profile("gcp").apply(GcpPlatform())
+img.profile("devtools").apply(Devtools())
 
 with img.all_profiles():
     results = img.bake()
@@ -217,6 +214,7 @@ See [`docs/policy.md`](docs/policy.md) for the full reference.
 | [`docs/api.md`](docs/api.md) | `Image` method reference, public models, error codes |
 | [`docs/cli.md`](docs/cli.md) | `tundravm` command: recipe loading, commands, exit codes |
 | [`docs/module-authoring.md`](docs/module-authoring.md) | Subclassing `Module`: `requires`, init priorities, checks, testing |
+| [`docs/testing.md`](docs/testing.md) | `tundravm.testing` helpers and pytest fixtures: compiled-tree readers, lint asserts, golden trees, `FakeModule`, CLI runs |
 | [`docs/policy.md`](docs/policy.md) | Policy options and CI settings |
 | [`docs/reproducibility.md`](docs/reproducibility.md) | Reproducible build settings and mkosi requirements |
 

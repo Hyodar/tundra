@@ -232,12 +232,12 @@ def _rule_service_user_missing(
 def _rule_file_path_duplicate(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    extra: dict[str, list[tuple[str, str, str]]] = {}
+    extra: dict[str, list[tuple[str, str | bytes, str]]] = {}
     for f in state.files:
         extra.setdefault(_norm(f.path), []).append(("file", f.content, f.mode))
     for t in state.templates:
         extra.setdefault(_norm(t.path), []).append(("template", t.rendered, t.mode))
-    skeleton: dict[str, list[tuple[str, str, str]]] = {}
+    skeleton: dict[str, list[tuple[str, str | bytes, str]]] = {}
     for f in state.skeleton_files:
         skeleton.setdefault(_norm(f.path), []).append(("skeleton", f.content, f.mode))
     for tree, groups in (("mkosi.extra", extra), ("mkosi.skeleton", skeleton)):

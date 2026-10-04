@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
+import os
+import re
 import shlex
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol, Self
+from typing import TYPE_CHECKING, Literal, Protocol, Self
 
 from .backends.base import BuildBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
@@ -62,6 +65,20 @@ from .modules.base import Module
 from .modules.init import Init
 from .observability import StructuredLogger
 from .policy import Policy, ensure_bake_policy
+
+if TYPE_CHECKING:
+    from .profile import Profile
+
+_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _read_source(path: Path) -> str | bytes:
+    """Read *path* as UTF-8 text, or as raw bytes when it is not valid UTF-8."""
+    data = path.read_bytes()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
 
 
 class Applicable(Protocol):
@@ -138,6 +155,11 @@ class Image:
     def state(self) -> RecipeState:
         return self._state
 
+    @property
+    def profile_names(self) -> tuple[str, ...]:
+        """Every profile declared so far, sorted."""
+        return tuple(sorted(self._state.profiles))
+
     def set_policy(self, policy: Policy) -> Self:
         self.policy = policy
         return self
@@ -168,10 +190,17 @@ class Image:
         """``Module`` instances applied to *profile* (default: the active profile), in order."""
         return tuple(self._modules.get(self._resolve_operation_profile(profile), ()))
 
-    @contextmanager
-    def profile(self, name: str) -> Iterator[Self]:
-        with self.profiles(name):
-            yield self
+    def profile(self, name: str) -> Profile:
+        """Return the :class:`~tundravm.profile.Profile` handle for *name*, declaring it.
+
+        Use it as a context manager (``with img.profile("azure"): ...``) or call the
+        declaration API on it directly (``img.profile("azure").install("walinuxagent")``).
+        """
+        from .profile import Profile
+
+        (selected,) = self._normalize_profile_names((name,))
+        self._ensure_profile(selected)
+        return Profile(self, selected)
 
     @contextmanager
     def profiles(self, *names: str) -> Iterator[Self]:
@@ -248,22 +277,68 @@ class Image:
         self,
         path: str,
         *,
-        content: str | None = None,
+        content: str | bytes | None = None,
         src: str | Path | None = None,
         mode: str = "0644",
     ) -> Self:
+        """Place a file at *path* in the image; *src* that is not UTF-8 is copied as bytes."""
         if not path:
             raise ValidationError("file() requires a destination path.")
         if content is None and src is None:
             raise ValidationError("file() requires content= or src=.")
         if content is not None and src is not None:
             raise ValidationError("file() accepts content= or src=, not both.")
-        if content is not None:
-            resolved_content = content
-        else:
-            resolved_content = Path(src).read_text(encoding="utf-8")  # type: ignore[arg-type]
+        resolved_content = content if content is not None else _read_source(Path(src or ""))
         for profile in self._iter_active_profiles():
             profile.files.append(FileEntry(path=path, content=resolved_content, mode=mode))
+        return self
+
+    def directory(
+        self,
+        dest: str,
+        *,
+        src: str | Path,
+        mode: str | None = None,
+        exclude: Sequence[str] = (),
+    ) -> Self:
+        """Place every file under the host directory *src* at *dest* in the image.
+
+        Files keep their relative paths. Each gets *mode*, or 0755 when executable on
+        the host and 0644 otherwise. *exclude* holds fnmatch globs matched against the
+        path relative to *src* (``*`` also matches ``/``); a matching directory is
+        skipped whole. Symlinked files are copied, symlinked directories are not followed.
+        """
+        if not dest:
+            raise ValidationError("directory() requires a destination path.")
+        root = Path(src)
+        if not root.is_dir():
+            raise ValidationError(
+                "directory() src must be an existing directory.",
+                context={"src": str(root)},
+            )
+        patterns = (exclude,) if isinstance(exclude, str) else tuple(exclude)
+
+        def excluded(rel: str) -> bool:
+            return any(fnmatch.fnmatchcase(rel, pattern) for pattern in patterns)
+
+        found: list[tuple[str, Path]] = []
+        for current, dirnames, filenames in os.walk(root):
+            base = Path(current).relative_to(root)
+            dirnames[:] = sorted(d for d in dirnames if not excluded((base / d).as_posix()))
+            for filename in sorted(filenames):
+                rel = (base / filename).as_posix()
+                if not excluded(rel) and (Path(current) / filename).is_file():
+                    found.append((rel, Path(current) / filename))
+        if not found:
+            raise ValidationError(
+                "directory() found no files to copy.",
+                hint="Check src= and exclude=.",
+                context={"src": str(root)},
+            )
+        prefix = dest.rstrip("/")
+        for rel, host_path in sorted(found):
+            file_mode = mode or ("0755" if host_path.stat().st_mode & 0o111 else "0644")
+            self.file(f"{prefix}/{rel}", content=_read_source(host_path), mode=file_mode)
         return self
 
     def template(
@@ -348,7 +423,12 @@ class Image:
         name: str,
         *,
         command: tuple[str, ...] | list[str] | str = (),
+        description: str | None = None,
         user: str | None = None,
+        working_dir: str | None = None,
+        env: Mapping[str, str] | None = None,
+        env_file: str | None = None,
+        exec_start_pre: Sequence[str] = (),
         after: tuple[str, ...] | list[str] = (),
         requires: tuple[str, ...] | list[str] = (),
         wants: tuple[str, ...] | list[str] = (),
@@ -357,9 +437,28 @@ class Image:
         extra_unit: Mapping[str, Mapping[str, str]] | None = None,
         security_profile: SecurityProfile = "default",
     ) -> Self:
-        """Register a systemd service unit in the current profile(s)."""
+        """Register a systemd service unit in the current profile(s).
+
+        *env* becomes ``Environment=`` lines (sorted, quoted when needed), *env_file*
+        ``EnvironmentFile=``, *working_dir* ``WorkingDirectory=``, each *exec_start_pre*
+        command an ``ExecStartPre=`` line, and *description* ``Description=``
+        (default: the service name).
+        """
         if not name:
             raise ValidationError("service() requires a non-empty service name.")
+        env_data = dict(env or {})
+        for key, value in env_data.items():
+            if not _ENV_KEY.fullmatch(key):
+                raise ValidationError(
+                    f"Invalid environment variable name {key!r} for service '{name}'.",
+                    hint="Use letters, digits and underscores, not starting with a digit.",
+                )
+            if "\n" in value:
+                raise ValidationError(
+                    f"Environment value for {key!r} in service '{name}' contains a newline.",
+                    hint="Use env_file= for multi-line values.",
+                )
+        pre_commands = (exec_start_pre,) if isinstance(exec_start_pre, str) else exec_start_pre
         exec_argv: tuple[str, ...]
         if isinstance(command, str):
             exec_argv = tuple(shlex.split(command)) if command else ()
@@ -376,6 +475,11 @@ class Image:
             enabled=enabled,
             extra_unit=dict(extra_unit) if extra_unit else {},
             security_profile=security_profile,
+            description=description or None,
+            env=env_data,
+            env_file=env_file or None,
+            working_dir=working_dir or None,
+            exec_start_pre=tuple(pre_commands),
         )
         for profile in self._iter_active_profiles():
             existing_names = {s.name for s in profile.services}
@@ -1089,20 +1193,7 @@ class Image:
                     continue
                 after = svc.after if init_svc in svc.after else (init_svc, *svc.after)
                 requires = svc.requires if init_svc in svc.requires else (init_svc, *svc.requires)
-                patched.append(
-                    ServiceSpec(
-                        name=svc.name,
-                        command=svc.command,
-                        user=svc.user,
-                        after=after,
-                        requires=requires,
-                        wants=svc.wants,
-                        restart=svc.restart,
-                        enabled=svc.enabled,
-                        extra_unit=svc.extra_unit,
-                        security_profile=svc.security_profile,
-                    )
-                )
+                patched.append(replace(svc, after=after, requires=requires))
             profile.services = patched
         # Register runtime-init for enablement (systemctl enable + minimal.target.wants)
         # in each active profile that does not have it yet. service() appends to every
@@ -1179,7 +1270,7 @@ class Image:
                 {
                     "path": file_entry.path,
                     "mode": file_entry.mode,
-                    "sha256": hashlib.sha256(file_entry.content.encode()).hexdigest(),
+                    "sha256": hashlib.sha256(file_entry.data).hexdigest(),
                 }
                 for file_entry in sorted(profile.files, key=lambda item: item.path)
             ]
@@ -1215,6 +1306,7 @@ class Image:
                     "restart": svc.restart,
                     "enabled": svc.enabled,
                     "security_profile": svc.security_profile,
+                    **svc.extras(),
                 }
                 for svc in sorted(profile.services, key=lambda item: item.name)
             ]
@@ -1271,7 +1363,7 @@ class Image:
                 {
                     "path": file_entry.path,
                     "mode": file_entry.mode,
-                    "sha256": hashlib.sha256(file_entry.content.encode()).hexdigest(),
+                    "sha256": hashlib.sha256(file_entry.data).hexdigest(),
                 }
                 for file_entry in sorted(profile.skeleton_files, key=lambda item: item.path)
             ]

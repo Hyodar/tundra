@@ -47,9 +47,29 @@ from tundravm import Image
 | Method | Description |
 | --- | --- |
 | `state -> RecipeState` | Property. Raw recipe state; `state.profiles[name]` is a `ProfileState` |
-| `profile(name) -> ContextManager[Self]` | Scope declarations to one profile |
+| `profile_names -> tuple[str, ...]` | Property. Every declared profile, sorted |
+| `profile(name) -> Profile` | Declare profile `name` and return its handle (see below) |
 | `profiles(*names) -> ContextManager[Self]` | Scope declarations to several profiles at once |
 | `all_profiles() -> ContextManager[Self]` | Scope to every profile declared so far (sorted by name) |
+
+`Profile` (`from tundravm import Profile`) works two ways. As a context manager, `with img.profile("azure"):` scopes every `img.*` call inside the block to that profile (the `as` target is the `Image`). As an object, it carries the declaration API bound to that profile, and each call returns the `Profile`, so chains stay on it:
+
+```python
+azure = img.profile("azure")
+azure.apply(AzurePlatform()).install("walinuxagent").output_targets("azure")
+azure.service("agent", command="/usr/bin/agent", env={"LOG": "info"})
+```
+
+| Member | Description |
+| --- | --- |
+| `name`, `image` | Profile name and owning `Image` |
+| `install`, `file`, `directory`, `template`, `user`, `service`, `apply`, `output_targets`, `debloat`, `run`, `hook`, `repository`, `partition`, `add_init_script` | Same signatures as on `Image`, run with only this profile active; return the `Profile` |
+| any other `Image` method returning `Self` (`backports`, `skeleton`, `build_install`, `ssh`, ...) | Same, resolved dynamically (typed as `(...) -> Profile`) |
+| `state -> ProfileState` | Property. This profile's state |
+| `explain()`, `summary()`, `explain_debloat()`, `applied_modules()` | `Image` counterparts with `profile=name` |
+| `check() -> list[Diagnostic]` | Diagnostics for this profile only |
+| `compile(path, *, force=False)`, `lock(path=None)`, `diff(against)`, `bake(output_dir=None, *, frozen=False, force=False)` | Run with only this profile active |
+| `measure(*, backend)`, `deploy(*, target, parameters=None, memory=None, cpus=None)` | `Image` counterparts with `profile=name` |
 
 ### Packages and repositories
 
@@ -64,7 +84,8 @@ from tundravm import Image
 
 | Method | Description |
 | --- | --- |
-| `file(path, *, content=None, src=None, mode="0644") -> Self` | Place a file in the image (`mkosi.extra/`); exactly one of `content`/`src` |
+| `file(path, *, content=None, src=None, mode="0644") -> Self` | Place a file in the image (`mkosi.extra/`); exactly one of `content`/`src`. `content` may be `bytes`; a `src` that is not UTF-8 is copied as bytes |
+| `directory(dest, *, src, mode=None, exclude=()) -> Self` | Place every file under host directory `src` at `dest`, keeping relative paths, in sorted order. Mode is `mode`, else `0755` for host-executable files and `0644` otherwise. `exclude` holds fnmatch globs on the path relative to `src` (`*` also matches `/`); a matching directory is skipped whole |
 | `template(dest, *, src=None, template=None, variables=None, mode="0644") -> Self` | Render `{name}` placeholders with `variables`, then place the file |
 | `skeleton(path, *, content=None, src=None, mode="0644") -> Self` | Place a file before the package manager runs (`mkosi.skeleton/`) |
 
@@ -73,7 +94,7 @@ from tundravm import Image
 | Method | Description |
 | --- | --- |
 | `user(name, *, system=False, home=None, shell="/usr/sbin/nologin", uid=None, gid=None, groups=()) -> Self` | Create a user; names unique per profile |
-| `service(name, *, command=(), user=None, after=(), requires=(), wants=(), restart="no", enabled=True, extra_unit=None, security_profile="default") -> Self` | Register a unit. With `command` the SDK generates the unit file; without it, only enablement is emitted. `restart`: `"always"`, `"on-failure"`, `"no"`. `security_profile`: `"strict"`, `"default"`, `"none"` |
+| `service(name, *, command=(), description=None, user=None, working_dir=None, env=None, env_file=None, exec_start_pre=(), after=(), requires=(), wants=(), restart="no", enabled=True, extra_unit=None, security_profile="default") -> Self` | Register a unit. With `command` the SDK generates the unit file; without it, only enablement is emitted. `description` sets `Description=` (default: the name). `exec_start_pre` adds one `ExecStartPre=` per command, `working_dir` sets `WorkingDirectory=`, `env_file` sets `EnvironmentFile=`, and `env` adds `Environment=` lines sorted by key, quoted when a value has spaces, quotes or backslashes. `restart`: `"always"`, `"on-failure"`, `"no"`. `security_profile`: `"strict"`, `"default"`, `"none"` |
 
 ### Partitions and outputs
 
@@ -146,6 +167,7 @@ The same views are available from the shell: `tundravm explain RECIPE` (`python 
 | Name | Description |
 | --- | --- |
 | `Image` | The recipe object above |
+| `Profile` | Handle returned by `Image.profile(name)`; see [Profiles](#profiles) |
 | `Applicable` | Protocol: anything with `apply(image: Image) -> None`; accepted by `Image.apply()` |
 | `load_recipe(path, attr=None, extra_paths=()) -> Image` | Load an `Image` from a recipe file using the CLI resolution rules |
 | `__version__` | Package version string |

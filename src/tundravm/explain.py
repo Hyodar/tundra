@@ -100,6 +100,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
                 "security_profile": svc.security_profile,
                 "user": svc.user,
                 "wants": list(svc.wants),
+                **svc.extras(),
             }
             for svc in sorted(profile_state.services, key=lambda item: item.name)
         ],
@@ -194,6 +195,12 @@ def render(description: dict[str, object]) -> str:
             parts.append(f"restart={svc['restart']}")
             if svc.get("user"):
                 parts.append(f"user={svc['user']}")
+            if svc.get("working_dir"):
+                parts.append(f"cwd={svc['working_dir']}")
+            if svc.get("env"):
+                parts.append("env=" + ",".join(svc["env"]))
+            if svc.get("env_file"):
+                parts.append(f"env_file={svc['env_file']}")
             for key in ("after", "requires", "wants"):
                 if svc.get(key):
                     parts.append(f"{key}=" + ",".join(svc[key]))
@@ -248,10 +255,10 @@ def render(description: dict[str, object]) -> str:
 def _describe_files(entries: Sequence[Any]) -> list[dict[str, object]]:
     return [
         {
-            "bytes": len(entry.content.encode()),
+            "bytes": len(entry.data),
             "mode": entry.mode,
             "path": entry.path,
-            "sha256": hashlib.sha256(entry.content.encode()).hexdigest()[:SHORT_DIGEST_LEN],
+            "sha256": hashlib.sha256(entry.data).hexdigest()[:SHORT_DIGEST_LEN],
         }
         for entry in sorted(entries, key=lambda item: item.path)
     ]

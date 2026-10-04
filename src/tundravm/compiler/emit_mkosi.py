@@ -23,6 +23,7 @@ from tundravm.errors import ValidationError
 from tundravm.models import (
     Arch,
     CommandSpec,
+    FileEntry,
     Kernel,
     Phase,
     ProfileState,
@@ -309,9 +310,27 @@ def _parse_mode(mode: str) -> int:
         ) from exc
 
 
+def _systemd_env_assignment(key: str, value: str) -> str:
+    """``KEY=value``, double-quoted per systemd rules when *value* needs it."""
+    assignment = f"{key}={value}"
+    if value and not any(ch.isspace() or ch in "\"'\\" for ch in value):
+        return assignment
+    escaped = assignment.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _write_file_entry(dest: Path, entry: FileEntry) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(entry.content, bytes):
+        dest.write_bytes(entry.content)
+    else:
+        dest.write_text(entry.content, encoding="utf-8")
+    dest.chmod(_parse_mode(entry.mode))
+
+
 def _systemd_unit_content(svc: ServiceSpec) -> str:
     """Generate a real systemd .service unit file from a ServiceSpec."""
-    lines: list[str] = ["[Unit]", f"Description={svc.name}"]
+    lines: list[str] = ["[Unit]", f"Description={svc.description or svc.name}"]
 
     if svc.after:
         lines.append(f"After={' '.join(svc.after)}")
@@ -327,10 +346,18 @@ def _systemd_unit_content(svc: ServiceSpec) -> str:
     lines.append("[Service]")
     lines.append("Type=simple")
 
+    for pre in svc.exec_start_pre:
+        lines.append(f"ExecStartPre={pre}")
     if svc.command:
         lines.append(f"ExecStart={' '.join(svc.command)}")
     if svc.user:
         lines.append(f"User={svc.user}")
+    if svc.working_dir:
+        lines.append(f"WorkingDirectory={svc.working_dir}")
+    if svc.env_file:
+        lines.append(f"EnvironmentFile={svc.env_file}")
+    for key, value in sorted(svc.env.items()):
+        lines.append(f"Environment={_systemd_env_assignment(key, value)}")
     if svc.restart != "no":
         lines.append(f"Restart={svc.restart}")
         lines.append("RestartSec=5")
@@ -684,10 +711,7 @@ class DeterministicMkosiEmitter:
 
         # Files from img.file()
         for entry in profile.files:
-            dest = extra_dir / entry.path.lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(entry.content, encoding="utf-8")
-            dest.chmod(_parse_mode(entry.mode))
+            _write_file_entry(extra_dir / entry.path.lstrip("/"), entry)
 
         # Rendered templates from img.template()
         for tmpl in profile.templates:
@@ -724,10 +748,7 @@ class DeterministicMkosiEmitter:
 
         # Write skeleton files from img.skeleton()
         for entry in profile.skeleton_files:
-            dest = skeleton_dir / entry.path.lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(entry.content, encoding="utf-8")
-            dest.chmod(_parse_mode(entry.mode))
+            _write_file_entry(skeleton_dir / entry.path.lstrip("/"), entry)
 
         # Additional apt repositories from image.repository(...)
         distribution, release = _parse_base(config.base)
@@ -757,13 +778,7 @@ class DeterministicMkosiEmitter:
                     f'Pin: origin "{host}"',
                     f"Pin-Priority: {repo.priority}",
                 ]
-                pref_path = (
-                    skeleton_dir
-                    / "etc"
-                    / "apt"
-                    / "preferences.d"
-                    / f"{safe_name}.pref"
-                )
+                pref_path = skeleton_dir / "etc" / "apt" / "preferences.d" / f"{safe_name}.pref"
                 pref_path.parent.mkdir(parents=True, exist_ok=True)
                 pref_path.write_text("\n".join(pref_lines) + "\n", encoding="utf-8")
                 pref_path.chmod(0o644)
