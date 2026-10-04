@@ -73,10 +73,10 @@ img.enable("openntpd", "dropbear").mask("ssh.service", "ssh.socket")
 
 ## Profiles
 
-A profile is a variant of the image, such as one per cloud. A profile extends the default profile: its image is everything declared on the default plus its own additions. On a conflict (same file path, unit, user) the profile wins. `output_targets` and `debloat` fall back to the default when the profile does not set them.
+A profile is a variant of the image, such as one per cloud. A profile extends the default profile: its image is everything declared on the default plus its own additions. On a conflict (same file path, unit, user) the profile wins. `targets` and `debloat` fall back to the default when the profile does not set them.
 
 ```python
-from tundravm.modules import Devtools
+from tundravm.modules import DevTools
 from tundravm.platforms import AzurePlatform, GcpPlatform
 
 azure = img.profile("azure")
@@ -85,7 +85,7 @@ azure.apply(AzurePlatform()).install("waagent")
 img.profile("gcp").apply(GcpPlatform())
 
 with img.profile("dev"):
-    img.apply(Devtools())
+    img.apply(DevTools())
 
 with img.all_profiles():
     img.bake()
@@ -117,7 +117,7 @@ Every module subclasses `tundravm.modules.Module` and overrides `setup()`, `inst
 | `DiskEncryption` | LUKS2 disks with naming, format policy and mount controls | 20 |
 | `SecretDelivery` | SSH key and secret delivery over HTTP, with schemas and targets | 30 |
 | `Tdxs` | `tundra-tools` issuer/validator service, socket and validator config | |
-| `Devtools` | Serial console, root password, SSH and debugging tools for dev profiles | |
+| `DevTools` | Serial console, root password, SSH and debugging tools for dev profiles | |
 
 `tundravm.platforms` adds `AzurePlatform` and `GcpPlatform`. At `compile()` the SDK writes `/usr/bin/runtime-init` with the boot scripts in priority order, a `runtime-init.service`, and `After=`/`Requires=runtime-init.service` on every other service.
 
@@ -251,6 +251,6 @@ uv run pytest
 | `E_LOCKFILE` | Recipe changed since the lock. `tundravm lock RECIPE --check` shows what; `tundravm lock RECIPE` accepts it |
 | `E_STATE` | No `bake-result.json`. Run `tundravm bake` first, or pass the bake's `--out DIR` to `measure`/`deploy` |
 | `E_POLICY` | Update the policy or bake with `--frozen` |
-| `E_DEPLOYMENT` | Add the target with `output_targets(...)` and rebake, or install the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
+| `E_DEPLOYMENT` | Add the target with `targets(...)` and rebake, or install the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 | `E_MEASUREMENT` | Bake the profile you are measuring |
 | `E_BACKEND_EXECUTION` | Run `tundravm doctor RECIPE`; check mkosi version (>= 25) and platform |
