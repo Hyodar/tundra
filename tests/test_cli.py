@@ -92,9 +92,7 @@ def test_lock_then_frozen_bake(recipe: Path, tmp_path: Path) -> None:
 
     code, out = run("bake", str(recipe), "--frozen")
     assert code == EXIT_OK
-    assert "baked default" in out
-    assert "qemu" in out
-    assert "report" in out
+    assert re.search(r"^default\s+qemu\s+\S+disk\.qcow2\s", out, re.M)
 
 
 def test_frozen_bake_without_lock_fails_with_code(
@@ -109,8 +107,8 @@ def test_bake_with_lock_flag(recipe: Path) -> None:
     code, out = run("bake", str(recipe), "--lock", "--all-profiles")
     assert code == EXIT_OK
     assert "locked " in out
-    assert "baked azure" in out
-    assert "baked default" in out
+    assert re.search(r"^azure\s+azure\s", out, re.M)
+    assert re.search(r"^default\s+qemu\s", out, re.M)
 
 
 def test_unknown_profile_is_reported(recipe: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -165,7 +163,7 @@ def test_new_writes_loadable_recipe(tmp_path: Path) -> None:
 
     code, out = run("bake", str(target), "--lock", "--out", str(tmp_path / "out"))
     assert code == EXIT_OK
-    assert "baked default" in out
+    assert re.search(r"^default\s+qemu\s", out, re.M)
 
 
 def test_new_refuses_overwrite_without_force(

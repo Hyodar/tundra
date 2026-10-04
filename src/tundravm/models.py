@@ -7,9 +7,12 @@ import posixpath
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from .errors import StateError, ValidationError
+
+if TYPE_CHECKING:
+    from .source import SourceBuild
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
@@ -368,6 +371,7 @@ class ProfileState:
     init_scripts: list[InitScriptEntry] = field(default_factory=list)
     debloat: DebloatConfig = field(default_factory=DebloatConfig)
     debloat_explicit: bool = False
+    source_builds: dict[str, SourceBuild] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -472,6 +476,7 @@ def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
         unit_states=list(dict.fromkeys((*base.unit_states, *own.unit_states))),
         partitions=_override(base.partitions, own.partitions, lambda p: p.name),
         hooks=[*base.hooks, *own.hooks],
+        source_builds={**base.source_builds, **own.source_builds},
         secrets=_override(base.secrets, own.secrets, lambda s: s.name),
         init_scripts=list(
             {(e.priority, e.script): e for e in (*base.init_scripts, *own.init_scripts)}.values()
@@ -511,10 +516,15 @@ def _fallback_debloat(base: ProfileState, own: ProfileState) -> DebloatConfig:
 
 @dataclass(frozen=True, slots=True)
 class BakeRequest:
+    """One profile build. ``on_output`` receives each backend output line as it
+    arrives; when it is ``None`` a failing backend puts the output tail in its
+    error message instead."""
+
     profile: str
     build_dir: Path
     emit_dir: Path
     output_targets: tuple[OutputTarget, ...] = ("qemu",)
+    on_output: Callable[[str], None] | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,6 +539,7 @@ class ProfileBuildResult:
     profile: str
     artifacts: dict[OutputTarget, ArtifactRef] = field(default_factory=dict)
     report_path: Path | None = None
+    duration_s: float | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -562,6 +573,7 @@ class BakeResult:
     lock_digest: str | None = None
     backend: str | None = None
     created_at: str | None = None
+    duration_s: float | None = field(default=None, compare=False)
 
     def artifact_for(self, *, profile: str, target: OutputTarget) -> ArtifactRef | None:
         profile_result = self.profiles.get(profile)

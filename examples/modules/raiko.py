@@ -12,9 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
-from tundravm.build_cache import Build, Cache
 from tundravm.modules import Module, Tdxs
 from tundravm.modules.resolve import resolve_after
+from tundravm.source import CargoBuild, GitSource, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -28,6 +28,21 @@ RAIKO_BUILD_PACKAGES = (
     "libssl-dev",
     "libelf-dev",
 )
+
+# Reproducibility flags for the cargo build
+RAIKO_CARGO_ENV = {
+    "RUSTFLAGS": (
+        "-C target-cpu=generic -C link-arg=-Wl,--build-id=none "
+        "-C symbol-mangling-version=v0 -L /usr/lib/x86_64-linux-gnu"
+    ),
+    "CARGO_HOME": "/build/.cargo",
+    "CARGO_PROFILE_RELEASE_LTO": "thin",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_PANIC": "abort",
+    "CARGO_PROFILE_RELEASE_INCREMENTAL": "false",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_TERM_COLOR": "never",
+}
 
 RAIKO_DEFAULT_REPO = "https://github.com/NethermindEth/raiko.git"
 RAIKO_DEFAULT_BRANCH = "feat/tdx"
@@ -67,43 +82,31 @@ class Raiko(Module):
         """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
 
-    def _add_build_hook(self, image: Image) -> None:
-        """Add build phase hook that clones and compiles raiko from source."""
-        clone_dir = Build.build_path("raiko")
-        chroot_dir = Build.chroot_path("raiko")
-        features_flag = f" --features {self.features}" if self.features else ""
-        cache = Cache.declare(
-            f"raiko-{self.source_branch}",
-            (
-                Cache.file(
-                    src=Build.build_path(f"raiko/target/release/{self.workspace_package}"),
-                    dest=Build.dest_path("usr/bin/raiko"),
-                    name="raiko",
-                ),
+    def source_spec(self) -> SourceBuild:
+        """The raiko source build: ``cargo build --release`` of ``workspace_package``.
+
+        The toolchain comes from the image's own build packages (``packages=()``),
+        and ``cache_key``/``mark_unpinned`` keep the unpinned hook byte-identical to
+        the hand-written one this module emitted before source builds existed.
+        """
+        return SourceBuild(
+            name="raiko",
+            source=GitSource(self.source_repo, self.source_branch),
+            build=CargoBuild(
+                output="raiko",
+                package=self.workspace_package,
+                features=(self.features,) if self.features else (),
+                env=RAIKO_CARGO_ENV,
+                packages=(),
             ),
+            install_to="/usr/bin/raiko",
+            cache_key=f"raiko-{self.source_branch}",
+            mark_unpinned=False,
         )
 
-        build_cmd = (
-            f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            "export "
-            'RUSTFLAGS="-C target-cpu=generic -C link-arg=-Wl,--build-id=none '
-            '-C symbol-mangling-version=v0 -L /usr/lib/x86_64-linux-gnu" '
-            "CARGO_HOME=/build/.cargo "
-            "CARGO_PROFILE_RELEASE_LTO=thin "
-            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 "
-            "CARGO_PROFILE_RELEASE_PANIC=abort "
-            "CARGO_PROFILE_RELEASE_INCREMENTAL=false "
-            "CARGO_PROFILE_RELEASE_OPT_LEVEL=3 "
-            "CARGO_TERM_COLOR=never "
-            f"&& cd {chroot_dir} "
-            "&& cargo fetch "
-            f"&& cargo build --release --frozen{features_flag}"
-            f" --package {self.workspace_package}"
-            "'"
-        )
-        image.hook("build", cache.wrap(build_cmd))
+    def _add_build_hook(self, image: Image) -> None:
+        """Add the build phase hook that clones and compiles raiko from source."""
+        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)

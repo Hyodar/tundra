@@ -46,9 +46,8 @@ def _digest(img: Image) -> str:
 
 def _codes(img: Image, profile: str | None = None) -> list[tuple[str, str | None]]:
     profiles = None if profile is None else (profile,)
-    return [
-        (d.code, d.subject) for d in img.check(profiles=profiles) if d.code != "backend-missing"
-    ]
+    ignored = {"backend-missing", "source-unpinned"}
+    return [(d.code, d.subject) for d in img.check(profiles=profiles) if d.code not in ignored]
 
 
 # 1. service() unit fields
@@ -537,5 +536,5 @@ def test_cli_bake_reports_lint_error(tmp_path: Path, capsys: pytest.CaptureFixtu
     )
     assert main(["bake", str(recipe)]) == EXIT_SDK_ERROR
     err = capsys.readouterr().err
-    assert err.startswith("error [E_LINT]: Recipe has 1 error-level diagnostics.")
+    assert "error [E_LINT]: Recipe has 1 error-level diagnostics." in err
     assert "file-path-relative" in err

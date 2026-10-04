@@ -14,8 +14,17 @@ import subprocess
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NoReturn
 
-from tundravm.backends.base import MountSpec, Requirement, collect_artifacts, write_flake_nix
+from tundravm.backends.base import (
+    MountSpec,
+    Requirement,
+    StreamResult,
+    collect_artifacts,
+    failure_message,
+    run_streaming,
+    write_flake_nix,
+)
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -129,11 +138,15 @@ class LimaMkosiBackend:
             f"/home/debian/.nix-profile/bin/nix develop "
             f"path:~/mnt/mkosi -c {mkosi_cmd}"
         )
-        result = self._lima_exec(instance, full_cmd)
+        result = run_streaming(self._ssh_argv(instance, full_cmd), on_output=request.on_output)
 
         if result.returncode != 0:
             raise BackendExecutionError(
-                "mkosi build failed inside Lima VM.",
+                failure_message(
+                    "mkosi build failed inside Lima VM.",
+                    result,
+                    streamed=request.on_output is not None,
+                ),
                 hint=("Check Lima VM status with `limactl list` and mkosi output for details."),
                 context={
                     "backend": self.name,
@@ -141,8 +154,6 @@ class LimaMkosiBackend:
                     "profile": request.profile,
                     "instance": instance,
                     "returncode": str(result.returncode),
-                    "stderr": result.stderr[-2000:] if result.stderr else "",
-                    "stdout": result.stdout[-2000:] if result.stdout else "",
                 },
             )
 
@@ -206,25 +217,26 @@ class LimaMkosiBackend:
         ).strip()
 
     def _lima_exec(self, instance: str, cmd: str) -> subprocess.CompletedProcess[str]:
-        """Execute a command inside the Lima VM via SSH."""
-        ssh_config = Path.home() / ".lima" / instance / "ssh.config"
+        """Execute a short command inside the Lima VM via SSH, capturing its output."""
         return subprocess.run(
-            [
-                "ssh",
-                "-F",
-                str(ssh_config),
-                f"lima-{instance}",
-                "-o",
-                "LogLevel=QUIET",
-                "--",
-                "bash",
-                "-c",
-                cmd,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
+            self._ssh_argv(instance, cmd), capture_output=True, text=True, check=False
         )
+
+    @staticmethod
+    def _ssh_argv(instance: str, cmd: str) -> list[str]:
+        ssh_config = Path.home() / ".lima" / instance / "ssh.config"
+        return [
+            "ssh",
+            "-F",
+            str(ssh_config),
+            f"lima-{instance}",
+            "-o",
+            "LogLevel=QUIET",
+            "--",
+            "bash",
+            "-c",
+            cmd,
+        ]
 
     def _instance_running(self, instance: str) -> bool:
         """Check if a Lima instance exists and is running."""
@@ -263,50 +275,36 @@ class LimaMkosiBackend:
         exists = self._instance_exists(instance)
 
         if not exists:
-            result = subprocess.run(
-                [
-                    "limactl",
-                    "create",
-                    "-y",
-                    "--name",
-                    instance,
-                    str(config_path),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            argv = ["limactl", "create", "-y", "--name", instance, str(config_path)]
+            result = run_streaming(argv, on_output=request.on_output)
             if result.returncode != 0:
-                raise BackendExecutionError(
-                    "Failed to create Lima VM instance.",
-                    hint="Check Lima installation and available disk space.",
-                    context={
-                        "backend": self.name,
-                        "operation": "create_instance",
-                        "instance": instance,
-                        "returncode": str(result.returncode),
-                        "stderr": (result.stderr[-2000:] if result.stderr else ""),
-                    },
-                )
+                message = "Failed to create Lima VM instance."
+                self._raise_instance_error(message, "create_instance", instance, result, request)
 
-        result = subprocess.run(
-            ["limactl", "start", "-y", instance],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = run_streaming(["limactl", "start", "-y", instance], on_output=request.on_output)
         if result.returncode != 0:
-            raise BackendExecutionError(
-                "Failed to start Lima VM instance.",
-                hint="Check Lima installation and available disk space.",
-                context={
-                    "backend": self.name,
-                    "operation": "start_instance",
-                    "instance": instance,
-                    "returncode": str(result.returncode),
-                    "stderr": (result.stderr[-2000:] if result.stderr else ""),
-                },
+            self._raise_instance_error(
+                "Failed to start Lima VM instance.", "start_instance", instance, result, request
             )
+
+    def _raise_instance_error(
+        self,
+        message: str,
+        operation: str,
+        instance: str,
+        result: StreamResult,
+        request: BakeRequest,
+    ) -> NoReturn:
+        raise BackendExecutionError(
+            failure_message(message, result, streamed=request.on_output is not None),
+            hint="Check Lima installation and available disk space.",
+            context={
+                "backend": self.name,
+                "operation": operation,
+                "instance": instance,
+                "returncode": str(result.returncode),
+            },
+        )
 
     def _instance_exists(self, instance: str) -> bool:
         """Check if a Lima instance exists (running or stopped)."""

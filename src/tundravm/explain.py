@@ -111,6 +111,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             for svc in sorted(profile_state.services, key=lambda item: item.name)
         ],
         "skeleton_files": _describe_files(profile_state.skeleton_files),
+        "sources": _describe_sources(image, profile_state),
         "units": _describe_units(profile_state),
         "templates": [
             {
@@ -158,6 +159,17 @@ def render(description: dict[str, object]) -> str:
 
     _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
     _append_inline_list(lines, "Build packages", _as_list(description.get("build_packages")))
+
+    sources = _as_list(description.get("sources"))
+    if sources:
+        lines.append(f"Sources ({len(sources)}):")
+        width = _column_width(sources, "name")
+        for source in sources:
+            ref = f"  ref={source['ref']}" if source.get("ref") else ""
+            lines.append(
+                f"  {source['name']:<{width}}  {source['kind']} {source['url']}{ref}"
+                f"  pinned={source['pinned'] or '-'}"
+            )
 
     repositories = _as_list(description.get("repositories"))
     if repositories:
@@ -301,6 +313,25 @@ def _describe_files(entries: Sequence[Any]) -> list[dict[str, object]]:
         }
         for entry in sorted(entries, key=lambda item: item.path)
     ]
+
+
+def _describe_sources(image: Image, profile_state: ProfileState) -> list[dict[str, object]]:
+    pins = image.source_pins() if profile_state.source_builds else {}
+    described: list[dict[str, object]] = []
+    for name, spec in sorted(profile_state.source_builds.items()):
+        pin = spec.pin_from(pins)
+        described.append(
+            {
+                "build": spec.build.kind,
+                "install_to": spec.install_to,
+                "kind": spec.source.kind,
+                "name": name,
+                "pinned": pin[:7] if pin else None,
+                "ref": spec.source.requested if spec.source.kind == "git" else None,
+                "url": spec.source.url,
+            }
+        )
+    return described
 
 
 def _describe_hooks(profile_state: ProfileState) -> dict[str, list[str]]:

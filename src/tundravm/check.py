@@ -594,6 +594,33 @@ def _rule_secret_undelivered(
         )
 
 
+def _rule_source_unpinned(
+    image: Image, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    if not state.source_builds:
+        return
+    pins = image.source_pins()
+    policy = image.policy.mutable_ref_policy
+    level: Level = "error" if policy == "error" else "warning" if policy == "warn" else "info"
+    for name, spec in sorted(state.source_builds.items()):
+        if spec.pin_from(pins) is not None:
+            continue
+        yield Diagnostic(
+            level=level,
+            code="source-unpinned",
+            message=(
+                f"source build {name!r} ({spec.source.kind} {spec.source.url} "
+                f"@ {spec.source.requested}) is not pinned in the lockfile"
+            ),
+            hint=(
+                "Run `tundravm lock RECIPE` to pin it, or declare an immutable source "
+                "(a 40-hex commit ref, or HttpSource(sha256=...))."
+            ),
+            profile=profile_name,
+            subject=name,
+        )
+
+
 def _rule_module_checks(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -614,6 +641,7 @@ RULES: list[Rule] = [
     _rule_debloat_removes_needed_unit,
     _rule_debloat_removes_declared_file,
     _rule_secret_undelivered,
+    _rule_source_unpinned,
     _rule_module_checks,
 ]
 

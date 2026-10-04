@@ -15,7 +15,13 @@ import sys
 from dataclasses import dataclass, field
 from typing import Literal
 
-from tundravm.backends.base import MountSpec, Requirement, collect_artifacts
+from tundravm.backends.base import (
+    MountSpec,
+    Requirement,
+    collect_artifacts,
+    failure_message,
+    run_streaming,
+)
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -109,24 +115,19 @@ class LocalLinuxBackend:
             ]
         )
 
-        result = subprocess.run(
-            cmd,
-            cwd=str(mkosi_dir),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = run_streaming(cmd, cwd=mkosi_dir, on_output=request.on_output)
 
         if result.returncode != 0:
             raise BackendExecutionError(
-                "mkosi build failed.",
+                failure_message(
+                    "mkosi build failed.", result, streamed=request.on_output is not None
+                ),
                 hint="Check mkosi output for details.",
                 context={
                     "backend": self.name,
                     "operation": "execute",
                     "profile": request.profile,
                     "returncode": str(result.returncode),
-                    "stderr": result.stderr[:2000] if result.stderr else "",
                     "command": " ".join(cmd),
                 },
             )

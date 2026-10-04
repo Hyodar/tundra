@@ -16,10 +16,7 @@ def serialize_lockfile(lockfile: Lockfile) -> str:
         "recipe_digest": lockfile.recipe_digest,
         "recipe": lockfile.recipe,
         "dependencies": lockfile.dependencies,
-        "fetches": [
-            {"source": item.source, "kind": item.kind, "digest": item.digest}
-            for item in lockfile.fetches
-        ],
+        "fetches": [_fetch_payload(item) for item in lockfile.fetches],
         "sections": lockfile.sections,
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -72,6 +69,15 @@ def write_lockfile(lockfile: Lockfile, path: str | Path) -> Path:
     return lock_path
 
 
+def _fetch_payload(item: LockedFetch) -> dict[str, str]:
+    payload = {"source": item.source, "kind": item.kind, "digest": item.digest}
+    if item.name is not None:
+        payload["name"] = item.name
+    if item.ref is not None:
+        payload["ref"] = item.ref
+    return payload
+
+
 def _parse_locked_fetch(item: Any) -> LockedFetch:
     if not isinstance(item, dict):
         raise LockfileError("Invalid fetch entry in lockfile.")
@@ -79,7 +85,15 @@ def _parse_locked_fetch(item: Any) -> LockedFetch:
         source=_required_str(item, "source"),
         kind=_required_str(item, "kind"),
         digest=_required_str(item, "digest"),
+        name=_optional_str(item, "name"),
+        ref=_optional_str(item, "ref"),
     )
+
+
+def _optional_str(payload: dict[str, Any], key: str) -> str | None:
+    if payload.get(key) is None:
+        return None
+    return _required_str(payload, key)
 
 
 def _required_str(payload: dict[str, Any], key: str) -> str:

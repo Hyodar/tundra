@@ -44,8 +44,10 @@ class InProcessBackend:
             mount.source.mkdir(parents=True, exist_ok=True)
 
     def execute(self, request: BakeRequest) -> BakeResult:
+        emit = request.on_output if request.on_output is not None else _discard
         profile_dir = request.build_dir / request.profile
         profile_dir.mkdir(parents=True, exist_ok=True)
+        emit(f"inprocess: building profile {request.profile} from {request.emit_dir}")
 
         profile_result = ProfileBuildResult(profile=request.profile)
 
@@ -61,8 +63,14 @@ class InProcessBackend:
                 target=target,
                 path=artifact_path,
             )
+            emit(f"inprocess: wrote {target} artifact {artifact_path.name}")
 
+        emit(f"inprocess: done ({len(profile_result.artifacts)} artifacts)")
         return BakeResult(profiles={request.profile: profile_result})
 
     def cleanup(self, request: BakeRequest) -> None:
         pass
+
+
+def _discard(line: str) -> None:
+    del line

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from tundravm.build_cache import Build, Cache
 from tundravm.errors import ValidationError
 from tundravm.modules.base import Module
 from tundravm.modules.resolve import resolve_after
+from tundravm.source import GitSource, GoBuild, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -69,10 +67,6 @@ class Tdxs(Module):
         """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
 
-    def _cache_key(self) -> str:
-        repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]
-        return f"tdxs-{repo_hash}-{self.source_branch}"
-
     def _canonical_role_type(self, value: str | None) -> str | None:
         if value is None:
             return None
@@ -85,31 +79,22 @@ class Tdxs(Module):
             )
         return canonical
 
-    def _add_build_hook(self, image: Image) -> None:
-        clone_dir = Build.build_path("tdxs")
-        chroot_dir = Build.chroot_path("tdxs")
-        cache = Cache.declare(
-            self._cache_key(),
-            (
-                Cache.file(
-                    src=Build.build_path("tdxs/build/tdxs"),
-                    dest=Build.dest_path("usr/bin/tdxs"),
-                    name="tdxs",
-                ),
-            ),
+    def source_spec(self) -> SourceBuild:
+        """The tdxs source build: ``go build ./cmd/tdxs`` from ``source_repo@source_branch``.
+
+        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
+        hand-written one this module emitted before source builds existed.
+        """
+        return SourceBuild(
+            name="tdxs",
+            source=GitSource(self.source_repo, self.source_branch),
+            build=GoBuild(package="./cmd/tdxs", output="tdxs"),
+            install_to="/usr/bin/tdxs",
+            mark_unpinned=False,
         )
 
-        build_cmd = (
-            f"git clone --depth=1 -b {shlex.quote(self.source_branch)} "
-            f'{shlex.quote(self.source_repo)} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            f"cd {chroot_dir} && "
-            "mkdir -p ./build && "
-            'go build -trimpath -ldflags "-s -w -buildid=" '
-            "-o ./build/tdxs ./cmd/tdxs"
-            "'"
-        )
-        image.hook("build", cache.wrap(build_cmd))
+    def _add_build_hook(self, image: Image) -> None:
+        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)

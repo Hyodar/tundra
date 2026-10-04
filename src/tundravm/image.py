@@ -35,11 +35,13 @@ from .errors import (
     LintError,
     LockfileError,
     MeasurementError,
+    PolicyError,
     ValidationError,
 )
 from .explain import describe, render
 from .lockfile import (
     LockDrift,
+    LockedFetch,
     build_lockfile,
     compare_lock,
     read_lockfile,
@@ -83,8 +85,16 @@ from .models import (
 )
 from .modules.base import Module
 from .modules.init import Init
-from .observability import StructuredLogger
+from .observability import (
+    Progress,
+    Reporter,
+    StructuredLogger,
+    display_path,
+    format_duration,
+    format_size,
+)
 from .policy import Policy, ensure_bake_policy
+from .source import Resolver, SourceBuild, resolve_pins, source_drift
 
 if TYPE_CHECKING:
     from .profile import Profile
@@ -359,6 +369,52 @@ class Image:
         for profile in self._iter_active_profiles():
             profile.build_sources.append((host_path, target))
         return self
+
+    def source_build(self, spec: SourceBuild) -> Self:
+        """Fetch, build and install *spec* in the build phase, pinned through the lockfile.
+
+        Adds the build packages the source and recipe need and one cached build
+        hook. Until :meth:`lock` pins the source, the hook clones the symbolic
+        ref; once ``<build_dir>/tundravm.lock`` records a pin, ``compile()``
+        emits a fetch of exactly that commit (or a sha256-checked download).
+        """
+        profiles = self._iter_active_profiles()
+        for profile in profiles:
+            if spec.name in profile.source_builds:
+                raise ValidationError(
+                    f"Source build {spec.name!r} is already declared.",
+                    hint="Give each source build a unique name.",
+                    context={"profile": profile.name, "source_build": spec.name},
+                )
+        if spec.packages:
+            self.build_install(*spec.packages)
+        for profile in profiles:
+            profile.source_builds[spec.name] = spec
+        return self.hook("build", spec.render())
+
+    def source_builds(self, *, profile: str | None = None) -> dict[str, SourceBuild]:
+        """Source builds declared for *profile* (default: every active profile), by name."""
+        names = (profile,) if profile is not None else self._active_profiles
+        builds: dict[str, SourceBuild] = {}
+        for name in names:
+            builds.update(self._state.effective_profile(name).source_builds)
+        return dict(sorted(builds.items()))
+
+    def source_pins(self, path: str | Path | None = None) -> dict[str, LockedFetch]:
+        """Source-build entries of the lockfile at *path* (default ``<build_dir>/tundravm.lock``).
+
+        Empty when the lockfile does not exist.
+        """
+        lock_path = self._normalize_path(path, fallback=self._default_lock_path())
+        if not lock_path.exists():
+            return {}
+        lock = read_lockfile(lock_path)
+        return {fetch.name: fetch for fetch in lock.fetches if fetch.name is not None}
+
+    def unpinned_sources(self, path: str | Path | None = None) -> list[str]:
+        """Names of active source builds the lockfile at *path* does not pin."""
+        pins = self.source_pins(path)
+        return [name for name, spec in self.source_builds().items() if spec.pin_from(pins) is None]
 
     def repository(
         self,
@@ -1049,41 +1105,74 @@ class Image:
             profile.hooks.append(HookSpec(phase=phase, command=spec, after_phase=after_phase))
         return self
 
-    def lock(self, path: str | Path | None = None) -> Path:
+    def lock(
+        self,
+        path: str | Path | None = None,
+        *,
+        resolver: Resolver | None = None,
+        offline: bool = False,
+    ) -> Path:
         """Write the lockfile for the active profiles and return its path.
 
         The default path is ``<build_dir>/tundravm.lock``. Besides the whole
         recipe digest that ``bake(frozen=True)`` enforces, the lockfile records a
         digest per section (``base``, ``profiles.<name>.packages``, ...) so
         :meth:`lock_status` and stale frozen bakes can say what changed.
+
+        Every source build is pinned in ``fetches``: git refs resolve to a commit
+        (``git ls-remote``), unhashed downloads are fetched once and hashed.
+        *resolver* replaces that network step (tests, mirrors). ``offline=True``
+        (or ``policy.network_mode="offline"``) reuses the existing lockfile's pins
+        and raises :class:`LockfileError` for any source that would need the network.
         """
         lock_path = self._normalize_path(path, fallback=self._default_lock_path())
         payload = self._recipe_payload(profile_names=self._active_profiles)
-        lock = build_lockfile(recipe=payload)
+        offline = offline or self.policy.network_mode == "offline"
+        previous = self.source_pins(lock_path) if offline else {}
+        fetches = resolve_pins(self.source_builds(), previous, resolver=resolver, offline=offline)
+        lock = build_lockfile(recipe=payload, fetches=fetches)
         return write_lockfile(lock, lock_path)
 
-    def lock_status(self, path: str | Path | None = None) -> LockDrift:
+    def lock_status(
+        self, path: str | Path | None = None, *, resolver: Resolver | None = None
+    ) -> LockDrift:
         """Compare the lockfile at *path* with the current recipe, section by section.
 
         Reads ``<build_dir>/tundravm.lock`` by default and never writes. The
         returned :class:`~tundravm.lockfile.LockDrift` lists changed, added and
         removed sections; ``render()`` prints them (``~ profiles.default.packages:
         +htop``) or ``lock is up to date``. A lockfile written before section
-        digests existed reports every section as added. Raises
+        digests existed reports every section as added. Source builds report as
+        ``+ sources.<name>`` (no pin) or ``~ sources.<name>: <old> -> <new>`` (pinned
+        for another ref, or, with *resolver*, the ref has moved). Raises
         :class:`LockfileError` when the lockfile is missing or unreadable.
         """
         lock_path = self._normalize_path(path, fallback=self._default_lock_path())
         lock = read_lockfile(lock_path)
-        return compare_lock(lock, self._recipe_payload(profile_names=self._active_profiles))
+        drift = compare_lock(lock, self._recipe_payload(profile_names=self._active_profiles))
+        pins = {fetch.name: fetch for fetch in lock.fetches if fetch.name is not None}
+        added, changed, removed, details = source_drift(
+            self.source_builds(), pins, resolver=resolver
+        )
+        return replace(
+            drift,
+            added=(*drift.added, *added),
+            changed=(*drift.changed, *changed),
+            removed=(*drift.removed, *removed),
+            details={**drift.details, **details},
+        )
 
     def compile(self, path: str | Path, *, force: bool = False) -> CompileResult:
         """Emit the mkosi build tree to *path* and return a CompileResult."""
         destination = self._normalize_path(path)
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
+        pins = self.source_pins()
+        self._enforce_source_policy(pins)
+        compile_key = self._compile_key(digest, pins)
         if (
             not force
-            and self._last_compile_digest == digest
+            and self._last_compile_digest == compile_key
             and self._last_compile_path == destination
             and destination.exists()
         ):
@@ -1093,13 +1182,13 @@ class Image:
                 digest=digest,
             )
         self._last_compile_emission = emit_mkosi_tree(
-            recipe=self._state,
+            recipe=self._pinned_state(pins),
             destination=destination,
             profile_names=self._active_profiles,
             base=self.base,
             config=self._emit_config(),
         )
-        self._last_compile_digest = digest
+        self._last_compile_digest = compile_key
         self._last_compile_path = destination
         return CompileResult(
             path=destination,
@@ -1122,134 +1211,202 @@ class Image:
         *,
         frozen: bool = False,
         force: bool = False,
+        reporter: Reporter | None = None,
     ) -> BakeResult:
-        """Compile, build, and package the image via the configured backend."""
-        ensure_bake_policy(policy=self.policy, frozen=frozen)
-        errors = [d for d in self.check() if d.level == "error"]
-        if errors:
-            raise LintError(
-                f"Recipe has {len(errors)} error-level diagnostics.",
-                hint="Run `tundravm check RECIPE` or img.check() to see them.",
-                context={"codes": ", ".join(d.code for d in errors[:3])},
-            )
-        if frozen:
-            self._assert_frozen_lock(profile_names=self._active_profiles)
-        destination = self._normalize_path(output_dir, fallback=self.build_dir)
-        destination.mkdir(parents=True, exist_ok=True)
-        recipe_lock_digest = recipe_digest(
-            self._recipe_payload(profile_names=self._active_profiles),
-        )
-        lock_digest = self._compute_lock_digest(recipe_lock_digest)
+        """Compile, build, and package the image via the configured backend.
 
-        # Compile the mkosi tree (skips if unchanged)
-        emission_root = destination / "mkosi"
-        self.compile(emission_root, force=force)
-        emission = self._last_compile_emission
-        assert emission is not None
-
-        # Validate backend
-        if self.backend is None:
-            raise ValidationError(
-                "No build backend configured.",
-                hint=(
-                    "Pass a backend to Image(), e.g. "
-                    "backend=LimaMkosiBackend(cpus=6, memory='12GiB', disk='100GiB')"
-                ),
-            )
-        backend = self.backend
-
-        profiles_result: dict[str, ProfileBuildResult] = {}
-        for profile_name in self._sorted_active_profile_names():
-            profile = self._state.effective_profile(profile_name)
-            profile_dir = destination / profile_name
-            profile_dir.mkdir(parents=True, exist_ok=True)
-
-            self.logger.log(
-                operation="bake_profile_start",
-                profile=profile_name,
-                phase="build",
-                module="image",
-                builder=backend.name,
-                message=f"Starting profile bake via {backend.name} backend.",
-            )
-
-            # Build via the real backend
-            request = BakeRequest(
-                profile=profile_name,
-                build_dir=destination,
-                emit_dir=emission_root,
-                output_targets=profile.output_targets,
-            )
-
-            backend.prepare(request)
-            try:
-                backend_result = backend.execute(request)
-            finally:
-                backend.cleanup(request)
-
-            # Merge backend artifacts into profile result
-            profile_result = backend_result.profiles.get(
-                profile_name, ProfileBuildResult(profile=profile_name)
-            )
-
-            # If the backend didn't find typed artifacts for all targets,
-            # check if the output files exist with expected names
-            for target in profile.output_targets:
-                if target not in profile_result.artifacts:
-                    artifact_path = profile_dir / self._artifact_filename(target)
-                    if artifact_path.exists():
-                        profile_result.artifacts[target] = ArtifactRef(
-                            target=target,
-                            path=artifact_path,
+        *reporter* receives progress events: lint/lock/compile phases, per-profile
+        prepare and build phases with durations, every backend output line,
+        artifacts with sizes, the report path, and a final ``done``. Without a
+        reporter, backend output only surfaces in a failing backend's error.
+        """
+        progress = Progress(reporter)
+        active = self._active_profiles
+        scope = active[0] if len(active) == 1 else None
+        with (
+            self.logger.attached(progress.reporter, started_at=progress.started),
+            progress.guard(profile=scope),
+        ):
+            ensure_bake_policy(policy=self.policy, frozen=frozen)
+            with progress.phase("lint", "lint", profile=scope):
+                diagnostics = self.check()
+                for diagnostic in diagnostics:
+                    if diagnostic.level in ("warning", "error"):
+                        progress.emit(
+                            "warning",
+                            diagnostic.profile,
+                            f"{diagnostic.code}: {diagnostic.message}",
+                            level=diagnostic.level,
+                            code=diagnostic.code,
                         )
-
-            # Generate build report
-            script_checksums = self._script_checksums(emission.script_paths.get(profile_name, {}))
-            artifact_digests = {
-                target: hashlib.sha256(Path(artifact.path).read_bytes()).hexdigest()
-                for target, artifact in sorted(profile_result.artifacts.items())
-                if Path(artifact.path).exists()
-            }
-            profile_logs = self.logger.records_for_profile(profile_name)
-
-            report_path = profile_dir / "report.json"
-            report_payload = {
-                "profile": profile_name,
-                "lock_digest": lock_digest,
-                "backend": backend.name,
-                "debloat": self.explain_debloat(profile=profile_name),
-                "artifact_digests": artifact_digests,
-                "emitted_scripts": script_checksums,
-                "artifacts": {
-                    target: str(artifact.path)
-                    for target, artifact in profile_result.artifacts.items()
-                },
-                "logs": profile_logs,
-            }
-            report_path.write_text(
-                json.dumps(report_payload, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
+                errors = [d for d in diagnostics if d.level == "error"]
+                if errors:
+                    raise LintError(
+                        f"Recipe has {len(errors)} error-level diagnostics.",
+                        hint="Run `tundravm check RECIPE` or img.check() to see them.",
+                        context={"codes": ", ".join(d.code for d in errors[:3])},
+                    )
+            if frozen:
+                with progress.phase("lock", "verify lockfile", profile=scope):
+                    self._assert_frozen_lock(profile_names=self._active_profiles)
+            destination = self._normalize_path(output_dir, fallback=self.build_dir)
+            destination.mkdir(parents=True, exist_ok=True)
+            recipe_lock_digest = recipe_digest(
+                self._recipe_payload(profile_names=self._active_profiles),
             )
-            profile_result.report_path = report_path
-            profiles_result[profile_name] = profile_result
+            lock_digest = self._compute_lock_digest(recipe_lock_digest)
 
-            self.logger.log(
-                operation="bake_profile_complete",
-                profile=profile_name,
-                phase="build",
-                module="image",
-                builder=backend.name,
-                message="Completed profile bake.",
+            # Compile the mkosi tree (skips if unchanged)
+            emission_root = destination / "mkosi"
+            with progress.phase("compile", "compile", profile=scope):
+                self.compile(emission_root, force=force)
+            emission = self._last_compile_emission
+            assert emission is not None
+
+            # Validate backend
+            if self.backend is None:
+                raise ValidationError(
+                    "No build backend configured.",
+                    hint=(
+                        "Pass a backend to Image(), e.g. "
+                        "backend=LimaMkosiBackend(cpus=6, memory='12GiB', disk='100GiB')"
+                    ),
+                )
+            backend = self.backend
+
+            profiles_result: dict[str, ProfileBuildResult] = {}
+            for profile_name in self._sorted_active_profile_names():
+                profile_started = progress.elapsed()
+                profile = self._state.effective_profile(profile_name)
+                profile_dir = destination / profile_name
+                profile_dir.mkdir(parents=True, exist_ok=True)
+
+                self.logger.log(
+                    operation="bake_profile_start",
+                    profile=profile_name,
+                    phase="build",
+                    module="image",
+                    builder=backend.name,
+                    message=f"Starting profile bake via {backend.name} backend.",
+                )
+
+                # Build via the real backend, streaming its output to the reporter
+                request = BakeRequest(
+                    profile=profile_name,
+                    build_dir=destination,
+                    emit_dir=emission_root,
+                    output_targets=profile.output_targets,
+                    on_output=None if reporter is None else progress.output(profile_name),
+                )
+
+                with progress.phase("prepare", f"prepare {backend.name}", profile=profile_name):
+                    backend.prepare(request)
+                try:
+                    with progress.phase("build", f"build via {backend.name}", profile=profile_name):
+                        backend_result = backend.execute(request)
+                finally:
+                    backend.cleanup(request)
+
+                # Merge backend artifacts into profile result
+                profile_result = backend_result.profiles.get(
+                    profile_name, ProfileBuildResult(profile=profile_name)
+                )
+
+                # If the backend didn't find typed artifacts for all targets,
+                # check if the output files exist with expected names
+                for target in profile.output_targets:
+                    if target not in profile_result.artifacts:
+                        artifact_path = profile_dir / self._artifact_filename(target)
+                        if artifact_path.exists():
+                            profile_result.artifacts[target] = ArtifactRef(
+                                target=target,
+                                path=artifact_path,
+                            )
+
+                # Hash artifacts (chunked; images can be several GiB)
+                artifact_digests: dict[str, str] = {}
+                for target, artifact in sorted(profile_result.artifacts.items()):
+                    path = Path(artifact.path)
+                    if not path.exists():
+                        continue
+                    with path.open("rb") as handle:
+                        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                    artifact_digests[target] = digest
+                    profile_result.artifacts[target] = replace(artifact, digest=digest)
+                    size = path.stat().st_size
+                    progress.emit(
+                        "artifact",
+                        profile_name,
+                        f"artifact {target} {display_path(path)} ({format_size(size)})",
+                        role="image",
+                        target=target,
+                        path=str(path),
+                        size_bytes=str(size),
+                        sha256=digest,
+                    )
+
+                # Generate build report
+                script_checksums = self._script_checksums(
+                    emission.script_paths.get(profile_name, {})
+                )
+                profile_logs = self.logger.records_for_profile(profile_name)
+
+                report_path = profile_dir / "report.json"
+                report_payload = {
+                    "profile": profile_name,
+                    "lock_digest": lock_digest,
+                    "backend": backend.name,
+                    "debloat": self.explain_debloat(profile=profile_name),
+                    "artifact_digests": artifact_digests,
+                    "emitted_scripts": script_checksums,
+                    "artifacts": {
+                        target: str(artifact.path)
+                        for target, artifact in profile_result.artifacts.items()
+                    },
+                    "logs": profile_logs,
+                }
+                report_path.write_text(
+                    json.dumps(report_payload, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                progress.emit(
+                    "artifact",
+                    profile_name,
+                    f"report {display_path(report_path)}",
+                    role="report",
+                    path=str(report_path),
+                )
+                profile_result.report_path = report_path
+                profile_result.duration_s = progress.elapsed() - profile_started
+                profiles_result[profile_name] = profile_result
+
+                self.logger.log(
+                    operation="bake_profile_complete",
+                    profile=profile_name,
+                    phase="build",
+                    module="image",
+                    builder=backend.name,
+                    message="Completed profile bake.",
+                )
+
+            total = progress.elapsed()
+            bake_result = BakeResult(
+                profiles=profiles_result,
+                lock_digest=lock_digest,
+                backend=backend.name,
+                created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                duration_s=total,
             )
-
-        bake_result = BakeResult(
-            profiles=profiles_result,
-            lock_digest=lock_digest,
-            backend=backend.name,
-            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        )
-        bake_result.save(destination)
-        self._last_bake_result = bake_result
+            bake_result.save(destination)
+            self._last_bake_result = bake_result
+            noun = "profile" if len(profiles_result) == 1 else "profiles"
+            progress.emit(
+                "done",
+                scope,
+                f"baked {len(profiles_result)} {noun} in {format_duration(total)}",
+                status="ok",
+                duration_s=f"{total:.3f}",
+            )
         return bake_result
 
     def measure(
@@ -1650,6 +1807,10 @@ class Image:
             own_init = self._state.ensure_profile(profile_name).init_scripts
             if profile_name != self._state.default_profile and own_init:
                 declared["init_scripts"] = _init_scripts_payload(own_init)
+            if profile.source_builds:
+                declared["source_builds"] = {
+                    name: spec.to_payload() for name, spec in sorted(profile.source_builds.items())
+                }
             if profile.unit_states:
                 declared["unit_states"] = {
                     action: [s.unit for s in profile.unit_states if s.action == action]
@@ -1696,11 +1857,74 @@ class Image:
             checksums[f"{phase}:{path.name}"] = checksum
         return checksums
 
+    def _compile_key(self, digest: str, pins: Mapping[str, LockedFetch]) -> str:
+        used = {
+            name: pin
+            for name, spec in self.source_builds().items()
+            if (pin := spec.pin_from(pins)) is not None
+        }
+        if not used:
+            return digest
+        return digest + ":" + hashlib.sha256(json.dumps(used, sort_keys=True).encode()).hexdigest()
+
+    def _enforce_source_policy(self, pins: Mapping[str, LockedFetch]) -> None:
+        """Refuse unpinned source builds when ``policy.mutable_ref_policy`` is ``"error"``.
+
+        Under ``"warn"`` compile stays silent: the ``source-unpinned`` check and
+        explain's ``pinned=-`` report it, and frozen bakes refuse it.
+        """
+        if self.policy.mutable_ref_policy != "error":
+            return
+        unpinned = [spec for spec in self.source_builds().values() if spec.pin_from(pins) is None]
+        if not unpinned:
+            return
+        names = ", ".join(f"{spec.name}@{spec.source.requested}" for spec in unpinned)
+        raise PolicyError(
+            f"Unpinned source builds are not allowed by policy: {names}.",
+            hint="Run `tundravm lock RECIPE` to pin them, or relax mutable_ref_policy.",
+            context={"operation": "compile", "sources": names},
+        )
+
+    def _pinned_state(self, pins: Mapping[str, LockedFetch]) -> RecipeState:
+        """The recipe state with every pinned source build's hook rendered at its pin."""
+        profiles: dict[str, ProfileState] = {}
+        changed = False
+        for name, profile in self._state.profiles.items():
+            swaps = {
+                spec.render(): pinned
+                for spec in profile.source_builds.values()
+                if (pinned := spec.render(spec.pin_from(pins))) != spec.render()
+            }
+            if not swaps:
+                profiles[name] = profile
+                continue
+            changed = True
+            commands = {
+                id(hook.command): replace(hook.command, argv=(swaps[hook.command.argv[0]],))
+                for hook in profile.hooks
+                if hook.command.argv and hook.command.argv[0] in swaps
+            }
+            profiles[name] = replace(
+                profile,
+                phases={
+                    phase: [commands.get(id(cmd), cmd) for cmd in cmds]
+                    for phase, cmds in profile.phases.items()
+                },
+                hooks=[
+                    replace(hook, command=commands[id(hook.command)])
+                    if id(hook.command) in commands
+                    else hook
+                    for hook in profile.hooks
+                ],
+            )
+        return replace(self._state, profiles=profiles) if changed else self._state
+
     def _assert_frozen_lock(self, *, profile_names: tuple[str, ...]) -> None:
         lock_path = self._default_lock_path()
         lock = read_lockfile(lock_path)
         current_recipe = self._recipe_payload(profile_names=profile_names)
         if lock.recipe_digest == recipe_digest(current_recipe):
+            self._assert_sources_pinned(lock_path)
             return
         drift = compare_lock(lock, current_recipe)
         lines = drift.render().splitlines()
@@ -1720,6 +1944,16 @@ class Image:
             hint="Run tundravm lock RECIPE to accept these changes, or revert them.",
             context={"lock": str(lock_path), "changed": changed},
         )
+
+    def _assert_sources_pinned(self, lock_path: Path) -> None:
+        unpinned = self.unpinned_sources(lock_path)
+        if unpinned:
+            raise LockfileError(
+                f"Frozen bake requires every source build to be pinned; unpinned: "
+                f"{', '.join(unpinned)}.",
+                hint="run tundravm lock RECIPE to pin them.",
+                context={"lock": str(lock_path), "sources": ", ".join(unpinned)},
+            )
 
     def _convert_artifact(
         self,

@@ -16,12 +16,18 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tundravm.backends.base import MountSpec, Requirement, collect_artifacts, write_flake_nix
+from tundravm.backends.base import (
+    MountSpec,
+    Requirement,
+    collect_artifacts,
+    failure_message,
+    run_streaming,
+    write_flake_nix,
+)
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -70,25 +76,22 @@ class NixMkosiBackend:
             flake_ref = f"path:{request.emit_dir}"
             cmd = ["nix", "develop", flake_ref, "-c", *mkosi_cmd]
 
-        result = subprocess.run(
-            cmd,
-            cwd=str(mkosi_dir),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = run_streaming(cmd, cwd=mkosi_dir, on_output=request.on_output)
 
         if result.returncode != 0:
             raise BackendExecutionError(
-                "mkosi build failed via nix backend.",
+                failure_message(
+                    "mkosi build failed via nix backend.",
+                    result,
+                    streamed=request.on_output is not None,
+                ),
                 hint="Check nix and mkosi output for details.",
                 context={
                     "backend": self.name,
                     "operation": "execute",
                     "profile": request.profile,
                     "returncode": str(result.returncode),
-                    "stderr": result.stderr[-2000:] if result.stderr else "",
-                    "stdout": result.stdout[-2000:] if result.stdout else "",
+                    "command": " ".join(cmd),
                 },
             )
 

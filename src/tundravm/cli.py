@@ -26,11 +26,12 @@ from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requ
 from .backends.base import BuildBackend
 from .check import cmd_check
 from .check import render as render_diagnostics
-from .diff import cmd_diff
+from .diff import _wants_color, cmd_diff
 from .errors import TdxError, ValidationError
 from .image import Image
 from .lockfile import recipe_digest
 from .models import DeployResult, OutputTarget
+from .observability import Event, JsonReporter, TextReporter, render_bake_summary
 from .recipe import load_recipe
 
 EXIT_OK = 0
@@ -98,7 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     lock.epilog = (
         "Drift is reported one section per line: `~` changed, `+` only in the recipe, "
         "`-` only in the lockfile, e.g. `~ profiles.default.packages: +htop -jq`. "
-        "A lockfile from before section digests reports every section as `+`."
+        "A lockfile from before section digests reports every section as `+`. "
+        "Source builds are pinned under `fetches` and drift as `+ sources.<name>` "
+        "(unpinned) or `~ sources.<name>: <old> -> <new>`."
     )
     lock.add_argument(
         "--path",
@@ -112,6 +115,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Do not write; print the drift and exit 1 if the lockfile is stale, "
             "or print `lock is up to date` and exit 0."
+        ),
+    )
+    lock.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "Do not touch the network: reuse the existing lockfile's source pins and fail "
+            "if a source build would need resolving."
         ),
     )
     lock.add_argument(
@@ -136,6 +147,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the lockfile first, then build with --frozen semantics.",
     )
     bake.add_argument("--force", action="store_true", help="Force recompilation.")
+    bake.epilog = (
+        "Progress goes to stderr as `[profile] step ... ok (1.2s)` lines (a live timer on a "
+        "terminal); the summary table goes to stdout. Backend output is hidden unless "
+        "--verbose, but its last lines are shown when the build fails."
+    )
+    output = bake.add_mutually_exclusive_group()
+    output.add_argument(
+        "-v", "--verbose", action="store_true", help="Echo every backend output line."
+    )
+    output.add_argument(
+        "-q", "--quiet", action="store_true", help="Print only the final summary and errors."
+    )
+    output.add_argument(
+        "--json-logs",
+        action="store_true",
+        help="Write progress events to stdout as JSON lines (no summary).",
+    )
+    bake.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="Colorize progress output (default: %(default)s).",
+    )
 
     check = _add_command(sub, "check", _cmd_check, help="Lint the recipe and report diagnostics.")
     check.add_argument("--json", action="store_true", help="Emit diagnostics as JSON.")
@@ -375,25 +409,40 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
                 print(img.lock_status(current).render(), file=out)
             else:
                 print(f"no lockfile at {current}; every section is new", file=out)
-        path = img.lock(args.path)
+        path = img.lock(args.path, offline=args.offline)
     print(f"locked {path}", file=out)
     return EXIT_OK
 
 
 def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
-    with _selected(img, args):
-        if args.lock:
-            lock_path = img.lock()
-            print(f"locked {lock_path}", file=out)
-        result = img.bake(args.out, frozen=args.frozen or args.lock, force=args.force)
-    for name in sorted(result.profiles):
-        profile_result = result.profiles[name]
-        print(f"baked {name}", file=out)
-        for target in sorted(profile_result.artifacts):
-            print(f"  {target:<6} {profile_result.artifacts[target].path}", file=out)
-        if profile_result.report_path is not None:
-            print(f"  report {profile_result.report_path}", file=out)
+    err = sys.stderr
+    reporter = (
+        JsonReporter(out)
+        if args.json_logs
+        else TextReporter(
+            err, verbose=args.verbose, quiet=args.quiet, color=_wants_color(args.color, err)
+        )
+    )
+    try:
+        with _selected(img, args):
+            if args.lock:
+                lock_path = img.lock()
+                if args.json_logs:
+                    extra = {"source": "cli", "path": str(lock_path)}
+                    reporter.emit(Event("log", None, f"locked {lock_path}", 0.0, extra))
+                else:
+                    print(f"locked {lock_path}", file=out)
+            result = img.bake(
+                args.out, frozen=args.frozen or args.lock, force=args.force, reporter=reporter
+            )
+    finally:
+        reporter.close()
+    if args.json_logs:
+        return EXIT_OK
+    if not args.quiet:
+        print(file=out)
+    print(render_bake_summary(result), file=out)
     for name in sorted(result.profiles):
         targets = sorted(result.profiles[name].artifacts)
         if targets:

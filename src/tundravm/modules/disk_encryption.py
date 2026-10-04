@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shlex
@@ -10,11 +9,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from tundravm.build_cache import Build, Cache
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.modules.base import Module
 from tundravm.modules.key_generation import KeyGeneration, KeySpec
+from tundravm.source import GitSource, GoBuild, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -152,31 +151,7 @@ class DiskEncryption(Module):
         """Validate disks, declare build packages and the disk-setup build hook."""
         self._validate()
         image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
-
-        clone_dir = Build.build_path("disk-encryption")
-        chroot_dir = Build.chroot_path("disk-encryption")
-        cache = Cache.declare(
-            self._cache_key(),
-            (
-                Cache.file(
-                    src=Build.build_path("disk-encryption/build/disk-setup"),
-                    dest=Build.dest_path("usr/bin/disk-setup"),
-                    name="disk-setup",
-                ),
-            ),
-        )
-
-        build_cmd = (
-            f"git clone --depth=1 -b {shlex.quote(self.source_branch)} "
-            f'{shlex.quote(self.source_repo)} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            f"cd {chroot_dir} && "
-            "mkdir -p ./build && "
-            'go build -trimpath -ldflags "-s -w -buildid=" '
-            "-o ./build/disk-setup ./cmd/disk-setup"
-            "'"
-        )
-        image.hook("build", cache.wrap(build_cmd))
+        image.source_build(self.source_spec())
 
     def install(self, image: Image) -> None:
         """Install cryptsetup and write the aggregate disk config."""
@@ -280,9 +255,19 @@ class DiskEncryption(Module):
                 ),
             )
 
-    def _cache_key(self) -> str:
-        repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]
-        return f"disk-encryption-{repo_hash}-{self.source_branch}"
+    def source_spec(self) -> SourceBuild:
+        """The ``disk-setup`` source build from ``source_repo@source_branch``.
+
+        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
+        hand-written one this module emitted before source builds existed.
+        """
+        return SourceBuild(
+            name="disk-encryption",
+            source=GitSource(self.source_repo, self.source_branch),
+            build=GoBuild(package="./cmd/disk-setup", output="disk-setup"),
+            install_to="/usr/bin/disk-setup",
+            mark_unpinned=False,
+        )
 
     def _render_config(self, disks: tuple[DiskSpec, ...] | None = None) -> str:
         disk_specs = disks or tuple(self._disks)

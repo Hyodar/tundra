@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from tundravm.build_cache import Build, Cache
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.modules.base import Module
+from tundravm.source import GitSource, GoBuild, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -119,31 +118,7 @@ class KeyGeneration(Module):
         """Validate keys, declare build packages and the key-gen build hook."""
         self._validate()
         image.build_install(*KEY_GENERATION_BUILD_PACKAGES)
-
-        clone_dir = Build.build_path("key-generation")
-        chroot_dir = Build.chroot_path("key-generation")
-        cache = Cache.declare(
-            self._cache_key(),
-            (
-                Cache.file(
-                    src=Build.build_path("key-generation/build/key-gen"),
-                    dest=Build.dest_path("usr/bin/key-gen"),
-                    name="key-gen",
-                ),
-            ),
-        )
-
-        build_cmd = (
-            f"git clone --depth=1 -b {shlex.quote(self.source_branch)} "
-            f'{shlex.quote(self.source_repo)} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            f"cd {chroot_dir} && "
-            "mkdir -p ./build && "
-            'go build -trimpath -ldflags "-s -w -buildid=" '
-            "-o ./build/key-gen ./cmd/key-gen"
-            "'"
-        )
-        image.hook("build", cache.wrap(build_cmd))
+        image.source_build(self.source_spec())
 
     def install(self, image: Image) -> None:
         """Install tpm2-tools when needed and write the aggregate key config."""
@@ -200,9 +175,19 @@ class KeyGeneration(Module):
                     context={"key": spec.name, "strategy": spec.strategy},
                 )
 
-    def _cache_key(self) -> str:
-        repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]
-        return f"key-generation-{repo_hash}-{self.source_branch}"
+    def source_spec(self) -> SourceBuild:
+        """The ``key-gen`` source build from ``source_repo@source_branch``.
+
+        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
+        hand-written one this module emitted before source builds existed.
+        """
+        return SourceBuild(
+            name="key-generation",
+            source=GitSource(self.source_repo, self.source_branch),
+            build=GoBuild(package="./cmd/key-gen", output="key-gen"),
+            install_to="/usr/bin/key-gen",
+            mark_unpinned=False,
+        )
 
     def _render_config(self, keys: tuple[KeySpec, ...] | None = None) -> str:
         key_specs = keys or tuple(self._keys)

@@ -33,17 +33,31 @@ from .models import (
 from .policy import Policy
 from .profile import Profile
 from .recipe import load_recipe
+from .source import (
+    CargoBuild,
+    DotnetBuild,
+    GitSource,
+    GoBuild,
+    HttpSource,
+    ScriptBuild,
+    SourceBuild,
+)
 
 __all__ = [
     "Applicable",
     "BackendExecutionError",
     "BakeRequest",
     "BakeResult",
+    "CargoBuild",
     "CompileResult",
     "DebloatConfig",
     "DeploymentError",
     "Diagnostic",
+    "DotnetBuild",
     "FileChange",
+    "GitSource",
+    "GoBuild",
+    "HttpSource",
     "Image",
     "Kernel",
     "LintError",
@@ -56,9 +70,11 @@ __all__ = [
     "ProfileState",
     "RecipeState",
     "ReproducibilityError",
+    "ScriptBuild",
     "SecretSchema",
     "SecretSpec",
     "SecretTarget",
+    "SourceBuild",
     "StateError",
     "TdxError",
     "TreeDiff",

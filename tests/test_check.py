@@ -292,7 +292,8 @@ def test_secret_delivery_applied_is_fine() -> None:
     delivery = SecretDelivery(store_at=None)  # no DiskEncryption: secret-store-undefined
     delivery.secret("token", targets=(SecretTarget.file("/run/token"),))
     delivery.apply(img)
-    assert img.check() == []
+    # SecretDelivery builds from an unpinned branch; that is source-unpinned's concern.
+    assert [d for d in img.check() if d.code != "source-unpinned"] == []
 
 
 # rendering + ordering

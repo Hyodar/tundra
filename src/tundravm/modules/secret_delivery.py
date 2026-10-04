@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from tundravm.build_cache import Build, Cache
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.models import SecretSchema, SecretSpec, SecretTarget
 from tundravm.modules.base import Module
 from tundravm.modules.disk_encryption import DiskEncryption, DiskSpec
+from tundravm.source import GitSource, GoBuild, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -131,31 +130,7 @@ class SecretDelivery(Module):
     def setup(self, image: Image) -> None:
         """Declare build packages and the secret-delivery build hook."""
         image.build_install(*SECRET_DELIVERY_BUILD_PACKAGES)
-
-        clone_dir = Build.build_path("secret-delivery")
-        chroot_dir = Build.chroot_path("secret-delivery")
-        cache = Cache.declare(
-            self._cache_key(),
-            (
-                Cache.file(
-                    src=Build.build_path("secret-delivery/build/secret-delivery"),
-                    dest=Build.dest_path("usr/bin/secret-delivery"),
-                    name="secret-delivery",
-                ),
-            ),
-        )
-
-        build_cmd = (
-            f"git clone --depth=1 -b {shlex.quote(self.source_branch)} "
-            f'{shlex.quote(self.source_repo)} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            f"cd {chroot_dir} && "
-            "mkdir -p ./build && "
-            'go build -trimpath -ldflags "-s -w -buildid=" '
-            "-o ./build/secret-delivery ./cmd/secret-delivery"
-            "'"
-        )
-        image.hook("build", cache.wrap(build_cmd))
+        image.source_build(self.source_spec())
 
     def install(self, image: Image) -> None:
         """Record the secrets on the active profiles and write the configs."""
@@ -164,9 +139,19 @@ class SecretDelivery(Module):
     def init_script(self, image: Image) -> str:
         return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
 
-    def _cache_key(self) -> str:
-        repo_hash = hashlib.sha256(self.source_repo.encode("utf-8")).hexdigest()[:12]
-        return f"secret-delivery-{repo_hash}-{self.source_branch}"
+    def source_spec(self) -> SourceBuild:
+        """The ``secret-delivery`` source build from ``source_repo@source_branch``.
+
+        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
+        hand-written one this module emitted before source builds existed.
+        """
+        return SourceBuild(
+            name="secret-delivery",
+            source=GitSource(self.source_repo, self.source_branch),
+            build=GoBuild(package="./cmd/secret-delivery", output="secret-delivery"),
+            install_to="/usr/bin/secret-delivery",
+            mark_unpinned=False,
+        )
 
     def _add_config(self, image: Image) -> None:
         for profile in image._iter_active_profiles():
