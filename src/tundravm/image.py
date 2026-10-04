@@ -1067,10 +1067,17 @@ class Image:
                 )
             profile.services = patched
         # Register runtime-init for enablement (systemctl enable + minimal.target.wants)
-        for profile in self._iter_active_profiles():
-            if not any(s.name == init_svc for s in profile.services):
+        # in each active profile that does not have it yet. service() appends to every
+        # active profile, so scope it to one profile at a time to stay idempotent
+        # across compiles with different profile selections.
+        missing = [
+            profile.name
+            for profile in self._iter_active_profiles()
+            if not any(s.name == init_svc for s in profile.services)
+        ]
+        for profile_name in missing:
+            with self.profiles(profile_name):
                 self.service(init_svc, enabled=True)
-                break  # service() appends to all active profiles
 
     def _iter_active_profiles(self) -> list[ProfileState]:
         profiles: list[ProfileState] = []
