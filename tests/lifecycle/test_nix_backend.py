@@ -5,6 +5,7 @@ import pytest
 from tests.helpers import bake_request
 from tundravm.backends.nix import NixMkosiBackend
 from tundravm.errors import BackendExecutionError
+from tundravm.models import BakeRequest
 
 
 def test_nix_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
@@ -119,3 +120,18 @@ def test_nix_backend_build_mkosi_args_extra(tmp_path: Path) -> None:
     args = backend._build_mkosi_args(request, output_dir)
 
     assert "--debug" in args
+
+
+def test_nix_backend_passes_absolute_paths_for_relative_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "build" / "mkosi" / "default").mkdir(parents=True)
+    request = BakeRequest(profile="default", build_dir=Path("build"), emit_dir=Path("build/mkosi"))
+    backend = NixMkosiBackend()
+
+    args = backend._build_mkosi_args(request, Path("build/default/output"))
+
+    assert f"--directory={tmp_path / 'build' / 'mkosi' / 'default'}" in args
+    assert f"--output-dir={tmp_path / 'build' / 'default' / 'output'}" in args
+    assert backend._resolve_mkosi_dir(request) == tmp_path / "build" / "mkosi" / "default"

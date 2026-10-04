@@ -15,6 +15,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TextIO
 
+from .backends.base import is_mkosi_state
 from .formats import annotation_path, md_cell, md_fence, md_table, resolve_format, workflow_command
 
 if TYPE_CHECKING:
@@ -205,11 +206,13 @@ def _collect(root: Path, ignore: Sequence[str]) -> dict[str, _Entry]:
     files: dict[str, _Entry] = {}
     if not root.is_dir():
         return files
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        base = Path(dirpath).relative_to(root)
+        dirnames[:] = [d for d in dirnames if not is_mkosi_state((base / d).as_posix())]
         for name in filenames:
             path = Path(dirpath, name)
             rel = path.relative_to(root).as_posix()
-            if any(fnmatchcase(rel, pattern) for pattern in ignore):
+            if is_mkosi_state(rel) or any(fnmatchcase(rel, pattern) for pattern in ignore):
                 continue
             info = path.lstat()
             if path.is_symlink():

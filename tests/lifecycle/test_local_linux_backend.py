@@ -1,11 +1,16 @@
+import subprocess
 import sys
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import bake_request
+from tundravm.backends.base import StreamResult
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.errors import BackendExecutionError
+from tundravm.models import BakeRequest
 
 
 def test_local_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
@@ -122,3 +127,166 @@ def test_local_backend_mkosi_version_check_passes(
 
     # Should not raise
     backend._check_mkosi_version()
+
+
+# ── command line, tools tree, ownership ──────────────────────────────────
+
+
+def _relative_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str = ""
+) -> BakeRequest:
+    """A request with *relative* build/emit dirs, as the CLI's ``--out build`` gives."""
+    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "build" / "mkosi" / "default"
+    project.mkdir(parents=True)
+    (project / "mkosi.conf").write_text(f"[Distribution]\nDistribution=debian\n{conf}")
+    monkeypatch.setattr(
+        "tundravm.backends.local_linux.shutil.which", lambda tool: f"/usr/bin/{tool}"
+    )
+    return BakeRequest(profile="default", build_dir=Path("build"), emit_dir=Path("build/mkosi"))
+
+
+def _flags(cmd: list[str]) -> dict[str, str]:
+    return dict(arg[2:].split("=", 1) for arg in cmd if arg.startswith("--") and "=" in arg)
+
+
+def test_local_command_passes_absolute_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
+    monkeypatch.setattr("tundravm.backends.local_linux.os.getuid", lambda: 1000)
+
+    cmd = LocalLinuxBackend().command(request)
+
+    build = tmp_path / "build"
+    assert cmd[:2] == ["sudo", "/usr/bin/mkosi"]
+    assert cmd[-1] == "build"
+    flags = _flags(cmd)
+    assert flags["directory"] == str(build / "mkosi" / "default")
+    assert flags["output-dir"] == str(build / "default" / "output")
+    assert flags["workspace-directory"] == str(build / ".mkosi" / "workspace")
+    assert flags["cache-directory"] == str(build / ".mkosi" / "cache")
+    assert all(Path(flags[k]).is_absolute() for k in flags if k not in ("image-id",))
+    assert "tools-tree" not in flags
+
+
+def test_local_command_adds_a_tools_tree_without_ukify_and_keeps_the_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notices: list[tuple[str, str]] = []
+    request = replace(
+        _relative_request(tmp_path, monkeypatch),
+        on_notice=lambda level, message: notices.append((level, message)),
+    )
+    conf = tmp_path / "build" / "mkosi" / "default" / "mkosi.conf"
+    before = conf.read_bytes()
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+
+    cmd = LocalLinuxBackend(privilege="none").command(request)
+
+    assert "--tools-tree=default" in cmd
+    assert [level for level, _ in notices] == ["info"]
+    assert "ukify not found" in notices[0][1] and "--tools-tree=default" in notices[0][1]
+    assert conf.read_bytes() == before
+    assert sorted(p.name for p in conf.parent.iterdir()) == ["mkosi.conf"]
+
+
+def test_local_command_respects_the_recipes_mkosi_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conf = "[Build]\nToolsTree=/opt/tools\nCacheDirectory=/var/cache/mine\n"
+    request = _relative_request(tmp_path, monkeypatch, conf)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+
+    flags = _flags(LocalLinuxBackend(privilege="none").command(request))
+
+    assert "tools-tree" not in flags and "cache-directory" not in flags
+    assert "workspace-directory" in flags
+
+
+def test_local_command_reuses_a_stashed_default_tools_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch, "[Build]\nToolsTree=default\n")
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
+    backend = LocalLinuxBackend(privilege="none")
+    assert _flags(backend.command(request))["tools-tree"] == "default"
+
+    cached = tmp_path / "build" / ".mkosi" / "mkosi.tools"
+    cached.mkdir(parents=True)
+    assert _flags(backend.command(request))["tools-tree"] == str(cached)
+
+
+def test_local_execute_finds_the_artifact_and_moves_the_tools_tree_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
+    seen: list[tuple[list[str], Path | None]] = []
+
+    def fake_mkosi(argv: Sequence[str], *, cwd: Path | None = None, **_: object) -> StreamResult:
+        seen.append((list(argv), cwd))
+        flags = _flags(list(argv))
+        (Path(flags["directory"]) / "mkosi.tools" / "usr").mkdir(parents=True)
+        (Path(flags["directory"]) / "mkosi.tools.manifest").write_text("{}")
+        (Path(flags["output-dir"]) / "default.efi").write_bytes(b"MZ")
+        return StreamResult(returncode=0, tail=())
+
+    monkeypatch.setattr("tundravm.backends.local_linux.run_streaming", fake_mkosi)
+    backend = LocalLinuxBackend(privilege="none")
+
+    result = backend.execute(request)
+
+    build = tmp_path / "build"
+    artifact = result.profiles["default"].artifacts["qemu"]
+    assert artifact.path == build / "default" / "output" / "default.efi"
+    assert seen[0][1] == build / "mkosi" / "default"
+    project = build / "mkosi" / "default"
+    assert sorted(p.name for p in project.iterdir()) == ["mkosi.conf"]
+    assert (build / ".mkosi" / "mkosi.tools" / "usr").is_dir()
+    assert (build / ".mkosi" / "mkosi.tools.manifest").is_file()
+    assert _flags(backend.command(request))["tools-tree"] == str(build / ".mkosi" / "mkosi.tools")
+
+
+def test_local_execute_hands_sudo_output_back_to_the_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
+    monkeypatch.setattr("tundravm.backends.local_linux.os.getuid", lambda: 1000)
+    monkeypatch.setattr("tundravm.backends.local_linux.os.getgid", lambda: 1001)
+    project = tmp_path / "build" / "mkosi" / "default"
+    events: list[str] = []
+
+    def failing_mkosi(argv: Sequence[str], **_: object) -> StreamResult:
+        (project / "mkosi.tools").mkdir()
+        return StreamResult(returncode=1, tail=("boom",))
+
+    def fake_run(argv: Sequence[str], **_: object) -> subprocess.CompletedProcess[str]:
+        assert (project / "mkosi.tools").is_dir()  # chown runs before the tools tree moves
+        events.append(" ".join(argv))
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+    monkeypatch.setattr("tundravm.backends.local_linux.run_streaming", failing_mkosi)
+    monkeypatch.setattr("tundravm.backends.local_linux.subprocess.run", fake_run)
+
+    with pytest.raises(BackendExecutionError):
+        LocalLinuxBackend().execute(request)
+
+    build = tmp_path / "build"
+    owned = [build / "default" / "output", build / ".mkosi", project / "mkosi.tools"]
+    assert events == ["sudo chown -R 1000:1001 " + " ".join(map(str, owned))]
+    assert (build / ".mkosi" / "mkosi.tools").is_dir()
+    assert not (project / "mkosi.tools").exists()
+
+
+def test_local_requirements_probe_the_tools_a_tools_tree_replaces() -> None:
+    by_tool = {r.tool: r for r in LocalLinuxBackend().requirements()}
+    for tool in ("ukify", "systemd-repart", "apt"):
+        assert by_tool[tool].optional
+        assert 'Setting("Build", "ToolsTree", ("default",))' in by_tool[tool].hint
+    assert by_tool["ukify"].hint.endswith("or install systemd-ukify")
+    assert not by_tool["mkosi"].optional

@@ -258,3 +258,21 @@ def test_measure_reads_the_bake_out_dir_manifest(recipe: Path, tmp_path: Path) -
         )
         assert code == EXIT_OK
         assert json.loads(out)["scheme"] == "rtmr"
+
+
+def test_doctor_local_marks_tools_tree_tools_optional_with_the_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_ukify(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if argv[0] in ("ukify", "systemd-repart"):
+            raise FileNotFoundError(argv[0])
+        return subprocess.CompletedProcess(list(argv), 0, f"{argv[0]} 26\n", "")
+
+    monkeypatch.setattr("tundravm.cli.run_probe", no_ukify)
+    code, out = run_main("doctor", "--backend", "local")
+    assert code == EXIT_OK
+    assert "backend local_linux: available" in out
+    fix = 'mkosi can use its own tools tree: add Setting("Build", "ToolsTree", ("default",))'
+    assert f"  missing (optional) ukify — {fix} to the recipe, or install systemd-ukify" in out
+    assert "  missing (optional) systemd-repart — " in out
+    assert "  ok apt apt 26" in out

@@ -25,6 +25,7 @@ from tundravm.backends.base import (
     Requirement,
     collect_artifacts,
     failure_message,
+    mkosi_project,
     run_streaming,
     write_flake_nix,
 )
@@ -64,7 +65,7 @@ class NixMkosiBackend:
     def execute(self, request: BakeRequest) -> BakeResult:
         self._ensure_prerequisites()
 
-        output_dir = request.build_dir / request.profile / "output"
+        output_dir = request.build_dir.resolve() / request.profile / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         mkosi_dir = self._resolve_mkosi_dir(request)
@@ -73,7 +74,7 @@ class NixMkosiBackend:
         if self._in_nix_shell():
             cmd = mkosi_cmd
         else:
-            flake_ref = f"path:{request.emit_dir}"
+            flake_ref = f"path:{request.emit_dir.resolve()}"
             cmd = ["nix", "develop", flake_ref, "-c", *mkosi_cmd]
 
         result = run_streaming(cmd, cwd=mkosi_dir, on_output=request.on_output)
@@ -112,22 +113,19 @@ class NixMkosiBackend:
         return bool(os.environ.get("IN_NIX_SHELL") or os.environ.get("NIX_STORE"))
 
     def _resolve_mkosi_dir(self, request: BakeRequest) -> Path:
-        """Return the directory from which mkosi should be invoked."""
-        native_profiles = request.emit_dir / "mkosi.profiles" / request.profile
-        if native_profiles.exists():
-            return request.emit_dir
-        per_dir = request.emit_dir / request.profile
-        return per_dir if per_dir.exists() else request.emit_dir
+        """Return the (absolute) directory from which mkosi should be invoked."""
+        return mkosi_project(request.emit_dir.resolve(), request.profile)[0]
 
     def _build_mkosi_args(self, request: BakeRequest, output_dir: Path) -> list[str]:
+        mkosi_dir, native = mkosi_project(request.emit_dir.resolve(), request.profile)
         cmd = [
             "mkosi",
+            f"--directory={mkosi_dir}",
             "--force",
             f"--image-id={request.profile}",
-            f"--output-dir={output_dir}",
+            f"--output-dir={output_dir.resolve()}",
         ]
-        native_profiles = request.emit_dir / "mkosi.profiles" / request.profile
-        if native_profiles.exists():
+        if native:
             cmd.append(f"--profile={request.profile}")
         cmd.extend(self.mkosi_args)
         cmd.append("build")

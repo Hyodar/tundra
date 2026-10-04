@@ -33,7 +33,7 @@ from tundravm.backends import (
     NixMkosiBackend,
     Requirement,
 )
-from tundravm.backends.base import BuildBackend
+from tundravm.backends.base import BuildBackend, is_mkosi_state
 from tundravm.deploy import DeployAdapter, get_adapter
 from tundravm.diff import diff_trees
 from tundravm.errors import DeploymentError, MeasurementError, StateError, ValidationError
@@ -51,7 +51,7 @@ from tundravm.models import (
     DeployRequest,
     ProfileBuildResult,
 )
-from tundravm.observability import Reporter, TextReporter
+from tundravm.observability import Event, Reporter, TextReporter
 
 from .lower import lower
 from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
@@ -312,24 +312,49 @@ def compile_image(img: Image, profiles: Sequence[str] | None, *, locked: Lock | 
         return read_tree(Path(tmp), variants=result.profiles)
 
 
-def read_tree(root: Path, *, variants: Sequence[str] = ()) -> Tree:
-    """Load the tree at *root* into memory."""
+def read_tree(
+    root: Path,
+    *,
+    variants: Sequence[str] = (),
+    warn: Callable[[str], None] | None = None,
+) -> Tree:
+    """Load the tree at *root* into memory.
+
+    mkosi's build state next to its config (``mkosi.tools``, ``mkosi.cache``,
+    ``mkosi.builddir``, ...) is not part of the tree. An unreadable path is left
+    out and reported to *warn*.
+    """
     entries: list[Entry] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
+
+    def skip(path: Path, exc: OSError) -> None:
+        if warn is not None:
+            warn(f"skipped unreadable {path}: {exc.strerror or exc}")
+
+    def walk_error(exc: OSError) -> None:
+        skip(Path(exc.filename or root), exc)
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=walk_error):
         base = Path(dirpath)
-        for name in sorted([*dirnames, *filenames]):
+        names = [*dirnames, *filenames]
+        kept = {n for n in names if not is_mkosi_state((base / n).relative_to(root).as_posix())}
+        dirnames[:] = sorted(n for n in dirnames if n in kept)
+        for name in sorted(kept):
             path = base / name
             rel = path.relative_to(root).as_posix()
-            info = path.lstat()
-            mode = info.st_mode & 0o7777
-            if path.is_symlink():
-                entries.append(Entry(rel, None, mode, symlink=os.readlink(path)))
-            elif path.is_dir():
-                if not any(path.iterdir()):
-                    entries.append(Entry(rel, None, mode))
-            else:
-                entries.append(Entry(rel, path.read_bytes(), mode))
+            try:
+                info = path.lstat()
+                mode = info.st_mode & 0o7777
+                if path.is_symlink():
+                    entries.append(Entry(rel, None, mode, symlink=os.readlink(path)))
+                elif path.is_dir():
+                    if not any(path.iterdir()):
+                        entries.append(Entry(rel, None, mode))
+                else:
+                    entries.append(Entry(rel, path.read_bytes(), mode))
+            except OSError as exc:
+                skip(path, exc)
+                if name in dirnames:
+                    dirnames.remove(name)
     entries.sort(key=lambda e: e.path)
     return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
 
@@ -658,7 +683,7 @@ def bake_image(
             simulated = img.backend is not None and img.backend.name == INPROCESS
         finally:
             img.build_dir, img.backend, img.lock_file = saved
-    tree = read_tree(destination / "mkosi")
+    tree = read_tree(destination / "mkosi", warn=_tree_warning(reporter))
     recipe_digest = (
         locked.recipe_digest
         if locked is not None
@@ -679,6 +704,16 @@ def bake_image(
         )
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result, read_artifacts(manifest)
+
+
+def _tree_warning(reporter: Reporter | None) -> Callable[[str], None] | None:
+    if reporter is None:
+        return None
+
+    def warn(message: str) -> None:
+        reporter.emit(Event("warning", None, message, 0.0, {"level": "warning"}))
+
+    return warn
 
 
 def _bake_lock(

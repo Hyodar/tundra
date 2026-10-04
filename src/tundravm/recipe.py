@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import inspect
 import sys
+import traceback
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -20,7 +21,8 @@ from typing import cast
 from ._image import Image
 from .backends.base import BuildBackend
 from .declarative.model import Recipe
-from .errors import ValidationError
+from .errors import TdxError, ValidationError
+from .observability import display_path
 
 RECIPE_OBJECT_NAMES: tuple[str, ...] = ("recipe", "RECIPE")
 """Module-level names checked first when looking for a ``Recipe``."""
@@ -93,12 +95,74 @@ def _import_recipe_module(recipe_path: Path, *, extra_paths: Sequence[str | Path
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     with _import_paths(str(recipe_path.parent), *(str(Path(p).resolve()) for p in extra_paths)):
+        keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
         try:
-            spec.loader.exec_module(module)
+            _exec_source(recipe_path, module)
+        except TdxError:
+            sys.modules.pop(module_name, None)
+            raise
+        except Exception as exc:
+            sys.modules.pop(module_name, None)
+            raise recipe_load_error(exc, recipe_path) from exc
         except BaseException:
             sys.modules.pop(module_name, None)
             raise
+        finally:
+            sys.dont_write_bytecode = keep
     return module
+
+
+def _exec_source(recipe_path: Path, module: ModuleType) -> None:
+    """Run the recipe from its current source, never from (or into) ``__pycache__``.
+
+    A ``.pyc`` is validated by source mtime and size, so an edit within the same
+    second that keeps the size would otherwise run the stale bytecode.
+    """
+    code = compile(recipe_path.read_bytes(), str(recipe_path), "exec", dont_inherit=True)
+    exec(code, module.__dict__)
+
+
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def recipe_load_error(exc: Exception, recipe_path: Path) -> ValidationError:
+    """*exc*, raised while running the recipe file, as an ``E_VALIDATION`` error.
+
+    The context names the failing ``file:line`` (for a syntax error the offending
+    line; else the innermost frame outside tundravm and the import machinery) and
+    the original ``Type: message``.
+    """
+    location = _failure_location(exc, recipe_path)
+    kind = "syntax error" if isinstance(exc, SyntaxError) else type(exc).__name__
+    detail = exc.msg if isinstance(exc, SyntaxError) else str(exc)
+    return ValidationError(
+        f"Recipe {recipe_path.name} failed to load: {kind} at {location}"
+        + (f": {detail}" if detail else ""),
+        hint=(
+            f"Run `python {display_path(recipe_path)}` to see the full traceback, "
+            "or pass --traceback."
+        ),
+        context={
+            "recipe": str(recipe_path),
+            "location": location,
+            "error": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__,
+        },
+    )
+
+
+def _failure_location(exc: Exception, recipe_path: Path) -> str:
+    if isinstance(exc, SyntaxError):
+        filename = exc.filename or str(recipe_path)
+        return f"{display_path(Path(filename))}:{exc.lineno or 0}"
+    found: tuple[str, int] | None = None
+    for frame in traceback.extract_tb(exc.__traceback__):
+        filename = frame.filename
+        if filename.startswith("<") or Path(filename).resolve().is_relative_to(_PACKAGE_DIR):
+            continue
+        found = (filename, frame.lineno or 0)
+    if found is None:
+        return display_path(recipe_path)
+    return f"{display_path(Path(found[0]))}:{found[1]}"
 
 
 @contextmanager
@@ -215,7 +279,12 @@ def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) 
                 hint="Recipe factories must be callable with no arguments.",
                 context={"recipe": str(recipe_path), "attr": name},
             )
-    result = factory()
+    try:
+        result = factory()
+    except TdxError:
+        raise
+    except Exception as exc:
+        raise recipe_load_error(exc, recipe_path) from exc
     if isinstance(result, Recipe):
         return result
     if result is None:

@@ -133,6 +133,7 @@ def test_scaffold_writes_the_project_files_and_lists_next_steps(tmp_path: Path) 
     pyproject = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "my-node"' in pyproject and 'requires-python = ">=3.12"' in pyproject
     assert 'dependencies = ["tundravm"]' in pyproject and 'dev = ["pytest"]' in pyproject
+    assert '[tool.pytest.ini_options]\npythonpath = ["."]\n' in pyproject
     readme = [line for line in (tmp_path / "README.md").read_text().splitlines() if line]
     assert len(readme) == 5 and "service template" in readme[0]
     assert "uv run pytest tests" in readme[3]
@@ -143,6 +144,7 @@ def test_scaffold_writes_the_project_files_and_lists_next_steps(tmp_path: Path) 
     assert "  1. tundravm compile my-node.py --out mkosi" in out
     assert "  2. uv run pytest tests" in out
     assert "  5. tundravm bake my-node.py --out build" in out
+    assert "  tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm`" in out
     assert "note:" not in out
 
 
@@ -187,7 +189,9 @@ def test_existing_pyproject_is_kept_with_a_note(tmp_path: Path) -> None:
     out = scaffold(tmp_path)
     assert pyproject.read_text() == '[project]\nname = "theirs"\n'
     assert f"kept {pyproject} (already exists)" in out
-    assert "`uv add tundravm` and `uv add --dev pytest`" in out
+    note = next(line for line in out.splitlines() if line.startswith("note:"))
+    assert "`uv add tundravm` and `uv add --dev pytest`" in note
+    assert "`uv add --editable PATH/TO/tundravm`" in note
 
 
 @pytest.mark.parametrize("template", list(TEMPLATES))

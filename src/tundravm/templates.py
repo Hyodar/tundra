@@ -365,6 +365,9 @@ def test_matches_committed_tree() -> None:
     assert_tree(tundravm.compile(RECIPE, lock=lock), GOLDEN)
 '''
 
+EDITABLE_INSTALL = "uv add --editable PATH/TO/tundravm"
+"""How ``init`` tells users to use a local tundravm checkout (it is not on PyPI yet)."""
+
 PYPROJECT_TEMPLATE = r"""[project]
 name = "$name"
 version = "0.1.0"
@@ -373,6 +376,9 @@ dependencies = ["tundravm"]
 
 [dependency-groups]
 dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
 """
 
 README_TEMPLATE = r"""# $title: a tundravm VM image recipe (`$filename`, $template template)
@@ -511,6 +517,7 @@ def render_workflow(*, recipe: str, out: str = "mkosi") -> str:
 __all__ = [
     "BACKEND_SNIPPETS",
     "DEFAULT_TEMPLATE",
+    "EDITABLE_INSTALL",
     "EXPECTED_FINDINGS",
     "GITIGNORE_BLOCK",
     "GITIGNORE_MARKER",

@@ -95,21 +95,40 @@ def test_lima_prepare_creates_directories_when_binary_exists(
     assert request.emit_dir.exists()
 
 
+def _bake_tree_request(tmp_path: Path) -> BakeRequest:
+    """A request laid out like ``bake``: the mkosi tree under the build directory."""
+    build = tmp_path / "build"
+    (build / "mkosi" / "default").mkdir(parents=True)
+    return BakeRequest(profile="default", build_dir=build, emit_dir=build / "mkosi")
+
+
 def test_lima_build_mkosi_command_per_directory(tmp_path: Path) -> None:
-    request = bake_request(tmp_path)
+    request = _bake_tree_request(tmp_path)
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     cmd = backend._build_mkosi_command(request)
 
+    assert "--directory=/home/debian/mnt/mkosi/default" in cmd
     assert "--force" in cmd
     assert "--image-id=default" in cmd
     assert "--cache-directory=/home/debian/mkosi-cache" in cmd
     assert "--output-dir=/home/debian/mkosi-output" in cmd
-    assert "build" in cmd
+    assert cmd.endswith(" build")
+
+
+def test_lima_maps_host_paths_into_the_mount(tmp_path: Path) -> None:
+    request = _bake_tree_request(tmp_path)
+    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
+    output = request.build_dir / "default" / "output"
+
+    assert backend._vm_path(request, output) == "/home/debian/mnt/default/output"
+    with pytest.raises(BackendExecutionError) as excinfo:
+        backend._vm_path(request, tmp_path / "elsewhere")
+    assert excinfo.value.hint is not None
 
 
 def test_lima_build_mkosi_command_extra_args(tmp_path: Path) -> None:
-    request = bake_request(tmp_path)
+    request = _bake_tree_request(tmp_path)
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", mkosi_args=["--debug"])
 
     cmd = backend._build_mkosi_command(request)

@@ -19,7 +19,7 @@ tundravm ci      RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--for
 tundravm completion bash|zsh|fish
 ```
 
-Every command that takes `RECIPE` (and `doctor`) also accepts `--attr NAME` and `--pythonpath DIR` (repeatable). `KIND` is `lima`, `nix`, `local` or `inprocess`. `--version` prints the version.
+Every command that takes `RECIPE` (and `doctor`) also accepts `--attr NAME`, `--pythonpath DIR` (repeatable) and `--traceback`, which raises an SDK error with its Python traceback instead of printing `error [E_CODE]: message`. `KIND` is `lima`, `nix`, `local` or `inprocess`. `--version` prints the version.
 
 With no arguments, `tundravm` prints its help followed by a quickstart and exits 0:
 

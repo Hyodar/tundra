@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import textwrap
 from collections import deque
@@ -190,31 +191,85 @@ def write_flake_nix(target_dir: Path) -> Path:
     return flake_path
 
 
+MKOSI_STATE_NAMES: frozenset[str] = frozenset(
+    {
+        ".mkosi-private",
+        "mkosi.builddir",
+        "mkosi.cache",
+        "mkosi.output",
+        "mkosi.pkgcache",
+        "mkosi.tools",
+        "mkosi.tools.build.cache",
+        "mkosi.tools.manifest",
+    }
+)
+"""Paths mkosi creates or reads next to its config; they are build state, never tree content."""
+
+TOOLS_TREE_NAMES = ("mkosi.tools", "mkosi.tools.build.cache", "mkosi.tools.manifest")
+"""What ``ToolsTree=default`` leaves in the mkosi config directory."""
+
+
+def is_mkosi_state(rel: str) -> bool:
+    """Whether *rel* (relative to an emitted tree) is mkosi build state.
+
+    Only the tree root and its variant directories hold mkosi config, so deeper
+    paths with these names (e.g. inside ``mkosi.extra/``) are content.
+    """
+    parts = Path(rel).parts
+    return len(parts) <= 2 and parts[-1] in MKOSI_STATE_NAMES
+
+
+def mkosi_project(emit_dir: Path, profile: str) -> tuple[Path, bool]:
+    """The directory mkosi builds *profile* from, and whether it needs ``--profile``.
+
+    Native profiles (``mkosi.profiles/<name>/``) build from *emit_dir*; per-directory
+    trees from ``<emit_dir>/<profile>/``, else *emit_dir* itself.
+    """
+    if (emit_dir / "mkosi.profiles" / profile).exists():
+        return emit_dir, True
+    per_dir = emit_dir / profile
+    return (per_dir if per_dir.exists() else emit_dir), False
+
+
+def mkosi_setting(project: Path, key: str) -> str | None:
+    """The value the mkosi config in *project* gives *key* last, or ``None`` if unset."""
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=\s*(.*?)\s*$", re.MULTILINE)
+    candidates = [
+        project / "mkosi.conf",
+        *sorted(project.glob("mkosi.conf.d/**/*.conf")),
+        *sorted(project.glob("mkosi.profiles/**/*.conf")),
+        project / "mkosi.local.conf",
+    ]
+    value: str | None = None
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for match in pattern.finditer(text):
+            value = match.group(1)
+    return value
+
+
 def collect_artifacts(output_dir: Path) -> dict[OutputTarget, ArtifactRef]:
-    """Scan *output_dir* for mkosi build artifacts."""
+    """Scan *output_dir* for mkosi build artifacts (files only; unreadable dirs yield none)."""
     artifacts: dict[OutputTarget, ArtifactRef] = {}
-    if not output_dir.exists():
+    try:
+        names = sorted(p for p in output_dir.iterdir() if p.is_file())
+    except OSError:
         return artifacts
 
-    for efi in sorted(output_dir.glob("*.efi*")):
+    def first(pattern: str) -> Path | None:
+        return next((p for p in names if p.match(pattern)), None)
+
+    if (efi := first("*.efi*")) is not None:
         artifacts["qemu"] = ArtifactRef(target="qemu", path=efi)
-        break
-
-    for raw in sorted(output_dir.glob("*.raw*")):
-        if "qemu" not in artifacts:
-            artifacts["qemu"] = ArtifactRef(target="qemu", path=raw)
-        break
-
-    for qcow2 in sorted(output_dir.glob("*.qcow2*")):
+    if "qemu" not in artifacts and (raw := first("*.raw*")) is not None:
+        artifacts["qemu"] = ArtifactRef(target="qemu", path=raw)
+    if (qcow2 := first("*.qcow2*")) is not None:
         artifacts["qemu"] = ArtifactRef(target="qemu", path=qcow2)
-        break
-
-    for vhd in sorted(output_dir.glob("*.vhd*")):
+    if (vhd := first("*.vhd*")) is not None:
         artifacts["azure"] = ArtifactRef(target="azure", path=vhd)
-        break
-
-    for tar_gz in sorted(output_dir.glob("*.tar.gz*")):
+    if (tar_gz := first("*.tar.gz*")) is not None:
         artifacts["gcp"] = ArtifactRef(target="gcp", path=tar_gz)
-        break
-
     return artifacts

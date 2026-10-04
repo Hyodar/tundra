@@ -25,6 +25,7 @@ from tundravm.models import ArtifactRef, BakeRequest, BakeResult, ProfileBuildRe
 from tundravm.observability import (
     Event,
     JsonReporter,
+    Progress,
     StructuredLogger,
     TextReporter,
     format_duration,
@@ -545,3 +546,18 @@ def test_cli_bake_failure_in_quiet_mode_still_shows_tail(
     assert code == EXIT_SDK_ERROR
     assert err.splitlines()[0].startswith("[default] build via flaky ... FAILED")
     assert "[default] | mkosi line 8" in err
+
+
+def test_backend_notices_show_unless_quiet() -> None:
+    def run(*, quiet: bool = False) -> str:
+        stream = io.StringIO()
+        progress = Progress(TextReporter(stream, live=False, quiet=quiet))
+        progress.notice("default")("info", "adding a tools tree")
+        progress.notice("default")("warning", "could not chown")
+        return stream.getvalue()
+
+    assert run().splitlines() == [
+        "[default] note adding a tools tree",
+        "[default] warning could not chown",
+    ]
+    assert run(quiet=True) == ""

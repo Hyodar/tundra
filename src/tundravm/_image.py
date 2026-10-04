@@ -1131,6 +1131,7 @@ class Image:
                     emit_dir=emission_root,
                     output_targets=profile.output_targets,
                     on_output=None if reporter is None else progress.output(profile_name),
+                    on_notice=None if reporter is None else progress.notice(profile_name),
                 )
 
                 with progress.phase("prepare", f"prepare {backend.name}", profile=profile_name):

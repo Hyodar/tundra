@@ -12,7 +12,7 @@ from tundravm.declarative.utils import Composite, DevTools, Tdxs
 from tundravm.declarative import diff, measure, deploy
 ```
 
-`tundravm` exports the declarations, the build recipes `Go`, `Cargo` and `Dotnet`, the recipe types, the lifecycle functions and result types, `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub` and `Backports`, and their base class `Composite`, live in `tundravm.declarative.utils`.
+`tundravm` exports the declarations, the build recipes `Go`, `Cargo` and `Dotnet`, the recipe types, the lifecycle functions and result types, `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub` and `Backports`, and their base class `Composite`, live in `tundravm.declarative.utils`. `tundravm.__version__` is the package version that `tundravm --version` prints.
 
 ## Recipe, variants, fragments
 
@@ -70,6 +70,8 @@ The default variant is the one named `default`, else the first whose parent is `
 `nethermind-v1` spells groups and users as postinst `groupadd`/`useradd` lines and omits the `# unpinned:` build marker, matching the historical nethermind-tdx tree.
 
 ## Declarations
+
+`Declaration` is the union of the types `Fragment.items`, `Variant.replace` and `Variant.remove` hold: `Package`, `File`, `Template`, `Directory`, `Group`, `User`, `Unit`, `Service`, `Hook`, `Init`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Key`, `Disk`, `Secrets`, `RuntimeTools` and `Build`.
 
 ### Packages, files, accounts, units
 
@@ -251,7 +253,7 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 | `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot |
 | `Backports(*, mirror=None, release=None)` | `backports` | A sync hook generating backports and sid apt sources, plus `Setting("Build", "SandboxTrees", ...)` |
 
-`issuer`/`validator` are `"tdx"`, `"azure"`, `"gcp"`, `"simulator"` or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. Each class is an instance of `Fragment`, so it goes wherever a `Fragment` does: in `common`, in a variant's `add`, or among another fragment's `items`.
+`issuer`/`validator` are a `TdxsType` (`"tdx"`, `"azure"`, `"gcp"` or `"simulator"`) or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. `BACKPORTS_TREE` is the `SandboxTrees` entry `Backports` adds, `"mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"`. Each class is an instance of `Fragment`, so it goes wherever a `Fragment` does: in `common`, in a variant's `add`, or among another fragment's `items`.
 
 ### `Composite`
 

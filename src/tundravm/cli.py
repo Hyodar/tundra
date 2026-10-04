@@ -10,7 +10,9 @@ one go; ``completion`` prints a shell completion script. With no arguments the
 help and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
 codes) or a usage error (unknown verbs and flags get a "did you mean"), 1 for a
 failed check (``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``,
-``doctor``) or an unexpected failure.
+``doctor``) or an unexpected failure. A recipe file that fails to import (syntax
+error, missing module, an exception while it runs) is an ``E_VALIDATION`` error
+naming ``file:line``; ``--traceback`` raises SDK errors with the Python traceback.
 """
 
 from __future__ import annotations
@@ -80,6 +82,7 @@ from .recipe import RecipeFile, load_file
 from .templates import (
     BACKEND_SNIPPETS,
     DEFAULT_TEMPLATE,
+    EDITABLE_INSTALL,
     GITIGNORE_BLOCK,
     GITIGNORE_MARKER,
     TEMPLATES,
@@ -131,6 +134,8 @@ def main(
     try:
         return handler(args, out)
     except TdxError as exc:
+        if getattr(args, "traceback", False):
+            raise
         print(f"error [{exc.code}]: {exc}", file=sys.stderr)
         return EXIT_SDK_ERROR
     except KeyboardInterrupt:
@@ -587,6 +592,11 @@ def _add_import_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="DIR",
         help="Extra import directory for the recipe (repeatable). CWD is always included.",
+    )
+    parser.add_argument(
+        "--traceback",
+        action="store_true",
+        help="On an error, raise it with the full Python traceback instead of one message.",
     )
 
 
@@ -1228,7 +1238,8 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
     if had_pyproject:
         print(
             f"note: {pyproject} already exists; add the dependencies with "
-            "`uv add tundravm` and `uv add --dev pytest`",
+            "`uv add tundravm` and `uv add --dev pytest` (tundravm is not on PyPI yet: "
+            f"`{EDITABLE_INSTALL}`)",
             file=out,
         )
     _init_lint(recipe, out)
@@ -1278,6 +1289,7 @@ def _init_next(root: Path, recipe: Path, tests: Path | None, github: bool, out: 
     print(f"next{where}:", file=out)
     for number, (command, why) in enumerate(steps, 1):
         print(f"  {number}. {command:<{width}}  {why}", file=out)
+    print(f"  tundravm is not on PyPI yet: `{EDITABLE_INSTALL}` uses a local checkout", file=out)
     if github:
         print("then commit mkosi/ and build/tundravm.lock; the workflow checks both", file=out)
 

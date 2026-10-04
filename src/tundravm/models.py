@@ -507,13 +507,21 @@ def _fallback_debloat(base: ProfileState, own: ProfileState) -> DebloatConfig:
 class BakeRequest:
     """One profile build. ``on_output`` receives each backend output line as it
     arrives; when it is ``None`` a failing backend puts the output tail in its
-    error message instead."""
+    error message instead. ``on_notice`` receives what the backend decided on the
+    user's behalf (e.g. adding a tools tree), as ``(level, message)`` with level
+    ``info`` or ``warning``."""
 
     profile: str
     build_dir: Path
     emit_dir: Path
     output_targets: tuple[OutputTarget, ...] = ("qemu",)
     on_output: Callable[[str], None] | None = field(default=None, compare=False, repr=False)
+    on_notice: Callable[[str, str], None] | None = field(default=None, compare=False, repr=False)
+
+    def notice(self, level: str, message: str) -> None:
+        """Pass *message* to ``on_notice``, if set."""
+        if self.on_notice is not None:
+            self.on_notice(level, message)
 
 
 @dataclass(frozen=True, slots=True)

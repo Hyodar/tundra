@@ -43,7 +43,9 @@ class Event:
     Phase events carry ``extra["phase"]`` and ``extra["status"]`` (``start``,
     ``ok`` or ``fail``); finished phases add ``extra["duration_s"]``. Backend
     output lines are ``log`` events with ``extra["source"] == "backend"``;
-    forwarded :class:`StructuredLogger` records have ``source == "logger"``.
+    forwarded :class:`StructuredLogger` records have ``source == "logger"``;
+    a backend's informational notices (e.g. adding a tools tree) have
+    ``source == "notice"`` and are shown unless quiet.
     """
 
     kind: EventKind
@@ -224,6 +226,10 @@ class TextReporter:
             self._line(event.profile, f"{event.message} ... {self._paint('ok', 'ok')}{suffix}")
 
     def _log(self, event: Event) -> None:
+        if event.extra.get("source") == "notice":
+            if not self._quiet:
+                self._line(event.profile, f"{self._paint('dim', 'note')} {event.message}")
+            return
         if event.extra.get("source") != "backend":
             if self._verbose:
                 self._line(event.profile, self._paint("dim", event.message))
@@ -348,6 +354,21 @@ class Progress:
 
         def forward(line: str) -> None:
             self.emit("log", profile, line, source="backend")
+
+        return forward
+
+    def notice(self, profile: str) -> Callable[[str, str], None]:
+        """Callback for a backend's ``(level, message)`` notices.
+
+        ``info`` becomes a ``log`` event with ``source == "notice"``; anything else a
+        ``warning`` event.
+        """
+
+        def forward(level: str, message: str) -> None:
+            if level == "info":
+                self.emit("log", profile, message, source="notice", level=level)
+            else:
+                self.emit("warning", profile, message, level="warning", source="backend")
 
         return forward
 

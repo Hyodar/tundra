@@ -65,6 +65,12 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 ### Fixed
 
+- Local bakes: artifacts landed inside the mkosi tree and `bake-result.json` listed none, because mkosi received a relative `--output-dir`; all backends now pass absolute paths. Lima ignored the per-variant directory.
+- A tools-tree bake left root-owned `mkosi.tools` in the compiled tree and the post-build tree read crashed with `PermissionError`; mkosi state now lives under `OUT/.mkosi/`, sudo output is chowned back, unreadable leftovers are warnings.
+- `‣ Could not find ukify`: the local backend adds `--tools-tree=default` when the host lacks `ukify` and the recipe sets no `ToolsTree`; `doctor` checks `ukify`, `systemd-repart` and `apt`.
+- A recipe file with a syntax, import or runtime error printed a Python traceback (exit 1); it is now `E_VALIDATION` (exit 2) with `location` and `error`, and `--traceback` re-raises.
+- Recipes are compiled from source on every load, so a same-size edit within the same second is never hidden by stale `__pycache__`.
+
 - `runtime-init.service` is registered once per variant, so compiling one variant and then all of them no longer fails with a duplicate service.
 - A file removed from the recipe no longer lingers in the compiled tree or in `compile --check`.
 - `tundravm ci` no longer reports false lock drift on recipes with runtime-init steps: its compile step works on a copy of the lowered recipe instead of changing what the lock step compares.

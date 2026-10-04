@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import run_main, write_recipe_file
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, ProbeRunner, build_parser, main
 from tundravm.completion import SHELLS, Shell, render_completion, verbs_of
+from tundravm.errors import ValidationError
 
 FORMAT_CHOICES = {
     choice
@@ -308,3 +310,32 @@ def test_diff_variants_rejects_unknown_variants_and_variant_flag(
     )
     assert code == EXIT_SDK_ERROR
     assert "cannot be combined" in capsys.readouterr().err
+
+
+# recipe files that fail to import
+
+
+def test_a_broken_recipe_is_an_sdk_error_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    recipe = write_recipe_file(tmp_path, "import tundravm\nrecipe = (\n", monkeypatch)
+
+    code, _ = run_main("lint", str(recipe))
+
+    err = capsys.readouterr().err
+    assert code == EXIT_SDK_ERROR
+    assert err.startswith("error [E_VALIDATION]: Recipe recipe.py failed to load: syntax error")
+    assert "location: recipe.py:2" in err
+    assert "Run `python recipe.py` to see the full traceback" in err
+    assert "Traceback" not in err
+
+
+def test_traceback_flag_reraises_with_the_original_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recipe = write_recipe_file(tmp_path, "import not_a_module_xyz\n", monkeypatch)
+
+    with pytest.raises(ValidationError) as excinfo:
+        run_main("bake", str(recipe), "--traceback")
+
+    assert isinstance(excinfo.value.__cause__, ModuleNotFoundError)

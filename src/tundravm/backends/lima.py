@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import shutil
 import subprocess
 import textwrap
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
 from tundravm.backends.base import (
@@ -22,6 +23,7 @@ from tundravm.backends.base import (
     StreamResult,
     collect_artifacts,
     failure_message,
+    mkosi_project,
     run_streaming,
     write_flake_nix,
 )
@@ -74,6 +76,9 @@ LIMA_YAML_TEMPLATE = textwrap.dedent("""\
           grep nix .profile >> .bashrc
 """)
 
+VM_MOUNT = "/home/debian/mnt"
+"""Where the VM sees the host build directory."""
+
 MKOSI_CACHE_DIR = "/home/debian/mkosi-cache"
 MKOSI_OUTPUT_DIR = "/home/debian/mkosi-output"
 
@@ -106,7 +111,7 @@ class LimaMkosiBackend:
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         """Single mount: build_dir -> /home/debian/mnt."""
-        return (MountSpec(source=request.build_dir, target="/home/debian/mnt"),)
+        return (MountSpec(source=request.build_dir, target=VM_MOUNT),)
 
     def prepare(self, request: BakeRequest) -> None:
         self._ensure_lima_available()
@@ -133,10 +138,11 @@ class LimaMkosiBackend:
         mkosi_cmd = self._build_mkosi_command(request)
 
         # Run inside the VM via nix develop
+        vm_emit = self._vm_path(request, request.emit_dir)
         full_cmd = (
-            f"cd ~/mnt/mkosi && "
+            f"cd {shlex.quote(vm_emit)} && "
             f"/home/debian/.nix-profile/bin/nix develop "
-            f"path:~/mnt/mkosi -c {mkosi_cmd}"
+            f"{shlex.quote('path:' + vm_emit)} -c {mkosi_cmd}"
         )
         result = run_streaming(self._ssh_argv(instance, full_cmd), on_output=request.on_output)
 
@@ -158,14 +164,14 @@ class LimaMkosiBackend:
             )
 
         # Copy artifacts from VM-internal output dir to host-visible mount
-        host_output = f"~/mnt/{request.profile}/output"
+        output_dir = request.build_dir.resolve() / request.profile / "output"
+        host_output = shlex.quote(self._vm_path(request, output_dir))
         self._lima_exec(
             instance,
             f"mkdir -p {host_output} && mv {MKOSI_OUTPUT_DIR}/* {host_output}/ 2>/dev/null || true",
         )
 
         # Collect artifacts from the host side
-        output_dir = request.build_dir / request.profile / "output"
         profile_result = ProfileBuildResult(profile=request.profile)
         profile_result.artifacts = collect_artifacts(output_dir)
 
@@ -195,26 +201,34 @@ class LimaMkosiBackend:
         return f"tdx-builder-{h}"
 
     def _build_mkosi_command(self, request: BakeRequest) -> str:
-        """Build the mkosi command string for execution inside the VM."""
-        native_profiles_dir = request.emit_dir / "mkosi.profiles" / request.profile
-        if native_profiles_dir.exists():
-            profile_flag = f"--profile={request.profile} "
-        else:
-            profile_flag = ""
+        """Build the mkosi command string for execution inside the VM (absolute VM paths)."""
+        mkosi_dir, native = mkosi_project(request.emit_dir.resolve(), request.profile)
+        args = [
+            "mkosi",
+            f"--directory={self._vm_path(request, mkosi_dir)}",
+            "--force",
+            f"--image-id={request.profile}",
+            f"--cache-directory={MKOSI_CACHE_DIR}",
+            f"--output-dir={MKOSI_OUTPUT_DIR}",
+        ]
+        if native:
+            args.append(f"--profile={request.profile}")
+        args.extend(self.mkosi_args)
+        args.append("build")
+        return " ".join(shlex.quote(arg) for arg in args)
 
-        extra_args = " ".join(self.mkosi_args)
-        if extra_args:
-            extra_args = f" {extra_args}"
-
-        return (
-            f"mkosi --force "
-            f"--image-id={request.profile} "
-            f"--cache-directory={MKOSI_CACHE_DIR} "
-            f"--output-dir={MKOSI_OUTPUT_DIR} "
-            f"{profile_flag}"
-            f"{extra_args}"
-            f"build"
-        ).strip()
+    def _vm_path(self, request: BakeRequest, host: Path) -> str:
+        """*host* (under the build directory) as the VM sees it through the mount."""
+        build_dir = request.build_dir.resolve()
+        try:
+            relative = host.resolve().relative_to(build_dir)
+        except ValueError:
+            raise BackendExecutionError(
+                f"{host} is outside the build directory the Lima VM mounts.",
+                hint=f"Keep the mkosi tree and output under {build_dir}.",
+                context={"backend": self.name, "operation": "execute", "path": str(host)},
+            ) from None
+        return str(PurePosixPath(VM_MOUNT, *relative.parts))
 
     def _lima_exec(self, instance: str, cmd: str) -> subprocess.CompletedProcess[str]:
         """Execute a short command inside the Lima VM via SSH, capturing its output."""
