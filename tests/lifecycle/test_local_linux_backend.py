@@ -133,7 +133,7 @@ def test_local_backend_mkosi_version_check_passes(
 
 
 def _relative_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str = ""
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str = "[Output]\nFormat=uki\n"
 ) -> BakeRequest:
     """A request with *relative* build/emit dirs, as the CLI's ``--out build`` gives."""
     monkeypatch.chdir(tmp_path)
@@ -190,6 +190,40 @@ def test_local_command_adds_a_tools_tree_without_ukify_and_keeps_the_tree(
     assert "ukify not found" in notices[0][1] and "--tools-tree=default" in notices[0][1]
     assert conf.read_bytes() == before
     assert sorted(p.name for p in conf.parent.iterdir()) == ["mkosi.conf"]
+
+
+@pytest.mark.parametrize(
+    ("conf", "mkosi_args"),
+    [
+        ("[Output]\nFormat=disk\n[Content]\nBootable=no\n", []),
+        ("[Output]\nFormat=disk\n", []),
+        ("[Output]\nFormat=uki\n", ["--format=directory", "--bootable=no"]),
+        ("[Output]\nFormat=uki\n", ["--format", "disk", "--bootable=no"]),
+    ],
+)
+def test_local_command_keeps_host_tools_for_builds_without_a_uki(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str, mkosi_args: list[str]
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch, conf)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+
+    cmd = LocalLinuxBackend(privilege="none", mkosi_args=mkosi_args).command(request)
+
+    assert not any(arg.startswith("--tools-tree") for arg in cmd)
+
+
+@pytest.mark.parametrize(
+    "conf", ["[Output]\nFormat=uki\n", "[Output]\nFormat=disk\n[Content]\nBootable=yes\n"]
+)
+def test_local_command_adds_a_tools_tree_for_uki_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch, conf)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+
+    cmd = LocalLinuxBackend(privilege="none").command(request)
+
+    assert "--tools-tree=default" in cmd
 
 
 def test_local_command_respects_the_recipes_mkosi_settings(

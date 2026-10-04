@@ -60,6 +60,38 @@ HOST_BUILD_TOOLS: tuple[Requirement, ...] = tuple(
 """Host tools mkosi runs without a tools tree; the backend adds one when ``ukify`` is missing."""
 
 
+UKIFY_FORMATS = frozenset({"uki", "esp"})
+"""Output formats mkosi always builds a UKI for."""
+
+DISABLED = frozenset({"no", "false", "0", "off", "disabled"})
+ENABLED = frozenset({"yes", "true", "1", "on", "enabled"})
+
+
+def _last_arg(args: list[str], *names: str) -> str | None:
+    """The value the last of *names* gets in *args* (``--name=value`` or ``--name value``)."""
+    value: str | None = None
+    for index, arg in enumerate(args):
+        for name in names:
+            if arg.startswith(f"{name}="):
+                value = arg.split("=", 1)[1]
+            elif arg == name and index + 1 < len(args):
+                value = args[index + 1]
+    return value
+
+
+def needs_ukify(mkosi_dir: Path, mkosi_args: list[str]) -> bool:
+    """Whether the build makes a UKI: ``Format=uki``/``esp``, or ``Bootable=yes``.
+
+    A ``Bootable=auto`` disk only uses ``ukify`` when the host has it, and a
+    ``Bootable=no`` or directory build never does, so neither needs a tools tree.
+    """
+    fmt = _last_arg(mkosi_args, "--format", "-t") or mkosi_setting(mkosi_dir, "Format") or "disk"
+    if fmt.lower() in UKIFY_FORMATS:
+        return True
+    bootable = _last_arg(mkosi_args, "--bootable") or mkosi_setting(mkosi_dir, "Bootable")
+    return (bootable or "auto").lower() in ENABLED
+
+
 def host_has_ukify() -> bool:
     """Whether mkosi would find ``ukify`` on this host."""
     return shutil.which("ukify") is not None or any(os.path.exists(p) for p in UKIFY_PATHS)
@@ -184,8 +216,9 @@ class LocalLinuxBackend:
     def tools_tree(self, request: BakeRequest) -> str | None:
         """The ``--tools-tree`` value to pass, or ``None`` to leave mkosi's choice alone.
 
-        A recipe that sets no ``ToolsTree=`` on a host without ``ukify`` gets
-        ``default``. ``ToolsTree=default`` reuses the tree an earlier bake into the
+        A recipe that sets no ``ToolsTree=`` and builds a UKI (:func:`needs_ukify`)
+        on a host without ``ukify`` gets ``default``; other builds keep the host
+        tools. ``ToolsTree=default`` reuses the tree an earlier bake into the
         same build directory left in ``.mkosi/mkosi.tools`` instead of rebuilding it.
         """
         build_dir = request.build_dir.resolve()
@@ -195,7 +228,7 @@ class LocalLinuxBackend:
         configured = mkosi_setting(mkosi_dir, "ToolsTree")
         if configured is not None and configured not in ("default", "yes"):
             return None
-        if configured is None and host_has_ukify():
+        if configured is None and (host_has_ukify() or not needs_ukify(mkosi_dir, self.mkosi_args)):
             return None
         cached = build_dir / STATE_DIRNAME / "mkosi.tools"
         value = str(cached) if cached.is_dir() else "default"
