@@ -8,13 +8,13 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 |---|---|---|
 | Recipe | `Recipe` | The whole image: recipe-wide settings, the `common` fragment and the variants |
 | Declaration | `Package`, `File`, `Service`, `Unit`, `Key`, `Disk`, `Build`, ... | One typed fact about the image, identified by type plus natural key |
-| Fragment | `Fragment` | A named group of declarations and nested fragments, with `requires` and `checks` |
+| Fragment | `Fragment` | A named group of declarations and nested fragments, with `requires` and `checks`; a `Composite` subclass computes one from its fields |
 | Variant | `Variant` | An overlay on a parent (`add`, `replace`, `remove`, `target`); one mkosi directory and artifact each |
 | Lock | `Lock` | Section digests of the resolved recipe plus one pin per source build |
 | Tree | `Tree` | The compiled mkosi project, in memory until written; has a digest |
 | Artifact | `Artifact` | A baked disk image of one variant and target, with the digests it came from |
 
-Every one of them is a frozen dataclass. Nothing in a recipe is mutated after construction: a fragment function returns a new `Fragment`, a variant describes a change instead of applying it, and the lifecycle functions take values and return values.
+Every one of them is a frozen dataclass. Nothing in a recipe is mutated after construction: a `Composite` fragment computes its contents once, from its fields, a variant describes a change instead of applying it, and the lifecycle functions take values and return values.
 
 ```python
 from tundravm import Fragment, Package, Recipe, Variant
@@ -202,6 +202,8 @@ Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
 | Measure | `measure(artifact, scheme="rtmr") -> Measurements` | `measure` | `measured-boot` or `dstack-mr`, or `allow_placeholder` |
 | Deploy | `deploy(artifact, using=Qemu()/Azure(...)/Gcp(...)) -> Deployment` | `deploy` | the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 
+A lock of every variant covers a bake or `lock --check` of any subset of them: only the selected variants' sections and the recipe-wide ones are compared.
+
 `bake` writes `out/bake-result.json`, the manifest `read_artifacts()`, `tundravm measure` and `tundravm deploy` read, so measuring and deploying work in a later process. Each `Artifact` carries the recipe digest, the lockfile digest and the tree digest it was built from.
 
 The in-process backend writes simulated artifacts (`Artifact.simulated`). `measure` and `deploy` refuse them unless you pass `allow_placeholder=True` (`--allow-placeholder`), and placeholder measurements say so (`tool="placeholder"`).
@@ -223,5 +225,7 @@ A recipe file names its backend in a module-level `backend` variable; the Python
 
 - `rtmr` uses `measured-boot` or `dstack-mr` on `PATH` and returns RTMR values; `Measurements.tool` names the tool and version.
 - `azure` and `gcp` have no local tool yet; they return placeholders only with `allow_placeholder=True`.
+
+`Measurements.to_json(path)` writes the values for a verifier, and `Measurements.verify(expected)` returns the registers that differ from an expected set (empty when all match).
 
 Placeholder values are derived from the artifact digest. They are never real measurements and must never go into an attestation policy.

@@ -16,6 +16,7 @@ Byte-identical *disk images* additionally depend on the Debian archive, the buil
 | `epoch` | Emitted |
 |---|---|
 | `0` (default) | `SourceDateEpoch=0`, `Environment=SOURCE_DATE_EPOCH=0`, a stable `Seed=` (deterministic partition UUIDs), and a finalize hook that strips `IMAGE_VERSION` from `os-release` |
+| any other integer | the same, with `SourceDateEpoch=` and `SOURCE_DATE_EPOCH` set to that value |
 | `None` | none of the above: the build is not reproducible |
 
 Every `mkosi.conf` also gets `ManifestFormat=json` and `CleanPackageMetadata=true`. Lowering never touches the network, and `Path` contents are read at compile time, so the tree depends only on the recipe, the files it reads, and the lock.
@@ -51,33 +52,37 @@ The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this s
 
 ## The lockfile
 
-`tundravm lock RECIPE` writes `build/tundravm.lock` (JSON, version 2):
+`tundravm lock RECIPE` writes `build/tundravm.lock` (JSON, version 3):
 
 | Key | Holds |
 |---|---|
 | `recipe_digest` | SHA-256 of the canonical recipe payload of the locked variants |
-| `sections` | One SHA-256 per section: `base`, `arch`, `default_profile`, `init_scripts`, and `profiles.<variant>.<section>` for `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `debloat`, `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `output_targets` (and `extends` for a variant with a parent) |
+| `sections` | One SHA-256 per section: `base`, `arch`, `default_profile`, `init_scripts`, and `variants.<variant>.<section>` for `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `debloat`, `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `source_builds`, `output_targets` (and `extends` for a variant with a parent) |
 | `recipe` | The payload itself, so drift can name the changed items |
 | `dependencies` | The package list of each variant |
 | `fetches` | One pin per source build: `name`, `kind` (`git`/`http`), `source` URL, requested `ref`, resolved `digest` (commit or sha256) |
 
-The sections only explain a mismatch; a frozen bake compares the whole recipe.
+Version 2 lockfiles named the per-variant sections `profiles.<variant>.<section>`; they still load, with the names mapped and the digests unchanged, so they check clean without re-locking.
+
+The sections explain a mismatch; a frozen bake of every variant also compares the whole-recipe digest.
 
 ```console
 $ tundravm lock node.py --check
-~ profiles.default.packages: +htop
-~ profiles.dev.packages: +htop
+~ variants.default.packages: +htop
+~ variants.dev.packages: +htop
 [exit 1]
 ```
 
-`~` changed, `+` only in the recipe, `-` only in the lockfile. In Python, `lock_status(recipe, read_lock(path))` returns the same drift as `lock-changed`/`lock-added`/`lock-removed` diagnostics, and `lint(recipe, lock=locked)` includes them.
+A lock of every variant covers any subset: `lock --check --variant NAME`, a frozen `bake --variant NAME` and `lock_status(recipe, locked, variants=(NAME,))` compare only the selected variants' sections and the recipe-wide ones, and skip the whole-recipe digest. A lock written with `lock --variant NAME` covers only that variant.
+
+`~` changed, `+` only in the recipe, `-` only in the lockfile. In Python, `lock_status(recipe, read_lock(path))` returns the same drift as `lock-changed`/`lock-added`/`lock-removed` diagnostics (`lock-stale` when only the whole-recipe digest differs), and `lint(recipe, lock=locked)` includes them. `lock_status(..., resolver=...)` also reports git refs that moved since the lock.
 
 ## Pinned sources
 
 The recipe records what you asked for (`Git(url, "master")`), never the commit, so locking does not make its own lockfile stale. `tundravm lock` resolves:
 
-- every `Git` ref to a commit;
-- every `Http` source without `sha256` to the hash of its download.
+- every `Git` ref to a commit, with `git ls-remote`;
+- every `Http` source without `sha256` to the sha256 of its download.
 
 `compile`, `diff` and `bake` read `build/tundravm.lock` and fetch exactly the pinned commit or verify the pinned hash. In Python, `compile(recipe, lock=locked)` applies the pins and `compile(recipe)` uses the refs.
 
@@ -88,7 +93,7 @@ The recipe records what you asked for (`Git(url, "master")`), never the commit, 
 
 ## Frozen bakes
 
-`tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from.
+`tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The check follows the subset rule above, so `bake --variant NAME` works against the lock of every variant. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from.
 
 ## mkosi
 

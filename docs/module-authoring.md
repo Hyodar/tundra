@@ -1,21 +1,56 @@
 # Writing fragments
 
-A reusable piece of an image (a service, a monitoring stack, a hardened SSH setup) is a Python function that returns a `Fragment`. There is no base class and no registration: the function takes typed arguments, returns a value, and a recipe puts that value into `common` or into a variant's `add`.
+A reusable piece of an image (a service, a monitoring stack, a hardened SSH setup) is a `Fragment`. There is no registration: a recipe puts the fragment into `common`, into a variant's `add`, or into another fragment's `items`. Write it in one of two ways.
+
+**A value**, for a one-off with nothing to configure: a `Fragment(...)` bound to a name.
 
 ```python
 from tundravm import Fragment, Package
 
-def debugging() -> Fragment:
-    return Fragment("debugging", items=(Package("strace"), Package("gdb")))
+DEBUGGING = Fragment("debugging", items=(Package("strace"), Package("gdb")))
 ```
 
-The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are the class form of the same thing: `Composite` subclasses, frozen dataclasses whose fields are the arguments and whose `compose()` returns the `Fragment`, so `Tdxs(after_init=True)` is itself a `Fragment`. So are `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/).
+**A `Composite` subclass**, the recommended way to ship a configurable fragment: a frozen dataclass whose fields are the configuration and whose `compose()` returns the contents. Each instance is itself a `Fragment`.
+
+```python
+from dataclasses import dataclass
+
+from tundravm import Fragment, Package
+from tundravm.declarative.utils import Composite
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Debugging(Composite):
+    gdb: bool = True
+
+    def compose(self) -> Fragment:
+        tools = ("strace", "gdb") if self.gdb else ("strace",)
+        return Fragment("debugging", items=tuple(Package(name) for name in tools))
+```
+
+```python
+>>> Debugging()
+Debugging(gdb=True)
+>>> Debugging(gdb=False).items
+(Package(name='strace', role='runtime'),)
+>>> Debugging() == Debugging()
+True
+```
+
+The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are written this way, and so are `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/) and `NethermindBase` in [`examples/nethermind_tdx.py`](../examples/nethermind_tdx.py).
+
+## Writing a `Composite`
+
+- Decorate the subclass with `@dataclass(frozen=True, slots=True, kw_only=True)`. Keyword-only fields keep call sites readable (`Tdxs(after_init=True)`) and let a required field follow ones with defaults.
+- Construction calls `compose()` once; the instance takes the returned fragment's `name`, `items`, `requires` and `checks`. `compose()` must return a `Fragment`.
+- Validate fields in `compose()` and raise `ValidationError` for bad values, as `EfiStub` does for an empty `snapshot`. The error surfaces where the recipe constructs the fragment.
+- The fields alone are the instance's `repr` and equality, so two instances with the same configuration are the same fragment and expand once. Lists passed for fields are frozen into tuples; keep the other fields immutable too (strings, numbers, declarations, other fragments).
 
 ## Anatomy
 
 `Fragment(name, items=(), requires=(), checks=())`:
 
-- **`name`** identifies the fragment. Including the same fragment twice in a variant is fine (it expands once); two *different* fragments with the same name are a `fragment-conflict` error, so pick a name that is unique to what the function returns, or put the distinguishing argument in it.
+- **`name`** identifies the fragment. Including the same fragment twice in a variant is fine (it expands once); two *different* fragments with the same name are a `fragment-conflict` error, so pick a name that is unique to what `compose()` returns, or put the distinguishing field in it.
 - **`items`** are declarations and nested fragments, in order. Unpack generators with `*(...)`.
 - **`requires`** names fragments that must also be in every variant that includes this one. It does not include them for you; a missing one is `fragment-requires-missing`.
 - **`checks`** are functions `Resolved -> tuple[Diagnostic, ...]` that run against each variant after resolution, during `lint` (and `resolve`, which raises on error-level results).
@@ -24,11 +59,14 @@ Everything a fragment declares is ordinary: a recipe can `replace` or `remove` a
 
 ## A complete example
 
-A Prometheus node exporter that keeps its textfile collector directory on the encrypted `/persistent` disk. It takes the storage fragment as an argument, so the caller decides which key and disk to use, and it checks that a disk is mounted where it writes.
+A Prometheus node exporter that keeps its textfile collector directory on the encrypted `/persistent` disk. It takes the storage fragment as a field, so the caller decides which key and disk to use, and it checks that a disk is mounted where it writes.
 
 ```python
 # exporter.py
+from dataclasses import dataclass
+
 from tundravm import Diagnostic, Disk, Fragment, Init, Package, Resolved, Unit
+from tundravm.declarative.utils import Composite
 
 EXPORTER_UNIT = """\
 [Unit]
@@ -57,34 +95,42 @@ def exporter_check(image: Resolved) -> tuple[Diagnostic, ...]:
     )
 
 
-def prometheus_exporter(storage: Fragment) -> Fragment:
-    return Fragment(
-        "prometheus-exporter",
-        requires=(storage.name,),
-        checks=(exporter_check,),
-        items=(
-            storage,
-            Package("prometheus-node-exporter"),
-            Init(
-                "exporter-directory",
-                "install -d -m 0755 /persistent/exporter\n",
-                priority=25,
-                after=("disks",),
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PrometheusExporter(Composite):
+    """The node exporter, writing its textfile collector under /persistent on *storage*."""
+
+    storage: Fragment
+
+    def compose(self) -> Fragment:
+        return Fragment(
+            "prometheus-exporter",
+            requires=(self.storage.name,),
+            checks=(exporter_check,),
+            items=(
+                self.storage,
+                Package("prometheus-node-exporter"),
+                Init(
+                    "exporter-directory",
+                    "install -d -m 0755 /persistent/exporter\n",
+                    priority=25,
+                    after=("disks",),
+                ),
+                Init(
+                    "exporter-ready",
+                    "printf 'tundra_boot_ready 1\\n' > /persistent/exporter/boot.prom\n",
+                    priority=40,
+                    after=("exporter-directory", "secrets"),
+                ),
+                Unit(
+                    "prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True
+                ),
             ),
-            Init(
-                "exporter-ready",
-                "printf 'tundra_boot_ready 1\\n' > /persistent/exporter/boot.prom\n",
-                priority=40,
-                after=("exporter-directory", "secrets"),
-            ),
-            Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True),
-        ),
-    )
+        )
 ```
 
 ```python
 # monitored.py
-from exporter import prometheus_exporter
+from exporter import PrometheusExporter
 
 from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant
 
@@ -94,7 +140,7 @@ storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
 recipe = Recipe(
     name="monitored",
-    common=Fragment("monitored", items=(prometheus_exporter(storage),)),
+    common=Fragment("monitored", items=(PrometheusExporter(storage=storage),)),
     variants=(Variant("default", target="qemu"),),
 )
 ```
@@ -154,10 +200,13 @@ A check receives the `Resolved` variant: `variant`, `target`, every declaration 
 
 ## Building from source
 
-A `Build` fetches a source, runs a script in it during the mkosi build phase, and installs results into the image. The source is pinned by `tundravm lock`.
+A `Build` fetches a source, builds it during the mkosi build phase, and installs results into the image. The source is pinned by `tundravm lock`.
 
 ```python
-from tundravm import Build, File, Fragment, Git, Install, Package, Unit, User
+from dataclasses import dataclass
+
+from tundravm import Build, File, Fragment, Git, Go, Install, Unit, User
+from tundravm.declarative.utils import Composite
 
 STATUS_UNIT = """\
 [Unit]
@@ -173,27 +222,35 @@ WantedBy=minimal.target
 """
 
 
-def status_page(*, source: Git, port: int = 9100) -> Fragment:
-    return Fragment(
-        "status-page",
-        items=(
-            Package("golang", role="build"),
-            Build(
-                "status-page",
-                source,
-                script="go build -trimpath -o ./out/status-page ./cmd/status-page",
-                install=(Install("out/status-page", "/usr/bin/status-page"),),
-                env=(("CGO_ENABLED", "0"),),
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StatusPage(Composite):
+    source: Git
+    port: int = 9100
+
+    def compose(self) -> Fragment:
+        return Fragment(
+            "status-page",
+            items=(
+                Build(
+                    "status-page",
+                    self.source,
+                    recipe=Go(
+                        output="status-page",
+                        package="./cmd/status-page",
+                        env={"CGO_ENABLED": "0"},
+                    ),
+                    install=(Install("build/status-page", "/usr/bin/status-page"),),
+                ),
+                File("/etc/status-page.toml", f"port = {self.port}\n"),
+                User("status", shell="/bin/false"),
+                Unit("status-page.service", STATUS_UNIT, enabled=True),
             ),
-            File("/etc/status-page.toml", f"port = {port}\n"),
-            User("status", shell="/bin/false"),
-            Unit("status-page.service", STATUS_UNIT, enabled=True),
-        ),
-    )
+        )
 ```
 
-- Take the source as an argument (`source: Git`) so a recipe can pin a fork or a tag; give it a sensible default if there is a canonical repository.
-- `script` runs inside the fetched source with `env` exported. Build-time packages are `Package(..., role="build")` or `Build(packages=...)`.
+- Take the source as a field (`source: Git`) so a recipe can pin a fork or a tag; give it a default if there is a canonical repository, as `Tdxs.source` does.
+- `recipe=Go(...)`, `Cargo(...)` or `Dotnet(...)` renders the toolchain's build command and installs its build packages (`golang`, `cargo`, `dotnet-sdk-8.0` by default; `packages=` and `env=` go on the recipe). The output lands at `build/<output>` (`Go`), `target/<profile>/<bin>` (`Cargo`) or `publish/<output>` (`Dotnet`) in the source tree. See [API: sources and builds](api.md#sources-and-builds).
+- For anything else pass `script=` instead: a shell script run inside the fetched source with `Build(env=...)` exported and `Build(packages=...)` installed for it. A `Build` takes exactly one of `script` and `recipe`.
 - `Install(source, destination, mode=0o755)` copies one built file; `Install("out/", "/opt/app", mode=None, directory=True)` copies a directory.
 - The built output is cached in the build directory under `cache_key` (default `<name>-<url digest>-<ref>`), so rebuilding an unchanged source is a copy.
 - Until the recipe is locked, `lint` warns `source-unpinned` for each build.
@@ -203,7 +260,7 @@ def status_page(*, source: Git, port: int = 9100) -> Fragment:
 Build a small recipe around the fragment and assert on its diagnostics and its compiled output:
 
 ```python
-from exporter import prometheus_exporter
+from exporter import PrometheusExporter
 
 from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant, compile, lint
 from tundravm.testing import assert_clean, assert_diagnostic, compile_tree
@@ -212,7 +269,7 @@ from tundravm.testing import assert_clean, assert_diagnostic, compile_tree
 def recipe_with(storage: Fragment) -> Recipe:
     return Recipe(
         name="t",
-        common=Fragment("t", items=(prometheus_exporter(storage),)),
+        common=Fragment("t", items=(PrometheusExporter(storage=storage),)),
         variants=(Variant("default", target="qemu"),),
     )
 
@@ -254,8 +311,8 @@ $ uv run pytest -q test_exporter.py
 
 ## Guidelines
 
-- Return a new `Fragment` on every call; never keep module-level mutable state.
-- Take dependencies as arguments (the storage fragment, a source, a port) rather than importing another fragment function and calling it with hidden defaults.
+- Keep `compose()` a pure function of the fields; never keep module-level mutable state.
+- Take dependencies as fields (the storage fragment, a source, a port) rather than constructing another fragment inside `compose()` with hidden defaults.
 - Declare everything the fragment needs (packages, users, groups, files) so it works in a standalone variant, and use `requires` for what must come from elsewhere.
 - Use `Service` for an ordinary service (it renders the unit and waits for runtime-init by default) and `Unit(name, content)` when you need exact bytes; tundravm does not edit `Unit` text beyond `after_init`.
 - Keep hook and init names unique to the fragment (`exporter-...`): they are identities.
