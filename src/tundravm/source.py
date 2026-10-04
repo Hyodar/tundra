@@ -11,6 +11,10 @@ Declare one with :meth:`tundravm.Image.source_build`::
         )
     )
 
+``install_to`` installs the recipe's single artifact; ``install=`` maps further
+paths in the source tree (a trailing ``/`` copies a directory) to absolute install
+paths, with :class:`Install` for a per-file mode.
+
 The build hook clones the symbolic ref until ``Image.lock()`` resolves it to a
 commit (``LockedFetch`` entries in ``tundravm.lock``); from then on the emitted
 hook fetches exactly that commit and the cache key carries it.
@@ -27,7 +31,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from typing import Literal
 
-from .build_cache import Build, Cache, CacheDecl
+from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
 from .errors import LockfileError, ValidationError
 from .lockfile.model import LockedFetch
 
@@ -103,20 +107,33 @@ Resolver = Callable[[Source], str]
 """Maps a source to its pin: a commit sha for git, a sha256 for http."""
 
 
+def _assignment(key: str, value: str) -> str:
+    if _PLAIN_ENV_VALUE.fullmatch(value):
+        return f"{key}={value}"
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+    return f'{key}="{escaped}"'
+
+
 def _env_assignments(env: Mapping[str, str]) -> str:
-    parts: list[str] = []
-    for key, value in env.items():
-        if _PLAIN_ENV_VALUE.fullmatch(value):
-            parts.append(f"{key}={value}")
-        else:
-            escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
-            parts.append(f'{key}="{escaped}"')
-    return " ".join(parts)
+    return " ".join(_assignment(key, value) for key, value in env.items())
+
+
+def _since(default: object) -> dict[str, object]:
+    """Field metadata: omit the field from the recipe payload while it holds *default*.
+
+    Recipes declared before the field existed keep their payload, so their
+    lockfile section digests stay fresh.
+    """
+    return {"payload_default": default}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GoBuild:
-    """``go build -trimpath`` of *package* into ``./build/<output>``."""
+    """``go build -trimpath`` of *package* into ``<output_dir>/<output>``.
+
+    ``output_dir`` is relative to the source tree. ``mkdir`` creates it before the
+    build; ``go build -o`` creates it too, so turning it off only drops the step.
+    """
 
     output: str
     package: str = "./..."
@@ -124,19 +141,22 @@ class GoBuild:
     tags: tuple[str, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
     packages: tuple[str, ...] = ("golang",)
+    output_dir: str = field(default="./build", metadata=_since("./build"))
+    mkdir: bool = field(default=True, metadata=_since(True))
 
     kind: Literal["go"] = field(default="go", init=False, repr=False)
 
     @property
     def artifact(self) -> str:
-        return f"build/{self.output}"
+        return posixpath.normpath(f"{self.output_dir}/{self.output}")
 
     def command(self, workdir: str) -> str:
         env = f"{_env_assignments(self.env)} " if self.env else ""
         tags = f" -tags {','.join(self.tags)}" if self.tags else ""
+        mkdir = f"mkdir -p {self.output_dir} && " if self.mkdir else ""
         return (
-            f"cd {workdir} && mkdir -p ./build && {env}go build -trimpath{tags} "
-            f'-ldflags "{self.ldflags}" -o ./build/{self.output} {self.package}'
+            f"cd {workdir} && {mkdir}{env}go build -trimpath{tags} "
+            f'-ldflags "{self.ldflags}" -o {self.output_dir}/{self.output} {self.package}'
         )
 
 
@@ -173,7 +193,11 @@ class CargoBuild:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DotnetBuild:
-    """Deterministic self-contained ``dotnet publish`` of *project* into ``./publish``."""
+    """Deterministic self-contained ``dotnet publish`` of *project* into ``publish/``.
+
+    ``restore_args`` are appended to ``dotnet restore``; ``properties`` become extra
+    ``-p:<name>=<value>`` publish properties after the deterministic ones.
+    """
 
     project: str
     output: str
@@ -181,6 +205,8 @@ class DotnetBuild:
     runtime: str = "linux-x64"
     env: Mapping[str, str] = field(default_factory=dict)
     packages: tuple[str, ...] = ("dotnet-sdk-8.0",)
+    restore_args: tuple[str, ...] = field(default=(), metadata=_since(()))
+    properties: Mapping[str, str] = field(default_factory=dict, metadata=_since({}))
 
     kind: Literal["dotnet"] = field(default="dotnet", init=False, repr=False)
 
@@ -190,11 +216,13 @@ class DotnetBuild:
 
     def command(self, workdir: str) -> str:
         env = f"export {_env_assignments(self.env)} && " if self.env else ""
+        restore = "".join(f" {arg}" for arg in self.restore_args)
+        props = "".join(f" -p:{_assignment(k, v)}" for k, v in self.properties.items())
         return (
-            f"{env}cd {workdir} && dotnet restore {self.project} --runtime {self.runtime} && "
-            f"dotnet publish {self.project} --configuration {self.configuration} "
-            f"--runtime {self.runtime} --self-contained true --output ./publish "
-            "-p:Deterministic=true -p:ContinuousIntegrationBuild=true"
+            f"{env}cd {workdir} && dotnet restore {self.project} --runtime {self.runtime}"
+            f"{restore} && dotnet publish {self.project} --configuration {self.configuration} "
+            f"--runtime {self.runtime} --self-contained true --output {workdir}/publish "
+            f"-p:Deterministic=true -p:ContinuousIntegrationBuild=true{props}"
         )
 
 
@@ -225,6 +253,8 @@ def _recipe_payload(build: BuildRecipe) -> dict[str, object]:
         if item.name == "kind":
             continue
         value = getattr(build, item.name)
+        if "payload_default" in item.metadata and value == item.metadata["payload_default"]:
+            continue
         if isinstance(value, Mapping):
             value = dict(sorted(value.items()))
         elif isinstance(value, tuple):
@@ -234,8 +264,21 @@ def _recipe_payload(build: BuildRecipe) -> dict[str, object]:
 
 
 @dataclass(frozen=True, slots=True)
+class Install:
+    """An ``install=`` target: absolute *dest*, with its own file *mode*."""
+
+    dest: str
+    mode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SourceBuild:
-    """Fetch *source*, run *build* inside mkosi-chroot, install the result at *install_to*.
+    """Fetch *source*, run *build* inside mkosi-chroot, install the results.
+
+    ``install_to`` installs the recipe's ``artifact`` with ``mode``. ``install``
+    maps further paths, relative to the source tree, to an absolute path or an
+    :class:`Install`; a path ending in ``/`` copies a directory. Artifacts are
+    cached and installed in declaration order, ``install_to`` first.
 
     ``cache_key`` overrides the default ``<name>-<url sha256[:12]>-<ref>`` build
     cache key; a lockfile pin appends ``-<pin[:12]>`` to it (default key: replaces
@@ -247,10 +290,11 @@ class SourceBuild:
     name: str
     source: Source
     build: BuildRecipe
-    install_to: str
+    install_to: str | None = None
     mode: str = "0755"
     cache_key: str | None = None
     mark_unpinned: bool = True
+    install: Mapping[str, str | Install] | None = None
 
     def __post_init__(self) -> None:
         if not _NAME_PATTERN.fullmatch(self.name):
@@ -258,11 +302,17 @@ class SourceBuild:
                 f"Invalid source build name {self.name!r}.",
                 hint="Use letters, digits, '.', '_' or '-'.",
             )
-        if not self.install_to.startswith("/"):
+        if self.install_to is None and not self.install:
+            raise ValidationError(
+                f"source build {self.name!r} installs nothing.",
+                hint="Pass install_to= for the recipe's artifact, or install={path: dest}.",
+            )
+        if self.install_to is not None and not self.install_to.startswith("/"):
             raise ValidationError(
                 f"source build {self.name!r}: install_to must be absolute.",
                 context={"install_to": self.install_to},
             )
+        self._check_install()
         if isinstance(self.source, GitSource) and not self.source.ref:
             raise ValidationError(f"source build {self.name!r}: GitSource requires a ref.")
         if isinstance(self.source, HttpSource) and self.source.sha256 is not None:
@@ -270,6 +320,47 @@ class SourceBuild:
                 raise ValidationError(
                     f"source build {self.name!r}: sha256 must be 64 lowercase hex chars."
                 )
+
+    def _check_install(self) -> None:
+        for path, target in (self.install or {}).items():
+            dest = target.dest if isinstance(target, Install) else target
+            parts = path.rstrip("/").split("/")
+            if not path or path.startswith("/") or ".." in parts:
+                raise ValidationError(
+                    f"source build {self.name!r}: install path {path!r} must be relative "
+                    "to the source tree.",
+                    context={"path": path},
+                )
+            if not dest.startswith("/"):
+                raise ValidationError(
+                    f"source build {self.name!r}: install destination {dest!r} must be absolute.",
+                    context={"path": path, "dest": dest},
+                )
+            if path.endswith("/") and isinstance(target, Install) and target.mode is not None:
+                raise ValidationError(
+                    f"source build {self.name!r}: directory {path!r} takes no mode.",
+                    hint="Directory copies keep the built files' modes.",
+                )
+        names = [posixpath.basename(dest.rstrip("/")) for _, dest, _, _ in self._targets()]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValidationError(
+                f"source build {self.name!r}: install destinations share the file name "
+                f"{', '.join(duplicates)}.",
+                hint="Each artifact is cached under its destination's file name.",
+            )
+
+    def _targets(self) -> list[tuple[str, str, str, bool]]:
+        """``(path in the source tree, dest, mode, is_dir)`` per artifact, in order."""
+        targets: list[tuple[str, str, str, bool]] = []
+        if self.install_to is not None:
+            targets.append((self.build.artifact, self.install_to, self.mode, False))
+        for path, target in (self.install or {}).items():
+            if isinstance(target, Install):
+                targets.append((path, target.dest, target.mode or self.mode, path.endswith("/")))
+            else:
+                targets.append((path, target, self.mode, path.endswith("/")))
+        return targets
 
     @property
     def packages(self) -> tuple[str, ...]:
@@ -307,7 +398,7 @@ class SourceBuild:
         )
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "name": self.name,
             "source": self.source.to_payload(),
             "build": _recipe_payload(self.build),
@@ -316,6 +407,12 @@ class SourceBuild:
             "cache_key": self.cache_key,
             "mark_unpinned": self.mark_unpinned,
         }
+        if self.install:
+            payload["install"] = [
+                {"path": path, "dest": dest, "mode": None if is_dir else mode}
+                for path, dest, mode, is_dir in self._targets()[self.install_to is not None :]
+            ]
+        return payload
 
     def render(self, pin: str | None = None) -> str:
         """The build-phase hook: fetch, build, cache, install.
@@ -345,13 +442,16 @@ class SourceBuild:
             else:
                 version = "unpinned"
             key = f"{self.name}-{url_hash}-{version}"
-        artifact = Cache.file(
-            src=Build.build_path(f"{workdir}/{self.build.artifact}"),
-            dest=Build.dest_path(self.install_to.lstrip("/")),
-            name=posixpath.basename(self.install_to),
-            mode=self.mode,
-        )
-        return Cache.declare(key, (artifact,))
+        artifacts: list[CacheFile | CacheDir] = []
+        for path, dest, mode, is_dir in self._targets():
+            src = Build.build_path(f"{workdir}/{path.rstrip('/')}")
+            target = Build.dest_path(dest.rstrip("/").lstrip("/"))
+            name = posixpath.basename(dest.rstrip("/"))
+            if is_dir:
+                artifacts.append(Cache.dir(src=src, dest=target, name=name))
+            else:
+                artifacts.append(Cache.file(src=src, dest=target, name=name, mode=mode))
+        return Cache.declare(key, tuple(artifacts))
 
     def _fetch(self, pin: str | None) -> str:
         target = f'"{Build.build_path(self.name)}"'
@@ -488,6 +588,7 @@ __all__ = [
     "GitSource",
     "GoBuild",
     "HttpSource",
+    "Install",
     "Resolver",
     "ScriptBuild",
     "Source",

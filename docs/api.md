@@ -230,11 +230,12 @@ All errors derive from `TdxError(message, *, code, hint=None, context=None)` and
 | --- | --- |
 | `GitSource(repo, ref, *, subdir=None, submodules=False)` | A git checkout; `ref` may be a branch, tag or 40-hex commit |
 | `HttpSource(url, *, sha256=None)` | A download; the hash is pinned by `lock()` when omitted |
-| `GoBuild(*, output, package="./...", ldflags="-s -w -buildid=", tags=(), env={}, packages=("golang",))` | `go build` recipe |
+| `GoBuild(*, output, package="./...", ldflags="-s -w -buildid=", tags=(), env={}, packages=("golang",), output_dir="./build", mkdir=True)` | `go build` recipe; the binary lands at `<output_dir>/<output>` |
 | `CargoBuild(*, output, bin=None, package=None, features=(), profile="release", env={}, packages=("cargo",))` | `cargo build` recipe |
-| `DotnetBuild(*, project, output, configuration="Release", runtime="linux-x64", packages=("dotnet-sdk-8.0",))` | `dotnet publish` recipe |
+| `DotnetBuild(*, project, output, configuration="Release", runtime="linux-x64", env={}, packages=("dotnet-sdk-8.0",), restore_args=(), properties={})` | `dotnet publish` recipe into `publish/`; `properties` add `-p:K=V` |
+| `Install(dest, mode=None)` | An `install=` target with its own file mode |
 | `ScriptBuild(*, script, output)` | Arbitrary bash producing `output` |
-| `SourceBuild(name, source, build, install_to, mode="0755", cache_key=None, mark_unpinned=True)` | One declaration: fetch, build, install to `install_to` |
+| `SourceBuild(name, source, build, install_to=None, mode="0755", cache_key=None, mark_unpinned=True, install=None)` | One declaration: fetch, build, install the artifact at `install_to` and/or each `install={path: dest}` entry (a trailing `/` copies a directory; `Install(dest, mode=)` sets a mode) |
 
 ```python
 img.source_build(SourceBuild(
@@ -245,7 +246,7 @@ img.source_build(SourceBuild(
 ))
 ```
 
-`tundravm lock` pins `master` to a commit in the lockfile's `fetches`; `compile()` then fetches that exact commit. `check` reports `source-unpinned` until it is pinned, `explain` shows a `Sources:` section, and `bake --frozen` refuses unpinned sources. `Tdxs`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery` and the example `Raiko` module build this way.
+`tundravm lock` pins `master` to a commit in the lockfile's `fetches`; `compile()` then fetches that exact commit. `check` reports `source-unpinned` until it is pinned, `explain` shows a `Sources:` section, and `bake --frozen` refuses unpinned sources. Every module that builds from source (`Tdxs`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, and the example `Raiko`, `TaikoClient`, `Nethermind`) is declared this way.
 
 ## Modules (`tundravm.modules`)
 

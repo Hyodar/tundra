@@ -12,9 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from tundravm.build_cache import Build, Cache
 from tundravm.modules.base import Module
 from tundravm.modules.resolve import resolve_after
+from tundravm.source import GitSource, GoBuild, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -25,6 +25,13 @@ TAIKO_CLIENT_BUILD_PACKAGES = (
     "git",
     "build-essential",
 )
+
+# CGO flags for the portable blst build
+TAIKO_CLIENT_GO_ENV = {
+    "GO111MODULE": "on",
+    "CGO_CFLAGS": "-O -D__BLST_PORTABLE__",
+    "CGO_CFLAGS_ALLOW": "-O -D__BLST_PORTABLE__",
+}
 
 TAIKO_CLIENT_DEFAULT_REPO = "https://github.com/NethermindEth/surge-taiko-mono"
 TAIKO_CLIENT_DEFAULT_BRANCH = "feat/tdx-proving"
@@ -57,33 +64,33 @@ class TaikoClient(Module):
         """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
 
-    def _add_build_hook(self, image: Image) -> None:
-        """Add build phase hook that clones and compiles taiko-client from source."""
-        clone_dir = Build.build_path("taiko-client")
-        chroot_dir = Build.chroot_path("taiko-client")
-        cache = Cache.declare(
-            f"taiko-client-{self.source_branch}",
-            (
-                Cache.file(
-                    src=Build.build_path(f"taiko-client/{self.build_path}/bin/taiko-client"),
-                    dest=Build.dest_path("usr/bin/taiko-client"),
-                    name="taiko-client",
-                ),
+    def source_spec(self) -> SourceBuild:
+        """The taiko-client source build: ``go build`` of ``cmd/main.go`` in ``build_path``.
+
+        The toolchain comes from the image's own build packages (``packages=()``);
+        ``output_dir``/``mkdir``, ``cache_key`` and ``mark_unpinned`` keep the unpinned
+        hook byte-identical to the hand-written one this module emitted before
+        source builds existed.
+        """
+        return SourceBuild(
+            name="taiko-client",
+            source=GitSource(self.source_repo, self.source_branch, subdir=self.build_path or None),
+            build=GoBuild(
+                output="taiko-client",
+                package="cmd/main.go",
+                output_dir="bin",
+                mkdir=False,
+                env=TAIKO_CLIENT_GO_ENV,
+                packages=(),
             ),
+            install_to="/usr/bin/taiko-client",
+            cache_key=f"taiko-client-{self.source_branch}",
+            mark_unpinned=False,
         )
 
-        build_cmd = (
-            f"git clone --depth=1 -b {self.source_branch} "
-            f'{self.source_repo} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            f"cd {chroot_dir}/{self.build_path} && "
-            'GO111MODULE=on CGO_CFLAGS="-O -D__BLST_PORTABLE__" '
-            'CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__" '
-            'go build -trimpath -ldflags "-s -w -buildid=" '
-            "-o bin/taiko-client cmd/main.go"
-            "'"
-        )
-        image.hook("build", cache.wrap(build_cmd))
+    def _add_build_hook(self, image: Image) -> None:
+        """Add the build phase hook that clones and compiles taiko-client from source."""
+        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)

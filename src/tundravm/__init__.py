@@ -39,6 +39,7 @@ from .source import (
     GitSource,
     GoBuild,
     HttpSource,
+    Install,
     ScriptBuild,
     SourceBuild,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "GitSource",
     "GoBuild",
     "HttpSource",
+    "Install",
     "Image",
     "Kernel",
     "LintError",

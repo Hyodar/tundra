@@ -13,9 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from tundravm.build_cache import Build, Cache
 from tundravm.modules.base import Module
 from tundravm.modules.resolve import resolve_after
+from tundravm.source import DotnetBuild, GitSource, Install, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -27,6 +27,28 @@ NETHERMIND_BUILD_PACKAGES = (
     "build-essential",
     "git",
 )
+
+# Keep the dotnet CLI quiet and its state out of the source tree
+NETHERMIND_DOTNET_ENV = {
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+    "DOTNET_NOLOGO": "1",
+    "DOTNET_CLI_HOME": "/tmp/dotnet",
+    "NUGET_PACKAGES": "/tmp/nuget",
+}
+
+# Reproducibility properties for the single-file publish
+NETHERMIND_PUBLISH_PROPERTIES = {
+    "PublishSingleFile": "true",
+    "BuildTimestamp": "0",
+    "Commit": "0" * 40,
+    "PublishReadyToRun": "false",
+    "DebugType": "none",
+    "IncludeAllContentForSelfExtract": "true",
+    "IncludePackageReferencesDuringMarkupCompilation": "true",
+    "EmbedUntrackedSources": "true",
+    "PublishRepositoryUrl": "true",
+}
 
 NETHERMIND_DEFAULT_REPO = "https://github.com/NethermindEth/nethermind.git"
 NETHERMIND_DEFAULT_PROJECT = "src/Nethermind/Nethermind.Runner"
@@ -63,68 +85,40 @@ class Nethermind(Module):
         """Declare runtime config, unit files, and the service user."""
         self._add_runtime_config(image)
 
-    def _add_build_hook(self, image: Image) -> None:
-        """Add build phase hook that clones and compiles nethermind from source."""
-        clone_dir = Build.build_path("nethermind")
-        chroot_dir = Build.chroot_path("nethermind")
-        svc = self.user  # service name for dest paths
+    def source_spec(self) -> SourceBuild:
+        """The nethermind source build: ``dotnet publish`` of ``project_path`` at ``version``.
 
-        cache = Cache.declare(
-            f"nethermind-{self.version}-{self.runtime}",
-            (
-                Cache.file(
-                    src=Build.build_path("nethermind/publish/nethermind"),
-                    dest=Build.dest_path("usr/bin/nethermind"),
-                    name="nethermind",
-                ),
-                Cache.file(
-                    src=Build.build_path("nethermind/publish/NLog.config"),
-                    dest=Build.dest_path(f"etc/{svc}/NLog.config"),
-                    name="NLog.config",
-                    mode="0644",
-                ),
-                Cache.dir(
-                    src=Build.build_path("nethermind/publish/plugins"),
-                    dest=Build.dest_path(f"etc/{svc}/plugins"),
-                    name="plugins",
-                ),
+        Installs the runner binary, its ``NLog.config`` and the ``plugins`` directory
+        under ``/etc/<user>``. The toolchain comes from the image's own build
+        packages (``packages=()``); ``cache_key`` and ``mark_unpinned`` keep the
+        unpinned hook byte-identical to the hand-written one this module emitted
+        before source builds existed.
+        """
+        etc = f"/etc/{self.user}"
+        return SourceBuild(
+            name="nethermind",
+            source=GitSource(self.source_repo, self.version),
+            build=DotnetBuild(
+                project=self.project_path,
+                output="nethermind",
+                runtime=self.runtime,
+                restore_args=("--disable-parallel", "--force"),
+                properties=NETHERMIND_PUBLISH_PROPERTIES,
+                env=NETHERMIND_DOTNET_ENV,
+                packages=(),
             ),
+            install_to="/usr/bin/nethermind",
+            install={
+                "publish/NLog.config": Install(f"{etc}/NLog.config", mode="0644"),
+                "publish/plugins/": f"{etc}/plugins",
+            },
+            cache_key=f"nethermind-{self.version}-{self.runtime}",
+            mark_unpinned=False,
         )
 
-        build_cmd = (
-            f"git clone --depth=1 -b {self.version} "
-            f'{self.source_repo} "{clone_dir}" && '
-            "mkosi-chroot bash -c '"
-            "export "
-            "DOTNET_CLI_TELEMETRY_OPTOUT=1 "
-            "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 "
-            "DOTNET_NOLOGO=1 "
-            "DOTNET_CLI_HOME=/tmp/dotnet "
-            "NUGET_PACKAGES=/tmp/nuget "
-            f"&& cd {chroot_dir} "
-            f"&& dotnet restore {self.project_path} "
-            f"--runtime {self.runtime} "
-            "--disable-parallel "
-            "--force "
-            f"&& dotnet publish {self.project_path} "
-            f"--configuration Release "
-            f"--runtime {self.runtime} "
-            "--self-contained true "
-            f"--output {chroot_dir}/publish "
-            "-p:Deterministic=true "
-            "-p:ContinuousIntegrationBuild=true "
-            "-p:PublishSingleFile=true "
-            "-p:BuildTimestamp=0 "
-            "-p:Commit=0000000000000000000000000000000000000000 "
-            "-p:PublishReadyToRun=false "
-            "-p:DebugType=none "
-            "-p:IncludeAllContentForSelfExtract=true "
-            "-p:IncludePackageReferencesDuringMarkupCompilation=true "
-            "-p:EmbedUntrackedSources=true "
-            "-p:PublishRepositoryUrl=true"
-            "'"
-        )
-        image.hook("build", cache.wrap(build_cmd))
+    def _add_build_hook(self, image: Image) -> None:
+        """Add the build phase hook that clones and compiles nethermind from source."""
+        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)
