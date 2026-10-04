@@ -240,7 +240,7 @@ def test_cli_bake_frozen_surfaces_drift(recipe: Path, capsys: pytest.CaptureFixt
     run("lock", str(recipe))
     recipe.write_text(recipe.read_text() + 'img.install("htop")\n', encoding="utf-8")
 
-    code, _ = run("bake", str(recipe), "--frozen")
+    code, _ = run("bake", str(recipe))
 
     assert code == EXIT_SDK_ERROR
     err = capsys.readouterr().err

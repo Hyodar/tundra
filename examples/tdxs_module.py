@@ -1,29 +1,18 @@
-"""Core TDX quote service module usage.
+"""The TDX quote service as a fragment.
 
-tundravm explain examples/tdxs_module.py
+    tundravm inspect examples/tdxs_module.py
+
+``tdxs()`` declares its build packages, the source build, ``config.yaml``, the
+socket-activated units and the ``tdxs`` user in the ``tdx`` group.
 """
 
-from tundravm import Image
 from tundravm.backends import LimaMkosiBackend
-from tundravm.modules import Tdxs
+from tundravm.declarative import Fragment, Package, Recipe, tdxs
 
+recipe = Recipe(
+    name="tdxs-module",
+    base="debian/bookworm",
+    common=Fragment("tdxs-module", items=(Package("ca-certificates"), tdxs())),
+)
 
-def build() -> Image:
-    img = Image(
-        base="debian/bookworm",
-        arch="x86_64",
-        backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
-    )
-    img.install("ca-certificates")
-    img.targets("qemu")
-
-    # Module sets up build packages (golang, git), build hook (clone + compile),
-    # config.yaml, systemd units, user/group creation, and socket enablement.
-    img.apply(Tdxs())
-    return img
-
-
-if __name__ == "__main__":
-    img = build()
-    img.lock()
-    img.bake(frozen=True)
+backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

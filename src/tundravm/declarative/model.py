@@ -47,6 +47,7 @@ _UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+")
 _GROUP_NAME = re.compile(r"[a-z_][a-z0-9_-]*\$?")
 _ENTRY_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 _BUILD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_CACHE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@/-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -696,17 +697,32 @@ class Install:
 
 @dataclass(frozen=True, slots=True)
 class Build:
+    """Run *script* in the fetched source and install its results.
+
+    ``env`` is exported before the script runs. ``cache_key`` names the build
+    cache entry; ``None`` derives ``<name>-<url digest>-<ref>`` from the source.
+    """
+
     name: str
     source: Git | Http
     script: str
     install: tuple[Install, ...]
     packages: tuple[str, ...] = ()
     env: Pairs = ()
+    cache_key: str | None = None
 
     def __post_init__(self) -> None:
         _freeze(self, "install", "packages", "env")
         if not isinstance(self.name, str) or not _BUILD_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid build name {self.name!r}.")
+        if self.cache_key is not None and (
+            not isinstance(self.cache_key, str) or not _CACHE_KEY.fullmatch(self.cache_key)
+        ):
+            raise _fail(
+                self,
+                f"invalid cache_key {self.cache_key!r} for build {self.name!r}.",
+                hint="Use letters, digits and '._+@/-' ('/' is cached as '_').",
+            )
         if not isinstance(self.source, (Git, Http)):
             raise _fail(self, f"build {self.name!r} source must be Git or Http.")
         _require_name(self, self.script, "script")

@@ -1,34 +1,110 @@
-"""Nethermind TDX base layer — reproduces the NethermindEth/nethermind-tdx base image.
+"""Nethermind TDX base layer: the NethermindEth/nethermind-tdx base image as a fragment.
 
-This example shows how to declare an image matching the real nethermind-tdx
-base layer (https://github.com/NethermindEth/nethermind-tdx), including:
+``nethermind_base()`` declares what every nethermind-tdx image shares:
 
-- Debian Trixie with UKI output and reproducible builds
-- Real kernel build from source with config file
-- EFI stub pinning from Debian snapshot for reproducible boot
-- Dynamic backports source generation
-- Skeleton files: custom init, static DNS, minimal.target, network DHCP
-- Full systemd debloat (binary stripping, unit masking, path removal)
-- Tdxs quote service module (build from source, config, systemd units)
+- a TDX kernel built from source with the repository's config and a hardened command line
+- reproducible output (fixed seed, ``SOURCE_DATE_EPOCH=0``) and a pinned EFI stub
+- Debian backports generated at sync time
+- skeleton files: the custom ``/init``, static DNS and DHCP network setup
+- full systemd debloat (binary stripping, unit masking, path removal)
+- the ``tdxs`` attestation service
 
-The SDK's integration tests verify this configuration produces output that
-matches the upstream repo file-for-file (see integration_tests/).
+Recipes built on it set ``mkosi=NETHERMIND_V1`` to emit the historical tree byte for byte.
+``recipe`` below is the base layer on its own.
 """
 
-from tundravm import Image, Kernel, MkosiOptions
-from tundravm.backends import LimaMkosiBackend
-from tundravm.modules.tdxs import Tdxs
+from __future__ import annotations
 
-# ── Upstream constants ────────────────────────────────────────────────
+from pathlib import Path
+
+from tundravm.backends import LimaMkosiBackend
+from tundravm.declarative import (
+    Debloat,
+    File,
+    Fragment,
+    Git,
+    Kernel,
+    Mkosi,
+    Package,
+    Recipe,
+    Setting,
+    backports,
+    efi_stub,
+    tdxs,
+)
+
+ROOT = Path(__file__).resolve().parent.parent
 
 PINNED_MIRROR = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
-
+EFI_STUB_VERSION = "255.4-1"
+KERNEL_VERSION = "6.13.12"
+KERNEL_CONFIG = ROOT / "kernel" / "kernel-yocto.config"
 KERNEL_CMDLINE = (
     "console=tty0 console=ttyS0,115200n8 "
     "mitigations=auto,nosmt "
     "spec_store_bypass_disable=on "
     "nospectre_v2"
 )
+SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
+
+NETHERMIND_V1 = Mkosi(dialect="nethermind-v1")
+"""Compiler dialect that reproduces the historical nethermind-tdx tree."""
+
+RUNTIME_PACKAGES = (
+    "kmod",
+    "systemd",
+    "systemd-boot-efi",
+    "busybox",
+    "util-linux",
+    "procps",
+    "ca-certificates",
+    "openssl",
+    "iproute2",
+    "udhcpc",
+    "e2fsprogs",
+)
+
+# Toolchains for the kernel and the services; stripped from the final image.
+BUILD_PACKAGES = (
+    "build-essential",
+    "git",
+    "curl",
+    "cmake",
+    "pkg-config",
+    "clang",
+    "cargo/sid",
+    "flex",
+    "bison",
+    "elfutils",
+    "bc",
+    "perl",
+    "gawk",
+    "zstd",
+    "libssl-dev",
+    "libelf-dev",
+)
+
+TDX_INIT = """\
+#!/bin/sh
+
+# Mount essential filesystems
+mkdir -p /dev /proc /sys /run
+mount -t proc none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs none /dev
+mount -t tmpfs none /run
+mount -t configfs none /sys/kernel/config
+
+# Workaround to make pivot_root work
+# https://aconz2.github.io/2024/07/29/container-from-initramfs.html
+exec unshare --mount sh -c '
+    mkdir /@
+    mount --rbind / /@
+    cd /@ && mount --move . /
+    exec chroot . /lib/systemd/systemd systemd.unit=minimal.target'
+"""
+
+RESOLV_CONF = "nameserver 8.8.8.8\nnameserver 8.8.4.4"
 
 NETWORK_SETUP_SERVICE = """\
 [Unit]
@@ -49,89 +125,36 @@ RemainAfterExit=yes
 WantedBy=sysinit.target"""
 
 
-# ── Image definition ──────────────────────────────────────────────────
-
-
-def build_nethermind_base() -> Image:
-    img = Image(
-        base="debian/trixie",
-        reproducible=True,
-        backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
-        # Real kernel build from source with hardened command line
-        kernel=Kernel.tdx_kernel(
-            "6.13.12",
-            cmdline=KERNEL_CMDLINE,
-            config_file="kernel/kernel-yocto.config",
-            source_repo="https://github.com/gregkh/linux",
+def nethermind_base(*, snapshot: str = PINNED_MIRROR) -> Fragment:
+    """The nethermind-tdx base layer; *snapshot* is the Debian snapshot the EFI stub comes from."""
+    return Fragment(
+        "nethermind-base",
+        items=(
+            Kernel(
+                KERNEL_VERSION,
+                Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
+                config=KERNEL_CONFIG,
+                cmdline=KERNEL_CMDLINE,
+            ),
+            Setting("Output", "Seed", (SEED,)),
+            Setting("Output", "OutputDirectory", ("build",)),
+            Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
+            Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
+            File("/init", TDX_INIT, mode=0o755, stage="skeleton"),
+            efi_stub(snapshot=snapshot, version=EFI_STUB_VERSION),
+            backports(),
+            *(Package(name) for name in RUNTIME_PACKAGES),
+            *(Package(name, role="build") for name in BUILD_PACKAGES),
+            File("/etc/resolv.conf", RESOLV_CONF, stage="skeleton"),
+            File(
+                "/etc/systemd/system/network-setup.service", NETWORK_SETUP_SERVICE, stage="skeleton"
+            ),
+            Debloat(),
+            tdxs(),
         ),
-        mkosi=MkosiOptions(
-            init_script=Image.DEFAULT_TDX_INIT,
-            seed="630b5f72-a36a-4e83-b23d-6ef47c82fd9c",
-            output_directory="build",
-            package_cache_directory="mkosi.cache",
-            environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
-        ),
     )
 
-    # Reproducibility hooks
-    # strip_image_version() is auto-called by reproducible=True
-    img.efi_stub(
-        snapshot_url=PINNED_MIRROR,
-        package_version="255.4-1",
-    )
-    img.backports()
 
-    # Runtime packages
-    img.install(
-        "kmod",
-        "systemd",
-        "systemd-boot-efi",
-        "busybox",
-        "util-linux",
-        "procps",
-        "ca-certificates",
-        "openssl",
-        "iproute2",
-        "udhcpc",
-        "e2fsprogs",
-    )
+recipe = Recipe(name="nethermind-tdx", common=nethermind_base(), mkosi=NETHERMIND_V1)
 
-    # Build-time packages (stripped from final image)
-    img.build_packages(
-        "build-essential",
-        "git",
-        "curl",
-        "cmake",
-        "pkg-config",
-        "clang",
-        "cargo/sid",
-        "flex",
-        "bison",
-        "elfutils",
-        "bc",
-        "perl",
-        "gawk",
-        "zstd",
-        "libssl-dev",
-        "libelf-dev",
-    )
-
-    # Skeleton: files placed before package manager runs (no trailing newline)
-    img.skeleton("/etc/resolv.conf", content="nameserver 8.8.8.8\nnameserver 8.8.4.4")
-    img.skeleton("/etc/systemd/system/network-setup.service", content=NETWORK_SETUP_SERVICE)
-    # minimal.target is auto-generated by debloat
-
-    # Aggressive debloat: strip systemd binaries/units, remove docs/caches
-    img.debloat(enabled=True)
-
-    # TDX quote service: builds from source, adds config + systemd units
-    Tdxs().apply(img)
-
-    return img
-
-
-if __name__ == "__main__":
-    img = build_nethermind_base()
-    img.compile("build/mkosi")
-    img.lock()
-    img.bake(frozen=True)
+backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

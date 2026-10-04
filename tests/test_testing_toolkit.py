@@ -321,7 +321,7 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
     assert path == tmp_path / "recipe.py"
     assert path.read_text(encoding="utf-8").startswith("from tundravm import Image\n")
 
-    code, out, err = run_cli("check", path)
+    code, out, err = run_cli("lint", path)
     assert code == 0
     assert "backend-missing" in out
     assert err == ""
@@ -338,6 +338,6 @@ def test_run_cli_captures_usage_errors_and_sdk_errors(tmp_path: Path) -> None:
     assert out == ""
 
     broken = recipe_file(tmp_path, "img = 42\n", name="sub/broken.py")
-    code, _, err = run_cli("check", broken)
+    code, _, err = run_cli("lint", broken)
     assert code != 0
     assert "error [" in err

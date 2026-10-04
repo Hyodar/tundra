@@ -42,46 +42,72 @@ def run(*argv: str) -> tuple[int, str]:
     return code, out.getvalue()
 
 
-def test_bake_prints_next_deploy_hint(recipe: Path) -> None:
+BOTH = ("--variant", "default", "--variant", "azure")
+
+
+def test_bake_prints_next_deploy_hint(recipe: Path, tmp_path: Path) -> None:
     code, out = run("bake", str(recipe))
     assert code == EXIT_OK
-    assert out.splitlines()[-1] == f"next: tundravm deploy {recipe} --target qemu"
+    manifest = tmp_path / "build" / "bake-result.json"
+    assert out.splitlines()[-1] == (
+        f"next: tundravm deploy {manifest} --variant default --target qemu"
+    )
 
 
-def test_measure_after_bake_in_separate_invocation(recipe: Path) -> None:
-    assert run("bake", str(recipe), "--all-profiles")[0] == EXIT_OK
+def test_measure_after_bake_in_separate_invocation(recipe: Path, tmp_path: Path) -> None:
+    assert run("bake", str(recipe), *BOTH)[0] == EXIT_OK
+    manifest = str(tmp_path / "build" / "bake-result.json")
 
-    code, out = run("measure", str(recipe), "--backend", "rtmr", "--json", "--allow-placeholder")
+    code, out = run(
+        "measure",
+        manifest,
+        "--variant",
+        "default",
+        "--scheme",
+        "rtmr",
+        "--json",
+        "--allow-placeholder",
+    )
     assert code == EXIT_OK
     payload = json.loads(out)
-    assert payload["backend"] == "rtmr"
-    assert payload["source"] == "placeholder"
+    assert payload["scheme"] == "rtmr"
+    assert payload["tool"] == "placeholder"
     assert payload["values"]
 
     code, out = run(
-        "measure", str(recipe), "--backend", "azure", "--profile", "azure", "--allow-placeholder"
+        "measure", manifest, "--scheme", "azure", "--variant", "azure", "--allow-placeholder"
     )
     assert code == EXIT_OK
-    assert out.startswith("measurements azure (azure)\nsource: placeholder\n")
+    assert out.startswith("measurements azure (azure)\nsource: placeholder (")
+
+
+def test_measure_refuses_simulated_artifact_without_allow_placeholder(
+    recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run("bake", str(recipe))[0] == EXIT_OK
+    capsys.readouterr()
+    code, _ = run("measure", str(tmp_path / "build"), "--scheme", "rtmr")
+    assert code == EXIT_SDK_ERROR
+    assert "simulated artifact" in capsys.readouterr().err
 
 
 def test_measure_without_bake_reports_state_error(
-    recipe: Path, capsys: pytest.CaptureFixture[str]
+    recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, _ = run("measure", str(recipe), "--backend", "rtmr")
+    code, _ = run("measure", str(tmp_path / "build"), "--scheme", "rtmr")
     assert code == EXIT_SDK_ERROR
     err = capsys.readouterr().err
     assert "E_STATE" in err
     assert "tundravm bake first" in err
 
 
-def test_measure_rejects_multiple_profiles(
-    recipe: Path, capsys: pytest.CaptureFixture[str]
+def test_measure_needs_a_variant_when_several_are_baked(
+    recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    run("bake", str(recipe), "--all-profiles")
-    code, _ = run("measure", str(recipe), "--backend", "rtmr", "--all-profiles")
+    run("bake", str(recipe), *BOTH)
+    code, _ = run("measure", str(tmp_path / "build"), "--scheme", "rtmr", "--allow-placeholder")
     assert code == EXIT_SDK_ERROR
-    assert "exactly one profile" in capsys.readouterr().err
+    assert "pass --variant NAME" in capsys.readouterr().err
 
 
 def test_deploy_qemu_after_bake_in_separate_invocation(
@@ -95,21 +121,27 @@ def test_deploy_qemu_after_bake_in_separate_invocation(
         return subprocess.CompletedProcess(list(argv), 0, "", "")
 
     monkeypatch.setattr(
-        "tundravm.image.get_adapter", lambda target: QemuDeployAdapter(runner=fake_qemu)
+        "tundravm.declarative.lifecycle.get_adapter",
+        lambda target: QemuDeployAdapter(runner=fake_qemu),
     )
-
-    code, out = run(
+    command = (
         "deploy",
-        str(recipe),
+        str(tmp_path / "build" / "bake-result.json"),
+        "--variant",
+        "default",
         "--target",
         "qemu",
-        "--memory",
-        "4GiB",
-        "--cpus",
-        "3",
+        "--param",
+        "memory=4GiB",
+        "--param",
+        "cpus=3",
         "--param",
         "ssh_port=2299",
     )
+    assert run(*command)[0] == EXIT_SDK_ERROR  # in-process artifacts are simulated
+    assert not launched
+
+    code, out = run(*command, "--allow-placeholder")
 
     assert code == EXIT_OK
     (argv,) = launched
@@ -124,11 +156,17 @@ def test_deploy_qemu_after_bake_in_separate_invocation(
     assert any(line.split() == ["artifact_path", str(disk)] for line in lines)
 
 
-def test_deploy_rejects_malformed_param(recipe: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_deploy_rejects_malformed_param(
+    recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     run("bake", str(recipe))
-    code, _ = run("deploy", str(recipe), "--target", "qemu", "--param", "oops")
+    manifest = str(tmp_path / "build")
+    code, _ = run("deploy", manifest, "--target", "qemu", "--param", "oops")
     assert code == EXIT_SDK_ERROR
     assert "KEY=VALUE" in capsys.readouterr().err
+    code, _ = run("deploy", manifest, "--target", "qemu", "--param", "vcpus=3")
+    assert code == EXIT_SDK_ERROR
+    assert "Unknown qemu parameter(s): vcpus" in capsys.readouterr().err
 
 
 def _runner(returncode: int) -> ProbeRunner:
@@ -153,7 +191,7 @@ def test_doctor_with_recipe_ok(recipe: Path) -> None:
     assert lines[1].startswith("python 3.")
     assert "backend nix_mkosi: available" in lines
     assert "  ok nix nix 9.9.9" in lines
-    assert lines[-1].startswith("check: ")
+    assert lines[-1].startswith("lint: ")
 
 
 @pytest.mark.parametrize("runner", [_runner(1), _missing])
@@ -191,27 +229,21 @@ def test_doctor_without_recipe_probes_every_real_backend(
     assert "  ok nix nix (Nix) 2.24.0" in out
     assert "backend local_linux: unavailable" in out
     assert "  missing mkosi — " in out
-    assert "check:" not in out
+    assert "lint:" not in out
 
 
-def test_measure_follows_bake_out_dir(recipe: Path, tmp_path: Path) -> None:
+def test_measure_reads_the_bake_out_dir_manifest(recipe: Path, tmp_path: Path) -> None:
     out_dir = tmp_path / "elsewhere"
     code, _ = run("bake", str(recipe), "--out", str(out_dir))
     assert code == EXIT_OK
     assert (out_dir / "bake-result.json").exists()
 
-    code, _ = run("measure", str(recipe), "--backend", "rtmr")
+    code, _ = run("measure", str(tmp_path / "build"), "--scheme", "rtmr")
     assert code == EXIT_SDK_ERROR
 
-    code, out = run(
-        "measure",
-        str(recipe),
-        "--backend",
-        "rtmr",
-        "--json",
-        "--out",
-        str(out_dir),
-        "--allow-placeholder",
-    )
-    assert code == EXIT_OK
-    assert json.loads(out)["backend"] == "rtmr"
+    for manifest in (out_dir, out_dir / "bake-result.json"):
+        code, out = run(
+            "measure", str(manifest), "--scheme", "rtmr", "--json", "--allow-placeholder"
+        )
+        assert code == EXIT_OK
+        assert json.loads(out)["scheme"] == "rtmr"

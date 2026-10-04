@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import io
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -235,8 +236,8 @@ def test_explain_lists_only_non_default_options() -> None:
 
 def test_qemu_basic_digest_is_unchanged() -> None:
     out = io.StringIO()
-    assert main(["digest", str(EXAMPLES / "qemu_basic.py")], stdout=out) == EXIT_OK
-    assert out.getvalue().strip() == QEMU_BASIC_DIGEST
+    assert main(["inspect", str(EXAMPLES / "qemu_basic.py"), "--json"], stdout=out) == EXIT_OK
+    assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST
 
 
 def test_surge_tree_is_up_to_date() -> None:

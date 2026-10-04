@@ -1,0 +1,2 @@
+RAIKO_CONFIG=/etc/raiko/config.json
+RAIKO_CHAIN_SPEC=/etc/raiko/chain-spec.json

@@ -41,7 +41,7 @@ jobs:
       - name: Lint example recipes
         # The surge recipe tracks upstream branches on purpose and ships no lockfile,
         # so source-unpinned warnings are expected; errors still fail the step.
-        run: uv run tundravm check examples/surge-tdx-prover/image.py --all-profiles
+        run: uv run tundravm lint examples/surge-tdx-prover/image.py
 
       - name: Committed mkosi tree is up to date
         run: uv run tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check

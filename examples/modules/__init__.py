@@ -1,15 +1,10 @@
-"""Example service modules for NethermindEth/nethermind-tdx images.
+"""Application fragments for NethermindEth/nethermind-tdx images.
 
-These modules are not part of the core SDK — they are application-specific
-service definitions used by the surge_tdx_prover example.
+Not part of the SDK: the services the surge-tdx-prover example composes.
 """
 
-from .nethermind import Nethermind
-from .raiko import Raiko
-from .taiko_client import TaikoClient
+from .nethermind import nethermind
+from .raiko import raiko
+from .taiko_client import taiko_client
 
-__all__ = [
-    "Nethermind",
-    "Raiko",
-    "TaikoClient",
-]
+__all__ = ["nethermind", "raiko", "taiko_client"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import subprocess
@@ -290,6 +291,19 @@ def _run(*argv: str) -> tuple[int, str]:
     return code, out.getvalue()
 
 
+def _manifest(recipe: Path) -> str:
+    return str(recipe.parent / "build" / "bake-result.json")
+
+
+def _real_manifest(recipe: Path) -> str:
+    """The manifest with ``simulated`` cleared, as a real backend's bake records it."""
+    path = Path(_manifest(recipe))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["declarative"]["simulated"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
 @pytest.mark.usefixtures("no_tools_on_path")
 def test_cli_measure_without_tool_fails_with_hint(
     recipe: Path, capsys: pytest.CaptureFixture[str]
@@ -297,7 +311,11 @@ def test_cli_measure_without_tool_fails_with_hint(
     assert _run("bake", str(recipe))[0] == EXIT_OK
     capsys.readouterr()
 
-    code, out = _run("measure", str(recipe), "--backend", "rtmr")
+    code, out = _run("measure", _manifest(recipe), "--scheme", "rtmr", "--allow-placeholder")
+    assert code == EXIT_OK
+    capsys.readouterr()
+
+    code, out = _run("measure", _real_manifest(recipe), "--scheme", "rtmr")
 
     err = capsys.readouterr().err
     assert code == EXIT_SDK_ERROR
@@ -315,11 +333,12 @@ def test_cli_allow_placeholder_table_and_banner(
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        code, out = _run("measure", str(recipe), "--backend", "rtmr", "--allow-placeholder")
+        code, out = _run("measure", _manifest(recipe), "--scheme", "rtmr", "--allow-placeholder")
 
     lines = out.splitlines()
+    disk = recipe.parent / "build" / "default" / "disk.qcow2"
     assert code == EXIT_OK
-    assert lines[:2] == ["measurements default (rtmr)", "source: placeholder"]
+    assert lines[:2] == ["measurements default (rtmr)", f"source: placeholder ({disk})"]
     assert [line.split()[0] for line in lines[2:]] == ["RTMR0", "RTMR1", "RTMR2"]
     err = capsys.readouterr().err
     assert PLACEHOLDER_BANNER in err
@@ -331,15 +350,20 @@ def test_cli_allow_placeholder_table_and_banner(
 def test_cli_allow_placeholder_json_carries_source(
     recipe: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    source = recipe.read_text(encoding="utf-8")
+    recipe.write_text(source.replace('img.targets("qemu")', 'img.targets("gcp")'), "utf-8")
     assert _run("bake", str(recipe))[0] == EXIT_OK
     capsys.readouterr()
 
-    code, out = _run("measure", str(recipe), "--backend", "gcp", "--json", "--allow-placeholder")
+    code, out = _run(
+        "measure", _manifest(recipe), "--scheme", "gcp", "--json", "--allow-placeholder"
+    )
 
     payload = json.loads(out)
     assert code == EXIT_OK
-    assert payload["source"] == "placeholder"
-    assert payload["schema_version"] == 2
+    assert payload["tool"] == "placeholder"
+    assert payload["scheme"] == "gcp"
+    assert payload["variant"] == "default"
     assert "PLACEHOLDER" in capsys.readouterr().err
 
 
@@ -355,7 +379,7 @@ def test_cli_measure_with_tool_prints_source(
         _measured_boot_writing(json.dumps({"rtmr": {"0": {"expected": RTMR0}}})),
     )
 
-    code, out = _run("measure", str(recipe), "--backend", "rtmr")
+    code, out = _run("measure", _real_manifest(recipe), "--scheme", "rtmr")
 
     uki = recipe.parent / "build" / "default" / "linux.efi"
     assert code == EXIT_OK
@@ -366,11 +390,11 @@ def test_cli_measure_with_tool_prints_source(
     ]
     assert "PLACEHOLDER" not in capsys.readouterr().err
 
-    code, out = _run("measure", str(recipe), "--backend", "rtmr", "--json")
+    code, out = _run("measure", _real_manifest(recipe), "--scheme", "rtmr", "--json")
     payload = json.loads(out)
-    assert payload["source"] == "measured-boot"
-    assert payload["tool_version"] == "v1.3.0"
+    assert payload["tool"] == "measured-boot v1.3.0"
     assert payload["artifact"] == str(uki)
+    assert payload["artifact_digest"] == hashlib.sha256(uki.read_bytes()).hexdigest()
 
 
 def _probe(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -401,4 +425,4 @@ def test_doctor_with_recipe_ignores_missing_measurement_tools(recipe: Path) -> N
 
     assert code == EXIT_OK
     assert "measurement tools:\n  missing (optional) measured-boot — " in text
-    assert text.splitlines()[-1].startswith("check: ")
+    assert text.splitlines()[-1].startswith("lint: ")

@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+
+/usr/bin/key-gen setup /etc/tdx/key-gen.yaml
+
+/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml
+if [ -e /dev/mapper/crypt_disk_disk_persistent ]; then
+    cryptsetup rename crypt_disk_disk_persistent cryptroot
+fi
+
+/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml

@@ -1,30 +1,41 @@
-"""Surge TDX Prover: the full NethermindEth/nethermind-tdx image as one recipe.
+"""Surge TDX Prover: the full NethermindEth/nethermind-tdx image as one declarative recipe.
 
-Start at ``build()``: it lists the steps in build order, each a small function below it.
-See the result with ``tundravm explain examples/surge-tdx-prover/image.py --profile azure``.
-Integration tests check the emitted tree against the upstream repository.
+``recipe`` is the nethermind-tdx base layer plus the prover stack (Raiko, the Taiko
+client and Nethermind, all built from source), a TPM-sealed key, an encrypted
+``/persistent`` disk and secrets delivered over HTTP. ``default`` targets QEMU;
+``azure`` and ``gcp`` add their platform glue; ``devtools`` adds debugging access.
+See the result with ``tundravm inspect examples/surge-tdx-prover/image.py --variant azure``.
 """
 
 from __future__ import annotations
 
-from examples.modules import Nethermind, Raiko, TaikoClient
-from examples.nethermind_tdx import PINNED_MIRROR, build_nethermind_base
-
-from tundravm import Image
-from tundravm.modules import (
-    DevTools,
-    DiskEncryption,
-    DiskSpec,
-    GitSource,
-    KeyGeneration,
-    KeySpec,
-    SecretDelivery,
+from contents import (
+    DROPBEAR_CONFIG,
+    OPENNTPD_CONF,
+    PROMETHEUS_DEFAULTS,
+    SYSCTL_CONF,
+    TDX_GUEST_PERMISSIONS,
+    TDX_GUEST_SYMLINK,
 )
-from tundravm.platforms import AzurePlatform, GcpPlatform
+from examples.modules import nethermind, raiko, taiko_client
+from examples.nethermind_tdx import NETHERMIND_V1, PINNED_MIRROR, nethermind_base
 
-# ── Packages (upstream surge-tdx-prover mkosi.conf) ──────────────────
+from tundravm.backends import LimaMkosiBackend
+from tundravm.declarative import (
+    Disk,
+    File,
+    Fragment,
+    Hook,
+    Key,
+    Package,
+    Recipe,
+    Secrets,
+    Unit,
+    Variant,
+    devtools,
+)
 
-RUNTIME_PACKAGES: tuple[str, ...] = (
+RUNTIME_PACKAGES = (
     "prometheus",
     "prometheus-node-exporter",
     "prometheus-process-exporter",
@@ -53,7 +64,7 @@ RUNTIME_PACKAGES: tuple[str, ...] = (
     "libtss2-dev",
 )
 
-BUILD_PACKAGES: tuple[str, ...] = (
+BUILD_PACKAGES = (
     "dotnet-sdk-10.0",
     "dotnet-runtime-10.0",
     "golang",
@@ -70,165 +81,74 @@ BUILD_PACKAGES: tuple[str, ...] = (
     "gcc",
 )
 
-# ── Config file contents (byte-exact with upstream: no trailing newline where absent) ──
-
-DROPBEAR_CONFIG = """\
-DROPBEAR_EXTRA_ARGS="-s -w -g -m -j -k"
-DROPBEAR_RECEIVE_WINDOW=6291456
-DROPBEAR_PORT=0.0.0.0:22
-DROPBEAR_SUBSYSTEM="sftp /usr/lib/openssh/sftp-server"
-"""
-
-SYSCTL_CONF = """\
-# Network hardening
-net.ipv4.ip_forward=1
-net.ipv4.conf.all.forwarding=1
-net.ipv6.conf.all.forwarding=1
-net.ipv4.tcp_syncookies=1
-net.ipv4.conf.all.accept_redirects=0
-net.ipv4.conf.default.accept_redirects=0
-net.ipv6.conf.all.accept_redirects=0
-net.ipv6.conf.default.accept_redirects=0
-net.ipv4.conf.all.send_redirects=0
-net.ipv4.conf.default.send_redirects=0
-net.ipv4.conf.all.rp_filter=1
-net.ipv4.conf.default.rp_filter=1
-
-# VM tuning
-vm.swappiness=1
-vm.max_map_count=2097152
-
-# File descriptor limits
-fs.file-max=1048576"""
-
-TDX_GUEST_PERMISSIONS = """\
-# TDX guest device permissions
-KERNEL=="tdx_guest", MODE="0660", GROUP="tdx"
-KERNEL=="tdx-guest", MODE="0660", GROUP="tdx"
-KERNEL=="tpm0", MODE="0660", GROUP="tdx"
-KERNEL=="tpmrm0", MODE="0660", GROUP="tdx"
-"""
-
-TDX_GUEST_SYMLINK = """\
-KERNEL=="tdx_guest", SYMLINK+="tdx-guest"
-"""
-
-OPENNTPD_CONF = """\
-servers pool.ntp.org
-sensor *
-constraints from "https://www.google.com/"""
-
-PROMETHEUS_DEFAULTS = (
-    'ARGS="'
-    "--config.file=/etc/prometheus/prometheus.yml "
-    "--storage.tsdb.path=/var/lib/prometheus "
-    "--web.listen-address=127.0.0.1:9090 "
-    '--storage.tsdb.retention.time=7d"\n'
+# Boot-time init: TPM-sealed key -> encrypted /persistent -> secrets over HTTP.
+key = Key("key_persistent", output="/tmp/key_persistent")
+disk = Disk(
+    "disk_persistent",
+    mount="/persistent",
+    device=None,  # the largest unpartitioned disk
+    key=key,
+    mapper="cryptroot",
 )
 
-NETHERMIND_ENV = """\
-NETHERMIND_CONFIG=/etc/nethermind-surge/config.json
-NETHERMIND_DATADIR=/persistent/nethermind
-NETHERMIND_JSONRPC_ENGINEHOST=127.0.0.1
-NETHERMIND_JSONRPC_ENGINEPORT=8551
-NETHERMIND_JSONRPC_HOST=127.0.0.1
-NETHERMIND_JSONRPC_PORT=8545
-NETHERMIND_JSONRPC_JWTSECRETFILE=/persistent/jwt/jwt.hex"""
+prover_stack = Fragment(
+    "prover-stack",
+    items=(
+        # The historical tree spells this group "-r", unlike the tdx group tdxs() declares.
+        Hook("eth-group", "postinst", "mkosi-chroot groupadd -r eth"),
+        raiko(),
+        taiko_client(),
+        nethermind(),
+        # Nethermind reads the TDX devices too; the tree grants it with usermod.
+        Hook("nethermind-tdx-group", "postinst", "mkosi-chroot usermod -a -G tdx nethermind-surge"),
+    ),
+)
 
-RAIKO_ENV = """\
-RAIKO_CONFIG=/etc/raiko/config.json
-RAIKO_CHAIN_SPEC=/etc/raiko/chain-spec.json"""
+system = Fragment(
+    "system",
+    items=(
+        File("/etc/default/dropbear", DROPBEAR_CONFIG),
+        File("/etc/sysctl.d/99-surge.conf", SYSCTL_CONF),
+        File("/etc/udev/rules.d/65-tdx-guest.rules", TDX_GUEST_PERMISSIONS),
+        File("/etc/udev/rules.d/99-tdx-symlink.rules", TDX_GUEST_SYMLINK),
+        File("/etc/openntpd/ntpd.conf", OPENNTPD_CONF),
+        File("/etc/default/prometheus", PROMETHEUS_DEFAULTS),
+        Unit("network-setup.service", enabled=True),
+        Unit("openntpd.service", enabled=True),
+        Unit("logrotate.service", enabled=True),
+        Unit("dropbear.service", enabled=True),
+        # dropbear owns port 22
+        Unit("ssh.service", enabled=False, masked=True),
+        Unit("ssh.socket", enabled=False, masked=True),
+    ),
+)
 
-TAIKO_CLIENT_ENV = """\
-TAIKO_CLIENT_CONFIG=/etc/taiko-client/config.json"""
-
-
-# ── Recipe ────────────────────────────────────────────────────────────
-
-
-def build() -> Image:
-    """The surge-tdx-prover image: the default profile plus azure, gcp and devtools."""
-    img = _base()
-    _packages(img)
-    _boot_init(img)
-    _prover_stack(img)
-    _system_config(img)
-    _system_services(img)
-    _cloud_profiles(img)
-    _devtools_profile(img)
-    return img
-
-
-def _base() -> Image:
-    """The nethermind-tdx base layer, resolving packages from a pinned Debian snapshot."""
-    return build_nethermind_base().pin_mirror(PINNED_MIRROR)
-
-
-def _packages(img: Image) -> None:
-    """Runtime packages, plus toolchains that are removed after the build."""
-    img.install(*RUNTIME_PACKAGES).build_packages(*BUILD_PACKAGES)
-
-
-def _boot_init(img: Image) -> None:
-    """Boot-time init: TPM-sealed key -> encrypted /persistent -> secrets over HTTP."""
-    key = KeySpec("key_persistent", strategy="tpm", output="/tmp/key_persistent")
-    disk = DiskSpec(
-        "disk_persistent",
-        device=None,  # no fixed path: use the largest unpartitioned disk
-        key=key,  # reads key.output; check() verifies the key is declared
-        mapper_name="cryptroot",
-        mount_at="/persistent",
-    )
-
-    img.apply(
-        KeyGeneration(keys=(key,)),
-        DiskEncryption(disks=(disk,)),
-        SecretDelivery(method="http_post", store_at=disk),
-    )
-
-
-def _prover_stack(img: Image) -> None:
-    """Raiko (prover), Taiko client and Nethermind (execution), all built from source."""
-    img.shell("mkosi-chroot groupadd -r eth", phase="postinst")  # the modules' users join it
-    img.apply(
-        Raiko(source=GitSource("https://github.com/NethermindEth/raiko.git", "feat/tdx")),
-        TaikoClient(
-            source=GitSource(
-                "https://github.com/NethermindEth/surge-taiko-mono",
-                "feat/tdx-proving",
-                subdir="packages/taiko-client",
-            ),
+recipe = Recipe(
+    name="surge-tdx-prover",
+    base="debian/trixie",
+    mirror=PINNED_MIRROR,
+    tools_mirror=PINNED_MIRROR,
+    epoch=0,
+    mkosi=NETHERMIND_V1,
+    common=Fragment(
+        "surge",
+        items=(
+            nethermind_base(),
+            *(Package(name) for name in RUNTIME_PACKAGES),
+            *(Package(name, role="build") for name in BUILD_PACKAGES),
+            key,
+            disk,
+            Secrets(store=disk),
+            prover_stack,
+            system,
         ),
-        Nethermind(source=GitSource("https://github.com/NethermindEth/nethermind.git", "1.32.3")),
-    )
-    img.shell("mkosi-chroot usermod -a -G tdx nethermind-surge", phase="postinst")
+    ),
+    variants=(
+        Variant("default", target="qemu"),
+        Variant("azure", parent="default", target="azure"),
+        Variant("gcp", parent="default", target="gcp"),
+        Variant("devtools", parent="default", add=devtools()),  # never ship it
+    ),
+)
 
-
-def _system_config(img: Image) -> None:
-    """Config files: dropbear, sysctl, TDX udev rules, NTP, Prometheus, service env."""
-    img.file("/etc/default/dropbear", content=DROPBEAR_CONFIG)
-    img.file("/etc/sysctl.d/99-surge.conf", content=SYSCTL_CONF)
-    img.file("/etc/udev/rules.d/65-tdx-guest.rules", content=TDX_GUEST_PERMISSIONS)
-    img.file("/etc/udev/rules.d/99-tdx-symlink.rules", content=TDX_GUEST_SYMLINK)
-    img.file("/etc/openntpd/ntpd.conf", content=OPENNTPD_CONF)
-    img.file("/etc/default/prometheus", content=PROMETHEUS_DEFAULTS)
-    img.file("/etc/nethermind-surge/env", content=NETHERMIND_ENV)
-    img.file("/etc/raiko/env", content=RAIKO_ENV)
-    img.file("/etc/taiko-client/env", content=TAIKO_CLIENT_ENV)
-
-
-def _system_services(img: Image) -> None:
-    """Enable packaged daemons; disable and mask OpenSSH so dropbear owns port 22."""
-    img.enable("network-setup", "openntpd", "logrotate", "dropbear")
-    img.disable("ssh.service", "ssh.socket").mask("ssh.service", "ssh.socket")
-
-
-def _cloud_profiles(img: Image) -> None:
-    """Azure and GCP variants: each adds its platform glue and output target."""
-    img.profile("azure").apply(AzurePlatform())
-    img.profile("gcp").apply(GcpPlatform())
-
-
-def _devtools_profile(img: Image) -> None:
-    """Debug variant: debugging tools, serial console, root login. Never ship it."""
-    img.profile("devtools").apply(DevTools())
+backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

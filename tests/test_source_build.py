@@ -136,8 +136,8 @@ def test_payload_has_source_builds_only_when_declared(tmp_path: Path) -> None:
 
 def test_existing_digest_is_unchanged() -> None:
     out = io.StringIO()
-    assert main(["digest", str(QEMU_BASIC)], stdout=out) == EXIT_OK
-    assert out.getvalue().strip() == QEMU_BASIC_DIGEST
+    assert main(["inspect", str(QEMU_BASIC), "--json"], stdout=out) == EXIT_OK
+    assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST
 
 
 def test_duplicate_source_build_name_is_rejected(tmp_path: Path) -> None:

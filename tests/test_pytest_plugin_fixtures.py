@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -55,7 +56,7 @@ def test_compiled_factory_uses_fresh_dirs(
 
 def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:
     path = recipe_file(tmp_path, "from tundravm import Image\nimg = Image()\n")
-    code, out, err = run_cli("digest", path)
+    code, out, err = run_cli("inspect", path, "--json")
     assert code == 0
-    assert len(out.strip()) == 64
+    assert len(json.loads(out)["digest"]) == 64
     assert err == ""

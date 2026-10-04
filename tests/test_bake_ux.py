@@ -425,7 +425,8 @@ def test_cli_bake_default_prints_progress_and_summary(
     assert re.match(
         r"default\s+qemu\s+\S+disk\.qcow2\s+\d+ B\s+[0-9a-f]{12}\s+\d+\.\ds$", lines[header + 1]
     )
-    assert lines[-1] == f"next: tundravm deploy {recipe} --target qemu"
+    manifest = tmp_path / "build" / "bake-result.json"
+    assert lines[-1] == f"next: tundravm deploy {manifest} --variant default --target qemu"
 
 
 def test_cli_bake_verbose_echoes_backend_output(
@@ -443,6 +444,7 @@ def test_cli_bake_quiet_prints_only_the_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     recipe = _write_recipe(tmp_path, RECIPE)
+    assert _run("lock", str(recipe))[0] == EXIT_OK
     code, out = _run("bake", str(recipe), "-q")
     assert code == EXIT_OK
     assert capsys.readouterr().err == ""
@@ -452,11 +454,12 @@ def test_cli_bake_quiet_prints_only_the_summary(
 
 def test_cli_bake_json_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     recipe = _write_recipe(tmp_path, RECIPE)
-    code, out = _run("bake", str(recipe), "--json-logs", "--lock")
+    assert _run("lock", str(recipe))[0] == EXIT_OK
+    code, out = _run("bake", str(recipe), "--json-logs")
     assert code == EXIT_OK
     assert capsys.readouterr().err == ""
     events = [json.loads(line) for line in out.splitlines()]
-    assert events[0]["message"].startswith("locked ")
+    assert events[0]["message"].startswith("frozen against ")
     assert events[-1]["kind"] == "done"
     assert events[-1]["extra"]["status"] == "ok"
     assert any(e["extra"].get("source") == "backend" for e in events)
@@ -490,6 +493,7 @@ def test_cli_bake_failure_in_quiet_mode_still_shows_tail(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     recipe = _write_recipe(tmp_path, FAILING_RECIPE)
+    assert _run("lock", str(recipe))[0] == EXIT_OK
     code, _ = _run("bake", str(recipe), "-q")
     err = capsys.readouterr().err
     assert code == EXIT_SDK_ERROR

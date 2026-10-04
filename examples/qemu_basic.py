@@ -1,24 +1,19 @@
 """Minimal QEMU-focused recipe.
 
-Run it directly, or drive it with the CLI:
-
-    tundravm explain examples/qemu_basic.py
-    tundravm bake examples/qemu_basic.py --lock
+tundravm inspect examples/qemu_basic.py
+tundravm bake examples/qemu_basic.py
 """
 
-from tundravm import Image
 from tundravm.backends import LimaMkosiBackend
+from tundravm.declarative import File, Fragment, Package, Recipe
 
+recipe = Recipe(
+    name="qemu-basic",
+    base="debian/bookworm",
+    common=Fragment(
+        "qemu-basic",
+        items=(Package("curl"), Package("jq"), File("/etc/motd", "QEMU profile\n")),
+    ),
+)
 
-def build() -> Image:
-    img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
-    img.install("curl", "jq")
-    img.file("/etc/motd", content="QEMU profile\n")
-    img.targets("qemu")
-    return img
-
-
-if __name__ == "__main__":
-    img = build()
-    img.lock()
-    img.bake(frozen=True)
+backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

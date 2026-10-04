@@ -868,3 +868,40 @@ Fluent-only features with no declarative equivalent yet:
 - The section-2 lifecycle functions (`compile`/`lock`/`bake`/`measure`/`deploy`/`Backend`/`Lock`/`Tree`/`Artifact`). The CLI reaches them through lowering.
 
 The CLI `check`/`ci` commands run the fluent rules on the lowered image. Warnings from `declarative.lint` and `Fragment.checks` are not surfaced there yet, though errors fail at load.
+
+Stage 2 (2026-10-04): the surge recipe is declarative.
+
+- `Build` gained `cache_key: str | None = None` (letters, digits, `._+@/-`; `/` is cached as `_`). `None` keeps the derived `<name>-<sha256(url)[:12]>-<ref>`. `Build` lowers to `ScriptBuild` (`export <env> && cd <workdir> && <script>`), which already spells the historical Cargo and .NET hooks; Go builds that want a command-prefix environment put it in `script` (taiko-client), and absolute paths such as `--output /build/nethermind/publish` are written out. No language recipes were added to the model.
+- `tundravm.declarative.modules` (exported from `tundravm.declarative`): `backports(*, mirror=None, release=None)` (a sync `Hook` plus `Setting("Build", "SandboxTrees", ...)`, so a recipe with its own `SandboxTrees` setting collides), `efi_stub(*, snapshot, version)` (a postinst `Hook`), `tdxs(*, source, issuer, validator, expected_measurements, check_revocations, get_collateral, verify_imds, verify_identity_token, after_init=False)` (build packages, `Build("tdxs")`, config `File`, the two `Unit`s rendered by the fluent `Tdxs` renderers, `Group("tdx")`, `User("tdxs")`) and `devtools(*, root_password="tdx")` (packages, the `serial-console.service` `Unit` without enablement, and the two historical postinst hooks). Fragment names: `backports`, `efi-stub`, `tdxs`, `devtools`.
+- `Mkosi(dialect="nethermind-v1")` rules, all in `lower.py`: `Group`/`User` lower to postinst lines at their declaration position (`mkosi-chroot groupadd [--system] [--gid N] <name>`; `mkosi-chroot useradd [--system] [--home-dir H] --shell S [--uid N] [--gid G] [--groups a,b] <name>`, no `--create-home`) instead of the account prelude, and an extending variant may not replace a `Group`/`User`; `Build` never emits the `# unpinned: <ref>` marker. The `current` dialect keeps the prelude spelling (`--create-home`) and the marker.
+- The surge quirks that no rule produces stay `Hook`s in the recipe: `groupadd -r eth` and `usermod -a -G tdx nethermind-surge` (so `nethermind()` declares `groups=("eth",)` only).
+- `examples/nethermind_tdx.py` is `nethermind_base(*, snapshot=PINNED_MIRROR) -> Fragment` plus `NETHERMIND_V1 = Mkosi(dialect="nethermind-v1")` and its own `recipe`; it stays in `examples/` because it reads the repository's kernel config. `examples/modules` holds `raiko(*, source)`, `taiko_client(*, source)` and `nethermind(*, source)`, each with its build, user, unit and env file; `contents.py` re-exports their literals. The fluent `Raiko`/`TaikoClient`/`Nethermind` classes and their tests are gone; `tests/fixtures/surge_fluent.py` keeps the fluent recipe (modules inlined) as the equivalence reference.
+- The CLI now compiles every declared variant, so `examples/surge-tdx-prover/mkosi/` also commits `azure/`, `gcp/` and `devtools/`, byte-identical to the fluent recipe's trees (`tests/test_declarative_modules.py`).
+
+Stage 3 (2026-10-04): the lifecycle functions and the CLI grammar.
+
+- `declarative/lifecycle.py` holds the section-2 lifecycle. Each function lowers the recipe and runs the compiler's existing step on the image (`Image.compile`, `check`, `_recipe_payload` with `build_lockfile`/`resolve_pins`/`compare_lock`/`source_drift`, `Image.bake`, `derive_measurements`, the deploy adapters), so it produces the same bytes the CLI does. Everything is exported from `tundravm.declarative`. The top level exports all of it except `diff`, `measure` and `deploy`, because those names are the `tundravm.diff`/`measure`/`deploy` subpackages and shadowing them breaks `monkeypatch.setattr("tundravm.measure.rtmr...")`. Top-level `Measurements` is now the declarative record.
+- Additions to the design's signatures:
+  - `Tree.variants`
+  - `Lock.lockfile` (the wrapped `Lockfile`, `compare=False`) and `Lock.text()`
+  - `lock(..., resolver=None, variants=None)` and `lock_status(..., variants=None)`
+  - `Backend.kind="inprocess"` and `Backend.build_backend()`
+  - `measure(..., allow_placeholder=False)`
+  - `deploy(..., allow_placeholder=False, adapter=None)`
+  - `doctor(..., runner=None)`
+  - `lock()` keeps every matching pin in `previous` and resolves only the unpinned sources and those named in `update`. Unknown `update` names fail.
+  - `compiler_version` is the running tundravm version, because the lockfile does not store it.
+- `compile(lock=None)` consults no lockfile: source builds use their refs. With a lock, its pins apply, through a scratch build dir that holds the lockfile.
+- `lint()` returns resolution and fragment-check diagnostics first, in resolution order. If none is an error, it adds the lowered image's `check()` findings, sorted by variant, level and code. It drops `backend-missing`, because the backend is a `bake()` argument. With `lock=`, drift is added as `lock-changed`, `lock-added` or `lock-removed` diagnostics (`subject` = section).
+- `bake()` writes `locked` to `out/tundravm.lock` and bakes frozen into `out`. It then adds a top-level `"declarative": {recipe_digest, tree_digest, simulated}` key to `bake-result.json`, which `BakeResult.load` ignores. `read_artifacts()` reads it back and accepts the file or its directory. `simulated` is true for the in-process backend, and `measure`/`deploy` refuse simulated artifacts unless `allow_placeholder=True`. `Artifact.lock_digest` is the sha256 of the lockfile bytes, as before.
+- CLI verbs: `init`, `inspect`, `lint`, `compile`, `diff`, `lock`, `bake`, `measure`, `deploy`, `doctor`, `ci`.
+  - `explain`, `check`, `digest` and `new` are removed, with no aliases. `digest` is `inspect --json` `["digest"]`.
+  - `-p/--profile` and `--all-profiles` became repeatable `--variant`. Without it a command runs on every declared variant (a legacy `Image` file keeps its active selection).
+  - `lint` and `ci` report declarative and fragment-check diagnostics alongside the compiler rules. `ci`'s first step is named `lint`.
+  - `bake` is frozen when `--lockfile` is given or `build/tundravm.lock` exists. Otherwise it bakes unpinned with a note. `--frozen`, `--lock` and `--force` are gone. `--backend lima|nix|local|inprocess` overrides the file's `backend`.
+  - `measure` and `deploy` take the manifest (`bake-result.json` or its directory) and `--variant`. `measure --scheme` replaces `--backend`. `deploy --param` keys are the `Qemu`/`Azure`/`Gcp` fields, replacing `--memory`/`--cpus`. The design's `deploy --config FILE` is not implemented.
+  - `doctor [RECIPE] [--backend KIND]` prints `lint: <summary>`.
+- `tundravm.testing`:
+  - New: `assert_tree(tree, golden)` compares every file path, its bytes, exec bit and symlink target, and ignores empty directories. `TUNDRAVM_UPDATE_GOLDEN=1` rewrites `golden`.
+  - New: `fake_bake(tree, *, variant, target, out)` writes a simulated artifact and its manifest.
+  - Extended: `assert_clean` and `assert_diagnostic` also take `lint()` diagnostics as a positional first argument. `strict` defaults to true for diagnostics. `assert_diagnostic` gained `variant=`. `compile_tree` accepts a `Recipe`.

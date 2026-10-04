@@ -1,35 +1,26 @@
-"""Multi-profile cloud recipe example.
+"""One image, three targets: each standalone variant carries its own guest agent.
 
-Run it directly, or drive it with the CLI:
-
-    tundravm explain examples/multi_profile_cloud.py --all-profiles
-    tundravm bake examples/multi_profile_cloud.py --lock --all-profiles
+tundravm inspect examples/multi_profile_cloud.py
+tundravm bake examples/multi_profile_cloud.py
 """
 
-from tundravm import Image
 from tundravm.backends import LimaMkosiBackend
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 
 
-def build() -> Image:
-    img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
-
-    with img.profile("azure"):
-        img.install("waagent")
-        img.targets("azure")
-
-    with img.profile("gcp"):
-        img.install("google-guest-agent")
-        img.targets("gcp")
-
-    with img.profile("qemu"):
-        img.install("qemu-guest-agent")
-        img.targets("qemu")
-
-    return img
+def _agent(variant: str, package: str) -> Fragment:
+    return Fragment(variant, items=(Package(package),))
 
 
-if __name__ == "__main__":
-    img = build()
-    with img.all_profiles():
-        img.lock()
-        img.bake(frozen=True)
+recipe = Recipe(
+    name="multi-profile-cloud",
+    base="debian/bookworm",
+    common=Fragment("common"),
+    variants=(
+        Variant("qemu", parent=None, target="qemu", add=_agent("qemu", "qemu-guest-agent")),
+        Variant("azure", parent=None, target="azure", add=_agent("azure", "waagent")),
+        Variant("gcp", parent=None, target="gcp", add=_agent("gcp", "google-guest-agent")),
+    ),
+)
+
+backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

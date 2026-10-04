@@ -4,9 +4,36 @@ A :class:`Recipe` is an immutable value: recipe-wide settings, a ``common``
 :class:`Fragment` of declarations and the :class:`Variant` overlays.
 :func:`resolve` expands one variant, :func:`lint` reports every problem as a
 :class:`Diagnostic`, and :func:`lower` builds the compiler's ``Image`` from it,
-which every CLI command consumes.
+which every CLI command consumes. The lifecycle (:func:`compile`, :func:`lint`,
+:func:`lock`, :func:`bake`, :func:`measure`, :func:`deploy`, :func:`doctor`)
+takes a recipe and explicit inputs and returns explicit results.
 """
 
+from .lifecycle import (
+    Artifact,
+    Azure,
+    Backend,
+    Deployment,
+    Entry,
+    Gcp,
+    Lock,
+    Measurements,
+    Pin,
+    Qemu,
+    Tree,
+    bake,
+    compile,
+    deploy,
+    diff,
+    doctor,
+    lint,
+    lock,
+    lock_status,
+    measure,
+    read_artifacts,
+    read_lock,
+    write_lock,
+)
 from .load import load
 from .lower import lower
 from .model import (
@@ -47,18 +74,25 @@ from .model import (
     User,
     Variant,
 )
-from .resolve import identity, lint, resolve, resolve_all
+from .modules import backports, devtools, efi_stub, tdxs
+from .resolve import identity, resolve, resolve_all
 
 __all__ = [
+    "Artifact",
+    "Azure",
+    "Backend",
     "Build",
     "Check",
     "Debloat",
     "Declaration",
+    "Deployment",
     "Diagnostic",
     "Directory",
     "Disk",
+    "Entry",
     "File",
     "Fragment",
+    "Gcp",
     "Git",
     "Group",
     "Hook",
@@ -67,11 +101,15 @@ __all__ = [
     "Install",
     "Kernel",
     "Key",
+    "Lock",
+    "Measurements",
     "Mkosi",
     "Package",
     "Pairs",
     "Partition",
     "Phase",
+    "Pin",
+    "Qemu",
     "Recipe",
     "Repository",
     "Resolved",
@@ -83,13 +121,29 @@ __all__ = [
     "Secrets",
     "Setting",
     "Target",
+    "Tree",
     "Unit",
     "User",
     "Variant",
+    "backports",
+    "bake",
+    "compile",
+    "deploy",
+    "devtools",
+    "diff",
+    "doctor",
+    "efi_stub",
     "identity",
     "lint",
     "load",
+    "lock",
+    "lock_status",
     "lower",
+    "measure",
+    "read_artifacts",
+    "read_lock",
     "resolve",
     "resolve_all",
+    "tdxs",
+    "write_lock",
 ]

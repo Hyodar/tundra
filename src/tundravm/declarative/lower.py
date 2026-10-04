@@ -86,6 +86,8 @@ UNIT_DIRECTORY = "/usr/lib/systemd/system"
 _OVERRIDABLE = (File, User, Group, Partition, Repository, Debloat)
 """Types an extending profile can redeclare: the fluent merge replaces them by identity."""
 _RECIPE_WIDE = (Setting, Kernel)
+HISTORICAL = "nethermind-v1"
+"""The dialect that reproduces the historical nethermind-tdx tree byte for byte."""
 _RUNTIME = (Key, Disk, Secrets, RuntimeTools)
 
 _SINGLE_SETTINGS: dict[tuple[str, str], str] = {
@@ -130,8 +132,9 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
         kernel=None if kernel is None else _kernel(kernel),
     )
 
+    dialect = recipe.mkosi.dialect
     with img.profiles(default.name):
-        _declare(img, base.items, full=base.items)
+        _declare(img, base.items, full=base.items, dialect=dialect)
     _apply_target(img, default.name, base.target, inherited=DEFAULT_TARGET)
 
     for variant in selected[1:]:
@@ -139,7 +142,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
         if variant.parent is None:
             img.profile(variant.name, extends=None)
             with img.profiles(variant.name):
-                _declare(img, child.items, full=child.items)
+                _declare(img, child.items, full=child.items, dialect=dialect)
                 if not any(isinstance(i, Debloat) for i in child.items) and any(
                     isinstance(i, Debloat) for i in base.items
                 ):
@@ -152,10 +155,10 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
                 f"the default variant {default.name!r} and None lower to fluent profiles yet.",
                 context={"variant": variant.name, "parent": variant.parent},
             )
-        own, reemit = _overlay(base, child)
+        own, reemit = _overlay(base, child, dialect=dialect)
         img.profile(variant.name, extends=default.name)
         with img.profiles(variant.name):
-            _declare(img, own, full=child.items, reemit=reemit)
+            _declare(img, own, full=child.items, reemit=reemit, dialect=dialect)
         _apply_target(img, variant.name, child.target, inherited=base.target)
     return img
 
@@ -192,7 +195,9 @@ def _check_recipe_wide(child: Resolved, recipe_wide: Sequence[Declaration]) -> N
             )
 
 
-def _overlay(base: Resolved, child: Resolved) -> tuple[list[Declaration], list[Unit]]:
+def _overlay(
+    base: Resolved, child: Resolved, *, dialect: str = "current"
+) -> tuple[list[Declaration], list[Unit]]:
     """What *child* declares on top of *base* (its extended profile), plus units to re-emit.
 
     A fluent profile that extends another only adds, or replaces the types its
@@ -215,7 +220,9 @@ def _overlay(base: Resolved, child: Resolved) -> tuple[list[Declaration], list[U
         if previous is None:
             own.append(item)
         elif previous != item:
-            if not isinstance(item, _OVERRIDABLE):
+            if not isinstance(item, _OVERRIDABLE) or (
+                dialect == HISTORICAL and isinstance(item, (Group, User))
+            ):
                 raise ValidationError(
                     f"Variant {child.variant!r} replaces {describe(identity(item))}; the "
                     "fluent profile merge cannot replace that type yet.",
@@ -249,11 +256,15 @@ def _declare(
     *,
     full: Sequence[Declaration],
     reemit: Sequence[Unit] = (),
+    dialect: str = "current",
 ) -> None:
     """Issue the fluent calls for *items* on the active profile.
 
     *full* is the whole resolved variant: it decides runtime-init wiring.
+    Under the ``nethermind-v1`` dialect groups and users are postinst lines
+    at their declaration position, spelled as the historical tree spells them.
     """
+    historical = dialect == HISTORICAL
     after_init = has_init(full)
     hooks = iter(order_hooks([item for item in items if isinstance(item, Hook)]))
     runtime_done = False
@@ -267,6 +278,10 @@ def _declare(
                 _file(img, item)
             case Directory():
                 _directory(img, item)
+            case Group() if historical:
+                img.shell(groupadd_line(item), phase="postinst")
+            case User() if historical:
+                img.shell(useradd_line(item), phase="postinst")
             case Group():
                 img.group(item.name, system=item.system, gid=item.gid)
             case User():
@@ -310,7 +325,7 @@ def _declare(
                     _runtime_tools(img, items)
                     runtime_done = True
             case Build():
-                img.build_from(_source_build(item))
+                img.build_from(_source_build(item, mark_unpinned=not historical))
             case Init() | Setting() | Kernel() | RuntimeTools():
                 pass  # inits register below; the rest is recipe-wide or configuration
     for unit in reemit:
@@ -448,7 +463,31 @@ def _git(source: Git) -> GitSource:
     return GitSource(source.url, source.ref, subdir=source.subdir, submodules=source.submodules)
 
 
-def _source_build(build: Build) -> SourceBuild:
+def groupadd_line(group: Group) -> str:
+    """The ``nethermind-v1`` postinst line that creates *group*."""
+    gid = "" if group.gid is None else f" --gid {group.gid}"
+    return f"mkosi-chroot groupadd{' --system' if group.system else ''}{gid} {group.name}"
+
+
+def useradd_line(user: User) -> str:
+    """The ``nethermind-v1`` postinst line that creates *user* (no ``--create-home``)."""
+    parts = ["mkosi-chroot useradd"]
+    if user.system:
+        parts.append("--system")
+    if user.home is not None:
+        parts.extend(("--home-dir", user.home))
+    parts.extend(("--shell", user.shell))
+    if user.uid is not None:
+        parts.extend(("--uid", str(user.uid)))
+    if user.primary_group is not None:
+        parts.extend(("--gid", str(user.primary_group)))
+    if user.groups:
+        parts.extend(("--groups", ",".join(user.groups)))
+    parts.append(user.name)
+    return " ".join(parts)
+
+
+def _source_build(build: Build, *, mark_unpinned: bool = True) -> SourceBuild:
     source: GitSource | HttpSource
     if isinstance(build.source, Git):
         source = _git(build.source)
@@ -472,6 +511,8 @@ def _source_build(build: Build) -> SourceBuild:
             env=dict(build.env),
         ),
         install=steps,
+        cache_key=build.cache_key,
+        mark_unpinned=mark_unpinned,
     )
 
 
@@ -650,4 +691,11 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
     return MkosiOptions(**changes)
 
 
-__all__ = ["INIT_SERVICE", "inject_after_init", "lower"]
+__all__ = [
+    "HISTORICAL",
+    "INIT_SERVICE",
+    "groupadd_line",
+    "inject_after_init",
+    "lower",
+    "useradd_line",
+]

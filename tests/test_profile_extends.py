@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -172,5 +173,5 @@ def test_digest_changes_when_extends_toggles() -> None:
 
 def test_default_only_recipe_digest_is_unchanged() -> None:
     out = io.StringIO()
-    assert main(["digest", str(QEMU_BASIC)], stdout=out) == EXIT_OK
-    assert out.getvalue().strip() == QEMU_BASIC_DIGEST
+    assert main(["inspect", str(QEMU_BASIC), "--json"], stdout=out) == EXIT_OK
+    assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST

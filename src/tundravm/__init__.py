@@ -1,7 +1,11 @@
 """Public package entrypoint for the TDX VM SDK.
 
 The declarative API (``Recipe``, ``Fragment``, ``Variant``, the declarations,
-``resolve``/``lint``/``lower``/``load``) is the public surface. The fluent
+``resolve``/``lint``/``lower``/``load``) and its lifecycle (``compile``,
+``lock``, ``bake``, ``read_artifacts``, ``doctor`` and their result types) are
+the public surface. ``diff``, ``measure`` and ``deploy`` are reached as
+``tundravm.declarative.diff``/``measure``/``deploy``: at the top level those
+names are the ``tundravm.diff``/``tundravm.measure``/``tundravm.deploy`` modules. The fluent
 ``Image``/``Profile`` names below it remain importable while the compiler is
 reached through them; ``Kernel`` is still the fluent kernel spec (the
 declarative one is ``tundravm.declarative.Kernel``).
@@ -10,14 +14,20 @@ declarative one is ``tundravm.declarative.Kernel``).
 __version__ = "0.1.0"
 
 from .declarative import (
+    Artifact,
+    Azure,
+    Backend,
     Build,
     Debloat,
     Declaration,
+    Deployment,
     Diagnostic,
     Directory,
     Disk,
+    Entry,
     File,
     Fragment,
+    Gcp,
     Git,
     Group,
     Hook,
@@ -25,9 +35,13 @@ from .declarative import (
     Init,
     Install,
     Key,
+    Lock,
+    Measurements,
     Mkosi,
     Package,
     Partition,
+    Pin,
+    Qemu,
     Recipe,
     Repository,
     Resolved,
@@ -38,14 +52,23 @@ from .declarative import (
     SecretFile,
     Secrets,
     Setting,
+    Tree,
     Unit,
     User,
     Variant,
+    bake,
+    compile,
+    doctor,
     lint,
     load,
+    lock,
+    lock_status,
     lower,
+    read_artifacts,
+    read_lock,
     resolve,
     resolve_all,
+    write_lock,
 )
 from .diff import FileChange, TreeDiff
 from .errors import (
@@ -62,7 +85,6 @@ from .errors import (
 )
 from .image import Image
 from .measure import PlaceholderMeasurementWarning
-from .measure.model import Measurements
 from .models import (
     BakeRequest,
     BakeResult,
@@ -91,6 +113,25 @@ from .source import (
 
 __all__ = [
     # Declarative API
+    "Artifact",
+    "Azure",
+    "Backend",
+    "Deployment",
+    "Entry",
+    "Gcp",
+    "Lock",
+    "Measurements",
+    "Pin",
+    "Qemu",
+    "Tree",
+    "bake",
+    "compile",
+    "doctor",
+    "lock",
+    "lock_status",
+    "read_artifacts",
+    "read_lock",
+    "write_lock",
     "Build",
     "Debloat",
     "Declaration",
@@ -145,7 +186,6 @@ __all__ = [
     "LintError",
     "LockfileError",
     "MeasurementError",
-    "Measurements",
     "MkosiOptions",
     "PolicyError",
     "PlaceholderMeasurementWarning",

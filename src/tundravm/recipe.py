@@ -12,6 +12,7 @@ import inspect
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import cast
@@ -262,6 +263,64 @@ def _public_names(module: ModuleType) -> list[str]:
     )
 
 
+@dataclass(slots=True)
+class RecipeFile:
+    """A loaded recipe file: its declarative ``recipe`` (or legacy ``image``) and ``backend``."""
+
+    path: Path
+    recipe: Recipe | None
+    image: Image | None
+    backend: BuildBackend | None
+
+    @property
+    def variants(self) -> tuple[str, ...]:
+        """Declared variant names (profile names for a legacy ``Image``)."""
+        if self.recipe is not None:
+            return tuple(v.name for v in self.recipe.variants)
+        assert self.image is not None
+        return self.image.profile_names
+
+    def lowered(self) -> Image:
+        """The compiler's ``Image`` (every variant lowered), with the file's backend."""
+        if self.image is None:
+            from .declarative.lower import lower
+
+            assert self.recipe is not None
+            self.image = lower(self.recipe)
+            if self.backend is not None:
+                self.image.backend = self.backend
+        return self.image
+
+
+def load_file(
+    path: str | Path,
+    *,
+    attr: str | None = None,
+    extra_paths: Sequence[str | Path] = (),
+) -> RecipeFile:
+    """Import a recipe file without lowering it; discovery as in :func:`load_recipe`."""
+    recipe_path = Path(path).expanduser().resolve()
+    if not recipe_path.is_file():
+        raise ValidationError(
+            f"Recipe file not found: {recipe_path}",
+            hint="Pass the path to a Python file that binds a Recipe.",
+            context={"recipe": str(recipe_path)},
+        )
+    module = _import_recipe_module(recipe_path, extra_paths=extra_paths)
+    found = (
+        _resolve_attr(module, attr, recipe_path)
+        if attr is not None
+        else _discover(module, recipe_path)
+    )
+    raw = getattr(module, BACKEND_NAME, None)
+    backend = None if raw is None else _backend(raw, recipe_path)
+    if isinstance(found, Image):
+        if backend is not None and found.backend is None:
+            found.backend = backend
+        return RecipeFile(recipe_path, None, found, found.backend)
+    return RecipeFile(recipe_path, found, None, backend)
+
+
 def load_declarative(
     path: str | Path,
     *,
@@ -294,6 +353,8 @@ __all__ = [
     "BACKEND_NAME",
     "RECIPE_FACTORY_NAMES",
     "RECIPE_OBJECT_NAMES",
+    "RecipeFile",
     "load_declarative",
+    "load_file",
     "load_recipe",
 ]

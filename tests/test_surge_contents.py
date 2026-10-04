@@ -7,8 +7,6 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from examples.modules import Nethermind, Raiko, TaikoClient
-from examples.nethermind_tdx import NETWORK_SETUP_SERVICE
 
 from tundravm import Image
 
@@ -26,7 +24,6 @@ def _load(name: str, path: Path) -> ModuleType:
 
 
 contents = _load("surge_contents", SURGE / "contents.py")
-recipe = _load("surge_contents_recipe", SURGE / "image.py")
 
 VERBATIM: tuple[tuple[str, str], ...] = (
     ("TDX_INIT", "mkosi.skeleton/init"),
@@ -113,30 +110,5 @@ def test_every_shipped_literal_file_is_covered() -> None:
     assert shipped - GENERATED == covered
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "DROPBEAR_CONFIG",
-        "SYSCTL_CONF",
-        "TDX_GUEST_PERMISSIONS",
-        "TDX_GUEST_SYMLINK",
-        "OPENNTPD_CONF",
-        "PROMETHEUS_DEFAULTS",
-        "NETHERMIND_ENV",
-        "RAIKO_ENV",
-        "TAIKO_CLIENT_ENV",
-    ],
-)
-def test_constant_matches_fluent_recipe(name: str) -> None:
-    assert getattr(recipe, name) == _const(name)
-
-
-def test_skeleton_constants_match_fluent_base() -> None:
+def test_skeleton_init_matches_the_compiler_default() -> None:
     assert Image.DEFAULT_TDX_INIT == _const("TDX_INIT")
-    assert NETWORK_SETUP_SERVICE == _const("NETWORK_SETUP_SERVICE")
-
-
-def test_unit_bodies_match_module_renders() -> None:
-    assert Raiko()._render_service_unit(after=Raiko().after) == _const("RAIKO_UNIT")
-    assert TaikoClient()._render_service_unit(after=()) == _const("TAIKO_CLIENT_UNIT")
-    assert Nethermind()._render_service_unit(after=()) == _const("NETHERMIND_UNIT")

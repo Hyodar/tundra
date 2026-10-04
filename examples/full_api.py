@@ -1,114 +1,110 @@
-"""End-to-end example covering the major SDK API surfaces.
+"""End-to-end example covering the major declaration types.
 
-Run it directly, or drive it with the CLI:
+Drive it with the CLI:
 
-    tundravm check examples/full_api.py --all-profiles
-    tundravm bake examples/full_api.py --lock --all-profiles
+    tundravm check examples/full_api.py
+    tundravm bake examples/full_api.py
 """
 
-from pathlib import Path
-
-from tundravm import Image, Kernel, MkosiOptions, SecretSchema, SecretTarget
 from tundravm.backends import LimaMkosiBackend
-from tundravm.modules import (
-    DiskEncryption,
-    DiskSpec,
-    KeyGeneration,
-    KeySpec,
-    SecretDelivery,
-    SecretSpec,
-    Tdxs,
+from tundravm.declarative import (
+    Debloat,
+    Disk,
+    File,
+    Fragment,
+    Git,
+    Hook,
+    Kernel,
+    Key,
+    Package,
+    Partition,
+    Recipe,
+    Repository,
+    Schema,
+    Secret,
+    SecretEnv,
+    SecretFile,
+    Secrets,
+    Setting,
+    Unit,
+    User,
+    Variant,
+    tdxs,
 )
 
+APP_SERVICE = """\
+[Unit]
+Description=app
+After=network-online.target
 
-def build() -> Image:
-    img = Image(
-        build_dir=Path("build"),
-        base="debian/bookworm",
-        arch="x86_64",
-        reproducible=True,
-        backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
-        kernel=Kernel.tdx_kernel("6.8"),
-        mkosi=MkosiOptions(package_cache_directory="mkosi.cache"),
-    )
+[Service]
+User=app
+ExecStart=/usr/local/bin/app --config /etc/app/runtime.env
+Restart=always
+MemoryMax=4G
+NoNewPrivileges=yes
+ProtectSystem=strict
 
-    img.repository(
-        "https://deb.debian.org/debian-security",
-        name="debian-security",
-        suite="bookworm-security",
-        components=["main"],
-        priority=10,
-    )
+[Install]
+WantedBy=minimal.target
+"""
 
-    img.install("ca-certificates", "curl", "jq")
-    img.targets("qemu")
-    img.debloat(
-        enabled=True,
-        extra_keep_units=["systemd-resolved.service"],
-    )
+key = Key("key_persistent", output="/persistent/key")
+disk = Disk("disk_persistent", mount="/persistent", device="/dev/vda3", key=key)
+jwt = Secret(
+    "jwt_secret",
+    targets=(
+        SecretFile("/run/tdx-secrets/jwt.hex", mode=0o440, owner="app"),
+        SecretEnv("JWT_SECRET"),
+    ),
+    schema=Schema(kind="string", min_length=64, max_length=64),
+)
 
-    img.file("/etc/motd", content="TDX VM\n")
-    img.template(
-        "/etc/app/runtime.env",
-        template="NETWORK={network}\nRPC_PORT={rpc_port}\n",
-        variables={"network": "mainnet", "rpc_port": 8545},
-    )
-
-    img.user("app", system=True, home="/var/lib/app", uid=1000, groups=["tdx"])
-    img.service(
-        "app.service",
-        command=["/usr/local/bin/app", "--config", "/etc/app/runtime.env"],
-        user="app",
-        after=["network-online.target"],
-        restart="always",
-        extra_unit={"Service": {"MemoryMax": "4G"}},
-        security_profile="strict",
-    )
-
-    img.partition("data", size="8G", mount_at="/var/lib/app", fs="ext4")
-    img.shell("pip install pyyaml", phase="prepare")
-    img.shell("sysctl --system", phase="postinst")  # default phase is postinst
-    img.shell("git submodule update --init", phase="sync")
-
-    # Composable init modules
-    key = KeySpec("key_persistent", strategy="tpm", output="/persistent/key")
-    KeyGeneration(keys=(key,)).apply(img)  # runtime-init priority 10
-
-    disk = DiskSpec("disk_persistent", device="/dev/vda3", key=key, key_name="key_persistent")
-    DiskEncryption(disks=(disk,)).apply(img)  # priority 20
-
-    jwt = SecretSpec(
-        "jwt_secret",
-        required=True,
-        schema=SecretSchema(kind="string", min_length=64, max_length=64),
-        targets=(
-            SecretTarget.file("/run/tdx-secrets/jwt.hex", owner="app", mode="0440"),
-            SecretTarget.env("JWT_SECRET", scope="global"),
+recipe = Recipe(
+    name="full-api",
+    base="debian/bookworm",
+    common=Fragment(
+        "app",
+        items=(
+            Kernel("6.8", Git("https://github.com/gregkh/linux", "v6.8")),
+            Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
+            Repository(
+                "debian-security",
+                "https://deb.debian.org/debian-security",
+                suite="bookworm-security",
+                priority=10,
+            ),
+            *(Package(name) for name in ("ca-certificates", "curl", "jq")),
+            Debloat(),
+            File("/etc/motd", "TDX VM\n"),
+            File(
+                "/etc/app/runtime.env",
+                "NETWORK={network}\nRPC_PORT={port}\n".format(network="mainnet", port=8545),
+            ),
+            tdxs(),
+            User("app", home="/var/lib/app", uid=1000, groups=("tdx",)),
+            Unit("app.service", APP_SERVICE, enabled=True, after_init=True),
+            Partition("data", size="8G", mount="/var/lib/app"),
+            Hook("pyyaml", "prepare", "pip install pyyaml"),
+            Hook("sysctl", "postinst", "sysctl --system"),
+            Hook("submodules", "sync", "git submodule update --init"),
+            key,
+            disk,
+            Secrets(entries=(jwt,), store=disk),
         ),
-    )
-    SecretDelivery(secrets=(jwt,), method="http_post").apply(img)  # priority 30
+    ),
+    variants=(
+        Variant("default", target="qemu"),
+        Variant("azure", target="azure", add=Fragment("azure", items=(Package("waagent"),))),
+        Variant("gcp", target="gcp", add=Fragment("gcp", items=(Package("google-guest-agent"),))),
+        Variant(
+            "dev",
+            add=Fragment(
+                "dev", items=tuple(Package(n) for n in ("dropbear", "strace", "gdb", "vim"))
+            ),
+            replace=(Debloat(enabled=False),),
+        ),
+    ),
+)
 
-    Tdxs().apply(img)
-
-    with img.profile("azure"):
-        img.targets("azure")
-        img.install("waagent")
-
-    with img.profile("gcp"):
-        img.targets("gcp")
-        img.install("google-guest-agent")
-
-    with img.profile("dev"):
-        img.install("dropbear")
-        img.install("strace", "gdb", "vim")
-        img.debloat(enabled=False)
-
-    return img
-
-
-if __name__ == "__main__":
-    img = build()
-    img.lock()
-    img.bake(frozen=True)
-    print(img.measure(backend="rtmr", allow_placeholder=True).to_json())
-    print(img.deploy(target="qemu").deployment_id)
+backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

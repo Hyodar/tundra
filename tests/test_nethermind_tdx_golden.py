@@ -13,7 +13,6 @@ behavioral artifacts rather than raw file paths:
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -21,11 +20,10 @@ from pathlib import Path
 
 import pytest
 
-_IMAGE_PATH = Path(__file__).resolve().parent.parent / "examples" / "surge-tdx-prover" / "image.py"
-_spec = importlib.util.spec_from_file_location("surge_tdx_prover_image", _IMAGE_PATH)
-_mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_mod)  # type: ignore[union-attr]
-build_surge_tdx_prover = _mod.build
+from tundravm.recipe import load_recipe
+
+_ROOT = Path(__file__).resolve().parent.parent
+_IMAGE_PATH = _ROOT / "examples" / "surge-tdx-prover" / "image.py"
 
 pytestmark = pytest.mark.integration
 
@@ -46,11 +44,10 @@ REQUIRED_SECTIONS = [
 @pytest.fixture(scope="module")
 def sdk_output(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Compile the full surge-tdx-prover image with all profiles."""
-    img = build_surge_tdx_prover()
-    # Activate all profiles so the emission includes azure, gcp, devtools
-    img._active_profiles = tuple(sorted(img.state.profiles.keys()))
+    img = load_recipe(_IMAGE_PATH, extra_paths=[_ROOT])
     out = tmp_path_factory.mktemp("sdk_emission")
-    img.compile(out / "mkosi")
+    # Every variant, so the emission includes azure, gcp and devtools
+    img.compile(out / "mkosi", profiles=sorted(img.state.profiles))
     return out / "mkosi"
 
 

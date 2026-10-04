@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from tundravm import Image, ValidationError, load_recipe
+from tundravm.declarative import Recipe
+from tundravm.recipe import load_declarative
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
@@ -155,10 +157,12 @@ def test_missing_file_error(tmp_path: Path) -> None:
 
 
 def test_surge_example_recipe_loads() -> None:
-    recipe = Path(__file__).resolve().parent.parent / "examples" / "surge-tdx-prover" / "image.py"
+    root = Path(__file__).resolve().parent.parent
+    recipe = root / "examples" / "surge-tdx-prover" / "image.py"
+    assert isinstance(load_declarative(recipe, extra_paths=[root]), Recipe)
     img = load_recipe(recipe)
     assert isinstance(img, Image)
-    assert {"azure", "gcp", "devtools"} <= set(img.state.profiles)
+    assert {"default", "azure", "gcp", "devtools"} == set(img.state.profiles)
 
 
 @pytest.mark.parametrize(
@@ -169,10 +173,12 @@ def test_surge_example_recipe_loads() -> None:
         "full_api.py",
         "tdxs_module.py",
         "strict_secrets.py",
+        "nethermind_tdx.py",
     ],
 )
 def test_small_examples_are_loadable_recipes(name: str) -> None:
-    recipe = Path(__file__).resolve().parent.parent / "examples" / name
-    img = load_recipe(recipe)
+    path = Path(__file__).resolve().parent.parent / "examples" / name
+    assert isinstance(load_declarative(path), Recipe)
+    img = load_recipe(path)
     assert isinstance(img, Image)
-    assert img.state.profiles["default"] is not None
+    assert img.state.profiles

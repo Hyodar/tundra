@@ -1,5 +1,11 @@
 """Helpers for testing recipes and modules: compile, lint, golden trees, CLI runs.
 
+The declarative helpers work on lifecycle values: :func:`assert_clean` and
+:func:`assert_diagnostic` take the diagnostics :func:`tundravm.lint` returns,
+:func:`assert_tree` compares a :class:`~tundravm.Tree` with a golden directory
+and :func:`fake_bake` turns a tree into a simulated :class:`~tundravm.Artifact`.
+They also accept a ``Recipe`` (linted for you) or a lowered ``Image``.
+
 Importing this package does not import pytest. The fixtures live in
 ``tundravm.testing.pytest_plugin``, which pytest loads automatically once
 tundravm is installed.
@@ -8,7 +14,9 @@ tundravm is installed.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -16,12 +24,26 @@ import textwrap
 from collections.abc import Iterator, Mapping, Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Self, cast
+from typing import TYPE_CHECKING, ClassVar, Self, cast, overload
 
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.check import Diagnostic, Level, render
+from tundravm.declarative import Recipe
+from tundravm.declarative.lifecycle import (
+    INPROCESS,
+    MANIFEST_KEY,
+    Artifact,
+    Tree,
+    check_report,
+    compile_image,
+    read_artifacts,
+    read_tree,
+    variant_names,
+)
+from tundravm.declarative.model import Diagnostic as Finding
+from tundravm.declarative.model import Target
 from tundravm.diff import TreeDiff, _foreign_profile_globs, diff_trees
-from tundravm.models import BakeResult
+from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
 from tundravm.modules.base import Module
 
 if TYPE_CHECKING:
@@ -121,13 +143,22 @@ def _profile_list(profiles: Sequence[str] | None) -> list[str] | None:
 
 
 def compile_tree(
-    image: Image, *, profiles: Sequence[str] | None = None, path: Path | None = None
+    image: Image | Recipe, *, profiles: Sequence[str] | None = None, path: Path | None = None
 ) -> CompiledTree:
-    """Compile *profiles* (default: the active ones) into *path* or a fresh temp dir.
+    """Compile *profiles* into *path* or a fresh temp dir.
 
-    The image's compile cache is left as it was, so a later ``bake()`` is unaffected.
+    For a ``Recipe``, *profiles* are variant names (default: every variant); for an
+    ``Image``, the default is its active profiles. The image's compile cache is
+    left as it was, so a later ``bake()`` is unaffected.
     """
     root = Path(path) if path is not None else Path(tempfile.mkdtemp(prefix="tundravm-tree-"))
+    if isinstance(image, Recipe):
+        names = variant_names(image, _profile_list(profiles))
+        from tundravm.declarative import lower
+
+        tree = compile_image(lower(image, variants=names), names, locked=None)
+        tree.write(root)
+        return CompiledTree(root, tree.variants, default_profile=tree.variants[0])
     saved = (image._last_compile_digest, image._last_compile_path, image._last_compile_emission)
     try:
         with _selected(image, profiles):
@@ -141,40 +172,126 @@ def compile_tree(
     return CompiledTree(root, result.profiles, default_profile=image.default_profile)
 
 
+AnyDiagnostic = Diagnostic | Finding
+
+
+def _findings(
+    subject: Image | Recipe | Sequence[AnyDiagnostic], profiles: Sequence[str] | None
+) -> Sequence[AnyDiagnostic]:
+    if isinstance(subject, Recipe):
+        return check_report(subject, None, variants=_profile_list(profiles))
+    if isinstance(subject, (list, tuple)):
+        return subject
+    image = cast("Image", subject)
+    return image.check(profiles=_profile_list(profiles))
+
+
+def _variant(d: AnyDiagnostic) -> str:
+    return d.variant if isinstance(d, Finding) else d.profile
+
+
+def _render(diagnostics: Sequence[AnyDiagnostic]) -> str:
+    if not diagnostics:
+        return "no findings"
+    if all(isinstance(d, Diagnostic) for d in diagnostics):
+        return render(cast("Sequence[Diagnostic]", diagnostics))
+    return "\n".join(
+        f"{d.level} {d.code} [{_variant(d)}]{f' {d.subject}' if d.subject else ''}: {d.message}"
+        for d in diagnostics
+    )
+
+
+@overload
 def assert_clean(
-    image: Image,
+    subject: Sequence[Finding],
+    /,
     *,
     profiles: Sequence[str] | None = None,
     allow: Sequence[str] = (),
-    strict: bool = False,
-) -> list[Diagnostic]:
-    """Fail on error-level findings (any finding with *strict*) whose code is not in *allow*.
+    strict: bool | None = None,
+) -> Sequence[Finding]: ...
+@overload
+def assert_clean(
+    subject: Image | Recipe,
+    /,
+    *,
+    profiles: Sequence[str] | None = None,
+    allow: Sequence[str] = (),
+    strict: bool | None = None,
+) -> list[Diagnostic]: ...
+def assert_clean(
+    subject: Image | Recipe | Sequence[Finding],
+    /,
+    *,
+    profiles: Sequence[str] | None = None,
+    allow: Sequence[str] = (),
+    strict: bool | None = None,
+) -> Sequence[AnyDiagnostic]:
+    """Fail on error-level findings (warnings too with *strict*) whose code is not in *allow*.
 
-    Returns every diagnostic, allowed or not.
+    *subject* is the diagnostics ``tundravm.lint()`` returned (*strict* defaults to
+    true), or a ``Recipe``/``Image`` to lint (*strict* defaults to false). Returns
+    every diagnostic, allowed or not.
     """
-    diagnostics = image.check(profiles=_profile_list(profiles))
-    failing = [d for d in diagnostics if d.code not in allow and (strict or d.level == "error")]
+    given = isinstance(subject, (list, tuple))
+    strict = given if strict is None else strict
+    diagnostics = _findings(subject, profiles)
+    levels = {"error", "warning"} if strict else {"error"}
+    failing = [d for d in diagnostics if d.code not in allow and d.level in levels]
     if failing:
-        raise AssertionError(f"recipe has {len(failing)} unexpected finding(s):\n{render(failing)}")
-    return diagnostics
+        raise AssertionError(
+            f"recipe has {len(failing)} unexpected finding(s):\n{_render(failing)}"
+        )
+    return list(diagnostics) if not given else diagnostics
 
 
+@overload
 def assert_diagnostic(
-    image: Image,
+    diagnostics: Sequence[Finding],
     code: str,
+    /,
     *,
     level: Level | None = None,
     profile: str | None = None,
+    variant: str | None = None,
     subject: str | None = None,
-) -> Diagnostic:
-    """Return the first diagnostic matching every given field, else fail listing them all."""
-    diagnostics = image.check(profiles=None if profile is None else [profile])
-    for d in diagnostics:
+) -> Finding: ...
+@overload
+def assert_diagnostic(
+    diagnostics: Image | Recipe,
+    code: str,
+    /,
+    *,
+    level: Level | None = None,
+    profile: str | None = None,
+    variant: str | None = None,
+    subject: str | None = None,
+) -> Diagnostic: ...
+def assert_diagnostic(
+    diagnostics: Image | Recipe | Sequence[Finding],
+    code: str,
+    /,
+    *,
+    level: Level | None = None,
+    profile: str | None = None,
+    variant: str | None = None,
+    subject: str | None = None,
+) -> AnyDiagnostic:
+    """Return the first diagnostic matching every given field, else fail listing them all.
+
+    *diagnostics* is what ``tundravm.lint()`` returned, or a ``Recipe``/``Image`` to
+    lint. ``profile`` is an alias of ``variant``.
+    """
+    wanted_subject = subject
+    variant = profile if profile is not None else variant
+    scope = None if variant is None or isinstance(diagnostics, (list, tuple)) else [variant]
+    found = _findings(diagnostics, scope)
+    for d in found:
         if (
             d.code == code
             and (level is None or d.level == level)
-            and (profile is None or d.profile == profile)
-            and (subject is None or d.subject == subject)
+            and (variant is None or _variant(d) == variant)
+            and (wanted_subject is None or (d.subject or None) == wanted_subject)
         ):
             return d
     wanted = ", ".join(
@@ -182,12 +299,77 @@ def assert_diagnostic(
         for key, value in (
             ("code", code),
             ("level", level),
-            ("profile", profile),
-            ("subject", subject),
+            ("variant", variant),
+            ("subject", wanted_subject),
         )
         if value is not None
     )
-    raise AssertionError(f"no diagnostic with {wanted}; found:\n{render(diagnostics)}")
+    raise AssertionError(f"no diagnostic with {wanted}; found:\n{_render(found)}")
+
+
+def assert_tree(tree: Tree, golden: str | Path, *, update: bool | None = None) -> None:
+    """Fail unless *golden* holds exactly *tree*: every path, its bytes, exec bit and symlink.
+
+    Empty directories are ignored (git does not keep them). *update* (default:
+    ``TUNDRAVM_UPDATE_GOLDEN=1``) writes *tree* to *golden* instead of comparing.
+    """
+    root = Path(golden)
+    if update is None:
+        update = os.environ.get(UPDATE_GOLDEN_ENV) == "1"
+    if update:
+        tree.write(root)
+        return
+    expected = {e.path: e for e in tree.entries if e.content is not None or e.symlink}
+    actual = {e.path: e for e in read_tree(root).entries if e.content is not None or e.symlink}
+    problems: list[str] = []
+    for path in sorted(expected.keys() | actual.keys()):
+        want, have = expected.get(path), actual.get(path)
+        if want is None:
+            problems.append(f"+ {path} (only in {root})")
+        elif have is None:
+            problems.append(f"- {path} (missing from {root})")
+        elif want.symlink != have.symlink:
+            problems.append(f"~ {path}: symlink {have.symlink!r} != {want.symlink!r}")
+        elif want.content != have.content:
+            problems.append(f"~ {path}: content differs")
+        elif bool(want.mode & 0o111) != bool(have.mode & 0o111):
+            problems.append(f"~ {path}: exec bit {oct(have.mode)} != {oct(want.mode)}")
+    if problems:
+        shown = "\n".join(problems[:_UNIFIED_LINES])
+        raise AssertionError(
+            f"tree differs from {root} in {len(problems)} path(s):\n{shown}\n"
+            f"Re-run with {UPDATE_GOLDEN_ENV}=1 to accept the compiled tree."
+        )
+
+
+_FAKE_FILENAMES: dict[str, str] = {
+    "qemu": "disk.qcow2",
+    "azure": "disk.vhd",
+    "gcp": "disk.raw.tar.gz",
+}
+
+
+def fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact:
+    """A simulated artifact for *variant* derived from *tree*, recorded in ``out``'s manifest.
+
+    Writes ``out/<variant>/<disk file>`` and ``out/bake-result.json`` (merging with
+    one already there), so :func:`tundravm.read_artifacts` reads it back.
+    Measurement and deployment refuse it unless told to allow placeholders.
+    """
+    base = Path(out)
+    path = base / variant / _FAKE_FILENAMES[target]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"simulated: variant={variant} target={target} tree={tree.digest}\n")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest = base / BAKE_RESULT_FILENAME
+    result = BakeResult.load(base) if manifest.is_file() else BakeResult(backend=INPROCESS)
+    profile = result.profiles.setdefault(variant, ProfileBuildResult(profile=variant))
+    profile.artifacts[target] = ArtifactRef(target=target, path=path, digest=digest)
+    result.save(base)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload[MANIFEST_KEY] = {"recipe_digest": "", "simulated": True, "tree_digest": tree.digest}
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return next(a for a in read_artifacts(manifest) if a.variant == variant and a.target == target)
 
 
 def assert_tree_matches(
@@ -358,9 +540,11 @@ __all__ = [
     "FakeModule",
     "assert_clean",
     "assert_diagnostic",
+    "assert_tree",
     "assert_tree_matches",
     "bake_in_process",
     "compile_tree",
+    "fake_bake",
     "recipe_file",
     "run_cli",
 ]

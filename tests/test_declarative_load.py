@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from tundravm import Recipe, load
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.errors import ValidationError
 from tundravm.recipe import load_recipe
 
@@ -83,17 +83,17 @@ def test_load_recipe_lowers_and_wires_the_backend(recipe_file: Path) -> None:
     assert img.state.effective_profile("azure").output_targets == ("azure",)
 
 
-def test_cli_explain_and_compile_a_declarative_recipe(recipe_file: Path, tmp_path: Path) -> None:
-    code, out = run("explain", str(recipe_file), "--json", "--all-profiles")
+def test_cli_inspect_and_compile_a_declarative_recipe(recipe_file: Path, tmp_path: Path) -> None:
+    code, out = run("inspect", str(recipe_file), "--json")
     assert code == EXIT_OK
-    payload = json.loads(out)
+    payload = json.loads(out)["variants"]
     assert set(payload) == {"default", "azure"}
     assert payload["default"]["base"] == "debian/bookworm"
 
-    code, out = run("explain", str(recipe_file), "--profile", "azure")
+    code, out = run("inspect", str(recipe_file), "--variant", "azure")
     assert code == EXIT_OK and "azure" in out
 
-    code, _ = run("compile", str(recipe_file), "--out", str(tmp_path / "tree"), "--all-profiles")
+    code, _ = run("compile", str(recipe_file), "--out", str(tmp_path / "tree"))
     assert code == EXIT_OK
     motd = tmp_path / "tree" / "default" / "mkosi.extra" / "etc" / "motd"
     assert motd.read_text() == "hello\n"
@@ -106,6 +106,10 @@ def test_cli_reports_resolution_errors(tmp_path: Path, capsys: pytest.CaptureFix
         "recipe = Recipe('b', Fragment('c', items=(Disk('d', '/data', key=Key('k')),)))\n",
         encoding="utf-8",
     )
-    code, _ = run("explain", str(broken))
+    code, _ = run("inspect", str(broken))
     assert code == EXIT_SDK_ERROR
     assert "disk-key-undefined" in capsys.readouterr().err
+
+    code, out = run("lint", str(broken))
+    assert code == EXIT_FAILURE
+    assert "error disk-key-undefined [default]" in out

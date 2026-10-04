@@ -1,12 +1,14 @@
 """Command-line interface for recipe files: ``tundravm <command> RECIPE``.
 
-Every command loads an ``Image`` from a Python recipe file via
-:func:`tundravm.recipe.load_recipe`, applies the requested profile selection,
-and runs one lifecycle step. ``measure`` and ``deploy`` read the
-``bake-result.json`` a previous ``bake`` wrote. ``init`` bootstraps a recipe
-project and ``ci`` runs the three review gates in one go. Exit codes: 0 success,
-2 SDK error (``E_*`` codes), 1 for a failed check (``check``, ``compile --check``,
-``lock --check``, ``diff``, ``ci``) or an unexpected failure.
+Every recipe command loads the ``Recipe`` a Python file binds (see
+:func:`tundravm.recipe.load_file`) and runs one lifecycle step from
+:mod:`tundravm.declarative.lifecycle` on the selected variants: repeat
+``--variant NAME``, or omit it for every declared variant. ``measure`` and
+``deploy`` read the ``bake-result.json`` manifest a ``bake`` wrote. ``init``
+bootstraps a recipe project and ``ci`` runs lint, compile and lock checks in
+one go. Exit codes: 0 success, 2 SDK error (``E_*`` codes), 1 for a failed check
+(``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``, ``doctor``)
+or an unexpected failure.
 """
 
 from __future__ import annotations
@@ -16,31 +18,53 @@ import json
 import os
 import platform
 import re
-import subprocess
 import sys
 import warnings
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
+from dataclasses import MISSING, fields
 from pathlib import Path
 from typing import TextIO, cast, get_args
 
 from . import __version__
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
-from .check import check as run_checks
-from .check import cmd_check, failing, render_as, render_summary
-from .check import render as render_diagnostics
+from .check import failing, render_as, render_summary
+from .declarative.lifecycle import (
+    DEPLOY_TARGETS,
+    Artifact,
+    Backend,
+    BackendKind,
+    Deployment,
+    DeployTarget,
+    Lock,
+    Measurements,
+    ProbeRunner,
+    Scheme,
+    bake_image,
+    check_report,
+    deploy,
+    lock_image,
+    measure,
+    probe,
+    read_artifacts,
+    read_lock,
+    requirements_of,
+    run_probe,
+    select_artifact,
+    using_lock,
+    write_lock,
+)
+from .declarative.model import Target
 from .diff import _wants_color, cmd_diff, diff_against
 from .errors import TdxError, ValidationError
 from .explain import render_markdown
 from .formats import annotation_path, format_help, resolve_format, workflow_command
 from .image import Image
 from .lockfile import LockDrift, recipe_digest
-from .measure import Measurements, PlaceholderMeasurementWarning
+from .measure import PlaceholderMeasurementWarning
 from .measure import rtmr as rtmr_measure
-from .models import DeployResult, OutputTarget
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
-from .recipe import load_recipe
+from .recipe import RecipeFile, load_file
 from .templates import (
     BACKEND_SNIPPETS,
     GITIGNORE_BLOCK,
@@ -53,6 +77,10 @@ from .templates import (
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_SDK_ERROR = 2
+
+MEASUREMENT_SCHEMES: tuple[Scheme, ...] = ("rtmr", "azure", "gcp")
+BACKEND_KINDS: tuple[BackendKind, ...] = get_args(BackendKind)
+LOCK_FILENAME = "tundravm.lock"
 
 
 def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> int:
@@ -74,47 +102,60 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tundravm",
-        description="Build, inspect, lock, bake, measure, and deploy TDX VM image recipes.",
+        description="Inspect, lint, compile, lock, bake, measure, and deploy TDX VM image recipes.",
         epilog=(
-            "RECIPE is a Python file that binds an Image to `img` or defines a "
-            "zero-argument `build() -> Image` function. Use --attr to pick another name."
+            "RECIPE is a Python file that binds a tundravm.Recipe to `recipe` or defines a "
+            "zero-argument `build() -> Recipe` function; --attr picks another name. A "
+            "module-level `backend` is the build backend `bake` uses unless --backend is given."
         ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    _add_init(sub)
 
-    explain = _add_command(
-        sub, "explain", _cmd_explain, help="Show what the recipe will produce (dry run)."
+    inspect = _add_command(
+        sub, "inspect", _cmd_inspect, help="Show what the recipe will produce (dry run)."
     )
-    explain_format = explain.add_mutually_exclusive_group()
-    explain_format.add_argument(
+    inspect_format = inspect.add_mutually_exclusive_group()
+    inspect_format.add_argument(
         "--format",
         choices=("text", "json", "markdown"),
         default=None,
         help=(
-            "Output format (default: text). markdown renders one section per profile with "
-            "tables, ready for $GITHUB_STEP_SUMMARY."
+            "Output format (default: text). json holds the recipe digest the lockfile "
+            "records and one entry per variant; markdown renders one section per variant "
+            "with tables, ready for $GITHUB_STEP_SUMMARY."
         ),
     )
-    explain_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
+    inspect_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
 
-    digest = _add_command(
-        sub, "digest", _cmd_digest, help="Print the recipe digest used by lockfiles."
+    lint = _add_command(
+        sub,
+        "lint",
+        _cmd_lint,
+        help="Report every recipe diagnostic: declarations, fragment checks, compiler rules.",
     )
-    del digest
+    lint_format = lint.add_mutually_exclusive_group()
+    lint_format.add_argument(
+        "--format",
+        choices=("auto", "text", "json", "github", "markdown"),
+        default=None,
+        help=(
+            "Output format (default: auto). github prints `::error file=RECIPE,title=CODE::"
+            "message` lines that show inline on the pull request; markdown prints a table. "
+            + format_help("--json")
+        ),
+    )
+    lint_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
+    lint.add_argument("--strict", action="store_true", help="Treat warnings as errors (exit 1).")
 
     compile_cmd = _add_command(
         sub, "compile", _cmd_compile, help="Emit the mkosi project tree for the recipe."
     )
     compile_cmd.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Destination directory (default: <build_dir>/mkosi).",
+        "--out", type=Path, default=None, help="Destination directory (default: build/mkosi)."
     )
-    compile_cmd.add_argument(
-        "--force", action="store_true", help="Re-emit even if the recipe is unchanged."
-    )
+    _add_lockfile(compile_cmd)
     compile_cmd.add_argument(
         "--check",
         action="store_true",
@@ -130,106 +171,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    lock = _add_command(sub, "lock", _cmd_lock, help="Write the lockfile for the recipe.")
-    lock.epilog = (
-        "Drift is reported one section per line: `~` changed, `+` only in the recipe, "
-        "`-` only in the lockfile, e.g. `~ profiles.default.packages: +htop -jq`. "
-        "A lockfile from before section digests reports every section as `+`. "
-        "Source builds are pinned under `fetches` and drift as `+ sources.<name>` "
-        "(unpinned) or `~ sources.<name>: <old> -> <new>`."
-    )
-    lock.add_argument(
-        "--path",
-        type=Path,
-        default=None,
-        help="Lockfile path (default: <build_dir>/tundravm.lock).",
-    )
-    lock.add_argument(
-        "--check",
-        action="store_true",
-        help=(
-            "Do not write; print the drift and exit 1 if the lockfile is stale, "
-            "or print `lock is up to date` and exit 0."
-        ),
-    )
-    lock.add_argument(
-        "--format",
-        choices=("auto", "text", "github", "markdown"),
-        default=None,
-        help=(
-            "Drift report format for --check (default: auto): github prints one ::error "
-            "per drifted section, markdown a table. " + format_help()
-        ),
-    )
-    lock.add_argument(
-        "--offline",
-        action="store_true",
-        help=(
-            "Do not touch the network: reuse the existing lockfile's source pins and fail "
-            "if a source build would need resolving."
-        ),
-    )
-    lock.add_argument(
-        "--explain",
-        action="store_true",
-        help=(
-            "Print which sections changed since the existing lockfile before writing it "
-            "(with --check, print the drift without writing)."
-        ),
-    )
-
-    bake = _add_command(sub, "bake", _cmd_bake, help="Compile and build the image.")
-    bake.add_argument(
-        "--out", type=Path, default=None, help="Build output directory (default: <build_dir>)."
-    )
-    bake.add_argument(
-        "--frozen", action="store_true", help="Refuse to build if the lockfile is stale."
-    )
-    bake.add_argument(
-        "--lock",
-        action="store_true",
-        help="Write the lockfile first, then build with --frozen semantics.",
-    )
-    bake.add_argument("--force", action="store_true", help="Force recompilation.")
-    bake.epilog = (
-        "Progress goes to stderr as `[profile] step ... ok (1.2s)` lines (a live timer on a "
-        "terminal); the summary table goes to stdout. Backend output is hidden unless "
-        "--verbose, but its last lines are shown when the build fails."
-    )
-    output = bake.add_mutually_exclusive_group()
-    output.add_argument(
-        "-v", "--verbose", action="store_true", help="Echo every backend output line."
-    )
-    output.add_argument(
-        "-q", "--quiet", action="store_true", help="Print only the final summary and errors."
-    )
-    output.add_argument(
-        "--json-logs",
-        action="store_true",
-        help="Write progress events to stdout as JSON lines (no summary).",
-    )
-    bake.add_argument(
-        "--color",
-        choices=("auto", "always", "never"),
-        default="auto",
-        help="Colorize progress output (default: %(default)s).",
-    )
-
-    check = _add_command(sub, "check", _cmd_check, help="Lint the recipe and report diagnostics.")
-    check_format = check.add_mutually_exclusive_group()
-    check_format.add_argument(
-        "--format",
-        choices=("auto", "text", "json", "github", "markdown"),
-        default=None,
-        help=(
-            "Output format (default: auto). github prints `::error file=RECIPE,title=CODE::"
-            "message` lines that show inline on the pull request; markdown prints a table. "
-            + format_help("--json")
-        ),
-    )
-    check_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
-    check.add_argument("--strict", action="store_true", help="Treat warnings as errors (exit 1).")
-
     diff = _add_command(
         sub, "diff", _cmd_diff, help="Show how the recipe differs from a compiled tree."
     )
@@ -237,8 +178,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--against",
         type=Path,
         default=None,
-        help="Compiled mkosi tree to compare with (default: <build_dir>/mkosi).",
+        help="Compiled mkosi tree to compare with (default: build/mkosi).",
     )
+    _add_lockfile(diff)
     diff_format = diff.add_mutually_exclusive_group()
     diff_format.add_argument(
         "--format",
@@ -260,70 +202,186 @@ def build_parser() -> argparse.ArgumentParser:
         help="Colorize output (default: %(default)s).",
     )
 
-    measure = _add_command(
-        sub,
-        "measure",
-        _cmd_measure,
-        help="Derive expected TDX measurements from the last bake.",
+    lock = _add_command(sub, "lock", _cmd_lock, help="Write the lockfile for the recipe.")
+    lock.epilog = (
+        "Pins already in the lockfile are kept while their source is unchanged; "
+        "--update NAME resolves that source again. Drift is reported one section per "
+        "line: `~` changed, `+` only in the recipe, `-` only in the lockfile, e.g. "
+        "`~ profiles.default.packages: +htop -jq`. Source builds are pinned under "
+        "`fetches` and drift as `+ sources.<name>` (unpinned) or "
+        "`~ sources.<name>: <old> -> <new>`."
     )
-    measure.add_argument(
-        "--backend", required=True, choices=MEASUREMENT_BACKENDS, help="Measurement scheme."
+    lock.add_argument(
+        "--path",
+        type=Path,
+        default=None,
+        help="Lockfile path (default: build/tundravm.lock).",
     )
-    measure.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
-    measure.add_argument(
-        "--out", type=Path, default=None, help="Bake output directory if bake used --out."
+    lock.add_argument(
+        "--update",
+        action="append",
+        default=None,
+        metavar="SOURCE",
+        help="Resolve this source build again even if it is pinned (repeatable).",
     )
-    measure.add_argument(
+    lock_mode = lock.add_mutually_exclusive_group()
+    lock_mode.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Do not write; print the drift and exit 1 if the lockfile is stale, "
+            "or print `lock is up to date` and exit 0."
+        ),
+    )
+    lock_mode.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "Do not touch the network: reuse the existing lockfile's source pins and fail "
+            "if a source build would need resolving."
+        ),
+    )
+    lock.add_argument(
+        "--format",
+        choices=("auto", "text", "github", "markdown"),
+        default=None,
+        help=(
+            "Drift report format for --check (default: auto): github prints one ::error "
+            "per drifted section, markdown a table. " + format_help()
+        ),
+    )
+    lock.add_argument(
+        "--explain",
+        action="store_true",
+        help=(
+            "Print which sections changed since the existing lockfile before writing it "
+            "(with --check, print the drift without writing)."
+        ),
+    )
+
+    bake = _add_command(sub, "bake", _cmd_bake, help="Compile and build the image.")
+    bake.add_argument(
+        "--out", type=Path, default=None, help="Build output directory (default: build)."
+    )
+    bake.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help=(
+            "Bake frozen against this lockfile (default: build/tundravm.lock when it "
+            "exists; without one the bake is unpinned)."
+        ),
+    )
+    bake.add_argument(
+        "--backend",
+        choices=BACKEND_KINDS,
+        default=None,
+        help="Build backend (default: the recipe file's `backend`).",
+    )
+    bake.epilog = (
+        "Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a "
+        "terminal); the summary table goes to stdout. Backend output is hidden unless "
+        "--verbose, but its last lines are shown when the build fails. The artifact "
+        "manifest is OUT/bake-result.json, which `measure` and `deploy` read."
+    )
+    output = bake.add_mutually_exclusive_group()
+    output.add_argument(
+        "-v", "--verbose", action="store_true", help="Echo every backend output line."
+    )
+    output.add_argument(
+        "-q", "--quiet", action="store_true", help="Print only the final summary and errors."
+    )
+    output.add_argument(
+        "--json-logs",
+        action="store_true",
+        help="Write progress events to stdout as JSON lines (no summary).",
+    )
+    bake.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="Colorize progress output (default: %(default)s).",
+    )
+
+    measure_cmd = _add_manifest_command(
+        sub, "measure", _cmd_measure, help="Derive expected TDX measurements of a baked variant."
+    )
+    measure_cmd.add_argument(
+        "--scheme", default="rtmr", choices=MEASUREMENT_SCHEMES, help="Measurement scheme."
+    )
+    measure_cmd.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    measure_cmd.add_argument(
         "--allow-placeholder",
         action="store_true",
         help=(
             "Without measured-boot/dstack-mr (and always for azure/gcp), print placeholder "
-            "values derived from artifact digests instead of failing. Not real measurements."
+            "values derived from artifact digests instead of failing. Not real measurements. "
+            "Also required to measure a simulated (in-process) artifact."
         ),
     )
 
-    deploy = _add_command(
-        sub, "deploy", _cmd_deploy, help="Deploy the last baked artifact of one profile."
+    deploy_cmd = _add_manifest_command(
+        sub, "deploy", _cmd_deploy, help="Deploy the baked artifact of one variant."
     )
-    deploy.add_argument(
-        "--target", required=True, choices=get_args(OutputTarget), help="Deploy target."
+    deploy_cmd.add_argument(
+        "--target", required=True, choices=tuple(DEPLOY_TARGETS), help="Deploy target."
     )
-    deploy.add_argument(
-        "--out", type=Path, default=None, help="Bake output directory if bake used --out."
-    )
-    deploy.add_argument("--memory", default=None, help="Guest memory, e.g. 4GiB.")
-    deploy.add_argument("--cpus", type=int, default=None, help="Guest vCPU count.")
-    deploy.add_argument(
+    deploy_cmd.add_argument(
         "--param",
         action="append",
         default=None,
         metavar="KEY=VALUE",
-        help="Adapter parameter (repeatable), e.g. --param ssh_port=2223.",
+        help=(
+            "Target setting (repeatable). qemu: memory, cpus, ssh_port, tdx, daemonize; "
+            "azure: storage_account, resource_group, location, vm_size; "
+            "gcp: project, bucket, zone, machine_type."
+        ),
     )
+    deploy_cmd.add_argument(
+        "--allow-placeholder",
+        action="store_true",
+        help="Deploy a simulated (in-process) artifact anyway.",
+    )
+
+    doctor_cmd = sub.add_parser(
+        "doctor",
+        help="Check the host tools the build backends need.",
+        description=(
+            "Report Python/tundravm versions and probe backend tools. With --backend, "
+            "probe only that backend; with RECIPE, probe its backend and lint it. Exit 1 "
+            "if a required tool is missing."
+        ),
+    )
+    doctor_cmd.set_defaults(handler=_cmd_doctor)
+    doctor_cmd.add_argument(
+        "recipe", type=Path, nargs="?", default=None, help="Optional recipe .py file."
+    )
+    doctor_cmd.add_argument(
+        "--backend", choices=BACKEND_KINDS, default=None, help="Backend to probe."
+    )
+    _add_import_options(doctor_cmd)
 
     ci = _add_command(
         sub,
         "ci",
         _cmd_ci,
-        help="Run check --strict, compile --check and lock --check; stop at the first failure.",
+        help="Run lint --strict, compile --check and lock --check; stop at the first failure.",
     )
     ci.epilog = (
-        "Lints every declared profile; the compile and lock checks use the selected "
-        "profiles, as `compile` and `lock` do. Prints `ok STEP: ...` or `FAIL STEP: ...` "
-        "per step (and `skip STEP` after a failure) and exits 1 on the first failure, "
-        "including a missing lockfile."
+        "Prints `ok STEP: ...` or `FAIL STEP: ...` per step (and `skip STEP` after a "
+        "failure) and exits 1 on the first failure, including a missing lockfile."
     )
     ci.add_argument(
         "--out",
         type=Path,
         default=None,
-        help="Committed mkosi tree to check (default: <build_dir>/mkosi).",
+        help="Committed mkosi tree to check (default: build/mkosi).",
     )
     ci.add_argument(
         "--lockfile",
         type=Path,
         default=None,
-        help="Lockfile to check (default: <build_dir>/tundravm.lock).",
+        help="Lockfile to check (default: build/tundravm.lock).",
     )
     ci.add_argument(
         "--format",
@@ -331,14 +389,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Report format for failing steps (default: auto). " + format_help(),
     )
+    return parser
 
+
+def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init = sub.add_parser(
         "init",
         help="Bootstrap a recipe project, optionally with a GitHub Actions workflow.",
         description=(
             "Write <name>.py from the starter template and a .gitignore block for build/ "
             "that keeps build/tundravm.lock committed. With --ci github, also write "
-            f"{WORKFLOW_PATH}, which posts `explain --format markdown` to the job summary "
+            f"{WORKFLOW_PATH}, which posts `inspect --format markdown` to the job summary "
             "and runs `tundravm ci`."
         ),
     )
@@ -370,51 +431,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Overwrite the recipe and workflow if they exist."
     )
 
-    doctor_cmd = sub.add_parser(
-        "doctor",
-        help="Check the host tools the build backends need.",
-        description=(
-            "Report Python/tundravm versions and probe backend tools. With RECIPE, "
-            "probe only its backend and run `check`; exit 1 if a required tool is missing."
-        ),
-    )
-    doctor_cmd.set_defaults(handler=_cmd_doctor)
-    doctor_cmd.add_argument(
-        "recipe", type=Path, nargs="?", default=None, help="Optional recipe .py file."
-    )
-    doctor_cmd.add_argument(
+
+def _add_import_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
         "--attr",
         default=None,
-        help="Name of the Image instance or factory function inside RECIPE.",
+        help="Name of the Recipe (or zero-argument factory) inside RECIPE.",
     )
-    doctor_cmd.add_argument(
+    parser.add_argument(
         "--pythonpath",
         action="append",
         default=None,
         metavar="DIR",
         help="Extra import directory for the recipe (repeatable). CWD is always included.",
     )
-
-    new = sub.add_parser(
-        "new",
-        help="Write a starter recipe file.",
-        description="Write a starter recipe file you can edit and run with the other commands.",
-    )
-    new.set_defaults(handler=_cmd_new)
-    new.add_argument("path", type=Path, help="Recipe file to create (must not exist).")
-    new.add_argument(
-        "--base", default="debian/trixie", help="Base distribution (default: %(default)s)."
-    )
-    new.add_argument(
-        "--backend",
-        choices=sorted(BACKEND_SNIPPETS),
-        default="lima",
-        help="Build backend to wire in (default: %(default)s).",
-    )
-    new.add_argument(
-        "--force", action="store_true", help="Overwrite the file if it already exists."
-    )
-    return parser
 
 
 def _add_command(
@@ -427,154 +457,184 @@ def _add_command(
     parser = sub.add_parser(name, help=help, description=help)
     parser.set_defaults(handler=handler)
     parser.add_argument("recipe", type=Path, help="Path to the recipe .py file.")
+    _add_import_options(parser)
     parser.add_argument(
-        "--attr",
-        default=None,
-        help="Name of the Image instance or factory function inside RECIPE.",
-    )
-    parser.add_argument(
-        "--pythonpath",
-        action="append",
-        default=None,
-        metavar="DIR",
-        help="Extra import directory for the recipe (repeatable). CWD is always included.",
-    )
-    selection = parser.add_mutually_exclusive_group()
-    selection.add_argument(
-        "-p",
-        "--profile",
+        "--variant",
         action="append",
         default=None,
         metavar="NAME",
-        help="Profile to operate on (repeatable).",
-    )
-    selection.add_argument(
-        "--all-profiles", action="store_true", help="Operate on every declared profile."
+        help="Variant to operate on (repeatable; default: every declared variant).",
     )
     return parser
 
 
-def _profiles_arg(img: Image, args: argparse.Namespace) -> tuple[str, ...] | None:
-    """The profiles requested on the command line; ``None`` keeps the default selection."""
-    if args.all_profiles:
-        return img.profile_names
-    names: list[str] | None = args.profile
+def _add_manifest_command(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+    name: str,
+    handler: Callable[[argparse.Namespace, TextIO], int],
+    *,
+    help: str,
+) -> argparse.ArgumentParser:
+    parser = sub.add_parser(name, help=help, description=help)
+    parser.set_defaults(handler=handler)
+    parser.add_argument(
+        "manifest",
+        type=Path,
+        help="bake-result.json written by `tundravm bake` (or the bake --out directory).",
+    )
+    parser.add_argument(
+        "--variant",
+        default=None,
+        metavar="NAME",
+        help="Baked variant (default: the only one baked).",
+    )
+    return parser
+
+
+def _add_lockfile(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="Apply this lockfile's source pins (default: build/tundravm.lock if present).",
+    )
+
+
+def _load(args: argparse.Namespace) -> RecipeFile:
+    extra: list[str] = [os.getcwd(), *(args.pythonpath or [])]
+    return load_file(args.recipe, attr=args.attr, extra_paths=extra)
+
+
+def _variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...] | None:
+    """The requested variants: ``--variant`` names, else every declared variant.
+
+    ``None`` (a legacy ``Image`` file without ``--variant``) keeps its active selection.
+    """
+    names: list[str] | None = args.variant
     if not names:
-        return None
-    unknown = [name for name in names if name not in img.state.profiles]
+        return loaded.variants if loaded.recipe is not None else None
+    unknown = [name for name in names if name not in loaded.variants]
     if unknown:
         raise ValidationError(
-            f"Unknown profile(s): {', '.join(unknown)}.",
-            hint=f"Declared profiles: {', '.join(img.profile_names)}",
+            f"Unknown variant(s): {', '.join(unknown)}.",
+            hint=f"Declared variants: {', '.join(loaded.variants)}",
             context={"recipe": str(args.recipe)},
         )
-    return tuple(names)
+    return tuple(dict.fromkeys(names))
 
 
-@contextmanager
-def _selected(img: Image, args: argparse.Namespace) -> Iterator[Image]:
-    """Activate the profiles requested on the command line."""
-    names = _profiles_arg(img, args)
-    if names is None:
-        yield img
-        return
-    with img.profiles(*names):
-        yield img
+def _listed(img: Image, names: tuple[str, ...] | None) -> tuple[str, ...]:
+    return names if names is not None else (img.default_profile,)
 
 
-def _load(args: argparse.Namespace) -> Image:
-    extra: list[str] = [os.getcwd(), *(args.pythonpath or [])]
-    return load_recipe(args.recipe, attr=args.attr, extra_paths=extra)
-
-
-def _cmd_explain(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
+def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args)
+    img = loaded.lowered()
+    variants = _listed(img, names)
     fmt = args.format or ("json" if args.json else "text")
-    with _selected(img, args):
-        profiles = _operation_profiles(img, args)
-        if fmt == "json":
-            payload = {name: img.explain(profile=name) for name in profiles}
-            print(json.dumps(payload, indent=2, sort_keys=True), file=out)
-            return EXIT_OK
-        if fmt == "markdown":
-            print(f"# tundravm: `{args.recipe.name}`\n", file=out)
-            sections = [render_markdown(img.explain(profile=name)) for name in profiles]
-            print("\n".join(sections).rstrip(), file=out)
-            return EXIT_OK
-        for index, name in enumerate(profiles):
-            if index:
-                print(file=out)
-            print(img.summary(profile=name).rstrip(), file=out)
+    if fmt == "json":
+        with img._operation_scope(variants) as active:
+            digest = recipe_digest(img._recipe_payload(profile_names=active))
+        payload = {
+            "digest": digest,
+            "variants": {name: img.explain(profile=name) for name in variants},
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
+        return EXIT_OK
+    if fmt == "markdown":
+        print(f"# tundravm: `{args.recipe.name}`\n", file=out)
+        sections = [render_markdown(img.explain(profile=name)) for name in variants]
+        print("\n".join(sections).rstrip(), file=out)
+        return EXIT_OK
+    for index, name in enumerate(variants):
+        if index:
+            print(file=out)
+        print(img.summary(profile=name).rstrip(), file=out)
     return EXIT_OK
 
 
-def _operation_profiles(img: Image, args: argparse.Namespace) -> list[str]:
-    if args.all_profiles:
-        return sorted(img.state.profiles)
-    if args.profile:
-        return list(args.profile)
-    return [img.default_profile]
+def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args)
+    diagnostics = check_report(loaded.recipe, loaded.image, variants=names)
+    fmt = resolve_format(args.format, alias="json" if args.json else None)
+    print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
+    return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
 
 
-def _cmd_digest(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
-    with _selected(img, args):
-        payload = img._recipe_payload(profile_names=img._active_profiles)
-    print(recipe_digest(payload), file=out)
-    return EXIT_OK
-
-
-def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
-    return cmd_check(args, out, img, profiles=_profiles_arg(img, args))
+def _lockfile(args: argparse.Namespace) -> Lock | None:
+    path: Path | None = getattr(args, "lockfile", None)
+    return None if path is None else read_lock(path)
 
 
 def _cmd_diff(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
-    return cmd_diff(args, out, img, profiles=_profiles_arg(img, args))
+    loaded = _load(args)
+    img = loaded.lowered()
+    if args.against is None:
+        args.against = Path(img.build_dir) / "mkosi"
+    return _cmd_diff_loaded(args, out, img, _variants(loaded, args))
 
 
 def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
+    loaded = _load(args)
+    img = loaded.lowered()
     destination = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
-    profiles = _profiles_arg(img, args)
     if args.check:
         fmt = resolve_format(args.format)
         args.against = destination
         args.format = "stat" if fmt == "text" else fmt
         args.stat = False
         args.color = "never"
-        return cmd_diff(args, out, img, profiles=profiles)
-    result = img.compile(destination, force=args.force, profiles=profiles)
+        return _cmd_diff_loaded(args, out, img, _variants(loaded, args))
+    names = _variants(loaded, args)
+    locked = _lockfile(args)
+    if locked is None:
+        result = img.compile(destination, force=True, profiles=names)
+    else:
+        with using_lock(img, locked):
+            result = img.compile(destination, force=True, profiles=names)
     print(f"compiled {result.path}", file=out)
-    print(f"  profiles: {', '.join(result.profiles)}", file=out)
+    print(f"  variants: {', '.join(result.profiles)}", file=out)
     print(f"  digest:   {result.digest}", file=out)
     return EXIT_OK
 
 
+def _cmd_diff_loaded(
+    args: argparse.Namespace, out: TextIO, img: Image, names: tuple[str, ...] | None
+) -> int:
+    locked = _lockfile(args)
+    if locked is None:
+        return cmd_diff(args, out, img, profiles=names)
+    with using_lock(img, locked):
+        return cmd_diff(args, out, img, profiles=names)
+
+
 def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
-    profiles = _profiles_arg(img, args)
+    loaded = _load(args)
+    names = _variants(loaded, args)
+    img = loaded.lowered()
+    path = _lock_path(img, args.path)
     if args.check:
-        drift = img.lock_status(args.path, profiles=profiles)
-        print(
-            render_drift(drift, resolve_format(args.format), _lock_path(img, args.path)),
-            file=out,
-        )
+        drift = img.lock_status(path, profiles=names)
+        print(render_drift(drift, resolve_format(args.format), path), file=out)
         return EXIT_OK if drift.is_clean else EXIT_FAILURE
+    previous = read_lock(path) if path.exists() else None
     if args.explain:
-        current = _lock_path(img, args.path)
-        if current.exists():
-            print(img.lock_status(current, profiles=profiles).render(), file=out)
+        if previous is not None:
+            print(img.lock_status(path, profiles=names).render(), file=out)
         else:
-            print(f"no lockfile at {current}; every section is new", file=out)
-    path = img.lock(args.path, offline=args.offline, profiles=profiles)
+            print(f"no lockfile at {path}; every section is new", file=out)
+    locked = lock_image(
+        img, names, previous=previous, update=tuple(args.update or ()), offline=args.offline
+    )
+    write_lock(locked, path)
     print(f"locked {path}", file=out)
     return EXIT_OK
 
 
 def _lock_path(img: Image, path: Path | None) -> Path:
-    return path if path is not None else Path(img.build_dir) / "tundravm.lock"
+    return path if path is not None else Path(img.build_dir) / LOCK_FILENAME
 
 
 def render_drift(drift: LockDrift, fmt: str, lock_path: Path) -> str:
@@ -587,7 +647,22 @@ def render_drift(drift: LockDrift, fmt: str, lock_path: Path) -> str:
 
 
 def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
+    loaded = _load(args)
+    names = _variants(loaded, args)
+    img = loaded.lowered()
+    destination: Path = args.out if args.out is not None else Path(img.build_dir)
+    lock_path = args.lockfile if args.lockfile is not None else _lock_path(img, None)
+    if args.lockfile is not None or lock_path.exists():
+        locked: Lock | None = read_lock(lock_path)
+    else:
+        locked = None
+        if not (args.quiet or args.json_logs):
+            print(
+                f"note: no lockfile at {lock_path}; baking unpinned "
+                f"(run `tundravm lock {args.recipe}` to freeze the bake)",
+                file=sys.stderr,
+            )
+    backend = None if args.backend is None else Backend(args.backend).build_backend()
     err = sys.stderr
     reporter = (
         JsonReporter(out)
@@ -597,20 +672,11 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
         )
     )
     try:
-        profiles = _profiles_arg(img, args)
-        if args.lock:
-            lock_path = img.lock(profiles=profiles)
-            if args.json_logs:
-                extra = {"source": "cli", "path": str(lock_path)}
-                reporter.emit(Event("log", None, f"locked {lock_path}", 0.0, extra))
-            else:
-                print(f"locked {lock_path}", file=out)
-        result = img.bake(
-            args.out,
-            frozen=args.frozen or args.lock,
-            force=args.force,
-            reporter=reporter,
-            profiles=profiles,
+        if locked is not None and args.json_logs:
+            extra = {"source": "cli", "path": str(lock_path)}
+            reporter.emit(Event("log", None, f"frozen against {lock_path}", 0.0, extra))
+        result, artifacts = bake_image(
+            img, names, locked=locked, backend=backend, out=destination, reporter=reporter
         )
     finally:
         reporter.close()
@@ -619,46 +685,51 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
     if not args.quiet:
         print(file=out)
     print(render_bake_summary(result), file=out)
-    for name in sorted(result.profiles):
-        targets = sorted(result.profiles[name].artifacts)
-        if targets:
-            selector = "" if name == img.default_profile else f" --profile {name}"
-            print(f"next: tundravm deploy {args.recipe}{selector} --target {targets[0]}", file=out)
-            break
+    if artifacts:
+        first = artifacts[0]
+        manifest = destination / "bake-result.json"
+        print(
+            f"next: tundravm deploy {manifest} --variant {first.variant} --target {first.target}",
+            file=out,
+        )
     return EXIT_OK
 
 
-MEASUREMENT_BACKENDS = ("rtmr", "azure", "gcp")
-
-
-def _single_profile(img: Image, args: argparse.Namespace, command: str) -> str:
-    profiles = _operation_profiles(img, args)
-    if len(profiles) != 1:
-        raise ValidationError(
-            f"`{command}` operates on exactly one profile; got {len(profiles)}.",
-            hint="Pass a single --profile NAME.",
-            context={"profiles": ", ".join(profiles)},
-        )
-    return profiles[0]
+def _artifact(args: argparse.Namespace, target: Target | None) -> Artifact:
+    artifacts = read_artifacts(args.manifest)
+    variant: str | None = args.variant
+    if variant is None:
+        baked = sorted({a.variant for a in artifacts})
+        if len(baked) != 1:
+            raise ValidationError(
+                f"The manifest holds {len(baked)} variants; pass --variant NAME.",
+                hint=f"Baked variants: {', '.join(baked) or '(none)'}",
+                context={"manifest": str(args.manifest)},
+            )
+        variant = baked[0]
+    return select_artifact(artifacts, variant=variant, target=target)
 
 
 def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
-    with _selected(img, args):
-        profile = _single_profile(img, args, "measure")
-        if args.out is not None:
-            img.last_bake(args.out)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", PlaceholderMeasurementWarning)
-            measurements = img.measure(
-                backend=args.backend, profile=profile, allow_placeholder=args.allow_placeholder
-            )
-    if measurements.is_placeholder:
+    scheme = cast(Scheme, args.scheme)
+    artifact = _artifact(args, None if scheme == "rtmr" else cast(Target, scheme))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PlaceholderMeasurementWarning)
+        measurements = measure(artifact, scheme=scheme, allow_placeholder=args.allow_placeholder)
+    if measurements.tool == "placeholder":
         print(PLACEHOLDER_BANNER, file=sys.stderr)
     if args.json:
-        print(json.dumps(measurements.to_dict(), indent=2, sort_keys=True), file=out)
+        payload = {
+            "artifact": str(artifact.path),
+            "artifact_digest": measurements.artifact_digest,
+            "scheme": measurements.scheme,
+            "tool": measurements.tool,
+            "values": dict(measurements.values),
+            "variant": artifact.variant,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
         return EXIT_OK
-    print(render_measurements(measurements, profile=profile), file=out)
+    print(render_measurements(measurements, artifact=artifact), file=out)
     return EXIT_OK
 
 
@@ -668,16 +739,14 @@ PLACEHOLDER_BANNER = (
 )
 
 
-def render_measurements(measurements: Measurements, *, profile: str) -> str:
+def render_measurements(measurements: Measurements, *, artifact: Artifact) -> str:
     """Human-readable ``Measurements``: header, ``source:`` provenance line, aligned values."""
-    source: str = measurements.source
-    if measurements.tool_version is not None:
-        source += f" {measurements.tool_version}"
-    if measurements.artifact is not None:
-        source += f" ({measurements.artifact})"
-    lines = [f"measurements {profile} ({measurements.backend})", f"source: {source}"]
-    width = max((len(key) for key in measurements.values), default=0)
-    lines.extend(f"  {key:<{width}}  {value}" for key, value in sorted(measurements.values.items()))
+    lines = [
+        f"measurements {artifact.variant} ({measurements.scheme})",
+        f"source: {measurements.tool} ({artifact.path})",
+    ]
+    width = max((len(key) for key, _ in measurements.values), default=0)
+    lines.extend(f"  {key:<{width}}  {value}" for key, value in measurements.values)
     return "\n".join(lines)
 
 
@@ -694,70 +763,76 @@ def _parse_params(raw: Sequence[str] | None) -> dict[str, str]:
     return params
 
 
-def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
-    params = _parse_params(args.param)
-    with _selected(img, args):
-        profile = _single_profile(img, args, "deploy")
-        if args.out is not None:
-            img.last_bake(args.out)
-        result = img.deploy(
-            target=cast(OutputTarget, args.target),
-            profile=profile,
-            parameters=params,
-            memory=args.memory,
-            cpus=args.cpus,
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+def parse_deploy_target(target: Target, params: dict[str, str]) -> DeployTarget:
+    """``--param`` values as the target's ``Qemu``/``Azure``/``Gcp`` settings."""
+    kind = DEPLOY_TARGETS[target]
+    known = {item.name: item for item in fields(kind)}
+    unknown = sorted(set(params) - set(known))
+    if unknown:
+        raise ValidationError(
+            f"Unknown {target} parameter(s): {', '.join(unknown)}.",
+            hint=f"{target} accepts: {', '.join(known)}",
         )
-    print(render_deploy_result(result, profile=profile), file=out)
+    values: dict[str, object] = {}
+    for name, raw in params.items():
+        kind_name = str(known[name].type)
+        if kind_name == "int":
+            try:
+                values[name] = int(raw)
+            except ValueError:
+                raise ValidationError(f"{target} parameter {name} must be an integer.") from None
+        elif kind_name == "bool":
+            if raw.lower() not in _TRUE | _FALSE:
+                raise ValidationError(f"{target} parameter {name} must be true or false.")
+            values[name] = raw.lower() in _TRUE
+        else:
+            values[name] = raw
+    missing = [n for n, f in known.items() if f.default is MISSING and n not in values]
+    if missing:
+        raise ValidationError(
+            f"Missing {target} parameter(s): {', '.join(missing)}.",
+            hint="Pass " + " ".join(f"--param {n}=..." for n in missing),
+        )
+    return kind(**values)  # type: ignore[arg-type]
+
+
+def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
+    target = cast(Target, args.target)
+    using = parse_deploy_target(target, _parse_params(args.param))
+    artifact = _artifact(args, target)
+    result = deploy(artifact, using=using, allow_placeholder=args.allow_placeholder)
+    print(render_deployment(result, variant=artifact.variant), file=out)
     return EXIT_OK
 
 
-def render_deploy_result(result: DeployResult, *, profile: str) -> str:
-    """Human-readable ``DeployResult``: header line plus aligned key/value rows."""
-    rows = [("deployment", result.deployment_id)]
+def render_deployment(result: Deployment, *, variant: str) -> str:
+    """Human-readable ``Deployment``: header line plus aligned key/value rows."""
+    rows = [("deployment", result.id)]
     if result.endpoint is not None:
         rows.append(("endpoint", result.endpoint))
-    rows.extend(sorted(result.metadata.items()))
+    rows.extend(result.metadata)
     width = max(len(key) for key, _ in rows)
-    lines = [f"deployed {profile} to {result.target}"]
+    lines = [f"deployed {variant} to {result.target}"]
     lines.extend(f"  {key:<{width}}  {value}" for key, value in rows)
     return "\n".join(lines)
 
 
-ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
-
-
-def run_probe(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    """Default ``doctor`` probe: run *argv* with a 10s timeout, capturing output."""
-    return subprocess.run(list(argv), capture_output=True, text=True, timeout=10, check=False)
-
-
 def probe_requirement(requirement: Requirement, runner: ProbeRunner) -> tuple[bool, str]:
     """Run one probe; return ``(ok, report line)``."""
-    try:
-        result = runner(requirement.probe)
-    except (OSError, subprocess.SubprocessError):
-        result = None
-    if result is None or result.returncode != 0:
-        label = "missing (optional)" if requirement.optional else "missing"
-        return False, f"{label} {requirement.tool} — {requirement.hint}"
-    text = (result.stdout or result.stderr or "").strip()
-    version = text.splitlines()[0] if text else ""
-    return True, f"ok {requirement.tool} {version}".rstrip()
-
-
-def _backend_requirements(backend: BuildBackend) -> tuple[Requirement, ...]:
-    requirements = getattr(backend, "requirements", None)
-    return tuple(requirements()) if callable(requirements) else ()
+    return probe(requirement, runner)
 
 
 def _probe_backend(backend: BuildBackend, runner: ProbeRunner, out: TextIO) -> bool:
     """Print one backend's probe lines; return False if a required tool is missing."""
-    requirements = _backend_requirements(backend)
+    requirements = requirements_of(backend)
     lines: list[str] = []
     ready = True
     for requirement in requirements:
-        ok, line = probe_requirement(requirement, runner)
+        ok, line = probe(requirement, runner)
         ready = ready and (ok or requirement.optional)
         lines.append(line)
     status = "available" if ready else "unavailable"
@@ -770,7 +845,7 @@ def _probe_backend(backend: BuildBackend, runner: ProbeRunner, out: TextIO) -> b
 
 
 def default_doctor_backends() -> tuple[BuildBackend, ...]:
-    """The real backends ``doctor`` probes when no recipe is given."""
+    """The real backends ``doctor`` probes when no recipe or --backend is given."""
     return (
         LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB"),
         NixMkosiBackend(),
@@ -782,67 +857,57 @@ def _probe_measurement_tools(runner: ProbeRunner, out: TextIO) -> None:
     """Print the optional RTMR measurement tools; they never fail ``doctor``."""
     print("measurement tools:", file=out)
     for requirement in rtmr_measure.requirements():
-        _, line = probe_requirement(requirement, runner)
+        _, line = probe(requirement, runner)
         print(f"  {line}", file=out)
 
 
-def doctor(img: Image | None, out: TextIO, *, runner: ProbeRunner | None = None) -> int:
-    """Environment report. Exit 1 if *img*'s backend lacks a required tool, else 0."""
-    probe = runner if runner is not None else run_probe
+def doctor(
+    loaded: RecipeFile | Image | None,
+    out: TextIO,
+    *,
+    runner: ProbeRunner | None = None,
+    backend: BuildBackend | None = None,
+) -> int:
+    """Environment report. Exit 1 if the probed backend lacks a required tool, else 0.
+
+    *backend* (``--backend``) is probed alone; else the recipe's backend; else every
+    real backend. With a recipe, its lint summary follows.
+    """
+    run = runner if runner is not None else run_probe
     print(f"tundravm {__version__}", file=out)
     print(f"python {platform.python_version()}", file=out)
-    if img is None:
-        for backend in default_doctor_backends():
-            _probe_backend(backend, probe, out)
-        _probe_measurement_tools(probe, out)
+    if isinstance(loaded, Image):
+        loaded = RecipeFile(Path("recipe.py"), None, loaded, loaded.backend)
+    if loaded is None and backend is None:
+        for candidate in default_doctor_backends():
+            _probe_backend(candidate, run, out)
+        _probe_measurement_tools(run, out)
         return EXIT_OK
-    if img.backend is None:
+    chosen = backend if backend is not None else (None if loaded is None else loaded.backend)
+    if chosen is None:
         print("backend: none configured", file=out)
         ready = False
     else:
-        ready = _probe_backend(img.backend, probe, out)
-    _probe_measurement_tools(probe, out)
-    summary = render_diagnostics(img.check()).splitlines()[-1]
-    print(f"check: {summary}", file=out)
+        ready = _probe_backend(chosen, run, out)
+    _probe_measurement_tools(run, out)
+    if loaded is not None:
+        names = loaded.variants if loaded.recipe is not None else None
+        report = check_report(loaded.recipe, loaded.image, variants=names)
+        print(f"lint: {render_summary(report)}", file=out)
     return EXIT_OK if ready else EXIT_FAILURE
 
 
 def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args) if args.recipe is not None else None
-    return doctor(img, out)
+    loaded = _load(args) if args.recipe is not None else None
+    backend = None if args.backend is None else Backend(args.backend).build_backend()
+    return doctor(loaded, out, backend=backend)
 
 
-def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
-    path: Path = args.path
-    if path.exists() and not args.force:
-        raise ValidationError(
-            f"Refusing to overwrite existing file: {path}",
-            hint="Pass --force to overwrite it.",
-            context={"path": str(path)},
-        )
-    if path.suffix != ".py":
-        raise ValidationError(
-            f"Recipe files must end in .py: {path}",
-            context={"path": str(path)},
-        )
-    title = path.stem.replace("_", "-").replace(" ", "-") or "tundravm"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        render_recipe_template(
-            title=title, filename=path.name, base=args.base, backend=args.backend
-        ),
-        encoding="utf-8",
-    )
-    print(f"wrote {path}", file=out)
-    print(f"next: tundravm explain {path}", file=out)
-    return EXIT_OK
+CiStep = Callable[[RecipeFile, argparse.Namespace, str], tuple[bool, str, str]]
 
 
-CiStep = Callable[[Image, argparse.Namespace, str], tuple[bool, str, str]]
-
-
-def _ci_check(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
-    diagnostics = run_checks(img, profiles=sorted(img.state.profiles))
+def _ci_lint(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+    diagnostics = check_report(loaded.recipe, loaded.image, variants=_ci_variants(loaded, args))
     report = render_as(diagnostics, fmt, recipe_path=args.recipe, strict=True)
     return (
         not failing(diagnostics, strict=True),
@@ -851,9 +916,15 @@ def _ci_check(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str
     )
 
 
-def _ci_compile(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+def _ci_variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...]:
+    names = _variants(loaded, args)
+    return names if names is not None else loaded.variants
+
+
+def _ci_compile(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+    img = loaded.lowered()
     destination: Path = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
-    result = diff_against(img, destination)
+    result = diff_against(img, destination, profiles=_variants(loaded, args))
     if result.is_clean:
         return True, "", f"{destination} is up to date"
     report = result.render("stat" if fmt == "text" else fmt, root=annotation_path(destination))
@@ -865,9 +936,10 @@ def _ci_compile(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, s
     return False, report.rstrip(), verdict
 
 
-def _ci_lock(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+def _ci_lock(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+    img = loaded.lowered()
     path = _lock_path(img, args.lockfile)
-    drift = img.lock_status(path)
+    drift = img.lock_status(path, profiles=_variants(loaded, args))
     if drift.is_clean:
         return True, "", f"{path} is up to date"
     count = len(drift.sections) or 1
@@ -879,34 +951,33 @@ def _ci_lock(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str,
 
 
 CI_STEPS: tuple[tuple[str, CiStep], ...] = (
-    ("check", _ci_check),
+    ("lint", _ci_lint),
     ("compile", _ci_compile),
     ("lock", _ci_lock),
 )
 
 
 def _cmd_ci(args: argparse.Namespace, out: TextIO) -> int:
-    img = _load(args)
+    loaded = _load(args)
     fmt = resolve_format(args.format)
-    with _selected(img, args):
-        for index, (name, step) in enumerate(CI_STEPS):
-            try:
-                ok, report, verdict = step(img, args, fmt)
-            except TdxError as exc:
-                hint = f" ({exc.hint})" if exc.hint else ""
-                ok, verdict = False, f"[{exc.code}] {exc.args[0]}{hint}"
-                report = (
-                    workflow_command("error", verdict, title=f"tundravm ci: {name}")
-                    if fmt == "github"
-                    else ""
-                )
-            if report:
-                print(report, file=out)
-            print(f"{'ok' if ok else 'FAIL'} {name}: {verdict}", file=out)
-            if not ok:
-                for skipped, _step in CI_STEPS[index + 1 :]:
-                    print(f"skip {skipped}", file=out)
-                return EXIT_FAILURE
+    for index, (name, step) in enumerate(CI_STEPS):
+        try:
+            ok, report, verdict = step(loaded, args, fmt)
+        except TdxError as exc:
+            hint = f" ({exc.hint})" if exc.hint else ""
+            ok, verdict = False, f"[{exc.code}] {exc.args[0]}{hint}"
+            report = (
+                workflow_command("error", verdict, title=f"tundravm ci: {name}")
+                if fmt == "github"
+                else ""
+            )
+        if report:
+            print(report, file=out)
+        print(f"{'ok' if ok else 'FAIL'} {name}: {verdict}", file=out)
+        if not ok:
+            for skipped, _step in CI_STEPS[index + 1 :]:
+                print(f"skip {skipped}", file=out)
+            return EXIT_FAILURE
     return EXIT_OK
 
 
@@ -984,19 +1055,21 @@ def _init_gitignore(path: Path) -> str:
 
 
 __all__ = [
+    "BACKEND_KINDS",
     "BACKEND_SNIPPETS",
     "EXIT_FAILURE",
     "EXIT_OK",
     "EXIT_SDK_ERROR",
-    "MEASUREMENT_BACKENDS",
+    "MEASUREMENT_SCHEMES",
     "PLACEHOLDER_BANNER",
     "ProbeRunner",
     "build_parser",
     "default_doctor_backends",
     "doctor",
     "main",
+    "parse_deploy_target",
     "probe_requirement",
-    "render_deploy_result",
+    "render_deployment",
     "render_drift",
     "render_measurements",
     "render_recipe_template",

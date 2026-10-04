@@ -1,4 +1,4 @@
-"""CI and code-review kit: `init`, `ci`, and `--format` on explain/check/diff/lock."""
+"""CI and code-review kit: `init`, `ci`, and `--format` on inspect/lint/diff/lock."""
 
 from __future__ import annotations
 
@@ -77,8 +77,8 @@ def test_init_writes_recipe_and_gitignore_without_ci(tmp_path: Path) -> None:
     assert "tundravm lock my-node.py" in out
     assert "tundravm ci my-node.py --out mkosi" in out
 
-    code, payload = run("explain", str(recipe), "--json", "--all-profiles")
-    assert code == EXIT_OK and set(json.loads(payload)) == {"default", "dev"}
+    code, payload = run("inspect", str(recipe), "--json")
+    assert code == EXIT_OK and set(json.loads(payload)["variants"]) == {"default", "dev"}
 
 
 def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
@@ -88,8 +88,7 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
     assert f"created {workflow}" in out
     text = workflow.read_text(encoding="utf-8")
     assert "run: uv sync" in text
-    assert "uv run tundravm explain node.py --all-profiles --format markdown" in text
-    assert '>> "$GITHUB_STEP_SUMMARY"' in text
+    assert 'uv run tundravm inspect node.py --format markdown >> "$GITHUB_STEP_SUMMARY"' in text
     assert "run: uv run tundravm ci node.py --out mkosi" in text
     assert "note: the workflow runs `uv sync`" in out
 
@@ -126,11 +125,13 @@ def test_init_project_passes_ci_once_compiled_and_locked(
     assert code == EXIT_OK, out
 
 
-# explain --format markdown
+# inspect --format markdown
 
 
-def test_explain_markdown_two_profiles(recipe: Path) -> None:
-    code, out = run("explain", str(recipe), "--all-profiles", "--format", "markdown")
+def test_inspect_markdown_two_variants(recipe: Path) -> None:
+    code, out = run(
+        "inspect", str(recipe), "--variant", "azure", "--variant", "default", "--format", "markdown"
+    )
     assert code == EXIT_OK
     assert out.startswith("# tundravm: `recipe.py`\n")
     assert "## Profile `default`" in out and "## Profile `azure`" in out
@@ -144,27 +145,27 @@ def test_explain_markdown_two_profiles(recipe: Path) -> None:
     assert "| `app` | `/usr/bin/app` | app |" in out
 
 
-def test_explain_markdown_collapses_long_package_lists(tmp_path: Path) -> None:
+def test_inspect_markdown_collapses_long_package_lists(tmp_path: Path) -> None:
     recipe = tmp_path / "big.py"
     names = ", ".join(f'"pkg{index:02d}"' for index in range(25))
     recipe.write_text(f"from tundravm import Image\nimg = Image()\nimg.install({names})\n")
-    code, out = run("explain", str(recipe), "--format", "markdown")
+    code, out = run("inspect", str(recipe), "--format", "markdown")
     assert code == EXIT_OK
     assert "<details><summary>Packages (25)</summary>\n\n| Package |" in out
     assert "</details>" in out
 
 
-def test_explain_json_alias_conflicts_with_format(recipe: Path) -> None:
+def test_inspect_json_alias_conflicts_with_format(recipe: Path) -> None:
     with pytest.raises(SystemExit):
-        main(["explain", str(recipe), "--json", "--format", "markdown"], stdout=io.StringIO())
+        main(["inspect", str(recipe), "--json", "--format", "markdown"], stdout=io.StringIO())
 
 
-# check --format
+# lint --format
 
 
-def test_check_github_lines_parse(recipe: Path) -> None:
+def test_lint_github_lines_parse(recipe: Path) -> None:
     recipe.write_text(recipe.read_text() + 'img.service("w", command="/usr/bin/w", user="ghost")\n')
-    code, out = run("check", str(recipe), "--format", "github")
+    code, out = run("lint", str(recipe), "--format", "github")
     assert code == EXIT_FAILURE
     found = parse_annotations(out)
     assert len(found) == 1
@@ -175,24 +176,24 @@ def test_check_github_lines_parse(recipe: Path) -> None:
     assert out.rstrip().endswith("1 error, 0 warnings, 0 infos")
 
 
-def test_check_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
+def test_lint_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
     recipe = tmp_path / "warn.py"
     recipe.write_text(
         "from tundravm import Image\nimg = Image()\nimg.install('curl')\n"
         "img.runtime_init('echo 1\\n', priority=5)\n"
         "img.runtime_init('echo 2\\n', priority=5)\n"
     )
-    code, out = run("check", str(recipe), "--format", "github")
+    code, out = run("lint", str(recipe), "--format", "github")
     assert code == EXIT_OK
     assert {level for level, _, _ in parse_annotations(out)} >= {"warning"}
-    code, out = run("check", str(recipe), "--format", "github", "--strict")
+    code, out = run("lint", str(recipe), "--format", "github", "--strict")
     assert code == EXIT_FAILURE
     assert "warning" not in {level for level, _, _ in parse_annotations(out)}
 
 
-def test_check_markdown_table(recipe: Path) -> None:
+def test_lint_markdown_table(recipe: Path) -> None:
     recipe.write_text(recipe.read_text() + 'img.service("w", command="/usr/bin/w", user="ghost")\n')
-    code, out = run("check", str(recipe), "--format", "markdown")
+    code, out = run("lint", str(recipe), "--format", "markdown")
     assert code == EXIT_FAILURE
     assert out.startswith("| Level | Code | Profile | Subject | Message | Hint |\n|---|")
     assert "| error | `service-user-missing` | `default` | `w` |" in out
@@ -287,7 +288,7 @@ def test_ci_pass_prints_three_ok_lines(recipe: Path, tmp_path: Path) -> None:
     code, out = run("ci", str(recipe), "--out", str(tree))
     assert code == EXIT_OK
     assert out.splitlines() == [
-        "ok check: no findings",
+        "ok lint: no findings",
         f"ok compile: {tree} is up to date",
         f"ok lock: {tmp_path / 'build' / 'tundravm.lock'} is up to date",
     ]
@@ -301,19 +302,19 @@ def test_ci_stops_at_first_failing_step(recipe: Path, tmp_path: Path) -> None:
     code, out = run("ci", str(recipe), "--out", str(tree))
     assert code == EXIT_FAILURE
     lines = out.splitlines()
-    assert lines[0] == "ok check: no findings"
+    assert lines[0] == "ok lint: no findings"
     assert "M  default/mkosi.conf" in lines
     assert lines[-2].startswith(f"FAIL compile: 1 file stale in {tree}; run `tundravm compile")
     assert lines[-1] == "skip lock"
     assert not any(line.startswith("ok lock") for line in lines)
 
 
-def test_ci_check_failure_skips_the_rest(recipe: Path) -> None:
+def test_ci_lint_failure_skips_the_rest(recipe: Path) -> None:
     recipe.write_text(recipe.read_text() + 'img.service("w", command="/usr/bin/w", user="ghost")\n')
     code, out = run("ci", str(recipe))
     assert code == EXIT_FAILURE
     assert out.splitlines()[-3:] == [
-        "FAIL check: 2 errors, 0 warnings, 0 infos",
+        "FAIL lint: 2 errors, 0 warnings, 0 infos",
         "skip compile",
         "skip lock",
     ]

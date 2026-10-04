@@ -7,9 +7,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from examples.modules import Nethermind, Raiko, TaikoClient
+from examples.modules import nethermind, raiko, taiko_client
 
 from tundravm import Image
+from tundravm.declarative import Fragment, Mkosi, Package, Recipe, lower, tdxs
 from tundravm.errors import ValidationError
 from tundravm.modules import (
     DiskEncryption,
@@ -82,53 +83,35 @@ def _build_phase_hooks(img: Image) -> list[str]:
 # ── Example modules ─────────────────────────────────────────────────
 
 
-def test_taiko_client_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -> None:
-    img = Image(build_dir=tmp_path / "build")
-    TaikoClient().apply(img)
-    assert _build_phase_hooks(img) == [TAIKO_CLIENT_LEGACY_HOOK]
-    assert TaikoClient().source_spec().render() == TAIKO_CLIENT_LEGACY_HOOK
-    assert list(img.source_builds()) == ["taiko-client"]
+def _surge_stack(dialect: str = "nethermind-v1") -> Image:
+    recipe = Recipe(
+        name="stack",
+        mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
+        common=Fragment(
+            "stack",
+            items=(tdxs(), Package("git", role="build"), raiko(), taiko_client(), nethermind()),
+        ),
+    )
+    return lower(recipe)
 
 
-def test_nethermind_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -> None:
-    img = Image(build_dir=tmp_path / "build")
-    Nethermind().apply(img)
-    assert _build_phase_hooks(img) == [NETHERMIND_LEGACY_HOOK]
-    assert Nethermind().source_spec().render() == NETHERMIND_LEGACY_HOOK
-    assert list(img.source_builds()) == ["nethermind"]
+def test_taiko_client_hook_is_byte_identical_to_legacy_bash() -> None:
+    assert TAIKO_CLIENT_LEGACY_HOOK in _build_phase_hooks(_surge_stack())
 
 
-def test_example_modules_keep_their_build_packages(tmp_path: Path) -> None:
-    img = Image(build_dir=tmp_path / "build")
-    img.apply(TaikoClient(), Nethermind())
-    assert img.state.profiles["default"].build_packages == {
-        "build-essential",
-        "dotnet-runtime-10.0",
-        "dotnet-sdk-10.0",
-        "git",
-        "golang",
-    }
+def test_nethermind_hook_is_byte_identical_to_legacy_bash() -> None:
+    assert NETHERMIND_LEGACY_HOOK in _build_phase_hooks(_surge_stack())
 
 
-def test_example_modules_follow_their_fields() -> None:
-    source = GitSource(TaikoClient().source.url, "main", subdir="cmd/client")
-    taiko = TaikoClient(source=source).source_spec()
-    assert taiko.source == source
-    hook = taiko.render()
-    assert "cd /build/taiko-client/cmd/client && " in hook
-    assert '"$BUILDROOT/build/taiko-client/cmd/client/bin/taiko-client"' in hook
-    nm_source = GitSource(Nethermind().source.url, "1.33.0")
-    nm_module = Nethermind(source=nm_source, runtime="linux-arm64", user="nm")
-    assert nm_module.version == "1.33.0"
-    nm = nm_module.source_spec().render()
-    assert '"$BUILDDIR/nethermind-1.33.0-linux-arm64"' in nm
-    assert "--runtime linux-arm64" in nm
-    assert '"$DESTDIR/etc/nm/NLog.config"' in nm
-    assert 'mkdir -p "$DESTDIR/etc/nm/plugins"' in nm
+def test_current_dialect_marks_unpinned_app_builds() -> None:
+    hooks = _build_phase_hooks(_surge_stack("current"))
+    assert "# unpinned: feat/tdx-proving\n" + TAIKO_CLIENT_LEGACY_HOOK in hooks
 
 
 def test_example_modules_pin_through_the_lockfile() -> None:
-    for spec in (TaikoClient().source_spec(), Nethermind().source_spec()):
+    builds = _surge_stack().source_builds()
+    for name in ("taiko-client", "nethermind"):
+        spec = builds[name]
         pinned = spec.render(SHA_A)
         assert "git clone" not in pinned
         assert f"fetch -q --depth=1 {spec.source.url} {SHA_A}" in pinned
@@ -142,14 +125,11 @@ def test_every_module_that_builds_from_source_is_a_source_build(tmp_path: Path) 
     disks = DiskEncryption(disks=(disk,))
     delivery = SecretDelivery(method="http_post", store_at=disk)
     img = Image(build_dir=tmp_path / "build")
-    img.apply(Tdxs(), keys, disks, delivery, Raiko(), TaikoClient(), Nethermind())
+    img.apply(Tdxs(), keys, disks, delivery)
     assert sorted(img.source_builds()) == [
         "disk-encryption",
         "key-generation",
-        "nethermind",
-        "raiko",
         "secret-delivery",
-        "taiko-client",
         "tdxs",
     ]
     rendered = [spec.render() for spec in img.source_builds().values()]

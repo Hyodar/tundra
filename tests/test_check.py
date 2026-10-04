@@ -370,7 +370,7 @@ def write_recipe(tmp_path: Path, extra: str = "") -> Path:
 
 def run(*argv: str) -> tuple[int, str]:
     out = io.StringIO()
-    return main(["check", *argv], stdout=out), out.getvalue()
+    return main(["lint", *argv], stdout=out), out.getvalue()
 
 
 def test_cli_clean_recipe(tmp_path: Path) -> None:
@@ -399,12 +399,12 @@ def test_cli_strict_fails_on_warnings(tmp_path: Path) -> None:
     assert run(str(recipe), "--strict")[0] == 1
 
 
-def test_cli_profile_selection(tmp_path: Path) -> None:
+def test_cli_variant_selection(tmp_path: Path) -> None:
     recipe = write_recipe(tmp_path, 'with img.profile("bare"):\n    pass\n')
-    code, out = run(str(recipe), "--all-profiles")
+    code, out = run(str(recipe), "--variant", "default", "--variant", "bare")
     assert code == 0
     assert "info profile-empty [bare]" in out
-    assert run(str(recipe), "--profile", "default")[1] == "no findings\n"
+    assert run(str(recipe), "--variant", "default")[1] == "no findings\n"
 
 
 # bake pre-flight

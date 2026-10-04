@@ -1,4 +1,4 @@
-"""File templates for ``tundravm new`` and ``tundravm init``."""
+"""File templates for ``tundravm init``."""
 
 from __future__ import annotations
 
@@ -17,9 +17,11 @@ BACKEND_SNIPPETS: dict[str, tuple[str, str]] = {
 
 RECIPE_TEMPLATE = """\"\"\"{title} image recipe.
 
-Inspect:  tundravm explain {filename}
-Compile:  tundravm compile {filename}
-Build:    tundravm bake {filename} --lock
+Inspect:  tundravm inspect {filename}
+Lint:     tundravm lint {filename}
+Compile:  tundravm compile {filename} --out mkosi
+Lock:     tundravm lock {filename}
+Build:    tundravm bake {filename} --out build
 \"\"\"
 
 from tundravm import Debloat, File, Fragment, Package, Recipe, Unit, User, Variant
@@ -100,8 +102,7 @@ jobs:
 
       - name: Summarize the image
         run: |
-          uv run tundravm explain {recipe} --all-profiles --format markdown \\
-            >> "$GITHUB_STEP_SUMMARY"
+          uv run tundravm inspect {recipe} --format markdown >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check recipe, compiled tree and lockfile
         run: uv run tundravm ci {recipe} --out {out}
@@ -109,7 +110,7 @@ jobs:
 
 
 def render_recipe_template(*, title: str, filename: str, base: str, backend: str) -> str:
-    """Return the starter recipe source for ``tundravm new`` and ``tundravm init``."""
+    """Return the starter recipe source ``tundravm init`` writes."""
     backend_import, backend_expr = BACKEND_SNIPPETS[backend]
     return RECIPE_TEMPLATE.format(
         title=title,

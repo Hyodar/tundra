@@ -1,0 +1,1 @@
+KERNEL=="tdx_guest", SYMLINK+="tdx-guest"

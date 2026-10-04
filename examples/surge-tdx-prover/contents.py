@@ -2,52 +2,16 @@
 
 Strings keep their trailing newline only where the shipped file has one. Unit bodies
 omit the ``After=``/``Requires=runtime-init.service`` that ``after_init`` adds.
-``tests/test_surge_contents.py`` checks every constant against ``mkosi/default/``.
+The base layer and the service fragments own their files; they are re-exported
+here so ``tests/test_surge_contents.py`` checks every constant against ``mkosi/default/``.
 """
 
 from __future__ import annotations
 
-# ── Skeleton (mkosi.skeleton/) ────────────────────────────────────────
-
-TDX_INIT = """\
-#!/bin/sh
-
-# Mount essential filesystems
-mkdir -p /dev /proc /sys /run
-mount -t proc none /proc
-mount -t sysfs none /sys
-mount -t devtmpfs none /dev
-mount -t tmpfs none /run
-mount -t configfs none /sys/kernel/config
-
-# Workaround to make pivot_root work
-# https://aconz2.github.io/2024/07/29/container-from-initramfs.html
-exec unshare --mount sh -c '
-    mkdir /@
-    mount --rbind / /@
-    cd /@ && mount --move . /
-    exec chroot . /lib/systemd/systemd systemd.unit=minimal.target'
-"""
-
-RESOLV_CONF = "nameserver 8.8.8.8\nnameserver 8.8.4.4"
-
-NETWORK_SETUP_SERVICE = """\
-[Unit]
-Description=Basic Network Setup
-DefaultDependencies=no
-Before=network.target
-Wants=network.target
-
-[Service]
-Type=oneshot
-ExecStart=ip link set lo up
-ExecStart=ip link set eth0 up
-ExecStart=chattr +i /etc/resolv.conf
-ExecStart=/usr/sbin/udhcpc -i eth0 -n
-RemainAfterExit=yes
-
-[Install]
-WantedBy=sysinit.target"""
+from examples.modules.nethermind import NETHERMIND_ENV, NETHERMIND_UNIT
+from examples.modules.raiko import RAIKO_ENV, RAIKO_UNIT
+from examples.modules.taiko_client import TAIKO_CLIENT_ENV, TAIKO_CLIENT_UNIT
+from examples.nethermind_tdx import NETWORK_SETUP_SERVICE, RESOLV_CONF, TDX_INIT
 
 # ── System configuration (mkosi.extra/etc/) ───────────────────────────
 
@@ -105,72 +69,20 @@ PROMETHEUS_DEFAULTS = (
     '--storage.tsdb.retention.time=7d"\n'
 )
 
-# ── Service environment files ─────────────────────────────────────────
-
-NETHERMIND_ENV = """\
-NETHERMIND_CONFIG=/etc/nethermind-surge/config.json
-NETHERMIND_DATADIR=/persistent/nethermind
-NETHERMIND_JSONRPC_ENGINEHOST=127.0.0.1
-NETHERMIND_JSONRPC_ENGINEPORT=8551
-NETHERMIND_JSONRPC_HOST=127.0.0.1
-NETHERMIND_JSONRPC_PORT=8545
-NETHERMIND_JSONRPC_JWTSECRETFILE=/persistent/jwt/jwt.hex"""
-
-RAIKO_ENV = """\
-RAIKO_CONFIG=/etc/raiko/config.json
-RAIKO_CHAIN_SPEC=/etc/raiko/chain-spec.json"""
-
-TAIKO_CLIENT_ENV = """\
-TAIKO_CLIENT_CONFIG=/etc/taiko-client/config.json"""
-
-# ── Service units (mkosi.extra/usr/lib/systemd/system/), before after_init ──
-
-RAIKO_UNIT = """\
-[Unit]
-Description=Raiko
-After=tdxs.service
-Requires=tdxs.service
-
-[Service]
-User=raiko
-Group=tdx
-Restart=on-failure
-ExecStart=/usr/bin/raiko
-
-[Install]
-WantedBy=default.target
-"""
-
-TAIKO_CLIENT_UNIT = """\
-[Unit]
-Description=Taiko Client
-
-[Service]
-User=taiko-client
-Group=eth
-Restart=on-failure
-ExecStart=/usr/bin/taiko-client
-
-[Install]
-WantedBy=default.target
-"""
-
-NETHERMIND_UNIT = """\
-[Unit]
-Description=Nethermind Surge
-
-[Service]
-User=nethermind-surge
-Group=eth
-Restart=on-failure
-LimitNOFILE=1048576
-EnvironmentFile=/etc/nethermind-surge/env
-ExecStart=/usr/bin/nethermind \\
---config /etc/nethermind-surge/config.json \\
---datadir /home/nethermind-surge/data \\
---JsonRpc.EngineHost 0.0.0.0 \\
---JsonRpc.EnginePort 8551
-
-[Install]
-WantedBy=default.target
-"""
+__all__ = [
+    "DROPBEAR_CONFIG",
+    "NETHERMIND_ENV",
+    "NETHERMIND_UNIT",
+    "NETWORK_SETUP_SERVICE",
+    "OPENNTPD_CONF",
+    "PROMETHEUS_DEFAULTS",
+    "RAIKO_ENV",
+    "RAIKO_UNIT",
+    "RESOLV_CONF",
+    "SYSCTL_CONF",
+    "TAIKO_CLIENT_ENV",
+    "TAIKO_CLIENT_UNIT",
+    "TDX_GUEST_PERMISSIONS",
+    "TDX_GUEST_SYMLINK",
+    "TDX_INIT",
+]

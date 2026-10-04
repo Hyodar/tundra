@@ -220,14 +220,15 @@ def test_compile_check_detects_stale_tree(recipe: Path, tmp_path: Path) -> None:
 
 def test_diff_command(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    run("compile", str(recipe), "--out", str(tree), "--all-profiles")
+    both = ("--variant", "default", "--variant", "azure")
+    run("compile", str(recipe), "--out", str(tree), *both)
     code, out = run("diff", str(recipe), "--against", str(tree), "--stat")
     assert (code, out) == (EXIT_OK, "tree is up to date with the recipe\n")
-    code, out = run("diff", str(recipe), "--against", str(tree), "--all-profiles")
+    code, out = run("diff", str(recipe), "--against", str(tree), *both)
     assert code == EXIT_OK
 
     recipe.write_text(recipe.read_text().replace("hello", "goodbye"))
-    code, out = run("diff", str(recipe), "--against", str(tree), "--stat", "--all-profiles")
+    code, out = run("diff", str(recipe), "--against", str(tree), "--stat", *both)
     assert (tree / "azure" / "mkosi.conf").is_file()
     assert (code, out) == (
         EXIT_FAILURE,
