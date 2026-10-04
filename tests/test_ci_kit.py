@@ -144,10 +144,10 @@ def test_inspect_markdown_two_variants(recipe: Path) -> None:
     )
     assert code == EXIT_OK
     assert out.startswith("# tundravm: `recipe.py`\n")
-    assert "## Profile `default`" in out and "## Profile `azure`" in out
-    assert out.index("## Profile `azure`") < out.index("## Profile `default`")
-    assert "**Extends:** none · **Modules:** none" in out
-    assert "**Extends:** `default` · **Modules:** `AzurePlatform`" in out
+    assert "## Variant `default`" in out and "## Variant `azure`" in out
+    assert out.index("## Variant `azure`") < out.index("## Variant `default`")
+    assert "**Parent:** `base` · **Fragments:** `common`" in out
+    assert "**Parent:** none" not in out
     assert "| Package | Installed in |" in out and "| `curl` | image |" in out
     assert "| Path | Mode | Bytes | sha256 |" in out and "| `/etc/motd` | 0644 | 6 |" in out
     assert "### Users (1)" in out and "| `app` | yes |" in out
@@ -211,7 +211,7 @@ def test_lint_markdown_table(recipe: Path) -> None:
     recipe.write_text(recipe.read_text() + GHOST)
     code, out = run("lint", str(recipe), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
-    assert out.startswith("| Level | Code | Profile | Subject | Message | Hint |\n|---|")
+    assert out.startswith("| Level | Code | Variant | Subject | Message | Hint |\n|---|")
     assert "| error | `service-user-missing` | `default` | `w` |" in out
     assert "**1 error, 0 warnings, 0 infos**" in out
 
@@ -288,11 +288,11 @@ def test_lock_check_github_and_markdown(recipe: Path, tmp_path: Path) -> None:
     [(level, props, message)] = parse_annotations(out)
     assert level == "error"
     assert props == {"file": str(LOCKFILE), "title": "lock drift"}
-    assert message.startswith("profiles.default.packages changed: +htop.")
+    assert message.startswith("variants.default.packages changed: +htop.")
 
     code, out = run("lock", str(recipe), "--check", "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
-    assert "| changed | `profiles.default.packages` | `+htop` |" in out
+    assert "| changed | `variants.default.packages` | `+htop` |" in out
 
 
 # ci
@@ -309,6 +309,48 @@ def test_ci_pass_prints_three_ok_lines(recipe: Path, tmp_path: Path) -> None:
         f"ok compile: {tree} is up to date",
         f"ok lock: {LOCKFILE} is up to date",
     ]
+
+
+RUNTIME_RECIPE = """
+from tundravm import (
+    Disk, Fragment, Git, Key, Recipe, RuntimeTools, Secret, SecretFile, Secrets, Service,
+    Variant,
+)
+from tundravm.backends.inprocess import InProcessBackend
+
+backend = InProcessBackend()
+TOOLS = RuntimeTools(Git("https://github.com/Hyodar/tundra-tools", "{sha}"))
+KEY = Key("key_persistent")
+ITEMS = (
+    TOOLS,
+    KEY,
+    Disk("disk_persistent", "/persistent", key=KEY),
+    Secrets(entries=(Secret("token", (SecretFile("/run/app/token"),)),)),
+    Service("app", "/usr/bin/app"),
+)
+recipe = Recipe(
+    "runtime",
+    Fragment("runtime", items=ITEMS),
+    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+)
+""".replace("{sha}", "a" * 40)
+
+
+def test_ci_after_compile_and_lock_is_clean_with_runtime_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    recipe = tmp_path / "runtime.py"
+    recipe.write_text(RUNTIME_RECIPE, encoding="utf-8")
+    tree = tmp_path / "mkosi"
+    assert run("compile", str(recipe), "--out", str(tree))[0] == EXIT_OK
+    assert run("lock", str(recipe))[0] == EXIT_OK
+    assert run("lock", str(recipe), "--check") == (EXIT_OK, "lock is up to date\n")
+
+    code, out = run("ci", str(recipe), "--out", str(tree))
+
+    assert (code, out.splitlines()[-1]) == (EXIT_OK, f"ok lock: {LOCKFILE} is up to date")
+    assert (tree / "default" / "mkosi.extra" / "usr" / "bin" / "runtime-init").is_file()
 
 
 def test_ci_stops_at_first_failing_step(recipe: Path, tmp_path: Path) -> None:
@@ -366,8 +408,8 @@ def test_auto_resolves_to_github_under_github_actions(
     assert code == EXIT_FAILURE and out.startswith("::error file=")
     code, out = run("lock", str(recipe), "--check", "--format", "text")
     assert out.splitlines()[:2] == [
-        "~ profiles.azure.packages: +htop",
-        "~ profiles.default.packages: +htop",
+        "~ variants.azure.packages: +htop",
+        "~ variants.default.packages: +htop",
     ]
     code, out = run("diff", str(recipe), "--against", str(tmp_path / "none"), "--stat")
     assert out.startswith("A  azure/mkosi.conf")

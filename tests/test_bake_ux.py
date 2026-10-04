@@ -153,12 +153,12 @@ def test_json_reporter_writes_one_object_per_line() -> None:
     reporter = JsonReporter(stream)
     reporter.emit(_phase("start"))
     reporter.emit(_output("hello"))
-    reporter.emit(Event("done", None, "baked 1 profile in 0.1s", 0.1234, {"status": "ok"}))
+    reporter.emit(Event("done", None, "baked 1 variant in 0.1s", 0.1234, {"status": "ok"}))
     payloads = [json.loads(line) for line in stream.getvalue().splitlines()]
     assert [p["kind"] for p in payloads] == ["phase", "log", "done"]
     assert payloads[1] == {
         "kind": "log",
-        "profile": "default",
+        "variant": "default",
         "message": "hello",
         "elapsed_s": 0.0,
         "extra": {"source": "backend"},
@@ -178,7 +178,7 @@ def test_inprocess_backend_streams_output_lines(tmp_path: Path) -> None:
         on_output=lines.append,
     )
     InProcessBackend().execute(request)
-    assert lines[0].startswith("inprocess: building profile default")
+    assert lines[0].startswith("inprocess: building variant default")
     assert "inprocess: wrote qemu artifact disk.qcow2" in lines
     assert lines[-1] == "inprocess: done (1 artifacts)"
 
@@ -276,7 +276,7 @@ def test_bake_emits_phases_output_artifacts_and_done(tmp_path: Path) -> None:
     assert kinds[-1] == "done"
     done = capture.events[-1]
     assert done.extra["status"] == "ok"
-    assert done.message.startswith("baked 1 profile in ")
+    assert done.message.startswith("baked 1 variant in ")
     assert all(b.elapsed_s >= a.elapsed_s for a, b in pairwise(capture.events))
     ok_build = next(
         e
@@ -397,7 +397,7 @@ def test_render_bake_summary_aligns_columns(tmp_path: Path) -> None:
         }
     )
     lines = render_bake_summary(result).splitlines()
-    assert lines[0].split() == ["profile", "target", "artifact", "size", "sha256", "time"]
+    assert lines[0].split() == ["variant", "target", "artifact", "size", "sha256", "time"]
     assert lines[1].split() == ["default", "qemu", str(disk), "2.0", "KiB", "abababababab", "1m15s"]
     assert lines[2].split() == ["empty", "-", "(no", "artifacts)", "-", "-", "-"]
     assert lines[0].index("target") == lines[1].index("qemu") == lines[2].index("-")
@@ -460,8 +460,8 @@ def test_cli_bake_default_prints_progress_and_summary(
     assert re.search(r"^\[default\] artifact qemu \S+disk\.qcow2 \(\d+ B\)$", err, re.M)
     assert "[default] | " not in err
     lines = out.splitlines()
-    header = next(i for i, line in enumerate(lines) if line.startswith("profile"))
-    assert lines[header].split() == ["profile", "target", "artifact", "size", "sha256", "time"]
+    header = next(i for i, line in enumerate(lines) if line.startswith("variant"))
+    assert lines[header].split() == ["variant", "target", "artifact", "size", "sha256", "time"]
     assert re.match(
         r"default\s+qemu\s+\S+disk\.qcow2\s+\d+ B\s+[0-9a-f]{12}\s+\d+\.\ds$", lines[header + 1]
     )
@@ -478,7 +478,7 @@ def test_cli_bake_verbose_echoes_backend_output(
     err = capsys.readouterr().err
     assert code == EXIT_OK
     assert "[default] | inprocess: wrote qemu artifact disk.qcow2" in err
-    assert "[default] Starting profile bake via inprocess backend." in err
+    assert "[default] Starting variant bake via inprocess backend." in err
 
 
 @pytest.mark.usefixtures("in_tmp_path")
@@ -490,7 +490,7 @@ def test_cli_bake_quiet_prints_only_the_summary(
     code, out = _run("bake", str(recipe), "-q")
     assert code == EXIT_OK
     assert capsys.readouterr().err == ""
-    assert out.splitlines()[0].startswith("profile  target")
+    assert out.splitlines()[0].startswith("variant  target")
     assert out.splitlines()[-1].startswith("next: tundravm deploy")
 
 

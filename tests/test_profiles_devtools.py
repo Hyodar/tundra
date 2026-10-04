@@ -1,10 +1,11 @@
-"""A variant that adds the ``devtools()`` fragment."""
+"""A variant that adds the ``DevTools()`` fragment."""
 
 from pathlib import Path
 
 import pytest
 
-from tundravm.declarative import Debloat, Fragment, Package, Recipe, Unit, Variant, devtools
+from tundravm.declarative import Debloat, Fragment, Package, Recipe, Unit, Variant
+from tundravm.declarative.utils import DevTools
 from tundravm.testing import CompiledTree, compile_tree
 
 SERIAL_UNIT = "serial-console.service"
@@ -30,7 +31,7 @@ def _recipe(*common: Debloat) -> Recipe:
     return Recipe(
         "debug",
         Fragment("common", items=common),
-        variants=(Variant("default"), Variant("devtools", add=devtools())),
+        variants=(Variant("default"), Variant("devtools", add=DevTools())),
     )
 
 
@@ -58,12 +59,12 @@ def test_devtools_profile_adds_debug_packages(tree: CompiledTree) -> None:
 
 def test_devtools_profile_includes_expected_packages() -> None:
     """Verify the exact package list matches the upstream devtools profile."""
-    declared = {item.name for item in devtools().items if isinstance(item, Package)}
+    declared = {item.name for item in DevTools().items if isinstance(item, Package)}
     assert declared == EXPECTED_PACKAGES
 
 
 def test_devtools_profile_emits_serial_console_service(tree: CompiledTree) -> None:
-    (unit,) = [item for item in devtools().items if isinstance(item, Unit)]
+    (unit,) = [item for item in DevTools().items if isinstance(item, Unit)]
 
     assert unit.name == SERIAL_UNIT
     assert tree.unit(SERIAL_UNIT, profile="devtools") == unit.content

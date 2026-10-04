@@ -13,8 +13,8 @@ from tundravm import File, Fragment, Package, Recipe, Service, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import bake_image
+from tundravm.declarative.utils import Tdxs
 from tundravm.models import BakeResult
-from tundravm.modules import tdxs
 
 
 def _bake(recipe: Recipe, backend: LocalLinuxBackend, output_dir: Path) -> BakeResult:
@@ -73,7 +73,7 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
     """Emit the tdxs fragment and verify config, units, and build script."""
     recipe = Recipe(
         "smoke",
-        Fragment("common", items=(Package("systemd"), tdxs())),
+        Fragment("common", items=(Package("systemd"), Tdxs())),
         base="debian/bookworm",
     )
 

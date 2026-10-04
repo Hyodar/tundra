@@ -1136,7 +1136,7 @@ class DeterministicMkosiEmitter:
         # [Content]
         lines.append("[Content]")
         if config.reproducible:
-            lines.append("SourceDateEpoch=0")
+            lines.append(f"SourceDateEpoch={env_vars['SOURCE_DATE_EPOCH']}")
         lines.append(f"CleanPackageMetadata={'true' if config.clean_package_metadata else 'false'}")
         if packages:
             pkg_lines = "\n".join(f"    {p}" for p in packages)

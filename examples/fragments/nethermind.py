@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from tundravm.declarative import Build, File, Fragment, Git, Install, Package, Unit, User
+from tundravm.declarative.utils import Composite
 
 NETHERMIND_SOURCE = Git("https://github.com/NethermindEth/nethermind.git", "1.32.3")
 NETHERMIND_PROJECT = "src/Nethermind/Nethermind.Runner"
@@ -71,30 +74,35 @@ def _publish_script(name: str, project: str, runtime: str) -> str:
     )
 
 
-def nethermind(*, source: Git = NETHERMIND_SOURCE) -> Fragment:
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Nethermind(Composite):
     """Nethermind at *source*: the runner binary, ``NLog.config`` and ``plugins``.
 
     The ``eth`` group the user joins is the recipe's to declare.
     """
-    etc = "/etc/nethermind-surge"
-    return Fragment(
-        "nethermind",
-        items=(
-            *(Package(name, role="build") for name in NETHERMIND_BUILD_PACKAGES),
-            Build(
-                "nethermind",
-                source,
-                script=_publish_script("nethermind", NETHERMIND_PROJECT, NETHERMIND_RUNTIME),
-                install=(
-                    Install("publish/nethermind", "/usr/bin/nethermind"),
-                    Install("publish/NLog.config", f"{etc}/NLog.config", mode=0o644),
-                    Install("publish/plugins", f"{etc}/plugins", mode=None, directory=True),
+
+    source: Git = NETHERMIND_SOURCE
+
+    def compose(self) -> Fragment:
+        etc = "/etc/nethermind-surge"
+        return Fragment(
+            "nethermind",
+            items=(
+                *(Package(name, role="build") for name in NETHERMIND_BUILD_PACKAGES),
+                Build(
+                    "nethermind",
+                    self.source,
+                    script=_publish_script("nethermind", NETHERMIND_PROJECT, NETHERMIND_RUNTIME),
+                    install=(
+                        Install("publish/nethermind", "/usr/bin/nethermind"),
+                        Install("publish/NLog.config", f"{etc}/NLog.config", mode=0o644),
+                        Install("publish/plugins", f"{etc}/plugins", mode=None, directory=True),
+                    ),
+                    env=NETHERMIND_DOTNET_ENV,
+                    cache_key=f"nethermind-{self.source.ref}-{NETHERMIND_RUNTIME}",
                 ),
-                env=NETHERMIND_DOTNET_ENV,
-                cache_key=f"nethermind-{source.ref}-{NETHERMIND_RUNTIME}",
+                User("nethermind-surge", home="/home/nethermind-surge", groups=("eth",)),
+                Unit("nethermind-surge.service", NETHERMIND_UNIT, enabled=True, after_init=True),
+                File(f"{etc}/env", NETHERMIND_ENV),
             ),
-            User("nethermind-surge", home="/home/nethermind-surge", groups=("eth",)),
-            Unit("nethermind-surge.service", NETHERMIND_UNIT, enabled=True, after_init=True),
-            File(f"{etc}/env", NETHERMIND_ENV),
-        ),
-    )
+        )

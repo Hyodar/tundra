@@ -47,7 +47,7 @@ class InProcessBackend:
         emit = request.on_output if request.on_output is not None else _discard
         profile_dir = request.build_dir / request.profile
         profile_dir.mkdir(parents=True, exist_ok=True)
-        emit(f"inprocess: building profile {request.profile} from {request.emit_dir}")
+        emit(f"inprocess: building variant {request.profile} from {request.emit_dir}")
 
         profile_result = ProfileBuildResult(profile=request.profile)
 

@@ -5,7 +5,7 @@ A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
 ``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``bake``,
 ``read_artifacts``, ``doctor``) take one. ``diff``, ``measure`` and ``deploy``
 are ``tundravm.declarative.diff``/``measure``/``deploy`` (at the top level those
-names are modules). The shipped fragments are in :mod:`tundravm.modules`.
+names are modules). The shipped fragments are in :mod:`tundravm.declarative.utils`.
 """
 
 __version__ = "0.1.0"
@@ -15,17 +15,20 @@ from .declarative import (
     Azure,
     Backend,
     Build,
+    Cargo,
     Debloat,
     Declaration,
     Deployment,
     Diagnostic,
     Directory,
     Disk,
+    Dotnet,
     Entry,
     File,
     Fragment,
     Gcp,
     Git,
+    Go,
     Group,
     Hook,
     Http,
@@ -91,6 +94,7 @@ __all__ = [
     "Backend",
     "BackendExecutionError",
     "Build",
+    "Cargo",
     "Debloat",
     "Declaration",
     "Deployment",
@@ -98,11 +102,13 @@ __all__ = [
     "Diagnostic",
     "Directory",
     "Disk",
+    "Dotnet",
     "Entry",
     "File",
     "Fragment",
     "Gcp",
     "Git",
+    "Go",
     "Group",
     "Hook",
     "Http",

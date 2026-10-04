@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from tundravm.declarative import Build, File, Fragment, Git, Install, Package, Unit, User
+from tundravm.declarative.utils import Composite
 
 TAIKO_CLIENT_SOURCE = Git(
     "https://github.com/NethermindEth/surge-taiko-mono",
@@ -38,24 +41,29 @@ TAIKO_CLIENT_ENV = """\
 TAIKO_CLIENT_CONFIG=/etc/taiko-client/config.json"""
 
 
-def taiko_client(*, source: Git = TAIKO_CLIENT_SOURCE) -> Fragment:
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaikoClient(Composite):
     """The taiko client from *source* (``cmd/main.go`` of its subdirectory).
 
     The ``eth`` group the user joins is the recipe's to declare.
     """
-    return Fragment(
-        "taiko-client",
-        items=(
-            *(Package(name, role="build") for name in TAIKO_CLIENT_BUILD_PACKAGES),
-            Build(
-                "taiko-client",
-                source,
-                script=TAIKO_CLIENT_BUILD,
-                install=(Install("bin/taiko-client", "/usr/bin/taiko-client"),),
-                cache_key=f"taiko-client-{source.ref}",
+
+    source: Git = TAIKO_CLIENT_SOURCE
+
+    def compose(self) -> Fragment:
+        return Fragment(
+            "taiko-client",
+            items=(
+                *(Package(name, role="build") for name in TAIKO_CLIENT_BUILD_PACKAGES),
+                Build(
+                    "taiko-client",
+                    self.source,
+                    script=TAIKO_CLIENT_BUILD,
+                    install=(Install("bin/taiko-client", "/usr/bin/taiko-client"),),
+                    cache_key=f"taiko-client-{self.source.ref}",
+                ),
+                User("taiko-client", home="/home/taiko-client", groups=("eth",)),
+                Unit("taiko-client.service", TAIKO_CLIENT_UNIT, enabled=True, after_init=True),
+                File("/etc/taiko-client/env", TAIKO_CLIENT_ENV),
             ),
-            User("taiko-client", home="/home/taiko-client", groups=("eth",)),
-            Unit("taiko-client.service", TAIKO_CLIENT_UNIT, enabled=True, after_init=True),
-            File("/etc/taiko-client/env", TAIKO_CLIENT_ENV),
-        ),
-    )
+        )

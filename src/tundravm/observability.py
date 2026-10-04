@@ -37,8 +37,9 @@ GLOBAL_LABEL = "tundravm"
 class Event:
     """One progress event.
 
-    ``profile`` is the profile the event concerns, or ``None`` for a step that
-    spans several. ``elapsed_s`` counts seconds since the operation started.
+    ``profile`` is the variant the event concerns (``variant`` in :meth:`to_dict`),
+    or ``None`` for a step that spans several. ``elapsed_s`` counts seconds since
+    the operation started.
     Phase events carry ``extra["phase"]`` and ``extra["status"]`` (``start``,
     ``ok`` or ``fail``); finished phases add ``extra["duration_s"]``. Backend
     output lines are ``log`` events with ``extra["source"] == "backend"``;
@@ -54,7 +55,7 @@ class Event:
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": self.kind,
-            "profile": self.profile,
+            "variant": self.profile,
             "message": self.message,
             "elapsed_s": round(self.elapsed_s, 3),
             "extra": dict(self.extra),
@@ -473,8 +474,8 @@ def format_size(size: int) -> str:
 
 
 def render_bake_summary(result: BakeResult) -> str:
-    """Aligned table: profile, target, artifact, size, sha256 prefix, duration."""
-    rows = [("profile", "target", "artifact", "size", "sha256", "time")]
+    """Aligned table: variant, target, artifact, size, sha256 prefix, duration."""
+    rows = [("variant", "target", "artifact", "size", "sha256", "time")]
     for name in sorted(result.profiles):
         profile = result.profiles[name]
         took = "-" if profile.duration_s is None else format_duration(profile.duration_s)

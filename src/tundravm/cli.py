@@ -56,9 +56,10 @@ from .declarative.lifecycle import (
     write_lock,
 )
 from .declarative.model import Target
+from .declarative.resolve import resolve
 from .diff import _wants_color, cmd_diff, diff_against
 from .errors import TdxError, ValidationError
-from .explain import render_markdown
+from .explain import describe, render, render_markdown
 from .formats import annotation_path, format_help, resolve_format, workflow_command
 from .lockfile import LockDrift, recipe_digest
 from .measure import PlaceholderMeasurementWarning
@@ -207,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
         "Pins already in the lockfile are kept while their source is unchanged; "
         "--update NAME resolves that source again. Drift is reported one section per "
         "line: `~` changed, `+` only in the recipe, `-` only in the lockfile, e.g. "
-        "`~ profiles.default.packages: +htop -jq`. Source builds are pinned under "
+        "`~ variants.default.packages: +htop -jq`. Source builds are pinned under "
         "`fetches` and drift as `+ sources.<name>` (unpinned) or "
         "`~ sources.<name>: <old> -> <new>`."
     )
@@ -530,25 +531,27 @@ def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
     img = loaded.lowered()
     variants = _listed(img, names)
     fmt = args.format or ("json" if args.json else "text")
+    described = {name: _describe(loaded, img, name) for name in variants}
     if fmt == "json":
         with img._operation_scope(variants) as active:
             digest = recipe_digest(img._recipe_payload(profile_names=active))
-        payload = {
-            "digest": digest,
-            "variants": {name: img.explain(profile=name) for name in variants},
-        }
+        payload = {"digest": digest, "variants": described}
         print(json.dumps(payload, indent=2, sort_keys=True), file=out)
         return EXIT_OK
     if fmt == "markdown":
         print(f"# tundravm: `{args.recipe.name}`\n", file=out)
-        sections = [render_markdown(img.explain(profile=name)) for name in variants]
+        sections = [render_markdown(description) for description in described.values()]
         print("\n".join(sections).rstrip(), file=out)
         return EXIT_OK
-    for index, name in enumerate(variants):
-        if index:
-            print(file=out)
-        print(img.summary(profile=name).rstrip(), file=out)
+    print("\n\n".join(render(d).rstrip() for d in described.values()), file=out)
     return EXIT_OK
+
+
+def _describe(loaded: RecipeFile, img: Image, name: str) -> dict[str, object]:
+    """*name*'s dry-run description with the recipe's parent and resolved fragment names."""
+    fragments = resolve(loaded.recipe, variant=name).fragments
+    parent = loaded.recipe.variant(name).parent
+    return describe(img, profile=name, parent=parent, fragments=fragments)
 
 
 def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:

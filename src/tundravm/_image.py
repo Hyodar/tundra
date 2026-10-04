@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import fnmatch
 import hashlib
 import json
@@ -44,10 +45,12 @@ from .explain import describe, render
 from .lockfile import (
     LockDrift,
     LockedFetch,
+    Lockfile,
     build_lockfile,
     compare_lock,
     read_lockfile,
     recipe_digest,
+    unselected_sources,
     write_lockfile,
 )
 from .measure import Measurements, derive_measurements
@@ -571,7 +574,7 @@ class Image:
         for profile in self._iter_active_profiles():
             if any(g.name == name for g in profile.groups):
                 raise ValidationError(
-                    f"Duplicate group name '{name}' in profile '{profile.name}'.",
+                    f"Duplicate group name '{name}' in variant '{profile.name}'.",
                     hint="Group names must be unique within a profile.",
                     context={"group": name, "profile": profile.name},
                 )
@@ -605,7 +608,7 @@ class Image:
             existing_names = {u.name for u in profile.users}
             if name in existing_names:
                 raise ValidationError(
-                    f"Duplicate user name '{name}' in profile '{profile.name}'.",
+                    f"Duplicate user name '{name}' in variant '{profile.name}'.",
                     hint="User names must be unique within a profile.",
                     context={"user": name, "profile": profile.name},
                 )
@@ -701,7 +704,7 @@ class Image:
             existing_names = {s.name for s in profile.services}
             if name in existing_names:
                 raise ValidationError(
-                    f"Duplicate service name '{name}' in profile '{profile.name}'.",
+                    f"Duplicate service name '{name}' in variant '{profile.name}'.",
                     hint="Service names must be unique within a profile.",
                     context={"service": name, "profile": profile.name},
                 )
@@ -1062,21 +1065,33 @@ class Image:
 
         Reads ``<build_dir>/tundravm.lock`` by default and never writes. The
         returned :class:`~tundravm.lockfile.LockDrift` lists changed, added and
-        removed sections; ``render()`` prints them (``~ profiles.default.packages:
+        removed sections; ``render()`` prints them (``~ variants.default.packages:
         +htop``) or ``lock is up to date``. A lockfile written before section
         digests existed reports every section as added. Source builds report as
         ``+ sources.<name>`` (no pin) or ``~ sources.<name>: <old> -> <new>`` (pinned
         for another ref, or, with *resolver*, the ref has moved). Raises
         :class:`LockfileError` when the lockfile is missing or unreadable.
+
+        *profiles* that leave out some declared profile are checked against
+        their own sections only (see :func:`~tundravm.lockfile.compare_lock`).
         """
         lock_path = self._normalize_path(path, fallback=self._default_lock_path())
         lock = read_lockfile(lock_path)
+        with self._operation_scope(profiles) as names:
+            partial = not set(self._state.profiles) <= set(names)
+            return self._lock_drift(lock, resolver=resolver, partial=partial)
+
+    def _lock_drift(self, lock: Lockfile, *, resolver: Resolver | None, partial: bool) -> LockDrift:
+        """Section and source drift of the active profiles against *lock*."""
+        payload = self._recipe_payload(profile_names=self._active_profiles)
+        drift = compare_lock(lock, payload, partial=partial)
         pins = {fetch.name: fetch for fetch in lock.fetches if fetch.name is not None}
-        with self._operation_scope(profiles):
-            drift = compare_lock(lock, self._recipe_payload(profile_names=self._active_profiles))
-            added, changed, removed, details = source_drift(
-                self.source_builds(), pins, resolver=resolver
-            )
+        added, changed, removed, details = source_drift(
+            self.source_builds(), pins, resolver=resolver
+        )
+        if partial:
+            elsewhere = unselected_sources(lock, payload)
+            removed = [s for s in removed if s.removeprefix("sources.") not in elsewhere]
         return replace(
             drift,
             added=(*drift.added, *added),
@@ -1097,6 +1112,16 @@ class Image:
             return self._compile(self._normalize_path(path), force=force)
 
     def _compile(self, destination: Path, *, force: bool) -> CompileResult:
+        # Runtime-init is generated into a scratch copy so compiling never changes what
+        # later steps (lint, lock, a second compile) see.
+        declared = self._state
+        self._state = copy.deepcopy(declared)
+        try:
+            return self._emit(destination, force=force)
+        finally:
+            self._state = declared
+
+    def _emit(self, destination: Path, *, force: bool) -> CompileResult:
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
         pins = self.source_pins()
@@ -1205,8 +1230,8 @@ class Image:
                 raise ValidationError(
                     "No build backend configured.",
                     hint=(
-                        "Pass a backend to Image(), e.g. "
-                        "backend=LimaMkosiBackend(cpus=6, memory='12GiB', disk='100GiB')"
+                        "Pass --backend (lima, nix or local), or bind "
+                        "`backend = LimaMkosiBackend()` in the recipe file."
                     ),
                 )
             backend = self.backend
@@ -1224,7 +1249,7 @@ class Image:
                     phase="build",
                     module="image",
                     builder=backend.name,
-                    message=f"Starting profile bake via {backend.name} backend.",
+                    message=f"Starting variant bake via {backend.name} backend.",
                 )
 
                 # Build via the real backend, streaming its output to the reporter
@@ -1323,7 +1348,7 @@ class Image:
                     phase="build",
                     module="image",
                     builder=backend.name,
-                    message="Completed profile bake.",
+                    message="Completed variant bake.",
                 )
 
             total = progress.elapsed()
@@ -1336,7 +1361,7 @@ class Image:
             )
             bake_result.save(destination)
             self._last_bake_result = bake_result
-            noun = "profile" if len(profiles_result) == 1 else "profiles"
+            noun = "variant" if len(profiles_result) == 1 else "variants"
             progress.emit(
                 "done",
                 scope,
@@ -1393,7 +1418,7 @@ class Image:
         if artifact is None:
             raise DeploymentError(
                 "Requested deploy target artifact was not baked.",
-                hint="Add the target via targets(...) and rerun bake().",
+                hint="Add the target to the Variant (target= or targets=) and bake again.",
                 context={"operation": "deploy", "profile": selected_profile, "target": target},
             )
 
@@ -1491,8 +1516,8 @@ class Image:
         unknown = [name for name in names if name not in self._state.profiles]
         if unknown:
             raise ValidationError(
-                f"Unknown profile(s): {', '.join(unknown)}.",
-                hint=f"Declared profiles: {', '.join(self.profile_names)}",
+                f"Unknown variant(s): {', '.join(unknown)}.",
+                hint=f"Declared variants: {', '.join(self.profile_names)}",
             )
         previous = self._active_profiles
         self._active_profiles = names
@@ -1869,10 +1894,12 @@ class Image:
         lock_path = self._default_lock_path()
         lock = read_lockfile(lock_path)
         current_recipe = self._recipe_payload(profile_names=profile_names)
-        if lock.recipe_digest == recipe_digest(current_recipe):
+        # A lock written for more variants than this bake selects covers it when
+        # every section of the selected variants and the recipe-wide ones matches.
+        drift = compare_lock(lock, current_recipe, partial=True)
+        if lock.recipe_digest == recipe_digest(current_recipe) or drift.is_clean:
             self._assert_sources_pinned(lock_path)
             return
-        drift = compare_lock(lock, current_recipe)
         lines = drift.render().splitlines()
         if len(lines) > _DRIFT_MESSAGE_LINES:
             hidden = len(lines) - _DRIFT_MESSAGE_LINES

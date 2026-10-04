@@ -9,7 +9,13 @@ from pathlib import Path
 
 from tundravm.formats import annotation_path, md_cell, md_table, workflow_command
 from tundravm.lockfile.model import Lockfile
-from tundravm.lockfile.resolve import recipe_digest, section_values, value_digest
+from tundravm.lockfile.resolve import (
+    VARIANTS_KEY,
+    VARIANTS_SECTION,
+    recipe_digest,
+    section_values,
+    value_digest,
+)
 
 DETAIL_LIMIT = 5
 """Maximum item entries shown per section detail before eliding the rest."""
@@ -28,7 +34,7 @@ class LockDrift:
     ``details`` holds a one-line item summary for some changed sections, such as
     ``+htop -jq`` for packages or ``~/etc/motd`` for files. ``digest_matches``
     reports whether the whole-recipe digest, which frozen bakes enforce, still
-    matches.
+    matches; it stays true when only some of the lock's variants were compared.
     """
 
     changed: tuple[str, ...] = ()
@@ -101,15 +107,66 @@ _DRIFT_WORDS = {
 }
 
 
-def compare_lock(lock: Lockfile, payload: Mapping[str, object]) -> LockDrift:
+def lock_variants(lock: Lockfile) -> tuple[str, ...]:
+    """The variants *lock* was written for, sorted."""
+    return _variants(lock.recipe)
+
+
+def _variants(payload: Mapping[str, object]) -> tuple[str, ...]:
+    entries = payload.get(VARIANTS_KEY)
+    return tuple(sorted(str(name) for name in entries)) if isinstance(entries, Mapping) else ()
+
+
+def unselected_variants(lock: Lockfile, payload: Mapping[str, object]) -> tuple[str, ...]:
+    """The variants *lock* holds that the recipe *payload* does not select."""
+    selected = set(_variants(payload))
+    return tuple(name for name in lock_variants(lock) if name not in selected)
+
+
+def unselected_sources(lock: Lockfile, payload: Mapping[str, object]) -> frozenset[str]:
+    """Source builds the lock records for variants the recipe *payload* does not select."""
+    entries = lock.recipe.get(VARIANTS_KEY)
+    if not isinstance(entries, Mapping):
+        return frozenset()
+    names: set[str] = set()
+    for variant in unselected_variants(lock, payload):
+        entry = entries.get(variant)
+        builds = entry.get("source_builds") if isinstance(entry, Mapping) else None
+        if isinstance(builds, Mapping):
+            names.update(str(name) for name in builds)
+    return frozenset(names)
+
+
+def _section_variant(name: str, variants: Sequence[str]) -> str | None:
+    """The variant a ``variants.<name>.<key>`` section belongs to (longest name wins)."""
+    found = [v for v in variants if name.startswith(f"{VARIANTS_SECTION}.{v}.")]
+    return max(found, key=len, default=None)
+
+
+def compare_lock(
+    lock: Lockfile, payload: Mapping[str, object], *, partial: bool = False
+) -> LockDrift:
     """Compare *lock* against the current recipe *payload* section by section.
 
     Item-level detail comes from the recipe payload embedded in the lockfile and
     is only used when that embedded sub-payload still hashes to the section
     digest the lockfile recorded.
+
+    *partial* says *payload* holds a selection of the recipe's variants: the
+    lock's sections of variants outside it are not compared, and the
+    whole-recipe digest only when the selection is every variant the lock holds.
+    A lock written for more variants thus covers a bake or check of fewer.
     """
     current = section_values(payload)
     locked = lock.sections
+    others = unselected_variants(lock, payload) if partial else ()
+    if others:
+        known = (*_variants(payload), *lock_variants(lock))
+        locked = {
+            name: digest
+            for name, digest in locked.items()
+            if _section_variant(name, known) not in others
+        }
     changed = tuple(
         name
         for name, value in current.items()
@@ -130,7 +187,7 @@ def compare_lock(lock: Lockfile, payload: Mapping[str, object]) -> LockDrift:
         added=added,
         removed=removed,
         details=details,
-        digest_matches=lock.recipe_digest == recipe_digest(payload),
+        digest_matches=bool(others) or lock.recipe_digest == recipe_digest(payload),
     )
 
 

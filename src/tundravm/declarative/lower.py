@@ -33,7 +33,7 @@ from tundravm._modules import (
 )
 from tundravm._modules.base import TUNDRA_TOOLS
 from tundravm._options import MkosiOptions
-from tundravm._source import GitSource, HttpSource, ScriptBuild, SourceBuild
+from tundravm._source import BuildRecipe, GitSource, HttpSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as FluentInstall
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel as FluentKernel
@@ -588,15 +588,21 @@ def _source_build(build: Build, *, mark_unpinned: bool = True) -> SourceBuild:
         )
         for step in build.install
     )
-    return SourceBuild(
-        name=build.name,
-        source=source,
-        build=ScriptBuild(
+    recipe: BuildRecipe
+    if build.recipe is not None:
+        recipe = build.recipe
+    else:
+        assert build.script is not None  # Build allows exactly one of script and recipe
+        recipe = ScriptBuild(
             script=build.script,
             output=build.install[0].source,
             packages=build.packages,
             env=dict(build.env),
-        ),
+        )
+    return SourceBuild(
+        name=build.name,
+        source=source,
+        build=recipe,
         install=steps,
         cache_key=build.cache_key,
         mark_unpinned=mark_unpinned,

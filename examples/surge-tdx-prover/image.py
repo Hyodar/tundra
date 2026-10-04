@@ -17,8 +17,8 @@ from contents import (
     TDX_GUEST_PERMISSIONS,
     TDX_GUEST_SYMLINK,
 )
-from examples.modules import nethermind, raiko, taiko_client
-from examples.nethermind_tdx import NETHERMIND_V1, PINNED_MIRROR, nethermind_base
+from examples.fragments import Nethermind, Raiko, TaikoClient
+from examples.nethermind_tdx import NETHERMIND_V1, PINNED_MIRROR, NethermindBase
 
 from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import (
@@ -32,8 +32,8 @@ from tundravm.declarative import (
     Secrets,
     Unit,
     Variant,
-    devtools,
 )
+from tundravm.declarative.utils import DevTools
 
 RUNTIME_PACKAGES = (
     "prometheus",
@@ -94,11 +94,11 @@ disk = Disk(
 prover_stack = Fragment(
     "prover-stack",
     items=(
-        # The historical tree spells this group "-r", unlike the tdx group tdxs() declares.
+        # The historical tree spells this group "-r", unlike the tdx group Tdxs declares.
         Hook("eth-group", "postinst", "mkosi-chroot groupadd -r eth"),
-        raiko(),
-        taiko_client(),
-        nethermind(),
+        Raiko(),
+        TaikoClient(),
+        Nethermind(),
         # Nethermind reads the TDX devices too; the tree grants it with usermod.
         Hook("nethermind-tdx-group", "postinst", "mkosi-chroot usermod -a -G tdx nethermind-surge"),
     ),
@@ -133,7 +133,7 @@ recipe = Recipe(
     common=Fragment(
         "surge",
         items=(
-            nethermind_base(),
+            NethermindBase(),
             *(Package(name) for name in RUNTIME_PACKAGES),
             *(Package(name, role="build") for name in BUILD_PACKAGES),
             key,
@@ -147,7 +147,7 @@ recipe = Recipe(
         Variant("default", target="qemu"),
         Variant("azure", parent="default", target="azure"),
         Variant("gcp", parent="default", target="gcp"),
-        Variant("devtools", parent="default", add=devtools()),  # never ship it
+        Variant("devtools", parent="default", add=DevTools()),  # never ship it
     ),
 )
 

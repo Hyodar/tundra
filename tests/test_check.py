@@ -41,7 +41,6 @@ from tundravm.check import Diagnostic, check, render
 from tundravm.cli import main
 from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import check_report
-from tundravm.models import SecretSpec
 
 DEFAULT = Variant("default", target="qemu")
 CLEAN: tuple[Declaration, ...] = (
@@ -49,14 +48,6 @@ CLEAN: tuple[Declaration, ...] = (
     User("app", system=True),
     Service("app", "/usr/bin/app", user="app"),
     File("/etc/motd", "hi\n"),
-)
-PLATFORM_MARKERS = frozenset(
-    {
-        "/usr/bin/azure-complete-provisioning",
-        "/usr/lib/systemd/system/azure-complete-provisioning.service",
-        "/usr/lib/udev/rules.d/65-gce-disk-naming.rules",
-        "/usr/lib/udev/google_nvme_id",
-    }
 )
 
 
@@ -173,11 +164,11 @@ def test_service_command_shipped_by_file_hook_package_or_essential() -> None:
     assert report(packaged) == []
 
 
-# e. output-target-platform-mismatch / platform-target-missing
+# e. cloud targets
 #
-# A cloud target always lowers with its platform module, so these rules only
-# fire on a lowered image whose platform files or target were changed after
-# lowering.
+# Lowering applies a cloud target's platform module to the variant that sets it,
+# and a variant cannot change a cloud target it inherits, so a platform without
+# its target (or a target without its platform) cannot be declared.
 
 
 def cloud_recipe() -> Recipe:
@@ -185,43 +176,14 @@ def cloud_recipe() -> Recipe:
     return recipe(variants=variants)
 
 
-def test_output_target_without_platform() -> None:
-    img = lower(cloud_recipe())
-    for name in ("azure", "gcp"):
-        state = img.state.profiles[name]
-        state.files = [f for f in state.files if f.path not in PLATFORM_MARKERS]
-        state.skeleton_files = [f for f in state.skeleton_files if f.path not in PLATFORM_MARKERS]
-    img.backend = InProcessBackend()
-    diags = check(img, profiles=["azure", "gcp"])
-    assert [(d.profile, d.code, d.subject) for d in diags] == [
-        ("azure", "output-target-platform-mismatch", "azure"),
-        ("gcp", "output-target-platform-mismatch", "gcp"),
-    ]
-
-
-def test_platform_applied_or_guest_agent_is_fine() -> None:
+def test_cloud_variants_lint_clean() -> None:
     agent = Variant("agent", target="azure", add=Fragment("agent", items=(Package("waagent"),)))
-    subject = recipe(variants=(*cloud_recipe().variants, agent))
-    assert report(subject, "azure", "gcp", "agent") == []
+    both = Variant("both", targets=("azure", "gcp"))
+    subject = recipe(variants=(*cloud_recipe().variants, agent, both))
+    assert report(subject, "azure", "gcp", "agent", "both") == []
 
 
-def test_platform_applied_but_target_overridden() -> None:
-    img = lower(cloud_recipe())
-    img.state.profiles["azure"].output_targets = ("qemu",)
-    img.backend = InProcessBackend()
-    [diag] = check(img, profiles=["azure"])
-    assert diag.code == "platform-target-missing"
-    assert diag.subject == "azure"
-    assert "no azure artifact" in diag.message
-
-
-def test_gcp_platform_applied_but_target_overridden() -> None:
-    img = lower(cloud_recipe())
-    img.state.profiles["gcp"].output_targets = ("qemu",)
-    img.backend = InProcessBackend()
-    assert [(d.code, d.subject) for d in check(img, profiles=["gcp"])] == [
-        ("platform-target-missing", "gcp")
-    ]
+def test_variant_cannot_drop_an_inherited_cloud_target() -> None:
     child = Variant("plain", parent="gcp", target="qemu")
     subject = recipe(variants=(*cloud_recipe().variants, child))
     assert [(d.code, d.subject) for d in lint(subject, variants=["plain"])] == [
@@ -229,12 +191,12 @@ def test_gcp_platform_applied_but_target_overridden() -> None:
     ]
 
 
-# f. profile-empty
+# f. variant-empty
 
 
-def test_profile_empty() -> None:
+def test_variant_empty() -> None:
     [diag] = report(recipe(variants=(DEFAULT, Variant("bare"))), "bare")
-    assert (diag.level, diag.code, diag.profile) == ("info", "profile-empty", "bare")
+    assert (diag.level, diag.code, diag.profile) == ("info", "variant-empty", "bare")
 
 
 def test_profile_with_content_or_default_is_not_empty() -> None:
@@ -310,20 +272,15 @@ def test_debloat_removes_declared_file() -> None:
     assert report(recipe(network, Debloat(keep_paths=("/etc/systemd/network",)))) == []
 
 
-# j. secret-undelivered
+# j. secrets
+#
+# A Secret needs a delivery target and Secrets always lowers with the delivery
+# step that writes them at boot, so an undelivered secret cannot be declared.
 
 
-def test_secret_undelivered() -> None:
+def test_secret_requires_a_delivery_target() -> None:
     with pytest.raises(ValidationError, match="at least one delivery target"):
         Secret("token", targets=())
-    img = lower(recipe())
-    img.state.profiles["default"].secrets.append(SecretSpec(name="token"))
-    img.backend = InProcessBackend()
-    diags = check(img)
-    assert [(d.code, d.subject) for d in diags] == [
-        ("secret-undelivered", None),
-        ("secret-undelivered", "token"),
-    ]
 
 
 def test_secret_delivery_applied_is_fine() -> None:
@@ -353,7 +310,7 @@ def test_ordering_is_deterministic() -> None:
     keys = [(d.profile, d.level, d.code) for d in diags]
     assert keys == [
         ("a", "warning", "init-priority-collision"),
-        ("a", "info", "profile-empty"),
+        ("a", "info", "variant-empty"),
         ("b", "error", "file-path-relative"),
         ("b", "warning", "init-priority-collision"),
         ("default", "warning", "backend-missing"),
@@ -375,12 +332,12 @@ def test_render_text_and_dict() -> None:
         profile="default",
         subject="app",
     )
-    info = Diagnostic(level="info", code="profile-empty", message="m", hint=None, profile="x")
+    info = Diagnostic(level="info", code="variant-empty", message="m", hint=None, profile="x")
     text = render([diag, info])
     assert text.splitlines() == [
         "error service-user-missing [default] app: boom",
         "    hint: fix it",
-        "info profile-empty [x]: m",
+        "info variant-empty [x]: m",
         "1 error, 0 warnings, 1 info",
     ]
     assert diag.to_dict() == {
@@ -388,7 +345,7 @@ def test_render_text_and_dict() -> None:
         "code": "service-user-missing",
         "message": "boom",
         "hint": "fix it",
-        "profile": "default",
+        "variant": "default",
         "subject": "app",
     }
 
@@ -454,7 +411,7 @@ def test_cli_variant_selection(tmp_path: Path) -> None:
     recipe_path = write_recipe(tmp_path, 'variants.append(Variant("bare"))\n')
     code, out = run(str(recipe_path), "--variant", "default", "--variant", "bare")
     assert code == 0
-    assert "info profile-empty [bare]" in out
+    assert "info variant-empty [bare]" in out
     assert run(str(recipe_path), "--variant", "default")[1] == "no findings\n"
 
 

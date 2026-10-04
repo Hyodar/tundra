@@ -1,6 +1,6 @@
 """Nethermind TDX base layer: the NethermindEth/nethermind-tdx base image as a fragment.
 
-``nethermind_base()`` declares what every nethermind-tdx image shares:
+``NethermindBase`` declares what every nethermind-tdx image shares:
 
 - a TDX kernel built from source with the repository's config and a hardened command line
 - reproducible output (fixed seed, ``SOURCE_DATE_EPOCH=0``) and a pinned EFI stub
@@ -15,6 +15,7 @@ Recipes built on it set ``mkosi=NETHERMIND_V1`` to emit the historical tree byte
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from tundravm.backends import LimaMkosiBackend
@@ -28,10 +29,8 @@ from tundravm.declarative import (
     Package,
     Recipe,
     Setting,
-    backports,
-    efi_stub,
-    tdxs,
 )
+from tundravm.declarative.utils import Backports, Composite, EfiStub, Tdxs
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -125,36 +124,43 @@ RemainAfterExit=yes
 WantedBy=sysinit.target"""
 
 
-def nethermind_base(*, snapshot: str = PINNED_MIRROR) -> Fragment:
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NethermindBase(Composite):
     """The nethermind-tdx base layer; *snapshot* is the Debian snapshot the EFI stub comes from."""
-    return Fragment(
-        "nethermind-base",
-        items=(
-            Kernel(
-                KERNEL_VERSION,
-                Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
-                config=KERNEL_CONFIG,
-                cmdline=KERNEL_CMDLINE,
+
+    snapshot: str = PINNED_MIRROR
+
+    def compose(self) -> Fragment:
+        return Fragment(
+            "nethermind-base",
+            items=(
+                Kernel(
+                    KERNEL_VERSION,
+                    Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
+                    config=KERNEL_CONFIG,
+                    cmdline=KERNEL_CMDLINE,
+                ),
+                Setting("Output", "Seed", (SEED,)),
+                Setting("Output", "OutputDirectory", ("build",)),
+                Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
+                Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
+                File("/init", TDX_INIT, mode=0o755, stage="skeleton"),
+                EfiStub(snapshot=self.snapshot, version=EFI_STUB_VERSION),
+                Backports(),
+                *(Package(name) for name in RUNTIME_PACKAGES),
+                *(Package(name, role="build") for name in BUILD_PACKAGES),
+                File("/etc/resolv.conf", RESOLV_CONF, stage="skeleton"),
+                File(
+                    "/etc/systemd/system/network-setup.service",
+                    NETWORK_SETUP_SERVICE,
+                    stage="skeleton",
+                ),
+                Debloat(),
+                Tdxs(),
             ),
-            Setting("Output", "Seed", (SEED,)),
-            Setting("Output", "OutputDirectory", ("build",)),
-            Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
-            Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
-            File("/init", TDX_INIT, mode=0o755, stage="skeleton"),
-            efi_stub(snapshot=snapshot, version=EFI_STUB_VERSION),
-            backports(),
-            *(Package(name) for name in RUNTIME_PACKAGES),
-            *(Package(name, role="build") for name in BUILD_PACKAGES),
-            File("/etc/resolv.conf", RESOLV_CONF, stage="skeleton"),
-            File(
-                "/etc/systemd/system/network-setup.service", NETWORK_SETUP_SERVICE, stage="skeleton"
-            ),
-            Debloat(),
-            tdxs(),
-        ),
-    )
+        )
 
 
-recipe = Recipe(name="nethermind-tdx", common=nethermind_base(), mkosi=NETHERMIND_V1)
+recipe = Recipe(name="nethermind-tdx", common=NethermindBase(), mkosi=NETHERMIND_V1)
 
 backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

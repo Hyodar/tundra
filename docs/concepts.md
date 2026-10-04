@@ -110,7 +110,7 @@ Two declarations put systemd units in the image:
 - **`Service`: a generated service.** `Service("app", "/usr/bin/app", user="app", restart="on-failure")` renders `/usr/lib/systemd/system/app.service` from typed fields (`exec_start`, `user`, `group`, `env`, `env_file`, `working_dir`, `exec_start_pre`, `after`/`requires`/`wants`, `wanted_by`, `type`, `restart`, `limits`, `kill_mode`, `timeout_stop`, `security`) and enables it. With `after_init=True`, the default, it also waits for `runtime-init.service` whenever the variant has a runtime-init step.
 - **`Unit`: verbatim text, or a packaged unit's state.** `Unit("app.service", content, enabled=True)` ships `content` (a string or a `Path` to read) exactly as written; the name needs its type suffix. `Unit("openntpd.service", enabled=True)` or `Unit("ssh.socket", enabled=False, masked=True)` only changes the state of a unit a package ships; it must enable, disable or mask something.
 
-`Unit(..., after_init=True)` adds `After=runtime-init.service` and `Requires=runtime-init.service` to the shipped text's `[Unit]` section. If the variant has no runtime-init step, `lint` warns with `unit-after-init-without-init`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (the shipped `tdxs()` and `devtools()` fragments use `Unit`).
+`Unit(..., after_init=True)` adds `After=runtime-init.service` and `Requires=runtime-init.service` to the shipped text's `[Unit]` section. If the variant has no runtime-init step, `lint` warns with `unit-after-init-without-init`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (the shipped `Tdxs()` and `DevTools()` fragments use `Unit`).
 
 `Template(path, template, variables=())` is a file rendered with `str.format_map(variables)` at lowering time, for config files that differ only in a few values.
 
@@ -160,7 +160,7 @@ variants=(
     Variant("default", target="qemu"),
     Variant("azure", parent="default", target="azure"),
     Variant("gcp", parent="default", target="gcp"),
-    Variant("devtools", parent="default", add=devtools()),
+    Variant("devtools", parent="default", add=DevTools()),
 )
 ```
 

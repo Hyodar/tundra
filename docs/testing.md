@@ -154,5 +154,5 @@ A test module that defines its own `recipe` fixture overrides the plugin's.
 
 ```bash
 uv run pytest                                  # everything
-uv run pytest tests/test_declarative_modules.py  # the surge recipe against its committed tree
+uv run pytest tests/test_declarative_utils.py    # the surge recipe against its committed tree
 ```

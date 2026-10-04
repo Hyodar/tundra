@@ -98,7 +98,7 @@ def prometheus_exporter(storage: Fragment) -> Fragment:
     )
 ```
 
-Identical fragments included twice expand once; two different fragments with the same name are an error. `tundravm.modules` ships `tdxs()` (the attestation quote service), `devtools()` (serial console and root login, never ship it), `efi_stub(snapshot=, version=)` and `backports()`. The full example is in [`docs/module-authoring.md`](docs/module-authoring.md).
+Identical fragments included twice expand once; two different fragments with the same name are an error. `tundravm.declarative.utils` ships `Tdxs()` (the attestation quote service), `DevTools()` (serial console and root login, never ship it), `EfiStub(snapshot=, version=)` and `Backports()`. The full example is in [`docs/module-authoring.md`](docs/module-authoring.md).
 
 Keys, disks and secrets are declarations that reference each other by object, so a disk cannot name a key that does not exist:
 
@@ -114,7 +114,7 @@ storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 variants=(
     Variant("default", target="qemu"),
     Variant("azure", parent="default", target="azure"),
-    Variant("azure-debug", parent="azure", add=devtools()),       # chained: azure plus debugging, never ship it
+    Variant("azure-debug", parent="azure", add=DevTools()),       # chained: azure plus debugging, never ship it
     Variant("prod", replace=(File("/etc/motd", "prod\n"),)),
     Variant("slim", remove=(Package("jq"),)),
     Variant("clouds", parent="default", targets=("azure", "gcp")),  # one variant, two disk images
@@ -134,7 +134,7 @@ variants=(
 - **Lock sections.** `tundravm lock` writes one digest per section (`base`, `arch`, `profiles.<variant>.packages`, `profiles.<variant>.files`, ...). `lock --check` prints the drift (`~ profiles.default.packages: +htop`) and exits 1.
 - **Pinned sources.** Every `Build` source is resolved to a commit (`Git`) or a hash (`Http`) at lock time; compile and bake fetch exactly that. `lock --update NAME` re-resolves one source; `lock --offline` never touches the network.
 - **Frozen bakes.** `bake` is frozen against `build/tundravm.lock` whenever it exists and refuses a recipe that drifted (`E_LOCKFILE`).
-- **Snapshot mirrors.** `Recipe(mirror=..., tools_mirror=...)` pins the Debian archive; `efi_stub()` pins the EFI stub.
+- **Snapshot mirrors.** `Recipe(mirror=..., tools_mirror=...)` pins the Debian archive; `EfiStub()` pins the EFI stub.
 
 See [`docs/reproducibility.md`](docs/reproducibility.md).
 
@@ -172,12 +172,12 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 | Example | Description |
 |---|---|
 | [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The full [nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image: Raiko, Taiko client and Nethermind built from source, TPM-sealed key, encrypted disk, secrets. Compiles byte-for-byte to the committed upstream tree, all four variants. |
-| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | The base layer as a fragment function: TDX kernel, EFI stub pinning, backports, debloat, `tdxs()` |
-| [`modules/`](examples/modules/) | `raiko()`, `taiko_client()`, `nethermind()`: fragment functions with a `Build`, a user, a unit and an env file |
+| [`nethermind_tdx.py`](examples/nethermind_tdx.py) | The base layer as a fragment, `NethermindBase()`: TDX kernel, EFI stub pinning, backports, debloat, `Tdxs()` |
+| [`fragments/`](examples/fragments/) | `Raiko()`, `TaikoClient()`, `Nethermind()`: fragments with a `Build`, a user, a unit and an env file |
 | [`full_api.py`](examples/full_api.py) | Most declaration types in one recipe: kernel, keys, disks, secrets, builds, variants |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Standalone variants per target, each with its own guest agent |
 | [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU image |
-| [`tdxs_module.py`](examples/tdxs_module.py) | The `tdxs()` fragment |
+| [`tdxs_module.py`](examples/tdxs_module.py) | The `Tdxs()` fragment |
 | [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas and delivery targets, validated at boot |
 
 ```bash

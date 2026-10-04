@@ -71,7 +71,7 @@ class Module:
                 mine, theirs = type(self).__name__, required.__name__
                 raise ValidationError(
                     f"Module {mine} requires {theirs}; apply {theirs} first.",
-                    hint=f"img.apply({theirs}(), {mine}())",
+                    hint=f"Apply {theirs} before {mine} in the same variant.",
                     context={"profile": profile},
                 )
         self.configure(image)

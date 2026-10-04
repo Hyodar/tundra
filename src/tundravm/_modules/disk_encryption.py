@@ -57,7 +57,7 @@ class DiskSpec:
             if key.output is None:
                 raise ValidationError(
                     f"disk {self.name!r}: key {key.name!r} has no output path to read.",
-                    hint=f"Declare the key with output=..., e.g. KeySpec({key.name!r}, "
+                    hint=f"Declare the key with output=..., e.g. Key({key.name!r}, "
                     "output='/run/keys/disk').",
                 )
             if self.key_path is not None and self.key_path != key.output:
@@ -171,11 +171,11 @@ class DiskEncryption(Module):
                     code="disk-key-undefined",
                     message=(
                         f"disk {disk.name!r} uses key {key_ref!r}, which no "
-                        "KeyGeneration in this profile declares"
+                        "Key in this variant declares"
                     ),
                     hint=(
-                        f"Declared keys: {declared}. Add KeySpec({key_ref!r}, ...) "
-                        "to a KeyGeneration applied to this profile, or fix the key."
+                        f"Declared keys: {declared}. Declare Key({key_ref!r}, ...) "
+                        "in this variant, or fix the Disk's key."
                     ),
                     profile=profile,
                     subject=disk.name,
@@ -190,7 +190,8 @@ class DiskEncryption(Module):
                         f"{key.name!r} is written to {written}"
                     ),
                     hint=(
-                        f"Set KeySpec({key.name!r}, output={disk.key_path!r}) or align key_path."
+                        f"Set Key({key.name!r}, output={disk.key_path!r}) or point the Disk "
+                        "at the key's output."
                     ),
                     profile=profile,
                     subject=disk.name,

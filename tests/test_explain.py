@@ -78,7 +78,8 @@ def test_explain_structure() -> None:
 
     assert info["base"] == "debian/trixie"
     assert info["arch"] == "x86_64"
-    assert info["profile"] == "default"
+    assert info["variant"] == "default"
+    assert info["parent"] is None and info["fragments"] == []
     assert info["reproducible"] is True
     assert info["mirror"] == "https://deb.example"
     assert info["kernel"] is None
@@ -141,7 +142,7 @@ def test_explain_structure() -> None:
 def test_explain_is_json_serializable_and_stable() -> None:
     image = lower(_recipe())
     payload = json.dumps(describe(image, profile="default"), sort_keys=True)
-    assert json.loads(payload)["profile"] == "default"
+    assert json.loads(payload)["variant"] == "default"
     assert payload == json.dumps(describe(image, profile="default"), sort_keys=True)
     assert payload == json.dumps(describe(lower(_recipe()), profile="default"), sort_keys=True)
 
@@ -164,10 +165,12 @@ def test_explain_per_profile() -> None:
     image = lower(_recipe())
     azure = describe(image, profile="azure")
 
-    assert azure["profile"] == "azure"
-    assert azure["extends"] == "default"
+    assert azure["variant"] == "azure"
+    assert azure["parent"] == "default"
     assert azure["packages"] == ["curl", "dmidecode", "jq", "systemd", "waagent"]
-    assert azure["modules"] == ["AzurePlatform"]
+    assert "modules" not in azure and "profile" not in azure
+    lineage = describe(image, profile="azure", parent="base", fragments=("common", "azure"))
+    assert (lineage["parent"], lineage["fragments"]) == ("base", ["common", "azure"])
     assert azure["targets"] == ["azure"]
     assert azure["users"] == describe(image, profile="default")["users"]
     assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]
@@ -198,7 +201,7 @@ def test_summary_contains_key_strings() -> None:
     image = lower(_recipe())
     text = render(describe(image, profile="default"))
 
-    assert text.startswith("Image: debian/trixie (x86_64)  profile=default  reproducible=yes\n")
+    assert text.startswith("Image: debian/trixie (x86_64)  variant=default  reproducible=yes\n")
     assert "Mirror: https://deb.example" in text
     assert "Packages (3): curl jq systemd" in text
     assert "Build packages (1): gcc" in text
@@ -216,10 +219,10 @@ def test_summary_contains_key_strings() -> None:
     assert "hello world" not in text
 
     azure_text = render(describe(image, profile="azure"))
-    assert "profile=azure" in azure_text
-    assert "Extends: default\n" in azure_text
+    assert "variant=azure" in azure_text
+    assert "Parent: default\n" in azure_text
     assert "Packages (5): curl dmidecode jq systemd waagent" in azure_text
-    assert "Extends" not in text
+    assert "Parent" not in text
     assert azure_text.endswith("Targets: azure\n")
     assert render(describe(image, profile="cloud")).endswith("Targets: qemu gcp\n")
 

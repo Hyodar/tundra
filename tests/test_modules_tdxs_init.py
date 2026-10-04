@@ -1,4 +1,4 @@
-"""The ``tdxs()`` fragment: source build, config, socket-activated units and account."""
+"""The ``Tdxs()`` fragment: source build, config, socket-activated units and account."""
 
 from pathlib import Path
 from typing import Literal
@@ -14,8 +14,8 @@ from tundravm.declarative import (
     Recipe,
     Setting,
     lint,
-    tdxs,
 )
+from tundravm.declarative.utils import Tdxs
 from tundravm.errors import ValidationError
 from tundravm.testing import CompiledTree, compile_tree
 
@@ -43,7 +43,7 @@ def _conf_list(conf: str, key: str) -> list[str]:
 
 
 def test_tdxs_declares_build_packages(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, tdxs())
+    tree = _compile(tmp_path, Tdxs())
 
     build_packages = _conf_list(tree.conf(), "BuildPackages")
     assert "golang" in build_packages
@@ -52,7 +52,7 @@ def test_tdxs_declares_build_packages(tmp_path: Path) -> None:
 
 
 def test_tdxs_adds_build_hook(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, tdxs())
+    tree = _compile(tmp_path, Tdxs())
 
     builds = [line for line in tree.script("build").splitlines() if "git clone" in line]
     assert len(builds) == 1
@@ -70,7 +70,7 @@ def test_tdxs_adds_build_hook(tmp_path: Path) -> None:
 
 
 def test_tdxs_custom_source(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, tdxs(source=Git("https://github.com/custom/tdxs-fork", "v2.0")))
+    tree = _compile(tmp_path, Tdxs(source=Git("https://github.com/custom/tdxs-fork", "v2.0")))
 
     build_script = tree.script("build")
     assert "custom/tdxs-fork" in build_script
@@ -78,7 +78,7 @@ def test_tdxs_custom_source(tmp_path: Path) -> None:
 
 
 def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, tdxs())
+    tree = _compile(tmp_path, Tdxs())
 
     assert "golang" in _conf_list(tree.conf(), "BuildPackages")
 
@@ -115,7 +115,7 @@ def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
 
 
 def test_tdxs_resolves_init_dependency_when_init_scripts_present(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Key("key_persistent"), tdxs(after_init=True))
+    tree = _compile(tmp_path, Key("key_persistent"), Tdxs(after_init=True))
 
     svc_content = tree.unit("tdxs.service")
     assert "After=runtime-init.service" in svc_content
@@ -127,7 +127,7 @@ def test_tdxs_resolves_init_dependency_when_init_scripts_present(tmp_path: Path)
 
 
 def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
-    recipe = _recipe(tdxs(after_init=True))
+    recipe = _recipe(Tdxs(after_init=True))
     tree = compile_tree(recipe, path=tmp_path / "tree")
 
     assert "runtime-init" not in tree.unit("tdxs.service")
@@ -137,7 +137,7 @@ def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
 
 
 def test_tdxs_renders_issuer_and_validator_types(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, tdxs(issuer="azure", validator="gcp"))
+    tree = _compile(tmp_path, Tdxs(issuer="azure", validator="gcp"))
 
     content = tree.read(TDXS_CONFIG)
     assert "issuer:" in content
@@ -147,7 +147,7 @@ def test_tdxs_renders_issuer_and_validator_types(tmp_path: Path) -> None:
 
 
 def test_tdxs_validator_config_supports_expected_measurements(tmp_path: Path) -> None:
-    fragment = tdxs(
+    fragment = Tdxs(
         issuer=None,
         validator="tdx",
         expected_measurements=(("mrtd", "abc123"), ("rtmr0", "def456")),
@@ -174,7 +174,7 @@ def test_tdxs_validator_config_supports_expected_measurements(tmp_path: Path) ->
 def test_tdxs_platform_validator_verification_flags(
     tmp_path: Path, validator: Literal["azure", "gcp"], flag: str
 ) -> None:
-    fragment = tdxs(validator=validator, verify_imds=True, verify_identity_token=True)
+    fragment = Tdxs(validator=validator, verify_imds=True, verify_identity_token=True)
     config = _compile(tmp_path, fragment).read(TDXS_CONFIG)
 
     assert flag in config
@@ -184,12 +184,12 @@ def test_tdxs_platform_validator_verification_flags(
 
 def test_tdxs_rejects_invalid_issuer_type() -> None:
     with pytest.raises(ValidationError, match="Unsupported tdxs type"):
-        tdxs(issuer="invalid")  # type: ignore[arg-type]
+        Tdxs(issuer="invalid")  # type: ignore[arg-type]
 
 
 def test_tdxs_rejects_no_roles() -> None:
     with pytest.raises(ValidationError, match="at least one of issuer_type or validator_type"):
-        tdxs(issuer=None, validator=None)
+        Tdxs(issuer=None, validator=None)
 
 
 def test_build_packages_lower_to_build_packages(tmp_path: Path) -> None:

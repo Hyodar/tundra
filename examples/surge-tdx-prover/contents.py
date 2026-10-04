@@ -8,9 +8,9 @@ here so ``tests/test_surge_contents.py`` checks every constant against ``mkosi/d
 
 from __future__ import annotations
 
-from examples.modules.nethermind import NETHERMIND_ENV, NETHERMIND_UNIT
-from examples.modules.raiko import RAIKO_ENV, RAIKO_UNIT
-from examples.modules.taiko_client import TAIKO_CLIENT_ENV, TAIKO_CLIENT_UNIT
+from examples.fragments.nethermind import NETHERMIND_ENV, NETHERMIND_UNIT
+from examples.fragments.raiko import RAIKO_ENV, RAIKO_UNIT
+from examples.fragments.taiko_client import TAIKO_CLIENT_ENV, TAIKO_CLIENT_UNIT
 from examples.nethermind_tdx import NETWORK_SETUP_SERVICE, RESOLV_CONF, TDX_INIT
 
 # ── System configuration (mkosi.extra/etc/) ───────────────────────────

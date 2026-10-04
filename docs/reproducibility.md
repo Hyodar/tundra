@@ -20,10 +20,11 @@ Byte-identical *disk images* additionally depend on the Debian archive, the buil
 
 Every `mkosi.conf` also gets `ManifestFormat=json` and `CleanPackageMetadata=true`. Lowering never touches the network, and `Path` contents are read at compile time, so the tree depends only on the recipe, the files it reads, and the lock.
 
-Pin the archive with snapshot mirrors, and the EFI stub with the `efi_stub()` fragment:
+Pin the archive with snapshot mirrors, and the EFI stub with the `EfiStub` fragment:
 
 ```python
-from tundravm.declarative import Fragment, Recipe, efi_stub
+from tundravm.declarative import Fragment, Recipe
+from tundravm.declarative.utils import EfiStub
 
 SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
 
@@ -31,7 +32,7 @@ recipe = Recipe(
     name="node",
     mirror=SNAPSHOT,
     tools_mirror=SNAPSHOT,
-    common=Fragment("node", items=(efi_stub(snapshot=SNAPSHOT, version="257.9-1~bpo12+1"),)),
+    common=Fragment("node", items=(EfiStub(snapshot=SNAPSHOT, version="257.9-1~bpo12+1"),)),
 )
 ```
 
@@ -46,7 +47,7 @@ tundravm compile node.py --out mkosi --check    # in CI: exit 1 and list the sta
 
 In tests, `assert_tree(compile(recipe, lock=locked), "mkosi")` compares every path, byte, exec bit and symlink, and `TUNDRAVM_UPDATE_GOLDEN=1` rewrites the golden tree (see [testing](testing.md#golden-trees)).
 
-The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`python -m examples.surge-tdx-prover compile --check`, and `tests/test_declarative_modules.py`).
+The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`python -m examples.surge-tdx-prover compile --check`, and `tests/test_declarative_utils.py`).
 
 ## The lockfile
 

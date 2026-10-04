@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-LOCKFILE_VERSION = 2
-"""Current lockfile schema version. Version 2 added per-section digests (``sections``)."""
+LOCKFILE_VERSION = 3
+"""Current lockfile schema version.
+
+Version 2 added per-section digests (``sections``); version 3 names the
+per-variant ones ``variants.<name>.<key>`` (version 2 said ``profiles.``, which
+:func:`~tundravm.lockfile.parse_lockfile` maps on read).
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +36,7 @@ class Lockfile:
 
     ``recipe_digest`` is the sha256 of the whole canonical recipe payload (what
     frozen bakes enforce). ``sections`` maps dotted payload paths such as
-    ``base`` or ``profiles.default.packages`` to the sha256 of that sub-payload,
+    ``base`` or ``variants.default.packages`` to the sha256 of that sub-payload,
     so drift can be reported section by section. Version 1 lockfiles have no
     ``sections`` and parse with an empty mapping.
     """

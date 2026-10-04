@@ -8,11 +8,11 @@ For the model behind these types see [concepts](concepts.md); for writing reusab
 
 ```python
 from tundravm import Recipe, Fragment, Variant, Package, File, Service, compile, lint, lock, bake
-from tundravm.modules import devtools, tdxs
+from tundravm.declarative.utils import DevTools, Tdxs
 from tundravm.declarative import diff, measure, deploy
 ```
 
-`tundravm` exports the declarations, the recipe types, the lifecycle functions and result types, `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The fragment functions `tdxs`, `devtools`, `efi_stub` and `backports` live in `tundravm.modules` (and `tundravm.declarative`).
+`tundravm` exports the declarations, the recipe types, the lifecycle functions and result types, `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub` and `Backports` live in `tundravm.declarative.utils`.
 
 ## Recipe, variants, fragments
 
@@ -206,18 +206,18 @@ default = next(a for a in artifacts if a.variant == "default")
 print(measure(default, allow_placeholder=True).values)
 ```
 
-## Fragment functions
+## Shipped fragments
 
-| Function | Fragment name | Declares |
+| Class | Fragment name | Declares |
 |---|---|---|
-| `tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements=(), check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
-| `devtools(*, root_password="tdx")` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it. |
-| `efi_stub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot |
-| `backports(*, mirror=None, release=None)` | `backports` | A sync hook generating backports and sid apt sources, plus `Setting("Build", "SandboxTrees", ...)` |
+| `Tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements=(), check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
+| `DevTools(*, root_password="tdx")` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it. |
+| `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot |
+| `Backports(*, mirror=None, release=None)` | `backports` | A sync hook generating backports and sid apt sources, plus `Setting("Build", "SandboxTrees", ...)` |
 
-`issuer`/`validator` are `"tdx"`, `"azure"`, `"gcp"`, `"simulator"` or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`.
+`issuer`/`validator` are `"tdx"`, `"azure"`, `"gcp"`, `"simulator"` or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. Each class is a `Composite`, a `Fragment` subclass: the keyword arguments are its dataclass fields (its `repr` and equality), and `name`/`items` come from its `compose()`.
 
-The examples ship more: `nethermind_base(*, snapshot=PINNED_MIRROR)` in [`examples/nethermind_tdx.py`](../examples/nethermind_tdx.py), and `raiko(*, source)`, `taiko_client(*, source)`, `nethermind(*, source)` in [`examples/modules/`](../examples/modules/).
+The examples ship more: `NethermindBase(*, snapshot=PINNED_MIRROR)` in [`examples/nethermind_tdx.py`](../examples/nethermind_tdx.py), and `Raiko(*, source)`, `TaikoClient(*, source)`, `Nethermind(*, source)` in [`examples/fragments/`](../examples/fragments/).
 
 ## Errors
 

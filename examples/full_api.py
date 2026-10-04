@@ -2,7 +2,8 @@
 
 Drive it with the CLI:
 
-    tundravm check examples/full_api.py
+    tundravm lint examples/full_api.py
+    tundravm lock examples/full_api.py
     tundravm bake examples/full_api.py
 """
 
@@ -29,8 +30,8 @@ from tundravm.declarative import (
     Unit,
     User,
     Variant,
-    tdxs,
 )
+from tundravm.declarative.utils import Tdxs
 
 APP_SERVICE = """\
 [Unit]
@@ -81,7 +82,7 @@ recipe = Recipe(
                 "/etc/app/runtime.env",
                 "NETWORK={network}\nRPC_PORT={port}\n".format(network="mainnet", port=8545),
             ),
-            tdxs(),
+            Tdxs(),
             User("app", home="/var/lib/app", uid=1000, groups=("tdx",)),
             Unit("app.service", APP_SERVICE, enabled=True, after_init=True),
             Partition("data", size="8G", mount="/var/lib/app"),

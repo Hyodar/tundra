@@ -35,7 +35,7 @@ def derive_measurements(
     if not digests_by_target:
         raise MeasurementError(
             "No artifacts are available for measurement derivation.",
-            hint="Bake profile artifacts before requesting measurements.",
+            hint="Bake the variant before measuring it.",
             context={"profile": profile, "backend": backend},
         )
     if backend == "rtmr":

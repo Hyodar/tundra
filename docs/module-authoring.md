@@ -9,7 +9,7 @@ def debugging() -> Fragment:
     return Fragment("debugging", items=(Package("strace"), Package("gdb")))
 ```
 
-The shipped `tdxs()`, `devtools()`, `efi_stub()` and `backports()` (in `tundravm.modules`) are written this way, and so are `raiko()`, `taiko_client()` and `nethermind()` in [`examples/modules/`](../examples/modules/).
+The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are the class form of the same thing: `Composite` subclasses, frozen dataclasses whose fields are the arguments and whose `compose()` returns the `Fragment`, so `Tdxs(after_init=True)` is itself a `Fragment`. So are `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/).
 
 ## Anatomy
 

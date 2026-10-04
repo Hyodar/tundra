@@ -17,7 +17,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -25,7 +25,7 @@ from typing import Literal, get_args
 
 from tundravm import check as _check
 from tundravm._image import Image
-from tundravm._source import Resolver, resolve_pins, source_drift
+from tundravm._source import Resolver, resolve_pins
 from tundravm.backends import (
     InProcessBackend,
     LimaMkosiBackend,
@@ -41,7 +41,6 @@ from tundravm.lockfile import (
     LockedFetch,
     Lockfile,
     build_lockfile,
-    compare_lock,
     parse_lockfile,
     serialize_lockfile,
 )
@@ -203,6 +202,31 @@ class Measurements:
     values: Pairs
     tool: str
     artifact_digest: str
+
+    def to_json(self, path: Path | None = None) -> str:
+        """The measurements as JSON (sorted keys, trailing newline), also written to *path*."""
+        payload = {
+            "artifact_digest": self.artifact_digest,
+            "scheme": self.scheme,
+            "tool": self.tool,
+            "values": dict(self.values),
+        }
+        text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        if path is not None:
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        return text
+
+    def verify(self, expected: Mapping[str, str]) -> tuple[str, ...]:
+        """The registers whose value differs from *expected*, sorted; empty when all match.
+
+        A register only one side holds counts as a mismatch.
+        """
+        actual = dict(self.values)
+        return tuple(
+            name for name in sorted({*actual, *expected}) if actual.get(name) != expected.get(name)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -513,21 +537,29 @@ def drift_diagnostics(drift_lines: Iterator[tuple[str, str, str]]) -> tuple[Diag
 
 
 def image_lock_status(
-    img: Image, locked: Lock, profiles: Sequence[str] | None
+    img: Image,
+    locked: Lock,
+    profiles: Sequence[str] | None,
+    *,
+    partial: bool = False,
+    resolver: Resolver | None = None,
 ) -> tuple[Diagnostic, ...]:
-    """Drift between *img*'s *profiles* and *locked*, one diagnostic per section."""
-    with img._operation_scope(profiles) as names:
-        drift = compare_lock(locked.lockfile, img._recipe_payload(profile_names=names))
-        added, changed, removed, details = source_drift(img.source_builds(), _named_pins(locked))
-    details = {**drift.details, **details}
+    """Drift between *img*'s *profiles* and *locked*, one diagnostic per section.
+
+    *partial* compares only the selected profiles' sections
+    (see :func:`~tundravm.lockfile.compare_lock`).
+    """
+    with img._operation_scope(profiles):
+        drift = img._lock_drift(locked.lockfile, resolver=resolver, partial=partial)
+    details = drift.details
 
     def lines() -> Iterator[tuple[str, str, str]]:
-        for section in (*drift.changed, *changed):
+        for section in drift.changed:
             detail = f": {details[section]}" if section in details else ""
             yield "lock-changed", section, f"{section} changed since the lock{detail}"
-        for section in (*drift.added, *added):
+        for section in drift.added:
             yield "lock-added", section, f"{section} is not in the lock"
-        for section in (*drift.removed, *removed):
+        for section in drift.removed:
             yield "lock-removed", section, f"{section} is only in the lock"
 
     found = drift_diagnostics(lines())
@@ -537,11 +569,23 @@ def image_lock_status(
 
 
 def lock_status(
-    recipe: Recipe, locked: Lock, *, variants: Sequence[str] | None = None
+    recipe: Recipe,
+    locked: Lock,
+    *,
+    variants: Sequence[str] | None = None,
+    resolver: Resolver | None = None,
 ) -> tuple[Diagnostic, ...]:
-    """Every section and source where *recipe* drifted from *locked*; empty when current."""
+    """Every section and source where *recipe* drifted from *locked*; empty when current.
+
+    With *variants* naming only some of the recipe's variants, the lock's sections
+    of the others are not compared, so a lock of every variant covers a subset.
+    *resolver* (as for :func:`lock`) also reports git refs that moved since the lock.
+    """
     names = variant_names(recipe, variants)
-    return image_lock_status(lower(recipe, variants=names), locked, names)
+    partial = set(names) != {v.name for v in recipe.variants}
+    return image_lock_status(
+        lower(recipe, variants=names), locked, names, partial=partial, resolver=resolver
+    )
 
 
 def read_lock(path: Path) -> Lock:

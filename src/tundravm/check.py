@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TextIO
 
 from .formats import annotation_path, md_cell, md_table, resolve_format, workflow_command
-from .models import InitScriptEntry, OutputTarget, ProfileState, unit_name
+from .models import InitScriptEntry, ProfileState, unit_name
 
 if TYPE_CHECKING:
     from ._image import Image
@@ -46,7 +46,7 @@ class Diagnostic:
             "code": self.code,
             "message": self.message,
             "hint": self.hint,
-            "profile": self.profile,
+            "variant": self.profile,
             "subject": self.subject,
         }
 
@@ -163,26 +163,6 @@ _ESSENTIAL_BINARIES = frozenset(
 
 _SHIPPED_PREFIXES = ("/usr/local/bin/", "/opt/", "/usr/bin/")
 
-# target -> (platform class, marker files it ships, guest agents that also provision, why)
-_PLATFORM_MARKERS: dict[str, tuple[str, tuple[str, ...], frozenset[str], str]] = {
-    "azure": (
-        "AzurePlatform",
-        (
-            "/usr/bin/azure-complete-provisioning",
-            "/usr/lib/systemd/system/azure-complete-provisioning.service",
-        ),
-        frozenset({"cloud-init", "waagent", "walinuxagent"}),
-        "it ships azure-complete-provisioning.service and dmidecode, without which "
-        "the VM never reports ready to Azure",
-    ),
-    "gcp": (
-        "GcpPlatform",
-        ("/usr/lib/udev/rules.d/65-gce-disk-naming.rules", "/usr/lib/udev/google_nvme_id"),
-        frozenset({"cloud-init", "google-compute-engine", "google-guest-agent"}),
-        "it ships the GCE metadata hosts/resolv.conf and the disk-naming udev rules",
-    ),
-}
-
 
 def _norm(path: str) -> str:
     return posixpath.normpath("/" + path.lstrip("/"))
@@ -216,11 +196,6 @@ def _init_entries(image: Image, state: ProfileState) -> list[InitScriptEntry]:
     return merged
 
 
-def effective_output_targets(image: Image, profile: str) -> tuple[OutputTarget, ...]:
-    """Output targets *profile* compiles to, after the default-profile fallback."""
-    return image.state.effective_profile(profile).output_targets
-
-
 def _rule_service_user_missing(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -240,7 +215,7 @@ def _rule_service_user_missing(
             and any(u.name == user for u in default.users)
         ):
             hint = (
-                f"{user!r} is declared in profile {default.name!r}, but {profile_name!r} "
+                f"{user!r} is declared in variant {default.name!r}, but {profile_name!r} "
                 "is lowered standalone and does not inherit it; declare it in "
                 f"{profile_name!r} too, or derive the variant from its parent."
             )
@@ -305,8 +280,8 @@ def _rule_file_path_duplicate(
                     f"({kinds}); only the last one ends up in the image"
                 ),
                 hint=(
-                    "Keep a single declaration. If two modules write this path, configure "
-                    "one of them to skip it or merge the content into one file."
+                    "Keep a single declaration. If two fragments write this path, drop "
+                    "one of them or merge the content into one File."
                 ),
                 profile=profile_name,
                 subject=path,
@@ -368,11 +343,11 @@ def _rule_service_command_not_shipped(
         yield Diagnostic(
             level="warning",
             code="service-command-not-shipped",
-            message=f"service {svc.name!r} runs {binary}, which nothing in this profile ships",
+            message=f"service {svc.name!r} runs {binary}, which nothing in this variant ships",
             hint=(
                 f"Ship it with File({binary!r}, Path(...), mode=0o755), a Build that "
                 "installs it, or the package that provides it. This heuristic only "
-                f"fires when the profile installs no packages and no file or hook mentions "
+                f"fires when the variant installs no packages and no file or hook mentions "
                 f"{name!r}; ignore it if the base image already has the binary."
             ),
             profile=profile_name,
@@ -380,29 +355,7 @@ def _rule_service_command_not_shipped(
         )
 
 
-def _rule_output_target_platform_mismatch(
-    image: Image, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    targets = state.output_targets
-    paths = _declared_paths(state)
-    for target, (platform, markers, agents, why) in sorted(_PLATFORM_MARKERS.items()):
-        has_platform = any(marker in paths for marker in markers)
-        if target in targets and not has_platform and not agents & state.packages:
-            yield Diagnostic(
-                level="warning",
-                code="output-target-platform-mismatch",
-                message=f"output target {target!r} without {platform} applied",
-                hint=(
-                    f"Give variant {profile_name!r} target={target!r} so lowering adds "
-                    f"{platform}; {why}. Installing a guest "
-                    f"agent ({', '.join(sorted(agents))}) also silences this."
-                ),
-                profile=profile_name,
-                subject=target,
-            )
-
-
-def _rule_profile_empty(
+def _rule_variant_empty(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     if profile_name == image.default_profile:
@@ -429,21 +382,21 @@ def _rule_profile_empty(
     if any(own) or state.output_targets_explicit or state.debloat_explicit:
         return
     if state.extends is None:
-        message = "profile declares nothing of its own and builds a bare base image"
+        message = "variant declares nothing of its own and builds a bare base image"
         hint = (
             f"Standalone variants (parent=None) do not inherit from "
             f"{image.default_profile!r}. Declare its contents in its add= fragment, "
             "or remove the variant."
         )
     else:
-        message = f"profile declares nothing of its own and builds the {state.extends!r} image"
+        message = f"variant declares nothing of its own and builds the {state.extends!r} image"
         hint = (
             f"Declare what it adds to {state.extends!r} in its add= fragment, "
             "or remove the variant."
         )
     yield Diagnostic(
         level="info",
-        code="profile-empty",
+        code="variant-empty",
         message=message,
         hint=hint,
         profile=profile_name,
@@ -469,8 +422,8 @@ def _rule_init_priority_collision(
                 f"registration order: {heads}"
             ),
             hint=(
-                "Give each fragment its own priority with runtime_init(..., priority=N) "
-                "(lower runs first) so boot order does not depend on module apply order."
+                "Give each step its own priority with Init(name, script, priority=N) "
+                "(lower runs first) so boot order does not depend on declaration order."
             ),
             profile=profile_name,
             subject=f"priority {priority}",
@@ -564,35 +517,6 @@ def _rule_debloat_removes_declared_file(
                 break
 
 
-def _rule_secret_undelivered(
-    image: Image, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    if not state.secrets:
-        return
-    for spec in state.secrets:
-        if not spec.targets:
-            yield Diagnostic(
-                level="warning",
-                code="secret-undelivered",
-                message=f"secret {spec.name!r} has no delivery target",
-                hint="Pass targets=(SecretTarget.file(...),) or SecretTarget.env(...).",
-                profile=profile_name,
-                subject=spec.name,
-            )
-    if not any("secret-delivery" in e.script for e in _init_entries(image, state)):
-        yield Diagnostic(
-            level="warning",
-            code="secret-undelivered",
-            message=f"{len(state.secrets)} secret(s) declared but no delivery runs at boot",
-            hint=(
-                "Apply SecretDelivery().apply(img) for this profile; it registers the "
-                "runtime-init step that receives and writes the secrets."
-            ),
-            profile=profile_name,
-            subject=None,
-        )
-
-
 def _rule_source_unpinned(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -613,7 +537,7 @@ def _rule_source_unpinned(
             ),
             hint=(
                 "Run `tundravm lock RECIPE` to pin it, or declare an immutable source "
-                "(a 40-hex commit ref, or HttpSource(sha256=...))."
+                "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...))."
             ),
             profile=profile_name,
             subject=name,
@@ -633,13 +557,11 @@ RULES: list[Rule] = [
     _rule_file_path_duplicate,
     _rule_file_path_relative,
     _rule_service_command_not_shipped,
-    _rule_output_target_platform_mismatch,
-    _rule_profile_empty,
+    _rule_variant_empty,
     _rule_init_priority_collision,
     _rule_backend_missing,
     _rule_debloat_removes_needed_unit,
     _rule_debloat_removes_declared_file,
-    _rule_secret_undelivered,
     _rule_source_unpinned,
     _rule_module_checks,
 ]
@@ -705,7 +627,7 @@ def render_github(
 ) -> str:
     """GitHub workflow commands, one ``::error``/``::warning``/``::notice`` per finding.
 
-    Each line is ``::error file=RECIPE,title=<code>::[profile] subject: message (hint)``,
+    Each line is ``::error file=RECIPE,title=<code>::[variant] subject: message (hint)``,
     so findings show inline on the pull request. With *strict*, warnings (which fail
     the run) are reported as errors. A plain summary line follows.
     """
@@ -740,7 +662,7 @@ def render_markdown(diagnostics: Sequence[Diagnostic]) -> str:
         )
         for d in diagnostics
     ]
-    table = md_table(("Level", "Code", "Profile", "Subject", "Message", "Hint"), rows)
+    table = md_table(("Level", "Code", "Variant", "Subject", "Message", "Hint"), rows)
     return f"{table}\n\n**{render_summary(diagnostics)}**"
 
 
@@ -789,7 +711,6 @@ __all__ = [
     "Rule",
     "check",
     "cmd_check",
-    "effective_output_targets",
     "failing",
     "render",
     "render_as",

@@ -25,6 +25,7 @@ from tundravm.declarative import (
     Git,
     Install,
     Lock,
+    Measurements,
     Package,
     Qemu,
     Recipe,
@@ -236,7 +237,7 @@ def test_bake_in_process_writes_simulated_artifacts(tmp_path: Path) -> None:
     assert all(a.simulated and a.path.is_file() and len(a.sha256) == 64 for a in artifacts)
     assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)
     assert all(a.tree_digest and a.lock_digest for a in artifacts)
-    assert any("baked 2 profiles" in line for line in lines)
+    assert any("baked 2 variants" in line for line in lines)
     assert read_artifacts(tmp_path / "out" / "bake-result.json") == artifacts
     assert read_artifacts(tmp_path / "out") == artifacts
 
@@ -249,6 +250,52 @@ def test_bake_refuses_a_stale_lock(tmp_path: Path) -> None:
             backend=Backend("inprocess"),
             out=tmp_path / "out",
         )
+
+
+def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> None:
+    locked = lock(_recipe())
+    assert lock_status(_recipe(), locked, variants=("azure",)) == ()
+
+    artifacts = bake(
+        _recipe(), locked=locked, backend=Backend("inprocess"), out=tmp_path, variants=("azure",)
+    )
+
+    assert {(a.variant, a.target) for a in artifacts} == {("azure", "azure")}
+    with pytest.raises(LockfileError, match="stale"):
+        bake(
+            _recipe(motd="bye\n"),
+            locked=locked,
+            backend=Backend("inprocess"),
+            out=tmp_path / "stale",
+            variants=("azure",),
+        )
+
+
+def test_lock_status_with_resolver_reports_moved_refs() -> None:
+    locked = lock(_recipe(build=True), resolver=_resolver([]))  # type: ignore[arg-type]
+    assert lock_status(_recipe(build=True), locked, resolver=lambda source: SHA) == ()
+
+    moved = lock_status(_recipe(build=True), locked, resolver=lambda source: "b" * 40)
+
+    assert [(d.code, d.subject) for d in moved] == [("lock-changed", "sources.app")]
+    assert moved[0].message.endswith(": aaaaaaa -> bbbbbbb")
+
+
+def test_measurements_to_json_and_verify(tmp_path: Path) -> None:
+    found = Measurements("rtmr", (("rtmr0", "aa"), ("rtmr1", "bb")), "dstack-mr 1.0", "d1")
+    path = tmp_path / "out" / "measurements.json"
+
+    text = found.to_json(path)
+
+    assert path.read_text() == text
+    assert json.loads(text) == {
+        "artifact_digest": "d1",
+        "scheme": "rtmr",
+        "tool": "dstack-mr 1.0",
+        "values": {"rtmr0": "aa", "rtmr1": "bb"},
+    }
+    assert found.verify({"rtmr0": "aa", "rtmr1": "bb"}) == ()
+    assert found.verify({"rtmr0": "aa", "rtmr1": "cc", "rtmr2": "dd"}) == ("rtmr1", "rtmr2")
 
 
 def test_measure_rejects_simulated_unless_allowed(tmp_path: Path) -> None:
@@ -471,3 +518,13 @@ def test_cli_bake_frozen_against_a_stale_lockfile(cli_recipe: Path, tmp_path: Pa
         "bake", cli_recipe, "--lockfile", "app.lock", "--out", "out", "--variant", "default", "-q"
     )
     assert code == 0, err
+
+
+def test_cli_bake_one_variant_against_a_lock_of_every_variant(cli_recipe: Path) -> None:
+    assert run_cli("lock", cli_recipe, "--path", "app.lock")[0] == 0
+    for variant in ("azure", "default"):
+        code, _, err = run_cli(
+            "bake", cli_recipe, "--lockfile", "app.lock", "--out", variant, "--variant", variant
+        )
+        assert code == 0, err
+        assert "E_LOCKFILE" not in err

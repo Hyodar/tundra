@@ -1,9 +1,11 @@
-"""Shipped fragment functions and the surge recipe lower to the fluent modules' trees."""
+"""The ``tundravm.declarative.utils`` fragments and the surge recipe lower to the fluent trees."""
 
 from __future__ import annotations
 
 import importlib.util
+import inspect
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import cast
@@ -11,7 +13,8 @@ from typing import cast
 import pytest
 
 from tundravm._image import Image
-from tundravm._modules import DevTools, Tdxs
+from tundravm._modules import DevTools as FluentDevTools
+from tundravm._modules import Tdxs as FluentTdxs
 from tundravm.declarative import (
     Build,
     Fragment,
@@ -20,16 +23,21 @@ from tundravm.declarative import (
     Hook,
     Install,
     Mkosi,
+    Package,
     Recipe,
     User,
     Variant,
-    backports,
-    devtools,
-    efi_stub,
     lower,
-    tdxs,
 )
 from tundravm.declarative.lower import groupadd_line, useradd_line
+from tundravm.declarative.utils import (
+    TUNDRA_TOOLS,
+    Backports,
+    Composite,
+    DevTools,
+    EfiStub,
+    Tdxs,
+)
 from tundravm.diff import diff_trees
 from tundravm.errors import ValidationError
 from tundravm.recipe import load_image
@@ -75,16 +83,16 @@ def _assert_same_tree(fluent: Image, recipe: Recipe, tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("configure", "fragment"),
     [
-        (lambda img: Tdxs().apply(img), tdxs()),
+        (lambda img: FluentTdxs().apply(img), Tdxs()),
         (
-            lambda img: Tdxs(
+            lambda img: FluentTdxs(
                 issuer_type="azure",
                 validator_type="azure",
                 expected_measurements={"rtmr0": "ab"},
                 check_revocations=True,
                 verify_imds=True,
             ).apply(img),
-            tdxs(
+            Tdxs(
                 issuer="azure",
                 validator="azure",
                 expected_measurements=(("rtmr0", "ab"),),
@@ -92,15 +100,15 @@ def _assert_same_tree(fluent: Image, recipe: Recipe, tmp_path: Path) -> None:
                 verify_imds=True,
             ),
         ),
-        (lambda img: DevTools().apply(img), devtools()),
+        (lambda img: FluentDevTools().apply(img), DevTools()),
         (
             lambda img: img.efi_stub(snapshot_url=SNAPSHOT, package_version="255.4-1"),
-            efi_stub(snapshot=SNAPSHOT, version="255.4-1"),
+            EfiStub(snapshot=SNAPSHOT, version="255.4-1"),
         ),
-        (lambda img: img.backports(), backports()),
+        (lambda img: img.backports(), Backports()),
         (
             lambda img: img.backports(mirror="http://m", release="trixie"),
-            backports(mirror="http://m", release="trixie"),
+            Backports(mirror="http://m", release="trixie"),
         ),
     ],  # fmt: skip
     ids=["tdxs", "tdxs-validator", "devtools", "efi-stub", "backports", "backports-pinned"],
@@ -116,9 +124,9 @@ def test_tdxs_after_init_matches_module_rendering(tmp_path: Path) -> None:
 
     def configure(img: Image) -> None:
         img.runtime_init("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml\n", priority=10)
-        Tdxs(after=("runtime-init.service",)).apply(img)
+        FluentTdxs(after=("runtime-init.service",)).apply(img)
 
-    img = lower(_recipe(tdxs(after_init=True), Fragment("keys", items=(Key("k"),))))
+    img = lower(_recipe(Tdxs(after_init=True), Fragment("keys", items=(Key("k"),))))
     units = {
         f.path: f.content
         for f in img.state.profiles["default"].files
@@ -133,10 +141,50 @@ def test_tdxs_after_init_matches_module_rendering(tmp_path: Path) -> None:
 
 
 def test_devtools_root_password() -> None:
-    hooks = [item for item in devtools(root_password="s3cret").items if isinstance(item, Hook)]
+    hooks = [item for item in DevTools(root_password="s3cret").items if isinstance(item, Hook)]
     assert 'openssl passwd -6 "s3cret"' in hooks[-1].script
     with pytest.raises(ValidationError):
-        devtools(root_password='a"b')
+        DevTools(root_password='a"b')
+
+
+def test_utils_are_fragments_configured_by_their_fields() -> None:
+    efi = EfiStub(snapshot=SNAPSHOT, version="255.4-1")
+    assert isinstance(efi, Fragment)
+    assert (efi.name, efi.requires, efi.checks) == ("efi-stub", (), ())
+    assert [type(item) for item in efi.items] == [Hook]
+    assert repr(efi) == f"EfiStub(snapshot={SNAPSHOT!r}, version='255.4-1')"
+    assert str(inspect.signature(EfiStub)) == "(*, snapshot: 'str', version: 'str') -> None"
+    assert repr(DevTools()) == "DevTools(root_password='tdx')"
+    assert repr(Backports(release="trixie")) == "Backports(mirror=None, release='trixie')"
+    assert Tdxs().source == TUNDRA_TOOLS
+    assert Tdxs().name == "tdxs" and Tdxs(after_init=True) != Tdxs()
+    assert Tdxs() == Tdxs() and hash(Tdxs()) == hash(Tdxs())
+    assert {DevTools().name, Backports().name} == {"devtools", "backports"}
+
+
+def test_utils_freeze_lists_and_reject_bad_values() -> None:
+    tdxs = Tdxs(expected_measurements=[("rtmr0", "ab")])  # type: ignore[arg-type]
+    assert tdxs.expected_measurements == (("rtmr0", "ab"),)
+    with pytest.raises(ValidationError, match="EfiStub"):
+        EfiStub(snapshot="", version="1")
+    with pytest.raises(TypeError):
+        EfiStub(SNAPSHOT, "1")  # type: ignore[misc]
+
+
+def test_composite_subclass_works_as_a_fragment() -> None:
+    @dataclass(frozen=True, slots=True, kw_only=True)
+    class Tools(Composite):
+        packages: tuple[str, ...] = ("strace",)
+
+        def compose(self) -> Fragment:
+            return Fragment("tools", items=tuple(Package(p) for p in self.packages))
+
+    tools = Tools(packages=("strace", "gdb"))
+    assert repr(tools).endswith(".Tools(packages=('strace', 'gdb'))")
+    recipe = Recipe(name="m", common=Fragment("m", items=(tools, tools)))
+    assert {"strace", "gdb"} <= lower(recipe).state.effective_profile("default").packages
+    variant = Recipe(name="m", common=Fragment("m"), variants=(Variant("v", add=Tools()),))
+    lower(variant)
 
 
 def test_historical_dialect_spells_accounts_as_postinst_lines() -> None:
@@ -150,7 +198,7 @@ def test_historical_dialect_spells_accounts_as_postinst_lines() -> None:
 
 
 def test_current_dialect_uses_the_account_prelude(tmp_path: Path) -> None:
-    recipe = Recipe(name="m", common=Fragment("m", items=(tdxs(),)))
+    recipe = Recipe(name="m", common=Fragment("m", items=(Tdxs(),)))
     lower(recipe).compile(tmp_path)
     postinst = (tmp_path / "default" / "scripts" / "06-postinst.sh").read_text()
     lines = postinst.splitlines()

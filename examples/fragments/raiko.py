@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from tundravm.declarative import Build, File, Fragment, Git, Install, Package, Unit, User
+from tundravm.declarative.utils import Composite
 
 RAIKO_SOURCE = Git("https://github.com/NethermindEth/raiko.git", "feat/tdx")
 
@@ -51,28 +54,33 @@ RAIKO_CONFIG=/etc/raiko/config.json
 RAIKO_CHAIN_SPEC=/etc/raiko/chain-spec.json"""
 
 
-def raiko(*, source: Git = RAIKO_SOURCE) -> Fragment:
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Raiko(Composite):
     """Raiko from *source*: ``raiko-host`` (``tdx`` feature) installed as ``/usr/bin/raiko``.
 
-    Requires ``tdxs()``: the unit orders after ``tdxs.service`` and the user's
+    Requires ``Tdxs``: the unit orders after ``tdxs.service`` and the user's
     primary group is ``tdx``.
     """
-    return Fragment(
-        "raiko",
-        requires=("tdxs",),
-        items=(
-            *(Package(name, role="build") for name in RAIKO_BUILD_PACKAGES),
-            Build(
-                "raiko",
-                source,
-                script="cargo fetch && cargo build --release --frozen --features tdx "
-                "--package raiko-host",
-                install=(Install("target/release/raiko-host", "/usr/bin/raiko"),),
-                env=RAIKO_CARGO_ENV,
-                cache_key=f"raiko-{source.ref}",
+
+    source: Git = RAIKO_SOURCE
+
+    def compose(self) -> Fragment:
+        return Fragment(
+            "raiko",
+            requires=("tdxs",),
+            items=(
+                *(Package(name, role="build") for name in RAIKO_BUILD_PACKAGES),
+                Build(
+                    "raiko",
+                    self.source,
+                    script="cargo fetch && cargo build --release --frozen --features tdx "
+                    "--package raiko-host",
+                    install=(Install("target/release/raiko-host", "/usr/bin/raiko"),),
+                    env=RAIKO_CARGO_ENV,
+                    cache_key=f"raiko-{self.source.ref}",
+                ),
+                User("raiko", home="/home/raiko", primary_group="tdx"),
+                Unit("raiko.service", RAIKO_UNIT, enabled=True, after_init=True),
+                File("/etc/raiko/env", RAIKO_ENV),
             ),
-            User("raiko", home="/home/raiko", primary_group="tdx"),
-            Unit("raiko.service", RAIKO_UNIT, enabled=True, after_init=True),
-            File("/etc/raiko/env", RAIKO_ENV),
-        ),
-    )
+        )

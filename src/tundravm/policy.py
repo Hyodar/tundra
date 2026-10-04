@@ -23,7 +23,11 @@ def ensure_bake_policy(*, policy: Policy, frozen: bool) -> None:
     if policy.require_frozen_lock and not frozen:
         raise PolicyError(
             "Frozen lock mode is required by policy.",
-            hint="Call bake(frozen=True) or relax policy.require_frozen_lock.",
+            hint=(
+                "Run `tundravm lock RECIPE` and bake against it (`tundravm bake --lockfile "
+                "PATH`, or bake(recipe, locked=...)), or set "
+                "Policy(require_frozen_lock=False)."
+            ),
             context={"operation": "bake"},
         )
 
@@ -32,7 +36,7 @@ def ensure_network_allowed(*, policy: Policy, operation: str) -> None:
     if policy.network_mode == "offline":
         raise PolicyError(
             "Network operations are disabled by policy.",
-            hint="Switch policy.network_mode to 'online' for this operation.",
+            hint="Set Policy(network_mode='online') for this operation.",
             context={"operation": operation},
         )
 

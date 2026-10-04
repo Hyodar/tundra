@@ -1,7 +1,7 @@
 """Dry-run description of what an :class:`~tundravm._image.Image` recipe will produce.
 
 ``describe()`` returns a JSON-serializable, deterministically ordered dict for
-one profile without compiling or baking; ``render()`` turns that dict into a
+one variant without compiling or baking; ``render()`` turns that dict into a
 compact plain-text summary and ``render_markdown()`` into a review-friendly
 Markdown section (tables per kind, long package lists collapsed).
 """
@@ -27,18 +27,29 @@ MARKDOWN_COLLAPSE_AT = 20
 """Markdown tables with more rows than this (usually packages) render collapsed."""
 
 
-def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
-    """Describe what *image* will produce for *profile* (default: the active profile).
+_IMAGE_PARENT: Any = object()
+"""``describe(parent=...)`` default: the profile the lowered image builds the variant on."""
+
+
+def describe(
+    image: Image,
+    *,
+    profile: str | None = None,
+    parent: str | None = _IMAGE_PARENT,
+    fragments: Sequence[str] = (),
+) -> dict[str, object]:
+    """Describe what *image* will produce for variant *profile* (default: the active one).
 
     Keys are sorted; lists are sorted by their natural identity (path, name,
     ...) except hooks, which keep registration order within each phase.
     File and init-script contents are summarized as short sha256 digests.
-    A profile that extends another is described as built: merged over it.
+    A variant built on another is described as built: merged over it.
+    *parent* and *fragments* are the recipe's ``Variant.parent`` and the
+    fragment names the variant resolved to.
     """
     selected = image._resolve_operation_profile(profile)
     state = image.state
     profile_state = state.effective_profile(selected)
-    extends = profile_state.extends
     kernel = image.kernel
     return {
         "arch": state.arch,
@@ -49,9 +60,8 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             {"dest": dest, "src": src} for src, dest in sorted(profile_state.build_sources)
         ],
         "debloat": image.explain_debloat(profile=selected),
-        "extends": extends,
-        "extends_modules": [] if extends is None else _module_names(image, extends),
         "files": _describe_files(profile_state.files),
+        "fragments": list(fragments),
         "groups": [
             {"gid": g.gid, "name": g.name, "system": g.system}
             for g in sorted(profile_state.groups, key=lambda item: item.name)
@@ -67,14 +77,13 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             "version": kernel.version,
         },
         "mirror": image.mirror,
-        "modules": _module_names(image, selected),
         "packages": sorted(profile_state.packages),
+        "parent": profile_state.extends if parent is _IMAGE_PARENT else parent,
         "partitions": [
             {"fs": p.fs, "mount_at": p.mount_at, "name": p.name, "size": p.size}
             for p in sorted(profile_state.partitions, key=lambda item: item.name)
         ],
         "policy": {f.name: getattr(image.policy, f.name) for f in fields(image.policy)},
-        "profile": selected,
         "repositories": [
             {
                 "components": list(repo.components),
@@ -138,6 +147,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             }
             for u in sorted(profile_state.users, key=lambda item: item.name)
         ],
+        "variant": selected,
     }
 
 
@@ -145,7 +155,7 @@ def render(description: dict[str, object]) -> str:
     """Render a ``describe()`` result as a compact plain-text summary."""
     lines: list[str] = [
         f"Image: {description['base']} ({description['arch']})"
-        f"  profile={description['profile']}"
+        f"  variant={description['variant']}"
         f"  reproducible={_yes_no(description['reproducible'])}"
     ]
     if description.get("mirror"):
@@ -161,11 +171,9 @@ def render(description: dict[str, object]) -> str:
         lines.append(
             "Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in build_options.items())
         )
-    if description.get("extends"):
-        inherited = _as_list(description.get("extends_modules"))
-        modules = f" (modules: {', '.join(inherited)})" if inherited else ""
-        lines.append(f"Extends: {description['extends']}{modules}")
-    _append_inline_list(lines, "Modules", _as_list(description.get("modules")))
+    if description.get("parent"):
+        lines.append(f"Parent: {description['parent']}")
+    _append_inline_list(lines, "Fragments", _as_list(description.get("fragments")))
 
     _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
     _append_inline_list(lines, "Build packages", _as_list(description.get("build_packages")))
@@ -316,14 +324,14 @@ def render(description: dict[str, object]) -> str:
 def render_markdown(description: dict[str, object]) -> str:
     """Render a ``describe()`` result as one Markdown section for code review.
 
-    A ``## Profile`` heading and an image line, then an ``Extends``/``Modules`` line,
+    A ``## Variant`` heading and an image line, then a ``Parent``/``Fragments`` line,
     then one table per non-empty kind: packages, files, users, services, units,
     hooks, sources and runtime init. A table longer than ``MARKDOWN_COLLAPSE_AT``
     rows is collapsed in a ``<details>`` block.
     """
     targets = " ".join(f"`{t}`" for t in _as_list(description.get("targets"))) or "none"
     blocks: list[str] = [
-        f"## Profile `{description['profile']}`",
+        f"## Variant `{description['variant']}`",
         f"`{description['base']}` ({description['arch']}) · "
         f"reproducible: {_yes_no(description['reproducible'])} · targets: {targets}",
         _markdown_lineage(description),
@@ -431,13 +439,10 @@ def render_markdown(description: dict[str, object]) -> str:
 
 
 def _markdown_lineage(description: dict[str, object]) -> str:
-    modules = ", ".join(f"`{m}`" for m in _as_list(description.get("modules"))) or "none"
-    extends = description.get("extends")
-    if not extends:
-        return f"**Extends:** none · **Modules:** {modules}"
-    inherited = ", ".join(f"`{m}`" for m in _as_list(description.get("extends_modules")))
-    via = f" (modules: {inherited})" if inherited else ""
-    return f"**Extends:** `{extends}`{via} · **Modules:** {modules}"
+    fragments = ", ".join(f"`{f}`" for f in _as_list(description.get("fragments"))) or "none"
+    parent = description.get("parent")
+    shown = f"`{parent}`" if parent else "none"
+    return f"**Parent:** {shown} · **Fragments:** {fragments}"
 
 
 def _append_section(
@@ -520,10 +525,6 @@ def _first_command_line(script: str) -> str:
         if line and not line.startswith("#"):
             return line
     return next((line for line in lines if line), "")
-
-
-def _module_names(image: Image, profile: str) -> list[str]:
-    return [type(module).__name__ for module in image.applied_modules(profile)]
 
 
 def _describe_init_scripts(entries: Sequence[InitScriptEntry]) -> dict[str, object]:

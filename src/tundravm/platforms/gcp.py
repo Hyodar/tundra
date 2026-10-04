@@ -8,12 +8,10 @@ and the profile's targets include ``"gcp"``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from tundravm._modules.base import Module
-from tundravm.check import Diagnostic, effective_output_targets
 
 if TYPE_CHECKING:
     from tundravm._image import Image
@@ -129,22 +127,3 @@ class GcpPlatform(Module):
 
         # Output target — triggers tar.gz postoutput script auto-generation
         image.targets("gcp")
-
-    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
-        targets = effective_output_targets(image, profile)
-        if "gcp" in targets:
-            return
-        yield Diagnostic(
-            level="warning",
-            code="platform-target-missing",
-            message=(
-                f"GcpPlatform is applied but output targets are {', '.join(targets)}; "
-                "no gcp artifact will be produced"
-            ),
-            hint=(
-                'Call img.targets("gcp", ...) after applying GcpPlatform, '
-                "or move the platform into its own profile."
-            ),
-            profile=profile,
-            subject="gcp",
-        )

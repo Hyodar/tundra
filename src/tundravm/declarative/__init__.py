@@ -40,15 +40,18 @@ from .load import load
 from .lower import lower
 from .model import (
     Build,
+    Cargo,
     Check,
     Debloat,
     Declaration,
     Diagnostic,
     Directory,
     Disk,
+    Dotnet,
     File,
     Fragment,
     Git,
+    Go,
     Group,
     Hook,
     Http,
@@ -78,7 +81,6 @@ from .model import (
     User,
     Variant,
 )
-from .modules import backports, devtools, efi_stub, tdxs
 from .resolve import identity, resolve, resolve_all
 
 __all__ = [
@@ -86,6 +88,7 @@ __all__ = [
     "Azure",
     "Backend",
     "Build",
+    "Cargo",
     "Check",
     "Debloat",
     "Declaration",
@@ -93,11 +96,13 @@ __all__ = [
     "Diagnostic",
     "Directory",
     "Disk",
+    "Dotnet",
     "Entry",
     "File",
     "Fragment",
     "Gcp",
     "Git",
+    "Go",
     "Group",
     "Hook",
     "Http",
@@ -132,14 +137,11 @@ __all__ = [
     "Unit",
     "User",
     "Variant",
-    "backports",
     "bake",
     "compile",
     "deploy",
-    "devtools",
     "diff",
     "doctor",
-    "efi_stub",
     "identity",
     "lint",
     "load",
@@ -151,6 +153,5 @@ __all__ = [
     "read_lock",
     "resolve",
     "resolve_all",
-    "tdxs",
     "write_lock",
 ]

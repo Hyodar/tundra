@@ -65,7 +65,7 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
 
     lockfile = lock(recipe).lockfile
 
-    assert lockfile.version == 2
+    assert lockfile.version == 3
     assert lockfile.recipe["base"] == "debian/bookworm"
     assert lockfile.dependencies["default"] == ["curl"]
     assert lockfile.dependencies["dev"] == ["curl", "jq"]

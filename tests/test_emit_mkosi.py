@@ -22,12 +22,10 @@ from tundravm.declarative import (
     Template,
     User,
     Variant,
-    backports,
     compile,
-    efi_stub,
     lower,
 )
-from tundravm.declarative.modules import BACKPORTS_TREE
+from tundravm.declarative.utils import BACKPORTS_TREE, Backports, EfiStub
 from tundravm.errors import ValidationError
 from tundravm.models import Phase
 
@@ -479,6 +477,28 @@ def test_compile_reproducible_no_override_user_epoch(tmp_path: Path) -> None:
 
     assert "Environment=SOURCE_DATE_EPOCH=1234" in conf_text
     assert "Environment=SOURCE_DATE_EPOCH=0" not in conf_text
+    assert "SourceDateEpoch=1234\n" in conf_text
+
+
+@pytest.mark.parametrize(
+    ("epoch", "lines"),
+    [
+        (1700000000, ["Environment=SOURCE_DATE_EPOCH=1700000000", "SourceDateEpoch=1700000000"]),
+        (0, ["Environment=SOURCE_DATE_EPOCH=0", "SourceDateEpoch=0"]),
+        (None, []),
+    ],
+)
+def test_compile_epoch_sets_source_date_epoch_consistently(
+    tmp_path: Path, epoch: int | None, lines: list[str]
+) -> None:
+    conf_text = _conf(_compile(_recipe(Package("curl"), epoch=epoch), tmp_path / "mkosi"))
+
+    found = [
+        line
+        for line in conf_text.splitlines()
+        if "SOURCE_DATE_EPOCH" in line or line.startswith("SourceDateEpoch=")
+    ]
+    assert found == lines
 
 
 def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
@@ -594,10 +614,10 @@ def test_compile_kernel_custom_source_repo(tmp_path: Path) -> None:
 
 
 def test_compile_efi_stub_postinst_hook(tmp_path: Path) -> None:
-    """efi_stub() declares a postinst hook that downloads and installs pinned EFI stub."""
+    """EfiStub() declares a postinst hook that downloads and installs pinned EFI stub."""
     recipe = _recipe(
         Package("systemd"),
-        efi_stub(
+        EfiStub(
             snapshot="https://snapshot.debian.org/archive/debian/20251113T083151Z",
             version="255.4-1",
         ),
@@ -620,8 +640,8 @@ def test_compile_efi_stub_postinst_hook(tmp_path: Path) -> None:
 
 
 def test_compile_efi_stub_registered_in_postinst_phase() -> None:
-    """efi_stub() lowers to a hook in the postinst phase of the profile state."""
-    recipe = _recipe(efi_stub(snapshot="https://snapshot.example.com", version="255.4-1"))
+    """EfiStub() lowers to a hook in the postinst phase of the profile state."""
+    recipe = _recipe(EfiStub(snapshot="https://snapshot.example.com", version="255.4-1"))
 
     scripts = _phase_scripts(recipe, "postinst")
     assert len(scripts) >= 1
@@ -673,10 +693,10 @@ def test_compile_strip_image_version_can_be_disabled() -> None:
 
 
 def test_compile_backports_sync_hook(tmp_path: Path) -> None:
-    """backports() declares a sync hook that generates debian-backports.sources."""
+    """Backports() declares a sync hook that generates debian-backports.sources."""
     recipe = _recipe(
         Package("systemd"),
-        backports(mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z"),
+        Backports(mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z"),
         epoch=None,
     )
 
@@ -693,8 +713,8 @@ def test_compile_backports_sync_hook(tmp_path: Path) -> None:
 
 
 def test_compile_backports_registered_in_sync_phase() -> None:
-    """backports() lowers to a hook in the sync phase of the profile state."""
-    recipe = _recipe(backports(mirror="https://example.com/debian"), epoch=None)
+    """Backports() lowers to a hook in the sync phase of the profile state."""
+    recipe = _recipe(Backports(mirror="https://example.com/debian"), epoch=None)
 
     scripts = _phase_scripts(recipe, "sync")
     assert len(scripts) >= 1
@@ -703,8 +723,8 @@ def test_compile_backports_registered_in_sync_phase() -> None:
 
 
 def test_compile_backports_auto_adds_sandbox_trees() -> None:
-    """backports() adds the sandbox_trees entry for the generated file."""
-    image = lower(_recipe(backports(), epoch=None))
+    """Backports() adds the sandbox_trees entry for the generated file."""
+    image = lower(_recipe(Backports(), epoch=None))
 
     expected_entry = (
         "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
@@ -713,10 +733,10 @@ def test_compile_backports_auto_adds_sandbox_trees() -> None:
 
 
 def test_compile_backports_no_duplicate_sandbox_trees() -> None:
-    """backports() does not duplicate a sandbox_trees entry the recipe already sets."""
+    """Backports() does not duplicate a sandbox_trees entry the recipe already sets."""
     recipe = _recipe(
         Setting("Build", "SandboxTrees", (BACKPORTS_TREE,)),
-        backports(),
+        Backports(),
         epoch=None,
     )
     image = lower(recipe)
@@ -729,20 +749,20 @@ def test_compile_backports_no_duplicate_sandbox_trees() -> None:
 
 def test_compile_backports_jq_fallback_when_no_mirror() -> None:
     """When mirror is not provided, script reads from $BUILDDIR/config.json via jq."""
-    script = _phase_scripts(_recipe(backports(), epoch=None), "sync")[0]
+    script = _phase_scripts(_recipe(Backports(), epoch=None), "sync")[0]
     assert 'jq -r .Mirror "$BUILDDIR/config.json"' in script
     assert 'MIRROR="http://deb.debian.org/debian"' in script
 
 
 def test_compile_backports_custom_release() -> None:
-    """backports() accepts a custom release parameter."""
-    script = _phase_scripts(_recipe(backports(release="trixie"), epoch=None), "sync")[0]
+    """Backports() accepts a custom release parameter."""
+    script = _phase_scripts(_recipe(Backports(release="trixie"), epoch=None), "sync")[0]
     assert 'RELEASE="trixie"' in script
 
 
 def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
-    """backports() sandbox_trees entry appears in emitted mkosi.conf."""
-    recipe = _recipe(Package("systemd"), backports(), epoch=None)
+    """Backports() sandbox_trees entry appears in emitted mkosi.conf."""
+    recipe = _recipe(Package("systemd"), Backports(), epoch=None)
 
     conf = _conf(_compile(recipe, tmp_path / "mkosi"))
     assert "SandboxTrees=" in conf

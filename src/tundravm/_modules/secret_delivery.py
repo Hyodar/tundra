@@ -84,13 +84,11 @@ class SecretDelivery(Module):
             level="warning",
             code="secret-store-undefined",
             message=(
-                f"secrets are stored on disk {store!r}, which no DiskEncryption "
-                "in this profile declares"
+                f"secrets are stored on disk {store!r}, which no Disk in this variant declares"
             ),
             hint=(
-                f"Declared disks: {declared}. Apply a DiskEncryption with "
-                f"DiskSpec({store!r}, ...) to this profile, pass store_at= one of the declared "
-                "disks, or store_at=None."
+                f"Declared disks: {declared}. Declare Disk({store!r}, ...) in this variant, "
+                "pass Secrets(store=) one of the declared disks, or store=None."
             ),
             profile=profile,
             subject=store,

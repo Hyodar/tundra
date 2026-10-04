@@ -12,10 +12,13 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Callable
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
+from tundravm._source import CargoBuild as Cargo
+from tundravm._source import DotnetBuild as Dotnet
+from tundravm._source import GoBuild as Go
 from tundravm.errors import ValidationError
 from tundravm.policy import Policy
 
@@ -864,24 +867,46 @@ class Install:
 
 @dataclass(frozen=True, slots=True)
 class Build:
-    """Run *script* in the fetched source and install its results.
+    """Build the fetched source with *script* or a *recipe* and install its results.
 
-    ``env`` is exported before the script runs. ``cache_key`` names the build
-    cache entry; ``None`` derives ``<name>-<url digest>-<ref>`` from the source.
+    Set exactly one of ``script`` (a shell script run in the source tree, with
+    ``env`` exported and ``packages`` installed for it) and ``recipe`` (:class:`Go`,
+    :class:`Cargo` or :class:`Dotnet`, which carry their own ``env`` and
+    ``packages``). ``install`` paths are relative to the source tree; a recipe's
+    output is at its ``artifact`` path, e.g. ``build/<output>`` for ``Go``.
+    ``cache_key`` names the build cache entry; ``None`` derives
+    ``<name>-<url digest>-<ref>`` from the source.
     """
 
     name: str
     source: Git | Http
-    script: str
-    install: tuple[Install, ...]
+    script: str | None = None
+    install: tuple[Install, ...] = ()
     packages: tuple[str, ...] = ()
     env: Pairs = ()
     cache_key: str | None = None
+    recipe: Go | Cargo | Dotnet | None = field(default=None, hash=False)
 
     def __post_init__(self) -> None:
         _freeze(self, "install", "packages", "env")
         if not isinstance(self.name, str) or not _BUILD_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid build name {self.name!r}.")
+        if (self.script is None) == (self.recipe is None):
+            raise _fail(
+                self,
+                f"build {self.name!r} needs exactly one of script= and recipe=.",
+                hint="script='make' runs a shell script; recipe=Go(...), Cargo(...) or "
+                "Dotnet(...) renders the toolchain's build command.",
+            )
+        if self.recipe is not None:
+            if not isinstance(self.recipe, (Go, Cargo, Dotnet)):
+                raise _fail(self, f"build {self.name!r} recipe must be Go, Cargo or Dotnet.")
+            if self.packages or self.env:
+                raise _fail(
+                    self,
+                    f"build {self.name!r} takes packages and env on its recipe.",
+                    hint=f"Pass them to {type(self.recipe).__name__}(packages=..., env=...).",
+                )
         if self.cache_key is not None and (
             not isinstance(self.cache_key, str) or not _CACHE_KEY.fullmatch(self.cache_key)
         ):
@@ -892,7 +917,8 @@ class Build:
             )
         if not isinstance(self.source, (Git, Http)):
             raise _fail(self, f"build {self.name!r} source must be Git or Http.")
-        _require_name(self, self.script, "script")
+        if self.script is not None:
+            _require_name(self, self.script, "script")
         if not self.install:
             raise _fail(self, f"build {self.name!r} installs nothing.")
         names: list[str] = []
@@ -1015,16 +1041,19 @@ __all__ = [
     "PHASES",
     "TARGETS",
     "Build",
+    "Cargo",
     "Check",
     "Debloat",
     "Declaration",
     "Diagnostic",
     "Directory",
     "Disk",
+    "Dotnet",
     "EMPTY_FRAGMENT",
     "File",
     "Fragment",
     "Git",
+    "Go",
     "Group",
     "Hook",
     "Http",

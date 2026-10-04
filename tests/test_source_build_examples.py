@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
-from examples.modules import nethermind, raiko, taiko_client
+from examples.fragments import Nethermind, Raiko, TaikoClient
 
 from tundravm._source import DotnetBuild, GitSource, GoBuild, Source, SourceBuild
 from tundravm._source import Install as SourceInstall
@@ -27,8 +27,8 @@ from tundravm.declarative import (
     compile,
     lock,
     lower,
-    tdxs,
 )
+from tundravm.declarative.utils import Tdxs
 from tundravm.errors import ValidationError
 
 REPO = "https://example.com/acme/tool.git"
@@ -104,7 +104,7 @@ def _surge_stack(dialect: Literal["current", "nethermind-v1"] = "nethermind-v1")
         mkosi=Mkosi(dialect=dialect),
         common=Fragment(
             "stack",
-            items=(tdxs(), Package("git", role="build"), raiko(), taiko_client(), nethermind()),
+            items=(Tdxs(), Package("git", role="build"), Raiko(), TaikoClient(), Nethermind()),
         ),
     )
 
@@ -138,7 +138,7 @@ def test_example_modules_pin_through_the_lockfile() -> None:
 def test_every_module_that_builds_from_source_is_a_source_build() -> None:
     key = Key("key_persistent", output="/tmp/key_persistent")
     disk = Disk("disk_persistent", "/persistent", key=key)
-    recipe = Recipe("tools", Fragment("tools", items=(tdxs(), key, disk, Secrets(store=disk))))
+    recipe = Recipe("tools", Fragment("tools", items=(Tdxs(), key, disk, Secrets(store=disk))))
     builds = lower(recipe).source_builds()
     assert sorted(builds) == [
         "disk-encryption",

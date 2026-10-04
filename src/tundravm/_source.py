@@ -561,7 +561,7 @@ def resolve_pins(
             f"resolve: {', '.join(needs_network)}.",
             hint=(
                 "Run `tundravm lock RECIPE` without --offline, or pin the source inline "
-                "(a 40-hex commit ref, or HttpSource(sha256=...))."
+                "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...))."
             ),
             context={"sources": ", ".join(needs_network)},
         )

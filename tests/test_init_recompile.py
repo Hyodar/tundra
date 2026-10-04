@@ -25,13 +25,19 @@ def _init_service_count(state: RecipeState, profile: str) -> int:
 
 def test_recompile_with_more_profiles_does_not_duplicate_runtime_init(tmp_path: Path) -> None:
     img = lower(_recipe(Variant("dev", add=Fragment("dev", items=(Package("vim"),)))))
+    payload = img._recipe_payload(profile_names=("default", "dev"))
 
     img.compile(tmp_path / "first")
     img.compile(tmp_path / "second", profiles=("default", "dev"))
     img.compile(tmp_path / "third", force=True)
 
-    assert _init_service_count(img.state, "default") == 1
-    assert _init_service_count(img.state, "dev") == 1
+    # Compiling generates runtime-init into the tree only, never into the declared state.
+    assert _init_service_count(img.state, "default") == 0
+    assert _init_service_count(img.state, "dev") == 0
+    assert img._recipe_payload(profile_names=("default", "dev")) == payload
+    for tree in ("first", "second", "third"):
+        assert (tmp_path / tree / "default/mkosi.extra/usr/bin/runtime-init").is_file()
+    assert (tmp_path / "second/dev/mkosi.extra/usr/bin/runtime-init").is_file()
 
 
 def test_bake_after_compile_across_profiles(

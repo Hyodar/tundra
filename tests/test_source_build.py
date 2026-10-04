@@ -46,9 +46,9 @@ from tundravm.declarative import (
     lock,
     lock_status,
     lower,
-    tdxs,
     write_lock,
 )
+from tundravm.declarative.utils import Tdxs
 from tundravm.errors import LockfileError, PolicyError, ValidationError
 from tundravm.lockfile import LockedFetch, build_lockfile, parse_lockfile, serialize_lockfile
 from tundravm.policy import MutableRefPolicy
@@ -289,10 +289,10 @@ def test_http_source_rendering() -> None:
 
 
 def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
-    historical = _recipe(tdxs(), dialect="nethermind-v1")
+    historical = _recipe(Tdxs(), dialect="nethermind-v1")
     assert TDXS_LEGACY_HOOK in _hooks(compile(historical)).splitlines()
     assert lower(historical).source_builds()["tdxs"].render() == TDXS_LEGACY_HOOK
-    current = _hooks(compile(_recipe(tdxs())))
+    current = _hooks(compile(_recipe(Tdxs())))
     assert current.startswith("# unpinned: master\n" + TDXS_LEGACY_HOOK)
 
 

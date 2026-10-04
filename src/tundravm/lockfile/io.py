@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from tundravm.errors import LockfileError
-from tundravm.lockfile.model import LockedFetch, Lockfile
+from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
+from tundravm.lockfile.resolve import VARIANTS_SECTION
 
 
 def serialize_lockfile(lockfile: Lockfile) -> str:
@@ -39,14 +40,27 @@ def parse_lockfile(raw: str) -> Lockfile:
     if not isinstance(fetches_raw, list):
         raise LockfileError("Invalid lockfile `fetches` value.")
     fetches = [_parse_locked_fetch(item) for item in fetches_raw]
+    sections = _optional_sections(payload, "sections")
+    if version == _PROFILE_SECTIONS_VERSION:
+        version = LOCKFILE_VERSION
+        sections = {_variant_section(name): digest for name, digest in sections.items()}
     return Lockfile(
         version=version,
         recipe_digest=recipe_digest,
         recipe=recipe,
         dependencies=dependencies,
         fetches=fetches,
-        sections=_optional_sections(payload, "sections"),
+        sections=sections,
     )
+
+
+_PROFILE_SECTIONS_VERSION = 2
+"""The lockfile version whose per-variant sections are named ``profiles.<name>.<key>``."""
+
+
+def _variant_section(name: str) -> str:
+    old = "profiles."
+    return VARIANTS_SECTION + name[len(old) - 1 :] if name.startswith(old) else name
 
 
 def read_lockfile(path: str | Path) -> Lockfile:
@@ -124,7 +138,7 @@ def _required_dependencies(payload: dict[str, Any], key: str) -> dict[str, list[
     parsed: dict[str, list[str]] = {}
     for profile, packages in value.items():
         if not isinstance(profile, str):
-            raise LockfileError("Invalid lockfile dependency profile key.")
+            raise LockfileError("Invalid lockfile dependency variant key.")
         if not isinstance(packages, list) or not all(isinstance(item, str) for item in packages):
             raise LockfileError("Invalid lockfile dependency package list.")
         parsed[profile] = list(packages)
