@@ -12,11 +12,12 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
 from tundravm.errors import ValidationError
+from tundravm.policy import Policy
 
 Target = Literal["qemu", "azure", "gcp"]
 Phase = Literal[
@@ -152,9 +153,11 @@ class Variant:
     replace: tuple[Declaration, ...] = ()
     remove: tuple[Declaration, ...] = ()
     target: Target | None = None
+    targets: tuple[Target, ...] = ()
+    """Several outputs from one variant; ``target`` is the one-output shorthand."""
 
     def __post_init__(self) -> None:
-        _freeze(self, "replace", "remove")
+        _freeze(self, "replace", "remove", "targets")
         _require_name(self, self.name)
         if self.name == BASE_PARENT:
             raise _fail(self, f"{BASE_PARENT!r} is reserved for Recipe.common.")
@@ -172,18 +175,45 @@ class Variant:
                     )
         if self.target is not None:
             _require_choice(self, self.target, TARGETS, "target")
+        if self.target is not None and self.targets:
+            raise _fail(
+                self,
+                f"variant {self.name!r} sets both target= and targets=.",
+                hint="target=X is the shorthand for targets=(X,); pass one of them.",
+            )
+        for target in self.targets:
+            _require_choice(self, target, TARGETS, "target")
+        if len(set(self.targets)) != len(self.targets):
+            raise _fail(self, f"variant {self.name!r} lists a target twice.")
+
+    @property
+    def outputs(self) -> tuple[Target, ...]:
+        """The targets this variant sets itself (empty: inherited)."""
+        return self.targets or (() if self.target is None else (self.target,))
 
 
 @dataclass(frozen=True, slots=True)
 class Mkosi:
-    """Compiler configuration: tree layout and emission dialect."""
+    """Compiler configuration: tree layout, emission dialect and generated helper files.
+
+    ``init_script`` is written to ``mkosi.skeleton/init`` (mode 0755);
+    ``version_script`` emits ``mkosi.version``; ``cloud_postoutput`` emits the
+    Azure/GCP disk conversion postoutput scripts; ``strip_os_release`` strips
+    ``IMAGE_VERSION`` from ``os-release`` (``None``: when ``Recipe.epoch`` is set).
+    """
 
     layout: Literal["directories", "native"] = "directories"
     dialect: Literal["current", "nethermind-v1"] = "current"
+    init_script: str | None = None
+    version_script: bool = False
+    cloud_postoutput: bool = True
+    strip_os_release: bool | None = None
 
     def __post_init__(self) -> None:
         _require_choice(self, self.layout, ("directories", "native"), "layout")
         _require_choice(self, self.dialect, ("current", "nethermind-v1"), "dialect")
+        if self.init_script is not None:
+            _require_name(self, self.init_script, "init_script")
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +229,7 @@ class Recipe:
     tools_mirror: str | None = None
     epoch: int | None = 0
     mkosi: Mkosi = Mkosi()
+    policy: Policy | None = None
 
     def __post_init__(self) -> None:
         _freeze(self, "variants")
@@ -223,6 +254,8 @@ class Recipe:
             raise _fail(self, f"epoch {self.epoch!r} must be a non-negative int or None.")
         if not isinstance(self.mkosi, Mkosi):
             raise _fail(self, "mkosi= must be a Mkosi value.")
+        if self.policy is not None and not isinstance(self.policy, Policy):
+            raise _fail(self, "policy= must be a tundravm.Policy value.")
 
     def variant(self, name: str) -> Variant:
         """The variant called *name*; ``ValidationError`` when there is none."""
@@ -350,6 +383,116 @@ class Unit:
 
 
 @dataclass(frozen=True, slots=True)
+class Service:
+    """A generated systemd service: the compiler renders the unit from these fields.
+
+    ``security`` selects the hardening profile (``strict``, ``default`` or
+    ``none``). With ``after_init`` the unit waits for ``runtime-init.service``
+    whenever the variant has a runtime-init step. ``Unit`` ships verbatim text.
+    """
+
+    name: str
+    exec_start: str | tuple[str, ...]
+    _: KW_ONLY
+    description: str | None = None
+    user: str | None = None
+    group: str | None = None
+    working_dir: str | None = None
+    env: Pairs = ()
+    env_file: str | None = None
+    exec_start_pre: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
+    requires: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
+    wanted_by: str | None = None
+    type: Literal["simple", "exec", "oneshot", "notify", "forking"] | None = None
+    restart: Literal["always", "on-failure", "no"] = "no"
+    limits: tuple[tuple[str, str | int], ...] = ()
+    kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
+    timeout_stop: str | None = None
+    security: Literal["strict", "default", "none"] = "default"
+    after_init: bool = True
+
+    def __post_init__(self) -> None:
+        _freeze(self, "exec_start", "env", "exec_start_pre", "after", "requires", "wants")
+        _freeze(self, "limits")
+        if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
+            raise _fail(self, f"invalid service name {self.name!r}.")
+        if self.name.endswith(".target") or (
+            "." in self.name and not self.name.endswith(".service")
+        ):
+            raise _fail(self, f"service {self.name!r} must be a .service unit.")
+        if isinstance(self.exec_start, str):
+            _require_name(self, self.exec_start, "exec_start")
+        elif not self.exec_start:
+            raise _fail(self, f"service {self.name!r} has an empty exec_start.")
+        else:
+            _require_names(self, self.exec_start, "exec_start argument")
+        for what in ("user", "group", "env_file", "wanted_by", "timeout_stop"):
+            value = getattr(self, what)
+            if value is not None:
+                _require_name(self, value, what)
+        for what in ("working_dir", "env_file"):
+            value = getattr(self, what)
+            if value is not None:
+                _require_absolute(self, value, what)
+        _require_pairs(self, self.env)
+        for what in ("exec_start_pre", "after", "requires", "wants"):
+            _require_names(self, getattr(self, what), what)
+        if self.type is not None:
+            _require_choice(
+                self, self.type, ("simple", "exec", "oneshot", "notify", "forking"), "type"
+            )
+        _require_choice(self, self.restart, ("always", "on-failure", "no"), "restart")
+        if self.kill_mode is not None:
+            _require_choice(
+                self, self.kill_mode, ("control-group", "mixed", "process", "none"), "kill_mode"
+            )
+        _require_choice(self, self.security, ("strict", "default", "none"), "security")
+        seen: set[str] = set()
+        for pair in self.limits:
+            if not isinstance(pair, tuple) or len(pair) != 2:
+                raise _fail(self, f"limits entries must be (resource, value) pairs, got {pair!r}.")
+            resource, value = pair
+            _require_name(self, resource, "limit resource")
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                raise _fail(self, f"limit {resource!r} must be a str or int, got {value!r}.")
+            if resource in seen:
+                raise _fail(self, f"limit {resource!r} is set twice.")
+            seen.add(resource)
+
+
+@dataclass(frozen=True, slots=True)
+class Template:
+    """A file rendered from *template* with ``str.format_map(variables)`` at lowering time."""
+
+    path: str
+    template: str | Path
+    variables: tuple[tuple[str, str | int | float], ...] = ()
+    mode: int = 0o644
+    stage: Literal["skeleton", "extra"] = "extra"
+
+    def __post_init__(self) -> None:
+        _freeze(self, "variables")
+        _require_absolute(self, self.path)
+        if not isinstance(self.template, (str, Path)):
+            raise _fail(self, f"template of {self.path!r} must be str or Path.")
+        seen: set[str] = set()
+        for pair in self.variables:
+            if not isinstance(pair, tuple) or len(pair) != 2:
+                raise _fail(self, f"variables must be (name, value) pairs, got {pair!r}.")
+            key, value = pair
+            _require_name(self, key, "variable name")
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                raise _fail(self, f"variable {key!r} must be str, int or float, got {value!r}.")
+            if key in seen:
+                raise _fail(self, f"variable {key!r} is set twice.")
+            seen.add(key)
+        _require_mode(self, self.mode)
+        _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
+
+
+@dataclass(frozen=True, slots=True)
 class Hook:
     name: str
     phase: Phase
@@ -439,14 +582,38 @@ class Debloat:
     minimize_systemd: bool = True
     keep_units: tuple[str, ...] | None = None
     keep_binaries: tuple[str, ...] | None = None
+    keep_units_extra: tuple[str, ...] = ()
+    """Units kept on top of ``keep_units`` (or its default list)."""
+    keep_paths_by_variant: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """``(variant, paths)``: paths kept only when building that variant."""
 
     def __post_init__(self) -> None:
-        _freeze(self, "remove", "extra_remove", "keep_paths", "keep_units", "keep_binaries")
+        _freeze(
+            self,
+            "remove",
+            "extra_remove",
+            "keep_paths",
+            "keep_units",
+            "keep_binaries",
+            "keep_units_extra",
+            "keep_paths_by_variant",
+        )
         for what in ("remove", "extra_remove", "keep_paths"):
             for path in getattr(self, what) or ():
                 _require_absolute(self, path, what)
-        for what in ("keep_units", "keep_binaries"):
+        for what in ("keep_units", "keep_binaries", "keep_units_extra"):
             _require_names(self, getattr(self, what) or (), what)
+        frozen: list[tuple[str, tuple[str, ...]]] = []
+        for pair in self.keep_paths_by_variant:
+            if not isinstance(pair, tuple) or len(pair) != 2:
+                raise _fail(self, f"keep_paths_by_variant holds {pair!r}, not (variant, paths).")
+            variant, paths = pair
+            _require_name(self, variant, "variant")
+            paths = tuple(paths)
+            for path in paths:
+                _require_absolute(self, path, "keep_paths_by_variant path")
+            frozen.append((variant, paths))
+        object.__setattr__(self, "keep_paths_by_variant", tuple(frozen))
 
 
 @dataclass(frozen=True, slots=True)
@@ -768,6 +935,8 @@ type Declaration = (
     | Group
     | User
     | Unit
+    | Service
+    | Template
     | Hook
     | Init
     | Repository
@@ -789,6 +958,8 @@ DECLARATION_TYPES: tuple[type, ...] = (
     Group,
     User,
     Unit,
+    Service,
+    Template,
     Hook,
     Init,
     Repository,
@@ -828,6 +999,13 @@ class Resolved:
     target: Target
     items: tuple[Declaration, ...]
     fragments: tuple[str, ...]
+    targets: tuple[Target, ...] = ()
+    """Every output of the variant (``target`` is the first)."""
+
+    def __post_init__(self) -> None:
+        _freeze(self, "targets")
+        if not self.targets:
+            object.__setattr__(self, "targets", (self.target,))
 
 
 __all__ = [
@@ -868,8 +1046,10 @@ __all__ = [
     "SecretEnv",
     "SecretFile",
     "Secrets",
+    "Service",
     "Setting",
     "Target",
+    "Template",
     "Unit",
     "User",
     "Variant",

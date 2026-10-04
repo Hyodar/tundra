@@ -11,7 +11,7 @@ import pytest
 from tundravm import Recipe, load
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.errors import ValidationError
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_image
 
 RECIPE = """
 from tundravm import File, Fragment, Package, Recipe, Unit, Variant
@@ -76,8 +76,8 @@ def test_load_discovers_a_build_factory_and_rejects_other_values(tmp_path: Path)
         load(nothing, attribute=None)
 
 
-def test_load_recipe_lowers_and_wires_the_backend(recipe_file: Path) -> None:
-    img = load_recipe(recipe_file)
+def test_load_image_lowers_and_wires_the_backend(recipe_file: Path) -> None:
+    img = load_image(recipe_file)
     assert img.profile_names == ("azure", "default")
     assert img.backend is not None and img.backend.name == "inprocess"
     assert img.state.effective_profile("azure").output_targets == ("azure",)

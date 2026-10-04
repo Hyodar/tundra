@@ -11,8 +11,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from tundravm import Image, Kernel, MkosiOptions
-from tundravm.modules import (
+from tundravm._image import Image
+from tundravm._modules import (
     DevTools,
     DiskEncryption,
     DiskSpec,
@@ -21,8 +21,10 @@ from tundravm.modules import (
     SecretDelivery,
     Tdxs,
 )
+from tundravm._options import MkosiOptions
+from tundravm._source import CargoBuild, DotnetBuild, GitSource, GoBuild, Install, SourceBuild
+from tundravm.models import Kernel
 from tundravm.platforms import AzurePlatform, GcpPlatform
-from tundravm.source import CargoBuild, DotnetBuild, GitSource, GoBuild, Install, SourceBuild
 
 ROOT = Path(__file__).resolve().parents[2]
 PINNED_MIRROR = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
@@ -264,7 +266,17 @@ def build() -> Image:
         img.file(path, content=getattr(C, name))
     img.enable("network-setup", "openntpd", "logrotate", "dropbear")
     img.disable("ssh.service", "ssh.socket").mask("ssh.service", "ssh.socket")
-    img.profile("azure").apply(AzurePlatform())
-    img.profile("gcp").apply(GcpPlatform())
-    img.profile("devtools").apply(DevTools())
+    for name, module in (
+        ("azure", AzurePlatform()),
+        ("gcp", GcpPlatform()),
+        ("devtools", DevTools()),
+    ):
+        img.profile(name)
+        with img.profiles(name):
+            img.apply(module)
     return img
+
+
+def blank_image(**options: object) -> Image:
+    """An empty fluent image: the parity tests' oracle for what lowering must reproduce."""
+    return Image(**options)  # type: ignore[arg-type]

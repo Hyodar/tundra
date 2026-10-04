@@ -6,12 +6,12 @@ import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, ClassVar, final
 
+from tundravm._source import GitSource
 from tundravm.errors import ValidationError
-from tundravm.source import GitSource
 
 if TYPE_CHECKING:
+    from tundravm._image import Image
     from tundravm.check import Diagnostic
-    from tundravm.image import Image
 
 TUNDRA_TOOLS = GitSource("https://github.com/Hyodar/tundra-tools.git", "master")
 """The ``tundra-tools`` repository Tdxs, KeyGeneration, DiskEncryption and

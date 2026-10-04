@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from tundravm._modules.base import TUNDRA_TOOLS, Module
+from tundravm._modules.resolve import resolve_after
+from tundravm._source import GitSource, GoBuild, Install, SourceBuild
 from tundravm.errors import ValidationError
-from tundravm.modules.base import TUNDRA_TOOLS, Module
-from tundravm.modules.resolve import resolve_after
-from tundravm.source import GitSource, GoBuild, Install, SourceBuild
 
 if TYPE_CHECKING:
-    from tundravm.image import Image
+    from tundravm._image import Image
 
 TDXS_BUILD_PACKAGES = (
     "golang",

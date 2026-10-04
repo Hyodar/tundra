@@ -40,8 +40,10 @@ from .model import (
     Resolved,
     RuntimeTools,
     Secrets,
+    Service,
     Setting,
     Target,
+    Template,
     Unit,
     User,
     Variant,
@@ -59,9 +61,9 @@ def identity(item: Declaration) -> Identity:
     match item:
         case Package():
             return (kind, item.name, item.role)
-        case File() | Directory():
+        case File() | Directory() | Template():
             return (kind, item.stage, posixpath.normpath(item.path))
-        case Unit():
+        case Unit() | Service():
             return (kind, unit_name(item.name))
         case Setting():
             return (kind, item.section, item.key)
@@ -190,26 +192,27 @@ def ancestry(recipe: Recipe, name: str) -> tuple[Variant, ...]:
     return tuple(reversed(chain))
 
 
-def _target(chain: Sequence[Variant]) -> Target:
-    target: Target = DEFAULT_TARGET
+def _targets(chain: Sequence[Variant]) -> tuple[Target, ...]:
+    targets: tuple[Target, ...] = (DEFAULT_TARGET,)
     for variant in chain:
-        if variant.target is not None:
-            target = variant.target
-    return target
+        if variant.outputs:
+            targets = variant.outputs
+    return targets
 
 
 def _check_targets(state: _Resolution, chain: Sequence[Variant]) -> None:
-    inherited: Target = DEFAULT_TARGET
+    inherited: tuple[Target, ...] = (DEFAULT_TARGET,)
     for variant in chain:
-        own = variant.target
-        if own is not None and inherited in CLOUD_TARGETS and own != inherited:
+        own = variant.outputs
+        clouds = [t for t in inherited if t in CLOUD_TARGETS]
+        if own and clouds and not set(clouds) <= set(own):
             state.report(
                 "target-inconsistent",
-                f"variant {variant.name!r} targets {own} but inherits the {inherited} "
-                "platform integration of its parent",
+                f"variant {variant.name!r} targets {', '.join(own)} but inherits the "
+                f"{', '.join(clouds)} platform integration of its parent",
                 subject=variant.name,
             )
-        if own is not None:
+        if own:
             inherited = own
 
 
@@ -408,11 +411,13 @@ def _resolve(recipe: Recipe, name: str) -> tuple[Resolved, list[Diagnostic]]:
     _check_targets(state, chain)
     items = tuple(state.items.values())
     _check_references(state, items)
+    targets = _targets(chain)
     resolved = Resolved(
         variant=name,
-        target=_target(chain),
+        target=targets[0],
         items=items,
         fragments=tuple(state.fragments),
+        targets=targets,
     )
     for fragment in state.fragments.values():
         for required in fragment.requires:

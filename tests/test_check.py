@@ -1,4 +1,9 @@
-"""Tests for the recipe linter (``Image.check()`` / ``tundravm check``)."""
+"""Tests for the recipe linter (``tundravm.lint`` / ``tundravm lint``).
+
+The compiler rules in ``tundravm.check`` run on the lowered recipe: ``report``
+is the CLI's lint report (resolution diagnostics, then the compiler rules,
+without ``backend-missing``); ``check(lower(recipe))`` runs the rules alone.
+"""
 
 from __future__ import annotations
 
@@ -8,99 +13,136 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image, LintError
+from tundravm import (
+    Backend,
+    Debloat,
+    Declaration,
+    File,
+    Fragment,
+    Hook,
+    Init,
+    LintError,
+    Package,
+    Recipe,
+    Secret,
+    SecretFile,
+    Secrets,
+    Service,
+    Template,
+    User,
+    ValidationError,
+    Variant,
+    bake,
+    lint,
+    lock,
+)
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.check import Diagnostic, render
+from tundravm.check import Diagnostic, check, render
 from tundravm.cli import main
+from tundravm.declarative import lower
+from tundravm.declarative.lifecycle import check_report
 from tundravm.models import SecretSpec
-from tundravm.modules.secret_delivery import SecretDelivery
-from tundravm.platforms import AzurePlatform, GcpPlatform
+
+DEFAULT = Variant("default", target="qemu")
+CLEAN: tuple[Declaration, ...] = (
+    Package("curl"),
+    User("app", system=True),
+    Service("app", "/usr/bin/app", user="app"),
+    File("/etc/motd", "hi\n"),
+)
+PLATFORM_MARKERS = frozenset(
+    {
+        "/usr/bin/azure-complete-provisioning",
+        "/usr/lib/systemd/system/azure-complete-provisioning.service",
+        "/usr/lib/udev/rules.d/65-gce-disk-naming.rules",
+        "/usr/lib/udev/google_nvme_id",
+    }
+)
 
 
-def clean_image(tmp_path: Path | None = None) -> Image:
-    img = Image(build_dir=tmp_path or Path("build"), backend=InProcessBackend())
-    img.install("curl")
-    img.user("app", system=True)
-    img.service("app", command="/usr/bin/app", user="app")
-    img.file("/etc/motd", content="hi\n")
-    return img
+def recipe(
+    *items: Declaration, variants: tuple[Variant, ...] = (DEFAULT,), clean: bool = True
+) -> Recipe:
+    common = (*CLEAN, *items) if clean else items
+    return Recipe("check", Fragment("common", items=common), variants=variants)
 
 
-def codes(img: Image, *, profiles: list[str] | None = None) -> list[str]:
-    return [d.code for d in img.check(profiles=profiles)]
+def report(subject: Recipe, *variants: str) -> list[Diagnostic]:
+    return check_report(subject, None, variants=variants or None)
+
+
+def codes(subject: Recipe, *variants: str) -> list[str]:
+    return [d.code for d in report(subject, *variants)]
 
 
 def test_clean_recipe_has_no_findings() -> None:
-    assert clean_image().check() == []
+    assert report(recipe()) == []
+    assert lint(recipe()) == ()
 
 
 # a. service-user-missing
 
 
 def test_service_user_missing() -> None:
-    img = clean_image()
-    img.service("worker", command="/usr/bin/worker", user="svc")
-    [diag] = img.check()
+    [diag] = report(recipe(Service("worker", "/usr/bin/worker", user="svc")))
     assert (diag.level, diag.code, diag.subject) == ("error", "service-user-missing", "worker")
-    assert "img.user('svc'" in (diag.hint or "")
+    assert "'svc'" in (diag.hint or "")
 
 
 def test_service_user_inherited_from_default() -> None:
-    img = clean_image()
-    with img.profile("dev"):
-        img.install("curl")
-        img.service("app", command="/usr/bin/app", user="app")
-    assert img.check(profiles=["dev"]) == []
+    dev = Variant(
+        "dev", add=Fragment("dev", items=(Service("worker", "/usr/bin/app", user="app"),))
+    )
+    assert report(recipe(variants=(DEFAULT, dev)), "dev") == []
 
 
 def test_service_user_not_inherited_by_standalone_profile() -> None:
-    img = clean_image()
-    with img.profile("dev", extends=None):
-        img.install("curl")
-        img.service("app", command="/usr/bin/app", user="app")
-    [diag] = img.check(profiles=["dev"])
+    items = (Package("curl"), Service("app", "/usr/bin/app", user="app"))
+    dev = Variant("dev", parent=None, add=Fragment("dev", items=items))
+    [diag] = report(recipe(variants=(DEFAULT, dev)), "dev")
     assert diag.code == "service-user-missing"
     assert "does not inherit" in (diag.hint or "")
 
 
 def test_service_user_root_base_or_hook_created_is_fine() -> None:
-    img = clean_image()
-    img.service("a", command="/usr/bin/a", user="root")
-    img.service("b", command="/usr/bin/b", user="nobody")
-    img.shell("mkosi-chroot useradd --system hookuser", phase="postinst")
-    img.service("c", command="/usr/bin/c", user="hookuser")
-    assert img.check() == []
+    subject = recipe(
+        Service("a", "/usr/bin/a", user="root"),
+        Service("b", "/usr/bin/b", user="nobody"),
+        Hook("hookuser", "postinst", "mkosi-chroot useradd --system hookuser"),
+        Service("c", "/usr/bin/c", user="hookuser"),
+    )
+    assert report(subject) == []
 
 
 # b. file-path-duplicate
 
 
 def test_file_path_duplicate_with_different_content() -> None:
-    img = clean_image()
-    img.template("/etc/motd", template="bye {x}\n", variables={"x": 1})
-    [diag] = img.check()
+    [diag] = report(recipe(Template("/etc/motd", "bye {x}\n", variables=(("x", 1),))))
     assert (diag.level, diag.code, diag.subject) == ("error", "file-path-duplicate", "/etc/motd")
     assert "file, template" in diag.message
 
 
 def test_identical_redeclaration_and_skeleton_override_are_fine() -> None:
-    img = clean_image()
-    img.file("/etc/motd", content="hi\n")
-    img.skeleton("/etc/motd", content="build-time\n")
-    assert img.check() == []
+    subject = recipe(
+        File("/etc/motd", "hi\n"),
+        Template("/etc/motd", "hi\n"),
+        File("/etc/motd", "build-time\n", stage="skeleton"),
+    )
+    assert report(subject) == []
 
 
 # c. file-path-relative
 
 
 def test_file_path_relative() -> None:
-    img = clean_image()
-    img.file("etc/relative", content="x")
-    img.skeleton("/etc/../../escape", content="x")
-    diags = img.check()
+    with pytest.raises(ValidationError, match="must be an absolute path"):
+        File("etc/relative", "x")
+    subject = recipe(File("/etc/../../escape", "x", stage="skeleton"), File("/opt/../../up", "y"))
+    diags = report(subject)
     assert [(d.code, d.subject) for d in diags] == [
         ("file-path-relative", "/etc/../../escape"),
-        ("file-path-relative", "etc/relative"),
+        ("file-path-relative", "/opt/../../up"),
     ]
     assert all(d.level == "error" for d in diags)
 
@@ -109,9 +151,7 @@ def test_file_path_relative() -> None:
 
 
 def test_service_command_not_shipped() -> None:
-    img = Image(backend=InProcessBackend())
-    img.service("tool", command="/usr/local/bin/tool --serve")
-    [diag] = img.check()
+    [diag] = report(recipe(Service("tool", "/usr/local/bin/tool --serve"), clean=False))
     assert (diag.level, diag.code, diag.subject) == (
         "warning",
         "service-command-not-shipped",
@@ -121,30 +161,38 @@ def test_service_command_not_shipped() -> None:
 
 
 def test_service_command_shipped_by_file_hook_package_or_essential() -> None:
-    img = Image(backend=InProcessBackend())
-    img.file("/usr/local/bin/tool", content="#!/bin/sh\n", mode="0755")
-    img.service("tool", command="/usr/local/bin/tool")
-    img.shell("cp out/builder $DESTDIR/opt/builder", phase="build")
-    img.service("builder", command="/opt/builder")
-    img.service("shell", command="/usr/bin/bash -c true")
-    assert img.check() == []
-    img.service("other", command="/usr/bin/other")
-    img.install("other")
-    assert img.check() == []
+    shipped = (
+        File("/usr/local/bin/tool", "#!/bin/sh\n", mode=0o755),
+        Service("tool", "/usr/local/bin/tool"),
+        Hook("builder", "build", "cp out/builder $DESTDIR/opt/builder"),
+        Service("builder", "/opt/builder"),
+        Service("shell", "/usr/bin/bash -c true"),
+    )
+    assert report(recipe(*shipped, clean=False)) == []
+    packaged = recipe(*shipped, Service("other", "/usr/bin/other"), Package("other"), clean=False)
+    assert report(packaged) == []
 
 
-# e. output-target-platform-mismatch
+# e. output-target-platform-mismatch / platform-target-missing
+#
+# A cloud target always lowers with its platform module, so these rules only
+# fire on a lowered image whose platform files or target were changed after
+# lowering.
+
+
+def cloud_recipe() -> Recipe:
+    variants = (DEFAULT, Variant("azure", target="azure"), Variant("gcp", target="gcp"))
+    return recipe(variants=variants)
 
 
 def test_output_target_without_platform() -> None:
-    img = clean_image()
-    with img.profile("azure"):
-        img.install("curl")
-        img.targets("azure")
-    with img.profile("gcp"):
-        img.install("curl")
-        img.targets("gcp")
-    diags = img.check(profiles=["azure", "gcp"])
+    img = lower(cloud_recipe())
+    for name in ("azure", "gcp"):
+        state = img.state.profiles[name]
+        state.files = [f for f in state.files if f.path not in PLATFORM_MARKERS]
+        state.skeleton_files = [f for f in state.skeleton_files if f.path not in PLATFORM_MARKERS]
+    img.backend = InProcessBackend()
+    diags = check(img, profiles=["azure", "gcp"])
     assert [(d.profile, d.code, d.subject) for d in diags] == [
         ("azure", "output-target-platform-mismatch", "azure"),
         ("gcp", "output-target-platform-mismatch", "gcp"),
@@ -152,35 +200,32 @@ def test_output_target_without_platform() -> None:
 
 
 def test_platform_applied_or_guest_agent_is_fine() -> None:
-    img = clean_image()
-    with img.profile("azure"):
-        AzurePlatform().apply(img)
-    with img.profile("gcp"):
-        GcpPlatform().apply(img)
-    with img.profile("agent"):
-        img.install("waagent")
-        img.targets("azure")
-    assert img.check(profiles=["azure", "gcp", "agent"]) == []
+    agent = Variant("agent", target="azure", add=Fragment("agent", items=(Package("waagent"),)))
+    subject = recipe(variants=(*cloud_recipe().variants, agent))
+    assert report(subject, "azure", "gcp", "agent") == []
 
 
 def test_platform_applied_but_target_overridden() -> None:
-    img = clean_image()
-    with img.profile("azure"):
-        AzurePlatform().apply(img)
-        img.targets("qemu")
-    [diag] = img.check(profiles=["azure"])
+    img = lower(cloud_recipe())
+    img.state.profiles["azure"].output_targets = ("qemu",)
+    img.backend = InProcessBackend()
+    [diag] = check(img, profiles=["azure"])
     assert diag.code == "platform-target-missing"
     assert diag.subject == "azure"
     assert "no azure artifact" in diag.message
 
 
 def test_gcp_platform_applied_but_target_overridden() -> None:
-    img = clean_image()
-    with img.profile("gcp"):
-        GcpPlatform().apply(img)
-        img.targets("qemu")
-    assert [(d.code, d.subject) for d in img.check(profiles=["gcp"])] == [
+    img = lower(cloud_recipe())
+    img.state.profiles["gcp"].output_targets = ("qemu",)
+    img.backend = InProcessBackend()
+    assert [(d.code, d.subject) for d in check(img, profiles=["gcp"])] == [
         ("platform-target-missing", "gcp")
+    ]
+    child = Variant("plain", parent="gcp", target="qemu")
+    subject = recipe(variants=(*cloud_recipe().variants, child))
+    assert [(d.code, d.subject) for d in lint(subject, variants=["plain"])] == [
+        ("target-inconsistent", "plain")
     ]
 
 
@@ -188,97 +233,93 @@ def test_gcp_platform_applied_but_target_overridden() -> None:
 
 
 def test_profile_empty() -> None:
-    img = clean_image()
-    with img.profile("bare"):
-        pass
-    [diag] = img.check(profiles=["bare"])
+    [diag] = report(recipe(variants=(DEFAULT, Variant("bare"))), "bare")
     assert (diag.level, diag.code, diag.profile) == ("info", "profile-empty", "bare")
 
 
 def test_profile_with_content_or_default_is_not_empty() -> None:
-    img = Image(backend=InProcessBackend())
-    with img.profile("dev"):
-        img.install("dropbear")
-    assert codes(img, profiles=["default", "dev"]) == []
+    dev = Variant("dev", add=Fragment("dev", items=(Package("dropbear"),)))
+    assert codes(recipe(variants=(DEFAULT, dev), clean=False), "default", "dev") == []
 
 
 # g. init-priority-collision
 
 
 def test_init_priority_collision() -> None:
-    img = clean_image()
-    img.runtime_init("echo one\n", priority=20)
-    img.runtime_init("echo two\n", priority=20)
-    img.runtime_init("echo three\n", priority=30)
-    [diag] = img.check()
+    subject = recipe(
+        Init("one", "echo one\n", priority=20),
+        Init("two", "echo two\n", priority=20),
+        Init("three", "echo three\n", priority=30),
+    )
+    [diag] = report(subject)
     assert (diag.code, diag.subject) == ("init-priority-collision", "priority 20")
     assert "'echo one'" in diag.message
 
 
 def test_distinct_or_duplicate_init_scripts_are_fine() -> None:
-    img = clean_image()
-    img.runtime_init("echo one\n", priority=20)
-    img.runtime_init("echo one\n", priority=20)
-    img.runtime_init("echo two\n", priority=30)
-    assert img.check() == []
+    subject = recipe(
+        Init("one", "echo one\n", priority=20),
+        Init("one-again", "echo one\n", priority=20),
+        Init("two", "echo two\n", priority=30),
+    )
+    assert report(subject) == []
 
 
 # h. backend-missing
 
 
 def test_backend_missing_reported_once_under_default() -> None:
-    img = Image()
-    img.install("curl")
-    with img.profile("dev"):
-        img.install("curl")
-    diags = img.check(profiles=["default", "dev"])
+    dev = Variant("dev", add=Fragment("dev", items=(Package("htop"),)))
+    subject = recipe(Package("curl"), variants=(DEFAULT, dev), clean=False)
+    img = lower(subject)
+    diags = check(img, profiles=["default", "dev"])
     assert [(d.code, d.profile) for d in diags] == [("backend-missing", "default")]
-    assert clean_image().check() == []
+    img.backend = InProcessBackend()
+    assert check(img, profiles=["default", "dev"]) == []
+    assert report(subject) == []  # a recipe's backend is a bake() argument
 
 
 # i. debloat-removes-needed-unit / debloat-removes-declared-file
 
+NEEDS_NETWORKD = Service("net", "/usr/bin/net", requires=("systemd-networkd.service",))
+
 
 def test_debloat_masks_needed_units() -> None:
-    img = clean_image()
-    img.service("net", command="/usr/bin/net", requires=["systemd-networkd.service"])
-    img.service("systemd-resolved", command="/usr/lib/systemd/systemd-resolved")
-    diags = img.check()
+    resolved = Service("systemd-resolved", "/usr/lib/systemd/systemd-resolved")
+    diags = report(recipe(NEEDS_NETWORKD, resolved))
     assert [(d.code, d.subject) for d in diags] == [
         ("debloat-removes-needed-unit", "net"),
         ("debloat-removes-needed-unit", "systemd-resolved"),
     ]
-    assert "extra_keep_units" in (diags[0].hint or "")
+    assert "keep_units" in (diags[0].hint or "")
 
 
 def test_debloat_keep_extra_or_disabled_is_fine() -> None:
-    img = clean_image()
-    img.service("net", command="/usr/bin/net", requires=["systemd-networkd.service"])
-    img.debloat(extra_keep_units=["systemd-networkd.service"])
-    assert img.check() == []
-    img.debloat(enabled=False)
-    assert img.check() == []
+    kept = Debloat(keep_units_extra=("systemd-networkd.service",))
+    assert report(recipe(NEEDS_NETWORKD, kept)) == []
+    assert report(recipe(NEEDS_NETWORKD, Debloat(enabled=False))) == []
 
 
 def test_debloat_removes_declared_file() -> None:
-    img = clean_image()
-    img.file("/etc/systemd/network/10-eth.network", content="[Match]\n")
-    [diag] = img.check()
+    network = File("/etc/systemd/network/10-eth.network", "[Match]\n")
+    [diag] = report(recipe(network))
     assert (diag.code, diag.subject) == (
         "debloat-removes-declared-file",
         "/etc/systemd/network/10-eth.network",
     )
-    img.debloat(paths_skip=["/etc/systemd/network"])
-    assert img.check() == []
+    assert report(recipe(network, Debloat(keep_paths=("/etc/systemd/network",)))) == []
 
 
 # j. secret-undelivered
 
 
 def test_secret_undelivered() -> None:
-    img = clean_image()
+    with pytest.raises(ValidationError, match="at least one delivery target"):
+        Secret("token", targets=())
+    img = lower(recipe())
     img.state.profiles["default"].secrets.append(SecretSpec(name="token"))
-    diags = img.check()
+    img.backend = InProcessBackend()
+    diags = check(img)
     assert [(d.code, d.subject) for d in diags] == [
         ("secret-undelivered", None),
         ("secret-undelivered", "token"),
@@ -286,28 +327,29 @@ def test_secret_undelivered() -> None:
 
 
 def test_secret_delivery_applied_is_fine() -> None:
-    from tundravm import SecretTarget
-
-    img = clean_image()
-    token = SecretSpec("token", targets=(SecretTarget.file("/run/token"),))
-    # no DiskEncryption: store_at=None, otherwise secret-store-undefined
-    SecretDelivery(secrets=(token,), store_at=None).apply(img)
-    # SecretDelivery builds from an unpinned branch; that is source-unpinned's concern.
-    assert [d for d in img.check() if d.code != "source-unpinned"] == []
+    # no Disk store: store=None, otherwise secret-store-undefined
+    secrets = Secrets(entries=(Secret("token", (SecretFile("/run/token"),)),))
+    # The delivery tool builds from an unpinned branch; that is source-unpinned's concern.
+    assert [d for d in report(recipe(secrets)) if d.code != "source-unpinned"] == []
 
 
 # rendering + ordering
 
 
 def test_ordering_is_deterministic() -> None:
-    img = Image()
-    with img.profile("b"):
-        img.file("rel", content="x")
-    with img.profile("a"):
-        pass
-    img.runtime_init("echo 1\n", priority=1)
-    img.runtime_init("echo 2\n", priority=1)
-    diags = img.check(profiles=["b", "a", "default"])
+    variants = (
+        DEFAULT,
+        Variant("b", add=Fragment("b", items=(File("/etc/../../escape", "x"),))),
+        Variant("a"),
+    )
+    subject = recipe(
+        Init("one", "echo 1\n", priority=1),
+        Init("two", "echo 2\n", priority=1),
+        variants=variants,
+        clean=False,
+    )
+    img = lower(subject)
+    diags = check(img, profiles=["b", "a", "default"])
     keys = [(d.profile, d.level, d.code) for d in diags]
     assert keys == [
         ("a", "warning", "init-priority-collision"),
@@ -317,7 +359,10 @@ def test_ordering_is_deterministic() -> None:
         ("default", "warning", "backend-missing"),
         ("default", "warning", "init-priority-collision"),
     ]
-    assert diags == img.check(profiles=["default", "a", "b"])
+    assert diags == check(img, profiles=["default", "a", "b"])
+    assert [(d.variant, d.code) for d in lint(subject)] == [
+        (profile, code) for profile, _, code in keys if code != "backend-missing"
+    ]
 
 
 def test_render_text_and_dict() -> None:
@@ -351,20 +396,22 @@ def test_render_text_and_dict() -> None:
 # CLI
 
 RECIPE = """
-from tundravm import Image
+from tundravm import Fragment, Init, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
-img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.install("curl")
-img.user("app", system=True)
-img.service("app", command="/usr/bin/app", user="app")
+backend = InProcessBackend()
+items = [Package("curl"), User("app", system=True), Service("app", "/usr/bin/app", user="app")]
+variants = [Variant("default", target="qemu")]
+"""
+
+BIND = """
+recipe = Recipe("cli", Fragment("common", items=tuple(items)), variants=tuple(variants))
 """
 
 
 def write_recipe(tmp_path: Path, extra: str = "") -> Path:
     path = tmp_path / "recipe.py"
-    build = str(tmp_path / "build")
-    path.write_text(f"BUILD_DIR = {build!r}\n{RECIPE}{extra}", encoding="utf-8")
+    path.write_text(f"{RECIPE}{extra}{BIND}", encoding="utf-8")
     return path
 
 
@@ -379,13 +426,14 @@ def test_cli_clean_recipe(tmp_path: Path) -> None:
 
 
 def test_cli_error_exit_and_json(tmp_path: Path) -> None:
-    recipe = write_recipe(tmp_path, 'img.service("w", command="/usr/bin/w", user="ghost")\n')
-    code, out = run(str(recipe))
+    extra = 'items.append(Service("w", "/usr/bin/w", user="ghost"))\n'
+    recipe_path = write_recipe(tmp_path, extra)
+    code, out = run(str(recipe_path))
     assert code == 1
     assert out.startswith("error service-user-missing [default] w:")
     assert out.rstrip().endswith("1 error, 0 warnings, 0 infos")
 
-    code, out = run(str(recipe), "--json")
+    code, out = run(str(recipe_path), "--json")
     assert code == 1
     payload = json.loads(out)
     assert payload["summary"] == {"errors": 1, "warnings": 0, "infos": 0}
@@ -393,35 +441,38 @@ def test_cli_error_exit_and_json(tmp_path: Path) -> None:
 
 
 def test_cli_strict_fails_on_warnings(tmp_path: Path) -> None:
-    extra = 'img.runtime_init("echo 1\\n", priority=5)\nimg.runtime_init("echo 2\\n", priority=5)\n'
-    recipe = write_recipe(tmp_path, extra)
-    assert run(str(recipe))[0] == 0
-    assert run(str(recipe), "--strict")[0] == 1
+    extra = (
+        'items.append(Init("one", "echo 1\\n", priority=5))\n'
+        'items.append(Init("two", "echo 2\\n", priority=5))\n'
+    )
+    recipe_path = write_recipe(tmp_path, extra)
+    assert run(str(recipe_path))[0] == 0
+    assert run(str(recipe_path), "--strict")[0] == 1
 
 
 def test_cli_variant_selection(tmp_path: Path) -> None:
-    recipe = write_recipe(tmp_path, 'with img.profile("bare"):\n    pass\n')
-    code, out = run(str(recipe), "--variant", "default", "--variant", "bare")
+    recipe_path = write_recipe(tmp_path, 'variants.append(Variant("bare"))\n')
+    code, out = run(str(recipe_path), "--variant", "default", "--variant", "bare")
     assert code == 0
     assert "info profile-empty [bare]" in out
-    assert run(str(recipe), "--variant", "default")[1] == "no findings\n"
+    assert run(str(recipe_path), "--variant", "default")[1] == "no findings\n"
 
 
 # bake pre-flight
 
 
 def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
-    img = clean_image(tmp_path)
-    img.file("relative/path", content="x")
+    subject = recipe(File("/etc/../../escape", "x"))
     with pytest.raises(LintError) as excinfo:
-        img.bake(tmp_path / "out")
+        bake(subject, locked=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out")
     assert excinfo.value.code == "E_LINT"
     assert "1 error-level diagnostics" in str(excinfo.value)
     assert excinfo.value.context["codes"] == "file-path-relative"
 
 
-def test_clean_recipe_bakes(tmp_path: Path, inprocess_backend: InProcessBackend) -> None:
-    img = clean_image(tmp_path)
-    img.backend = inprocess_backend
-    result = img.bake(tmp_path / "out")
-    assert "default" in result.profiles
+def test_clean_recipe_bakes(tmp_path: Path) -> None:
+    subject = recipe()
+    artifacts = bake(
+        subject, locked=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out"
+    )
+    assert [a.variant for a in artifacts] == ["default"]

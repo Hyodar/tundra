@@ -1,37 +1,52 @@
-"""Tests for GCP platform profile helper."""
+"""A ``gcp`` target variant gets the GCP platform integration."""
 
-from tundravm import Image
+from pathlib import Path
+
+import pytest
+
+from tundravm.declarative import Fragment, Recipe, Variant, compile, resolve
 from tundravm.platforms.gcp import (
     GCE_DISK_NAMING_RULES,
     GCP_HOSTS,
     GCP_RESOLV_CONF,
     GOOGLE_NVME_ID,
-    GcpPlatform,
+)
+from tundravm.testing import CompiledTree, compile_tree
+
+HOSTS = "mkosi.extra/etc/hosts"
+RESOLV_CONF = "mkosi.extra/etc/resolv.conf"
+UDEV_RULES = "mkosi.extra/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
+NVME_ID = "mkosi.extra/usr/lib/udev/google_nvme_id"
+RECIPE = Recipe(
+    "cloud",
+    Fragment("common"),
+    variants=(Variant("default", target="qemu"), Variant("gcp", target="gcp")),
 )
 
 
-def test_gcp_profile_adds_udev_package() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("gcp"):
-        GcpPlatform().apply(image)
-
-    profile = image.state.profiles["gcp"]
-    assert "udev" in profile.packages
+@pytest.fixture
+def tree(tmp_path: Path) -> CompiledTree:
+    return compile_tree(RECIPE, path=tmp_path / "tree")
 
 
-def test_gcp_profile_emits_hosts_file() -> None:
-    image = Image(reproducible=False)
+def _packages(conf: str) -> list[str]:
+    lines = conf.splitlines()
+    start = lines.index("Packages=") + 1 if "Packages=" in lines else len(lines)
+    values: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("    "):
+            break
+        values.append(line.strip())
+    return values
 
-    with image.profile("gcp"):
-        GcpPlatform().apply(image)
 
-    profile = image.state.profiles["gcp"]
-    file_paths = {f.path for f in profile.files}
-    assert "/etc/hosts" in file_paths
+def test_gcp_profile_adds_udev_package(tree: CompiledTree) -> None:
+    assert "udev" in _packages(tree.conf(profile="gcp"))
 
-    hosts_entry = next(f for f in profile.files if f.path == "/etc/hosts")
-    assert hosts_entry.content == GCP_HOSTS
+
+def test_gcp_profile_emits_hosts_file(tree: CompiledTree) -> None:
+    assert HOSTS in tree.files(profile="gcp")
+    assert tree.read(HOSTS, profile="gcp") == GCP_HOSTS
 
 
 def test_gcp_hosts_content() -> None:
@@ -40,18 +55,9 @@ def test_gcp_hosts_content() -> None:
     assert "169.254.169.254 metadata.google.internal metadata" in GCP_HOSTS
 
 
-def test_gcp_profile_emits_resolv_conf() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("gcp"):
-        GcpPlatform().apply(image)
-
-    profile = image.state.profiles["gcp"]
-    file_paths = {f.path for f in profile.files}
-    assert "/etc/resolv.conf" in file_paths
-
-    resolv_entry = next(f for f in profile.files if f.path == "/etc/resolv.conf")
-    assert resolv_entry.content == GCP_RESOLV_CONF
+def test_gcp_profile_emits_resolv_conf(tree: CompiledTree) -> None:
+    assert RESOLV_CONF in tree.files(profile="gcp")
+    assert tree.read(RESOLV_CONF, profile="gcp") == GCP_RESOLV_CONF
 
 
 def test_gcp_resolv_conf_content() -> None:
@@ -60,20 +66,9 @@ def test_gcp_resolv_conf_content() -> None:
     assert "options edns0 trust-ad" in GCP_RESOLV_CONF
 
 
-def test_gcp_profile_emits_udev_rules() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("gcp"):
-        GcpPlatform().apply(image)
-
-    profile = image.state.profiles["gcp"]
-    file_paths = {f.path for f in profile.files}
-    assert "/usr/lib/udev/rules.d/65-gce-disk-naming.rules" in file_paths
-
-    rules_entry = next(
-        f for f in profile.files if f.path == "/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
-    )
-    assert rules_entry.content == GCE_DISK_NAMING_RULES
+def test_gcp_profile_emits_udev_rules(tree: CompiledTree) -> None:
+    assert UDEV_RULES in tree.files(profile="gcp")
+    assert tree.read(UDEV_RULES, profile="gcp") == GCE_DISK_NAMING_RULES
 
 
 def test_gce_disk_naming_rules_content() -> None:
@@ -91,19 +86,11 @@ def test_gce_disk_naming_rules_content() -> None:
     assert "google-local-nvme-ssd" in GCE_DISK_NAMING_RULES
 
 
-def test_gcp_profile_emits_nvme_id_script() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("gcp"):
-        GcpPlatform().apply(image)
-
-    profile = image.state.profiles["gcp"]
-    file_paths = {f.path for f in profile.files}
-    assert "/usr/lib/udev/google_nvme_id" in file_paths
-
-    nvme_entry = next(f for f in profile.files if f.path == "/usr/lib/udev/google_nvme_id")
-    assert nvme_entry.mode == "0755"
-    assert nvme_entry.content == GOOGLE_NVME_ID
+def test_gcp_profile_emits_nvme_id_script(tree: CompiledTree) -> None:
+    assert NVME_ID in tree.files(profile="gcp")
+    modes = {entry.path: entry.mode for entry in compile(RECIPE, variants=["gcp"]).entries}
+    assert modes[f"gcp/{NVME_ID}"] == 0o755
+    assert tree.read(NVME_ID, profile="gcp") == GOOGLE_NVME_ID
 
 
 def test_google_nvme_id_content() -> None:
@@ -113,23 +100,14 @@ def test_google_nvme_id_content() -> None:
     assert "serial" in GOOGLE_NVME_ID
 
 
-def test_gcp_profile_sets_output_target() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("gcp"):
-        GcpPlatform().apply(image)
-
-    profile = image.state.profiles["gcp"]
-    assert "gcp" in profile.output_targets
+def test_gcp_profile_sets_output_target(tree: CompiledTree) -> None:
+    assert resolve(RECIPE, variant="gcp").target == "gcp"
+    assert "PostOutputScripts=scripts/gcp-postoutput.sh" in tree.conf(profile="gcp").splitlines()
+    assert tree.exists("scripts/gcp-postoutput.sh", profile="gcp")
 
 
-def test_gcp_profile_does_not_affect_default_profile() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("gcp"):
-        GcpPlatform().apply(image)
-
-    default_profile = image.state.profiles["default"]
-    assert "udev" not in default_profile.packages
-    assert not any(f.path == "/etc/hosts" for f in default_profile.files)
-    assert not any(f.path == "/etc/resolv.conf" for f in default_profile.files)
+def test_gcp_profile_does_not_affect_default_profile(tree: CompiledTree) -> None:
+    assert "udev" not in _packages(tree.conf(profile="default"))
+    default_files = tree.files(profile="default")
+    assert HOSTS not in default_files
+    assert RESOLV_CONF not in default_files

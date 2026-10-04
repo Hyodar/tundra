@@ -1,7 +1,7 @@
 """Load recipes from Python files for the CLI and other tooling.
 
-A recipe file binds a declarative :class:`~tundravm.declarative.Recipe` (lowered
-here onto the compiler's ``Image``) or, for older files, an ``Image``.
+A recipe file binds a declarative :class:`~tundravm.declarative.Recipe`;
+:func:`load_image` also lowers it for the compiler.
 """
 
 from __future__ import annotations
@@ -17,27 +17,21 @@ from pathlib import Path
 from types import ModuleType
 from typing import cast
 
+from ._image import Image
 from .backends.base import BuildBackend
 from .declarative.model import Recipe
 from .errors import ValidationError
-from .image import Image
 
-RECIPE_OBJECT_NAMES: tuple[str, ...] = ("img", "image", "IMAGE", "recipe", "RECIPE")
-"""Module-level names checked first when looking for a ``Recipe`` (or ``Image``)."""
+RECIPE_OBJECT_NAMES: tuple[str, ...] = ("recipe", "RECIPE")
+"""Module-level names checked first when looking for a ``Recipe``."""
 
 BACKEND_NAME = "backend"
 """Module-level name of the build backend a declarative recipe file bakes with."""
 
-Loaded = Recipe | Image
-_LOADED_TYPES = (Recipe, Image)
+Loaded = Recipe
+_LOADED_TYPES = (Recipe,)
 
-RECIPE_FACTORY_NAMES: tuple[str, ...] = (
-    "build",
-    "build_image",
-    "make_image",
-    "create_image",
-    "recipe",
-)
+RECIPE_FACTORY_NAMES: tuple[str, ...] = ("build", "recipe")
 """Zero-argument callables checked first when looking for a ``Recipe`` factory."""
 
 
@@ -46,47 +40,33 @@ def load_recipe(
     *,
     attr: str | None = None,
     extra_paths: Sequence[str | Path] = (),
-) -> Image:
-    """Import a recipe file and return the ``Image`` it defines.
+) -> Recipe:
+    """Import a recipe file and return the ``Recipe`` it defines.
 
     Resolution order when *attr* is not given:
 
-    1. A module-level ``Recipe`` (or ``Image``) bound to one of ``RECIPE_OBJECT_NAMES``.
+    1. A module-level ``Recipe`` bound to one of ``RECIPE_OBJECT_NAMES``.
     2. A zero-argument callable named in ``RECIPE_FACTORY_NAMES`` returning one.
-    3. The only module-level ``Recipe``/``Image`` value, if exactly one exists.
+    3. The only module-level ``Recipe`` value, if exactly one exists.
     4. The only zero-argument function defined in the file whose name starts with
-       ``build`` or whose return annotation is ``Recipe``/``Image``, if exactly one exists.
-
-    A ``Recipe`` is lowered with :func:`tundravm.declarative.lower`; a module-level
-    ``backend`` (a build backend instance) becomes the image's backend.
+       ``build`` or whose return annotation is ``Recipe``, if exactly one exists.
 
     The file runs with ``__name__`` set to a private module name, so an
     ``if __name__ == "__main__":`` block is not executed. The file's directory and
-    every entry of *extra_paths* are importable while the recipe runs, so sibling
-    helper modules and project-local packages resolve.
+    every entry of *extra_paths* are importable while it runs, so sibling helper
+    modules and project-local packages resolve.
     """
-    recipe_path = Path(path).expanduser().resolve()
-    if not recipe_path.is_file():
-        raise ValidationError(
-            f"Recipe file not found: {recipe_path}",
-            hint="Pass the path to a Python file that builds an Image.",
-            context={"recipe": str(recipe_path)},
-        )
-    module = _import_recipe_module(recipe_path, extra_paths=extra_paths)
-    found = (
-        _resolve_attr(module, attr, recipe_path)
-        if attr is not None
-        else _discover(module, recipe_path)
-    )
-    if isinstance(found, Image):
-        return found
-    from .declarative.lower import lower
+    return load_file(path, attr=attr, extra_paths=extra_paths).recipe
 
-    img = lower(found)
-    backend = getattr(module, BACKEND_NAME, None)
-    if backend is not None:
-        img.backend = _backend(backend, recipe_path)
-    return img
+
+def load_image(
+    path: str | Path,
+    *,
+    attr: str | None = None,
+    extra_paths: Sequence[str | Path] = (),
+) -> Image:
+    """The recipe file at *path*, lowered for the compiler with its ``backend``."""
+    return load_file(path, attr=attr, extra_paths=extra_paths).lowered()
 
 
 def _backend(value: object, recipe_path: Path) -> BuildBackend:
@@ -215,7 +195,7 @@ def _looks_like_factory(name: str, value: object, module: ModuleType) -> bool:
     if name.startswith("build"):
         return True
     annotation = inspect.signature(value).return_annotation
-    return annotation in _LOADED_TYPES or annotation in ("Recipe", "Image")
+    return annotation in _LOADED_TYPES or annotation == "Recipe"
 
 
 def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) -> Loaded:
@@ -265,27 +245,23 @@ def _public_names(module: ModuleType) -> list[str]:
 
 @dataclass(slots=True)
 class RecipeFile:
-    """A loaded recipe file: its declarative ``recipe`` (or legacy ``image``) and ``backend``."""
+    """A loaded recipe file: its ``recipe``, its ``backend`` and the lowered image once built."""
 
     path: Path
-    recipe: Recipe | None
+    recipe: Recipe
     image: Image | None
     backend: BuildBackend | None
 
     @property
     def variants(self) -> tuple[str, ...]:
-        """Declared variant names (profile names for a legacy ``Image``)."""
-        if self.recipe is not None:
-            return tuple(v.name for v in self.recipe.variants)
-        assert self.image is not None
-        return self.image.profile_names
+        """Declared variant names."""
+        return tuple(v.name for v in self.recipe.variants)
 
     def lowered(self) -> Image:
-        """The compiler's ``Image`` (every variant lowered), with the file's backend."""
+        """The compiler's image (every variant lowered), with the file's backend."""
         if self.image is None:
             from .declarative.lower import lower
 
-            assert self.recipe is not None
             self.image = lower(self.recipe)
             if self.backend is not None:
                 self.image.backend = self.backend
@@ -314,10 +290,6 @@ def load_file(
     )
     raw = getattr(module, BACKEND_NAME, None)
     backend = None if raw is None else _backend(raw, recipe_path)
-    if isinstance(found, Image):
-        if backend is not None and found.backend is None:
-            found.backend = backend
-        return RecipeFile(recipe_path, None, found, found.backend)
     return RecipeFile(recipe_path, found, None, backend)
 
 
@@ -327,26 +299,8 @@ def load_declarative(
     attr: str | None = None,
     extra_paths: Sequence[str | Path] = (),
 ) -> Recipe:
-    """Import a recipe file and return its ``Recipe``, discovered as in :func:`load_recipe`."""
-    recipe_path = Path(path).expanduser().resolve()
-    if not recipe_path.is_file():
-        raise ValidationError(
-            f"Recipe file not found: {recipe_path}",
-            context={"recipe": str(recipe_path)},
-        )
-    module = _import_recipe_module(recipe_path, extra_paths=extra_paths)
-    found = (
-        _resolve_attr(module, attr, recipe_path)
-        if attr is not None
-        else _discover(module, recipe_path)
-    )
-    if not isinstance(found, Recipe):
-        raise ValidationError(
-            "Recipe file defines an Image, not a declarative Recipe.",
-            hint="Bind a tundravm.Recipe to a module-level `recipe`.",
-            context={"recipe": str(recipe_path)},
-        )
-    return found
+    """Alias of :func:`load_recipe` kept for ``tundravm.declarative.load``."""
+    return load_recipe(path, attr=attr, extra_paths=extra_paths)
 
 
 __all__ = [
@@ -356,5 +310,6 @@ __all__ = [
     "RecipeFile",
     "load_declarative",
     "load_file",
+    "load_image",
     "load_recipe",
 ]

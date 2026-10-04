@@ -1,229 +1,261 @@
-# Module Authoring Guide
+# Writing fragments
 
-A module is a class that subclasses `tundravm.modules.Module` and calls the `Image` API to declare packages, files, services, build hooks, and init scripts. Construct it, then call `module.apply(img)` or `img.apply(module, ...)`. Every built-in (`KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools`, `AzurePlatform`, `GcpPlatform`) and the example modules in `examples/modules/` use the same base class.
-
-| Member | Kind | Default | Purpose |
-| --- | --- | --- | --- |
-| `name` | `ClassVar[str]` | kebab-case class name (`KeyGeneration` -> `key-generation`) | Stable identifier |
-| `requires` | `ClassVar[tuple[type[Module], ...]]` | `()` | Module classes that must already be applied to the same profile(s) |
-| `init_priority` | `ClassVar[int \| None]` | `None` | When set, `init_script()` is registered with `add_init_script(script, priority=...)` |
-| `setup(image)` | method | no-op | Build-time: build packages, build sources, build hooks |
-| `install(image)` | method | no-op | Runtime: packages, files, users, services |
-| `init_script(image)` | method | `None` | Bash fragment for `/usr/bin/runtime-init` |
-| `check(image, profile)` | method | no findings | Module-specific diagnostics, run by `img.check()` / `tundravm check` |
-| `apply(image)` | final method | | Runs the steps below; do not override |
-
-`apply(image)` does, for the active profiles:
-
-1. Verifies `requires` against `image.applied_modules(profile)` for every active profile. A missing dependency raises `ValidationError("Module X requires Y; apply Y first.")` with the hint `img.apply(Y(), X())`.
-2. Calls `setup(image)`, then `install(image)`.
-3. If `init_priority` is set and `init_script(image)` returns a non-empty string, registers it at that priority.
-4. Records the module on each active profile; `img.applied_modules(profile)` lists them in apply order.
-
-The base class has `__slots__ = ()` and only class variables, so `@dataclass(slots=True)` subclasses work as-is. `img.apply()` also accepts any object with an `apply(image)` method, but only `Module` subclasses are recorded, checked by `requires`, and linted.
-
-## Example
-
-`Agent` builds a service that reads a boot-generated key. It needs `KeyGeneration` in the same profile (`requires`), prepares its runtime directory after keys and disks are ready (`init_priority = 25`), and reports a key name that no `KeyGeneration` declares (`check`).
+A reusable piece of an image (a service, a monitoring stack, a hardened SSH setup) is a Python function that returns a `Fragment`. There is no base class and no registration: the function takes typed arguments, returns a value, and a recipe puts that value into `common` or into a variant's `add`.
 
 ```python
-from __future__ import annotations
+from tundravm import Fragment, Package
 
-from collections.abc import Iterator
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+def debugging() -> Fragment:
+    return Fragment("debugging", items=(Package("strace"), Package("gdb")))
+```
 
-from tundravm.check import Diagnostic
-from tundravm.modules import KeyGeneration, Module
-from tundravm.modules.resolve import resolve_after
+The shipped `tdxs()`, `devtools()`, `efi_stub()` and `backports()` (in `tundravm.modules`) are written this way, and so are `raiko()`, `taiko_client()` and `nethermind()` in [`examples/modules/`](../examples/modules/).
 
-if TYPE_CHECKING:
-    from tundravm.image import Image
+## Anatomy
 
-AGENT_UNIT = """\
+`Fragment(name, items=(), requires=(), checks=())`:
+
+- **`name`** identifies the fragment. Including the same fragment twice in a variant is fine (it expands once); two *different* fragments with the same name are a `fragment-conflict` error, so pick a name that is unique to what the function returns, or put the distinguishing argument in it.
+- **`items`** are declarations and nested fragments, in order. Unpack generators with `*(...)`.
+- **`requires`** names fragments that must also be in every variant that includes this one. It does not include them for you; a missing one is `fragment-requires-missing`.
+- **`checks`** are functions `Resolved -> tuple[Diagnostic, ...]` that run against each variant after resolution, during `lint` (and `resolve`, which raises on error-level results).
+
+Everything a fragment declares is ordinary: a recipe can `replace` or `remove` any of it in a variant, and identity collisions with other fragments are reported, not silently merged.
+
+## A complete example
+
+A Prometheus node exporter that keeps its textfile collector directory on the encrypted `/persistent` disk. It takes the storage fragment as an argument, so the caller decides which key and disk to use, and it checks that a disk is mounted where it writes.
+
+```python
+# exporter.py
+from tundravm import Diagnostic, Disk, Fragment, Init, Package, Resolved, Unit
+
+EXPORTER_UNIT = """\
 [Unit]
-Description=Agent
-After={after}
+Description=Prometheus node exporter
 
 [Service]
-User={user}
-ExecStart=/usr/bin/agent --config /etc/agent/config.toml
+ExecStart=/usr/bin/prometheus-node-exporter --collector.textfile.directory=/persistent/exporter
+User=prometheus
 Restart=on-failure
 
 [Install]
-WantedBy=default.target
+WantedBy=minimal.target
 """
 
 
-@dataclass(slots=True)
-class Agent(Module):
-    requires: ClassVar[tuple[type[Module], ...]] = (KeyGeneration,)
-    init_priority: ClassVar[int | None] = 25
+def exporter_check(image: Resolved) -> tuple[Diagnostic, ...]:
+    """The exporter writes to /persistent, so some disk must mount there."""
+    if any(isinstance(item, Disk) and item.mount == "/persistent" for item in image.items):
+        return ()
+    return (
+        Diagnostic(
+            "exporter-storage-missing",
+            "the exporter needs a disk mounted at /persistent",
+            subject="prometheus-node-exporter",
+        ),
+    )
 
-    user: str = "agent"
-    key_name: str = "agent"
-    key_path: str = "/persistent/agent.key"
-    after: tuple[str, ...] = ("network-online.target",)
 
-    def setup(self, image: Image) -> None:
-        image.build_install("build-essential", "git")
-
-    def install(self, image: Image) -> None:
-        image.install("ca-certificates")
-        image.file(
-            "/etc/agent/config.toml",
-            content=f'key_path = "{self.key_path}"\n',
-        )
-        image.file(
-            "/usr/lib/systemd/system/agent.service",
-            content=AGENT_UNIT.format(
-                user=self.user,
-                after=" ".join(resolve_after(self.after, image)),
+def prometheus_exporter(storage: Fragment) -> Fragment:
+    return Fragment(
+        "prometheus-exporter",
+        requires=(storage.name,),
+        checks=(exporter_check,),
+        items=(
+            storage,
+            Package("prometheus-node-exporter"),
+            Init(
+                "exporter-directory",
+                "install -d -m 0755 /persistent/exporter\n",
+                priority=25,
+                after=("disks",),
             ),
-        )
-        image.run(
-            f"mkosi-chroot useradd --system --shell /usr/sbin/nologin {self.user}",
-            phase="postinst",
-        )
-        image.service("agent", enabled=True)
-
-    def init_script(self, image: Image) -> str:
-        return f"install -d -m 0750 -o {self.user} /run/agent\n"
-
-    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
-        declared = {
-            spec.name
-            for module in image.applied_modules(profile)
-            if isinstance(module, KeyGeneration)
-            for spec in module.keys
-        }
-        if self.key_name not in declared:
-            yield Diagnostic(
-                level="error",
-                code="agent-key-undefined",
-                message=f"Agent reads key {self.key_name!r}, which is never generated",
-                hint=f"Add keys.key({self.key_name!r}, output={self.key_path!r}).",
-                profile=profile,
-                subject=self.key_name,
-            )
+            Init(
+                "exporter-ready",
+                "printf 'tundra_boot_ready 1\\n' > /persistent/exporter/boot.prom\n",
+                priority=40,
+                after=("exporter-directory", "secrets"),
+            ),
+            Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True),
+        ),
+    )
 ```
 
 ```python
-from tundravm import Image
-from tundravm.modules import KeyGeneration
+# monitored.py
+from exporter import prometheus_exporter
 
-img = Image()
-keys = KeyGeneration()
-keys.key("agent", strategy="tpm", output="/persistent/agent.key")
-img.apply(keys, Agent())       # Agent() alone raises: requires KeyGeneration
-errors = [d for d in img.check() if d.level == "error"]
-assert errors == []            # Agent(key_name="other") reports agent-key-undefined
-```
+from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant
 
-Notes on the example:
+key = Key("key_persistent")
+disk = Disk("disk_persistent", mount="/persistent", key=key)
+storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
-- `image.run(cmd, phase="postinst")` runs inside the build. Prefix with `mkosi-chroot` to execute inside the image root.
-- `image.service("agent", enabled=True)` with no `command=` only enables an existing unit file. Pass `command=` to have the SDK generate the unit instead.
-- `resolve_after(after, image)` prepends `runtime-init.service` when any init scripts are registered. Hand-written unit files need this; units generated by `image.service(command=...)` get `After=`/`Requires=runtime-init.service` injected automatically at `compile()`.
-- Build order matters: apply init modules (`KeyGeneration`, etc.) before modules that render their own unit with `resolve_after`, otherwise `image.has_init_scripts()` is still `False`. Init scripts are scoped to the profile that registers them; extending profiles inherit the default's. Declaring them in `requires` enforces that order.
-- Use `requires` only for dependencies that always hold. Conditional ones (a disk that names a key, a key path that must match) belong in `check()`, which sees every module applied to the profile regardless of order.
-
-### Compiling a binary at build time
-
-Use `image.hook("build", cmd)` for source builds. `tundravm.build_cache` provides stable paths and a build cache wrapper; see `examples/modules/raiko.py` for a full Rust pipeline.
-
-```python
-from tundravm.build_cache import Build, Cache
-
-clone_dir = Build.build_path("agent")          # host path under $BUILDDIR
-chroot_dir = Build.chroot_path("agent")        # same dir as seen from mkosi-chroot
-cache = Cache.declare(
-    "agent-v1",
-    (Cache.file(src=Build.build_path("agent/out/agent"),
-                dest=Build.dest_path("usr/bin/agent"), name="agent"),),
+recipe = Recipe(
+    name="monitored",
+    common=Fragment("monitored", items=(prometheus_exporter(storage),)),
+    variants=(Variant("default", target="qemu"),),
 )
-image.hook("build", cache.wrap(
-    f'git clone --depth=1 https://example.com/agent.git "{clone_dir}" && '
-    f"mkosi-chroot bash -c 'cd {chroot_dir} && make -o out/agent'"
-))
 ```
 
-## Init priorities
+The compiled `/usr/bin/runtime-init` runs the built-in steps and the fragment's steps by priority:
 
-`init_priority` orders boot scripts: at `compile()` the SDK sorts all fragments by priority (lower first), writes `/usr/bin/runtime-init` and `runtime-init.service`, and makes every other service wait on it.
+```bash
+#!/bin/bash
+set -euo pipefail
 
-| Priority | Module |
-| --- | --- |
-| 10 | `KeyGeneration` |
-| 20 | `DiskEncryption` |
-| 30 | `SecretDelivery` |
-| 100 | Default for a bare `img.add_init_script()` call |
+/usr/bin/key-gen setup /etc/tdx/key-gen.yaml
 
-Pick a priority relative to what your script depends on. Needs a key: `> 10`. Needs a mounted encrypted disk: `> 20`. Needs secrets: `> 30`. Two fragments with the same priority run in registration order and `img.check()` reports `init-priority-collision`.
+/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml
 
-Fragments run under `set -euo pipefail`; a failing fragment aborts `runtime-init` and every dependent service.
+install -d -m 0755 /persistent/exporter
 
-## Profile scoping
+/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml
 
-Every `Image` call writes to the active profile set. Outside any block that is the default profile. Inside `with img.profile("x"):` only profile `x` is touched, so a module applied there has no effect on other profiles.
+printf 'tundra_boot_ready 1\n' > /persistent/exporter/boot.prom
+```
+
+and the unit waits for it:
+
+```ini
+[Unit]
+Description=Prometheus node exporter
+After=runtime-init.service
+Requires=runtime-init.service
+...
+```
+
+Resolving the default variant shows what the fragment contributed:
 
 ```python
-from tundravm import Image
-from tundravm.modules import Devtools, KeyGeneration
-
-img = Image()
-keys = KeyGeneration()
-keys.key("key_persistent", strategy="tpm")
-keys.apply(img)                 # default profile, inherited by dev
-
-with img.profile("dev"):
-    Devtools().apply(img)       # dev profile only
+>>> resolve(recipe, variant="default").fragments
+('monitored', 'prometheus-exporter', 'secure-storage')
+>>> [type(item).__name__ for item in resolve(recipe, variant="default").items]
+['Key', 'Disk', 'Secrets', 'Package', 'Init', 'Init', 'Unit']
 ```
 
-A profile extends the default profile, so a module applied to the default reaches every extending profile: `dev` above gets key generation too. `requires` and `check()` see inherited modules, and `img.applied_modules("dev", inherited=True)` lists them first. A module applied inside a profile stays in that profile. A profile declared with `extends=None` inherits no declarations or modules; apply what it needs there.
+## Checks
 
-Init-script fragments are stored on `img.init`, which is shared by the whole image, so `/usr/bin/runtime-init` has the same content in every compiled profile, standalone ones included.
+A check receives the `Resolved` variant: `variant`, `target`, every declaration in `items` (after inheritance, `replace` and `remove`) and the included fragment names in `fragments`. It returns diagnostics; an empty tuple means fine.
 
-## Build phases
+- `Diagnostic(code, message, level="error", variant="", subject="")`. Leave `variant` empty: resolution fills in the variant the check ran for.
+- Use your own code prefix (`exporter-...`), so tests and `lint --format github` annotations identify the fragment.
+- Use `level="warning"` for advice. Error-level results make `resolve`, `compile` and `bake` refuse the recipe.
+- Checks must be pure: they run once per variant per lint, in any order.
 
-`image.hook(phase, cmd)` and `image.run(cmd, phase=...)` accept these phases, executed in this order:
+## Ordering
 
-| Phase | Where it runs | Typical use |
-| --- | --- | --- |
-| `sync` | host | fetch inputs, generate apt sources |
-| `skeleton` | host | files needed before the package manager |
-| `prepare` | host, `$BUILDROOT` populated | pre-build setup |
-| `build` | host, `mkosi-chroot` available | compile binaries into `$DESTDIR` |
-| `extra` | host | extra source trees |
-| `postinst` | host, use `mkosi-chroot` for in-image commands | users, `systemctl enable`, config fixes |
-| `finalize` | host, `$BUILDROOT` | path removal, os-release tweaks |
-| `postoutput` | host | metadata for the written disk image |
-| `clean` | host | `mkosi clean` hooks |
-| `repart` | host | partition layout hooks |
-| `boot` | guest, systemd oneshot | boot-time glue (`image.on_boot`) |
+**Runtime init.** `Init(name, script, priority=100, after=())` adds a step to `/usr/bin/runtime-init`. Steps run by ascending priority. The built-in steps are `keys` (10), `disks` (20) and `secrets` (30), present when the variant declares a `Key`, `Disk` or `Secrets`. `after` names steps that must run first, built-in or yours; it orders steps of equal priority and must agree with the priorities (`init-order` otherwise). Pick a priority between the built-in steps you depend on and those that depend on you: 25 is "after disks are mounted, before secrets arrive"; 40 is "after secrets".
 
-`hook(..., after_phase=...)` must name a phase earlier than `phase`.
+**Units.** `Unit(..., after_init=True)` makes a shipped unit start after `runtime-init.service` (`After=` and `Requires=`). Use it for anything that reads keys, disks or secrets.
 
-## Testing your module
+**Build hooks.** `Hook(name, phase, script, after=())` runs a script in an mkosi phase (`build`, `postinst`, `finalize`, ...). Hooks keep declaration order inside a phase; `after` names hooks of the same phase that must run first.
 
-`tundravm.testing` provides compile, lint, golden-tree, and CLI helpers, and its pytest plugin provides the `image`, `inprocess_image`, `compiled`, and `run_cli` fixtures automatically. No mkosi is needed. See [`testing.md`](testing.md) for the full reference. Using the `Agent` example above:
+## Building from source
+
+A `Build` fetches a source, runs a script in it during the mkosi build phase, and installs results into the image. The source is pinned by `tundravm lock`.
 
 ```python
-from tundravm import Image
-from tundravm.modules import KeyGeneration
-from tundravm.testing import FakeModule, assert_diagnostic, compile_tree
+from tundravm import Build, File, Fragment, Git, Install, Package, Unit, User
+
+STATUS_UNIT = """\
+[Unit]
+Description=Status page
+
+[Service]
+User=status
+ExecStart=/usr/bin/status-page --config /etc/status-page.toml
+Restart=on-failure
+
+[Install]
+WantedBy=minimal.target
+"""
 
 
-def test_agent(image: Image) -> None:  # `image` comes from the tundravm pytest plugin
-    keys = KeyGeneration()
-    keys.key("agent", strategy="tpm", output="/persistent/agent.key")
-    db = FakeModule("db", init_script="echo db-ready", init_priority=30)
-    image.apply(keys, Agent(key_name="other"), db)
-
-    assert_diagnostic(image, "agent-key-undefined", level="error", subject="other")
-    init = compile_tree(image).runtime_init()
-    assert init.index("/run/agent") < init.index("echo db-ready")  # 25 runs before 30
-    assert db.applied_to == ["default"]
+def status_page(*, source: Git, port: int = 9100) -> Fragment:
+    return Fragment(
+        "status-page",
+        items=(
+            Package("golang", role="build"),
+            Build(
+                "status-page",
+                source,
+                script="go build -trimpath -o ./out/status-page ./cmd/status-page",
+                install=(Install("out/status-page", "/usr/bin/status-page"),),
+                env=(("CGO_ENABLED", "0"),),
+            ),
+            File("/etc/status-page.toml", f"port = {port}\n"),
+            User("status", shell="/bin/false"),
+            Unit("status-page.service", STATUS_UNIT, enabled=True),
+        ),
+    )
 ```
 
-`FakeModule` stands in for the modules yours composes with. Use it to check `requires` ordering and init priorities. `image.state.profiles[name]` still exposes the raw declarations (`packages`, `files`, `services`, `phases`) when you need them. Pass `Image(reproducible=False)` to leave out the default `strip_image_version()` finalize hook, so `phases` holds only what the module added.
+- Take the source as an argument (`source: Git`) so a recipe can pin a fork or a tag; give it a sensible default if there is a canonical repository.
+- `script` runs inside the fetched source with `env` exported. Build-time packages are `Package(..., role="build")` or `Build(packages=...)`.
+- `Install(source, destination, mode=0o755)` copies one built file; `Install("out/", "/opt/app", mode=None, directory=True)` copies a directory.
+- The built output is cached in the build directory under `cache_key` (default `<name>-<url digest>-<ref>`), so rebuilding an unchanged source is a copy.
+- Until the recipe is locked, `lint` warns `source-unpinned` for each build.
+
+## Testing a fragment
+
+Build a small recipe around the fragment and assert on its diagnostics and its compiled output:
+
+```python
+from exporter import prometheus_exporter
+
+from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant, compile, lint
+from tundravm.testing import assert_clean, assert_diagnostic, compile_tree
+
+
+def recipe_with(storage: Fragment) -> Recipe:
+    return Recipe(
+        name="t",
+        common=Fragment("t", items=(prometheus_exporter(storage),)),
+        variants=(Variant("default", target="qemu"),),
+    )
+
+
+key = Key("key_persistent")
+disk = Disk("disk_persistent", mount="/persistent", key=key)
+STORAGE = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
+
+
+def test_exporter_is_clean():
+    assert_clean(lint(recipe_with(STORAGE)), allow=("source-unpinned",))
+
+
+def test_exporter_needs_persistent_storage():
+    elsewhere = Disk("disk_data", mount="/data", key=key)
+    storage = Fragment("secure-storage", items=(key, elsewhere, Secrets(store=elsewhere)))
+    assert_diagnostic(lint(recipe_with(storage)), "exporter-storage-missing", variant="default")
+
+
+def test_unit_waits_for_runtime_init():
+    tree = compile_tree(recipe_with(STORAGE))
+    unit = tree.unit("prometheus-node-exporter.service")
+    assert "After=runtime-init.service" in unit
+    assert "Requires=runtime-init.service" in unit
+    assert "boot.prom" in tree.runtime_init()
+
+
+def test_tree_digest_is_stable():
+    assert compile(recipe_with(STORAGE)).digest == compile(recipe_with(STORAGE)).digest
+```
+
+```console
+$ uv run pytest -q test_exporter.py
+....                                                                     [100%]
+4 passed in 0.03s
+```
+
+`allow=("source-unpinned",)` accepts the warning for the unlocked `tundra-tools` builds the key, disk and secrets need. To pin a fragment's whole output, compare it with a committed tree: `assert_tree(compile(recipe), "tests/golden/exporter")`, regenerated with `TUNDRAVM_UPDATE_GOLDEN=1`. See [testing](testing.md).
+
+## Guidelines
+
+- Return a new `Fragment` on every call; never keep module-level mutable state.
+- Take dependencies as arguments (the storage fragment, a source, a port) rather than importing another fragment function and calling it with hidden defaults.
+- Declare everything the fragment needs (packages, users, groups, files) so it works in a standalone variant, and use `requires` for what must come from elsewhere.
+- Use `Service` for an ordinary service (it renders the unit and waits for runtime-init by default) and `Unit(name, content)` when you need exact bytes; tundravm does not edit `Unit` text beyond `after_init`.
+- Keep hook and init names unique to the fragment (`exporter-...`): they are identities.

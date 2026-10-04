@@ -12,11 +12,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from tundravm._modules.base import Module
 from tundravm.check import Diagnostic, effective_output_targets
-from tundravm.modules.base import Module
 
 if TYPE_CHECKING:
-    from tundravm.image import Image
+    from tundravm._image import Image
 
 # ---------------------------------------------------------------------------
 # Azure provisioning completion script

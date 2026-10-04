@@ -56,7 +56,7 @@ def read_lockfile(path: str | Path) -> Lockfile:
     except FileNotFoundError as exc:
         raise LockfileError(
             "Lockfile does not exist.",
-            hint="Run img.lock() or `tundravm lock RECIPE` to create it.",
+            hint="Run `tundravm lock RECIPE` (or tundravm.lock(recipe)) to create it.",
             context={"path": str(lock_path)},
         ) from exc
     return parse_lockfile(raw)

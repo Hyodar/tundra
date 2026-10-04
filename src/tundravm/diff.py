@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, TextIO
 from .formats import annotation_path, md_cell, md_fence, md_table, resolve_format, workflow_command
 
 if TYPE_CHECKING:
-    from .image import Image
+    from ._image import Image
 
 ChangeStatus = Literal["added", "removed", "modified", "mode"]
 

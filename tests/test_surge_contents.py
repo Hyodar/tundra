@@ -8,7 +8,7 @@ from types import ModuleType
 
 import pytest
 
-from tundravm import Image
+from tundravm.compiler.emit_mkosi import DEFAULT_TDX_INIT_SCRIPT
 
 SURGE = Path(__file__).resolve().parent.parent / "examples" / "surge-tdx-prover"
 GOLDEN = SURGE / "mkosi" / "default"
@@ -111,4 +111,4 @@ def test_every_shipped_literal_file_is_covered() -> None:
 
 
 def test_skeleton_init_matches_the_compiler_default() -> None:
-    assert Image.DEFAULT_TDX_INIT == _const("TDX_INIT")
+    assert DEFAULT_TDX_INIT_SCRIPT == _const("TDX_INIT")

@@ -12,27 +12,44 @@ import pytest
 
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, ProbeRunner, doctor, main
 from tundravm.deploy.qemu import QemuDeployAdapter
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_file
 
 RECIPE = """
-from tundravm import Image
+from tundravm import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
+
+backend = InProcessBackend()
+recipe = Recipe(
+    "lifecycle",
+    Fragment("common", items=(Package("curl"),)),
+    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+)
+"""
+
+NIX_RECIPE = """
+from tundravm import Fragment, Package, Recipe
 from tundravm.backends import NixMkosiBackend
 
-img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.install("curl")
-img.targets("qemu")
-with img.profile("azure"):
-    img.targets("azure")
-
-nix = Image(build_dir=BUILD_DIR, backend=NixMkosiBackend())
+backend = NixMkosiBackend()
+recipe = Recipe("nix", Fragment("common", items=(Package("curl"),)))
 """
+
+BUILD = Path("build")
+"""Recipe files bake into ``build/`` under the working directory (the fixture's tmp_path)."""
 
 
 @pytest.fixture
-def recipe(tmp_path: Path) -> Path:
+def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.chdir(tmp_path)
     path = tmp_path / "recipe.py"
-    path.write_text(f"BUILD_DIR = {str(tmp_path / 'build')!r}\n" + RECIPE, encoding="utf-8")
+    path.write_text(RECIPE, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def nix_recipe(tmp_path: Path) -> Path:
+    path = tmp_path / "nix.py"
+    path.write_text(NIX_RECIPE, encoding="utf-8")
     return path
 
 
@@ -43,12 +60,13 @@ def run(*argv: str) -> tuple[int, str]:
 
 
 BOTH = ("--variant", "default", "--variant", "azure")
+DEFAULT = ("--variant", "default")
 
 
 def test_bake_prints_next_deploy_hint(recipe: Path, tmp_path: Path) -> None:
-    code, out = run("bake", str(recipe))
+    code, out = run("bake", str(recipe), *DEFAULT)
     assert code == EXIT_OK
-    manifest = tmp_path / "build" / "bake-result.json"
+    manifest = BUILD / "bake-result.json"
     assert out.splitlines()[-1] == (
         f"next: tundravm deploy {manifest} --variant default --target qemu"
     )
@@ -84,7 +102,7 @@ def test_measure_after_bake_in_separate_invocation(recipe: Path, tmp_path: Path)
 def test_measure_refuses_simulated_artifact_without_allow_placeholder(
     recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert run("bake", str(recipe))[0] == EXIT_OK
+    assert run("bake", str(recipe), *DEFAULT)[0] == EXIT_OK
     capsys.readouterr()
     code, _ = run("measure", str(tmp_path / "build"), "--scheme", "rtmr")
     assert code == EXIT_SDK_ERROR
@@ -113,7 +131,7 @@ def test_measure_needs_a_variant_when_several_are_baked(
 def test_deploy_qemu_after_bake_in_separate_invocation(
     recipe: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert run("bake", str(recipe))[0] == EXIT_OK
+    assert run("bake", str(recipe), *BOTH)[0] == EXIT_OK
     launched: list[list[str]] = []
 
     def fake_qemu(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -181,10 +199,9 @@ def _missing(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
     raise FileNotFoundError(argv[0])
 
 
-def test_doctor_with_recipe_ok(recipe: Path) -> None:
-    img = load_recipe(recipe, attr="nix")
+def test_doctor_with_recipe_ok(nix_recipe: Path) -> None:
     out = io.StringIO()
-    code = doctor(img, out, runner=_runner(0))
+    code = doctor(load_file(nix_recipe), out, runner=_runner(0))
     lines = out.getvalue().splitlines()
     assert code == EXIT_OK
     assert lines[0].startswith("tundravm ")
@@ -195,10 +212,9 @@ def test_doctor_with_recipe_ok(recipe: Path) -> None:
 
 
 @pytest.mark.parametrize("runner", [_runner(1), _missing])
-def test_doctor_with_recipe_missing_tool_exits_1(recipe: Path, runner: ProbeRunner) -> None:
-    img = load_recipe(recipe, attr="nix")
+def test_doctor_with_recipe_missing_tool_exits_1(nix_recipe: Path, runner: ProbeRunner) -> None:
     out = io.StringIO()
-    code = doctor(img, out, runner=runner)
+    code = doctor(load_file(nix_recipe), out, runner=runner)
     text = out.getvalue()
     assert code == EXIT_FAILURE
     assert "backend nix_mkosi: unavailable" in text
@@ -234,7 +250,7 @@ def test_doctor_without_recipe_probes_every_real_backend(
 
 def test_measure_reads_the_bake_out_dir_manifest(recipe: Path, tmp_path: Path) -> None:
     out_dir = tmp_path / "elsewhere"
-    code, _ = run("bake", str(recipe), "--out", str(out_dir))
+    code, _ = run("bake", str(recipe), "--out", str(out_dir), *DEFAULT)
     assert code == EXIT_OK
     assert (out_dir / "bake-result.json").exists()
 

@@ -1,31 +1,62 @@
+"""The ``tdxs()`` fragment: source build, config, socket-activated units and account."""
+
+from pathlib import Path
+from typing import Literal
+
 import pytest
 
-from tundravm import Image, ValidationError
-from tundravm.modules import GitSource, KeyGeneration, KeySpec, Tdxs
+from tundravm.declarative import (
+    Declaration,
+    Fragment,
+    Git,
+    Key,
+    Package,
+    Recipe,
+    Setting,
+    lint,
+    tdxs,
+)
+from tundravm.errors import ValidationError
+from tundravm.testing import CompiledTree, compile_tree
+
+TDXS_CONFIG = "mkosi.extra/etc/tdxs/config.yaml"
 
 
-def test_tdxs_configure_declares_build_packages() -> None:
-    image = Image()
-    module = Tdxs()
-
-    module.configure(image)
-
-    profile = image.state.profiles["default"]
-    assert "golang" in profile.build_packages
-    assert "git" in profile.build_packages
-    assert "build-essential" in profile.build_packages
+def _recipe(*items: Declaration | Fragment) -> Recipe:
+    return Recipe("tdxs", Fragment("attestation", items=items))
 
 
-def test_tdxs_configure_adds_build_hook() -> None:
-    image = Image()
-    module = Tdxs()
+def _compile(tmp_path: Path, *items: Declaration | Fragment) -> CompiledTree:
+    return compile_tree(_recipe(*items), path=tmp_path / "tree")
 
-    module.configure(image)
 
-    profile = image.state.profiles["default"]
-    build_commands = profile.phases.get("build", [])
-    assert len(build_commands) == 1
-    build_script = build_commands[0].argv[0]
+def _conf_list(conf: str, key: str) -> list[str]:
+    """The values of a multi-line ``key=`` list in an mkosi.conf."""
+    lines = conf.splitlines()
+    start = lines.index(f"{key}=") + 1 if f"{key}=" in lines else len(lines)
+    values: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("    "):
+            break
+        values.append(line.strip())
+    return values
+
+
+def test_tdxs_declares_build_packages(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, tdxs())
+
+    build_packages = _conf_list(tree.conf(), "BuildPackages")
+    assert "golang" in build_packages
+    assert "git" in build_packages
+    assert "build-essential" in build_packages
+
+
+def test_tdxs_adds_build_hook(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, tdxs())
+
+    builds = [line for line in tree.script("build").splitlines() if "git clone" in line]
+    assert len(builds) == 1
+    build_script = builds[0]
     assert "git clone" in build_script
     assert "Hyodar/tundra-tools" in build_script
     assert "mkosi-chroot bash -c" in build_script
@@ -38,39 +69,27 @@ def test_tdxs_configure_adds_build_hook() -> None:
     assert "sync-constellation" not in build_script
 
 
-def test_tdxs_custom_source() -> None:
-    image = Image()
-    module = Tdxs(source=GitSource("https://github.com/custom/tdxs-fork", "v2.0"))
+def test_tdxs_custom_source(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, tdxs(source=Git("https://github.com/custom/tdxs-fork", "v2.0")))
 
-    module.configure(image)
-
-    profile = image.state.profiles["default"]
-    build_script = profile.phases["build"][0].argv[0]
+    build_script = tree.script("build")
     assert "custom/tdxs-fork" in build_script
     assert "-b v2.0" in build_script
 
 
-def test_tdxs_generates_config_yaml_and_units() -> None:
-    image = Image()
-    module = Tdxs()
+def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, tdxs())
 
-    module.apply(image)
+    assert "golang" in _conf_list(tree.conf(), "BuildPackages")
 
-    profile = image.state.profiles["default"]
-    assert "golang" in profile.build_packages
-
-    config_files = [f for f in profile.files if f.path == "/etc/tdxs/config.yaml"]
-    assert len(config_files) == 1
-    config_content = config_files[0].content
+    config_content = tree.read(TDXS_CONFIG)
     assert "transport:" in config_content
     assert "type: socket" in config_content
     assert "systemd: true" in config_content
     assert "issuer:" in config_content
     assert "type: tdx" in config_content
 
-    svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.service"]
-    assert len(svc_files) == 1
-    svc_content = svc_files[0].content
+    svc_content = tree.unit("tdxs.service")
     assert "User=tdxs" in svc_content
     assert "Group=tdx" in svc_content
     assert "Type=notify" in svc_content
@@ -78,79 +97,66 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
     assert "--log-level info" in svc_content
     assert "Requires=tdxs.socket" in svc_content
 
-    sock_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.socket"]
-    assert len(sock_files) == 1
-    sock_content = sock_files[0].content
+    sock_content = tree.unit("tdxs.socket")
     assert "ListenStream=/var/tdxs.sock" in sock_content
     assert "SocketMode=0660" in sock_content
     assert "SocketUser=root" in sock_content
     assert "SocketGroup=tdx" in sock_content
 
-    postinst_commands = profile.phases.get("postinst", [])
-    assert len(postinst_commands) == 2
-    assert postinst_commands[0].argv[0] == "mkosi-chroot groupadd --system tdx"
-    assert "mkosi-chroot useradd --system" in postinst_commands[1].argv[0]
-    assert "tdxs" in postinst_commands[1].argv[0]
+    postinst = tree.script("postinst").splitlines()
+    assert "mkosi-chroot groupadd --system tdx" in postinst
+    (useradd,) = [line for line in postinst if "useradd" in line]
+    assert useradd.startswith("mkosi-chroot useradd --system")
+    assert useradd.endswith(" tdxs")
+    assert postinst.index("mkosi-chroot groupadd --system tdx") < postinst.index(useradd)
 
-    service_names = {s.name for s in profile.services}
-    assert "tdxs.service" in service_names
-    assert "tdxs.socket" in service_names
+    assert "mkosi-chroot systemctl enable tdxs.service" in postinst
+    assert "mkosi-chroot systemctl enable tdxs.socket" in postinst
 
 
-def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:
-    image = Image()
-    KeyGeneration(keys=(KeySpec("key_persistent", strategy="tpm"),)).apply(image)
-    Tdxs().apply(image)
+def test_tdxs_resolves_init_dependency_when_init_scripts_present(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Key("key_persistent"), tdxs(after_init=True))
 
-    profile = image.state.profiles["default"]
-    svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.service"]
-    svc_content = svc_files[0].content
+    svc_content = tree.unit("tdxs.service")
     assert "After=runtime-init.service" in svc_content
     assert "Requires=runtime-init.service tdxs.socket" in svc_content
 
-
-def test_tdxs_no_init_dependency_when_no_init_scripts() -> None:
-    image = Image()
-    Tdxs().apply(image)
-
-    profile = image.state.profiles["default"]
-    svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/tdxs.service"]
-    svc_content = svc_files[0].content
-    assert "runtime-init" not in svc_content
+    sock_content = tree.unit("tdxs.socket")
+    assert "After=runtime-init.service" in sock_content
+    assert "Requires=runtime-init.service" in sock_content
 
 
-def test_tdxs_compatibility_aliases_are_canonicalized() -> None:
-    image = Image()
-    module = Tdxs(issuer_type="azure-tdx", validator_type="gcp-tdx")
+def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
+    recipe = _recipe(tdxs(after_init=True))
+    tree = compile_tree(recipe, path=tmp_path / "tree")
 
-    module.apply(image)
+    assert "runtime-init" not in tree.unit("tdxs.service")
+    assert "runtime-init" not in tree.unit("tdxs.socket")
+    codes = {d.code for d in lint(recipe)}
+    assert "unit-after-init-without-init" in codes
 
-    profile = image.state.profiles["default"]
-    config_files = [f for f in profile.files if f.path == "/etc/tdxs/config.yaml"]
-    content = config_files[0].content
+
+def test_tdxs_renders_issuer_and_validator_types(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, tdxs(issuer="azure", validator="gcp"))
+
+    content = tree.read(TDXS_CONFIG)
     assert "issuer:" in content
     assert "type: azure" in content
     assert "validator:" in content
     assert "type: gcp" in content
 
 
-def test_tdxs_validator_config_supports_expected_measurements() -> None:
-    image = Image()
-    module = Tdxs(
-        issuer_type=None,
-        validator_type="tdx",
-        expected_measurements={
-            "mrtd": "abc123",
-            "rtmr0": "def456",
-        },
+def test_tdxs_validator_config_supports_expected_measurements(tmp_path: Path) -> None:
+    fragment = tdxs(
+        issuer=None,
+        validator="tdx",
+        expected_measurements=(("mrtd", "abc123"), ("rtmr0", "def456")),
         check_revocations=True,
         get_collateral=True,
     )
+    tree = _compile(tmp_path, fragment)
 
-    module.apply(image)
-
-    profile = image.state.profiles["default"]
-    config = next(f.content for f in profile.files if f.path == "/etc/tdxs/config.yaml")
+    config = tree.read(TDXS_CONFIG)
     assert "issuer:" not in config
     assert "validator:" in config
     assert "type: tdx" in config
@@ -161,62 +167,41 @@ def test_tdxs_validator_config_supports_expected_measurements() -> None:
     assert "get_collateral: true" in config
 
 
-def test_tdxs_custom_socket_and_service_names() -> None:
-    image = Image()
-    module = Tdxs(
-        socket_path="/run/tdx/quote.sock",
-        socket_mode="0600",
-        socket_user="tdxs",
-        service_name="quote-issuer.service",
-        socket_name="quote-issuer.socket",
-        log_level="debug",
-    )
+@pytest.mark.parametrize(
+    ("validator", "flag"),
+    [("azure", "verify_imds: true"), ("gcp", "verify_identity_token: true")],
+)
+def test_tdxs_platform_validator_verification_flags(
+    tmp_path: Path, validator: Literal["azure", "gcp"], flag: str
+) -> None:
+    fragment = tdxs(validator=validator, verify_imds=True, verify_identity_token=True)
+    config = _compile(tmp_path, fragment).read(TDXS_CONFIG)
 
-    module.apply(image)
-
-    profile = image.state.profiles["default"]
-    sock_files = [
-        f for f in profile.files if f.path == "/usr/lib/systemd/system/quote-issuer.socket"
-    ]
-    assert len(sock_files) == 1
-    assert "ListenStream=/run/tdx/quote.sock" in sock_files[0].content
-    assert "SocketMode=0600" in sock_files[0].content
-    assert "SocketUser=tdxs" in sock_files[0].content
-
-    svc_files = [
-        f for f in profile.files if f.path == "/usr/lib/systemd/system/quote-issuer.service"
-    ]
-    assert len(svc_files) == 1
-    assert "Requires=quote-issuer.socket" in svc_files[0].content
-    assert "--log-level debug" in svc_files[0].content
-
-    service_names = {s.name for s in profile.services}
-    assert "quote-issuer.service" in service_names
-    assert "quote-issuer.socket" in service_names
+    assert flag in config
+    other = {"verify_imds: true", "verify_identity_token: true"} - {flag}
+    assert not any(line in config for line in other)
 
 
 def test_tdxs_rejects_invalid_issuer_type() -> None:
     with pytest.raises(ValidationError, match="Unsupported tdxs type"):
-        Tdxs(issuer_type="invalid").apply(Image())  # type: ignore[arg-type]
+        tdxs(issuer="invalid")  # type: ignore[arg-type]
 
 
 def test_tdxs_rejects_no_roles() -> None:
     with pytest.raises(ValidationError, match="at least one of issuer_type or validator_type"):
-        Tdxs(issuer_type=None, validator_type=None).apply(Image())
+        tdxs(issuer=None, validator=None)
 
 
-def test_image_build_packages_adds_build_packages() -> None:
-    image = Image()
-    image.build_packages("golang", "git")
+def test_build_packages_lower_to_build_packages(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Package("golang", role="build"), Package("git", role="build"))
 
-    profile = image.state.profiles["default"]
-    assert "golang" in profile.build_packages
-    assert "git" in profile.build_packages
+    build_packages = _conf_list(tree.conf(), "BuildPackages")
+    assert "golang" in build_packages
+    assert "git" in build_packages
+    assert "golang" not in _conf_list(tree.conf(), "Packages")
 
 
-def test_image_mount_build_source_adds_build_sources() -> None:
-    image = Image()
-    image.mount_build_source("../services/tdxs", dest="tdxs")
+def test_build_sources_setting_mounts_build_source(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Setting("Build", "BuildSources", ("../services/tdxs:tdxs",)))
 
-    profile = image.state.profiles["default"]
-    assert ("../services/tdxs", "tdxs") in profile.build_sources
+    assert "BuildSources=../services/tdxs:tdxs" in tree.conf().splitlines()

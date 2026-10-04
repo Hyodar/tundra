@@ -4,18 +4,33 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tundravm import Image
+from tundravm.declarative import (
+    Declaration,
+    File,
+    Fragment,
+    Package,
+    Recipe,
+    Variant,
+    lower,
+)
+
+VARIANTS = ("default", "dev")
+
+
+def _recipe(*items: Declaration) -> Recipe:
+    return Recipe(
+        "reset",
+        Fragment("common", items=(Package("curl"), *items)),
+        variants=(
+            Variant("default", target="qemu"),
+            Variant("dev", add=Fragment("dev", items=(Package("vim"),))),
+        ),
+    )
 
 
 def test_recompile_removes_stale_profile_files(tmp_path: Path) -> None:
-    img = Image()
-    img.install("curl")
-    img.file("/etc/old.conf", content="old\n")
-    with img.profile("dev"):
-        img.install("vim")
     dest = tmp_path / "mkosi"
-    with img.all_profiles():
-        img.compile(dest)
+    lower(_recipe(File("/etc/old.conf", "old\n"))).compile(dest, profiles=VARIANTS)
     old_path = dest / "default" / "mkosi.extra" / "etc" / "old.conf"
     assert old_path.exists()
     stray = dest / "default" / "stray.txt"
@@ -23,12 +38,7 @@ def test_recompile_removes_stale_profile_files(tmp_path: Path) -> None:
     root_note = dest / "NOTES.md"
     root_note.write_text("kept\n", encoding="utf-8")
 
-    fresh = Image()
-    fresh.install("curl")
-    with fresh.profile("dev"):
-        fresh.install("vim")
-    with fresh.all_profiles():
-        fresh.compile(dest)
+    lower(_recipe()).compile(dest, profiles=VARIANTS)
 
     assert not old_path.exists()
     assert not stray.exists()
@@ -37,17 +47,13 @@ def test_recompile_removes_stale_profile_files(tmp_path: Path) -> None:
 
 
 def test_compile_of_one_profile_leaves_other_profiles_alone(tmp_path: Path) -> None:
-    img = Image()
-    img.install("curl")
-    with img.profile("dev"):
-        img.install("vim")
+    image = lower(_recipe())
     dest = tmp_path / "mkosi"
-    with img.all_profiles():
-        img.compile(dest)
+    image.compile(dest, profiles=VARIANTS)
     marker = dest / "dev" / "marker"
     marker.write_text("x", encoding="utf-8")
 
-    img.compile(dest, force=True)
+    image.compile(dest, force=True, profiles=("default",))
 
     assert marker.exists()
     assert (dest / "default" / "mkosi.conf").exists()

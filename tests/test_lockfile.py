@@ -1,17 +1,41 @@
+import io
 from pathlib import Path
 
 import pytest
 
-from tundravm import Image
-from tundravm.backends import InProcessBackend
+from tundravm.cli import EXIT_SDK_ERROR, main
+from tundravm.declarative import (
+    Backend,
+    Fragment,
+    Package,
+    Recipe,
+    Variant,
+    bake,
+    lock,
+)
 from tundravm.errors import LockfileError
 from tundravm.lockfile import (
     LockedFetch,
     build_lockfile,
     parse_lockfile,
-    read_lockfile,
     serialize_lockfile,
 )
+
+RECIPE_FILE = """
+from tundravm.backends.inprocess import InProcessBackend
+from tundravm.declarative import Fragment, Package, Recipe
+
+recipe = Recipe("lockfile", Fragment("lockfile", items=(Package("curl"),)))
+backend = InProcessBackend()
+"""
+
+
+def _recipe(*packages: str) -> Recipe:
+    return Recipe(
+        "lockfile",
+        Fragment("lockfile", items=tuple(Package(name) for name in packages)),
+        base="debian/bookworm",
+    )
 
 
 def test_lockfile_roundtrip_parser_serializer() -> None:
@@ -28,47 +52,56 @@ def test_lockfile_roundtrip_parser_serializer() -> None:
     assert decoded == lock
 
 
-def test_image_lock_writes_dependency_and_recipe_metadata(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.install("curl")
-    with image.profile("dev"):
-        image.install("jq")
+def test_lock_records_dependency_and_recipe_metadata() -> None:
+    recipe = Recipe(
+        "lockfile",
+        Fragment("lockfile", items=(Package("curl"),)),
+        base="debian/bookworm",
+        variants=(
+            Variant("default", target="qemu"),
+            Variant("dev", add=Fragment("dev", items=(Package("jq"),))),
+        ),
+    )
 
-    with image.all_profiles():
-        lock_path = image.lock()
+    lockfile = lock(recipe).lockfile
 
-    lock = read_lockfile(lock_path)
-    assert lock.version == 2
-    assert lock.recipe["base"] == "debian/bookworm"
-    assert lock.dependencies["default"] == ["curl"]
-    assert lock.dependencies["dev"] == ["curl", "jq"]
-    assert lock.recipe_digest
+    assert lockfile.version == 2
+    assert lockfile.recipe["base"] == "debian/bookworm"
+    assert lockfile.dependencies["default"] == ["curl"]
+    assert lockfile.dependencies["dev"] == ["curl", "jq"]
+    assert lockfile.recipe_digest
 
 
-def test_bake_frozen_fails_when_lock_missing(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    with pytest.raises(LockfileError):
-        image.bake(frozen=True)
+def test_bake_frozen_fails_when_lock_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    recipe = tmp_path / "recipe.py"
+    recipe.write_text(RECIPE_FILE, encoding="utf-8")
+    missing = tmp_path / "missing.lock"
+
+    code = main(
+        ["bake", str(recipe), "--lockfile", str(missing), "--out", str(tmp_path / "out")],
+        stdout=io.StringIO(),
+    )
+
+    assert code == EXIT_SDK_ERROR
+    assert "error [E_LOCKFILE]" in capsys.readouterr().err
+    assert not (tmp_path / "out" / "bake-result.json").exists()
 
 
 def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.install("curl")
-    image.lock()
-    image.install("jq")
+    locked = lock(_recipe("curl"))
 
     with pytest.raises(LockfileError) as excinfo:
-        image.bake(frozen=True)
+        bake(_recipe("curl", "jq"), locked=locked, backend=Backend("inprocess"), out=tmp_path)
 
     assert "stale" in str(excinfo.value).lower()
 
 
 def test_bake_frozen_succeeds_with_current_lock(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.install("curl")
-    image.lock()
+    recipe = _recipe("curl")
 
-    result = image.bake(frozen=True)
-    artifact = result.artifact_for(profile="default", target="qemu")
+    artifacts = bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path)
 
-    assert artifact is not None
+    assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
+    assert artifacts[0].path.is_file()

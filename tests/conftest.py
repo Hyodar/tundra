@@ -22,7 +22,7 @@ def inprocess_backend() -> InProcessBackend:
 @pytest.fixture(autouse=True)
 def _no_network_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail fast if a test resolves source pins over the network by accident."""
-    import tundravm.source as source_module
+    import tundravm._source as source_module
 
     def _refuse(source: object) -> str:
         raise AssertionError(

@@ -5,45 +5,63 @@ from __future__ import annotations
 import io
 import json
 import warnings
+from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
-from tundravm import Image
-from tundravm.cli import EXIT_OK, main
-from tundravm.errors import LockfileError, PolicyError
-from tundravm.lockfile import (
-    LockedFetch,
-    build_lockfile,
-    parse_lockfile,
-    read_lockfile,
-    serialize_lockfile,
-    write_lockfile,
-)
-from tundravm.modules import (
-    DiskEncryption,
-    DiskSpec,
-    KeyGeneration,
-    KeySpec,
-    SecretDelivery,
-    Tdxs,
-)
-from tundravm.policy import Policy
-from tundravm.source import (
-    CargoBuild,
+from tundravm._source import (
     GitSource,
-    GoBuild,
-    HttpSource,
-    Install,
+    ScriptBuild,
     Source,
     SourceBuild,
+    source_drift,
 )
+from tundravm._source import Install as SourceInstall
+from tundravm.cli import EXIT_OK, main
+from tundravm.declarative import (
+    Backend,
+    Build,
+    Declaration,
+    Diagnostic,
+    Disk,
+    Fragment,
+    Git,
+    Http,
+    Install,
+    Key,
+    Lock,
+    Mkosi,
+    Package,
+    Pin,
+    Policy,
+    Recipe,
+    Secrets,
+    Tree,
+    Variant,
+    bake,
+    compile,
+    lint,
+    lock,
+    lock_status,
+    lower,
+    tdxs,
+    write_lock,
+)
+from tundravm.errors import LockfileError, PolicyError, ValidationError
+from tundravm.lockfile import LockedFetch, build_lockfile, parse_lockfile, serialize_lockfile
+from tundravm.policy import MutableRefPolicy
+from tundravm.recipe import load_recipe
 
 REPO = "https://example.com/acme/tool.git"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 QEMU_BASIC = Path(__file__).resolve().parent.parent / "examples" / "qemu_basic.py"
 QEMU_BASIC_DIGEST = "571668210b9086615b19fde56a4b86cf0aa65f2ec480b2497a42641739d15c8e"
+GO_SCRIPT = (
+    'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
+)
 
 # The hook Tdxs wrote by hand before source builds existed (default repo and branch).
 TDXS_LEGACY_HOOK = (
@@ -56,6 +74,31 @@ TDXS_LEGACY_HOOK = (
     '"$BUILDROOT/build/tdxs/build/tdxs" "$BUILDDIR/tdxs-2bddc6a617e7-master"/tdxs; fi && '
     'install -D -m 0755 "$BUILDDIR/tdxs-2bddc6a617e7-master"/tdxs "$DESTDIR/usr/bin/tdxs"'
 )
+
+RECIPE_FILE = """
+from tundravm.declarative import Build, Fragment, Git, Install, Recipe
+
+recipe = Recipe(
+    "tool",
+    Fragment(
+        "tool",
+        items=(
+            Build(
+                "tool",
+                Git({repo!r}, "main"),
+                script="make",
+                install=(Install("tool", "/usr/bin/tool"),),
+            ),
+        ),
+    ),
+)
+"""
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lowered recipes read ``./build/tundravm.lock``; keep the repository's out of reach."""
+    monkeypatch.chdir(tmp_path)
 
 
 def _legacy_go_hook(name: str, binary: str) -> str:
@@ -72,58 +115,82 @@ def _legacy_go_hook(name: str, binary: str) -> str:
     )
 
 
-def _spec(ref: str = "main", **kwargs: object) -> SourceBuild:
-    return SourceBuild(
-        name="tool",
-        source=GitSource(REPO, ref),
-        build=GoBuild(package="./cmd/tool", output="tool"),
-        install=(Install.artifact("/usr/bin/tool"),),
-        **kwargs,  # type: ignore[arg-type]
+def _build(ref: str = "main") -> Build:
+    return Build(
+        "tool",
+        Git(REPO, ref),
+        script=GO_SCRIPT,
+        install=(Install("build/tool", "/usr/bin/tool"),),
+        packages=("golang",),
     )
 
 
-def _image(tmp_path: Path, spec: SourceBuild | None = None, **kwargs: object) -> Image:
-    img = Image(build_dir=tmp_path / "build", **kwargs)  # type: ignore[arg-type]
-    img.build_from(spec or _spec())
-    return img
+def _spec() -> SourceBuild:
+    """What ``_build()`` lowers to."""
+    return SourceBuild(
+        name="tool",
+        source=GitSource(REPO, "main"),
+        build=ScriptBuild(script=GO_SCRIPT, output="build/tool", packages=("golang",)),
+        install=(SourceInstall("file", "/usr/bin/tool", "build/tool", "0755"),),
+    )
 
 
-def _fixed(digest: str):  # type: ignore[no-untyped-def]
-    calls: list[Source] = []
+def _recipe(
+    *items: Declaration | Fragment,
+    policy: Policy | None = None,
+    variants: tuple[Variant, ...] = (Variant("default", target="qemu"),),
+    dialect: Literal["current", "nethermind-v1"] = "current",
+) -> Recipe:
+    return Recipe(
+        "tool",
+        Fragment("tool", items=items),
+        variants=variants,
+        mkosi=Mkosi(dialect=dialect),
+        policy=policy,
+    )
 
-    def resolve(source: Source) -> str:
-        calls.append(source)
-        return digest
 
-    resolve.calls = calls  # type: ignore[attr-defined]
-    return resolve
+class _Fixed:
+    """A resolver that pins every source to *digest* and records what it resolved."""
+
+    def __init__(self, digest: str) -> None:
+        self.digest = digest
+        self.calls: list[Source] = []
+
+    def __call__(self, source: Source) -> str:
+        self.calls.append(source)
+        return self.digest
 
 
-def _build_hooks(img: Image, out: Path) -> str:
-    img.compile(out)
-    return (out / "default" / "scripts" / "04-build.sh").read_text()
+def _read(tree: Tree, path: str) -> str:
+    content = next(entry.content for entry in tree.entries if entry.path == path)
+    assert content is not None
+    return content.decode()
+
+
+def _hooks(tree: Tree, variant: str = "default") -> str:
+    """The build hooks of *variant*'s ``04-build.sh``, after its shebang header."""
+    return _read(tree, f"{variant}/scripts/04-build.sh").split("\n\n", 1)[1].rstrip("\n")
 
 
 # ── Declaration and payload ─────────────────────────────────────────
 
 
-def test_source_build_records_spec_packages_and_hook(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    profile = img.state.profiles["default"]
-    assert profile.source_builds == {"tool": _spec()}
-    assert {"git", "golang"} <= profile.build_packages
-    hooks = [h.command.argv[0] for h in profile.hooks if h.phase == "build"]
-    assert hooks == [_spec().render()]
-    assert hooks[0].startswith("# unpinned: main\n")
+def test_build_lowers_to_source_build_packages_and_hook() -> None:
+    recipe = _recipe(_build())
+    assert lower(recipe).source_builds() == {"tool": _spec()}
+    tree = compile(recipe)
+    assert "BuildPackages=\n    git\n    golang\n" in _read(tree, "default/mkosi.conf")
+    hooks = _hooks(tree)
+    assert hooks == _spec().render()
+    assert hooks.startswith("# unpinned: main\n")
 
 
-def test_payload_has_source_builds_only_when_declared(tmp_path: Path) -> None:
-    bare = Image(build_dir=tmp_path / "build")
-    payload = bare._recipe_payload(profile_names=("default",))
-    assert "source_builds" not in payload["profiles"]["default"]  # type: ignore[index]
-    img = _image(tmp_path)
-    profiles = img._recipe_payload(profile_names=("default",))["profiles"]
-    entry = profiles["default"]["source_builds"]["tool"]  # type: ignore[index]
+def test_payload_has_source_builds_only_when_declared() -> None:
+    bare = lock(_recipe(Package("curl"))).lockfile.recipe
+    assert "source_builds" not in bare["profiles"]["default"]
+    payload = lock(_recipe(_build()), resolver=_Fixed(SHA_A)).lockfile.recipe
+    entry = payload["profiles"]["default"]["source_builds"]["tool"]
     assert entry["source"] == {
         "kind": "git",
         "url": REPO,
@@ -131,7 +198,7 @@ def test_payload_has_source_builds_only_when_declared(tmp_path: Path) -> None:
         "subdir": None,
         "submodules": False,
     }
-    assert entry["build"]["kind"] == "go"
+    assert entry["build"]["kind"] == "script"
 
 
 def test_existing_digest_is_unchanged() -> None:
@@ -140,27 +207,30 @@ def test_existing_digest_is_unchanged() -> None:
     assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST
 
 
-def test_duplicate_source_build_name_is_rejected(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    with pytest.raises(Exception, match="already declared"):
-        img.build_from(_spec("dev"))
+def test_duplicate_source_build_name_is_rejected() -> None:
+    recipe = _recipe(_build(), _build("dev"))
+    found = lint(recipe)
+    assert [(d.code, d.subject) for d in found] == [("identity-collision", "Build(tool)")]
+    with pytest.raises(ValidationError, match="identity-collision"):
+        lower(recipe)
 
 
-def test_profile_inherits_default_source_builds(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    img.profile("azure")
-    assert "tool" in img.source_builds(profile="azure")
+def test_variant_inherits_common_source_builds() -> None:
+    variants = (Variant("default", target="qemu"), Variant("azure", target="azure"))
+    recipe = _recipe(_build(), variants=variants)
+    assert "tool" in lower(recipe).source_builds(profile="azure")
+    assert _hooks(compile(recipe), "azure") == _spec().render()
 
 
 # ── Rendering ───────────────────────────────────────────────────────
 
 
 def test_unpinned_and_pinned_rendering() -> None:
-    spec = _spec()
-    unpinned = spec.render()
+    recipe = _recipe(_build())
+    unpinned = _hooks(compile(recipe))
     assert f"git clone --depth=1 -b main {REPO}" in unpinned
     assert "tool-" in unpinned and "-main" in unpinned
-    pinned = spec.render(SHA_A)
+    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
     assert "unpinned" not in pinned
     assert "git clone" not in pinned
     assert f"fetch -q --depth=1 {REPO} {SHA_A}" in pinned
@@ -169,187 +239,169 @@ def test_unpinned_and_pinned_rendering() -> None:
 
 
 def test_commit_ref_is_pinned_inline() -> None:
-    spec = _spec(SHA_B)
-    assert not spec.mutable
-    assert spec.render() == spec.render(SHA_A)
-    assert SHA_B in spec.render()
+    recipe = _recipe(_build(SHA_B))
+    assert not lower(recipe).source_builds()["tool"].mutable
+    elsewhere = lock(_recipe(_build()), resolver=_Fixed(SHA_A))  # pins tool@main
+    tree = compile(recipe)
+    assert compile(recipe, lock=elsewhere).digest == tree.digest
+    assert SHA_B in _hooks(tree)
+    assert "unpinned" not in _hooks(tree)
 
 
-def test_subdir_submodules_and_quoting() -> None:
-    spec = SourceBuild(
-        name="tool",
-        source=GitSource(REPO, "main", subdir="pkg/tool", submodules=True),
-        build=GoBuild(output="tool", env={"CGO_CFLAGS": "-O -D__X__", "GO111MODULE": "on"}),
-        install=(Install.artifact("/usr/local/bin/tool"),),
-        mark_unpinned=False,
+def test_subdir_submodules_env_and_quoting() -> None:
+    build = Build(
+        "tool",
+        Git(REPO, "main", subdir="pkg/tool", submodules=True),
+        script="mkdir -p ./build && go build -o ./build/tool './cmd/tool'",
+        install=(Install("build/tool", "/usr/local/bin/tool"),),
+        env=(("CGO_CFLAGS", "-O -D__X__"), ("GO111MODULE", "on")),
     )
-    hook = spec.render()
+    recipe = _recipe(build)
+    hook = _hooks(compile(recipe))
     assert "--recurse-submodules --shallow-submodules" in hook
-    assert 'cd /build/tool/pkg/tool && mkdir -p ./build && CGO_CFLAGS="-O -D__X__" ' in hook
+    assert (
+        '\'export CGO_CFLAGS="-O -D__X__" GO111MODULE=on && cd /build/tool/pkg/tool && '
+        "mkdir -p ./build && go build -o ./build/tool '\\''./cmd/tool'\\'''"
+    ) in hook
     assert '"$BUILDROOT/build/tool/pkg/tool/build/tool"' in hook
-    assert "submodule update" in spec.render(SHA_A)
+    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
+    assert "submodule update" in pinned
 
 
-def test_cargo_and_http_rendering() -> None:
-    spec = SourceBuild(
-        name="prover",
-        source=HttpSource("https://example.com/prover-1.0.tar.gz"),
-        build=CargoBuild(output="prover", bin="prover", features=("a", "b")),
-        install=(Install.artifact("/usr/bin/prover"),),
+def test_http_source_rendering() -> None:
+    url = "https://example.com/prover-1.0.tar.gz"
+    build = Build(
+        "prover",
+        Http(url),
+        script="cargo build --release --frozen --features a,b --bin prover",
+        install=(Install("target/release/prover", "/usr/bin/prover"),),
+        packages=("cargo",),
     )
-    assert spec.packages == ("curl", "cargo")
-    hook = spec.render()
-    assert hook.startswith("# unpinned: https://example.com/prover-1.0.tar.gz\n")
+    recipe = _recipe(build)
+    assert lower(recipe).source_builds()["prover"].packages == ("curl", "cargo")
+    hook = _hooks(compile(recipe))
+    assert hook.startswith(f"# unpinned: {url}\n")
     assert "cargo build --release --frozen --features a,b --bin prover" in hook
     assert "sha256sum" not in hook
-    pinned = spec.render("c" * 64)
+    pinned = _hooks(compile(_recipe(replace(build, source=Http(url, sha256="c" * 64)))))
     assert f'echo "{"c" * 64}  "' in pinned
     assert "--strip-components=1" in pinned
 
 
-def test_tdxs_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -> None:
-    img = Image(build_dir=tmp_path / "build")
-    Tdxs().apply(img)
-    hooks = [h.command.argv[0] for h in img.state.profiles["default"].hooks if h.phase == "build"]
-    assert TDXS_LEGACY_HOOK in hooks
-    assert Tdxs().source_spec().render() == TDXS_LEGACY_HOOK
+def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
+    historical = _recipe(tdxs(), dialect="nethermind-v1")
+    assert TDXS_LEGACY_HOOK in _hooks(compile(historical)).splitlines()
+    assert lower(historical).source_builds()["tdxs"].render() == TDXS_LEGACY_HOOK
+    current = _hooks(compile(_recipe(tdxs())))
+    assert current.startswith("# unpinned: master\n" + TDXS_LEGACY_HOOK)
 
 
-def _init_modules() -> tuple[KeyGeneration, DiskEncryption, SecretDelivery]:
-    key = KeySpec("key_persistent", strategy="tpm", output="/tmp/key_persistent")
-    disk = DiskSpec("disk_persistent", device=None, key=key, mount_at="/persistent")
-    return (
-        KeyGeneration(keys=(key,)),
-        DiskEncryption(disks=(disk,)),
-        SecretDelivery(method="http_post", store_at=disk),
-    )
+def _runtime_recipe() -> Recipe:
+    key = Key("key_persistent", output="/tmp/key_persistent")
+    disk = Disk("disk_persistent", "/persistent", key=key)
+    return _recipe(key, disk, Secrets(store=disk))
 
 
-def _init_scripts(img: Image, prefix: str) -> list[str]:
-    return [e.script for e in img.init_scripts() if e.script.startswith(prefix)]
+def _assert_runtime_tool_hook(name: str, binary: str) -> None:
+    legacy = _legacy_go_hook(name, binary)
+    recipe = _runtime_recipe()
+    tree = compile(recipe)
+    assert legacy in _hooks(tree).splitlines()
+    assert lower(recipe).source_builds()[name].render() == legacy
+    runtime_init = _read(tree, "default/mkosi.extra/usr/bin/runtime-init")
+    assert runtime_init.count(f"/usr/bin/{binary} setup ") == 1
+    assert not [d for d in lint(recipe) if d.level == "error"]
 
 
-def _build_phase_hooks(img: Image) -> list[str]:
-    return [h.command.argv[0] for h in img.state.profiles["default"].hooks if h.phase == "build"]
+def test_key_generation_hook_is_byte_identical_to_legacy_bash() -> None:
+    _assert_runtime_tool_hook("key-generation", "key-gen")
 
 
-def test_key_generation_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -> None:
-    legacy = _legacy_go_hook("key-generation", "key-gen")
-    keys, disks, delivery = _init_modules()
-    img = Image(build_dir=tmp_path / "build")
-    img.apply(keys, disks, delivery)
-    assert legacy in _build_phase_hooks(img)
-    assert keys.source_spec().render() == legacy
-    assert len(_init_scripts(img, "/usr/bin/key-gen setup ")) == 1
-    assert not [d for d in keys.check(img, "default") if d.level == "error"]
+def test_disk_encryption_hook_is_byte_identical_to_legacy_bash() -> None:
+    _assert_runtime_tool_hook("disk-encryption", "disk-setup")
 
 
-def test_disk_encryption_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -> None:
-    legacy = _legacy_go_hook("disk-encryption", "disk-setup")
-    keys, disks, delivery = _init_modules()
-    img = Image(build_dir=tmp_path / "build")
-    img.apply(keys, disks, delivery)
-    assert legacy in _build_phase_hooks(img)
-    assert disks.source_spec().render() == legacy
-    assert len(_init_scripts(img, "/usr/bin/disk-setup setup ")) == 1
-    assert not [d for d in disks.check(img, "default") if d.level == "error"]
-
-
-def test_secret_delivery_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -> None:
-    legacy = _legacy_go_hook("secret-delivery", "secret-delivery")
-    keys, disks, delivery = _init_modules()
-    img = Image(build_dir=tmp_path / "build")
-    img.apply(keys, disks, delivery)
-    assert legacy in _build_phase_hooks(img)
-    assert delivery.source_spec().render() == legacy
-    assert len(_init_scripts(img, "/usr/bin/secret-delivery setup ")) == 1
-    assert not [d for d in delivery.check(img, "default") if d.level == "error"]
+def test_secret_delivery_hook_is_byte_identical_to_legacy_bash() -> None:
+    _assert_runtime_tool_hook("secret-delivery", "secret-delivery")
 
 
 # ── Locking ─────────────────────────────────────────────────────────
 
 
-def test_lock_writes_fetches_and_compile_uses_pin(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    resolver = _fixed(SHA_A)
-    lock_path = img.lock(resolver=resolver)
+def test_lock_records_fetches_and_compile_uses_pin() -> None:
+    recipe = _recipe(_build())
+    resolver = _Fixed(SHA_A)
+    locked = lock(recipe, resolver=resolver)
     assert resolver.calls == [GitSource(REPO, "main")]
-    lock = read_lockfile(lock_path)
-    assert lock.fetches == [
+    assert locked.lockfile.fetches == [
         LockedFetch(source=REPO, kind="git", digest=SHA_A, name="tool", ref="main")
     ]
-    assert img.source_pins() == {"tool": lock.fetches[0]}
-    assert img.unpinned_sources() == []
-    script = _build_hooks(img, tmp_path / "out")
+    assert locked.pins == (Pin("tool", Git(REPO, "main"), SHA_A),)
+    script = _hooks(compile(recipe, lock=locked))
     assert SHA_A in script
     assert "unpinned" not in script
     # The recipe payload keeps the symbolic declaration: the lock stays fresh.
-    assert img.lock_status().is_clean
+    assert lock_status(recipe, locked) == ()
 
 
-def test_unpinned_compile_emits_marker(tmp_path: Path) -> None:
-    script = _build_hooks(_image(tmp_path), tmp_path / "out")
+def test_unpinned_compile_emits_marker() -> None:
+    script = _hooks(compile(_recipe(_build())))
     assert "# unpinned: main" in script
     assert "git clone --depth=1 -b main" in script
 
 
-def test_pin_for_another_ref_is_ignored(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    img.lock(resolver=_fixed(SHA_A))
-    moved = _image(tmp_path / "x", _spec("dev"))
-    moved.build_dir = img.build_dir
-    assert moved.unpinned_sources() == ["tool"]
+def test_pin_for_another_ref_is_ignored() -> None:
+    locked = lock(_recipe(_build()), resolver=_Fixed(SHA_A))
+    hook = _hooks(compile(_recipe(_build("dev")), lock=locked))
+    assert hook.startswith("# unpinned: dev\n")
+    assert SHA_A not in hook
 
 
-def test_lock_offline_reuses_pins_and_fails_without_them(tmp_path: Path) -> None:
-    img = _image(tmp_path)
+def test_lock_offline_reuses_pins_and_fails_without_them() -> None:
+    recipe = _recipe(_build())
     with pytest.raises(LockfileError, match="need the network to resolve: tool"):
-        img.lock(offline=True)
-    img.lock(resolver=_fixed(SHA_A))
-    resolver = _fixed(SHA_B)
-    img.lock(offline=True, resolver=resolver)
+        lock(recipe, offline=True)
+    previous = lock(recipe, resolver=_Fixed(SHA_A))
+    resolver = _Fixed(SHA_B)
+    again = lock(recipe, previous=previous, offline=True, resolver=resolver)
     assert resolver.calls == []
-    assert img.source_pins()["tool"].digest == SHA_A
+    assert [pin.digest for pin in again.pins] == [SHA_A]
 
 
-def test_offline_lock_accepts_inline_pins(tmp_path: Path) -> None:
-    img = _image(tmp_path, _spec(SHA_B))
-    lock = read_lockfile(img.lock(offline=True))
-    assert [f.digest for f in lock.fetches] == [SHA_B]
+def test_offline_lock_accepts_inline_pins() -> None:
+    locked = lock(_recipe(_build(SHA_B)), offline=True)
+    assert [f.digest for f in locked.lockfile.fetches] == [SHA_B]
 
 
-def test_http_source_without_sha256_is_hashed_by_resolver(tmp_path: Path) -> None:
-    spec = SourceBuild(
-        name="blob",
-        source=HttpSource("https://example.com/blob.bin"),
-        build=GoBuild(output="blob"),
-        install=(Install.artifact("/usr/bin/blob"),),
-    )
-    img = _image(tmp_path, spec)
-    lock = read_lockfile(img.lock(resolver=_fixed("d" * 64)))
-    assert lock.fetches[0].kind == "http"
-    assert lock.fetches[0].digest == "d" * 64
-    assert lock.fetches[0].ref is None
+def test_http_source_without_sha256_is_hashed_by_resolver() -> None:
+    url = "https://example.com/blob.bin"
+    build = Build("blob", Http(url), script="make", install=(Install("blob", "/usr/bin/blob"),))
+    locked = lock(_recipe(build), resolver=_Fixed("d" * 64))
+    fetch = locked.lockfile.fetches[0]
+    assert fetch.kind == "http"
+    assert fetch.digest == "d" * 64
+    assert fetch.ref is None
+    assert locked.pins == (Pin("blob", Http(url, sha256="d" * 64), "d" * 64),)
 
 
 def test_lockfile_roundtrips_fetch_name_and_ref() -> None:
-    lock = build_lockfile(
+    lockfile = build_lockfile(
         recipe={"base": "x"},
         fetches=[LockedFetch(source=REPO, kind="git", digest=SHA_A, name="tool", ref="main")],
     )
-    raw = serialize_lockfile(lock)
+    raw = serialize_lockfile(lockfile)
     assert json.loads(raw)["fetches"][0]["ref"] == "main"
-    assert parse_lockfile(raw).fetches == lock.fetches
+    assert parse_lockfile(raw).fetches == lockfile.fetches
     plain = build_lockfile(recipe={}, fetches=[LockedFetch(source="u", kind="http", digest="d")])
     assert "name" not in json.loads(serialize_lockfile(plain))["fetches"][0]
 
 
 def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    payload = img._recipe_payload(profile_names=("default",))
-    write_lockfile(build_lockfile(recipe=payload), img.build_dir / "tundravm.lock")
+    recipe = _recipe(_build())
+    pinned = lock(recipe, resolver=_Fixed(SHA_A))
+    unpinned = Lock.of(build_lockfile(recipe=pinned.lockfile.recipe))
     with pytest.raises(LockfileError, match="unpinned: tool") as excinfo:
-        img.bake(frozen=True)
+        bake(recipe, locked=unpinned, backend=Backend("inprocess"), out=tmp_path / "out")
     assert excinfo.value.hint is not None
     assert "run tundravm lock" in excinfo.value.hint
 
@@ -357,48 +409,58 @@ def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
 # ── Policy ──────────────────────────────────────────────────────────
 
 
-def test_policy_warn_compiles_silently_and_error_refuses(tmp_path: Path) -> None:
-    for mode in ("warn", "allow"):
-        img = _image(tmp_path / mode, policy=Policy(mutable_ref_policy=mode))
+def test_policy_warn_compiles_silently_and_error_refuses() -> None:
+    lenient: tuple[MutableRefPolicy, ...] = ("warn", "allow")
+    for mode in lenient:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            img.compile(tmp_path / mode / "out")
-    strict = _image(tmp_path / "e", policy=Policy(mutable_ref_policy="error"))
+            compile(_recipe(_build(), policy=Policy(mutable_ref_policy=mode)))
+    strict = _recipe(_build(), policy=Policy(mutable_ref_policy="error"))
     with pytest.raises(PolicyError, match="tool@main"):
-        strict.compile(tmp_path / "e" / "out")
-    strict.lock(resolver=_fixed(SHA_A))
-    strict.compile(tmp_path / "e" / "out")  # a lockfile pin satisfies the policy
+        compile(strict)
+    compile(strict, lock=lock(strict, resolver=_Fixed(SHA_A)))  # a lock pin satisfies it
 
 
 # ── Drift, explain, check ───────────────────────────────────────────
 
 
-def test_drift_reports_new_and_moved_sources(tmp_path: Path) -> None:
-    img = Image(build_dir=tmp_path / "build")
-    img.lock()
-    img.build_from(_spec())
-    assert "+ sources.tool" in img.lock_status().render().splitlines()
-    img.lock(resolver=_fixed(SHA_A))
-    assert img.lock_status().is_clean
-    moved = img.lock_status(resolver=_fixed(SHA_B))
-    assert f"~ sources.tool: {SHA_A[:7]} -> {SHA_B[:7]}" in moved.render().splitlines()
+def test_drift_reports_new_and_moved_sources() -> None:
+    recipe = _recipe(Package("curl"), _build())
+    added = Diagnostic("lock-added", "sources.tool is not in the lock", subject="sources.tool")
+    assert added in lock_status(recipe, lock(_recipe(Package("curl"))))
+    locked = lock(recipe, resolver=_Fixed(SHA_A))
+    assert lock_status(recipe, locked) == ()
+    builds = lower(recipe).source_builds()
+    pins = {"tool": locked.lockfile.fetches[0]}
+    moved = source_drift(builds, pins, resolver=_Fixed(SHA_B))
+    assert moved == ([], ["sources.tool"], [], {"sources.tool": f"{SHA_A[:7]} -> {SHA_B[:7]}"})
+    retargeted = lock_status(_recipe(Package("curl"), _build("dev")), locked)
+    changed = f"sources.tool changed since the lock: {SHA_A[:7]} -> dev"
+    assert Diagnostic("lock-changed", changed, subject="sources.tool") in retargeted
 
 
-def test_drift_reports_removed_sources(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    img.lock(resolver=_fixed(SHA_A))
-    bare = Image(build_dir=img.build_dir)
-    assert "- sources.tool" in bare.lock_status().render().splitlines()
+def test_drift_reports_removed_sources() -> None:
+    locked = lock(_recipe(Package("curl"), _build()), resolver=_Fixed(SHA_A))
+    removed = Diagnostic("lock-removed", "sources.tool is only in the lock", subject="sources.tool")
+    assert removed in lock_status(_recipe(Package("curl")), locked)
+
+
+def _inspect(recipe: Path, *flags: str) -> str:
+    out = io.StringIO()
+    assert main(["inspect", str(recipe), *flags], stdout=out) == EXIT_OK
+    return out.getvalue()
 
 
 def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    assert f"tool  git {REPO}  ref=main  pinned=-" in img.summary()
-    img.lock(resolver=_fixed(SHA_A))
-    info = img.explain()
+    path = tmp_path / "recipe.py"
+    path.write_text(RECIPE_FILE.format(repo=REPO), encoding="utf-8")
+    assert f"tool  git {REPO}  ref=main  pinned=-" in _inspect(path)
+    locked = lock(load_recipe(path), resolver=_Fixed(SHA_A))
+    write_lock(locked, tmp_path / "build" / "tundravm.lock")  # where the CLI looks
+    info = json.loads(_inspect(path, "--json"))["variants"]["default"]
     assert info["sources"] == [
         {
-            "build": "go",
+            "build": "script",
             "install": ["/usr/bin/tool"],
             "kind": "git",
             "name": "tool",
@@ -407,29 +469,25 @@ def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
             "url": REPO,
         }
     ]
-    assert "Sources (1):" in img.summary()
-    assert f"pinned={SHA_A[:7]}" in img.summary()
+    summary = _inspect(path)
+    assert "Sources (1):" in summary
+    assert f"pinned={SHA_A[:7]}" in summary
 
 
-def test_check_rule_source_unpinned(tmp_path: Path) -> None:
-    img = _image(tmp_path)
-    found = [d for d in img.check() if d.code == "source-unpinned"]
+def test_check_rule_source_unpinned() -> None:
+    recipe = _recipe(_build())
+    found = [d for d in lint(recipe) if d.code == "source-unpinned"]
     assert [(d.level, d.subject) for d in found] == [("warning", "tool")]
-    img.set_policy(Policy(mutable_ref_policy="error"))
-    assert [d.level for d in img.check() if d.code == "source-unpinned"] == ["error"]
-    img.lock(resolver=_fixed(SHA_A))
-    assert not [d for d in img.check() if d.code == "source-unpinned"]
+    strict = _recipe(_build(), policy=Policy(mutable_ref_policy="error"))
+    assert [d.level for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
+    # lint reads the pins of ./build/tundravm.lock, as `tundravm lint` does.
+    write_lock(lock(recipe, resolver=_Fixed(SHA_A)), Path("build") / "tundravm.lock")
+    assert not [d for d in lint(recipe) if d.code == "source-unpinned"]
 
 
 def test_cli_lock_offline_fails_clearly(tmp_path: Path) -> None:
     recipe = tmp_path / "recipe.py"
-    recipe.write_text(
-        "from tundravm import Image\n"
-        "from tundravm.source import GitSource, GoBuild, Install, SourceBuild\n"
-        f"img = Image(build_dir={str(tmp_path / 'build')!r})\n"
-        "img.build_from(SourceBuild(name='tool', source=GitSource('https://x/y.git', 'main'),"
-        " build=GoBuild(output='tool'), install=(Install.artifact('/usr/bin/tool'),)))\n"
-    )
+    recipe.write_text(RECIPE_FILE.format(repo="https://x/y.git"), encoding="utf-8")
     out = io.StringIO()
     code = main(["lock", str(recipe), "--offline"], stdout=out)
     assert code != EXIT_OK

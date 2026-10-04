@@ -5,10 +5,13 @@ from __future__ import annotations
 import importlib.util
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 
 import pytest
 
-from tundravm import Image, ValidationError
+from tundravm._image import Image
+from tundravm._modules import DevTools, Tdxs
 from tundravm.declarative import (
     Build,
     Fragment,
@@ -28,13 +31,27 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.lower import groupadd_line, useradd_line
 from tundravm.diff import diff_trees
-from tundravm.modules import DevTools, Tdxs
-from tundravm.recipe import load_recipe
+from tundravm.errors import ValidationError
+from tundravm.recipe import load_image
 
 ROOT = Path(__file__).resolve().parent.parent
 SURGE = ROOT / "examples" / "surge-tdx-prover"
 SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
 HISTORICAL = Mkosi(dialect="nethermind-v1")
+
+
+def _surge_fluent() -> ModuleType:
+    """``tests/fixtures/surge_fluent.py``: the fluent parity oracle."""
+    path = Path(__file__).parent / "fixtures" / "surge_fluent.py"
+    spec = importlib.util.spec_from_file_location("surge_fluent", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def blank_image(**options: object) -> Image:
+    return cast(Image, _surge_fluent().blank_image(**options))
 
 
 def _recipe(*items: Fragment, variants: tuple[Variant, ...] = (Variant("default"),)) -> Recipe:
@@ -43,7 +60,7 @@ def _recipe(*items: Fragment, variants: tuple[Variant, ...] = (Variant("default"
 
 
 def _fluent(configure: Callable[[Image], object]) -> Image:
-    img = Image(base="debian/trixie", reproducible=True)
+    img = blank_image(base="debian/trixie", reproducible=True)
     configure(img)
     return img
 
@@ -141,7 +158,7 @@ def test_current_dialect_uses_the_account_prelude(tmp_path: Path) -> None:
     assert lines[4].startswith("mkosi-chroot useradd --system --home-dir /home/tdxs --create-home")
 
 
-def test_historical_dialect_rejects_account_replacement() -> None:
+def test_historical_dialect_lowers_account_replacement_standalone() -> None:
     recipe = _recipe(
         Fragment("users", items=(User("svc"),)),
         variants=(
@@ -149,8 +166,10 @@ def test_historical_dialect_rejects_account_replacement() -> None:
             Variant("other", parent="default", replace=(User("svc", uid=5),)),
         ),
     )
-    with pytest.raises(ValidationError, match="replaces"):
-        lower(recipe)
+    img = lower(recipe)
+    assert img.state.profiles["other"].extends is None
+    commands = [" ".join(c.argv) for c in img.state.effective_profile("other").phases["postinst"]]
+    assert any("--uid 5 svc" in command for command in commands)
 
 
 def test_build_cache_key_and_unpinned_marker() -> None:
@@ -187,7 +206,7 @@ def _fluent_surge() -> Image:
 
 
 def _declarative_surge() -> Image:
-    return load_recipe(SURGE / "image.py", extra_paths=[ROOT])
+    return load_image(SURGE / "image.py", extra_paths=[ROOT])
 
 
 def test_surge_recipe_matches_the_committed_tree(tmp_path: Path) -> None:

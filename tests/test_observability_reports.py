@@ -2,19 +2,22 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from tundravm import Image
-from tundravm.backends import InProcessBackend
+from tundravm.declarative import Backend, Fragment, Hook, Recipe, bake, lock
+from tundravm.models import BakeResult
+
+
+def _bake(tmp_path: Path, *items: Hook) -> Path:
+    """Bake a qemu recipe in-process; return the default variant's ``report.json``."""
+    recipe = Recipe("report", Fragment("report", items=items))
+    out = tmp_path / "build"
+    bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=out)
+    report_path = BakeResult.load(out).profiles["default"].report_path
+    assert report_path is not None
+    return report_path
 
 
 def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.targets("qemu")
-    image.shell("echo hello", phase="prepare")
-    result = image.bake()
-
-    report_path = result.profiles["default"].report_path
-    assert report_path is not None
-    report = _read_json(report_path)
+    report = _read_json(_bake(tmp_path, Hook("hello", "prepare", "echo hello")))
 
     assert "artifact_digests" in report
     assert "lock_digest" in report
@@ -32,11 +35,8 @@ def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> Non
 
 
 def test_structured_logs_include_profile_phase_module_and_builder(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.targets("qemu")
-    image.bake()
+    records = cast(list[dict[str, Any]], _read_json(_bake(tmp_path))["logs"])
 
-    records = image.logger.records_for_profile("default")
     assert records
     for record in records:
         assert record["profile"] == "default"

@@ -8,20 +8,35 @@ import json
 import subprocess
 import warnings
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from tundravm import Image, MeasurementError
-from tundravm.backends import InProcessBackend, inprocess
+from tundravm.backends import inprocess
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, PLACEHOLDER_BANNER, doctor, main
+from tundravm.declarative import (
+    Artifact,
+    Backend,
+    Fragment,
+    Package,
+    Recipe,
+    Variant,
+    bake,
+    lock,
+    measure,
+)
+from tundravm.declarative.lifecycle import Scheme
+from tundravm.errors import MeasurementError
 from tundravm.measure import (
     MEASUREMENTS_SCHEMA_VERSION,
     Measurements,
     PlaceholderMeasurementWarning,
+    derive_measurements,
     rtmr,
 )
-from tundravm.recipe import load_recipe
+from tundravm.models import ArtifactRef, ProfileBuildResult
+from tundravm.recipe import load_file
 
 RTMR0 = "0a" * 48
 RTMR1 = "1b" * 48
@@ -65,11 +80,25 @@ def _dstack_printing(stdout: str, code: int = 0) -> rtmr.ToolRunner:
     return run
 
 
-def _baked(tmp_path: Path) -> Image:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.targets("qemu")
-    image.bake()
-    return image
+def _baked(tmp_path: Path, *, simulated: bool = False) -> tuple[Artifact, ...]:
+    """In-process artifacts of a qemu ``default`` and a ``gcp`` variant.
+
+    Unless *simulated*, they are marked as a real backend's, so ``measure`` reaches
+    the tool lookup instead of refusing a simulated artifact.
+    """
+    recipe = Recipe(
+        "measured",
+        Fragment("measured", items=(Package("curl"),)),
+        variants=(Variant("default", target="qemu"), Variant("gcp", target="gcp")),
+    )
+    artifacts = bake(
+        recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
+    )
+    return artifacts if simulated else tuple(replace(a, simulated=False) for a in artifacts)
+
+
+def _default(tmp_path: Path) -> Artifact:
+    return next(a for a in _baked(tmp_path) if a.variant == "default")
 
 
 @pytest.fixture
@@ -101,15 +130,15 @@ def _derive(
     )
 
 
-# --- Image.measure -----------------------------------------------------------
+# --- measure() ---------------------------------------------------------------
 
 
 @pytest.mark.usefixtures("no_tools_on_path")
 def test_no_tool_refuses_with_hint(tmp_path: Path) -> None:
-    image = _baked(tmp_path)
+    artifact = _default(tmp_path)
 
     with pytest.raises(MeasurementError) as caught:
-        image.measure(backend="rtmr")
+        measure(artifact, scheme="rtmr")
 
     error = caught.value
     assert error.code == "E_MEASUREMENT"
@@ -120,33 +149,46 @@ def test_no_tool_refuses_with_hint(tmp_path: Path) -> None:
     assert "allow_placeholder=True" in error.hint
 
 
-@pytest.mark.parametrize("backend", ["azure", "gcp"])
-def test_cloud_backends_are_placeholder_only(tmp_path: Path, backend: str) -> None:
-    image = _baked(tmp_path)
+@pytest.mark.parametrize("scheme", ["azure", "gcp"])
+def test_cloud_backends_are_placeholder_only(tmp_path: Path, scheme: Scheme) -> None:
+    artifact = _default(tmp_path)
 
     with pytest.raises(MeasurementError) as caught:
-        image.measure(backend=backend)  # type: ignore[arg-type]
+        measure(artifact, scheme=scheme)
 
     error = caught.value
-    assert str(error).startswith(f"No measurement tool found for {backend} measurements.")
+    assert str(error).startswith(f"No measurement tool found for {scheme} measurements.")
     assert error.hint is not None
     assert "is a placeholder; use the cloud's attestation report" in error.hint
 
 
 @pytest.mark.usefixtures("no_tools_on_path")
-@pytest.mark.parametrize("backend", ["rtmr", "azure", "gcp"])
-def test_allow_placeholder_returns_flagged_values_and_warns(tmp_path: Path, backend: str) -> None:
-    image = _baked(tmp_path)
+@pytest.mark.parametrize("scheme", ["rtmr", "azure", "gcp"])
+def test_allow_placeholder_returns_flagged_values_and_warns(tmp_path: Path, scheme: Scheme) -> None:
+    artifact = _default(tmp_path)
 
     with pytest.warns(PlaceholderMeasurementWarning, match="not real measurements") as record:
-        measurements = image.measure(backend=backend, allow_placeholder=True)  # type: ignore[arg-type]
+        found = measure(artifact, scheme=scheme, allow_placeholder=True)
 
     assert record[0].filename == __file__
+    assert found.tool == "placeholder"
+    assert found.scheme == scheme
+    assert found.artifact_digest == artifact.sha256
+    assert found.values
+
+    profile = ProfileBuildResult(
+        profile=artifact.variant,
+        artifacts={artifact.target: ArtifactRef(target=artifact.target, path=artifact.path)},
+    )
+    with pytest.warns(PlaceholderMeasurementWarning):
+        measurements = derive_measurements(
+            backend=scheme, profile="default", profile_result=profile, allow_placeholder=True
+        )
+    assert dict(found.values) == measurements.values
     assert measurements.source == "placeholder"
     assert measurements.is_placeholder
     assert measurements.tool_version is None
     assert measurements.artifact is None
-    assert measurements.values
     payload = measurements.to_dict()
     assert payload["schema_version"] == MEASUREMENTS_SCHEMA_VERSION == 2
     assert payload["source"] == "placeholder"
@@ -155,11 +197,14 @@ def test_allow_placeholder_returns_flagged_values_and_warns(tmp_path: Path, back
     assert json.loads(measurements.to_json())["source"] == "placeholder"
 
 
-def test_profile_measure_passes_allow_placeholder(tmp_path: Path) -> None:
-    image = _baked(tmp_path)
+def test_variant_measure_passes_allow_placeholder(tmp_path: Path) -> None:
+    gcp = next(a for a in _baked(tmp_path, simulated=True) if a.variant == "gcp")
+    assert gcp.simulated
     with pytest.warns(PlaceholderMeasurementWarning):
-        measurements = image.profile("default").measure(backend="gcp", allow_placeholder=True)
-    assert measurements.source == "placeholder"
+        measurements = measure(gcp, scheme="gcp", allow_placeholder=True)
+    assert measurements.tool == "placeholder"
+    with pytest.raises(MeasurementError, match="simulated"):
+        measure(gcp, scheme="gcp")
 
 
 # --- rtmr.derive with injected tools -----------------------------------------
@@ -270,19 +315,29 @@ def test_requirements_are_optional_tools() -> None:
 # --- CLI ---------------------------------------------------------------------
 
 RECIPE = """
-from tundravm import Image
 from tundravm.backends.inprocess import InProcessBackend
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 
-img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.targets("qemu")
+recipe = Recipe(
+    "measured",
+    Fragment("measured", items=(Package("curl"),)),
+    variants=(Variant("default", target="qemu"),),
+)
+backend = InProcessBackend()
 """
 
 
 @pytest.fixture
-def recipe(tmp_path: Path) -> Path:
+def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The recipe file, run from its directory: the CLI's ``build/`` is ``tmp_path/build``."""
+    monkeypatch.chdir(tmp_path)
     path = tmp_path / "recipe.py"
-    path.write_text(f"BUILD_DIR = {str(tmp_path / 'build')!r}\n" + RECIPE, encoding="utf-8")
+    path.write_text(RECIPE, encoding="utf-8")
     return path
+
+
+def _bake(recipe: Path) -> int:
+    return _run("bake", str(recipe))[0]
 
 
 def _run(*argv: str) -> tuple[int, str]:
@@ -308,7 +363,7 @@ def _real_manifest(recipe: Path) -> str:
 def test_cli_measure_without_tool_fails_with_hint(
     recipe: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert _run("bake", str(recipe))[0] == EXIT_OK
+    assert _bake(recipe) == EXIT_OK
     capsys.readouterr()
 
     code, out = _run("measure", _manifest(recipe), "--scheme", "rtmr", "--allow-placeholder")
@@ -328,7 +383,7 @@ def test_cli_measure_without_tool_fails_with_hint(
 def test_cli_allow_placeholder_table_and_banner(
     recipe: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert _run("bake", str(recipe))[0] == EXIT_OK
+    assert _bake(recipe) == EXIT_OK
     capsys.readouterr()
 
     with warnings.catch_warnings(record=True) as caught:
@@ -351,8 +406,8 @@ def test_cli_allow_placeholder_json_carries_source(
     recipe: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = recipe.read_text(encoding="utf-8")
-    recipe.write_text(source.replace('img.targets("qemu")', 'img.targets("gcp")'), "utf-8")
-    assert _run("bake", str(recipe))[0] == EXIT_OK
+    recipe.write_text(source.replace('target="qemu"', 'target="gcp"'), "utf-8")
+    assert _bake(recipe) == EXIT_OK
     capsys.readouterr()
 
     code, out = _run(
@@ -371,7 +426,7 @@ def test_cli_measure_with_tool_prints_source(
     recipe: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setitem(inprocess.TARGET_FILENAMES, "qemu", "linux.efi")
-    assert _run("bake", str(recipe))[0] == EXIT_OK
+    assert _bake(recipe) == EXIT_OK
     capsys.readouterr()
     monkeypatch.setattr("tundravm.measure.rtmr.shutil.which", _only("measured-boot"))
     monkeypatch.setattr(
@@ -420,7 +475,7 @@ def test_doctor_with_recipe_ignores_missing_measurement_tools(recipe: Path) -> N
         raise FileNotFoundError(argv[0])
 
     out = io.StringIO()
-    code = doctor(load_recipe(recipe), out, runner=nothing)
+    code = doctor(load_file(recipe), out, runner=nothing)
     text = out.getvalue()
 
     assert code == EXIT_OK

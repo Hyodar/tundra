@@ -1,283 +1,303 @@
-# API Reference
+# API reference
 
-Compact reference for `tundravm`. Signatures are taken from `src/tundravm/image.py`. All mutating `Image` methods return `Self` and can be chained. Declarations apply to the active profile set (see [Profiles](#profiles)).
+The public API is the declarative one in `tundravm.declarative`. Most names are also exported from `tundravm`; the exceptions are listed under [Imports](#imports). Every record below is a frozen, slotted dataclass: lists passed for tuple fields are frozen into tuples, and `__post_init__` raises `ValidationError` for malformed values.
 
-```python
-from tundravm import Image
-```
+For the model behind these types see [concepts](concepts.md); for writing reusable fragments see [writing fragments](module-authoring.md).
 
-## `Image`
-
-### Construction and fields
-
-`Image` is a keyword-only dataclass. Fields remain assignable afterwards (`img.kernel = Kernel.tdx_kernel("6.8")`), and `set_kernel()` / `mkosi_options()` are the chainable forms.
-
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `base` | `"debian/bookworm"` | Distribution/release |
-| `arch` | `"x86_64"` | `"x86_64"` or `"aarch64"` |
-| `backend` | `None` | `BuildBackend` used by `bake()`; required for `bake()` only |
-| `build_dir` | `Path("build")` | Default bake output and lockfile directory; accepts `str` or `Path` |
-| `reproducible` | `True` | Registers `strip_image_version()` on construction |
-| `policy` | `Policy()` | Strictness settings; see `set_policy()` |
-| `kernel` | `None` | `Kernel` spec (custom or TDX kernel build) |
-| `mirror` | `None` | Package mirror, e.g. a Debian snapshot URL; see `pin_mirror()` |
-| `tools_tree_mirror` | `None` | Mirror for the mkosi tools tree |
-| `default_profile` | `"default"` | Name of the implicit profile |
-| `mkosi` | `MkosiOptions()` | mkosi emitter knobs, see below; `img.mkosi_options(seed=...)` replaces fields |
-
-`MkosiOptions` (frozen; `from tundravm import MkosiOptions`):
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `with_network` | `True` | mkosi `WithNetwork=` |
-| `clean_package_metadata` | `True` | mkosi `CleanPackageMetadata=` |
-| `manifest_format` | `"json"` | mkosi `ManifestFormat=` |
-| `compress_output` | `None` | mkosi `CompressOutput=` |
-| `output_directory` | `None` | mkosi `OutputDirectory=` |
-| `seed` | `None` | mkosi `Seed=` for partition UUIDs |
-| `sandbox_trees` | `()` | `host:guest` sandbox tree entries; `backports()` appends one |
-| `package_cache_directory` | `None` | mkosi `PackageCacheDirectory=` |
-| `init_script` | `None` | Skeleton `/init` script text; `None` emits no init file |
-| `environment` | `{}` | mkosi `Environment=KEY=VALUE` entries |
-| `environment_passthrough` | `None` | mkosi `Environment=KEY` entries passed through from the host |
-| `emit_mode` | `"per_directory"` | `"per_directory"` (one dir per profile) or `"native_profiles"` (`mkosi.profiles/`) |
-| `generate_version_script` | `False` | Emit `mkosi.version` |
-| `generate_cloud_postoutput` | `True` | Emit Azure/GCP conversion postoutput scripts |
-
-None of these enter the recipe digest. `explain`/`summary` show a `Build options:` line only for non-default values. `Image.DEFAULT_TDX_INIT` holds the built-in init script text; `img.init` (not a constructor argument) is the runtime-init generator.
-
-### Profiles
-
-| Method | Description |
-| --- | --- |
-| `state -> RecipeState` | Property. Raw recipe state; `state.profiles[name]` is a `ProfileState` |
-| `profile_names -> tuple[str, ...]` | Property. Every declared profile, sorted |
-| `profile(name, *, extends=<default profile>) -> Profile` | Declare profile `name` and return its handle (see below). A new profile extends the default profile; `extends=None` makes it standalone |
-| `profiles(*names, extends=<default profile>) -> ContextManager[Self]` | Scope declarations to several profiles at once |
-| `all_profiles() -> ContextManager[Self]` | Scope to every profile declared so far (sorted by name) |
-
-A profile extends the default profile: it compiles to the default's packages, files, users, services, hooks, init scripts and modules plus its own declarations, and its own declaration wins on the same file path, unit, user, partition or repository name. `output_targets` and `debloat` fall back to the default when unset.
-
-`Profile` (`from tundravm import Profile`) works two ways. As a context manager, `with img.profile("azure"):` scopes every `img.*` call inside the block to that profile (the `as` target is the `Image`). As an object, it carries the declaration API bound to that profile, and each call returns the `Profile`, so chains stay on it:
+## Imports
 
 ```python
-azure = img.profile("azure")
-azure.apply(AzurePlatform()).install("walinuxagent").output_targets("azure")
-azure.service("agent", command="/usr/bin/agent", env={"LOG": "info"})
+from tundravm import Recipe, Fragment, Variant, Package, File, Service, compile, lint, lock, bake
+from tundravm.modules import devtools, tdxs
+from tundravm.declarative import diff, measure, deploy
 ```
 
-| Member | Description |
-| --- | --- |
-| `name`, `image` | Profile name and owning `Image` |
-| `install`, `file`, `directory`, `template`, `user`, `service`, `apply`, `output_targets`, `debloat`, `run`, `hook`, `repository`, `partition`, `add_init_script` | Same signatures as on `Image`, run with only this profile active; return the `Profile` |
-| any other `Image` method returning `Self` (`backports`, `skeleton`, `build_install`, `ssh`, ...) | Same, resolved dynamically (typed as `(...) -> Profile`) |
-| `state -> ProfileState` | Property. This profile's state |
-| `explain()`, `summary()`, `explain_debloat()`, `applied_modules()` | `Image` counterparts with `profile=name` (`applied_modules()` lists only the profile's own modules) |
-| `check() -> list[Diagnostic]` | Diagnostics for this profile only |
-| `compile(path, *, force=False)`, `lock(path=None)`, `diff(against)`, `bake(output_dir=None, *, frozen=False, force=False)` | Run with only this profile active |
-| `measure(*, backend)`, `deploy(*, target, parameters=None, memory=None, cpus=None)` | `Image` counterparts with `profile=name` |
+`tundravm` exports the declarations, the recipe types, the lifecycle functions and result types, `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The fragment functions `tdxs`, `devtools`, `efi_stub` and `backports` live in `tundravm.modules` (and `tundravm.declarative`).
 
-### Packages and repositories
+## Recipe, variants, fragments
 
-| Method | Description |
-| --- | --- |
-| `install(*packages) -> Self` | Runtime packages |
-| `build_install(*packages) -> Self` | Build-only packages, removed after build |
-| `build_source(host_path, target="") -> Self` | Mount a host directory into the build (`BuildSources=`) |
-| `repository(url, *, name=None, suite=None, components=(), keyring=None, priority=100) -> Self` | Extra apt repository |
+### `Recipe`
 
-### Files and templates
+| Field | Type | Default |
+|---|---|---|
+| `name` | `str` | required |
+| `common` | `Fragment` | required |
+| `variants` | `tuple[Variant, ...]` | `(Variant("default", target="qemu"),)` |
+| `base` | `str` | `"debian/trixie"` |
+| `arch` | `"x86_64" \| "aarch64"` | `"x86_64"` |
+| `mirror` | `str \| None` | `None` (the distribution default) |
+| `tools_mirror` | `str \| None` | `None` |
+| `epoch` | `int \| None` | `0`: reproducible (`SOURCE_DATE_EPOCH=0`, stable seed, `IMAGE_VERSION` stripped); `None`: not reproducible; other values set `SOURCE_DATE_EPOCH` |
+| `mkosi` | `Mkosi` | `Mkosi()` |
+| `policy` | `Policy \| None` | `None` (the default `Policy()`); see [policy](policy.md) |
 
-| Method | Description |
-| --- | --- |
-| `file(path, *, content=None, src=None, mode="0644") -> Self` | Place a file in the image (`mkosi.extra/`); exactly one of `content`/`src`. `content` may be `bytes`; a `src` that is not UTF-8 is copied as bytes |
-| `directory(dest, *, src, mode=None, exclude=()) -> Self` | Place every file under host directory `src` at `dest`, keeping relative paths, in sorted order. Mode is `mode`, else `0755` for host-executable files and `0644` otherwise. `exclude` holds fnmatch globs on the path relative to `src` (`*` also matches `/`); a matching directory is skipped whole |
-| `template(dest, *, src=None, template=None, variables=None, mode="0644") -> Self` | Render `{name}` placeholders with `variables`, then place the file |
-| `skeleton(path, *, content=None, src=None, mode="0644") -> Self` | Place a file before the package manager runs (`mkosi.skeleton/`) |
+At least one variant; names are unique. `recipe.variant(name)` returns one or raises `ValidationError`.
 
-### Users and services
+### `Variant`
 
-| Method | Description |
-| --- | --- |
-| `user(name, *, system=False, home=None, shell="/usr/sbin/nologin", uid=None, gid=None, groups=()) -> Self` | Create a user; names unique per profile |
-| `service(name, *, command=(), description=None, user=None, group=None, working_dir=None, env=None, env_file=None, exec_start_pre=(), after=(), requires=(), wants=(), wanted_by=None, type=None, restart="no", limits=None, kill_mode=None, timeout_stop=None, enabled=True, extra_unit=None, security_profile="default") -> Self` | Register a unit. With `command` the SDK generates the unit file; without it, only enablement is emitted. `description` sets `Description=` (default: the name). `exec_start_pre` adds one `ExecStartPre=` per command, `working_dir` sets `WorkingDirectory=`, `env_file` sets `EnvironmentFile=`, and `env` adds `Environment=` lines sorted by key, quoted when a value has spaces, quotes or backslashes. `group` sets `Group=`, `wanted_by` overrides `WantedBy=minimal.target`, `type` overrides `Type=simple`, `limits={"NOFILE": 1048576}` emits `LimitNOFILE=` lines, `kill_mode` and `timeout_stop` set `KillMode=`/`TimeoutStopSec=`. `restart`: `"always"`, `"on-failure"`, `"no"`. `security_profile`: `"strict"`, `"default"`, `"none"` |
-| `group(name, *, system=False, gid=None) -> Self` | Create a group before any user; the linter reports `user-group-undefined` for a user in a group nobody declares |
-| `enable(*units) -> Self` / `disable(*units) -> Self` / `mask(*units) -> Self` | Declare the state of packaged units (`systemctl enable|disable|mask` at postinst); `explain` lists them under `Units:` |
+| Field | Type | Default |
+|---|---|---|
+| `name` | `str` | required; `"base"` is reserved |
+| `parent` | `str \| None` | `"base"` (`Recipe.common`); `None` is standalone; else a variant name |
+| `add` | `Fragment` | empty |
+| `replace` | `tuple[Declaration, ...]` | `()` |
+| `remove` | `tuple[Declaration, ...]` | `()` |
+| `target` | `"qemu" \| "azure" \| "gcp" \| None` | `None`: inherited, `qemu` at the root |
+| `targets` | `tuple[Target, ...]` | `()`: several outputs from one variant; `target=X` is the shorthand for `targets=(X,)` and setting both fails |
 
-### Partitions and outputs
+### `Fragment`
 
-| Method | Description |
-| --- | --- |
-| `partition(name, *, size, mount, fs="ext4") -> Self` | Extra data partition |
-| `output_targets(*targets) -> Self` | Any of `"qemu"`, `"azure"`, `"gcp"`; default `("qemu",)` |
+| Field | Type | Default |
+|---|---|---|
+| `name` | `str` | required |
+| `items` | `tuple[Declaration \| Fragment, ...]` | `()` |
+| `requires` | `tuple[str, ...]` | `()`: fragment names that must be in the same variant |
+| `checks` | `tuple[Check, ...]` | `()`: `Callable[[Resolved], tuple[Diagnostic, ...]]` |
 
-### Build phases and hooks
+### `Mkosi`
 
-Phases run in this order: `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`.
+| Field | Type | Default |
+|---|---|---|
+| `layout` | `"directories" \| "native"` | `"directories"` |
+| `dialect` | `"current" \| "nethermind-v1"` | `"current"` |
+| `init_script` | `str \| None` | `None`; text written to `mkosi.skeleton/init` (mode 0755) |
+| `version_script` | `bool` | `False`; emit `mkosi.version` |
+| `cloud_postoutput` | `bool` | `True`; emit the Azure/GCP disk conversion postoutput scripts |
+| `strip_os_release` | `bool \| None` | `None`: strip `IMAGE_VERSION` from `os-release` when `Recipe.epoch` is set |
 
-| Method | Description |
-| --- | --- |
-| `run(command, *, phase="postinst", env=None, cwd=None) -> Self` | Shell snippet in a phase; alias for `hook(phase, command)` |
-| `hook(phase, command, *, env=None, cwd=None, after_phase=None) -> Self` | Shell snippet in a phase; `after_phase` must be an earlier phase |
-| `sync(command, *, env=None) -> Self` | `sync` phase (before build) |
-| `prepare(command, *, env=None) -> Self` | `prepare` phase (after base packages, before build) |
-| `finalize(command, *, env=None) -> Self` | `finalize` phase (host, `$BUILDROOT`) |
-| `postoutput(command, *, env=None) -> Self` | `postoutput` phase (after the disk image is written) |
-| `clean(command, *, env=None) -> Self` | `clean` phase (`mkosi clean`) |
-| `on_boot(command, *, env=None) -> Self` | `boot` phase: a systemd oneshot run at VM boot |
+`nethermind-v1` spells groups and users as postinst `groupadd`/`useradd` lines and omits the `# unpinned:` build marker, matching the historical nethermind-tdx tree.
 
-Hooks run on the host with mkosi variables (`$BUILDROOT`, `$DESTDIR`, `$BUILDDIR`). Use `mkosi-chroot <cmd>` to execute inside the image.
+## Declarations
 
-### Reproducibility helpers
+### Packages, files, accounts, units
 
-| Method | Description |
-| --- | --- |
-| `strip_image_version(*, enabled=True) -> Self` | Finalize hook removing `IMAGE_VERSION` from `os-release`; on by default via `reproducible=True` |
-| `efi_stub(*, snapshot_url, package_version) -> Self` | Postinst hook installing `systemd-boot-efi` from a Debian snapshot |
-| `backports(*, mirror=None, release=None) -> Self` | Sync hook generating `debian-backports.sources`; adds the matching `sandbox_trees` entry |
-| `debloat(*, enabled=True, paths_remove=None, paths_skip=(), paths_remove_extra=(), paths_skip_for_profiles=None, systemd_minimize=True, systemd_units_keep=None, systemd_units_keep_extra=(), systemd_bins_keep=None) -> Self` | Configure path removal and systemd minimization; `None` keeps the defaults from `DebloatConfig` |
-| `explain_debloat(*, profile=None) -> dict[str, object]` | Effective debloat settings for one profile |
+| Type | Fields (defaults) | Identity |
+|---|---|---|
+| `Package` | `name`, `role="runtime"` (`"runtime"` or `"build"`) | name, role |
+| `File` | `path` (absolute), `content: str \| bytes \| Path`, `mode=0o644`, `stage="extra"` (`"skeleton"` or `"extra"`) | stage, path |
+| `Template` | `path` (absolute), `template: str \| Path`, `variables: tuple[tuple[str, str \| int \| float], ...] = ()`, `mode=0o644`, `stage="extra"` | stage, path |
+| `Directory` | `path` (absolute), `source: Path`, `exclude=()`, `mode=None` (keep), `stage="extra"` | stage, path |
+| `Group` | `name`, `system=True`, `gid=None` | name |
+| `User` | `name`, `system=True`, `home=None`, `shell="/usr/sbin/nologin"`, `uid=None`, `primary_group=None`, `groups=()` | name |
+| `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `after_init=False` | unit name |
+| `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only: `description=None`, `user=None`, `group=None`, `working_dir=None`, `env: Pairs = ()`, `env_file=None`, `exec_start_pre=()`, `after=()`, `requires=()`, `wants=()`, `wanted_by=None` (`minimal.target`), `type=None` (`"simple"`, `"exec"`, `"oneshot"`, `"notify"`, `"forking"`), `restart="no"` (`"always"`, `"on-failure"`, `"no"`), `limits=()` (`(resource, value)` pairs), `kill_mode=None`, `timeout_stop=None`, `security="default"` (`"strict"`, `"default"`, `"none"`), `after_init=True` | unit name |
 
-### Init
+`Template` renders `template` with `str.format_map(variables)` at lowering time; a placeholder without a value fails to lower. `Service` renders and enables a `.service` unit; `after_init=True` makes it wait for `runtime-init.service` when the variant has a runtime-init step. `Unit` with `content` ships that text verbatim and needs a type suffix (`app.service`). Without `content` it controls a packaged unit and must set `enabled` or `masked`. `after_init=True` adds `After=`/`Requires=runtime-init.service`.
 
-| Method | Description |
-| --- | --- |
-| `add_init_script(script, *, priority=100) -> Self` | Append a bash fragment to `/usr/bin/runtime-init` for the active profiles; lower priority runs first. Extending profiles inherit the default's fragments |
-| `init_scripts(profile=None) -> tuple[InitScriptEntry, ...]` / `has_init_scripts() -> bool` | The merged init fragments of a profile |
-| `ssh() -> Self` | Install `dropbear` (dev profiles) |
+### Scripts and ordering
 
-### Introspection
+| Type | Fields (defaults) | Identity |
+|---|---|---|
+| `Hook` | `name`, `phase: Phase`, `script`, `env: Pairs = ()`, `cwd=None`, `after=()` | name |
+| `Init` | `name`, `script`, `priority=100`, `after=()` | name |
 
-| Method | Description |
-| --- | --- |
-| `apply(*modules) -> Self` | Call `module.apply(img)` for each argument in order; chainable. Accepts any `Applicable`; `Module` subclasses are recorded |
-| `applied_modules(profile=None, *, inherited=False) -> tuple[Module, ...]` | `Module` instances applied to one profile, in apply order; `inherited=True` puts the extended profile's modules first |
-| `explain(*, profile=None) -> dict[str, object]` | Dry-run description of the recipe for one profile |
-| `summary(*, profile=None) -> str` | Human-readable form of `explain()` |
-| `check(*, profiles=None) -> list[Diagnostic]` | Lint the active profiles (or `profiles`); see [Diagnostics](#diagnostics) |
-| `diff(against) -> TreeDiff` | Compile the active profiles to a temp dir and diff against the tree at `against`; writes nothing |
+`Phase` is one of `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. `Hook.after` names hooks of the same or an earlier phase. `Init` steps run in `/usr/bin/runtime-init` by ascending priority; `after` orders equal priorities and may name the built-in `keys` (10), `disks` (20) and `secrets` (30), which are reserved names. `Pairs` is `tuple[tuple[str, str], ...]`.
 
-The same views are available from the shell: `tundravm explain`, `check` and `diff`. See [cli.md](cli.md).
+### System configuration
 
-### Lifecycle
+| Type | Fields (defaults) | Identity |
+|---|---|---|
+| `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100` | name |
+| `Partition` | `name`, `size`, `mount`, `filesystem="ext4"` | name |
+| `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant=()` (`(variant, paths)` kept only in that variant) | one per variant |
+| `Setting` | `section`, `key`, `values: tuple[str, ...]` | section, key |
+| `Kernel` | `version`, `source: Git \| Http`, `config: Path \| None = None`, `cmdline=""`, `tdx=True` | one per variant |
 
-| Method | Description |
-| --- | --- |
-| `set_policy(policy) -> Self` | Replace the `Policy` |
-| `lock(path=None, *, resolver=None, offline=False) -> Path` | Write the lockfile for the active profiles; default `build_dir / "tundravm.lock"`. Resolves every `GitSource` ref to a commit and every `HttpSource` to a sha256 (`offline=True` reuses existing pins and fails on anything new) |
-| `source_build(spec: SourceBuild) -> Self` | Declare a from-source build (clone or download, build, install); pinned by the lockfile. `source_builds(profile=None)`, `source_pins(path=None)`, `unpinned_sources(path=None)` inspect it |
-| `pin_mirror(url, *, tools_tree=True) -> Self` | Chainable form of the `mirror`/`tools_tree_mirror` attributes |
-| `lock_status(path=None, *, resolver=None) -> LockDrift` | Compare the lockfile with the recipe section by section; never writes. `LockfileError` if the lockfile is missing |
-| `compile(path, *, force=False) -> CompileResult` | Emit the mkosi tree for the active profiles; skipped when digest and path are unchanged. Each profile directory is recreated, so files dropped from the recipe disappear |
-| `mkosi_options(**overrides) -> Self` | Replace fields of `img.mkosi` (image-wide, chainable); unknown names raise `ValidationError` |
-| `set_kernel(kernel) -> Self` | Chainable form of the `kernel` field |
-| `bake(output_dir=None, *, frozen=False, force=False) -> BakeResult` | Run `check()` (error-level findings raise `LintError`), `compile()` into `<output_dir>/mkosi`, then build each active profile with the backend into `<output_dir>/<profile>/` and write `<output_dir>/bake-result.json`; `frozen=True` fails on a stale lockfile with `LockfileError` listing the drifted sections, and on any source build without a lockfile pin |
-| `measure(*, backend, profile=None, allow_placeholder=False) -> Measurements` | Derive measurements from `last_bake()`; `backend` is `"rtmr"` (real via `measured-boot`/`dstack-mr`), `"azure"` or `"gcp"` (placeholders). Without a tool it raises `MeasurementError` unless `allow_placeholder=True`, which returns `source="placeholder"` and warns |
-| `deploy(*, target, profile=None, parameters=None, memory=None, cpus=None) -> DeployResult` | Deploy an artifact from `last_bake()`; `parameters` are adapter-specific strings |
-| `last_bake(build_dir=None) -> BakeResult` | The latest bake result, loaded from `<build_dir>/bake-result.json` when this process has not baked. With `build_dir` it reloads from that directory (for a bake made with `output_dir`). `StateError` if there is none |
+No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkosi escape hatch; supported keys are `Output.Seed`, `Output.OutputDirectory`, `Output.CompressOutput`, `Output.ManifestFormat`, `Build.PackageCacheDirectory`, `Build.WithNetwork`, `Build.Environment`, `Build.SandboxTrees` and `Content.CleanPackageMetadata`; others fail to lower. Settings are recipe-wide, except `Setting("Build", "BuildSources", ("src[:dest]", ...))`, which mounts host directories into one variant's build. A `Kernel` is recipe-wide too, and must come from a git repository tagged `v<version>`.
 
-`profile=None` is accepted only when exactly one profile is active.
+## Keys, disks and secrets
 
-## Public models (`from tundravm import ...`)
+| Type | Fields (defaults) | Identity |
+|---|---|---|
+| `Key` | `name`, `output=None`, `strategy="random"` (`"random"` or `"pipe"`), `persist_in_tpm=True`, `size=64`, `pipe=None` (required with `"pipe"`) | name |
+| `Disk` | `name`, `mount`, `device=None` (largest unpartitioned disk), `key: Key \| Path \| None = None`, `mapper=None` (needs a key), `format="on_fail"` (`"always"`, `"on_initialize"`, `"on_fail"`, `"never"`), `directories=("ssh", "data", "logs")` | name |
+| `Secrets` | `name="secrets"`, `entries: tuple[Secret, ...] = ()`, `store: Disk \| None = None`, `host="0.0.0.0"`, `port=8080`, `ssh_directory="/root/.ssh"`, `ssh_key_path="/etc/root_key"` | name |
+| `Secret` | `name`, `targets: tuple[SecretFile \| SecretEnv, ...]` (at least one), `required=True`, `schema: Schema \| None = None` | (inside `Secrets`) |
+| `SecretFile` | `path`, `mode=0o400`, `owner=None` | |
+| `SecretEnv` | `name`, `service=None` (`None`: global environment) | |
+| `Schema` | `kind="string"` (`"string"` or `"json"`), `min_length=None`, `max_length=None`, `pattern=None`, `enum=()` | |
+| `RuntimeTools` | `source: Git`, `key_config="/etc/tdx/key-gen.yaml"`, `disk_config="/etc/tdx/disk-setup.yaml"`, `secret_config="/etc/tdx/secrets.yaml"`, `secret_manifest="/etc/tdx/secrets.json"` | one per variant |
 
-| Name | Description |
-| --- | --- |
-| `Image` | The recipe object above |
-| `Profile` | Handle returned by `Image.profile(name)`; see [Profiles](#profiles) |
-| `Applicable` | Protocol: anything with `apply(image: Image) -> None`; accepted by `Image.apply()` |
-| `load_recipe(path, attr=None, extra_paths=()) -> Image` | Load an `Image` from a recipe file using the CLI resolution rules |
-| `__version__` | Package version string |
-| `Policy` | `require_frozen_lock`, `mutable_ref_policy` (`warn`/`error`/`allow`), `require_integrity`, `network_mode` (`online`/`offline`) |
-| `Kernel` | Kernel spec; constructors `Kernel.generic(version)`, `Kernel.from_config(path)`, `Kernel.tdx_kernel(version, *, cmdline=None, config_file=None, source_repo=...)` |
-| `DebloatConfig` | Frozen defaults for `debloat()`; `effective_paths_remove`, `effective_units_keep` |
-| `SecretSchema` | `kind` (`string`/`json`), `min_length`, `max_length`, `pattern`, `enum` |
-| `SecretTarget` | Where a secret lands; `SecretTarget.file(path, *, mode="0400", owner=None)`, `SecretTarget.env(name, *, scope="service")` |
-| `SecretSpec` | `name`, `required`, `schema`, `targets` |
-| `ProfileState` | Per-profile declarations: `packages`, `build_packages`, `files`, `services`, `users`, `phases`, `hooks`, `init_scripts`, `debloat`, `output_targets` |
-| `RecipeState` | `base`, `arch`, `default_profile`, `profiles` |
-| `CompileResult` | `path`, `profiles`, `digest`; behaves like a `Path` (`/`, `exists()`) |
-| `BakeRequest` | `profile`, `build_dir`, `emit_dir`, `output_targets`; passed to backends |
-| `BakeResult` | `profiles: dict[str, ProfileBuildResult]`, `lock_digest`, `backend`, `created_at`; `artifact_for(profile=, target=) -> ArtifactRef \| None`; `save(build_dir)`, `BakeResult.load(build_dir)` for `bake-result.json` |
-| `Diagnostic` | One lint finding: `level` (`error`/`warning`/`info`), `code`, `message`, `hint`, `profile`, `subject`; `to_dict()` |
-| `TreeDiff`, `FileChange` | Result of `Image.diff()`: the changed files and their unified diffs |
-| `Measurements` | `backend`, `values`; `to_json(path=None)`, `to_cbor(path=None)`, `verify(expected) -> VerificationResult` |
+`Disk.key` and `Secrets.store` take the declaration object, not its name. Without `RuntimeTools` the tools build from `tundra-tools` `master`.
 
-Other useful imports:
+## Sources and builds
 
-- `tundravm.modules`: `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `Devtools`, `Init`, and the `Module` base class (`name`, `requires`, `init_priority`; `setup`, `install`, `init_script`, `check`; final `apply`). See [module-authoring.md](module-authoring.md).
-- `tundravm.backends`: `LimaMkosiBackend`, `NixMkosiBackend`, `LocalLinuxBackend`, `InProcessBackend` (tests), `BuildBackend` (`name`, `requirements()`, `mount_plan()`, `prepare()`, `execute()`, `cleanup()`), `Requirement`.
-- `tundravm.lockfile`: `LockDrift` (`changed`, `added`, `removed`, `is_clean`, `render()`), `compare_lock`, `section_digests`.
-- `tundravm.testing`: test helpers and pytest fixtures; see [testing.md](testing.md).
-- `tundravm.platforms`: `AzurePlatform`, `GcpPlatform`.
-- `tundravm.build_cache`: `Build`, `Cache` for cached source builds in `build` hooks.
+| Type | Fields (defaults) |
+|---|---|
+| `Git` | `url`, `ref`, `subdir=None` (relative), `submodules=False` |
+| `Http` | `url`, `sha256=None` (64 lowercase hex) |
+| `Install` | `source` (relative to the build directory), `destination` (absolute), `mode=0o755`, `directory=False` (requires `mode=None`) |
+| `Build` | `name`, `source: Git \| Http`, `script`, `install: tuple[Install, ...]` (at least one), `packages=()`, `env: Pairs = ()`, `cache_key=None` |
 
-## Errors (`tundravm.errors`)
+`Build` identity is its name. `cache_key=None` derives `<name>-<url digest>-<ref>`; install destinations of one build need distinct file names.
 
-All errors derive from `TdxError(message, *, code, hint=None, context=None)` and expose `.code`, `.hint`, `.context`, `.to_dict()`.
+## Resolution
+
+```python
+resolve(recipe: Recipe, *, variant: str) -> Resolved
+resolve_all(recipe: Recipe) -> tuple[Resolved, ...]
+identity(item: Declaration) -> tuple[str, ...]
+```
+
+`resolve` raises `ValidationError` on the first error-level diagnostic (the message names its code and how many more there are). `Resolved` has `variant: str`, `target: Target` (the first output), `targets: tuple[Target, ...]`, `items: tuple[Declaration, ...]` and `fragments: tuple[str, ...]` (the names of the fragments included).
+
+`Diagnostic` has `code: str`, `message: str`, `level="error"` (`"error"`, `"warning"`, `"info"`), `variant=""` and `subject=""`. A fragment check may leave `variant` empty; resolution fills it in.
+
+## Lifecycle
+
+```python
+lint(recipe, *, variants=None, lock=None) -> tuple[Diagnostic, ...]
+compile(recipe, *, variants=None, lock=None) -> Tree
+diff(tree: Tree, against: Tree | Path) -> str
+lock(recipe, *, previous=None, update=(), offline=False, resolver=None, variants=None) -> Lock
+lock_status(recipe, locked: Lock, *, variants=None) -> tuple[Diagnostic, ...]
+read_lock(path: Path) -> Lock
+write_lock(locked: Lock, path: Path) -> None
+bake(recipe, *, locked: Lock, backend: Backend, out: Path, variants=None, progress=None) -> tuple[Artifact, ...]
+read_artifacts(manifest: Path) -> tuple[Artifact, ...]
+measure(artifact, *, scheme="rtmr", allow_placeholder=False) -> Measurements
+deploy(artifact, *, using: Qemu | Azure | Gcp, allow_placeholder=False, adapter=None) -> Deployment
+doctor(backend: Backend, *, runner=None) -> tuple[Diagnostic, ...]
+load(path, *, attribute="recipe", extra_paths=()) -> Recipe
+lower(recipe, *, variants=None)  # internal: the compiler's image for the recipe
+```
+
+`variants=None` means every declared variant; unknown names raise `ValidationError`.
+
+- **`lint`** returns resolution and fragment-check diagnostics first, in resolution order. When none is an error it adds the compiler's rules on the lowered recipe, sorted by variant, level and code. With `lock`, drift is added as `lock-changed`, `lock-added` and `lock-removed` diagnostics whose `subject` is the section.
+- **`compile`** returns the tree in memory. Without `lock` no lockfile is consulted, so source builds use their refs; with one, its pins apply.
+- **`diff`** is a unified diff from `against` (a `Tree` or a directory) to `tree`, empty when they match. Variant directories in `against` that `tree` does not hold are not compared.
+- **`lock`** keeps every pin in `previous` whose source is unchanged and resolves the rest, plus the sources named in `update` (unknown names raise). `resolver` replaces the network lookup; `offline=True` fails for any source without a previous pin.
+- **`lock_status`** is the drift between the recipe and `locked`, one diagnostic per section; empty when current.
+- **`bake`** writes `locked` to `out/tundravm.lock`, bakes frozen into `out` and writes `out/bake-result.json`. It fails before building on lint errors (`LintError`) or drift (`LockfileError`). `progress` receives the CLI's progress lines.
+- **`read_artifacts`** reads `bake-result.json` (or the directory holding it).
+- **`measure`** derives expected measurements with `measured-boot` or `dstack-mr`; without one it raises `MeasurementError` unless `allow_placeholder`, which also emits a `PlaceholderMeasurementWarning`. Simulated artifacts are refused unless `allow_placeholder`.
+- **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_placeholder`. `adapter` replaces the default adapter (tests).
+- **`doctor`** returns one `tool-missing` diagnostic per missing host tool of the backend (a warning when the tool is optional).
+- **`load`** imports a recipe file and returns its `Recipe`; `attribute` may also name a zero-argument factory, and `attribute=None` discovers it as the [CLI does](cli.md#recipe-files). `load_recipe(path, *, attr=None, extra_paths=())` is the same with CLI discovery by default.
+
+### Result and input types
+
+| Type | Fields |
+|---|---|
+| `Tree` | `entries: tuple[Entry, ...]`, `digest: str`, `variants: tuple[str, ...]`; `write(path)` writes it, replacing its variant directories and dropping stale ones |
+| `Entry` | `path`, `content: bytes \| None`, `mode: int`, `symlink: str \| None = None` (a directory has neither content nor symlink) |
+| `Lock` | `recipe_digest`, `sections: Pairs` (section to digest), `pins: tuple[Pin, ...]`, `compiler_version`; `text()` is the serialized lockfile |
+| `Pin` | `identity` (build name, or URL for anonymous fetches), `source: Git \| Http` (the resolved commit or hash), `digest` |
+| `Backend` | `kind` (`"lima"`, `"nix"`, `"local"`, `"inprocess"`), `cpus=2`, `memory="4GiB"`, `disk="40GiB"` (the last three for Lima) |
+| `Artifact` | `path`, `variant`, `target`, `sha256`, `recipe_digest`, `lock_digest`, `tree_digest`, `simulated=False` |
+| `Measurements` | `scheme` (`"rtmr"`, `"azure"`, `"gcp"`), `values: Pairs`, `tool` (`"measured-boot <version>"`, `"dstack-mr <version>"` or `"placeholder"`), `artifact_digest` |
+| `Qemu` | `memory="2G"`, `cpus=2`, `ssh_port=2222`, `tdx=False`, `daemonize=True` |
+| `Azure` | `storage_account`, `resource_group="tdx-vms"`, `location="eastus"`, `vm_size="Standard_DC2s_v3"` |
+| `Gcp` | `project`, `bucket`, `zone="us-central1-a"`, `machine_type="n2d-standard-2"` |
+| `Deployment` | `id`, `target`, `endpoint: str \| None`, `metadata: Pairs` |
+
+```python
+from pathlib import Path
+from tundravm import Backend, bake, compile, lint, lock, read_artifacts, write_lock
+from tundravm.declarative import measure
+
+assert not [d for d in lint(recipe) if d.level == "error"]
+locked = lock(recipe)
+write_lock(locked, Path("build/tundravm.lock"))
+compile(recipe, lock=locked).write(Path("mkosi"))
+artifacts = bake(recipe, locked=locked, backend=Backend("inprocess"), out=Path("build"))
+default = next(a for a in artifacts if a.variant == "default")
+print(measure(default, allow_placeholder=True).values)
+```
+
+## Fragment functions
+
+| Function | Fragment name | Declares |
+|---|---|---|
+| `tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements=(), check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
+| `devtools(*, root_password="tdx")` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it. |
+| `efi_stub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot |
+| `backports(*, mirror=None, release=None)` | `backports` | A sync hook generating backports and sid apt sources, plus `Setting("Build", "SandboxTrees", ...)` |
+
+`issuer`/`validator` are `"tdx"`, `"azure"`, `"gcp"`, `"simulator"` or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`.
+
+The examples ship more: `nethermind_base(*, snapshot=PINNED_MIRROR)` in [`examples/nethermind_tdx.py`](../examples/nethermind_tdx.py), and `raiko(*, source)`, `taiko_client(*, source)`, `nethermind(*, source)` in [`examples/modules/`](../examples/modules/).
+
+## Errors
+
+Every SDK error subclasses `TdxError(message, *, code, hint=None, context=None)`, which has `code`, `hint`, `context` and `to_dict()`. The CLI prints them as `error [CODE]: message`, the hint and the context, and exits 2.
 
 | Class | Code | Raised when |
-| --- | --- | --- |
-| `ValidationError` | `E_VALIDATION` | Bad arguments, duplicate names, missing backend, unmet module `requires` |
-| `LintError` | `E_LINT` | `bake()` with error-level lint findings; run `tundravm check` |
-| `LockfileError` | `E_LOCKFILE` | `bake(frozen=True)` with a missing or stale lockfile |
-| `ReproducibilityError` | `E_REPRODUCIBILITY` | Artifact digests differ between equivalent builds |
-| `BackendExecutionError` | `E_BACKEND_EXECUTION` | mkosi/backend failure, unsupported mkosi version |
-| `MeasurementError` | `E_MEASUREMENT` | `measure()` for a profile the last bake did not build, no measurement tool on PATH (without `allow_placeholder`), or invalid tool output |
-| `DeploymentError` | `E_DEPLOYMENT` | `deploy()` without a baked artifact for the target, or a missing deploy tool |
-| `StateError` | `E_STATE` | `measure()`/`deploy()`/`last_bake()` with no `bake-result.json` |
-| `PolicyError` | `E_POLICY` | Policy violation (non-frozen bake, mutable ref, offline network) |
+|---|---|---|
+| `ValidationError` | `E_VALIDATION` | A malformed declaration, a resolution error, a recipe that cannot lower, an unknown variant, a bad recipe file |
+| `LintError` | `E_LINT` | `bake` refused a recipe with error-level compiler findings |
+| `LockfileError` | `E_LOCKFILE` | A missing or unreadable lockfile, or a frozen bake of a recipe that drifted from it |
+| `ReproducibilityError` | `E_REPRODUCIBILITY` | Two builds that should match did not |
+| `BackendExecutionError` | `E_BACKEND_EXECUTION` | The backend failed or its tools are unusable |
+| `MeasurementError` | `E_MEASUREMENT` | No measurement tool, or a simulated artifact, without `allow_placeholder` |
+| `DeploymentError` | `E_DEPLOYMENT` | A simulated artifact, a target mismatch, or a missing target tool |
+| `PolicyError` | `E_POLICY` | A `Policy` setting refused the operation |
+| `StateError` | `E_STATE` | `bake-result.json` is missing or unreadable, or has no artifact for the requested variant/target |
 
-`ErrorCode` is a `StrEnum` of the codes above.
+## Lint rules
 
-## Source builds (`from tundravm import ...`)
+Resolution and references (from `resolve`):
 
-| Name | Description |
-| --- | --- |
-| `GitSource(repo, ref, *, subdir=None, submodules=False)` | A git checkout; `ref` may be a branch, tag or 40-hex commit |
-| `HttpSource(url, *, sha256=None)` | A download; the hash is pinned by `lock()` when omitted |
-| `GoBuild(*, output, package="./...", ldflags="-s -w -buildid=", tags=(), env={}, packages=("golang",), output_dir="./build", mkdir=True)` | `go build` recipe; the binary lands at `<output_dir>/<output>` |
-| `CargoBuild(*, output, bin=None, package=None, features=(), profile="release", env={}, packages=("cargo",))` | `cargo build` recipe |
-| `DotnetBuild(*, project, output, configuration="Release", runtime="linux-x64", env={}, packages=("dotnet-sdk-8.0",), restore_args=(), properties={})` | `dotnet publish` recipe into `publish/`; `properties` add `-p:K=V` |
-| `Install(dest, mode=None)` | An `install=` target with its own file mode |
-| `ScriptBuild(*, script, output)` | Arbitrary bash producing `output` |
-| `SourceBuild(name, source, build, install_to=None, mode="0755", cache_key=None, mark_unpinned=True, install=None)` | One declaration: fetch, build, install the artifact at `install_to` and/or each `install={path: dest}` entry (a trailing `/` copies a directory; `Install(dest, mode=)` sets a mode) |
+| Code | Level | Meaning |
+|---|---|---|
+| `fragment-conflict` | error | Two different fragments share a name |
+| `identity-collision` | error | Two different declarations share an identity; use `replace` |
+| `replace-missing` | error | A variant replaces something it does not inherit |
+| `remove-missing` | error | A variant removes something it does not inherit |
+| `target-inconsistent` | error | A variant leaves the cloud target its parent set |
+| `disk-key-undefined` | error | A disk's key is not declared in the variant |
+| `disk-key-mismatch` | error | A disk's key differs from the declared key of that name |
+| `secret-store-undefined` | error | The secrets' store disk is not declared in the variant |
+| `secret-store-mismatch` | error | The store disk differs from the declared disk of that name |
+| `init-after-undefined` | error | An `Init.after` names no init step |
+| `init-order` | error | An `Init` runs after a step with a higher priority |
+| `hook-after-undefined` | error | A `Hook.after` names no hook |
+| `hook-order` | error | A `Hook` runs after a hook of a later phase |
+| `unit-after-init-without-init` | warning | `Unit(after_init=True)` in a variant with no runtime-init step |
+| `fragment-requires-missing` | error | A fragment's `requires` names a fragment the variant does not include |
+
+Compiler rules (on the lowered recipe, when resolution found no error):
+
+| Code | Level | Meaning |
+|---|---|---|
+| `user-group-undefined` | error | A user joins a group nothing creates |
+| `service-user-missing` | error | A generated service runs as a user nothing creates |
+| `file-path-duplicate` | error | One path declared several times with different content |
+| `file-path-relative` | error | A path is relative or contains `..` |
+| `service-command-not-shipped` | warning | A generated service runs a binary nothing ships |
+| `output-target-platform-mismatch` | warning | A cloud output without its platform integration |
+| `platform-target-missing` | warning | Platform integration without its output target |
+| `init-priority-collision` | warning | Several runtime-init steps share a priority |
+| `debloat-removes-needed-unit` | warning | Debloat masks a unit a service needs |
+| `debloat-removes-declared-file` | warning | Debloat deletes a declared file at finalize |
+| `secret-undelivered` | warning | A secret has no delivery target, or nothing delivers secrets at boot |
+| `source-unpinned` | warning (error / info by policy) | A source build has no pin in `build/tundravm.lock` |
+| `disk-key-path-mismatch` | warning | A disk reads a key file the key does not write |
+| `key-pipe-outside-run` | info | A pipe key's path is outside `/run` |
+| `profile-empty` | info | A variant declares nothing of its own |
+
+Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`, `lock-removed`, `lock-stale`. Host tools (from `doctor`): `tool-missing`.
+
+## Policy
+
+`Policy(require_frozen_lock=False, mutable_ref_policy="warn", require_integrity=True, network_mode="online")`. See [policy](policy.md).
+
+## Testing helpers
+
+`tundravm.testing` (see [testing](testing.md)); `variants` is a name, a sequence of names, or `None` for every variant:
 
 ```python
-img.source_build(SourceBuild(
-    name="tdxs",
-    source=GitSource("https://github.com/Hyodar/tundra-tools.git", "master"),
-    build=GoBuild(package="./cmd/tdxs", output="tdxs"),
-    install_to="/usr/bin/tdxs",
-))
+compile_tree(recipe, *, variants=None, path=None) -> CompiledTree
+assert_clean(diagnostics_or_recipe, /, *, variants=None, allow=(), strict=None) -> diagnostics
+assert_diagnostic(diagnostics_or_recipe, code, /, *, level=None, variant=None, subject=None, variants=None) -> Diagnostic
+assert_tree(tree: Tree, golden: str | Path, *, update=None) -> None
+assert_tree_matches(recipe, golden_dir, *, variants=None, update=None) -> TreeDiff
+fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact
+bake_in_process(recipe, *, out=None, variants=None, locked=None) -> tuple[Artifact, ...]
+fake_fragment(name="fake", *, packages=(), files=None, init=None, priority=50, requires=(), checks=()) -> Fragment
+recipe_file(tmp_path: Path, source: str, name="recipe.py") -> Path
+run_cli(*argv) -> tuple[int, str, str]
 ```
 
-`tundravm lock` pins `master` to a commit in the lockfile's `fetches`; `compile()` then fetches that exact commit. `check` reports `source-unpinned` until it is pinned, `explain` shows a `Sources:` section, and `bake --frozen` refuses unpinned sources. Every module that builds from source (`Tdxs`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, and the example `Raiko`, `TaikoClient`, `Nethermind`) is declared this way.
-
-## Modules (`tundravm.modules`)
-
-`KeyGeneration.with_key(...)`, `DiskEncryption.with_disk(...)` and `SecretDelivery.with_secret(...)` return the module, so configuration can be inline: `img.apply(KeyGeneration().with_key("root", strategy="tpm", output="/run/keys/root"))`. `DiskEncryption.disk(..., key=KeySpec)` derives `key_path` from the key and is validated by `check()`; `SecretDelivery(store_at=DiskSpec)` is checked by `secret-store-undefined`.
-
-## Diagnostics
-
-`Image.check()` and `tundravm check` return `Diagnostic`s. Codes are stable.
-
-| Code | Level | Finding |
-| --- | --- | --- |
-| `service-user-missing` | error | A service runs as a user the profile never creates |
-| `file-path-duplicate` | error | Two files at the same path |
-| `file-path-relative` | error | A file path that is not absolute |
-| `service-command-not-shipped` | warning | A service command that no package or file provides |
-| `output-target-platform-mismatch` | warning | An `azure`/`gcp` target without its platform module |
-| `profile-empty` | info | A profile with no declarations of its own |
-| `init-priority-collision` | warning | Two init scripts at the same priority |
-| `backend-missing` | warning | No backend, so `bake()` cannot run |
-| `debloat-removes-needed-unit` | warning | Debloat masks a unit a declared service needs |
-| `debloat-removes-declared-file` | warning | Debloat deletes a declared file |
-| `secret-undelivered` | warning | A secret with no delivery target, or secrets declared with no delivery at boot |
-| `disk-key-undefined` | error | `DiskEncryption` reads a key no `KeyGeneration` declares |
-| `disk-key-path-mismatch` | warning | A disk reads a key path the key never writes |
-| `key-pipe-outside-run` | info | A pipe-strategy key whose pipe is not under `/run` |
-| `platform-target-missing` | warning | `AzurePlatform`/`GcpPlatform` applied without its output target |
-
-`bake()` refuses recipes with any error-level finding.
+Pytest fixtures (plugin `tundravm`, loaded automatically): `recipe`, `compiled`, `run_cli`.

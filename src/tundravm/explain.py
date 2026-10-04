@@ -1,4 +1,4 @@
-"""Dry-run description of what an :class:`~tundravm.image.Image` recipe will produce.
+"""Dry-run description of what an :class:`~tundravm._image.Image` recipe will produce.
 
 ``describe()`` returns a JSON-serializable, deterministically ordered dict for
 one profile without compiling or baking; ``render()`` turns that dict into a
@@ -13,13 +13,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from typing import TYPE_CHECKING, Any, cast, get_args
 
+from ._options import MkosiOptions
 from .compiler import PHASE_ORDER
 from .formats import md_cell, md_table
 from .models import InitScriptEntry, ProfileState, UnitAction, unit_name
-from .options import MkosiOptions
 
 if TYPE_CHECKING:
-    from .image import Image
+    from ._image import Image
 
 PREVIEW_WIDTH = 80
 SHORT_DIGEST_LEN = 12

@@ -1,27 +1,44 @@
-"""Tests for the shared resolve_after utility."""
+"""Units declared with ``after_init`` wait for runtime-init only when the variant has one."""
 
-from tundravm import Image
-from tundravm.modules import KeyGeneration, KeySpec
-from tundravm.modules.resolve import resolve_after
+from pathlib import Path
 
-
-def test_resolve_after_prepends_init_when_scripts_present() -> None:
-    image = Image()
-    KeyGeneration(keys=(KeySpec("k", strategy="tpm"),)).apply(image)
-
-    result = resolve_after(("network.target",), image)
-    assert result == ("runtime-init.service", "network.target")
+from tundravm.declarative import Declaration, Fragment, Key, Recipe, Unit
+from tundravm.testing import compile_tree
 
 
-def test_resolve_after_noop_when_no_init() -> None:
-    image = Image()
-    result = resolve_after(("network.target",), image)
-    assert result == ("network.target",)
+def _unit_text(tmp_path: Path, content: str, *extra: Declaration) -> str:
+    unit = Unit("app.service", content, enabled=True, after_init=True)
+    recipe = Recipe("app", Fragment("app", items=(unit, *extra)))
+    return compile_tree(recipe, path=tmp_path / "tree").unit("app.service")
 
 
-def test_resolve_after_no_duplicate_if_already_present() -> None:
-    image = Image()
-    KeyGeneration(keys=(KeySpec("k", strategy="tpm"),)).apply(image)
+def _after(text: str) -> str:
+    return next(line for line in text.splitlines() if line.startswith("After="))
 
-    result = resolve_after(("runtime-init.service", "network.target"), image)
-    assert result == ("runtime-init.service", "network.target")
+
+APP_UNIT = "[Unit]\nDescription=App\nAfter=network.target\n\n[Service]\nExecStart=/usr/bin/app\n"
+
+
+def test_after_init_prepends_init_when_scripts_present(tmp_path: Path) -> None:
+    text = _unit_text(tmp_path, APP_UNIT, Key("k"))
+
+    assert _after(text) == "After=runtime-init.service network.target"
+    assert "Requires=runtime-init.service" in text.splitlines()
+
+
+def test_after_init_noop_when_no_init(tmp_path: Path) -> None:
+    text = _unit_text(tmp_path, APP_UNIT)
+
+    assert _after(text) == "After=network.target"
+    assert text == APP_UNIT
+
+
+def test_after_init_no_duplicate_if_already_present(tmp_path: Path) -> None:
+    content = APP_UNIT.replace(
+        "After=network.target",
+        "After=runtime-init.service network.target\nRequires=runtime-init.service",
+    )
+    text = _unit_text(tmp_path, content, Key("k"))
+
+    assert _after(text) == "After=runtime-init.service network.target"
+    assert text == content

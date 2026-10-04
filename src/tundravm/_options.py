@@ -1,4 +1,4 @@
-"""mkosi build-tree options grouped off :class:`~tundravm.image.Image`."""
+"""mkosi build-tree options grouped off :class:`~tundravm._image.Image`."""
 
 from __future__ import annotations
 

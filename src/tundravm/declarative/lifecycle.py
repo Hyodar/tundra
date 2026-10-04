@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Literal, get_args
 
 from tundravm import check as _check
+from tundravm._image import Image
+from tundravm._source import Resolver, resolve_pins, source_drift
 from tundravm.backends import (
     InProcessBackend,
     LimaMkosiBackend,
@@ -35,7 +37,6 @@ from tundravm.backends.base import BuildBackend
 from tundravm.deploy import DeployAdapter, get_adapter
 from tundravm.diff import diff_trees
 from tundravm.errors import DeploymentError, MeasurementError, StateError, ValidationError
-from tundravm.image import Image
 from tundravm.lockfile import (
     LockedFetch,
     Lockfile,
@@ -53,7 +54,6 @@ from tundravm.models import (
     ProfileBuildResult,
 )
 from tundravm.observability import Reporter, TextReporter
-from tundravm.source import Resolver, resolve_pins, source_drift
 
 from .lower import lower
 from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
@@ -282,11 +282,8 @@ def compile_image(img: Image, profiles: Sequence[str] | None, *, locked: Lock | 
     saved = (img._last_compile_digest, img._last_compile_path, img._last_compile_emission)
     with tempfile.TemporaryDirectory(prefix="tundravm-tree-") as tmp:
         try:
-            if locked is None:
+            with using_lock(img, locked):  # never the working directory's build/ lockfile
                 result = img.compile(Path(tmp), force=True, profiles=profiles)
-            else:
-                with using_lock(img, locked):
-                    result = img.compile(Path(tmp), force=True, profiles=profiles)
         finally:
             img._last_compile_digest, img._last_compile_path, img._last_compile_emission = saved
         return read_tree(Path(tmp), variants=result.profiles)

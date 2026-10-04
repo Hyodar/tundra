@@ -7,8 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image, StateError
-from tundravm.backends import InProcessBackend
+from tundravm.declarative import (
+    Backend,
+    Fragment,
+    Package,
+    Recipe,
+    bake,
+    lock,
+    measure,
+    read_artifacts,
+)
+from tundravm.errors import StateError
 from tundravm.measure import PlaceholderMeasurementWarning
 from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
 
@@ -77,17 +86,16 @@ def test_load_corrupt_file_raises_state_error(tmp_path: Path) -> None:
         BakeResult.load(tmp_path)
 
 
-def test_bake_saves_and_fresh_image_measures_and_finds_it(tmp_path: Path) -> None:
-    def make() -> Image:
-        img = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-        img.targets("qemu")
-        return img
+def test_bake_saves_and_a_fresh_read_measures_and_finds_it(tmp_path: Path) -> None:
+    recipe = Recipe("io", Fragment("io", items=(Package("curl"),)))
+    build_dir = tmp_path / "build"
 
-    baked = make().bake()
-    assert (tmp_path / "build" / BAKE_RESULT_FILENAME).is_file()
-    assert baked.backend == "inprocess"
+    baked = bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=build_dir)
+    assert (build_dir / BAKE_RESULT_FILENAME).is_file()
+    assert BakeResult.load(build_dir).backend == "inprocess"
 
-    fresh = make()
-    assert fresh.last_bake() == baked
+    fresh = read_artifacts(build_dir)
+    assert fresh == baked
+    assert read_artifacts(build_dir / BAKE_RESULT_FILENAME) == baked
     with pytest.warns(PlaceholderMeasurementWarning):
-        assert fresh.measure(backend="rtmr", allow_placeholder=True).values
+        assert measure(fresh[0], scheme="rtmr", allow_placeholder=True).values

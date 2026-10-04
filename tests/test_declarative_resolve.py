@@ -255,3 +255,60 @@ def test_hook_unit_and_target_checks() -> None:
         "unit-after-init-without-init",
     ]
     assert {d.variant for d in found} == {"local"}
+
+
+def test_service_and_template_identities() -> None:
+    from tundravm.declarative import Service, Template, identity
+
+    assert identity(Service("app", "/bin/app")) == identity(Service("app.service", "/bin/x"))
+    assert identity(Template("/etc/a", "x")) == ("Template", "extra", "/etc/a")
+    recipe = Recipe(
+        "r",
+        Fragment("c", items=(Service("app", "/bin/app"),)),
+        variants=(
+            Variant("default"),
+            Variant("v", replace=(Service("app", "/bin/app --verbose"),)),
+        ),
+    )
+    (service,) = resolve(recipe, variant="v").items
+    assert isinstance(service, Service) and service.exec_start == "/bin/app --verbose"
+
+
+def test_chained_variants_remove_and_replace_any_kind() -> None:
+    from tundravm.declarative import Key, Service
+
+    key = Key("k")
+    recipe = Recipe(
+        "r",
+        Fragment("c", items=(Package("curl"), key, Service("app", "/bin/app"))),
+        variants=(
+            Variant("default"),
+            Variant("cloud", target="azure", add=Fragment("a", items=(Package("waagent"),))),
+            Variant(
+                "slim",
+                parent="cloud",
+                remove=(Package("curl"), key),
+                replace=(Service("app", "/bin/app --slim"),),
+            ),
+        ),
+    )
+    slim = resolve(recipe, variant="slim")
+    assert slim.targets == ("azure",)
+    names = [getattr(item, "name", None) for item in slim.items]
+    assert "curl" not in names and "k" not in names and "waagent" in names
+
+
+def test_several_targets_inherit_and_stay_consistent() -> None:
+    recipe = Recipe(
+        "r",
+        Fragment("c"),
+        variants=(
+            Variant("default"),
+            Variant("cloud", targets=("azure", "gcp")),
+            Variant("child", parent="cloud"),
+            Variant("narrow", parent="cloud", target="qemu"),
+        ),
+    )
+    assert resolve(recipe, variant="child").targets == ("azure", "gcp")
+    codes = {(d.variant, d.code) for d in lint(recipe)}
+    assert ("narrow", "target-inconsistent") in codes

@@ -1,4 +1,5 @@
-"""Tests for compiled-tree diffing (``Image.diff``, ``tundravm diff``, ``compile --check``)."""
+"""Tests for compiled-tree diffing (``tundravm.declarative.diff``, ``tundravm diff``,
+``compile --check``)."""
 
 from __future__ import annotations
 
@@ -7,23 +8,31 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import FileChange, Image, TreeDiff
+from tundravm import Declaration, File, Fragment, Package, Recipe, Variant
+from tundravm import declarative as tv
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, main
-from tundravm.diff import diff_against, diff_trees
+from tundravm.declarative import lower
+from tundravm.diff import FileChange, TreeDiff, diff_against, diff_trees
 
 RECIPE = """
-from tundravm import Image
+from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.platforms import AzurePlatform
 
-img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.install("curl", "jq")
-img.file("/etc/motd", content="hello\\n")
-img.user("app", system=True)
-img.service("app", command="/usr/bin/app")
-img.targets("qemu")
-with img.profile("azure"):
-    AzurePlatform().apply(img)
+backend = InProcessBackend()
+recipe = Recipe(
+    "diff",
+    Fragment(
+        "common",
+        items=(
+            Package("curl"),
+            Package("jq"),
+            File("/etc/motd", "hello\\n"),
+            User("app", system=True),
+            Service("app", "/usr/bin/app"),
+        ),
+    ),
+    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+)
 """
 
 
@@ -129,70 +138,75 @@ def test_to_dict_is_serializable(trees: tuple[Path, Path]) -> None:
     )
 
 
-def make_image(tmp_path: Path) -> Image:
-    img = Image(build_dir=tmp_path / "build")
-    img.install("curl")
-    img.file("/etc/motd", content="hello\n")
-    return img
+def make_recipe(*extra: Package, variants: tuple[Variant, ...] = ()) -> Recipe:
+    items: tuple[Declaration, ...] = (Package("curl"), File("/etc/motd", "hello\n"), *extra)
+    return Recipe(
+        "diff",
+        Fragment("common", items=items),
+        variants=(Variant("default", target="qemu"), *variants),
+    )
 
 
-def test_image_diff_reports_new_package(tmp_path: Path) -> None:
-    img = make_image(tmp_path)
+def test_diff_reports_new_package(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    img.compile(tree)
-    assert img.diff(tree).is_clean
+    tv.compile(make_recipe()).write(tree)
+    assert diff_against(lower(make_recipe()), tree).is_clean
+    assert tv.diff(tv.compile(make_recipe()), tree) == ""
 
-    img.install("extra")
-    diff = img.diff(tree)
+    changed = make_recipe(Package("extra"))
+    diff = diff_against(lower(changed), tree)
     assert [(c.path, c.status) for c in diff.changes] == [("default/mkosi.conf", "modified")]
     assert "+    extra\n" in diff.unified()
+    assert tv.diff(tv.compile(changed), tree) == diff.unified()
     assert "    extra\n" not in (tree / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
 
 def test_diff_against_missing_tree_is_all_added(tmp_path: Path) -> None:
-    diff = diff_against(make_image(tmp_path), tmp_path / "missing")
+    diff = diff_against(lower(make_recipe()), tmp_path / "missing")
     assert diff.changes
     assert {c.status for c in diff.changes} == {"added"}
     assert "default/mkosi.conf" in {c.path for c in diff.changes}
 
 
 def test_diff_ignores_profiles_that_were_not_compiled(tmp_path: Path) -> None:
-    img = make_image(tmp_path)
-    with img.profile("other"):
-        img.install("htop")
+    other = Variant("other", add=Fragment("other", items=(Package("htop"),)))
+    recipe = make_recipe(variants=(other,))
     tree = tmp_path / "tree"
-    with img.all_profiles():
-        img.compile(tree)
+    tv.compile(recipe).write(tree)
     assert (tree / "other" / "mkosi.conf").is_file()
-    assert img.diff(tree).is_clean
+    assert tv.diff(tv.compile(recipe, variants=["default"]), tree) == ""
+    assert diff_against(lower(recipe), tree, profiles=["default"]).is_clean
 
 
-def test_diff_preserves_compile_skip_cache(tmp_path: Path) -> None:
-    img = make_image(tmp_path)
+def test_diff_leaves_the_tree_alone_until_written(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    first = img.compile(tree)
+    first = tv.compile(make_recipe())
+    first.write(tree)
     conf = tree / "default" / "mkosi.conf"
     conf.write_text("hand edit\n", encoding="utf-8")
 
-    assert [c.path for c in img.diff(tree).changes] == ["default/mkosi.conf"]
-    assert img._last_compile_path == tree
-    again = img.compile(tree)
-    assert again.digest == first.digest and again.path == tree
-    assert conf.read_text(encoding="utf-8") == "hand edit\n"  # unchanged recipe: compile skipped
+    assert [c.path for c in diff_against(lower(make_recipe()), tree).changes] == [
+        "default/mkosi.conf"
+    ]
+    assert "-hand edit\n" in tv.diff(first, tree)
+    assert conf.read_text(encoding="utf-8") == "hand edit\n"  # diffing never writes
+    first.write(tree)
+    assert tv.diff(first, tree) == ""
 
-    img.install("extra")
-    img.diff(tree)
-    changed = img.compile(tree)
-    assert changed.path == tree and changed.digest != first.digest
+    changed = tv.compile(make_recipe(Package("extra")))
+    assert changed.digest != first.digest
+    assert "+    extra\n" in tv.diff(changed, tree)
+    changed.write(tree)
     assert "    extra\n" in conf.read_text(encoding="utf-8")
-    assert img._last_compile_emission is not None
-    assert img.diff(tree).is_clean
+    assert tv.diff(changed, tree) == ""
 
 
 @pytest.fixture
-def recipe(tmp_path: Path) -> Path:
+def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The recipe file, run from *tmp_path* so its build dir is ``tmp_path / "build"``."""
+    monkeypatch.chdir(tmp_path)
     path = tmp_path / "recipe.py"
-    path.write_text(f"BUILD_DIR = {str(tmp_path / 'build')!r}\n" + RECIPE, encoding="utf-8")
+    path.write_text(RECIPE, encoding="utf-8")
     return path
 
 
@@ -212,9 +226,14 @@ def test_compile_check_detects_stale_tree(recipe: Path, tmp_path: Path) -> None:
     code, out = run("compile", str(recipe), "--out", str(tree), "--check")
     assert (code, out) == (EXIT_OK, "tree is up to date with the recipe\n")
 
-    recipe.write_text(recipe.read_text().replace('"curl", "jq"', '"curl", "jq", "htop"'))
+    text = recipe.read_text()
+    recipe.write_text(
+        text.replace('Package("jq"),', 'Package("jq"),\n            Package("htop"),')
+    )
     code, out = run("compile", str(recipe), "--out", str(tree), "--check")
     assert code == EXIT_FAILURE
+    assert out == "M  azure/mkosi.conf\nM  default/mkosi.conf\n2 files changed\n"
+    code, out = run("compile", str(recipe), "--out", str(tree), "--check", "--variant", "default")
     assert out == "M  default/mkosi.conf\n1 file changed\n"
 
 

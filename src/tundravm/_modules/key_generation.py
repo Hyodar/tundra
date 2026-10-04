@@ -8,13 +8,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from tundravm._modules.base import TUNDRA_TOOLS, Module
+from tundravm._source import GitSource, GoBuild, Install, SourceBuild
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
-from tundravm.modules.base import TUNDRA_TOOLS, Module
-from tundravm.source import GitSource, GoBuild, Install, SourceBuild
 
 if TYPE_CHECKING:
-    from tundravm.image import Image
+    from tundravm._image import Image
 
 KEY_GENERATION_BUILD_PACKAGES = (
     "golang",

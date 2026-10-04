@@ -4,10 +4,26 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image
-from tundravm.backends import InProcessBackend
+from tundravm.declarative import (
+    Artifact,
+    Backend,
+    Fragment,
+    Package,
+    Recipe,
+    bake,
+    lock,
+    measure,
+    read_artifacts,
+)
 from tundravm.errors import StateError
-from tundravm.measure import PlaceholderMeasurementWarning, rtmr
+from tundravm.measure import (
+    MeasurementBackend,
+    Measurements,
+    PlaceholderMeasurementWarning,
+    derive_measurements,
+    rtmr,
+)
+from tundravm.models import ArtifactRef, ProfileBuildResult
 
 RTMR_A = "aa" * 48
 RTMR_B = "bb" * 48
@@ -18,40 +34,51 @@ def _measured_boot(name: str) -> str | None:
     return "/usr/bin/measured-boot" if name == "measured-boot" else None
 
 
-def _image_with_backend(tmp_path: Path) -> Image:
-    return Image(build_dir=tmp_path / "build", backend=InProcessBackend())
+def _baked(tmp_path: Path) -> Artifact:
+    recipe = Recipe("measured", Fragment("measured", items=(Package("curl"),)))
+    (artifact,) = bake(
+        recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
+    )
+    return artifact
+
+
+def _derived(artifact: Artifact, scheme: MeasurementBackend) -> Measurements:
+    """The compiler's measurement record of *artifact* (exports and verification)."""
+    profile = ProfileBuildResult(
+        profile=artifact.variant,
+        artifacts={artifact.target: ArtifactRef(target=artifact.target, path=artifact.path)},
+    )
+    return derive_measurements(
+        backend=scheme, profile=artifact.variant, profile_result=profile, allow_placeholder=True
+    )
 
 
 def test_measure_requires_baked_artifacts(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build")
     with pytest.raises(StateError, match="No bake result found"):
-        image.measure(backend="rtmr")
+        read_artifacts(tmp_path / "build")
 
 
 def test_measure_supports_rtmr_azure_and_gcp(tmp_path: Path) -> None:
-    image = _image_with_backend(tmp_path)
-    image.targets("qemu")
-    image.bake()
+    artifact = _baked(tmp_path)
 
     with pytest.warns(PlaceholderMeasurementWarning):
-        rtmr_measurements = image.measure(backend="rtmr", allow_placeholder=True)
-        azure = image.measure(backend="azure", allow_placeholder=True)
-        gcp = image.measure(backend="gcp", allow_placeholder=True)
+        rtmr_measurements = measure(artifact, scheme="rtmr", allow_placeholder=True)
+        azure = measure(artifact, scheme="azure", allow_placeholder=True)
+        gcp = measure(artifact, scheme="gcp", allow_placeholder=True)
 
-    assert rtmr_measurements.backend == "rtmr"
-    assert azure.backend == "azure"
-    assert gcp.backend == "gcp"
+    assert rtmr_measurements.scheme == "rtmr"
+    assert azure.scheme == "azure"
+    assert gcp.scheme == "gcp"
     assert rtmr_measurements.values
     assert azure.values
     assert gcp.values
+    assert {m.artifact_digest for m in (rtmr_measurements, azure, gcp)} == {artifact.sha256}
 
 
 def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
-    image = _image_with_backend(tmp_path)
-    image.targets("qemu")
-    image.bake()
+    artifact = _baked(tmp_path)
     with pytest.warns(PlaceholderMeasurementWarning):
-        measurements = image.measure(backend="rtmr", allow_placeholder=True)
+        measurements = _derived(artifact, "rtmr")
 
     json_first = measurements.to_json()
     json_second = measurements.to_json()
@@ -67,14 +94,14 @@ def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
     measurements.to_cbor(cbor_path)
     assert json_path.exists()
     assert cbor_path.exists()
+    with pytest.warns(PlaceholderMeasurementWarning):
+        assert dict(measure(artifact, allow_placeholder=True).values) == measurements.values
 
 
 def test_measure_verification_reports_actionable_mismatches(tmp_path: Path) -> None:
-    image = _image_with_backend(tmp_path)
-    image.targets("qemu")
-    image.bake()
+    artifact = _baked(tmp_path)
     with pytest.warns(PlaceholderMeasurementWarning):
-        measurements = image.measure(backend="rtmr", allow_placeholder=True)
+        measurements = _derived(artifact, "rtmr")
 
     result = measurements.verify(
         {

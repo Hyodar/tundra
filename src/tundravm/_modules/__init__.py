@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from tundravm._source import GitSource
 from tundravm.models import SecretSpec
-from tundravm.source import GitSource
 
 from .base import TUNDRA_TOOLS, Module
 from .devtools import DevTools

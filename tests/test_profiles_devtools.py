@@ -1,152 +1,138 @@
-"""Tests for devtools platform profile helper."""
+"""A variant that adds the ``devtools()`` fragment."""
 
-from tundravm import Image
-from tundravm.modules.devtools import (
-    DEVTOOLS_PACKAGES,
-    DEVTOOLS_POSTINST_SCRIPT,
-    SERIAL_CONSOLE_SERVICE,
-    DevTools,
-)
+from pathlib import Path
+
+import pytest
+
+from tundravm.declarative import Debloat, Fragment, Package, Recipe, Unit, Variant, devtools
+from tundravm.testing import CompiledTree, compile_tree
+
+SERIAL_UNIT = "serial-console.service"
+BASH_COMPLETION = "/usr/share/bash-completion"
+EXPECTED_PACKAGES = {
+    "apt",
+    "bash-completion",
+    "curl",
+    "dnsutils",
+    "iputils-ping",
+    "net-tools",
+    "netcat-openbsd",
+    "openssh-server",
+    "socat",
+    "strace",
+    "tcpdump",
+    "tcpflow",
+    "vim",
+}
 
 
-def test_devtools_profile_adds_debug_packages() -> None:
-    image = Image(reproducible=False)
+def _recipe(*common: Debloat) -> Recipe:
+    return Recipe(
+        "debug",
+        Fragment("common", items=common),
+        variants=(Variant("default"), Variant("devtools", add=devtools())),
+    )
 
-    with image.profile("devtools"):
-        DevTools().apply(image)
 
-    profile = image.state.profiles["devtools"]
-    for pkg in DEVTOOLS_PACKAGES:
-        assert pkg in profile.packages, f"Missing package: {pkg}"
+@pytest.fixture
+def tree(tmp_path: Path) -> CompiledTree:
+    return compile_tree(_recipe(), path=tmp_path / "tree")
+
+
+def _packages(conf: str) -> list[str]:
+    lines = conf.splitlines()
+    start = lines.index("Packages=") + 1 if "Packages=" in lines else len(lines)
+    values: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("    "):
+            break
+        values.append(line.strip())
+    return values
+
+
+def test_devtools_profile_adds_debug_packages(tree: CompiledTree) -> None:
+    packages = _packages(tree.conf(profile="devtools"))
+    for pkg in EXPECTED_PACKAGES:
+        assert pkg in packages, f"Missing package: {pkg}"
 
 
 def test_devtools_profile_includes_expected_packages() -> None:
     """Verify the exact package list matches the upstream devtools profile."""
-    expected = {
-        "apt",
-        "bash-completion",
-        "curl",
-        "dnsutils",
-        "iputils-ping",
-        "net-tools",
-        "netcat-openbsd",
-        "openssh-server",
-        "socat",
-        "strace",
-        "tcpdump",
-        "tcpflow",
-        "vim",
-    }
-    assert set(DEVTOOLS_PACKAGES) == expected
+    declared = {item.name for item in devtools().items if isinstance(item, Package)}
+    assert declared == EXPECTED_PACKAGES
 
 
-def test_devtools_profile_emits_serial_console_service() -> None:
-    image = Image(reproducible=False)
+def test_devtools_profile_emits_serial_console_service(tree: CompiledTree) -> None:
+    (unit,) = [item for item in devtools().items if isinstance(item, Unit)]
 
-    with image.profile("devtools"):
-        DevTools().apply(image)
-
-    profile = image.state.profiles["devtools"]
-    file_paths = {f.path for f in profile.files}
-    assert "/usr/lib/systemd/system/serial-console.service" in file_paths
-
-    svc_entry = next(
-        f for f in profile.files if f.path == "/usr/lib/systemd/system/serial-console.service"
-    )
-    assert svc_entry.content == SERIAL_CONSOLE_SERVICE
+    assert unit.name == SERIAL_UNIT
+    assert tree.unit(SERIAL_UNIT, profile="devtools") == unit.content
 
 
-def test_serial_console_service_content() -> None:
+def test_serial_console_service_content(tree: CompiledTree) -> None:
     """Verify the serial console service enables serial-getty@ttyS0."""
-    assert "serial-getty@ttyS0.service" in SERIAL_CONSOLE_SERVICE
-    assert "Type=oneshot" in SERIAL_CONSOLE_SERVICE
-    assert "RemainAfterExit=yes" in SERIAL_CONSOLE_SERVICE
-    assert "WantedBy=minimal.target" in SERIAL_CONSOLE_SERVICE
+    service = tree.unit(SERIAL_UNIT, profile="devtools")
+    assert "serial-getty@ttyS0.service" in service
+    assert "Type=oneshot" in service
+    assert "RemainAfterExit=yes" in service
+    assert "WantedBy=minimal.target" in service
 
 
-def test_devtools_profile_enables_serial_console_in_postinst() -> None:
-    image = Image(reproducible=False)
+def test_devtools_profile_enables_serial_console_in_postinst(tree: CompiledTree) -> None:
+    postinst = tree.script("postinst", profile="devtools").splitlines()
 
-    with image.profile("devtools"):
-        DevTools().apply(image)
-
-    profile = image.state.profiles["devtools"]
-    postinst_commands = profile.phases.get("postinst", [])
-
-    enable_cmds = [
-        cmd for cmd in postinst_commands if "systemctl" in cmd.argv[0] and "enable" in cmd.argv[0]
-    ]
-    assert len(enable_cmds) >= 1
-    assert any("serial-console.service" in cmd.argv[0] for cmd in enable_cmds)
+    enable_cmds = [line for line in postinst if "systemctl" in line and "enable" in line]
+    assert any(SERIAL_UNIT in line for line in enable_cmds)
 
 
-def test_devtools_postinst_sets_root_password() -> None:
+def test_devtools_postinst_sets_root_password(tree: CompiledTree) -> None:
     """Verify the postinst script sets root password via openssl passwd."""
-    assert "openssl passwd" in DEVTOOLS_POSTINST_SCRIPT
-    assert "usermod -p" in DEVTOOLS_POSTINST_SCRIPT
-    assert "passwd -u root" in DEVTOOLS_POSTINST_SCRIPT
+    postinst = tree.script("postinst", profile="devtools")
+    assert 'openssl passwd -6 "tdx"' in postinst
+    assert "usermod -p" in postinst
+    assert "passwd -u root" in postinst
 
 
-def test_devtools_postinst_configures_dropbear() -> None:
+def test_devtools_postinst_configures_dropbear(tree: CompiledTree) -> None:
     """Verify the postinst script removes restrictive dropbear flags."""
-    assert "dropbear" in DEVTOOLS_POSTINST_SCRIPT
-    assert "-s" in DEVTOOLS_POSTINST_SCRIPT
-    assert "-w" in DEVTOOLS_POSTINST_SCRIPT
-    assert "-g" in DEVTOOLS_POSTINST_SCRIPT
+    postinst = tree.script("postinst", profile="devtools")
+    assert "/etc/default/dropbear" in postinst
+    assert "sed -i 's/ -s//g; s/ -w//g; s/ -g//g' /etc/default/dropbear" in postinst
 
 
-def test_devtools_postinst_configures_openssh() -> None:
+def test_devtools_postinst_configures_openssh(tree: CompiledTree) -> None:
     """Verify the postinst script enables password auth for openssh."""
-    assert "PermitRootLogin yes" in DEVTOOLS_POSTINST_SCRIPT
-    assert "PasswordAuthentication yes" in DEVTOOLS_POSTINST_SCRIPT
+    postinst = tree.script("postinst", profile="devtools")
+    assert "PermitRootLogin yes" in postinst
+    assert "PasswordAuthentication yes" in postinst
 
 
-def test_devtools_profile_registers_postinst_password_hook() -> None:
-    image = Image(reproducible=False)
+def test_devtools_profile_registers_postinst_password_hook(tree: CompiledTree) -> None:
+    postinst = tree.script("postinst", profile="devtools")
 
-    with image.profile("devtools"):
-        DevTools().apply(image)
-
-    profile = image.state.profiles["devtools"]
-    postinst_commands = profile.phases.get("postinst", [])
-    # Should have at least 2 postinst commands: systemctl enable + password setup
-    assert len(postinst_commands) >= 2
-
-    # Check that the password/auth setup script is in postinst
-    all_args = " ".join(" ".join(cmd.argv) for cmd in postinst_commands)
-    assert "openssl passwd" in all_args or "bash" in all_args
+    # The serial console enable line runs before the password/auth setup
+    enable = postinst.index(f"mkosi-chroot systemctl enable {SERIAL_UNIT}")
+    assert enable < postinst.index("openssl passwd")
 
 
-def test_devtools_profile_does_not_affect_default_profile() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("devtools"):
-        DevTools().apply(image)
-
-    default_profile = image.state.profiles["default"]
-    assert "vim" not in default_profile.packages
-    assert not any(
-        f.path == "/usr/lib/systemd/system/serial-console.service" for f in default_profile.files
-    )
+def test_devtools_profile_does_not_affect_default_profile(tree: CompiledTree) -> None:
+    assert "vim" not in _packages(tree.conf(profile="default"))
+    assert f"mkosi.extra/usr/lib/systemd/system/{SERIAL_UNIT}" not in tree.files(profile="default")
+    assert "openssl passwd" not in tree.script("postinst", profile="default")
 
 
-def test_devtools_profile_bash_completion_in_debloat_skip() -> None:
-    """Verify that paths_skip_for_profiles with devtools preserves bash-completion."""
-    image = Image(reproducible=False)
-    image.debloat(
-        paths_skip_for_profiles={"devtools": ("/usr/share/bash-completion",)},
-    )
+def test_devtools_profile_bash_completion_in_debloat_skip(tmp_path: Path) -> None:
+    """A path kept only for the devtools variant survives debloat there alone."""
+    debloat = Debloat(keep_paths_by_variant=(("devtools", (BASH_COMPLETION,)),))
+    tree = compile_tree(_recipe(debloat), path=tmp_path / "tree")
 
-    with image.profile("devtools"):
-        DevTools().apply(image)
+    assert "bash-completion" in _packages(tree.conf(profile="devtools"))
 
-    # Verify bash-completion is in the devtools profile packages
-    profile = image.state.profiles["devtools"]
-    assert "bash-completion" in profile.packages
-
-    # Verify debloat config has the conditional skip
-    default_profile = image.state.profiles["default"]
-    debloat_config = default_profile.debloat
-    conditional = debloat_config.profile_conditional_paths
-    assert "devtools" in conditional
-    assert "/usr/share/bash-completion" in conditional["devtools"]
+    finalize = tree.script("finalize", profile="default")
+    assert finalize.count(f'rm -rf "$BUILDROOT{BASH_COMPLETION}"') == 1
+    conditional = finalize[finalize.index("# Debloat: profile-conditional path removal") :]
+    assert conditional.splitlines()[1:4] == [
+        'if [[ ! "${PROFILES:-}" == *"devtools"* ]]; then',
+        f'    rm -rf "$BUILDROOT{BASH_COMPLETION}"',
+        "fi",
+    ]

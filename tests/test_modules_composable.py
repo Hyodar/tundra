@@ -1,76 +1,81 @@
-"""Tests for composable init modules: KeyGeneration, DiskEncryption, SecretDelivery."""
+"""Keys, disks and secrets lower to the tundra-tools builds, configs and runtime-init steps."""
 
-from typing import Literal
+import json
+from pathlib import Path
 
 import pytest
 
-from tundravm import Image
-from tundravm.errors import ValidationError
-from tundravm.models import SecretSpec
-from tundravm.modules import (
-    DiskEncryption,
-    DiskSpec,
-    GitSource,
-    KeyGeneration,
-    KeySpec,
-    SecretDelivery,
+from tundravm.declarative import (
+    Declaration,
+    Disk,
+    Fragment,
+    Git,
+    Init,
+    Key,
+    Recipe,
+    RuntimeTools,
+    Schema,
+    Secret,
+    SecretEnv,
+    SecretFile,
+    Secrets,
 )
+from tundravm.errors import ValidationError
+from tundravm.testing import CompiledTree, compile_tree
 
-# ── KeyGeneration ────────────────────────────────────────────────────
+KEY_CONFIG = "mkosi.extra/etc/tdx/key-gen.yaml"
+DISK_CONFIG = "mkosi.extra/etc/tdx/disk-setup.yaml"
+SECRET_CONFIG = "mkosi.extra/etc/tdx/secrets.yaml"
+SECRET_MANIFEST = "mkosi.extra/etc/tdx/secrets.json"
+PERSISTENT_KEY = Path("/persistent/key")
 
 
-def _module_with_key(
-    name: str = "key_persistent",
-    *,
-    strategy: Literal["tpm", "random", "pipe"] = "tpm",
-    output: str | None = None,
-    size: int = 64,
-    pipe_path: str | None = None,
-    persist_in_tpm: bool | None = None,
-) -> KeyGeneration:
-    key = KeySpec(
-        name,
-        strategy=strategy,
-        output=output,
-        size=size,
-        pipe_path=pipe_path,
-        persist_in_tpm=persist_in_tpm,
+def _recipe(*items: Declaration) -> Recipe:
+    return Recipe("runtime", Fragment("runtime", items=items))
+
+
+def _compile(tmp_path: Path, *items: Declaration) -> CompiledTree:
+    return compile_tree(_recipe(*items), path=tmp_path / "tree")
+
+
+def _builds(tree: CompiledTree) -> list[str]:
+    """The build script's source-build lines, one per build."""
+    return [line for line in tree.script("build").splitlines() if "git clone" in line]
+
+
+def _conf_list(conf: str, key: str) -> list[str]:
+    """The values of a multi-line ``key=`` list in an mkosi.conf."""
+    lines = conf.splitlines()
+    start = lines.index(f"{key}=") + 1 if f"{key}=" in lines else len(lines)
+    values: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("    "):
+            break
+        values.append(line.strip())
+    return values
+
+
+def _probes(priority: int) -> tuple[Init, Init]:
+    """Inits that run just before and just after *priority*."""
+    return (
+        Init("probe-early", "echo probe-early", priority=priority - 1),
+        Init("probe-late", "echo probe-late", priority=priority + 1),
     )
-    return KeyGeneration(keys=(key,))
 
 
-def _module_with_disk(
-    name: str = "disk_persistent",
-    *,
-    device: str | None = "/dev/vda3",
-    mapper_name: str | None = None,
-    key_path: str | None = "/persistent/key",
-    mount_at: str = "/persistent",
-    key_name: str | None = "key_persistent",
-    format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail",
-    dirs: tuple[str, ...] = ("ssh", "data", "logs"),
-) -> DiskEncryption:
-    disk = DiskSpec(
-        name,
-        device=device,
-        mapper_name=mapper_name,
-        key_path=key_path,
-        mount_at=mount_at,
-        key_name=key_name,
-        format_policy=format_policy,
-        dirs=dirs,
-    )
-    return DiskEncryption(disks=(disk,))
+def _assert_runs_at_priority(script: str, marker: str) -> None:
+    assert script.index("probe-early") < script.index(marker) < script.index("probe-late")
 
 
-def test_key_generation_adds_build_hook() -> None:
-    image = Image(reproducible=False)
-    _module_with_key(strategy="tpm").apply(image)
+# ── Keys ─────────────────────────────────────────────────────────────
 
-    profile = image.state.profiles["default"]
-    build_commands = profile.phases.get("build", [])
-    assert len(build_commands) == 1
-    build_script = build_commands[0].argv[0]
+
+def test_key_generation_adds_build_hook(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Key("key_persistent"))
+
+    builds = _builds(tree)
+    assert len(builds) == 1
+    build_script = builds[0]
     assert "git clone" in build_script
     assert "Hyodar/tundra-tools" in build_script
     assert "mkosi-chroot bash -c" in build_script
@@ -80,126 +85,105 @@ def test_key_generation_adds_build_hook() -> None:
     assert "$DESTDIR/usr/bin/key-gen" in build_script
 
 
-def test_key_generation_registers_init_script() -> None:
-    image = Image(reproducible=False)
-    _module_with_key(strategy="tpm", output="/persistent/key").apply(image)
+def test_key_generation_registers_init_script(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Key("key_persistent", output="/persistent/key"), *_probes(10))
 
-    profile = image.state.profiles["default"]
-    assert len(image.init_scripts()) == 1
-    entry = image.init_scripts()[0]
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in entry.script
-    assert entry.priority == 10
+    script = tree.runtime_init()
+    assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
+    _assert_runs_at_priority(script, "key-gen setup")
 
     # output_path is in the config file, not the init script
-    config_files = [f for f in profile.files if f.path == "/etc/tdx/key-gen.yaml"]
-    assert len(config_files) == 1
-    assert 'output_path: "/persistent/key"' in config_files[0].content
-    assert "tpm: true" in config_files[0].content
+    config = tree.read(KEY_CONFIG)
+    assert 'output_path: "/persistent/key"' in config
+    assert 'strategy: "random"' in config
+    assert "tpm: true" in config
+    assert "/persistent/key" not in script
 
 
-def test_key_generation_allows_output_for_non_tpm_keys() -> None:
-    image = Image(reproducible=False)
-    _module_with_key(strategy="random", output="/tmp/key").apply(image)
+def test_key_generation_allows_output_for_non_tpm_keys(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Key("key_persistent", output="/tmp/key", persist_in_tpm=False))
 
-    profile = image.state.profiles["default"]
-    config = next(f.content for f in profile.files if f.path == "/etc/tdx/key-gen.yaml")
+    config = tree.read(KEY_CONFIG)
     assert 'output_path: "/tmp/key"' in config
     assert "tpm: false" in config
+    assert "tpm2-tools" not in _conf_list(tree.conf(), "Packages")
 
 
-def test_key_generation_pipe_strategy_renders_pipe_config() -> None:
-    image = Image(reproducible=False)
-    _module_with_key(
-        "rootfs_key",
-        strategy="pipe",
-        pipe_path="/run/tdx/passphrase",
-        persist_in_tpm=True,
-    ).apply(image)
+def test_key_generation_pipe_strategy_renders_pipe_config(tmp_path: Path) -> None:
+    key = Key("rootfs_key", strategy="pipe", pipe="/run/tdx/passphrase", persist_in_tpm=True)
+    tree = _compile(tmp_path, key)
 
-    profile = image.state.profiles["default"]
-    config_files = [f for f in profile.files if f.path == "/etc/tdx/key-gen.yaml"]
-    assert len(config_files) == 1
-    content = config_files[0].content
+    content = tree.read(KEY_CONFIG)
     assert "rootfs_key:" in content
     assert 'strategy: "pipe"' in content
     assert 'pipe_path: "/run/tdx/passphrase"' in content
     assert "tpm: true" in content
+    assert "tpm2-tools" in _conf_list(tree.conf(), "Packages")
 
 
-def test_key_generation_custom_repo_and_branch() -> None:
-    image = Image(reproducible=False)
-    module = KeyGeneration(
-        keys=(KeySpec("key_persistent", strategy="tpm"),),
-        source=GitSource("https://github.com/custom/fork", "v2.0"),
-    )
-    module.apply(image)
+def test_key_generation_custom_repo_and_branch(tmp_path: Path) -> None:
+    tools = RuntimeTools(Git("https://github.com/custom/fork", "v2.0"))
+    tree = _compile(tmp_path, Key("key_persistent"), tools)
 
-    profile = image.state.profiles["default"]
-    build_script = profile.phases["build"][0].argv[0]
+    (build_script,) = _builds(tree)
     assert "custom/fork" in build_script
     assert "-b v2.0" in build_script
 
 
-def test_key_generation_supports_multiple_keys() -> None:
-    image = Image(reproducible=False)
-    module = KeyGeneration(
-        keys=(
-            KeySpec("root", strategy="tpm", output="/persistent/root.key"),
-            KeySpec(
-                "data",
-                strategy="pipe",
-                pipe_path="/run/keys/data.pipe",
-                persist_in_tpm=True,
-                output="/persistent/data.key",
-            ),
-        )
+def test_key_generation_supports_multiple_keys(tmp_path: Path) -> None:
+    tree = _compile(
+        tmp_path,
+        Key("root", output="/persistent/root.key"),
+        Key(
+            "data",
+            strategy="pipe",
+            pipe="/run/keys/data.pipe",
+            persist_in_tpm=True,
+            output="/persistent/data.key",
+        ),
     )
-    module.apply(image)
 
-    profile = image.state.profiles["default"]
-    config = next(f.content for f in profile.files if f.path == "/etc/tdx/key-gen.yaml")
+    config = tree.read(KEY_CONFIG)
     assert "root:" in config
     assert "data:" in config
     assert 'pipe_path: "/run/keys/data.pipe"' in config
     assert 'output_path: "/persistent/root.key"' in config
     assert 'output_path: "/persistent/data.key"' in config
 
-    script = image.init_scripts()[0].script
+    assert len(_builds(tree)) == 1
+    script = tree.runtime_init()
     assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
 
 
 def test_key_generation_pipe_strategy_requires_pipe_path() -> None:
-    with pytest.raises(ValidationError, match="pipe strategy requires pipe_path"):
-        KeySpec("bad", strategy="pipe")
+    with pytest.raises(ValidationError, match="the pipe strategy requires pipe="):
+        Key("bad", strategy="pipe")
 
 
 def test_key_generation_pipe_path_only_valid_with_pipe_strategy() -> None:
-    with pytest.raises(ValidationError, match="pipe_path is only valid"):
-        KeySpec("bad", strategy="tpm", pipe_path="/run/keys/x.pipe")
+    with pytest.raises(ValidationError, match="pipe= is only valid"):
+        Key("bad", pipe="/run/keys/x.pipe")
 
 
-def test_key_generation_rejects_empty_duplicate_and_shared_outputs() -> None:
-    with pytest.raises(ValidationError, match="at least one key"):
-        KeyGeneration(keys=())
-    with pytest.raises(ValidationError, match="Duplicate key name 'a'"):
-        KeyGeneration(keys=(KeySpec("a"), KeySpec("a")))
+def test_key_generation_rejects_duplicate_and_shared_outputs(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match=r"Key\(a\) is declared twice"):
+        _compile(tmp_path, Key("a"), Key("a", output="/k"))
     with pytest.raises(ValidationError, match="output path must be unique"):
-        KeyGeneration(keys=(KeySpec("a", output="/k"), KeySpec("b", output="/k")))
-    with pytest.raises(ValidationError, match="Invalid key name"):
-        KeySpec("bad name")
+        _compile(tmp_path, Key("a", output="/k"), Key("b", output="/k"))
+    with pytest.raises(ValidationError, match="invalid key name"):
+        Key("bad name")
 
 
-# ── DiskEncryption ───────────────────────────────────────────────────
+# ── Disks ────────────────────────────────────────────────────────────
 
 
-def test_disk_encryption_adds_build_hook() -> None:
-    image = Image(reproducible=False)
-    _module_with_disk(device="/dev/vda3").apply(image)
+def test_disk_encryption_adds_build_hook(tmp_path: Path) -> None:
+    disk = Disk("disk_persistent", "/persistent", device="/dev/vda3", key=PERSISTENT_KEY)
+    tree = _compile(tmp_path, disk)
 
-    profile = image.state.profiles["default"]
-    build_commands = profile.phases.get("build", [])
-    assert len(build_commands) == 1
-    build_script = build_commands[0].argv[0]
+    builds = _builds(tree)
+    assert len(builds) == 1
+    build_script = builds[0]
     assert "git clone" in build_script
     assert "Hyodar/tundra-tools" in build_script
     assert "mkosi-chroot bash -c" in build_script
@@ -208,45 +192,36 @@ def test_disk_encryption_adds_build_hook() -> None:
     assert "$DESTDIR/usr/bin/disk-setup" in build_script
 
 
-def test_disk_encryption_registers_init_script() -> None:
-    image = Image(reproducible=False)
-    _module_with_disk(
-        device="/dev/vdb",
-        mapper_name="cryptdata",
-        key_path="/persistent/key",
-        mount_at="/data",
-    ).apply(image)
+def test_disk_encryption_registers_init_script(tmp_path: Path) -> None:
+    disk = Disk(
+        "disk_persistent", "/data", device="/dev/vdb", key=PERSISTENT_KEY, mapper="cryptdata"
+    )
+    tree = _compile(tmp_path, disk, *_probes(20))
 
-    profile = image.state.profiles["default"]
-    assert len(image.init_scripts()) == 1
-    entry = image.init_scripts()[0]
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in entry.script
-    assert "cryptsetup rename crypt_disk_disk_persistent cryptdata" in entry.script
-    assert entry.priority == 20
+    script = tree.runtime_init()
+    assert script.count("/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml") == 1
+    assert "cryptsetup rename crypt_disk_disk_persistent cryptdata" in script
+    _assert_runs_at_priority(script, "disk-setup setup")
 
     # key_path and mount_at are in the config file
-    config_files = [f for f in profile.files if f.path == "/etc/tdx/disk-setup.yaml"]
-    assert len(config_files) == 1
-    assert 'encryption_key_path: "/persistent/key"' in config_files[0].content
-    assert 'mount_at: "/data"' in config_files[0].content
-    assert 'pattern: "/dev/vdb"' in config_files[0].content
+    config = tree.read(DISK_CONFIG)
+    assert 'encryption_key_path: "/persistent/key"' in config
+    assert 'mount_at: "/data"' in config
+    assert 'pattern: "/dev/vdb"' in config
 
 
-def test_disk_encryption_renders_custom_disk_config() -> None:
-    image = Image(reproducible=False)
-    _module_with_disk(
+def test_disk_encryption_renders_custom_disk_config(tmp_path: Path) -> None:
+    key = Key("rootfs_key")
+    disk = Disk(
         "scratch",
-        device=None,
-        key_name="rootfs_key",
-        format_policy="on_initialize",
-        dirs=("data", "cache"),
-        mount_at="/mnt/scratch",
-    ).apply(image)
+        "/mnt/scratch",
+        key=key,
+        format="on_initialize",
+        directories=("data", "cache"),
+    )
+    tree = _compile(tmp_path, key, disk)
 
-    profile = image.state.profiles["default"]
-    config_files = [f for f in profile.files if f.path == "/etc/tdx/disk-setup.yaml"]
-    assert len(config_files) == 1
-    content = config_files[0].content
+    content = tree.read(DISK_CONFIG)
     assert "scratch:" in content
     assert 'strategy: "largest"' in content
     assert 'format: "on_initialize"' in content
@@ -255,110 +230,82 @@ def test_disk_encryption_renders_custom_disk_config() -> None:
     assert 'dirs: ["data", "cache"]' in content
 
 
-def test_disk_encryption_installs_cryptsetup() -> None:
-    image = Image(reproducible=False)
-    _module_with_disk().apply(image)
+def test_disk_encryption_installs_cryptsetup(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Disk("disk_persistent", "/persistent", key=PERSISTENT_KEY))
 
-    profile = image.state.profiles["default"]
-    assert "cryptsetup" in profile.packages
+    assert "cryptsetup" in _conf_list(tree.conf(), "Packages")
 
 
-def test_disk_encryption_custom_repo() -> None:
-    image = Image(reproducible=False)
-    module = DiskEncryption(
-        disks=(DiskSpec("disk_persistent"),),
-        source=GitSource("https://github.com/custom/disk", "v3"),
-    )
-    module.apply(image)
+def test_disk_encryption_custom_repo(tmp_path: Path) -> None:
+    tools = RuntimeTools(Git("https://github.com/custom/disk", "v3"))
+    tree = _compile(tmp_path, Disk("disk_persistent", "/persistent"), tools)
 
-    profile = image.state.profiles["default"]
-    build_script = profile.phases["build"][0].argv[0]
+    (build_script,) = _builds(tree)
     assert "custom/disk" in build_script
     assert "-b v3" in build_script
 
 
-def test_disk_encryption_supports_multiple_disks() -> None:
-    image = Image(reproducible=False)
-    module = DiskEncryption(
-        disks=(
-            DiskSpec(
-                "data",
-                device="/dev/vdb",
-                key_name="data_key",
-                key_path="/persistent/data.key",
-                mount_at="/data",
-            ),
-            DiskSpec(
-                "logs",
-                device="/dev/vdc",
-                key_name="logs_key",
-                key_path="/persistent/logs.key",
-                mount_at="/var/log/app",
-                mapper_name="cryptlogs",
-                dirs=("logs", "archive"),
-            ),
-            DiskSpec(
-                "scratch",
-                device=None,
-                key_name=None,
-                key_path=None,
-                mount_at="/scratch",
-                format_policy="on_initialize",
-                dirs=("cache",),
-            ),
-        )
+def test_disk_encryption_supports_multiple_disks(tmp_path: Path) -> None:
+    data_key = Key("data_key")
+    logs_key = Key("logs_key", output="/persistent/logs.key")
+    tree = _compile(
+        tmp_path,
+        data_key,
+        logs_key,
+        Disk("data", "/data", device="/dev/vdb", key=data_key),
+        Disk(
+            "logs",
+            "/var/log/app",
+            device="/dev/vdc",
+            key=logs_key,
+            mapper="cryptlogs",
+            directories=("logs", "archive"),
+        ),
+        Disk("scratch", "/scratch", format="on_initialize", directories=("cache",)),
     )
-    module.apply(image)
 
-    profile = image.state.profiles["default"]
-    config = next(f.content for f in profile.files if f.path == "/etc/tdx/disk-setup.yaml")
+    config = tree.read(DISK_CONFIG)
     assert "data:" in config
     assert "logs:" in config
     assert "scratch:" in config
     assert 'encryption_key: "data_key"' in config
-    assert 'encryption_key: "logs_key"' in config
-    assert 'encryption_key_path: "/persistent/data.key"' in config
     assert 'encryption_key_path: "/persistent/logs.key"' in config
     assert 'mount_at: "/scratch"' in config
+    assert 'dirs: ["logs", "archive"]' in config
     assert 'dirs: ["cache"]' in config
 
-    script = image.init_scripts()[0].script
+    script = tree.runtime_init()
     assert script.count("/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml") == 1
     assert "cryptsetup rename crypt_disk_logs cryptlogs" in script
 
 
 def test_disk_encryption_rejects_mapper_name_for_plain_disks() -> None:
-    with pytest.raises(ValidationError, match="Plain disks cannot request custom mapper names"):
-        DiskSpec("disk_persistent", key_name=None, key_path=None, mapper_name="plain")
+    with pytest.raises(ValidationError, match="a plain disk cannot set mapper="):
+        Disk("disk_persistent", "/persistent", mapper="plain")
 
 
-def test_disk_encryption_rejects_conflicting_disks() -> None:
-    with pytest.raises(ValidationError, match="at least one disk"):
-        DiskEncryption(disks=())
-    with pytest.raises(ValidationError, match="Duplicate disk name 'a'"):
-        DiskEncryption(disks=(DiskSpec("a", mount_at="/a"), DiskSpec("a", mount_at="/b")))
+def test_disk_encryption_rejects_conflicting_disks(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match=r"Disk\(a\) is declared twice"):
+        _compile(tmp_path, Disk("a", "/a"), Disk("a", "/b"))
     with pytest.raises(ValidationError, match="unique mount point"):
-        DiskEncryption(disks=(DiskSpec("a"), DiskSpec("b")))
+        _compile(tmp_path, Disk("a", "/persistent"), Disk("b", "/persistent"))
     with pytest.raises(ValidationError, match="unique mapper name"):
-        DiskEncryption(
-            disks=(
-                DiskSpec("a", key_path="/k/a", mapper_name="m", mount_at="/a"),
-                DiskSpec("b", key_path="/k/b", mapper_name="m", mount_at="/b"),
-            )
+        _compile(
+            tmp_path,
+            Disk("a", "/a", key=Path("/k/a"), mapper="m"),
+            Disk("b", "/b", key=Path("/k/b"), mapper="m"),
         )
 
 
-# ── SecretDelivery ───────────────────────────────────────────────────
+# ── Secrets ──────────────────────────────────────────────────────────
 
 
-def test_secret_delivery_adds_build_hook() -> None:
-    image = Image(reproducible=False)
-    SecretDelivery(method="http_post").apply(image)
+def test_secret_delivery_adds_build_hook(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Secrets())
 
-    profile = image.state.profiles["default"]
-    build_commands = profile.phases.get("build", [])
-    assert len(build_commands) == 1
-    build_script = build_commands[0].argv[0]
+    builds = _builds(tree)
+    assert len(builds) == 1
+    build_script = builds[0]
     assert "git clone" in build_script
     assert "Hyodar/tundra-tools" in build_script
     assert "mkosi-chroot bash -c" in build_script
@@ -367,70 +314,52 @@ def test_secret_delivery_adds_build_hook() -> None:
     assert "$DESTDIR/usr/bin/secret-delivery" in build_script
 
 
-def test_secret_delivery_registers_init_script() -> None:
-    image = Image(reproducible=False)
-    SecretDelivery(method="http_post", port=9090).apply(image)
+def test_secret_delivery_registers_init_script(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Secrets(port=9090), *_probes(30))
 
-    assert len(image.init_scripts()) == 1
-    entry = image.init_scripts()[0]
+    script = tree.runtime_init()
     expected = "/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml"
-    assert expected in entry.script
-    assert entry.priority == 30
+    assert script.count(expected) == 1
+    _assert_runs_at_priority(script, "secret-delivery setup")
+    assert 'server_url: "0.0.0.0:9090"' in tree.read(SECRET_CONFIG)
 
 
-def test_secret_delivery_does_not_add_runtime_packages() -> None:
-    image = Image(reproducible=False)
-    SecretDelivery().apply(image)
+def test_secret_delivery_does_not_add_runtime_packages(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Secrets())
 
-    profile = image.state.profiles["default"]
-    assert "python3" not in profile.packages
+    assert "python3" not in _conf_list(tree.conf(), "Packages")
 
 
-def test_secret_delivery_writes_config_from_declared_secrets() -> None:
-    import json
-
-    from tundravm.models import SecretSchema, SecretTarget
-
-    image = Image(reproducible=False)
-    delivery = SecretDelivery(
-        secrets=(
-            SecretSpec(
+def test_secret_delivery_writes_config_from_declared_secrets(tmp_path: Path) -> None:
+    store = Disk("data-disk", "/data")
+    secrets = Secrets(
+        entries=(
+            Secret(
                 "jwt_secret",
-                required=True,
-                schema=SecretSchema(kind="string", min_length=64, max_length=64),
                 targets=(
-                    SecretTarget.file("/run/secrets/jwt.hex", owner="app", mode="0440"),
-                    SecretTarget.env("JWT_SECRET", scope="global"),
+                    SecretFile("/run/secrets/jwt.hex", owner="app", mode=0o440),
+                    SecretEnv("JWT_SECRET"),
                 ),
+                required=True,
+                schema=Schema(kind="string", min_length=64, max_length=64),
             ),
-            SecretSpec(
-                "api_key",
-                required=False,
-                targets=(SecretTarget.file("/run/secrets/api-key"),),
-            ),
+            Secret("api_key", targets=(SecretFile("/run/secrets/api-key"),), required=False),
         ),
-        method="http_post",
+        store=store,
         host="127.0.0.1",
         port=9090,
-        ssh_dir="/var/lib/app/.ssh",
-        key_path="/run/keys/root.pub",
-        store_at="data-disk",
+        ssh_directory="/var/lib/app/.ssh",
+        ssh_key_path="/run/keys/root.pub",
     )
-    delivery.apply(image)
+    tree = _compile(tmp_path, store, secrets)
 
-    profile = image.state.profiles["default"]
-    manifest_files = [f for f in profile.files if f.path == "/etc/tdx/secrets.json"]
-    assert len(manifest_files) == 1
-    config = json.loads(manifest_files[0].content)
-
-    yaml_files = [f for f in profile.files if f.path == "/etc/tdx/secrets.yaml"]
-    assert len(yaml_files) == 1
-    yaml_content = yaml_files[0].content
+    yaml_content = tree.read(SECRET_CONFIG)
     assert 'server_url: "127.0.0.1:9090"' in yaml_content
     assert 'dir: "/var/lib/app/.ssh"' in yaml_content
     assert 'key_path: "/run/keys/root.pub"' in yaml_content
     assert 'store_at: "data-disk"' in yaml_content
 
+    config = json.loads(tree.read(SECRET_MANIFEST))
     assert config["method"] == "http_post"
     assert config["host"] == "127.0.0.1"
     assert config["port"] == 9090
@@ -457,66 +386,53 @@ def test_secret_delivery_writes_config_from_declared_secrets() -> None:
     assert jwt["targets"][1] == {"kind": "env", "location": "JWT_SECRET", "scope": "global"}
 
 
-# ── Composition with Init ────────────────────────────────────────────
+# ── Composition through runtime-init ─────────────────────────────────
 
 
-def test_init_generates_runtime_init_from_init_scripts() -> None:
-    image = Image(reproducible=False)
-    _module_with_key(strategy="tpm").apply(image)
-    _module_with_disk(device="/dev/vda3").apply(image)
-    SecretDelivery(method="http_post").apply(image)
-    image._apply_init()
+def _runtime_items() -> tuple[Declaration, ...]:
+    key = Key("key_persistent", output="/persistent/key")
+    disk = Disk("disk_persistent", "/persistent", device="/dev/vda3", key=key)
+    return (key, disk, Secrets(store=disk))
 
-    profile = image.state.profiles["default"]
 
-    build_commands = profile.phases.get("build", [])
-    assert len(build_commands) == 3
+def test_init_generates_runtime_init_from_init_scripts(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, *_runtime_items())
 
-    script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
-    assert len(script_files) == 1
-    script = script_files[0].content
+    assert len(_builds(tree)) == 3
+
+    script = tree.runtime_init()
     assert "#!/bin/bash" in script
     assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in script
     assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in script
     assert "/usr/bin/secret-delivery" in script
 
-    svc_files = [
-        f for f in profile.files if f.path == "/usr/lib/systemd/system/runtime-init.service"
-    ]
-    assert len(svc_files) == 1
-    svc = svc_files[0].content
+    svc = tree.unit("runtime-init.service")
     assert "Type=oneshot" in svc
     assert "ExecStart=/usr/bin/runtime-init" in svc
 
-    assert "cryptsetup" in profile.packages
-    assert "python3" not in profile.packages
+    conf = tree.conf()
+    packages = _conf_list(conf, "Packages")
+    assert "cryptsetup" in packages
+    assert "python3" not in packages
 
-    assert "golang" in profile.build_packages
-    assert "git" in profile.build_packages
+    build_packages = _conf_list(conf, "BuildPackages")
+    assert "golang" in build_packages
+    assert "git" in build_packages
 
 
-def test_init_scripts_sorted_by_priority() -> None:
-    image = Image(reproducible=False)
-    SecretDelivery(method="http_post").apply(image)
-    _module_with_key(strategy="tpm").apply(image)
-    _module_with_disk(device="/dev/vda3").apply(image)
-    image._apply_init()
+def test_init_scripts_sorted_by_priority(tmp_path: Path) -> None:
+    key, disk, secrets = _runtime_items()
+    tree = _compile(tmp_path, secrets, disk, key)
 
-    profile = image.state.profiles["default"]
-    script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
-    script = script_files[0].content
-    assert isinstance(script, str)
-
+    script = tree.runtime_init()
     key_pos = script.index("key-gen setup")
     disk_pos = script.index("disk-setup setup")
     secret_pos = script.index("secret-delivery")
     assert key_pos < disk_pos < secret_pos
 
 
-def test_init_without_init_scripts_does_not_generate_runtime_init() -> None:
-    image = Image(reproducible=False)
-    image._apply_init()
+def test_init_without_init_scripts_does_not_generate_runtime_init(tmp_path: Path) -> None:
+    tree = _compile(tmp_path)
 
-    profile = image.state.profiles["default"]
-    script_files = [f for f in profile.files if f.path == "/usr/bin/runtime-init"]
-    assert len(script_files) == 0
+    assert not tree.exists("mkosi.extra/usr/bin/runtime-init")
+    assert not tree.exists("mkosi.extra/usr/lib/systemd/system/runtime-init.service")

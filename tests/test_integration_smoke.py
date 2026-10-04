@@ -9,33 +9,41 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image
+from tundravm import File, Fragment, Package, Recipe, Service, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.modules import Tdxs
+from tundravm.declarative import lower
+from tundravm.declarative.lifecycle import bake_image
+from tundravm.models import BakeResult
+from tundravm.modules import tdxs
+
+
+def _bake(recipe: Recipe, backend: LocalLinuxBackend, output_dir: Path) -> BakeResult:
+    result, _ = bake_image(
+        lower(recipe), ("default",), locked=None, backend=backend, out=output_dir
+    )
+    return result
 
 
 @pytest.mark.integration
 def test_directory_format_pipeline(tmp_path: Path) -> None:
     """Emit + bake a minimal Debian image in directory format."""
-    img = Image(
-        build_dir=tmp_path,
+    recipe = Recipe(
+        "smoke",
+        Fragment(
+            "common",
+            items=(
+                Package("systemd"),
+                Package("udev"),
+                File("/etc/tdx-test", "integration-test\n"),
+                Service("hello", "/bin/true", restart="no"),
+                User("appuser", system=True, shell="/bin/false"),
+            ),
+        ),
         base="debian/bookworm",
-        backend=LocalLinuxBackend(),
-        reproducible=True,
     )
-    img.install("systemd", "udev")
-    img.file("/etc/tdx-test", content="integration-test\n")
-    img.service("hello", command="/bin/true", restart="no", enabled=True)
-    img.user("appuser", system=True, shell="/bin/false")
-
-    backend = LocalLinuxBackend(
-        privilege="sudo",
-        mkosi_args=["--format=directory", "--bootable=no"],
-    )
-    img.backend = backend
 
     emit_dir = tmp_path / "mkosi"
-    img.compile(emit_dir)
+    compile(recipe).write(emit_dir)
 
     unit_path = (
         emit_dir
@@ -49,8 +57,11 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     )
     assert unit_path.exists(), "hello.service not emitted"
 
-    output_dir = tmp_path / "output"
-    bake_result = img.bake(output_dir=output_dir)
+    backend = LocalLinuxBackend(
+        privilege="sudo",
+        mkosi_args=["--format=directory", "--bootable=no"],
+    )
+    bake_result = _bake(recipe, backend, tmp_path / "output")
 
     for _pname, presult in bake_result.profiles.items():
         if presult.report_path and presult.report_path.exists():
@@ -59,18 +70,15 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
 
 
 def test_tdxs_module_emission(tmp_path: Path) -> None:
-    """Emit Tdxs module and verify config, units, and build script."""
-    img = Image(
-        build_dir=tmp_path,
+    """Emit the tdxs fragment and verify config, units, and build script."""
+    recipe = Recipe(
+        "smoke",
+        Fragment("common", items=(Package("systemd"), tdxs())),
         base="debian/bookworm",
-        backend=LocalLinuxBackend(),
-        reproducible=True,
     )
-    img.install("systemd")
-    Tdxs().apply(img)
 
     emit_dir = tmp_path / "mkosi"
-    img.compile(emit_dir)
+    compile(recipe).write(emit_dir)
 
     conf_text = (emit_dir / "default" / "mkosi.conf").read_text()
     assert "BuildPackages=" in conf_text
@@ -122,22 +130,15 @@ def test_tdxs_module_emission(tmp_path: Path) -> None:
 @pytest.mark.integration
 def test_raw_disk_format(tmp_path: Path) -> None:
     """Bake a raw disk image and verify artifact collection."""
-    img = Image(
-        build_dir=tmp_path,
-        base="debian/bookworm",
-        backend=LocalLinuxBackend(),
-        reproducible=True,
+    recipe = Recipe(
+        "smoke", Fragment("common", items=(Package("systemd"),)), base="debian/bookworm"
     )
-    img.install("systemd")
 
     backend = LocalLinuxBackend(
         privilege="sudo",
         mkosi_args=["--format=disk", "--bootable=no"],
     )
-    img.backend = backend
-
-    output_dir = tmp_path / "output"
-    bake_result = img.bake(output_dir=output_dir)
+    bake_result = _bake(recipe, backend, tmp_path / "output")
 
     for _pname, presult in bake_result.profiles.items():
         for _target, artifact in presult.artifacts.items():

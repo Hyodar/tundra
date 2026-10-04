@@ -3,11 +3,13 @@
 A :class:`Recipe` is an immutable value: recipe-wide settings, a ``common``
 :class:`Fragment` of declarations and the :class:`Variant` overlays.
 :func:`resolve` expands one variant, :func:`lint` reports every problem as a
-:class:`Diagnostic`, and :func:`lower` builds the compiler's ``Image`` from it,
-which every CLI command consumes. The lifecycle (:func:`compile`, :func:`lint`,
+:class:`Diagnostic`, and :func:`lower` hands it to the compiler, which every CLI
+command consumes. The lifecycle (:func:`compile`, :func:`lint`,
 :func:`lock`, :func:`bake`, :func:`measure`, :func:`deploy`, :func:`doctor`)
 takes a recipe and explicit inputs and returns explicit results.
 """
+
+from tundravm.policy import Policy
 
 from .lifecycle import (
     Artifact,
@@ -68,8 +70,10 @@ from .model import (
     SecretEnv,
     SecretFile,
     Secrets,
+    Service,
     Setting,
     Target,
+    Template,
     Unit,
     User,
     Variant,
@@ -109,6 +113,7 @@ __all__ = [
     "Partition",
     "Phase",
     "Pin",
+    "Policy",
     "Qemu",
     "Recipe",
     "Repository",
@@ -119,8 +124,10 @@ __all__ = [
     "SecretEnv",
     "SecretFile",
     "Secrets",
+    "Service",
     "Setting",
     "Target",
+    "Template",
     "Tree",
     "Unit",
     "User",

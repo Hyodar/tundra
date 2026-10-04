@@ -5,29 +5,31 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from examples.modules import nethermind, raiko, taiko_client
 
-from tundravm import Image
-from tundravm.declarative import Fragment, Mkosi, Package, Recipe, lower, tdxs
-from tundravm.errors import ValidationError
-from tundravm.modules import (
-    DiskEncryption,
-    DiskSpec,
-    KeyGeneration,
-    KeySpec,
-    SecretDelivery,
-    Tdxs,
-)
-from tundravm.source import (
-    DotnetBuild,
-    GitSource,
-    GoBuild,
+from tundravm._source import DotnetBuild, GitSource, GoBuild, Source, SourceBuild
+from tundravm._source import Install as SourceInstall
+from tundravm.declarative import (
+    Build,
+    Disk,
+    Fragment,
+    Git,
     Install,
-    ScriptBuild,
-    SourceBuild,
+    Key,
+    Mkosi,
+    Package,
+    Recipe,
+    Secrets,
+    Tree,
+    compile,
+    lock,
+    lower,
+    tdxs,
 )
+from tundravm.errors import ValidationError
 
 REPO = "https://example.com/acme/tool.git"
 SHA_A = "a" * 40
@@ -76,64 +78,76 @@ NETHERMIND_LEGACY_HOOK = (
 )
 
 
-def _build_phase_hooks(img: Image) -> list[str]:
-    return [h.command.argv[0] for h in img.state.profiles["default"].hooks if h.phase == "build"]
+@pytest.fixture(autouse=True)
+def _isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``compile`` applies the pins of ``./build/tundravm.lock``; keep the repository's out."""
+    monkeypatch.chdir(tmp_path)
+
+
+def _hooks(tree: Tree) -> str:
+    """The build hooks of the default variant's ``04-build.sh``, after its shebang header."""
+    content = next(e.content for e in tree.entries if e.path == "default/scripts/04-build.sh")
+    assert content is not None
+    return content.decode().split("\n\n", 1)[1].rstrip("\n")
+
+
+def _pin_all(source: Source) -> str:
+    return SHA_A
 
 
 # ── Example modules ─────────────────────────────────────────────────
 
 
-def _surge_stack(dialect: str = "nethermind-v1") -> Image:
-    recipe = Recipe(
+def _surge_stack(dialect: Literal["current", "nethermind-v1"] = "nethermind-v1") -> Recipe:
+    return Recipe(
         name="stack",
-        mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
+        mkosi=Mkosi(dialect=dialect),
         common=Fragment(
             "stack",
             items=(tdxs(), Package("git", role="build"), raiko(), taiko_client(), nethermind()),
         ),
     )
-    return lower(recipe)
 
 
 def test_taiko_client_hook_is_byte_identical_to_legacy_bash() -> None:
-    assert TAIKO_CLIENT_LEGACY_HOOK in _build_phase_hooks(_surge_stack())
+    assert TAIKO_CLIENT_LEGACY_HOOK in _hooks(compile(_surge_stack())).splitlines()
 
 
 def test_nethermind_hook_is_byte_identical_to_legacy_bash() -> None:
-    assert NETHERMIND_LEGACY_HOOK in _build_phase_hooks(_surge_stack())
+    assert NETHERMIND_LEGACY_HOOK in _hooks(compile(_surge_stack())).splitlines()
 
 
 def test_current_dialect_marks_unpinned_app_builds() -> None:
-    hooks = _build_phase_hooks(_surge_stack("current"))
-    assert "# unpinned: feat/tdx-proving\n" + TAIKO_CLIENT_LEGACY_HOOK in hooks
+    hooks = _hooks(compile(_surge_stack("current")))
+    assert "\n# unpinned: feat/tdx-proving\n" + TAIKO_CLIENT_LEGACY_HOOK + "\n" in hooks
 
 
 def test_example_modules_pin_through_the_lockfile() -> None:
-    builds = _surge_stack().source_builds()
+    recipe = _surge_stack()
+    builds = lower(recipe).source_builds()
+    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
+    assert "git clone" not in pinned
     for name in ("taiko-client", "nethermind"):
         spec = builds[name]
-        pinned = spec.render(SHA_A)
-        assert "git clone" not in pinned
-        assert f"fetch -q --depth=1 {spec.source.url} {SHA_A}" in pinned
-        assert f"{spec.cache_key}-{SHA_A[:12]}".replace("/", "_") in pinned
+        assert isinstance(spec.source, GitSource)
+        assert spec.render(SHA_A) in pinned.splitlines()
+        assert f"fetch -q --depth=1 {spec.source.url} {SHA_A}" in spec.render(SHA_A)
+        assert f"{spec.cache_key}-{SHA_A[:12]}".replace("/", "_") in spec.render(SHA_A)
 
 
-def test_every_module_that_builds_from_source_is_a_source_build(tmp_path: Path) -> None:
-    key = KeySpec("key_persistent", strategy="tpm", output="/tmp/key_persistent")
-    keys = KeyGeneration(keys=(key,))
-    disk = DiskSpec("disk_persistent", device=None, key=key, mount_at="/persistent")
-    disks = DiskEncryption(disks=(disk,))
-    delivery = SecretDelivery(method="http_post", store_at=disk)
-    img = Image(build_dir=tmp_path / "build")
-    img.apply(Tdxs(), keys, disks, delivery)
-    assert sorted(img.source_builds()) == [
+def test_every_module_that_builds_from_source_is_a_source_build() -> None:
+    key = Key("key_persistent", output="/tmp/key_persistent")
+    disk = Disk("disk_persistent", "/persistent", key=key)
+    recipe = Recipe("tools", Fragment("tools", items=(tdxs(), key, disk, Secrets(store=disk))))
+    builds = lower(recipe).source_builds()
+    assert sorted(builds) == [
         "disk-encryption",
         "key-generation",
         "secret-delivery",
         "tdxs",
     ]
-    rendered = [spec.render() for spec in img.source_builds().values()]
-    assert sorted(rendered) == sorted(_build_phase_hooks(img))
+    emitted = ("tdxs", "key-generation", "disk-encryption", "secret-delivery")
+    assert _hooks(compile(recipe)) == "\n".join(builds[name].render() for name in emitted)
 
 
 # ── GoBuild / DotnetBuild generalizations ───────────────────────────
@@ -157,7 +171,7 @@ def test_go_build_output_dir_and_mkdir() -> None:
         name="tool",
         source=GitSource(REPO, "main"),
         build=custom,
-        install=(Install.artifact("/usr/bin/tool"),),
+        install=(SourceInstall.artifact("/usr/bin/tool"),),
     )
     assert '"$BUILDROOT/build/tool/bin/tool"' in spec.render()
 
@@ -183,7 +197,7 @@ def test_new_recipe_fields_stay_out_of_the_payload_at_their_defaults() -> None:
         name="tool",
         source=GitSource(REPO, "main"),
         build=GoBuild(output="tool"),
-        install=(Install.artifact("/usr/bin/tool"),),
+        install=(SourceInstall.artifact("/usr/bin/tool"),),
     ).to_payload()
     go_build = go["build"]
     assert isinstance(go_build, dict)
@@ -197,35 +211,41 @@ def test_new_recipe_fields_stay_out_of_the_payload_at_their_defaults() -> None:
         name="app",
         source=GitSource(REPO, "main"),
         build=dotnet,
-        install=(Install.artifact("/usr/bin/o"),),
+        install=(SourceInstall.artifact("/usr/bin/o"),),
     )
     build = spec.to_payload()["build"]
     assert isinstance(build, dict)
     assert build["restore_args"] == ["--force"]
     assert "properties" not in build
+    script = _spec(Build("app", Git(REPO, "main"), script="make", install=_one())).to_payload()
+    assert script["build"] == {"kind": "script", "script": "make", "output": "app", "packages": []}
 
 
 # ── Multi-artifact install ──────────────────────────────────────────
 
 
-def _multi(**kwargs: object) -> SourceBuild:
-    return SourceBuild(
-        name="app",
-        source=GitSource(REPO, "main"),
-        build=ScriptBuild(script="make", output="out/app"),
-        **kwargs,  # type: ignore[arg-type]
-    )
+def _one() -> tuple[Install, ...]:
+    return (Install("app", "/usr/bin/app"),)
+
+
+def _spec(build: Build) -> SourceBuild:
+    """The source build *build* lowers to."""
+    recipe = Recipe("app", Fragment("app", items=(build,)), mkosi=Mkosi(dialect="nethermind-v1"))
+    return lower(recipe).source_builds()[build.name]
+
+
+def _multi(*install: Install) -> Build:
+    return Build("app", Git(REPO, "main"), script="make", install=install)
 
 
 def test_install_steps_render_files_modes_and_directories() -> None:
-    spec = _multi(
-        install=(
-            Install.artifact("/usr/bin/app"),
-            Install.file("conf/app.toml", "/etc/app/app.toml", mode="0600"),
-            Install.tree("share", "/usr/share/app-data/"),
-            Install.file("out/helper", "/usr/libexec/helper"),
-        ),
-        mark_unpinned=False,
+    spec = _spec(
+        _multi(
+            Install("out/app", "/usr/bin/app"),
+            Install("conf/app.toml", "/etc/app/app.toml", mode=0o600),
+            Install("share", "/usr/share/app-data/", mode=None, directory=True),
+            Install("out/helper", "/usr/libexec/helper"),
+        )
     )
     url_hash = hashlib.sha256(REPO.encode()).hexdigest()[:12]
     key = f'"$BUILDDIR/app-{url_hash}-main"'
@@ -246,14 +266,13 @@ def test_install_steps_render_files_modes_and_directories() -> None:
     )
 
 
-def test_install_without_artifact_and_payload() -> None:
-    spec = _multi(
-        install=(
-            Install.file("out/app", "/usr/bin/app", mode="0750"),
-            Install.file("conf/app.toml", "/etc/app/app.toml", mode="0600"),
-            Install.tree("share/", "/usr/share/app-data"),
-        ),
-        mark_unpinned=False,
+def test_install_modes_directories_and_payload() -> None:
+    spec = _spec(
+        _multi(
+            Install("out/app", "/usr/bin/app", mode=0o750),
+            Install("conf/app.toml", "/etc/app/app.toml", mode=0o600),
+            Install("share/", "/usr/share/app-data", mode=None, directory=True),
+        )
     )
     hook = spec.render()
     assert 'install -D -m 0750 "$BUILDROOT/build/app/out/app"' in hook
@@ -271,23 +290,29 @@ def test_install_without_artifact_and_payload() -> None:
     ("install", "message"),
     [
         (lambda: (), "installs nothing"),
-        (lambda: (Install.file("/abs/app", "/usr/bin/app"),), "must be relative"),
-        (lambda: (Install.file("../app", "/usr/bin/app"),), "must be relative"),
-        (lambda: (Install.tree("share/../..", "/usr/share/x"),), "must be relative"),
-        (lambda: (Install.file("out/app", "usr/bin/app"),), "must be absolute"),
-        (lambda: (Install.artifact("usr/bin/app"),), "must be absolute"),
+        (lambda: (Install("/abs/app", "/usr/bin/app"),), "must be relative"),
+        (lambda: (Install("../app", "/usr/bin/app"),), "must be relative"),
         (
-            lambda: (Install(kind="tree", dest="/usr/share/x", path="share", mode="0644"),),
-            "takes no mode",
+            lambda: (Install("share/../..", "/usr/share/x", mode=None, directory=True),),
+            "must be relative",
         ),
-        (lambda: (Install.file("share/", "/usr/share/x"),), "names a directory"),
-        (lambda: (Install("/etc/app.toml", "0600"),), "Unknown install kind"),  # type: ignore[arg-type]
+        (lambda: (Install("out/app", "usr/bin/app"),), "must be an absolute path"),
         (
-            lambda: (Install.artifact("/usr/bin/app"), Install.tree("share", "/usr/share/app")),
+            lambda: (Install("share", "usr/share/x", mode=None, directory=True),),
+            "must be an absolute path",
+        ),
+        (lambda: (Install("share", "/usr/share/x", mode=0o644, directory=True),), "takes no mode"),
+        (lambda: (Install("share/", "/usr/share/x"),), "names a directory"),
+        (lambda: ("out/app",), "is not Install"),
+        (
+            lambda: (
+                Install("out/app", "/usr/bin/app"),
+                Install("share", "/usr/share/app", mode=None, directory=True),
+            ),
             "share the file name app",
         ),
     ],
 )
 def test_install_validation(install: Callable[[], tuple[Install, ...]], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
-        _multi(install=install())
+        _multi(*install())

@@ -1,91 +1,106 @@
-# Reproducibility Validation
+# Reproducibility
 
-Use the same workflow locally and in CI:
+tundravm makes two promises and gives you a check for each:
 
-```bash
-uv sync
-uv run ruff check .
-uv run mypy .
-uv run pytest
-```
+| Promise | Check |
+|---|---|
+| The same recipe compiles to the same mkosi tree, byte for byte | `tundravm compile --check`, `assert_tree`, `Tree.digest` |
+| The same recipe and lockfile fetch the same inputs | `tundravm lock --check`, frozen `bake` |
 
-The repository includes reproducibility-focused tests that run two equivalent bake flows and assert artifact digest stability.
+Byte-identical *disk images* additionally depend on the Debian archive, the build backend and mkosi itself; pin the first with a snapshot mirror and run the same backend.
 
-## mkosi v26 Requirements
+## Reproducible output
 
-The SDK requires mkosi >= 25 (v26 recommended). The `local_linux` backend
-checks the installed version at prepare time and raises `E_BACKEND_EXECUTION`
-if the version is too old.
+`Recipe.epoch` controls the time and identity settings the compiler emits:
 
-Install mkosi v26:
+| `epoch` | Emitted |
+|---|---|
+| `0` (default) | `SourceDateEpoch=0`, `Environment=SOURCE_DATE_EPOCH=0`, a stable `Seed=` (deterministic partition UUIDs), and a finalize hook that strips `IMAGE_VERSION` from `os-release` |
+| `None` | none of the above: the build is not reproducible |
 
-```bash
-pip install --break-system-packages 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
-```
+Every `mkosi.conf` also gets `ManifestFormat=json` and `CleanPackageMetadata=true`. Lowering never touches the network, and `Path` contents are read at compile time, so the tree depends only on the recipe, the files it reads, and the lock.
 
-Reproducibility settings emitted in `mkosi.conf`:
-- `SourceDateEpoch=0` and `Environment=SOURCE_DATE_EPOCH=0`
-- `Seed=<stable-uuid>` for deterministic partition UUIDs
-- `CompressOutput=zstd`
-- `ManifestFormat=json` for reproducible manifest output
-- `CleanPackageMetadata=yes` to strip volatile package metadata
-
-## CI Mode
-
-For strict CI reproducibility, combine frozen bakes and strict policy:
+Pin the archive with snapshot mirrors, and the EFI stub with the `efi_stub()` fragment:
 
 ```python
-from tundravm.policy import Policy
+from tundravm.declarative import Fragment, Recipe, efi_stub
 
-policy = Policy(
-    require_frozen_lock=True,
-    mutable_ref_policy="error",
-    require_integrity=True,
+SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
+
+recipe = Recipe(
+    name="node",
+    mirror=SNAPSHOT,
+    tools_mirror=SNAPSHOT,
+    common=Fragment("node", items=(efi_stub(snapshot=SNAPSHOT, version="257.9-1~bpo12+1"),)),
 )
 ```
 
-Then run bake with frozen lock enforcement:
+## Committed trees
 
-```python
-img.set_policy(policy)
-img.lock()
-img.bake(frozen=True)
+Commit the compiled tree and check it in CI:
+
+```bash
+tundravm compile node.py --out mkosi            # after every recipe change
+tundravm compile node.py --out mkosi --check    # in CI: exit 1 and list the stale files
 ```
 
-## Lockfile sections
+In tests, `assert_tree(compile(recipe, lock=locked), "mkosi")` compares every path, byte, exec bit and symlink, and `TUNDRAVM_UPDATE_GOLDEN=1` rewrites the golden tree (see [testing](testing.md#golden-trees)).
 
-Lockfile schema v2 adds `sections`: a SHA-256 per recipe section (`base`, `arch`, `default_profile`, `init_scripts`, `profiles.<name>.<section>`), computed over the same canonical JSON as `recipe_digest`. The whole-recipe digest is unchanged and is still what frozen bakes enforce. The sections only explain a mismatch.
+The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`python -m examples.surge-tdx-prover compile --check`, and `tests/test_declarative_modules.py`).
 
-```python
-drift = img.lock_status()      # reads <build_dir>/tundravm.lock, never writes
-drift.is_clean                 # False when anything changed
-drift.changed, drift.added, drift.removed
-print(drift.render())          # "~ profiles.default.packages: +htop" or "lock is up to date"
+## The lockfile
+
+`tundravm lock RECIPE` writes `build/tundravm.lock` (JSON, version 2):
+
+| Key | Holds |
+|---|---|
+| `recipe_digest` | SHA-256 of the canonical recipe payload of the locked variants |
+| `sections` | One SHA-256 per section: `base`, `arch`, `default_profile`, `init_scripts`, and `profiles.<variant>.<section>` for `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `debloat`, `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `output_targets` (and `extends` for a variant with a parent) |
+| `recipe` | The payload itself, so drift can name the changed items |
+| `dependencies` | The package list of each variant |
+| `fetches` | One pin per source build: `name`, `kind` (`git`/`http`), `source` URL, requested `ref`, resolved `digest` (commit or sha256) |
+
+The sections only explain a mismatch; a frozen bake compares the whole recipe.
+
+```console
+$ tundravm lock node.py --check
+~ profiles.default.packages: +htop
+~ profiles.dev.packages: +htop
+[exit 1]
 ```
 
-`lock_status(path=None)` returns a `LockDrift` and raises `LockfileError` when the lockfile is missing or unreadable. Item detail comes from the recipe payload embedded in the lockfile, and only when it still matches the recorded section digest. From the shell: `tundravm lock RECIPE --check`.
-
-Lockfiles written before v2 still pass frozen bakes, but `lock --check` reports every section as `+` until you re-lock.
+`~` changed, `+` only in the recipe, `-` only in the lockfile. In Python, `lock_status(recipe, read_lock(path))` returns the same drift as `lock-changed`/`lock-added`/`lock-removed` diagnostics, and `lint(recipe, lock=locked)` includes them.
 
 ## Pinned sources
 
-Modules that build from source declare it instead of writing bash:
+The recipe records what you asked for (`Git(url, "master")`), never the commit, so locking does not make its own lockfile stale. `tundravm lock` resolves:
 
-```python
-from tundravm import GitSource, GoBuild, SourceBuild
+- every `Git` ref to a commit;
+- every `Http` source without `sha256` to the hash of its download.
 
-img.source_build(SourceBuild(
-    name="tdxs",
-    source=GitSource("https://github.com/Hyodar/tundra-tools.git", "master"),
-    build=GoBuild(package="./cmd/tdxs", output="tdxs"),
-    install_to="/usr/bin/tdxs",
-))
+`compile`, `diff` and `bake` read `build/tundravm.lock` and fetch exactly the pinned commit or verify the pinned hash. In Python, `compile(recipe, lock=locked)` applies the pins and `compile(recipe)` uses the refs.
+
+- `lock` keeps every existing pin whose source is unchanged; `--update NAME` re-resolves one source.
+- `lock --offline` reuses the pins and fails naming any source that would need the network.
+- An unpinned build is the `source-unpinned` lint warning. Drift shows as `+ sources.<name>` or `~ sources.<name>: <old> -> <new>`.
+- A `Git` ref that is already a 40-hex commit, or an `Http` source with `sha256`, is immutable and needs no resolution.
+
+## Frozen bakes
+
+`tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from.
+
+## mkosi
+
+The `local` backend needs mkosi v25 or newer (v26 recommended) on `PATH` and checks the version before building. The `lima` and `nix` backends bring their own.
+
+```bash
+pip install 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
 ```
 
-The recipe digest records the symbolic declaration (`master`), never the resolved commit, so locking does not make its own lockfile stale. `tundravm lock` resolves every git ref to a commit and every `HttpSource` without `sha256` to a hash, and stores them in the lockfile's `fetches` (with `name` and `ref`). `compile()` reads `<build_dir>/tundravm.lock` and, where a pin exists for the same repo and ref, fetches that exact commit instead of the branch.
+## CI
 
-- `tundravm lock --offline` (or `policy.network_mode="offline"`) reuses existing pins and fails naming any source that would need the network.
-- `mutable_ref_policy`: `"warn"` (default) leaves `compile()` silent and relies on `check` (`source-unpinned`), `explain` (`pinned=-`) and frozen bakes; `"error"` makes `compile()` fail on an unpinned source; `"allow"` downgrades the check to info. A lockfile pin satisfies every policy.
-- `bake --frozen` refuses unpinned sources with the names to pin.
-- `lock --check` shows `+ sources.<name>`, `- sources.<name>` and `~ sources.<name>: <old7> -> <new7>`.
-- `SourceBuild(mark_unpinned=False)` keeps the build hook free of an `# unpinned:` comment (the built-in modules use it to keep existing trees byte-identical); `cache_key=` overrides the build-cache key.
+```bash
+tundravm ci node.py --out mkosi    # lint --strict, compile --check, lock --check
+```
+
+Add `Policy(require_frozen_lock=True, mutable_ref_policy="error")` to refuse unpinned bakes and unpinned sources outright (see [policy](policy.md)).

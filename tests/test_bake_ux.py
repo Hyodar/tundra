@@ -13,11 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image
+from tundravm import Backend, File, Fragment, Recipe, bake, lock
 from tundravm.backends.base import StreamResult, failure_message, run_streaming
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.declarative import lower
+from tundravm.declarative.lifecycle import bake_image
 from tundravm.errors import BackendExecutionError, LintError
 from tundravm.models import ArtifactRef, BakeRequest, BakeResult, ProfileBuildResult
 from tundravm.observability import (
@@ -224,18 +226,29 @@ def test_local_backend_maps_streamed_failure_to_backend_error(
     assert excinfo.value.context["returncode"] == "1"
 
 
-# -- Image.bake events --------------------------------------------------------
+# -- bake events ----------------------------------------------------------------
 
 
-def _image(tmp_path: Path) -> Image:
-    img = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    img.targets("qemu")
-    return img
+def _recipe(*items: File) -> Recipe:
+    return Recipe("bake", Fragment("common", items=items))
+
+
+def _bake(tmp_path: Path, recipe: Recipe, reporter: Capture | None) -> BakeResult:
+    """Bake *recipe* lowered, in process, with *reporter*, as ``tundravm bake`` does."""
+    result, _ = bake_image(
+        lower(recipe),
+        ("default",),
+        locked=None,
+        backend=InProcessBackend(),
+        out=tmp_path / "build",
+        reporter=reporter,
+    )
+    return result
 
 
 def test_bake_emits_phases_output_artifacts_and_done(tmp_path: Path) -> None:
     capture = Capture()
-    result = _image(tmp_path).bake(reporter=capture)
+    result = _bake(tmp_path, _recipe(), capture)
 
     assert capture.phases() == [
         ("lint", "start"),
@@ -275,15 +288,22 @@ def test_bake_emits_phases_output_artifacts_and_done(tmp_path: Path) -> None:
 
 def test_bake_forwards_logger_records_only_while_attached(tmp_path: Path) -> None:
     capture = Capture()
-    img = _image(tmp_path)
-    img.bake(reporter=capture)
+    img = lower(_recipe())
+    bake_image(
+        img,
+        ("default",),
+        locked=None,
+        backend=InProcessBackend(),
+        out=tmp_path / "build",
+        reporter=capture,
+    )
     logged = [e for e in capture.events if e.extra.get("source") == "logger"]
     assert [e.extra["operation"] for e in logged] == ["bake_profile_start", "bake_profile_complete"]
     assert img.logger.reporter is None
 
 
 def test_bake_without_reporter_records_digests_and_durations(tmp_path: Path) -> None:
-    result = _image(tmp_path).bake()
+    result = _bake(tmp_path, _recipe(), None)
     profile = result.profiles["default"]
     assert profile.artifacts["qemu"].digest is not None
     assert len(profile.artifacts["qemu"].digest or "") == 64
@@ -295,12 +315,26 @@ def test_bake_without_reporter_records_digests_and_durations(tmp_path: Path) -> 
     )
 
 
+def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
+    recipe = _recipe()
+    progress: list[str] = []
+    [artifact] = bake(
+        recipe,
+        locked=lock(recipe),
+        backend=Backend("inprocess"),
+        out=tmp_path / "out",
+        progress=progress.append,
+    )
+    assert any(line.startswith("[default] build via inprocess ... ok") for line in progress)
+    assert (artifact.variant, artifact.target, artifact.simulated) == ("default", "qemu", True)
+    saved = json.loads((tmp_path / "out" / "bake-result.json").read_text())
+    assert saved["profiles"]["default"]["artifact_digests"]["qemu"] == artifact.sha256
+
+
 def test_bake_lint_failure_emits_failed_phase_and_done(tmp_path: Path) -> None:
     capture = Capture()
-    img = _image(tmp_path)
-    img.file("relative/path", content="x")
     with pytest.raises(LintError):
-        img.bake(reporter=capture)
+        _bake(tmp_path, _recipe(File("/etc/../../escape", "x")), capture)
     assert capture.phases() == [("lint", "start"), ("lint", "fail")]
     warnings = [e for e in capture.events if e.kind == "warning"]
     assert any(e.extra["level"] == "error" for e in warnings)
@@ -372,16 +406,15 @@ def test_render_bake_summary_aligns_columns(tmp_path: Path) -> None:
 # -- CLI ----------------------------------------------------------------------
 
 RECIPE = """
-from tundravm import Image
+from tundravm import Fragment, Package, Recipe
 from tundravm.backends.inprocess import InProcessBackend
 
-img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.install("curl")
-img.targets("qemu")
+backend = InProcessBackend()
+recipe = Recipe("bake", Fragment("common", items=(Package("curl"),)))
 """
 
 FAILING_RECIPE = """
-from tundravm import Image
+from tundravm import Fragment, Recipe
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.errors import BackendExecutionError
 
@@ -393,15 +426,21 @@ class FlakyBackend(InProcessBackend):
         raise BackendExecutionError("mkosi build failed. (exit 1)", context={"backend": "flaky"})
 
 
-img = Image(build_dir=BUILD_DIR, backend=FlakyBackend(name="flaky"))
-img.targets("qemu")
+backend = FlakyBackend(name="flaky")
+recipe = Recipe("flaky", Fragment("common"))
 """
 
 
 def _write_recipe(tmp_path: Path, body: str) -> Path:
     path = tmp_path / "recipe.py"
-    path.write_text(f"BUILD_DIR = {str(tmp_path / 'build')!r}\n" + body, encoding="utf-8")
+    path.write_text(body, encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run from *tmp_path*: recipe files build into ``build/`` under the working directory."""
+    monkeypatch.chdir(tmp_path)
 
 
 def _run(*argv: str) -> tuple[int, str]:
@@ -409,6 +448,7 @@ def _run(*argv: str) -> tuple[int, str]:
     return main(list(argv), stdout=out), out.getvalue()
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 def test_cli_bake_default_prints_progress_and_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -425,10 +465,11 @@ def test_cli_bake_default_prints_progress_and_summary(
     assert re.match(
         r"default\s+qemu\s+\S+disk\.qcow2\s+\d+ B\s+[0-9a-f]{12}\s+\d+\.\ds$", lines[header + 1]
     )
-    manifest = tmp_path / "build" / "bake-result.json"
+    manifest = Path("build") / "bake-result.json"
     assert lines[-1] == f"next: tundravm deploy {manifest} --variant default --target qemu"
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 def test_cli_bake_verbose_echoes_backend_output(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -440,6 +481,7 @@ def test_cli_bake_verbose_echoes_backend_output(
     assert "[default] Starting profile bake via inprocess backend." in err
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 def test_cli_bake_quiet_prints_only_the_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -452,6 +494,7 @@ def test_cli_bake_quiet_prints_only_the_summary(
     assert out.splitlines()[-1].startswith("next: tundravm deploy")
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 def test_cli_bake_json_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     recipe = _write_recipe(tmp_path, RECIPE)
     assert _run("lock", str(recipe))[0] == EXIT_OK
@@ -466,12 +509,14 @@ def test_cli_bake_json_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     assert "next:" not in out
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 def test_cli_bake_flags_are_mutually_exclusive(tmp_path: Path) -> None:
     recipe = _write_recipe(tmp_path, RECIPE)
     with pytest.raises(SystemExit):
         _run("bake", str(recipe), "-v", "-q")
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 def test_cli_bake_failure_shows_output_tail_and_error_code(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -489,6 +534,7 @@ def test_cli_bake_failure_shows_output_tail_and_error_code(
     assert err.index("mkosi line 8") < err.index("error [E_BACKEND_EXECUTION]")
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 def test_cli_bake_failure_in_quiet_mode_still_shows_tail(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

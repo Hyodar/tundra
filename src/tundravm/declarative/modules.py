@@ -12,13 +12,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from tundravm.errors import ValidationError
-from tundravm.modules.devtools import (
+from tundravm._modules.devtools import (
     DEVTOOLS_PACKAGES,
     DEVTOOLS_POSTINST_SCRIPT,
     SERIAL_CONSOLE_SERVICE,
 )
-from tundravm.modules.tdxs import TDXS_BUILD_PACKAGES, Tdxs
+from tundravm._modules.tdxs import TDXS_BUILD_PACKAGES, Tdxs
+from tundravm.errors import ValidationError
 
 from .model import (
     Build,

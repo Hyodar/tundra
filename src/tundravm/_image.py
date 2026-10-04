@@ -14,8 +14,12 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Literal, Self
+from typing import Final, Literal, Self
 
+from ._modules.base import Module
+from ._modules.init import Init
+from ._options import MkosiOptions
+from ._source import Resolver, SourceBuild, resolve_pins, source_drift
 from .backends.base import BuildBackend
 from .check import Diagnostic
 from .check import check as run_checks
@@ -81,8 +85,6 @@ from .models import (
     UserSpec,
     unit_name,
 )
-from .modules.base import Module
-from .modules.init import Init
 from .observability import (
     Progress,
     Reporter,
@@ -91,12 +93,7 @@ from .observability import (
     format_duration,
     format_size,
 )
-from .options import MkosiOptions
 from .policy import Policy, ensure_bake_policy
-from .source import Resolver, SourceBuild, resolve_pins, source_drift
-
-if TYPE_CHECKING:
-    from .profile import Profile
 
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+")
@@ -228,7 +225,7 @@ class Image:
         img.bake()
 
     mkosi-only knobs (seed, cache directory, environment, ...) live in
-    :class:`~tundravm.options.MkosiOptions`: ``Image(mkosi=MkosiOptions(...))``
+    :class:`~tundravm._options.MkosiOptions`: ``Image(mkosi=MkosiOptions(...))``
     or ``img.set_mkosi(MkosiOptions(...))``.
     """
 
@@ -309,7 +306,7 @@ class Image:
             if not isinstance(module, Module):
                 raise ValidationError(
                     f"{type(module).__name__} is not a module.",
-                    hint="Subclass tundravm.modules.Module; see docs/module-authoring.md.",
+                    hint="Subclass tundravm._modules.Module; see docs/module-authoring.md.",
                 )
             module.apply(self)
         return self
@@ -329,21 +326,15 @@ class Image:
         base = tuple(self._modules.get(extends, ()))
         return base + tuple(m for m in own if not any(m is b for b in base))
 
-    def profile(
-        self, name: str, *, extends: str | None | Literal[_Unset.TOKEN] = _UNSET
-    ) -> Profile:
-        """Return the :class:`~tundravm.profile.Profile` handle for *name*, declaring it.
+    def profile(self, name: str, *, extends: str | None | Literal[_Unset.TOKEN] = _UNSET) -> str:
+        """Declare profile *name* (extending the default one unless *extends* says otherwise).
 
-        Use it as a context manager (``with img.profile("azure"): ...``) or call the
-        declaration API on it directly (``img.profile("azure").install("walinuxagent")``).
-        A new profile extends the default profile: it builds the default image plus
-        its own declarations. Pass ``extends=None`` for a standalone profile.
+        Declarations go to it inside ``with img.profiles(name): ...``. Pass
+        ``extends=None`` for a standalone profile. Returns the normalized name.
         """
-        from .profile import Profile
-
         (selected,) = self._normalize_profile_names((name,))
         self._ensure_profile(selected, extends=extends)
-        return Profile(self, selected)
+        return selected
 
     @contextmanager
     def profiles(
@@ -645,6 +636,7 @@ class Image:
         limits: Mapping[str, str | int] | None = None,
         kill_mode: KillMode | None = None,
         timeout_stop: str | None = None,
+        after_init: bool = True,
     ) -> Self:
         """Register a systemd service unit in the current profile(s).
 
@@ -703,6 +695,7 @@ class Image:
             limits=limit_data,
             kill_mode=kill_mode,
             timeout_stop=timeout_stop or None,
+            after_init=after_init,
         )
         for profile in self._iter_active_profiles():
             existing_names = {s.name for s in profile.services}
@@ -1187,7 +1180,7 @@ class Image:
                 if errors:
                     raise LintError(
                         f"Recipe has {len(errors)} error-level diagnostics.",
-                        hint="Run `tundravm check RECIPE` or img.check() to see them.",
+                        hint="Run `tundravm lint RECIPE` to see them.",
                         context={"codes": ", ".join(d.code for d in errors[:3])},
                     )
             if frozen:
@@ -1561,7 +1554,7 @@ class Image:
                 continue
             patched: list[ServiceSpec] = []
             for svc in profile.services:
-                if svc.name == init_svc or svc.name.endswith(".target"):
+                if svc.name == init_svc or svc.name.endswith(".target") or not svc.after_init:
                     patched.append(svc)
                     continue
                 after = svc.after if init_svc in svc.after else (init_svc, *svc.after)

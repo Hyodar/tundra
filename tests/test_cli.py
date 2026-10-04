@@ -12,26 +12,33 @@ import pytest
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 
 RECIPE = """
-from tundravm import Image
+from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.platforms import AzurePlatform
 
-img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.install("curl", "jq")
-img.file("/etc/motd", content="hello\\n")
-img.user("app", system=True)
-img.service("app", command="/usr/bin/app")
-img.targets("qemu")
-with img.profile("azure"):
-    AzurePlatform().apply(img)
+backend = InProcessBackend()
+recipe = Recipe(
+    "cli",
+    Fragment(
+        "common",
+        items=(
+            Package("curl"),
+            Package("jq"),
+            File("/etc/motd", "hello\\n"),
+            User("app", system=True),
+            Service("app", "/usr/bin/app"),
+        ),
+    ),
+    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+)
 """
 
 
 @pytest.fixture
-def recipe(tmp_path: Path) -> Path:
+def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The recipe file, run from *tmp_path* so its build dir is ``tmp_path / "build"``."""
+    monkeypatch.chdir(tmp_path)
     path = tmp_path / "recipe.py"
-    build_dir = tmp_path / "build"
-    path.write_text(f"BUILD_DIR = {str(build_dir)!r}\n" + RECIPE, encoding="utf-8")
+    path.write_text(RECIPE, encoding="utf-8")
     return path
 
 
@@ -54,6 +61,7 @@ def test_digest_is_stable_and_variant_sensitive(recipe: Path) -> None:
     a, b, c = digest(), digest(), digest("--variant", "azure")
     assert a == b
     assert a != c
+    assert digest("--variant", "default", "--variant", "azure") == a
 
 
 def test_inspect_text_and_json(recipe: Path) -> None:
@@ -74,15 +82,17 @@ def test_compile_writes_tree(recipe: Path, tmp_path: Path) -> None:
     code, out = run("compile", str(recipe), "--out", str(out_dir))
     assert code == EXIT_OK
     assert f"compiled {out_dir}" in out
-    assert "variants: default" in out
+    assert "variants: default, azure" in out
     assert out_dir.exists()
     assert any(out_dir.rglob("mkosi.conf"))
 
 
 def test_compile_defaults_to_build_dir(recipe: Path, tmp_path: Path) -> None:
-    code, out = run("compile", str(recipe))
+    code, out = run("compile", str(recipe), "--variant", "default")
     assert code == EXIT_OK
-    assert str(tmp_path / "build" / "mkosi") in out
+    assert f"compiled {Path('build') / 'mkosi'}\n" in out
+    assert "variants: default\n" in out
+    assert (tmp_path / "build" / "mkosi" / "default" / "mkosi.conf").is_file()
 
 
 def test_lock_then_frozen_bake(recipe: Path, tmp_path: Path) -> None:
@@ -126,9 +136,9 @@ def test_unknown_variant_is_reported(recipe: Path, capsys: pytest.CaptureFixture
 def test_attr_flag_selects_factory(tmp_path: Path) -> None:
     recipe = tmp_path / "r.py"
     recipe.write_text(
-        "from tundravm import Image\n"
-        "def small():\n    i = Image(); i.install('a'); return i\n"
-        "def big():\n    i = Image(); i.install('b'); return i\n",
+        "from tundravm import Fragment, Package, Recipe\n"
+        "def small():\n    return Recipe('r', Fragment('c', items=(Package('a'),)))\n"
+        "def big():\n    return Recipe('r', Fragment('c', items=(Package('b'),)))\n",
         encoding="utf-8",
     )
     code, out = run("inspect", str(recipe), "--attr", "big", "--json")

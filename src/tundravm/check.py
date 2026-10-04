@@ -1,4 +1,4 @@
-"""Recipe diagnostics: ``Image.check()`` and ``tundravm check``.
+"""Compiler diagnostics on a lowered recipe, reported by ``lint()`` and ``tundravm lint``.
 
 Each rule is a small function ``(image, profile_name, state) -> Iterator[Diagnostic]``
 registered in ``RULES``; ``_rule_module_checks`` adds each applied module's own
@@ -23,7 +23,7 @@ from .formats import annotation_path, md_cell, md_table, resolve_format, workflo
 from .models import InitScriptEntry, OutputTarget, ProfileState, unit_name
 
 if TYPE_CHECKING:
-    from .image import Image
+    from ._image import Image
 
 Level = Literal["error", "warning", "info"]
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
@@ -233,10 +233,7 @@ def _rule_service_user_missing(
             continue
         if re.search(rf"\b(useradd|adduser)\b[^\n;&|]*\b{re.escape(user)}\b", commands):
             continue
-        hint = (
-            f"Declare it with img.user({user!r}, system=True) in profile {profile_name!r}, "
-            "or drop user= to run as root."
-        )
+        hint = f"Declare User({user!r}) in variant {profile_name!r}, or drop user= to run as root."
         if (
             default is not None
             and profile_name != default.name
@@ -244,8 +241,8 @@ def _rule_service_user_missing(
         ):
             hint = (
                 f"{user!r} is declared in profile {default.name!r}, but {profile_name!r} "
-                "is standalone (extends=None) and does not inherit it; declare it in "
-                f"{profile_name!r} too, or drop extends=None."
+                "is lowered standalone and does not inherit it; declare it in "
+                f"{profile_name!r} too, or derive the variant from its parent."
             )
         yield Diagnostic(
             level="error",
@@ -275,7 +272,7 @@ def _rule_user_group_undefined(
                 code="user-group-undefined",
                 message=f"user {user.name!r} joins group {group!r}, which is never created",
                 hint=(
-                    f"Declare it with img.group({group!r}, system=True) in profile "
+                    f"Declare Group({group!r}) in variant "
                     f"{profile_name!r}, or drop it from groups=; useradd fails on an "
                     "unknown group."
                 ),
@@ -373,8 +370,8 @@ def _rule_service_command_not_shipped(
             code="service-command-not-shipped",
             message=f"service {svc.name!r} runs {binary}, which nothing in this profile ships",
             hint=(
-                f"Ship it with img.file({binary!r}, src=..., mode='0755'), a build hook "
-                "that installs it, or the package that provides it. This heuristic only "
+                f"Ship it with File({binary!r}, Path(...), mode=0o755), a Build that "
+                "installs it, or the package that provides it. This heuristic only "
                 f"fires when the profile installs no packages and no file or hook mentions "
                 f"{name!r}; ignore it if the base image already has the binary."
             ),
@@ -396,8 +393,8 @@ def _rule_output_target_platform_mismatch(
                 code="output-target-platform-mismatch",
                 message=f"output target {target!r} without {platform} applied",
                 hint=(
-                    f"Apply {platform}().apply(img) inside "
-                    f"`with img.profile({profile_name!r}):`; {why}. Installing a guest "
+                    f"Give variant {profile_name!r} target={target!r} so lowering adds "
+                    f"{platform}; {why}. Installing a guest "
                     f"agent ({', '.join(sorted(agents))}) also silences this."
                 ),
                 profile=profile_name,
@@ -434,15 +431,15 @@ def _rule_profile_empty(
     if state.extends is None:
         message = "profile declares nothing of its own and builds a bare base image"
         hint = (
-            f"Standalone profiles (extends=None) do not inherit from "
-            f"{image.default_profile!r}. Declare its contents inside "
-            f"`with img.profile({profile_name!r}):`, or remove the profile."
+            f"Standalone variants (parent=None) do not inherit from "
+            f"{image.default_profile!r}. Declare its contents in its add= fragment, "
+            "or remove the variant."
         )
     else:
         message = f"profile declares nothing of its own and builds the {state.extends!r} image"
         hint = (
-            f"Declare what it adds to {state.extends!r} inside "
-            f"`with img.profile({profile_name!r}):`, or remove the profile."
+            f"Declare what it adds to {state.extends!r} in its add= fragment, "
+            "or remove the variant."
         )
     yield Diagnostic(
         level="info",
@@ -490,8 +487,8 @@ def _rule_backend_missing(
         code="backend-missing",
         message="no build backend configured; bake() will fail",
         hint=(
-            "Pass backend= to Image(), e.g. Image(backend=LimaMkosiBackend()). "
-            "compile() and check() work without one."
+            "Bind `backend = LimaMkosiBackend()` in the recipe file or pass bake(backend=...). "
+            "compile() and lint() work without one."
         ),
         profile=image.default_profile,
         subject=None,
@@ -521,7 +518,7 @@ def _rule_debloat_removes_needed_unit(
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} is a systemd unit that debloat masks",
                 hint=(
-                    f"Add it to img.debloat(extra_keep_units=[{unit!r}]) so the "
+                    f"Add it to Debloat(keep_units_extra=({unit!r},)) so the "
                     "systemd minimization keeps it."
                 ),
                 profile=profile_name,
@@ -535,7 +532,7 @@ def _rule_debloat_removes_needed_unit(
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} depends on {dep!r}, which debloat masks",
                 hint=(
-                    f"Add it to img.debloat(extra_keep_units=[{dep!r}]), or drop "
+                    f"Add it to Debloat(keep_units_extra=({dep!r},)), or drop "
                     "the dependency; a Requires= on a masked unit stops the service."
                 ),
                 profile=profile_name,
@@ -558,7 +555,7 @@ def _rule_debloat_removes_declared_file(
                     code="debloat-removes-declared-file",
                     message=f"debloat deletes {pattern} at finalize, after this file is placed",
                     hint=(
-                        f"Add {pattern!r} to img.debloat(paths_skip=[...]) or move the file "
+                        f"Add {pattern!r} to Debloat(keep_paths=(...)) or move the file "
                         "outside the removed path."
                     ),
                     profile=profile_name,

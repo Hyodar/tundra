@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 from .errors import StateError, ValidationError
 
 if TYPE_CHECKING:
-    from .source import SourceBuild
+    from ._source import SourceBuild
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
@@ -183,6 +183,7 @@ class ServiceSpec:
     limits: Mapping[str, str] = field(default_factory=dict)
     kill_mode: KillMode | None = None
     timeout_stop: str | None = None
+    after_init: bool = True
 
     def extras(self) -> dict[str, object]:
         """Optional unit fields that are set, keyed by name (empty for a plain service)."""
@@ -198,6 +199,7 @@ class ServiceSpec:
             "type": self.type,
             "wanted_by": self.wanted_by,
             "working_dir": self.working_dir,
+            "runs_before_init": not self.after_init,
         }
         return {key: value for key, value in optional.items() if value}
 

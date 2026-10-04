@@ -2,100 +2,37 @@
 
 ## Unreleased
 
+This release replaces the SDK's public API. An image is now an immutable value, a `Recipe`, and every lifecycle step is a function over it. The fluent `Image`/`Profile`/`Module` builder is gone from the public surface.
+
 ### Added
 
-- `tundravm` command (also `python -m tundravm`) with `new`, `explain`, `check`, `digest`, `compile` (`--check`), `diff`, `lock` (`--check`, `--explain`), `bake`, `measure`, `deploy` and `doctor`. See `docs/cli.md`.
-- `load_recipe()`: loads an `Image` from a Python file (`img`, `build()`, or the single `Image`/`build_*` in the file; `--attr` to choose). The file runs under a private `__name__`.
-- `Image.apply(*modules)`: applies modules in order and chains. `Applicable` protocol for anything with `apply(image)`.
-- `Image.explain()` and `Image.summary()`: dry-run description of one profile, including `Extends:` and `Modules:`.
-- `Image.check()` linter returning `Diagnostic`s (level, code, profile, subject, message, hint). Rules: `service-user-missing`, `file-path-duplicate`, `file-path-relative`, `service-command-not-shipped`, `output-target-platform-mismatch`, `profile-empty`, `init-priority-collision`, `backend-missing`, `debloat-removes-needed-unit`, `debloat-removes-declared-file`, `secret-undelivered`, plus module checks `disk-key-undefined`, `disk-key-path-mismatch`, `key-pipe-outside-run`, `platform-target-missing`.
-- `Image.diff(against)` returning a `TreeDiff`, `tundravm diff`, and `compile --check` as a CI drift gate.
-- `Module` base class with `name`, `requires`, `init_priority` and `setup()`/`install()`/`init_script()`/`check()` hooks. `Image.applied_modules(profile=None, *, inherited=False)`.
-- `bake()` writes `<out>/bake-result.json`. `BakeResult.save()`/`load()`, `Image.last_bake(build_dir=None)`, so `measure()` and `deploy()` work in a new process.
-- `StateError` (`E_STATE`) for missing or unreadable persisted state.
-- `measure --out` and `deploy --out` to follow a bake made with `--out`.
-- `doctor` probes each backend's `Requirement`s (`limactl`, `nix`, `mkosi`, `sudo`/`unshare`).
-- `Profile` objects: `img.profile(name)` returns a handle with the declaration API and profile-scoped `explain`/`summary`/`check`/`compile`/`lock`/`diff`/`bake`/`measure`/`deploy`. `Image.profile_names`.
-- `img.profile(name, extends=None)` for a standalone profile.
-- `Image.directory(dest, *, src, mode=None, exclude=())`: imports a host directory tree, keeping the executable bit.
-- `service()` gains `description`, `working_dir`, `env`, `env_file` and `exec_start_pre`.
-- Lockfile section digests (`base`, `arch`, `default_profile`, `init_scripts`, `profiles.<name>.<section>`). `Image.lock_status(path=None) -> LockDrift`. `tundravm.lockfile` exports `LockDrift`, `compare_lock`, `section_digests`.
-- `tundravm.testing`: `compile_tree()`/`CompiledTree`, `assert_clean()`, `assert_diagnostic()`, `assert_tree_matches()` (golden trees, `TUNDRAVM_UPDATE_GOLDEN=1`), `bake_in_process()`, `FakeModule`, `recipe_file()`, `run_cli()`. A pytest plugin registers the `image`, `inprocess_image`, `compiled` and `run_cli` fixtures.
-- `QemuDeployAdapter` accepts an injectable runner.
-- Source builds: `Image.source_build(SourceBuild(...))` with `GitSource`/`HttpSource` and `GoBuild`/`CargoBuild`/`DotnetBuild`/`ScriptBuild`. `tundravm lock` pins refs to commits and downloads to hashes (`--offline` reuses pins), `compile()` fetches the pinned commit, `check` reports `source-unpinned`, `explain` shows `Sources:`, `bake --frozen` refuses unpinned sources, and `lock --check` shows `~ sources.<name>: <old> -> <new>`. Source builds install several artifacts with `install={path: dest | Install(dest, mode=)}` (a trailing `/` copies a directory); `GoBuild` gains `output_dir`/`mkdir`, `DotnetBuild` gains `restore_args`/`properties`. All seven modules that build from source (`Tdxs`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, and the example `Raiko`, `TaikoClient`, `Nethermind`) build through it with byte-identical hooks.
-- `service()` gains `group`, `wanted_by`, `type`, `limits`, `kill_mode` and `timeout_stop`.
-- `Image.enable()`, `disable()` and `mask()` for packaged units; `explain` lists them under `Units:`.
-- `Image.group(name, system=, gid=)` and the `user-group-undefined` rule.
-- `Image.pin_mirror(url, tools_tree=True)`.
-- `KeyGeneration.with_key()`, `DiskEncryption.with_disk()`, `SecretDelivery.with_secret()` return the module; `DiskEncryption.disk(key=KeySpec)`; `SecretDelivery.store_at` accepts a `DiskSpec` with the `secret-store-undefined` rule.
-- `Image.init_scripts(profile=None)`, `Image.has_init_scripts()`, `Profile.applied_modules(inherited=)`.
-- `LintError` (`E_LINT`) for a bake refused by the linter.
-- `MkosiOptions`, `Image.mkosi_options(**overrides)`, `Image.set_kernel()`; `explain`/`summary` show non-default `Build options:`. The in-memory compile cache now keys on the emit config, so changing options after a compile re-emits.
-- Measurement provenance: `Measurements.source` (`measured-boot`, `dstack-mr` or `placeholder`), `tool_version`, `artifact`, `is_placeholder`; `tundravm measure --allow-placeholder`; `doctor` lists the optional measurement tools; `PlaceholderMeasurementWarning`.
-- `tundravm init [DIR]` bootstraps a recipe project (`NAME.py`, a `build/` `.gitignore` block that keeps the lockfile, and with `--ci github` a GitHub Actions workflow). Templates live in `tundravm.templates`.
-- `tundravm ci RECIPE` runs `check --strict`, `compile --check` and `lock --check` with one verdict line per step, exit 1 at the first failure.
-- `--format` for review output: `explain` (`text|json|markdown`), `check` (`auto|text|json|github|markdown`), `diff` (`auto|text|stat|markdown|github`), `compile --check` and `lock --check` (`auto|text|github|markdown`). `auto`, the default, emits GitHub workflow annotations under `GITHUB_ACTIONS=true`. New APIs: `explain.render_markdown()`, `check.render_github()`/`render_markdown()`, `TreeDiff.markdown()`/`github()`, `LockDrift.github()`/`markdown()`.
-- Live bake progress: `Event`/`Reporter` (`TextReporter`, `JsonReporter`, `NullReporter`) in `tundravm.observability`, backends stream mkosi output line by line, `Image.bake(reporter=)`, and `tundravm bake -v/-q/--json-logs/--color` with a summary table. `bake-result.json` records artifact digests.
-- The unused `tundravm.cache` package (and the never-called artifact converter) is removed.
-- Docs: concepts, tutorial, API, CLI, module authoring, testing.
+- **Declarative API** (`tundravm`, `tundravm.declarative`). A `Recipe` holds recipe-wide settings (`base`, `arch`, `mirror`, `tools_mirror`, `epoch`, `Mkosi`, `Policy`), a `common` `Fragment` and its `Variant`s. Declarations are frozen dataclasses that validate at construction: `Package`, `File`, `Directory`, `Template`, `Group`, `User`, `Service` (a generated unit), `Unit` (verbatim text or a packaged unit's state), `Hook`, `Init`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Build` (`Git`/`Http` source, `Install` map, `cache_key`), and the `Key`, `Disk` and `Secrets` trio (`Secret`, `SecretFile`, `SecretEnv`, `Schema`, `RuntimeTools`), which reference each other by object. Fragments group declarations and carry `requires` and `checks` (functions of the `Resolved` variant). Variants overlay a parent (`base`, another variant, or `None`) with `add`, `replace` and `remove`, and pick their output with `target` or `targets`. `resolve`/`resolve_all` expand fragments, apply ancestry and check references; identity is type plus natural key, so collisions are errors and changes are explicit. `tundravm.modules` ships `tdxs()`, `devtools()`, `efi_stub()` and `backports()` as fragment functions.
+- **Lifecycle functions** with explicit inputs and results: `lint(recipe, lock=)`, `compile(recipe, lock=) -> Tree`, `diff(tree, against)`, `lock(recipe, previous=, update=, offline=) -> Lock`, `lock_status`, `read_lock`/`write_lock`, `bake(recipe, locked=, backend=Backend(kind), out=) -> tuple[Artifact, ...]`, `read_artifacts`, `measure(artifact) -> Measurements`, `deploy(artifact, using=Qemu()/Azure()/Gcp()) -> Deployment`, `doctor(backend)`, `load(path)`. Artifacts record the recipe, lockfile and tree digests; simulated (in-process) artifacts are refused by `measure`/`deploy` unless `allow_placeholder=True`.
+- **CLI grammar**: `init`, `inspect`, `lint`, `compile`, `diff`, `lock`, `bake`, `measure`, `deploy`, `doctor`, `ci`. Every recipe command takes a repeatable `--variant` and runs on every variant without it. `--format auto|text|json|github|markdown` for review output (`auto` picks GitHub annotations under `GITHUB_ACTIONS=true`). `lint` reports resolution, fragment-check and compiler diagnostics together. `bake` is frozen whenever `build/tundravm.lock` exists, takes `--backend lima|nix|local|inprocess`, and reports progress (`-v`, `-q`, `--json-logs`). `measure` and `deploy` read `bake-result.json` (`--scheme`, `--target`, `--param KEY=VALUE`, `--allow-placeholder`). `ci` runs `lint --strict`, `compile --check` and `lock --check`. `init --ci github` writes a workflow that calls it.
+- **Testing**: `tundravm.testing` works on lifecycle values: `assert_clean`/`assert_diagnostic` take `lint()` diagnostics, `assert_tree(tree, golden)` compares every path, byte, exec bit and symlink (`TUNDRAVM_UPDATE_GOLDEN=1` rewrites), `compile_tree`, `fake_bake`, `bake_in_process`, `fake_fragment`, `recipe_file`, `run_cli`. Pytest fixtures `recipe`, `compiled`, `run_cli`.
+- Lockfile section digests (`profiles.<variant>.<section>`) and source pins (`fetches`); `lock --check` names the drifted sections, `lock --update NAME` re-resolves one source, `lock --offline` reuses pins.
+- Measurement provenance: `Measurements.tool` names `measured-boot`, `dstack-mr` or `placeholder`; placeholders print a banner and emit `PlaceholderMeasurementWarning`.
+- `StateError` (`E_STATE`) for a missing or unreadable `bake-result.json`, `LintError` (`E_LINT`) for a bake refused by the linter.
+- `examples/surge-tdx-prover` is a declarative recipe that compiles byte-for-byte to the committed nethermind-tdx tree for `default`, `azure`, `gcp` and `devtools`; `examples/modules` holds `raiko()`, `taiko_client()` and `nethermind()`.
 
 ### Changed
 
-- `bake()` runs the linter before building.
-- Frozen-bake errors list the drifted lockfile sections (up to 15) instead of a bare digest mismatch.
-- Lockfile version 1 → 2. Version 1 files still load and still pass frozen bakes; `lock --check` reports every section as added until you re-lock.
-- `explain` shows `Extends:` and `Modules:` lines and previews hooks by their first non-comment line.
-- Init priorities live on the module classes: `KeyGeneration` 10, `DiskEncryption` 20, `SecretDelivery` 30. `Raiko` (example) declares `requires = (Tdxs,)`.
-- Init scripts are scoped to the profile that registers them; extending profiles inherit the default's. Standalone profiles keep the `IMAGE_VERSION` strip hook.
-- `compile()` is silent about unpinned sources under `mutable_ref_policy="warn"`; only `"error"` fails the compile.
-- The unused `tundravm.ir` package is removed.
-- Small examples expose `build() -> Image` and no longer bake on import. The surge recipe is rewritten on the new API and `python -m examples.surge-tdx-prover` delegates to the CLI. Its compiled tree is unchanged.
+- Lockfile version 1 → 2. Version 1 files still load; `lock --check` reports every section as added until you re-lock.
+- Recipe files bind a `Recipe` to `recipe` (or `RECIPE`, or a `build()` factory). A module-level `backend` is the bake backend. `load_recipe()` returns the `Recipe`.
+- `Recipe.base` defaults to `debian/trixie`.
+- `compile()` recreates each variant directory, so stale files are removed.
+- The `BuildBackend` protocol has `requirements()`, which `doctor` probes.
 
-### Breaking
+### Removed
 
-- Profiles extend the default profile. A profile's image is the default's packages, files, users, services, hooks, init scripts and modules plus its own additions; the profile wins on the same file path, unit, user, partition or repository. Previously each profile compiled to a standalone image. Pass `extends=None` for the old behaviour.
-- The `Module` and `InitModule` protocols are removed. Modules subclass the `Module` base class. `apply()` is final; override `setup()`, `install()`, `init_script()` or `check()` instead. Init priorities are the `init_priority` class attribute, not an `apply()` argument.
-- `img.profile(name)` returns a `Profile`, not a context manager yielding the `Image`. `with img.profile(name):` still works.
-- `measure()` and `deploy()` with no bake result raise `StateError` (`E_STATE`) instead of `MeasurementError`/`DeploymentError`.
-- `bake()` raises `LintError` (`E_LINT`) for a recipe with error-level lint findings.
-- `Init.add_script`, `Init.scripts` and `Init.has_scripts` are removed; use `Image.add_init_script()`, `Image.init_scripts()` and `Image.has_init_scripts()`.
-- Recipes using `Tdxs` get a new recipe digest (the `source_builds` payload key), so their lockfiles need re-locking.
-- `compile()` recreates each profile directory, so stale files are removed. Files at the tree root and other profiles' directories are kept.
-- The `BuildBackend` protocol gains `requirements() -> tuple[Requirement, ...]`.
-- `FileEntry.content` may be `bytes`. `file(src=...)` copies non-UTF-8 files as bytes.
-- `Image.build_dir` is normalized to a `Path` (a `str` is accepted).
-- `Image` is keyword-only. The mkosi knobs (`with_network`, `clean_package_metadata`, `manifest_format`, `compress_output`, `output_directory`, `seed`, `sandbox_trees`, `package_cache_directory`, `init_script`, `environment`, `environment_passthrough`, `emit_mode`, `generate_version_script`, `generate_cloud_postoutput`) moved to `MkosiOptions`, passed as `Image(mkosi=...)` or set with `img.mkosi_options(...)`; `logger` and `init` are no longer constructor arguments. `Image.emit_mkosi()` is removed; use `compile()`.
-- `measure()` refuses placeholder values unless `allow_placeholder=True` (CLI `--allow-placeholder`); `rtmr`/`azure`/`gcp` modules return `Measurements`, which now requires `source=` (JSON schema 2).
-
-### Breaking (API round, from an external design review)
-
-| Old | New |
-| --- | --- |
-| `img.build_install(...)` | `img.build_packages(...)` |
-| `img.build_source(host_path, target)` | `img.mount_build_source(src, dest=)` |
-| `img.source_build(spec)` | `img.build_from(spec)` |
-| `img.output_targets(...)` | `img.targets(...)` |
-| `img.add_init_script(...)` | `img.runtime_init(script, priority=)` |
-| `img.directory(dest, src=)` | `img.copy_tree(dest, src=)` |
-| `img.run/hook/sync/prepare/finalize/postoutput/clean/on_boot` | one `img.shell(command, phase=)`; `after_phase` removed |
-| `img.mkosi_options(**kw)` | `img.set_mkosi(MkosiOptions(...))` |
-| `img.service(name, enabled=True)` (no command) | `img.enable(name)`; `service()` requires `command=` |
-| `img.ssh()` | `img.install("dropbear")` |
-| `partition(mount=)`, `DiskSpec.mount_point` | `mount_at` |
-| `file(path=)`, `skeleton(path=)` | first parameter is `dest` |
-| `debloat(paths_remove_extra=, systemd_units_keep_extra=)` | `extra_remove_paths=`, `extra_keep_units=` |
-| `Devtools` | `DevTools` |
-| `Applicable`, `tundravm.modules.Init`, `CompileResult./`, `emit_mkosi()` | removed |
-| `Profile.__getattr__` forwarding | every profile method is explicit and typed; image-wide setters raise `AttributeError` |
-| `Module.setup/install/init_script/init_priority` | one `configure(image)` hook (+ `check()`); modules call `image.runtime_init(..., priority=)` |
-| `KeyGeneration().key(...)`, `.with_key(...)` (and disk/secret equivalents) | `KeyGeneration(keys=(KeySpec(...),))`, `DiskEncryption(disks=(DiskSpec(...),))`, `SecretDelivery(secrets=(...))` |
-| `Tdxs(source_repo=, source_branch=)`, `Raiko(...)`, `TaikoClient(build_path=)`, `Nethermind(version=)` | `source=GitSource(url, ref, subdir=)` |
-| `GitSource.repo` | `GitSource.url` |
-| `SourceBuild(install_to=, mode=, install={...})`, `Install(dest, mode)` | `SourceBuild(install=(Install.artifact(dest), Install.file(path, dest, mode=), Install.tree(path, dest)))` |
-| `compile/lock/lock_status/diff/bake` scoped by `with img.profiles(...)` | also accept `profiles=` explicitly |
+- The fluent `Image`, `Profile` and `Module` API (`img.install()`, `img.service()`, `img.profile()`, `img.apply()`, `Module` subclasses, `MkosiOptions`, `SourceBuild`/`GitSource`/`HttpSource`/`GoBuild`/`CargoBuild`/`DotnetBuild`/`ScriptBuild`). It remains as internal lowering machinery (`tundravm._image`, `tundravm._modules`, ...), not as API. Use `Recipe`, `Fragment` and the declarations.
+- The module classes `KeyGeneration`, `DiskEncryption`, `SecretDelivery`, `Tdxs`, `DevTools`, `AzurePlatform`, `GcpPlatform`: use the `Key`, `Disk` and `Secrets` declarations, the `tdxs()` and `devtools()` fragments, and `Variant(target="azure"|"gcp")`.
+- CLI verbs `explain` (use `inspect`), `check` (use `lint`), `digest` (use `inspect --json`, key `digest`) and `new` (use `init`), with no aliases.
+- `--profile`/`-p` and `--all-profiles` (use repeatable `--variant`; omit it for every variant), `bake --lock`/`--frozen`/`--force`, `measure --backend` (use `--scheme`), `deploy --memory`/`--cpus` (use `--param`), `measure --out`/`deploy --out` (pass the bake directory).
+- `tundravm.testing.FakeModule` (use `fake_fragment`) and the `image`/`inprocess_image` fixtures (use `recipe`).
+- `SPEC.md`, which described the fluent API. The design record is `docs/design/declarative-api.md`.
 
 ### Fixed
 
-- `runtime-init.service` is registered once per profile, so compiling the default profile and then all profiles no longer fails with a duplicate service.
-- A file removed from the recipe no longer lingers in the compiled tree and in `compile --check`.
-- `examples/full_api.py`: a `Requires=` on a `secrets-ready.target` that nothing provides, and a disk reading a key path the key never writes.
+- `runtime-init.service` is registered once per variant, so compiling one variant and then all of them no longer fails with a duplicate service.
+- A file removed from the recipe no longer lingers in the compiled tree or in `compile --check`.

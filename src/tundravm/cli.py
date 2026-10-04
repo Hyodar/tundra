@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TextIO, cast, get_args
 
 from . import __version__
+from ._image import Image
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .check import failing, render_as, render_summary
@@ -59,7 +60,6 @@ from .diff import _wants_color, cmd_diff, diff_against
 from .errors import TdxError, ValidationError
 from .explain import render_markdown
 from .formats import annotation_path, format_help, resolve_format, workflow_command
-from .image import Image
 from .lockfile import LockDrift, recipe_digest
 from .measure import PlaceholderMeasurementWarning
 from .measure import rtmr as rtmr_measure
@@ -505,14 +505,11 @@ def _load(args: argparse.Namespace) -> RecipeFile:
     return load_file(args.recipe, attr=args.attr, extra_paths=extra)
 
 
-def _variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...] | None:
-    """The requested variants: ``--variant`` names, else every declared variant.
-
-    ``None`` (a legacy ``Image`` file without ``--variant``) keeps its active selection.
-    """
+def _variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...]:
+    """The requested variants: ``--variant`` names, else every declared variant."""
     names: list[str] | None = args.variant
     if not names:
-        return loaded.variants if loaded.recipe is not None else None
+        return loaded.variants
     unknown = [name for name in names if name not in loaded.variants]
     if unknown:
         raise ValidationError(
@@ -862,7 +859,7 @@ def _probe_measurement_tools(runner: ProbeRunner, out: TextIO) -> None:
 
 
 def doctor(
-    loaded: RecipeFile | Image | None,
+    loaded: RecipeFile | None,
     out: TextIO,
     *,
     runner: ProbeRunner | None = None,
@@ -876,8 +873,6 @@ def doctor(
     run = runner if runner is not None else run_probe
     print(f"tundravm {__version__}", file=out)
     print(f"python {platform.python_version()}", file=out)
-    if isinstance(loaded, Image):
-        loaded = RecipeFile(Path("recipe.py"), None, loaded, loaded.backend)
     if loaded is None and backend is None:
         for candidate in default_doctor_backends():
             _probe_backend(candidate, run, out)
@@ -891,8 +886,7 @@ def doctor(
         ready = _probe_backend(chosen, run, out)
     _probe_measurement_tools(run, out)
     if loaded is not None:
-        names = loaded.variants if loaded.recipe is not None else None
-        report = check_report(loaded.recipe, loaded.image, variants=names)
+        report = check_report(loaded.recipe, loaded.image, variants=loaded.variants)
         print(f"lint: {render_summary(report)}", file=out)
     return EXIT_OK if ready else EXIT_FAILURE
 

@@ -1,38 +1,47 @@
-"""Tests for Azure platform profile helper."""
+"""An ``azure`` target variant gets the Azure platform integration."""
 
-from tundravm import Image
-from tundravm.platforms.azure import (
-    AZURE_PROVISIONING_SCRIPT,
-    AZURE_PROVISIONING_SERVICE,
-    AzurePlatform,
+from pathlib import Path
+
+import pytest
+
+from tundravm.declarative import Fragment, Recipe, Variant, compile, resolve
+from tundravm.platforms.azure import AZURE_PROVISIONING_SCRIPT, AZURE_PROVISIONING_SERVICE
+from tundravm.testing import CompiledTree, compile_tree
+
+SCRIPT = "mkosi.extra/usr/bin/azure-complete-provisioning"
+SERVICE = "azure-complete-provisioning.service"
+RECIPE = Recipe(
+    "cloud",
+    Fragment("common"),
+    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
 )
 
 
-def test_azure_profile_adds_dmidecode_package() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("azure"):
-        AzurePlatform().apply(image)
-
-    profile = image.state.profiles["azure"]
-    assert "dmidecode" in profile.packages
+@pytest.fixture
+def tree(tmp_path: Path) -> CompiledTree:
+    return compile_tree(RECIPE, path=tmp_path / "tree")
 
 
-def test_azure_profile_emits_provisioning_script() -> None:
-    image = Image(reproducible=False)
+def _packages(conf: str) -> list[str]:
+    lines = conf.splitlines()
+    start = lines.index("Packages=") + 1 if "Packages=" in lines else len(lines)
+    values: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("    "):
+            break
+        values.append(line.strip())
+    return values
 
-    with image.profile("azure"):
-        AzurePlatform().apply(image)
 
-    profile = image.state.profiles["azure"]
-    file_paths = {f.path for f in profile.files}
-    assert "/usr/bin/azure-complete-provisioning" in file_paths
+def test_azure_profile_adds_dmidecode_package(tree: CompiledTree) -> None:
+    assert "dmidecode" in _packages(tree.conf(profile="azure"))
 
-    script_entry = next(
-        f for f in profile.files if f.path == "/usr/bin/azure-complete-provisioning"
-    )
-    assert script_entry.mode == "0755"
-    assert script_entry.content == AZURE_PROVISIONING_SCRIPT
+
+def test_azure_profile_emits_provisioning_script(tree: CompiledTree) -> None:
+    assert SCRIPT in tree.files(profile="azure")
+    modes = {entry.path: entry.mode for entry in compile(RECIPE, variants=["azure"]).entries}
+    assert modes[f"azure/{SCRIPT}"] == 0o755
+    assert tree.read(SCRIPT, profile="azure") == AZURE_PROVISIONING_SCRIPT
 
 
 def test_azure_provisioning_script_content() -> None:
@@ -46,22 +55,8 @@ def test_azure_provisioning_script_content() -> None:
     assert "goalstate" in AZURE_PROVISIONING_SCRIPT
 
 
-def test_azure_profile_emits_service_unit() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("azure"):
-        AzurePlatform().apply(image)
-
-    profile = image.state.profiles["azure"]
-    file_paths = {f.path for f in profile.files}
-    assert "/usr/lib/systemd/system/azure-complete-provisioning.service" in file_paths
-
-    svc_entry = next(
-        f
-        for f in profile.files
-        if f.path == "/usr/lib/systemd/system/azure-complete-provisioning.service"
-    )
-    assert svc_entry.content == AZURE_PROVISIONING_SERVICE
+def test_azure_profile_emits_service_unit(tree: CompiledTree) -> None:
+    assert tree.unit(SERVICE, profile="azure") == AZURE_PROVISIONING_SERVICE
 
 
 def test_azure_service_unit_content() -> None:
@@ -73,56 +68,29 @@ def test_azure_service_unit_content() -> None:
     assert "ExecStart=/usr/bin/azure-complete-provisioning" in AZURE_PROVISIONING_SERVICE
 
 
-def test_azure_profile_enables_service_in_postinst() -> None:
-    image = Image(reproducible=False)
+def test_azure_profile_enables_service_in_postinst(tree: CompiledTree) -> None:
+    postinst = tree.script("postinst", profile="azure").splitlines()
 
-    with image.profile("azure"):
-        AzurePlatform().apply(image)
-
-    profile = image.state.profiles["azure"]
-    postinst_commands = profile.phases.get("postinst", [])
-    assert len(postinst_commands) >= 1
-
-    # Check that systemctl enable is called
-    enable_cmds = [
-        cmd for cmd in postinst_commands if "systemctl" in cmd.argv[0] and "enable" in cmd.argv[0]
-    ]
-    assert len(enable_cmds) >= 1
-    assert any("azure-complete-provisioning.service" in cmd.argv[0] for cmd in enable_cmds)
+    enable_cmds = [line for line in postinst if "systemctl" in line and "enable" in line]
+    assert any(SERVICE in line for line in enable_cmds)
 
 
-def test_azure_profile_symlinks_to_minimal_target() -> None:
-    image = Image(reproducible=False)
+def test_azure_profile_symlinks_to_minimal_target(tree: CompiledTree) -> None:
+    postinst = tree.script("postinst", profile="azure").splitlines()
 
-    with image.profile("azure"):
-        AzurePlatform().apply(image)
-
-    profile = image.state.profiles["azure"]
-    postinst_commands = profile.phases.get("postinst", [])
-
-    # Check symlink into minimal.target.wants
-    link_cmds = [cmd for cmd in postinst_commands if "ln" in cmd.argv[0]]
-    assert len(link_cmds) >= 1
-    link_cmd = link_cmds[0]
-    assert "minimal.target.wants/azure-complete-provisioning.service" in link_cmd.argv[0]
+    link_cmds = [line for line in postinst if line.startswith("mkosi-chroot ln ")]
+    assert len(link_cmds) == 1
+    assert f"minimal.target.wants/{SERVICE}" in link_cmds[0]
 
 
-def test_azure_profile_sets_output_target() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("azure"):
-        AzurePlatform().apply(image)
-
-    profile = image.state.profiles["azure"]
-    assert "azure" in profile.output_targets
+def test_azure_profile_sets_output_target(tree: CompiledTree) -> None:
+    assert resolve(RECIPE, variant="azure").target == "azure"
+    conf = tree.conf(profile="azure").splitlines()
+    assert "PostOutputScripts=scripts/azure-postoutput.sh" in conf
+    assert tree.exists("scripts/azure-postoutput.sh", profile="azure")
 
 
-def test_azure_profile_does_not_affect_default_profile() -> None:
-    image = Image(reproducible=False)
-
-    with image.profile("azure"):
-        AzurePlatform().apply(image)
-
-    default_profile = image.state.profiles["default"]
-    assert "dmidecode" not in default_profile.packages
-    assert not any(f.path == "/usr/bin/azure-complete-provisioning" for f in default_profile.files)
+def test_azure_profile_does_not_affect_default_profile(tree: CompiledTree) -> None:
+    assert "dmidecode" not in _packages(tree.conf(profile="default"))
+    assert SCRIPT not in tree.files(profile="default")
+    assert not tree.exists("scripts/azure-postoutput.sh", profile="default")

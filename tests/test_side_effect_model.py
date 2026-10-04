@@ -1,39 +1,70 @@
 from pathlib import Path
 
-from tundravm import Image
-from tundravm.backends import InProcessBackend
+import pytest
+
+from tundravm.declarative import (
+    Backend,
+    Fragment,
+    Hook,
+    Package,
+    Recipe,
+    Target,
+    Variant,
+    bake,
+    compile,
+    lint,
+    lock,
+    lower,
+    resolve,
+    write_lock,
+)
 
 
-def test_declarative_methods_do_not_touch_filesystem(tmp_path: Path) -> None:
-    build_dir = tmp_path / "build"
-    image = Image(build_dir=build_dir)
+def _recipe(*packages: str, targets: tuple[Target, ...] = ("qemu", "azure")) -> Recipe:
+    return Recipe(
+        "effects",
+        Fragment(
+            "common",
+            items=(*(Package(p) for p in packages), Hook("ready", "prepare", "echo ready")),
+        ),
+        variants=(Variant("default", targets=targets),),
+    )
 
-    image.install("curl", "jq")
-    image.targets("qemu")
-    image.shell("echo hello", phase="prepare")
+
+def test_declarative_values_do_not_touch_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    recipe = _recipe("curl", "jq", targets=("qemu",))
+    resolve(recipe, variant="default")
+    lint(recipe)
+    tree = compile(recipe)
+    image = lower(recipe)
 
     assert image.state.profiles["default"].packages == {"curl", "jq"}
-    assert not build_dir.exists()
+    assert tree.entries
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     build_dir = tmp_path / "build"
     emit_dir = tmp_path / "mkosi"
-    image = Image(build_dir=build_dir, backend=InProcessBackend())
-    image.install("curl")
-    image.targets("qemu", "azure")
-    image.shell("echo ready", phase="prepare")
+    recipe = _recipe("curl")
 
-    lock_path = image.lock()
-    assert lock_path == build_dir / "tundravm.lock"
+    locked = lock(recipe)
+    lock_path = build_dir / "tundravm.lock"
+    assert not lock_path.exists()
+    write_lock(locked, lock_path)
     assert lock_path.exists()
 
-    generated = image.compile(emit_dir)
-    assert generated.path == emit_dir
+    compile(recipe).write(emit_dir)
     assert (emit_dir / "default" / "mkosi.conf").exists()
 
-    result = image.bake()
-    assert result.artifact_for(profile="default", target="qemu") is not None
-    assert result.artifact_for(profile="default", target="azure") is not None
+    artifacts = bake(recipe, locked=locked, backend=Backend("inprocess"), out=build_dir)
+    assert {(a.variant, a.target) for a in artifacts} == {
+        ("default", "qemu"),
+        ("default", "azure"),
+    }
     assert (build_dir / "default" / "disk.qcow2").exists()
     assert (build_dir / "default" / "disk.vhd").exists()

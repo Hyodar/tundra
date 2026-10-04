@@ -1,10 +1,13 @@
-"""Helpers for testing recipes and modules: compile, lint, golden trees, CLI runs.
+"""Helpers for testing recipes and fragments: compile, lint, golden trees, CLI runs.
 
-The declarative helpers work on lifecycle values: :func:`assert_clean` and
-:func:`assert_diagnostic` take the diagnostics :func:`tundravm.lint` returns,
-:func:`assert_tree` compares a :class:`~tundravm.Tree` with a golden directory
-and :func:`fake_bake` turns a tree into a simulated :class:`~tundravm.Artifact`.
-They also accept a ``Recipe`` (linted for you) or a lowered ``Image``.
+Every helper takes declarative values: a :class:`~tundravm.Recipe`, the
+:class:`~tundravm.Tree` :func:`tundravm.compile` returns, or the diagnostics
+:func:`tundravm.lint` returns. :func:`compile_tree` writes a recipe's tree to
+disk with readers for the files tests inspect, :func:`assert_clean` and
+:func:`assert_diagnostic` check lint results, :func:`assert_tree` and
+:func:`assert_tree_matches` compare against a golden directory,
+:func:`fake_bake` and :func:`bake_in_process` produce simulated artifacts, and
+:func:`fake_fragment` builds a small :class:`~tundravm.Fragment` to compose with.
 
 Importing this package does not import pytest. The fixtures live in
 ``tundravm.testing.pytest_plugin``, which pytest loads automatically once
@@ -21,44 +24,51 @@ import os
 import shutil
 import tempfile
 import textwrap
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Self, cast, overload
+from typing import cast, overload
 
-from tundravm.backends.inprocess import InProcessBackend
 from tundravm.check import Diagnostic, Level, render
-from tundravm.declarative import Recipe
+from tundravm.declarative import lifecycle
 from tundravm.declarative.lifecycle import (
     INPROCESS,
     MANIFEST_KEY,
     Artifact,
+    Backend,
+    Lock,
     Tree,
     check_report,
-    compile_image,
     read_artifacts,
     read_tree,
-    variant_names,
+)
+from tundravm.declarative.model import (
+    Check,
+    Declaration,
+    File,
+    Fragment,
+    Init,
+    Package,
+    Recipe,
+    Target,
 )
 from tundravm.declarative.model import Diagnostic as Finding
-from tundravm.declarative.model import Target
 from tundravm.diff import TreeDiff, _foreign_profile_globs, diff_trees
 from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
-from tundravm.modules.base import Module
-
-if TYPE_CHECKING:
-    from tundravm.image import Image
 
 UPDATE_GOLDEN_ENV = "TUNDRAVM_UPDATE_GOLDEN"
 _UNIFIED_LINES = 200
 _UNIT_DIR = "mkosi.extra/usr/lib/systemd/system"
 
+Variants = str | Sequence[str] | None
+"""A variant selection: one name, several names, or ``None`` for every declared variant."""
+
 
 class CompiledTree:
     """A compiled mkosi tree on disk, with readers for the files tests inspect.
 
-    Every ``profile`` argument defaults to the image's default profile when it
-    was compiled, otherwise to the first compiled profile.
+    ``profiles`` (alias ``variants``) are the compiled variant directories.
+    Every ``profile`` argument names one of them and defaults to the first.
     """
 
     __slots__ = ("default_profile", "profiles", "root")
@@ -76,11 +86,16 @@ class CompiledTree:
     def __repr__(self) -> str:
         return f"CompiledTree({str(self.root)!r}, profiles={self.profiles!r})"
 
+    @property
+    def variants(self) -> tuple[str, ...]:
+        """The compiled variants (same as ``profiles``)."""
+        return self.profiles
+
     def profile(self, name: str | None = None) -> Path:
-        """Directory holding *name*'s mkosi.conf, extra, skeleton and scripts."""
+        """Directory holding variant *name*'s mkosi.conf, extra, skeleton and scripts."""
         name = name or self.default_profile
         if name not in self.profiles:
-            raise KeyError(f"profile {name!r} was not compiled; compiled: {list(self.profiles)}")
+            raise KeyError(f"variant {name!r} was not compiled; compiled: {list(self.profiles)}")
         native = self.root / "mkosi.profiles" / name
         return native if native.is_dir() and not (self.root / name).is_dir() else self.root / name
 
@@ -94,7 +109,7 @@ class CompiledTree:
         return self.path(relpath, profile).exists()
 
     def files(self, profile: str | None = None) -> list[str]:
-        """Sorted POSIX paths of every file in the profile, relative to its directory."""
+        """Sorted POSIX paths of every file in the variant, relative to its directory."""
         base = self.profile(profile)
         return sorted(p.relative_to(base).as_posix() for p in base.rglob("*") if not p.is_dir())
 
@@ -123,67 +138,36 @@ class CompiledTree:
         return self.read("mkosi.conf", profile)
 
 
-@contextlib.contextmanager
-def _selected(image: Image, profiles: Sequence[str] | None) -> Iterator[None]:
-    if profiles is None:
-        yield
-        return
-    names = (profiles,) if isinstance(profiles, str) else tuple(profiles)
-    unknown = [name for name in names if name not in image.state.profiles]
-    if unknown:
-        raise ValueError(f"unknown profile(s) {unknown}; declared: {sorted(image.state.profiles)}")
-    with image.profiles(*names):
-        yield
-
-
-def _profile_list(profiles: Sequence[str] | None) -> list[str] | None:
-    if profiles is None:
+def _names(variants: Variants) -> list[str] | None:
+    if variants is None:
         return None
-    return [profiles] if isinstance(profiles, str) else list(profiles)
+    return [variants] if isinstance(variants, str) else list(variants)
 
 
 def compile_tree(
-    image: Image | Recipe, *, profiles: Sequence[str] | None = None, path: Path | None = None
+    recipe: Recipe, *, variants: Variants = None, path: str | Path | None = None
 ) -> CompiledTree:
-    """Compile *profiles* into *path* or a fresh temp dir.
+    """Compile *variants* of *recipe* (default: every declared one) into *path* or a temp dir.
 
-    For a ``Recipe``, *profiles* are variant names (default: every variant); for an
-    ``Image``, the default is its active profiles. The image's compile cache is
-    left as it was, so a later ``bake()`` is unaffected.
+    Unknown variant names raise ``ValidationError``. No lockfile is consulted,
+    so source builds use their refs.
     """
     root = Path(path) if path is not None else Path(tempfile.mkdtemp(prefix="tundravm-tree-"))
-    if isinstance(image, Recipe):
-        names = variant_names(image, _profile_list(profiles))
-        from tundravm.declarative import lower
-
-        tree = compile_image(lower(image, variants=names), names, locked=None)
-        tree.write(root)
-        return CompiledTree(root, tree.variants, default_profile=tree.variants[0])
-    saved = (image._last_compile_digest, image._last_compile_path, image._last_compile_emission)
-    try:
-        with _selected(image, profiles):
-            result = image.compile(root, force=True)
-    finally:
-        (
-            image._last_compile_digest,
-            image._last_compile_path,
-            image._last_compile_emission,
-        ) = saved
-    return CompiledTree(root, result.profiles, default_profile=image.default_profile)
+    tree = lifecycle.compile(recipe, variants=_names(variants))
+    tree.write(root)
+    return CompiledTree(root, tree.variants, default_profile=tree.variants[0])
 
 
 AnyDiagnostic = Diagnostic | Finding
+Diagnostics = Sequence[Finding] | Sequence[Diagnostic]
 
 
-def _findings(
-    subject: Image | Recipe | Sequence[AnyDiagnostic], profiles: Sequence[str] | None
-) -> Sequence[AnyDiagnostic]:
+def _findings(subject: Recipe | Diagnostics, variants: Variants) -> Sequence[AnyDiagnostic]:
     if isinstance(subject, Recipe):
-        return check_report(subject, None, variants=_profile_list(profiles))
-    if isinstance(subject, (list, tuple)):
-        return subject
-    image = cast("Image", subject)
-    return image.check(profiles=_profile_list(profiles))
+        return check_report(subject, None, variants=_names(variants))
+    if variants is not None:
+        raise TypeError("variants= selects what a Recipe is linted for; lint() already chose")
+    return subject
 
 
 def _variant(d: AnyDiagnostic) -> str:
@@ -206,43 +190,45 @@ def assert_clean(
     subject: Sequence[Finding],
     /,
     *,
-    profiles: Sequence[str] | None = None,
+    variants: Variants = None,
     allow: Sequence[str] = (),
     strict: bool | None = None,
 ) -> Sequence[Finding]: ...
 @overload
 def assert_clean(
-    subject: Image | Recipe,
+    subject: Recipe | Sequence[Diagnostic],
     /,
     *,
-    profiles: Sequence[str] | None = None,
+    variants: Variants = None,
     allow: Sequence[str] = (),
     strict: bool | None = None,
 ) -> list[Diagnostic]: ...
 def assert_clean(
-    subject: Image | Recipe | Sequence[Finding],
+    subject: Recipe | Diagnostics,
     /,
     *,
-    profiles: Sequence[str] | None = None,
+    variants: Variants = None,
     allow: Sequence[str] = (),
     strict: bool | None = None,
 ) -> Sequence[AnyDiagnostic]:
     """Fail on error-level findings (warnings too with *strict*) whose code is not in *allow*.
 
-    *subject* is the diagnostics ``tundravm.lint()`` returned (*strict* defaults to
-    true), or a ``Recipe``/``Image`` to lint (*strict* defaults to false). Returns
-    every diagnostic, allowed or not.
+    *subject* is a sequence of diagnostics, such as what ``tundravm.lint()``
+    returned (*strict* defaults to true), or a ``Recipe`` to lint for
+    *variants* (default: all; *strict* defaults to false). A recipe's findings
+    are the compiler's report form, with hints. Returns every diagnostic,
+    allowed or not.
     """
-    given = isinstance(subject, (list, tuple))
+    given = not isinstance(subject, Recipe)
     strict = given if strict is None else strict
-    diagnostics = _findings(subject, profiles)
+    diagnostics = _findings(subject, variants)
     levels = {"error", "warning"} if strict else {"error"}
     failing = [d for d in diagnostics if d.code not in allow and d.level in levels]
     if failing:
         raise AssertionError(
             f"recipe has {len(failing)} unexpected finding(s):\n{_render(failing)}"
         )
-    return list(diagnostics) if not given else diagnostics
+    return diagnostics if given else list(diagnostics)
 
 
 @overload
@@ -251,6 +237,7 @@ def assert_diagnostic(
     code: str,
     /,
     *,
+    variants: Variants = None,
     level: Level | None = None,
     profile: str | None = None,
     variant: str | None = None,
@@ -258,20 +245,22 @@ def assert_diagnostic(
 ) -> Finding: ...
 @overload
 def assert_diagnostic(
-    diagnostics: Image | Recipe,
+    diagnostics: Recipe | Sequence[Diagnostic],
     code: str,
     /,
     *,
+    variants: Variants = None,
     level: Level | None = None,
     profile: str | None = None,
     variant: str | None = None,
     subject: str | None = None,
 ) -> Diagnostic: ...
 def assert_diagnostic(
-    diagnostics: Image | Recipe | Sequence[Finding],
+    diagnostics: Recipe | Diagnostics,
     code: str,
     /,
     *,
+    variants: Variants = None,
     level: Level | None = None,
     profile: str | None = None,
     variant: str | None = None,
@@ -279,13 +268,15 @@ def assert_diagnostic(
 ) -> AnyDiagnostic:
     """Return the first diagnostic matching every given field, else fail listing them all.
 
-    *diagnostics* is what ``tundravm.lint()`` returned, or a ``Recipe``/``Image`` to
-    lint. ``profile`` is an alias of ``variant``.
+    *diagnostics* is a sequence of diagnostics (what ``tundravm.lint()``
+    returned), or a ``Recipe`` to lint for *variants* (default: *variant*
+    alone when given, else all). ``profile`` is an alias of ``variant``.
     """
     wanted_subject = subject
     variant = profile if profile is not None else variant
-    scope = None if variant is None or isinstance(diagnostics, (list, tuple)) else [variant]
-    found = _findings(diagnostics, scope)
+    if variants is None and variant is not None and isinstance(diagnostics, Recipe):
+        variants = [variant]
+    found = _findings(diagnostics, variants)
     for d in found:
         if (
             d.code == code
@@ -342,46 +333,17 @@ def assert_tree(tree: Tree, golden: str | Path, *, update: bool | None = None) -
         )
 
 
-_FAKE_FILENAMES: dict[str, str] = {
-    "qemu": "disk.qcow2",
-    "azure": "disk.vhd",
-    "gcp": "disk.raw.tar.gz",
-}
-
-
-def fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact:
-    """A simulated artifact for *variant* derived from *tree*, recorded in ``out``'s manifest.
-
-    Writes ``out/<variant>/<disk file>`` and ``out/bake-result.json`` (merging with
-    one already there), so :func:`tundravm.read_artifacts` reads it back.
-    Measurement and deployment refuse it unless told to allow placeholders.
-    """
-    base = Path(out)
-    path = base / variant / _FAKE_FILENAMES[target]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"simulated: variant={variant} target={target} tree={tree.digest}\n")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    manifest = base / BAKE_RESULT_FILENAME
-    result = BakeResult.load(base) if manifest.is_file() else BakeResult(backend=INPROCESS)
-    profile = result.profiles.setdefault(variant, ProfileBuildResult(profile=variant))
-    profile.artifacts[target] = ArtifactRef(target=target, path=path, digest=digest)
-    result.save(base)
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload[MANIFEST_KEY] = {"recipe_digest": "", "simulated": True, "tree_digest": tree.digest}
-    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return next(a for a in read_artifacts(manifest) if a.variant == variant and a.target == target)
-
-
 def assert_tree_matches(
-    image: Image,
+    recipe: Recipe,
     golden_dir: str | Path,
     *,
-    profiles: Sequence[str] | None = None,
+    variants: Variants = None,
     update: bool | None = None,
 ) -> TreeDiff:
-    """Compare the compiled tree with *golden_dir*; rewrite it instead when updating.
+    """Compare *recipe*'s compiled tree with *golden_dir*; rewrite it instead when updating.
 
-    *update* defaults to ``TUNDRAVM_UPDATE_GOLDEN=1`` in the environment. Profile
+    Unlike :func:`assert_tree`, a mismatch shows a unified diff. *update*
+    defaults to ``TUNDRAVM_UPDATE_GOLDEN=1`` in the environment. Variant
     directories in *golden_dir* that were not compiled are neither compared nor
     touched. Returns the diff from the golden tree to the compiled one.
     """
@@ -389,7 +351,7 @@ def assert_tree_matches(
     if update is None:
         update = os.environ.get(UPDATE_GOLDEN_ENV) == "1"
     with tempfile.TemporaryDirectory(prefix="tundravm-golden-") as tmp:
-        tree = compile_tree(image, profiles=profiles, path=Path(tmp))
+        tree = compile_tree(recipe, variants=variants, path=Path(tmp))
         ignore = _foreign_profile_globs(golden, tree.profiles)
         diff = diff_trees(golden, tree.root, ignore=ignore)
         if update:
@@ -420,93 +382,90 @@ def _replace_tree(source: Path, golden: Path, keep: Sequence[str]) -> None:
     shutil.copytree(source, golden, symlinks=True, dirs_exist_ok=True)
 
 
-def bake_in_process(
-    image: Image,
-    *,
-    build_dir: Path | None = None,
-    profiles: Sequence[str] | None = None,
-) -> BakeResult:
-    """Bake with ``InProcessBackend`` into *build_dir* or a temp dir; the backend is restored."""
-    destination = (
-        Path(build_dir)
-        if build_dir is not None
-        else Path(tempfile.mkdtemp(prefix="tundravm-bake-"))
-    )
-    original = image.backend
-    image.backend = InProcessBackend()
-    try:
-        with _selected(image, profiles):
-            return image.bake(destination)
-    finally:
-        image.backend = original
+_FAKE_FILENAMES: dict[str, str] = {
+    "qemu": "disk.qcow2",
+    "azure": "disk.vhd",
+    "gcp": "disk.raw.tar.gz",
+}
 
 
-class FakeModule(Module):
-    """Configurable module for tests; records the profiles it was applied to.
+def fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact:
+    """A simulated artifact for *variant* derived from *tree*, recorded in ``out``'s manifest.
 
-    Each instance gets its own subclass, so fakes can require each other::
-
-        a = FakeModule("a")
-        b = FakeModule("b", requires=(a,))
-        img.apply(a, b)  # FakeModule("b") alone raises ValidationError
+    Writes ``out/<variant>/<disk file>`` and ``out/bake-result.json`` (merging with
+    one already there), so :func:`tundravm.read_artifacts` reads it back.
+    Measurement and deployment refuse it unless told to allow placeholders.
     """
+    base = Path(out)
+    path = base / variant / _FAKE_FILENAMES[target]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"simulated: variant={variant} target={target} tree={tree.digest}\n")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest = base / BAKE_RESULT_FILENAME
+    result = BakeResult.load(base) if manifest.is_file() else BakeResult(backend=INPROCESS)
+    profile = result.profiles.setdefault(variant, ProfileBuildResult(profile=variant))
+    profile.artifacts[target] = ArtifactRef(target=target, path=path, digest=digest)
+    result.save(base)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload[MANIFEST_KEY] = {"recipe_digest": "", "simulated": True, "tree_digest": tree.digest}
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return next(a for a in read_artifacts(manifest) if a.variant == variant and a.target == target)
 
-    applied_to: list[str]
-    packages: tuple[str, ...]
-    files: dict[str, str]
-    script: str | None
 
-    _GENERATED: ClassVar[bool] = False
+def bake_in_process(
+    recipe: Recipe,
+    *,
+    out: str | Path | None = None,
+    variants: Variants = None,
+    locked: Lock | None = None,
+) -> tuple[Artifact, ...]:
+    """Bake *variants* (default: all) with the in-process backend into *out* or a temp dir.
 
-    def __new__(
-        cls,
-        name: str = "fake",
-        *,
-        packages: Sequence[str] = (),
-        files: Mapping[str, str] | None = None,
-        init_script: str | None = None,
-        init_priority: int | None = 50,
-        requires: Sequence[type[Module] | Module] = (),
-    ) -> Self:
-        base = cls.__mro__[1] if cls._GENERATED else cls
-        namespace: dict[str, object] = {
-            "name": name,
-            "requires": tuple(r if isinstance(r, type) else type(r) for r in requires),
-            "init_priority": init_priority,
-            "_GENERATED": True,
-            "__module__": base.__module__,
-            "__qualname__": f"{base.__qualname__}[{name}]",
-        }
-        generated = type(f"{base.__name__}[{name}]", (base,), namespace)
-        return cast(Self, object.__new__(generated))
+    The artifacts are simulated placeholders. Without *locked*, the recipe is
+    locked offline first, which fails for a source build: pass a lock built
+    with a ``resolver=`` for those.
+    """
+    names = _names(variants)
+    destination = Path(out) if out is not None else Path(tempfile.mkdtemp(prefix="tundravm-bake-"))
+    if locked is None:
+        locked = lifecycle.lock(recipe, offline=True, variants=names)
+    return lifecycle.bake(
+        recipe, locked=locked, backend=Backend("inprocess"), out=destination, variants=names
+    )
 
-    def __init__(
-        self,
-        name: str = "fake",
-        *,
-        packages: Sequence[str] = (),
-        files: Mapping[str, str] | None = None,
-        init_script: str | None = None,
-        init_priority: int | None = 50,
-        requires: Sequence[type[Module] | Module] = (),
-    ) -> None:
-        self.packages = tuple(packages)
-        self.files = dict(files or {})
-        self.script = init_script
-        self.applied_to = []
 
-    def __repr__(self) -> str:
-        return f"FakeModule({self.name!r})"
+def fake_fragment(
+    name: str = "fake",
+    *,
+    packages: Sequence[str] = (),
+    files: Mapping[str, str | bytes] | None = None,
+    init: str | None = None,
+    priority: int = 50,
+    requires: Sequence[str | Fragment] = (),
+    checks: Sequence[Check] = (),
+) -> Fragment:
+    """A small :class:`~tundravm.Fragment` for testing how fragments compose.
 
-    def configure(self, image: Image) -> None:
-        if self.packages:
-            image.install(*self.packages)
-        for path, content in self.files.items():
-            image.file(path, content=content)
-        self.applied_to.extend(image._active_profiles)
-        priority: int | None = getattr(self, "init_priority", None)
-        if self.script and priority is not None:
-            image.runtime_init(self.script, priority=priority)
+    It declares a ``Package`` per name in *packages*, a ``File`` per
+    ``path: content`` in *files* and, when *init* is given, an ``Init`` called
+    *name* running *init* at *priority*. *requires* names the fragments
+    (or takes the fragments themselves) that must be in the same variant,
+    and *checks* run on every variant that includes it::
+
+        a = fake_fragment("a")
+        b = fake_fragment("b", requires=(a,))
+        Recipe(name="t", common=Fragment("app", (b,)))  # lint: fragment-requires-missing
+    """
+    items: list[Declaration] = [Package(package) for package in packages]
+    items.extend(File(path, content) for path, content in (files or {}).items())
+    if init is not None:
+        items.append(Init(name, init, priority=priority))
+    return Fragment(
+        name,
+        tuple(items),
+        requires=tuple(r.name if isinstance(r, Fragment) else r for r in requires),
+        checks=tuple(checks),
+    )
 
 
 def recipe_file(tmp_path: Path, source: str, name: str = "recipe.py") -> Path:
@@ -537,7 +496,7 @@ def run_cli(*argv: str | os.PathLike[str]) -> tuple[int, str, str]:
 __all__ = [
     "UPDATE_GOLDEN_ENV",
     "CompiledTree",
-    "FakeModule",
+    "Variants",
     "assert_clean",
     "assert_diagnostic",
     "assert_tree",
@@ -545,6 +504,7 @@ __all__ = [
     "bake_in_process",
     "compile_tree",
     "fake_bake",
+    "fake_fragment",
     "recipe_file",
     "run_cli",
 ]

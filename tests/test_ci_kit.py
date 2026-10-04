@@ -14,28 +14,37 @@ from tundravm.diff import TreeDiff
 from tundravm.formats import md_cell, resolve_format, workflow_command
 
 RECIPE = """
-from tundravm import Image
+from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.platforms import AzurePlatform
 
-img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.install("curl", "jq")
-img.file("/etc/motd", content="hello\\n")
-img.user("app", system=True)
-img.service("app", command="/usr/bin/app", user="app")
-img.targets("qemu")
-with img.profile("azure"):
-    AzurePlatform().apply(img)
+backend = InProcessBackend()
+PACKAGES = ("curl", "jq")
+ITEMS = [
+    File("/etc/motd", "hello\\n"),
+    User("app", system=True),
+    Service("app", "/usr/bin/app", user="app"),
+]
+
+
+def build() -> Recipe:
+    items = (*(Package(name) for name in PACKAGES), *ITEMS)
+    variants = (Variant("default", target="qemu"), Variant("azure", target="azure"))
+    return Recipe("ci", Fragment("common", items=items), variants=variants)
+
 """
+GHOST = 'ITEMS.append(Service("w", "/usr/bin/w", user="ghost"))\n'
+DEFAULT = ("--variant", "default")
+LOCKFILE = Path("build") / "tundravm.lock"
 
 ANNOTATION = re.compile(r"^::(error|warning|notice) (?P<props>[^:]*)::(?P<message>.+)$")
 
 
 @pytest.fixture
-def recipe(tmp_path: Path) -> Path:
+def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The recipe file, run from *tmp_path* so its build dir is ``tmp_path / "build"``."""
+    monkeypatch.chdir(tmp_path)
     path = tmp_path / "recipe.py"
-    build_dir = tmp_path / "build"
-    path.write_text(f"BUILD_DIR = {str(build_dir)!r}\n" + RECIPE, encoding="utf-8")
+    path.write_text(RECIPE, encoding="utf-8")
     return path
 
 
@@ -57,7 +66,8 @@ def parse_annotations(text: str) -> list[tuple[str, dict[str, str], str]]:
 
 
 def mutate(recipe: Path) -> None:
-    recipe.write_text(recipe.read_text().replace('"curl", "jq"', '"curl", "jq", "htop"'))
+    text = recipe.read_text()
+    recipe.write_text(text.replace('("curl", "jq")', '("curl", "jq", "htop")'))
 
 
 # init
@@ -147,8 +157,11 @@ def test_inspect_markdown_two_variants(recipe: Path) -> None:
 
 def test_inspect_markdown_collapses_long_package_lists(tmp_path: Path) -> None:
     recipe = tmp_path / "big.py"
-    names = ", ".join(f'"pkg{index:02d}"' for index in range(25))
-    recipe.write_text(f"from tundravm import Image\nimg = Image()\nimg.install({names})\n")
+    packages = ", ".join(f'Package("pkg{index:02d}")' for index in range(25))
+    recipe.write_text(
+        "from tundravm import Fragment, Package, Recipe\n"
+        f"recipe = Recipe('big', Fragment('common', items=({packages},)))\n"
+    )
     code, out = run("inspect", str(recipe), "--format", "markdown")
     assert code == EXIT_OK
     assert "<details><summary>Packages (25)</summary>\n\n| Package |" in out
@@ -164,24 +177,27 @@ def test_inspect_json_alias_conflicts_with_format(recipe: Path) -> None:
 
 
 def test_lint_github_lines_parse(recipe: Path) -> None:
-    recipe.write_text(recipe.read_text() + 'img.service("w", command="/usr/bin/w", user="ghost")\n')
-    code, out = run("lint", str(recipe), "--format", "github")
+    recipe.write_text(recipe.read_text() + GHOST)
+    code, out = run("lint", str(recipe), "--format", "github", *DEFAULT)
     assert code == EXIT_FAILURE
     found = parse_annotations(out)
     assert len(found) == 1
     level, props, message = found[0]
     assert level == "error"
-    assert props == {"file": str(recipe), "title": "service-user-missing"}
-    assert message.startswith("[default] w: ") and "(Declare it with" in message
+    assert props == {"file": "recipe.py", "title": "service-user-missing"}  # relative to CWD
+    assert message.startswith("[default] w: ") and "(Declare" in message
     assert out.rstrip().endswith("1 error, 0 warnings, 0 infos")
 
 
 def test_lint_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
     recipe = tmp_path / "warn.py"
     recipe.write_text(
-        "from tundravm import Image\nimg = Image()\nimg.install('curl')\n"
-        "img.runtime_init('echo 1\\n', priority=5)\n"
-        "img.runtime_init('echo 2\\n', priority=5)\n"
+        "from tundravm import Fragment, Init, Package, Recipe\n"
+        "recipe = Recipe('warn', Fragment('common', items=(\n"
+        "    Package('curl'),\n"
+        "    Init('one', 'echo 1\\n', priority=5),\n"
+        "    Init('two', 'echo 2\\n', priority=5),\n"
+        ")))\n"
     )
     code, out = run("lint", str(recipe), "--format", "github")
     assert code == EXIT_OK
@@ -192,8 +208,8 @@ def test_lint_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
 
 
 def test_lint_markdown_table(recipe: Path) -> None:
-    recipe.write_text(recipe.read_text() + 'img.service("w", command="/usr/bin/w", user="ghost")\n')
-    code, out = run("lint", str(recipe), "--format", "markdown")
+    recipe.write_text(recipe.read_text() + GHOST)
+    code, out = run("lint", str(recipe), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
     assert out.startswith("| Level | Code | Profile | Subject | Message | Hint |\n|---|")
     assert "| error | `service-user-missing` | `default` | `w` |" in out
@@ -205,19 +221,19 @@ def test_lint_markdown_table(recipe: Path) -> None:
 
 def test_diff_github_and_markdown_on_mutated_recipe(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    assert run("compile", str(recipe), "--out", str(tree))[0] == EXIT_OK
+    assert run("compile", str(recipe), "--out", str(tree), *DEFAULT)[0] == EXIT_OK
     mutate(recipe)
 
-    code, out = run("diff", str(recipe), "--against", str(tree), "--format", "github")
+    code, out = run("diff", str(recipe), "--against", str(tree), "--format", "github", *DEFAULT)
     assert code == EXIT_FAILURE
     [(level, props, message)] = parse_annotations(out)
     assert level == "warning"
-    assert props == {"file": f"{tree}/default/mkosi.conf", "title": "compiled tree drift"}
+    assert props == {"file": "tree/default/mkosi.conf", "title": "compiled tree drift"}
     assert "modified" in message
     assert "::group::unified diff\n::stop-commands::tundravm-" in out
     assert "+    htop\n" in out and out.endswith("::endgroup::\n")
 
-    code, out = run("diff", str(recipe), "--against", str(tree), "--format", "markdown")
+    code, out = run("diff", str(recipe), "--against", str(tree), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
     assert "| Status | File |\n|---|---|\n| modified | `default/mkosi.conf` |" in out
     assert "**1 file changed**" in out
@@ -226,7 +242,7 @@ def test_diff_github_and_markdown_on_mutated_recipe(recipe: Path, tmp_path: Path
 
 def test_tree_diff_markdown_truncates_long_diffs(recipe: Path, tmp_path: Path) -> None:
     lines = "".join(f"line {index}\\n" for index in range(500))
-    recipe.write_text(recipe.read_text() + f'img.file("/etc/big", content="{lines}")\n')
+    recipe.write_text(recipe.read_text() + f'ITEMS.append(File("/etc/big", "{lines}"))\n')
     code, out = run(
         "diff", str(recipe), "--against", str(tmp_path / "empty"), "--format", "markdown"
     )
@@ -243,7 +259,8 @@ def test_compile_check_github_annotates_stale_files(recipe: Path, tmp_path: Path
     code, out = run("compile", str(recipe), "--out", str(tree), "--check", "--format", "github")
     assert code == EXIT_FAILURE
     assert [props["file"] for _, props, _ in parse_annotations(out)] == [
-        f"{tree}/default/mkosi.conf"
+        "tree/azure/mkosi.conf",
+        "tree/default/mkosi.conf",
     ]
 
 
@@ -261,19 +278,19 @@ def test_markdown_helpers_escape() -> None:
 
 
 def test_lock_check_github_and_markdown(recipe: Path, tmp_path: Path) -> None:
-    assert run("lock", str(recipe))[0] == EXIT_OK
-    code, out = run("lock", str(recipe), "--check", "--format", "github")
+    assert run("lock", str(recipe), *DEFAULT)[0] == EXIT_OK
+    code, out = run("lock", str(recipe), "--check", "--format", "github", *DEFAULT)
     assert (code, out) == (EXIT_OK, "lock is up to date\n")
 
     mutate(recipe)
-    code, out = run("lock", str(recipe), "--check", "--format", "github")
+    code, out = run("lock", str(recipe), "--check", "--format", "github", *DEFAULT)
     assert code == EXIT_FAILURE
     [(level, props, message)] = parse_annotations(out)
     assert level == "error"
-    assert props == {"file": str(tmp_path / "build" / "tundravm.lock"), "title": "lock drift"}
+    assert props == {"file": str(LOCKFILE), "title": "lock drift"}
     assert message.startswith("profiles.default.packages changed: +htop.")
 
-    code, out = run("lock", str(recipe), "--check", "--format", "markdown")
+    code, out = run("lock", str(recipe), "--check", "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
     assert "| changed | `profiles.default.packages` | `+htop` |" in out
 
@@ -290,7 +307,7 @@ def test_ci_pass_prints_three_ok_lines(recipe: Path, tmp_path: Path) -> None:
     assert out.splitlines() == [
         "ok lint: no findings",
         f"ok compile: {tree} is up to date",
-        f"ok lock: {tmp_path / 'build' / 'tundravm.lock'} is up to date",
+        f"ok lock: {LOCKFILE} is up to date",
     ]
 
 
@@ -304,13 +321,14 @@ def test_ci_stops_at_first_failing_step(recipe: Path, tmp_path: Path) -> None:
     lines = out.splitlines()
     assert lines[0] == "ok lint: no findings"
     assert "M  default/mkosi.conf" in lines
-    assert lines[-2].startswith(f"FAIL compile: 1 file stale in {tree}; run `tundravm compile")
+    assert "M  azure/mkosi.conf" in lines
+    assert lines[-2].startswith(f"FAIL compile: 2 files stale in {tree}; run `tundravm compile")
     assert lines[-1] == "skip lock"
     assert not any(line.startswith("ok lock") for line in lines)
 
 
 def test_ci_lint_failure_skips_the_rest(recipe: Path) -> None:
-    recipe.write_text(recipe.read_text() + 'img.service("w", command="/usr/bin/w", user="ghost")\n')
+    recipe.write_text(recipe.read_text() + GHOST)
     code, out = run("ci", str(recipe))
     assert code == EXIT_FAILURE
     assert out.splitlines()[-3:] == [
@@ -347,6 +365,10 @@ def test_auto_resolves_to_github_under_github_actions(
     code, out = run("lock", str(recipe), "--check")
     assert code == EXIT_FAILURE and out.startswith("::error file=")
     code, out = run("lock", str(recipe), "--check", "--format", "text")
-    assert out.startswith("~ profiles.default.packages: +htop")
+    assert out.splitlines()[:2] == [
+        "~ profiles.azure.packages: +htop",
+        "~ profiles.default.packages: +htop",
+    ]
     code, out = run("diff", str(recipe), "--against", str(tmp_path / "none"), "--stat")
-    assert out.startswith("A  default/mkosi.conf")
+    assert out.startswith("A  azure/mkosi.conf")
+    assert "\nA  default/mkosi.conf\n" in out

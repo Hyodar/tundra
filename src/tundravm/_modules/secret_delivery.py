@@ -8,15 +8,15 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from tundravm._modules.base import TUNDRA_TOOLS, Module
+from tundravm._modules.disk_encryption import DiskEncryption, DiskSpec
+from tundravm._source import GitSource, GoBuild, Install, SourceBuild
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.models import SecretSpec
-from tundravm.modules.base import TUNDRA_TOOLS, Module
-from tundravm.modules.disk_encryption import DiskEncryption, DiskSpec
-from tundravm.source import GitSource, GoBuild, Install, SourceBuild
 
 if TYPE_CHECKING:
-    from tundravm.image import Image
+    from tundravm._image import Image
 
 SECRET_DELIVERY_BUILD_PACKAGES = (
     "golang",

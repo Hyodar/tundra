@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 
 import pytest
 
-from tundravm import Image, MkosiOptions
+from tundravm._image import Image
+from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
+from tundravm._options import MkosiOptions
+from tundravm._source import GitSource, ScriptBuild, SourceBuild
+from tundravm._source import Install as FluentInstall
 from tundravm.declarative import (
     Build,
     Debloat,
@@ -35,6 +42,7 @@ from tundravm.declarative import (
     User,
     Variant,
     lower,
+    resolve,
 )
 from tundravm.declarative.lower import inject_after_init
 from tundravm.diff import diff_trees
@@ -42,10 +50,7 @@ from tundravm.errors import ValidationError
 from tundravm.lockfile import recipe_digest
 from tundravm.models import Kernel as FluentKernel
 from tundravm.models import SecretSpec, SecretTarget
-from tundravm.modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
 from tundravm.platforms import AzurePlatform
-from tundravm.source import GitSource, ScriptBuild, SourceBuild
-from tundravm.source import Install as FluentInstall
 
 TOOLS = "https://example.com/tundra-tools.git"
 APP_REPO = "https://example.com/app.git"
@@ -65,6 +70,20 @@ UNIT_AFTER_INIT = UNIT.replace(
     "After=runtime-init.service network.target\nRequires=runtime-init.service\n",
 )
 PROFILES = ("default", "azure")
+
+
+def _surge_fluent() -> ModuleType:
+    """``tests/fixtures/surge_fluent.py``: the fluent parity oracle."""
+    path = Path(__file__).parent / "fixtures" / "surge_fluent.py"
+    spec = importlib.util.spec_from_file_location("surge_fluent", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def blank_image(**options: object) -> Image:
+    return cast(Image, _surge_fluent().blank_image(**options))
 
 
 def declarative_recipe() -> Recipe:
@@ -135,7 +154,7 @@ def fluent_image() -> Image:
     tools = GitSource(TOOLS, "v1")
     key = KeySpec("key_persistent", output="/tmp/key_persistent")
     disk = DiskSpec("disk_persistent", device=None, key=key, mapper_name="cryptroot")
-    img = Image(base="debian/bookworm", mkosi=MkosiOptions())
+    img = blank_image(base="debian/bookworm", mkosi=MkosiOptions())
     img.install("curl", "jq").build_packages("golang")
     img.file("/etc/motd", content="hello\n")
     img.skeleton("/etc/resolv.conf", content="nameserver 1.1.1.1\n")
@@ -180,7 +199,8 @@ def fluent_image() -> Image:
     img.debloat(extra_remove_paths=("/usr/share/foo",))
     img.runtime_init("test -d /persistent\n", priority=25)
     img.runtime_init("echo up\n", priority=25)
-    with img.profile("azure"):
+    img.profile("azure")
+    with img.profiles("azure"):
         img.file("/etc/motd", content="azure\n")
         img.install("waagent")
         img.targets("azure")
@@ -293,40 +313,48 @@ def test_standalone_variant_gets_only_its_own_declarations() -> None:
 
 
 @pytest.mark.parametrize(
-    ("variants", "message"),
+    "variants",
     [
-        (
-            (Variant("default"), Variant("a", target="azure"), Variant("b", parent="a")),
-            "only 'base'",
-        ),
-        (
-            (
-                Variant("default", add=Fragment("d", items=(Package("d"),))),
-                Variant("sibling"),
-            ),
-            "lacks Package",
-        ),
-        ((Variant("default"), Variant("slim", remove=(Package("curl"),))), "lacks Package"),
-        (
-            (Variant("default"), Variant("v", replace=(Hook("h", "build", "other"),))),
-            "cannot replace",
-        ),
-        (
-            (Variant("default"), Variant("v", add=Fragment("k", items=(Key("k2"),)))),
-            "keys, disks or secrets",
-        ),
-        (
-            (
-                Variant("default"),
-                Variant("v", add=Fragment("s", items=(Setting("Output", "Seed", ("x",)),))),
-            ),
-            "recipe-wide",
-        ),
+        (Variant("default"), Variant("a", target="azure"), Variant("b", parent="a")),
+        (Variant("default", add=Fragment("d", items=(Package("d"),))), Variant("sibling")),
+        (Variant("default"), Variant("slim", remove=(Package("curl"),))),
+        (Variant("default"), Variant("v", replace=(Hook("h", "build", "other"),))),
+        (Variant("default"), Variant("v", add=Fragment("k", items=(Key("k2"),)))),
     ],
+    ids=["chain", "sibling-of-base", "remove", "replace-hook", "child-keys"],
 )
-def test_unsupported_variant_shapes_raise(variants: tuple[Variant, ...], message: str) -> None:
+def test_shapes_the_profile_merge_cannot_express_lower_standalone(
+    variants: tuple[Variant, ...],
+) -> None:
     common = Fragment("c", items=(Package("curl"), Hook("h", "build", "make"), Key("k1")))
-    with pytest.raises(ValidationError, match=message):
+    recipe = Recipe("r", common, variants=variants)
+    name = variants[-1].name
+    img = lower(recipe)
+    assert img.state.profiles[name].extends is None
+    resolved = resolve(recipe, variant=name)
+    packages = {i.name for i in resolved.items if isinstance(i, Package) and i.role == "runtime"}
+    assert packages <= img.state.effective_profile(name).packages
+    if "curl" not in packages:
+        assert "curl" not in img.state.effective_profile(name).packages
+
+
+def test_chained_variant_inherits_its_parents_target() -> None:
+    recipe = Recipe(
+        "r",
+        Fragment("c", items=(Package("curl"),)),
+        variants=(Variant("default"), Variant("a", target="azure"), Variant("b", parent="a")),
+    )
+    img = lower(recipe)
+    assert img.state.effective_profile("b").output_targets == ("azure",)
+
+
+def test_variant_changing_recipe_wide_settings_raises() -> None:
+    common = Fragment("c", items=(Package("curl"),))
+    variants = (
+        Variant("default"),
+        Variant("v", add=Fragment("s", items=(Setting("Output", "Seed", ("x",)),))),
+    )
+    with pytest.raises(ValidationError, match="recipe-wide"):
         lower(Recipe("r", common, variants=variants))
 
 
@@ -423,3 +451,172 @@ def test_runtime_tools_default_and_key_handoff() -> None:
     assert 'encryption_key: "k"' in str(config) and 'pattern: "/dev/vdb"' in str(config)
     assert "key-generation" in img.source_builds()
     assert img.source_builds()["key-generation"].source.url.endswith("tundra-tools.git")
+
+
+# ── Declarations added for the declarative-only API ─────────────────────
+
+
+def _one(*items: object, **recipe: object) -> Recipe:
+    return Recipe("r", Fragment("c", items=items), **recipe)  # type: ignore[arg-type]
+
+
+def test_service_lowers_to_the_generated_unit() -> None:
+    from tundravm.declarative import Init, Service
+
+    service = Service(
+        "app",
+        "/usr/bin/app --serve",
+        user="app",
+        env=(("MODE", "prod"),),
+        limits=(("NOFILE", 1048576),),
+        restart="always",
+        security="strict",
+    )
+    img = lower(_one(service, Init("ready", "true")))
+    (spec,) = img.state.effective_profile("default").services[:1]
+    assert spec.name == "app"
+    assert spec.command == ("/usr/bin/app", "--serve")
+    assert spec.env == {"MODE": "prod"} and spec.limits == {"NOFILE": "1048576"}
+    assert spec.security_profile == "strict" and spec.restart == "always"
+
+
+def test_service_after_init_false_skips_the_runtime_init_dependency(tmp_path: Path) -> None:
+    from tundravm.declarative import Init, Service
+
+    recipe = _one(
+        Service("early", "/usr/bin/early", after_init=False),
+        Service("late", "/usr/bin/late"),
+        Init("ready", "true"),
+    )
+    lower(recipe).compile(tmp_path / "tree")
+    units = tmp_path / "tree" / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
+    assert "runtime-init.service" not in (units / "early.service").read_text()
+    assert "After=runtime-init.service" in (units / "late.service").read_text()
+
+
+def test_service_rejects_bad_fields() -> None:
+    from tundravm.declarative import Service
+
+    with pytest.raises(ValidationError, match="restart"):
+        Service("x", "/bin/x", restart="sometimes")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="limit"):
+        Service("x", "/bin/x", limits=(("NOFILE", 1), ("NOFILE", 2)))
+    with pytest.raises(ValidationError, match=".service"):
+        Service("x.socket", "/bin/x")
+
+
+def test_template_renders_in_extra_and_skeleton() -> None:
+    from tundravm.declarative import Template
+
+    img = lower(
+        _one(
+            Template("/etc/app.conf", "port={port}\n", variables=(("port", 8080),)),
+            Template("/etc/boot.conf", "id={id}\n", variables=(("id", "x"),), stage="skeleton"),
+        )
+    )
+    profile = img.state.effective_profile("default")
+    (entry,) = profile.templates
+    assert entry.path == "/etc/app.conf" and entry.rendered == "port=8080\n"
+    skeleton = next(f for f in profile.skeleton_files if f.path == "/etc/boot.conf")
+    assert skeleton.content == "id=x\n"
+
+
+def test_template_missing_variable_raises() -> None:
+    from tundravm.declarative import Template
+
+    with pytest.raises(ValidationError, match="placeholder"):
+        lower(_one(Template("/etc/a", "{missing}", stage="skeleton")))
+
+
+def test_build_sources_setting_mounts_per_variant() -> None:
+    recipe = Recipe(
+        "r",
+        Fragment("c", items=(Setting("Build", "BuildSources", ("../src:app", "../lib")),)),
+    )
+    profile = lower(recipe).state.effective_profile("default")
+    assert profile.build_sources == [("../src", "app"), ("../lib", "")]
+
+
+def test_debloat_extra_units_and_per_variant_paths() -> None:
+    debloat = Debloat(keep_units_extra=("app.service",), keep_paths_by_variant=(("x", ("/opt",)),))
+    config = lower(_one(debloat)).state.effective_profile("default").debloat
+    assert config.extra_keep_units == ("app.service",)
+    assert config.paths_skip_for_profiles == (("x", ("/opt",)),)
+
+
+def test_mkosi_fields_and_policy_reach_the_compiler() -> None:
+    from tundravm.declarative import Mkosi, Policy
+
+    policy = Policy(require_frozen_lock=True)
+    img = lower(
+        _one(
+            Package("curl"),
+            mkosi=Mkosi(init_script="#!/bin/sh\n", version_script=True, cloud_postoutput=False),
+            policy=policy,
+        )
+    )
+    assert img.mkosi.init_script == "#!/bin/sh\n"
+    assert img.mkosi.generate_version_script and not img.mkosi.generate_cloud_postoutput
+    assert img.policy == policy
+
+
+def test_strip_os_release_overrides_the_epoch_default() -> None:
+    from tundravm.declarative import Mkosi
+
+    def strips(recipe: Recipe) -> bool:
+        hooks = lower(recipe).state.effective_profile("default").phases.get("finalize", [])
+        return any("IMAGE_VERSION" in c.argv[0] for c in hooks)
+
+    assert strips(_one(Package("a")))
+    assert not strips(_one(Package("a"), mkosi=Mkosi(strip_os_release=False)))
+    assert strips(_one(Package("a"), epoch=None, mkosi=Mkosi(strip_os_release=True)))
+    assert not strips(_one(Package("a"), epoch=None))
+
+
+def test_variant_with_several_targets() -> None:
+    recipe = Recipe(
+        "r",
+        Fragment("c", items=(Package("curl"),)),
+        variants=(Variant("default"), Variant("cloud", targets=("azure", "gcp"))),
+    )
+    assert resolve(recipe, variant="cloud").targets == ("azure", "gcp")
+    img = lower(recipe)
+    assert img.state.effective_profile("cloud").output_targets == ("azure", "gcp")
+    with pytest.raises(ValidationError, match="both target= and targets="):
+        Variant("x", target="qemu", targets=("azure",))
+
+
+def _chained(layout: str) -> Recipe:
+    from tundravm.declarative import Mkosi
+
+    return Recipe(
+        "r",
+        Fragment("c", items=(Package("curl"), File("/etc/motd", "base\n"))),
+        variants=(
+            Variant("default"),
+            Variant("cloud", target="azure", add=Fragment("a", items=(Package("waagent"),))),
+            Variant(
+                "slim",
+                parent="cloud",
+                remove=(Package("curl"),),
+                replace=(File("/etc/motd", "slim\n"),),
+            ),
+        ),
+        mkosi=Mkosi(layout=layout),  # type: ignore[arg-type]
+    )
+
+
+def test_native_layout_rejects_standalone_variants() -> None:
+    with pytest.raises(ValidationError, match="layout='directories'"):
+        lower(_chained("native"))
+
+
+def test_chained_variant_compiles_its_resolved_declarations() -> None:
+    from tundravm.declarative import compile
+
+    recipe = _chained("directories")
+    tree = compile(recipe)
+    assert "slim" in tree.variants
+    slim = lower(recipe).state.effective_profile("slim")
+    assert "curl" not in slim.packages and "waagent" in slim.packages
+    assert slim.output_targets == ("azure",)

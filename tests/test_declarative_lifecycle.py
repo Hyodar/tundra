@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import tundravm
+from tundravm._source import Source
 from tundravm.backends import Requirement
 from tundravm.declarative import (
     Artifact,
@@ -47,7 +48,7 @@ from tundravm.declarative import (
 )
 from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.errors import DeploymentError, LockfileError, MeasurementError, ValidationError
-from tundravm.source import Source
+from tundravm.measure import PlaceholderMeasurementWarning
 from tundravm.testing import (
     assert_clean,
     assert_diagnostic,
@@ -254,7 +255,7 @@ def test_measure_rejects_simulated_unless_allowed(tmp_path: Path) -> None:
     artifact = next(a for a in _baked(tmp_path) if a.target == "qemu")
     with pytest.raises(MeasurementError, match="simulated"):
         measure(artifact)
-    with pytest.warns(tundravm.PlaceholderMeasurementWarning):
+    with pytest.warns(PlaceholderMeasurementWarning):
         found = measure(artifact, scheme="gcp", allow_placeholder=True)
     assert found.scheme == "gcp" and found.tool == "placeholder"
     assert found.artifact_digest == artifact.sha256 and found.values

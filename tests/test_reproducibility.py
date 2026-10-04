@@ -1,34 +1,50 @@
 import hashlib
+from collections.abc import Sequence
 from pathlib import Path
 
-from tundravm import Image
-from tundravm.backends import InProcessBackend
-from tundravm.models import BakeResult
+from tundravm.declarative import (
+    Artifact,
+    Backend,
+    Fragment,
+    Hook,
+    Package,
+    Recipe,
+    Variant,
+    bake,
+    lock,
+)
 
 
-def test_repeated_bakes_with_same_recipe_have_stable_artifact_digests(tmp_path: Path) -> None:
-    first = Image(build_dir=tmp_path / "build-a", backend=InProcessBackend())
-    first.install("curl")
-    first.targets("qemu", "azure")
-    first.shell("echo hello", phase="prepare")
-    first_result = first.bake()
-
-    second = Image(build_dir=tmp_path / "build-b", backend=InProcessBackend())
-    second.install("curl")
-    second.targets("qemu", "azure")
-    second.shell("echo hello", phase="prepare")
-    second_result = second.bake()
-
-    assert _artifact_digest_map(first_result, profile="default") == _artifact_digest_map(
-        second_result,
-        profile="default",
+def _recipe() -> Recipe:
+    return Recipe(
+        "repro",
+        Fragment("common", items=(Package("curl"), Hook("hello", "prepare", "echo hello"))),
+        variants=(Variant("default", targets=("qemu", "azure")),),
     )
 
 
-def _artifact_digest_map(result: BakeResult, *, profile: str) -> dict[str, str]:
-    profile_result = result.profiles[profile]
+def _bake(out: Path) -> tuple[Artifact, ...]:
+    recipe = _recipe()
+    return bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=out)
+
+
+def test_repeated_bakes_with_same_recipe_have_stable_artifact_digests(tmp_path: Path) -> None:
+    first = _bake(tmp_path / "build-a")
+    second = _bake(tmp_path / "build-b")
+
+    assert _artifact_digest_map(first, variant="default") == _artifact_digest_map(
+        second,
+        variant="default",
+    )
+    assert set(_artifact_digest_map(first, variant="default")) == {"azure", "qemu"}
+
+
+def _artifact_digest_map(artifacts: Sequence[Artifact], *, variant: str) -> dict[str, str]:
     digests: dict[str, str] = {}
-    for target, artifact in sorted(profile_result.artifacts.items()):
-        payload = Path(artifact.path).read_bytes()
-        digests[target] = hashlib.sha256(payload).hexdigest()
+    for artifact in sorted(artifacts, key=lambda a: a.target):
+        if artifact.variant != variant:
+            continue
+        digest = hashlib.sha256(artifact.path.read_bytes()).hexdigest()
+        assert digest == artifact.sha256
+        digests[artifact.target] = digest
     return digests

@@ -10,10 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from tundravm.modules.base import Module
+from tundravm._modules.base import Module
 
 if TYPE_CHECKING:
-    from tundravm.image import Image
+    from tundravm._image import Image
 
 # ---------------------------------------------------------------------------
 # Debug packages installed in the devtools profile

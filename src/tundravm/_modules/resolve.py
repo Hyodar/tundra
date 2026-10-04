@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tundravm.image import Image
+    from tundravm._image import Image
 
 
 def resolve_after(after: tuple[str, ...], image: Image) -> tuple[str, ...]:

@@ -1,4 +1,4 @@
-"""Pytest fixtures for tundravm recipes and modules.
+"""Pytest fixtures for tundravm recipes and fragments.
 
 Registered as the ``tundravm`` plugin through the ``pytest11`` entry point, so
 the fixtures are available in any project that has tundravm installed. Disable
@@ -9,44 +9,37 @@ from __future__ import annotations
 
 import itertools
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
 import pytest
 
-from tundravm.backends.inprocess import InProcessBackend
-from tundravm.image import Image
-from tundravm.testing import CompiledTree, compile_tree
+from tundravm.declarative.model import Fragment, Recipe
+from tundravm.testing import CompiledTree, Variants, compile_tree
 from tundravm.testing import run_cli as _run_cli
 
 
 class CompileFactory(Protocol):
-    def __call__(self, image: Image, profiles: Sequence[str] | None = None) -> CompiledTree: ...
+    def __call__(self, recipe: Recipe, variants: Variants = None) -> CompiledTree: ...
 
 
 CliRunner = Callable[..., tuple[int, str, str]]
 
 
 @pytest.fixture
-def image() -> Image:
-    """A fresh ``Image(reproducible=True)`` with no backend."""
-    return Image(reproducible=True)
-
-
-@pytest.fixture
-def inprocess_image(tmp_path: Path) -> Image:
-    """An ``Image`` that bakes with ``InProcessBackend`` into ``tmp_path / "build"``."""
-    return Image(backend=InProcessBackend(), build_dir=tmp_path / "build")
+def recipe() -> Recipe:
+    """A minimal ``Recipe(name="test", common=Fragment("test"))`` with one ``default`` variant."""
+    return Recipe(name="test", common=Fragment("test"))
 
 
 @pytest.fixture
 def compiled(tmp_path: Path) -> CompileFactory:
-    """Factory: ``compiled(image, profiles=None)`` compiles into a new dir under ``tmp_path``."""
+    """Factory: ``compiled(recipe, variants=None)`` compiles into a new dir under ``tmp_path``."""
     counter = itertools.count()
 
-    def factory(image: Image, profiles: Sequence[str] | None = None) -> CompiledTree:
-        return compile_tree(image, profiles=profiles, path=tmp_path / f"compiled-{next(counter)}")
+    def factory(recipe: Recipe, variants: Variants = None) -> CompiledTree:
+        return compile_tree(recipe, variants=variants, path=tmp_path / f"compiled-{next(counter)}")
 
     return factory
 
@@ -61,4 +54,4 @@ def run_cli() -> CliRunner:
     return runner
 
 
-__all__ = ["CliRunner", "CompileFactory", "compiled", "image", "inprocess_image", "run_cli"]
+__all__ = ["CliRunner", "CompileFactory", "compiled", "recipe", "run_cli"]

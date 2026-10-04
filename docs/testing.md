@@ -1,153 +1,158 @@
-# Testing recipes and modules
+# Testing recipes and fragments
 
-`tundravm.testing` packages the helpers the SDK's own test suite uses, so a recipe or a third-party module can be tested in a few lines, without mkosi, a VM, or root. Everything runs in-process: compile to a temp dir and read files back, lint with `check()`, compare against a committed golden tree, bake with placeholder artifacts, and drive the CLI.
-
-## Quick start
-
-Installing tundravm registers a pytest plugin (the `pytest11` entry point `tundravm`), so its fixtures are available in every test with no `conftest.py` changes. Turn it off with `pytest -p no:tundravm`.
+`tundravm.testing` checks recipes and fragments without a build backend. Its helpers take the values the lifecycle functions return (`lint()` diagnostics, a compiled `Tree`), so a test reads like the code it tests. Importing it does not import pytest.
 
 ```python
-from tundravm import Image
-from tundravm.testing import assert_clean
-
-
-def test_recipe(image: Image, compiled) -> None:
-    image.install("curl")
-    image.service("app", command="/usr/bin/app")
-    assert_clean(image)
-    assert "curl" in compiled(image).conf()
+from tundravm import compile, lint
+from tundravm.testing import assert_clean, assert_diagnostic, assert_tree, compile_tree, fake_bake
 ```
 
-| Fixture | Provides |
-| --- | --- |
-| `image` | A fresh `Image(reproducible=True)` with no backend |
-| `inprocess_image` | An `Image` with `InProcessBackend()` and `build_dir=tmp_path / "build"`, so `bake()` works anywhere |
-| `compiled` | Factory `compiled(image, profiles=None) -> CompiledTree`; each call compiles into a new dir under `tmp_path` |
-| `run_cli` | `run_cli(*argv) -> (exit_code, stdout, stderr)` |
-
-For type hints, `tundravm.testing.pytest_plugin` exports `CompileFactory` (the `compiled` fixture) and `CliRunner` (the `run_cli` fixture). A fixture of the same name in your own `conftest.py` takes precedence over the plugin's.
-
-## Helpers
-
-All helpers live in `tundravm.testing`. Importing it does not import pytest; failures are plain `AssertionError`s, so the helpers work under any test runner. Every `profiles=` argument takes a list of profile names (or a single name) and defaults to the image's active profiles.
-
-### `compile_tree`
-
-`compile_tree(image, *, profiles=None, path=None) -> CompiledTree` compiles into `path`, or a fresh temp dir when `path` is `None`. The image's compile cache is left untouched, so a later `bake()` behaves as if `compile_tree` never ran. Unknown profile names raise `ValueError` instead of silently compiling an empty profile.
+## Diagnostics
 
 ```python
-tree = compile_tree(img, profiles=["default", "azure"])
-assert "curl" in tree.conf()
-assert "User=app" in tree.unit("app")                 # app.service
-assert "useradd" in tree.script("postinst")           # scripts/NN-postinst.sh
-assert tree.read("mkosi.extra/etc/motd") == "hello\n"
-assert "jq" in tree.conf(profile="azure")
+assert_clean(diagnostics, /, *, variants=None, allow=(), strict=None) -> diagnostics
+assert_diagnostic(diagnostics, code, /, *, level=None, variant=None, subject=None, variants=None) -> Diagnostic
 ```
 
-`CompiledTree` methods. `profile=` defaults to the image's default profile, or the first compiled one when that profile was not compiled.
+- `assert_clean(lint(recipe))` fails listing every error and warning whose code is not in `allow`. For a list of diagnostics `strict` defaults to true (warnings fail); pass `strict=False` to fail on errors only.
+- `assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default")` returns the first diagnostic matching every field you give, or fails listing what was found.
+- Both also accept a `Recipe` and lint it for you (then `strict` defaults to false, and `variants=` limits the variants linted).
+
+```python
+from tundravm import Disk, Fragment, Key, Recipe, lint
+from tundravm.testing import assert_diagnostic
+
+
+def test_disk_without_its_key():
+    disk = Disk("data", mount="/data", key=Key("data"))
+    recipe = Recipe(name="t", common=Fragment("t", items=(disk,)))
+    found = assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default", subject="data")
+    assert found.level == "error"
+```
+
+## Compiled trees
+
+```python
+compile_tree(recipe, *, variants=None, path=None) -> CompiledTree
+```
+
+Compiles the recipe (every variant, or the names in `variants`) into `path` or a fresh temporary directory, without a lockfile. `CompiledTree` reads what tests usually inspect; every `profile` argument is a variant name and defaults to the first compiled variant:
 
 | Method | Returns |
-| --- | --- |
-| `root`, `profiles` | Tree root `Path`; tuple of compiled profile names |
-| `profile(name)` | The profile's directory; `KeyError` if it was not compiled |
-| `path(relpath)`, `read(relpath)`, `exists(relpath)` | Path, text, or existence of a file relative to the profile directory |
-| `files()` | Sorted POSIX paths of every file in the profile |
-| `unit(name)` | `mkosi.extra/usr/lib/systemd/system/<name>`; a bare name gets `.service` |
-| `script(phase)` | `scripts/NN-<phase>.sh` |
-| `runtime_init()` | `mkosi.extra/usr/bin/runtime-init` |
-| `conf()` | `mkosi.conf` |
-
-`CompiledTree` implements `__fspath__`, so it can be passed to `open()`, `Path()`, or `diff_trees()`. A missing unit or script raises `FileNotFoundError` naming the ones that exist.
-
-### `assert_clean`
-
-`assert_clean(image, *, profiles=None, allow=(), strict=False) -> list[Diagnostic]` runs `image.check()` and fails on any error-level finding whose code is not in `allow`. With `strict=True`, warnings and infos fail too. The failure message is the same report `tundravm check` prints. On success it returns every diagnostic, allowed or not.
+|---|---|
+| `tree.root`, `tree.variants` | The directory, the compiled variant names |
+| `tree.profile(name)` | The variant's directory |
+| `tree.files(name)` | Every file path under it, sorted |
+| `tree.read(relpath, name)`, `tree.exists(relpath, name)`, `tree.path(relpath, name)` | One file |
+| `tree.conf(name)` | `mkosi.conf` |
+| `tree.unit(unit_name, name)` | A shipped unit file (`.service` is optional) |
+| `tree.script(phase, name)` | The phase script, e.g. `tree.script("postinst")` |
+| `tree.runtime_init(name)` | `/usr/bin/runtime-init` |
 
 ```python
-assert_clean(img)
-assert_clean(img, strict=True, allow=["backend-missing"])
-assert_clean(img, profiles=["azure"])
+from tundravm import Fragment, Recipe, Service
+from tundravm.testing import compile_tree
+
+
+def test_app_unit_is_enabled():
+    recipe = Recipe(name="t", common=Fragment("t", items=(Service("app", "/usr/bin/app"),)))
+    tree = compile_tree(recipe)
+    assert "ExecStart=/usr/bin/app" in tree.unit("app.service")
+    assert "systemctl enable app.service" in tree.script("postinst")
 ```
-
-### `assert_diagnostic`
-
-`assert_diagnostic(image, code, *, level=None, profile=None, subject=None) -> Diagnostic` returns the first finding that matches every given field. If none matches, it fails and lists every finding. Pass `profile=` to lint a profile that is not active.
-
-```python
-img.service("app", command="/usr/bin/app", user="ghost")
-d = assert_diagnostic(img, "service-user-missing", level="error", subject="app")
-assert "ghost" in d.message
-```
-
-### `assert_tree_matches`
-
-`assert_tree_matches(image, golden_dir, *, profiles=None, update=None) -> TreeDiff` compiles into a temp dir and diffs it against `golden_dir` with `tundravm.diff.diff_trees`. On a mismatch it fails with `TreeDiff.stat()` and the first 200 lines of the unified diff. Profile directories in `golden_dir` that were not compiled are neither compared nor modified. See [Golden trees](#golden-trees).
-
-```python
-GOLDEN = Path(__file__).parent / "golden" / "agent"
-
-def test_agent_tree(image: Image) -> None:
-    image.apply(Agent())
-    assert_tree_matches(image, GOLDEN)
-```
-
-### `bake_in_process`
-
-`bake_in_process(image, *, build_dir=None, profiles=None) -> BakeResult` swaps in `InProcessBackend()`, bakes into `build_dir` (or a temp dir), and restores the original backend, even if the bake raises. Artifacts are small deterministic placeholder files, so this tests the bake pipeline (lint gate, compile, artifact layout) rather than mkosi itself.
-
-```python
-result = bake_in_process(img, build_dir=tmp_path / "build")
-assert result.profiles["default"].artifacts["qemu"].path.is_file()
-assert img.backend is None  # restored
-```
-
-### `FakeModule`
-
-`FakeModule(name="fake", *, packages=(), files=None, init_script=None, init_priority=50, requires=())` is a ready-made `Module` for testing how your module composes with others. `install()` declares the packages and files, `init_script()` returns `init_script`, and `applied_to` records every profile it was applied to. Each instance gets its own subclass, so `requires` accepts fake instances as well as module classes.
-
-```python
-a = FakeModule("a", init_script="echo a", init_priority=10)
-b = FakeModule("b", packages=("curl",), files={"/etc/b": "b\n"}, requires=(a,))
-img.apply(a, b)                  # img.apply(b) alone raises ValidationError
-assert b.applied_to == ["default"]
-assert img.applied_modules() == (a, b)
-```
-
-Two fakes with the same `init_priority` trigger the `init-priority-collision` warning. Give them different priorities unless you are testing that rule.
 
 ## Golden trees
 
-A golden test commits the compiled tree next to the test and fails when the recipe's output changes. Reviewers see the effect of a recipe or module change as a file diff.
-
-1. Write the test with `assert_tree_matches(image, GOLDEN)`.
-2. Create or refresh the golden tree: `TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_agent.py`. With the variable set (and `update` left as `None`), the helper replaces the compiled profiles in `golden_dir` instead of failing. Files that are no longer emitted are deleted. Other profiles' directories are kept.
-3. Review the change with `git diff tests/golden/` and commit it with the code change.
-4. Without the variable, any drift fails with the stat and diff:
-
-```
-compiled tree differs from tests/golden/agent
-M  default/mkosi.conf
-A  default/mkosi.extra/etc/new
-2 files changed
-...
-Re-run with TUNDRAVM_UPDATE_GOLDEN=1 to accept the compiled tree.
+```python
+assert_tree(tree: Tree, golden: str | Path, *, update=None) -> None
 ```
 
-Pass `update=True` or `update=False` to override the environment. Golden trees are deterministic only for `reproducible=True` images (the default, and what the `image` fixture uses).
-
-## CLI testing
-
-`recipe_file(tmp_path, source, name="recipe.py") -> Path` writes a recipe file, dedenting `source` so it can be an indented triple-quoted string, and creates parent directories. `run_cli(*argv) -> (exit_code, stdout, stderr)` runs `tundravm.cli.main` in-process. It captures both streams, accepts `Path` arguments, and turns argparse's `SystemExit` into an exit code (2 for usage errors).
+Fails unless `golden` holds exactly `tree`: every file path, its bytes, its executable bit and every symlink target. Empty directories are ignored, because git does not keep them. With `update=True`, or `TUNDRAVM_UPDATE_GOLDEN=1` in the environment, it writes `tree` to `golden` instead.
 
 ```python
-def test_cli_check(tmp_path: Path, run_cli) -> None:
-    path = recipe_file(tmp_path, """
-        from tundravm import Image
-        img = Image()
-        img.install("curl")
-    """)
-    code, out, err = run_cli("check", path, "--strict")
-    assert code == 1 and "backend-missing" in out and err == ""
+from pathlib import Path
+
+from tundravm import compile, read_lock
+
+
+def test_committed_tree_is_current():
+    locked = read_lock(Path("build/tundravm.lock"))
+    assert_tree(compile(recipe, lock=locked), Path("mkosi"))
 ```
 
-SDK errors are printed to stderr as `error [<code>]: ...`, with the exit codes listed in [`cli.md`](cli.md).
+`compile(recipe)` without `lock=` ignores any lockfile and builds sources from their refs, while `tundravm compile` applies `build/tundravm.lock` when it exists. Compare like with like: pass the lock when the committed tree was compiled with one.
+
+```bash
+TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py   # accept the new tree, then review the git diff
+```
+
+## Simulated artifacts
+
+```python
+fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact
+```
+
+Writes a simulated disk file for one variant under `out` and records it in `out/bake-result.json` (merging with one already there), so `read_artifacts()`, `tundravm measure` and `tundravm deploy` find it. The artifact is `simulated`: `measure` and `deploy` refuse it unless `allow_placeholder=True`.
+
+```python
+from tundravm import compile
+from tundravm.declarative import measure
+from tundravm.testing import fake_bake
+
+
+def test_measure_placeholder(recipe, tmp_path):  # `recipe` is the plugin's minimal fixture
+    artifact = fake_bake(compile(recipe), variant="default", target="qemu", out=tmp_path)
+    assert measure(artifact, allow_placeholder=True).tool == "placeholder"
+```
+
+For a full bake without tools, `bake_in_process(recipe, out=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `locked=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
+
+## Composition fakes
+
+```python
+fake_fragment(name="fake", *, packages=(), files=None, init=None, priority=50, requires=(), checks=()) -> Fragment
+```
+
+A small fragment for testing how fragments compose: a `Package` per name, a `File` per `{path: content}`, an `Init` step when `init` is given, and the `requires`/`checks` you pass.
+
+## CLI tests
+
+```python
+recipe_file(tmp_path, source, name="recipe.py") -> Path
+run_cli(*argv) -> tuple[int, str, str]
+```
+
+`recipe_file` writes dedented source; `run_cli` runs `tundravm` in-process and returns the exit code, stdout and stderr.
+
+```python
+from tundravm.testing import recipe_file, run_cli
+
+
+def test_lint_fails_on_a_dangling_key(tmp_path):
+    path = recipe_file(tmp_path, """
+        from tundravm import Disk, Fragment, Key, Recipe
+        recipe = Recipe(name="t", common=Fragment("t", items=(Disk("data", mount="/data", key=Key("data")),)))
+    """)
+    code, out, err = run_cli("lint", path)
+    assert code == 1
+    assert "disk-key-undefined" in out
+```
+
+## Pytest fixtures
+
+The `tundravm` pytest plugin is registered through an entry point, so installing tundravm makes its fixtures available (disable with `pytest -p no:tundravm`):
+
+| Fixture | Gives |
+|---|---|
+| `recipe` | A minimal `Recipe(name="test", common=Fragment("test"))` with one `default` variant |
+| `compiled` | `compiled(recipe, variants=None) -> CompiledTree`, compiled into a fresh directory under `tmp_path` |
+| `run_cli` | The `run_cli` helper |
+
+A test module that defines its own `recipe` fixture overrides the plugin's.
+
+## Running the repository's tests
+
+```bash
+uv run pytest                                  # everything
+uv run pytest tests/test_declarative_modules.py  # the surge recipe against its committed tree
+```

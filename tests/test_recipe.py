@@ -1,4 +1,4 @@
-"""Tests for tundravm.recipe.load_recipe."""
+"""Tests for tundravm.recipe.load_recipe / load_image."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image, ValidationError, load_recipe
-from tundravm.declarative import Recipe
-from tundravm.recipe import load_declarative
+from tundravm import Package, Recipe, ValidationError, load_recipe
+from tundravm.recipe import load_declarative, load_image
+
+ROOT = Path(__file__).resolve().parent.parent
+HEADER = "from tundravm import Fragment, Package, Recipe\n"
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
@@ -17,25 +19,24 @@ def _write(tmp_path: Path, name: str, body: str) -> Path:
     return path
 
 
-def test_loads_module_level_img(tmp_path: Path) -> None:
+def test_loads_module_level_recipe(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\nimg = Image()\nimg.install('curl')\n",
+        HEADER + "recipe = Recipe('r', Fragment('common', items=(Package('curl'),)))\n",
     )
-    img = load_recipe(recipe)
-    assert isinstance(img, Image)
-    assert "curl" in img.state.profiles["default"].packages
+    loaded = load_recipe(recipe)
+    assert isinstance(loaded, Recipe)
+    assert Package("curl") in loaded.common.items
+    assert "curl" in load_image(recipe).state.profiles["default"].packages
 
 
 def test_loads_build_factory(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\n"
-        "def build() -> Image:\n"
-        "    img = Image(base='debian/trixie')\n"
-        "    return img\n",
+        HEADER + "def build() -> Recipe:\n"
+        "    return Recipe('r', Fragment('common'), base='debian/trixie')\n",
     )
     assert load_recipe(recipe).base == "debian/trixie"
 
@@ -44,9 +45,8 @@ def test_discovers_single_build_prefixed_factory(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\n"
-        "def helper():\n    return 1\n"
-        "def build_surge_prover():\n    return Image(base='debian/sid')\n",
+        HEADER + "def helper():\n    return 1\n"
+        "def build_surge_prover():\n    return Recipe('r', Fragment('c'), base='debian/sid')\n",
     )
     assert load_recipe(recipe).base == "debian/sid"
 
@@ -55,43 +55,43 @@ def test_discovers_factory_by_return_annotation(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\n"
-        "def make_the_thing() -> Image:\n    return Image(base='debian/sid')\n",
+        HEADER + "def make_the_thing() -> Recipe:\n"
+        "    return Recipe('r', Fragment('c'), base='debian/sid')\n",
     )
     assert load_recipe(recipe).base == "debian/sid"
 
 
 def test_discovers_single_anonymous_instance(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", "from tundravm import Image\nmy_vm = Image()\n")
-    assert isinstance(load_recipe(recipe), Image)
+    recipe = _write(tmp_path, "recipe.py", HEADER + "my_vm = Recipe('vm', Fragment('c'))\n")
+    assert load_recipe(recipe).name == "vm"
 
 
 def test_attr_override_selects_instance_or_factory(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\n"
-        "img = Image(base='debian/bookworm')\n"
-        "other = Image(base='debian/trixie')\n"
-        "def third() -> Image:\n    return Image(base='debian/sid')\n",
+        HEADER + "recipe = Recipe('r', Fragment('c'), base='debian/bookworm')\n"
+        "other = Recipe('r', Fragment('c'), base='debian/trixie')\n"
+        "def third() -> Recipe:\n    return Recipe('r', Fragment('c'), base='debian/sid')\n",
     )
     assert load_recipe(recipe).base == "debian/bookworm"
     assert load_recipe(recipe, attr="other").base == "debian/trixie"
     assert load_recipe(recipe, attr="third").base == "debian/sid"
+    assert load_image(recipe, attr="third").state.base == "debian/sid"
 
 
 def test_attr_missing_lists_candidates(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", "from tundravm import Image\nimg = Image()\n")
+    recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r', Fragment('c'))\n")
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe, attr="nope")
-    assert "img" in str(excinfo.value)
+    assert "recipe" in str(excinfo.value)
 
 
 def test_ambiguous_instances_error(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\na = Image()\nb = Image()\n",
+        HEADER + "a = Recipe('a', Fragment('c'))\nb = Recipe('b', Fragment('c'))\n",
     )
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
@@ -99,29 +99,35 @@ def test_ambiguous_instances_error(tmp_path: Path) -> None:
     assert "--attr" in str(excinfo.value)
 
 
-def test_no_image_error(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", "x = 1\n")
-    with pytest.raises(ValidationError) as excinfo:
-        load_recipe(recipe)
-    assert "does not define a Recipe" in str(excinfo.value)
+def test_no_recipe_error(tmp_path: Path) -> None:
+    for body in ("x = 1\n", "recipe = {'name': 'not a Recipe'}\n"):
+        recipe = _write(tmp_path, "recipe.py", body)
+        with pytest.raises(ValidationError) as excinfo:
+            load_recipe(recipe)
+        assert "does not define a Recipe" in str(excinfo.value)
 
 
 def test_factory_returning_none_is_explained(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\ndef build():\n    Image().install('curl')\n",
+        HEADER + "def build():\n    Recipe('r', Fragment('c'))\n",
     )
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
     assert "returned None" in str(excinfo.value)
+
+    _write(tmp_path, "recipe.py", HEADER + "def build():\n    return Fragment('c')\n")
+    with pytest.raises(ValidationError) as excinfo:
+        load_recipe(recipe)
+    assert "returned Fragment, expected Recipe" in str(excinfo.value)
 
 
 def test_factory_with_required_args_is_rejected(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\ndef build(size):\n    return Image()\n",
+        HEADER + "def build(size):\n    return Recipe('r', Fragment('c'))\n",
     )
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
@@ -132,10 +138,10 @@ def test_main_guard_does_not_run(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from tundravm import Image\nimg = Image()\n"
+        HEADER + "recipe = Recipe('r', Fragment('c'))\n"
         "if __name__ == '__main__':\n    raise SystemExit('should not run')\n",
     )
-    assert isinstance(load_recipe(recipe), Image)
+    assert isinstance(load_recipe(recipe), Recipe)
 
 
 def test_sibling_imports_resolve(tmp_path: Path) -> None:
@@ -143,11 +149,11 @@ def test_sibling_imports_resolve(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from helper_pkgs import PACKAGES\nfrom tundravm import Image\n"
-        "img = Image()\nimg.install(*PACKAGES)\n",
+        "from helper_pkgs import PACKAGES\n" + HEADER + "recipe = Recipe('r', "
+        "Fragment('common', items=tuple(Package(name) for name in PACKAGES)))\n",
     )
-    img = load_recipe(recipe)
-    assert {"curl", "jq"} <= img.state.profiles["default"].packages
+    assert load_recipe(recipe).common.items == (Package("curl"), Package("jq"))
+    assert {"curl", "jq"} <= load_image(recipe).state.profiles["default"].packages
 
 
 def test_missing_file_error(tmp_path: Path) -> None:
@@ -157,11 +163,12 @@ def test_missing_file_error(tmp_path: Path) -> None:
 
 
 def test_surge_example_recipe_loads() -> None:
-    root = Path(__file__).resolve().parent.parent
-    recipe = root / "examples" / "surge-tdx-prover" / "image.py"
-    assert isinstance(load_declarative(recipe, extra_paths=[root]), Recipe)
-    img = load_recipe(recipe)
-    assert isinstance(img, Image)
+    recipe = ROOT / "examples" / "surge-tdx-prover" / "image.py"
+    loaded = load_recipe(recipe, extra_paths=[ROOT])
+    assert isinstance(loaded, Recipe)
+    assert isinstance(load_declarative(recipe, extra_paths=[ROOT]), Recipe)
+    assert {v.name for v in loaded.variants} == {"default", "azure", "gcp", "devtools"}
+    img = load_image(recipe, extra_paths=[ROOT])
     assert {"default", "azure", "gcp", "devtools"} == set(img.state.profiles)
 
 
@@ -177,8 +184,7 @@ def test_surge_example_recipe_loads() -> None:
     ],
 )
 def test_small_examples_are_loadable_recipes(name: str) -> None:
-    path = Path(__file__).resolve().parent.parent / "examples" / name
-    assert isinstance(load_declarative(path), Recipe)
-    img = load_recipe(path)
-    assert isinstance(img, Image)
+    path = ROOT / "examples" / name
+    assert isinstance(load_recipe(path, extra_paths=[ROOT]), Recipe)
+    img = load_image(path, extra_paths=[ROOT])
     assert img.state.profiles

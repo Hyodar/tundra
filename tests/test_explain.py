@@ -3,40 +3,78 @@ from copy import deepcopy
 
 import pytest
 
-from tundravm import Image, Kernel
+from tundravm import (
+    Debloat,
+    File,
+    Fragment,
+    Git,
+    Hook,
+    Init,
+    Kernel,
+    Package,
+    Partition,
+    Recipe,
+    Repository,
+    Service,
+    Template,
+    User,
+    Variant,
+)
+from tundravm.declarative import lower
 from tundravm.errors import ValidationError
 from tundravm.explain import describe, render
 from tundravm.lockfile import recipe_digest
 
 
-def _build_image() -> Image:
-    image = Image(base="debian/trixie", mirror="https://deb.example")
-    image.install("systemd", "curl", "jq")
-    image.build_packages("gcc")
-    image.repository("https://deb.example/security", name="debian-security", priority=10)
-    image.file("/etc/motd", content="hello world\n", mode="0644")
-    image.template("/etc/app/env", template="A={a}\nB={b}\n", variables={"b": "2", "a": "1"})
-    image.user("app", uid=1000, gid=1000, shell="/bin/bash", groups=("video",))
-    image.service(
-        "app",
-        command="/usr/bin/app --flag",
-        restart="always",
-        after=("network-online.target",),
+def _recipe() -> Recipe:
+    common = Fragment(
+        "common",
+        items=(
+            Package("systemd"),
+            Package("curl"),
+            Package("jq"),
+            Package("gcc", role="build"),
+            Repository(
+                "debian-security", "https://deb.example/security", "trixie-security", priority=10
+            ),
+            File("/etc/motd", "hello world\n", mode=0o644),
+            Template("/etc/app/env", "A={a}\nB={b}\n", variables=(("b", "2"), ("a", "1"))),
+            User(
+                "app",
+                system=False,
+                uid=1000,
+                primary_group=1000,
+                shell="/bin/bash",
+                groups=("video",),
+            ),
+            Service(
+                "app",
+                "/usr/bin/app --flag",
+                restart="always",
+                after=("network-online.target",),
+            ),
+            Partition("data", "4G", "/data"),
+            Hook("first", "postinst", "echo first\necho second"),
+            Hook("long", "postinst", "x" * 200),
+            Init("init", "echo init", priority=10),
+        ),
     )
-    image.partition("data", size="4G", mount_at="/data")
-    image.shell("echo first\necho second", phase="postinst")
-    image.shell("x" * 200, phase="postinst")
-    image.runtime_init("echo init", priority=10)
-    image.targets("qemu", "gcp")
-    with image.profile("azure"):
-        image.install("waagent")
-        image.targets("azure")
-    return image
+    return Recipe(
+        "explain",
+        common,
+        variants=(
+            Variant("default", target="qemu"),
+            Variant("azure", target="azure", add=Fragment("azure", items=(Package("waagent"),))),
+            Variant("cloud", targets=("qemu", "gcp")),
+        ),
+        base="debian/trixie",
+        mirror="https://deb.example",
+    )
 
 
 def test_explain_structure() -> None:
-    image = _build_image()
-    info = image.explain()
+    image = lower(_recipe())
+    info = describe(image, profile="default")
 
     assert info["base"] == "debian/trixie"
     assert info["arch"] == "x86_64"
@@ -46,7 +84,7 @@ def test_explain_structure() -> None:
     assert info["kernel"] is None
     assert info["packages"] == ["curl", "jq", "systemd"]
     assert info["build_packages"] == ["gcc"]
-    assert info["targets"] == ["qemu", "gcp"]
+    assert info["targets"] == ["qemu"]
     assert info["policy"] == {
         "require_frozen_lock": False,
         "mutable_ref_policy": "warn",
@@ -88,7 +126,7 @@ def test_explain_structure() -> None:
 
     hooks = info["hooks"]
     assert isinstance(hooks, dict)
-    assert "finalize" in hooks  # strip_image_version hook from reproducible=True
+    assert "finalize" in hooks  # strip_image_version hook from Recipe.epoch
     assert hooks["postinst"][0] == "echo first"
     assert hooks["postinst"][1].endswith("...")
     assert len(hooks["postinst"][1]) == 80
@@ -97,22 +135,23 @@ def test_explain_structure() -> None:
 
     debloat = info["debloat"]
     assert isinstance(debloat, dict)
-    assert debloat == image.explain_debloat()
+    assert debloat == image.explain_debloat(profile="default")
 
 
 def test_explain_is_json_serializable_and_stable() -> None:
-    image = _build_image()
-    payload = json.dumps(image.explain(), sort_keys=True)
+    image = lower(_recipe())
+    payload = json.dumps(describe(image, profile="default"), sort_keys=True)
     assert json.loads(payload)["profile"] == "default"
-    assert payload == json.dumps(image.explain(), sort_keys=True)
+    assert payload == json.dumps(describe(image, profile="default"), sort_keys=True)
+    assert payload == json.dumps(describe(lower(_recipe()), profile="default"), sort_keys=True)
 
 
 def test_explain_does_not_mutate_state() -> None:
-    image = _build_image()
+    image = lower(_recipe())
     digest_before = recipe_digest(image._recipe_payload(profile_names=image._active_profiles))
-    first = image.explain()
+    first = describe(image, profile="default")
     state_after_first = deepcopy(image.state)
-    second = image.explain()
+    second = describe(image, profile="default")
 
     assert first == second
     assert image.state == state_after_first
@@ -122,46 +161,48 @@ def test_explain_does_not_mutate_state() -> None:
 
 
 def test_explain_per_profile() -> None:
-    image = _build_image()
-    azure = image.explain(profile="azure")
+    image = lower(_recipe())
+    azure = describe(image, profile="azure")
 
     assert azure["profile"] == "azure"
     assert azure["extends"] == "default"
-    assert azure["packages"] == ["curl", "jq", "systemd", "waagent"]
+    assert azure["packages"] == ["curl", "dmidecode", "jq", "systemd", "waagent"]
+    assert azure["modules"] == ["AzurePlatform"]
     assert azure["targets"] == ["azure"]
-    assert azure["users"] == image.explain()["users"]
+    assert azure["users"] == describe(image, profile="default")["users"]
+    assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]
 
-    with image.profile("azure"):
-        assert image.explain() == azure
+    with image.profiles("azure"):
         assert describe(image) == azure
 
     with image.profiles("default", "azure"):
         with pytest.raises(ValidationError):
-            image.explain()
+            describe(image)
 
 
 def test_explain_includes_kernel() -> None:
-    image = Image(kernel=Kernel.tdx_kernel("6.12.1", cmdline="quiet"))
-    kernel = image.explain()["kernel"]
-    assert kernel == {
+    kernel = Kernel("6.12.1", Git("https://github.com/gregkh/linux", "v6.12.1"), cmdline="quiet")
+    image = lower(Recipe("kernel", Fragment("common", items=(kernel,))))
+    info = describe(image, profile="default")
+    assert info["kernel"] == {
         "cmdline": "quiet",
         "config_file": None,
         "source_repo": "https://github.com/gregkh/linux",
         "tdx": True,
         "version": "6.12.1",
     }
-    assert "Kernel: 6.12.1  tdx=yes  cmdline=quiet" in image.summary()
+    assert "Kernel: 6.12.1  tdx=yes  cmdline=quiet" in render(info)
 
 
 def test_summary_contains_key_strings() -> None:
-    image = _build_image()
-    text = image.summary()
+    image = lower(_recipe())
+    text = render(describe(image, profile="default"))
 
     assert text.startswith("Image: debian/trixie (x86_64)  profile=default  reproducible=yes\n")
     assert "Mirror: https://deb.example" in text
     assert "Packages (3): curl jq systemd" in text
     assert "Build packages (1): gcc" in text
-    assert "debian-security  https://deb.example/security  prio=10" in text
+    assert "debian-security  https://deb.example/security  trixie-security  main  prio=10" in text
     assert "/etc/motd  0644  12B  sha256:a948904f2f0f" in text
     assert "/etc/app/env  0644  vars=a,b" in text
     assert "app  uid=1000  gid=1000  shell=/bin/bash  groups=video" in text
@@ -171,23 +212,24 @@ def test_summary_contains_key_strings() -> None:
     assert "  postinst (2):\n    echo first\n" in text
     assert "Runtime init: 1 (priorities: 10)" in text
     assert "Debloat: enabled," in text
-    assert text.endswith("Targets: qemu gcp\n")
+    assert text.endswith("Targets: qemu\n")
     assert "hello world" not in text
 
-    azure_text = image.summary(profile="azure")
+    azure_text = render(describe(image, profile="azure"))
     assert "profile=azure" in azure_text
     assert "Extends: default\n" in azure_text
-    assert "Packages (4): curl jq systemd waagent" in azure_text
+    assert "Packages (5): curl dmidecode jq systemd waagent" in azure_text
     assert "Extends" not in text
     assert azure_text.endswith("Targets: azure\n")
-    assert render(image.explain(profile="azure")) == azure_text
+    assert render(describe(image, profile="cloud")).endswith("Targets: qemu gcp\n")
 
 
 def test_summary_omits_empty_sections() -> None:
-    image = Image(reproducible=False)
-    with image.profile("bare"):
-        image.debloat(enabled=False)
-    text = image.summary(profile="bare")
+    bare = Variant("bare", add=Fragment("bare", items=(Debloat(enabled=False),)))
+    recipe = Recipe(
+        "bare", Fragment("common"), variants=(Variant("default", target="qemu"), bare), epoch=None
+    )
+    text = render(describe(lower(recipe), profile="bare"))
 
     assert "Packages" not in text
     assert "Files" not in text

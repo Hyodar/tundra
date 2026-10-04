@@ -1,14 +1,11 @@
-"""Public package entrypoint for the TDX VM SDK.
+"""tundravm: declarative TDX VM images.
 
-The declarative API (``Recipe``, ``Fragment``, ``Variant``, the declarations,
-``resolve``/``lint``/``lower``/``load``) and its lifecycle (``compile``,
-``lock``, ``bake``, ``read_artifacts``, ``doctor`` and their result types) are
-the public surface. ``diff``, ``measure`` and ``deploy`` are reached as
-``tundravm.declarative.diff``/``measure``/``deploy``: at the top level those
-names are the ``tundravm.diff``/``tundravm.measure``/``tundravm.deploy`` modules. The fluent
-``Image``/``Profile`` names below it remain importable while the compiler is
-reached through them; ``Kernel`` is still the fluent kernel spec (the
-declarative one is ``tundravm.declarative.Kernel``).
+A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
+:class:`Variant` overlays) is the whole public model; ``resolve``/``lint``/
+``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``bake``,
+``read_artifacts``, ``doctor``) take one. ``diff``, ``measure`` and ``deploy``
+are ``tundravm.declarative.diff``/``measure``/``deploy`` (at the top level those
+names are modules). The shipped fragments are in :mod:`tundravm.modules`.
 """
 
 __version__ = "0.1.0"
@@ -34,6 +31,7 @@ from .declarative import (
     Http,
     Init,
     Install,
+    Kernel,
     Key,
     Lock,
     Measurements,
@@ -41,6 +39,7 @@ from .declarative import (
     Package,
     Partition,
     Pin,
+    Policy,
     Qemu,
     Recipe,
     Repository,
@@ -51,7 +50,9 @@ from .declarative import (
     SecretEnv,
     SecretFile,
     Secrets,
+    Service,
     Setting,
+    Template,
     Tree,
     Unit,
     User,
@@ -70,7 +71,6 @@ from .declarative import (
     resolve_all,
     write_lock,
 )
-from .diff import FileChange, TreeDiff
 from .errors import (
     BackendExecutionError,
     DeploymentError,
@@ -83,75 +83,48 @@ from .errors import (
     TdxError,
     ValidationError,
 )
-from .image import Image
-from .measure import PlaceholderMeasurementWarning
-from .models import (
-    BakeRequest,
-    BakeResult,
-    CompileResult,
-    DebloatConfig,
-    Kernel,
-    ProfileState,
-    RecipeState,
-    SecretSchema,
-    SecretSpec,
-    SecretTarget,
-)
-from .options import MkosiOptions
-from .policy import Policy
-from .profile import Profile
 from .recipe import load_recipe
-from .source import (
-    CargoBuild,
-    DotnetBuild,
-    GitSource,
-    GoBuild,
-    HttpSource,
-    ScriptBuild,
-    SourceBuild,
-)
 
 __all__ = [
-    # Declarative API
     "Artifact",
     "Azure",
     "Backend",
-    "Deployment",
-    "Entry",
-    "Gcp",
-    "Lock",
-    "Measurements",
-    "Pin",
-    "Qemu",
-    "Tree",
-    "bake",
-    "compile",
-    "doctor",
-    "lock",
-    "lock_status",
-    "read_artifacts",
-    "read_lock",
-    "write_lock",
+    "BackendExecutionError",
     "Build",
     "Debloat",
     "Declaration",
+    "Deployment",
+    "DeploymentError",
     "Diagnostic",
     "Directory",
     "Disk",
+    "Entry",
     "File",
     "Fragment",
+    "Gcp",
     "Git",
     "Group",
     "Hook",
     "Http",
     "Init",
     "Install",
+    "Kernel",
     "Key",
+    "LintError",
+    "Lock",
+    "LockfileError",
+    "MeasurementError",
+    "Measurements",
     "Mkosi",
     "Package",
     "Partition",
+    "Pin",
+    "Policy",
+    "PolicyError",
+    "Qemu",
     "Recipe",
     "Repository",
+    "ReproducibilityError",
     "Resolved",
     "RuntimeTools",
     "Schema",
@@ -159,50 +132,29 @@ __all__ = [
     "SecretEnv",
     "SecretFile",
     "Secrets",
+    "Service",
     "Setting",
-    "Unit",
-    "User",
-    "Variant",
-    "lint",
-    "load",
-    "lower",
-    "resolve",
-    "resolve_all",
-    # Fluent frontend (internal lowering target; removed in a later stage)
-    "BackendExecutionError",
-    "BakeRequest",
-    "BakeResult",
-    "CargoBuild",
-    "CompileResult",
-    "DebloatConfig",
-    "DeploymentError",
-    "DotnetBuild",
-    "FileChange",
-    "GitSource",
-    "GoBuild",
-    "HttpSource",
-    "Image",
-    "Kernel",
-    "LintError",
-    "LockfileError",
-    "MeasurementError",
-    "MkosiOptions",
-    "PolicyError",
-    "PlaceholderMeasurementWarning",
-    "Policy",
-    "Profile",
-    "ProfileState",
-    "RecipeState",
-    "ReproducibilityError",
-    "ScriptBuild",
-    "SecretSchema",
-    "SecretSpec",
-    "SecretTarget",
-    "SourceBuild",
     "StateError",
     "TdxError",
-    "TreeDiff",
+    "Template",
+    "Tree",
+    "Unit",
+    "User",
     "ValidationError",
-    "__version__",
+    "Variant",
+    "bake",
+    "compile",
+    "doctor",
+    "lint",
+    "load",
     "load_recipe",
+    "lock",
+    "lock_status",
+    "lower",
+    "read_artifacts",
+    "read_lock",
+    "resolve",
+    "resolve_all",
+    "write_lock",
+    "__version__",
 ]

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_image
 
 _ROOT = Path(__file__).resolve().parent.parent
 _IMAGE_PATH = _ROOT / "examples" / "surge-tdx-prover" / "image.py"
@@ -44,7 +44,7 @@ REQUIRED_SECTIONS = [
 @pytest.fixture(scope="module")
 def sdk_output(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Compile the full surge-tdx-prover image with all profiles."""
-    img = load_recipe(_IMAGE_PATH, extra_paths=[_ROOT])
+    img = load_image(_IMAGE_PATH, extra_paths=[_ROOT])
     out = tmp_path_factory.mktemp("sdk_emission")
     # Every variant, so the emission includes azure, gcp and devtools
     img.compile(out / "mkosi", profiles=sorted(img.state.profiles))

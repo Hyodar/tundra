@@ -1,27 +1,52 @@
 import hashlib
+import io
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from tundravm import Image
-from tundravm.backends import InProcessBackend
+from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.declarative import Backend, Policy, bake, lock
 from tundravm.errors import PolicyError, ValidationError
 from tundravm.fetch import fetch, fetch_git
-from tundravm.policy import Policy
+from tundravm.recipe import load_recipe
+
+FROZEN_RECIPE = """
+from tundravm.backends.inprocess import InProcessBackend
+from tundravm.declarative import Fragment, Package, Policy, Recipe
+
+recipe = Recipe(
+    "frozen",
+    Fragment("frozen", items=(Package("curl"),)),
+    policy=Policy(require_frozen_lock=True),
+)
+backend = InProcessBackend()
+"""
 
 
-def test_policy_requires_frozen_lock_for_bake(tmp_path: Path) -> None:
-    image = Image(build_dir=tmp_path / "build", backend=InProcessBackend()).set_policy(
-        Policy(require_frozen_lock=True)
+def test_policy_requires_frozen_lock_for_bake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)  # the CLI's default lockfile is ./build/tundravm.lock
+    path = tmp_path / "recipe.py"
+    path.write_text(FROZEN_RECIPE, encoding="utf-8")
+    out = tmp_path / "out"
+    lock_path = tmp_path / "frozen.lock"
+
+    # Without a lockfile the CLI bakes unfrozen, which the policy refuses.
+    assert main(["bake", str(path), "--out", str(out)], stdout=io.StringIO()) == EXIT_SDK_ERROR
+    assert "error [E_POLICY]" in capsys.readouterr().err
+
+    assert main(["lock", str(path), "--path", str(lock_path)], stdout=io.StringIO()) == EXIT_OK
+    argv = ["bake", str(path), "--lockfile", str(lock_path), "--out", str(out)]
+    assert main(argv, stdout=io.StringIO()) == EXIT_OK
+
+    recipe = load_recipe(path)
+    assert isinstance(recipe.policy, Policy) and recipe.policy.require_frozen_lock
+    artifacts = bake(
+        recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "api"
     )
-
-    with pytest.raises(PolicyError):
-        image.bake()
-
-    image.lock()
-    result = image.bake(frozen=True)
-    assert result.artifact_for(profile="default", target="qemu") is not None
+    assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
 
 
 def test_policy_mutable_ref_error_is_enforced(tmp_path: Path) -> None:
