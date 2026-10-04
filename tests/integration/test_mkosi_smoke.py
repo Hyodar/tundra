@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import File, Fragment, Package, Recipe, Service, User, compile
+from tundravm import File, Fragment, Package, Recipe, Service, Setting, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import bake_image
@@ -37,6 +37,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
                 File("/etc/tdx-test", "integration-test\n"),
                 Service("hello", "/bin/true", restart="no"),
                 User("appuser", system=True, shell="/bin/false"),
+                Setting("Content", "Bootable", ("no",)),
             ),
         ),
         base="debian/bookworm",
@@ -131,7 +132,9 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
 def test_raw_disk_format(tmp_path: Path) -> None:
     """Bake a raw disk image and verify artifact collection."""
     recipe = Recipe(
-        "smoke", Fragment("common", items=(Package("systemd"),)), base="debian/bookworm"
+        "smoke",
+        Fragment("common", items=(Package("systemd"), Setting("Content", "Bootable", ("no",)))),
+        base="debian/bookworm",
     )
 
     backend = LocalLinuxBackend(
