@@ -45,6 +45,8 @@ At least one variant; names are unique. `recipe.variant(name)` returns one or ra
 | `target` | `"qemu" \| "azure" \| "gcp" \| None` | `None`: inherited, `qemu` at the root |
 | `targets` | `tuple[Target, ...]` | `()`: several outputs from one variant; `target=X` is the shorthand for `targets=(X,)` and setting both fails |
 
+The default variant is the one named `default`, else the first whose parent is `base` or `None`. It may have any parent; a variant it is chained onto lowers like any other, standalone when it lacks what the default adds. A variant whose parent is `base` or the default variant, and which only adds declarations or replaces `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant. Every other variant lowers standalone, among them a variant with its own settings or kernel and a `base`-parented variant that leaves a cloud-targeted default's targets (see [variants](concepts.md#variants-and-targets)).
+
 ### `Fragment`
 
 | Field | Type | Default |
@@ -58,7 +60,7 @@ At least one variant; names are unique. `recipe.variant(name)` returns one or ra
 
 | Field | Type | Default |
 |---|---|---|
-| `layout` | `"directories" \| "native"` | `"directories"` |
+| `layout` | `"directories" \| "native"` | `"directories"`; `"native"` writes one root `mkosi.conf` (the default variant) that mkosi applies to every profile, so it supports only variants that extend the default as overlays. Otherwise lowering raises `ValidationError` listing each offending variant with its reason (`'solo' (it is parentless)`, `'big' (it has its own Setting(Content, Locale))`) |
 | `dialect` | `"current" \| "nethermind-v1"` | `"current"` |
 | `init_script` | `str \| None` | `None`; text written to `mkosi.skeleton/init` (mode 0755) |
 | `version_script` | `bool` | `False`; emit `mkosi.version` |
@@ -100,10 +102,12 @@ At least one variant; names are unique. `recipe.variant(name)` returns one or ra
 | `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100` | name |
 | `Partition` | `name`, `size`, `mount`, `filesystem="ext4"` | name |
 | `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant=()` (`(variant, paths)` kept only in that variant) | one per variant |
-| `Setting` | `section`, `key`, `values: tuple[str, ...]` | section, key |
+| `Setting` | `section`, `key`, `values: tuple[str, ...]`; per variant | section, key |
 | `Kernel` | `version`, `source: Git \| Http`, `config: Path \| None = None`, `cmdline=""`, `tdx=True` | one per variant |
 
-No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkosi escape hatch; supported keys are `Output.Seed`, `Output.OutputDirectory`, `Output.CompressOutput`, `Output.ManifestFormat`, `Build.PackageCacheDirectory`, `Build.WithNetwork`, `Build.Environment`, `Build.SandboxTrees` and `Content.CleanPackageMetadata`; others fail to lower. Settings are recipe-wide, except `Setting("Build", "BuildSources", ("src[:dest]", ...))`, which mounts host directories into one variant's build. A `Kernel` is recipe-wide too, and must come from a git repository tagged `v<version>`.
+No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkosi escape hatch, and settings belong to the variant that declares them. `Output.Seed`, `Output.OutputDirectory`, `Output.CompressOutput`, `Output.ManifestFormat`, `Build.PackageCacheDirectory`, `Build.WithNetwork`, `Build.Environment`, `Build.SandboxTrees` and `Content.CleanPackageMetadata` map onto compiler options. Any other key is written verbatim into that variant's `mkosi.conf`, under its section, one `Key=value` line per value. Keys the compiler writes itself (`Packages`, `BuildPackages`, `Mirror`, `Format`, `ImageId`, `KernelCommandLine`, `ExtraTrees`, the phase script keys such as `BuildScripts`, ...) raise `ValidationError` naming the declaration to use instead (`Package(name)`, `Recipe.mirror`, `Hook(name, phase, script)`, ...). `Setting("Build", "BuildSources", ("src[:dest]", ...))` mounts host directories into the variant's build.
+
+`Kernel.source` is a `Git` branch, tag or full commit hash, with `subdir` and `submodules`, or an `Http` tarball, which needs `sha256=` and is checked against it before unpacking. The kernel source is not covered by the lockfile (`lock` pins no kernel ref), which is why `Http` carries its digest in the recipe. A variant whose settings or kernel differ from the default variant's lowers standalone with its own `mkosi.conf` lines, kernel build and config.
 
 ## Keys, disks and secrets
 
@@ -119,6 +123,8 @@ No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkos
 | `RuntimeTools` | `source: Git`, `key_config="/etc/tdx/key-gen.yaml"`, `disk_config="/etc/tdx/disk-setup.yaml"`, `secret_config="/etc/tdx/secrets.yaml"`, `secret_manifest="/etc/tdx/secrets.json"` | one per variant |
 
 `Disk.key` and `Secrets.store` take the declaration object, not its name. Without `RuntimeTools` the tools build from `tundra-tools` `master`.
+
+A variant may declare several `Secrets`. A single one uses the `RuntimeTools` `secret_config` and `secret_manifest` paths. With more than one, each writes `<stem>-<name>` paths instead (`/etc/tdx/secrets-api.yaml`, `/etc/tdx/secrets-api.json` for `Secrets("api")`) and gets its own `secret-delivery setup` runtime-init step. Two declarations whose paths overlap (a config path another `Secrets` or a `RuntimeTools` path writes, or a `SecretFile` path another `Secrets` delivers) raise `ValidationError` naming both.
 
 ## Sources and builds
 
@@ -191,7 +197,7 @@ lower(recipe, *, variants=None)  # internal: the compiler's image for the recipe
 - **`diff`** is a unified diff from `against` (a `Tree` or a directory) to `tree`, empty when they match. Variant directories in `against` that `tree` does not hold are not compared.
 - **`lock`** keeps every pin in `previous` whose source is unchanged and resolves the rest, plus the sources named in `update` (unknown names raise). The default lookup runs `git ls-remote` for a git ref and hashes the download for an `Http` source without `sha256`; `resolver`, a function from source to pin, replaces it; `offline=True` fails for any source without a previous pin.
 - **`lock_status`** is the drift between the recipe and `locked`, one diagnostic per section; empty when current. With `resolver` (as for `lock`) it also reports git refs that moved since the lock, as `sources.<name>`. When `variants` leaves out some declared variant, see [subsets](#locks-and-variant-subsets).
-- **`bake`** writes `locked` to `out/tundravm.lock`, bakes frozen into `out` and writes `out/bake-result.json`. It fails before building on lint errors (`LintError`) or drift (`LockfileError`); a `locked` of every variant covers `variants=` naming a [subset](#locks-and-variant-subsets). `progress` receives the CLI's progress lines.
+- **`bake`** writes `locked` to `out/tundravm.lock` when that file is absent or identical; a different lockfile already there is left alone and the bake reads a scratch copy of `locked`. It bakes frozen into `out` and writes `out/bake-result.json`, whose `declarative.lockfile` is the path of the lockfile it used (`null` for a scratch copy). It fails before building on lint errors (`LintError`) or drift (`LockfileError`); a `locked` of every variant covers `variants=` naming a [subset](#locks-and-variant-subsets). `progress` receives the CLI's progress lines.
 - **`read_artifacts`** reads `bake-result.json` (or the directory holding it).
 - **`measure`** derives expected measurements with `measured-boot` or `dstack-mr`; without one it raises `MeasurementError` unless `allow_placeholder`, which also emits a `PlaceholderMeasurementWarning`. Simulated artifacts are refused unless `allow_placeholder`.
 - **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_placeholder`. `adapter` replaces the default adapter (tests).

@@ -18,6 +18,12 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `Measurements.to_json(path=None)` returns the measurements as JSON (and writes them to `path`); `Measurements.verify(expected)` returns the registers that differ from `expected`, empty when all match.
 - Measurement provenance: `Measurements.tool` names `measured-boot`, `dstack-mr` or `placeholder`; placeholders print a banner and emit `PlaceholderMeasurementWarning`.
 - `StateError` (`E_STATE`) for a missing or unreadable `bake-result.json`, `LintError` (`E_LINT`) for a bake refused by the linter.
+- `Kernel` sources beyond tag `v<version>`: any git branch, tag or full commit hash, with `subdir` and `submodules`, or an `Http` tarball checked against its `sha256` (required, since the lockfile does not pin kernel sources). An `Http` kernel adds `curl` to the build packages.
+- Per-variant settings and kernels: a variant whose `Setting`s or `Kernel` differ from the default variant's lowers standalone with its own `mkosi.conf` lines, kernel build and kernel config.
+- A `Setting` without a compiler mapping is written verbatim into its variant's `mkosi.conf`, under its section. Keys the compiler writes itself (`Packages`, `Mirror`, `Format`, the phase script keys, ...) raise and name the declaration to use.
+- Several `Secrets` per variant. With more than one, each writes `<stem>-<name>` config and manifest paths (`/etc/tdx/secrets-api.yaml`) and gets its own runtime-init step; overlapping paths raise naming both declarations.
+- The default variant may have any parent; the parent lowers like any other variant.
+- A `base`-parented variant may leave a cloud-targeted default variant's targets; it lowers standalone.
 - `examples/surge-tdx-prover` is a declarative recipe that compiles byte-for-byte to the committed nethermind-tdx tree for `default`, `azure`, `gcp` and `devtools`; `examples/fragments` holds `Raiko`, `TaikoClient` and `Nethermind`, and `examples/nethermind_tdx.py` holds `NethermindBase`.
 
 ### Changed
@@ -30,6 +36,9 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `Recipe.base` defaults to `debian/trixie`.
 - `compile()` recreates each variant directory, so stale files are removed.
 - The `BuildBackend` protocol has `requirements()`, which `doctor` probes.
+- `Mkosi(layout="native")` refuses a recipe with standalone variants in one error that lists each offending variant with its reason (`'solo' (it is parentless)`).
+- `inspect --format json`: the kernel's `source_repo` key is replaced by a `source` object (`repo`, `ref`, `subdir`, `submodules` for git; `url`, `sha256` for a tarball).
+- The hint for a `Build` that passes `packages`/`env` beside a `recipe` names `Go`, `Cargo` or `Dotnet`, not the internal build class.
 
 ### Removed
 
@@ -41,6 +50,7 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `tundravm.builders` and `tundravm.fetch`. Builds are `Build(script=...)` or `Build(recipe=Go(...) | Cargo(...) | Dotnet(...))`, and `tundravm lock` resolves pins itself (`git ls-remote` for a git ref, the sha256 of the download for http).
 - The `cbor2` dependency, which nothing used: tundravm has no runtime dependencies.
 - `tundravm.testing.FakeModule` (use `fake_fragment`) and the `image`/`inprocess_image` fixtures (use `recipe`).
+- `Policy.require_integrity`, inert since `tundravm.fetch` went away. `Policy` has `require_frozen_lock`, `mutable_ref_policy` and `network_mode`.
 - `SPEC.md`, which described the fluent API. The design record is `docs/design/declarative-api.md`.
 
 ### Fixed
@@ -49,3 +59,4 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - A file removed from the recipe no longer lingers in the compiled tree or in `compile --check`.
 - `tundravm ci` no longer reports false lock drift on recipes with runtime-init steps: its compile step works on a copy of the lowered recipe instead of changing what the lock step compares.
 - A frozen bake of some variants against a lock of every variant no longer fails at `verify lockfile`.
+- `bake --lockfile PATH` no longer overwrites a different `<out>/tundravm.lock`: it bakes against `PATH` and leaves that file alone. `bake-result.json` records the lockfile used as `declarative.lockfile`.

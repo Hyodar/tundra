@@ -169,15 +169,19 @@ variants=(
 How a variant lowers depends on what it does:
 
 - A variant whose parent is `base` or the default variant, and which only adds declarations or replaces `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant's directory. This keeps committed trees such as surge's byte-identical.
-- Every other variant (chained onto another variant, parentless, removing anything, replacing other kinds, changing keys, disks or secrets, or mounting its own `BuildSources`) is lowered standalone from its own resolved declarations.
+- Every other variant (chained onto another variant, parentless, removing anything, replacing other kinds, changing keys, disks or secrets, mounting its own `BuildSources`, having its own settings or kernel, or leaving a cloud-targeted default variant's targets) is lowered standalone from its own resolved declarations, with its own `mkosi.conf` lines and kernel.
+
+The default variant (the one named `default`, else the first root variant) may itself have a parent; that parent then lowers like any other variant.
 
 These still raise `ValidationError` when you compile, lint or bake:
 
-- a variant that declares or removes a `Setting` (other than `Build.BuildSources`) or the `Kernel`: both are recipe-wide, so declare them in `common`;
-- a standalone-lowered variant under `Mkosi(layout="native")`, because mkosi applies the root configuration to every profile;
-- more than one `Secrets` per variant;
-- a default variant whose parent is another variant;
-- a `Kernel` from `Http` or a git ref other than `v<version>`.
+- a standalone-lowered variant under `Mkosi(layout="native")`, because mkosi applies the root configuration to every profile; the error lists each such variant with its reason;
+- unreadable files, `Unit` or `Template` sources that are not UTF-8, and missing or empty `Directory` sources;
+- a `Template` placeholder without a value, and a malformed `Setting` value (a non-boolean `Build.WithNetwork`, several values for a single-valued key);
+- a `Setting` for a key the compiler writes itself (`Packages`, `Mirror`, `Format`, ...), naming the declaration to use instead;
+- a `Kernel` from `Http` without `sha256`;
+- two `Secrets` whose config, manifest or delivered file paths overlap;
+- variant parent cycles and `Init`/`Hook` ordering cycles.
 
 ## Lifecycle
 

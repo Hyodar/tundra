@@ -133,7 +133,7 @@ variants=(
 - `add` is a fragment. Adding a declaration whose identity the variant already inherits with a different value is an `identity-collision` error; use `replace`, which swaps an inherited declaration of the same identity (`replace-missing` if there is none). `remove` drops one (`remove-missing` if there is none).
 - `target` (or `targets` for several outputs) is `qemu`, `azure` or `gcp`, inherited from the parent; cloud targets add their platform integration. A child cannot drop a cloud target it inherits (`target-inconsistent`).
 
-`Setting`s and the `Kernel` are recipe-wide: declare them in `common`. See [Variants and targets](docs/concepts.md#variants-and-targets).
+`Setting`s and the `Kernel` belong to the variant that declares them; declare them in `common` to share them. A variant with its own settings or kernel lowers standalone. See [Variants and targets](docs/concepts.md#variants-and-targets).
 
 ## Reproducibility
 
