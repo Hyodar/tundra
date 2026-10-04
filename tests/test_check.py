@@ -67,7 +67,7 @@ def test_service_user_root_base_or_hook_created_is_fine() -> None:
     img = clean_image()
     img.service("a", command="/usr/bin/a", user="root")
     img.service("b", command="/usr/bin/b", user="nobody")
-    img.run("mkosi-chroot useradd --system hookuser")
+    img.shell("mkosi-chroot useradd --system hookuser", phase="postinst")
     img.service("c", command="/usr/bin/c", user="hookuser")
     assert img.check() == []
 
@@ -124,7 +124,7 @@ def test_service_command_shipped_by_file_hook_package_or_essential() -> None:
     img = Image(backend=InProcessBackend())
     img.file("/usr/local/bin/tool", content="#!/bin/sh\n", mode="0755")
     img.service("tool", command="/usr/local/bin/tool")
-    img.hook("build", "cp out/builder $DESTDIR/opt/builder")
+    img.shell("cp out/builder $DESTDIR/opt/builder", phase="build")
     img.service("builder", command="/opt/builder")
     img.service("shell", command="/usr/bin/bash -c true")
     assert img.check() == []
@@ -140,10 +140,10 @@ def test_output_target_without_platform() -> None:
     img = clean_image()
     with img.profile("azure"):
         img.install("curl")
-        img.output_targets("azure")
+        img.targets("azure")
     with img.profile("gcp"):
         img.install("curl")
-        img.output_targets("gcp")
+        img.targets("gcp")
     diags = img.check(profiles=["azure", "gcp"])
     assert [(d.profile, d.code, d.subject) for d in diags] == [
         ("azure", "output-target-platform-mismatch", "azure"),
@@ -159,7 +159,7 @@ def test_platform_applied_or_guest_agent_is_fine() -> None:
         GcpPlatform().apply(img)
     with img.profile("agent"):
         img.install("waagent")
-        img.output_targets("azure")
+        img.targets("azure")
     assert img.check(profiles=["azure", "gcp", "agent"]) == []
 
 
@@ -167,7 +167,7 @@ def test_platform_applied_but_target_overridden() -> None:
     img = clean_image()
     with img.profile("azure"):
         AzurePlatform().apply(img)
-        img.output_targets("qemu")
+        img.targets("qemu")
     [diag] = img.check(profiles=["azure"])
     assert diag.code == "platform-target-missing"
     assert diag.subject == "azure"
@@ -178,7 +178,7 @@ def test_gcp_platform_applied_but_target_overridden() -> None:
     img = clean_image()
     with img.profile("gcp"):
         GcpPlatform().apply(img)
-        img.output_targets("qemu")
+        img.targets("qemu")
     assert [(d.code, d.subject) for d in img.check(profiles=["gcp"])] == [
         ("platform-target-missing", "gcp")
     ]
@@ -207,9 +207,9 @@ def test_profile_with_content_or_default_is_not_empty() -> None:
 
 def test_init_priority_collision() -> None:
     img = clean_image()
-    img.add_init_script("echo one\n", priority=20)
-    img.add_init_script("echo two\n", priority=20)
-    img.add_init_script("echo three\n", priority=30)
+    img.runtime_init("echo one\n", priority=20)
+    img.runtime_init("echo two\n", priority=20)
+    img.runtime_init("echo three\n", priority=30)
     [diag] = img.check()
     assert (diag.code, diag.subject) == ("init-priority-collision", "priority 20")
     assert "'echo one'" in diag.message
@@ -217,9 +217,9 @@ def test_init_priority_collision() -> None:
 
 def test_distinct_or_duplicate_init_scripts_are_fine() -> None:
     img = clean_image()
-    img.add_init_script("echo one\n", priority=20)
-    img.add_init_script("echo one\n", priority=20)
-    img.add_init_script("echo two\n", priority=30)
+    img.runtime_init("echo one\n", priority=20)
+    img.runtime_init("echo one\n", priority=20)
+    img.runtime_init("echo two\n", priority=30)
     assert img.check() == []
 
 
@@ -248,13 +248,13 @@ def test_debloat_masks_needed_units() -> None:
         ("debloat-removes-needed-unit", "net"),
         ("debloat-removes-needed-unit", "systemd-resolved"),
     ]
-    assert "systemd_units_keep_extra" in (diags[0].hint or "")
+    assert "extra_keep_units" in (diags[0].hint or "")
 
 
 def test_debloat_keep_extra_or_disabled_is_fine() -> None:
     img = clean_image()
     img.service("net", command="/usr/bin/net", requires=["systemd-networkd.service"])
-    img.debloat(systemd_units_keep_extra=["systemd-networkd.service"])
+    img.debloat(extra_keep_units=["systemd-networkd.service"])
     assert img.check() == []
     img.debloat(enabled=False)
     assert img.check() == []
@@ -289,9 +289,9 @@ def test_secret_delivery_applied_is_fine() -> None:
     from tundravm import SecretTarget
 
     img = clean_image()
-    delivery = SecretDelivery(store_at=None)  # no DiskEncryption: secret-store-undefined
-    delivery.secret("token", targets=(SecretTarget.file("/run/token"),))
-    delivery.apply(img)
+    token = SecretSpec("token", targets=(SecretTarget.file("/run/token"),))
+    # no DiskEncryption: store_at=None, otherwise secret-store-undefined
+    SecretDelivery(secrets=(token,), store_at=None).apply(img)
     # SecretDelivery builds from an unpinned branch; that is source-unpinned's concern.
     assert [d for d in img.check() if d.code != "source-unpinned"] == []
 
@@ -305,8 +305,8 @@ def test_ordering_is_deterministic() -> None:
         img.file("rel", content="x")
     with img.profile("a"):
         pass
-    img.add_init_script("echo 1\n", priority=1)
-    img.add_init_script("echo 2\n", priority=1)
+    img.runtime_init("echo 1\n", priority=1)
+    img.runtime_init("echo 2\n", priority=1)
     diags = img.check(profiles=["b", "a", "default"])
     keys = [(d.profile, d.level, d.code) for d in diags]
     assert keys == [
@@ -393,10 +393,7 @@ def test_cli_error_exit_and_json(tmp_path: Path) -> None:
 
 
 def test_cli_strict_fails_on_warnings(tmp_path: Path) -> None:
-    extra = (
-        'img.add_init_script("echo 1\\n", priority=5)\n'
-        'img.add_init_script("echo 2\\n", priority=5)\n'
-    )
+    extra = 'img.runtime_init("echo 1\\n", priority=5)\nimg.runtime_init("echo 2\\n", priority=5)\n'
     recipe = write_recipe(tmp_path, extra)
     assert run(str(recipe))[0] == 0
     assert run(str(recipe), "--strict")[0] == 1

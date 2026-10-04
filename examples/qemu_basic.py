@@ -14,7 +14,7 @@ def build() -> Image:
     img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
     img.install("curl", "jq")
     img.file("/etc/motd", content="QEMU profile\n")
-    img.output_targets("qemu")
+    img.targets("qemu")
     return img
 
 

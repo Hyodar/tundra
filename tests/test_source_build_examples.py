@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,14 @@ from examples.modules import Nethermind, Raiko, TaikoClient
 
 from tundravm import Image
 from tundravm.errors import ValidationError
-from tundravm.modules import DiskEncryption, KeyGeneration, SecretDelivery, Tdxs
+from tundravm.modules import (
+    DiskEncryption,
+    DiskSpec,
+    KeyGeneration,
+    KeySpec,
+    SecretDelivery,
+    Tdxs,
+)
 from tundravm.source import (
     DotnetBuild,
     GitSource,
@@ -103,12 +111,16 @@ def test_example_modules_keep_their_build_packages(tmp_path: Path) -> None:
 
 
 def test_example_modules_follow_their_fields() -> None:
-    taiko = TaikoClient(source_branch="main", build_path="cmd/client").source_spec()
-    assert taiko.source == GitSource(TaikoClient().source_repo, "main", subdir="cmd/client")
+    source = GitSource(TaikoClient().source.url, "main", subdir="cmd/client")
+    taiko = TaikoClient(source=source).source_spec()
+    assert taiko.source == source
     hook = taiko.render()
     assert "cd /build/taiko-client/cmd/client && " in hook
     assert '"$BUILDROOT/build/taiko-client/cmd/client/bin/taiko-client"' in hook
-    nm = Nethermind(version="1.33.0", runtime="linux-arm64", user="nm").source_spec().render()
+    nm_source = GitSource(Nethermind().source.url, "1.33.0")
+    nm_module = Nethermind(source=nm_source, runtime="linux-arm64", user="nm")
+    assert nm_module.version == "1.33.0"
+    nm = nm_module.source_spec().render()
     assert '"$BUILDDIR/nethermind-1.33.0-linux-arm64"' in nm
     assert "--runtime linux-arm64" in nm
     assert '"$DESTDIR/etc/nm/NLog.config"' in nm
@@ -124,10 +136,10 @@ def test_example_modules_pin_through_the_lockfile() -> None:
 
 
 def test_every_module_that_builds_from_source_is_a_source_build(tmp_path: Path) -> None:
-    keys = KeyGeneration()
-    key = keys.key("key_persistent", strategy="tpm", output="/tmp/key_persistent")
-    disks = DiskEncryption()
-    disk = disks.disk("disk_persistent", device=None, key=key, mount_point="/persistent")
+    key = KeySpec("key_persistent", strategy="tpm", output="/tmp/key_persistent")
+    keys = KeyGeneration(keys=(key,))
+    disk = DiskSpec("disk_persistent", device=None, key=key, mount_at="/persistent")
+    disks = DiskEncryption(disks=(disk,))
     delivery = SecretDelivery(method="http_post", store_at=disk)
     img = Image(build_dir=tmp_path / "build")
     img.apply(Tdxs(), keys, disks, delivery, Raiko(), TaikoClient(), Nethermind())
@@ -162,7 +174,10 @@ def test_go_build_output_dir_and_mkdir() -> None:
     made = GoBuild(output="tool", output_dir="out/bin")
     assert made.command("/w").startswith("cd /w && mkdir -p out/bin && go build")
     spec = SourceBuild(
-        name="tool", source=GitSource(REPO, "main"), build=custom, install_to="/usr/bin/tool"
+        name="tool",
+        source=GitSource(REPO, "main"),
+        build=custom,
+        install=(Install.artifact("/usr/bin/tool"),),
     )
     assert '"$BUILDROOT/build/tool/bin/tool"' in spec.render()
 
@@ -188,15 +203,21 @@ def test_new_recipe_fields_stay_out_of_the_payload_at_their_defaults() -> None:
         name="tool",
         source=GitSource(REPO, "main"),
         build=GoBuild(output="tool"),
-        install_to="/usr/bin/tool",
+        install=(Install.artifact("/usr/bin/tool"),),
     ).to_payload()
     go_build = go["build"]
     assert isinstance(go_build, dict)
     assert set(go_build) == {"kind", "output", "package", "ldflags", "tags", "env", "packages"}
-    assert "install" not in go
+    assert go["install"] == [
+        {"kind": "artifact", "path": None, "dest": "/usr/bin/tool", "mode": "0755"}
+    ]
+    assert "install_to" not in go and "mode" not in go
     dotnet = DotnetBuild(project="p", output="o", restore_args=("--force",))
     spec = SourceBuild(
-        name="app", source=GitSource(REPO, "main"), build=dotnet, install_to="/usr/bin/o"
+        name="app",
+        source=GitSource(REPO, "main"),
+        build=dotnet,
+        install=(Install.artifact("/usr/bin/o"),),
     )
     build = spec.to_payload()["build"]
     assert isinstance(build, dict)
@@ -216,14 +237,14 @@ def _multi(**kwargs: object) -> SourceBuild:
     )
 
 
-def test_install_mapping_renders_files_modes_and_directories() -> None:
+def test_install_steps_render_files_modes_and_directories() -> None:
     spec = _multi(
-        install_to="/usr/bin/app",
-        install={
-            "conf/app.toml": Install("/etc/app/app.toml", mode="0600"),
-            "share/": "/usr/share/app-data/",
-            "out/helper": "/usr/libexec/helper",
-        },
+        install=(
+            Install.artifact("/usr/bin/app"),
+            Install.file("conf/app.toml", "/etc/app/app.toml", mode="0600"),
+            Install.tree("share", "/usr/share/app-data/"),
+            Install.file("out/helper", "/usr/libexec/helper"),
+        ),
         mark_unpinned=False,
     )
     url_hash = hashlib.sha256(REPO.encode()).hexdigest()[:12]
@@ -245,44 +266,48 @@ def test_install_mapping_renders_files_modes_and_directories() -> None:
     )
 
 
-def test_install_only_build_and_payload() -> None:
+def test_install_without_artifact_and_payload() -> None:
     spec = _multi(
-        install={
-            "out/app": "/usr/bin/app",
-            "conf/app.toml": Install("/etc/app/app.toml", mode="0600"),
-            "share/": "/usr/share/app-data",
-        },
-        mode="0750",
+        install=(
+            Install.file("out/app", "/usr/bin/app", mode="0750"),
+            Install.file("conf/app.toml", "/etc/app/app.toml", mode="0600"),
+            Install.tree("share/", "/usr/share/app-data"),
+        ),
         mark_unpinned=False,
     )
-    assert spec.install_to is None
     hook = spec.render()
     assert 'install -D -m 0750 "$BUILDROOT/build/app/out/app"' in hook
     assert 'install -D -m 0600 "$BUILDROOT/build/app/conf/app.toml"' in hook
     assert 'cp -r "$BUILDROOT/build/app/share"/* ' in hook
     assert hook.endswith('/app-data/* "$DESTDIR/usr/share/app-data"/')
     assert spec.to_payload()["install"] == [
-        {"path": "out/app", "dest": "/usr/bin/app", "mode": "0750"},
-        {"path": "conf/app.toml", "dest": "/etc/app/app.toml", "mode": "0600"},
-        {"path": "share/", "dest": "/usr/share/app-data", "mode": None},
+        {"kind": "file", "path": "out/app", "dest": "/usr/bin/app", "mode": "0750"},
+        {"kind": "file", "path": "conf/app.toml", "dest": "/etc/app/app.toml", "mode": "0600"},
+        {"kind": "tree", "path": "share/", "dest": "/usr/share/app-data", "mode": None},
     ]
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "message"),
+    ("install", "message"),
     [
-        ({}, "installs nothing"),
-        ({"install": {}}, "installs nothing"),
-        ({"install": {"/abs/app": "/usr/bin/app"}}, "must be relative"),
-        ({"install": {"../app": "/usr/bin/app"}}, "must be relative"),
-        ({"install": {"out/app": "usr/bin/app"}}, "must be absolute"),
-        ({"install": {"share/": Install("/usr/share/x", mode="0644")}}, "takes no mode"),
+        (lambda: (), "installs nothing"),
+        (lambda: (Install.file("/abs/app", "/usr/bin/app"),), "must be relative"),
+        (lambda: (Install.file("../app", "/usr/bin/app"),), "must be relative"),
+        (lambda: (Install.tree("share/../..", "/usr/share/x"),), "must be relative"),
+        (lambda: (Install.file("out/app", "usr/bin/app"),), "must be absolute"),
+        (lambda: (Install.artifact("usr/bin/app"),), "must be absolute"),
         (
-            {"install_to": "/usr/bin/app", "install": {"share/": "/usr/share/app"}},
+            lambda: (Install(kind="tree", dest="/usr/share/x", path="share", mode="0644"),),
+            "takes no mode",
+        ),
+        (lambda: (Install.file("share/", "/usr/share/x"),), "names a directory"),
+        (lambda: (Install("/etc/app.toml", "0600"),), "Unknown install kind"),  # type: ignore[arg-type]
+        (
+            lambda: (Install.artifact("/usr/bin/app"), Install.tree("share", "/usr/share/app")),
             "share the file name app",
         ),
     ],
 )
-def test_install_mapping_validation(kwargs: dict[str, object], message: str) -> None:
+def test_install_validation(install: Callable[[], tuple[Install, ...]], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
-        _multi(**kwargs)
+        _multi(install=install())

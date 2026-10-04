@@ -8,8 +8,8 @@ from tundravm.backends import InProcessBackend
 
 def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.output_targets("qemu")
-    image.run("echo hello", phase="prepare")
+    image.targets("qemu")
+    image.shell("echo hello", phase="prepare")
     result = image.bake()
 
     report_path = result.profiles["default"].report_path
@@ -33,7 +33,7 @@ def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> Non
 
 def test_structured_logs_include_profile_phase_module_and_builder(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.output_targets("qemu")
+    image.targets("qemu")
     image.bake()
 
     records = image.logger.records_for_profile("default")

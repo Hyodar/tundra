@@ -51,6 +51,7 @@ NETHERMIND_PUBLISH_PROPERTIES = {
 }
 
 NETHERMIND_DEFAULT_REPO = "https://github.com/NethermindEth/nethermind.git"
+NETHERMIND_DEFAULT_VERSION = "1.32.3"
 NETHERMIND_DEFAULT_PROJECT = "src/Nethermind/Nethermind.Runner"
 NETHERMIND_DEFAULT_RUNTIME = "linux-x64"
 
@@ -67,8 +68,7 @@ class Nethermind(Module):
          and installs config files.
     """
 
-    source_repo: str = NETHERMIND_DEFAULT_REPO
-    version: str = "1.32.3"
+    source: GitSource = GitSource(NETHERMIND_DEFAULT_REPO, NETHERMIND_DEFAULT_VERSION)
     project_path: str = NETHERMIND_DEFAULT_PROJECT
     runtime: str = NETHERMIND_DEFAULT_RUNTIME
     config_files: dict[str, str] = field(default_factory=dict)
@@ -76,13 +76,15 @@ class Nethermind(Module):
     group: str = "eth"
     after: tuple[str, ...] = ()
 
-    def setup(self, image: Image) -> None:
-        """Declare build packages and the nethermind build hook."""
-        image.build_install(*NETHERMIND_BUILD_PACKAGES)
-        self._add_build_hook(image)
+    @property
+    def version(self) -> str:
+        """The release built: the source ref (a tag such as ``1.32.3``)."""
+        return self.source.ref
 
-    def install(self, image: Image) -> None:
-        """Declare runtime config, unit files, and the service user."""
+    def configure(self, image: Image) -> None:
+        """Build nethermind, then declare its unit file, config files and user."""
+        image.build_packages(*NETHERMIND_BUILD_PACKAGES)
+        image.build_from(self.source_spec())
         self._add_runtime_config(image)
 
     def source_spec(self) -> SourceBuild:
@@ -97,7 +99,7 @@ class Nethermind(Module):
         etc = f"/etc/{self.user}"
         return SourceBuild(
             name="nethermind",
-            source=GitSource(self.source_repo, self.version),
+            source=self.source,
             build=DotnetBuild(
                 project=self.project_path,
                 output="nethermind",
@@ -107,18 +109,14 @@ class Nethermind(Module):
                 env=NETHERMIND_DOTNET_ENV,
                 packages=(),
             ),
-            install_to="/usr/bin/nethermind",
-            install={
-                "publish/NLog.config": Install(f"{etc}/NLog.config", mode="0644"),
-                "publish/plugins/": f"{etc}/plugins",
-            },
+            install=(
+                Install.artifact("/usr/bin/nethermind"),
+                Install.file("publish/NLog.config", f"{etc}/NLog.config", mode="0644"),
+                Install.tree("publish/plugins", f"{etc}/plugins"),
+            ),
             cache_key=f"nethermind-{self.version}-{self.runtime}",
             mark_unpinned=False,
         )
-
-    def _add_build_hook(self, image: Image) -> None:
-        """Add the build phase hook that clones and compiles nethermind from source."""
-        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)
@@ -134,12 +132,12 @@ class Nethermind(Module):
         for src_path, dest_path in self.config_files.items():
             image.file(dest_path, src=src_path)
 
-        image.run(
+        image.shell(
             f"mkosi-chroot useradd --system --home-dir /home/{self.user} "
             f"--shell /usr/sbin/nologin --groups {self.group} {self.user}",
             phase="postinst",
         )
-        image.service("nethermind-surge", enabled=True)
+        image.enable("nethermind-surge")
 
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render nethermind-surge.service systemd unit."""

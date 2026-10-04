@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tundravm import Image, Profile, ValidationError
-from tundravm.profile import declaration_methods
+from tundravm.profile import IMAGE_WIDE_SETTERS
 
 
 def test_context_manager_still_scopes_declarations() -> None:
@@ -44,7 +44,7 @@ def test_bound_declarations_land_in_that_profile_only() -> None:
     azure.install("walinuxagent")
     azure.file("/etc/azure.conf", content="x=1\n")
     azure.service("agent", command="/usr/bin/agent")
-    azure.output_targets("azure")
+    azure.targets("azure")
 
     state = img.state.profiles["azure"]
     default = img.state.profiles["default"]
@@ -62,19 +62,19 @@ def test_chaining_returns_the_profile() -> None:
     img = Image()
     gcp = img.profile("gcp")
 
-    result = gcp.install("google-guest-agent").run("echo hi").output_targets("gcp")
+    result = gcp.install("google-guest-agent").shell("echo hi", phase="postinst").targets("gcp")
 
     assert result is gcp
     assert isinstance(result, Profile)
     assert img.state.profiles["gcp"].packages == {"google-guest-agent"}
 
 
-def test_getattr_falls_back_to_declaration_methods() -> None:
+def test_less_common_declarations_are_profile_scoped() -> None:
     img = Image()
     dev = img.profile("dev")
 
     assert dev.backports(mirror="http://mirror.example") is dev
-    assert dev.build_install("gcc") is dev
+    assert dev.build_packages("gcc") is dev
 
     dev_hooks = img.state.profiles["dev"].phases["sync"]
     assert any("http://mirror.example" in cmd.argv[0] for cmd in dev_hooks)
@@ -82,18 +82,29 @@ def test_getattr_falls_back_to_declaration_methods() -> None:
     assert img.state.profiles["dev"].build_packages == {"gcc"}
 
 
-def test_getattr_rejects_non_declaration_attributes() -> None:
+def test_image_wide_setters_point_at_profile_image() -> None:
     dev = Image().profile("dev")
-    with pytest.raises(AttributeError, match="profile.image.mkosi"):
-        _ = dev.mkosi
+    for name in sorted(IMAGE_WIDE_SETTERS):
+        with pytest.raises(AttributeError, match=f"profile.image.{name}"):
+            getattr(dev, name)
+        assert not hasattr(dev, name)
     with pytest.raises(AttributeError, match="no attribute 'nope'"):
-        _ = dev.nope
+        _ = dev.nope  # type: ignore[attr-defined]
 
 
-def test_declaration_methods_are_the_self_returning_public_methods() -> None:
-    names = declaration_methods(Image)
-    assert {"install", "file", "directory", "service", "backports", "apply", "ssh"} <= names
-    assert names.isdisjoint({"compile", "bake", "explain", "profile", "profiles", "lock"})
+def test_profile_declares_every_profile_local_image_declaration() -> None:
+    declarations = {
+        name
+        for name, member in vars(Image).items()
+        if not name.startswith("_")
+        and callable(member)
+        and member.__annotations__.get("return") == "Self"
+    }
+    common = {"install", "file", "copy_tree", "service", "backports", "apply", "shell"}
+    assert common <= declarations
+    for name in declarations - IMAGE_WIDE_SETTERS:
+        assert name in vars(Profile), name
+    assert IMAGE_WIDE_SETTERS <= declarations
 
 
 def test_profile_names_and_repr() -> None:

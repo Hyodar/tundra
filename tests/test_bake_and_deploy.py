@@ -15,11 +15,11 @@ def _image_with_backend(tmp_path: Path) -> Image:
 
 def test_bake_respects_global_and_profile_output_targets(tmp_path: Path) -> None:
     image = _image_with_backend(tmp_path)
-    image.output_targets("qemu")
+    image.targets("qemu")
     with image.profile("azure"):
-        image.output_targets("azure")
+        image.targets("azure")
     with image.profile("gcp"):
-        image.output_targets("gcp")
+        image.targets("gcp")
 
     with image.all_profiles():
         result = image.bake()
@@ -39,7 +39,7 @@ def test_bake_respects_global_and_profile_output_targets(tmp_path: Path) -> None
 
 def test_deploy_fails_when_target_artifact_not_baked(tmp_path: Path) -> None:
     image = _image_with_backend(tmp_path)
-    image.output_targets("qemu")
+    image.targets("qemu")
     image.bake()
 
     with pytest.raises(DeploymentError) as excinfo:
@@ -54,7 +54,7 @@ def test_deploy_returns_result_when_target_was_baked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image = _image_with_backend(tmp_path)
-    image.output_targets("qemu")
+    image.targets("qemu")
     image.bake()
 
     # Mock the QEMU adapter to not require actual QEMU
@@ -89,9 +89,9 @@ def test_deploy_requires_explicit_profile_for_multi_profile_scope(
 ) -> None:
     image = _image_with_backend(tmp_path)
     with image.profile("dev"):
-        image.output_targets("qemu")
+        image.targets("qemu")
     with image.profile("prod"):
-        image.output_targets("qemu")
+        image.targets("qemu")
     with image.all_profiles():
         image.bake()
 

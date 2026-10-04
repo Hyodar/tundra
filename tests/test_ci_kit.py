@@ -23,7 +23,7 @@ img.install("curl", "jq")
 img.file("/etc/motd", content="hello\\n")
 img.user("app", system=True)
 img.service("app", command="/usr/bin/app", user="app")
-img.output_targets("qemu")
+img.targets("qemu")
 with img.profile("azure"):
     AzurePlatform().apply(img)
 """
@@ -179,8 +179,8 @@ def test_check_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
     recipe = tmp_path / "warn.py"
     recipe.write_text(
         "from tundravm import Image\nimg = Image()\nimg.install('curl')\n"
-        "img.add_init_script('echo 1\\n', priority=5)\n"
-        "img.add_init_script('echo 2\\n', priority=5)\n"
+        "img.runtime_init('echo 1\\n', priority=5)\n"
+        "img.runtime_init('echo 2\\n', priority=5)\n"
     )
     code, out = run("check", str(recipe), "--format", "github")
     assert code == EXIT_OK

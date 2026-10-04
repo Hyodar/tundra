@@ -12,10 +12,10 @@ from tundravm.models import Kernel, Phase
 def test_compile_golden_output(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.install("jq", "curl")
-    image.run("echo prep", phase="prepare", env={"B": "2", "A": "1"}, cwd="/work")
-    image.run("echo build", phase="build")
+    image.shell("echo prep", phase="prepare", env={"B": "2", "A": "1"}, cwd="/work")
+    image.shell("echo build", phase="build")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
 
     conf_path = output_dir / "default" / "mkosi.conf"
     prepare_script = output_dir / "default" / "scripts" / "03-prepare.sh"
@@ -61,7 +61,7 @@ def test_compile_golden_output(tmp_path: Path) -> None:
 def test_compile_is_deterministic(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.install("curl")
-    image.run("echo hello", phase="prepare")
+    image.shell("echo hello", phase="prepare")
 
     output_a = image.compile(tmp_path / "mkosi-a")
     output_b = image.compile(tmp_path / "mkosi-b")
@@ -88,7 +88,7 @@ def test_compile_generates_extra_tree(tmp_path: Path) -> None:
         variables={"network": "mainnet"},
     )
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
 
     extra_dir = output_dir / "default" / "mkosi.extra"
     assert (extra_dir / "etc" / "motd").read_text(encoding="utf-8") == "TDX VM\n"
@@ -108,7 +108,7 @@ def test_compile_generates_service_units(tmp_path: Path) -> None:
         security_profile="strict",
     )
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
 
     unit_path = (
         output_dir
@@ -142,7 +142,7 @@ def test_compile_generates_extra_unit_all_sections(tmp_path: Path) -> None:
         },
     )
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
 
     unit_path = (
         output_dir
@@ -171,7 +171,7 @@ def test_compile_generates_postinst_with_users(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.user("app", system=True, home="/var/lib/app", uid=1000, groups=["tdx"])
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
 
     # Check that postinst script exists and has user creation via mkosi-chroot
     postinst = output_dir / "default" / "scripts" / "06-postinst.sh"
@@ -185,9 +185,9 @@ def test_compile_generates_postinst_with_users(tmp_path: Path) -> None:
 
 def test_compile_generates_debloat_finalize(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
-    image.debloat(enabled=True, paths_remove_extra=["/usr/share/fonts"])
+    image.debloat(enabled=True, extra_remove_paths=["/usr/share/fonts"])
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
 
     # Finalize has path removal
     finalize = output_dir / "default" / "scripts" / "07-finalize.sh"
@@ -210,7 +210,7 @@ def test_compile_architecture_field(tmp_path: Path) -> None:
     for py_arch, mkosi_arch in ARCH_TO_MKOSI.items():
         image = Image(base="debian/bookworm", arch=py_arch)  # type: ignore[arg-type]
         image.install("curl")
-        output_dir = image.compile(tmp_path / f"mkosi-{py_arch}")
+        output_dir = image.compile(tmp_path / f"mkosi-{py_arch}").path
         conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
         assert f"Architecture={mkosi_arch}" in conf_text
 
@@ -220,7 +220,7 @@ def test_compile_with_network_configurable(tmp_path: Path) -> None:
     for with_net, expected in [(True, "WithNetwork=true"), (False, "WithNetwork=false")]:
         image = Image(base="debian/bookworm", mkosi=MkosiOptions(with_network=with_net))
         image.install("curl")
-        output_dir = image.compile(tmp_path / f"mkosi-net-{with_net}")
+        output_dir = image.compile(tmp_path / f"mkosi-net-{with_net}").path
         conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
         assert expected in conf_text
 
@@ -229,7 +229,7 @@ def test_compile_no_at_prefix(tmp_path: Path) -> None:
     """Format and ImageId do not have @ prefix in mkosi v26 output."""
     image = Image(base="debian/bookworm")
     image.install("curl")
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
     assert "@Format=" not in conf_text
     assert "@ImageId=" not in conf_text
@@ -242,7 +242,7 @@ def test_compile_service_enablement_uses_mkosi_chroot(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.service("myapp", command="/usr/bin/myapp", enabled=True)
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     postinst = output_dir / "default" / "scripts" / "06-postinst.sh"
     content = postinst.read_text(encoding="utf-8")
     assert "mkosi-chroot systemctl enable myapp.service" in content
@@ -253,7 +253,7 @@ def test_compile_debloat_uses_dpkg_query(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.debloat(enabled=True)
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     postinst = output_dir / "default" / "scripts" / "06-postinst.sh"
     content = postinst.read_text(encoding="utf-8")
 
@@ -271,7 +271,7 @@ def test_compile_default_target(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm")
     image.debloat(enabled=True)
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     postinst = output_dir / "default" / "scripts" / "06-postinst.sh"
     content = postinst.read_text(encoding="utf-8")
     assert 'ln -sf minimal.target "$BUILDROOT/etc/systemd/system/default.target"' in content
@@ -279,10 +279,10 @@ def test_compile_default_target(tmp_path: Path) -> None:
 
 def test_compile_skeleton_init_script(tmp_path: Path) -> None:
     """Custom init script is written to mkosi.skeleton/init when configured."""
-    image = Image(base="debian/bookworm").mkosi_options(init_script=Image.DEFAULT_TDX_INIT)
+    image = Image(base="debian/bookworm", mkosi=MkosiOptions(init_script=Image.DEFAULT_TDX_INIT))
     image.install("systemd")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     init_path = output_dir / "default" / "mkosi.skeleton" / "init"
     assert init_path.exists()
     content = init_path.read_text(encoding="utf-8")
@@ -298,7 +298,7 @@ def test_compile_version_script(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm", mkosi=MkosiOptions(generate_version_script=True))
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     version_path = output_dir / "mkosi.version"
     assert version_path.exists()
     content = version_path.read_text(encoding="utf-8")
@@ -310,9 +310,9 @@ def test_compile_gcp_postoutput(tmp_path: Path) -> None:
     """GCP postoutput script is emitted when profile has gcp output target."""
     image = Image(base="debian/bookworm")
     image.install("curl")
-    image.output_targets("gcp")
+    image.targets("gcp")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     gcp_script = output_dir / "default" / "scripts" / "gcp-postoutput.sh"
     assert gcp_script.exists()
     content = gcp_script.read_text(encoding="utf-8")
@@ -325,9 +325,9 @@ def test_compile_azure_postoutput(tmp_path: Path) -> None:
     """Azure postoutput script is emitted when profile has azure output target."""
     image = Image(base="debian/bookworm")
     image.install("curl")
-    image.output_targets("azure")
+    image.targets("azure")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     azure_script = output_dir / "default" / "scripts" / "azure-postoutput.sh"
     assert azure_script.exists()
     content = azure_script.read_text(encoding="utf-8")
@@ -344,7 +344,7 @@ def test_compile_native_profiles_mode(tmp_path: Path) -> None:
 
     # Must emit with all profiles active
     with image.all_profiles():
-        output_dir = image.compile(tmp_path / "mkosi")
+        output_dir = image.compile(tmp_path / "mkosi").path
 
     # Root mkosi.conf
     assert (output_dir / "mkosi.conf").exists()
@@ -364,7 +364,7 @@ def test_compile_environment_key_value(tmp_path: Path) -> None:
     )
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
     assert "Environment=MY_VAR=hello" in conf_text
@@ -380,7 +380,7 @@ def test_compile_environment_passthrough(tmp_path: Path) -> None:
     )
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
     assert "Environment=KERNEL_IMAGE\n" in conf_text
@@ -398,7 +398,7 @@ def test_compile_environment_both_forms(tmp_path: Path) -> None:
     )
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
     assert "Environment=SOURCE_DATE_EPOCH=0" in conf_text
@@ -414,7 +414,7 @@ def test_compile_reproducible_auto_adds_source_date_epoch(tmp_path: Path) -> Non
     )
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
     # Both the user env and the auto-added SOURCE_DATE_EPOCH
@@ -431,7 +431,7 @@ def test_compile_reproducible_no_override_user_epoch(tmp_path: Path) -> None:
     )
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
     assert "Environment=SOURCE_DATE_EPOCH=1234" in conf_text
@@ -448,7 +448,7 @@ def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
     image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     build_script = output_dir / "default" / "scripts" / "04-build.sh"
 
     assert build_script.exists()
@@ -479,7 +479,7 @@ def test_compile_kernel_config_file_copied(tmp_path: Path) -> None:
     image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     kernel_config = output_dir / "default" / "kernel" / "kernel.config"
 
     assert kernel_config.exists()
@@ -495,7 +495,7 @@ def test_compile_kernel_config_auto_adds_env_passthrough(tmp_path: Path) -> None
     image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
     assert "Environment=KERNEL_IMAGE\n" in conf_text
@@ -508,7 +508,7 @@ def test_compile_kernel_without_config_no_build_script(tmp_path: Path) -> None:
     image.kernel = Kernel.tdx_kernel("6.8")
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
 
     # No build script should exist (no build hooks registered)
     build_script = output_dir / "default" / "scripts" / "04-build.sh"
@@ -531,9 +531,9 @@ def test_compile_kernel_build_script_with_user_hooks(tmp_path: Path) -> None:
     image = Image(base="debian/bookworm", reproducible=False)
     image.kernel = Kernel.tdx_kernel("6.13.12", config_file=str(config_file))
     image.install("curl")
-    image.run("echo custom-build-step", phase="build")
+    image.shell("echo custom-build-step", phase="build")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     build_script = output_dir / "default" / "scripts" / "04-build.sh"
 
     assert build_script.exists()
@@ -557,7 +557,7 @@ def test_compile_kernel_custom_source_repo(tmp_path: Path) -> None:
     )
     image.install("curl")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     build_script = output_dir / "default" / "scripts" / "04-build.sh"
 
     script_text = build_script.read_text(encoding="utf-8")
@@ -573,7 +573,7 @@ def test_compile_efi_stub_postinst_hook(tmp_path: Path) -> None:
         package_version="255.4-1",
     )
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     postinst = output_dir / "default" / "scripts" / "06-postinst.sh"
 
     assert postinst.exists()
@@ -614,7 +614,7 @@ def test_compile_strip_image_version_finalize_hook(tmp_path: Path) -> None:
     image.install("systemd")
     # reproducible=True by default, so strip_image_version is auto-called
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     finalize = output_dir / "default" / "scripts" / "07-finalize.sh"
 
     assert finalize.exists()
@@ -674,7 +674,7 @@ def test_compile_backports_sync_hook(tmp_path: Path) -> None:
     image.install("systemd")
     image.backports(mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z")
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     sync_script = output_dir / "default" / "scripts" / "01-sync.sh"
 
     assert sync_script.exists()
@@ -762,7 +762,7 @@ def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
     image.install("systemd")
     image.backports()
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     conf = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
     assert "SandboxTrees=" in conf
     assert "debian-backports.sources" in conf
@@ -778,7 +778,7 @@ def test_compile_debloat_profile_conditional_paths(tmp_path: Path) -> None:
         },
     )
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     finalize = output_dir / "default" / "scripts" / "07-finalize.sh"
     assert finalize.exists()
     content = finalize.read_text(encoding="utf-8")
@@ -806,7 +806,7 @@ def test_compile_debloat_profile_conditional_unconditional_coexist(
         },
     )
 
-    output_dir = image.compile(tmp_path / "mkosi")
+    output_dir = image.compile(tmp_path / "mkosi").path
     finalize = output_dir / "default" / "scripts" / "07-finalize.sh"
     content = finalize.read_text(encoding="utf-8")
 

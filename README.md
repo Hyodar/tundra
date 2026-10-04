@@ -24,7 +24,7 @@ img = Image(base="debian/trixie", backend=LimaMkosiBackend(cpus=6, memory="12GiB
 img.install("systemd", "curl", "jq")
 img.user("app", system=True, shell="/bin/false")
 img.service("app", command="/usr/bin/app", user="app", env={"LOG_LEVEL": "info"})
-img.output_targets("qemu")
+img.targets("qemu")
 ```
 
 ```bash

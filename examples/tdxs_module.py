@@ -15,7 +15,7 @@ def build() -> Image:
         backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
     )
     img.install("ca-certificates")
-    img.output_targets("qemu")
+    img.targets("qemu")
 
     # Module sets up build packages (golang, git), build hook (clone + compile),
     # config.yaml, systemd units, user/group creation, and socket enablement.

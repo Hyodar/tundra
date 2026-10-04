@@ -30,7 +30,7 @@ def test_measure_requires_baked_artifacts(tmp_path: Path) -> None:
 
 def test_measure_supports_rtmr_azure_and_gcp(tmp_path: Path) -> None:
     image = _image_with_backend(tmp_path)
-    image.output_targets("qemu")
+    image.targets("qemu")
     image.bake()
 
     with pytest.warns(PlaceholderMeasurementWarning):
@@ -48,7 +48,7 @@ def test_measure_supports_rtmr_azure_and_gcp(tmp_path: Path) -> None:
 
 def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
     image = _image_with_backend(tmp_path)
-    image.output_targets("qemu")
+    image.targets("qemu")
     image.bake()
     with pytest.warns(PlaceholderMeasurementWarning):
         measurements = image.measure(backend="rtmr", allow_placeholder=True)
@@ -71,7 +71,7 @@ def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
 
 def test_measure_verification_reports_actionable_mismatches(tmp_path: Path) -> None:
     image = _image_with_backend(tmp_path)
-    image.output_targets("qemu")
+    image.targets("qemu")
     image.bake()
     with pytest.warns(PlaceholderMeasurementWarning):
         measurements = image.measure(backend="rtmr", allow_placeholder=True)

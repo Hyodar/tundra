@@ -127,7 +127,7 @@ def test_explain_shows_env_and_working_dir_only_when_set() -> None:
 
 def test_init_injection_keeps_new_fields(tmp_path: Path) -> None:
     img = Image(reproducible=False)
-    img.add_init_script("echo init")
+    img.runtime_init("echo init")
     img.service("svc", command="/usr/bin/svc", env={"A": "1"}, working_dir="/srv")
 
     unit = _unit(img, tmp_path, "svc.service")

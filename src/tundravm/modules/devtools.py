@@ -1,4 +1,4 @@
-"""Built-in Devtools module.
+"""Built-in DevTools module.
 
 Adds debugging packages, serial console access, and password-based root login
 to an Image.  This module is intended for development/debugging and should
@@ -79,8 +79,8 @@ SSHEOF
 
 
 @dataclass(slots=True)
-class Devtools(Module):
-    """Devtools module for development and debugging.
+class DevTools(Module):
+    """DevTools module for development and debugging.
 
     Adds:
     * Debug/diagnostic runtime packages (bash-completion, curl, vim, etc.)
@@ -95,7 +95,7 @@ class Devtools(Module):
         to :meth:`Image.debloat`.
     """
 
-    def install(self, image: Image) -> None:
+    def configure(self, image: Image) -> None:
         """Apply devtools configuration to the image."""
         # Debug runtime packages
         image.install(*DEVTOOLS_PACKAGES)
@@ -107,10 +107,10 @@ class Devtools(Module):
         )
 
         # Enable serial-console service
-        image.run(
+        image.shell(
             "mkosi-chroot systemctl enable serial-console.service",
             phase="postinst",
         )
 
         # Root password + auth configuration
-        image.run(DEVTOOLS_POSTINST_SCRIPT, phase="postinst")
+        image.shell(DEVTOOLS_POSTINST_SCRIPT, phase="postinst")

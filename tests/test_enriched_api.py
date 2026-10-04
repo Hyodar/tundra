@@ -53,15 +53,19 @@ class TestServiceSpec:
 
     def test_duplicate_service_name_rejected(self) -> None:
         img = Image()
-        img.service("app")
+        img.service("app", command="/usr/bin/app")
         with pytest.raises(ValidationError, match="Duplicate service"):
-            img.service("app")
+            img.service("app", command="/usr/bin/app")
+
+    def test_service_requires_a_command(self) -> None:
+        with pytest.raises(ValidationError, match="use enable"):
+            Image().service("app", command="")
 
     def test_same_service_name_in_different_profiles_ok(self) -> None:
         img = Image()
-        img.service("app")
+        img.service("app", command="/usr/bin/app")
         with img.profile("dev"):
-            img.service("app")  # Different profile, should be fine
+            img.service("app", command="/usr/bin/app")  # Different profile, should be fine
 
 
 # --- Rich user() parameters ---
@@ -188,9 +192,9 @@ class TestDebloatConfig:
         config = img.state.profiles["default"].debloat
         assert "/usr/share/bash-completion" not in config.effective_paths_remove
 
-    def test_debloat_paths_remove_extra(self) -> None:
+    def test_debloat_extra_remove_paths(self) -> None:
         img = Image()
-        img.debloat(paths_remove_extra=["/usr/share/fonts"])
+        img.debloat(extra_remove_paths=["/usr/share/fonts"])
         config = img.state.profiles["default"].debloat
         assert "/usr/share/fonts" in config.effective_paths_remove
 
@@ -200,9 +204,9 @@ class TestDebloatConfig:
         config = img.state.profiles["default"].debloat
         assert config.systemd_minimize is False
 
-    def test_debloat_systemd_units_keep_extra(self) -> None:
+    def test_debloat_extra_keep_units(self) -> None:
         img = Image()
-        img.debloat(systemd_units_keep_extra=["systemd-resolved.service"])
+        img.debloat(extra_keep_units=["systemd-resolved.service"])
         config = img.state.profiles["default"].debloat
         assert "systemd-resolved.service" in config.effective_units_keep
 
@@ -216,7 +220,7 @@ class TestDebloatConfig:
         img = Image()
         img.debloat(
             paths_skip=["/usr/share/bash-completion"],
-            systemd_units_keep_extra=["systemd-resolved.service"],
+            extra_keep_units=["systemd-resolved.service"],
         )
         explanation = img.explain_debloat()
         assert "systemd_minimize" in explanation
@@ -231,7 +235,7 @@ class TestDebloatConfig:
 class TestLifecycleMethods:
     def test_sync(self) -> None:
         img = Image()
-        img.sync("git submodule update --init")
+        img.shell("git submodule update --init", phase="sync")
         assert "sync" in img.state.profiles["default"].phases
         assert img.state.profiles["default"].phases["sync"][0].argv == (
             "git submodule update --init",
@@ -239,27 +243,27 @@ class TestLifecycleMethods:
 
     def test_prepare(self) -> None:
         img = Image()
-        img.prepare("pip install pyyaml")
+        img.shell("pip install pyyaml", phase="prepare")
         assert "prepare" in img.state.profiles["default"].phases
 
     def test_finalize(self) -> None:
         img = Image()
-        img.finalize("du -sh $BUILDROOT")
+        img.shell("du -sh $BUILDROOT", phase="finalize")
         assert "finalize" in img.state.profiles["default"].phases
 
     def test_postoutput(self) -> None:
         img = Image()
-        img.postoutput("sha256sum $OUTPUTDIR/latest.efi")
+        img.shell("sha256sum $OUTPUTDIR/latest.efi", phase="postoutput")
         assert "postoutput" in img.state.profiles["default"].phases
 
     def test_clean(self) -> None:
         img = Image()
-        img.clean("rm -rf ./tmp-cache")
+        img.shell("rm -rf ./tmp-cache", phase="clean")
         assert "clean" in img.state.profiles["default"].phases
 
-    def test_on_boot(self) -> None:
+    def test_boot_phase(self) -> None:
         img = Image()
-        img.on_boot("/usr/local/bin/init-attestation")
+        img.shell("/usr/local/bin/init-attestation", phase="boot")
         assert "boot" in img.state.profiles["default"].phases
 
     def test_skeleton_as_file(self, tmp_path: Path) -> None:
@@ -267,20 +271,19 @@ class TestLifecycleMethods:
         img.skeleton("/etc/resolv.conf", content="nameserver 1.1.1.1\n")
         assert img.state.profiles["default"].skeleton_files[0].path == "/etc/resolv.conf"
 
-    def test_ssh_installs_dropbear(self) -> None:
+    def test_shell_requires_command_and_phase(self) -> None:
         img = Image()
-        img.ssh()
-        assert "dropbear" in img.state.profiles["default"].packages
-
-    def test_sync_requires_command(self) -> None:
-        img = Image()
+        with pytest.raises(ValidationError, match="requires a command"):
+            img.shell("", phase="sync")
         with pytest.raises(TypeError):
-            img.sync()  # type: ignore[call-arg]
+            img.shell("echo hi")  # type: ignore[call-arg]
 
-    def test_prepare_requires_command(self) -> None:
+    def test_removed_shell_aliases(self) -> None:
         img = Image()
-        with pytest.raises(TypeError):
-            img.prepare()  # type: ignore[call-arg]
+        for name in ("run", "hook", "sync", "prepare", "finalize", "postoutput", "clean"):
+            assert not hasattr(img, name), name
+        assert not hasattr(img, "on_boot")
+        assert not hasattr(img, "ssh")
 
 
 # --- Kernel model ---

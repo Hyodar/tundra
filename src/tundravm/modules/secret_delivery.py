@@ -5,15 +5,15 @@ from __future__ import annotations
 import json
 import shlex
 from collections.abc import Iterator
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Literal, Self
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
-from tundravm.models import SecretSchema, SecretSpec, SecretTarget
-from tundravm.modules.base import Module
+from tundravm.models import SecretSpec
+from tundravm.modules.base import TUNDRA_TOOLS, Module
 from tundravm.modules.disk_encryption import DiskEncryption, DiskSpec
-from tundravm.source import GitSource, GoBuild, SourceBuild
+from tundravm.source import GitSource, GoBuild, Install, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -24,23 +24,22 @@ SECRET_DELIVERY_BUILD_PACKAGES = (
     "build-essential",
 )
 
-SECRET_DELIVERY_DEFAULT_REPO = "https://github.com/Hyodar/tundra-tools.git"
-SECRET_DELIVERY_DEFAULT_BRANCH = "master"
 SECRET_DELIVERY_DEFAULT_CONFIG_PATH = "/etc/tdx/secrets.yaml"
 SECRET_DELIVERY_DEFAULT_MANIFEST_PATH = "/etc/tdx/secrets.json"
+SECRET_DELIVERY_INIT_PRIORITY = 30
 
 
 @dataclass(slots=True)
 class SecretDelivery(Module):
     """Boot-time secret delivery phase.
 
+    *secrets* are the expected secrets, each with at least one delivery target.
     *store_at* names the ``DiskEncryption`` disk (a name or the ``DiskSpec``) that
     received secrets are stored on; ``check()`` warns when no disk applied to the
     profile has that name (``secret-store-undefined``).
     """
 
-    init_priority: ClassVar[int | None] = 30
-
+    secrets: tuple[SecretSpec, ...] = ()
     method: Literal["http_post"] = "http_post"
     host: str = "0.0.0.0"
     port: int = 8080
@@ -49,47 +48,17 @@ class SecretDelivery(Module):
     store_at: str | DiskSpec | None = "disk_persistent"
     config_path: str = SECRET_DELIVERY_DEFAULT_CONFIG_PATH
     manifest_path: str = SECRET_DELIVERY_DEFAULT_MANIFEST_PATH
-    source_repo: str = SECRET_DELIVERY_DEFAULT_REPO
-    source_branch: str = SECRET_DELIVERY_DEFAULT_BRANCH
-    _secrets: list[SecretSpec] = field(
-        default_factory=list,
-        init=False,
-        repr=False,
-    )
+    source: GitSource = TUNDRA_TOOLS
 
-    def secret(
-        self,
-        name: str,
-        *,
-        required: bool = True,
-        schema: SecretSchema | None = None,
-        targets: tuple[SecretTarget, ...] = (),
-    ) -> SecretSpec:
-        """Declare an expected secret with validation schema and targets."""
-        if not name:
-            raise ValidationError("secret() requires a non-empty secret name.")
-        if not targets:
-            raise ValidationError("secret() requires at least one delivery target.")
-        entry = SecretSpec(
-            name=name,
-            required=required,
-            schema=schema,
-            targets=targets,
-        )
-        self._secrets.append(entry)
-        return entry
-
-    def with_secret(
-        self,
-        name: str,
-        *,
-        required: bool = True,
-        schema: SecretSchema | None = None,
-        targets: tuple[SecretTarget, ...] = (),
-    ) -> Self:
-        """Like :meth:`secret`, but return the module so declarations chain inline."""
-        self.secret(name, required=required, schema=schema, targets=targets)
-        return self
+    def __post_init__(self) -> None:
+        self.secrets = tuple(self.secrets)
+        for spec in self.secrets:
+            if not spec.name:
+                raise ValidationError("SecretDelivery requires non-empty secret names.")
+            if not spec.targets:
+                raise ValidationError(
+                    f"secret {spec.name!r} requires at least one delivery target."
+                )
 
     @property
     def store_disk(self) -> str | None:
@@ -120,49 +89,46 @@ class SecretDelivery(Module):
             ),
             hint=(
                 f"Declared disks: {declared}. Apply a DiskEncryption with "
-                f"disk({store!r}, ...) to this profile, pass store_at= one of the declared "
+                f"DiskSpec({store!r}, ...) to this profile, pass store_at= one of the declared "
                 "disks, or store_at=None."
             ),
             profile=profile,
             subject=store,
         )
 
-    def setup(self, image: Image) -> None:
-        """Declare build packages and the secret-delivery build hook."""
-        image.build_install(*SECRET_DELIVERY_BUILD_PACKAGES)
-        image.source_build(self.source_spec())
-
-    def install(self, image: Image) -> None:
-        """Record the secrets on the active profiles and write the configs."""
+    def configure(self, image: Image) -> None:
+        """Build secret-delivery, record the secrets, write the configs, run it at boot."""
+        image.build_packages(*SECRET_DELIVERY_BUILD_PACKAGES)
+        image.build_from(self.source_spec())
         self._add_config(image)
-
-    def init_script(self, image: Image) -> str:
-        return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
+        image.runtime_init(
+            f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n",
+            priority=SECRET_DELIVERY_INIT_PRIORITY,
+        )
 
     def source_spec(self) -> SourceBuild:
-        """The ``secret-delivery`` source build from ``source_repo@source_branch``.
+        """The ``secret-delivery`` source build from ``source``.
 
         ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
         hand-written one this module emitted before source builds existed.
         """
         return SourceBuild(
             name="secret-delivery",
-            source=GitSource(self.source_repo, self.source_branch),
+            source=self.source,
             build=GoBuild(package="./cmd/secret-delivery", output="secret-delivery"),
-            install_to="/usr/bin/secret-delivery",
+            install=(Install.artifact("/usr/bin/secret-delivery"),),
             mark_unpinned=False,
         )
 
     def _add_config(self, image: Image) -> None:
         for profile in image._iter_active_profiles():
-            for spec in self._secrets:
-                profile.secrets.append(spec)
+            profile.secrets.extend(self.secrets)
 
         image.file(self.config_path, content=self._render_yaml_config())
         image.file(
             self.manifest_path,
             content=_render_manifest_json(
-                self._secrets,
+                self.secrets,
                 method=self.method,
                 host=self.host,
                 port=self.port,
@@ -188,7 +154,7 @@ class SecretDelivery(Module):
 
 
 def _render_manifest_json(
-    secrets: list[SecretSpec],
+    secrets: tuple[SecretSpec, ...],
     *,
     method: str,
     host: str,

@@ -15,15 +15,15 @@ def build() -> Image:
 
     with img.profile("azure"):
         img.install("waagent")
-        img.output_targets("azure")
+        img.targets("azure")
 
     with img.profile("gcp"):
         img.install("google-guest-agent")
-        img.output_targets("gcp")
+        img.targets("gcp")
 
     with img.profile("qemu"):
         img.install("qemu-guest-agent")
-        img.output_targets("qemu")
+        img.targets("qemu")
 
     return img
 

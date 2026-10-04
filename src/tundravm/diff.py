@@ -157,8 +157,12 @@ def diff_trees(old: Path, new: Path, *, ignore: Sequence[str] = ()) -> TreeDiff:
     return TreeDiff(changes=tuple(changes))
 
 
-def diff_against(image: Image, against: str | Path) -> TreeDiff:
-    """Diff the tree at *against* to what *image* compiles to for its active profiles.
+def diff_against(
+    image: Image, against: str | Path, *, profiles: Sequence[str] | None = None
+) -> TreeDiff:
+    """Diff the tree at *against* to what *image* compiles to for *profiles*.
+
+    ``None`` compiles the image's active profiles.
 
     Profile directories on disk that were not compiled are left out, so a tree
     holding more profiles than are active is not reported as removed.
@@ -167,7 +171,7 @@ def diff_against(image: Image, against: str | Path) -> TreeDiff:
     saved = (image._last_compile_digest, image._last_compile_path, image._last_compile_emission)
     with tempfile.TemporaryDirectory(prefix="tundravm-diff-") as tmp:
         try:
-            result = image.compile(tmp, force=True)
+            result = image.compile(tmp, force=True, profiles=profiles)
         finally:
             (
                 image._last_compile_digest,
@@ -177,9 +181,11 @@ def diff_against(image: Image, against: str | Path) -> TreeDiff:
         return diff_trees(root, Path(tmp), ignore=_foreign_profile_globs(root, result.profiles))
 
 
-def cmd_diff(args: argparse.Namespace, out: TextIO, img: Image) -> int:
+def cmd_diff(
+    args: argparse.Namespace, out: TextIO, img: Image, *, profiles: Sequence[str] | None = None
+) -> int:
     against = args.against if args.against is not None else Path(img.build_dir) / "mkosi"
-    result = diff_against(img, against)
+    result = diff_against(img, against, profiles=profiles)
     if result.is_clean:
         print("tree is up to date with the recipe", file=out)
         return 0

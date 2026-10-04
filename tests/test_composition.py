@@ -12,7 +12,10 @@ from examples.modules import Nethermind, Raiko, TaikoClient
 from tundravm import Image, MkosiOptions
 from tundravm.modules import (
     DiskEncryption,
+    DiskSpec,
+    GitSource,
     KeyGeneration,
+    KeySpec,
     SecretDelivery,
     Tdxs,
 )
@@ -32,39 +35,30 @@ def _build_base_image() -> Image:
     img.debloat(
         paths_skip_for_profiles={"devtools": ("/usr/share/bash-completion",)},
     )
-    img.hook("build", "echo base-build-hook")
+    img.shell("echo base-build-hook", phase="build")
     return img
 
 
 def _apply_app_layer(img: Image) -> Image:
     """Apply application-layer packages, hooks, and modules."""
     img.install("prometheus", "rclone", "curl", "jq")
-    img.hook("build", "echo app-build-hook")
+    img.shell("echo app-build-hook", phase="build")
 
-    keys = KeyGeneration()
-    keys.key("key_persistent", strategy="tpm")
-    keys.apply(img)
-    disks = DiskEncryption()
-    disks.disk("disk_persistent", device="/dev/vda3")
-    disks.apply(img)
+    KeyGeneration(keys=(KeySpec("key_persistent", strategy="tpm"),)).apply(img)
+    DiskEncryption(disks=(DiskSpec("disk_persistent", device="/dev/vda3"),)).apply(img)
     SecretDelivery(method="http_post").apply(img)
 
     Tdxs().apply(img)
 
-    Raiko(
-        source_repo="NethermindEth/raiko.git",
-        source_branch="feat/tdx",
-    ).apply(img)
+    Raiko(source=GitSource("NethermindEth/raiko.git", "feat/tdx")).apply(img)
 
     TaikoClient(
-        source_repo="NethermindEth/surge-taiko-mono",
-        source_branch="feat/tdx-proving",
+        source=GitSource(
+            "NethermindEth/surge-taiko-mono", "feat/tdx-proving", subdir="packages/taiko-client"
+        ),
     ).apply(img)
 
-    Nethermind(
-        source_repo="NethermindEth/nethermind.git",
-        version="1.32.3",
-    ).apply(img)
+    Nethermind(source=GitSource("NethermindEth/nethermind.git", "1.32.3")).apply(img)
 
     img._apply_init()
     return img
@@ -122,7 +116,7 @@ def test_postinst_has_both_base_and_app_commands() -> None:
     """Postinst phase should contain commands from both base and app layers."""
     img = _build_base_image()
     # Add a base-layer postinst command
-    img.run("echo base-postinst", phase="postinst")
+    img.shell("echo base-postinst", phase="postinst")
     _apply_app_layer(img)
 
     profile = img.state.profiles["default"]

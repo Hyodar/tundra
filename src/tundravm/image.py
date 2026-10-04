@@ -10,11 +10,11 @@ import re
 import shlex
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Final, Literal, Self
 
 from .backends.base import BuildBackend
 from .check import Diagnostic
@@ -188,12 +188,6 @@ def _validate_units(action: str, units: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(units))
 
 
-class Applicable(Protocol):
-    """Anything with an ``apply(image)`` method: modules, platforms, user bundles."""
-
-    def apply(self, image: Image) -> None: ...
-
-
 @dataclass(slots=True, kw_only=True)
 class Image:
     """Declarative recipe for a TDX-enabled VM image.
@@ -212,7 +206,7 @@ class Image:
 
     mkosi-only knobs (seed, cache directory, environment, ...) live in
     :class:`~tundravm.options.MkosiOptions`: ``Image(mkosi=MkosiOptions(...))``
-    or ``img.mkosi_options(...)``.
+    or ``img.set_mkosi(MkosiOptions(...))``.
     """
 
     DEFAULT_TDX_INIT = DEFAULT_TDX_INIT_SCRIPT
@@ -267,38 +261,34 @@ class Image:
         self.kernel = kernel
         return self
 
-    def mkosi_options(self, **overrides: object) -> Self:
-        """Replace fields of ``self.mkosi`` (image-wide), e.g. ``mkosi_options(seed="...")``."""
-        known = {f.name for f in fields(MkosiOptions)}
-        unknown = sorted(set(overrides) - known)
-        if unknown:
+    def set_mkosi(self, options: MkosiOptions) -> Self:
+        """Replace ``self.mkosi`` (image-wide), e.g. ``set_mkosi(replace(img.mkosi, seed=...))``."""
+        if not isinstance(options, MkosiOptions):
             raise ValidationError(
-                f"Unknown mkosi option(s): {', '.join(unknown)}.",
-                hint=f"Expected one of: {', '.join(sorted(known))}.",
+                f"set_mkosi() expects MkosiOptions, got {type(options).__name__}.",
+                hint="Pass tundravm.MkosiOptions(...).",
             )
-        self.mkosi = replace(self.mkosi, **overrides)  # type: ignore[arg-type]
+        self.mkosi = options
         return self
 
-    def apply(self, *modules: Applicable) -> Self:
+    def apply(self, *modules: Module) -> Self:
         """Apply one or more modules to the active profiles, in order.
 
         Equivalent to ``module.apply(self)`` for each module, but chainable::
 
             img.apply(KeyGeneration(), DiskEncryption(), Tdxs())
 
-        ``Module`` subclasses record themselves in ``applied_modules()``; any
-        other object with an ``apply(image)`` method is called but not recorded.
+        Each module records itself in ``applied_modules()``.
         """
         if not modules:
             raise ValidationError("apply() requires at least one module.")
         for module in modules:
-            apply_fn = getattr(module, "apply", None)
-            if not callable(apply_fn):
+            if not isinstance(module, Module):
                 raise ValidationError(
-                    f"{type(module).__name__} is not a module: it has no apply(image) method.",
+                    f"{type(module).__name__} is not a module.",
                     hint="Subclass tundravm.modules.Module; see docs/module-authoring.md.",
                 )
-            apply_fn(self)
+            module.apply(self)
         return self
 
     def applied_modules(
@@ -362,10 +352,10 @@ class Image:
             profile.packages.update(packages)
         return self
 
-    def build_install(self, *packages: str) -> Self:
+    def build_packages(self, *packages: str) -> Self:
         """Declare packages required at build time (removed after build)."""
         if not packages:
-            raise ValidationError("build_install() requires at least one package.")
+            raise ValidationError("build_packages() requires at least one package.")
         for package in packages:
             if not package:
                 raise ValidationError("Package names must be non-empty.")
@@ -373,15 +363,15 @@ class Image:
             profile.build_packages.update(packages)
         return self
 
-    def build_source(self, host_path: str, target: str = "") -> Self:
-        """Mount a host directory into the build environment (mkosi BuildSources)."""
-        if not host_path:
-            raise ValidationError("build_source() requires a non-empty host path.")
+    def mount_build_source(self, src: str, *, dest: str = "") -> Self:
+        """Mount the host directory *src* into the build environment at *dest* (BuildSources)."""
+        if not src:
+            raise ValidationError("mount_build_source() requires a non-empty src path.")
         for profile in self._iter_active_profiles():
-            profile.build_sources.append((host_path, target))
+            profile.build_sources.append((src, dest))
         return self
 
-    def source_build(self, spec: SourceBuild) -> Self:
+    def build_from(self, spec: SourceBuild) -> Self:
         """Fetch, build and install *spec* in the build phase, pinned through the lockfile.
 
         Adds the build packages the source and recipe need and one cached build
@@ -395,13 +385,13 @@ class Image:
                 raise ValidationError(
                     f"Source build {spec.name!r} is already declared.",
                     hint="Give each source build a unique name.",
-                    context={"profile": profile.name, "source_build": spec.name},
+                    context={"profile": profile.name, "build_from": spec.name},
                 )
         if spec.packages:
-            self.build_install(*spec.packages)
+            self.build_packages(*spec.packages)
         for profile in profiles:
             profile.source_builds[spec.name] = spec
-        return self.hook("build", spec.render())
+        return self.shell(spec.render(), phase="build")
 
     def source_builds(self, *, profile: str | None = None) -> dict[str, SourceBuild]:
         """Source builds declared for *profile* (default: every active profile), by name."""
@@ -454,14 +444,14 @@ class Image:
 
     def file(
         self,
-        path: str,
+        dest: str,
         *,
         content: str | bytes | None = None,
         src: str | Path | None = None,
         mode: str = "0644",
     ) -> Self:
-        """Place a file at *path* in the image; *src* that is not UTF-8 is copied as bytes."""
-        if not path:
+        """Place a file at *dest* in the image; *src* that is not UTF-8 is copied as bytes."""
+        if not dest:
             raise ValidationError("file() requires a destination path.")
         if content is None and src is None:
             raise ValidationError("file() requires content= or src=.")
@@ -469,10 +459,10 @@ class Image:
             raise ValidationError("file() accepts content= or src=, not both.")
         resolved_content = content if content is not None else _read_source(Path(src or ""))
         for profile in self._iter_active_profiles():
-            profile.files.append(FileEntry(path=path, content=resolved_content, mode=mode))
+            profile.files.append(FileEntry(path=dest, content=resolved_content, mode=mode))
         return self
 
-    def directory(
+    def copy_tree(
         self,
         dest: str,
         *,
@@ -488,11 +478,11 @@ class Image:
         skipped whole. Symlinked files are copied, symlinked directories are not followed.
         """
         if not dest:
-            raise ValidationError("directory() requires a destination path.")
+            raise ValidationError("copy_tree() requires a destination path.")
         root = Path(src)
         if not root.is_dir():
             raise ValidationError(
-                "directory() src must be an existing directory.",
+                "copy_tree() src must be an existing directory.",
                 context={"src": str(root)},
             )
         patterns = (exclude,) if isinstance(exclude, str) else tuple(exclude)
@@ -510,7 +500,7 @@ class Image:
                     found.append((rel, Path(current) / filename))
         if not found:
             raise ValidationError(
-                "directory() found no files to copy.",
+                "copy_tree() found no files to copy.",
                 hint="Check src= and exclude=.",
                 context={"src": str(root)},
             )
@@ -623,7 +613,7 @@ class Image:
         self,
         name: str,
         *,
-        command: tuple[str, ...] | list[str] | str = (),
+        command: tuple[str, ...] | list[str] | str,
         description: str | None = None,
         user: str | None = None,
         working_dir: str | None = None,
@@ -658,6 +648,11 @@ class Image:
         """
         if not name:
             raise ValidationError("service() requires a non-empty service name.")
+        if not command:
+            raise ValidationError(
+                f"service() requires a non-empty command for '{name}'.",
+                hint=f"To enable a unit a package or file() ships, use enable({name!r}).",
+            )
         limit_data = _normalize_limits(name, limits)
         env_data = dict(env or {})
         for key, value in env_data.items():
@@ -673,10 +668,7 @@ class Image:
                 )
         pre_commands = (exec_start_pre,) if isinstance(exec_start_pre, str) else exec_start_pre
         exec_argv: tuple[str, ...]
-        if isinstance(command, str):
-            exec_argv = tuple(shlex.split(command)) if command else ()
-        else:
-            exec_argv = tuple(command)
+        exec_argv = tuple(shlex.split(command)) if isinstance(command, str) else tuple(command)
         entry = ServiceSpec(
             name=name,
             command=exec_argv,
@@ -762,19 +754,20 @@ class Image:
             self.tools_tree_mirror = url
         return self
 
-    def partition(self, name: str, *, size: str, mount: str, fs: str = "ext4") -> Self:
+    def partition(self, name: str, *, size: str, mount_at: str, fs: str = "ext4") -> Self:
         if not name:
             raise ValidationError("partition() requires a non-empty name.")
-        if not size or not mount:
-            raise ValidationError("partition() requires both size and mount values.")
-        entry = PartitionSpec(name=name, size=size, mount=mount, fs=fs)
+        if not size or not mount_at:
+            raise ValidationError("partition() requires both size and mount_at values.")
+        entry = PartitionSpec(name=name, size=size, mount_at=mount_at, fs=fs)
         for profile in self._iter_active_profiles():
             profile.partitions.append(entry)
         return self
 
-    def output_targets(self, *targets: OutputTarget) -> Self:
+    def targets(self, *targets: OutputTarget) -> Self:
+        """Set the artifacts the active profiles bake (``qemu``, ``azure``, ``gcp``)."""
         if not targets:
-            raise ValidationError("output_targets() requires at least one target.")
+            raise ValidationError("targets() requires at least one target.")
         deduped = tuple(dict.fromkeys(targets))
         for profile in self._iter_active_profiles():
             profile.output_targets = deduped
@@ -787,11 +780,11 @@ class Image:
         enabled: bool = True,
         paths_remove: tuple[str, ...] | None = None,
         paths_skip: tuple[str, ...] | list[str] = (),
-        paths_remove_extra: tuple[str, ...] | list[str] = (),
+        extra_remove_paths: tuple[str, ...] | list[str] = (),
         paths_skip_for_profiles: dict[str, tuple[str, ...]] | None = None,
         systemd_minimize: bool = True,
         systemd_units_keep: tuple[str, ...] | None = None,
-        systemd_units_keep_extra: tuple[str, ...] | list[str] = (),
+        extra_keep_units: tuple[str, ...] | list[str] = (),
         systemd_bins_keep: tuple[str, ...] | None = None,
     ) -> Self:
         """Configure image debloating — removal of unnecessary files and systemd units."""
@@ -806,11 +799,11 @@ class Image:
                 enabled=True,
                 paths_remove=paths_remove or _defaults.paths_remove,
                 paths_skip=tuple(paths_skip),
-                paths_remove_extra=tuple(paths_remove_extra),
+                extra_remove_paths=tuple(extra_remove_paths),
                 paths_skip_for_profiles=profile_skips,
                 systemd_minimize=systemd_minimize,
                 systemd_units_keep=systemd_units_keep or _defaults.systemd_units_keep,
-                systemd_units_keep_extra=tuple(systemd_units_keep_extra),
+                extra_keep_units=tuple(extra_keep_units),
                 systemd_bins_keep=systemd_bins_keep or _defaults.systemd_bins_keep,
             )
 
@@ -844,24 +837,17 @@ class Image:
         """Lint the recipe; see ``tundravm.check`` for the rules."""
         return run_checks(self, profiles=profiles)
 
-    def diff(self, against: str | Path) -> TreeDiff:
+    def diff(self, against: str | Path, *, profiles: Sequence[str] | None = None) -> TreeDiff:
         """Diff the compiled tree at *against* to what this recipe compiles to now.
 
-        Only the active profiles are compiled and compared; nothing is written to *against*.
+        Only *profiles* (default: the active ones) are compiled and compared; nothing
+        is written to *against*.
         """
-        return diff_against(self, against)
-
-    # --- Lifecycle convenience methods ---
-
-    def sync(self, command: str, *, env: Mapping[str, str] | None = None) -> Self:
-        """Register a sync-phase command (runs before build)."""
-        if not command:
-            raise ValidationError("sync() requires a command.")
-        return self.hook("sync", command, env=env)
+        return diff_against(self, against, profiles=profiles)
 
     def skeleton(
         self,
-        path: str,
+        dest: str,
         *,
         content: str | None = None,
         src: str | Path | None = None,
@@ -872,7 +858,7 @@ class Image:
         This maps to mkosi.skeleton/ and is useful for custom apt sources,
         resolv.conf for build DNS, or directory structure that packages expect.
         """
-        if not path:
+        if not dest:
             raise ValidationError("skeleton() requires a destination path.")
         if (content is None) == (src is None):
             raise ValidationError("skeleton() requires exactly one of content= or src=.")
@@ -883,63 +869,8 @@ class Image:
                 raise ValidationError("skeleton() requires src when content is not provided.")
             resolved_content = Path(src).read_text(encoding="utf-8")
         for profile in self._iter_active_profiles():
-            profile.skeleton_files.append(FileEntry(path=path, content=resolved_content, mode=mode))
+            profile.skeleton_files.append(FileEntry(path=dest, content=resolved_content, mode=mode))
         return self
-
-    def prepare(
-        self,
-        command: str,
-        *,
-        env: Mapping[str, str] | None = None,
-    ) -> Self:
-        """Register a prepare-phase command (runs after base packages, before build)."""
-        if not command:
-            raise ValidationError("prepare() requires a command.")
-        return self.hook("prepare", command, env=env)
-
-    def finalize(
-        self,
-        command: str,
-        *,
-        env: Mapping[str, str] | None = None,
-    ) -> Self:
-        """Register a finalize-phase command (runs on HOST with $BUILDROOT)."""
-        if not command:
-            raise ValidationError("finalize() requires a command.")
-        return self.hook("finalize", command, env=env)
-
-    def postoutput(
-        self,
-        command: str,
-        *,
-        env: Mapping[str, str] | None = None,
-    ) -> Self:
-        """Register a postoutput-phase command (runs after disk image is written)."""
-        if not command:
-            raise ValidationError("postoutput() requires a command.")
-        return self.hook("postoutput", command, env=env)
-
-    def clean(
-        self,
-        command: str,
-        *,
-        env: Mapping[str, str] | None = None,
-    ) -> Self:
-        """Register a clean-phase command (runs on `mkosi clean`)."""
-        if not command:
-            raise ValidationError("clean() requires a command.")
-        return self.hook("clean", command, env=env)
-
-    def on_boot(
-        self,
-        command: str,
-        *,
-        env: Mapping[str, str] | None = None,
-    ) -> Self:
-        """Register a boot-time command (runs when VM boots, systemd oneshot)."""
-        if not command:
-            raise ValidationError("on_boot() requires a command.")
-        return self.hook("boot", command, env=env)
 
     def strip_image_version(self, *, enabled: bool = True) -> Self:
         """Strip IMAGE_VERSION from /etc/os-release for reproducible attestation."""
@@ -959,8 +890,7 @@ class Image:
                     ]
             return self
         script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release" """
-        self.hook("finalize", script)
-        return self
+        return self.shell(script, phase="finalize")
 
     def efi_stub(self, *, snapshot_url: str, package_version: str) -> Self:
         """Pin systemd-boot-efi from a specific Debian snapshot for reproducible EFI stub."""
@@ -981,8 +911,7 @@ class Image:
             '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
             'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
         )
-        self.run(script, phase="postinst")
-        return self
+        return self.shell(script, phase="postinst")
 
     def backports(self, *, mirror: str | None = None, release: str | None = None) -> Self:
         """Generate Debian backports sources dynamically at sync time.
@@ -1019,8 +948,7 @@ class Image:
             "EOF"
         )
 
-        script = "\n".join(lines)
-        self.hook("sync", script)
+        self.shell("\n".join(lines), phase="sync")
 
         # Auto-add sandbox_trees entry for the generated file
         backports_entry = (
@@ -1033,7 +961,7 @@ class Image:
 
         return self
 
-    def add_init_script(self, script: str, *, priority: int = 100) -> Self:
+    def runtime_init(self, script: str, *, priority: int = 100) -> Self:
         """Append a bash fragment to the active profiles' runtime-init script.
 
         Fragments are ordered by *priority* (lower runs first) when Init
@@ -1043,7 +971,7 @@ class Image:
         sequence.
         """
         if not script:
-            raise ValidationError("add_init_script() requires non-empty script content.")
+            raise ValidationError("runtime_init() requires non-empty script content.")
         entry = InitScriptEntry(script=script, priority=priority)
         for profile in self._iter_active_profiles():
             profile.init_scripts.append(entry)
@@ -1062,59 +990,27 @@ class Image:
         """Whether any active profile runs runtime-init fragments."""
         return any(self.init_scripts(name) for name in self._active_profiles)
 
-    def ssh(self) -> Self:
-        """Enable SSH access via dropbear (typically used inside dev profiles)."""
-        self.install("dropbear")
-        return self
-
-    def run(
+    def shell(
         self,
         command: str,
         *,
-        phase: Phase = "postinst",
-        env: Mapping[str, str] | None = None,
-        cwd: str | None = None,
-    ) -> Self:
-        """Run a shell command during the given build phase (default: postinst)."""
-        return self.hook(
-            phase,
-            command,
-            env=env,
-            cwd=cwd,
-        )
-
-    def hook(
-        self,
         phase: Phase,
-        command: str,
-        *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
-        after_phase: Phase | None = None,
     ) -> Self:
-        """Register a shell command to run during a specific build phase."""
+        """Run the shell *command* in build *phase* (``boot`` runs it at VM boot)."""
         if not command:
-            raise ValidationError("hook() requires a command.")
+            raise ValidationError("shell() requires a command.")
         if phase not in VALID_PHASES:
             raise ValidationError(
                 f"Invalid phase {phase!r}.",
                 hint=f"Expected one of: {', '.join(sorted(VALID_PHASES))}",
             )
-        if after_phase is not None and after_phase not in VALID_PHASES:
-            raise ValidationError(
-                f"Invalid after_phase {after_phase!r}.",
-                hint=f"Expected one of: {', '.join(sorted(VALID_PHASES))}",
-            )
-        self._validate_phase_order(phase=phase, after_phase=after_phase)
         env_data = dict(env or {})
         for profile in self._iter_active_profiles():
-            spec = CommandSpec(
-                argv=(command,),
-                env=dict(env_data),
-                cwd=cwd,
-            )
+            spec = CommandSpec(argv=(command,), env=dict(env_data), cwd=cwd)
             profile.phases.setdefault(phase, []).append(spec)
-            profile.hooks.append(HookSpec(phase=phase, command=spec, after_phase=after_phase))
+            profile.hooks.append(HookSpec(phase=phase, command=spec))
         return self
 
     def lock(
@@ -1123,8 +1019,9 @@ class Image:
         *,
         resolver: Resolver | None = None,
         offline: bool = False,
+        profiles: Sequence[str] | None = None,
     ) -> Path:
-        """Write the lockfile for the active profiles and return its path.
+        """Write the lockfile for *profiles* (default: the active ones) and return its path.
 
         The default path is ``<build_dir>/tundravm.lock``. Besides the whole
         recipe digest that ``bake(frozen=True)`` enforces, the lockfile records a
@@ -1138,15 +1035,22 @@ class Image:
         and raises :class:`LockfileError` for any source that would need the network.
         """
         lock_path = self._normalize_path(path, fallback=self._default_lock_path())
-        payload = self._recipe_payload(profile_names=self._active_profiles)
         offline = offline or self.policy.network_mode == "offline"
-        previous = self.source_pins(lock_path) if offline else {}
-        fetches = resolve_pins(self.source_builds(), previous, resolver=resolver, offline=offline)
+        with self._operation_scope(profiles):
+            payload = self._recipe_payload(profile_names=self._active_profiles)
+            previous = self.source_pins(lock_path) if offline else {}
+            fetches = resolve_pins(
+                self.source_builds(), previous, resolver=resolver, offline=offline
+            )
         lock = build_lockfile(recipe=payload, fetches=fetches)
         return write_lockfile(lock, lock_path)
 
     def lock_status(
-        self, path: str | Path | None = None, *, resolver: Resolver | None = None
+        self,
+        path: str | Path | None = None,
+        *,
+        resolver: Resolver | None = None,
+        profiles: Sequence[str] | None = None,
     ) -> LockDrift:
         """Compare the lockfile at *path* with the current recipe, section by section.
 
@@ -1161,11 +1065,12 @@ class Image:
         """
         lock_path = self._normalize_path(path, fallback=self._default_lock_path())
         lock = read_lockfile(lock_path)
-        drift = compare_lock(lock, self._recipe_payload(profile_names=self._active_profiles))
         pins = {fetch.name: fetch for fetch in lock.fetches if fetch.name is not None}
-        added, changed, removed, details = source_drift(
-            self.source_builds(), pins, resolver=resolver
-        )
+        with self._operation_scope(profiles):
+            drift = compare_lock(lock, self._recipe_payload(profile_names=self._active_profiles))
+            added, changed, removed, details = source_drift(
+                self.source_builds(), pins, resolver=resolver
+            )
         return replace(
             drift,
             added=(*drift.added, *added),
@@ -1174,9 +1079,18 @@ class Image:
             details={**drift.details, **details},
         )
 
-    def compile(self, path: str | Path, *, force: bool = False) -> CompileResult:
-        """Emit the mkosi build tree to *path* and return a CompileResult."""
-        destination = self._normalize_path(path)
+    def compile(
+        self,
+        path: str | Path,
+        *,
+        force: bool = False,
+        profiles: Sequence[str] | None = None,
+    ) -> CompileResult:
+        """Emit the mkosi tree for *profiles* (default: the active ones) to *path*."""
+        with self._operation_scope(profiles):
+            return self._compile(self._normalize_path(path), force=force)
+
+    def _compile(self, destination: Path, *, force: bool) -> CompileResult:
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
         pins = self.source_pins()
@@ -1217,14 +1131,26 @@ class Image:
         frozen: bool = False,
         force: bool = False,
         reporter: Reporter | None = None,
+        profiles: Sequence[str] | None = None,
     ) -> BakeResult:
-        """Compile, build, and package the image via the configured backend.
+        """Compile, build, and package *profiles* (default: the active ones) via the backend.
 
         *reporter* receives progress events: lint/lock/compile phases, per-profile
         prepare and build phases with durations, every backend output line,
         artifacts with sizes, the report path, and a final ``done``. Without a
         reporter, backend output only surfaces in a failing backend's error.
         """
+        with self._operation_scope(profiles):
+            return self._bake(output_dir, frozen=frozen, force=force, reporter=reporter)
+
+    def _bake(
+        self,
+        output_dir: str | Path | None,
+        *,
+        frozen: bool,
+        force: bool,
+        reporter: Reporter | None,
+    ) -> BakeResult:
         progress = Progress(reporter)
         active = self._active_profiles
         scope = active[0] if len(active) == 1 else None
@@ -1461,7 +1387,7 @@ class Image:
         if artifact is None:
             raise DeploymentError(
                 "Requested deploy target artifact was not baked.",
-                hint="Add the target via output_targets(...) and rerun bake().",
+                hint="Add the target via targets(...) and rerun bake().",
                 context={"operation": "deploy", "profile": selected_profile, "target": target},
             )
 
@@ -1547,17 +1473,27 @@ class Image:
                 normalized.append(name)
         return tuple(normalized)
 
-    def _validate_phase_order(self, *, phase: Phase, after_phase: Phase | None) -> None:
-        if after_phase is None:
+    @contextmanager
+    def _operation_scope(self, profiles: Sequence[str] | None) -> Iterator[tuple[str, ...]]:
+        """Run an operation on *profiles*, or on the active selection when ``None``."""
+        if profiles is None:
+            yield self._active_profiles
             return
-        phase_index = PHASE_ORDER.index(phase)
-        after_index = PHASE_ORDER.index(after_phase)
-        if after_index >= phase_index:
+        names = self._normalize_profile_names(
+            (profiles,) if isinstance(profiles, str) else tuple(profiles)
+        )
+        unknown = [name for name in names if name not in self._state.profiles]
+        if unknown:
             raise ValidationError(
-                "Invalid phase hook dependency order.",
-                hint="after_phase must be earlier than the hook phase.",
-                context={"phase": phase, "after_phase": after_phase},
+                f"Unknown profile(s): {', '.join(unknown)}.",
+                hint=f"Declared profiles: {', '.join(self.profile_names)}",
             )
+        previous = self._active_profiles
+        self._active_profiles = names
+        try:
+            yield names
+        finally:
+            self._active_profiles = previous
 
     def _sorted_active_profile_names(self) -> list[str]:
         return sorted(self._active_profiles)
@@ -1620,7 +1556,7 @@ class Image:
                 patched.append(replace(svc, after=after, requires=requires))
             profile.services = patched
         # Register runtime-init for enablement (systemctl enable + minimal.target.wants)
-        # in each generating profile that does not have it yet. service() appends to every
+        # in each generating profile that does not have it yet. enable() appends to every
         # active profile, so scope it to one profile at a time to stay idempotent
         # across compiles with different profile selections.
         missing = [
@@ -1630,7 +1566,7 @@ class Image:
         ]
         for profile_name in missing:
             with self.profiles(profile_name):
-                self.service(init_svc, enabled=True)
+                self.enable(init_svc)
 
     def _record_module(self, module: Module) -> None:
         for profile_name in self._active_profiles:
@@ -1748,24 +1684,17 @@ class Image:
                 {
                     "name": partition.name,
                     "size": partition.size,
-                    "mount": partition.mount,
+                    "mount": partition.mount_at,
                     "fs": partition.fs,
                 }
                 for partition in sorted(profile.partitions, key=lambda item: item.name)
             ]
+            # "after_phase" is no longer declarable; the key stays so digests do not move.
             hooks = [
-                {
-                    "phase": hook.phase,
-                    "after_phase": hook.after_phase,
-                    "argv": list(hook.command.argv),
-                }
+                {"phase": hook.phase, "after_phase": None, "argv": list(hook.command.argv)}
                 for hook in sorted(
                     profile.hooks,
-                    key=lambda item: (
-                        PHASE_ORDER.index(item.phase),
-                        item.after_phase or "",
-                        item.command.argv,
-                    ),
+                    key=lambda item: (PHASE_ORDER.index(item.phase), item.command.argv),
                 )
             ]
             secrets = [

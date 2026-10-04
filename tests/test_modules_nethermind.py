@@ -1,24 +1,25 @@
 from examples.modules import Nethermind
 
 from tundravm import Image
+from tundravm.modules import GitSource
 
 
-def test_nethermind_setup_declares_build_packages() -> None:
+def test_nethermind_configure_declares_build_packages() -> None:
     image = Image(reproducible=False)
     module = Nethermind()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     for pkg in ("dotnet-sdk-10.0", "dotnet-runtime-10.0", "build-essential", "git"):
         assert pkg in profile.build_packages
 
 
-def test_nethermind_setup_adds_build_hook_with_dotnet_properties() -> None:
+def test_nethermind_configure_adds_build_hook_with_dotnet_properties() -> None:
     image = Image(reproducible=False)
     module = Nethermind()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -57,24 +58,23 @@ def test_nethermind_setup_adds_build_hook_with_dotnet_properties() -> None:
 
 def test_nethermind_custom_version_and_repo() -> None:
     image = Image(reproducible=False)
-    module = Nethermind(
-        source_repo="https://github.com/custom/nethermind-fork.git",
-        version="2.0.0",
-    )
+    module = Nethermind(source=GitSource("https://github.com/custom/nethermind-fork.git", "2.0.0"))
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
     assert "custom/nethermind-fork.git" in build_script
     assert "-b 2.0.0" in build_script
+    assert module.version == "2.0.0"
+    assert '"$BUILDDIR/nethermind-2.0.0-linux-x64"' in build_script
 
 
 def test_nethermind_service_unit_content() -> None:
     image = Image(reproducible=False)
     module = Nethermind()
 
-    module.install(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     svc_files = [
@@ -100,7 +100,7 @@ def test_nethermind_creates_system_user_in_postinst() -> None:
     image = Image(reproducible=False)
     module = Nethermind()
 
-    module.install(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     postinst_commands = profile.phases.get("postinst", [])
@@ -112,17 +112,17 @@ def test_nethermind_creates_system_user_in_postinst() -> None:
     assert "nethermind-surge" in cmd
 
 
-def test_nethermind_apply_combines_setup_and_install() -> None:
+def test_nethermind_apply_declares_build_and_runtime() -> None:
     image = Image(reproducible=False)
     module = Nethermind()
 
     module.apply(image)
 
     profile = image.state.profiles["default"]
-    # Build packages from setup()
+    # Build packages
     assert "dotnet-sdk-10.0" in profile.build_packages
     assert "dotnet-runtime-10.0" in profile.build_packages
-    # Files from install()
+    # Runtime files
     assert any(f.path == "/usr/lib/systemd/system/nethermind-surge.service" for f in profile.files)
     # Build hook
     assert len(profile.phases.get("build", [])) == 1
@@ -147,7 +147,7 @@ def test_nethermind_config_files_mapping(tmp_path: object) -> None:
         },
     )
 
-    module.install(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     config_paths = [f.path for f in profile.files]
@@ -159,7 +159,7 @@ def test_nethermind_custom_runtime() -> None:
     image = Image(reproducible=False)
     module = Nethermind(runtime="linux-arm64")
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]

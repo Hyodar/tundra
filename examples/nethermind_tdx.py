@@ -97,7 +97,7 @@ def build_nethermind_base() -> Image:
     )
 
     # Build-time packages (stripped from final image)
-    img.build_install(
+    img.build_packages(
         "build-essential",
         "git",
         "curl",

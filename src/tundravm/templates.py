@@ -24,7 +24,7 @@ Build:    tundravm bake {filename} --lock
 
 from tundravm import Image
 {backend_import}
-from tundravm.modules import Devtools
+from tundravm.modules import DevTools
 
 img = Image(base="{base}", backend={backend_expr})
 img.install("systemd", "curl", "jq")
@@ -32,10 +32,10 @@ img.file("/etc/motd", content="{title}\\n")
 img.user("app", system=True, shell="/bin/false")
 img.service("app", command="/usr/bin/true")
 img.debloat(enabled=True)
-img.output_targets("qemu")
+img.targets("qemu")
 
 with img.profile("dev"):
-    img.apply(Devtools())
+    img.apply(DevTools())
 '''
 
 GITIGNORE_MARKER = "/build/*"

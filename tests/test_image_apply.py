@@ -5,14 +5,15 @@ from __future__ import annotations
 import pytest
 
 from tundravm import Image, ValidationError
-from tundravm.modules import Devtools, KeyGeneration
+from tundravm.modules import DevTools, KeyGeneration, KeySpec
+from tundravm.modules.base import Module
 
 
-class _Bundle:
+class _Bundle(Module):
     def __init__(self) -> None:
         self.applied_to: list[Image] = []
 
-    def apply(self, image: Image) -> None:
+    def configure(self, image: Image) -> None:
         self.applied_to.append(image)
         image.install("bundle-pkg")
 
@@ -30,15 +31,13 @@ def test_apply_runs_each_module_in_order_and_chains() -> None:
 
 def test_apply_matches_module_apply() -> None:
     def keys() -> KeyGeneration:
-        module = KeyGeneration()
-        module.key("root", strategy="tpm")
-        return module
+        return KeyGeneration(keys=(KeySpec("root", strategy="tpm"),))
 
     via_method = Image()
     via_apply = Image()
-    Devtools().apply(via_method)
+    DevTools().apply(via_method)
     keys().apply(via_method)
-    via_apply.apply(Devtools(), keys())
+    via_apply.apply(DevTools(), keys())
     assert via_method.state.profiles["default"].packages == (
         via_apply.state.profiles["default"].packages
     )
@@ -59,6 +58,6 @@ def test_apply_rejects_non_modules() -> None:
     img = Image()
     with pytest.raises(ValidationError) as excinfo:
         img.apply("not a module")  # type: ignore[arg-type]
-    assert "no apply(image) method" in str(excinfo.value)
+    assert "str is not a module" in str(excinfo.value)
     with pytest.raises(ValidationError):
         img.apply()

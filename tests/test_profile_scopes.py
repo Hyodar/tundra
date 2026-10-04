@@ -44,9 +44,9 @@ def test_all_profiles_scope_applies_to_every_profile() -> None:
 def test_scoped_operations_only_emit_for_selected_profiles(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
     with image.profile("dev"):
-        image.output_targets("azure")
+        image.targets("azure")
     with image.profile("prod"):
-        image.output_targets("gcp")
+        image.targets("gcp")
 
     with image.profiles("dev", "prod"):
         bake_result = image.bake()

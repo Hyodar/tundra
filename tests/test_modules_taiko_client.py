@@ -1,24 +1,25 @@
 from examples.modules import TaikoClient
 
 from tundravm import Image
+from tundravm.modules import GitSource
 
 
-def test_taiko_client_setup_declares_build_packages() -> None:
+def test_taiko_client_configure_declares_build_packages() -> None:
     image = Image(reproducible=False)
     module = TaikoClient()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     for pkg in ("golang", "git", "build-essential"):
         assert pkg in profile.build_packages
 
 
-def test_taiko_client_setup_adds_build_hook_with_cgo_flags() -> None:
+def test_taiko_client_configure_adds_build_hook_with_cgo_flags() -> None:
     image = Image(reproducible=False)
     module = TaikoClient()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -43,28 +44,27 @@ def test_taiko_client_setup_adds_build_hook_with_cgo_flags() -> None:
     assert "$DESTDIR/usr/bin/taiko-client" in build_script
 
 
-def test_taiko_client_custom_source_and_build_path() -> None:
+def test_taiko_client_custom_source_and_subdir() -> None:
     image = Image(reproducible=False)
     module = TaikoClient(
-        source_repo="https://github.com/custom/taiko-fork",
-        source_branch="main",
-        build_path="cmd/client",
+        source=GitSource("https://github.com/custom/taiko-fork", "main", subdir="cmd/client")
     )
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
     assert "custom/taiko-fork" in build_script
     assert "-b main" in build_script
-    assert "cmd/client" in build_script
+    assert "cd /build/taiko-client/cmd/client && " in build_script
+    assert '"$BUILDDIR/taiko-client-main"' in build_script
 
 
 def test_taiko_client_service_unit_content() -> None:
     image = Image(reproducible=False)
     module = TaikoClient()
 
-    module.install(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     svc_files = [
@@ -84,7 +84,7 @@ def test_taiko_client_creates_system_user_in_postinst() -> None:
     image = Image(reproducible=False)
     module = TaikoClient()
 
-    module.install(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     postinst_commands = profile.phases.get("postinst", [])
@@ -96,17 +96,17 @@ def test_taiko_client_creates_system_user_in_postinst() -> None:
     assert "taiko-client" in cmd
 
 
-def test_taiko_client_apply_combines_setup_and_install() -> None:
+def test_taiko_client_apply_declares_build_and_runtime() -> None:
     image = Image(reproducible=False)
     module = TaikoClient()
 
     module.apply(image)
 
     profile = image.state.profiles["default"]
-    # Build packages from setup()
+    # Build packages
     assert "golang" in profile.build_packages
     assert "git" in profile.build_packages
-    # Files from install()
+    # Runtime files
     assert any(f.path == "/usr/lib/systemd/system/taiko-client.service" for f in profile.files)
     # Build hook
     assert len(profile.phases.get("build", [])) == 1

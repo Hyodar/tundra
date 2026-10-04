@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from tundravm import Image
-from tundravm.models import SecretSchema, SecretTarget
+from tundravm.models import SecretSchema, SecretSpec, SecretTarget
 from tundravm.modules import SecretDelivery
 
 
@@ -18,8 +18,7 @@ def test_secret_target_helpers_support_file_and_global_env() -> None:
 def test_secret_values_are_not_persisted_in_lockfile(tmp_path: Path) -> None:
     image = Image(build_dir=tmp_path / "build")
 
-    delivery = SecretDelivery()
-    delivery.secret(
+    token = SecretSpec(
         "api_token",
         required=True,
         schema=SecretSchema(kind="string", min_length=4),
@@ -28,7 +27,7 @@ def test_secret_values_are_not_persisted_in_lockfile(tmp_path: Path) -> None:
             SecretTarget.env("API_TOKEN", scope="global"),
         ),
     )
-    delivery.apply(image)
+    SecretDelivery(secrets=(token,)).apply(image)
 
     lock_path = image.lock(resolver=lambda source: "0" * 40)
     lock_text = lock_path.read_text(encoding="utf-8")

@@ -229,7 +229,7 @@ def test_local_backend_maps_streamed_failure_to_backend_error(
 
 def _image(tmp_path: Path) -> Image:
     img = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    img.output_targets("qemu")
+    img.targets("qemu")
     return img
 
 
@@ -377,7 +377,7 @@ from tundravm.backends.inprocess import InProcessBackend
 
 img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
 img.install("curl")
-img.output_targets("qemu")
+img.targets("qemu")
 """
 
 FAILING_RECIPE = """
@@ -394,7 +394,7 @@ class FlakyBackend(InProcessBackend):
 
 
 img = Image(build_dir=BUILD_DIR, backend=FlakyBackend(name="flaky"))
-img.output_targets("qemu")
+img.targets("qemu")
 """
 
 

@@ -80,7 +80,7 @@ def test_load_corrupt_file_raises_state_error(tmp_path: Path) -> None:
 def test_bake_saves_and_fresh_image_measures_and_finds_it(tmp_path: Path) -> None:
     def make() -> Image:
         img = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-        img.output_targets("qemu")
+        img.targets("qemu")
         return img
 
     baked = make().bake()

@@ -66,7 +66,7 @@ def _dstack_printing(stdout: str, code: int = 0) -> rtmr.ToolRunner:
 
 def _baked(tmp_path: Path) -> Image:
     image = Image(build_dir=tmp_path / "build", backend=InProcessBackend())
-    image.output_targets("qemu")
+    image.targets("qemu")
     image.bake()
     return image
 
@@ -273,7 +273,7 @@ from tundravm import Image
 from tundravm.backends.inprocess import InProcessBackend
 
 img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
-img.output_targets("qemu")
+img.targets("qemu")
 """
 
 

@@ -14,7 +14,7 @@ def _init_service_count(img: Image, profile: str) -> int:
 
 def test_recompile_with_more_profiles_does_not_duplicate_runtime_init(tmp_path: Path) -> None:
     img = Image()
-    img.add_init_script("echo hi", priority=10)
+    img.runtime_init("echo hi", priority=10)
     img.install("curl")
     with img.profile("dev"):
         img.install("vim")
@@ -30,10 +30,10 @@ def test_recompile_with_more_profiles_does_not_duplicate_runtime_init(tmp_path: 
 
 def test_bake_after_compile_across_profiles(tmp_path: Path, inprocess_backend: object) -> None:
     img = Image(build_dir=tmp_path / "build", backend=inprocess_backend)  # type: ignore[arg-type]
-    img.add_init_script("echo hi", priority=10)
+    img.runtime_init("echo hi", priority=10)
     img.install("curl")
     with img.profile("azure"):
-        img.output_targets("azure")
+        img.targets("azure")
 
     img.compile(tmp_path / "preview")
     with img.all_profiles():

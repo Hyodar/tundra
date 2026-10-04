@@ -12,8 +12,11 @@ from tundravm import Image, Kernel, MkosiOptions, SecretSchema, SecretTarget
 from tundravm.backends import LimaMkosiBackend
 from tundravm.modules import (
     DiskEncryption,
+    DiskSpec,
     KeyGeneration,
+    KeySpec,
     SecretDelivery,
+    SecretSpec,
     Tdxs,
 )
 
@@ -38,10 +41,10 @@ def build() -> Image:
     )
 
     img.install("ca-certificates", "curl", "jq")
-    img.output_targets("qemu")
+    img.targets("qemu")
     img.debloat(
         enabled=True,
-        systemd_units_keep_extra=["systemd-resolved.service"],
+        extra_keep_units=["systemd-resolved.service"],
     )
 
     img.file("/etc/motd", content="TDX VM\n")
@@ -62,28 +65,19 @@ def build() -> Image:
         security_profile="strict",
     )
 
-    img.partition("data", size="8G", mount="/var/lib/app", fs="ext4")
-    img.prepare("pip install pyyaml")
-    img.run("sysctl --system")  # default phase is postinst
-    img.sync("git submodule update --init")
+    img.partition("data", size="8G", mount_at="/var/lib/app", fs="ext4")
+    img.shell("pip install pyyaml", phase="prepare")
+    img.shell("sysctl --system", phase="postinst")  # default phase is postinst
+    img.shell("git submodule update --init", phase="sync")
 
     # Composable init modules
-    keys = KeyGeneration()
-    keys.key("key_persistent", strategy="tpm", output="/persistent/key")  # priority 10
-    keys.apply(img)
+    key = KeySpec("key_persistent", strategy="tpm", output="/persistent/key")
+    KeyGeneration(keys=(key,)).apply(img)  # runtime-init priority 10
 
-    disks = DiskEncryption()
-    disks.disk(
-        "disk_persistent",
-        device="/dev/vda3",
-        key_name="key_persistent",
-        key_path="/persistent/key",
-    )  # priority 20
-    disks.apply(img)
+    disk = DiskSpec("disk_persistent", device="/dev/vda3", key=key, key_name="key_persistent")
+    DiskEncryption(disks=(disk,)).apply(img)  # priority 20
 
-    # Secret delivery: declare secrets then apply
-    delivery = SecretDelivery(method="http_post")
-    delivery.secret(
+    jwt = SecretSpec(
         "jwt_secret",
         required=True,
         schema=SecretSchema(kind="string", min_length=64, max_length=64),
@@ -92,20 +86,20 @@ def build() -> Image:
             SecretTarget.env("JWT_SECRET", scope="global"),
         ),
     )
-    delivery.apply(img)  # priority 30
+    SecretDelivery(secrets=(jwt,), method="http_post").apply(img)  # priority 30
 
     Tdxs().apply(img)
 
     with img.profile("azure"):
-        img.output_targets("azure")
+        img.targets("azure")
         img.install("waagent")
 
     with img.profile("gcp"):
-        img.output_targets("gcp")
+        img.targets("gcp")
         img.install("google-guest-agent")
 
     with img.profile("dev"):
-        img.ssh()
+        img.install("dropbear")
         img.install("strace", "gdb", "vim")
         img.debloat(enabled=False)
 

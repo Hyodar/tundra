@@ -14,7 +14,7 @@ class MkosiOptions:
     """Knobs for the emitted mkosi tree; none of them enter the recipe digest.
 
     Pass ``Image(mkosi=MkosiOptions(seed=...))`` or adjust an existing image
-    with ``img.mkosi_options(seed=...)``.
+    with ``img.set_mkosi(replace(img.mkosi, seed=...))``.
     """
 
     with_network: bool = True

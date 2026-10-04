@@ -29,8 +29,8 @@ def _recipe() -> Image:
     img.file("/etc/motd", content="hello\n")
     img.user("app", system=True)
     img.service("app", command="/usr/bin/app", user="app")
-    img.run("echo configured")
-    img.add_init_script("echo booted", priority=50)
+    img.shell("echo configured", phase="postinst")
+    img.runtime_init("echo booted", priority=50)
     with img.profile("azure"):
         img.install("jq")
     return img

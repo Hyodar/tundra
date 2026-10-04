@@ -11,7 +11,15 @@ from examples.modules import Nethermind, Raiko, TaikoClient
 from examples.nethermind_tdx import PINNED_MIRROR, build_nethermind_base
 
 from tundravm import Image
-from tundravm.modules import Devtools, DiskEncryption, KeyGeneration, SecretDelivery
+from tundravm.modules import (
+    DevTools,
+    DiskEncryption,
+    DiskSpec,
+    GitSource,
+    KeyGeneration,
+    KeySpec,
+    SecretDelivery,
+)
 from tundravm.platforms import AzurePlatform, GcpPlatform
 
 # ── Packages (upstream surge-tdx-prover mkosi.conf) ──────────────────
@@ -158,45 +166,42 @@ def _base() -> Image:
 
 def _packages(img: Image) -> None:
     """Runtime packages, plus toolchains that are removed after the build."""
-    img.install(*RUNTIME_PACKAGES).build_install(*BUILD_PACKAGES)
+    img.install(*RUNTIME_PACKAGES).build_packages(*BUILD_PACKAGES)
 
 
 def _boot_init(img: Image) -> None:
     """Boot-time init: TPM-sealed key -> encrypted /persistent -> secrets over HTTP."""
-    keys = KeyGeneration()
-    key = keys.key("key_persistent", strategy="tpm", output="/tmp/key_persistent")
-
-    disks = DiskEncryption()
-    disk = disks.disk(
+    key = KeySpec("key_persistent", strategy="tpm", output="/tmp/key_persistent")
+    disk = DiskSpec(
         "disk_persistent",
         device=None,  # no fixed path: use the largest unpartitioned disk
         key=key,  # reads key.output; check() verifies the key is declared
         mapper_name="cryptroot",
-        mount_point="/persistent",
+        mount_at="/persistent",
     )
 
-    img.apply(keys, disks, SecretDelivery(method="http_post", store_at=disk))
+    img.apply(
+        KeyGeneration(keys=(key,)),
+        DiskEncryption(disks=(disk,)),
+        SecretDelivery(method="http_post", store_at=disk),
+    )
 
 
 def _prover_stack(img: Image) -> None:
     """Raiko (prover), Taiko client and Nethermind (execution), all built from source."""
-    img.run("mkosi-chroot groupadd -r eth", phase="postinst")  # the modules' users join it
+    img.shell("mkosi-chroot groupadd -r eth", phase="postinst")  # the modules' users join it
     img.apply(
-        Raiko(
-            source_repo="https://github.com/NethermindEth/raiko.git",
-            source_branch="feat/tdx",
-        ),
+        Raiko(source=GitSource("https://github.com/NethermindEth/raiko.git", "feat/tdx")),
         TaikoClient(
-            source_repo="https://github.com/NethermindEth/surge-taiko-mono",
-            source_branch="feat/tdx-proving",
-            build_path="packages/taiko-client",
+            source=GitSource(
+                "https://github.com/NethermindEth/surge-taiko-mono",
+                "feat/tdx-proving",
+                subdir="packages/taiko-client",
+            ),
         ),
-        Nethermind(
-            source_repo="https://github.com/NethermindEth/nethermind.git",
-            version="1.32.3",
-        ),
+        Nethermind(source=GitSource("https://github.com/NethermindEth/nethermind.git", "1.32.3")),
     )
-    img.run("mkosi-chroot usermod -a -G tdx nethermind-surge", phase="postinst")
+    img.shell("mkosi-chroot usermod -a -G tdx nethermind-surge", phase="postinst")
 
 
 def _system_config(img: Image) -> None:
@@ -226,4 +231,4 @@ def _cloud_profiles(img: Image) -> None:
 
 def _devtools_profile(img: Image) -> None:
     """Debug variant: debugging tools, serial console, root login. Never ship it."""
-    img.profile("devtools").apply(Devtools())
+    img.profile("devtools").apply(DevTools())

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import io
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -134,9 +135,10 @@ def test_options_are_frozen_and_normalized() -> None:
         options.seed = "x"  # type: ignore[misc]
 
 
-def test_mkosi_options_chains_and_merges() -> None:
+def test_set_mkosi_chains_and_replaces() -> None:
     img = Image()
-    result = img.mkosi_options(seed="abc").install("curl").mkosi_options(with_network=False)
+    result = img.set_mkosi(MkosiOptions(seed="abc")).install("curl")
+    result.set_mkosi(replace(img.mkosi, with_network=False))
 
     assert result is img
     assert img.mkosi == MkosiOptions(seed="abc", with_network=False)
@@ -146,16 +148,18 @@ def test_mkosi_options_chains_and_merges() -> None:
     assert config.with_network is False
 
 
-def test_mkosi_options_is_profile_independent() -> None:
+def test_set_mkosi_is_profile_independent() -> None:
     img = Image()
     with img.profile("dev"):
-        img.mkosi_options(package_cache_directory="mkosi.cache")
+        img.set_mkosi(MkosiOptions(package_cache_directory="mkosi.cache"))
     assert img.mkosi.package_cache_directory == "mkosi.cache"
+    with pytest.raises(AttributeError, match="profile.image.set_mkosi"):
+        img.profile("dev").set_mkosi(MkosiOptions())
 
 
-def test_mkosi_options_rejects_unknown_names() -> None:
-    with pytest.raises(ValidationError, match="Unknown mkosi option"):
-        Image().mkosi_options(with_networking=False)
+def test_set_mkosi_rejects_non_options() -> None:
+    with pytest.raises(ValidationError, match="expects MkosiOptions"):
+        Image().set_mkosi({"with_network": False})  # type: ignore[arg-type]
 
 
 def test_set_kernel_chains() -> None:
@@ -198,7 +202,7 @@ def test_changed_options_recompile(tmp_path: Path) -> None:
     tree = img.compile(tmp_path / "mkosi").path
     assert "Seed=630b" not in (tree / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
-    img.mkosi_options(seed="630b")
+    img.set_mkosi(MkosiOptions(seed="630b"))
     img.compile(tmp_path / "mkosi")
     assert "Seed=630b" in (tree / "default" / "mkosi.conf").read_text(encoding="utf-8")
 
@@ -208,11 +212,13 @@ def test_explain_lists_only_non_default_options() -> None:
     assert img.explain()["build_options"] == {}
     assert "Build options" not in img.summary()
 
-    img.mkosi_options(
-        seed="s",
-        with_network=False,
-        environment={"B": "2", "A": "1"},
-        init_script="#!/bin/sh\n",
+    img.set_mkosi(
+        MkosiOptions(
+            seed="s",
+            with_network=False,
+            environment={"B": "2", "A": "1"},
+            init_script="#!/bin/sh\n",
+        )
     )
     options = img.explain()["build_options"]
     assert options == {

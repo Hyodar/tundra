@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
-from .base import Module
-from .devtools import Devtools
-from .disk_encryption import DiskEncryption
-from .init import Init
-from .key_generation import KeyGeneration
+from tundravm.models import SecretSpec
+from tundravm.source import GitSource
+
+from .base import TUNDRA_TOOLS, Module
+from .devtools import DevTools
+from .disk_encryption import DiskEncryption, DiskSpec
+from .key_generation import KeyGeneration, KeySpec
 from .secret_delivery import SecretDelivery
 from .tdxs import Tdxs
 
 __all__ = [
+    "TUNDRA_TOOLS",
+    "DevTools",
     "DiskEncryption",
-    "Devtools",
-    "Init",
+    "DiskSpec",
+    "GitSource",
     "KeyGeneration",
+    "KeySpec",
     "Module",
     "SecretDelivery",
+    "SecretSpec",
     "Tdxs",
 ]

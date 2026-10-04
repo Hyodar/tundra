@@ -21,7 +21,7 @@ img.install("curl", "jq")
 img.file("/etc/motd", content="hello\\n")
 img.user("app", system=True)
 img.service("app", command="/usr/bin/app")
-img.output_targets("qemu")
+img.targets("qemu")
 with img.profile("azure"):
     AzurePlatform().apply(img)
 """

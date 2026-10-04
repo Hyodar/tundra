@@ -21,9 +21,9 @@ from tundravm.backends import NixMkosiBackend
 
 img = Image(build_dir=BUILD_DIR, backend=InProcessBackend())
 img.install("curl")
-img.output_targets("qemu")
+img.targets("qemu")
 with img.profile("azure"):
-    img.output_targets("azure")
+    img.targets("azure")
 
 nix = Image(build_dir=BUILD_DIR, backend=NixMkosiBackend())
 """

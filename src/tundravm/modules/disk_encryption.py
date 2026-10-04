@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Literal, Self
+from typing import TYPE_CHECKING, Literal
 
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
-from tundravm.modules.base import Module
-from tundravm.modules.key_generation import KeyGeneration, KeySpec
-from tundravm.source import GitSource, GoBuild, SourceBuild
+from tundravm.modules.base import TUNDRA_TOOLS, Module
+from tundravm.modules.key_generation import KeyGeneration, KeySpec, validate_entry_name
+from tundravm.source import GitSource, GoBuild, Install, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -24,221 +23,113 @@ DISK_ENCRYPTION_BUILD_PACKAGES = (
     "build-essential",
 )
 
-DISK_ENCRYPTION_DEFAULT_REPO = "https://github.com/Hyodar/tundra-tools.git"
-DISK_ENCRYPTION_DEFAULT_BRANCH = "master"
 DISK_ENCRYPTION_DEFAULT_CONFIG_PATH = "/etc/tdx/disk-setup.yaml"
+DISK_ENCRYPTION_INIT_PRIORITY = 20
 DEFAULT_DISK_DIRS = ("ssh", "data", "logs")
-ENTRY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 @dataclass(frozen=True, slots=True)
 class DiskSpec:
-    """Specification for a managed encrypted or plain disk."""
+    """A managed encrypted or plain disk.
+
+    A disk is encrypted when it has a key: ``key=`` a :class:`KeySpec` (read from
+    ``key.output``, which ``key_path`` then holds), ``key_path`` alone, or
+    ``key_name`` (written to the config as ``encryption_key``). ``device=None``
+    picks the largest unpartitioned disk.
+    """
 
     name: str
-    device: str | None = "/dev/vda3"
-    mapper_name: str | None = None
-    key_path: str | None = None
-    mount_point: str = "/persistent"
-    key_name: str | None = None
-    format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail"
-    dirs: tuple[str, ...] = DEFAULT_DISK_DIRS
-    key: KeySpec | None = None
+    device: str | None = field(default="/dev/vda3", kw_only=True)
+    mapper_name: str | None = field(default=None, kw_only=True)
+    key: KeySpec | None = field(default=None, kw_only=True)
+    key_path: str | None = field(default=None, kw_only=True)
+    key_name: str | None = field(default=None, kw_only=True)
+    mount_at: str = field(default="/persistent", kw_only=True)
+    format_policy: Literal["always", "on_initialize", "on_fail", "never"] = field(
+        default="on_fail", kw_only=True
+    )
+    dirs: tuple[str, ...] = field(default=DEFAULT_DISK_DIRS, kw_only=True)
+
+    def __post_init__(self) -> None:
+        validate_entry_name(self.name, kind="disk")
+        key = self.key
+        if key is not None:
+            if key.output is None:
+                raise ValidationError(
+                    f"disk {self.name!r}: key {key.name!r} has no output path to read.",
+                    hint=f"Declare the key with output=..., e.g. KeySpec({key.name!r}, "
+                    "output='/run/keys/disk').",
+                )
+            if self.key_path is not None and self.key_path != key.output:
+                raise ValidationError(
+                    f"disk {self.name!r}: key_path {self.key_path!r} differs from key "
+                    f"{key.name!r} output {key.output!r}.",
+                    hint="Drop key_path=; it defaults to key.output.",
+                )
+            if self.key_name is not None and self.key_name != key.name:
+                raise ValidationError(
+                    f"disk {self.name!r}: key_name {self.key_name!r} differs from key "
+                    f"{key.name!r}.",
+                    hint="Pass key= or key_name=, not both.",
+                )
+            object.__setattr__(self, "key_path", key.output)
+        if not self.encrypted:
+            if self.mapper_name is not None:
+                raise ValidationError(
+                    "Plain disks cannot request custom mapper names.",
+                    context={"disk": self.name, "mapper_name": self.mapper_name},
+                )
+
+    @property
+    def encrypted(self) -> bool:
+        """True when the disk has a key (``key_name`` or ``key_path``)."""
+        return self.key_name is not None or self.key_path is not None
+
+    @property
+    def generated_mapper_name(self) -> str:
+        """The mapper name ``disk-setup`` opens the disk under."""
+        return f"crypt_disk_{self.name}"
 
 
 @dataclass(slots=True)
 class DiskEncryption(Module):
     """Configure one or more disks via ``tundra-tools`` ``disk-setup``.
 
-    Disks may be plain, keyed by ``key_path`` alone, keyed by a ``KeyGeneration``
-    key spec via ``key=`` (reads ``key.output``), or by key name via ``key_name``
-    (also written to the config as ``encryption_key``); ``check()`` verifies that
-    ``key=`` and ``key_name`` keys are declared for the profile.
+    ``check()`` verifies that the keys disks reference through ``key=`` or
+    ``key_name`` are declared by a ``KeyGeneration`` applied to the profile.
     """
 
-    init_priority: ClassVar[int | None] = 20
-
+    disks: tuple[DiskSpec, ...]
     config_path: str = DISK_ENCRYPTION_DEFAULT_CONFIG_PATH
-    source_repo: str = DISK_ENCRYPTION_DEFAULT_REPO
-    source_branch: str = DISK_ENCRYPTION_DEFAULT_BRANCH
-    _disks: list[DiskSpec] = field(default_factory=list, init=False, repr=False)
+    source: GitSource = TUNDRA_TOOLS
 
-    def disk(
-        self,
-        name: str,
-        *,
-        device: str | None = "/dev/vda3",
-        mapper_name: str | None = None,
-        key_path: str | None = None,
-        mount_point: str = "/persistent",
-        key_name: str | None = None,
-        format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail",
-        dirs: tuple[str, ...] = DEFAULT_DISK_DIRS,
-        key: KeySpec | None = None,
-    ) -> DiskSpec:
-        """Register an additional disk definition.
-
-        *key* is a spec returned by ``KeyGeneration.key()``: the disk reads it from
-        ``key.output`` (so *key_path* defaults to it) and ``check()`` reports it when no
-        ``KeyGeneration`` applied to the profile declares it.
-        """
-        if key is not None:
-            if key.output is None:
-                raise ValidationError(
-                    f"disk {name!r}: key {key.name!r} has no output path to read.",
-                    hint=f"Declare the key with output=..., e.g. keys.key({key.name!r}, "
-                    "output='/run/keys/disk').",
-                )
-            if key_path is not None and key_path != key.output:
-                raise ValidationError(
-                    f"disk {name!r}: key_path {key_path!r} differs from key "
-                    f"{key.name!r} output {key.output!r}.",
-                    hint="Drop key_path=; it defaults to key.output.",
-                )
-            if key_name is not None and key_name != key.name:
-                raise ValidationError(
-                    f"disk {name!r}: key_name {key_name!r} differs from key {key.name!r}.",
-                    hint="Pass key= or key_name=, not both.",
-                )
-            key_path = key.output
-        spec = DiskSpec(
-            name=name,
-            device=device,
-            mapper_name=mapper_name,
-            key_path=key_path,
-            mount_point=mount_point,
-            key_name=key_name,
-            format_policy=format_policy,
-            dirs=dirs,
-            key=key,
-        )
-        self._append_disk(spec)
-        return spec
-
-    def with_disk(
-        self,
-        name: str,
-        *,
-        device: str | None = "/dev/vda3",
-        mapper_name: str | None = None,
-        key_path: str | None = None,
-        mount_point: str = "/persistent",
-        key_name: str | None = None,
-        format_policy: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail",
-        dirs: tuple[str, ...] = DEFAULT_DISK_DIRS,
-        key: KeySpec | None = None,
-    ) -> Self:
-        """Like :meth:`disk`, but return the module so declarations chain inline."""
-        self.disk(
-            name,
-            device=device,
-            mapper_name=mapper_name,
-            key_path=key_path,
-            mount_point=mount_point,
-            key_name=key_name,
-            format_policy=format_policy,
-            dirs=dirs,
-            key=key,
-        )
-        return self
-
-    @property
-    def disks(self) -> tuple[DiskSpec, ...]:
-        """Registered disk definitions, in declaration order."""
-        return tuple(self._disks)
-
-    def setup(self, image: Image) -> None:
-        """Validate disks, declare build packages and the disk-setup build hook."""
-        self._validate()
-        image.build_install(*DISK_ENCRYPTION_BUILD_PACKAGES)
-        image.source_build(self.source_spec())
-
-    def install(self, image: Image) -> None:
-        """Install cryptsetup and write the aggregate disk config."""
-        image.install("cryptsetup")
-        image.file(self.config_path, content=self._render_config())
-
-    def init_script(self, image: Image) -> str:
-        return self._render_init_script()
-
-    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
-        keys: dict[str, KeySpec] = {}
-        for module in image.applied_modules(profile, inherited=True):
-            if isinstance(module, KeyGeneration):
-                keys.update((spec.name, spec) for spec in module.keys)
-        for disk in self._disks:
-            key_ref = disk.key_name or (disk.key.name if disk.key is not None else None)
-            if key_ref is None:
-                continue
-            key = keys.get(key_ref)
-            if key is None:
-                declared = ", ".join(sorted(keys)) or "none"
-                yield Diagnostic(
-                    level="error",
-                    code="disk-key-undefined",
-                    message=(
-                        f"disk {disk.name!r} uses key {key_ref!r}, which no "
-                        "KeyGeneration in this profile declares"
-                    ),
-                    hint=(
-                        f"Declared keys: {declared}. Add keys.key({key_ref!r}, ...) "
-                        "to a KeyGeneration applied to this profile, or fix the key."
-                    ),
-                    profile=profile,
-                    subject=disk.name,
-                )
-            elif disk.key_path is not None and key.output != disk.key_path:
-                written = key.output or "no file (output is unset)"
-                yield Diagnostic(
-                    level="warning",
-                    code="disk-key-path-mismatch",
-                    message=(
-                        f"disk {disk.name!r} reads its key from {disk.key_path}, but key "
-                        f"{key.name!r} is written to {written}"
-                    ),
-                    hint=f"Set keys.key({key.name!r}, output={disk.key_path!r}) or align key_path.",
-                    profile=profile,
-                    subject=disk.name,
-                )
-
-    def _append_disk(self, spec: DiskSpec) -> None:
-        self._validate_name(spec.name, kind="disk")
-        if any(existing.name == spec.name for existing in self._disks):
-            raise ValidationError(f"Duplicate disk name {spec.name!r}.")
-        self._disks.append(spec)
-
-    def _validate(self) -> None:
-        if not self._disks:
+    def __post_init__(self) -> None:
+        self.disks = tuple(self.disks)
+        if not self.disks:
             raise ValidationError("DiskEncryption requires at least one disk definition.")
 
+        names: set[str] = set()
         mount_points: set[str] = set()
         mapper_names: set[str] = set()
         env_key_names: set[str] = set()
-        for spec in self._disks:
-            if spec.mount_point in mount_points:
+        for spec in self.disks:
+            if spec.name in names:
+                raise ValidationError(f"Duplicate disk name {spec.name!r}.")
+            names.add(spec.name)
+            if spec.mount_at in mount_points:
                 raise ValidationError(
                     "Each managed disk must use a unique mount point.",
-                    context={"disk": spec.name, "mount_point": spec.mount_point},
+                    context={"disk": spec.name, "mount_at": spec.mount_at},
                 )
-            mount_points.add(spec.mount_point)
+            mount_points.add(spec.mount_at)
 
-            if not self._is_encrypted(spec):
-                if spec.mapper_name is not None:
-                    raise ValidationError(
-                        "Plain disks cannot request custom mapper names.",
-                        context={"disk": spec.name, "mapper_name": spec.mapper_name},
-                    )
-                if spec.key_path is not None:
-                    raise ValidationError(
-                        "Plain disks cannot declare encryption key paths.",
-                        context={"disk": spec.name, "key_path": spec.key_path},
-                    )
+            if not spec.encrypted:
                 continue
 
             if spec.key_path is None and spec.key_name is not None:
                 env_key_names.add(spec.key_name)
 
-            effective_mapper = spec.mapper_name or self._generated_mapper_name(spec.name)
+            effective_mapper = spec.mapper_name or spec.generated_mapper_name
             if effective_mapper in mapper_names:
                 raise ValidationError(
                     "Each encrypted disk must use a unique mapper name.",
@@ -255,30 +146,79 @@ class DiskEncryption(Module):
                 ),
             )
 
+    def configure(self, image: Image) -> None:
+        """Build disk-setup, write the aggregate disk config, run it at boot (priority 20)."""
+        image.build_packages(*DISK_ENCRYPTION_BUILD_PACKAGES)
+        image.build_from(self.source_spec())
+        image.install("cryptsetup")
+        image.file(self.config_path, content=self._render_config())
+        image.runtime_init(self._render_init_script(), priority=DISK_ENCRYPTION_INIT_PRIORITY)
+
+    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+        keys: dict[str, KeySpec] = {}
+        for module in image.applied_modules(profile, inherited=True):
+            if isinstance(module, KeyGeneration):
+                keys.update((spec.name, spec) for spec in module.keys)
+        for disk in self.disks:
+            key_ref = disk.key_name or (disk.key.name if disk.key is not None else None)
+            if key_ref is None:
+                continue
+            key = keys.get(key_ref)
+            if key is None:
+                declared = ", ".join(sorted(keys)) or "none"
+                yield Diagnostic(
+                    level="error",
+                    code="disk-key-undefined",
+                    message=(
+                        f"disk {disk.name!r} uses key {key_ref!r}, which no "
+                        "KeyGeneration in this profile declares"
+                    ),
+                    hint=(
+                        f"Declared keys: {declared}. Add KeySpec({key_ref!r}, ...) "
+                        "to a KeyGeneration applied to this profile, or fix the key."
+                    ),
+                    profile=profile,
+                    subject=disk.name,
+                )
+            elif disk.key_path is not None and key.output != disk.key_path:
+                written = key.output or "no file (output is unset)"
+                yield Diagnostic(
+                    level="warning",
+                    code="disk-key-path-mismatch",
+                    message=(
+                        f"disk {disk.name!r} reads its key from {disk.key_path}, but key "
+                        f"{key.name!r} is written to {written}"
+                    ),
+                    hint=(
+                        f"Set KeySpec({key.name!r}, output={disk.key_path!r}) or align key_path."
+                    ),
+                    profile=profile,
+                    subject=disk.name,
+                )
+
     def source_spec(self) -> SourceBuild:
-        """The ``disk-setup`` source build from ``source_repo@source_branch``.
+        """The ``disk-setup`` source build from ``source``.
 
         ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
         hand-written one this module emitted before source builds existed.
         """
         return SourceBuild(
             name="disk-encryption",
-            source=GitSource(self.source_repo, self.source_branch),
+            source=self.source,
             build=GoBuild(package="./cmd/disk-setup", output="disk-setup"),
-            install_to="/usr/bin/disk-setup",
+            install=(Install.artifact("/usr/bin/disk-setup"),),
             mark_unpinned=False,
         )
 
-    def _render_config(self, disks: tuple[DiskSpec, ...] | None = None) -> str:
-        disk_specs = disks or tuple(self._disks)
+    def _render_config(self) -> str:
         lines = ["disks:"]
-        for spec in disk_specs:
+        for spec in self.disks:
             lines.extend(
                 (
                     f"  {spec.name}:",
                     *self._strategy_lines(spec),
                     f'    format: "{spec.format_policy}"',
-                    f'    mount_at: "{spec.mount_point}"',
+                    f'    mount_at: "{spec.mount_at}"',
                     f"    dirs: {json.dumps(list(spec.dirs))}",
                 )
             )
@@ -297,14 +237,11 @@ class DiskEncryption(Module):
             )
         return ('    strategy: "largest"',)
 
-    def _generated_mapper_name(self, name: str) -> str:
-        return f"crypt_disk_{name}"
-
     def _render_init_script(self) -> str:
         lines = [f"/usr/bin/disk-setup setup {shlex.quote(self.config_path)}"]
-        for spec in self._disks:
-            if self._is_encrypted(spec) and spec.mapper_name:
-                generated_mapper = self._generated_mapper_name(spec.name)
+        for spec in self.disks:
+            if spec.encrypted and spec.mapper_name:
+                generated_mapper = spec.generated_mapper_name
                 if spec.mapper_name != generated_mapper:
                     generated_mapper_path = shlex.quote(f"/dev/mapper/{generated_mapper}")
                     generated_mapper_name = shlex.quote(generated_mapper)
@@ -318,15 +255,3 @@ class DiskEncryption(Module):
                         )
                     )
         return "\n".join(lines) + "\n"
-
-    def _validate_name(self, name: str, *, kind: str) -> None:
-        if not name:
-            raise ValidationError(f"{kind} names must be non-empty.")
-        if ENTRY_NAME_PATTERN.fullmatch(name) is None:
-            raise ValidationError(
-                f"Invalid {kind} name {name!r}.",
-                hint="Use only letters, numbers, dot, underscore, and dash.",
-            )
-
-    def _is_encrypted(self, spec: DiskSpec) -> bool:
-        return spec.key_name is not None or spec.key_path is not None

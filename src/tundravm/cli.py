@@ -454,25 +454,30 @@ def _add_command(
     return parser
 
 
-@contextmanager
-def _selected(img: Image, args: argparse.Namespace) -> Iterator[Image]:
-    """Activate the profiles requested on the command line."""
+def _profiles_arg(img: Image, args: argparse.Namespace) -> tuple[str, ...] | None:
+    """The profiles requested on the command line; ``None`` keeps the default selection."""
     if args.all_profiles:
-        with img.all_profiles():
-            yield img
-        return
+        return img.profile_names
     names: list[str] | None = args.profile
     if not names:
-        yield img
-        return
-    known = sorted(img.state.profiles)
+        return None
     unknown = [name for name in names if name not in img.state.profiles]
     if unknown:
         raise ValidationError(
             f"Unknown profile(s): {', '.join(unknown)}.",
-            hint=f"Declared profiles: {', '.join(known)}",
+            hint=f"Declared profiles: {', '.join(img.profile_names)}",
             context={"recipe": str(args.recipe)},
         )
+    return tuple(names)
+
+
+@contextmanager
+def _selected(img: Image, args: argparse.Namespace) -> Iterator[Image]:
+    """Activate the profiles requested on the command line."""
+    names = _profiles_arg(img, args)
+    if names is None:
+        yield img
+        return
     with img.profiles(*names):
         yield img
 
@@ -521,28 +526,26 @@ def _cmd_digest(args: argparse.Namespace, out: TextIO) -> int:
 
 def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
-    with _selected(img, args):
-        return cmd_check(args, out, img)
+    return cmd_check(args, out, img, profiles=_profiles_arg(img, args))
 
 
 def _cmd_diff(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
-    with _selected(img, args):
-        return cmd_diff(args, out, img)
+    return cmd_diff(args, out, img, profiles=_profiles_arg(img, args))
 
 
 def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
     destination = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
-    with _selected(img, args):
-        if args.check:
-            fmt = resolve_format(args.format)
-            args.against = destination
-            args.format = "stat" if fmt == "text" else fmt
-            args.stat = False
-            args.color = "never"
-            return cmd_diff(args, out, img)
-        result = img.compile(destination, force=args.force)
+    profiles = _profiles_arg(img, args)
+    if args.check:
+        fmt = resolve_format(args.format)
+        args.against = destination
+        args.format = "stat" if fmt == "text" else fmt
+        args.stat = False
+        args.color = "never"
+        return cmd_diff(args, out, img, profiles=profiles)
+    result = img.compile(destination, force=args.force, profiles=profiles)
     print(f"compiled {result.path}", file=out)
     print(f"  profiles: {', '.join(result.profiles)}", file=out)
     print(f"  digest:   {result.digest}", file=out)
@@ -551,21 +554,21 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
 
 def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
-    with _selected(img, args):
-        if args.check:
-            drift = img.lock_status(args.path)
-            print(
-                render_drift(drift, resolve_format(args.format), _lock_path(img, args.path)),
-                file=out,
-            )
-            return EXIT_OK if drift.is_clean else EXIT_FAILURE
-        if args.explain:
-            current = _lock_path(img, args.path)
-            if current.exists():
-                print(img.lock_status(current).render(), file=out)
-            else:
-                print(f"no lockfile at {current}; every section is new", file=out)
-        path = img.lock(args.path, offline=args.offline)
+    profiles = _profiles_arg(img, args)
+    if args.check:
+        drift = img.lock_status(args.path, profiles=profiles)
+        print(
+            render_drift(drift, resolve_format(args.format), _lock_path(img, args.path)),
+            file=out,
+        )
+        return EXIT_OK if drift.is_clean else EXIT_FAILURE
+    if args.explain:
+        current = _lock_path(img, args.path)
+        if current.exists():
+            print(img.lock_status(current, profiles=profiles).render(), file=out)
+        else:
+            print(f"no lockfile at {current}; every section is new", file=out)
+    path = img.lock(args.path, offline=args.offline, profiles=profiles)
     print(f"locked {path}", file=out)
     return EXIT_OK
 
@@ -594,17 +597,21 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
         )
     )
     try:
-        with _selected(img, args):
-            if args.lock:
-                lock_path = img.lock()
-                if args.json_logs:
-                    extra = {"source": "cli", "path": str(lock_path)}
-                    reporter.emit(Event("log", None, f"locked {lock_path}", 0.0, extra))
-                else:
-                    print(f"locked {lock_path}", file=out)
-            result = img.bake(
-                args.out, frozen=args.frozen or args.lock, force=args.force, reporter=reporter
-            )
+        profiles = _profiles_arg(img, args)
+        if args.lock:
+            lock_path = img.lock(profiles=profiles)
+            if args.json_logs:
+                extra = {"source": "cli", "path": str(lock_path)}
+                reporter.emit(Event("log", None, f"locked {lock_path}", 0.0, extra))
+            else:
+                print(f"locked {lock_path}", file=out)
+        result = img.bake(
+            args.out,
+            frozen=args.frozen or args.lock,
+            force=args.force,
+            reporter=reporter,
+            profiles=profiles,
+        )
     finally:
         reporter.close()
     if args.json_logs:

@@ -206,7 +206,7 @@ class ServiceSpec:
 class PartitionSpec:
     name: str
     size: str
-    mount: str
+    mount_at: str
     fs: str = "ext4"
 
 
@@ -214,7 +214,6 @@ class PartitionSpec:
 class HookSpec:
     phase: Phase
     command: CommandSpec
-    after_phase: Phase | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,11 +261,11 @@ class DebloatConfig:
     enabled: bool = True
     paths_remove: tuple[str, ...] = DEFAULT_DEBLOAT_PATHS_REMOVE
     paths_skip: tuple[str, ...] = ()
-    paths_remove_extra: tuple[str, ...] = ()
+    extra_remove_paths: tuple[str, ...] = ()
     paths_skip_for_profiles: tuple[tuple[str, tuple[str, ...]], ...] = ()
     systemd_minimize: bool = True
     systemd_units_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP
-    systemd_units_keep_extra: tuple[str, ...] = ()
+    extra_keep_units: tuple[str, ...] = ()
     systemd_bins_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP
     clean_var_dirs: tuple[str, ...] = ("/var/log", "/var/cache")
 
@@ -277,14 +276,14 @@ class DebloatConfig:
         # Also exclude paths that are conditionally skipped for profiles
         for _profile, paths in self.paths_skip_for_profiles:
             skip_set.update(paths)
-        combined = list(self.paths_remove) + list(self.paths_remove_extra)
+        combined = list(self.paths_remove) + list(self.extra_remove_paths)
         return tuple(sorted(set(p for p in combined if p not in skip_set)))
 
     @property
     def profile_conditional_paths(self) -> dict[str, tuple[str, ...]]:
         """Paths that should only be removed when a specific profile is NOT active."""
         result: dict[str, list[str]] = {}
-        all_paths = set(self.paths_remove) | set(self.paths_remove_extra)
+        all_paths = set(self.paths_remove) | set(self.extra_remove_paths)
         for profile_name, paths in self.paths_skip_for_profiles:
             for p in paths:
                 if p in all_paths:
@@ -294,7 +293,7 @@ class DebloatConfig:
     @property
     def effective_units_keep(self) -> tuple[str, ...]:
         """Units to keep = default + extra."""
-        return tuple(sorted(set(self.systemd_units_keep) | set(self.systemd_units_keep_extra)))
+        return tuple(sorted(set(self.systemd_units_keep) | set(self.extra_keep_units)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -544,7 +543,7 @@ class ProfileBuildResult:
 
 @dataclass(frozen=True, slots=True)
 class CompileResult:
-    """Result of compile(), behaves as a Path for backward compatibility."""
+    """Result of compile(): the tree's path, the compiled profiles and the recipe digest."""
 
     path: Path
     profiles: tuple[str, ...]
@@ -553,14 +552,8 @@ class CompileResult:
     def __fspath__(self) -> str:
         return str(self.path)
 
-    def __truediv__(self, other: str) -> Path:
-        return self.path / other
-
     def __str__(self) -> str:
         return str(self.path)
-
-    def exists(self) -> bool:
-        return self.path.exists()
 
 
 BAKE_RESULT_FILENAME = "bake-result.json"

@@ -2,25 +2,25 @@ import pytest
 from examples.modules import Raiko
 
 from tundravm import Image, ValidationError
-from tundravm.modules import Tdxs
+from tundravm.modules import GitSource, Tdxs
 
 
-def test_raiko_setup_declares_build_packages() -> None:
+def test_raiko_configure_declares_build_packages() -> None:
     image = Image(reproducible=False)
     module = Raiko()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     for pkg in ("build-essential", "pkg-config", "git", "clang", "libssl-dev", "libelf-dev"):
         assert pkg in profile.build_packages
 
 
-def test_raiko_setup_adds_build_hook_with_correct_flags() -> None:
+def test_raiko_configure_adds_build_hook_with_correct_flags() -> None:
     image = Image(reproducible=False)
     module = Raiko()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -52,26 +52,24 @@ def test_raiko_setup_adds_build_hook_with_correct_flags() -> None:
     assert "$DESTDIR/usr/bin/raiko" in build_script
 
 
-def test_raiko_custom_source_repo_and_branch() -> None:
+def test_raiko_custom_source() -> None:
     image = Image(reproducible=False)
-    module = Raiko(
-        source_repo="https://github.com/custom/raiko-fork.git",
-        source_branch="main",
-    )
+    module = Raiko(source=GitSource("https://github.com/custom/raiko-fork.git", "main"))
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
     assert "custom/raiko-fork.git" in build_script
     assert "-b main" in build_script
+    assert '"$BUILDDIR/raiko-main"' in build_script
 
 
 def test_raiko_service_unit_content() -> None:
     image = Image(reproducible=False)
     module = Raiko()
 
-    module.install(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     svc_files = [f for f in profile.files if f.path == "/usr/lib/systemd/system/raiko.service"]
@@ -90,7 +88,7 @@ def test_raiko_creates_system_user_in_postinst() -> None:
     image = Image(reproducible=False)
     module = Raiko()
 
-    module.install(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     postinst_commands = profile.phases.get("postinst", [])
@@ -102,17 +100,17 @@ def test_raiko_creates_system_user_in_postinst() -> None:
     assert "raiko" in cmd
 
 
-def test_raiko_apply_combines_setup_and_install() -> None:
+def test_raiko_apply_declares_build_and_runtime() -> None:
     image = Image(reproducible=False)
     module = Raiko()
 
     image.apply(Tdxs(), module)
 
     profile = image.state.profiles["default"]
-    # Build packages from setup()
+    # Build packages
     assert "build-essential" in profile.build_packages
     assert "clang" in profile.build_packages
-    # Files from install()
+    # Runtime files
     assert any(f.path == "/usr/lib/systemd/system/raiko.service" for f in profile.files)
     # Build hooks: tdxs, then raiko
     build = [cmd.argv[0] for cmd in profile.phases.get("build", [])]

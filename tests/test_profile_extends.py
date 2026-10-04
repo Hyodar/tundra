@@ -11,7 +11,7 @@ from tundravm import Image, MkosiOptions
 from tundravm.cli import EXIT_OK, main
 from tundravm.errors import ValidationError
 from tundravm.lockfile import recipe_digest
-from tundravm.modules import Devtools
+from tundravm.modules import DevTools
 from tundravm.platforms import AzurePlatform
 
 QEMU_BASIC = Path(__file__).resolve().parent.parent / "examples" / "qemu_basic.py"
@@ -25,12 +25,12 @@ def _image() -> Image:
     img.file("/etc/motd", content="default\n")
     img.file("/etc/app.conf", content="a=1\n")
     img.service("app", command="/usr/bin/app", user="app")
-    img.run("echo default-hook")
+    img.shell("echo default-hook", phase="postinst")
     with img.profile("azure"):
         img.install("waagent")
         img.file("/etc/motd", content="azure\n")
         img.service("agent", command="/usr/bin/agent")
-        img.run("echo azure-hook")
+        img.shell("echo azure-hook", phase="postinst")
     return img
 
 
@@ -68,7 +68,7 @@ def test_profile_file_overrides_default_file() -> None:
 def test_extends_none_is_standalone() -> None:
     img = Image(reproducible=False)
     img.install("curl")
-    img.output_targets("qemu", "gcp")
+    img.targets("qemu", "gcp")
     with img.profile("solo", extends=None):
         img.install("vim")
 
@@ -90,7 +90,7 @@ def test_extends_other_profile_is_rejected() -> None:
 def test_compiled_profile_conf_holds_default_and_profile_packages(tmp_path: Path) -> None:
     img = _image()
     with img.all_profiles():
-        out = img.compile(tmp_path / "mkosi")
+        out = img.compile(tmp_path / "mkosi").path
 
     conf = (out / "azure" / "mkosi.conf").read_text(encoding="utf-8")
     assert "    curl\n" in conf and "    waagent\n" in conf
@@ -103,9 +103,9 @@ def test_compiled_profile_conf_holds_default_and_profile_packages(tmp_path: Path
 
 def test_native_profiles_overlay_holds_only_additions(tmp_path: Path) -> None:
     img = _image()
-    img.mkosi_options(emit_mode="native_profiles")
+    img.set_mkosi(MkosiOptions(emit_mode="native_profiles"))
     with img.all_profiles():
-        out = img.compile(tmp_path / "mkosi")
+        out = img.compile(tmp_path / "mkosi").path
 
     root = (out / "mkosi.conf").read_text(encoding="utf-8")
     overlay = (out / "mkosi.profiles" / "azure" / "mkosi.conf").read_text(encoding="utf-8")
@@ -126,23 +126,23 @@ def test_native_profiles_rejects_standalone_profile(tmp_path: Path) -> None:
 def test_explain_shows_extends_and_modules() -> None:
     img = Image(reproducible=False)
     img.install("curl")
-    img.apply(Devtools())
+    img.apply(DevTools())
     img.profile("azure").apply(AzurePlatform())
 
     azure = img.explain(profile="azure")
     assert azure["extends"] == "default"
     assert azure["modules"] == ["AzurePlatform"]
-    assert azure["extends_modules"] == ["Devtools"]
+    assert azure["extends_modules"] == ["DevTools"]
     text = img.summary(profile="azure")
-    assert "Extends: default (modules: Devtools)\n" in text
+    assert "Extends: default (modules: DevTools)\n" in text
     assert "Modules (1): AzurePlatform\n" in text
     assert "Extends" not in img.summary()
-    assert "Modules (1): Devtools\n" in img.summary()
+    assert "Modules (1): DevTools\n" in img.summary()
 
 
 def test_hook_preview_skips_comment_lines() -> None:
     img = Image(reproducible=False)
-    img.run("# Set root password\n\nchpasswd <<< root:x\n")
+    img.shell("# Set root password\n\nchpasswd <<< root:x\n", phase="postinst")
     assert img.explain()["hooks"] == {"postinst": ["chpasswd <<< root:x"]}
 
 

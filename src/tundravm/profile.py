@@ -1,52 +1,38 @@
 """Profile handles: one named slice of an :class:`~tundravm.image.Image` recipe.
 
-``img.profile("azure")`` returns a :class:`Profile`. Use it as a context manager,
-exactly like before, or call the declaration API on it directly::
+``img.profile("azure")`` returns a :class:`Profile`. Use it as a context manager
+or call the declaration API on it directly::
 
     azure = img.profile("azure")
-    azure.install("walinuxagent").output_targets("azure")
+    azure.install("walinuxagent").targets("azure")
 
 Every declaration call runs with only that profile active and returns the
 ``Profile``, so chains stay on it. Inspection and build calls (``explain``,
 ``check``, ``compile``, ``bake``, ...) are scoped to the profile as well.
+Image-wide setters (``set_policy``, ``set_kernel``, ``set_mkosi``, ``pin_mirror``)
+are not on a profile; call them on ``profile.image``.
 """
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Concatenate, Literal, Self
+from typing import Any, Concatenate, Literal, NoReturn
 
 from .check import Diagnostic
 from .diff import TreeDiff
 from .image import Image
+from .lockfile import LockDrift
 from .measure import Measurements
 from .models import BakeResult, CompileResult, DeployResult, OutputTarget, ProfileState
 from .modules.base import Module
+from .observability import Reporter
+from .source import Resolver
 
-_DECLARATIONS: dict[type[Image], frozenset[str]] = {}
-
-
-def declaration_methods(cls: type[Image]) -> frozenset[str]:
-    """Public methods of *cls* annotated to return ``Self``: the fluent declaration API."""
-    cached = _DECLARATIONS.get(cls)
-    if cached is not None:
-        return cached
-    names: set[str] = set()
-    for klass in reversed(cls.__mro__):
-        for attr, member in vars(klass).items():
-            if attr.startswith("_") or not inspect.isfunction(member):
-                continue
-            returns = member.__annotations__.get("return")
-            if returns == "Self" or returns is Self:
-                names.add(attr)
-            else:
-                names.discard(attr)
-    _DECLARATIONS[cls] = frozenset(names)
-    return _DECLARATIONS[cls]
+IMAGE_WIDE_SETTERS = frozenset({"pin_mirror", "set_kernel", "set_mkosi", "set_policy"})
+"""``Image`` declaration methods that configure the whole image, never one profile."""
 
 
 def _scoped[**P](
@@ -61,6 +47,19 @@ def _scoped[**P](
     scoped.__qualname__ = f"Profile.{attr}"
     scoped.__doc__ = method.__doc__
     return scoped
+
+
+class _ImageWide:
+    """Raise ``AttributeError`` pointing at ``profile.image`` for an image-wide setter."""
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+
+    def __get__(self, obj: object, objtype: type | None = None) -> NoReturn:
+        raise AttributeError(
+            f"'Profile' object has no attribute {self.name!r}; Image.{self.name} is "
+            f"image-wide, use profile.image.{self.name}(...)"
+        )
 
 
 class Profile:
@@ -90,55 +89,45 @@ class Profile:
     ) -> bool | None:
         return self._entered.pop().__exit__(exc_type, exc, tb)
 
-    def __getattr__(self, attr: str) -> Callable[..., Profile]:
-        if attr.startswith("_") or attr in self.__slots__:
-            raise AttributeError(attr)
-        if attr not in declaration_methods(type(self.image)):
-            hint = (
-                f"; Image.{attr} is not profile-scoped, use profile.image.{attr}"
-                if hasattr(self.image, attr)
-                else ""
-            )
-            raise AttributeError(f"'Profile' object has no attribute {attr!r}{hint}")
-
-        def bound(*args: Any, **kwargs: Any) -> Profile:
-            return self._declare(attr, *args, **kwargs)
-
-        bound.__name__ = attr
-        bound.__qualname__ = f"Profile.{attr}"
-        bound.__doc__ = getattr(type(self.image), attr).__doc__
-        return bound
-
-    def __dir__(self) -> list[str]:
-        return sorted({*super().__dir__(), *declaration_methods(type(self.image))})
-
     def _declare(self, attr: str, /, *args: Any, **kwargs: Any) -> Profile:
         method = getattr(self.image, attr)
         with self.image.profiles(self.name):
             method(*args, **kwargs)
         return self
 
-    # --- Declarations (typed; the rest of Image's fluent API goes through __getattr__) ---
+    # --- Declarations: each runs with only this profile active ---
 
+    apply = _scoped(Image.apply)
     install = _scoped(Image.install)
+    build_packages = _scoped(Image.build_packages)
+    mount_build_source = _scoped(Image.mount_build_source)
+    build_from = _scoped(Image.build_from)
+    repository = _scoped(Image.repository)
     file = _scoped(Image.file)
-    directory = _scoped(Image.directory)
+    copy_tree = _scoped(Image.copy_tree)
     template = _scoped(Image.template)
+    skeleton = _scoped(Image.skeleton)
     group = _scoped(Image.group)
     user = _scoped(Image.user)
     service = _scoped(Image.service)
     enable = _scoped(Image.enable)
     disable = _scoped(Image.disable)
     mask = _scoped(Image.mask)
-    pin_mirror = _scoped(Image.pin_mirror)
-    apply = _scoped(Image.apply)
-    output_targets = _scoped(Image.output_targets)
-    debloat = _scoped(Image.debloat)
-    run = _scoped(Image.run)
-    hook = _scoped(Image.hook)
-    repository = _scoped(Image.repository)
     partition = _scoped(Image.partition)
-    add_init_script = _scoped(Image.add_init_script)
+    targets = _scoped(Image.targets)
+    debloat = _scoped(Image.debloat)
+    shell = _scoped(Image.shell)
+    runtime_init = _scoped(Image.runtime_init)
+    strip_image_version = _scoped(Image.strip_image_version)
+    efi_stub = _scoped(Image.efi_stub)
+    backports = _scoped(Image.backports)
+
+    # --- Image-wide setters live on profile.image ---
+
+    set_policy = _ImageWide()
+    set_kernel = _ImageWide()
+    set_mkosi = _ImageWide()
+    pin_mirror = _ImageWide()
 
     # --- Profile-scoped inspection and build ---
 
@@ -165,17 +154,25 @@ class Profile:
         return [d for d in self.image.check(profiles=(self.name,)) if d.profile == self.name]
 
     def compile(self, path: str | Path, *, force: bool = False) -> CompileResult:
-        """Compile with only this profile active."""
-        with self.image.profiles(self.name):
-            return self.image.compile(path, force=force)
+        """Compile this profile only."""
+        return self.image.compile(path, force=force, profiles=(self.name,))
 
-    def lock(self, path: str | Path | None = None) -> Path:
-        with self.image.profiles(self.name):
-            return self.image.lock(path)
+    def lock(
+        self,
+        path: str | Path | None = None,
+        *,
+        resolver: Resolver | None = None,
+        offline: bool = False,
+    ) -> Path:
+        return self.image.lock(path, resolver=resolver, offline=offline, profiles=(self.name,))
+
+    def lock_status(
+        self, path: str | Path | None = None, *, resolver: Resolver | None = None
+    ) -> LockDrift:
+        return self.image.lock_status(path, resolver=resolver, profiles=(self.name,))
 
     def diff(self, against: str | Path) -> TreeDiff:
-        with self.image.profiles(self.name):
-            return self.image.diff(against)
+        return self.image.diff(against, profiles=(self.name,))
 
     def bake(
         self,
@@ -183,10 +180,12 @@ class Profile:
         *,
         frozen: bool = False,
         force: bool = False,
+        reporter: Reporter | None = None,
     ) -> BakeResult:
-        """Bake with only this profile active."""
-        with self.image.profiles(self.name):
-            return self.image.bake(output_dir, frozen=frozen, force=force)
+        """Bake this profile only."""
+        return self.image.bake(
+            output_dir, frozen=frozen, force=force, reporter=reporter, profiles=(self.name,)
+        )
 
     def measure(
         self,
@@ -215,4 +214,4 @@ class Profile:
         )
 
 
-__all__ = ["Profile", "declaration_methods"]
+__all__ = ["IMAGE_WIDE_SETTERS", "Profile"]

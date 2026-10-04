@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from tundravm.modules.base import Module
 from tundravm.modules.resolve import resolve_after
-from tundravm.source import GitSource, GoBuild, SourceBuild
+from tundravm.source import GitSource, GoBuild, Install, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -48,24 +48,23 @@ class TaikoClient(Module):
       2. Runtime: generates systemd service unit and creates system user.
     """
 
-    source_repo: str = TAIKO_CLIENT_DEFAULT_REPO
-    source_branch: str = TAIKO_CLIENT_DEFAULT_BRANCH
-    build_path: str = TAIKO_CLIENT_DEFAULT_BUILD_PATH
+    source: GitSource = GitSource(
+        TAIKO_CLIENT_DEFAULT_REPO,
+        TAIKO_CLIENT_DEFAULT_BRANCH,
+        subdir=TAIKO_CLIENT_DEFAULT_BUILD_PATH,
+    )
     user: str = "taiko-client"
     group: str = "eth"
     after: tuple[str, ...] = ()
 
-    def setup(self, image: Image) -> None:
-        """Declare build packages and the taiko-client build hook."""
-        image.build_install(*TAIKO_CLIENT_BUILD_PACKAGES)
-        self._add_build_hook(image)
-
-    def install(self, image: Image) -> None:
-        """Declare runtime config, unit files, and the service user."""
+    def configure(self, image: Image) -> None:
+        """Build taiko-client, then declare its unit file and service user."""
+        image.build_packages(*TAIKO_CLIENT_BUILD_PACKAGES)
+        image.build_from(self.source_spec())
         self._add_runtime_config(image)
 
     def source_spec(self) -> SourceBuild:
-        """The taiko-client source build: ``go build`` of ``cmd/main.go`` in ``build_path``.
+        """The taiko-client source build: ``go build`` of ``cmd/main.go`` in ``source.subdir``.
 
         The toolchain comes from the image's own build packages (``packages=()``);
         ``output_dir``/``mkdir``, ``cache_key`` and ``mark_unpinned`` keep the unpinned
@@ -74,7 +73,7 @@ class TaikoClient(Module):
         """
         return SourceBuild(
             name="taiko-client",
-            source=GitSource(self.source_repo, self.source_branch, subdir=self.build_path or None),
+            source=self.source,
             build=GoBuild(
                 output="taiko-client",
                 package="cmd/main.go",
@@ -83,14 +82,10 @@ class TaikoClient(Module):
                 env=TAIKO_CLIENT_GO_ENV,
                 packages=(),
             ),
-            install_to="/usr/bin/taiko-client",
-            cache_key=f"taiko-client-{self.source_branch}",
+            install=(Install.artifact("/usr/bin/taiko-client"),),
+            cache_key=f"taiko-client-{self.source.ref}",
             mark_unpinned=False,
         )
-
-    def _add_build_hook(self, image: Image) -> None:
-        """Add the build phase hook that clones and compiles taiko-client from source."""
-        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)
@@ -103,12 +98,12 @@ class TaikoClient(Module):
             content=self._render_service_unit(after=resolved_after),
         )
 
-        image.run(
+        image.shell(
             f"mkosi-chroot useradd --system --home-dir /home/{self.user} "
             f"--shell /usr/sbin/nologin --groups {self.group} {self.user}",
             phase="postinst",
         )
-        image.service("taiko-client", enabled=True)
+        image.enable("taiko-client")
 
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render taiko-client.service systemd unit."""

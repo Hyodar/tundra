@@ -12,7 +12,7 @@ from tundravm.lockfile import recipe_digest
 def _build_image() -> Image:
     image = Image(base="debian/trixie", mirror="https://deb.example")
     image.install("systemd", "curl", "jq")
-    image.build_install("gcc")
+    image.build_packages("gcc")
     image.repository("https://deb.example/security", name="debian-security", priority=10)
     image.file("/etc/motd", content="hello world\n", mode="0644")
     image.template("/etc/app/env", template="A={a}\nB={b}\n", variables={"b": "2", "a": "1"})
@@ -23,14 +23,14 @@ def _build_image() -> Image:
         restart="always",
         after=("network-online.target",),
     )
-    image.partition("data", size="4G", mount="/data")
-    image.hook("postinst", "echo first\necho second")
-    image.hook("postinst", "x" * 200)
-    image.add_init_script("echo init", priority=10)
-    image.output_targets("qemu", "gcp")
+    image.partition("data", size="4G", mount_at="/data")
+    image.shell("echo first\necho second", phase="postinst")
+    image.shell("x" * 200, phase="postinst")
+    image.runtime_init("echo init", priority=10)
+    image.targets("qemu", "gcp")
     with image.profile("azure"):
         image.install("waagent")
-        image.output_targets("azure")
+        image.targets("azure")
     return image
 
 
@@ -46,7 +46,7 @@ def test_explain_structure() -> None:
     assert info["kernel"] is None
     assert info["packages"] == ["curl", "jq", "systemd"]
     assert info["build_packages"] == ["gcc"]
-    assert info["output_targets"] == ["qemu", "gcp"]
+    assert info["targets"] == ["qemu", "gcp"]
     assert info["policy"] == {
         "require_frozen_lock": False,
         "mutable_ref_policy": "warn",
@@ -84,7 +84,7 @@ def test_explain_structure() -> None:
 
     partitions = info["partitions"]
     assert isinstance(partitions, list)
-    assert partitions[0] == {"fs": "ext4", "mount": "/data", "name": "data", "size": "4G"}
+    assert partitions[0] == {"fs": "ext4", "mount_at": "/data", "name": "data", "size": "4G"}
 
     hooks = info["hooks"]
     assert isinstance(hooks, dict)
@@ -93,7 +93,7 @@ def test_explain_structure() -> None:
     assert hooks["postinst"][1].endswith("...")
     assert len(hooks["postinst"][1]) == 80
 
-    assert info["init_scripts"] == {"count": 1, "priorities": [10]}
+    assert info["runtime_init"] == {"count": 1, "priorities": [10]}
 
     debloat = info["debloat"]
     assert isinstance(debloat, dict)
@@ -128,7 +128,7 @@ def test_explain_per_profile() -> None:
     assert azure["profile"] == "azure"
     assert azure["extends"] == "default"
     assert azure["packages"] == ["curl", "jq", "systemd", "waagent"]
-    assert azure["output_targets"] == ["azure"]
+    assert azure["targets"] == ["azure"]
     assert azure["users"] == image.explain()["users"]
 
     with image.profile("azure"):
@@ -169,9 +169,9 @@ def test_summary_contains_key_strings() -> None:
     assert "data  4G  /data  ext4" in text
     assert "Hooks:\n" in text
     assert "  postinst (2):\n    echo first\n" in text
-    assert "Init scripts: 1 (priorities: 10)" in text
+    assert "Runtime init: 1 (priorities: 10)" in text
     assert "Debloat: enabled," in text
-    assert text.endswith("Output targets: qemu gcp\n")
+    assert text.endswith("Targets: qemu gcp\n")
     assert "hello world" not in text
 
     azure_text = image.summary(profile="azure")
@@ -179,7 +179,7 @@ def test_summary_contains_key_strings() -> None:
     assert "Extends: default\n" in azure_text
     assert "Packages (4): curl jq systemd waagent" in azure_text
     assert "Extends" not in text
-    assert azure_text.endswith("Output targets: azure\n")
+    assert azure_text.endswith("Targets: azure\n")
     assert render(image.explain(profile="azure")) == azure_text
 
 

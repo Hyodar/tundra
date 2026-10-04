@@ -472,7 +472,7 @@ def _rule_init_priority_collision(
                 f"registration order: {heads}"
             ),
             hint=(
-                "Give each fragment its own priority with add_init_script(..., priority=N) "
+                "Give each fragment its own priority with runtime_init(..., priority=N) "
                 "(lower runs first) so boot order does not depend on module apply order."
             ),
             profile=profile_name,
@@ -521,7 +521,7 @@ def _rule_debloat_removes_needed_unit(
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} is a systemd unit that debloat masks",
                 hint=(
-                    f"Add it to img.debloat(systemd_units_keep_extra=[{unit!r}]) so the "
+                    f"Add it to img.debloat(extra_keep_units=[{unit!r}]) so the "
                     "systemd minimization keeps it."
                 ),
                 profile=profile_name,
@@ -535,7 +535,7 @@ def _rule_debloat_removes_needed_unit(
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} depends on {dep!r}, which debloat masks",
                 hint=(
-                    f"Add it to img.debloat(systemd_units_keep_extra=[{dep!r}]), or drop "
+                    f"Add it to img.debloat(extra_keep_units=[{dep!r}]), or drop "
                     "the dependency; a Requires= on a masked unit stops the service."
                 ),
                 profile=profile_name,
@@ -774,8 +774,10 @@ def failing(diagnostics: Sequence[Diagnostic], *, strict: bool = False) -> bool:
     return any(d.level in levels for d in diagnostics)
 
 
-def cmd_check(args: argparse.Namespace, out: TextIO, img: Image) -> int:
-    diagnostics = check(img)
+def cmd_check(
+    args: argparse.Namespace, out: TextIO, img: Image, *, profiles: Sequence[str] | None = None
+) -> int:
+    diagnostics = check(img, profiles=profiles)
     fmt = resolve_format(args.format, alias="json" if args.json else None)
     print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
     return 1 if failing(diagnostics, strict=args.strict) else 0

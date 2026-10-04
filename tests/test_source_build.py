@@ -20,13 +20,21 @@ from tundravm.lockfile import (
     serialize_lockfile,
     write_lockfile,
 )
-from tundravm.modules import DiskEncryption, KeyGeneration, SecretDelivery, Tdxs
+from tundravm.modules import (
+    DiskEncryption,
+    DiskSpec,
+    KeyGeneration,
+    KeySpec,
+    SecretDelivery,
+    Tdxs,
+)
 from tundravm.policy import Policy
 from tundravm.source import (
     CargoBuild,
     GitSource,
     GoBuild,
     HttpSource,
+    Install,
     Source,
     SourceBuild,
 )
@@ -69,14 +77,14 @@ def _spec(ref: str = "main", **kwargs: object) -> SourceBuild:
         name="tool",
         source=GitSource(REPO, ref),
         build=GoBuild(package="./cmd/tool", output="tool"),
-        install_to="/usr/bin/tool",
+        install=(Install.artifact("/usr/bin/tool"),),
         **kwargs,  # type: ignore[arg-type]
     )
 
 
 def _image(tmp_path: Path, spec: SourceBuild | None = None, **kwargs: object) -> Image:
     img = Image(build_dir=tmp_path / "build", **kwargs)  # type: ignore[arg-type]
-    img.source_build(spec or _spec())
+    img.build_from(spec or _spec())
     return img
 
 
@@ -135,7 +143,7 @@ def test_existing_digest_is_unchanged() -> None:
 def test_duplicate_source_build_name_is_rejected(tmp_path: Path) -> None:
     img = _image(tmp_path)
     with pytest.raises(Exception, match="already declared"):
-        img.source_build(_spec("dev"))
+        img.build_from(_spec("dev"))
 
 
 def test_profile_inherits_default_source_builds(tmp_path: Path) -> None:
@@ -172,7 +180,7 @@ def test_subdir_submodules_and_quoting() -> None:
         name="tool",
         source=GitSource(REPO, "main", subdir="pkg/tool", submodules=True),
         build=GoBuild(output="tool", env={"CGO_CFLAGS": "-O -D__X__", "GO111MODULE": "on"}),
-        install_to="/usr/local/bin/tool",
+        install=(Install.artifact("/usr/local/bin/tool"),),
         mark_unpinned=False,
     )
     hook = spec.render()
@@ -187,7 +195,7 @@ def test_cargo_and_http_rendering() -> None:
         name="prover",
         source=HttpSource("https://example.com/prover-1.0.tar.gz"),
         build=CargoBuild(output="prover", bin="prover", features=("a", "b")),
-        install_to="/usr/bin/prover",
+        install=(Install.artifact("/usr/bin/prover"),),
     )
     assert spec.packages == ("curl", "cargo")
     hook = spec.render()
@@ -208,11 +216,17 @@ def test_tdxs_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -> None:
 
 
 def _init_modules() -> tuple[KeyGeneration, DiskEncryption, SecretDelivery]:
-    keys = KeyGeneration()
-    key = keys.key("key_persistent", strategy="tpm", output="/tmp/key_persistent")
-    disks = DiskEncryption()
-    disk = disks.disk("disk_persistent", device=None, key=key, mount_point="/persistent")
-    return keys, disks, SecretDelivery(method="http_post", store_at=disk)
+    key = KeySpec("key_persistent", strategy="tpm", output="/tmp/key_persistent")
+    disk = DiskSpec("disk_persistent", device=None, key=key, mount_at="/persistent")
+    return (
+        KeyGeneration(keys=(key,)),
+        DiskEncryption(disks=(disk,)),
+        SecretDelivery(method="http_post", store_at=disk),
+    )
+
+
+def _init_scripts(img: Image, prefix: str) -> list[str]:
+    return [e.script for e in img.init_scripts() if e.script.startswith(prefix)]
 
 
 def _build_phase_hooks(img: Image) -> list[str]:
@@ -226,7 +240,7 @@ def test_key_generation_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) ->
     img.apply(keys, disks, delivery)
     assert legacy in _build_phase_hooks(img)
     assert keys.source_spec().render() == legacy
-    assert keys.init_script(img).startswith("/usr/bin/key-gen setup ")
+    assert len(_init_scripts(img, "/usr/bin/key-gen setup ")) == 1
     assert not [d for d in keys.check(img, "default") if d.level == "error"]
 
 
@@ -237,7 +251,7 @@ def test_disk_encryption_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -
     img.apply(keys, disks, delivery)
     assert legacy in _build_phase_hooks(img)
     assert disks.source_spec().render() == legacy
-    assert disks.init_script(img).startswith("/usr/bin/disk-setup setup ")
+    assert len(_init_scripts(img, "/usr/bin/disk-setup setup ")) == 1
     assert not [d for d in disks.check(img, "default") if d.level == "error"]
 
 
@@ -248,7 +262,7 @@ def test_secret_delivery_hook_is_byte_identical_to_legacy_bash(tmp_path: Path) -
     img.apply(keys, disks, delivery)
     assert legacy in _build_phase_hooks(img)
     assert delivery.source_spec().render() == legacy
-    assert delivery.init_script(img).startswith("/usr/bin/secret-delivery setup ")
+    assert len(_init_scripts(img, "/usr/bin/secret-delivery setup ")) == 1
     assert not [d for d in delivery.check(img, "default") if d.level == "error"]
 
 
@@ -309,7 +323,7 @@ def test_http_source_without_sha256_is_hashed_by_resolver(tmp_path: Path) -> Non
         name="blob",
         source=HttpSource("https://example.com/blob.bin"),
         build=GoBuild(output="blob"),
-        install_to="/usr/bin/blob",
+        install=(Install.artifact("/usr/bin/blob"),),
     )
     img = _image(tmp_path, spec)
     lock = read_lockfile(img.lock(resolver=_fixed("d" * 64)))
@@ -362,7 +376,7 @@ def test_policy_warn_compiles_silently_and_error_refuses(tmp_path: Path) -> None
 def test_drift_reports_new_and_moved_sources(tmp_path: Path) -> None:
     img = Image(build_dir=tmp_path / "build")
     img.lock()
-    img.source_build(_spec())
+    img.build_from(_spec())
     assert "+ sources.tool" in img.lock_status().render().splitlines()
     img.lock(resolver=_fixed(SHA_A))
     assert img.lock_status().is_clean
@@ -385,7 +399,7 @@ def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
     assert info["sources"] == [
         {
             "build": "go",
-            "install_to": "/usr/bin/tool",
+            "install": ["/usr/bin/tool"],
             "kind": "git",
             "name": "tool",
             "pinned": SHA_A[:7],
@@ -411,10 +425,10 @@ def test_cli_lock_offline_fails_clearly(tmp_path: Path) -> None:
     recipe = tmp_path / "recipe.py"
     recipe.write_text(
         "from tundravm import Image\n"
-        "from tundravm.source import GitSource, GoBuild, SourceBuild\n"
+        "from tundravm.source import GitSource, GoBuild, Install, SourceBuild\n"
         f"img = Image(build_dir={str(tmp_path / 'build')!r})\n"
-        "img.source_build(SourceBuild(name='tool', source=GitSource('https://x/y.git', 'main'),"
-        " build=GoBuild(output='tool'), install_to='/usr/bin/tool'))\n"
+        "img.build_from(SourceBuild(name='tool', source=GitSource('https://x/y.git', 'main'),"
+        " build=GoBuild(output='tool'), install=(Install.artifact('/usr/bin/tool'),)))\n"
     )
     out = io.StringIO()
     code = main(["lock", str(recipe), "--offline"], stdout=out)

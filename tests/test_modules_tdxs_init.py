@@ -1,14 +1,14 @@
 import pytest
 
 from tundravm import Image, ValidationError
-from tundravm.modules import Tdxs
+from tundravm.modules import GitSource, KeyGeneration, KeySpec, Tdxs
 
 
-def test_tdxs_setup_declares_build_packages() -> None:
+def test_tdxs_configure_declares_build_packages() -> None:
     image = Image()
     module = Tdxs()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     assert "golang" in profile.build_packages
@@ -16,11 +16,11 @@ def test_tdxs_setup_declares_build_packages() -> None:
     assert "build-essential" in profile.build_packages
 
 
-def test_tdxs_setup_adds_build_hook() -> None:
+def test_tdxs_configure_adds_build_hook() -> None:
     image = Image()
     module = Tdxs()
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_commands = profile.phases.get("build", [])
@@ -38,14 +38,11 @@ def test_tdxs_setup_adds_build_hook() -> None:
     assert "sync-constellation" not in build_script
 
 
-def test_tdxs_custom_source_repo_and_branch() -> None:
+def test_tdxs_custom_source() -> None:
     image = Image()
-    module = Tdxs(
-        source_repo="https://github.com/custom/tdxs-fork",
-        source_branch="v2.0",
-    )
+    module = Tdxs(source=GitSource("https://github.com/custom/tdxs-fork", "v2.0"))
 
-    module.setup(image)
+    module.configure(image)
 
     profile = image.state.profiles["default"]
     build_script = profile.phases["build"][0].argv[0]
@@ -101,12 +98,8 @@ def test_tdxs_generates_config_yaml_and_units() -> None:
 
 
 def test_tdxs_resolves_init_dependency_when_init_scripts_present() -> None:
-    from tundravm.modules import KeyGeneration
-
     image = Image()
-    keys = KeyGeneration()
-    keys.key("key_persistent", strategy="tpm")
-    keys.apply(image)
+    KeyGeneration(keys=(KeySpec("key_persistent", strategy="tpm"),)).apply(image)
     Tdxs().apply(image)
 
     profile = image.state.profiles["default"]
@@ -212,18 +205,18 @@ def test_tdxs_rejects_no_roles() -> None:
         Tdxs(issuer_type=None, validator_type=None).apply(Image())
 
 
-def test_image_build_install_adds_build_packages() -> None:
+def test_image_build_packages_adds_build_packages() -> None:
     image = Image()
-    image.build_install("golang", "git")
+    image.build_packages("golang", "git")
 
     profile = image.state.profiles["default"]
     assert "golang" in profile.build_packages
     assert "git" in profile.build_packages
 
 
-def test_image_build_source_adds_build_sources() -> None:
+def test_image_mount_build_source_adds_build_sources() -> None:
     image = Image()
-    image.build_source("../services/tdxs", "tdxs")
+    image.mount_build_source("../services/tdxs", dest="tdxs")
 
     profile = image.state.profiles["default"]
     assert ("../services/tdxs", "tdxs") in profile.build_sources

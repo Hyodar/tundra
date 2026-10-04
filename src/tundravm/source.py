@@ -1,19 +1,19 @@
 """Source builds: a fetched source plus a build recipe, pinned through the lockfile.
 
-Declare one with :meth:`tundravm.Image.source_build`::
+Declare one with :meth:`tundravm.Image.build_from`::
 
-    img.source_build(
+    img.build_from(
         SourceBuild(
             name="tdxs",
             source=GitSource("https://github.com/Hyodar/tundra-tools.git", "master"),
             build=GoBuild(package="./cmd/tdxs", output="tdxs"),
-            install_to="/usr/bin/tdxs",
+            install=(Install.artifact("/usr/bin/tdxs"),),
         )
     )
 
-``install_to`` installs the recipe's single artifact; ``install=`` maps further
-paths in the source tree (a trailing ``/`` copies a directory) to absolute install
-paths, with :class:`Install` for a per-file mode.
+``install=`` lists what lands in the image, in order: :meth:`Install.artifact` is
+the recipe's own output, :meth:`Install.file` and :meth:`Install.tree` copy further
+paths of the source tree.
 
 The build hook clones the symbolic ref until ``Image.lock()`` resolves it to a
 commit (``LockedFetch`` entries in ``tundravm.lock``); from then on the emitted
@@ -46,16 +46,12 @@ _ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar.zst
 class GitSource:
     """A git repository at *ref* (branch, tag, or full 40-hex commit sha)."""
 
-    repo: str
+    url: str
     ref: str
     subdir: str | None = field(default=None, kw_only=True)
     submodules: bool = field(default=False, kw_only=True)
 
     kind: Literal["git"] = field(default="git", init=False, repr=False)
-
-    @property
-    def url(self) -> str:
-        return self.repo
 
     @property
     def requested(self) -> str:
@@ -70,7 +66,7 @@ class GitSource:
     def to_payload(self) -> dict[str, object]:
         return {
             "kind": self.kind,
-            "url": self.repo,
+            "url": self.url,
             "ref": self.ref,
             "subdir": self.subdir,
             "submodules": self.submodules,
@@ -263,22 +259,79 @@ def _recipe_payload(build: BuildRecipe) -> dict[str, object]:
     return payload
 
 
+InstallKind = Literal["artifact", "file", "tree"]
+
+
 @dataclass(frozen=True, slots=True)
 class Install:
-    """An ``install=`` target: absolute *dest*, with its own file *mode*."""
+    """One install step of a :class:`SourceBuild`; build it with a constructor below.
 
+    ``artifact`` installs the recipe's own output, ``file`` one more file of the
+    source tree and ``tree`` a whole directory of it (the built files keep their
+    modes). *path* is relative to the source tree, *dest* absolute.
+    """
+
+    kind: InstallKind
     dest: str
+    path: str | None = None
     mode: str | None = None
+
+    @classmethod
+    def artifact(cls, dest: str, *, mode: str = "0755") -> Install:
+        """The build recipe's artifact, installed at *dest* with *mode*."""
+        return cls(kind="artifact", dest=dest, mode=mode)
+
+    @classmethod
+    def file(cls, path: str, dest: str, *, mode: str = "0755") -> Install:
+        """The file *path* of the source tree, installed at *dest* with *mode*."""
+        return cls(kind="file", dest=dest, path=path, mode=mode)
+
+    @classmethod
+    def tree(cls, path: str, dest: str) -> Install:
+        """The directory *path* of the source tree, copied to *dest*."""
+        return cls(kind="tree", dest=dest, path=path)
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("artifact", "file", "tree"):
+            raise ValidationError(
+                f"Unknown install kind {self.kind!r}.",
+                hint="Use Install.artifact(), Install.file() or Install.tree().",
+            )
+        if self.kind == "artifact" and self.path is not None:
+            raise ValidationError(
+                "Install.artifact() takes no path: it installs the build's artifact.",
+                context={"path": self.path},
+            )
+        if self.kind == "tree" and self.mode is not None:
+            raise ValidationError(
+                f"tree {self.path!r} takes no mode.",
+                hint="Directory copies keep the built files' modes.",
+            )
+        if self.kind == "file" and (self.path or "").endswith("/"):
+            raise ValidationError(
+                f"file {self.path!r} names a directory.",
+                hint="Use Install.tree() to copy a directory.",
+            )
+        if self.kind != "artifact":
+            path = self.path or ""
+            if not path or path.startswith("/") or ".." in path.rstrip("/").split("/"):
+                raise ValidationError(
+                    f"install path {path!r} must be relative to the source tree.",
+                    context={"path": path},
+                )
+        if not self.dest.startswith("/"):
+            raise ValidationError(
+                f"install destination {self.dest!r} must be absolute.",
+                context={"path": self.path or "", "dest": self.dest},
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class SourceBuild:
     """Fetch *source*, run *build* inside mkosi-chroot, install the results.
 
-    ``install_to`` installs the recipe's ``artifact`` with ``mode``. ``install``
-    maps further paths, relative to the source tree, to an absolute path or an
-    :class:`Install`; a path ending in ``/`` copies a directory. Artifacts are
-    cached and installed in declaration order, ``install_to`` first.
+    *install* lists the :class:`Install` steps; artifacts are cached under their
+    destination's file name and installed in that order.
 
     ``cache_key`` overrides the default ``<name>-<url sha256[:12]>-<ref>`` build
     cache key; a lockfile pin appends ``-<pin[:12]>`` to it (default key: replaces
@@ -290,11 +343,9 @@ class SourceBuild:
     name: str
     source: Source
     build: BuildRecipe
-    install_to: str | None = None
-    mode: str = "0755"
+    install: tuple[Install, ...] = ()
     cache_key: str | None = None
     mark_unpinned: bool = True
-    install: Mapping[str, str | Install] | None = None
 
     def __post_init__(self) -> None:
         if not _NAME_PATTERN.fullmatch(self.name):
@@ -302,45 +353,12 @@ class SourceBuild:
                 f"Invalid source build name {self.name!r}.",
                 hint="Use letters, digits, '.', '_' or '-'.",
             )
-        if self.install_to is None and not self.install:
+        object.__setattr__(self, "install", tuple(self.install))
+        if not self.install:
             raise ValidationError(
                 f"source build {self.name!r} installs nothing.",
-                hint="Pass install_to= for the recipe's artifact, or install={path: dest}.",
+                hint="Pass install=(Install.artifact('/usr/bin/<name>'), ...).",
             )
-        if self.install_to is not None and not self.install_to.startswith("/"):
-            raise ValidationError(
-                f"source build {self.name!r}: install_to must be absolute.",
-                context={"install_to": self.install_to},
-            )
-        self._check_install()
-        if isinstance(self.source, GitSource) and not self.source.ref:
-            raise ValidationError(f"source build {self.name!r}: GitSource requires a ref.")
-        if isinstance(self.source, HttpSource) and self.source.sha256 is not None:
-            if not SHA256_PATTERN.fullmatch(self.source.sha256):
-                raise ValidationError(
-                    f"source build {self.name!r}: sha256 must be 64 lowercase hex chars."
-                )
-
-    def _check_install(self) -> None:
-        for path, target in (self.install or {}).items():
-            dest = target.dest if isinstance(target, Install) else target
-            parts = path.rstrip("/").split("/")
-            if not path or path.startswith("/") or ".." in parts:
-                raise ValidationError(
-                    f"source build {self.name!r}: install path {path!r} must be relative "
-                    "to the source tree.",
-                    context={"path": path},
-                )
-            if not dest.startswith("/"):
-                raise ValidationError(
-                    f"source build {self.name!r}: install destination {dest!r} must be absolute.",
-                    context={"path": path, "dest": dest},
-                )
-            if path.endswith("/") and isinstance(target, Install) and target.mode is not None:
-                raise ValidationError(
-                    f"source build {self.name!r}: directory {path!r} takes no mode.",
-                    hint="Directory copies keep the built files' modes.",
-                )
         names = [posixpath.basename(dest.rstrip("/")) for _, dest, _, _ in self._targets()]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
@@ -349,18 +367,25 @@ class SourceBuild:
                 f"{', '.join(duplicates)}.",
                 hint="Each artifact is cached under its destination's file name.",
             )
+        if isinstance(self.source, GitSource) and not self.source.ref:
+            raise ValidationError(f"source build {self.name!r}: GitSource requires a ref.")
+        if isinstance(self.source, HttpSource) and self.source.sha256 is not None:
+            if not SHA256_PATTERN.fullmatch(self.source.sha256):
+                raise ValidationError(
+                    f"source build {self.name!r}: sha256 must be 64 lowercase hex chars."
+                )
 
     def _targets(self) -> list[tuple[str, str, str, bool]]:
         """``(path in the source tree, dest, mode, is_dir)`` per artifact, in order."""
-        targets: list[tuple[str, str, str, bool]] = []
-        if self.install_to is not None:
-            targets.append((self.build.artifact, self.install_to, self.mode, False))
-        for path, target in (self.install or {}).items():
-            if isinstance(target, Install):
-                targets.append((path, target.dest, target.mode or self.mode, path.endswith("/")))
-            else:
-                targets.append((path, target, self.mode, path.endswith("/")))
-        return targets
+        return [
+            (
+                self.build.artifact if step.path is None else step.path,
+                step.dest,
+                step.mode or "",
+                step.kind == "tree",
+            )
+            for step in self.install
+        ]
 
     @property
     def packages(self) -> tuple[str, ...]:
@@ -398,21 +423,17 @@ class SourceBuild:
         )
 
     def to_payload(self) -> dict[str, object]:
-        payload: dict[str, object] = {
+        return {
             "name": self.name,
             "source": self.source.to_payload(),
             "build": _recipe_payload(self.build),
-            "install_to": self.install_to,
-            "mode": self.mode,
+            "install": [
+                {"kind": step.kind, "path": step.path, "dest": step.dest, "mode": step.mode}
+                for step in self.install
+            ],
             "cache_key": self.cache_key,
             "mark_unpinned": self.mark_unpinned,
         }
-        if self.install:
-            payload["install"] = [
-                {"path": path, "dest": dest, "mode": None if is_dir else mode}
-                for path, dest, mode, is_dir in self._targets()[self.install_to is not None :]
-            ]
-        return payload
 
     def render(self, pin: str | None = None) -> str:
         """The build-phase hook: fetch, build, cache, install.
@@ -457,7 +478,7 @@ class SourceBuild:
         target = f'"{Build.build_path(self.name)}"'
         if isinstance(self.source, HttpSource):
             return self._fetch_http(pin, target)
-        repo = shlex.quote(self.source.repo)
+        repo = shlex.quote(self.source.url)
         if pin is None:
             ref = shlex.quote(self.source.ref)
             if self.source.submodules:
@@ -492,7 +513,7 @@ def default_resolver(source: Source) -> str:
     if isinstance(source, GitSource):
         from .fetch.git import _resolve_commit
 
-        return _resolve_commit(repo=source.repo, ref=source.ref)
+        return _resolve_commit(repo=source.url, ref=source.ref)
     from .fetch.http import fetch
     from .policy import Policy
 
@@ -589,6 +610,7 @@ __all__ = [
     "GoBuild",
     "HttpSource",
     "Install",
+    "InstallKind",
     "Resolver",
     "ScriptBuild",
     "Source",

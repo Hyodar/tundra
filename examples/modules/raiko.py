@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from tundravm.modules import Module, Tdxs
 from tundravm.modules.resolve import resolve_after
-from tundravm.source import CargoBuild, GitSource, SourceBuild
+from tundravm.source import CargoBuild, GitSource, Install, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -63,8 +63,7 @@ class Raiko(Module):
 
     requires: ClassVar[tuple[type[Module], ...]] = (Tdxs,)
 
-    source_repo: str = RAIKO_DEFAULT_REPO
-    source_branch: str = RAIKO_DEFAULT_BRANCH
+    source: GitSource = GitSource(RAIKO_DEFAULT_REPO, RAIKO_DEFAULT_BRANCH)
     features: str = "tdx"
     workspace_package: str = "raiko-host"
     config_path: str | None = None
@@ -73,13 +72,10 @@ class Raiko(Module):
     group: str = "tdx"
     after: tuple[str, ...] = ("tdxs.service",)
 
-    def setup(self, image: Image) -> None:
-        """Declare build packages and the raiko build hook."""
-        image.build_install(*RAIKO_BUILD_PACKAGES)
-        self._add_build_hook(image)
-
-    def install(self, image: Image) -> None:
-        """Declare runtime config, unit files, and the service user."""
+    def configure(self, image: Image) -> None:
+        """Build raiko, then declare its unit file and service user."""
+        image.build_packages(*RAIKO_BUILD_PACKAGES)
+        image.build_from(self.source_spec())
         self._add_runtime_config(image)
 
     def source_spec(self) -> SourceBuild:
@@ -91,7 +87,7 @@ class Raiko(Module):
         """
         return SourceBuild(
             name="raiko",
-            source=GitSource(self.source_repo, self.source_branch),
+            source=self.source,
             build=CargoBuild(
                 output="raiko",
                 package=self.workspace_package,
@@ -99,14 +95,10 @@ class Raiko(Module):
                 env=RAIKO_CARGO_ENV,
                 packages=(),
             ),
-            install_to="/usr/bin/raiko",
-            cache_key=f"raiko-{self.source_branch}",
+            install=(Install.artifact("/usr/bin/raiko"),),
+            cache_key=f"raiko-{self.source.ref}",
             mark_unpinned=False,
         )
-
-    def _add_build_hook(self, image: Image) -> None:
-        """Add the build phase hook that clones and compiles raiko from source."""
-        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)
@@ -124,12 +116,12 @@ class Raiko(Module):
         if self.chain_spec_path is not None:
             image.file("/etc/raiko/chain-spec.json", src=self.chain_spec_path)
 
-        image.run(
+        image.shell(
             f"mkosi-chroot useradd --system --home-dir /home/{self.user} "
             f"--shell /usr/sbin/nologin --gid {self.group} {self.user}",
             phase="postinst",
         )
-        image.service("raiko", enabled=True)
+        image.enable("raiko")
 
     def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
         """Render raiko.service systemd unit."""

@@ -45,9 +45,8 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
         "base": state.base,
         "build_options": _describe_build_options(image.mkosi),
         "build_packages": sorted(profile_state.build_packages),
-        "build_sources": [
-            {"host_path": host_path, "target": target}
-            for host_path, target in sorted(profile_state.build_sources)
+        "build_source_mounts": [
+            {"dest": dest, "src": src} for src, dest in sorted(profile_state.build_sources)
         ],
         "debloat": image.explain_debloat(profile=selected),
         "extends": extends,
@@ -58,7 +57,6 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             for g in sorted(profile_state.groups, key=lambda item: item.name)
         ],
         "hooks": _describe_hooks(profile_state),
-        "init_scripts": _describe_init_scripts(profile_state.init_scripts),
         "kernel": None
         if kernel is None
         else {
@@ -70,10 +68,9 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
         },
         "mirror": image.mirror,
         "modules": _module_names(image, selected),
-        "output_targets": list(profile_state.output_targets),
         "packages": sorted(profile_state.packages),
         "partitions": [
-            {"fs": p.fs, "mount": p.mount, "name": p.name, "size": p.size}
+            {"fs": p.fs, "mount_at": p.mount_at, "name": p.name, "size": p.size}
             for p in sorted(profile_state.partitions, key=lambda item: item.name)
         ],
         "policy": {f.name: getattr(image.policy, f.name) for f in fields(image.policy)},
@@ -93,6 +90,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             )
         ],
         "reproducible": image.reproducible,
+        "runtime_init": _describe_init_scripts(profile_state.init_scripts),
         "secrets": [
             {
                 "name": secret.name,
@@ -118,6 +116,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
         ],
         "skeleton_files": _describe_files(profile_state.skeleton_files),
         "sources": _describe_sources(image, profile_state),
+        "targets": list(profile_state.output_targets),
         "units": _describe_units(profile_state),
         "templates": [
             {
@@ -276,7 +275,7 @@ def render(description: dict[str, object]) -> str:
     if partitions:
         lines.append(f"Partitions ({len(partitions)}):")
         for part in partitions:
-            lines.append(f"  {part['name']}  {part['size']}  {part['mount']}  {part['fs']}")
+            lines.append(f"  {part['name']}  {part['size']}  {part['mount_at']}  {part['fs']}")
 
     secrets = _as_list(description.get("secrets"))
     if secrets:
@@ -293,10 +292,10 @@ def render(description: dict[str, object]) -> str:
             lines.append(f"  {phase} ({len(previews)}):")
             lines.extend(f"    {preview}" for preview in previews)
 
-    init_scripts = _as_dict(description.get("init_scripts"))
-    if init_scripts.get("count"):
-        priorities = ", ".join(str(p) for p in init_scripts["priorities"])
-        lines.append(f"Init scripts: {init_scripts['count']} (priorities: {priorities})")
+    runtime_init = _as_dict(description.get("runtime_init"))
+    if runtime_init.get("count"):
+        priorities = ", ".join(str(p) for p in runtime_init["priorities"])
+        lines.append(f"Runtime init: {runtime_init['count']} (priorities: {priorities})")
 
     debloat = _as_dict(description.get("debloat"))
     if debloat:
@@ -308,9 +307,9 @@ def render(description: dict[str, object]) -> str:
         else:
             lines.append("Debloat: disabled")
 
-    output_targets = _as_list(description.get("output_targets"))
-    if output_targets:
-        lines.append("Output targets: " + " ".join(str(t) for t in output_targets))
+    output = _as_list(description.get("targets"))
+    if output:
+        lines.append("Targets: " + " ".join(str(t) for t in output))
     return "\n".join(lines) + "\n"
 
 
@@ -319,10 +318,10 @@ def render_markdown(description: dict[str, object]) -> str:
 
     A ``## Profile`` heading and an image line, then an ``Extends``/``Modules`` line,
     then one table per non-empty kind: packages, files, users, services, units,
-    hooks, sources and init scripts. A table longer than ``MARKDOWN_COLLAPSE_AT``
+    hooks, sources and runtime init. A table longer than ``MARKDOWN_COLLAPSE_AT``
     rows is collapsed in a ``<details>`` block.
     """
-    targets = " ".join(f"`{t}`" for t in _as_list(description.get("output_targets"))) or "none"
+    targets = " ".join(f"`{t}`" for t in _as_list(description.get("targets"))) or "none"
     blocks: list[str] = [
         f"## Profile `{description['profile']}`",
         f"`{description['base']}` ({description['arch']}) · "
@@ -416,11 +415,11 @@ def render_markdown(description: dict[str, object]) -> str:
             for src in _as_list(description.get("sources"))
         ],
     )
-    init_scripts = _as_dict(description.get("init_scripts"))
-    priorities = _as_list(init_scripts.get("priorities"))
+    runtime_init = _as_dict(description.get("runtime_init"))
+    priorities = _as_list(runtime_init.get("priorities"))
     _append_section(
         blocks,
-        "Init scripts",
+        "Runtime init",
         ("Priority", "Scripts"),
         [
             (str(priority), str(priorities.count(priority)))
@@ -479,7 +478,7 @@ def _describe_sources(image: Image, profile_state: ProfileState) -> list[dict[st
         described.append(
             {
                 "build": spec.build.kind,
-                "install_to": spec.install_to,
+                "install": [install.dest for install in spec.install],
                 "kind": spec.source.kind,
                 "name": name,
                 "pinned": pin[:7] if pin else None,

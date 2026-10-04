@@ -316,15 +316,15 @@ class FakeModule(Module):
     def __repr__(self) -> str:
         return f"FakeModule({self.name!r})"
 
-    def install(self, image: Image) -> None:
+    def configure(self, image: Image) -> None:
         if self.packages:
             image.install(*self.packages)
         for path, content in self.files.items():
             image.file(path, content=content)
         self.applied_to.extend(image._active_profiles)
-
-    def init_script(self, image: Image) -> str | None:
-        return self.script
+        priority: int | None = getattr(self, "init_priority", None)
+        if self.script and priority is not None:
+            image.runtime_init(self.script, priority=priority)
 
 
 def recipe_file(tmp_path: Path, source: str, name: str = "recipe.py") -> Path:

@@ -1,4 +1,4 @@
-"""``Image.directory()``: import a host directory tree into mkosi.extra."""
+"""``Image.copy_tree()``: import a host directory tree into mkosi.extra."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _tree(root: Path) -> Path:
 
 def test_imports_nested_tree_under_dest(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    img = Image().directory("/etc/app/", src=src)
+    img = Image().copy_tree("/etc/app/", src=src)
 
     files = {f.path: f for f in img.state.profiles["default"].files}
     assert sorted(files) == [
@@ -40,18 +40,18 @@ def test_imports_nested_tree_under_dest(tmp_path: Path) -> None:
 
 def test_preserves_exec_bit_unless_mode_given(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    img = Image().directory("/opt", src=src)
+    img = Image().copy_tree("/opt", src=src)
     modes = {f.path: f.mode for f in img.state.profiles["default"].files}
     assert modes["/opt/bin/start.sh"] == "0755"
     assert modes["/opt/motd"] == "0644"
 
-    forced = Image().directory("/opt", src=src, mode="0600")
+    forced = Image().copy_tree("/opt", src=src, mode="0600")
     assert {f.mode for f in forced.state.profiles["default"].files} == {"0600"}
 
 
 def test_exclude_globs_match_relative_paths_and_prune_dirs(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    img = Image().directory("/etc", src=src, exclude=("cache", "*.swp", "systemd/*/*.network"))
+    img = Image().copy_tree("/etc", src=src, exclude=("cache", "*.swp", "systemd/*/*.network"))
 
     assert [f.path for f in img.state.profiles["default"].files] == [
         "/etc/bin/start.sh",
@@ -61,8 +61,8 @@ def test_exclude_globs_match_relative_paths_and_prune_dirs(tmp_path: Path) -> No
 
 def test_order_is_deterministic(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    first = [f.path for f in Image().directory("/x", src=src).state.profiles["default"].files]
-    second = [f.path for f in Image().directory("/x", src=src).state.profiles["default"].files]
+    first = [f.path for f in Image().copy_tree("/x", src=src).state.profiles["default"].files]
+    second = [f.path for f in Image().copy_tree("/x", src=src).state.profiles["default"].files]
     assert first == second == sorted(first)
 
 
@@ -71,7 +71,7 @@ def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
     src.mkdir()
     blob = bytes(range(256))
     (src / "firmware.bin").write_bytes(blob)
-    img = Image(reproducible=False).directory("/lib/firmware", src=src)
+    img = Image(reproducible=False).copy_tree("/lib/firmware", src=src)
 
     entry = img.state.profiles["default"].files[0]
     assert entry.content == blob
@@ -84,14 +84,14 @@ def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
 def test_scoped_to_profile(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
     img = Image()
-    img.profile("dev").directory("/etc/dev", src=src, exclude=("cache",))
+    img.profile("dev").copy_tree("/etc/dev", src=src, exclude=("cache",))
     assert img.state.profiles["default"].files == []
     assert len(img.state.profiles["dev"].files) == 4
 
 
 def test_rejects_missing_or_empty_src(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="existing directory"):
-        Image().directory("/etc", src=tmp_path / "missing")
+        Image().copy_tree("/etc", src=tmp_path / "missing")
     (tmp_path / "empty").mkdir()
     with pytest.raises(ValidationError, match="no files"):
-        Image().directory("/etc", src=tmp_path / "empty")
+        Image().copy_tree("/etc", src=tmp_path / "empty")

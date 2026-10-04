@@ -1,7 +1,7 @@
 """Declaration gaps closed after the surge dogfooding pass.
 
-service() unit fields, enable/disable/mask, group(), pin_mirror(), chainable
-module config, DiskEncryption key=, and SecretDelivery store_at checks.
+service() unit fields, enable/disable/mask, group(), pin_mirror(), inline
+module specs, DiskSpec key=, and SecretDelivery store_at checks.
 """
 
 from __future__ import annotations
@@ -16,7 +16,14 @@ import pytest
 
 from tundravm import Image, SecretTarget, ValidationError
 from tundravm.lockfile import recipe_digest
-from tundravm.modules import DiskEncryption, KeyGeneration, SecretDelivery
+from tundravm.modules import (
+    DiskEncryption,
+    DiskSpec,
+    KeyGeneration,
+    KeySpec,
+    SecretDelivery,
+    SecretSpec,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 UNIT_DIR = "default/mkosi.extra/usr/lib/systemd/system"
@@ -130,11 +137,10 @@ def test_explain_renders_new_service_fields() -> None:
 # 2. enable / disable / mask
 
 
-def test_enable_matches_commandless_service(tmp_path: Path) -> None:
+def test_enable_links_units_without_writing_them(tmp_path: Path) -> None:
     via_enable = Image(reproducible=False).enable("openntpd", "dropbear")
-    via_service = Image(reproducible=False)
-    via_service.service("openntpd", enabled=True).service("dropbear", enabled=True)
-    assert _digest(via_enable) == _digest(via_service)
+    with pytest.raises(ValidationError, match="non-empty command"):
+        Image().service("openntpd", command=())
     lines = _postinst(via_enable, tmp_path)
     assert "mkosi-chroot systemctl enable openntpd.service" in lines
     assert (
@@ -155,7 +161,7 @@ def test_enable_is_idempotent_and_reenables_a_disabled_service() -> None:
 def test_disable_and_mask_run_after_postinst_hooks(tmp_path: Path) -> None:
     img = Image(reproducible=False)
     img.mask("ssh.service", "ssh.socket").disable("ssh", "ssh.socket")
-    img.run("echo hook")
+    img.shell("echo hook", phase="postinst")
     img.mask("ssh.service")
     lines = _postinst(img, tmp_path)
     hook = lines.index("echo hook")
@@ -253,7 +259,7 @@ def test_user_group_undefined() -> None:
 
 def test_user_group_defined_by_hook_or_other_user() -> None:
     img = Image(reproducible=False)
-    img.run("mkosi-chroot groupadd -r eth")
+    img.shell("mkosi-chroot groupadd -r eth", phase="postinst")
     img.user("svc", system=True)
     img.user("app", system=True, groups=("eth", "svc"))
     assert _codes(img) == []
@@ -287,7 +293,7 @@ def test_pin_mirror_sets_mirrors_and_chains(tmp_path: Path) -> None:
 def test_profile_wrappers_chain() -> None:
     img = Image(reproducible=False)
     dev = img.profile("dev")
-    assert dev.group("tdx").enable("a").disable("b").mask("c").pin_mirror("https://m/") is dev
+    assert dev.group("tdx").enable("a").disable("b").mask("c") is dev
     own = img.state.profiles["dev"]
     assert [g.name for g in own.groups] == ["tdx"]
     assert [s.name for s in own.services] == ["a"]
@@ -297,16 +303,17 @@ def test_profile_wrappers_chain() -> None:
     ]
 
 
-# 5. chainable module config, DiskEncryption key=
+# 5. inline module specs, DiskSpec key=
 
 
-def test_chainable_module_config_inline() -> None:
+def test_module_specs_configure_inline() -> None:
     img = Image(reproducible=False)
     img.apply(
-        KeyGeneration().with_key("root", strategy="tpm", output="/run/root.key"),
-        DiskEncryption().with_disk("data", key_name="root", key_path="/run/root.key"),
-        SecretDelivery(store_at="data").with_secret(
-            "token", targets=(SecretTarget.file("/run/token"),)
+        KeyGeneration(keys=(KeySpec("root", strategy="tpm", output="/run/root.key"),)),
+        DiskEncryption(disks=(DiskSpec("data", key_name="root", key_path="/run/root.key"),)),
+        SecretDelivery(
+            secrets=(SecretSpec("token", targets=(SecretTarget.file("/run/token"),)),),
+            store_at="data",
         ),
     )
     assert [type(m).__name__ for m in img.applied_modules()] == [
@@ -317,16 +324,19 @@ def test_chainable_module_config_inline() -> None:
     assert _codes(img) == []
 
 
-def test_with_secret_returns_module() -> None:
-    delivery = SecretDelivery(store_at=None)
-    assert delivery.with_secret("token", targets=(SecretTarget.file("/run/t"),)) is delivery
-    assert [s.name for s in delivery._secrets] == ["token"]
+def test_secret_delivery_takes_secret_specs() -> None:
+    token = SecretSpec("token", targets=(SecretTarget.file("/run/t"),))
+    delivery = SecretDelivery(secrets=(token,), store_at=None)
+    assert delivery.secrets == (token,)
+    with pytest.raises(ValidationError, match="non-empty"):
+        SecretDelivery(secrets=(SecretSpec("", targets=token.targets),))
+    with pytest.raises(ValidationError, match="at least one delivery target"):
+        SecretDelivery(secrets=(SecretSpec("token"),))
 
 
 def test_disk_key_spec_derives_key_path_without_encryption_key_line() -> None:
-    keys = KeyGeneration()
-    key = keys.key("root", output="/run/root.key")
-    disks = DiskEncryption().with_disk("data", key=key, mount_point="/data")
+    key = KeySpec("root", output="/run/root.key")
+    disks = DiskEncryption(disks=(DiskSpec("data", key=key, mount_at="/data"),))
     config = disks._render_config()
     assert 'encryption_key_path: "/run/root.key"' in config
     assert "encryption_key:" not in config
@@ -334,40 +344,42 @@ def test_disk_key_spec_derives_key_path_without_encryption_key_line() -> None:
 
 
 def test_disk_key_spec_checked_against_applied_keys() -> None:
-    stray = KeyGeneration().key("root", output="/run/root.key")
+    stray = KeySpec("root", output="/run/root.key")
     img = Image(reproducible=False)
     img.apply(
-        KeyGeneration().with_key("other", output="/run/other.key"),
-        DiskEncryption().with_disk("data", key=stray),
+        KeyGeneration(keys=(KeySpec("other", output="/run/other.key"),)),
+        DiskEncryption(disks=(DiskSpec("data", key=stray),)),
         SecretDelivery(store_at="data"),
     )
     assert _codes(img) == [("disk-key-undefined", "data")]
 
 
 def test_disk_key_spec_output_mismatch_warns() -> None:
-    declared = KeyGeneration().with_key("root", output="/run/a.key")
-    stale = KeyGeneration().key("root", output="/run/b.key")
+    declared = KeyGeneration(keys=(KeySpec("root", output="/run/a.key"),))
+    stale = KeySpec("root", output="/run/b.key")
     img = Image(reproducible=False)
     img.apply(
-        declared, DiskEncryption().with_disk("data", key=stale), SecretDelivery(store_at=None)
+        declared,
+        DiskEncryption(disks=(DiskSpec("data", key=stale),)),
+        SecretDelivery(store_at=None),
     )
     assert _codes(img) == [("disk-key-path-mismatch", "data")]
 
 
 def test_disk_key_spec_validation() -> None:
-    no_output = KeyGeneration().key("root")
+    no_output = KeySpec("root")
     with pytest.raises(ValidationError, match="no output path"):
-        DiskEncryption().disk("data", key=no_output)
-    key = KeyGeneration().key("root", output="/run/root.key")
+        DiskSpec("data", key=no_output)
+    key = KeySpec("root", output="/run/root.key")
     with pytest.raises(ValidationError, match="differs from key"):
-        DiskEncryption().disk("data", key=key, key_path="/run/other.key")
+        DiskSpec("data", key=key, key_path="/run/other.key")
     with pytest.raises(ValidationError, match="key_name"):
-        DiskEncryption().disk("data", key=key, key_name="other")
+        DiskSpec("data", key=key, key_name="other")
 
 
 def test_disk_key_name_behaviour_unchanged() -> None:
-    disks = DiskEncryption().with_disk("data", key_name="root", key_path="/run/root.key")
-    assert 'encryption_key: "root"' in disks._render_config()
+    disk = DiskSpec("data", key_name="root", key_path="/run/root.key")
+    assert 'encryption_key: "root"' in DiskEncryption(disks=(disk,))._render_config()
 
 
 # 6. SecretDelivery store_at
@@ -382,10 +394,9 @@ def test_secret_store_undefined_warns() -> None:
 
 
 def test_secret_store_accepts_disk_spec_and_inherited_disks() -> None:
-    disks = DiskEncryption()
-    disk = disks.disk("disk_persistent", device=None)
+    disk = DiskSpec("disk_persistent", device=None)
     img = Image(reproducible=False)
-    img.apply(disks)
+    img.apply(DiskEncryption(disks=(disk,)))
     img.profile("dev").apply(SecretDelivery(store_at=disk))
     assert _codes(img, "dev") == []
     delivery = SecretDelivery(store_at=disk)
@@ -423,21 +434,21 @@ def test_surge_tree_unchanged() -> None:
 
 def test_init_scripts_do_not_leak_out_of_a_profile(tmp_path: Path) -> None:
     img = Image(reproducible=False)
-    img.profile("dev").add_init_script("echo dev\n", priority=5)
+    img.profile("dev").runtime_init("echo dev\n", priority=5)
     assert img.init_scripts("default") == ()
     assert [e.script for e in img.init_scripts("dev")] == ["echo dev\n"]
     with img.profiles("default", "dev"):
         out = img.compile(tmp_path / "tree").path
     assert not (out / "default/mkosi.extra/usr/bin/runtime-init").exists()
     assert "echo dev" in (out / "dev/mkosi.extra/usr/bin/runtime-init").read_text()
-    assert img.explain()["init_scripts"] == {"count": 0, "priorities": []}
-    assert img.explain(profile="dev")["init_scripts"] == {"count": 1, "priorities": [5]}
+    assert img.explain()["runtime_init"] == {"count": 0, "priorities": []}
+    assert img.explain(profile="dev")["runtime_init"] == {"count": 1, "priorities": [5]}
 
 
 def test_extending_profile_runs_default_scripts_standalone_does_not(tmp_path: Path) -> None:
     img = Image(reproducible=False)
-    img.add_init_script("echo base\n", priority=20)
-    img.profile("dev").add_init_script("echo dev\n", priority=10)
+    img.runtime_init("echo base\n", priority=20)
+    img.profile("dev").runtime_init("echo dev\n", priority=10)
     img.profile("solo", extends=None).install("curl")
     assert [e.script for e in img.init_scripts("dev")] == ["echo base\n", "echo dev\n"]
     assert img.init_scripts("solo") == ()
@@ -452,7 +463,7 @@ def test_module_in_profile_scopes_after_dependency() -> None:
     from tundravm.modules import Tdxs
 
     img = Image(reproducible=False)
-    img.profile("dev").apply(KeyGeneration().with_key("k", output="/run/k"))
+    img.profile("dev").apply(KeyGeneration(keys=(KeySpec("k", output="/run/k"),)))
     img.apply(Tdxs())
     unit = next(f for f in img.state.profiles["default"].files if f.path.endswith("tdxs.service"))
     assert "runtime-init.service" not in str(unit.content)
@@ -460,8 +471,8 @@ def test_module_in_profile_scopes_after_dependency() -> None:
 
 def test_init_priority_collision_reads_merged_profile_list() -> None:
     img = Image(reproducible=False)
-    img.add_init_script("echo a\n", priority=1)
-    img.profile("dev").add_init_script("echo b\n", priority=1)
+    img.runtime_init("echo a\n", priority=1)
+    img.profile("dev").runtime_init("echo b\n", priority=1)
     found = {(d.profile, d.code) for d in img.check(profiles=("default", "dev"))}
     assert ("dev", "init-priority-collision") in found
     assert ("default", "init-priority-collision") not in found
@@ -469,12 +480,12 @@ def test_init_priority_collision_reads_merged_profile_list() -> None:
 
 def test_init_scripts_payload_keeps_default_digest_shape() -> None:
     img = Image(reproducible=False)
-    img.add_init_script("echo a\n", priority=1)
+    img.runtime_init("echo a\n", priority=1)
     payload = img._recipe_payload(profile_names=("default",))
     sha = hashlib.sha256(b"echo a\n").hexdigest()
     assert payload["init_scripts"] == [{"priority": 1, "sha256": sha}]
     assert "init_scripts" not in _payload(img)
-    img.profile("dev").add_init_script("echo dev\n")
+    img.profile("dev").runtime_init("echo dev\n")
     dev = img._recipe_payload(profile_names=("dev",))["profiles"]
     assert len(cast(dict[str, Any], dev)["dev"]["init_scripts"]) == 1
 
@@ -511,7 +522,7 @@ def test_strip_hook_not_doubled_when_profile_extends_again() -> None:
 
 def test_profile_applied_modules_inherited() -> None:
     img = Image(reproducible=False)
-    keys = KeyGeneration().with_key("k", output="/run/k")
+    keys = KeyGeneration(keys=(KeySpec("k", output="/run/k"),))
     img.apply(keys)
     dev = img.profile("dev")
     delivery = SecretDelivery(store_at=None)

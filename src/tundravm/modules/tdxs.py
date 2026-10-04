@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from tundravm.errors import ValidationError
-from tundravm.modules.base import Module
+from tundravm.modules.base import TUNDRA_TOOLS, Module
 from tundravm.modules.resolve import resolve_after
-from tundravm.source import GitSource, GoBuild, SourceBuild
+from tundravm.source import GitSource, GoBuild, Install, SourceBuild
 
 if TYPE_CHECKING:
     from tundravm.image import Image
@@ -19,8 +19,6 @@ TDXS_BUILD_PACKAGES = (
     "build-essential",
 )
 
-TDXS_DEFAULT_REPO = "https://github.com/Hyodar/tundra-tools.git"
-TDXS_DEFAULT_BRANCH = "master"
 TDXS_DEFAULT_CONFIG_PATH = "/etc/tdxs/config.yaml"
 TDXS_ROLE_TYPE_ALIASES = {
     "dcap": "tdx",
@@ -55,16 +53,12 @@ class Tdxs(Module):
     verify_identity_token: bool = False
     expected_measurements: dict[str, str] | None = None
     after: tuple[str, ...] = ()
-    source_repo: str = TDXS_DEFAULT_REPO
-    source_branch: str = TDXS_DEFAULT_BRANCH
+    source: GitSource = TUNDRA_TOOLS
 
-    def setup(self, image: Image) -> None:
-        """Declare build packages and the tdxs build hook."""
-        image.build_install(*TDXS_BUILD_PACKAGES)
-        self._add_build_hook(image)
-
-    def install(self, image: Image) -> None:
-        """Declare runtime config, unit files, and the service user."""
+    def configure(self, image: Image) -> None:
+        """Build tdxs, then declare its config, unit files and service user."""
+        image.build_packages(*TDXS_BUILD_PACKAGES)
+        image.build_from(self.source_spec())
         self._add_runtime_config(image)
 
     def _canonical_role_type(self, value: str | None) -> str | None:
@@ -80,21 +74,18 @@ class Tdxs(Module):
         return canonical
 
     def source_spec(self) -> SourceBuild:
-        """The tdxs source build: ``go build ./cmd/tdxs`` from ``source_repo@source_branch``.
+        """The tdxs source build: ``go build ./cmd/tdxs`` from ``source``.
 
         ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
         hand-written one this module emitted before source builds existed.
         """
         return SourceBuild(
             name="tdxs",
-            source=GitSource(self.source_repo, self.source_branch),
+            source=self.source,
             build=GoBuild(package="./cmd/tdxs", output="tdxs"),
-            install_to="/usr/bin/tdxs",
+            install=(Install.artifact("/usr/bin/tdxs"),),
             mark_unpinned=False,
         )
-
-    def _add_build_hook(self, image: Image) -> None:
-        image.source_build(self.source_spec())
 
     def _resolve_after(self, image: Image) -> tuple[str, ...]:
         return resolve_after(self.after, image)
@@ -108,17 +99,17 @@ class Tdxs(Module):
         image.file(service_path, content=self._render_service_unit(after=resolved_after))
         image.file(socket_path, content=self._render_socket_unit(after=resolved_after))
 
-        image.run(
+        image.shell(
             f"mkosi-chroot groupadd --system {self.group}",
             phase="postinst",
         )
-        image.run(
+        image.shell(
             f"mkosi-chroot useradd --system --home-dir /home/{self.user} "
             f"--shell /usr/sbin/nologin --gid {self.group} {self.user}",
             phase="postinst",
         )
-        image.service(self.service_name, enabled=True)
-        image.service(self.socket_name, enabled=True)
+        image.enable(self.service_name)
+        image.enable(self.socket_name)
 
     def _render_config(self) -> str:
         lines = [

@@ -12,7 +12,15 @@ import pytest
 from tundravm import Diagnostic, Image, ValidationError
 from tundravm.lockfile import recipe_digest
 from tundravm.models import InitScriptEntry
-from tundravm.modules import DiskEncryption, KeyGeneration, Module, SecretDelivery, Tdxs
+from tundravm.modules import (
+    DiskEncryption,
+    DiskSpec,
+    KeyGeneration,
+    KeySpec,
+    Module,
+    SecretDelivery,
+    Tdxs,
+)
 from tundravm.platforms import AzurePlatform
 
 
@@ -20,17 +28,16 @@ from tundravm.platforms import AzurePlatform
 class _Marker(Module):
     package: str = "marker-pkg"
 
-    def install(self, image: Image) -> None:
+    def configure(self, image: Image) -> None:
         image.install(self.package)
 
 
 @dataclass(slots=True)
 class _NeedsMarker(Module):
     requires: ClassVar[tuple[type[Module], ...]] = (_Marker,)
-    init_priority: ClassVar[int | None] = 42
 
-    def init_script(self, image: Image) -> str:
-        return "echo needs-marker\n"
+    def configure(self, image: Image) -> None:
+        image.runtime_init("echo needs-marker\n", priority=42)
 
     def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
         yield Diagnostic(
@@ -47,10 +54,15 @@ class _Named(Module):
 
 
 def _keys(*names: str) -> KeyGeneration:
-    module = KeyGeneration()
-    for name in names:
-        module.key(name, strategy="tpm", output=f"/persistent/{name}.key")
-    return module
+    return KeyGeneration(
+        keys=tuple(
+            KeySpec(name, strategy="tpm", output=f"/persistent/{name}.key") for name in names
+        )
+    )
+
+
+def _disks(*disks: DiskSpec) -> DiskEncryption:
+    return DiskEncryption(disks=disks)
 
 
 def test_default_name_is_kebab_case_of_class_name() -> None:
@@ -60,7 +72,7 @@ def test_default_name_is_kebab_case_of_class_name() -> None:
     assert AzurePlatform.name == "azure-platform"
     assert _NeedsMarker.name == "needs-marker"
     assert _Named.name == "custom-name"
-    assert KeyGeneration().name == "key-generation"
+    assert _keys("root").name == "key-generation"
 
 
 def test_requires_rejects_missing_dependency() -> None:
@@ -117,22 +129,21 @@ def test_registry_is_per_profile() -> None:
     assert img.applied_modules("unknown") == ()
 
 
-def test_duck_typed_modules_still_apply_but_are_not_recorded() -> None:
+def test_duck_typed_modules_are_rejected() -> None:
     class Bundle:
         def apply(self, image: Image) -> None:
             image.install("bundle-pkg")
 
     img = Image()
-    img.apply(Bundle())
-    assert "bundle-pkg" in img.state.profiles["default"].packages
+    with pytest.raises(ValidationError, match="Bundle is not a module"):
+        img.apply(Bundle())  # type: ignore[arg-type]
     assert img.applied_modules() == ()
 
 
 def test_init_priority_registers_the_same_runtime_init(tmp_path: Path) -> None:
     img = Image(reproducible=False)
     img.apply(_keys("root"))
-    disks = DiskEncryption()
-    disks.disk("data", key_name="root", key_path="/persistent/root.key")
+    disks = _disks(DiskSpec("data", key_name="root", key_path="/persistent/root.key"))
     img.apply(disks, SecretDelivery())
 
     assert img.init_scripts() == (
@@ -171,9 +182,7 @@ def test_module_check_surfaces_through_image_check() -> None:
 def test_disk_key_undefined_is_reported_with_declared_keys() -> None:
     img = Image()
     img.apply(_keys("root", "logs"))
-    disks = DiskEncryption()
-    disks.disk("data", key_name="missing", key_path="/persistent/missing.key")
-    img.apply(disks)
+    img.apply(_disks(DiskSpec("data", key_name="missing", key_path="/persistent/missing.key")))
 
     [diag] = [d for d in img.check() if d.code == "disk-key-undefined"]
     assert diag.level == "error"
@@ -186,9 +195,7 @@ def test_disk_key_defined_in_another_profile_only_is_undefined() -> None:
     img = Image()
     with img.profile("keys"):
         img.apply(_keys("root"))
-    disks = DiskEncryption()
-    disks.disk("data", key_name="root", key_path="/persistent/root.key")
-    img.apply(disks)
+    img.apply(_disks(DiskSpec("data", key_name="root", key_path="/persistent/root.key")))
     [diag] = [d for d in img.check() if d.code.startswith("disk-key")]
     assert diag.code == "disk-key-undefined"
     assert diag.hint is not None
@@ -198,26 +205,28 @@ def test_disk_key_defined_in_another_profile_only_is_undefined() -> None:
 def test_disk_key_path_mismatch_and_match() -> None:
     img = Image()
     img.apply(_keys("root"))
-    disks = DiskEncryption()
-    disks.disk("data", key_name="root", key_path="/elsewhere/root.key")
-    img.apply(disks)
+    img.apply(_disks(DiskSpec("data", key_name="root", key_path="/elsewhere/root.key")))
     [diag] = [d for d in img.check() if d.code.startswith("disk-key")]
     assert (diag.level, diag.code, diag.subject) == ("warning", "disk-key-path-mismatch", "data")
 
     aligned = Image()
     aligned.apply(_keys("root"))
-    ok = DiskEncryption()
-    ok.disk("data", key_name="root", key_path="/persistent/root.key")
-    ok.disk("plain", device=None, mount_point="/scratch")
+    ok = _disks(
+        DiskSpec("data", key_name="root", key_path="/persistent/root.key"),
+        DiskSpec("plain", device=None, mount_at="/scratch"),
+    )
     aligned.apply(ok)
     assert not [d for d in aligned.check() if d.code.startswith("disk-key")]
 
 
 def test_key_pipe_outside_run_is_info() -> None:
     img = Image()
-    keys = KeyGeneration()
-    keys.key("a", strategy="pipe", pipe_path="/var/keys/a.pipe")
-    keys.key("b", strategy="pipe", pipe_path="/run/keys/b.pipe", output="/persistent/b.key")
+    keys = KeyGeneration(
+        keys=(
+            KeySpec("a", strategy="pipe", pipe_path="/var/keys/a.pipe"),
+            KeySpec("b", strategy="pipe", pipe_path="/run/keys/b.pipe", output="/persistent/b.key"),
+        )
+    )
     img.apply(keys)
     found = [(d.level, d.code, d.subject) for d in img.check() if d.code.startswith("key-")]
     assert found == [("info", "key-pipe-outside-run", "a")]

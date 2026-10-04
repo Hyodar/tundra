@@ -16,7 +16,7 @@ from .errors import (
     TdxError,
     ValidationError,
 )
-from .image import Applicable, Image
+from .image import Image
 from .measure import PlaceholderMeasurementWarning
 from .measure.model import Measurements
 from .models import (
@@ -47,7 +47,6 @@ from .source import (
 )
 
 __all__ = [
-    "Applicable",
     "BackendExecutionError",
     "BakeRequest",
     "BakeResult",

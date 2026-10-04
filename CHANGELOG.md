@@ -67,6 +67,33 @@
 - `Image` is keyword-only. The mkosi knobs (`with_network`, `clean_package_metadata`, `manifest_format`, `compress_output`, `output_directory`, `seed`, `sandbox_trees`, `package_cache_directory`, `init_script`, `environment`, `environment_passthrough`, `emit_mode`, `generate_version_script`, `generate_cloud_postoutput`) moved to `MkosiOptions`, passed as `Image(mkosi=...)` or set with `img.mkosi_options(...)`; `logger` and `init` are no longer constructor arguments. `Image.emit_mkosi()` is removed; use `compile()`.
 - `measure()` refuses placeholder values unless `allow_placeholder=True` (CLI `--allow-placeholder`); `rtmr`/`azure`/`gcp` modules return `Measurements`, which now requires `source=` (JSON schema 2).
 
+### Breaking (API round, from an external design review)
+
+| Old | New |
+| --- | --- |
+| `img.build_install(...)` | `img.build_packages(...)` |
+| `img.build_source(host_path, target)` | `img.mount_build_source(src, dest=)` |
+| `img.source_build(spec)` | `img.build_from(spec)` |
+| `img.output_targets(...)` | `img.targets(...)` |
+| `img.add_init_script(...)` | `img.runtime_init(script, priority=)` |
+| `img.directory(dest, src=)` | `img.copy_tree(dest, src=)` |
+| `img.run/hook/sync/prepare/finalize/postoutput/clean/on_boot` | one `img.shell(command, phase=)`; `after_phase` removed |
+| `img.mkosi_options(**kw)` | `img.set_mkosi(MkosiOptions(...))` |
+| `img.service(name, enabled=True)` (no command) | `img.enable(name)`; `service()` requires `command=` |
+| `img.ssh()` | `img.install("dropbear")` |
+| `partition(mount=)`, `DiskSpec.mount_point` | `mount_at` |
+| `file(path=)`, `skeleton(path=)` | first parameter is `dest` |
+| `debloat(paths_remove_extra=, systemd_units_keep_extra=)` | `extra_remove_paths=`, `extra_keep_units=` |
+| `Devtools` | `DevTools` |
+| `Applicable`, `tundravm.modules.Init`, `CompileResult./`, `emit_mkosi()` | removed |
+| `Profile.__getattr__` forwarding | every profile method is explicit and typed; image-wide setters raise `AttributeError` |
+| `Module.setup/install/init_script/init_priority` | one `configure(image)` hook (+ `check()`); modules call `image.runtime_init(..., priority=)` |
+| `KeyGeneration().key(...)`, `.with_key(...)` (and disk/secret equivalents) | `KeyGeneration(keys=(KeySpec(...),))`, `DiskEncryption(disks=(DiskSpec(...),))`, `SecretDelivery(secrets=(...))` |
+| `Tdxs(source_repo=, source_branch=)`, `Raiko(...)`, `TaikoClient(build_path=)`, `Nethermind(version=)` | `source=GitSource(url, ref, subdir=)` |
+| `GitSource.repo` | `GitSource.url` |
+| `SourceBuild(install_to=, mode=, install={...})`, `Install(dest, mode)` | `SourceBuild(install=(Install.artifact(dest), Install.file(path, dest, mode=), Install.tree(path, dest)))` |
+| `compile/lock/lock_status/diff/bake` scoped by `with img.profiles(...)` | also accept `profiles=` explicitly |
+
 ### Fixed
 
 - `runtime-init.service` is registered once per profile, so compiling the default profile and then all profiles no longer fails with a duplicate service.
