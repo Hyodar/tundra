@@ -43,6 +43,8 @@ tundravm explain recipe.py --profile azure   # dry run: what the recipe produces
 tundravm digest recipe.py                    # recipe digest used by lockfiles
 tundravm compile recipe.py --out build/mkosi
 tundravm bake recipe.py --lock --all-profiles
+tundravm check recipe.py --strict               # lint: undeclared users, shadowed files, ...
+tundravm diff recipe.py --against build/mkosi    # what a recipe change does to the tree
 tundravm new recipes/node.py --backend nix   # starter recipe file
 ```
 

@@ -56,7 +56,9 @@ With neither `--profile` nor `--all-profiles`, commands use the default profile.
 | --- | --- | --- |
 | `explain RECIPE` | `--json` | Dry run. Prints `Image.summary()` per selected profile, or `{profile: Image.explain()}` as JSON |
 | `digest RECIPE` | | Prints the 64-hex recipe digest used by lockfiles. Profile-sensitive; useful for CI diffs |
-| `compile RECIPE` | `--out DIR`, `--force` | Emits the mkosi tree (default `<build_dir>/mkosi`). Prints path, profiles, digest |
+| `compile RECIPE` | `--out DIR`, `--force`, `--check` | Emits the mkosi tree (default `<build_dir>/mkosi`). Prints path, profiles, digest. `--check` writes nothing and exits 1 if the tree at `--out` is stale, listing the files that differ |
+| `check RECIPE` | `--json`, `--strict` | Lints the recipe (`Image.check()`): services running as undeclared users, relative file paths, shadowed files, platform/output-target mismatches, init priority collisions, missing backend. Exit 1 on errors, or on warnings with `--strict` |
+| `diff RECIPE` | `--against DIR`, `--stat`, `--color auto\|always\|never` | Compiles to a temp dir and shows a unified diff against an existing tree (default `<build_dir>/mkosi`). Exit 1 when they differ |
 | `lock RECIPE` | `--path FILE` | Writes the lockfile (default `<build_dir>/tundravm.lock`) |
 | `bake RECIPE` | `--out DIR`, `--frozen`, `--lock`, `--force` | Compile and build with the recipe's backend. `--lock` writes the lockfile first, then bakes with `--frozen` semantics. Prints per-profile artifacts and `report.json` path |
 | `new PATH` | `--base X`, `--backend lima\|nix\|local\|inprocess`, `--force` | Writes a starter recipe file; refuses to overwrite without `--force` |
@@ -77,5 +79,14 @@ tundravm explain examples/surge-tdx-prover/image.py --profile azure
 tundravm digest recipe.py --all-profiles
 tundravm compile recipe.py --out build/mkosi
 tundravm bake recipe.py --lock --all-profiles
+tundravm check recipe.py --strict
+tundravm diff recipe.py --against build/mkosi
+tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check  # CI drift gate
 tundravm new recipes/node.py --backend nix
 ```
+
+## Review workflow
+
+Commit the compiled tree next to the recipe. A recipe change then shows up twice in review: the Python diff and the resulting mkosi diff. `tundravm diff` previews the second part before you commit, and `tundravm compile --check` in CI fails the build when someone forgets to regenerate the tree.
+
+`bake` runs `check` first and refuses to build a recipe with error-level findings. Run `tundravm check` to see them.

@@ -37,3 +37,9 @@ jobs:
 
       - name: Tests
         run: uv run pytest
+
+      - name: Lint example recipes
+        run: uv run tundravm check examples/surge-tdx-prover/image.py --all-profiles --strict
+
+      - name: Committed mkosi tree is up to date
+        run: uv run tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check
