@@ -1,5 +1,7 @@
 """Public package entrypoint for the TDX VM SDK."""
 
+__version__ = "0.1.0"
+
 from .errors import (
     BackendExecutionError,
     DeploymentError,
@@ -10,7 +12,7 @@ from .errors import (
     TdxError,
     ValidationError,
 )
-from .image import Image
+from .image import Applicable, Image
 from .measure.model import Measurements
 from .models import (
     BakeRequest,
@@ -25,8 +27,10 @@ from .models import (
     SecretTarget,
 )
 from .policy import Policy
+from .recipe import load_recipe
 
 __all__ = [
+    "Applicable",
     "BackendExecutionError",
     "BakeRequest",
     "BakeResult",
@@ -48,4 +52,6 @@ __all__ = [
     "SecretTarget",
     "TdxError",
     "ValidationError",
+    "__version__",
+    "load_recipe",
 ]

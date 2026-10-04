@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal, Protocol, Self
 
 from .backends.base import BuildBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
@@ -24,6 +24,7 @@ from .compiler import (
 )
 from .deploy import get_adapter
 from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
+from .explain import describe, render
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
 from .measure import Measurements, derive_measurements
 from .models import (
@@ -56,6 +57,12 @@ from .models import (
 from .modules.init import Init
 from .observability import StructuredLogger
 from .policy import Policy, ensure_bake_policy
+
+
+class Applicable(Protocol):
+    """Anything with an ``apply(image)`` method: modules, platforms, user bundles."""
+
+    def apply(self, image: Image) -> None: ...
 
 
 @dataclass(slots=True)
@@ -111,6 +118,7 @@ class Image:
     _last_compile_emission: MkosiEmission | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
+        self.build_dir = Path(self.build_dir)
         self._state = RecipeState.initialize(
             base=self.base,
             arch=self.arch,
@@ -126,6 +134,25 @@ class Image:
 
     def set_policy(self, policy: Policy) -> Self:
         self.policy = policy
+        return self
+
+    def apply(self, *modules: Applicable) -> Self:
+        """Apply one or more modules to the active profiles, in order.
+
+        Equivalent to ``module.apply(self)`` for each module, but chainable::
+
+            img.apply(KeyGeneration(), DiskEncryption(), Tdxs())
+        """
+        if not modules:
+            raise ValidationError("apply() requires at least one module.")
+        for module in modules:
+            apply_fn = getattr(module, "apply", None)
+            if not callable(apply_fn):
+                raise ValidationError(
+                    f"{type(module).__name__} is not a module: it has no apply(image) method.",
+                    hint="See docs/module-authoring.md for the module protocols.",
+                )
+            apply_fn(self)
         return self
 
     @contextmanager
@@ -419,6 +446,14 @@ class Image:
             "systemd_units_keep": list(config.effective_units_keep),
             "systemd_bins_keep": list(config.systemd_bins_keep),
         }
+
+    def explain(self, *, profile: str | None = None) -> dict[str, object]:
+        """Describe what this recipe will produce for *profile*, without compiling."""
+        return describe(self, profile=self._resolve_operation_profile(profile))
+
+    def summary(self, *, profile: str | None = None) -> str:
+        """Plain-text summary of ``explain(profile=...)``."""
+        return render(self.explain(profile=profile))
 
     # --- Lifecycle convenience methods ---
 
