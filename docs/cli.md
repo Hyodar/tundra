@@ -60,7 +60,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `bake` | Compiles and builds every selected variant into `--out` (default `build`), then writes `OUT/bake-result.json`. | |
 | `measure` | Expected measurements of one baked variant. | |
 | `deploy` | Deploys one baked variant's artifact. | |
-| `doctor` | Python and tundravm versions, the backend's host tools, the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
+| `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart` and `apt`; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
 | `ci` | `lint --strict`, `compile --check`, `lock --check` in order; stops at the first failure. | any step fails, including a missing lockfile |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
@@ -94,7 +94,7 @@ It writes:
 
 - `NAME.py`, the recipe;
 - `tests/test_NAME.py` (lint, compile and golden-tree tests), with every character of `NAME` that is not valid in an identifier replaced by `_`: `--name my-node` writes `tests/test_my_node.py`;
-- `pyproject.toml` and `README.md`, only when absent; an existing one is kept, even with `--force`;
+- `pyproject.toml` and `README.md`, only when absent; an existing one is kept, even with `--force`. The generated `pyproject.toml` depends on `tundravm`, puts `pytest` in the `dev` group and sets `[tool.pytest.ini_options] pythonpath = ["."]`, so tests you add can import the recipe and its sibling modules (`from node import App`);
 - a `build/` block in `.gitignore` that keeps `build/tundravm.lock`;
 - with `--ci github`, the workflow (see [CI](#ci)).
 
@@ -107,7 +107,7 @@ created svc/tests/test_my_node.py
 kept svc/pyproject.toml (already exists)
 created svc/README.md
 created svc/.gitignore
-note: svc/pyproject.toml already exists; add the dependencies with `uv add tundravm` and `uv add --dev pytest`
+note: svc/pyproject.toml already exists; add the dependencies with `uv add tundravm` and `uv add --dev pytest` (tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm`)
 lint my-node.py: no findings
 next (from svc):
   1. tundravm compile my-node.py --out mkosi  write the mkosi tree; commit it
@@ -115,9 +115,10 @@ next (from svc):
   3. tundravm lock my-node.py                 pin packages and sources in build/tundravm.lock
   4. tundravm ci my-node.py --out mkosi       the lint, tree and lockfile checks CI runs
   5. tundravm bake my-node.py --out build     build the image
+  tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm` uses a local checkout
 ```
 
-The `note:` line appears only when `pyproject.toml` already existed. A missing backend tool never fails `init`; the probe ends with a pointer to the in-process backend:
+The `note:` line appears only when `pyproject.toml` already existed; add `[tool.pytest.ini_options] pythonpath = ["."]` to that file yourself if your tests import project modules. Until tundravm's first release, install it from a checkout: `uv add --editable PATH/TO/tundravm` in the project, with `PATH/TO/tundravm` the directory holding tundravm's `pyproject.toml`. A missing backend tool never fails `init`; the probe ends with a pointer to the in-process backend:
 
 ```
 checking the nix backend (tundravm doctor --backend nix):
@@ -144,6 +145,20 @@ The recipe is found in this order:
 5. The only public zero-argument function defined in the file whose name starts with `build` or whose return annotation is `Recipe`.
 
 Several candidates at step 4 or 5, a factory that needs arguments, or one that returns `None` is an `E_VALIDATION` error with a hint.
+
+A recipe file that fails to load (a syntax error, a missing import, an exception while the file or its factory runs) is also `E_VALIDATION`, exit 2. The context names the failing `location` (`file:line`: for a syntax error the offending line, otherwise the innermost frame outside tundravm, which can be a sibling helper module) and the original `error` as `Type: message`:
+
+```console
+$ tundravm lint node.py
+error [E_VALIDATION]: Recipe node.py failed to load: syntax error at node.py:27: '(' was never closed
+Hint: Run `python node.py` to see the full traceback, or pass --traceback.
+  recipe: /home/me/node/node.py
+  location: node.py:27
+  error: SyntaxError: '(' was never closed
+[exit 2]
+```
+
+A misspelt name reads `Recipe node.py failed to load: NameError at node.py:40: name 'Pakcage' is not defined`. `--traceback` raises the error with the Python traceback instead (exit 1, as any uncaught exception). Every load compiles the recipe file from its current source and writes no bytecode for it, so an edit is never hidden by a stale `__pycache__`.
 
 A module-level `backend` holding a backend instance (`LimaMkosiBackend(...)`, `NixMkosiBackend()`, `LocalLinuxBackend()`, `InProcessBackend()`) is what `bake` and `doctor RECIPE` use. `bake --backend KIND` overrides it.
 
@@ -285,6 +300,48 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
 - The frozen check compares like `lock --check` with the same `--variant` selection: a lockfile of every variant covers `bake --variant default`, while a lockfile written for fewer variants than the bake selects fails at `verify lockfile`.
 - A recipe with error-level lint findings fails at `lint` with `E_LINT`.
 - `OUT/bake-result.json` records, per variant and target, the artifact path and sha256, plus the lockfile digest and a `declarative` block with the recipe digest, the tree digest, `simulated` (true for the in-process backend) and, for a frozen bake, `lockfile`: the path of the lockfile it baked against, as given (`--lockfile PATH`, else `build/tundravm.lock`).
+- After the build, `bake` reads the compiled tree for its digest. A path it cannot read (a root-owned leftover, say) is skipped with a `warning` line instead of failing the bake, and mkosi's state next to its config (`mkosi.tools`, `mkosi.cache`, `mkosi.builddir`, ...) is never tree content; `diff` and `compile --check` ignore it too.
+
+### Local backend
+
+`--backend local` runs the host's `mkosi` (v25+), by default under `sudo`, with absolute `--directory` and `--output-dir` paths. For the `minimal` template (`tundravm init --template minimal --backend local`, then `tundravm bake node.py`), mkosi 26 on Ubuntu 24.04 builds a 47.2 MiB UKI:
+
+```
+variant  target  artifact                          size      sha256        time
+default  qemu    build/default/output/default.efi  47.2 MiB  b0be0e718b25  1m24s
+next: tundravm deploy build/bake-result.json --variant default --target qemu
+```
+
+- A bootable variant's artifact is the UKI `OUT/<variant>/output/<variant>.efi`, next to the other files mkosi writes there; `bake-result.json` records it with its sha256.
+- mkosi's workspace, package cache and tools tree live in `OUT/.mkosi/` (`workspace/`, `cache/`, `mkosi.tools`), never in the compiled tree. A recipe that sets `WorkspaceDirectory` or `CacheDirectory` keeps its own.
+- Under `sudo`, what mkosi wrote (`OUT/<variant>/output/`, `OUT/.mkosi/`) is chowned back to you, so the build directory holds no root-owned files. If that fails, a `warning` names the `sudo chown -R UID:GID OUT` to run.
+- mkosi builds a UKI with the host's `ukify` unless it uses a tools tree. When the host has no `ukify` and the recipe sets no `ToolsTree`, the backend adds `--tools-tree=default` to the mkosi command (the compiled tree is unchanged) and says so on a `note` line, which `-q` hides:
+
+  ```
+  [default] note ukify not found on the host; building with mkosi's default tools tree (--tools-tree=default). Install systemd-ukify to use the host tools.
+  ```
+
+- The first bake builds the tools tree; a later bake into the same `OUT` passes `--tools-tree=OUT/.mkosi/mkosi.tools` (the note then says `reusing` and the path) instead of building it again. In the run above, a second bake took 32s against 1m24s for the first.
+
+`tundravm doctor --backend local` probes `ukify`, `systemd-repart` and `apt` as optional tools, the ones mkosi takes from the host when there is no tools tree:
+
+```console
+$ tundravm doctor --backend local
+tundravm 0.1.0
+python 3.12.3
+backend local_linux: available
+  ok mkosi mkosi 26
+  ok sudo Sudo version 1.9.15p5
+  missing (optional) ukify — mkosi can use its own tools tree: add Setting("Build", "ToolsTree", ("default",)) to the recipe, or install systemd-ukify
+  ok systemd-repart systemd 255 (255.4-1ubuntu8.17)
+  ok apt apt 2.8.3 (amd64)
+measurement tools:
+  missing (optional) measured-boot — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
+  missing (optional) dstack-mr — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
+[exit 0]
+```
+
+A missing `ukify` alone needs no action, since the backend then adds the tools tree itself. With `ukify` present but `systemd-repart` or `apt` missing, add the `ToolsTree` setting the hint names.
 
 ## Measure and deploy
 

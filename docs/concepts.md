@@ -227,6 +227,14 @@ The in-process backend writes simulated artifacts (`Artifact.simulated`). `measu
 
 A recipe file names its backend in a module-level `backend` variable; the Python `bake()` takes a `Backend` value. Nothing before `bake` needs a backend.
 
+`bake` compiles the tree into `OUT/mkosi/` and every mkosi backend gives mkosi absolute paths: `--directory` is the variant's directory of that tree (or the tree root plus `--profile` for native profiles) and `--output-dir` is `OUT/<variant>/output/`, so artifacts land there whatever the working directory.
+
+- `LocalLinuxBackend` keeps mkosi's workspace, cache and tools tree in `OUT/.mkosi/`. After a `sudo` run it chowns what mkosi wrote back to the invoking user, warning with the `sudo chown` to run if that fails. When the host has no `ukify` and the recipe sets no `ToolsTree`, it adds `--tools-tree=default` to the mkosi command, and a later bake into the same `OUT` (also one whose recipe sets `ToolsTree=default`) reuses `OUT/.mkosi/mkosi.tools`. See [CLI: Local backend](cli.md#local-backend).
+- `NixMkosiBackend` runs mkosi inside `nix develop path:OUT/mkosi` (an absolute path), with the tools the generated flake provides; inside a Nix shell already, it runs mkosi directly.
+- `LimaMkosiBackend` mounts `OUT` in the VM at `/home/debian/mnt` and translates each host path under it to the VM path, so `OUT/mkosi/<variant>` is `/home/debian/mnt/mkosi/<variant>`; a tree or output path outside `OUT` is an `E_BACKEND_EXECUTION` error. mkosi writes to `/home/debian/mkosi-output` in the VM, with its cache in `/home/debian/mkosi-cache`, and the backend moves the output to `OUT/<variant>/output/`.
+
+A backend gets one `BakeRequest` per variant (`profile`, `build_dir`, `emit_dir`, `output_targets`). It streams mkosi's output lines to `on_output(line)` and reports what it decided on the user's behalf, such as adding a tools tree, to `on_notice(level, message)` with `level` `"info"` or `"warning"`; `request.notice(level, message)` calls it when it is set. `bake` prints an `info` notice as a `note` line and a `warning` as a `warning` line, both hidden by `-q`; with `--json-logs` they are a `log` event whose `extra.source` is `notice` and a `warning` event.
+
 ## Measurements
 
 `measure(artifact, scheme=)` derives the values a verifier should expect:

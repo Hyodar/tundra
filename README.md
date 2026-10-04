@@ -46,7 +46,7 @@ tundravm measure build --variant default        # expected RTMRs of the baked ar
 tundravm deploy build --variant default --target qemu
 ```
 
-`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). Commands run on every declared variant unless you pass `--variant NAME` (repeatable). `uv add tundravm` (or `uv sync` in this repo) installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). Commands run on every declared variant unless you pass `--variant NAME` (repeatable). tundravm is not on PyPI yet: until the first release, install it from a checkout (`uv add --editable PATH/TO/tundravm` in your project, or `uv sync` in this repo), which also installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
 
 ## Why
 

@@ -2,7 +2,7 @@
 
 This walk-through starts from an empty directory and follows the project `tundravm init` writes: inspect the starter recipe, lint it (and see what happens without a kernel), add a variant, compile and lock, change the recipe and see the diff and the lock drift, bake, measure and deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`.
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv add tundravm`, or `uv sync` in this repository). Step 11 runs the project's tests with `uv run`, which installs tundravm into the project's own environment; if your package index does not have tundravm, run `uv add --editable PATH/TO/tundravm` in the project first.
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 11 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
 
 ## 1. Start a project
 
@@ -21,6 +21,7 @@ next:
   3. tundravm lock node.py                 pin packages and sources in build/tundravm.lock
   4. tundravm ci node.py --out mkosi       the lint, tree and lockfile checks CI runs
   5. tundravm bake node.py --out build     build the image
+  tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm` uses a local checkout
 
 checking the inprocess backend (tundravm doctor --backend inprocess):
 tundravm 0.1.0
@@ -504,7 +505,7 @@ def test_probes_the_wrong_port() -> None:
 - `assert_clean(lint(recipe))` fails on errors and, for a list of diagnostics, on warnings too (`allow=("code",)` to accept some).
 - `assert_diagnostic` returns the first diagnostic matching every field you give, or fails listing what was found.
 
-The tests import `fragments` and `node` from the project directory, so put it on pytest's path in `pyproject.toml`:
+The tests import `fragments` and `node` from the project directory, which the generated `pyproject.toml` puts on pytest's path:
 
 ```toml
 [tool.pytest.ini_options]
