@@ -62,7 +62,7 @@ from .declarative.lifecycle import (
 from .declarative.model import Target
 from .declarative.resolve import resolve
 from .diff import _wants_color, cmd_diff, diff_against
-from .errors import TdxError, ValidationError
+from .errors import LockfileError, TdxError, ValidationError
 from .explain import (
     describe,
     diff_variants,
@@ -295,8 +295,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--update NAME resolves that source again. Drift is reported one section per "
         "line: `~` changed, `+` only in the recipe, `-` only in the lockfile, e.g. "
         "`~ variants.default.packages: +htop -jq`. Source builds are pinned under "
-        "`fetches` and drift as `+ sources.<name>` (unpinned) or "
-        "`~ sources.<name>: <old> -> <new>`."
+        "`fetches` and drift as `+ sources.<name>: source <name> is not pinned` or "
+        "`~ sources.<name>: <old> -> <new>`; --check never touches the network. Locking "
+        "tries every source and writes nothing unless all resolve: the error lists each "
+        "failed source as `<name>: git <url> @ <ref>: <reason>` and exits 2."
     )
     lock.add_argument(
         "--path",
@@ -334,7 +336,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Drift report format for --check (default: auto): github prints one ::error "
-            "per drifted section, markdown a table. " + format_help()
+            "per drifted section, markdown a table. When sources fail to resolve, github "
+            "also prints one ::error per failed source. " + format_help()
         ),
     )
     lock.add_argument(
@@ -756,12 +759,28 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
             print(img.lock_status(path, profiles=names).render(), file=out)
         else:
             print(f"no lockfile at {path}; every section is new", file=out)
-    locked = lock_image(
-        img, names, previous=previous, update=tuple(args.update or ()), offline=args.offline
-    )
+    try:
+        locked = lock_image(
+            img, names, previous=previous, update=tuple(args.update or ()), offline=args.offline
+        )
+    except LockfileError as exc:
+        if exc.failures and resolve_format(args.format) == "github":
+            print(_failure_annotations(exc, args.recipe), file=out)
+        raise
     write_lock(locked, path)
     print(f"locked {path}", file=out)
     return EXIT_OK
+
+
+def _failure_annotations(exc: LockfileError, recipe: str | Path) -> str:
+    """One ``::error`` per source build *exc* could not resolve, on the recipe file."""
+    path = annotation_path(recipe)
+    return "\n".join(
+        workflow_command(
+            "error", f"{name}: {error.source}: {error.reason}", file=path, title=error.code
+        )
+        for name, error in exc.failures.items()
+    )
 
 
 def _lock_path(img: Image, path: Path | None) -> Path:

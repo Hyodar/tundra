@@ -506,7 +506,9 @@ def _rule_source_unpinned(
             ),
             hint=(
                 "Run `tundravm lock RECIPE` to pin it, or declare an immutable source "
-                "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...))."
+                "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)). "
+                "Locking reports a dead upstream ref, with every other source it cannot "
+                "resolve, before anything is written."
             ),
             profile=profile_name,
             subject=name,

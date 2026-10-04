@@ -939,8 +939,9 @@ class Image:
         removed sections; ``render()`` prints them (``~ variants.default.packages:
         +htop``) or ``lock is up to date``. A lockfile written before section
         digests existed reports every section as added. Source builds report as
-        ``+ sources.<name>`` (no pin) or ``~ sources.<name>: <old> -> <new>`` (pinned
-        for another ref, or, with *resolver*, the ref has moved). Raises
+        ``+ sources.<name>: source <name> is not pinned`` or ``~ sources.<name>: <old>
+        -> <new>`` (pinned for another ref, or, with *resolver*, the ref has moved);
+        without *resolver* nothing touches the network. Raises
         :class:`LockfileError` when the lockfile is missing or unreadable.
 
         *profiles* that leave out some declared profile are checked against

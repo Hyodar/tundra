@@ -359,7 +359,7 @@ def test_pin_for_another_ref_is_ignored() -> None:
 
 def test_lock_offline_reuses_pins_and_fails_without_them() -> None:
     recipe = _recipe(_build())
-    with pytest.raises(LockfileError, match="need the network to resolve: tool"):
+    with pytest.raises(LockfileError, match="tool: git .* @ main: not pinned in the lockfile"):
         lock(recipe, offline=True)
     previous = lock(recipe, resolver=_Fixed(SHA_A))
     resolver = _Fixed(SHA_B)
@@ -426,7 +426,7 @@ def test_policy_warn_compiles_silently_and_error_refuses() -> None:
 
 def test_drift_reports_new_and_moved_sources() -> None:
     recipe = _recipe(Package("curl"), _build())
-    added = Diagnostic("lock-added", "sources.tool is not in the lock", subject="sources.tool")
+    added = Diagnostic("lock-added", "source tool is not pinned", subject="sources.tool")
     assert added in lock_status(recipe, lock(_recipe(Package("curl"))))
     locked = lock(recipe, resolver=_Fixed(SHA_A))
     assert lock_status(recipe, locked) == ()

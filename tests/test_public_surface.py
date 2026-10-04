@@ -62,6 +62,7 @@ EXPECTED_TOP_LEVEL = [
     "Secrets",
     "Service",
     "Setting",
+    "SourceError",
     "StateError",
     "TdxError",
     "Template",

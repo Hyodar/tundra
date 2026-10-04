@@ -489,7 +489,7 @@ def lock_image(
             pending[name] = build
         else:
             kept.append(build.locked(pin))
-    fetches = [*kept, *resolve_pins(pending, prior, resolver=resolver, offline=offline)]
+    fetches = resolve_pins(pending, prior, resolver=resolver, offline=offline, kept=kept)
     fetches.sort(key=lambda fetch: fetch.name or fetch.source)
     return Lock.of(build_lockfile(recipe=payload, fetches=fetches))
 
@@ -511,7 +511,10 @@ def lock(
 
     Pins in *previous* that still match their source are kept; sources named in
     *update* are resolved again. *resolver* replaces the network lookup;
-    ``offline=True`` fails for any source *previous* does not pin.
+    ``offline=True`` fails for any source *previous* does not pin. Every source is
+    attempted before failing: one :class:`~tundravm.errors.LockfileError` lists
+    each source that could not be resolved, with the reason, and its ``failures``
+    maps their names to :class:`~tundravm.errors.SourceError`.
     """
     names = variant_names(recipe, variants)
     return lock_image(
@@ -553,7 +556,7 @@ def image_lock_status(
             detail = f": {details[section]}" if section in details else ""
             yield "lock-changed", section, f"{section} changed since the lock{detail}"
         for section in drift.added:
-            yield "lock-added", section, f"{section} is not in the lock"
+            yield "lock-added", section, details.get(section, f"{section} is not in the lock")
         for section in drift.removed:
             yield "lock-removed", section, f"{section} is only in the lock"
 

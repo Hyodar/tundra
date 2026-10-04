@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 
 
 class ErrorCode(StrEnum):
@@ -18,6 +19,7 @@ class ErrorCode(StrEnum):
     POLICY = "E_POLICY"
     STATE = "E_STATE"
     LINT = "E_LINT"
+    SOURCE = "E_SOURCE"
 
 
 class TdxError(Exception):
@@ -72,15 +74,50 @@ class ValidationError(TdxError):
         super().__init__(message, code=ErrorCode.VALIDATION, hint=hint, context=context)
 
 
+class SourceError(TdxError):
+    """A source build's source could not be resolved to a pin.
+
+    ``source`` names it (``git <url> @ <ref>``, ``http <url>``); ``reason`` says why,
+    e.g. ``ref 'main' not found``, ``repository unreachable: <git error>`` or
+    ``HTTP 404``.
+    """
+
+    source: str
+    reason: str
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        source: str,
+        reason: str,
+        hint: str | None = None,
+        context: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(message, code=ErrorCode.SOURCE, hint=hint, context=context)
+        self.source = source
+        self.reason = reason
+
+
 class LockfileError(TdxError):
+    """A lockfile is missing, unreadable or stale, or locking failed.
+
+    ``failures`` maps each source build that ``lock()`` could not resolve to its
+    :class:`SourceError`; it is empty for every other lockfile error.
+    """
+
+    failures: Mapping[str, SourceError]
+
     def __init__(
         self,
         message: str,
         *,
         hint: str | None = None,
         context: Mapping[str, str] | None = None,
+        failures: Mapping[str, SourceError] | None = None,
     ) -> None:
         super().__init__(message, code=ErrorCode.LOCKFILE, hint=hint, context=context)
+        self.failures = MappingProxyType(dict(failures or {}))
 
 
 class ReproducibilityError(TdxError):
@@ -173,6 +210,7 @@ __all__ = [
     "MeasurementError",
     "PolicyError",
     "ReproducibilityError",
+    "SourceError",
     "StateError",
     "TdxError",
     "ValidationError",

@@ -15,17 +15,19 @@ hook fetches exactly that commit and the cache key carries it.
 from __future__ import annotations
 
 import hashlib
+import os
 import posixpath
 import re
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import Literal
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
-from .errors import LockfileError, ValidationError
+from .errors import LockfileError, SourceError, TdxError, ValidationError
 from .lockfile.model import LockedFetch
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -33,6 +35,8 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PLAIN_ENV_VALUE = re.compile(r"^[A-Za-z0-9_@%+=:,./-]*$")
 _ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar.zst")
+_NETWORK_TIMEOUT = 60.0
+"""Seconds :func:`default_resolver` waits on ``git ls-remote`` or a stalled download."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +59,10 @@ class GitSource:
     def inline_pin(self) -> str | None:
         """The commit when *ref* already is one, else None."""
         return self.ref if COMMIT_PATTERN.fullmatch(self.ref) else None
+
+    def describe(self) -> str:
+        """``git <url> @ <ref>``, as lock errors name the source."""
+        return f"git {self.url} @ {self.ref}"
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -86,6 +94,10 @@ class HttpSource:
     @property
     def filename(self) -> str:
         return posixpath.basename(self.url.split("?", 1)[0]) or "download"
+
+    def describe(self) -> str:
+        """``http <url>``, as lock errors name the source."""
+        return f"http {self.url}"
 
     def to_payload(self) -> dict[str, object]:
         return {"kind": self.kind, "url": self.url, "sha256": self.sha256}
@@ -512,33 +524,106 @@ class SourceBuild:
 
 
 def default_resolver(source: Source) -> str:
-    """Resolve *source* over the network: ``git ls-remote`` or the sha256 of a download."""
+    """Resolve *source* over the network: ``git ls-remote`` or the sha256 of a download.
+
+    Raises :class:`~tundravm.errors.SourceError` whose ``reason`` says why:
+    ``ref '<ref>' not found``, ``repository unreachable: <git's error>``,
+    ``HTTP <status>``, ``timed out after 60s``, or the network error. git never
+    prompts for credentials: a private or missing repository is unreachable.
+    """
     if source.inline_pin is not None:
         return source.inline_pin
     if isinstance(source, GitSource):
-        return _ls_remote(source.url, source.ref)
-    with urlopen(source.url) as response:
-        return hashlib.sha256(response.read()).hexdigest()
+        return _ls_remote(source)
+    return _download_digest(source)
 
 
-def _ls_remote(url: str, ref: str) -> str:
-    """The commit *ref* points at in the git repository at *url*."""
-    command = ["git", "ls-remote", url, ref]
-    completed = subprocess.run(command, check=False, text=True, capture_output=True)
+def _ls_remote(source: GitSource) -> str:
+    """The commit *source*'s ref points at, without prompting for credentials."""
+    command = ["git", "ls-remote", source.url, source.ref]
+    described = source.describe()
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=_NETWORK_TIMEOUT,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except subprocess.TimeoutExpired:
+        reason = f"timed out after {_NETWORK_TIMEOUT:g}s"
+        raise SourceError(
+            f"Cannot resolve {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Check the network path to the repository, then lock again.",
+        ) from None
+    except OSError as exc:
+        reason = f"cannot run git: {exc.strerror or exc}"
+        raise SourceError(
+            f"Cannot resolve {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Install git on the host that runs `tundravm lock`.",
+        ) from exc
     if completed.returncode != 0:
-        raise ValidationError(
-            "Git command failed.",
-            hint="Inspect repository/ref inputs and git installation.",
-            context={"argv": " ".join(command), "stderr": completed.stderr.strip()},
+        reason = f"repository unreachable: {_git_error(completed)}"
+        raise SourceError(
+            f"Cannot resolve {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Check the repository URL, its access rights and the network.",
+            context={"argv": " ".join(command)},
         )
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     if not lines:
-        raise ValidationError(
-            "Unable to resolve git ref.",
-            hint="Ensure the repository and ref are valid and reachable.",
-            context={"repo": url, "ref": ref},
+        reason = f"ref {source.ref!r} not found"
+        raise SourceError(
+            f"Cannot resolve {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint=f"List the refs upstream has with `git ls-remote {source.url}`.",
         )
     return lines[0].split()[0]
+
+
+def _git_error(completed: subprocess.CompletedProcess[str]) -> str:
+    """The first ``fatal:`` line of git's stderr, else its first line or the exit code."""
+    lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
+    fatal = [line for line in lines if line.startswith("fatal:")]
+    return (fatal or lines or [f"git exited {completed.returncode}"])[0]
+
+
+def _download_digest(source: HttpSource) -> str:
+    """The sha256 of the file at *source*'s url."""
+    described = source.describe()
+    try:
+        with urlopen(source.url, timeout=_NETWORK_TIMEOUT) as response:
+            return hashlib.sha256(response.read()).hexdigest()
+    except HTTPError as exc:
+        exc.close()
+        reason = f"HTTP {exc.code}"
+        raise SourceError(
+            f"Cannot resolve {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Check the URL in a browser or with `curl -I URL`; it must serve the file.",
+        ) from exc
+    except OSError as exc:
+        reason = _network_reason(exc.reason if isinstance(exc, URLError) else exc)
+        raise SourceError(
+            f"Cannot resolve {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Check the URL and the network path to its host.",
+        ) from exc
+
+
+def _network_reason(cause: object) -> str:
+    if isinstance(cause, TimeoutError):
+        return f"timed out after {_NETWORK_TIMEOUT:g}s"
+    return str(cause)
 
 
 def resolve_pins(
@@ -547,16 +632,20 @@ def resolve_pins(
     *,
     resolver: Resolver | None = None,
     offline: bool = False,
+    kept: Sequence[LockedFetch] = (),
 ) -> list[LockedFetch]:
-    """Lockfile entries for *builds*.
+    """Lockfile entries for *builds*, after the *kept* pins of sources not in *builds*.
 
     Online, every mutable source is resolved again through *resolver* (default:
     :func:`default_resolver`). Offline, inline pins and matching *previous*
-    entries are reused and anything else raises :class:`LockfileError`.
+    entries are reused. Every source is attempted; when any fails, one
+    :class:`LockfileError` lists each failed source with its reason and counts
+    the *kept* pins as resolved; its ``failures`` maps the failed names to
+    :class:`~tundravm.errors.SourceError`.
     """
     resolve = resolver or default_resolver
-    pins: list[LockedFetch] = []
-    needs_network: list[str] = []
+    pins: list[LockedFetch] = list(kept)
+    failures: dict[str, SourceError] = {}
     for name, build in sorted(builds.items()):
         if build.source.inline_pin is not None:
             pins.append(build.locked(build.source.inline_pin))
@@ -564,22 +653,59 @@ def resolve_pins(
         if offline:
             pin = build.pin_from(previous)
             if pin is None:
-                needs_network.append(name)
+                failures[name] = _failure(build.source, "not pinned in the lockfile")
             else:
                 pins.append(build.locked(pin))
             continue
-        pins.append(build.locked(resolve(build.source)))
-    if needs_network:
-        raise LockfileError(
-            f"Cannot lock offline: {len(needs_network)} source(s) need the network to "
-            f"resolve: {', '.join(needs_network)}.",
-            hint=(
-                "Run `tundravm lock RECIPE` without --offline, or pin the source inline "
-                "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...))."
-            ),
-            context={"sources": ", ".join(needs_network)},
-        )
+        try:
+            pins.append(build.locked(resolve(build.source)))
+        except SourceError as exc:
+            failures[name] = exc
+        except (TdxError, OSError) as exc:
+            failures[name] = _failure(build.source, _reason(exc))
+    if failures:
+        raise _unresolved(failures, len(kept) + len(builds), offline=offline)
     return pins
+
+
+def _reason(exc: TdxError | OSError) -> str:
+    """The message of a resolver error that is not a SourceError, without hint or context."""
+    if isinstance(exc, TdxError) and exc.args:
+        return str(exc.args[0])
+    return str(exc) or type(exc).__name__
+
+
+def _failure(source: Source, reason: str) -> SourceError:
+    described = source.describe()
+    return SourceError(
+        f"Cannot resolve {described}: {reason}.",
+        source=described,
+        reason=reason,
+        hint="Fix the source declaration or its upstream, then lock again.",
+    )
+
+
+def _unresolved(failures: Mapping[str, SourceError], total: int, *, offline: bool) -> LockfileError:
+    """One error naming every source in *failures*, out of *total* to resolve."""
+    count = len(failures)
+    noun = "source" if count == 1 else "sources"
+    if offline:
+        verb = "needs" if count == 1 else "need"
+        head = f"Cannot lock offline: {count} {noun} {verb} the network to resolve:"
+        hint = (
+            "Run `tundravm lock RECIPE` without --offline, or pin the source inline "
+            "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...))."
+        )
+    else:
+        head = f"Cannot lock: {count} {noun} could not be resolved:"
+        hint = (
+            "Fix the refs above, or drop NAME from --update to keep its existing pin, "
+            "or pass --offline to reuse existing pins."
+        )
+    lines = [head]
+    lines.extend(f"  {name}: {error.source}: {error.reason}" for name, error in failures.items())
+    lines.append(f"{total - count} of {total} sources resolved; nothing written.")
+    return LockfileError("\n".join(lines), hint=hint, failures=failures)
 
 
 def source_drift(
@@ -590,9 +716,11 @@ def source_drift(
 ) -> tuple[list[str], list[str], list[str], dict[str, str]]:
     """``(added, changed, removed, details)`` for the ``sources.<name>`` drift lines.
 
-    A declared source without a lockfile entry is added; one whose entry was
-    resolved from a different url/ref, or (with *resolver*) whose ref now
-    resolves elsewhere, is changed, detailed as ``<old sha7> -> <new sha7>``.
+    A declared source without a lockfile entry is added, detailed as
+    ``source <name> is not pinned`` unless the declaration pins it inline; one
+    whose entry was resolved from a different url/ref, or (with *resolver*) whose
+    ref now resolves elsewhere, is changed, detailed as ``<old sha7> -> <new sha7>``.
+    Without *resolver* nothing touches the network.
     """
     added: list[str] = []
     changed: list[str] = []
@@ -602,6 +730,8 @@ def source_drift(
         locked = fetches.get(name)
         if locked is None:
             added.append(section)
+            if build.source.inline_pin is None:
+                details[section] = f"source {name} is not pinned"
             continue
         if build.matches(locked) and resolver is None:
             continue
