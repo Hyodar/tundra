@@ -84,6 +84,10 @@ Lowering is deterministic and never touches the network; `Path` contents (file s
 
 The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. `dialect="nethermind-v1"` spells user and group creation as postinst lines and leaves build hooks unmarked, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
 
+### Bootable images
+
+By default every variant compiles to `Format=uki`, a bootable unified kernel image, and mkosi can only build one from an image that holds a kernel. A bootable variant therefore declares a `Kernel(...)` built from source or installs a distribution kernel package (`Package("linux-image-amd64")`, any `linux-image-*`, or Ubuntu's `linux-generic`, `linux-kvm` and `linux-virtual`). Without either, lint reports `kernel-missing`, an error, so `bake` stops at its lint step before mkosi runs. A disk that is never booted declares `Setting("Content", "Bootable", ("no",))` instead: its variant compiles to `Format=disk` and `Bootable=no` and needs no kernel. The `init` templates install the Debian kernel together with `systemd-sysv`, `udev`, `kmod` and `systemd-boot-efi`.
+
 ## Runtime init
 
 Some declarations need work at boot, before services start: generating keys, opening and mounting encrypted disks, receiving secrets. tundravm collects that work into one script, `/usr/bin/runtime-init`, run by `runtime-init.service`.

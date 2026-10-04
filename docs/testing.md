@@ -83,7 +83,7 @@ def test_committed_tree_is_current():
 `compile(recipe)` without `lock=` ignores any lockfile and builds sources from their refs, while `tundravm compile` applies `build/tundravm.lock` when it exists. Compare like with like: pass the lock when the committed tree was compiled with one.
 
 ```bash
-TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py   # accept the new tree, then review the git diff
+TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_recipe.py   # accept the new tree, then review the git diff
 ```
 
 ## Simulated artifacts
@@ -144,7 +144,7 @@ The `tundravm` pytest plugin is registered through an entry point, so installing
 
 | Fixture | Gives |
 |---|---|
-| `recipe` | A minimal `Recipe(name="test", common=Fragment("test"))` with one `default` variant |
+| `recipe` | A minimal lint-clean `Recipe(name="test", common=Fragment("test", (Package("linux-image-amd64"),)))` with one `default` variant; the kernel package keeps `kernel-missing` quiet |
 | `compiled` | `compiled(recipe, variants=None) -> CompiledTree`, compiled into a fresh directory under `tmp_path` |
 | `run_cli` | The `run_cli` helper |
 

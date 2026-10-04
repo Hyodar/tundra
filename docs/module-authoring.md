@@ -262,14 +262,14 @@ Build a small recipe around the fragment and assert on its diagnostics and its c
 ```python
 from exporter import PrometheusExporter
 
-from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant, compile, lint
+from tundravm import Disk, Fragment, Key, Package, Recipe, Secrets, Variant, compile, lint
 from tundravm.testing import assert_clean, assert_diagnostic, compile_tree
 
 
 def recipe_with(storage: Fragment) -> Recipe:
     return Recipe(
         name="t",
-        common=Fragment("t", items=(PrometheusExporter(storage=storage),)),
+        common=Fragment("t", items=(Package("linux-image-amd64"), PrometheusExporter(storage=storage))),
         variants=(Variant("default", target="qemu"),),
     )
 
@@ -307,7 +307,7 @@ $ uv run pytest -q test_exporter.py
 4 passed in 0.03s
 ```
 
-`allow=("source-unpinned",)` accepts the warning for the unlocked `tundra-tools` builds the key, disk and secrets need. To pin a fragment's whole output, compare it with a committed tree: `assert_tree(compile(recipe), "tests/golden/exporter")`, regenerated with `TUNDRAVM_UPDATE_GOLDEN=1`. See [testing](testing.md).
+The kernel package keeps `kernel-missing` quiet: every bootable variant needs one. `allow=("source-unpinned",)` accepts the warning for the unlocked `tundra-tools` builds the key, disk and secrets need. To pin a fragment's whole output, compare it with a committed tree: `assert_tree(compile(recipe), "tests/golden/exporter")`, regenerated with `TUNDRAVM_UPDATE_GOLDEN=1`. See [testing](testing.md).
 
 ## Guidelines
 

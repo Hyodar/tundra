@@ -88,6 +88,8 @@ cloud    service plus azure and gcp variants, backports and an EFI stub pinned t
 prover   cloud plus a TPM-sealed key, an encrypted disk, secrets and the tdxs attestation service
 ```
 
+Every template installs the Debian kernel and the packages a UKI boots with (`linux-image-amd64`, `systemd`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`), so it bakes a bootable UKI as written and passes `kernel-missing` (see [Lint](#lint)).
+
 It writes:
 
 - `NAME.py`, the recipe;
@@ -205,6 +207,20 @@ Target: `qemu` → `azure`
 ```
 
 `--format json` prints `{"a", "b", "targets": {A: [...], B: [...]}, "added": [...], "removed": [...], "changed": [{"declaration", "fields"}]}`. A `~` line names the fields that differ.
+
+## Lint
+
+`lint` prints one line per finding, its hint indented under it, then a summary. A variant that boots but installs no kernel is `kernel-missing`, an error:
+
+```console
+$ tundravm lint node.py
+error kernel-missing [default]: variant builds a bootable UKI but installs no kernel, so mkosi stops with 'A kernel must be installed in the image to build a UKI'
+    hint: Add Package("linux-image-amd64") for the distribution kernel, declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a non-bootable image.
+1 error, 0 warnings, 0 infos
+[exit 1]
+```
+
+`bake` lints first, so this stops it with `E_LINT` before the backend runs mkosi. See [Concepts: Bootable images](concepts.md#bootable-images) for the three fixes; the [API reference](api.md#lint-rules) lists every code.
 
 ## Lockfile drift
 

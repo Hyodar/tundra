@@ -23,6 +23,7 @@ from tundravm.backends import LimaMkosiBackend
 recipe = Recipe(
     name="node",
     common=Fragment("node", items=(
+        Package("linux-image-amd64"),  # a bootable variant needs a kernel (lint: kernel-missing)
         Package("curl"),
         File("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
         User("app", shell="/bin/false"),
