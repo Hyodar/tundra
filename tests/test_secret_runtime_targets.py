@@ -30,7 +30,7 @@ def test_secret_values_are_not_persisted_in_lockfile(tmp_path: Path) -> None:
     )
     delivery.apply(image)
 
-    lock_path = image.lock()
+    lock_path = image.lock(resolver=lambda source: "0" * 40)
     lock_text = lock_path.read_text(encoding="utf-8")
     # Schema metadata is in the lockfile via profile.secrets, but no values
     assert "api_token" in lock_text

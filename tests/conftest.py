@@ -17,3 +17,16 @@ def _plain_format_outside_github(monkeypatch: pytest.MonkeyPatch) -> None:
 def inprocess_backend() -> InProcessBackend:
     """Provide an in-process backend for tests that call bake()."""
     return InProcessBackend()
+
+
+@pytest.fixture(autouse=True)
+def _no_network_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail fast if a test resolves source pins over the network by accident."""
+    import tundravm.source as source_module
+
+    def _refuse(source: object) -> str:
+        raise AssertionError(
+            f"test tried to resolve {source!r} over the network; pass resolver= to lock()"
+        )
+
+    monkeypatch.setattr(source_module, "default_resolver", _refuse)
