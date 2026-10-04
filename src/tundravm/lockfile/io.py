@@ -10,6 +10,8 @@ from tundravm.errors import LockfileError
 from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
 from tundravm.lockfile.resolve import VARIANTS_SECTION
 
+_REGENERATE = "The lockfile is generated: run `tundravm lock RECIPE` to rewrite it."
+
 
 def serialize_lockfile(lockfile: Lockfile) -> str:
     payload = {
@@ -30,7 +32,7 @@ def parse_lockfile(raw: str) -> Lockfile:
         raise LockfileError("Invalid lockfile JSON.", hint=str(exc)) from exc
 
     if not isinstance(payload, dict):
-        raise LockfileError("Invalid lockfile payload type.")
+        raise LockfileError("Invalid lockfile payload type.", hint=_REGENERATE)
 
     version = _required_int(payload, "version")
     recipe_digest = _required_str(payload, "recipe_digest")
@@ -38,7 +40,7 @@ def parse_lockfile(raw: str) -> Lockfile:
     dependencies = _required_dependencies(payload, "dependencies")
     fetches_raw = payload.get("fetches", [])
     if not isinstance(fetches_raw, list):
-        raise LockfileError("Invalid lockfile `fetches` value.")
+        raise LockfileError("Invalid lockfile `fetches` value.", hint=_REGENERATE)
     fetches = [_parse_locked_fetch(item) for item in fetches_raw]
     sections = _optional_sections(payload, "sections")
     if version == _PROFILE_SECTIONS_VERSION:
@@ -87,7 +89,7 @@ def _fetch_payload(item: LockedFetch) -> dict[str, str]:
 
 def _parse_locked_fetch(item: Any) -> LockedFetch:
     if not isinstance(item, dict):
-        raise LockfileError("Invalid fetch entry in lockfile.")
+        raise LockfileError("Invalid fetch entry in lockfile.", hint=_REGENERATE)
     return LockedFetch(
         source=_required_str(item, "source"),
         kind=_required_str(item, "kind"),
@@ -106,34 +108,34 @@ def _optional_str(payload: dict[str, Any], key: str) -> str | None:
 def _required_str(payload: dict[str, Any], key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value:
-        raise LockfileError(f"Invalid lockfile `{key}` value.")
+        raise LockfileError(f"Invalid lockfile `{key}` value.", hint=_REGENERATE)
     return value
 
 
 def _required_int(payload: dict[str, Any], key: str) -> int:
     value = payload.get(key)
     if not isinstance(value, int):
-        raise LockfileError(f"Invalid lockfile `{key}` value.")
+        raise LockfileError(f"Invalid lockfile `{key}` value.", hint=_REGENERATE)
     return value
 
 
 def _required_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     if not isinstance(value, dict):
-        raise LockfileError(f"Invalid lockfile `{key}` value.")
+        raise LockfileError(f"Invalid lockfile `{key}` value.", hint=_REGENERATE)
     return value
 
 
 def _required_dependencies(payload: dict[str, Any], key: str) -> dict[str, list[str]]:
     value = payload.get(key)
     if not isinstance(value, dict):
-        raise LockfileError(f"Invalid lockfile `{key}` value.")
+        raise LockfileError(f"Invalid lockfile `{key}` value.", hint=_REGENERATE)
     parsed: dict[str, list[str]] = {}
     for profile, packages in value.items():
         if not isinstance(profile, str):
-            raise LockfileError("Invalid lockfile dependency variant key.")
+            raise LockfileError("Invalid lockfile dependency variant key.", hint=_REGENERATE)
         if not isinstance(packages, list) or not all(isinstance(item, str) for item in packages):
-            raise LockfileError("Invalid lockfile dependency package list.")
+            raise LockfileError("Invalid lockfile dependency package list.", hint=_REGENERATE)
         parsed[profile] = list(packages)
     return parsed
 
@@ -143,5 +145,5 @@ def _optional_sections(payload: dict[str, Any], key: str) -> dict[str, str]:
     if not isinstance(value, dict) or not all(
         isinstance(name, str) and isinstance(digest, str) for name, digest in value.items()
     ):
-        raise LockfileError(f"Invalid lockfile `{key}` value.")
+        raise LockfileError(f"Invalid lockfile `{key}` value.", hint=_REGENERATE)
     return dict(value)

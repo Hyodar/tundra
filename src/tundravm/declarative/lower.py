@@ -445,6 +445,7 @@ def _read(path: Path, *, owner: str) -> str | bytes:
     except OSError as exc:
         raise ValidationError(
             f"{owner}: cannot read {path}: {exc.strerror or exc}.",
+            hint="Relative paths resolve against the working directory; check the file exists.",
             context={"path": str(path)},
         ) from exc
 
@@ -463,6 +464,7 @@ def _directory(img: Image, item: Directory) -> None:
     if not item.source.is_dir():
         raise ValidationError(
             f"Directory {item.path}: source {item.source} is not an existing directory.",
+            hint="Relative paths resolve against the working directory; check source= exists.",
             context={"path": item.path, "source": str(item.source)},
         )
     if item.stage == "extra":
@@ -486,7 +488,10 @@ def _unit(img: Image, unit: Unit, *, after_init: bool) -> None:
         if isinstance(content, Path):
             raw = _read(content, owner=f"Unit {unit.name}")
             if isinstance(raw, bytes):
-                raise ValidationError(f"Unit {unit.name}: {content} is not UTF-8 text.")
+                raise ValidationError(
+                    f"Unit {unit.name}: {content} is not UTF-8 text.",
+                    hint="Save the unit file as UTF-8; systemd units are text.",
+                )
             content = raw
         if unit.after_init and after_init:
             content = inject_after_init(content)
@@ -529,7 +534,10 @@ def _template(img: Image, item: Template) -> None:
     if isinstance(source, Path):
         raw = _read(source, owner=f"Template {item.path}")
         if isinstance(raw, bytes):
-            raise ValidationError(f"Template {item.path}: {source} is not UTF-8 text.")
+            raise ValidationError(
+                f"Template {item.path}: {source} is not UTF-8 text.",
+                hint="Save the template as UTF-8, or ship binary content with File().",
+            )
         source = raw
     variables = dict(item.variables)
     if item.stage == "extra":
@@ -540,6 +548,7 @@ def _template(img: Image, item: Template) -> None:
     except KeyError as exc:
         raise ValidationError(
             f"Template {item.path}: no value for placeholder {exc}.",
+            hint="Add it to variables=, or write a literal brace as '{{' or '}}'.",
             context={"path": item.path},
         ) from exc
     img.skeleton(item.path, content=rendered, mode=_mode(item.mode))
@@ -826,7 +835,10 @@ def _setting_bool(setting: Setting, value: str) -> bool:
         return True
     if lowered in _FALSE:
         return False
-    raise ValidationError(f"Setting {setting.section}.{setting.key}: {value!r} is not a boolean.")
+    raise ValidationError(
+        f"Setting {setting.section}.{setting.key}: {value!r} is not a boolean.",
+        hint=f"Use one of: {', '.join(sorted(_TRUE | _FALSE))}",
+    )
 
 
 def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
@@ -882,6 +894,7 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
         if len(setting.values) != 1:
             raise ValidationError(
                 f"Setting {setting.section}.{setting.key} takes exactly one value.",
+                hint=f"Pass one value: Setting({setting.section!r}, {setting.key!r}, (VALUE,)).",
             )
         (value,) = setting.values
         changes[field] = _setting_bool(setting, value) if key in _BOOL_SETTINGS else value

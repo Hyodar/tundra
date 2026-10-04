@@ -177,7 +177,7 @@ def test_surge_example_recipe_loads() -> None:
         "qemu_basic.py",
         "multi_profile_cloud.py",
         "full_api.py",
-        "tdxs_module.py",
+        "tdxs_fragment.py",
         "strict_secrets.py",
         "nethermind_tdx.py",
     ],

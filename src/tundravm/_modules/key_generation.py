@@ -30,7 +30,10 @@ ENTRY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 def validate_entry_name(name: str, *, kind: str) -> None:
     """Reject empty names and names outside ``[A-Za-z0-9_.-]``."""
     if not name:
-        raise ValidationError(f"{kind} names must be non-empty.")
+        raise ValidationError(
+            f"{kind} names must be non-empty.",
+            hint="Use only letters, numbers, dot, underscore, and dash.",
+        )
     if ENTRY_NAME_PATTERN.fullmatch(name) is None:
         raise ValidationError(
             f"Invalid {kind} name {name!r}.",
@@ -59,11 +62,13 @@ class KeySpec:
         if self.strategy == "pipe" and not self.pipe_path:
             raise ValidationError(
                 "pipe strategy requires pipe_path.",
+                hint="Give Key(strategy='pipe') a pipe= path to read the key from.",
                 context={"key": self.name},
             )
         if self.strategy != "pipe" and self.pipe_path is not None:
             raise ValidationError(
                 "pipe_path is only valid with strategy='pipe'.",
+                hint="Drop pipe=, or pass strategy='pipe'.",
                 context={"key": self.name, "strategy": self.strategy},
             )
 
@@ -94,17 +99,24 @@ class KeyGeneration(Module):
     def __post_init__(self) -> None:
         self.keys = tuple(self.keys)
         if not self.keys:
-            raise ValidationError("KeyGeneration requires at least one key definition.")
+            raise ValidationError(
+                "KeyGeneration requires at least one key definition.",
+                hint="Declare at least one Key().",
+            )
         names: set[str] = set()
         output_paths: set[str] = set()
         for spec in self.keys:
             if spec.name in names:
-                raise ValidationError(f"Duplicate key name {spec.name!r}.")
+                raise ValidationError(
+                    f"Duplicate key name {spec.name!r}.",
+                    hint="Give each Key() a unique name.",
+                )
             names.add(spec.name)
             if spec.output is not None:
                 if spec.output in output_paths:
                     raise ValidationError(
                         "Each generated key output path must be unique.",
+                        hint="Give each Key() its own output= path.",
                         context={"key": spec.name, "path": spec.output},
                     )
                 output_paths.add(spec.output)

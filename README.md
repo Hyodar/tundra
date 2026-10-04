@@ -184,7 +184,7 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 | [`full_api.py`](examples/full_api.py) | Most declaration types in one recipe: kernel, keys, disks, secrets, builds, variants |
 | [`multi_profile_cloud.py`](examples/multi_profile_cloud.py) | Standalone variants per target, each with its own guest agent |
 | [`qemu_basic.py`](examples/qemu_basic.py) | Minimal QEMU image |
-| [`tdxs_module.py`](examples/tdxs_module.py) | The `Tdxs()` fragment |
+| [`tdxs_fragment.py`](examples/tdxs_fragment.py) | The `Tdxs()` fragment |
 | [`strict_secrets.py`](examples/strict_secrets.py) | Secret schemas and delivery targets, validated at boot |
 
 ```bash

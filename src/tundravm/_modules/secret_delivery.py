@@ -54,10 +54,14 @@ class SecretDelivery(Module):
         self.secrets = tuple(self.secrets)
         for spec in self.secrets:
             if not spec.name:
-                raise ValidationError("SecretDelivery requires non-empty secret names.")
+                raise ValidationError(
+                    "SecretDelivery requires non-empty secret names.",
+                    hint="Give each Secret() a name, e.g. Secret('api-token', ...).",
+                )
             if not spec.targets:
                 raise ValidationError(
-                    f"secret {spec.name!r} requires at least one delivery target."
+                    f"secret {spec.name!r} requires at least one delivery target.",
+                    hint="Deliver it with SecretFile(PATH) or SecretEnv(NAME) in targets=.",
                 )
 
     @property
@@ -140,7 +144,10 @@ class SecretDelivery(Module):
 
     def _render_yaml_config(self) -> str:
         if self.method != "http_post":
-            raise ValidationError("Only http_post secret delivery is supported.")
+            raise ValidationError(
+                "Only http_post secret delivery is supported.",
+                hint="Secrets() delivers over HTTP POST only.",
+            )
 
         lines = [
             "ssh:",

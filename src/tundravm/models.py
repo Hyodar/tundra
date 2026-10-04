@@ -416,6 +416,7 @@ class RecipeState:
         if name == self.default_profile and extends is not None:
             raise ValidationError(
                 f"The default profile {name!r} cannot extend another profile.",
+                hint="Drop extends= on the default profile; other profiles extend it.",
                 context={"profile": name, "extends": extends},
             )
         if extends is not None and extends != self.default_profile:

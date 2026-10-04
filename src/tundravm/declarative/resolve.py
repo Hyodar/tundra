@@ -82,7 +82,10 @@ def identity(item: Declaration) -> Identity:
             | Build()
         ):
             return (kind, item.name)
-    raise ValidationError(f"{item!r} is not a declaration.")
+    raise ValidationError(
+        f"{item!r} is not a declaration.",
+        hint="Fragment items must be declarations such as Package(), File() or Unit().",
+    )
 
 
 def describe(ident: Identity) -> str:
@@ -177,7 +180,10 @@ def ancestry(recipe: Recipe, name: str) -> tuple[Variant, ...]:
     while current is not None:
         if any(v.name == current.name for v in chain):
             names = " -> ".join(v.name for v in (*reversed(chain), current))
-            raise ValidationError(f"Variant parents form a cycle: {names}.")
+            raise ValidationError(
+                f"Variant parents form a cycle: {names}.",
+                hint="Point one variant's parent= at a variant outside the loop, or drop it.",
+            )
         chain.append(current)
         parent = current.parent
         if parent is None or parent == BASE_PARENT:
@@ -246,7 +252,10 @@ def _stable_topological[T](
         if key in placed:
             return
         if key in visiting:
-            raise ValidationError(f"Ordering cycle through {key!r}.")
+            raise ValidationError(
+                f"Ordering cycle through {key!r}.",
+                hint="Remove one of the after= dependencies that form the loop.",
+            )
         visiting.add(key)
         for dep in deps(node):
             if dep in by_name:
@@ -297,7 +306,8 @@ def order_hooks(hooks: Sequence[Hook]) -> list[Hook]:
             if dep in phase_of and PHASES.index(phase_of[dep]) > PHASES.index(hook.phase):
                 raise ValidationError(
                     f"hook {hook.name!r} ({hook.phase}) runs after {dep!r}, a later "
-                    f"{phase_of[dep]} hook."
+                    f"{phase_of[dep]} hook.",
+                    hint=f"Drop {dep!r} from after=, or move {hook.name!r} to a later phase.",
                 )
     slots: dict[str, list[int]] = {}
     for index, hook in enumerate(hooks):

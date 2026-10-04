@@ -74,7 +74,8 @@ class Composite(Fragment):
         composed = self.compose()
         if not isinstance(composed, Fragment):
             raise ValidationError(
-                f"{type(self).__name__}.compose() returned {composed!r}, not a Fragment."
+                f"{type(self).__name__}.compose() returned {composed!r}, not a Fragment.",
+                hint="Return Fragment(name, items=(...)) from compose().",
             )
         for name in _DERIVED:
             object.__setattr__(self, name, getattr(composed, name))
@@ -146,7 +147,10 @@ class EfiStub(Composite):
 
     def compose(self) -> Fragment:
         if not self.snapshot or not self.version:
-            raise ValidationError("EfiStub requires a non-empty snapshot and version.")
+            raise ValidationError(
+                "EfiStub requires a non-empty snapshot and version.",
+                hint="Pass snapshot= a snapshot.debian.org URL and version= e.g. '255.4-1'.",
+            )
         script = (
             f'EFI_SNAPSHOT_URL="{self.snapshot}"\n'
             f'EFI_PACKAGE_VERSION="{self.version}"\n'
@@ -237,7 +241,8 @@ class DevTools(Composite):
         if not self.root_password or _UNSAFE_PASSWORD & set(self.root_password):
             raise ValidationError(
                 "DevTools root_password must be non-empty one-line text without '\"', '$', "
-                "'`' or '\\'."
+                "'`' or '\\'.",
+                hint="Pick a password of plain letters, digits and punctuation on one line.",
             )
         login = _devtools.DEVTOOLS_POSTINST_SCRIPT.replace(
             f'openssl passwd -6 "{_DEFAULT_ROOT_PASSWORD}"',

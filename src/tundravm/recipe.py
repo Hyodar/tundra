@@ -131,6 +131,7 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Recipe:
         return _call_factory(value, attr, recipe_path)
     raise ValidationError(
         f"Recipe attribute {attr!r} is a {type(value).__name__}, not a Recipe or a callable.",
+        hint="Point --attr at a Recipe or a zero-argument function that returns one.",
         context={"recipe": str(recipe_path), "attr": attr},
     )
 
@@ -228,6 +229,7 @@ def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) 
         )
     raise ValidationError(
         f"Recipe factory {name}() returned {type(result).__name__}, expected Recipe.",
+        hint=f"Make {name}() return a tundravm.Recipe.",
         context={"recipe": str(recipe_path), "attr": name},
     )
 

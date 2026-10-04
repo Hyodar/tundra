@@ -6,14 +6,17 @@ Every recipe command loads the ``Recipe`` a Python file binds (see
 ``--variant NAME``, or omit it for every declared variant. ``measure`` and
 ``deploy`` read the ``bake-result.json`` manifest a ``bake`` wrote. ``init``
 bootstraps a recipe project and ``ci`` runs lint, compile and lock checks in
-one go. Exit codes: 0 success, 2 SDK error (``E_*`` codes), 1 for a failed check
-(``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``, ``doctor``)
-or an unexpected failure.
+one go; ``completion`` prints a shell completion script. With no arguments the
+help and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
+codes) or a usage error (unknown verbs and flags get a "did you mean"), 1 for a
+failed check (``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``,
+``doctor``) or an unexpected failure.
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import platform
@@ -30,6 +33,7 @@ from ._image import Image
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .check import failing, render_as, render_summary
+from .completion import SHELLS, Shell, render_completion
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
     Artifact,
@@ -59,7 +63,14 @@ from .declarative.model import Target
 from .declarative.resolve import resolve
 from .diff import _wants_color, cmd_diff, diff_against
 from .errors import TdxError, ValidationError
-from .explain import describe, render, render_markdown
+from .explain import (
+    describe,
+    diff_variants,
+    render,
+    render_markdown,
+    render_variant_diff,
+    render_variant_diff_markdown,
+)
 from .formats import annotation_path, format_help, resolve_format, workflow_command
 from .lockfile import LockDrift, recipe_digest
 from .measure import PlaceholderMeasurementWarning
@@ -83,12 +94,34 @@ MEASUREMENT_SCHEMES: tuple[Scheme, ...] = ("rtmr", "azure", "gcp")
 BACKEND_KINDS: tuple[BackendKind, ...] = get_args(BackendKind)
 LOCK_FILENAME = "tundravm.lock"
 
+QUICKSTART = """\
+quickstart:
+  tundravm init . --name node                 write node.py and check its build backend
+  tundravm inspect node.py                    show what the image will contain
+  tundravm lint node.py                       report every recipe diagnostic
+  tundravm bake node.py --backend inprocess   simulated build, no VM or root needed"""
 
-def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> int:
-    """Run the CLI and return an exit code (never raises for SDK errors)."""
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    stdout: TextIO | None = None,
+    runner: ProbeRunner | None = None,
+) -> int:
+    """Run the CLI and return an exit code (never raises for SDK errors).
+
+    *runner* replaces the host-tool probe ``doctor`` and ``init`` run (tests).
+    Usage errors exit 2 through argparse's ``SystemExit``.
+    """
     out = stdout if stdout is not None else sys.stdout
     parser = build_parser()
-    args = parser.parse_args(argv)
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    if not tokens:
+        print(parser.format_help(), file=out)
+        print(QUICKSTART, file=out)
+        return EXIT_OK
+    args = _parse(parser, tokens)
+    args.runner = runner
     handler: Callable[[argparse.Namespace, TextIO], int] = args.handler
     try:
         return handler(args, out)
@@ -100,6 +133,48 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         return 130
 
 
+def _parse(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse.Namespace:
+    """``parse_args`` with "did you mean" for an unknown verb or flag."""
+    verbs = _subcommands(parser)
+    for token in tokens:
+        if token == "--" or token in verbs:
+            break
+        if token.startswith("-"):
+            if not any(
+                flag.startswith(token.split("=")[0]) for flag in parser._option_string_actions
+            ):
+                parser.error(f"unrecognized arguments: {token}{_did_you_mean([token], parser)}")
+            continue
+        choices = ", ".join(verbs)
+        match = difflib.get_close_matches(token, list(verbs), n=1)
+        hint = f"did you mean {match[0]!r}?" if match else f"choose from {choices}"
+        parser.error(f"unknown command {token!r} ({hint})")
+    args, extras = parser.parse_known_args(tokens)
+    if extras:
+        command = verbs[args.command]
+        command.error(f"unrecognized arguments: {' '.join(extras)}{_did_you_mean(extras, command)}")
+    return args
+
+
+def _subcommands(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return dict(action.choices)
+    return {}
+
+
+def _did_you_mean(extras: Sequence[str], parser: argparse.ArgumentParser) -> str:
+    """`` (did you mean --format?)`` for the unknown flags in *extras* with a close match."""
+    flags = list(parser._option_string_actions)
+    found = [
+        match[0]
+        for token in extras
+        if token.startswith("-")
+        and (match := difflib.get_close_matches(token.split("=")[0], flags, n=1))
+    ]
+    return f" (did you mean {', '.join(dict.fromkeys(found))}?)" if found else ""
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tundravm",
@@ -107,7 +182,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "RECIPE is a Python file that binds a tundravm.Recipe to `recipe` or defines a "
             "zero-argument `build() -> Recipe` function; --attr picks another name. A "
-            "module-level `backend` is the build backend `bake` uses unless --backend is given."
+            "module-level `backend` is the build backend `bake` uses unless --backend is given. "
+            "`tundravm completion bash|zsh|fish` prints a shell completion script."
         ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -129,6 +205,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     inspect_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
+    inspect.add_argument(
+        "--diff-variants",
+        nargs=2,
+        default=None,
+        metavar=("A", "B"),
+        help=(
+            "Print which declarations differ between variants A and B after resolution "
+            "(added, removed or changed, matched by identity) instead of describing them."
+        ),
+    )
 
     lint = _add_command(
         sub,
@@ -390,6 +476,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Report format for failing steps (default: auto). " + format_help(),
     )
+
+    completion = sub.add_parser(
+        "completion",
+        help="Print a shell completion script (bash, zsh or fish).",
+        description=(
+            "Print a static completion script for the verbs, flags and flag choices of "
+            "this tundravm version; its header says where to install it."
+        ),
+        epilog=(
+            "bash: source <(tundravm completion bash) in ~/.bashrc. "
+            "zsh: source <(tundravm completion zsh) in ~/.zshrc after compinit. "
+            "fish: tundravm completion fish > ~/.config/fish/completions/tundravm.fish."
+        ),
+    )
+    completion.set_defaults(handler=_cmd_completion)
+    completion.add_argument("shell", choices=SHELLS, help="Shell to generate the script for.")
     return parser
 
 
@@ -430,6 +532,11 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     )
     init.add_argument(
         "--force", action="store_true", help="Overwrite the recipe and workflow if they exist."
+    )
+    init.add_argument(
+        "--no-doctor",
+        action="store_true",
+        help="Skip probing the chosen backend's host tools (`tundravm doctor --backend`).",
     )
 
 
@@ -511,14 +618,18 @@ def _variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...]:
     names: list[str] | None = args.variant
     if not names:
         return loaded.variants
+    _require_variants(loaded, names, args.recipe)
+    return tuple(dict.fromkeys(names))
+
+
+def _require_variants(loaded: RecipeFile, names: Sequence[str], recipe: Path) -> None:
     unknown = [name for name in names if name not in loaded.variants]
     if unknown:
         raise ValidationError(
             f"Unknown variant(s): {', '.join(unknown)}.",
             hint=f"Declared variants: {', '.join(loaded.variants)}",
-            context={"recipe": str(args.recipe)},
+            context={"recipe": str(recipe)},
         )
-    return tuple(dict.fromkeys(names))
 
 
 def _listed(img: Image, names: tuple[str, ...] | None) -> tuple[str, ...]:
@@ -527,10 +638,12 @@ def _listed(img: Image, names: tuple[str, ...] | None) -> tuple[str, ...]:
 
 def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
+    fmt = args.format or ("json" if args.json else "text")
+    if args.diff_variants is not None:
+        return _inspect_diff(loaded, args, fmt, out)
     names = _variants(loaded, args)
     img = loaded.lowered()
     variants = _listed(img, names)
-    fmt = args.format or ("json" if args.json else "text")
     described = {name: _describe(loaded, img, name) for name in variants}
     if fmt == "json":
         with img._operation_scope(variants) as active:
@@ -544,6 +657,24 @@ def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
         print("\n".join(sections).rstrip(), file=out)
         return EXIT_OK
     print("\n\n".join(render(d).rstrip() for d in described.values()), file=out)
+    return EXIT_OK
+
+
+def _inspect_diff(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: TextIO) -> int:
+    if args.variant:
+        raise ValidationError(
+            "--diff-variants and --variant cannot be combined.",
+            hint="--diff-variants A B already names both variants; drop --variant.",
+        )
+    a, b = args.diff_variants
+    _require_variants(loaded, (a, b), args.recipe)
+    diff = diff_variants(resolve(loaded.recipe, variant=a), resolve(loaded.recipe, variant=b))
+    if fmt == "json":
+        print(json.dumps(diff.to_dict(), indent=2, sort_keys=True), file=out)
+    elif fmt == "markdown":
+        print(render_variant_diff_markdown(diff, recipe=args.recipe.name), file=out)
+    else:
+        print(render_variant_diff(diff), file=out)
     return EXIT_OK
 
 
@@ -790,10 +921,16 @@ def parse_deploy_target(target: Target, params: dict[str, str]) -> DeployTarget:
             try:
                 values[name] = int(raw)
             except ValueError:
-                raise ValidationError(f"{target} parameter {name} must be an integer.") from None
+                raise ValidationError(
+                    f"{target} parameter {name} must be an integer.",
+                    hint=f"Pass a whole number, e.g. --param {name}=2",
+                ) from None
         elif kind_name == "bool":
             if raw.lower() not in _TRUE | _FALSE:
-                raise ValidationError(f"{target} parameter {name} must be true or false.")
+                raise ValidationError(
+                    f"{target} parameter {name} must be true or false.",
+                    hint=f"Use one of: {', '.join(sorted(_TRUE | _FALSE))}",
+                )
             values[name] = raw.lower() in _TRUE
         else:
             values[name] = raw
@@ -903,7 +1040,12 @@ def doctor(
 def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args) if args.recipe is not None else None
     backend = None if args.backend is None else Backend(args.backend).build_backend()
-    return doctor(loaded, out, backend=backend)
+    return doctor(loaded, out, runner=args.runner, backend=backend)
+
+
+def _cmd_completion(args: argparse.Namespace, out: TextIO) -> int:
+    print(render_completion(build_parser(), cast(Shell, args.shell)), file=out, end="")
+    return EXIT_OK
 
 
 CiStep = Callable[[RecipeFile, argparse.Namespace, str], tuple[bool, str, str]]
@@ -1019,7 +1161,20 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
         print("then commit mkosi/ and build/tundravm.lock; the workflow checks both", file=out)
         if not (root / "pyproject.toml").exists():
             print("note: the workflow runs `uv sync`; run `uv init && uv add tundravm`", file=out)
+    if not args.no_doctor:
+        _init_doctor(args.backend, args.runner, out)
     return EXIT_OK
+
+
+def _init_doctor(kind: BackendKind, runner: ProbeRunner | None, out: TextIO) -> None:
+    """Probe the backend ``init`` wired in; a missing tool is reported, never fatal."""
+    print(f"\nchecking the {kind} backend (tundravm doctor --backend {kind}):", file=out)
+    if doctor(None, out, runner=runner, backend=Backend(kind).build_backend()) != EXIT_OK:
+        print(
+            f"the {kind} backend is not ready: install the missing tools above, or bake "
+            "with --backend inprocess for a simulated build",
+            file=out,
+        )
 
 
 def _init_name(requested: str | None, root: Path) -> str:

@@ -69,7 +69,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
             assert "backend" in report
 
 
-def test_tdxs_module_emission(tmp_path: Path) -> None:
+def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     """Emit the tdxs fragment and verify config, units, and build script."""
     recipe = Recipe(
         "smoke",

@@ -738,7 +738,11 @@ def read_artifacts(manifest: Path) -> tuple[Artifact, ...]:
         payload = json.loads((base / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
         extra = payload.get(MANIFEST_KEY) or {}
     except (OSError, ValueError, AttributeError) as exc:
-        raise StateError(f"Unreadable bake result: {exc}", context={"path": str(path)}) from exc
+        raise StateError(
+            f"Unreadable bake result: {exc}",
+            hint="Run `tundravm bake RECIPE` again to rewrite bake-result.json.",
+            context={"path": str(path)},
+        ) from exc
     simulated = bool(extra.get("simulated", result.backend == INPROCESS))
     artifacts: list[Artifact] = []
     for variant, profile in sorted(result.profiles.items()):

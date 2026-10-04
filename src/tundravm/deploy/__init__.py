@@ -26,7 +26,11 @@ def get_adapter(target: str) -> DeployAdapter:
         return AzureDeployAdapter()
     if target == "gcp":
         return GcpDeployAdapter()
-    raise DeploymentError("Unsupported deploy target.", context={"target": target})
+    raise DeploymentError(
+        "Unsupported deploy target.",
+        hint="Use one of: qemu, azure, gcp",
+        context={"target": target},
+    )
 
 
 __all__ = [

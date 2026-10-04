@@ -298,6 +298,7 @@ class Install:
         if self.kind == "artifact" and self.path is not None:
             raise ValidationError(
                 "Install.artifact() takes no path: it installs the build's artifact.",
+                hint="Use Install.file(path, dest) to install a file from the source tree.",
                 context={"path": self.path},
             )
         if self.kind == "tree" and self.mode is not None:
@@ -315,11 +316,13 @@ class Install:
             if not path or path.startswith("/") or ".." in path.rstrip("/").split("/"):
                 raise ValidationError(
                     f"install path {path!r} must be relative to the source tree.",
+                    hint="Name it from the checkout root, without '/' or '..', e.g. 'bin/app'.",
                     context={"path": path},
                 )
         if not self.dest.startswith("/"):
             raise ValidationError(
                 f"install destination {self.dest!r} must be absolute.",
+                hint="Pass the path in the image, e.g. '/usr/local/bin/app'.",
                 context={"path": self.path or "", "dest": self.dest},
             )
 
@@ -366,11 +369,15 @@ class SourceBuild:
                 hint="Each artifact is cached under its destination's file name.",
             )
         if isinstance(self.source, GitSource) and not self.source.ref:
-            raise ValidationError(f"source build {self.name!r}: GitSource requires a ref.")
+            raise ValidationError(
+                f"source build {self.name!r}: GitSource requires a ref.",
+                hint="Give Git() a tag, branch or commit; `tundravm lock` pins it.",
+            )
         if isinstance(self.source, HttpSource) and self.source.sha256 is not None:
             if not SHA256_PATTERN.fullmatch(self.source.sha256):
                 raise ValidationError(
-                    f"source build {self.name!r}: sha256 must be 64 lowercase hex chars."
+                    f"source build {self.name!r}: sha256 must be 64 lowercase hex chars.",
+                    hint="Give Http() the `sha256sum FILE` output, or omit it and `tundravm lock`.",
                 )
 
     def _targets(self) -> list[tuple[str, str, str, bool]]:

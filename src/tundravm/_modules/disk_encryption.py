@@ -77,6 +77,7 @@ class DiskSpec:
             if self.mapper_name is not None:
                 raise ValidationError(
                     "Plain disks cannot request custom mapper names.",
+                    hint="Drop mapper=, or give the Disk() a key= so it is encrypted.",
                     context={"disk": self.name, "mapper_name": self.mapper_name},
                 )
 
@@ -106,7 +107,10 @@ class DiskEncryption(Module):
     def __post_init__(self) -> None:
         self.disks = tuple(self.disks)
         if not self.disks:
-            raise ValidationError("DiskEncryption requires at least one disk definition.")
+            raise ValidationError(
+                "DiskEncryption requires at least one disk definition.",
+                hint="Declare at least one Disk().",
+            )
 
         names: set[str] = set()
         mount_points: set[str] = set()
@@ -114,11 +118,15 @@ class DiskEncryption(Module):
         env_key_names: set[str] = set()
         for spec in self.disks:
             if spec.name in names:
-                raise ValidationError(f"Duplicate disk name {spec.name!r}.")
+                raise ValidationError(
+                    f"Duplicate disk name {spec.name!r}.",
+                    hint="Give each Disk() a unique name.",
+                )
             names.add(spec.name)
             if spec.mount_at in mount_points:
                 raise ValidationError(
                     "Each managed disk must use a unique mount point.",
+                    hint="Give each Disk() its own mount= path.",
                     context={"disk": spec.name, "mount_at": spec.mount_at},
                 )
             mount_points.add(spec.mount_at)
@@ -133,6 +141,7 @@ class DiskEncryption(Module):
             if effective_mapper in mapper_names:
                 raise ValidationError(
                     "Each encrypted disk must use a unique mapper name.",
+                    hint="Set a distinct mapper= on one of the clashing Disk() declarations.",
                     context={"disk": spec.name, "mapper_name": effective_mapper},
                 )
             mapper_names.add(effective_mapper)

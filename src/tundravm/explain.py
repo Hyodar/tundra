@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 from ._options import MkosiOptions
 from .compiler import PHASE_ORDER
+from .declarative.model import Declaration, Resolved
+from .declarative.resolve import describe as describe_identity
+from .declarative.resolve import identity
 from .formats import md_cell, md_table
 from .models import InitScriptEntry, Kernel, ProfileState, UnitAction, unit_name
 
@@ -622,4 +625,94 @@ def _as_dict(value: object) -> dict[str, Any]:
     return dict(cast(Mapping[str, Any], value)) if isinstance(value, Mapping) else {}
 
 
-__all__ = ["describe", "render", "render_markdown"]
+@dataclass(frozen=True, slots=True)
+class VariantDiff:
+    """Declarations of variant *b* against variant *a*, matched by ``identity()``."""
+
+    a: str
+    b: str
+    targets: tuple[tuple[str, ...], tuple[str, ...]]
+    added: tuple[str, ...]
+    removed: tuple[str, ...]
+    changed: tuple[tuple[str, tuple[str, ...]], ...]
+    """``(declaration, names of the fields that differ)`` per changed declaration."""
+
+    @property
+    def is_empty(self) -> bool:
+        same_targets = self.targets[0] == self.targets[1]
+        return same_targets and not (self.added or self.removed or self.changed)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "a": self.a,
+            "b": self.b,
+            "targets": {self.a: list(self.targets[0]), self.b: list(self.targets[1])},
+            "added": list(self.added),
+            "removed": list(self.removed),
+            "changed": [{"declaration": d, "fields": list(f)} for d, f in self.changed],
+        }
+
+
+def diff_variants(a: Resolved, b: Resolved) -> VariantDiff:
+    """Which declarations *b* adds, drops or changes relative to *a* (both resolved)."""
+    left = {identity(item): item for item in a.items}
+    right = {identity(item): item for item in b.items}
+    return VariantDiff(
+        a=a.variant,
+        b=b.variant,
+        targets=(tuple(a.targets), tuple(b.targets)),
+        added=tuple(describe_identity(key) for key in right if key not in left),
+        removed=tuple(describe_identity(key) for key in left if key not in right),
+        changed=tuple(
+            (describe_identity(key), _changed_fields(item, right[key]))
+            for key, item in left.items()
+            if key in right and item != right[key]
+        ),
+    )
+
+
+def _changed_fields(old: Declaration, new: Declaration) -> tuple[str, ...]:
+    return tuple(f.name for f in fields(old) if getattr(old, f.name) != getattr(new, f.name))
+
+
+def render_variant_diff(diff: VariantDiff) -> str:
+    """Plain text: a count line, then ``+``/``-``/``~`` lines per declaration."""
+    counts = f"{len(diff.added)} added, {len(diff.removed)} removed, {len(diff.changed)} changed"
+    lines = [f"variants {diff.a} -> {diff.b}: {counts}"]
+    if diff.targets[0] != diff.targets[1]:
+        lines.append(f"  target: {', '.join(diff.targets[0])} -> {', '.join(diff.targets[1])}")
+    lines.extend(f"  + {item}" for item in diff.added)
+    lines.extend(f"  - {item}" for item in diff.removed)
+    lines.extend(f"  ~ {item}: {', '.join(changed)}" for item, changed in diff.changed)
+    return "\n".join(lines)
+
+
+def render_variant_diff_markdown(diff: VariantDiff, *, recipe: str) -> str:
+    """A Markdown section: target line when it differs, then one table row per change."""
+    lines = [f"# tundravm: `{recipe}` variants `{diff.a}` → `{diff.b}`", ""]
+    if diff.targets[0] != diff.targets[1]:
+        old, new = (", ".join(t) for t in diff.targets)
+        lines += [f"Target: {md_cell(old, code=True)} → {md_cell(new, code=True)}", ""]
+    rows = [
+        *(("added", md_cell(item, code=True), md_cell(None)) for item in diff.added),
+        *(("removed", md_cell(item, code=True), md_cell(None)) for item in diff.removed),
+        *(
+            ("changed", md_cell(item, code=True), md_cell(", ".join(changed)))
+            for item, changed in diff.changed
+        ),
+    ]
+    lines.append(
+        md_table(("Change", "Declaration", "Fields"), rows) if rows else "No declaration differs."
+    )
+    return "\n".join(lines)
+
+
+__all__ = [
+    "VariantDiff",
+    "describe",
+    "diff_variants",
+    "render",
+    "render_markdown",
+    "render_variant_diff",
+    "render_variant_diff_markdown",
+]

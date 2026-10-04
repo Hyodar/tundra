@@ -194,7 +194,10 @@ def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, 
 
 def _validate_units(action: str, units: tuple[str, ...]) -> tuple[str, ...]:
     if not units:
-        raise ValidationError(f"{action}() requires at least one unit.")
+        raise ValidationError(
+            f"{action}() requires at least one unit.",
+            hint="Name at least one systemd unit, e.g. 'ssh.service'.",
+        )
     for unit in units:
         if not unit or not _UNIT_NAME.fullmatch(unit):
             raise ValidationError(
@@ -270,7 +273,10 @@ class Image:
         Each module records itself in ``applied_modules()``.
         """
         if not modules:
-            raise ValidationError("apply() requires at least one module.")
+            raise ValidationError(
+                "apply() requires at least one module.",
+                hint="Pass at least one module instance.",
+            )
         for module in modules:
             if not isinstance(module, Module):
                 raise ValidationError(
@@ -320,10 +326,16 @@ class Image:
 
     def install(self, *packages: str) -> Self:
         if not packages:
-            raise ValidationError("install() requires at least one package.")
+            raise ValidationError(
+                "install() requires at least one package.",
+                hint="Declare packages with Package('curl').",
+            )
         for package in packages:
             if not package:
-                raise ValidationError("Package names must be non-empty.")
+                raise ValidationError(
+                    "Package names must be non-empty.",
+                    hint="Give every Package() a non-empty name.",
+                )
         for profile in self._iter_active_profiles():
             profile.packages.update(packages)
         return self
@@ -331,10 +343,16 @@ class Image:
     def build_packages(self, *packages: str) -> Self:
         """Declare packages required at build time (removed after build)."""
         if not packages:
-            raise ValidationError("build_packages() requires at least one package.")
+            raise ValidationError(
+                "build_packages() requires at least one package.",
+                hint="Declare build-time packages with Package('golang', role='build').",
+            )
         for package in packages:
             if not package:
-                raise ValidationError("Package names must be non-empty.")
+                raise ValidationError(
+                    "Package names must be non-empty.",
+                    hint="Give every Package() a non-empty name.",
+                )
         for profile in self._iter_active_profiles():
             profile.build_packages.update(packages)
         return self
@@ -342,7 +360,10 @@ class Image:
     def mount_build_source(self, src: str, *, dest: str = "") -> Self:
         """Mount the host directory *src* into the build environment at *dest* (BuildSources)."""
         if not src:
-            raise ValidationError("mount_build_source() requires a non-empty src path.")
+            raise ValidationError(
+                "mount_build_source() requires a non-empty src path.",
+                hint="Pass the host directory to mount into the build.",
+            )
         for profile in self._iter_active_profiles():
             profile.build_sources.append((src, dest))
         return self
@@ -404,7 +425,10 @@ class Image:
         priority: int = 100,
     ) -> Self:
         if not url:
-            raise ValidationError("repository() requires a non-empty URL.")
+            raise ValidationError(
+                "repository() requires a non-empty URL.",
+                hint="Give Repository() the archive base URL, e.g. 'https://deb.debian.org/debian'.",
+            )
         repo_name = name or url.split("/")[-1] or url
         entry = RepositorySpec(
             name=repo_name,
@@ -428,11 +452,20 @@ class Image:
     ) -> Self:
         """Place a file at *dest* in the image; *src* that is not UTF-8 is copied as bytes."""
         if not dest:
-            raise ValidationError("file() requires a destination path.")
+            raise ValidationError(
+                "file() requires a destination path.",
+                hint="Give File() an absolute path in the image, e.g. File('/etc/motd', 'hi\\n').",
+            )
         if content is None and src is None:
-            raise ValidationError("file() requires content= or src=.")
+            raise ValidationError(
+                "file() requires content= or src=.",
+                hint="Give File() inline content or a host Path to copy.",
+            )
         if content is not None and src is not None:
-            raise ValidationError("file() accepts content= or src=, not both.")
+            raise ValidationError(
+                "file() accepts content= or src=, not both.",
+                hint="Pass either inline content or a host file, not both.",
+            )
         resolved_content = content if content is not None else _read_source(Path(src or ""))
         for profile in self._iter_active_profiles():
             profile.files.append(FileEntry(path=dest, content=resolved_content, mode=mode))
@@ -454,11 +487,15 @@ class Image:
         skipped whole. Symlinked files are copied, symlinked directories are not followed.
         """
         if not dest:
-            raise ValidationError("copy_tree() requires a destination path.")
+            raise ValidationError(
+                "copy_tree() requires a destination path.",
+                hint="Give Directory() an absolute path in the image, e.g. '/opt/app'.",
+            )
         root = Path(src)
         if not root.is_dir():
             raise ValidationError(
                 "copy_tree() src must be an existing directory.",
+                hint="Paths are relative to the working directory; check src= exists.",
                 context={"src": str(root)},
             )
         found = _walk_tree(root, exclude)
@@ -484,16 +521,25 @@ class Image:
         mode: str = "0644",
     ) -> Self:
         if not dest:
-            raise ValidationError("template() requires a destination path (dest= parameter).")
+            raise ValidationError(
+                "template() requires a destination path.",
+                hint="Give Template() the absolute path of the rendered file in the image.",
+            )
 
         if src is not None and template is not None:
-            raise ValidationError("template() requires exactly one of src= or template=, not both.")
+            raise ValidationError(
+                "template() accepts src= or template=, not both.",
+                hint="Pass either an inline template string or a host file, not both.",
+            )
         if src is not None:
             template_content = Path(src).read_text(encoding="utf-8")
         elif template is not None:
             template_content = template
         else:
-            raise ValidationError("template() requires either src= or template= parameter.")
+            raise ValidationError(
+                "template() requires src= or template=.",
+                hint="Give Template() an inline template string or a host Path.",
+            )
 
         resolved_vars: dict[str, str] = {}
         if variables is not None:
@@ -553,7 +599,10 @@ class Image:
     ) -> Self:
         """Create user *name* in postinst; *gid* is its primary group, by number or name."""
         if not name:
-            raise ValidationError("user() requires a non-empty user name.")
+            raise ValidationError(
+                "user() requires a non-empty user name.",
+                hint="Give User() an account name, e.g. User('app').",
+            )
         entry = UserSpec(
             name=name,
             system=system,
@@ -613,7 +662,10 @@ class Image:
         To enable a unit that a package or ``file()`` already ships, use :meth:`enable`.
         """
         if not name:
-            raise ValidationError("service() requires a non-empty service name.")
+            raise ValidationError(
+                "service() requires a non-empty service name.",
+                hint="Give Service() a name, e.g. Service('app', '/usr/bin/app').",
+            )
         if not command:
             raise ValidationError(
                 f"service() requires a non-empty command for '{name}'.",
@@ -710,9 +762,15 @@ class Image:
 
     def partition(self, name: str, *, size: str, mount_at: str, fs: str = "ext4") -> Self:
         if not name:
-            raise ValidationError("partition() requires a non-empty name.")
+            raise ValidationError(
+                "partition() requires a non-empty name.",
+                hint="Give Partition() a name, e.g. Partition('data', size='10G', mount='/data').",
+            )
         if not size or not mount_at:
-            raise ValidationError("partition() requires both size and mount_at values.")
+            raise ValidationError(
+                "partition() requires both size and mount_at values.",
+                hint="Give Partition() a size (e.g. '10G') and a mount point (e.g. '/data').",
+            )
         entry = PartitionSpec(name=name, size=size, mount_at=mount_at, fs=fs)
         for profile in self._iter_active_profiles():
             profile.partitions.append(entry)
@@ -721,7 +779,10 @@ class Image:
     def targets(self, *targets: OutputTarget) -> Self:
         """Set the artifacts the active profiles bake (``qemu``, ``azure``, ``gcp``)."""
         if not targets:
-            raise ValidationError("targets() requires at least one target.")
+            raise ValidationError(
+                "targets() requires at least one target.",
+                hint="Set Variant(target=...) to 'qemu', 'azure' or 'gcp'.",
+            )
         deduped = tuple(dict.fromkeys(targets))
         for profile in self._iter_active_profiles():
             profile.output_targets = deduped
@@ -782,7 +843,10 @@ class Image:
     def skeleton(self, dest: str, *, content: str | bytes, mode: str = "0644") -> Self:
         """Place a file in ``mkosi.skeleton/``: in the image before the package manager runs."""
         if not dest:
-            raise ValidationError("skeleton() requires a destination path.")
+            raise ValidationError(
+                "skeleton() requires a destination path.",
+                hint="Give File(..., stage='skeleton') an absolute path in the image.",
+            )
         for profile in self._iter_active_profiles():
             profile.skeleton_files.append(FileEntry(path=dest, content=content, mode=mode))
         return self
@@ -817,7 +881,10 @@ class Image:
         sequence.
         """
         if not script:
-            raise ValidationError("runtime_init() requires non-empty script content.")
+            raise ValidationError(
+                "runtime_init() requires non-empty script content.",
+                hint="Give Init() the shell script runtime-init runs at boot.",
+            )
         entry = InitScriptEntry(script=script, priority=priority)
         for profile in self._iter_active_profiles():
             profile.init_scripts.append(entry)
@@ -842,7 +909,10 @@ class Image:
     ) -> Self:
         """Run the shell *command* in build *phase* (``boot`` runs it at VM boot)."""
         if not command:
-            raise ValidationError("shell() requires a command.")
+            raise ValidationError(
+                "shell() requires a command.",
+                hint="Give Hook() a non-empty script.",
+            )
         if phase not in VALID_PHASES:
             raise ValidationError(
                 f"Invalid phase {phase!r}.",
@@ -1231,17 +1301,26 @@ class Image:
     def _normalize_path(self, path: str | Path | None, *, fallback: Path | None = None) -> Path:
         if path is None:
             if fallback is None:
-                raise ValidationError("A path value is required.")
+                raise ValidationError(
+                    "A path value is required.",
+                    hint="Pass the output directory, e.g. 'build/mkosi'.",
+                )
             return fallback
         return Path(path)
 
     def _normalize_profile_names(self, names: tuple[str, ...]) -> tuple[str, ...]:
         if not names:
-            raise ValidationError("At least one profile name is required.")
+            raise ValidationError(
+                "At least one profile name is required.",
+                hint="Name at least one variant, e.g. 'default'.",
+            )
         normalized: list[str] = []
         for name in names:
             if not name:
-                raise ValidationError("Profile names must be non-empty.")
+                raise ValidationError(
+                    "Profile names must be non-empty.",
+                    hint="Use a declared variant name, e.g. 'default'.",
+                )
             if name not in normalized:
                 normalized.append(name)
         return tuple(normalized)

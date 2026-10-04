@@ -26,6 +26,9 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - A `base`-parented variant may leave a cloud-targeted default variant's targets; it lowers standalone.
 - `examples/surge-tdx-prover` is a declarative recipe that compiles byte-for-byte to the committed nethermind-tdx tree for `default`, `azure`, `gcp` and `devtools`; `examples/fragments` holds `Raiko`, `TaikoClient` and `Nethermind`, and `examples/nethermind_tdx.py` holds `NethermindBase`.
 
+- `tundravm completion bash|zsh|fish` prints a completion script generated from the parser; bare `tundravm` prints help plus a quickstart; unknown verbs and flags exit 2 with a "did you mean" suggestion; `init` ends with a `doctor` probe of the chosen backend (`--no-doctor` skips it); `inspect --diff-variants A B` lists declarations that differ between two variants; `main(runner=)` for tests.
+- Every error raised by the package carries a hint; `tests/test_error_hints.py` enforces it.
+
 ### Changed
 
 - Lockfile version 1 → 3. Per-variant sections are named `variants.<variant>.<section>` (version 2 said `profiles.`). Version 2 files still load with their sections renamed and digests unchanged; version 1 files load too, and `lock --check` reports every section as added until you re-lock.

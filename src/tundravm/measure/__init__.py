@@ -48,7 +48,11 @@ def derive_measurements(
         return azure.derive(profile, digests_by_target, allow_placeholder=allow_placeholder)
     if backend == "gcp":
         return gcp.derive(profile, digests_by_target, allow_placeholder=allow_placeholder)
-    raise MeasurementError("Unsupported measurement backend.", context={"backend": backend})
+    raise MeasurementError(
+        "Unsupported measurement backend.",
+        hint="Use one of: rtmr, azure, gcp",
+        context={"backend": backend},
+    )
 
 
 def _artifact_data(
