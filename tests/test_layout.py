@@ -3,7 +3,6 @@ import importlib
 CORE_MODULES = [
     "tundravm.image",
     "tundravm.cache",
-    "tundravm.ir",
     "tundravm.compiler",
     "tundravm.backends",
     "tundravm.builders",
@@ -14,6 +13,13 @@ CORE_MODULES = [
     "tundravm.policy",
     "tundravm.observability",
     "tundravm.modules",
+    "tundravm.cli",
+    "tundravm.recipe",
+    "tundravm.check",
+    "tundravm.diff",
+    "tundravm.explain",
+    "tundravm.profile",
+    "tundravm.testing",
 ]
 
 
