@@ -1,21 +1,13 @@
 """Source builds: a fetched source plus a build recipe, pinned through the lockfile.
 
-Declare one with :meth:`tundravm.Image.build_from`::
-
-    img.build_from(
-        SourceBuild(
-            name="tdxs",
-            source=GitSource("https://github.com/Hyodar/tundra-tools.git", "master"),
-            build=GoBuild(package="./cmd/tdxs", output="tdxs"),
-            install=(Install.artifact("/usr/bin/tdxs"),),
-        )
-    )
+``declarative.lower`` turns each declarative ``Build`` into a :class:`SourceBuild`
+and hands it to ``Image.build_from``; the internal modules declare theirs directly.
 
 ``install=`` lists what lands in the image, in order: :meth:`Install.artifact` is
 the recipe's own output, :meth:`Install.file` and :meth:`Install.tree` copy further
 paths of the source tree.
 
-The build hook clones the symbolic ref until ``Image.lock()`` resolves it to a
+The build hook clones the symbolic ref until ``tundravm.lock()`` resolves it to a
 commit (``LockedFetch`` entries in ``tundravm.lock``); from then on the emitted
 hook fetches exactly that commit and the cache key carries it.
 """
@@ -26,10 +18,11 @@ import hashlib
 import posixpath
 import re
 import shlex
-import tempfile
+import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from typing import Literal
+from urllib.request import urlopen
 
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
 from .errors import LockfileError, ValidationError
@@ -512,19 +505,33 @@ class SourceBuild:
 
 
 def default_resolver(source: Source) -> str:
-    """Resolve *source* over the network: ``git ls-remote`` or a one-off download."""
+    """Resolve *source* over the network: ``git ls-remote`` or the sha256 of a download."""
     if source.inline_pin is not None:
         return source.inline_pin
     if isinstance(source, GitSource):
-        from .fetch.git import _resolve_commit
+        return _ls_remote(source.url, source.ref)
+    with urlopen(source.url) as response:
+        return hashlib.sha256(response.read()).hexdigest()
 
-        return _resolve_commit(repo=source.url, ref=source.ref)
-    from .fetch.http import fetch
-    from .policy import Policy
 
-    with tempfile.TemporaryDirectory(prefix="tundravm-lock-") as tmp:
-        path = fetch(source.url, sha256="", cache_dir=tmp, policy=Policy(require_integrity=False))
-        return path.name
+def _ls_remote(url: str, ref: str) -> str:
+    """The commit *ref* points at in the git repository at *url*."""
+    command = ["git", "ls-remote", url, ref]
+    completed = subprocess.run(command, check=False, text=True, capture_output=True)
+    if completed.returncode != 0:
+        raise ValidationError(
+            "Git command failed.",
+            hint="Inspect repository/ref inputs and git installation.",
+            context={"argv": " ".join(command), "stderr": completed.stderr.strip()},
+        )
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise ValidationError(
+            "Unable to resolve git ref.",
+            hint="Ensure the repository and ref are valid and reachable.",
+            context={"repo": url, "ref": ref},
+        )
+    return lines[0].split()[0]
 
 
 def resolve_pins(
@@ -601,10 +608,6 @@ def source_drift(
         details[section] = f"{locked.digest[:7]} -> {new}"
     removed = sorted(f"sources.{name}" for name in fetches if name not in builds)
     return added, changed, removed, details
-
-
-def short_pin(pin: str | None) -> str:
-    return pin[:7] if pin else "-"
 
 
 __all__ = [

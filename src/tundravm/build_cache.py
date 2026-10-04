@@ -4,9 +4,9 @@ Provides ``Cache.declare()`` for defining cached build artifacts and
 ``Cache.wrap()`` for generating shell scripts with automatic cache
 check/restore/store logic matching the upstream nethermind-tdx pattern.
 
-Path helpers (``Build.build_path``, ``Build.dest_path``, ``Build.output_path``)
-produce typed wrappers for ``$BUILDROOT/build/``, ``$DESTDIR/``, and
-``$BUILDDIR/`` respectively, enforced in ``Cache.file()`` / ``Cache.dir()``.
+Path helpers (``Build.build_path``, ``Build.dest_path``, ``Build.chroot_path``)
+produce typed wrappers for ``$BUILDROOT/build/``, ``$DESTDIR/`` and ``/build/``
+respectively, enforced in ``Cache.file()`` / ``Cache.dir()``.
 """
 
 from __future__ import annotations
@@ -37,16 +37,6 @@ class DestPath:
 
 
 @dataclass(frozen=True, slots=True)
-class OutPath:
-    """A path under ``$BUILDDIR/``."""
-
-    rel: str
-
-    def __str__(self) -> str:
-        return f"$BUILDDIR/{self.rel}"
-
-
-@dataclass(frozen=True, slots=True)
 class ChrootPath:
     """A path under ``/build/`` (inside mkosi-chroot)."""
 
@@ -70,11 +60,6 @@ class Build:
         return DestPath(path)
 
     @staticmethod
-    def output_path(path: str) -> OutPath:
-        """Return a typed ``$BUILDDIR/{path}`` reference."""
-        return OutPath(path)
-
-    @staticmethod
     def chroot_path(path: str) -> ChrootPath:
         """Return a typed ``/build/{path}`` reference (inside mkosi-chroot)."""
         return ChrootPath(path)
@@ -87,7 +72,7 @@ class Build:
 class CacheFile:
     """A single file artifact to cache."""
 
-    src: SrcPath | OutPath
+    src: SrcPath
     dest: DestPath
     name: str
     mode: str = "0755"
@@ -97,7 +82,7 @@ class CacheFile:
 class CacheDir:
     """A directory artifact to cache."""
 
-    src: SrcPath | OutPath
+    src: SrcPath
     dest: DestPath
     name: str
 
@@ -153,7 +138,7 @@ class Cache:
 
     @staticmethod
     def file(
-        src: SrcPath | OutPath,
+        src: SrcPath,
         dest: DestPath,
         *,
         name: str,
@@ -164,7 +149,7 @@ class Cache:
 
     @staticmethod
     def dir(
-        src: SrcPath | OutPath,
+        src: SrcPath,
         dest: DestPath,
         *,
         name: str,

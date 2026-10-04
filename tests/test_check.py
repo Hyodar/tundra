@@ -1,8 +1,8 @@
 """Tests for the recipe linter (``tundravm.lint`` / ``tundravm lint``).
 
 The compiler rules in ``tundravm.check`` run on the lowered recipe: ``report``
-is the CLI's lint report (resolution diagnostics, then the compiler rules,
-without ``backend-missing``); ``check(lower(recipe))`` runs the rules alone.
+is the CLI's lint report (resolution diagnostics, then the compiler rules);
+``check(lower(recipe))`` runs the rules alone.
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from tundravm import (
     lint,
     lock,
 )
-from tundravm.backends.inprocess import InProcessBackend
 from tundravm.check import Diagnostic, check, render
 from tundravm.cli import main
 from tundravm.declarative import lower
@@ -227,20 +226,6 @@ def test_distinct_or_duplicate_init_scripts_are_fine() -> None:
     assert report(subject) == []
 
 
-# h. backend-missing
-
-
-def test_backend_missing_reported_once_under_default() -> None:
-    dev = Variant("dev", add=Fragment("dev", items=(Package("htop"),)))
-    subject = recipe(Package("curl"), variants=(DEFAULT, dev), clean=False)
-    img = lower(subject)
-    diags = check(img, profiles=["default", "dev"])
-    assert [(d.code, d.profile) for d in diags] == [("backend-missing", "default")]
-    img.backend = InProcessBackend()
-    assert check(img, profiles=["default", "dev"]) == []
-    assert report(subject) == []  # a recipe's backend is a bake() argument
-
-
 # i. debloat-removes-needed-unit / debloat-removes-declared-file
 
 NEEDS_NETWORKD = Service("net", "/usr/bin/net", requires=("systemd-networkd.service",))
@@ -313,12 +298,11 @@ def test_ordering_is_deterministic() -> None:
         ("a", "info", "variant-empty"),
         ("b", "error", "file-path-relative"),
         ("b", "warning", "init-priority-collision"),
-        ("default", "warning", "backend-missing"),
         ("default", "warning", "init-priority-collision"),
     ]
     assert diags == check(img, profiles=["default", "a", "b"])
     assert [(d.variant, d.code) for d in lint(subject)] == [
-        (profile, code) for profile, _, code in keys if code != "backend-missing"
+        (profile, code) for profile, _, code in keys
     ]
 
 

@@ -306,31 +306,6 @@ class Kernel:
     tdx: bool = False
     source_repo: str = "https://github.com/gregkh/linux"
 
-    @classmethod
-    def generic(cls, version: str, *, cmdline: str | None = None) -> Kernel:
-        return cls(version=version, cmdline=cmdline)
-
-    @classmethod
-    def from_config(cls, config_file: str) -> Kernel:
-        return cls(config_file=config_file)
-
-    @classmethod
-    def tdx_kernel(
-        cls,
-        version: str,
-        *,
-        cmdline: str | None = None,
-        config_file: str | Path | None = None,
-        source_repo: str = "https://github.com/gregkh/linux",
-    ) -> Kernel:
-        return cls(
-            version=version,
-            tdx=True,
-            cmdline=cmdline,
-            config_file=config_file,
-            source_repo=source_repo,
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class InitScriptEntry:
@@ -569,12 +544,6 @@ class BakeResult:
     backend: str | None = None
     created_at: str | None = None
     duration_s: float | None = field(default=None, compare=False)
-
-    def artifact_for(self, *, profile: str, target: OutputTarget) -> ArtifactRef | None:
-        profile_result = self.profiles.get(profile)
-        if profile_result is None:
-            return None
-        return profile_result.artifacts.get(target)
 
     def save(self, build_dir: str | Path) -> Path:
         """Write ``<build_dir>/bake-result.json``; paths inside build_dir are stored relative."""

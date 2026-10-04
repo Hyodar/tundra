@@ -6,13 +6,9 @@ from .lima import LimaMkosiBackend
 from .local_linux import LocalLinuxBackend
 from .nix import NixMkosiBackend
 
-# Backward-compat alias
-LimaBackend = LimaMkosiBackend
-
 __all__ = [
     "BuildBackend",
     "InProcessBackend",
-    "LimaBackend",
     "LimaMkosiBackend",
     "LocalLinuxBackend",
     "MountSpec",

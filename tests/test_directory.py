@@ -83,7 +83,6 @@ def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
     compile(recipe).write(tmp_path / "tree")
     emitted = tmp_path / "tree" / "default" / "mkosi.extra" / "lib" / "firmware" / "firmware.bin"
     assert emitted.read_bytes() == blob
-    assert "firmware.bin" in image.summary()
 
 
 def test_scoped_to_variant(tmp_path: Path) -> None:

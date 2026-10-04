@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tundravm import Package, Recipe, ValidationError, load_recipe
-from tundravm.recipe import load_declarative, load_image
+from tundravm.recipe import load_image
 
 ROOT = Path(__file__).resolve().parent.parent
 HEADER = "from tundravm import Fragment, Package, Recipe\n"
@@ -166,7 +166,6 @@ def test_surge_example_recipe_loads() -> None:
     recipe = ROOT / "examples" / "surge-tdx-prover" / "image.py"
     loaded = load_recipe(recipe, extra_paths=[ROOT])
     assert isinstance(loaded, Recipe)
-    assert isinstance(load_declarative(recipe, extra_paths=[ROOT]), Recipe)
     assert {v.name for v in loaded.variants} == {"default", "azure", "gcp", "devtools"}
     img = load_image(recipe, extra_paths=[ROOT])
     assert {"default", "azure", "gcp", "devtools"} == set(img.state.profiles)

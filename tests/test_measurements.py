@@ -75,45 +75,31 @@ def test_measure_supports_rtmr_azure_and_gcp(tmp_path: Path) -> None:
     assert {m.artifact_digest for m in (rtmr_measurements, azure, gcp)} == {artifact.sha256}
 
 
-def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
+def test_measure_export_is_stable(tmp_path: Path) -> None:
     artifact = _baked(tmp_path)
     with pytest.warns(PlaceholderMeasurementWarning):
-        measurements = _derived(artifact, "rtmr")
-
-    json_first = measurements.to_json()
-    json_second = measurements.to_json()
-    cbor_first = measurements.to_cbor()
-    cbor_second = measurements.to_cbor()
-
-    assert json_first == json_second
-    assert cbor_first == cbor_second
+        first = measure(artifact, allow_placeholder=True)
+        second = measure(artifact, allow_placeholder=True)
 
     json_path = tmp_path / "measurements.json"
-    cbor_path = tmp_path / "measurements.cbor"
-    measurements.to_json(json_path)
-    measurements.to_cbor(cbor_path)
-    assert json_path.exists()
-    assert cbor_path.exists()
+    assert first.to_json(json_path) == second.to_json()
+    assert json_path.read_text(encoding="utf-8") == first.to_json()
     with pytest.warns(PlaceholderMeasurementWarning):
-        assert dict(measure(artifact, allow_placeholder=True).values) == measurements.values
+        assert dict(first.values) == _derived(artifact, "rtmr").values
 
 
-def test_measure_verification_reports_actionable_mismatches(tmp_path: Path) -> None:
+def test_measure_verification_reports_mismatched_registers(tmp_path: Path) -> None:
     artifact = _baked(tmp_path)
     with pytest.warns(PlaceholderMeasurementWarning):
-        measurements = _derived(artifact, "rtmr")
+        measurements = measure(artifact, allow_placeholder=True)
+    values = dict(measurements.values)
+    first = sorted(values)[0]
 
-    result = measurements.verify(
-        {
-            "RTMR0": "00" * 32,
-            "RTMR9": "11" * 32,
-        },
+    assert measurements.verify(values) == ()
+    assert measurements.verify({**values, first: "00" * 48, "RTMR9": "11" * 48}) == (
+        first,
+        "RTMR9",
     )
-
-    reasons = {mismatch.reason for mismatch in result.mismatches}
-    assert result.ok is False
-    assert "value_mismatch" in reasons
-    assert "missing_actual" in reasons
 
 
 def test_rtmr_derive_uses_measured_boot_for_uki(tmp_path: Path) -> None:

@@ -1,4 +1,9 @@
-"""Core image object for SDK recipe declarations."""
+"""Internal lowering target; not a public API.
+
+``tundravm.declarative.lower`` turns a declarative ``Recipe`` into an
+:class:`Image` (every variant a profile) and the lifecycle compiles, locks and
+bakes it. Nothing outside ``tundravm`` should build one by hand.
+"""
 
 from __future__ import annotations
 
@@ -20,40 +25,30 @@ from typing import Final, Literal, Self
 from ._modules.base import Module
 from ._modules.init import Init
 from ._options import MkosiOptions
-from ._source import Resolver, SourceBuild, resolve_pins, source_drift
+from ._source import Resolver, SourceBuild, source_drift
 from .backends.base import BuildBackend
-from .check import Diagnostic
 from .check import check as run_checks
 from .compiler import (
-    DEFAULT_TDX_INIT_SCRIPT,
     PHASE_ORDER,
     EmitConfig,
     MkosiEmission,
     emit_mkosi_tree,
 )
-from .deploy import get_adapter
-from .diff import TreeDiff, diff_against
 from .errors import (
-    DeploymentError,
     LintError,
     LockfileError,
-    MeasurementError,
     PolicyError,
     ValidationError,
 )
-from .explain import describe, render
 from .lockfile import (
     LockDrift,
     LockedFetch,
     Lockfile,
-    build_lockfile,
     compare_lock,
     read_lockfile,
     recipe_digest,
     unselected_sources,
-    write_lockfile,
 )
-from .measure import Measurements, derive_measurements
 from .models import (
     VALID_PHASES,
     Arch,
@@ -63,8 +58,6 @@ from .models import (
     CommandSpec,
     CompileResult,
     DebloatConfig,
-    DeployRequest,
-    DeployResult,
     FileEntry,
     GroupSpec,
     HookSpec,
@@ -213,26 +206,13 @@ def _validate_units(action: str, units: tuple[str, ...]) -> tuple[str, ...]:
 
 @dataclass(slots=True, kw_only=True)
 class Image:
-    """Declarative recipe for a TDX-enabled VM image.
+    """The lowered recipe: per-profile state the compiler emits as an mkosi tree.
 
-    An Image accumulates configuration (packages, files, services, modules)
-    through a fluent API and then emits a build tree via ``compile()``,
-    executes the build via ``bake()``, and optionally produces measurements
-    or deployments.
-
-    Typical lifecycle::
-
-        img = Image(base="debian/bookworm", backend=LimaMkosiBackend())
-        img.install("curl")
-        Tdxs().apply(img)
-        img.bake()
-
-    mkosi-only knobs (seed, cache directory, environment, ...) live in
-    :class:`~tundravm._options.MkosiOptions`: ``Image(mkosi=MkosiOptions(...))``
-    or ``img.set_mkosi(MkosiOptions(...))``.
+    ``declarative.lower`` fills it through the declaration methods (``install``,
+    ``file``, ``service``, ``apply`` for the internal modules, ...) inside
+    ``profiles(name)`` blocks; ``compile()`` emits the tree and ``bake()`` runs
+    the backend. mkosi-only knobs live in :class:`~tundravm._options.MkosiOptions`.
     """
-
-    DEFAULT_TDX_INIT = DEFAULT_TDX_INIT_SCRIPT
 
     base: str = "debian/bookworm"
     arch: Arch = "x86_64"
@@ -250,7 +230,6 @@ class Image:
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _modules: dict[str, list[Module]] = field(init=False, default_factory=dict, repr=False)
-    _last_bake_result: BakeResult | None = field(init=False, default=None, repr=False)
     _last_compile_digest: str | None = field(init=False, default=None, repr=False)
     _last_compile_path: Path | None = field(init=False, default=None, repr=False)
     _last_compile_emission: MkosiEmission | None = field(init=False, default=None, repr=False)
@@ -274,25 +253,6 @@ class Image:
     def profile_names(self) -> tuple[str, ...]:
         """Every profile declared so far, sorted."""
         return tuple(sorted(self._state.profiles))
-
-    def set_policy(self, policy: Policy) -> Self:
-        self.policy = policy
-        return self
-
-    def set_kernel(self, kernel: Kernel) -> Self:
-        """Build *kernel* instead of the distribution kernel (image-wide)."""
-        self.kernel = kernel
-        return self
-
-    def set_mkosi(self, options: MkosiOptions) -> Self:
-        """Replace ``self.mkosi`` (image-wide), e.g. ``set_mkosi(replace(img.mkosi, seed=...))``."""
-        if not isinstance(options, MkosiOptions):
-            raise ValidationError(
-                f"set_mkosi() expects MkosiOptions, got {type(options).__name__}.",
-                hint="Pass tundravm.MkosiOptions(...).",
-            )
-        self.mkosi = options
-        return self
 
     def apply(self, *modules: Module) -> Self:
         """Apply one or more modules to the active profiles, in order.
@@ -340,24 +300,17 @@ class Image:
         return selected
 
     @contextmanager
-    def profiles(
-        self, *names: str, extends: str | None | Literal[_Unset.TOKEN] = _UNSET
-    ) -> Iterator[Self]:
-        """Make *names* the active profiles inside the block; see :meth:`profile` for *extends*."""
+    def profiles(self, *names: str) -> Iterator[Self]:
+        """Make *names* (declared with :meth:`profile` unless default) active inside the block."""
         selected = self._normalize_profile_names(names)
         previous_profiles = self._active_profiles
         for profile_name in selected:
-            self._ensure_profile(profile_name, extends=extends)
+            self._ensure_profile(profile_name, extends=_UNSET)
         self._active_profiles = selected
         try:
             yield self
         finally:
             self._active_profiles = previous_profiles
-
-    @contextmanager
-    def all_profiles(self) -> Iterator[Self]:
-        with self.profiles(*tuple(sorted(self._state.profiles))):
-            yield self
 
     def install(self, *packages: str) -> Self:
         if not packages:
@@ -749,19 +702,6 @@ class Image:
                     profile.unit_states.append(spec)
         return self
 
-    def pin_mirror(self, url: str, *, tools_tree: bool = True) -> Self:
-        """Resolve packages from *url* (``Mirror=``), and the tools tree too by default.
-
-        Equivalent to setting ``img.mirror`` (and ``img.tools_tree_mirror``); applies to
-        every profile.
-        """
-        if not url:
-            raise ValidationError("pin_mirror() requires a non-empty URL.")
-        self.mirror = url
-        if tools_tree:
-            self.tools_tree_mirror = url
-        return self
-
     def partition(self, name: str, *, size: str, mount_at: str, fs: str = "ext4") -> Self:
         if not name:
             raise ValidationError("partition() requires a non-empty name.")
@@ -833,52 +773,12 @@ class Image:
             "systemd_bins_keep": list(config.systemd_bins_keep),
         }
 
-    def explain(self, *, profile: str | None = None) -> dict[str, object]:
-        """Describe what this recipe will produce for *profile*, without compiling."""
-        return describe(self, profile=self._resolve_operation_profile(profile))
-
-    def summary(self, *, profile: str | None = None) -> str:
-        """Plain-text summary of ``explain(profile=...)``."""
-        return render(self.explain(profile=profile))
-
-    def check(self, *, profiles: Sequence[str] | None = None) -> list[Diagnostic]:
-        """Lint the recipe; see ``tundravm.check`` for the rules."""
-        return run_checks(self, profiles=profiles)
-
-    def diff(self, against: str | Path, *, profiles: Sequence[str] | None = None) -> TreeDiff:
-        """Diff the compiled tree at *against* to what this recipe compiles to now.
-
-        Only *profiles* (default: the active ones) are compiled and compared; nothing
-        is written to *against*.
-        """
-        return diff_against(self, against, profiles=profiles)
-
-    def skeleton(
-        self,
-        dest: str,
-        *,
-        content: str | bytes | None = None,
-        src: str | Path | None = None,
-        mode: str = "0644",
-    ) -> Self:
-        """Place a file in the image before the package manager runs.
-
-        This maps to mkosi.skeleton/ and is useful for custom apt sources,
-        resolv.conf for build DNS, or directory structure that packages expect.
-        """
+    def skeleton(self, dest: str, *, content: str | bytes, mode: str = "0644") -> Self:
+        """Place a file in ``mkosi.skeleton/``: in the image before the package manager runs."""
         if not dest:
             raise ValidationError("skeleton() requires a destination path.")
-        if (content is None) == (src is None):
-            raise ValidationError("skeleton() requires exactly one of content= or src=.")
-        resolved_content: str | bytes
-        if content is not None:
-            resolved_content = content
-        else:
-            if src is None:
-                raise ValidationError("skeleton() requires src when content is not provided.")
-            resolved_content = Path(src).read_text(encoding="utf-8")
         for profile in self._iter_active_profiles():
-            profile.skeleton_files.append(FileEntry(path=dest, content=resolved_content, mode=mode))
+            profile.skeleton_files.append(FileEntry(path=dest, content=content, mode=mode))
         return self
 
     def strip_image_version(self, *, enabled: bool = True) -> Self:
@@ -900,75 +800,6 @@ class Image:
             return self
         script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release" """
         return self.shell(script, phase="finalize")
-
-    def efi_stub(self, *, snapshot_url: str, package_version: str) -> Self:
-        """Pin systemd-boot-efi from a specific Debian snapshot for reproducible EFI stub."""
-        if not snapshot_url:
-            raise ValidationError("efi_stub() requires a non-empty snapshot_url.")
-        if not package_version:
-            raise ValidationError("efi_stub() requires a non-empty package_version.")
-        script = (
-            f'EFI_SNAPSHOT_URL="{snapshot_url}"\n'
-            f'EFI_PACKAGE_VERSION="{package_version}"\n'
-            'DEB_URL="${EFI_SNAPSHOT_URL}/pool/main/s/systemd/'
-            'systemd-boot-efi_${EFI_PACKAGE_VERSION}_amd64.deb"\n'
-            "WORK_DIR=$(mktemp -d)\n"
-            'curl -sSfL -o "$WORK_DIR/systemd-boot-efi.deb" "$DEB_URL"\n'
-            'cp "$WORK_DIR/systemd-boot-efi.deb" "$BUILDROOT/tmp/"\n'
-            "mkosi-chroot dpkg -i /tmp/systemd-boot-efi.deb\n"
-            'cp "$BUILDROOT/usr/lib/systemd/boot/efi/systemd-bootx64.efi" '
-            '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
-            'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
-        )
-        return self.shell(script, phase="postinst")
-
-    def backports(self, *, mirror: str | None = None, release: str | None = None) -> Self:
-        """Generate Debian backports sources dynamically at sync time.
-
-        Registers a sync phase hook matching upstream add-backports.sh behavior.
-        """
-        lines: list[str] = []
-        if mirror is not None:
-            lines.append(f'MIRROR="{mirror}"')
-        else:
-            lines.append('MIRROR=$(jq -r .Mirror "$BUILDDIR/config.json" 2>/dev/null || echo "")')
-            lines.append('if [ -z "$MIRROR" ] || [ "$MIRROR" = "null" ]; then')
-            lines.append('    MIRROR="http://deb.debian.org/debian"')
-            lines.append("fi")
-
-        if release is not None:
-            lines.append(f'RELEASE="{release}"')
-
-        lines.append(
-            'cat > "$BUILDDIR/debian-backports.sources" <<EOF\n'
-            "Types: deb deb-src\n"
-            "URIs: $MIRROR\n"
-            "Suites: ${RELEASE}-backports\n"
-            "Components: main\n"
-            "Enabled: yes\n"
-            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
-            "\n"
-            "Types: deb deb-src\n"
-            "URIs: $MIRROR\n"
-            "Suites: sid\n"
-            "Components: main\n"
-            "Enabled: yes\n"
-            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
-            "EOF"
-        )
-
-        self.shell("\n".join(lines), phase="sync")
-
-        # Auto-add sandbox_trees entry for the generated file
-        backports_entry = (
-            "mkosi.builddir/debian-backports.sources"
-            ":/etc/apt/sources.list.d/debian-backports.sources"
-        )
-        trees = self.mkosi.sandbox_trees
-        if backports_entry not in trees:
-            self.mkosi = replace(self.mkosi, sandbox_trees=(*trees, backports_entry))
-
-        return self
 
     def runtime_init(self, script: str, *, priority: int = 100) -> Self:
         """Append a bash fragment to the active profiles' runtime-init script.
@@ -995,10 +826,6 @@ class Image:
         entries = self._state.effective_profile(selected).init_scripts
         return tuple({(e.priority, e.script): e for e in entries}.values())
 
-    def has_init_scripts(self) -> bool:
-        """Whether any active profile runs runtime-init fragments."""
-        return any(self.init_scripts(name) for name in self._active_profiles)
-
     def shell(
         self,
         command: str,
@@ -1021,38 +848,6 @@ class Image:
             profile.phases.setdefault(phase, []).append(spec)
             profile.hooks.append(HookSpec(phase=phase, command=spec))
         return self
-
-    def lock(
-        self,
-        path: str | Path | None = None,
-        *,
-        resolver: Resolver | None = None,
-        offline: bool = False,
-        profiles: Sequence[str] | None = None,
-    ) -> Path:
-        """Write the lockfile for *profiles* (default: the active ones) and return its path.
-
-        The default path is ``<build_dir>/tundravm.lock``. Besides the whole
-        recipe digest that ``bake(frozen=True)`` enforces, the lockfile records a
-        digest per section (``base``, ``profiles.<name>.packages``, ...) so
-        :meth:`lock_status` and stale frozen bakes can say what changed.
-
-        Every source build is pinned in ``fetches``: git refs resolve to a commit
-        (``git ls-remote``), unhashed downloads are fetched once and hashed.
-        *resolver* replaces that network step (tests, mirrors). ``offline=True``
-        (or ``policy.network_mode="offline"``) reuses the existing lockfile's pins
-        and raises :class:`LockfileError` for any source that would need the network.
-        """
-        lock_path = self._normalize_path(path, fallback=self._default_lock_path())
-        offline = offline or self.policy.network_mode == "offline"
-        with self._operation_scope(profiles):
-            payload = self._recipe_payload(profile_names=self._active_profiles)
-            previous = self.source_pins(lock_path) if offline else {}
-            fetches = resolve_pins(
-                self.source_builds(), previous, resolver=resolver, offline=offline
-            )
-        lock = build_lockfile(recipe=payload, fetches=fetches)
-        return write_lockfile(lock, lock_path)
 
     def lock_status(
         self,
@@ -1191,7 +986,7 @@ class Image:
         ):
             ensure_bake_policy(policy=self.policy, frozen=frozen)
             with progress.phase("lint", "lint", profile=scope):
-                diagnostics = self.check()
+                diagnostics = run_checks(self)
                 for diagnostic in diagnostics:
                     if diagnostic.level in ("warning", "error"):
                         progress.emit(
@@ -1360,7 +1155,6 @@ class Image:
                 duration_s=total,
             )
             bake_result.save(destination)
-            self._last_bake_result = bake_result
             noun = "variant" if len(profiles_result) == 1 else "variants"
             progress.emit(
                 "done",
@@ -1370,85 +1164,6 @@ class Image:
                 duration_s=f"{total:.3f}",
             )
         return bake_result
-
-    def measure(
-        self,
-        *,
-        backend: Literal["rtmr", "azure", "gcp"],
-        profile: str | None = None,
-        allow_placeholder: bool = False,
-    ) -> Measurements:
-        """Derive expected TDX measurements from the last bake result.
-
-        Values come from ``measured-boot`` or ``dstack-mr`` (``rtmr`` only). Without
-        a tool this raises ``MeasurementError`` (``E_MEASUREMENT``), unless
-        *allow_placeholder* is true: then the result has ``source="placeholder"``
-        (digest-derived values no TEE reproduces) and a
-        ``PlaceholderMeasurementWarning`` is emitted. ``azure`` and ``gcp`` are
-        always placeholders.
-        """
-        selected_profile = self._resolve_operation_profile(profile)
-        profile_result = self.last_bake().profiles.get(selected_profile)
-        if profile_result is None:
-            raise MeasurementError(
-                "Profile has no baked artifacts for measurement.",
-                hint="Bake the selected profile before measure().",
-                context={"operation": "measure", "profile": selected_profile, "backend": backend},
-            )
-        return derive_measurements(
-            backend=backend,
-            profile=selected_profile,
-            profile_result=profile_result,
-            allow_placeholder=allow_placeholder,
-        )
-
-    def deploy(
-        self,
-        *,
-        target: OutputTarget,
-        profile: str | None = None,
-        parameters: Mapping[str, str] | None = None,
-        # Common deploy parameters (passed through to adapter)
-        memory: str | None = None,
-        cpus: int | None = None,
-    ) -> DeployResult:
-        """Deploy baked artifacts to the specified target platform."""
-        selected_profile = self._resolve_operation_profile(profile)
-        artifact = self.last_bake().artifact_for(profile=selected_profile, target=target)
-        if artifact is None:
-            raise DeploymentError(
-                "Requested deploy target artifact was not baked.",
-                hint="Add the target to the Variant (target= or targets=) and bake again.",
-                context={"operation": "deploy", "profile": selected_profile, "target": target},
-            )
-
-        params = dict(parameters or {})
-        if memory is not None:
-            params["memory"] = memory
-        if cpus is not None:
-            params["cpus"] = str(cpus)
-
-        request = DeployRequest(
-            profile=selected_profile,
-            target=target,
-            artifact_path=artifact.path,
-            parameters=params,
-        )
-        return get_adapter(target).deploy(request)
-
-    def last_bake(self, build_dir: str | Path | None = None) -> BakeResult:
-        """Return the latest bake result, loading ``bake-result.json`` from disk if needed.
-
-        With *build_dir* the result is (re)loaded from that directory, which is how a
-        bake made with ``bake(output_dir=...)`` is picked up by ``measure()`` and
-        ``deploy()`` in a later process. Raises ``StateError`` (``E_STATE``) when
-        nothing has been baked yet.
-        """
-        if build_dir is not None:
-            self._last_bake_result = BakeResult.load(build_dir)
-        elif self._last_bake_result is None:
-            self._last_bake_result = BakeResult.load(self.build_dir)
-        return self._last_bake_result
 
     def _emit_config(self) -> EmitConfig:
         """Build an EmitConfig from the Image's settings and ``self.mkosi``."""

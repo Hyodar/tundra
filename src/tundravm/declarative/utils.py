@@ -4,12 +4,10 @@ Each is a :class:`Composite`: a :class:`Fragment` whose configuration is its own
 dataclass fields, so ``EfiStub(snapshot=MIRROR, version="255.4-1")`` reads like a
 declaration and goes wherever a ``Fragment`` does.
 
-They lower to the bytes the fluent ``efi_stub()``/``backports()`` methods and the
-fluent ``Tdxs``/``DevTools`` modules emit; the unit and config text comes from the
-fluent renderers so the two stay identical. Under ``Mkosi(dialect="nethermind-v1")``
-the account lines and build hooks match those modules exactly; the ``current``
-dialect lowers the ``Group``/``User`` declarations through the compiler's account
-prelude instead.
+The committed ``examples/surge-tdx-prover/mkosi`` trees pin their output. Under
+``Mkosi(dialect="nethermind-v1")`` the account lines and build hooks are the
+historical ones; the ``current`` dialect lowers the ``Group``/``User``
+declarations through the compiler's account prelude instead.
 """
 
 from __future__ import annotations
@@ -207,16 +205,16 @@ class Tdxs(Composite):
                     ),
                     install=(Install("build/tdxs", "/usr/bin/tdxs"),),
                 ),
-                File(spec.config_path, spec._render_config()),
+                File(spec.config_path, spec.render_config()),
                 Unit(
                     spec.service_name,
-                    spec._render_service_unit(after=()),
+                    spec.render_service_unit(),
                     enabled=True,
                     after_init=self.after_init,
                 ),
                 Unit(
                     spec.socket_name,
-                    spec._render_socket_unit(after=()),
+                    spec.render_socket_unit(),
                     enabled=True,
                     after_init=self.after_init,
                 ),

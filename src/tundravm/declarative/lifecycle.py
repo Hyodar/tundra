@@ -41,7 +41,6 @@ from tundravm.lockfile import (
     LockedFetch,
     Lockfile,
     build_lockfile,
-    parse_lockfile,
     serialize_lockfile,
 )
 from tundravm.measure import derive_measurements
@@ -396,8 +395,6 @@ def check_report(
 
     The recipe's resolution diagnostics come first, in resolution order. When
     none is an error, the lowered image's ``check()`` findings follow, sorted.
-    A recipe holds no backend (it is a :func:`bake` argument), so its lint
-    leaves out ``backend-missing``.
     """
     found: list[_check.Diagnostic] = []
     names: tuple[str, ...] | None = None
@@ -420,8 +417,6 @@ def check_report(
     assert img is not None
     profiles = names if names is not None else (None if variants is None else tuple(variants))
     checked = _check.check(img, profiles=profiles)
-    if recipe is not None:
-        checked = [d for d in checked if d.code != "backend-missing"]
     checked = sorted(checked, key=lambda d: (d.profile, _LEVELS[d.level], d.code, d.subject or ""))
     found.extend(d for d in checked if d not in found)
     return found
@@ -600,10 +595,6 @@ def write_lock(locked: Lock, path: Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(locked.text(), encoding="utf-8")
-
-
-def parse_lock(text: str) -> Lock:
-    return Lock.of(parse_lockfile(text))
 
 
 # ── bake ─────────────────────────────────────────────────────────────────

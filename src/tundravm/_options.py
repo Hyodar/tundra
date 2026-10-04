@@ -1,4 +1,4 @@
-"""mkosi build-tree options grouped off :class:`~tundravm._image.Image`."""
+"""mkosi build-tree options of the lowered :class:`~tundravm._image.Image` (internal)."""
 
 from __future__ import annotations
 
@@ -13,8 +13,7 @@ EmitMode = Literal["per_directory", "native_profiles"]
 class MkosiOptions:
     """Knobs for the emitted mkosi tree; none of them enter the recipe digest.
 
-    Pass ``Image(mkosi=MkosiOptions(seed=...))`` or adjust an existing image
-    with ``img.set_mkosi(replace(img.mkosi, seed=...))``.
+    ``declarative.lower`` builds them from the recipe's ``Setting`` items.
     """
 
     with_network: bool = True
@@ -30,11 +29,11 @@ class MkosiOptions:
     seed: str | None = None
     """``Seed=`` for partition UUIDs; ``None`` uses the SDK's fixed seed."""
     sandbox_trees: tuple[str, ...] = ()
-    """``SandboxTrees=`` entries (``backports()`` appends its sources file)."""
+    """``SandboxTrees=`` entries."""
     package_cache_directory: str | None = None
     """``PackageCacheDirectory=``."""
     init_script: str | None = None
-    """Written to ``mkosi.skeleton/init`` (mode 0755), e.g. ``Image.DEFAULT_TDX_INIT``."""
+    """Written to ``mkosi.skeleton/init`` (mode 0755)."""
     environment: Mapping[str, str] = field(default_factory=dict)
     """``Environment=`` key/value pairs."""
     environment_passthrough: tuple[str, ...] | None = None

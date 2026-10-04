@@ -1,17 +1,11 @@
-"""Built-in TDX attestation service (tdxs) module."""
+"""Renders the tdxs config and unit files for the ``declarative.utils.Tdxs`` fragment."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-from tundravm._modules.base import TUNDRA_TOOLS, Module
-from tundravm._modules.resolve import resolve_after
-from tundravm._source import GitSource, GoBuild, Install, SourceBuild
 from tundravm.errors import ValidationError
-
-if TYPE_CHECKING:
-    from tundravm._image import Image
 
 TDXS_BUILD_PACKAGES = (
     "golang",
@@ -29,8 +23,8 @@ TDXS_VALID_TYPES = {"azure", "gcp", "simulator", "tdx"}
 
 
 @dataclass(slots=True)
-class Tdxs(Module):
-    """Configure the ``tundra-tools`` TDX attestation service."""
+class Tdxs:
+    """The ``tundra-tools`` TDX attestation service's config and unit files."""
 
     issuer_type: (
         Literal["tdx", "azure", "gcp", "simulator", "dcap", "azure-tdx", "gcp-tdx"] | None
@@ -52,14 +46,6 @@ class Tdxs(Module):
     verify_imds: bool = False
     verify_identity_token: bool = False
     expected_measurements: dict[str, str] | None = None
-    after: tuple[str, ...] = ()
-    source: GitSource = TUNDRA_TOOLS
-
-    def configure(self, image: Image) -> None:
-        """Build tdxs, then declare its config, unit files and service user."""
-        image.build_packages(*TDXS_BUILD_PACKAGES)
-        image.build_from(self.source_spec())
-        self._add_runtime_config(image)
 
     def _canonical_role_type(self, value: str | None) -> str | None:
         if value is None:
@@ -73,45 +59,7 @@ class Tdxs(Module):
             )
         return canonical
 
-    def source_spec(self) -> SourceBuild:
-        """The tdxs source build: ``go build ./cmd/tdxs`` from ``source``.
-
-        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
-        hand-written one this module emitted before source builds existed.
-        """
-        return SourceBuild(
-            name="tdxs",
-            source=self.source,
-            build=GoBuild(package="./cmd/tdxs", output="tdxs"),
-            install=(Install.artifact("/usr/bin/tdxs"),),
-            mark_unpinned=False,
-        )
-
-    def _resolve_after(self, image: Image) -> tuple[str, ...]:
-        return resolve_after(self.after, image)
-
-    def _add_runtime_config(self, image: Image) -> None:
-        resolved_after = self._resolve_after(image)
-        image.file(self.config_path, content=self._render_config())
-
-        service_path = f"/usr/lib/systemd/system/{self.service_name}"
-        socket_path = f"/usr/lib/systemd/system/{self.socket_name}"
-        image.file(service_path, content=self._render_service_unit(after=resolved_after))
-        image.file(socket_path, content=self._render_socket_unit(after=resolved_after))
-
-        image.shell(
-            f"mkosi-chroot groupadd --system {self.group}",
-            phase="postinst",
-        )
-        image.shell(
-            f"mkosi-chroot useradd --system --home-dir /home/{self.user} "
-            f"--shell /usr/sbin/nologin --gid {self.group} {self.user}",
-            phase="postinst",
-        )
-        image.enable(self.service_name)
-        image.enable(self.socket_name)
-
-    def _render_config(self) -> str:
+    def render_config(self) -> str:
         lines = [
             "transport:",
             "  type: socket",
@@ -151,13 +99,8 @@ class Tdxs(Module):
             lines.append("verify_identity_token: true")
         return lines
 
-    def _render_service_unit(self, *, after: tuple[str, ...] | None = None) -> str:
-        effective = after if after is not None else self.after
-        requires = [*effective, self.socket_name]
-        lines = ["[Unit]", "Description=TDXS"]
-        if effective:
-            lines.append(f"After={' '.join(effective)}")
-        lines.append(f"Requires={' '.join(requires)}")
+    def render_service_unit(self) -> str:
+        lines = ["[Unit]", "Description=TDXS", f"Requires={self.socket_name}"]
         lines.append("")
         lines.extend(
             [
@@ -178,13 +121,8 @@ class Tdxs(Module):
         )
         return "\n".join(lines)
 
-    def _render_socket_unit(self, *, after: tuple[str, ...] | None = None) -> str:
-        effective = after if after is not None else self.after
-        lines = ["[Unit]", "Description=TDXS Socket"]
-        if effective:
-            lines.append(f"After={' '.join(effective)}")
-            lines.append(f"Requires={' '.join(effective)}")
-        lines.append("")
+    def render_socket_unit(self) -> str:
+        lines = ["[Unit]", "Description=TDXS Socket", ""]
         lines.extend(
             [
                 "[Socket]",

@@ -8,7 +8,6 @@ from tundravm.build_cache import (
     CacheFile,
     ChrootPath,
     DestPath,
-    OutPath,
     SrcPath,
 )
 
@@ -23,10 +22,6 @@ def test_dest_path_str() -> None:
     assert str(Build.dest_path("usr/bin/app")) == "$DESTDIR/usr/bin/app"
 
 
-def test_output_path_str() -> None:
-    assert str(Build.output_path("go-cache")) == "$BUILDDIR/go-cache"
-
-
 def test_chroot_path_str() -> None:
     assert str(Build.chroot_path("raiko")) == "/build/raiko"
 
@@ -34,7 +29,6 @@ def test_chroot_path_str() -> None:
 def test_path_types() -> None:
     assert isinstance(Build.build_path("x"), SrcPath)
     assert isinstance(Build.dest_path("x"), DestPath)
-    assert isinstance(Build.output_path("x"), OutPath)
     assert isinstance(Build.chroot_path("x"), ChrootPath)
 
 
@@ -185,19 +179,3 @@ def test_wrap_structure_if_not_then_fi() -> None:
     assert result.startswith("if ! (")
     assert "make build" in result
     assert "fi && " in result
-
-
-def test_wrap_with_output_path_src() -> None:
-    """Cache.file src can be an OutPath too."""
-    decl = Cache.declare(
-        "pkg-v1",
-        (
-            Cache.file(
-                src=Build.output_path("pkg-out/binary"),
-                dest=Build.dest_path("usr/bin/app"),
-                name="app",
-            ),
-        ),
-    )
-    result = decl.wrap("go build")
-    assert "$BUILDDIR/pkg-out/binary" in result

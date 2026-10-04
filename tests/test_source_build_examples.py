@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -10,13 +11,13 @@ from typing import Literal
 import pytest
 from examples.fragments import Nethermind, Raiko, TaikoClient
 
-from tundravm._source import DotnetBuild, GitSource, GoBuild, Source, SourceBuild
-from tundravm._source import Install as SourceInstall
 from tundravm.declarative import (
     Build,
     Disk,
+    Dotnet,
     Fragment,
     Git,
+    Go,
     Install,
     Key,
     Mkosi,
@@ -26,7 +27,6 @@ from tundravm.declarative import (
     Tree,
     compile,
     lock,
-    lower,
 )
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import ValidationError
@@ -91,8 +91,15 @@ def _hooks(tree: Tree) -> str:
     return content.decode().split("\n\n", 1)[1].rstrip("\n")
 
 
-def _pin_all(source: Source) -> str:
+def _pin_all(source: object) -> str:
     return SHA_A
+
+
+def _source_builds(recipe: Recipe) -> dict[str, dict[str, object]]:
+    """The source builds the lockfile records for the default variant, by name."""
+    payload = json.loads(lock(recipe, resolver=_pin_all).text())
+    builds: dict[str, dict[str, object]] = payload["recipe"]["profiles"]["default"]["source_builds"]
+    return builds
 
 
 # ── Example modules ─────────────────────────────────────────────────
@@ -122,62 +129,77 @@ def test_current_dialect_marks_unpinned_app_builds() -> None:
     assert "\n# unpinned: feat/tdx-proving\n" + TAIKO_CLIENT_LEGACY_HOOK + "\n" in hooks
 
 
-def test_example_modules_pin_through_the_lockfile() -> None:
+@pytest.mark.parametrize(
+    ("name", "url", "cache_dir"),
+    [
+        (
+            "taiko-client",
+            "https://github.com/NethermindEth/surge-taiko-mono",
+            "taiko-client-feat_tdx-proving",
+        ),
+        (
+            "nethermind",
+            "https://github.com/NethermindEth/nethermind.git",
+            "nethermind-1.32.3-linux-x64",
+        ),
+    ],
+)
+def test_example_modules_pin_through_the_lockfile(name: str, url: str, cache_dir: str) -> None:
     recipe = _surge_stack()
-    builds = lower(recipe).source_builds()
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
     assert "git clone" not in pinned
-    for name in ("taiko-client", "nethermind"):
-        spec = builds[name]
-        assert isinstance(spec.source, GitSource)
-        assert spec.render(SHA_A) in pinned.splitlines()
-        assert f"fetch -q --depth=1 {spec.source.url} {SHA_A}" in spec.render(SHA_A)
-        assert f"{spec.cache_key}-{SHA_A[:12]}".replace("/", "_") in spec.render(SHA_A)
+    (hook,) = (line for line in pinned.splitlines() if f'"$BUILDROOT/build/{name}"' in line)
+    assert f'git -C "$BUILDROOT/build/{name}" fetch -q --depth=1 {url} {SHA_A}' in hook
+    assert f'"$BUILDDIR/{cache_dir}-{SHA_A[:12]}"' in hook
 
 
 def test_every_module_that_builds_from_source_is_a_source_build() -> None:
     key = Key("key_persistent", output="/tmp/key_persistent")
     disk = Disk("disk_persistent", "/persistent", key=key)
     recipe = Recipe("tools", Fragment("tools", items=(Tdxs(), key, disk, Secrets(store=disk))))
-    builds = lower(recipe).source_builds()
-    assert sorted(builds) == [
+    assert sorted(_source_builds(recipe)) == [
         "disk-encryption",
         "key-generation",
         "secret-delivery",
         "tdxs",
     ]
+    lines = _hooks(compile(recipe)).splitlines()
+    hooks = [line for line in lines if not line.startswith("# unpinned: ")]
+    assert lines[0] == "# unpinned: master"
     emitted = ("tdxs", "key-generation", "disk-encryption", "secret-delivery")
-    assert _hooks(compile(recipe)) == "\n".join(builds[name].render() for name in emitted)
+    assert len(hooks) == len(emitted)
+    for hook, name in zip(hooks, emitted, strict=True):
+        assert f'"$BUILDROOT/build/{name}" && ' in hook
 
 
 # ── GoBuild / DotnetBuild generalizations ───────────────────────────
 
 
 def test_go_build_output_dir_and_mkdir() -> None:
-    default = GoBuild(output="tool", package="./cmd/tool")
+    default = Go(output="tool", package="./cmd/tool")
     assert default.artifact == "build/tool"
     assert default.command("/build/tool") == (
         'cd /build/tool && mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" '
         "-o ./build/tool ./cmd/tool"
     )
-    custom = GoBuild(output="tool", package="cmd/main.go", output_dir="bin", mkdir=False)
+    custom = Go(output="tool", package="cmd/main.go", output_dir="bin", mkdir=False)
     assert custom.artifact == "bin/tool"
     assert custom.command("/build/tool") == (
         'cd /build/tool && go build -trimpath -ldflags "-s -w -buildid=" -o bin/tool cmd/main.go'
     )
-    made = GoBuild(output="tool", output_dir="out/bin")
+    made = Go(output="tool", output_dir="out/bin")
     assert made.command("/w").startswith("cd /w && mkdir -p out/bin && go build")
-    spec = SourceBuild(
-        name="tool",
-        source=GitSource(REPO, "main"),
-        build=custom,
-        install=(SourceInstall.artifact("/usr/bin/tool"),),
+    build = Build(
+        "tool",
+        Git(REPO, "main"),
+        recipe=custom,
+        install=(Install(custom.artifact, "/usr/bin/tool"),),
     )
-    assert '"$BUILDROOT/build/tool/bin/tool"' in spec.render()
+    assert '"$BUILDROOT/build/tool/bin/tool"' in _hook(build)
 
 
 def test_dotnet_build_restore_args_and_properties() -> None:
-    build = DotnetBuild(
+    build = Dotnet(
         project="src/App",
         output="app",
         restore_args=("--force",),
@@ -193,31 +215,35 @@ def test_dotnet_build_restore_args_and_properties() -> None:
 
 
 def test_new_recipe_fields_stay_out_of_the_payload_at_their_defaults() -> None:
-    go = SourceBuild(
-        name="tool",
-        source=GitSource(REPO, "main"),
-        build=GoBuild(output="tool"),
-        install=(SourceInstall.artifact("/usr/bin/tool"),),
-    ).to_payload()
+    go_recipe = Go(output="tool")
+    go = _payload(
+        Build(
+            "tool",
+            Git(REPO, "main"),
+            recipe=go_recipe,
+            install=(Install("build/tool", "/usr/bin/tool"),),
+        )
+    )
     go_build = go["build"]
     assert isinstance(go_build, dict)
     assert set(go_build) == {"kind", "output", "package", "ldflags", "tags", "env", "packages"}
     assert go["install"] == [
-        {"kind": "artifact", "path": None, "dest": "/usr/bin/tool", "mode": "0755"}
+        {"kind": "file", "path": "build/tool", "dest": "/usr/bin/tool", "mode": "0755"}
     ]
     assert "install_to" not in go and "mode" not in go
-    dotnet = DotnetBuild(project="p", output="o", restore_args=("--force",))
-    spec = SourceBuild(
-        name="app",
-        source=GitSource(REPO, "main"),
-        build=dotnet,
-        install=(SourceInstall.artifact("/usr/bin/o"),),
-    )
-    build = spec.to_payload()["build"]
+    dotnet = Dotnet(project="p", output="o", restore_args=("--force",))
+    build = _payload(
+        Build(
+            "app",
+            Git(REPO, "main"),
+            recipe=dotnet,
+            install=(Install(dotnet.artifact, "/usr/bin/o"),),
+        )
+    )["build"]
     assert isinstance(build, dict)
     assert build["restore_args"] == ["--force"]
     assert "properties" not in build
-    script = _spec(Build("app", Git(REPO, "main"), script="make", install=_one())).to_payload()
+    script = _payload(Build("app", Git(REPO, "main"), script="make", install=_one()))
     assert script["build"] == {"kind": "script", "script": "make", "output": "app", "packages": []}
 
 
@@ -228,10 +254,18 @@ def _one() -> tuple[Install, ...]:
     return (Install("app", "/usr/bin/app"),)
 
 
-def _spec(build: Build) -> SourceBuild:
-    """The source build *build* lowers to."""
-    recipe = Recipe("app", Fragment("app", items=(build,)), mkosi=Mkosi(dialect="nethermind-v1"))
-    return lower(recipe).source_builds()[build.name]
+def _single(build: Build) -> Recipe:
+    return Recipe("app", Fragment("app", items=(build,)), mkosi=Mkosi(dialect="nethermind-v1"))
+
+
+def _hook(build: Build) -> str:
+    """The unpinned build hook *build* compiles to."""
+    return _hooks(compile(_single(build)))
+
+
+def _payload(build: Build) -> dict[str, object]:
+    """The lockfile's record of *build*."""
+    return _source_builds(_single(build))[build.name]
 
 
 def _multi(*install: Install) -> Build:
@@ -239,17 +273,15 @@ def _multi(*install: Install) -> Build:
 
 
 def test_install_steps_render_files_modes_and_directories() -> None:
-    spec = _spec(
-        _multi(
-            Install("out/app", "/usr/bin/app"),
-            Install("conf/app.toml", "/etc/app/app.toml", mode=0o600),
-            Install("share", "/usr/share/app-data/", mode=None, directory=True),
-            Install("out/helper", "/usr/libexec/helper"),
-        )
+    build = _multi(
+        Install("out/app", "/usr/bin/app"),
+        Install("conf/app.toml", "/etc/app/app.toml", mode=0o600),
+        Install("share", "/usr/share/app-data/", mode=None, directory=True),
+        Install("out/helper", "/usr/libexec/helper"),
     )
     url_hash = hashlib.sha256(REPO.encode()).hexdigest()[:12]
     key = f'"$BUILDDIR/app-{url_hash}-main"'
-    assert spec.render() == (
+    assert _hook(build) == (
         f'if ! ([ -d {key} ] && [ "$(ls -A {key} 2>/dev/null)" ]); then '
         f'git clone --depth=1 -b main {REPO} "$BUILDROOT/build/app" && '
         "mkosi-chroot bash -c 'cd /build/app && make' && "
@@ -267,19 +299,17 @@ def test_install_steps_render_files_modes_and_directories() -> None:
 
 
 def test_install_modes_directories_and_payload() -> None:
-    spec = _spec(
-        _multi(
-            Install("out/app", "/usr/bin/app", mode=0o750),
-            Install("conf/app.toml", "/etc/app/app.toml", mode=0o600),
-            Install("share/", "/usr/share/app-data", mode=None, directory=True),
-        )
+    build = _multi(
+        Install("out/app", "/usr/bin/app", mode=0o750),
+        Install("conf/app.toml", "/etc/app/app.toml", mode=0o600),
+        Install("share/", "/usr/share/app-data", mode=None, directory=True),
     )
-    hook = spec.render()
+    hook = _hook(build)
     assert 'install -D -m 0750 "$BUILDROOT/build/app/out/app"' in hook
     assert 'install -D -m 0600 "$BUILDROOT/build/app/conf/app.toml"' in hook
     assert 'cp -r "$BUILDROOT/build/app/share"/* ' in hook
     assert hook.endswith('/app-data/* "$DESTDIR/usr/share/app-data"/')
-    assert spec.to_payload()["install"] == [
+    assert _payload(build)["install"] == [
         {"kind": "file", "path": "out/app", "dest": "/usr/bin/app", "mode": "0750"},
         {"kind": "file", "path": "conf/app.toml", "dest": "/etc/app/app.toml", "mode": "0600"},
         {"kind": "tree", "path": "share/", "dest": "/usr/share/app-data", "mode": None},

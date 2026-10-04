@@ -1,20 +1,14 @@
-"""The ``tundravm.declarative.utils`` fragments and the surge recipe lower to the fluent trees."""
+"""The ``tundravm.declarative.utils`` fragments and the surge recipe against the golden trees."""
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
-from typing import cast
 
 import pytest
+from examples.nethermind_tdx import EFI_STUB_VERSION, PINNED_MIRROR
 
-from tundravm._image import Image
-from tundravm._modules import DevTools as FluentDevTools
-from tundravm._modules import Tdxs as FluentTdxs
 from tundravm.declarative import (
     Build,
     Fragment,
@@ -22,14 +16,16 @@ from tundravm.declarative import (
     Group,
     Hook,
     Install,
+    Key,
     Mkosi,
     Package,
     Recipe,
+    Tree,
     User,
     Variant,
-    lower,
+    compile,
+    load,
 )
-from tundravm.declarative.lower import groupadd_line, useradd_line
 from tundravm.declarative.utils import (
     TUNDRA_TOOLS,
     Backports,
@@ -38,28 +34,15 @@ from tundravm.declarative.utils import (
     EfiStub,
     Tdxs,
 )
-from tundravm.diff import diff_trees
 from tundravm.errors import ValidationError
-from tundravm.recipe import load_image
+from tundravm.testing import assert_tree, assert_tree_matches
 
 ROOT = Path(__file__).resolve().parent.parent
 SURGE = ROOT / "examples" / "surge-tdx-prover"
+GOLDEN = SURGE / "mkosi"
+SURGE_VARIANTS = ("default", "azure", "gcp", "devtools")
 SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
 HISTORICAL = Mkosi(dialect="nethermind-v1")
-
-
-def _surge_fluent() -> ModuleType:
-    """``tests/fixtures/surge_fluent.py``: the fluent parity oracle."""
-    path = Path(__file__).parent / "fixtures" / "surge_fluent.py"
-    spec = importlib.util.spec_from_file_location("surge_fluent", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def blank_image(**options: object) -> Image:
-    return cast(Image, _surge_fluent().blank_image(**options))
 
 
 def _recipe(*items: Fragment, variants: tuple[Variant, ...] = (Variant("default"),)) -> Recipe:
@@ -67,77 +50,108 @@ def _recipe(*items: Fragment, variants: tuple[Variant, ...] = (Variant("default"
     return Recipe(name="module", common=common, variants=variants, mkosi=HISTORICAL)
 
 
-def _fluent(configure: Callable[[Image], object]) -> Image:
-    img = blank_image(base="debian/trixie", reproducible=True)
-    configure(img)
-    return img
+def _text(tree: Tree, path: str) -> str:
+    content = next(e.content for e in tree.entries if e.path == path)
+    assert content is not None, path
+    return content.decode()
 
 
-def _assert_same_tree(fluent: Image, recipe: Recipe, tmp_path: Path) -> None:
-    fluent.compile(tmp_path / "fluent")
-    lower(recipe).compile(tmp_path / "declarative")
-    diff = diff_trees(tmp_path / "fluent", tmp_path / "declarative")
-    assert diff.is_clean, diff.render("text")
+def _files(tree: Tree, variant: str = "default") -> dict[str, bytes]:
+    """The variant's files, keyed by their path inside the variant directory."""
+    prefix = f"{variant}/"
+    return {
+        e.path.removeprefix(prefix): e.content
+        for e in tree.entries
+        if e.path.startswith(prefix) and e.content is not None
+    }
+
+
+# ── The utils fragments ─────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
-    ("configure", "fragment"),
+    ("fragment", "variant", "paths"),
     [
-        (lambda img: FluentTdxs().apply(img), Tdxs()),
         (
-            lambda img: FluentTdxs(
-                issuer_type="azure",
-                validator_type="azure",
-                expected_measurements={"rtmr0": "ab"},
-                check_revocations=True,
-                verify_imds=True,
-            ).apply(img),
-            Tdxs(
-                issuer="azure",
-                validator="azure",
-                expected_measurements=(("rtmr0", "ab"),),
-                check_revocations=True,
-                verify_imds=True,
+            Tdxs(),
+            "default",
+            (
+                "mkosi.extra/etc/tdxs/config.yaml",
+                "mkosi.extra/usr/lib/systemd/system/tdxs.service",
+                "mkosi.extra/usr/lib/systemd/system/tdxs.socket",
             ),
         ),
-        (lambda img: FluentDevTools().apply(img), DevTools()),
-        (
-            lambda img: img.efi_stub(snapshot_url=SNAPSHOT, package_version="255.4-1"),
-            EfiStub(snapshot=SNAPSHOT, version="255.4-1"),
-        ),
-        (lambda img: img.backports(), Backports()),
-        (
-            lambda img: img.backports(mirror="http://m", release="trixie"),
-            Backports(mirror="http://m", release="trixie"),
-        ),
-    ],  # fmt: skip
-    ids=["tdxs", "tdxs-validator", "devtools", "efi-stub", "backports", "backports-pinned"],
+        (DevTools(), "devtools", ("mkosi.extra/usr/lib/systemd/system/serial-console.service",)),
+        (Backports(), "default", ("scripts/01-sync.sh",)),
+    ],
+    ids=["tdxs", "devtools", "backports"],
 )
-def test_fragment_lowers_like_the_fluent_module(
-    configure: Callable[[Image], object], fragment: Fragment, tmp_path: Path
+def test_fragment_files_match_the_surge_golden_tree(
+    fragment: Fragment, variant: str, paths: tuple[str, ...]
 ) -> None:
-    _assert_same_tree(_fluent(configure), _recipe(fragment), tmp_path)
+    files = _files(compile(_recipe(fragment)))
+    base = _files(compile(_recipe()))
+    assert sorted(set(files) - set(base) - {"scripts/04-build.sh"}) == sorted(paths)
+    for path in paths:
+        assert files[path] == (GOLDEN / variant / path).read_bytes(), path
 
 
-def test_tdxs_after_init_matches_module_rendering(tmp_path: Path) -> None:
-    from tundravm.declarative import Key
+def test_efi_stub_hook_matches_the_surge_golden_tree() -> None:
+    (hook,) = EfiStub(snapshot=PINNED_MIRROR, version=EFI_STUB_VERSION).items
+    assert isinstance(hook, Hook)
+    postinst = (GOLDEN / "default" / "scripts" / "06-postinst.sh").read_text()
+    assert hook.script.strip() + "\n" in postinst
+    tree = compile(_recipe(EfiStub(snapshot=PINNED_MIRROR, version=EFI_STUB_VERSION)))
+    assert hook.script.strip() + "\n" in _text(tree, "default/scripts/06-postinst.sh")
 
-    def configure(img: Image) -> None:
-        img.runtime_init("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml\n", priority=10)
-        FluentTdxs(after=("runtime-init.service",)).apply(img)
 
-    img = lower(_recipe(Tdxs(after_init=True), Fragment("keys", items=(Key("k"),))))
-    units = {
-        f.path: f.content
-        for f in img.state.profiles["default"].files
-        if f.path.startswith("/usr/lib/systemd/system/tdxs")
-    }
-    expected = {
-        f.path: f.content
-        for f in _fluent(configure).state.profiles["default"].files
-        if f.path.startswith("/usr/lib/systemd/system/tdxs")
-    }
-    assert units == expected
+def test_tdxs_issuer_and_validator_render_the_config() -> None:
+    tdxs = Tdxs(
+        issuer="azure",
+        validator="azure",
+        expected_measurements=(("rtmr0", "ab"),),
+        check_revocations=True,
+        verify_imds=True,
+    )
+    config = _text(compile(_recipe(tdxs)), "default/mkosi.extra/etc/tdxs/config.yaml")
+    assert config == (
+        "transport:\n"
+        "  type: socket\n"
+        "  config:\n"
+        "    systemd: true\n"
+        "issuer:\n"
+        "  type: azure\n"
+        "validator:\n"
+        "  type: azure\n"
+        "  config:\n"
+        "    expected_measurements:\n"
+        '      rtmr0: "ab"\n'
+        "    check_revocations: true\n"
+        "    verify_imds: true\n"
+    )
+
+
+def test_backports_pins_mirror_and_release() -> None:
+    default = _text(compile(_recipe(Backports())), "default/scripts/01-sync.sh")
+    assert 'jq -r .Mirror "$BUILDDIR/config.json"' in default
+    pinned = _text(
+        compile(_recipe(Backports(mirror="http://m", release="trixie"))),
+        "default/scripts/01-sync.sh",
+    )
+    assert 'MIRROR="http://m"\nRELEASE="trixie"\n' in pinned
+    assert "jq" not in pinned
+    assert pinned.split("cat > ", 1)[1] == default.split("cat > ", 1)[1]
+
+
+def test_tdxs_after_init_orders_after_runtime_init() -> None:
+    tree = compile(_recipe(Tdxs(after_init=True), Fragment("keys", items=(Key("k"),))))
+    units = "default/mkosi.extra/usr/lib/systemd/system"
+    service = _text(tree, f"{units}/tdxs.service")
+    socket = _text(tree, f"{units}/tdxs.socket")
+    assert "After=runtime-init.service\nRequires=runtime-init.service tdxs.socket\n" in service
+    assert "After=runtime-init.service\nRequires=runtime-init.service\n" in socket
+    plain = compile(_recipe(Tdxs(), Fragment("keys", items=(Key("k"),))))
+    assert "runtime-init" not in _text(plain, f"{units}/tdxs.service")
 
 
 def test_devtools_root_password() -> None:
@@ -182,26 +196,35 @@ def test_composite_subclass_works_as_a_fragment() -> None:
     tools = Tools(packages=("strace", "gdb"))
     assert repr(tools).endswith(".Tools(packages=('strace', 'gdb'))")
     recipe = Recipe(name="m", common=Fragment("m", items=(tools, tools)))
-    assert {"strace", "gdb"} <= lower(recipe).state.effective_profile("default").packages
+    conf = _text(compile(recipe), "default/mkosi.conf").splitlines()
+    assert {"    strace", "    gdb"} <= set(conf)
     variant = Recipe(name="m", common=Fragment("m"), variants=(Variant("v", add=Tools()),))
-    lower(variant)
+    assert "    strace" in _text(compile(variant), "v/mkosi.conf").splitlines()
 
 
 def test_historical_dialect_spells_accounts_as_postinst_lines() -> None:
-    assert groupadd_line(Group("tdx")) == "mkosi-chroot groupadd --system tdx"
-    assert groupadd_line(Group("x", system=False, gid=7)) == "mkosi-chroot groupadd --gid 7 x"
-    user = User("svc", home="/home/svc", uid=9, primary_group="tdx", groups=("eth", "x"))
-    assert useradd_line(user) == (
-        "mkosi-chroot useradd --system --home-dir /home/svc --shell /usr/sbin/nologin "
-        "--uid 9 --gid tdx --groups eth,x svc"
+    accounts = Fragment(
+        "accounts",
+        items=(
+            Group("tdx"),
+            Group("x", system=False, gid=7),
+            Group("eth"),
+            User("svc", home="/home/svc", uid=9, primary_group="tdx", groups=("eth", "x")),
+        ),
     )
+    postinst = _text(compile(_recipe(accounts)), "default/scripts/06-postinst.sh")
+    assert postinst.splitlines()[3:7] == [
+        "mkosi-chroot groupadd --system tdx",
+        "mkosi-chroot groupadd --gid 7 x",
+        "mkosi-chroot groupadd --system eth",
+        "mkosi-chroot useradd --system --home-dir /home/svc --shell /usr/sbin/nologin "
+        "--uid 9 --gid tdx --groups eth,x svc",
+    ]
 
 
-def test_current_dialect_uses_the_account_prelude(tmp_path: Path) -> None:
+def test_current_dialect_uses_the_account_prelude() -> None:
     recipe = Recipe(name="m", common=Fragment("m", items=(Tdxs(),)))
-    lower(recipe).compile(tmp_path)
-    postinst = (tmp_path / "default" / "scripts" / "06-postinst.sh").read_text()
-    lines = postinst.splitlines()
+    lines = _text(compile(recipe), "default/scripts/06-postinst.sh").splitlines()
     assert lines[3] == "mkosi-chroot groupadd --system tdx"
     assert lines[4].startswith("mkosi-chroot useradd --system --home-dir /home/tdxs --create-home")
 
@@ -214,10 +237,14 @@ def test_historical_dialect_lowers_account_replacement_standalone() -> None:
             Variant("other", parent="default", replace=(User("svc", uid=5),)),
         ),
     )
-    img = lower(recipe)
-    assert img.state.profiles["other"].extends is None
-    commands = [" ".join(c.argv) for c in img.state.effective_profile("other").phases["postinst"]]
-    assert any("--uid 5 svc" in command for command in commands)
+    tree = compile(recipe)
+    useradds = [
+        line
+        for line in _text(tree, "other/scripts/06-postinst.sh").splitlines()
+        if "useradd" in line
+    ]
+    assert useradds == ["mkosi-chroot useradd --system --shell /usr/sbin/nologin --uid 5 svc"]
+    assert "--uid" not in _text(tree, "default/scripts/06-postinst.sh")
 
 
 def test_build_cache_key_and_unpinned_marker() -> None:
@@ -228,12 +255,13 @@ def test_build_cache_key_and_unpinned_marker() -> None:
         install=(Install("tool", "/usr/bin/tool"),),
         cache_key="tool-feat/x",
     )
-    historical = lower(_recipe(Fragment("b", items=(build,)))).source_builds()["tool"]
-    assert historical.cache_key == "tool-feat/x"
-    assert not historical.render().startswith("# unpinned")
-    assert '"$BUILDDIR/tool-feat_x"' in historical.render()
+    historical = _text(
+        compile(_recipe(Fragment("b", items=(build,)))), "default/scripts/04-build.sh"
+    )
+    assert "# unpinned" not in historical
+    assert '"$BUILDDIR/tool-feat_x"' in historical
     current = Recipe(name="m", common=Fragment("b", items=(build,)))
-    assert lower(current).source_builds()["tool"].render().startswith("# unpinned: feat/x\n")
+    assert "\n# unpinned: feat/x\n" in _text(compile(current), "default/scripts/04-build.sh")
     with pytest.raises(ValidationError, match="cache_key"):
         Build("t", build.source, script="make", install=build.install, cache_key="a b")
 
@@ -241,34 +269,21 @@ def test_build_cache_key_and_unpinned_marker() -> None:
 # ── The surge recipe ────────────────────────────────────────────────
 
 
-def _fluent_surge() -> Image:
-    spec = importlib.util.spec_from_file_location(
-        "surge_fluent", ROOT / "tests" / "fixtures" / "surge_fluent.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    img = module.build()
-    assert isinstance(img, Image)
-    return img
+@pytest.fixture(scope="module")
+def surge() -> Recipe:
+    return load(SURGE / "image.py", extra_paths=[ROOT])
 
 
-def _declarative_surge() -> Image:
-    return load_image(SURGE / "image.py", extra_paths=[ROOT])
+def test_surge_recipe_declares_the_golden_variants(surge: Recipe) -> None:
+    assert tuple(v.name for v in surge.variants) == SURGE_VARIANTS
+    assert sorted(p.name for p in GOLDEN.iterdir()) == sorted(SURGE_VARIANTS)
 
 
-def test_surge_recipe_matches_the_committed_tree(tmp_path: Path) -> None:
-    img = _declarative_surge()
-    img.compile(tmp_path, profiles=sorted(img.state.profiles))
-    diff = diff_trees(SURGE / "mkosi", tmp_path)
-    assert diff.is_clean, diff.render("text")
+def test_surge_recipe_matches_the_committed_tree(surge: Recipe) -> None:
+    assert_tree(compile(surge), GOLDEN, update=False)
 
 
-def test_surge_recipe_matches_the_fluent_recipe_for_every_variant(tmp_path: Path) -> None:
-    fluent, declarative = _fluent_surge(), _declarative_surge()
-    assert sorted(fluent.state.profiles) == sorted(declarative.state.profiles)
-    names = sorted(fluent.state.profiles)
-    fluent.compile(tmp_path / "fluent", profiles=names)
-    declarative.compile(tmp_path / "declarative", profiles=names)
-    diff = diff_trees(tmp_path / "fluent", tmp_path / "declarative")
-    assert diff.is_clean, diff.render("text")
+@pytest.mark.parametrize("variant", SURGE_VARIANTS)
+def test_surge_variant_compiles_alone_to_its_golden_tree(surge: Recipe, variant: str) -> None:
+    diff = assert_tree_matches(surge, GOLDEN, variants=[variant], update=False)
+    assert diff.is_clean

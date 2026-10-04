@@ -76,13 +76,6 @@ def read_lockfile(path: str | Path) -> Lockfile:
     return parse_lockfile(raw)
 
 
-def write_lockfile(lockfile: Lockfile, path: str | Path) -> Path:
-    lock_path = Path(path)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path.write_text(serialize_lockfile(lockfile), encoding="utf-8")
-    return lock_path
-
-
 def _fetch_payload(item: LockedFetch) -> dict[str, str]:
     payload = {"source": item.source, "kind": item.kind, "digest": item.digest}
     if item.name is not None:

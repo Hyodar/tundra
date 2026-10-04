@@ -1,4 +1,4 @@
-"""Compiled-tree diffing: ``Image.diff()``, ``tundravm diff`` and ``compile --check``."""
+"""Compiled-tree diffing: ``tundravm diff`` and ``compile --check``."""
 
 from __future__ import annotations
 

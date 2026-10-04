@@ -28,8 +28,6 @@ RECIPE_OBJECT_NAMES: tuple[str, ...] = ("recipe", "RECIPE")
 BACKEND_NAME = "backend"
 """Module-level name of the build backend a declarative recipe file bakes with."""
 
-Loaded = Recipe
-_LOADED_TYPES = (Recipe,)
 
 RECIPE_FACTORY_NAMES: tuple[str, ...] = ("build", "recipe")
 """Zero-argument callables checked first when looking for a ``Recipe`` factory."""
@@ -119,7 +117,7 @@ def _import_paths(*paths: str) -> Iterator[None]:
                 pass
 
 
-def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Loaded:
+def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Recipe:
     if not hasattr(module, attr):
         raise ValidationError(
             f"Recipe has no attribute {attr!r}.",
@@ -127,7 +125,7 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Loaded:
             context={"recipe": str(recipe_path), "attr": attr},
         )
     value = getattr(module, attr)
-    if isinstance(value, _LOADED_TYPES):
+    if isinstance(value, Recipe):
         return value
     if callable(value):
         return _call_factory(value, attr, recipe_path)
@@ -137,10 +135,10 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Loaded:
     )
 
 
-def _discover(module: ModuleType, recipe_path: Path) -> Loaded:
+def _discover(module: ModuleType, recipe_path: Path) -> Recipe:
     for name in RECIPE_OBJECT_NAMES:
         value = getattr(module, name, None)
-        if isinstance(value, _LOADED_TYPES):
+        if isinstance(value, Recipe):
             return value
 
     for name in RECIPE_FACTORY_NAMES:
@@ -151,7 +149,7 @@ def _discover(module: ModuleType, recipe_path: Path) -> Loaded:
     instances = {
         name: value
         for name, value in vars(module).items()
-        if isinstance(value, _LOADED_TYPES) and not name.startswith("_")
+        if isinstance(value, Recipe) and not name.startswith("_")
     }
     if len(instances) == 1:
         return next(iter(instances.values()))
@@ -195,10 +193,10 @@ def _looks_like_factory(name: str, value: object, module: ModuleType) -> bool:
     if name.startswith("build"):
         return True
     annotation = inspect.signature(value).return_annotation
-    return annotation in _LOADED_TYPES or annotation == "Recipe"
+    return annotation is Recipe or annotation == "Recipe"
 
 
-def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) -> Loaded:
+def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) -> Recipe:
     try:
         signature = inspect.signature(factory)
     except (TypeError, ValueError):
@@ -217,7 +215,7 @@ def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) 
                 context={"recipe": str(recipe_path), "attr": name},
             )
     result = factory()
-    if isinstance(result, _LOADED_TYPES):
+    if isinstance(result, Recipe):
         return result
     if result is None:
         raise ValidationError(
@@ -238,8 +236,7 @@ def _public_names(module: ModuleType) -> list[str]:
     return sorted(
         name
         for name, value in vars(module).items()
-        if not name.startswith("_")
-        and (isinstance(value, _LOADED_TYPES) or inspect.isfunction(value))
+        if not name.startswith("_") and (isinstance(value, Recipe) or inspect.isfunction(value))
     )
 
 
@@ -293,22 +290,11 @@ def load_file(
     return RecipeFile(recipe_path, found, None, backend)
 
 
-def load_declarative(
-    path: str | Path,
-    *,
-    attr: str | None = None,
-    extra_paths: Sequence[str | Path] = (),
-) -> Recipe:
-    """Alias of :func:`load_recipe` kept for ``tundravm.declarative.load``."""
-    return load_recipe(path, attr=attr, extra_paths=extra_paths)
-
-
 __all__ = [
     "BACKEND_NAME",
     "RECIPE_FACTORY_NAMES",
     "RECIPE_OBJECT_NAMES",
     "RecipeFile",
-    "load_declarative",
     "load_file",
     "load_image",
     "load_recipe",

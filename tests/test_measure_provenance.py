@@ -29,7 +29,6 @@ from tundravm.declarative import (
 from tundravm.declarative.lifecycle import Scheme
 from tundravm.errors import MeasurementError
 from tundravm.measure import (
-    MEASUREMENTS_SCHEMA_VERSION,
     Measurements,
     PlaceholderMeasurementWarning,
     derive_measurements,
@@ -186,15 +185,8 @@ def test_allow_placeholder_returns_flagged_values_and_warns(tmp_path: Path, sche
         )
     assert dict(found.values) == measurements.values
     assert measurements.source == "placeholder"
-    assert measurements.is_placeholder
     assert measurements.tool_version is None
     assert measurements.artifact is None
-    payload = measurements.to_dict()
-    assert payload["schema_version"] == MEASUREMENTS_SCHEMA_VERSION == 2
-    assert payload["source"] == "placeholder"
-    assert payload["tool_version"] is None
-    assert payload["artifact"] is None
-    assert json.loads(measurements.to_json())["source"] == "placeholder"
 
 
 def test_variant_measure_passes_allow_placeholder(tmp_path: Path) -> None:
@@ -221,7 +213,6 @@ def test_measured_boot_values_carry_provenance(uki: Path) -> None:
     assert measurements.tool_version == "v1.3.0"
     assert measurements.artifact == str(uki)
     assert measurements.values == {"RTMR0": RTMR0, "RTMR1": RTMR1}
-    assert measurements.to_dict()["tool_version"] == "v1.3.0"
 
 
 def test_dstack_mr_json_keys_are_normalized(uki: Path) -> None:

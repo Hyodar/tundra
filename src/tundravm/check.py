@@ -9,7 +9,6 @@ profile merged over the default profile it extends.
 
 from __future__ import annotations
 
-import argparse
 import fnmatch
 import json
 import posixpath
@@ -17,9 +16,9 @@ import re
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TextIO
+from typing import TYPE_CHECKING, Literal
 
-from .formats import annotation_path, md_cell, md_table, resolve_format, workflow_command
+from .formats import annotation_path, md_cell, md_table, workflow_command
 from .models import InitScriptEntry, ProfileState, unit_name
 
 if TYPE_CHECKING:
@@ -306,18 +305,6 @@ def _rule_file_path_relative(
                 profile=profile_name,
                 subject=path,
             )
-        elif not path.startswith("/"):
-            yield Diagnostic(
-                level="error",
-                code="file-path-relative",
-                message=f"{kind} path is relative",
-                hint=(
-                    f"Use the absolute in-image path {_norm(path)!r}; paths are always "
-                    "rooted at the image root, so a relative one only hides duplicates."
-                ),
-                profile=profile_name,
-                subject=path,
-            )
 
 
 def _rule_service_command_not_shipped(
@@ -428,24 +415,6 @@ def _rule_init_priority_collision(
             profile=profile_name,
             subject=f"priority {priority}",
         )
-
-
-def _rule_backend_missing(
-    image: Image, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    if image.backend is not None:
-        return
-    yield Diagnostic(
-        level="warning",
-        code="backend-missing",
-        message="no build backend configured; bake() will fail",
-        hint=(
-            "Bind `backend = LimaMkosiBackend()` in the recipe file or pass bake(backend=...). "
-            "compile() and lint() work without one."
-        ),
-        profile=image.default_profile,
-        subject=None,
-    )
 
 
 def _rule_debloat_removes_needed_unit(
@@ -559,7 +528,6 @@ RULES: list[Rule] = [
     _rule_service_command_not_shipped,
     _rule_variant_empty,
     _rule_init_priority_collision,
-    _rule_backend_missing,
     _rule_debloat_removes_needed_unit,
     _rule_debloat_removes_declared_file,
     _rule_source_unpinned,
@@ -693,15 +661,6 @@ def failing(diagnostics: Sequence[Diagnostic], *, strict: bool = False) -> bool:
     return any(d.level in levels for d in diagnostics)
 
 
-def cmd_check(
-    args: argparse.Namespace, out: TextIO, img: Image, *, profiles: Sequence[str] | None = None
-) -> int:
-    diagnostics = check(img, profiles=profiles)
-    fmt = resolve_format(args.format, alias="json" if args.json else None)
-    print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
-    return 1 if failing(diagnostics, strict=args.strict) else 0
-
-
 _GITHUB_COMMANDS: dict[str, str] = {"error": "error", "warning": "warning", "info": "notice"}
 
 
@@ -710,7 +669,6 @@ __all__ = [
     "Diagnostic",
     "Rule",
     "check",
-    "cmd_check",
     "failing",
     "render",
     "render_as",

@@ -39,8 +39,7 @@ def test_bake_result_artifact_lookup() -> None:
             )
         }
     )
-    resolved = result.artifact_for(profile="default", target="qemu")
-    assert resolved == artifact
+    assert result.profiles["default"].artifacts["qemu"] == artifact
 
 
 def test_error_codes_are_stable_and_machine_readable() -> None:

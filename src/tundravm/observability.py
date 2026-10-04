@@ -444,13 +444,6 @@ class StructuredLogger:
     def records_for_profile(self, profile: str) -> list[dict[str, Any]]:
         return [record for record in self.records if record.get("profile") == profile]
 
-    def to_json_lines(self, path: str | Path) -> Path:
-        output_path = Path(path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [json.dumps(record, sort_keys=True) for record in self.records]
-        output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return output_path
-
 
 def format_duration(seconds: float) -> str:
     """``0.4s``, ``12.3s``, ``4m05s``, ``1h02m``."""

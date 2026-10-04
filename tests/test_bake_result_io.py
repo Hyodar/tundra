@@ -68,8 +68,7 @@ def test_relative_paths_resolve_against_the_load_location(tmp_path: Path) -> Non
 
     loaded = BakeResult.load(moved)
 
-    artifact = loaded.artifact_for(profile="default", target="qemu")
-    assert artifact is not None
+    artifact = loaded.profiles["default"].artifacts["qemu"]
     assert artifact.path == moved / "default" / "disk.qcow2"
 
 

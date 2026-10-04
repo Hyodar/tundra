@@ -1,19 +1,9 @@
-"""Built-in DevTools module.
+"""Packages, serial console unit and login script of the ``declarative.utils.DevTools`` fragment.
 
-Adds debugging packages, serial console access, and password-based root login
-to an Image.  This module is intended for development/debugging and should
-**not** be used in production.
+Development/debugging only: it enables password-based root login.
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-from tundravm._modules.base import Module
-
-if TYPE_CHECKING:
-    from tundravm._image import Image
 
 # ---------------------------------------------------------------------------
 # Debug packages installed in the devtools profile
@@ -76,41 +66,3 @@ cat > /etc/ssh/sshd_config.d/99-devtools.conf << 'SSHEOF'
  PasswordAuthentication yes
 SSHEOF
 """
-
-
-@dataclass(slots=True)
-class DevTools(Module):
-    """DevTools module for development and debugging.
-
-    Adds:
-    * Debug/diagnostic runtime packages (bash-completion, curl, vim, etc.)
-    * ``serial-console.service`` enabling serial-getty on ttyS0
-    * PostInst hook setting root password and enabling password auth for
-      dropbear and openssh
-
-    .. note::
-
-        To preserve ``/usr/share/bash-completion`` when debloat is active,
-        pass ``paths_skip_for_profiles={"devtools": ("/usr/share/bash-completion",)}``
-        to :meth:`Image.debloat`.
-    """
-
-    def configure(self, image: Image) -> None:
-        """Apply devtools configuration to the image."""
-        # Debug runtime packages
-        image.install(*DEVTOOLS_PACKAGES)
-
-        # Serial console service
-        image.file(
-            "/usr/lib/systemd/system/serial-console.service",
-            content=SERIAL_CONSOLE_SERVICE,
-        )
-
-        # Enable serial-console service
-        image.shell(
-            "mkosi-chroot systemctl enable serial-console.service",
-            phase="postinst",
-        )
-
-        # Root password + auth configuration
-        image.shell(DEVTOOLS_POSTINST_SCRIPT, phase="postinst")

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "tundravm contributors" }]
-dependencies = ["cbor2>=5.6.5"]
+dependencies = []
 
 [project.scripts]
 tundravm = "tundravm.cli:main"

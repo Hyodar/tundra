@@ -4,8 +4,6 @@ CORE_MODULES = [
     "tundravm._image",
     "tundravm.compiler",
     "tundravm.backends",
-    "tundravm.builders",
-    "tundravm.fetch",
     "tundravm.lockfile",
     "tundravm.measure",
     "tundravm.deploy",

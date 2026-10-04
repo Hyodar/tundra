@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 from pathlib import Path
-from types import ModuleType
-from typing import cast
 
 import pytest
 
@@ -15,6 +12,7 @@ from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, 
 from tundravm._options import MkosiOptions
 from tundravm._source import GitSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as FluentInstall
+from tundravm.check import check
 from tundravm.declarative import (
     Build,
     Debloat,
@@ -70,20 +68,6 @@ UNIT_AFTER_INIT = UNIT.replace(
     "After=runtime-init.service network.target\nRequires=runtime-init.service\n",
 )
 PROFILES = ("default", "azure")
-
-
-def _surge_fluent() -> ModuleType:
-    """``tests/fixtures/surge_fluent.py``: the fluent parity oracle."""
-    path = Path(__file__).parent / "fixtures" / "surge_fluent.py"
-    spec = importlib.util.spec_from_file_location("surge_fluent", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def blank_image(**options: object) -> Image:
-    return cast(Image, _surge_fluent().blank_image(**options))
 
 
 def declarative_recipe() -> Recipe:
@@ -154,7 +138,7 @@ def fluent_image() -> Image:
     tools = GitSource(TOOLS, "v1")
     key = KeySpec("key_persistent", output="/tmp/key_persistent")
     disk = DiskSpec("disk_persistent", device=None, key=key, mapper_name="cryptroot")
-    img = blank_image(base="debian/bookworm", mkosi=MkosiOptions())
+    img = Image(base="debian/bookworm", mkosi=MkosiOptions())
     img.install("curl", "jq").build_packages("golang")
     img.file("/etc/motd", content="hello\n")
     img.skeleton("/etc/resolv.conf", content="nameserver 1.1.1.1\n")
@@ -228,7 +212,7 @@ def test_lowered_recipe_compiles_to_the_fluent_tree(tmp_path: Path) -> None:
     diff = diff_trees(tmp_path / "fluent", tmp_path / "lowered")
     assert diff.is_clean, diff.unified()
     assert modes(tmp_path / "fluent") == modes(tmp_path / "lowered")
-    assert lowered.check() == fluent.check()
+    assert check(lowered) == check(fluent)
 
     runtime_init = (tmp_path / "lowered/default/mkosi.extra/usr/bin/runtime-init").read_text()
     order = ["key-gen", "disk-setup", "test -d", "echo up", "secret-delivery"]

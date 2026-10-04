@@ -22,9 +22,9 @@ def load(
     ``build()`` factory. The file's directory and *extra_paths* are importable
     while it runs.
     """
-    from tundravm.recipe import load_declarative
+    from tundravm.recipe import load_recipe
 
-    return load_declarative(path, attr=attribute, extra_paths=extra_paths)
+    return load_recipe(path, attr=attribute, extra_paths=extra_paths)
 
 
 __all__ = ["load"]
