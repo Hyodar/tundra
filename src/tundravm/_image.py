@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Final, Literal, Self
 
 from ._modules.base import Module
@@ -92,6 +92,8 @@ from .observability import (
 from .policy import Policy, ensure_bake_policy
 
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+NETWORK_SETUP_UNIT = "network-setup.service"
+"""The unit runtime-init requires when a profile declares it (else ``network-online.target``)."""
 _UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+")
 _GROUP_NAME = re.compile(r"[a-z_][a-z0-9_-]*\$?")
 # systemd resource limits (``Limit<RESOURCE>=``), see systemd.exec(5).
@@ -1279,6 +1281,7 @@ class Image:
             "compress_output": options.compress_output,
             "output_directory": options.output_directory,
             "sandbox_trees": options.sandbox_trees,
+            "sandbox_files": options.sandbox_files,
             "package_cache_directory": options.package_cache_directory,
             "init_script": options.init_script,
             "generate_version_script": options.generate_version_script,
@@ -1288,6 +1291,7 @@ class Image:
             "environment_passthrough": options.environment_passthrough,
             "settings": options.settings,
             "bootable": options.bootable,
+            "dialect": options.dialect,
         }
         if options.seed is not None:
             emit_kwargs["seed"] = options.seed
@@ -1389,12 +1393,18 @@ class Image:
         targets = [self._ensure_profile(n) for n in dict.fromkeys(names)]
         generators: list[ProfileState] = []
         for profile in targets:
-            if profile.extends is not None and not profile.init_scripts:
-                continue  # inherits the default profile's runtime-init files
             merged = self.init_scripts(profile.name)
-            if merged:
-                self.init.apply(profile, scripts=merged)
-                generators.append(profile)
+            if not merged:
+                continue
+            network_setup = self._init_needs_network_setup(profile.name)
+            if profile.extends is not None and not profile.init_scripts:
+                # inherits the default profile's runtime-init files and enablement,
+                # unless its own network-setup.service changes the unit
+                if network_setup != self._init_needs_network_setup(profile.extends):
+                    self.init.apply(profile, scripts=merged, network_setup=network_setup)
+                continue
+            self.init.apply(profile, scripts=merged, network_setup=network_setup)
+            generators.append(profile)
         init_svc = self.init.service_name
         # Inject After/Requires runtime-init.service into the services of every
         # profile that runs runtime-init
@@ -1422,6 +1432,24 @@ class Image:
         for profile_name in missing:
             with self.profiles(profile_name):
                 self.enable(init_svc)
+
+    def _init_needs_network_setup(self, profile_name: str) -> bool:
+        """Whether runtime-init requires ``network-setup.service`` in *profile_name*.
+
+        Always under ``nethermind-v1``; otherwise only when the profile declares
+        that unit (else runtime-init waits for ``network-online.target``).
+        """
+        if self.mkosi_for(profile_name).dialect == "nethermind-v1":
+            return True
+        return self._declares_unit(profile_name, NETWORK_SETUP_UNIT)
+
+    def _declares_unit(self, profile_name: str, unit: str) -> bool:
+        """Whether profile *profile_name* ships, generates or enables *unit*."""
+        profile = self._state.effective_profile(profile_name)
+        files = (*profile.files, *profile.skeleton_files)
+        return any(PurePosixPath(f.path).name == unit for f in files) or any(
+            unit_name(s.name) == unit for s in profile.services
+        )
 
     def _record_module(self, module: Module) -> None:
         for profile_name in self._active_profiles:

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, fields
 from typing import Literal
 
 EmitMode = Literal["per_directory", "native_profiles"]
+Dialect = Literal["current", "nethermind-v1"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,9 @@ class MkosiOptions:
     """``Seed=`` for partition UUIDs; ``None`` uses the SDK's fixed seed."""
     sandbox_trees: tuple[str, ...] = ()
     """``SandboxTrees=`` entries."""
+    sandbox_files: tuple[tuple[str, str], ...] = ()
+    """``(path, content)`` written under ``mkosi.sandbox/``, which mkosi copies into its
+    package-manager sandbox (not the image)."""
     package_cache_directory: str | None = None
     """``PackageCacheDirectory=``."""
     init_script: str | None = None
@@ -48,9 +52,12 @@ class MkosiOptions:
     """``(section, key, values)`` written verbatim to ``mkosi.conf``, one line per value."""
     bootable: bool = True
     """``False`` writes ``Bootable=no`` and a plain disk image instead of a UKI."""
+    dialect: Dialect = "current"
+    """``nethermind-v1`` keeps the historical cloud postoutput scripts and runtime-init unit."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sandbox_trees", tuple(self.sandbox_trees))
+        object.__setattr__(self, "sandbox_files", tuple(self.sandbox_files))
         object.__setattr__(self, "settings", tuple(self.settings))
         object.__setattr__(self, "environment", dict(self.environment))
         if self.environment_passthrough is not None:
@@ -66,4 +73,4 @@ class MkosiOptions:
         }
 
 
-__all__ = ["EmitMode", "MkosiOptions"]
+__all__ = ["Dialect", "EmitMode", "MkosiOptions"]

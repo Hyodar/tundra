@@ -226,6 +226,25 @@ AZURE_POSTOUTPUT_SCRIPT = textwrap.dedent("""\
     echo "Successfully created VHD: $VHD_FILE"
 """)
 
+HISTORICAL_OUTPUT_NAME = "${IMAGE_ID}_${IMAGE_VERSION}"
+"""The output name the cloud postoutput scripts spell under the ``nethermind-v1`` dialect."""
+OUTPUT_NAME = "${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}"
+"""The name mkosi gives its output: ``IMAGE_ID``, plus ``_IMAGE_VERSION`` when a version is set."""
+
+
+def cloud_postoutput_script(script: str, dialect: str = "current") -> str:
+    """*script* (a cloud postoutput script) as *dialect* emits it.
+
+    The ``current`` dialect reads mkosi's output name whether or not the image has
+    a version; ``nethermind-v1`` keeps the historical ``${IMAGE_ID}_${IMAGE_VERSION}``.
+    """
+    return (
+        script
+        if dialect == "nethermind-v1"
+        else script.replace(HISTORICAL_OUTPUT_NAME, OUTPUT_NAME)
+    )
+
+
 # mkosi.version: git-based version script
 MKOSI_VERSION_SCRIPT = textwrap.dedent("""\
     #!/bin/bash
@@ -266,6 +285,8 @@ class EmitConfig:
     clean_package_metadata: bool = True
     manifest_format: str = "json"
     sandbox_trees: tuple[str, ...] = ()
+    sandbox_files: tuple[tuple[str, str], ...] = ()
+    """``(path, content)`` written under ``mkosi.sandbox/`` (the package manager's sandbox)."""
     package_cache_directory: str | None = None
     init_script: str | None = None
     generate_version_script: bool = False
@@ -277,6 +298,8 @@ class EmitConfig:
     """Verbatim ``[section] key=value`` lines the compiler does not write itself."""
     bootable: bool = True
     """``False`` writes ``Bootable=no`` and ``Format=disk``: mkosi needs a kernel for a UKI."""
+    dialect: Literal["current", "nethermind-v1"] = "current"
+    """``nethermind-v1`` keeps the historical cloud postoutput scripts."""
     profiles: Mapping[str, EmitConfig] = field(default_factory=dict)
     """Profiles with their own settings or kernel; the rest use this configuration."""
 
@@ -662,6 +685,7 @@ class DeterministicMkosiEmitter:
 
             # Generate mkosi.skeleton/ tree
             self._emit_skeleton_tree(profile_dir, profile, profile_config)
+            self._emit_sandbox_tree(profile_dir, profile_config)
 
             # Copy kernel config file if kernel has one
             self._emit_kernel_config(profile_dir, profile_config)
@@ -678,7 +702,7 @@ class DeterministicMkosiEmitter:
             # Emit cloud postoutput scripts based on output_targets
             cloud_scripts: tuple[Path, ...] = ()
             if config.generate_cloud_postoutput:
-                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
+                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile, profile_config)
 
             # Generate mkosi.conf
             conf_content = self._render_conf(
@@ -745,6 +769,7 @@ class DeterministicMkosiEmitter:
 
         # Root: the full default profile
         self._emit_skeleton_tree(destination, default, config)
+        self._emit_sandbox_tree(destination, config)
         self._emit_extra_tree(destination, default)
         self._emit_kernel_config(destination, config)
         root_scripts = self._emit_all_scripts(
@@ -756,7 +781,7 @@ class DeterministicMkosiEmitter:
         )
         root_cloud: tuple[Path, ...] = ()
         if config.generate_cloud_postoutput:
-            root_cloud = self._emit_cloud_postoutput(destination, default)
+            root_cloud = self._emit_cloud_postoutput(destination, default, config)
         root_conf_path = destination / "mkosi.conf"
         root_conf_path.write_text(
             self._render_conf(
@@ -795,7 +820,7 @@ class DeterministicMkosiEmitter:
             )
             cloud_scripts: tuple[Path, ...] = ()
             if config.generate_cloud_postoutput:
-                cloud_scripts = self._emit_cloud_postoutput(profile_dir, overlay)
+                cloud_scripts = self._emit_cloud_postoutput(profile_dir, overlay, config)
 
             conf_content = self._render_conf(
                 profile_name=profile_name,
@@ -821,23 +846,41 @@ class DeterministicMkosiEmitter:
             script_paths=script_paths,
         )
 
-    def _emit_cloud_postoutput(self, profile_dir: Path, profile: ProfileState) -> tuple[Path, ...]:
+    def _emit_cloud_postoutput(
+        self, profile_dir: Path, profile: ProfileState, config: EmitConfig
+    ) -> tuple[Path, ...]:
         """Emit cloud-specific postoutput scripts based on output_targets."""
         emitted: list[Path] = []
         targets = profile.output_targets
         if "gcp" in targets:
             gcp_script = profile_dir / "scripts" / "gcp-postoutput.sh"
             gcp_script.parent.mkdir(parents=True, exist_ok=True)
-            gcp_script.write_text(GCP_POSTOUTPUT_SCRIPT, encoding="utf-8")
+            gcp_script.write_text(
+                cloud_postoutput_script(GCP_POSTOUTPUT_SCRIPT, config.dialect), encoding="utf-8"
+            )
             gcp_script.chmod(0o755)
             emitted.append(gcp_script)
         if "azure" in targets:
             azure_script = profile_dir / "scripts" / "azure-postoutput.sh"
             azure_script.parent.mkdir(parents=True, exist_ok=True)
-            azure_script.write_text(AZURE_POSTOUTPUT_SCRIPT, encoding="utf-8")
+            azure_script.write_text(
+                cloud_postoutput_script(AZURE_POSTOUTPUT_SCRIPT, config.dialect), encoding="utf-8"
+            )
             azure_script.chmod(0o755)
             emitted.append(azure_script)
         return tuple(emitted)
+
+    def _emit_sandbox_tree(self, profile_dir: Path, config: EmitConfig) -> None:
+        """Write ``config.sandbox_files`` under ``mkosi.sandbox/``.
+
+        mkosi picks the directory up as a sandbox tree by itself and copies it over
+        the sandbox its package manager runs in; nothing of it reaches the image.
+        """
+        for path, content in config.sandbox_files:
+            dest = profile_dir / "mkosi.sandbox" / path.lstrip("/")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+            dest.chmod(0o644)
 
     def _validate_profile_phases(self, *, profile_name: str, profile: ProfileState) -> None:
         allowed = set(PHASE_ORDER)

@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -13,6 +14,7 @@ from tundravm.declarative import (
     Fragment,
     Git,
     Hook,
+    Init,
     Kernel,
     Mkosi,
     Package,
@@ -20,6 +22,7 @@ from tundravm.declarative import (
     Service,
     Setting,
     Template,
+    Unit,
     User,
     Variant,
     compile,
@@ -32,6 +35,7 @@ from tundravm.models import Phase
 Arch = Literal["x86_64", "aarch64"]
 LINUX = "https://github.com/gregkh/linux"
 UNIT_DIR = Path("default") / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
+HISTORICAL = Mkosi(dialect="nethermind-v1")
 
 
 def _recipe(
@@ -720,11 +724,12 @@ def test_compile_strip_image_version_can_be_disabled() -> None:
 
 
 def test_compile_backports_sync_hook(tmp_path: Path) -> None:
-    """Backports() declares a sync hook that generates debian-backports.sources."""
+    """nethermind-v1: Backports() declares a sync hook that generates debian-backports.sources."""
     recipe = _recipe(
         Package("systemd"),
         Backports(mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z"),
         epoch=None,
+        mkosi=HISTORICAL,
     )
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
@@ -740,8 +745,8 @@ def test_compile_backports_sync_hook(tmp_path: Path) -> None:
 
 
 def test_compile_backports_registered_in_sync_phase() -> None:
-    """Backports() lowers to a hook in the sync phase of the profile state."""
-    recipe = _recipe(Backports(mirror="https://example.com/debian"), epoch=None)
+    """nethermind-v1: Backports() lowers to a hook in the sync phase of the profile state."""
+    recipe = _recipe(Backports(mirror="https://example.com/debian"), epoch=None, mkosi=HISTORICAL)
 
     scripts = _phase_scripts(recipe, "sync")
     assert len(scripts) >= 1
@@ -750,8 +755,8 @@ def test_compile_backports_registered_in_sync_phase() -> None:
 
 
 def test_compile_backports_auto_adds_sandbox_trees() -> None:
-    """Backports() adds the sandbox_trees entry for the generated file."""
-    image = lower(_recipe(Backports(), epoch=None))
+    """nethermind-v1: Backports() adds the sandbox_trees entry for the generated file."""
+    image = lower(_recipe(Backports(), epoch=None, mkosi=HISTORICAL))
 
     expected_entry = (
         "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
@@ -760,11 +765,12 @@ def test_compile_backports_auto_adds_sandbox_trees() -> None:
 
 
 def test_compile_backports_no_duplicate_sandbox_trees() -> None:
-    """Backports() does not duplicate a sandbox_trees entry the recipe already sets."""
+    """nethermind-v1: Backports() does not duplicate a sandbox_trees entry already set."""
     recipe = _recipe(
         Setting("Build", "SandboxTrees", (BACKPORTS_TREE,)),
         Backports(),
         epoch=None,
+        mkosi=HISTORICAL,
     )
     image = lower(recipe)
 
@@ -775,25 +781,81 @@ def test_compile_backports_no_duplicate_sandbox_trees() -> None:
 
 
 def test_compile_backports_jq_fallback_when_no_mirror() -> None:
-    """When mirror is not provided, script reads from $BUILDDIR/config.json via jq."""
-    script = _phase_scripts(_recipe(Backports(), epoch=None), "sync")[0]
+    """nethermind-v1: without a mirror the script reads $BUILDDIR/config.json via jq."""
+    script = _phase_scripts(_recipe(Backports(), epoch=None, mkosi=HISTORICAL), "sync")[0]
     assert 'jq -r .Mirror "$BUILDDIR/config.json"' in script
     assert 'MIRROR="http://deb.debian.org/debian"' in script
 
 
 def test_compile_backports_custom_release() -> None:
-    """Backports() accepts a custom release parameter."""
-    script = _phase_scripts(_recipe(Backports(release="trixie"), epoch=None), "sync")[0]
+    """nethermind-v1: Backports() accepts a custom release parameter."""
+    script = _phase_scripts(
+        _recipe(Backports(release="trixie"), epoch=None, mkosi=HISTORICAL), "sync"
+    )[0]
     assert 'RELEASE="trixie"' in script
 
 
 def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
-    """Backports() sandbox_trees entry appears in emitted mkosi.conf."""
-    recipe = _recipe(Package("systemd"), Backports(), epoch=None)
+    """nethermind-v1: the Backports() sandbox_trees entry appears in emitted mkosi.conf."""
+    recipe = _recipe(Package("systemd"), Backports(), epoch=None, mkosi=HISTORICAL)
 
     conf = _conf(_compile(recipe, tmp_path / "mkosi"))
     assert "SandboxTrees=" in conf
     assert "debian-backports.sources" in conf
+
+
+def test_compile_backports_writes_static_sandbox_sources(tmp_path: Path) -> None:
+    """current: Backports() is a compile-time mkosi.sandbox file, with no hook or builddir tree."""
+    recipe = _recipe(Package("systemd"), Backports(), epoch=None)
+    recipe = replace(recipe, mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z/")
+
+    output_dir = _compile(recipe, tmp_path / "mkosi")
+
+    sources = output_dir / "default/mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
+    stanza = (
+        "Types: deb deb-src\n"
+        "URIs: https://snapshot.debian.org/archive/debian/20251113T083151Z/\n"
+        "Suites: {}\n"
+        "Components: main\n"
+        "Enabled: yes\n"
+        "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+    )
+    assert sources.read_text() == stanza.format("bookworm-backports") + "\n" + stanza.format("sid")
+    assert not _script(output_dir, "01-sync.sh").exists()
+    conf = _conf(output_dir)
+    assert "SandboxTrees=" not in conf and "mkosi.builddir" not in conf
+    assert lower(recipe).mkosi.sandbox_trees == ()
+
+
+def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
+    """current: Backports' mirror/release win; without either, deb.debian.org and the base."""
+    pinned = lower(_recipe(Backports(mirror="http://m", release="trixie"), epoch=None))
+    ((path, text),) = pinned.mkosi.sandbox_files
+    assert path == "/etc/apt/sources.list.d/debian-backports.sources"
+    assert "URIs: http://m\nSuites: trixie-backports\n" in text
+    assert "URIs: http://m\nSuites: sid\n" in text
+    plain = lower(_recipe(Backports(), epoch=None))
+    assert (
+        "URIs: http://deb.debian.org/debian\nSuites: bookworm-backports\n"
+        in (plain.mkosi.sandbox_files[0][1])
+    )
+    assert not _phase_scripts(_recipe(Backports(), epoch=None), "sync")
+
+
+def test_compile_backports_only_in_the_variant_that_adds_it(tmp_path: Path) -> None:
+    """current: a variant adding Backports gets the sandbox file; the default does not."""
+    recipe = _recipe(
+        Package("systemd"),
+        variants=(
+            Variant("default", target="qemu"),
+            Variant("bp", parent="default", add=Backports()),
+        ),
+        epoch=None,
+    )
+    output_dir = _compile(recipe, tmp_path / "mkosi")
+    path = "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
+    assert (output_dir / "bp" / path).is_file()
+    assert not (output_dir / "default" / path).exists()
 
 
 def _devtools_debloat_recipe() -> Recipe:
@@ -844,3 +906,93 @@ def _snapshot_tree(root: Path) -> dict[str, str]:
         if path.is_file():
             snapshot[str(path.relative_to(root))] = path.read_text(encoding="utf-8")
     return snapshot
+
+
+# ── current-dialect output names and runtime-init dependencies ──────────
+
+
+@pytest.mark.parametrize(("target", "script"), [("azure", "azure"), ("gcp", "gcp")])
+def test_cloud_postoutput_reads_the_output_with_or_without_a_version(
+    tmp_path: Path, target: Literal["azure", "gcp"], script: str
+) -> None:
+    """current: ${IMAGE_ID}.efi without ImageVersion=; nethermind-v1 keeps ${IMAGE_ID}_${...}."""
+    variants = (Variant("default", target="qemu"), Variant(target, parent="default", target=target))
+    current = _compile(_recipe(variants=variants), tmp_path / "current")
+    text = _script(current, f"{script}-postoutput.sh", target).read_text()
+    assert '"${OUTPUTDIR}/${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}.efi"' in text
+    assert "${IMAGE_ID}_${IMAGE_VERSION}" not in text
+    old = _compile(_recipe(variants=variants, mkosi=HISTORICAL), tmp_path / "old")
+    old_text = _script(old, f"{script}-postoutput.sh", target).read_text()
+    assert '"${OUTPUTDIR}/${IMAGE_ID}_${IMAGE_VERSION}.efi"' in old_text
+
+
+@pytest.mark.parametrize("version", [None, "1.2"])
+def test_current_postoutput_output_name_runs_under_set_u(version: str | None) -> None:
+    import subprocess
+
+    from tundravm.compiler.emit_mkosi import OUTPUT_NAME
+
+    env = {"IMAGE_ID": "node", "PATH": "/usr/bin:/bin"}
+    if version is not None:
+        env["IMAGE_VERSION"] = version
+    result = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail; echo "{OUTPUT_NAME}.efi"'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == ("node.efi" if version is None else "node_1.2.efi")
+
+
+def _runtime_init_unit(out: Path, variant: str = "default") -> str:
+    path = out / variant / "mkosi.extra/usr/lib/systemd/system/runtime-init.service"
+    return path.read_text(encoding="utf-8")
+
+
+def test_runtime_init_waits_for_network_online_without_network_setup(tmp_path: Path) -> None:
+    out = _compile(_recipe(Init("hello", "echo hi")), tmp_path / "mkosi")
+    unit = _runtime_init_unit(out)
+    assert "After=network-online.target\nWants=network-online.target\n" in unit
+    assert "network-setup" not in unit
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        Unit("network-setup.service", enabled=True),
+        File("/etc/systemd/system/network-setup.service", "[Service]\n", stage="skeleton"),
+        Service("network-setup", "/usr/bin/net-up"),
+    ],
+    ids=["unit", "file", "service"],
+)
+def test_runtime_init_requires_a_declared_network_setup(
+    tmp_path: Path, declared: Declaration
+) -> None:
+    out = _compile(_recipe(Init("hello", "echo hi"), declared), tmp_path / "mkosi")
+    unit = _runtime_init_unit(out)
+    assert "After=network.target network-setup.service\nRequires=network-setup.service\n" in unit
+    assert "network-online" not in unit
+
+
+def test_runtime_init_follows_a_variants_own_network_setup(tmp_path: Path) -> None:
+    recipe = _recipe(
+        Init("hello", "echo hi"),
+        variants=(
+            Variant("default", target="qemu"),
+            Variant(
+                "net",
+                parent="default",
+                add=Fragment("net", items=(Unit("network-setup.service", enabled=True),)),
+            ),
+        ),
+    )
+    out = _compile(recipe, tmp_path / "mkosi")
+    assert "Wants=network-online.target" in _runtime_init_unit(out)
+    assert "Requires=network-setup.service" in _runtime_init_unit(out, "net")
+
+
+def test_runtime_init_keeps_network_setup_under_nethermind_v1(tmp_path: Path) -> None:
+    out = _compile(_recipe(Init("hello", "echo hi"), mkosi=HISTORICAL), tmp_path / "mkosi")
+    unit = _runtime_init_unit(out)
+    assert "After=network.target network-setup.service\nRequires=network-setup.service\n" in unit

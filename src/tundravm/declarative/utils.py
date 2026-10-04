@@ -44,7 +44,17 @@ TUNDRA_TOOLS = Git("https://github.com/Hyodar/tundra-tools.git", "master")
 BACKPORTS_TREE = (
     "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
 )
-"""The ``SandboxTrees=`` entry that exposes the generated backports sources to apt."""
+"""The ``nethermind-v1`` ``SandboxTrees=`` entry that exposes the generated sources to apt."""
+DEFAULT_DEBIAN_MIRROR = "http://deb.debian.org/debian"
+"""The mirror :class:`Backports` uses when neither it nor the recipe sets one."""
+_SOURCES_STANZA = (
+    "Types: deb deb-src\n"
+    "URIs: {mirror}\n"
+    "Suites: {suite}\n"
+    "Components: main\n"
+    "Enabled: yes\n"
+    "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+)
 
 _DEFAULT_ROOT_PASSWORD = "tdx"
 _UNSAFE_PASSWORD = frozenset('"$`\\\n')
@@ -87,10 +97,14 @@ class Composite(Fragment):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Backports(Composite):
-    """Debian backports and sid sources, generated at sync time and mounted for apt.
+    """Debian backports and sid sources for apt during the build (not in the image).
 
-    Without *mirror* the hook reads the build's configured mirror (falling back to
-    ``deb.debian.org``); *release* overrides ``$RELEASE``. Fragment name: ``backports``.
+    The ``current`` dialect writes them at compile time to the variant's
+    ``mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources`` (see
+    :meth:`render_sources`): without *mirror* they use ``Recipe.mirror``, else
+    ``deb.debian.org``; without *release*, the release of ``Recipe.base``. Under
+    ``nethermind-v1`` a sync hook generates them into ``mkosi.builddir``, reading
+    the build's mirror and ``$RELEASE``. Fragment name: ``backports``.
     """
 
     mirror: str | None = None
@@ -111,19 +125,11 @@ class Backports(Composite):
             )
         if self.release is not None:
             lines.append(f'RELEASE="{self.release}"')
-        stanza = (
-            "Types: deb deb-src\n"
-            "URIs: $MIRROR\n"
-            "Suites: {suite}\n"
-            "Components: main\n"
-            "Enabled: yes\n"
-            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
-        )
         lines.append(
             'cat > "$BUILDDIR/debian-backports.sources" <<EOF\n'
-            + stanza.format(suite="${RELEASE}-backports")
+            + _SOURCES_STANZA.format(mirror="$MIRROR", suite="${RELEASE}-backports")
             + "\n"
-            + stanza.format(suite="sid")
+            + _SOURCES_STANZA.format(mirror="$MIRROR", suite="sid")
             + "EOF"
         )
         return Fragment(
@@ -132,6 +138,24 @@ class Backports(Composite):
                 Hook("backports", "sync", "\n".join(lines)),
                 Setting("Build", "SandboxTrees", (BACKPORTS_TREE,)),
             ),
+        )
+
+    def render_sources(self, *, mirror: str | None, release: str) -> str:
+        """The deb822 sources file the ``current`` dialect writes into the build sandbox.
+
+        *mirror* and *release* are the recipe's; the fragment's own fields win.
+        """
+        uri = self.mirror or mirror or DEFAULT_DEBIAN_MIRROR
+        suite = self.release or release
+        if not suite:
+            raise ValidationError(
+                "Backports needs a Debian release: Recipe.base names none.",
+                hint="Set Recipe.base to e.g. 'debian/trixie', or pass Backports(release=...).",
+            )
+        return (
+            _SOURCES_STANZA.format(mirror=uri, suite=f"{suite}-backports")
+            + "\n"
+            + _SOURCES_STANZA.format(mirror=uri, suite="sid")
         )
 
 

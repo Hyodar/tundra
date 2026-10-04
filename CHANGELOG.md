@@ -64,6 +64,11 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `SPEC.md`, which described the fluent API. The design record is `docs/design/declarative-api.md`.
 
 ### Fixed
+- `Backports()` works on mkosi 26: the current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` at compile time (mirror from the fragment, the recipe or deb.debian.org; release from the recipe base) instead of a sync hook that mkosi 26 cannot run.
+- Azure/GCP conversions run inside mkosi's tools tree when one is used: the local backend adds `--tools-tree-package=qemu-utils,gdisk,parted`, reuses a cached tree only when it has those tools, and skips the host pre-check in that case (azure VHD and gcp tar.gz bake for real on a host without qemu-img).
+- Current-dialect postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so recipes without a version no longer die under `set -u`.
+- `runtime-init.service` requires `network-setup.service` only when the variant ships that unit; otherwise it orders after `network-online.target`.
+- `doctor` probes `pefile` under mkosi's own Python; the local backend adds the tools tree when the host lacks pefile for a bootable build.
 - Images that declare users or groups install `passwd`, so `useradd` in postinst no longer exits 127 (the service template bakes for real).
 - `bake` with the local backend fails before mkosi when an azure/gcp variant's disk tool (`qemu-img`/`sgdisk`) is missing on the host; `doctor` lists those tools for cloud variants.
 

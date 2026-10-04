@@ -19,7 +19,7 @@ are read here.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -50,6 +50,7 @@ from .model import (
     Directory,
     Disk,
     File,
+    Fragment,
     Git,
     Group,
     Hook,
@@ -85,8 +86,11 @@ from .resolve import (
     order_inits,
     resolve,
 )
+from .utils import BACKPORTS_TREE, Backports
 
 INIT_SERVICE = "runtime-init.service"
+BACKPORTS_SOURCES = BACKPORTS_TREE.partition(":")[2]
+"""Where :class:`Backports` sources go in the build sandbox (``current`` dialect)."""
 UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
 _OVERRIDABLE = (File, User, Group, Partition, Repository, Debloat)
@@ -156,8 +160,16 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
     selected = _selected(recipe, variants, default)
     resolved = {variant.name: resolve(recipe, variant=variant.name) for variant in selected}
     base = resolved[default.name]
+    dialect = recipe.mkosi.dialect
+    backports = {} if dialect == HISTORICAL else _backports_sources(recipe)
     options = {
-        name: _mkosi_options(recipe, [i for i in r.items if isinstance(i, Setting)])
+        name: _mkosi_options(
+            recipe,
+            [i for i in r.items if isinstance(i, Setting)],
+            sandbox_files=tuple(
+                (BACKPORTS_SOURCES, backports[i]) for i in r.items if i in backports
+            ),
+        )
         for name, r in resolved.items()
     }
     kernels = {name: _variant_kernel(r.items) for name, r in resolved.items()}
@@ -177,9 +189,8 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
     if strip is not None and strip != (recipe.epoch is not None):
         img.strip_image_version(enabled=strip)
 
-    dialect = recipe.mkosi.dialect
     with img.profiles(default.name):
-        _declare(img, base.items, full=base.items, dialect=dialect)
+        _declare(img, base.items, full=base.items, dialect=dialect, skip=backports)
     _apply_target(img, default.name, base.targets, inherited=(DEFAULT_TARGET,))
 
     rejected: list[tuple[str, str]] = []
@@ -209,7 +220,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
                 img.profile_kernels[variant.name] = kernels[variant.name]
             img.profile(variant.name, extends=None)
             with img.profiles(variant.name):
-                _declare(img, child.items, full=child.items, dialect=dialect)
+                _declare(img, child.items, full=child.items, dialect=dialect, skip=backports)
                 if not any(isinstance(i, Debloat) for i in child.items) and any(
                     isinstance(i, Debloat) for i in base.items
                 ):
@@ -218,7 +229,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
             continue
         img.profile(variant.name, extends=default.name)
         with img.profiles(variant.name):
-            _declare(img, own, full=child.items, reemit=reemit, dialect=dialect)
+            _declare(img, own, full=child.items, reemit=reemit, dialect=dialect, skip=backports)
         _apply_target(img, variant.name, child.targets, inherited=base.targets)
     if rejected:
         plural = "s" if len(rejected) > 1 else ""
@@ -234,6 +245,31 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
             context={"variants": ", ".join(name for name, _ in rejected)},
         )
     return img
+
+
+def _backports_sources(recipe: Recipe) -> dict[Declaration, str]:
+    """The sync hook of each :class:`Backports` in *recipe*, mapped to the sources it stands for.
+
+    The ``current`` dialect writes those sources into ``mkosi.sandbox`` in place of
+    the hook: mkosi 26 reads ``SandboxTrees=`` before any script runs and gives sync
+    scripts no ``$BUILDDIR``.
+    """
+    release = recipe.base.partition("/")[2]
+    found: dict[Declaration, str] = {}
+
+    def walk(fragment: Fragment) -> None:
+        if isinstance(fragment, Backports):
+            hook = next(item for item in fragment.items if isinstance(item, Hook))
+            found[hook] = fragment.render_sources(mirror=recipe.mirror, release=release)
+            return
+        for item in fragment.items:
+            if isinstance(item, Fragment):
+                walk(item)
+
+    walk(recipe.common)
+    for variant in recipe.variants:
+        walk(variant.add)
+    return found
 
 
 def _wide(items: Sequence[Declaration]) -> dict[tuple[str, ...], Declaration]:
@@ -326,12 +362,14 @@ def _declare(
     full: Sequence[Declaration],
     reemit: Sequence[Unit] = (),
     dialect: str = "current",
+    skip: Collection[Declaration] = (),
 ) -> None:
     """Issue the fluent calls for *items* on the active profile.
 
     *full* is the whole resolved variant: it decides runtime-init wiring.
     Under the ``nethermind-v1`` dialect groups and users are postinst lines
     at their declaration position, spelled as the historical tree spells them.
+    Hooks in *skip* keep their place in the hook order but are not emitted.
     """
     historical = dialect == HISTORICAL
     after_init = has_init(full)
@@ -375,7 +413,8 @@ def _declare(
                     img.mount_build_source(source, dest=dest)
             case Hook():
                 hook = next(hooks)
-                img.shell(hook.script, phase=hook.phase, env=dict(hook.env), cwd=hook.cwd)
+                if hook not in skip:
+                    img.shell(hook.script, phase=hook.phase, env=dict(hook.env), cwd=hook.cwd)
             case Repository():
                 img.repository(
                     item.url,
@@ -844,11 +883,17 @@ def _setting_bool(setting: Setting, value: str) -> bool:
     )
 
 
-def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
+def _mkosi_options(
+    recipe: Recipe,
+    settings: Sequence[Setting],
+    *,
+    sandbox_files: tuple[tuple[str, str], ...] = (),
+) -> MkosiOptions:
     """``MkosiOptions`` for the recipe-wide fields and one variant's *settings*.
 
     Settings without a compiler field are written verbatim, unless the compiler
-    writes that key itself.
+    writes that key itself. *sandbox_files* replace the ``nethermind-v1``
+    backports sandbox tree.
     """
     config = recipe.mkosi
     changes: dict[str, Any] = {
@@ -856,7 +901,10 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
         "init_script": config.init_script,
         "generate_version_script": config.version_script,
         "generate_cloud_postoutput": config.cloud_postoutput,
+        "dialect": config.dialect,
     }
+    if sandbox_files:
+        changes["sandbox_files"] = sandbox_files
     environment: dict[str, str] = {}
     passthrough: list[str] = []
     verbatim: list[tuple[str, str, tuple[str, ...]]] = []
@@ -875,7 +923,9 @@ def _mkosi_options(recipe: Recipe, settings: Sequence[Setting]) -> MkosiOptions:
                     passthrough.append(name)
             continue
         if key == ("Build", "SandboxTrees"):
-            changes["sandbox_trees"] = setting.values
+            changes["sandbox_trees"] = tuple(
+                v for v in setting.values if not (sandbox_files and v == BACKPORTS_TREE)
+            )
             continue
         if key == _BOOTABLE and len(setting.values) == 1 and setting.values[0].lower() in _FALSE:
             changes["bootable"] = False

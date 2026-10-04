@@ -366,3 +366,182 @@ def test_local_prepare_needs_no_cloud_tool_for_qemu(
     LocalLinuxBackend().prepare(bake_request(tmp_path))
 
     assert (tmp_path / "build").is_dir()
+
+
+@pytest.mark.parametrize("target", ["azure", "gcp"])
+def test_local_command_gives_a_default_tools_tree_the_cloud_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: OutputTarget
+) -> None:
+    """The cloud postoutput scripts run in the tools tree, which lacks qemu-img, sgdisk, parted."""
+    request = replace(_relative_request(tmp_path, monkeypatch), output_targets=(target,))
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+
+    flags = _flags(LocalLinuxBackend(privilege="none").command(request))
+
+    assert flags["tools-tree"] == "default"
+    assert flags["tools-tree-package"] == "qemu-utils,gdisk,parted"
+
+
+def test_local_command_adds_no_cloud_packages_for_qemu_or_host_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+    assert "tools-tree-package" not in _flags(LocalLinuxBackend(privilege="none").command(request))
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
+    cloud = replace(request, output_targets=("azure",))
+    assert not any(
+        arg.startswith("--tools-tree") for arg in LocalLinuxBackend(privilege="none").command(cloud)
+    )
+
+
+def test_local_command_reuses_a_stashed_tools_tree_only_with_the_cloud_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = replace(_relative_request(tmp_path, monkeypatch), output_targets=("azure",))
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+    backend = LocalLinuxBackend(privilege="none")
+    cached = tmp_path / "build" / ".mkosi" / "mkosi.tools"
+    (cached / "usr" / "bin").mkdir(parents=True)
+
+    assert _flags(backend.command(request))["tools-tree"] == "default"
+
+    (cached / "usr" / "bin" / "qemu-img").touch()
+    (cached / "usr" / "sbin").mkdir()
+    (cached / "usr" / "sbin" / "sgdisk").touch()
+    (cached / "usr" / "sbin" / "parted").touch()
+    flags = _flags(backend.command(request))
+    assert flags["tools-tree"] == str(cached)
+    assert "tools-tree-package" not in flags
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
+@pytest.mark.parametrize("conf", ["[Build]\nToolsTree=default\n", "[Output]\nFormat=uki\n"])
+def test_local_prepare_skips_the_host_cloud_check_in_a_tools_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str
+) -> None:
+    request = replace(_relative_request(tmp_path, monkeypatch, conf), output_targets=("azure",))
+    monkeypatch.setattr(
+        "tundravm.backends.local_linux.shutil.which",
+        lambda name: None if name in ("qemu-img", "ukify") else f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
+
+    LocalLinuxBackend().prepare(request)
+
+    assert (tmp_path / "build").is_dir()
+
+
+# ── pefile ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "conf",
+    [
+        "[Output]\nFormat=directory\n",
+        "[Output]\nFormat=disk\n",
+        "[Output]\nFormat=disk\n[Content]\nBootable=yes\n",
+    ],
+)
+def test_local_command_adds_a_tools_tree_without_pefile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str
+) -> None:
+    """mkosi reads an installed kernel with pefile, even for a directory build."""
+    notices: list[tuple[str, str]] = []
+    request = replace(
+        _relative_request(tmp_path, monkeypatch, conf),
+        on_notice=lambda level, message: notices.append((level, message)),
+    )
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_pefile", lambda: False)
+
+    cmd = LocalLinuxBackend(privilege="none").command(request)
+
+    assert "--tools-tree=default" in cmd
+    assert notices == [
+        (
+            "info",
+            "pefile not found on the host; building with mkosi's default tools tree "
+            "(--tools-tree=default). Install python3-pefile to use the host tools.",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("conf", "mkosi_args"),
+    [
+        ("[Output]\nFormat=disk\n[Content]\nBootable=no\n", []),
+        ("[Output]\nFormat=directory\n", ["--bootable=no"]),
+    ],
+)
+def test_local_command_keeps_host_tools_without_pefile_for_unbootable_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str, mkosi_args: list[str]
+) -> None:
+    request = _relative_request(tmp_path, monkeypatch, conf)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+    probed: list[bool] = []
+
+    def no_pefile() -> bool:
+        probed.append(True)
+        return False
+
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_pefile", no_pefile)
+
+    cmd = LocalLinuxBackend(privilege="none", mkosi_args=mkosi_args).command(request)
+
+    assert not any(arg.startswith("--tools-tree") for arg in cmd)
+    assert probed == []
+
+
+def test_local_notice_names_every_missing_host_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notices: list[str] = []
+    request = replace(
+        _relative_request(tmp_path, monkeypatch),
+        on_notice=lambda _level, message: notices.append(message),
+    )
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_pefile", lambda: False)
+
+    LocalLinuxBackend(privilege="none").command(request)
+
+    assert notices[0].startswith("ukify and pefile not found on the host;")
+    assert notices[0].endswith("Install systemd-ukify and python3-pefile to use the host tools.")
+
+
+def test_local_requirements_probe_pefile_with_mkosis_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = tmp_path / "mkosi"
+    script.write_text("#!/opt/py/bin/python3.12 -s\nimport mkosi\n")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: str(script))
+
+    by_tool = {r.tool: r for r in LocalLinuxBackend().requirements()}
+
+    pefile = by_tool["pefile"]
+    assert pefile.optional
+    assert pefile.probe[0] == "/opt/py/bin/python3.12"
+    assert pefile.probe[1:] == ("-c", "import pefile; print(pefile.__version__)")
+    assert pefile.hint == (
+        'install python3-pefile, or let mkosi use its tools tree (Setting("Build", "ToolsTree", '
+        '("default",)))'
+    )
+
+
+@pytest.mark.parametrize(
+    ("shebang", "python"),
+    [("#!/usr/bin/env python3\n", "python3"), ("#!/bin/sh\n", "python3"), ("", "python3")],
+)
+def test_mkosi_python_falls_back_to_python3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shebang: str, python: str
+) -> None:
+    from tundravm.backends.local_linux import mkosi_python
+
+    script = tmp_path / "mkosi"
+    script.write_text(f"{shebang}exec mkosi\n")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: str(script))
+    assert mkosi_python() == python
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: None)
+    assert mkosi_python() == "python3"

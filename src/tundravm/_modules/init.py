@@ -29,12 +29,18 @@ class Init:
         return "runtime-init.service"
 
     def apply(
-        self, profile: ProfileState, *, scripts: Sequence[InitScriptEntry] | None = None
+        self,
+        profile: ProfileState,
+        *,
+        scripts: Sequence[InitScriptEntry] | None = None,
+        network_setup: bool = True,
     ) -> None:
         """Generate runtime-init script + service unit into *profile*.files.
 
         *scripts* replaces ``profile.init_scripts`` as the fragments to render, e.g.
-        with the merged fragments of a profile that extends another.
+        with the merged fragments of a profile that extends another. With
+        *network_setup* the unit requires ``network-setup.service``; without it, it
+        waits for ``network-online.target``.
         """
         merged_scripts = list(profile.init_scripts if scripts is None else scripts)
         if not merged_scripts:
@@ -76,17 +82,21 @@ class Init:
         profile.files.append(
             FileEntry(
                 path="/usr/lib/systemd/system/runtime-init.service",
-                content=self._render_service_unit(),
+                content=self._render_service_unit(network_setup=network_setup),
                 mode="0644",
             )
         )
 
-    def _render_service_unit(self) -> str:
+    def _render_service_unit(self, *, network_setup: bool = True) -> str:
+        network = (
+            "After=network.target network-setup.service\nRequires=network-setup.service"
+            if network_setup
+            else "After=network-online.target\nWants=network-online.target"
+        )
         return dedent("""\
             [Unit]
             Description=Runtime Init
-            After=network.target network-setup.service
-            Requires=network-setup.service
+            {network}
 
             [Service]
             Type=oneshot
@@ -95,4 +105,4 @@ class Init:
 
             [Install]
             WantedBy=minimal.target
-        """)
+        """).format(network=network)

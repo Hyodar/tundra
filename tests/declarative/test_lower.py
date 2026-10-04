@@ -262,6 +262,7 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
         with_network=False,
         sandbox_trees=("a:/b", "c:/d"),
         emit_mode="native_profiles",
+        dialect="nethermind-v1",
     )
     assert img.reproducible
     assert not lower(Recipe("r", Fragment("c"), epoch=None)).reproducible

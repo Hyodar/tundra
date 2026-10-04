@@ -38,3 +38,9 @@ def _no_network_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
 def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Run from *tmp_path*: lowering reads ``./build/tundravm.lock``; keep the repository's out."""
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _host_has_pefile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the host's ``pefile`` out of the local backend's tools-tree choice."""
+    monkeypatch.setattr("tundravm.backends.local_linux.host_has_pefile", lambda: True)

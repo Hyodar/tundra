@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -45,20 +45,39 @@ TOOLS_TREE_FIX = (
 """Hint for a host tool a default mkosi tools tree would provide."""
 
 
-HOST_BUILD_TOOLS: tuple[Requirement, ...] = tuple(
-    Requirement(
-        tool=tool,
-        probe=(tool, "--version"),
-        hint=TOOLS_TREE_FIX.format(package=package),
-        optional=True,
-    )
-    for tool, package in (
-        ("ukify", "systemd-ukify"),
-        ("systemd-repart", "systemd-repart"),
-        ("apt", "apt (Debian and Ubuntu images)"),
-    )
+PEFILE = Requirement(
+    tool="pefile",
+    probe=("python3", "-c", "import pefile; print(pefile.__version__)"),
+    hint="install python3-pefile, or let mkosi use its tools tree "
+    '(Setting("Build", "ToolsTree", ("default",)))',
+    optional=True,
 )
-"""Host tools mkosi runs without a tools tree; the backend adds one when ``ukify`` is missing."""
+"""Python's ``pefile``: mkosi reads the installed kernel with it, directory builds included.
+
+``requirements`` probes it with the interpreter that runs mkosi (:func:`mkosi_python`)."""
+
+
+HOST_BUILD_TOOLS: tuple[Requirement, ...] = (
+    *(
+        Requirement(
+            tool=tool,
+            probe=(tool, "--version"),
+            hint=TOOLS_TREE_FIX.format(package=package),
+            optional=True,
+        )
+        for tool, package in (
+            ("ukify", "systemd-ukify"),
+            ("systemd-repart", "systemd-repart"),
+            ("apt", "apt (Debian and Ubuntu images)"),
+        )
+    ),
+    PEFILE,
+)
+"""Host tools mkosi runs without a tools tree; the backend adds one when ``ukify`` or
+``pefile`` is missing and the build needs it."""
+
+HOST_TOOL_PACKAGES = {"ukify": "systemd-ukify", "pefile": "python3-pefile"}
+"""The package that provides each host tool a missing one of which adds a tools tree."""
 
 
 CLOUD_IMAGE_TOOLS: tuple[tuple[str, Requirement], ...] = (
@@ -90,6 +109,19 @@ def cloud_tools(targets: Iterable[str]) -> tuple[Requirement, ...]:
     """The cloud postoutput tools *targets* need, once each, in table order."""
     wanted = set(targets)
     return tuple(req for target, req in CLOUD_IMAGE_TOOLS if target in wanted)
+
+
+CLOUD_TOOLS_TREE_PACKAGES = ("qemu-utils", "gdisk", "parted")
+"""What a default tools tree gets for the azure and gcp postoutput scripts, which run in it."""
+CLOUD_TOOLS_TREE_BINARIES = ("qemu-img", "sgdisk", "parted")
+"""The commands of :data:`CLOUD_TOOLS_TREE_PACKAGES` a reused tools tree must hold."""
+
+
+def tree_has_tools(tree: Path, tools: Iterable[str]) -> bool:
+    """Whether the tools tree at *tree* ships every one of *tools*."""
+    return all(
+        any(os.path.lexists(tree / "usr" / sub / tool) for sub in ("bin", "sbin")) for tool in tools
+    )
 
 
 UKIFY_FORMATS = frozenset({"uki", "esp"})
@@ -124,9 +156,50 @@ def needs_ukify(mkosi_dir: Path, mkosi_args: list[str]) -> bool:
     return (bootable or "auto").lower() in ENABLED
 
 
+def installs_kernel(mkosi_dir: Path, mkosi_args: list[str]) -> bool:
+    """Whether mkosi may read an installed kernel with pefile: any build but ``Bootable=no``."""
+    bootable = _last_arg(mkosi_args, "--bootable") or mkosi_setting(mkosi_dir, "Bootable")
+    return (bootable or "auto").lower() not in DISABLED
+
+
 def host_has_ukify() -> bool:
     """Whether mkosi would find ``ukify`` on this host."""
     return shutil.which("ukify") is not None or any(os.path.exists(p) for p in UKIFY_PATHS)
+
+
+def mkosi_python() -> str:
+    """The interpreter that runs mkosi: its script's shebang, else ``python3``."""
+    path = shutil.which("mkosi")
+    try:
+        with open(path or "", "rb") as script:
+            first = script.readline(256)
+    except OSError:
+        return "python3"
+    words = first[2:].decode(errors="replace").split() if first.startswith(b"#!") else []
+    if words and os.path.basename(words[0]) == "env":
+        words = words[1:]
+    return words[0] if words and "python" in os.path.basename(words[0]) else "python3"
+
+
+def host_has_pefile() -> bool:
+    """Whether the Python that runs mkosi on the host imports ``pefile``."""
+    try:
+        result = subprocess.run(
+            [mkosi_python(), "-c", "import pefile"], capture_output=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def missing_host_tools(mkosi_dir: Path, mkosi_args: list[str]) -> tuple[str, ...]:
+    """The host tools the build needs and lacks that mkosi's default tools tree provides."""
+    missing: list[str] = []
+    if needs_ukify(mkosi_dir, mkosi_args) and not host_has_ukify():
+        missing.append("ukify")
+    if installs_kernel(mkosi_dir, mkosi_args) and not host_has_pefile():
+        missing.append("pefile")
+    return tuple(missing)
 
 
 @dataclass(slots=True)
@@ -159,7 +232,11 @@ class LocalLinuxBackend:
                     hint="Install util-linux for rootless `unshare --map-auto`.",
                 ),
             )
-        return (mkosi, *privilege, *HOST_BUILD_TOOLS)
+        tools = tuple(
+            replace(req, probe=(mkosi_python(), *req.probe[1:])) if req is PEFILE else req
+            for req in HOST_BUILD_TOOLS
+        )
+        return (mkosi, *privilege, *tools)
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         return (
@@ -241,6 +318,8 @@ class LocalLinuxBackend:
         tools = self.tools_tree(request)
         if tools is not None:
             cmd.append(f"--tools-tree={tools}")
+            if tools == "default" and cloud_tools(request.output_targets):
+                cmd.append(f"--tools-tree-package={','.join(CLOUD_TOOLS_TREE_PACKAGES)}")
         if native:
             cmd.append(f"--profile={request.profile}")
         cmd.extend([*self.mkosi_args, "build"])
@@ -249,30 +328,55 @@ class LocalLinuxBackend:
     def tools_tree(self, request: BakeRequest) -> str | None:
         """The ``--tools-tree`` value to pass, or ``None`` to leave mkosi's choice alone.
 
-        A recipe that sets no ``ToolsTree=`` and builds a UKI (:func:`needs_ukify`)
-        on a host without ``ukify`` gets ``default``; other builds keep the host
-        tools. ``ToolsTree=default`` reuses the tree an earlier bake into the
-        same build directory left in ``.mkosi/mkosi.tools`` instead of rebuilding it.
+        A recipe that sets no ``ToolsTree=`` gets ``default`` when the host lacks a
+        tool the build needs (:func:`missing_host_tools`: ``ukify`` for a UKI,
+        ``pefile`` for any bootable build); other builds keep the host tools.
+        ``ToolsTree=default`` reuses the tree an earlier bake into the same build
+        directory left in ``.mkosi/mkosi.tools`` instead of rebuilding it, unless
+        an azure or gcp variant needs the cloud tools that tree lacks; ``command``
+        then adds them with ``--tools-tree-package``.
         """
+        value, message = self._tools_tree_choice(request)
+        if message is not None:
+            request.notice("info", message)
+        return value
+
+    def _tools_tree_choice(self, request: BakeRequest) -> tuple[str | None, str | None]:
+        """:meth:`tools_tree`'s value and the notice that explains it, if any."""
         build_dir = request.build_dir.resolve()
         mkosi_dir, _ = mkosi_project(request.emit_dir.resolve(), request.profile)
         if any(arg.startswith("--tools-tree") for arg in self.mkosi_args):
-            return None
+            return None, None
         configured = mkosi_setting(mkosi_dir, "ToolsTree")
         if configured is not None and configured not in ("default", "yes"):
-            return None
-        if configured is None and (host_has_ukify() or not needs_ukify(mkosi_dir, self.mkosi_args)):
-            return None
+            return None, None
+        missing = () if configured is not None else missing_host_tools(mkosi_dir, self.mkosi_args)
+        if configured is None and not missing:
+            return None, None
         cached = build_dir / STATE_DIRNAME / "mkosi.tools"
-        value = str(cached) if cached.is_dir() else "default"
+        cloud = bool(cloud_tools(request.output_targets))
+        reuse = cached.is_dir() and (not cloud or tree_has_tools(cached, CLOUD_TOOLS_TREE_BINARIES))
+        value = str(cached) if reuse else "default"
+        message: str | None = None
         if configured is None:
-            how = f"reusing {cached}" if value != "default" else "--tools-tree=default"
-            request.notice(
-                "info",
-                f"ukify not found on the host; building with mkosi's default tools tree "
-                f"({how}). Install systemd-ukify to use the host tools.",
+            how = f"reusing {cached}" if reuse else "--tools-tree=default"
+            install = " and ".join(HOST_TOOL_PACKAGES[tool] for tool in missing)
+            message = (
+                f"{' and '.join(missing)} not found on the host; building with mkosi's default "
+                f"tools tree ({how}). Install {install} to use the host tools."
             )
-        return value
+        return value, message
+
+    def _scripts_in_tools_tree(self, request: BakeRequest) -> bool:
+        """Whether mkosi runs this build's scripts in a tools tree, not on the host."""
+        passed = _last_arg(self.mkosi_args, "--tools-tree")
+        if passed is not None:
+            return passed.lower() not in DISABLED
+        mkosi_dir, _ = mkosi_project(request.emit_dir.resolve(), request.profile)
+        configured = mkosi_setting(mkosi_dir, "ToolsTree")
+        if configured is not None:
+            return configured.lower() not in DISABLED
+        return self._tools_tree_choice(request)[0] is not None
 
     def cleanup(self, request: BakeRequest) -> None:
         pass
@@ -349,8 +453,15 @@ class LocalLinuxBackend:
         self._check_mkosi_version()
 
     def _ensure_cloud_tools(self, request: BakeRequest) -> None:
-        """Fail before mkosi runs when a cloud postoutput script would miss its tool."""
-        for requirement in cloud_tools(request.output_targets):
+        """Fail before mkosi runs when a cloud postoutput script would miss its tool.
+
+        Only for host-tools builds: in a tools tree the scripts run there, and a
+        default one gets :data:`CLOUD_TOOLS_TREE_PACKAGES`.
+        """
+        required = cloud_tools(request.output_targets)
+        if not required or self._scripts_in_tools_tree(request):
+            return
+        for requirement in required:
             if shutil.which(requirement.tool) is None:
                 raise BackendExecutionError(
                     f"Variant {request.profile!r} needs `{requirement.tool}` on the host "
