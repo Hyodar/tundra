@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from tundravm.formats import annotation_path, md_cell, md_table, workflow_command
 from tundravm.lockfile.model import Lockfile
 from tundravm.lockfile.resolve import recipe_digest, section_values, value_digest
 
@@ -49,17 +51,54 @@ class LockDrift:
         """One line per drifted section (``~``, ``+``, ``-``), or ``lock is up to date``."""
         if self.is_clean:
             return "lock is up to date"
+        lines: list[str] = []
+        for marker, name, detail in self._entries():
+            line = f"{marker} {name}"
+            lines.append(f"{line}: {detail}" if detail else line)
+        return "\n".join(lines)
+
+    def github(self, lock_path: str | Path | None = None) -> str:
+        """One ``::error`` workflow command per drifted section, or ``lock is up to date``."""
+        if self.is_clean:
+            return "lock is up to date"
+        path = None if lock_path is None else annotation_path(lock_path)
+        lines: list[str] = []
+        for marker, name, detail in self._entries():
+            message = f"{name} {_DRIFT_WORDS[marker]}"
+            if detail:
+                message += f": {detail}"
+            message += ". Run `tundravm lock` and commit the lockfile."
+            lines.append(workflow_command("error", message, file=path, title="lock drift"))
+        return "\n".join(lines)
+
+    def markdown(self) -> str:
+        """A Markdown table of drifted sections, or a bold up-to-date line."""
+        if self.is_clean:
+            return "**Lock is up to date.**"
+        rows = [
+            (md_cell(_DRIFT_WORDS[marker]), md_cell(name, code=True), md_cell(detail, code=True))
+            for marker, name, detail in self._entries()
+        ]
+        return md_table(("Change", "Section", "Detail"), rows)
+
+    def _entries(self) -> list[tuple[str, str, str | None]]:
+        """``(marker, section, detail)`` per drifted section, sorted by section."""
         markers = {name: "~" for name in self.changed}
         markers.update({name: "+" for name in self.added})
         markers.update({name: "-" for name in self.removed})
-        lines: list[str] = []
-        for name in sorted(markers):
-            line = f"{markers[name]} {name}"
-            detail = self.details.get(name)
-            lines.append(f"{line}: {detail}" if detail else line)
-        if not lines:
-            lines.append("~ recipe_digest (every section matches; the lockfile digest was edited)")
-        return "\n".join(lines)
+        entries = [(markers[name], name, self.details.get(name)) for name in sorted(markers)]
+        if not entries and not self.digest_matches:
+            entries.append(
+                ("~", "recipe_digest", "every section matches; the lockfile digest was edited")
+            )
+        return entries
+
+
+_DRIFT_WORDS = {
+    "~": "changed",
+    "+": "added (not in the lockfile)",
+    "-": "removed (only in the lockfile)",
+}
 
 
 def compare_lock(lock: Lockfile, payload: Mapping[str, object]) -> LockDrift:

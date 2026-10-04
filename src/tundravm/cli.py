@@ -3,9 +3,10 @@
 Every command loads an ``Image`` from a Python recipe file via
 :func:`tundravm.recipe.load_recipe`, applies the requested profile selection,
 and runs one lifecycle step. ``measure`` and ``deploy`` read the
-``bake-result.json`` a previous ``bake`` wrote. Exit codes: 0 success, 2 SDK
-error (``E_*`` codes), 1 for a failed check (``check``, ``compile --check``, ``lock --check``,
-``diff``) or an unexpected failure.
+``bake-result.json`` a previous ``bake`` wrote. ``init`` bootstraps a recipe
+project and ``ci`` runs the three review gates in one go. Exit codes: 0 success,
+2 SDK error (``E_*`` codes), 1 for a failed check (``check``, ``compile --check``,
+``lock --check``, ``diff``, ``ci``) or an unexpected failure.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Sequence
@@ -24,15 +26,26 @@ from typing import TextIO, cast, get_args
 from . import __version__
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
-from .check import cmd_check
+from .check import check as run_checks
+from .check import cmd_check, failing, render_as, render_summary
 from .check import render as render_diagnostics
-from .diff import _wants_color, cmd_diff
+from .diff import _wants_color, cmd_diff, diff_against
 from .errors import TdxError, ValidationError
+from .explain import render_markdown
+from .formats import annotation_path, format_help, resolve_format, workflow_command
 from .image import Image
-from .lockfile import recipe_digest
+from .lockfile import LockDrift, recipe_digest
 from .models import DeployResult, OutputTarget
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
 from .recipe import load_recipe
+from .templates import (
+    BACKEND_SNIPPETS,
+    GITIGNORE_BLOCK,
+    GITIGNORE_MARKER,
+    WORKFLOW_PATH,
+    render_recipe_template,
+    render_workflow,
+)
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -70,7 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
     explain = _add_command(
         sub, "explain", _cmd_explain, help="Show what the recipe will produce (dry run)."
     )
-    explain.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
+    explain_format = explain.add_mutually_exclusive_group()
+    explain_format.add_argument(
+        "--format",
+        choices=("text", "json", "markdown"),
+        default=None,
+        help=(
+            "Output format (default: text). markdown renders one section per profile with "
+            "tables, ready for $GITHUB_STEP_SUMMARY."
+        ),
+    )
+    explain_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
 
     digest = _add_command(
         sub, "digest", _cmd_digest, help="Print the recipe digest used by lockfiles."
@@ -94,6 +117,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not write; exit 1 if the tree at --out is stale relative to the recipe.",
     )
+    compile_cmd.add_argument(
+        "--format",
+        choices=("auto", "text", "markdown", "github"),
+        default=None,
+        help=(
+            "Report format for --check (default: auto); text lists the changed files. "
+            + format_help()
+        ),
+    )
 
     lock = _add_command(sub, "lock", _cmd_lock, help="Write the lockfile for the recipe.")
     lock.epilog = (
@@ -115,6 +147,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Do not write; print the drift and exit 1 if the lockfile is stale, "
             "or print `lock is up to date` and exit 0."
+        ),
+    )
+    lock.add_argument(
+        "--format",
+        choices=("auto", "text", "github", "markdown"),
+        default=None,
+        help=(
+            "Drift report format for --check (default: auto): github prints one ::error "
+            "per drifted section, markdown a table. " + format_help()
         ),
     )
     lock.add_argument(
@@ -172,7 +213,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     check = _add_command(sub, "check", _cmd_check, help="Lint the recipe and report diagnostics.")
-    check.add_argument("--json", action="store_true", help="Emit diagnostics as JSON.")
+    check_format = check.add_mutually_exclusive_group()
+    check_format.add_argument(
+        "--format",
+        choices=("auto", "text", "json", "github", "markdown"),
+        default=None,
+        help=(
+            "Output format (default: auto). github prints `::error file=RECIPE,title=CODE::"
+            "message` lines that show inline on the pull request; markdown prints a table. "
+            + format_help("--json")
+        ),
+    )
+    check_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
     check.add_argument("--strict", action="store_true", help="Treat warnings as errors (exit 1).")
 
     diff = _add_command(
@@ -184,7 +236,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Compiled mkosi tree to compare with (default: <build_dir>/mkosi).",
     )
-    diff.add_argument("--stat", action="store_true", help="Only list changed files.")
+    diff_format = diff.add_mutually_exclusive_group()
+    diff_format.add_argument(
+        "--format",
+        choices=("auto", "text", "stat", "markdown", "github"),
+        default=None,
+        help=(
+            "Output format (default: auto). text is a unified diff, stat lists changed "
+            "files, markdown wraps both for a PR comment, github annotates each changed "
+            "file. " + format_help("--stat")
+        ),
+    )
+    diff_format.add_argument(
+        "--stat", action="store_true", help="Only list changed files (--format stat)."
+    )
     diff.add_argument(
         "--color",
         choices=("auto", "always", "never"),
@@ -223,6 +288,75 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="KEY=VALUE",
         help="Adapter parameter (repeatable), e.g. --param ssh_port=2223.",
+    )
+
+    ci = _add_command(
+        sub,
+        "ci",
+        _cmd_ci,
+        help="Run check --strict, compile --check and lock --check; stop at the first failure.",
+    )
+    ci.epilog = (
+        "Lints every declared profile; the compile and lock checks use the selected "
+        "profiles, as `compile` and `lock` do. Prints `ok STEP: ...` or `FAIL STEP: ...` "
+        "per step (and `skip STEP` after a failure) and exits 1 on the first failure, "
+        "including a missing lockfile."
+    )
+    ci.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Committed mkosi tree to check (default: <build_dir>/mkosi).",
+    )
+    ci.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="Lockfile to check (default: <build_dir>/tundravm.lock).",
+    )
+    ci.add_argument(
+        "--format",
+        choices=("auto", "text", "github"),
+        default=None,
+        help="Report format for failing steps (default: auto). " + format_help(),
+    )
+
+    init = sub.add_parser(
+        "init",
+        help="Bootstrap a recipe project, optionally with a GitHub Actions workflow.",
+        description=(
+            "Write <name>.py from the starter template and a .gitignore block for build/ "
+            "that keeps build/tundravm.lock committed. With --ci github, also write "
+            f"{WORKFLOW_PATH}, which posts `explain --format markdown` to the job summary "
+            "and runs `tundravm ci`."
+        ),
+    )
+    init.set_defaults(handler=_cmd_init)
+    init.add_argument(
+        "dir", type=Path, nargs="?", default=Path("."), help="Project directory (default: .)."
+    )
+    init.add_argument(
+        "--name",
+        default=None,
+        help="Recipe name; writes NAME.py (default: the directory name).",
+    )
+    init.add_argument(
+        "--base", default="debian/trixie", help="Base distribution (default: %(default)s)."
+    )
+    init.add_argument(
+        "--backend",
+        choices=sorted(BACKEND_SNIPPETS),
+        default="lima",
+        help="Build backend to wire in (default: %(default)s).",
+    )
+    init.add_argument(
+        "--ci",
+        choices=("github", "none"),
+        default="none",
+        help="CI workflow to write (default: %(default)s).",
+    )
+    init.add_argument(
+        "--force", action="store_true", help="Overwrite the recipe and workflow if they exist."
     )
 
     doctor_cmd = sub.add_parser(
@@ -339,11 +473,17 @@ def _load(args: argparse.Namespace) -> Image:
 
 def _cmd_explain(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
+    fmt = args.format or ("json" if args.json else "text")
     with _selected(img, args):
         profiles = _operation_profiles(img, args)
-        if args.json:
+        if fmt == "json":
             payload = {name: img.explain(profile=name) for name in profiles}
             print(json.dumps(payload, indent=2, sort_keys=True), file=out)
+            return EXIT_OK
+        if fmt == "markdown":
+            print(f"# tundravm: `{args.recipe.name}`\n", file=out)
+            sections = [render_markdown(img.explain(profile=name)) for name in profiles]
+            print("\n".join(sections).rstrip(), file=out)
             return EXIT_OK
         for index, name in enumerate(profiles):
             if index:
@@ -385,8 +525,10 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
     destination = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
     with _selected(img, args):
         if args.check:
+            fmt = resolve_format(args.format)
             args.against = destination
-            args.stat = True
+            args.format = "stat" if fmt == "text" else fmt
+            args.stat = False
             args.color = "never"
             return cmd_diff(args, out, img)
         result = img.compile(destination, force=args.force)
@@ -401,10 +543,13 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     with _selected(img, args):
         if args.check:
             drift = img.lock_status(args.path)
-            print(drift.render(), file=out)
+            print(
+                render_drift(drift, resolve_format(args.format), _lock_path(img, args.path)),
+                file=out,
+            )
             return EXIT_OK if drift.is_clean else EXIT_FAILURE
         if args.explain:
-            current = args.path if args.path is not None else Path(img.build_dir) / "tundravm.lock"
+            current = _lock_path(img, args.path)
             if current.exists():
                 print(img.lock_status(current).render(), file=out)
             else:
@@ -412,6 +557,19 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
         path = img.lock(args.path, offline=args.offline)
     print(f"locked {path}", file=out)
     return EXIT_OK
+
+
+def _lock_path(img: Image, path: Path | None) -> Path:
+    return path if path is not None else Path(img.build_dir) / "tundravm.lock"
+
+
+def render_drift(drift: LockDrift, fmt: str, lock_path: Path) -> str:
+    """Render a lock drift report in a resolved format: text, github or markdown."""
+    if fmt == "github":
+        return drift.github(lock_path)
+    if fmt == "markdown":
+        return drift.markdown()
+    return drift.render()
 
 
 def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
@@ -604,55 +762,6 @@ def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
     return doctor(img, out)
 
 
-BACKEND_SNIPPETS: dict[str, tuple[str, str]] = {
-    "lima": (
-        "from tundravm.backends import LimaMkosiBackend",
-        'LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")',
-    ),
-    "nix": ("from tundravm.backends import NixMkosiBackend", "NixMkosiBackend()"),
-    "local": ("from tundravm.backends import LocalLinuxBackend", "LocalLinuxBackend()"),
-    "inprocess": (
-        "from tundravm.backends.inprocess import InProcessBackend",
-        "InProcessBackend()",
-    ),
-}
-
-RECIPE_TEMPLATE = '''"""{title} image recipe.
-
-Inspect:  tundravm explain {filename}
-Compile:  tundravm compile {filename}
-Build:    tundravm bake {filename} --lock
-"""
-
-from tundravm import Image
-{backend_import}
-from tundravm.modules import Devtools
-
-img = Image(base="{base}", backend={backend_expr})
-img.install("systemd", "curl", "jq")
-img.file("/etc/motd", content="{title}\\n")
-img.user("app", system=True, shell="/bin/false")
-img.service("app", command="/usr/bin/true")
-img.debloat(enabled=True)
-img.output_targets("qemu")
-
-with img.profile("dev"):
-    img.apply(Devtools())
-'''
-
-
-def render_recipe_template(*, title: str, filename: str, base: str, backend: str) -> str:
-    """Return the starter recipe source for ``tundravm new``."""
-    backend_import, backend_expr = BACKEND_SNIPPETS[backend]
-    return RECIPE_TEMPLATE.format(
-        title=title,
-        filename=filename,
-        base=base,
-        backend_import=backend_import,
-        backend_expr=backend_expr,
-    )
-
-
 def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
     path: Path = args.path
     if path.exists() and not args.force:
@@ -679,6 +788,151 @@ def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+CiStep = Callable[[Image, argparse.Namespace, str], tuple[bool, str, str]]
+
+
+def _ci_check(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+    diagnostics = run_checks(img, profiles=sorted(img.state.profiles))
+    report = render_as(diagnostics, fmt, recipe_path=args.recipe, strict=True)
+    return (
+        not failing(diagnostics, strict=True),
+        report if diagnostics else "",
+        render_summary(diagnostics),
+    )
+
+
+def _ci_compile(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+    destination: Path = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
+    result = diff_against(img, destination)
+    if result.is_clean:
+        return True, "", f"{destination} is up to date"
+    report = result.render("stat" if fmt == "text" else fmt, root=annotation_path(destination))
+    count = len(result.changes)
+    verdict = (
+        f"{count} file{'' if count == 1 else 's'} stale in {destination}; "
+        f"run `tundravm compile {args.recipe} --out {destination}`"
+    )
+    return False, report.rstrip(), verdict
+
+
+def _ci_lock(img: Image, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
+    path = _lock_path(img, args.lockfile)
+    drift = img.lock_status(path)
+    if drift.is_clean:
+        return True, "", f"{path} is up to date"
+    count = len(drift.sections) or 1
+    verdict = (
+        f"{count} section{'' if count == 1 else 's'} drifted from {path}; "
+        f"run `tundravm lock {args.recipe}`"
+    )
+    return False, render_drift(drift, fmt, path), verdict
+
+
+CI_STEPS: tuple[tuple[str, CiStep], ...] = (
+    ("check", _ci_check),
+    ("compile", _ci_compile),
+    ("lock", _ci_lock),
+)
+
+
+def _cmd_ci(args: argparse.Namespace, out: TextIO) -> int:
+    img = _load(args)
+    fmt = resolve_format(args.format)
+    with _selected(img, args):
+        for index, (name, step) in enumerate(CI_STEPS):
+            try:
+                ok, report, verdict = step(img, args, fmt)
+            except TdxError as exc:
+                hint = f" ({exc.hint})" if exc.hint else ""
+                ok, verdict = False, f"[{exc.code}] {exc.args[0]}{hint}"
+                report = (
+                    workflow_command("error", verdict, title=f"tundravm ci: {name}")
+                    if fmt == "github"
+                    else ""
+                )
+            if report:
+                print(report, file=out)
+            print(f"{'ok' if ok else 'FAIL'} {name}: {verdict}", file=out)
+            if not ok:
+                for skipped, _step in CI_STEPS[index + 1 :]:
+                    print(f"skip {skipped}", file=out)
+                return EXIT_FAILURE
+    return EXIT_OK
+
+
+def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
+    root: Path = args.dir
+    name = _init_name(args.name, root)
+    recipe = root / f"{name}.py"
+    workflow = root / WORKFLOW_PATH
+    gitignore = root / ".gitignore"
+    targets = [recipe, workflow] if args.ci == "github" else [recipe]
+    existing = [path for path in targets if path.exists()]
+    if existing and not args.force:
+        raise ValidationError(
+            f"Refusing to overwrite existing file(s): {', '.join(map(str, existing))}",
+            hint="Pass --force to overwrite them.",
+            context={"dir": str(root)},
+        )
+    contents = {
+        recipe: render_recipe_template(
+            title=name.replace("_", "-"), filename=recipe.name, base=args.base, backend=args.backend
+        ),
+        workflow: render_workflow(recipe=recipe.name),
+    }
+    for path in targets:
+        verb = "overwrote" if path in existing else "created"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents[path], encoding="utf-8")
+        print(f"{verb} {path}", file=out)
+    print(_init_gitignore(gitignore), file=out)
+    where = "" if root.resolve() == Path.cwd().resolve() else f" (from {root})"
+    print(f"next{where}:", file=out)
+    print(f"  tundravm compile {recipe.name} --out mkosi", file=out)
+    print(f"  tundravm lock {recipe.name}", file=out)
+    print(f"  tundravm ci {recipe.name} --out mkosi", file=out)
+    if args.ci == "github":
+        print("then commit mkosi/ and build/tundravm.lock; the workflow checks both", file=out)
+        if not (root / "pyproject.toml").exists():
+            print("note: the workflow runs `uv sync`; run `uv init && uv add tundravm`", file=out)
+    return EXIT_OK
+
+
+def _init_name(requested: str | None, root: Path) -> str:
+    raw = requested if requested is not None else root.resolve().name
+    raw = raw.removesuffix(".py")
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-.")
+    if requested is not None and (not name or name != raw):
+        raise ValidationError(
+            f"Invalid recipe name: {requested!r}",
+            hint="Use letters, digits, `-`, `_` and `.` only.",
+        )
+    return name or "image"
+
+
+def _init_gitignore(path: Path) -> str:
+    """Append the build/ block to *path* unless present; return the report line."""
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(GITIGNORE_BLOCK, encoding="utf-8")
+        return f"created {path}"
+    text = path.read_text(encoding="utf-8")
+    lines = {line.strip() for line in text.splitlines()}
+    if GITIGNORE_MARKER in lines:
+        return f"kept {path} (already ignores build output)"
+    separator = (
+        "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    )
+    path.write_text(text + separator + GITIGNORE_BLOCK, encoding="utf-8")
+    report = f"updated {path}"
+    if lines & {"build/", "/build/", "build", "/build"}:
+        report += (
+            "\nwarning: an existing `build/` rule also hides build/tundravm.lock;"
+            " remove it or `git add -f build/tundravm.lock`"
+        )
+    return report
+
+
 __all__ = [
     "BACKEND_SNIPPETS",
     "EXIT_FAILURE",
@@ -692,6 +946,7 @@ __all__ = [
     "main",
     "probe_requirement",
     "render_deploy_result",
+    "render_drift",
     "render_recipe_template",
     "run_probe",
 ]

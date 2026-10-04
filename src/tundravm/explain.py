@@ -2,7 +2,8 @@
 
 ``describe()`` returns a JSON-serializable, deterministically ordered dict for
 one profile without compiling or baking; ``render()`` turns that dict into a
-compact plain-text summary.
+compact plain-text summary and ``render_markdown()`` into a review-friendly
+Markdown section (tables per kind, long package lists collapsed).
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import fields
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 from .compiler import PHASE_ORDER
+from .formats import md_cell, md_table
 from .models import InitScriptEntry, ProfileState, UnitAction, unit_name
 
 if TYPE_CHECKING:
@@ -20,6 +22,8 @@ if TYPE_CHECKING:
 
 PREVIEW_WIDTH = 80
 SHORT_DIGEST_LEN = 12
+MARKDOWN_COLLAPSE_AT = 20
+"""Markdown tables with more rows than this (usually packages) render collapsed."""
 
 
 def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
@@ -303,6 +307,151 @@ def render(description: dict[str, object]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_markdown(description: dict[str, object]) -> str:
+    """Render a ``describe()`` result as one Markdown section for code review.
+
+    A ``## Profile`` heading and an image line, then an ``Extends``/``Modules`` line,
+    then one table per non-empty kind: packages, files, users, services, units,
+    hooks, sources and init scripts. A table longer than ``MARKDOWN_COLLAPSE_AT``
+    rows is collapsed in a ``<details>`` block.
+    """
+    targets = " ".join(f"`{t}`" for t in _as_list(description.get("output_targets"))) or "none"
+    blocks: list[str] = [
+        f"## Profile `{description['profile']}`",
+        f"`{description['base']}` ({description['arch']}) · "
+        f"reproducible: {_yes_no(description['reproducible'])} · targets: {targets}",
+        _markdown_lineage(description),
+    ]
+    packages = _as_list(description.get("packages"))
+    build_packages = _as_list(description.get("build_packages"))
+    package_rows = [(md_cell(name, code=True), "image") for name in packages]
+    package_rows += [(md_cell(name, code=True), "build") for name in build_packages]
+    _append_section(blocks, "Packages", ("Package", "Installed in"), package_rows)
+
+    files = _as_list(description.get("files")) + _as_list(description.get("skeleton_files"))
+    _append_section(
+        blocks,
+        "Files",
+        ("Path", "Mode", "Bytes", "sha256"),
+        [
+            (md_cell(f["path"], code=True), md_cell(f["mode"]), str(f["bytes"]), f"`{f['sha256']}`")
+            for f in files
+        ],
+    )
+    _append_section(
+        blocks,
+        "Users",
+        ("User", "System", "UID", "GID", "Home", "Shell", "Groups"),
+        [
+            (
+                md_cell(u["name"], code=True),
+                _yes_no(u.get("system")),
+                md_cell(u.get("uid")),
+                md_cell(u.get("gid")),
+                md_cell(u.get("home"), code=True),
+                md_cell(u.get("shell"), code=True),
+                md_cell(", ".join(u.get("groups") or ())),
+            )
+            for u in _as_list(description.get("users"))
+        ],
+    )
+    services = [s for s in _as_list(description.get("services")) if s.get("command")]
+    _append_section(
+        blocks,
+        "Services",
+        ("Service", "Command", "User", "Restart", "Enabled"),
+        [
+            (
+                md_cell(svc["name"], code=True),
+                md_cell(_truncate(" ".join(svc["command"])), code=True),
+                md_cell(svc.get("user")),
+                md_cell(svc.get("restart")),
+                _yes_no(svc.get("enabled", True)),
+            )
+            for svc in services
+        ],
+    )
+    units = _as_dict(description.get("units"))
+    _append_section(
+        blocks,
+        "Units",
+        ("Action", "Units"),
+        [
+            (action, ", ".join(md_cell(name, code=True) for name in names))
+            for action, names in units.items()
+            if names
+        ],
+    )
+    hooks = _as_dict(description.get("hooks"))
+    _append_section(
+        blocks,
+        "Hooks",
+        ("Phase", "Command"),
+        [
+            (md_cell(phase), md_cell(preview, code=True))
+            for phase, previews in hooks.items()
+            for preview in previews
+        ],
+    )
+    _append_section(
+        blocks,
+        "Sources",
+        ("Source", "Kind", "URL", "Ref", "Pinned", "Build"),
+        [
+            (
+                md_cell(src["name"], code=True),
+                md_cell(src["kind"]),
+                md_cell(src["url"]),
+                md_cell(src.get("ref"), code=True),
+                md_cell(src.get("pinned"), code=True),
+                md_cell(src.get("build")),
+            )
+            for src in _as_list(description.get("sources"))
+        ],
+    )
+    init_scripts = _as_dict(description.get("init_scripts"))
+    priorities = _as_list(init_scripts.get("priorities"))
+    _append_section(
+        blocks,
+        "Init scripts",
+        ("Priority", "Scripts"),
+        [
+            (str(priority), str(priorities.count(priority)))
+            for priority in dict.fromkeys(priorities)
+        ],
+        count=len(priorities),
+    )
+    return "\n\n".join(blocks) + "\n"
+
+
+def _markdown_lineage(description: dict[str, object]) -> str:
+    modules = ", ".join(f"`{m}`" for m in _as_list(description.get("modules"))) or "none"
+    extends = description.get("extends")
+    if not extends:
+        return f"**Extends:** none · **Modules:** {modules}"
+    inherited = ", ".join(f"`{m}`" for m in _as_list(description.get("extends_modules")))
+    via = f" (modules: {inherited})" if inherited else ""
+    return f"**Extends:** `{extends}`{via} · **Modules:** {modules}"
+
+
+def _append_section(
+    blocks: list[str],
+    title: str,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    *,
+    count: int | None = None,
+) -> None:
+    if not rows:
+        return
+    heading = f"{title} ({len(rows) if count is None else count})"
+    table = md_table(headers, rows)
+    if len(rows) > MARKDOWN_COLLAPSE_AT:
+        blocks.append(f"<details><summary>{heading}</summary>\n\n{table}\n\n</details>")
+    else:
+        blocks.append(f"### {heading}\n\n{table}")
+
+
 def _describe_files(entries: Sequence[Any]) -> list[dict[str, object]]:
     return [
         {
@@ -433,4 +582,4 @@ def _as_dict(value: object) -> dict[str, Any]:
     return dict(cast(Mapping[str, Any], value)) if isinstance(value, Mapping) else {}
 
 
-__all__ = ["describe", "render"]
+__all__ = ["describe", "render", "render_markdown"]

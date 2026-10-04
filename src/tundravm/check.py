@@ -16,8 +16,10 @@ import posixpath
 import re
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TextIO
 
+from .formats import annotation_path, md_cell, md_table, resolve_format, workflow_command
 from .models import InitScriptEntry, OutputTarget, ProfileState, unit_name
 
 if TYPE_CHECKING:
@@ -683,31 +685,103 @@ def render(diagnostics: Sequence[Diagnostic]) -> str:
         lines.append(f"{d.level} {d.code} [{d.profile}]{subject}: {d.message}")
         if d.hint:
             lines.append(f"    hint: {d.hint}")
-    counts = summarize(diagnostics)
-    lines.append(
-        ", ".join(
-            (
-                _plural(counts["errors"], "error"),
-                _plural(counts["warnings"], "warning"),
-                _plural(counts["infos"], "info"),
-            )
-        )
-    )
+    lines.append(render_summary(diagnostics))
     return "\n".join(lines)
 
 
-def cmd_check(args: argparse.Namespace, out: TextIO, img: Image) -> int:
-    diagnostics = check(img)
-    if args.json:
+def render_summary(diagnostics: Sequence[Diagnostic]) -> str:
+    """``no findings`` or ``N errors, N warnings, N infos``."""
+    if not diagnostics:
+        return "no findings"
+    counts = summarize(diagnostics)
+    return ", ".join(
+        (
+            _plural(counts["errors"], "error"),
+            _plural(counts["warnings"], "warning"),
+            _plural(counts["infos"], "info"),
+        )
+    )
+
+
+def render_github(
+    diagnostics: Sequence[Diagnostic], recipe_path: str | Path, *, strict: bool = False
+) -> str:
+    """GitHub workflow commands, one ``::error``/``::warning``/``::notice`` per finding.
+
+    Each line is ``::error file=RECIPE,title=<code>::[profile] subject: message (hint)``,
+    so findings show inline on the pull request. With *strict*, warnings (which fail
+    the run) are reported as errors. A plain summary line follows.
+    """
+    if not diagnostics:
+        return "no findings"
+    path = annotation_path(recipe_path)
+    lines: list[str] = []
+    for d in diagnostics:
+        command = _GITHUB_COMMANDS[d.level]
+        if strict and d.level == "warning":
+            command = "error"
+        subject = f" {d.subject}" if d.subject else ""
+        hint = f" ({d.hint})" if d.hint else ""
+        message = f"[{d.profile}]{subject}: {d.message}{hint}"
+        lines.append(workflow_command(command, message, file=path, title=d.code))
+    lines.append(render_summary(diagnostics))
+    return "\n".join(lines)
+
+
+def render_markdown(diagnostics: Sequence[Diagnostic]) -> str:
+    """A Markdown table of findings followed by the summary line in bold."""
+    if not diagnostics:
+        return "**No findings.**"
+    rows = [
+        (
+            md_cell(d.level),
+            md_cell(d.code, code=True),
+            md_cell(d.profile, code=True),
+            md_cell(d.subject, code=True),
+            md_cell(d.message),
+            md_cell(d.hint),
+        )
+        for d in diagnostics
+    ]
+    table = md_table(("Level", "Code", "Profile", "Subject", "Message", "Hint"), rows)
+    return f"{table}\n\n**{render_summary(diagnostics)}**"
+
+
+def render_as(
+    diagnostics: Sequence[Diagnostic],
+    fmt: str,
+    *,
+    recipe_path: str | Path,
+    strict: bool = False,
+) -> str:
+    """Render *diagnostics* in a resolved ``--format``: text, json, github or markdown."""
+    if fmt == "json":
         payload = {
             "diagnostics": [d.to_dict() for d in diagnostics],
             "summary": summarize(diagnostics),
         }
-        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
-    else:
-        print(render(diagnostics), file=out)
-    failing = {"error", "warning"} if args.strict else {"error"}
-    return 1 if any(d.level in failing for d in diagnostics) else 0
+        return json.dumps(payload, indent=2, sort_keys=True)
+    if fmt == "github":
+        return render_github(diagnostics, recipe_path, strict=strict)
+    if fmt == "markdown":
+        return render_markdown(diagnostics)
+    return render(diagnostics)
+
+
+def failing(diagnostics: Sequence[Diagnostic], *, strict: bool = False) -> bool:
+    """True when a finding fails ``check``: an error, or with *strict* a warning."""
+    levels = {"error", "warning"} if strict else {"error"}
+    return any(d.level in levels for d in diagnostics)
+
+
+def cmd_check(args: argparse.Namespace, out: TextIO, img: Image) -> int:
+    diagnostics = check(img)
+    fmt = resolve_format(args.format, alias="json" if args.json else None)
+    print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
+    return 1 if failing(diagnostics, strict=args.strict) else 0
+
+
+_GITHUB_COMMANDS: dict[str, str] = {"error": "error", "warning": "warning", "info": "notice"}
 
 
 __all__ = [
@@ -717,6 +791,11 @@ __all__ = [
     "check",
     "cmd_check",
     "effective_output_targets",
+    "failing",
     "render",
+    "render_as",
+    "render_github",
+    "render_markdown",
+    "render_summary",
     "summarize",
 ]
