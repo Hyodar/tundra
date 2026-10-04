@@ -92,7 +92,7 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
     assert "run: uv sync" in text
     assert 'uv run tundravm inspect node.py --format markdown >> "$GITHUB_STEP_SUMMARY"' in text
     assert "run: uv run tundravm ci node.py --out mkosi" in text
-    assert "note: the workflow runs `uv sync`" in out
+    assert f"created {tmp_path / 'pyproject.toml'}" in out  # what `uv sync` installs from
 
 
 def test_init_refuses_overwrite_without_force(

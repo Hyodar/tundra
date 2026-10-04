@@ -79,10 +79,15 @@ from .observability import Event, JsonReporter, TextReporter, render_bake_summar
 from .recipe import RecipeFile, load_file
 from .templates import (
     BACKEND_SNIPPETS,
+    DEFAULT_TEMPLATE,
     GITIGNORE_BLOCK,
     GITIGNORE_MARKER,
+    TEMPLATES,
     WORKFLOW_PATH,
+    render_pyproject,
+    render_readme,
     render_recipe_template,
+    render_test_module,
     render_workflow,
 )
 
@@ -96,7 +101,7 @@ LOCK_FILENAME = "tundravm.lock"
 
 QUICKSTART = """\
 quickstart:
-  tundravm init . --name node                 write node.py and check its build backend
+  tundravm init . --name node                 scaffold node.py, its tests and pyproject.toml
   tundravm inspect node.py                    show what the image will contain
   tundravm lint node.py                       report every recipe diagnostic
   tundravm bake node.py --backend inprocess   simulated build, no VM or root needed"""
@@ -501,12 +506,14 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init = sub.add_parser(
         "init",
-        help="Bootstrap a recipe project, optionally with a GitHub Actions workflow.",
+        help="Scaffold a recipe project: recipe, tests, pyproject.toml, README and CI.",
         description=(
-            "Write <name>.py from the starter template and a .gitignore block for build/ "
-            "that keeps build/tundravm.lock committed. With --ci github, also write "
-            f"{WORKFLOW_PATH}, which posts `inspect --format markdown` to the job summary "
-            "and runs `tundravm ci`."
+            "Write <name>.py from a starter template (--template; --list-templates shows "
+            "them), tests/test_<name>.py using tundravm.testing, a pyproject.toml and a "
+            "README.md when the directory has none, and a .gitignore block for build/ that "
+            f"keeps build/tundravm.lock committed. With --ci github, also write {WORKFLOW_PATH}, "
+            "which posts `inspect --format markdown` to the job summary and runs `tundravm ci`. "
+            "Then lint the new recipe and probe the chosen backend."
         ),
     )
     init.set_defaults(handler=_cmd_init)
@@ -517,6 +524,17 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         "--name",
         default=None,
         help="Recipe name; writes NAME.py (default: the directory name).",
+    )
+    init.add_argument(
+        "--template",
+        choices=tuple(TEMPLATES),
+        default=DEFAULT_TEMPLATE,
+        help="Starter recipe (default: %(default)s); see --list-templates.",
+    )
+    init.add_argument(
+        "--list-templates",
+        action="store_true",
+        help="Print the templates with a one-line description each, then exit.",
     )
     init.add_argument(
         "--base", default="debian/trixie", help="Base distribution (default: %(default)s)."
@@ -533,8 +551,22 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         default="none",
         help="CI workflow to write (default: %(default)s).",
     )
+    tests = init.add_mutually_exclusive_group()
+    tests.add_argument(
+        "--with-tests",
+        dest="tests",
+        action="store_true",
+        default=True,
+        help="Write tests/test_<name>.py: lint, compile and golden-tree tests (default).",
+    )
+    tests.add_argument(
+        "--no-tests", dest="tests", action="store_false", help="Do not write the tests module."
+    )
     init.add_argument(
-        "--force", action="store_true", help="Overwrite the recipe and workflow if they exist."
+        "--force",
+        action="store_true",
+        help="Overwrite the recipe, tests module and workflow if they exist "
+        "(an existing pyproject.toml or README.md is always kept).",
     )
     init.add_argument(
         "--no-doctor",
@@ -1146,43 +1178,108 @@ def _cmd_ci(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
+    if args.list_templates:
+        width = max(map(len, TEMPLATES))
+        for template, summary in TEMPLATES.items():
+            default = " (default)" if template == DEFAULT_TEMPLATE else ""
+            print(f"{template:<{width}}  {summary}{default}", file=out)
+        return EXIT_OK
     root: Path = args.dir
     name = _init_name(args.name, root)
+    title = name.replace("_", "-")
     recipe = root / f"{name}.py"
-    workflow = root / WORKFLOW_PATH
-    gitignore = root / ".gitignore"
-    targets = [recipe, workflow] if args.ci == "github" else [recipe]
-    existing = [path for path in targets if path.exists()]
+    tests = root / "tests" / f"test_{re.sub(r'[^A-Za-z0-9_]', '_', name)}.py"
+    files = {
+        recipe: render_recipe_template(
+            title=title,
+            filename=recipe.name,
+            base=args.base,
+            backend=args.backend,
+            template=args.template,
+        )
+    }
+    if args.tests:
+        files[tests] = render_test_module(filename=recipe.name, template=args.template)
+    if args.ci == "github":
+        files[root / WORKFLOW_PATH] = render_workflow(recipe=recipe.name)
+    existing = [path for path in files if path.exists()]
     if existing and not args.force:
         raise ValidationError(
             f"Refusing to overwrite existing file(s): {', '.join(map(str, existing))}",
             hint="Pass --force to overwrite them.",
             context={"dir": str(root)},
         )
-    contents = {
-        recipe: render_recipe_template(
-            title=name.replace("_", "-"), filename=recipe.name, base=args.base, backend=args.backend
+    pyproject = root / "pyproject.toml"
+    had_pyproject = pyproject.exists()
+    files_if_absent = {
+        pyproject: render_pyproject(name=_project_name(name)),
+        root / "README.md": render_readme(
+            title=title, filename=recipe.name, template=args.template, tests=args.tests
         ),
-        workflow: render_workflow(recipe=recipe.name),
     }
-    for path in targets:
-        verb = "overwrote" if path in existing else "created"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents[path], encoding="utf-8")
-        print(f"{verb} {path}", file=out)
-    print(_init_gitignore(gitignore), file=out)
-    where = "" if root.resolve() == Path.cwd().resolve() else f" (from {root})"
-    print(f"next{where}:", file=out)
-    print(f"  tundravm compile {recipe.name} --out mkosi", file=out)
-    print(f"  tundravm lock {recipe.name}", file=out)
-    print(f"  tundravm ci {recipe.name} --out mkosi", file=out)
-    if args.ci == "github":
-        print("then commit mkosi/ and build/tundravm.lock; the workflow checks both", file=out)
-        if not (root / "pyproject.toml").exists():
-            print("note: the workflow runs `uv sync`; run `uv init && uv add tundravm`", file=out)
+    for path, text in files.items():
+        _init_write(path, text, "overwrote" if path in existing else "created", out)
+    for path, text in files_if_absent.items():
+        if path.exists():
+            print(f"kept {path} (already exists)", file=out)
+        else:
+            _init_write(path, text, "created", out)
+    print(_init_gitignore(root / ".gitignore"), file=out)
+    if had_pyproject:
+        print(
+            f"note: {pyproject} already exists; add the dependencies with "
+            "`uv add tundravm` and `uv add --dev pytest`",
+            file=out,
+        )
+    _init_lint(recipe, out)
+    _init_next(root, recipe, tests if args.tests else None, args.ci == "github", out)
     if not args.no_doctor:
         _init_doctor(args.backend, args.runner, out)
     return EXIT_OK
+
+
+def _init_write(path: Path, text: str, verb: str, out: TextIO) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    print(f"{verb} {path}", file=out)
+
+
+def _init_lint(recipe: Path, out: TextIO) -> None:
+    """Lint the new recipe and print the summary; findings never fail ``init``."""
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no __pycache__ in DIR
+    try:
+        loaded = load_file(recipe, extra_paths=[os.getcwd()])
+    finally:
+        sys.dont_write_bytecode = keep
+    report = check_report(loaded.recipe, loaded.image, variants=loaded.variants)
+    codes = sorted({diagnostic.code for diagnostic in report})
+    detail = f" ({', '.join(codes)}; `tundravm lint {recipe.name}` lists them)" if codes else ""
+    print(f"lint {recipe.name}: {render_summary(report)}{detail}", file=out)
+    if "source-unpinned" in codes:
+        print(f"  `tundravm lock {recipe.name}` pins the source builds", file=out)
+
+
+def _init_next(root: Path, recipe: Path, tests: Path | None, github: bool, out: TextIO) -> None:
+    """Print the numbered follow-up commands, run from *root*."""
+    name = recipe.name
+    steps = [
+        (f"tundravm compile {name} --out mkosi", "write the mkosi tree; commit it"),
+        *(
+            [(f"uv run pytest {tests.parent.name}", f"run {tests.name} against mkosi/")]
+            if tests is not None
+            else []
+        ),
+        (f"tundravm lock {name}", "pin packages and sources in build/tundravm.lock"),
+        (f"tundravm ci {name} --out mkosi", "the lint, tree and lockfile checks CI runs"),
+        (f"tundravm bake {name} --out build", "build the image"),
+    ]
+    width = max(len(command) for command, _ in steps)
+    where = "" if root.resolve() == Path.cwd().resolve() else f" (from {root})"
+    print(f"next{where}:", file=out)
+    for number, (command, why) in enumerate(steps, 1):
+        print(f"  {number}. {command:<{width}}  {why}", file=out)
+    if github:
+        print("then commit mkosi/ and build/tundravm.lock; the workflow checks both", file=out)
 
 
 def _init_doctor(kind: BackendKind, runner: ProbeRunner | None, out: TextIO) -> None:
@@ -1206,6 +1303,11 @@ def _init_name(requested: str | None, root: Path) -> str:
             hint="Use letters, digits, `-`, `_` and `.` only.",
         )
     return name or "image"
+
+
+def _project_name(name: str) -> str:
+    """*name* as a PEP 508 project name: it starts and ends with a letter or digit."""
+    return re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", name) or "image"
 
 
 def _init_gitignore(path: Path) -> str:
