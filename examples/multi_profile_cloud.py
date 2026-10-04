@@ -1,10 +1,16 @@
-"""Multi-profile cloud recipe example."""
+"""Multi-profile cloud recipe example.
+
+Run it directly, or drive it with the CLI:
+
+    tundravm explain examples/multi_profile_cloud.py --all-profiles
+    tundravm bake examples/multi_profile_cloud.py --lock --all-profiles
+"""
 
 from tundravm import Image
 from tundravm.backends import LimaMkosiBackend
 
 
-def build_cloud_profiles() -> None:
+def build() -> Image:
     img = Image(backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"))
 
     with img.profile("azure"):
@@ -19,10 +25,11 @@ def build_cloud_profiles() -> None:
         img.install("qemu-guest-agent")
         img.output_targets("qemu")
 
-    with img.all_profiles():
-        img.lock()
-        img.bake(frozen=True)
+    return img
 
 
 if __name__ == "__main__":
-    build_cloud_profiles()
+    img = build()
+    with img.all_profiles():
+        img.lock()
+        img.bake(frozen=True)

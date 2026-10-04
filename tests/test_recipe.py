@@ -159,3 +159,11 @@ def test_surge_example_recipe_loads() -> None:
     img = load_recipe(recipe)
     assert isinstance(img, Image)
     assert {"azure", "gcp", "devtools"} <= set(img.state.profiles)
+
+
+@pytest.mark.parametrize("name", ["qemu_basic.py", "multi_profile_cloud.py"])
+def test_small_examples_are_loadable_recipes(name: str) -> None:
+    recipe = Path(__file__).resolve().parent.parent / "examples" / name
+    img = load_recipe(recipe)
+    assert isinstance(img, Image)
+    assert img.state.profiles["default"] is not None
