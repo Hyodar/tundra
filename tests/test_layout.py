@@ -2,7 +2,6 @@ import importlib
 
 CORE_MODULES = [
     "tundravm.image",
-    "tundravm.cache",
     "tundravm.compiler",
     "tundravm.backends",
     "tundravm.builders",

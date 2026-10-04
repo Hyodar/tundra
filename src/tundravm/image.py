@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Protocol, Self
 
 from .backends.base import BuildBackend
-from .cache import BuildCacheInput, BuildCacheStore, cache_key
 from .check import Diagnostic
 from .check import check as run_checks
 from .compiler import (
@@ -1557,9 +1556,6 @@ class Image:
             return fallback_digest
         return hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
-    def _cache_store(self) -> BuildCacheStore:
-        return BuildCacheStore(self.build_dir / ".cache" / "conversion")
-
     def _resolve_operation_profile(self, profile: str | None) -> str:
         if profile is not None:
             return profile
@@ -1954,39 +1950,3 @@ class Image:
                 hint="run tundravm lock RECIPE to pin them.",
                 context={"lock": str(lock_path), "sources": ", ".join(unpinned)},
             )
-
-    def _convert_artifact(
-        self,
-        *,
-        source_artifact: Path,
-        profile_name: str,
-        target: OutputTarget,
-        dependencies: tuple[str, ...],
-    ) -> tuple[ArtifactRef, bool]:
-        artifact_path = source_artifact.parent / self._artifact_filename(target)
-        source_hash = hashlib.sha256(source_artifact.read_bytes()).hexdigest()
-        inputs = BuildCacheInput(
-            source_hash=source_hash,
-            source_tree=source_hash,
-            toolchain="converter-v1",
-            flags=(f"target={target}",),
-            dependencies=dependencies,
-            env={},
-            target=target,
-        )
-        key = cache_key(inputs)
-        cache_store = self._cache_store()
-        cached_payload = cache_store.load(key=key, expected_inputs=inputs)
-        if cached_payload is not None:
-            artifact_path.write_bytes(cached_payload)
-            return ArtifactRef(target=target, path=artifact_path), True
-
-        payload = (
-            "tundravm converted artifact:\n"
-            f"profile={profile_name}\n"
-            f"target={target}\n"
-            f"source={source_artifact.name}\n"
-        ).encode()
-        artifact_path.write_bytes(payload)
-        cache_store.save(inputs=inputs, artifact=payload)
-        return ArtifactRef(target=target, path=artifact_path), False

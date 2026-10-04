@@ -30,6 +30,8 @@
 - `KeyGeneration.with_key()`, `DiskEncryption.with_disk()`, `SecretDelivery.with_secret()` return the module; `DiskEncryption.disk(key=KeySpec)`; `SecretDelivery.store_at` accepts a `DiskSpec` with the `secret-store-undefined` rule.
 - `Image.init_scripts(profile=None)`, `Image.has_init_scripts()`, `Profile.applied_modules(inherited=)`.
 - `LintError` (`E_LINT`) for a bake refused by the linter.
+- Live bake progress: `Event`/`Reporter` (`TextReporter`, `JsonReporter`, `NullReporter`) in `tundravm.observability`, backends stream mkosi output line by line, `Image.bake(reporter=)`, and `tundravm bake -v/-q/--json-logs/--color` with a summary table. `bake-result.json` records artifact digests.
+- The unused `tundravm.cache` package (and the never-called artifact converter) is removed.
 - Docs: concepts, tutorial, API, CLI, module authoring, testing.
 
 ### Changed

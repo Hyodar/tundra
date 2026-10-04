@@ -60,7 +60,7 @@ With neither `--profile` nor `--all-profiles`, commands use the default profile.
 | `check RECIPE` | `--json`, `--strict` | Lints the recipe (`Image.check()`): services running as undeclared users, relative file paths, shadowed files, platform/output-target mismatches, init priority collisions, missing backend. Exit 1 on errors, or on warnings with `--strict` |
 | `diff RECIPE` | `--against DIR`, `--stat`, `--color auto\|always\|never` | Compiles to a temp dir and shows a unified diff against an existing tree (default `<build_dir>/mkosi`). Exit 1 when they differ |
 | `lock RECIPE` | `--path FILE`, `--check`, `--explain` | Writes the lockfile (default `<build_dir>/tundravm.lock`). `--check` compares it with the recipe without writing: prints `lock is up to date` and exits 0, or one line per drifted section and exits 1. `--explain` prints the drifted sections, then writes the new lockfile; with `--check` it only reports |
-| `bake RECIPE` | `--out DIR`, `--frozen`, `--lock`, `--force` | Compile and build with the recipe's backend. `--lock` writes the lockfile first, then bakes with `--frozen` semantics. Prints per-profile artifacts, the `report.json` path, and a `next: tundravm deploy ...` line. Also writes `bake-result.json` (see below) |
+| `bake RECIPE` | `--out DIR`, `--frozen`, `--lock`, `--force`, `-v/--verbose`, `-q/--quiet`, `--json-logs`, `--color auto\|always\|never` | Compile and build with the recipe's backend. `--lock` writes the lockfile first, then bakes with `--frozen` semantics. Prints per-profile artifacts, the `report.json` path, and a `next: tundravm deploy ...` line. Also writes `bake-result.json` (see below) |
 | `measure RECIPE` | `--backend rtmr\|azure\|gcp`, `--json`, `--out DIR` | Derives expected TDX measurements for one profile from `bake-result.json`. Prints a table, or `{schema_version, backend, values}` as JSON. `--out` reads the bake made with `bake --out DIR` |
 | `deploy RECIPE` | `--target qemu\|azure\|gcp`, `--out DIR`, `--memory 4G`, `--cpus N`, `--param KEY=VALUE` | Deploys one profile's baked artifact from `bake-result.json` and prints the deployment id, endpoint, and adapter metadata. `--param` is repeatable and passed to the adapter (e.g. `ssh_port`, `tdx=true`, `daemonize=false` for QEMU). `--out` reads the bake made with `bake --out DIR` |
 | `doctor [RECIPE]` | `--attr NAME`, `--pythonpath DIR` | Prints Python and tundravm versions and probes backend tools (`limactl`, `nix`, `mkosi`, `sudo`/`unshare`). Without `RECIPE` it reports every real backend as available or unavailable. With `RECIPE` it probes only that recipe's backend, then prints the `check` summary line. Exit 1 when the recipe's backend is missing a required tool |
@@ -82,6 +82,10 @@ The lockfile records one digest per recipe section: `base`, `arch`, `default_pro
 `~` is a changed section, `+` a section only in the recipe, `-` a section only in the lockfile. Item detail (`+htop -jq`) is shown when the lockfile's embedded recipe still matches the section digest.
 
 `bake --frozen` (and `bake(frozen=True)`) fails with `E_LOCKFILE` and lists the drifted sections, at most 15, then points to `lock --check`. Run `tundravm lock RECIPE` to accept the changes, or revert them.
+
+## Bake output
+
+Progress goes to stderr, one line per step (`[azure] build via lima ... ok (4m12s)`), with a live timer on a TTY and a `still running` heartbeat every minute elsewhere. The summary table (profile, target, artifact, size, sha256, time) goes to stdout, followed by the `next:` hint. Backend output is hidden unless the build fails, in which case the last five lines are shown. `-v` echoes every backend line as `[profile] | line`, `-q` prints only the summary and errors, `--json-logs` writes one JSON event per line to stdout (no summary) for CI collectors, and `--color` follows the `diff` convention (`NO_COLOR` respected). Pass `reporter=` to `Image.bake()` for the same events in Python.
 
 ## Exit codes
 
