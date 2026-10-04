@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import shlex
+import shutil
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -494,7 +495,7 @@ class DeterministicMkosiEmitter:
             self._validate_profile_phases(profile_name=profile_name, recipe=recipe)
 
             profile_dir = destination / profile_name
-            profile_dir.mkdir(parents=True, exist_ok=True)
+            _reset_dir(profile_dir)
 
             # Generate mkosi.extra/ overlay tree (files, templates, service units)
             self._emit_extra_tree(profile_dir, profile)
@@ -603,7 +604,7 @@ class DeterministicMkosiEmitter:
             self._validate_profile_phases(profile_name=profile_name, recipe=recipe)
 
             profile_dir = profiles_dir / profile_name
-            profile_dir.mkdir(parents=True, exist_ok=True)
+            _reset_dir(profile_dir)
 
             # Profile-specific extra tree
             self._emit_extra_tree(profile_dir, profile)
@@ -1149,6 +1150,15 @@ class DeterministicMkosiEmitter:
         if command.cwd is not None:
             rendered = f"(cd {shlex.quote(command.cwd)} && {rendered})"
         return rendered
+
+
+def _reset_dir(path: Path) -> None:
+    """Recreate *path* empty so files dropped from the recipe do not linger."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def emit_mkosi_tree(
