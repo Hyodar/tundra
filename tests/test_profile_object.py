@@ -114,7 +114,7 @@ def test_profile_scoped_explain_summary_and_state() -> None:
     dev = img.profile("dev").install("htop")
 
     assert dev.explain()["profile"] == "dev"
-    assert dev.explain()["packages"] == ["htop"]
+    assert dev.explain()["packages"] == ["curl", "htop"]
     assert "htop" in dev.summary()
     assert dev.state is img.state.profiles["dev"]
 
@@ -125,7 +125,7 @@ def test_profile_scoped_check_filters_to_that_profile() -> None:
     dev = img.profile("dev").service("dev-svc", command="/bin/true", user="phantom")
 
     codes = {(d.profile, d.subject) for d in dev.check() if d.code == "service-user-missing"}
-    assert codes == {("dev", "dev-svc")}
+    assert codes == {("dev", "dev-svc"), ("dev", "svc")}
     assert all(d.profile == "dev" for d in dev.check())
 
 

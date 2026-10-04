@@ -132,7 +132,7 @@ class DiskEncryption(Module):
 
     def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
         keys: dict[str, KeySpec] = {}
-        for module in image.applied_modules(profile):
+        for module in image.applied_modules(profile, inherited=True):
             if isinstance(module, KeyGeneration):
                 keys.update((spec.name, spec) for spec in module.keys)
         for disk in self._disks:

@@ -45,14 +45,22 @@ def test_service_user_missing() -> None:
     assert "img.user('svc'" in (diag.hint or "")
 
 
-def test_service_user_not_inherited_from_default() -> None:
+def test_service_user_inherited_from_default() -> None:
     img = clean_image()
     with img.profile("dev"):
         img.install("curl")
         img.service("app", command="/usr/bin/app", user="app")
+    assert img.check(profiles=["dev"]) == []
+
+
+def test_service_user_not_inherited_by_standalone_profile() -> None:
+    img = clean_image()
+    with img.profile("dev", extends=None):
+        img.install("curl")
+        img.service("app", command="/usr/bin/app", user="app")
     [diag] = img.check(profiles=["dev"])
     assert diag.code == "service-user-missing"
-    assert "do not inherit" in (diag.hint or "")
+    assert "does not inherit" in (diag.hint or "")
 
 
 def test_service_user_root_base_or_hook_created_is_fine() -> None:

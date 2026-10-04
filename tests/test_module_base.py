@@ -78,6 +78,7 @@ def test_requires_rejects_missing_dependency() -> None:
 def test_requires_is_checked_per_active_profile() -> None:
     img = Image()
     img.apply(_Marker())
+    img.profile("dev", extends=None)
     with img.profiles("default", "dev"), pytest.raises(ValidationError) as excinfo:
         img.apply(_NeedsMarker())
     assert excinfo.value.context == {"profile": "dev"}
@@ -160,8 +161,11 @@ def test_module_check_surfaces_through_image_check() -> None:
     img.apply(_Marker(), _NeedsMarker())
     with img.profile("dev"):
         img.install("curl")
+    with img.profile("solo", extends=None):
+        img.install("curl")
     assert "needs-marker-applied" in [d.code for d in img.check()]
-    assert "needs-marker-applied" not in [d.code for d in img.check(profiles=["dev"])]
+    assert "needs-marker-applied" in [d.code for d in img.check(profiles=["dev"])]
+    assert "needs-marker-applied" not in [d.code for d in img.check(profiles=["solo"])]
 
 
 def test_disk_key_undefined_is_reported_with_declared_keys() -> None:

@@ -41,7 +41,7 @@ def test_image_lock_writes_dependency_and_recipe_metadata(tmp_path: Path) -> Non
     assert lock.version == 2
     assert lock.recipe["base"] == "debian/bookworm"
     assert lock.dependencies["default"] == ["curl"]
-    assert lock.dependencies["dev"] == ["jq"]
+    assert lock.dependencies["dev"] == ["curl", "jq"]
     assert lock.recipe_digest
 
 

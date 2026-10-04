@@ -8,6 +8,7 @@ automatically during ``compile()``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from textwrap import dedent
 
@@ -45,9 +46,16 @@ class Init:
             raise ValidationError("add_script() requires non-empty script content.")
         self._scripts.append(InitScriptEntry(script=script, priority=priority))
 
-    def apply(self, profile: ProfileState) -> None:
-        """Generate runtime-init script + service unit into *profile*.files."""
-        merged_scripts = list(self._scripts) + list(profile.init_scripts)
+    def apply(
+        self, profile: ProfileState, *, scripts: Sequence[InitScriptEntry] | None = None
+    ) -> None:
+        """Generate runtime-init script + service unit into *profile*.files.
+
+        *scripts* replaces ``profile.init_scripts`` as the profile's own fragments,
+        e.g. with the merged fragments of a profile that extends another.
+        """
+        own = profile.init_scripts if scripts is None else scripts
+        merged_scripts = list(self._scripts) + list(own)
         if not merged_scripts:
             return
         deduped: list[InitScriptEntry] = []

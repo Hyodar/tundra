@@ -229,7 +229,10 @@ def test_diff_command(recipe: Path, tmp_path: Path) -> None:
     recipe.write_text(recipe.read_text().replace("hello", "goodbye"))
     code, out = run("diff", str(recipe), "--against", str(tree), "--stat", "--all-profiles")
     assert (tree / "azure" / "mkosi.conf").is_file()
-    assert (code, out) == (EXIT_FAILURE, "M  default/mkosi.extra/etc/motd\n1 file changed\n")
+    assert (code, out) == (
+        EXIT_FAILURE,
+        "M  azure/mkosi.extra/etc/motd\nM  default/mkosi.extra/etc/motd\n2 files changed\n",
+    )
 
     code, out = run("diff", str(recipe), "--against", str(tree), "--color", "never")
     assert code == EXIT_FAILURE

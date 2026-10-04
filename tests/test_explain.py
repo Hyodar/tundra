@@ -126,9 +126,10 @@ def test_explain_per_profile() -> None:
     azure = image.explain(profile="azure")
 
     assert azure["profile"] == "azure"
-    assert azure["packages"] == ["waagent"]
+    assert azure["extends"] == "default"
+    assert azure["packages"] == ["curl", "jq", "systemd", "waagent"]
     assert azure["output_targets"] == ["azure"]
-    assert azure["users"] == []
+    assert azure["users"] == image.explain()["users"]
 
     with image.profile("azure"):
         assert image.explain() == azure
@@ -175,8 +176,9 @@ def test_summary_contains_key_strings() -> None:
 
     azure_text = image.summary(profile="azure")
     assert "profile=azure" in azure_text
-    assert "Packages (1): waagent" in azure_text
-    assert "Users" not in azure_text
+    assert "Extends: default\n" in azure_text
+    assert "Packages (4): curl jq systemd waagent" in azure_text
+    assert "Extends" not in text
     assert azure_text.endswith("Output targets: azure\n")
     assert render(image.explain(profile="azure")) == azure_text
 

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+import posixpath
+from collections.abc import Callable, Hashable, Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
-from .errors import StateError
+from .errors import StateError, ValidationError
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
@@ -305,7 +306,16 @@ class InitScriptEntry:
 
 @dataclass(slots=True)
 class ProfileState:
+    """One profile's own declarations.
+
+    ``extends`` names the profile this one builds on top of: ``None`` for the
+    default profile and for standalone profiles, the default profile's name for
+    every other profile unless it opted out. Read the merged result through
+    :meth:`RecipeState.effective_profile`.
+    """
+
     name: str
+    extends: str | None = None
     packages: set[str] = field(default_factory=set)
     build_packages: set[str] = field(default_factory=set)
     build_sources: list[tuple[str, str]] = field(default_factory=list)
@@ -344,9 +354,123 @@ class RecipeState:
         )
 
     def ensure_profile(self, name: str) -> ProfileState:
+        """Return *name*'s own state, creating it (extending the default profile) if new."""
         if name not in self.profiles:
-            self.profiles[name] = ProfileState(name=name)
+            extends = None if name == self.default_profile else self.default_profile
+            self.profiles[name] = ProfileState(name=name, extends=extends)
         return self.profiles[name]
+
+    def set_extends(self, name: str, extends: str | None) -> None:
+        """Make *name* extend *extends* (``None``: standalone); only the default can be extended."""
+        self._validate_extends(name, extends)
+        self.ensure_profile(name).extends = extends
+
+    def effective_profile(self, name: str) -> ProfileState:
+        """What *name* builds: its own declarations merged over the profile it extends.
+
+        The default profile's effective view is its own state (the same object).
+        Every other profile gets a new :class:`ProfileState`; standalone profiles
+        (``extends=None``) only take output targets and debloat from the default
+        profile when they did not set them.
+        """
+        own = self.ensure_profile(name)
+        if name == self.default_profile:
+            return own
+        self._validate_extends(name, own.extends)
+        default = self.ensure_profile(self.default_profile)
+        if own.extends is None:
+            return replace(
+                own,
+                output_targets=_fallback_targets(default, own),
+                debloat=_fallback_debloat(default, own),
+            )
+        return merge_profiles(default, own)
+
+    def _validate_extends(self, name: str, extends: str | None) -> None:
+        if name == self.default_profile and extends is not None:
+            raise ValidationError(
+                f"The default profile {name!r} cannot extend another profile.",
+                context={"profile": name, "extends": extends},
+            )
+        if extends is not None and extends != self.default_profile:
+            raise ValidationError(
+                f"Profile {name!r} can only extend the default profile "
+                f"{self.default_profile!r}, not {extends!r}.",
+                hint="Pass extends=None for a standalone profile.",
+                context={"profile": name, "extends": extends},
+            )
+
+
+def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
+    """*own* layered over *base* as a new :class:`ProfileState`; see ``effective_profile``.
+
+    Sets are unioned; keyed lists keep *base*'s entries that *own* does not
+    redeclare, then append *own*'s; ordered lists (hooks, phases) run *base*'s
+    first.
+    """
+    extra_paths = {_norm_path(f.path) for f in own.files}
+    extra_paths.update(_norm_path(t.path) for t in own.templates)
+    phases: dict[Phase, list[CommandSpec]] = {
+        phase: list(commands) for phase, commands in base.phases.items()
+    }
+    for phase, commands in own.phases.items():
+        phases.setdefault(phase, []).extend(commands)
+    return ProfileState(
+        name=own.name,
+        extends=own.extends,
+        packages=base.packages | own.packages,
+        build_packages=base.build_packages | own.build_packages,
+        build_sources=list(dict.fromkeys((*base.build_sources, *own.build_sources))),
+        output_targets=_fallback_targets(base, own),
+        output_targets_explicit=own.output_targets_explicit,
+        phases=phases,
+        repositories=_override(base.repositories, own.repositories, lambda r: r.name),
+        files=_override(base.files, own.files, lambda f: _norm_path(f.path), extra_paths),
+        skeleton_files=_override(
+            base.skeleton_files, own.skeleton_files, lambda f: _norm_path(f.path)
+        ),
+        templates=_override(
+            base.templates, own.templates, lambda t: _norm_path(t.path), extra_paths
+        ),
+        users=_override(base.users, own.users, lambda u: u.name),
+        services=_override(base.services, own.services, lambda s: unit_name(s.name)),
+        partitions=_override(base.partitions, own.partitions, lambda p: p.name),
+        hooks=[*base.hooks, *own.hooks],
+        secrets=_override(base.secrets, own.secrets, lambda s: s.name),
+        init_scripts=list(
+            {(e.priority, e.script): e for e in (*base.init_scripts, *own.init_scripts)}.values()
+        ),
+        debloat=_fallback_debloat(base, own),
+        debloat_explicit=own.debloat_explicit,
+    )
+
+
+def unit_name(name: str) -> str:
+    """Systemd unit name for a service name (``foo`` -> ``foo.service``)."""
+    return name if "." in name else f"{name}.service"
+
+
+def _norm_path(path: str) -> str:
+    return posixpath.normpath("/" + path.lstrip("/"))
+
+
+def _override[T](
+    base: Iterable[T],
+    own: Iterable[T],
+    key: Callable[[T], Hashable],
+    taken: set[str] | None = None,
+) -> list[T]:
+    own_list = list(own)
+    replaced: set[Hashable] = set(taken) if taken is not None else {key(item) for item in own_list}
+    return [item for item in base if key(item) not in replaced] + own_list
+
+
+def _fallback_targets(base: ProfileState, own: ProfileState) -> tuple[OutputTarget, ...]:
+    return own.output_targets if own.output_targets_explicit else base.output_targets
+
+
+def _fallback_debloat(base: ProfileState, own: ProfileState) -> DebloatConfig:
+    return own.debloat if own.debloat_explicit else base.debloat
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,6 +666,8 @@ __all__ = [
     "ProfileBuildResult",
     "ProfileState",
     "RepositorySpec",
+    "merge_profiles",
+    "unit_name",
     "RecipeState",
     "RestartPolicy",
     "SecretSchema",

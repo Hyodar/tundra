@@ -28,11 +28,12 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
     Keys are sorted; lists are sorted by their natural identity (path, name,
     ...) except hooks, which keep registration order within each phase.
     File and init-script contents are summarized as short sha256 digests.
+    A profile that extends another is described as built: merged over it.
     """
     selected = image._resolve_operation_profile(profile)
-    image._apply_profile_fallbacks((selected,))
     state = image.state
-    profile_state = state.ensure_profile(selected)
+    profile_state = state.effective_profile(selected)
+    extends = profile_state.extends
     kernel = image.kernel
     return {
         "arch": state.arch,
@@ -43,6 +44,8 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             for host_path, target in sorted(profile_state.build_sources)
         ],
         "debloat": image.explain_debloat(profile=selected),
+        "extends": extends,
+        "extends_modules": [] if extends is None else _module_names(image, extends),
         "files": _describe_files(profile_state.files),
         "hooks": _describe_hooks(profile_state),
         "init_scripts": _describe_init_scripts(
@@ -58,6 +61,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
             "version": kernel.version,
         },
         "mirror": image.mirror,
+        "modules": _module_names(image, selected),
         "output_targets": list(profile_state.output_targets),
         "packages": sorted(profile_state.packages),
         "partitions": [
@@ -143,6 +147,11 @@ def render(description: dict[str, object]) -> str:
     policy = _as_dict(description.get("policy"))
     if policy:
         lines.append("Policy: " + " ".join(f"{k}={_fmt(v)}" for k, v in sorted(policy.items())))
+    if description.get("extends"):
+        inherited = _as_list(description.get("extends_modules"))
+        modules = f" (modules: {', '.join(inherited)})" if inherited else ""
+        lines.append(f"Extends: {description['extends']}{modules}")
+    _append_inline_list(lines, "Modules", _as_list(description.get("modules")))
 
     _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
     _append_inline_list(lines, "Build packages", _as_list(description.get("build_packages")))
@@ -268,15 +277,26 @@ def _describe_hooks(profile_state: ProfileState) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {}
     for phase in PHASE_ORDER:
         previews = [
-            _truncate(
-                " ".join(hook.command.argv).splitlines()[0].strip() if hook.command.argv else ""
-            )
+            _truncate(_first_command_line(" ".join(hook.command.argv)))
             for hook in profile_state.hooks
             if hook.phase == phase
         ]
         if previews:
             grouped[phase] = previews
     return grouped
+
+
+def _first_command_line(script: str) -> str:
+    """First line of *script* that is not blank or a comment (falls back to the first)."""
+    lines = [line.strip() for line in script.splitlines()]
+    for line in lines:
+        if line and not line.startswith("#"):
+            return line
+    return next((line for line in lines if line), "")
+
+
+def _module_names(image: Image, profile: str) -> list[str]:
+    return [type(module).__name__ for module in image.applied_modules(profile)]
 
 
 def _describe_init_scripts(entries: Sequence[InitScriptEntry]) -> dict[str, object]:

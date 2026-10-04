@@ -71,7 +71,7 @@ class Module:
     def apply(self, image: Image) -> None:
         """Verify ``requires``, run setup/install/init_script, record the module."""
         for profile in image._active_profiles:
-            applied = image.applied_modules(profile)
+            applied = image.applied_modules(profile, inherited=True)
             for required in self.requires:
                 if any(isinstance(module, required) for module in applied):
                     continue

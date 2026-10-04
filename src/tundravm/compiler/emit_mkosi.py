@@ -14,7 +14,7 @@ import hashlib
 import shlex
 import shutil
 import textwrap
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urlparse
@@ -23,6 +23,7 @@ from tundravm.errors import ValidationError
 from tundravm.models import (
     Arch,
     CommandSpec,
+    DebloatConfig,
     FileEntry,
     Kernel,
     Phase,
@@ -512,14 +513,11 @@ class DeterministicMkosiEmitter:
             version_path.chmod(0o755)
 
         for profile_name in sorted(profile_names):
-            profile = recipe.profiles.get(profile_name)
-            if profile is None:
-                raise ValidationError(
-                    "Profile does not exist for mkosi emission.",
-                    hint="Create the profile before calling emit_mkosi().",
-                    context={"profile": profile_name, "operation": "emit_mkosi"},
-                )
-            self._validate_profile_phases(profile_name=profile_name, recipe=recipe)
+            _require_profile(recipe, profile_name)
+            # Each profile directory is a complete image: the profile merged over the
+            # profile it extends.
+            profile = recipe.effective_profile(profile_name)
+            self._validate_profile_phases(profile_name=profile_name, profile=profile)
 
             profile_dir = destination / profile_name
             _reset_dir(profile_dir)
@@ -579,7 +577,11 @@ class DeterministicMkosiEmitter:
         profile_names: tuple[str, ...],
         config: EmitConfig,
     ) -> MkosiEmission:
-        """Emit a single root mkosi.conf with mkosi.profiles/<name>/ overrides."""
+        """Emit the default profile as the root mkosi.conf, others as mkosi.profiles/<name>/.
+
+        mkosi layers ``mkosi.profiles/<name>/`` over the root config, so each overlay
+        holds only what that profile adds to the default profile it extends.
+        """
         destination.mkdir(parents=True, exist_ok=True)
         profile_paths: dict[str, Path] = {}
         script_paths: dict[str, dict[Phase, Path]] = {}
@@ -590,76 +592,73 @@ class DeterministicMkosiEmitter:
             version_path.write_text(MKOSI_VERSION_SCRIPT, encoding="utf-8")
             version_path.chmod(0o755)
 
-        # Root mkosi.conf with shared configuration (use first profile as base)
-        first_profile_name = sorted(profile_names)[0]
-        first_profile = recipe.profiles.get(first_profile_name)
-        if first_profile is None:
-            raise ValidationError(
-                "Profile does not exist for mkosi emission.",
-                hint="Create the profile before calling emit_mkosi().",
-                context={"profile": first_profile_name, "operation": "emit_mkosi"},
-            )
+        for profile_name in profile_names:
+            _require_profile(recipe, profile_name)
+        default_name = recipe.default_profile
+        default = recipe.effective_profile(default_name)
+        self._validate_profile_phases(profile_name=default_name, profile=default)
 
-        # Shared skeleton and extra at root level
-        self._emit_skeleton_tree(destination, first_profile, config)
-        self._emit_extra_tree(destination, first_profile)
-
-        # Root mkosi.conf with shared settings (no profile-specific packages)
-        root_conf_content = self._render_conf(
-            profile_name=first_profile_name,
+        # Root: the full default profile
+        self._emit_skeleton_tree(destination, default, config)
+        self._emit_extra_tree(destination, default)
+        self._emit_kernel_config(destination, config)
+        root_scripts = self._emit_all_scripts(
+            profile_name=default_name,
+            profile_dir=destination,
+            profile=default,
+            recipe=recipe,
             config=config,
-            packages=[],
-            build_packages=[],
-            repositories=[],
-            phase_scripts={},
         )
+        root_cloud: tuple[Path, ...] = ()
+        if config.generate_cloud_postoutput:
+            root_cloud = self._emit_cloud_postoutput(destination, default)
         root_conf_path = destination / "mkosi.conf"
-        root_conf_path.write_text(root_conf_content, encoding="utf-8")
+        root_conf_path.write_text(
+            self._render_conf(
+                profile_name=default_name,
+                config=config,
+                packages=sorted(default.packages),
+                build_packages=sorted(default.build_packages),
+                build_sources=default.build_sources or None,
+                repositories=default.repositories,
+                phase_scripts=root_scripts,
+                cloud_postoutput_scripts=root_cloud,
+            ),
+            encoding="utf-8",
+        )
 
-        # Per-profile overrides under mkosi.profiles/<name>/
+        # Per-profile overlays under mkosi.profiles/<name>/; the root already built
+        # the kernel and wrote the init script.
         profiles_dir = destination / "mkosi.profiles"
         profiles_dir.mkdir(parents=True, exist_ok=True)
+        overlay_config = replace(config, kernel=None, init_script=None)
 
         for profile_name in sorted(profile_names):
-            profile = recipe.profiles.get(profile_name)
-            if profile is None:
-                raise ValidationError(
-                    "Profile does not exist for mkosi emission.",
-                    hint="Create the profile before calling emit_mkosi().",
-                    context={"profile": profile_name, "operation": "emit_mkosi"},
-                )
-            self._validate_profile_phases(profile_name=profile_name, recipe=recipe)
+            overlay = _native_overlay(recipe, profile_name)
+            self._validate_profile_phases(profile_name=profile_name, profile=overlay)
 
             profile_dir = profiles_dir / profile_name
             _reset_dir(profile_dir)
-
-            # Profile-specific extra tree
-            self._emit_extra_tree(profile_dir, profile)
-
-            # Copy kernel config file if kernel has one
-            self._emit_kernel_config(profile_dir, config)
-
-            # Generate phase scripts
+            self._emit_skeleton_tree(profile_dir, overlay, overlay_config)
+            self._emit_extra_tree(profile_dir, overlay)
             phase_scripts = self._emit_all_scripts(
                 profile_name=profile_name,
                 profile_dir=profile_dir,
-                profile=profile,
+                profile=overlay,
                 recipe=recipe,
-                config=config,
+                config=overlay_config,
             )
-            # Emit cloud postoutput scripts
             cloud_scripts: tuple[Path, ...] = ()
             if config.generate_cloud_postoutput:
-                cloud_scripts = self._emit_cloud_postoutput(profile_dir, profile)
+                cloud_scripts = self._emit_cloud_postoutput(profile_dir, overlay)
 
-            # Profile-specific mkosi.conf override
             conf_content = self._render_conf(
                 profile_name=profile_name,
                 config=config,
-                packages=sorted(profile.packages),
-                build_packages=sorted(profile.build_packages),
-                build_sources=profile.build_sources or None,
-                repositories=profile.repositories,
+                packages=sorted(overlay.packages),
+                build_packages=sorted(overlay.build_packages),
+                build_sources=overlay.build_sources or None,
+                repositories=overlay.repositories,
                 phase_scripts=phase_scripts,
                 cloud_postoutput_scripts=cloud_scripts,
             )
@@ -667,7 +666,9 @@ class DeterministicMkosiEmitter:
             conf_path.write_text(conf_content, encoding="utf-8")
 
             profile_paths[profile_name] = conf_path
-            script_paths[profile_name] = phase_scripts
+            script_paths[profile_name] = (
+                root_scripts if profile_name == default_name else phase_scripts
+            )
 
         return MkosiEmission(
             root=destination,
@@ -693,8 +694,7 @@ class DeterministicMkosiEmitter:
             emitted.append(azure_script)
         return tuple(emitted)
 
-    def _validate_profile_phases(self, *, profile_name: str, recipe: RecipeState) -> None:
-        profile = recipe.profiles[profile_name]
+    def _validate_profile_phases(self, *, profile_name: str, profile: ProfileState) -> None:
         allowed = set(PHASE_ORDER)
         for phase in profile.phases:
             if phase not in allowed:
@@ -1165,6 +1165,44 @@ class DeterministicMkosiEmitter:
         if command.cwd is not None:
             rendered = f"(cd {shlex.quote(command.cwd)} && {rendered})"
         return rendered
+
+
+def _require_profile(recipe: RecipeState, name: str) -> None:
+    if name not in recipe.profiles:
+        raise ValidationError(
+            "Profile does not exist for mkosi emission.",
+            hint="Create the profile before calling emit_mkosi().",
+            context={"profile": name, "operation": "emit_mkosi"},
+        )
+
+
+def _native_overlay(recipe: RecipeState, name: str) -> ProfileState:
+    """What ``mkosi.profiles/<name>/`` adds on top of the root (default profile) tree.
+
+    Entries the default profile already ships, its output targets and its debloat
+    are left out so nothing runs twice.
+    """
+    if name == recipe.default_profile:
+        return ProfileState(name=name, output_targets=(), debloat=DebloatConfig(enabled=False))
+    own = recipe.profiles[name]
+    if own.extends is None:
+        raise ValidationError(
+            "native_profiles mode cannot emit a standalone profile.",
+            hint=(
+                "mkosi applies the root mkosi.conf (the default profile) to every profile; "
+                "drop extends=None or use emit_mode='per_directory'."
+            ),
+            context={"profile": name, "operation": "emit_mkosi"},
+        )
+    default = recipe.effective_profile(recipe.default_profile)
+    targets = own.output_targets if own.output_targets_explicit else ()
+    return replace(
+        own,
+        files=[f for f in own.files if f not in default.files],
+        services=[s for s in own.services if s not in default.services],
+        output_targets=tuple(t for t in targets if t not in default.output_targets),
+        debloat=own.debloat if own.debloat_explicit else DebloatConfig(enabled=False),
+    )
 
 
 def _reset_dir(path: Path) -> None:

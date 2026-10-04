@@ -8,9 +8,8 @@ from tundravm import Image
 
 
 def _init_service_count(img: Image, profile: str) -> int:
-    return sum(
-        1 for svc in img.state.profiles[profile].services if svc.name == "runtime-init.service"
-    )
+    services = img.state.effective_profile(profile).services
+    return sum(1 for svc in services if svc.name == "runtime-init.service")
 
 
 def test_recompile_with_more_profiles_does_not_duplicate_runtime_init(tmp_path: Path) -> None:

@@ -212,7 +212,8 @@ def test_golden_ignores_and_keeps_profiles_not_compiled(tmp_path: Path) -> None:
     assert_tree_matches(changed, golden, update=True)
     assert (golden / "azure" / "mkosi.conf").read_text(encoding="utf-8") == azure_conf
     assert_tree_matches(changed, golden)
-    assert_tree_matches(changed, golden, profiles=["azure"])
+    with pytest.raises(AssertionError, match="azure/mkosi.conf"):
+        assert_tree_matches(changed, golden, profiles=["azure"])
 
 
 def test_golden_truncates_long_diffs(tmp_path: Path) -> None:

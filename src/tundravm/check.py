@@ -2,10 +2,9 @@
 
 Each rule is a small function ``(image, profile_name, state) -> Iterator[Diagnostic]``
 registered in ``RULES``; ``_rule_module_checks`` adds each applied module's own
-``Module.check()`` findings. Rules read each profile on its own: the compiler emits
-every profile tree from that profile's declarations only, so nothing declared in
-the default profile reaches another profile's image (output targets and debloat
-are the only fallbacks, see ``Image._apply_profile_fallbacks``).
+``Module.check()`` findings. Rules read each profile's effective state
+(``RecipeState.effective_profile``): what the compiler emits for it, i.e. the
+profile merged over the default profile it extends.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TextIO
 
-from .models import DebloatConfig, InitScriptEntry, OutputTarget, ProfileState
+from .models import InitScriptEntry, OutputTarget, ProfileState, unit_name
 
 if TYPE_CHECKING:
     from .image import Image
@@ -166,31 +165,9 @@ def _init_entries(image: Image, state: ProfileState) -> list[InitScriptEntry]:
     return merged
 
 
-def _default_state(image: Image) -> ProfileState | None:
-    return image.state.profiles.get(image.default_profile)
-
-
-def _effective_targets(image: Image, state: ProfileState) -> tuple[OutputTarget, ...]:
-    default = _default_state(image)
-    if state.output_targets_explicit or default is None or state.name == default.name:
-        return state.output_targets
-    return default.output_targets
-
-
-def _effective_debloat(image: Image, state: ProfileState) -> DebloatConfig:
-    default = _default_state(image)
-    if state.debloat_explicit or default is None or state.name == default.name:
-        return state.debloat
-    return default.debloat
-
-
 def effective_output_targets(image: Image, profile: str) -> tuple[OutputTarget, ...]:
     """Output targets *profile* compiles to, after the default-profile fallback."""
-    return _effective_targets(image, image.state.ensure_profile(profile))
-
-
-def _unit_name(name: str) -> str:
-    return name if "." in name else f"{name}.service"
+    return image.state.effective_profile(profile).output_targets
 
 
 def _rule_service_user_missing(
@@ -198,7 +175,7 @@ def _rule_service_user_missing(
 ) -> Iterator[Diagnostic]:
     declared = {u.name for u in state.users}
     commands = _command_text(state)
-    default = _default_state(image)
+    default = image.state.profiles.get(image.default_profile)
     for svc in state.services:
         user = svc.user
         if user is None or user in declared or user in _BASE_USERS:
@@ -215,9 +192,9 @@ def _rule_service_user_missing(
             and any(u.name == user for u in default.users)
         ):
             hint = (
-                f"{user!r} is declared in profile {default.name!r}, but profiles do not "
-                "inherit from it; declare it inside "
-                f"`with img.profiles({default.name!r}, {profile_name!r}):`."
+                f"{user!r} is declared in profile {default.name!r}, but {profile_name!r} "
+                "is standalone (extends=None) and does not inherit it; declare it in "
+                f"{profile_name!r} too, or drop extends=None."
             )
         yield Diagnostic(
             level="error",
@@ -331,7 +308,7 @@ def _rule_service_command_not_shipped(
 def _rule_output_target_platform_mismatch(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    targets = _effective_targets(image, state)
+    targets = state.output_targets
     paths = _declared_paths(state)
     for target, (platform, markers, agents, why) in sorted(_PLATFORM_MARKERS.items()):
         has_platform = any(marker in paths for marker in markers)
@@ -355,6 +332,7 @@ def _rule_profile_empty(
 ) -> Iterator[Diagnostic]:
     if profile_name == image.default_profile:
         return
+    state = image.state.ensure_profile(profile_name)
     own: Iterable[object] = (
         state.packages,
         state.build_packages,
@@ -373,15 +351,24 @@ def _rule_profile_empty(
     )
     if any(own) or state.output_targets_explicit or state.debloat_explicit:
         return
+    if state.extends is None:
+        message = "profile declares nothing of its own and builds a bare base image"
+        hint = (
+            f"Standalone profiles (extends=None) do not inherit from "
+            f"{image.default_profile!r}. Declare its contents inside "
+            f"`with img.profile({profile_name!r}):`, or remove the profile."
+        )
+    else:
+        message = f"profile declares nothing of its own and builds the {state.extends!r} image"
+        hint = (
+            f"Declare what it adds to {state.extends!r} inside "
+            f"`with img.profile({profile_name!r}):`, or remove the profile."
+        )
     yield Diagnostic(
         level="info",
         code="profile-empty",
-        message="profile declares nothing of its own and builds a bare base image",
-        hint=(
-            f"Profiles do not inherit packages, files or services from "
-            f"{image.default_profile!r}. Declare its contents inside "
-            f"`with img.profile({profile_name!r}):`, or remove the profile."
-        ),
+        message=message,
+        hint=hint,
         profile=profile_name,
         subject=None,
     )
@@ -434,11 +421,11 @@ def _rule_backend_missing(
 def _rule_debloat_removes_needed_unit(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    config = _effective_debloat(image, state)
+    config = state.debloat
     if not (config.enabled and config.systemd_minimize):
         return
     keep = set(config.effective_units_keep) | {"minimal.target"}
-    own_units = {_unit_name(s.name) for s in state.services}
+    own_units = {unit_name(s.name) for s in state.services}
     own_units.update(posixpath.basename(p) for p in _declared_paths(state))
 
     def masked(unit: str) -> bool:
@@ -447,7 +434,7 @@ def _rule_debloat_removes_needed_unit(
         return unit.startswith("systemd-") or unit.endswith(".target")
 
     for svc in state.services:
-        unit = _unit_name(svc.name)
+        unit = unit_name(svc.name)
         if unit.startswith("systemd-") and unit not in keep:
             yield Diagnostic(
                 level="warning",
@@ -479,7 +466,7 @@ def _rule_debloat_removes_needed_unit(
 def _rule_debloat_removes_declared_file(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    config = _effective_debloat(image, state)
+    config = state.debloat
     if not config.enabled:
         return
     removed = list(config.effective_paths_remove) + list(config.clean_var_dirs)
@@ -532,7 +519,7 @@ def _rule_secret_undelivered(
 def _rule_module_checks(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    for module in image.applied_modules(profile_name):
+    for module in image.applied_modules(profile_name, inherited=True):
         yield from module.check(image, profile_name)
 
 
@@ -561,7 +548,7 @@ def check(image: Image, *, profiles: Sequence[str] | None = None) -> list[Diagno
     names = tuple(profiles) if profiles is not None else image._active_profiles
     found: dict[Diagnostic, None] = {}
     for name in dict.fromkeys(names):
-        state = image.state.ensure_profile(name)
+        state = image.state.effective_profile(name)
         for rule in RULES:
             found.update(dict.fromkeys(rule(image, name, state)))
     return sorted(found, key=_sort_key)

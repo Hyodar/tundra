@@ -11,11 +11,11 @@ import shlex
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Final, Literal, Protocol, Self
 
 from .backends.base import BuildBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
@@ -77,6 +77,13 @@ if TYPE_CHECKING:
     from .profile import Profile
 
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+class _Unset(Enum):
+    TOKEN = 0
+
+
+_UNSET: Final = _Unset.TOKEN
 _DRIFT_MESSAGE_LINES = 15
 
 
@@ -194,28 +201,46 @@ class Image:
             apply_fn(self)
         return self
 
-    def applied_modules(self, profile: str | None = None) -> tuple[Module, ...]:
-        """``Module`` instances applied to *profile* (default: the active profile), in order."""
-        return tuple(self._modules.get(self._resolve_operation_profile(profile), ()))
+    def applied_modules(
+        self, profile: str | None = None, *, inherited: bool = False
+    ) -> tuple[Module, ...]:
+        """``Module`` instances applied to *profile* (default: the active profile), in order.
 
-    def profile(self, name: str) -> Profile:
+        With ``inherited=True`` the modules of the profile it extends come first.
+        """
+        selected = self._resolve_operation_profile(profile)
+        own = tuple(self._modules.get(selected, ()))
+        extends = self._state.ensure_profile(selected).extends
+        if not inherited or extends is None:
+            return own
+        base = tuple(self._modules.get(extends, ()))
+        return base + tuple(m for m in own if not any(m is b for b in base))
+
+    def profile(
+        self, name: str, *, extends: str | None | Literal[_Unset.TOKEN] = _UNSET
+    ) -> Profile:
         """Return the :class:`~tundravm.profile.Profile` handle for *name*, declaring it.
 
         Use it as a context manager (``with img.profile("azure"): ...``) or call the
         declaration API on it directly (``img.profile("azure").install("walinuxagent")``).
+        A new profile extends the default profile: it builds the default image plus
+        its own declarations. Pass ``extends=None`` for a standalone profile.
         """
         from .profile import Profile
 
         (selected,) = self._normalize_profile_names((name,))
-        self._ensure_profile(selected)
+        self._ensure_profile(selected, extends=extends)
         return Profile(self, selected)
 
     @contextmanager
-    def profiles(self, *names: str) -> Iterator[Self]:
+    def profiles(
+        self, *names: str, extends: str | None | Literal[_Unset.TOKEN] = _UNSET
+    ) -> Iterator[Self]:
+        """Make *names* the active profiles inside the block; see :meth:`profile` for *extends*."""
         selected = self._normalize_profile_names(names)
         previous_profiles = self._active_profiles
         for profile_name in selected:
-            self._ensure_profile(profile_name)
+            self._ensure_profile(profile_name, extends=extends)
         self._active_profiles = selected
         try:
             yield self
@@ -559,9 +584,7 @@ class Image:
 
     def explain_debloat(self, *, profile: str | None = None) -> dict[str, object]:
         selected_profile = self._resolve_operation_profile(profile)
-        self._apply_profile_fallbacks((selected_profile,))
-        profile_state = self._state.ensure_profile(selected_profile)
-        config = profile_state.debloat
+        config = self._state.effective_profile(selected_profile).debloat
         return {
             "profile": selected_profile,
             "enabled": config.enabled,
@@ -950,7 +973,7 @@ class Image:
 
         profiles_result: dict[str, ProfileBuildResult] = {}
         for profile_name in self._sorted_active_profile_names():
-            profile = self._state.profiles[profile_name]
+            profile = self._state.effective_profile(profile_name)
             profile_dir = destination / profile_name
             profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1205,16 +1228,33 @@ class Image:
         )
 
     def _apply_init(self) -> None:
-        """Apply Init: generate runtime-init files and inject deps into services."""
+        """Apply Init: generate runtime-init files and inject deps into services.
+
+        Runs on every active profile and on the default profile they extend. An
+        extending profile only gets its own runtime-init files when it adds init
+        scripts; otherwise it inherits the default profile's.
+        """
         if self.init is None:
             return
-        for profile in self._iter_active_profiles():
-            self.init.apply(profile)
+        default_name = self._state.default_profile
+        names = list(self._active_profiles)
+        if any(self._ensure_profile(n).extends is not None for n in names):
+            names.insert(0, default_name)
+        targets = [self._ensure_profile(n) for n in dict.fromkeys(names)]
+        generators: list[ProfileState] = []
+        for profile in targets:
+            if profile.extends is None:
+                self.init.apply(profile)
+                generators.append(profile)
+            elif profile.init_scripts:
+                merged = self._state.effective_profile(profile.name).init_scripts
+                self.init.apply(profile, scripts=merged)
+                generators.append(profile)
         if not self.init.has_scripts:
             return
         init_svc = self.init.service_name
         # Inject After/Requires runtime-init.service into all profile services
-        for profile in self._iter_active_profiles():
+        for profile in targets:
             patched: list[ServiceSpec] = []
             for svc in profile.services:
                 if svc.name == init_svc or svc.name.endswith(".target"):
@@ -1225,12 +1265,12 @@ class Image:
                 patched.append(replace(svc, after=after, requires=requires))
             profile.services = patched
         # Register runtime-init for enablement (systemctl enable + minimal.target.wants)
-        # in each active profile that does not have it yet. service() appends to every
+        # in each generating profile that does not have it yet. service() appends to every
         # active profile, so scope it to one profile at a time to stay idempotent
         # across compiles with different profile selections.
         missing = [
             profile.name
-            for profile in self._iter_active_profiles()
+            for profile in generators
             if not any(s.name == init_svc for s in profile.services)
         ]
         for profile_name in missing:
@@ -1249,27 +1289,17 @@ class Image:
             profiles.append(self._ensure_profile(profile_name))
         return profiles
 
-    def _ensure_profile(self, name: str) -> ProfileState:
+    def _ensure_profile(
+        self, name: str, *, extends: str | None | Literal[_Unset.TOKEN] = _UNSET
+    ) -> ProfileState:
+        if extends is not _UNSET:
+            self._state.set_extends(name, extends)
         return self._state.ensure_profile(name)
 
-    def _apply_profile_fallbacks(self, profile_names: tuple[str, ...]) -> None:
-        """Apply default profile output/debloat only when a profile did not set them explicitly."""
-        default_name = self._state.default_profile
-        default_profile = self._state.ensure_profile(default_name)
-        for profile_name in profile_names:
-            profile = self._state.ensure_profile(profile_name)
-            if profile_name == default_name:
-                continue
-            if not profile.output_targets_explicit:
-                profile.output_targets = default_profile.output_targets
-            if not profile.debloat_explicit:
-                profile.debloat = deepcopy(default_profile.debloat)
-
     def _recipe_payload(self, *, profile_names: tuple[str, ...]) -> dict[str, object]:
-        self._apply_profile_fallbacks(profile_names)
         profiles_data: dict[str, dict[str, object]] = {}
         for profile_name in sorted(profile_names):
-            profile = self._ensure_profile(profile_name)
+            profile = self._state.effective_profile(profile_name)
             phases = {
                 phase: [
                     {
@@ -1396,7 +1426,13 @@ class Image:
                 }
                 for file_entry in sorted(profile.skeleton_files, key=lambda item: item.path)
             ]
+            # The default profile's payload carries no "extends" key so default-only
+            # recipes keep their digests.
+            inheritance: dict[str, object] = (
+                {} if profile_name == self._state.default_profile else {"extends": profile.extends}
+            )
             profiles_data[profile_name] = {
+                **inheritance,
                 "packages": sorted(profile.packages),
                 "build_packages": sorted(profile.build_packages),
                 "build_sources": profile.build_sources,
