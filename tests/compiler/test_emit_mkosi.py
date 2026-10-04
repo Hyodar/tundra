@@ -258,6 +258,15 @@ def test_compile_generates_postinst_with_users(tmp_path: Path) -> None:
     assert "/var/lib/app" in content
 
 
+def test_users_pull_in_the_account_tools_package(tmp_path: Path) -> None:
+    """``mkosi-chroot useradd`` exits 127 unless the image installs ``passwd``."""
+    with_user = _compile(_recipe(Package("systemd"), User("app")), tmp_path / "user")
+    assert "    passwd\n" in _conf(with_user)
+
+    without = _compile(_recipe(Package("systemd")), tmp_path / "none")
+    assert "passwd" not in _conf(without)
+
+
 def test_compile_generates_debloat_finalize(tmp_path: Path) -> None:
     recipe = _recipe(Debloat(enabled=True, extra_remove=("/usr/share/fonts",)))
 

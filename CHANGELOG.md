@@ -64,6 +64,8 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `SPEC.md`, which described the fluent API. The design record is `docs/design/declarative-api.md`.
 
 ### Fixed
+- Images that declare users or groups install `passwd`, so `useradd` in postinst no longer exits 127 (the service template bakes for real).
+- `bake` with the local backend fails before mkosi when an azure/gcp variant's disk tool (`qemu-img`/`sgdisk`) is missing on the host; `doctor` lists those tools for cloud variants.
 
 - Local bakes: artifacts landed inside the mkosi tree and `bake-result.json` listed none, because mkosi received a relative `--output-dir`; all backends now pass absolute paths. Lima ignored the per-variant directory.
 - A tools-tree bake left root-owned `mkosi.tools` in the compiled tree and the post-build tree read crashed with `PermissionError`; mkosi state now lives under `OUT/.mkosi/`, sudo output is chowned back, unreadable leftovers are warnings.

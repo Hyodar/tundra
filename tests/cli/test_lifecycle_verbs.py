@@ -276,3 +276,39 @@ def test_doctor_local_marks_tools_tree_tools_optional_with_the_fix(
     assert f"  missing (optional) ukify — {fix} to the recipe, or install systemd-ukify" in out
     assert "  missing (optional) systemd-repart — " in out
     assert "  ok apt apt 26" in out
+
+
+CLOUD_RECIPE = """
+from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.backends import LocalLinuxBackend
+
+backend = LocalLinuxBackend()
+recipe = Recipe(
+    "cloud",
+    Fragment("common", items=(Package("systemd"),)),
+    variants=(
+        Variant("default", target="qemu"),
+        Variant("azure", parent="default", target="azure"),
+    ),
+)
+"""
+
+
+def test_doctor_probes_the_cloud_tools_of_azure_variants(tmp_path: Path) -> None:
+    path = write_recipe_file(tmp_path, CLOUD_RECIPE)
+    out = io.StringIO()
+    code = doctor(load_file(path), out, runner=_missing)
+    text = out.getvalue()
+    assert "cloud image tools:\n  missing (optional) qemu-img — " in text
+    assert "install qemu-utils, or bake --variant default" in text
+    assert "sgdisk" not in text
+    assert code == EXIT_FAILURE  # mkosi itself is missing; the cloud tool stays optional
+
+
+def test_doctor_skips_cloud_tools_without_cloud_variants(tmp_path: Path) -> None:
+    source = CLOUD_RECIPE.replace(
+        '        Variant("azure", parent="default", target="azure"),\n', ""
+    )
+    out = io.StringIO()
+    doctor(load_file(write_recipe_file(tmp_path, source)), out, runner=_runner(0))
+    assert "cloud image tools" not in out.getvalue()

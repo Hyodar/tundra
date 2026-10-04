@@ -438,6 +438,18 @@ def _unit_state_commands(profile: ProfileState) -> list[CommandSpec]:
     return commands
 
 
+ACCOUNT_TOOLS_PACKAGE = "passwd"
+"""The package with ``useradd``/``groupadd``, which the postinst lines run in the image."""
+
+
+def _image_packages(profile: ProfileState) -> list[str]:
+    """*profile*'s packages, plus the account tools when it declares users or groups."""
+    packages = set(profile.packages)
+    if profile.users or profile.groups:
+        packages.add(ACCOUNT_TOOLS_PACKAGE)
+    return sorted(packages)
+
+
 def _useradd_command(user: UserSpec) -> str:
     """Generate a useradd shell command from a UserSpec."""
     parts: list[str] = ["mkosi-chroot useradd"]
@@ -672,7 +684,7 @@ class DeterministicMkosiEmitter:
             conf_content = self._render_conf(
                 profile_name=profile_name,
                 config=profile_config,
-                packages=sorted(profile.packages),
+                packages=_image_packages(profile),
                 build_packages=sorted(profile.build_packages),
                 build_sources=profile.build_sources or None,
                 repositories=profile.repositories,
@@ -750,7 +762,7 @@ class DeterministicMkosiEmitter:
             self._render_conf(
                 profile_name=default_name,
                 config=config,
-                packages=sorted(default.packages),
+                packages=_image_packages(default),
                 build_packages=sorted(default.build_packages),
                 build_sources=default.build_sources or None,
                 repositories=default.repositories,
@@ -788,7 +800,7 @@ class DeterministicMkosiEmitter:
             conf_content = self._render_conf(
                 profile_name=profile_name,
                 config=config,
-                packages=sorted(overlay.packages),
+                packages=_image_packages(overlay),
                 build_packages=sorted(overlay.build_packages),
                 build_sources=overlay.build_sources or None,
                 repositories=overlay.repositories,

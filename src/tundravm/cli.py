@@ -34,6 +34,7 @@ from . import __version__
 from ._image import Image
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
+from .backends.local_linux import cloud_tools
 from .check import failing, render_as, render_summary
 from .completion import SHELLS, Shell, render_completion
 from .declarative.lifecycle import (
@@ -1065,6 +1066,22 @@ def _probe_measurement_tools(runner: ProbeRunner, out: TextIO) -> None:
         print(f"  {line}", file=out)
 
 
+def _probe_cloud_tools(
+    loaded: RecipeFile, backend: BuildBackend, runner: ProbeRunner, out: TextIO
+) -> None:
+    """Print the optional host tools the recipe's azure/gcp variants bake with locally."""
+    if not isinstance(backend, LocalLinuxBackend):
+        return
+    targets = {t for v in loaded.recipe.variants for t in (*v.targets, v.target) if t}
+    requirements = cloud_tools(targets)
+    if not requirements:
+        return
+    print("cloud image tools:", file=out)
+    for requirement in requirements:
+        _, line = probe(requirement, runner)
+        print(f"  {line}", file=out)
+
+
 def doctor(
     loaded: RecipeFile | None,
     out: TextIO,
@@ -1091,6 +1108,8 @@ def doctor(
         ready = False
     else:
         ready = _probe_backend(chosen, run, out)
+        if loaded is not None:
+            _probe_cloud_tools(loaded, chosen, run, out)
     _probe_measurement_tools(run, out)
     if loaded is not None:
         report = check_report(loaded.recipe, loaded.image, variants=loaded.variants)

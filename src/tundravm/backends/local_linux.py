@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -58,6 +59,37 @@ HOST_BUILD_TOOLS: tuple[Requirement, ...] = tuple(
     )
 )
 """Host tools mkosi runs without a tools tree; the backend adds one when ``ukify`` is missing."""
+
+
+CLOUD_IMAGE_TOOLS: tuple[tuple[str, Requirement], ...] = (
+    (
+        "azure",
+        Requirement(
+            tool="qemu-img",
+            probe=("qemu-img", "--version"),
+            hint="The azure variant converts its disk to a VHD with it: "
+            "install qemu-utils, or bake --variant default",
+            optional=True,
+        ),
+    ),
+    (
+        "gcp",
+        Requirement(
+            tool="sgdisk",
+            probe=("sgdisk", "--version"),
+            hint="The gcp variant partitions its disk with it: "
+            "install gdisk, or bake --variant default",
+            optional=True,
+        ),
+    ),
+)
+"""(target, tool) for the commands the azure and gcp postoutput scripts run besides mtools."""
+
+
+def cloud_tools(targets: Iterable[str]) -> tuple[Requirement, ...]:
+    """The cloud postoutput tools *targets* need, once each, in table order."""
+    wanted = set(targets)
+    return tuple(req for target, req in CLOUD_IMAGE_TOOLS if target in wanted)
 
 
 UKIFY_FORMATS = frozenset({"uki", "esp"})
@@ -137,6 +169,7 @@ class LocalLinuxBackend:
 
     def prepare(self, request: BakeRequest) -> None:
         self._ensure_local_prerequisites()
+        self._ensure_cloud_tools(request)
         for mount in self.mount_plan(request):
             mount.source.mkdir(parents=True, exist_ok=True)
 
@@ -314,6 +347,22 @@ class LocalLinuxBackend:
                 context={"backend": self.name, "operation": "prepare"},
             )
         self._check_mkosi_version()
+
+    def _ensure_cloud_tools(self, request: BakeRequest) -> None:
+        """Fail before mkosi runs when a cloud postoutput script would miss its tool."""
+        for requirement in cloud_tools(request.output_targets):
+            if shutil.which(requirement.tool) is None:
+                raise BackendExecutionError(
+                    f"Variant {request.profile!r} needs `{requirement.tool}` on the host "
+                    "for its cloud disk image.",
+                    hint=requirement.hint,
+                    context={
+                        "backend": self.name,
+                        "operation": "prepare",
+                        "profile": request.profile,
+                        "tool": requirement.tool,
+                    },
+                )
 
     def _check_mkosi_version(self) -> None:
         """Verify mkosi version meets the minimum requirement."""

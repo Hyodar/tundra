@@ -10,7 +10,7 @@ from tests.helpers import bake_request
 from tundravm.backends.base import StreamResult
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.errors import BackendExecutionError
-from tundravm.models import BakeRequest
+from tundravm.models import BakeRequest, OutputTarget
 
 
 def test_local_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
@@ -324,3 +324,45 @@ def test_local_requirements_probe_the_tools_a_tools_tree_replaces() -> None:
         assert 'Setting("Build", "ToolsTree", ("default",))' in by_tool[tool].hint
     assert by_tool["ukify"].hint.endswith("or install systemd-ukify")
     assert not by_tool["mkosi"].optional
+
+
+# ── cloud postoutput tools ───────────────────────────────────────────────
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
+@pytest.mark.parametrize(("target", "tool"), [("azure", "qemu-img"), ("gcp", "sgdisk")])
+def test_local_prepare_fails_fast_when_a_cloud_tool_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: OutputTarget, tool: str
+) -> None:
+    """The azure/gcp postoutput scripts would exit 127 inside mkosi; say so before it runs."""
+    request = replace(bake_request(tmp_path), profile=target, output_targets=(target,))
+    monkeypatch.setattr(
+        "tundravm.backends.local_linux.shutil.which",
+        lambda name: None if name == tool else f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
+
+    with pytest.raises(BackendExecutionError) as excinfo:
+        LocalLinuxBackend().prepare(request)
+
+    assert excinfo.value.code == "E_BACKEND_EXECUTION"
+    assert f"`{tool}`" in str(excinfo.value)
+    assert excinfo.value.hint is not None
+    assert excinfo.value.hint.endswith("or bake --variant default")
+    assert excinfo.value.context["tool"] == tool
+    assert not request.build_dir.exists()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
+def test_local_prepare_needs_no_cloud_tool_for_qemu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "tundravm.backends.local_linux.shutil.which",
+        lambda name: "/usr/bin/mkosi" if name == "mkosi" else None,
+    )
+    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
+
+    LocalLinuxBackend().prepare(bake_request(tmp_path))
+
+    assert (tmp_path / "build").is_dir()
