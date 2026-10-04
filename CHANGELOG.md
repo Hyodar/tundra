@@ -22,6 +22,14 @@
 - Lockfile section digests (`base`, `arch`, `default_profile`, `init_scripts`, `profiles.<name>.<section>`). `Image.lock_status(path=None) -> LockDrift`. `tundravm.lockfile` exports `LockDrift`, `compare_lock`, `section_digests`.
 - `tundravm.testing`: `compile_tree()`/`CompiledTree`, `assert_clean()`, `assert_diagnostic()`, `assert_tree_matches()` (golden trees, `TUNDRAVM_UPDATE_GOLDEN=1`), `bake_in_process()`, `FakeModule`, `recipe_file()`, `run_cli()`. A pytest plugin registers the `image`, `inprocess_image`, `compiled` and `run_cli` fixtures.
 - `QemuDeployAdapter` accepts an injectable runner.
+- Source builds: `Image.source_build(SourceBuild(...))` with `GitSource`/`HttpSource` and `GoBuild`/`CargoBuild`/`DotnetBuild`/`ScriptBuild`. `tundravm lock` pins refs to commits and downloads to hashes (`--offline` reuses pins), `compile()` fetches the pinned commit, `check` reports `source-unpinned`, `explain` shows `Sources:`, `bake --frozen` refuses unpinned sources, and `lock --check` shows `~ sources.<name>: <old> -> <new>`. `Tdxs`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery` and the example `Raiko` module build through it with byte-identical hooks.
+- `service()` gains `group`, `wanted_by`, `type`, `limits`, `kill_mode` and `timeout_stop`.
+- `Image.enable()`, `disable()` and `mask()` for packaged units; `explain` lists them under `Units:`.
+- `Image.group(name, system=, gid=)` and the `user-group-undefined` rule.
+- `Image.pin_mirror(url, tools_tree=True)`.
+- `KeyGeneration.with_key()`, `DiskEncryption.with_disk()`, `SecretDelivery.with_secret()` return the module; `DiskEncryption.disk(key=KeySpec)`; `SecretDelivery.store_at` accepts a `DiskSpec` with the `secret-store-undefined` rule.
+- `Image.init_scripts(profile=None)`, `Image.has_init_scripts()`, `Profile.applied_modules(inherited=)`.
+- `LintError` (`E_LINT`) for a bake refused by the linter.
 - Docs: concepts, tutorial, API, CLI, module authoring, testing.
 
 ### Changed
@@ -31,6 +39,9 @@
 - Lockfile version 1 → 2. Version 1 files still load and still pass frozen bakes; `lock --check` reports every section as added until you re-lock.
 - `explain` shows `Extends:` and `Modules:` lines and previews hooks by their first non-comment line.
 - Init priorities live on the module classes: `KeyGeneration` 10, `DiskEncryption` 20, `SecretDelivery` 30. `Raiko` (example) declares `requires = (Tdxs,)`.
+- Init scripts are scoped to the profile that registers them; extending profiles inherit the default's. Standalone profiles keep the `IMAGE_VERSION` strip hook.
+- `compile()` is silent about unpinned sources under `mutable_ref_policy="warn"`; only `"error"` fails the compile.
+- The unused `tundravm.ir` package is removed.
 - Small examples expose `build() -> Image` and no longer bake on import. The surge recipe is rewritten on the new API and `python -m examples.surge-tdx-prover` delegates to the CLI. Its compiled tree is unchanged.
 
 ### Breaking
@@ -39,7 +50,9 @@
 - The `Module` and `InitModule` protocols are removed. Modules subclass the `Module` base class. `apply()` is final; override `setup()`, `install()`, `init_script()` or `check()` instead. Init priorities are the `init_priority` class attribute, not an `apply()` argument.
 - `img.profile(name)` returns a `Profile`, not a context manager yielding the `Image`. `with img.profile(name):` still works.
 - `measure()` and `deploy()` with no bake result raise `StateError` (`E_STATE`) instead of `MeasurementError`/`DeploymentError`.
-- `bake()` raises `ValidationError` for a recipe with error-level lint findings.
+- `bake()` raises `LintError` (`E_LINT`) for a recipe with error-level lint findings.
+- `Init.add_script`, `Init.scripts` and `Init.has_scripts` are removed; use `Image.add_init_script()`, `Image.init_scripts()` and `Image.has_init_scripts()`.
+- Recipes using `Tdxs` get a new recipe digest (the `source_builds` payload key), so their lockfiles need re-locking.
 - `compile()` recreates each profile directory, so stale files are removed. Files at the tree root and other profiles' directories are kept.
 - The `BuildBackend` protocol gains `requirements() -> tuple[Requirement, ...]`.
 - `FileEntry.content` may be `bytes`. `file(src=...)` copies non-UTF-8 files as bytes.

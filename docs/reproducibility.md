@@ -66,3 +66,26 @@ print(drift.render())          # "~ profiles.default.packages: +htop" or "lock i
 `lock_status(path=None)` returns a `LockDrift` and raises `LockfileError` when the lockfile is missing or unreadable. Item detail comes from the recipe payload embedded in the lockfile, and only when it still matches the recorded section digest. From the shell: `tundravm lock RECIPE --check`.
 
 Lockfiles written before v2 still pass frozen bakes, but `lock --check` reports every section as `+` until you re-lock.
+
+## Pinned sources
+
+Modules that build from source declare it instead of writing bash:
+
+```python
+from tundravm import GitSource, GoBuild, SourceBuild
+
+img.source_build(SourceBuild(
+    name="tdxs",
+    source=GitSource("https://github.com/Hyodar/tundra-tools.git", "master"),
+    build=GoBuild(package="./cmd/tdxs", output="tdxs"),
+    install_to="/usr/bin/tdxs",
+))
+```
+
+The recipe digest records the symbolic declaration (`master`), never the resolved commit, so locking does not make its own lockfile stale. `tundravm lock` resolves every git ref to a commit and every `HttpSource` without `sha256` to a hash, and stores them in the lockfile's `fetches` (with `name` and `ref`). `compile()` reads `<build_dir>/tundravm.lock` and, where a pin exists for the same repo and ref, fetches that exact commit instead of the branch.
+
+- `tundravm lock --offline` (or `policy.network_mode="offline"`) reuses existing pins and fails naming any source that would need the network.
+- `mutable_ref_policy`: `"warn"` (default) leaves `compile()` silent and relies on `check` (`source-unpinned`), `explain` (`pinned=-`) and frozen bakes; `"error"` makes `compile()` fail on an unpinned source; `"allow"` downgrades the check to info. A lockfile pin satisfies every policy.
+- `bake --frozen` refuses unpinned sources with the names to pin.
+- `lock --check` shows `+ sources.<name>`, `- sources.<name>` and `~ sources.<name>: <old7> -> <new7>`.
+- `SourceBuild(mark_unpinned=False)` keeps the build hook free of an `# unpinned:` comment (the built-in modules use it to keep existing trees byte-identical); `cache_key=` overrides the build-cache key.

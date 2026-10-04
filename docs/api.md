@@ -96,7 +96,9 @@ azure.service("agent", command="/usr/bin/agent", env={"LOG": "info"})
 | Method | Description |
 | --- | --- |
 | `user(name, *, system=False, home=None, shell="/usr/sbin/nologin", uid=None, gid=None, groups=()) -> Self` | Create a user; names unique per profile |
-| `service(name, *, command=(), description=None, user=None, working_dir=None, env=None, env_file=None, exec_start_pre=(), after=(), requires=(), wants=(), restart="no", enabled=True, extra_unit=None, security_profile="default") -> Self` | Register a unit. With `command` the SDK generates the unit file; without it, only enablement is emitted. `description` sets `Description=` (default: the name). `exec_start_pre` adds one `ExecStartPre=` per command, `working_dir` sets `WorkingDirectory=`, `env_file` sets `EnvironmentFile=`, and `env` adds `Environment=` lines sorted by key, quoted when a value has spaces, quotes or backslashes. `restart`: `"always"`, `"on-failure"`, `"no"`. `security_profile`: `"strict"`, `"default"`, `"none"` |
+| `service(name, *, command=(), description=None, user=None, group=None, working_dir=None, env=None, env_file=None, exec_start_pre=(), after=(), requires=(), wants=(), wanted_by=None, type=None, restart="no", limits=None, kill_mode=None, timeout_stop=None, enabled=True, extra_unit=None, security_profile="default") -> Self` | Register a unit. With `command` the SDK generates the unit file; without it, only enablement is emitted. `description` sets `Description=` (default: the name). `exec_start_pre` adds one `ExecStartPre=` per command, `working_dir` sets `WorkingDirectory=`, `env_file` sets `EnvironmentFile=`, and `env` adds `Environment=` lines sorted by key, quoted when a value has spaces, quotes or backslashes. `group` sets `Group=`, `wanted_by` overrides `WantedBy=minimal.target`, `type` overrides `Type=simple`, `limits={"NOFILE": 1048576}` emits `LimitNOFILE=` lines, `kill_mode` and `timeout_stop` set `KillMode=`/`TimeoutStopSec=`. `restart`: `"always"`, `"on-failure"`, `"no"`. `security_profile`: `"strict"`, `"default"`, `"none"` |
+| `group(name, *, system=False, gid=None) -> Self` | Create a group before any user; the linter reports `user-group-undefined` for a user in a group nobody declares |
+| `enable(*units) -> Self` / `disable(*units) -> Self` / `mask(*units) -> Self` | Declare the state of packaged units (`systemctl enable|disable|mask` at postinst); `explain` lists them under `Units:` |
 
 ### Partitions and outputs
 
@@ -136,7 +138,8 @@ Hooks run on the host with mkosi variables (`$BUILDROOT`, `$DESTDIR`, `$BUILDDIR
 
 | Method | Description |
 | --- | --- |
-| `add_init_script(script, *, priority=100) -> Self` | Append a bash fragment to `/usr/bin/runtime-init`; lower priority runs first |
+| `add_init_script(script, *, priority=100) -> Self` | Append a bash fragment to `/usr/bin/runtime-init` for the active profiles; lower priority runs first. Extending profiles inherit the default's fragments |
+| `init_scripts(profile=None) -> tuple[InitScriptEntry, ...]` / `has_init_scripts() -> bool` | The merged init fragments of a profile |
 | `ssh() -> Self` | Install `dropbear` (dev profiles) |
 
 ### Introspection
@@ -157,11 +160,13 @@ The same views are available from the shell: `tundravm explain`, `check` and `di
 | Method | Description |
 | --- | --- |
 | `set_policy(policy) -> Self` | Replace the `Policy` |
-| `lock(path=None) -> Path` | Write the lockfile for the active profiles; default `build_dir / "tundravm.lock"` |
-| `lock_status(path=None) -> LockDrift` | Compare the lockfile with the recipe section by section; never writes. `LockfileError` if the lockfile is missing |
+| `lock(path=None, *, resolver=None, offline=False) -> Path` | Write the lockfile for the active profiles; default `build_dir / "tundravm.lock"`. Resolves every `GitSource` ref to a commit and every `HttpSource` to a sha256 (`offline=True` reuses existing pins and fails on anything new) |
+| `source_build(spec: SourceBuild) -> Self` | Declare a from-source build (clone or download, build, install); pinned by the lockfile. `source_builds(profile=None)`, `source_pins(path=None)`, `unpinned_sources(path=None)` inspect it |
+| `pin_mirror(url, *, tools_tree=True) -> Self` | Chainable form of the `mirror`/`tools_tree_mirror` attributes |
+| `lock_status(path=None, *, resolver=None) -> LockDrift` | Compare the lockfile with the recipe section by section; never writes. `LockfileError` if the lockfile is missing |
 | `compile(path, *, force=False) -> CompileResult` | Emit the mkosi tree for the active profiles; skipped when digest and path are unchanged. Each profile directory is recreated, so files dropped from the recipe disappear |
 | `emit_mkosi(path) -> CompileResult` | Deprecated alias of `compile()` |
-| `bake(output_dir=None, *, frozen=False, force=False) -> BakeResult` | Run `check()` (error-level findings raise `ValidationError`), `compile()` into `<output_dir>/mkosi`, then build each active profile with the backend into `<output_dir>/<profile>/` and write `<output_dir>/bake-result.json`; `frozen=True` fails on a stale lockfile with `LockfileError` listing the drifted sections |
+| `bake(output_dir=None, *, frozen=False, force=False) -> BakeResult` | Run `check()` (error-level findings raise `LintError`), `compile()` into `<output_dir>/mkosi`, then build each active profile with the backend into `<output_dir>/<profile>/` and write `<output_dir>/bake-result.json`; `frozen=True` fails on a stale lockfile with `LockfileError` listing the drifted sections, and on any source build without a lockfile pin |
 | `measure(*, backend, profile=None) -> Measurements` | Derive measurements from `last_bake()`; `backend` is `"rtmr"`, `"azure"` or `"gcp"` |
 | `deploy(*, target, profile=None, parameters=None, memory=None, cpus=None) -> DeployResult` | Deploy an artifact from `last_bake()`; `parameters` are adapter-specific strings |
 | `last_bake(build_dir=None) -> BakeResult` | The latest bake result, loaded from `<build_dir>/bake-result.json` when this process has not baked. With `build_dir` it reloads from that directory (for a bake made with `output_dir`). `StateError` if there is none |
@@ -207,7 +212,8 @@ All errors derive from `TdxError(message, *, code, hint=None, context=None)` and
 
 | Class | Code | Raised when |
 | --- | --- | --- |
-| `ValidationError` | `E_VALIDATION` | Bad arguments, duplicate names, missing backend, unmet module `requires`, `bake()` with error-level lint findings |
+| `ValidationError` | `E_VALIDATION` | Bad arguments, duplicate names, missing backend, unmet module `requires` |
+| `LintError` | `E_LINT` | `bake()` with error-level lint findings; run `tundravm check` |
 | `LockfileError` | `E_LOCKFILE` | `bake(frozen=True)` with a missing or stale lockfile |
 | `ReproducibilityError` | `E_REPRODUCIBILITY` | Artifact digests differ between equivalent builds |
 | `BackendExecutionError` | `E_BACKEND_EXECUTION` | mkosi/backend failure, unsupported mkosi version |
@@ -217,6 +223,33 @@ All errors derive from `TdxError(message, *, code, hint=None, context=None)` and
 | `PolicyError` | `E_POLICY` | Policy violation (non-frozen bake, mutable ref, offline network) |
 
 `ErrorCode` is a `StrEnum` of the codes above.
+
+## Source builds (`from tundravm import ...`)
+
+| Name | Description |
+| --- | --- |
+| `GitSource(repo, ref, *, subdir=None, submodules=False)` | A git checkout; `ref` may be a branch, tag or 40-hex commit |
+| `HttpSource(url, *, sha256=None)` | A download; the hash is pinned by `lock()` when omitted |
+| `GoBuild(*, output, package="./...", ldflags="-s -w -buildid=", tags=(), env={}, packages=("golang",))` | `go build` recipe |
+| `CargoBuild(*, output, bin=None, package=None, features=(), profile="release", env={}, packages=("cargo",))` | `cargo build` recipe |
+| `DotnetBuild(*, project, output, configuration="Release", runtime="linux-x64", packages=("dotnet-sdk-8.0",))` | `dotnet publish` recipe |
+| `ScriptBuild(*, script, output)` | Arbitrary bash producing `output` |
+| `SourceBuild(name, source, build, install_to, mode="0755", cache_key=None, mark_unpinned=True)` | One declaration: fetch, build, install to `install_to` |
+
+```python
+img.source_build(SourceBuild(
+    name="tdxs",
+    source=GitSource("https://github.com/Hyodar/tundra-tools.git", "master"),
+    build=GoBuild(package="./cmd/tdxs", output="tdxs"),
+    install_to="/usr/bin/tdxs",
+))
+```
+
+`tundravm lock` pins `master` to a commit in the lockfile's `fetches`; `compile()` then fetches that exact commit. `check` reports `source-unpinned` until it is pinned, `explain` shows a `Sources:` section, and `bake --frozen` refuses unpinned sources. `Tdxs`, `KeyGeneration`, `DiskEncryption`, `SecretDelivery` and the example `Raiko` module build this way.
+
+## Modules (`tundravm.modules`)
+
+`KeyGeneration.with_key(...)`, `DiskEncryption.with_disk(...)` and `SecretDelivery.with_secret(...)` return the module, so configuration can be inline: `img.apply(KeyGeneration().with_key("root", strategy="tpm", output="/run/keys/root"))`. `DiskEncryption.disk(..., key=KeySpec)` derives `key_path` from the key and is validated by `check()`; `SecretDelivery(store_at=DiskSpec)` is checked by `secret-store-undefined`.
 
 ## Diagnostics
 

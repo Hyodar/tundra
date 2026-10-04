@@ -59,6 +59,15 @@ The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full
 - **Modules.** One `Module` base class with `requires`, init priorities and checks.
 - **Testing toolkit.** `tundravm.testing` and a pytest plugin: compiled-tree readers, lint asserts, golden trees, in-process bakes.
 
+Services, groups and packaged units are declared, not scripted:
+
+```python
+img.group("eth", system=True).user("nethermind", system=True, groups=("eth",))
+img.service("nethermind", command="/usr/bin/nethermind", user="nethermind", group="eth",
+            restart="on-failure", limits={"NOFILE": 1048576}, env_file="/etc/nethermind/env")
+img.enable("openntpd", "dropbear").mask("ssh.service", "ssh.socket")
+```
+
 ## Profiles
 
 A profile is a variant of the image, such as one per cloud. A profile extends the default profile: its image is everything declared on the default plus its own additions. On a conflict (same file path, unit, user) the profile wins. `output_targets` and `debloat` fall back to the default when the profile does not set them.
