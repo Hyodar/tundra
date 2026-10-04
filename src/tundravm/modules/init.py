@@ -34,6 +34,11 @@ class Init:
     def has_scripts(self) -> bool:
         return bool(self._scripts)
 
+    @property
+    def scripts(self) -> tuple[InitScriptEntry, ...]:
+        """Registered fragments in registration order."""
+        return tuple(self._scripts)
+
     def add_script(self, script: str, *, priority: int = 100) -> None:
         """Register a bash fragment with the given priority (lower runs first)."""
         if not script:

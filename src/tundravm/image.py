@@ -6,7 +6,7 @@ import hashlib
 import json
 import shlex
 import warnings
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -15,6 +15,8 @@ from typing import Literal, Protocol, Self
 
 from .backends.base import BuildBackend
 from .cache import BuildCacheInput, BuildCacheStore, cache_key
+from .check import Diagnostic
+from .check import check as run_checks
 from .compiler import (
     DEFAULT_TDX_INIT_SCRIPT,
     PHASE_ORDER,
@@ -23,6 +25,7 @@ from .compiler import (
     emit_mkosi_tree,
 )
 from .deploy import get_adapter
+from .diff import TreeDiff, diff_against
 from .errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from .explain import describe, render
 from .lockfile import build_lockfile, read_lockfile, recipe_digest, write_lockfile
@@ -455,6 +458,17 @@ class Image:
         """Plain-text summary of ``explain(profile=...)``."""
         return render(self.explain(profile=profile))
 
+    def check(self, *, profiles: Sequence[str] | None = None) -> list[Diagnostic]:
+        """Lint the recipe; see ``tundravm.check`` for the rules."""
+        return run_checks(self, profiles=profiles)
+
+    def diff(self, against: str | Path) -> TreeDiff:
+        """Diff the compiled tree at *against* to what this recipe compiles to now.
+
+        Only the active profiles are compiled and compared; nothing is written to *against*.
+        """
+        return diff_against(self, against)
+
     # --- Lifecycle convenience methods ---
 
     def sync(self, command: str, *, env: Mapping[str, str] | None = None) -> Self:
@@ -758,6 +772,13 @@ class Image:
     ) -> BakeResult:
         """Compile, build, and package the image via the configured backend."""
         ensure_bake_policy(policy=self.policy, frozen=frozen)
+        errors = [d for d in self.check() if d.level == "error"]
+        if errors:
+            raise ValidationError(
+                f"Recipe has {len(errors)} error-level diagnostics.",
+                hint="Run `tundravm check RECIPE` or img.check() to see them.",
+                context={"codes": ", ".join(d.code for d in errors[:3])},
+            )
         if frozen:
             self._assert_frozen_lock(profile_names=self._active_profiles)
         destination = self._normalize_path(output_dir, fallback=self.build_dir)

@@ -2,6 +2,8 @@
 
 __version__ = "0.1.0"
 
+from .check import Diagnostic
+from .diff import FileChange, TreeDiff
 from .errors import (
     BackendExecutionError,
     DeploymentError,
@@ -37,6 +39,8 @@ __all__ = [
     "CompileResult",
     "DebloatConfig",
     "DeploymentError",
+    "Diagnostic",
+    "FileChange",
     "Image",
     "Kernel",
     "LockfileError",
@@ -51,6 +55,7 @@ __all__ = [
     "SecretSpec",
     "SecretTarget",
     "TdxError",
+    "TreeDiff",
     "ValidationError",
     "__version__",
     "load_recipe",

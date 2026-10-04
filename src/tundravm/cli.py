@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import TextIO
 
 from . import __version__
+from .check import cmd_check
+from .diff import cmd_diff
 from .errors import TdxError, ValidationError
 from .image import Image
 from .lockfile import recipe_digest
@@ -78,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     compile_cmd.add_argument(
         "--force", action="store_true", help="Re-emit even if the recipe is unchanged."
     )
+    compile_cmd.add_argument(
+        "--check",
+        action="store_true",
+        help="Do not write; exit 1 if the tree at --out is stale relative to the recipe.",
+    )
 
     lock = _add_command(sub, "lock", _cmd_lock, help="Write the lockfile for the recipe.")
     lock.add_argument(
@@ -100,6 +107,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the lockfile first, then build with --frozen semantics.",
     )
     bake.add_argument("--force", action="store_true", help="Force recompilation.")
+
+    check = _add_command(sub, "check", _cmd_check, help="Lint the recipe and report diagnostics.")
+    check.add_argument("--json", action="store_true", help="Emit diagnostics as JSON.")
+    check.add_argument("--strict", action="store_true", help="Treat warnings as errors (exit 1).")
+
+    diff = _add_command(
+        sub, "diff", _cmd_diff, help="Show how the recipe differs from a compiled tree."
+    )
+    diff.add_argument(
+        "--against",
+        type=Path,
+        default=None,
+        help="Compiled mkosi tree to compare with (default: <build_dir>/mkosi).",
+    )
+    diff.add_argument("--stat", action="store_true", help="Only list changed files.")
+    diff.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="Colorize output (default: %(default)s).",
+    )
 
     new = sub.add_parser(
         "new",
@@ -219,10 +247,27 @@ def _cmd_digest(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
+    img = _load(args)
+    with _selected(img, args):
+        return cmd_check(args, out, img)
+
+
+def _cmd_diff(args: argparse.Namespace, out: TextIO) -> int:
+    img = _load(args)
+    with _selected(img, args):
+        return cmd_diff(args, out, img)
+
+
 def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
     img = _load(args)
     destination = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
     with _selected(img, args):
+        if args.check:
+            args.against = destination
+            args.stat = True
+            args.color = "never"
+            return cmd_diff(args, out, img)
         result = img.compile(destination, force=args.force)
     print(f"compiled {result.path}", file=out)
     print(f"  profiles: {', '.join(result.profiles)}", file=out)
