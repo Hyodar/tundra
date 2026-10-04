@@ -3,7 +3,7 @@ from typing import cast
 
 import pytest
 
-from tundravm import Image
+from tundravm import Image, MkosiOptions
 from tundravm.compiler.emit_mkosi import ARCH_TO_MKOSI
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel, Phase
@@ -218,7 +218,7 @@ def test_compile_architecture_field(tmp_path: Path) -> None:
 def test_compile_with_network_configurable(tmp_path: Path) -> None:
     """WithNetwork can be set to True or False."""
     for with_net, expected in [(True, "WithNetwork=true"), (False, "WithNetwork=false")]:
-        image = Image(base="debian/bookworm", with_network=with_net)
+        image = Image(base="debian/bookworm", mkosi=MkosiOptions(with_network=with_net))
         image.install("curl")
         output_dir = image.compile(tmp_path / f"mkosi-net-{with_net}")
         conf_text = (output_dir / "default" / "mkosi.conf").read_text(encoding="utf-8")
@@ -279,7 +279,7 @@ def test_compile_default_target(tmp_path: Path) -> None:
 
 def test_compile_skeleton_init_script(tmp_path: Path) -> None:
     """Custom init script is written to mkosi.skeleton/init when configured."""
-    image = Image(base="debian/bookworm", init_script=Image.DEFAULT_TDX_INIT)
+    image = Image(base="debian/bookworm").mkosi_options(init_script=Image.DEFAULT_TDX_INIT)
     image.install("systemd")
 
     output_dir = image.compile(tmp_path / "mkosi")
@@ -295,7 +295,7 @@ def test_compile_skeleton_init_script(tmp_path: Path) -> None:
 
 def test_compile_version_script(tmp_path: Path) -> None:
     """mkosi.version is emitted at the emission root when enabled."""
-    image = Image(base="debian/bookworm", generate_version_script=True)
+    image = Image(base="debian/bookworm", mkosi=MkosiOptions(generate_version_script=True))
     image.install("curl")
 
     output_dir = image.compile(tmp_path / "mkosi")
@@ -337,7 +337,7 @@ def test_compile_azure_postoutput(tmp_path: Path) -> None:
 
 def test_compile_native_profiles_mode(tmp_path: Path) -> None:
     """Native profiles mode creates root mkosi.conf + mkosi.profiles/<name>/."""
-    image = Image(base="debian/bookworm", emit_mode="native_profiles")
+    image = Image(base="debian/bookworm", mkosi=MkosiOptions(emit_mode="native_profiles"))
     image.install("curl")
     with image.profile("prod"):
         image.install("nginx")
@@ -359,7 +359,7 @@ def test_compile_environment_key_value(tmp_path: Path) -> None:
     """Environment=KEY=VALUE pairs are emitted in [Build] section."""
     image = Image(
         base="debian/bookworm",
-        environment={"MY_VAR": "hello", "OTHER": "world"},
+        mkosi=MkosiOptions(environment={"MY_VAR": "hello", "OTHER": "world"}),
         reproducible=False,
     )
     image.install("curl")
@@ -375,7 +375,7 @@ def test_compile_environment_passthrough(tmp_path: Path) -> None:
     """Environment=KEY (passthrough without value) is emitted in [Build] section."""
     image = Image(
         base="debian/bookworm",
-        environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
+        mkosi=MkosiOptions(environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION")),
         reproducible=False,
     )
     image.install("curl")
@@ -391,8 +391,10 @@ def test_compile_environment_both_forms(tmp_path: Path) -> None:
     """Both key=value and passthrough forms coexist in [Build] section."""
     image = Image(
         base="debian/bookworm",
-        environment={"SOURCE_DATE_EPOCH": "0"},
-        environment_passthrough=("KERNEL_IMAGE",),
+        mkosi=MkosiOptions(
+            environment={"SOURCE_DATE_EPOCH": "0"},
+            environment_passthrough=("KERNEL_IMAGE",),
+        ),
     )
     image.install("curl")
 
@@ -408,7 +410,7 @@ def test_compile_reproducible_auto_adds_source_date_epoch(tmp_path: Path) -> Non
     image = Image(
         base="debian/bookworm",
         reproducible=True,
-        environment={"MY_VAR": "test"},
+        mkosi=MkosiOptions(environment={"MY_VAR": "test"}),
     )
     image.install("curl")
 
@@ -425,7 +427,7 @@ def test_compile_reproducible_no_override_user_epoch(tmp_path: Path) -> None:
     image = Image(
         base="debian/bookworm",
         reproducible=True,
-        environment={"SOURCE_DATE_EPOCH": "1234"},
+        mkosi=MkosiOptions(environment={"SOURCE_DATE_EPOCH": "1234"}),
     )
     image.install("curl")
 
@@ -708,7 +710,7 @@ def test_compile_backports_auto_adds_sandbox_trees() -> None:
     expected_entry = (
         "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
     )
-    assert expected_entry in image.sandbox_trees
+    assert expected_entry in image.mkosi.sandbox_trees
 
 
 def test_compile_backports_no_duplicate_sandbox_trees() -> None:
@@ -716,9 +718,11 @@ def test_compile_backports_no_duplicate_sandbox_trees() -> None:
     image = Image(
         base="debian/bookworm",
         reproducible=False,
-        sandbox_trees=(
-            "mkosi.builddir/debian-backports.sources"
-            ":/etc/apt/sources.list.d/debian-backports.sources",
+        mkosi=MkosiOptions(
+            sandbox_trees=(
+                "mkosi.builddir/debian-backports.sources"
+                ":/etc/apt/sources.list.d/debian-backports.sources",
+            ),
         ),
     )
     image.backports()
@@ -726,7 +730,7 @@ def test_compile_backports_no_duplicate_sandbox_trees() -> None:
     expected_entry = (
         "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
     )
-    assert image.sandbox_trees.count(expected_entry) == 1
+    assert image.mkosi.sandbox_trees.count(expected_entry) == 1
 
 
 def test_compile_backports_jq_fallback_when_no_mirror() -> None:
@@ -810,13 +814,6 @@ def test_compile_debloat_profile_conditional_unconditional_coexist(
     assert 'rm -rf "$BUILDROOT/usr/share/doc"' in content
     # Conditional path is guarded
     assert 'rm -rf "$BUILDROOT/usr/share/bash-completion"' in content
-
-
-def test_emit_mkosi_deprecation_warning(tmp_path: Path) -> None:
-    image = Image(base="debian/bookworm")
-    image.install("curl")
-    with pytest.warns(DeprecationWarning, match="emit_mkosi.*deprecated"):
-        image.emit_mkosi(tmp_path / "mkosi")
 
 
 def _snapshot_tree(root: Path) -> dict[str, str]:

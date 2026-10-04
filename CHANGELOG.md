@@ -30,6 +30,8 @@
 - `KeyGeneration.with_key()`, `DiskEncryption.with_disk()`, `SecretDelivery.with_secret()` return the module; `DiskEncryption.disk(key=KeySpec)`; `SecretDelivery.store_at` accepts a `DiskSpec` with the `secret-store-undefined` rule.
 - `Image.init_scripts(profile=None)`, `Image.has_init_scripts()`, `Profile.applied_modules(inherited=)`.
 - `LintError` (`E_LINT`) for a bake refused by the linter.
+- `MkosiOptions`, `Image.mkosi_options(**overrides)`, `Image.set_kernel()`; `explain`/`summary` show non-default `Build options:`. The in-memory compile cache now keys on the emit config, so changing options after a compile re-emits.
+- Measurement provenance: `Measurements.source` (`measured-boot`, `dstack-mr` or `placeholder`), `tool_version`, `artifact`, `is_placeholder`; `tundravm measure --allow-placeholder`; `doctor` lists the optional measurement tools; `PlaceholderMeasurementWarning`.
 - `tundravm init [DIR]` bootstraps a recipe project (`NAME.py`, a `build/` `.gitignore` block that keeps the lockfile, and with `--ci github` a GitHub Actions workflow). Templates live in `tundravm.templates`.
 - `tundravm ci RECIPE` runs `check --strict`, `compile --check` and `lock --check` with one verdict line per step, exit 1 at the first failure.
 - `--format` for review output: `explain` (`text|json|markdown`), `check` (`auto|text|json|github|markdown`), `diff` (`auto|text|stat|markdown|github`), `compile --check` and `lock --check` (`auto|text|github|markdown`). `auto`, the default, emits GitHub workflow annotations under `GITHUB_ACTIONS=true`. New APIs: `explain.render_markdown()`, `check.render_github()`/`render_markdown()`, `TreeDiff.markdown()`/`github()`, `LockDrift.github()`/`markdown()`.
@@ -62,6 +64,8 @@
 - The `BuildBackend` protocol gains `requirements() -> tuple[Requirement, ...]`.
 - `FileEntry.content` may be `bytes`. `file(src=...)` copies non-UTF-8 files as bytes.
 - `Image.build_dir` is normalized to a `Path` (a `str` is accepted).
+- `Image` is keyword-only. The mkosi knobs (`with_network`, `clean_package_metadata`, `manifest_format`, `compress_output`, `output_directory`, `seed`, `sandbox_trees`, `package_cache_directory`, `init_script`, `environment`, `environment_passthrough`, `emit_mode`, `generate_version_script`, `generate_cloud_postoutput`) moved to `MkosiOptions`, passed as `Image(mkosi=...)` or set with `img.mkosi_options(...)`; `logger` and `init` are no longer constructor arguments. `Image.emit_mkosi()` is removed; use `compile()`.
+- `measure()` refuses placeholder values unless `allow_placeholder=True` (CLI `--allow-placeholder`); `rtmr`/`azure`/`gcp` modules return `Measurements`, which now requires `source=` (JSON schema 2).
 
 ### Fixed
 

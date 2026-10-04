@@ -18,6 +18,7 @@ import platform
 import re
 import subprocess
 import sys
+import warnings
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -35,6 +36,8 @@ from .explain import render_markdown
 from .formats import annotation_path, format_help, resolve_format, workflow_command
 from .image import Image
 from .lockfile import LockDrift, recipe_digest
+from .measure import Measurements, PlaceholderMeasurementWarning
+from .measure import rtmr as rtmr_measure
 from .models import DeployResult, OutputTarget
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
 from .recipe import load_recipe
@@ -269,6 +272,14 @@ def build_parser() -> argparse.ArgumentParser:
     measure.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
     measure.add_argument(
         "--out", type=Path, default=None, help="Bake output directory if bake used --out."
+    )
+    measure.add_argument(
+        "--allow-placeholder",
+        action="store_true",
+        help=(
+            "Without measured-boot/dstack-mr (and always for azure/gcp), print placeholder "
+            "values derived from artifact digests instead of failing. Not real measurements."
+        ),
     )
 
     deploy = _add_command(
@@ -630,15 +641,37 @@ def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
         profile = _single_profile(img, args, "measure")
         if args.out is not None:
             img.last_bake(args.out)
-        measurements = img.measure(backend=args.backend, profile=profile)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PlaceholderMeasurementWarning)
+            measurements = img.measure(
+                backend=args.backend, profile=profile, allow_placeholder=args.allow_placeholder
+            )
+    if measurements.is_placeholder:
+        print(PLACEHOLDER_BANNER, file=sys.stderr)
     if args.json:
         print(json.dumps(measurements.to_dict(), indent=2, sort_keys=True), file=out)
         return EXIT_OK
-    print(f"measurements {profile} ({measurements.backend})", file=out)
-    width = max((len(key) for key in measurements.values), default=0)
-    for key, value in sorted(measurements.values.items()):
-        print(f"  {key:<{width}}  {value}", file=out)
+    print(render_measurements(measurements, profile=profile), file=out)
     return EXIT_OK
+
+
+PLACEHOLDER_BANNER = (
+    "PLACEHOLDER: not real measurements. These values are derived from artifact digests; "
+    "never put them in an attestation policy."
+)
+
+
+def render_measurements(measurements: Measurements, *, profile: str) -> str:
+    """Human-readable ``Measurements``: header, ``source:`` provenance line, aligned values."""
+    source: str = measurements.source
+    if measurements.tool_version is not None:
+        source += f" {measurements.tool_version}"
+    if measurements.artifact is not None:
+        source += f" ({measurements.artifact})"
+    lines = [f"measurements {profile} ({measurements.backend})", f"source: {source}"]
+    width = max((len(key) for key in measurements.values), default=0)
+    lines.extend(f"  {key:<{width}}  {value}" for key, value in sorted(measurements.values.items()))
+    return "\n".join(lines)
 
 
 def _parse_params(raw: Sequence[str] | None) -> dict[str, str]:
@@ -738,6 +771,14 @@ def default_doctor_backends() -> tuple[BuildBackend, ...]:
     )
 
 
+def _probe_measurement_tools(runner: ProbeRunner, out: TextIO) -> None:
+    """Print the optional RTMR measurement tools; they never fail ``doctor``."""
+    print("measurement tools:", file=out)
+    for requirement in rtmr_measure.requirements():
+        _, line = probe_requirement(requirement, runner)
+        print(f"  {line}", file=out)
+
+
 def doctor(img: Image | None, out: TextIO, *, runner: ProbeRunner | None = None) -> int:
     """Environment report. Exit 1 if *img*'s backend lacks a required tool, else 0."""
     probe = runner if runner is not None else run_probe
@@ -746,12 +787,14 @@ def doctor(img: Image | None, out: TextIO, *, runner: ProbeRunner | None = None)
     if img is None:
         for backend in default_doctor_backends():
             _probe_backend(backend, probe, out)
+        _probe_measurement_tools(probe, out)
         return EXIT_OK
     if img.backend is None:
         print("backend: none configured", file=out)
         ready = False
     else:
         ready = _probe_backend(img.backend, probe, out)
+    _probe_measurement_tools(probe, out)
     summary = render_diagnostics(img.check()).splitlines()[-1]
     print(f"check: {summary}", file=out)
     return EXIT_OK if ready else EXIT_FAILURE
@@ -939,6 +982,7 @@ __all__ = [
     "EXIT_OK",
     "EXIT_SDK_ERROR",
     "MEASUREMENT_BACKENDS",
+    "PLACEHOLDER_BANNER",
     "ProbeRunner",
     "build_parser",
     "default_doctor_backends",
@@ -947,6 +991,7 @@ __all__ = [
     "probe_requirement",
     "render_deploy_result",
     "render_drift",
+    "render_measurements",
     "render_recipe_template",
     "run_probe",
 ]

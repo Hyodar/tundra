@@ -37,7 +37,7 @@ with img.all_profiles():
 
 A profile extends the default profile. Its image is the default's packages, files, users, services, hooks, init scripts and modules plus its own declarations. When both declare the same file path, unit, user, partition or repository name, the profile wins. `output_targets` and `debloat` fall back to the default's values when the profile does not set them. `img.profile("standalone", extends=None)` starts from an empty image instead; only init-script fragments, which live on `img.init`, still apply to it. `tundravm explain --profile NAME` shows the merged result with an `Extends:` line.
 
-`compile()`, `lock()`, and `bake()` operate on the active set. Compiled trees have one directory per profile (`<path>/<profile>/mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Bake outputs land in `<output_dir>/<profile>/`. With `emit_mode="native_profiles"` you get a single root `mkosi.conf` plus `mkosi.profiles/<name>/` overrides instead.
+`compile()`, `lock()`, and `bake()` operate on the active set. Compiled trees have one directory per profile (`<path>/<profile>/mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Bake outputs land in `<output_dir>/<profile>/`. With `mkosi=MkosiOptions(emit_mode="native_profiles")` you get a single root `mkosi.conf` plus `mkosi.profiles/<name>/` overrides instead.
 
 `measure()` and `deploy()` need a single profile. Pass `profile="azure"` when more than one is active, or call `img.profile("azure").measure(...)`.
 

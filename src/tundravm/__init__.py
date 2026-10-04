@@ -17,6 +17,7 @@ from .errors import (
     ValidationError,
 )
 from .image import Applicable, Image
+from .measure import PlaceholderMeasurementWarning
 from .measure.model import Measurements
 from .models import (
     BakeRequest,
@@ -30,6 +31,7 @@ from .models import (
     SecretSpec,
     SecretTarget,
 )
+from .options import MkosiOptions
 from .policy import Policy
 from .profile import Profile
 from .recipe import load_recipe
@@ -66,7 +68,9 @@ __all__ = [
     "LockfileError",
     "MeasurementError",
     "Measurements",
+    "MkosiOptions",
     "PolicyError",
+    "PlaceholderMeasurementWarning",
     "Policy",
     "Profile",
     "ProfileState",

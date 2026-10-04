@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image
+from tundravm import Image, MkosiOptions
 from tundravm.cli import EXIT_OK, main
 from tundravm.errors import ValidationError
 from tundravm.lockfile import recipe_digest
@@ -103,7 +103,7 @@ def test_compiled_profile_conf_holds_default_and_profile_packages(tmp_path: Path
 
 def test_native_profiles_overlay_holds_only_additions(tmp_path: Path) -> None:
     img = _image()
-    img.emit_mode = "native_profiles"
+    img.mkosi_options(emit_mode="native_profiles")
     with img.all_profiles():
         out = img.compile(tmp_path / "mkosi")
 
@@ -117,7 +117,7 @@ def test_native_profiles_overlay_holds_only_additions(tmp_path: Path) -> None:
 
 
 def test_native_profiles_rejects_standalone_profile(tmp_path: Path) -> None:
-    img = Image(emit_mode="native_profiles")
+    img = Image(mkosi=MkosiOptions(emit_mode="native_profiles"))
     img.profile("solo", extends=None)
     with img.all_profiles(), pytest.raises(ValidationError, match="standalone"):
         img.compile(tmp_path / "mkosi")

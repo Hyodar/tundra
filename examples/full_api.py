@@ -8,7 +8,7 @@ Run it directly, or drive it with the CLI:
 
 from pathlib import Path
 
-from tundravm import Image, Kernel, SecretSchema, SecretTarget
+from tundravm import Image, Kernel, MkosiOptions, SecretSchema, SecretTarget
 from tundravm.backends import LimaMkosiBackend
 from tundravm.modules import (
     DiskEncryption,
@@ -25,9 +25,9 @@ def build() -> Image:
         arch="x86_64",
         reproducible=True,
         backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
+        kernel=Kernel.tdx_kernel("6.8"),
+        mkosi=MkosiOptions(package_cache_directory="mkosi.cache"),
     )
-
-    img.kernel = Kernel.tdx_kernel("6.8")
 
     img.repository(
         "https://deb.debian.org/debian-security",
@@ -116,5 +116,5 @@ if __name__ == "__main__":
     img = build()
     img.lock()
     img.bake(frozen=True)
-    print(img.measure(backend="rtmr").to_json())
+    print(img.measure(backend="rtmr", allow_placeholder=True).to_json())
     print(img.deploy(target="qemu").deployment_id)

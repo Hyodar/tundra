@@ -8,10 +8,9 @@ import json
 import os
 import re
 import shlex
-import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -92,6 +91,7 @@ from .observability import (
     format_duration,
     format_size,
 )
+from .options import MkosiOptions
 from .policy import Policy, ensure_bake_policy
 from .source import Resolver, SourceBuild, resolve_pins, source_drift
 
@@ -161,6 +161,10 @@ def _normalize_limits(service: str, limits: Mapping[str, str | int] | None) -> d
     return dict(sorted(normalized.items()))
 
 
+def _short_sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
 def _is_strip_hook(hook: HookSpec) -> bool:
     return hook.phase == "finalize" and "IMAGE_VERSION" in hook.command.argv[0]
 
@@ -190,7 +194,7 @@ class Applicable(Protocol):
     def apply(self, image: Image) -> None: ...
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Image:
     """Declarative recipe for a TDX-enabled VM image.
 
@@ -205,36 +209,27 @@ class Image:
         img.install("curl")
         Tdxs().apply(img)
         img.bake()
+
+    mkosi-only knobs (seed, cache directory, environment, ...) live in
+    :class:`~tundravm.options.MkosiOptions`: ``Image(mkosi=MkosiOptions(...))``
+    or ``img.mkosi_options(...)``.
     """
 
     DEFAULT_TDX_INIT = DEFAULT_TDX_INIT_SCRIPT
 
-    build_dir: Path = field(default_factory=lambda: Path("build"))
     base: str = "debian/bookworm"
     arch: Arch = "x86_64"
-    default_profile: str = "default"
     backend: BuildBackend | None = None
+    build_dir: Path = field(default_factory=lambda: Path("build"))
     reproducible: bool = True
     policy: Policy = field(default_factory=Policy)
-    logger: StructuredLogger = field(default_factory=StructuredLogger)
-    kernel: Kernel | None = field(default=None)
-    with_network: bool = True
-    clean_package_metadata: bool = True
-    manifest_format: str = "json"
-    compress_output: str | None = None
-    output_directory: str | None = None
-    seed: str | None = None
+    kernel: Kernel | None = None
     mirror: str | None = None
     tools_tree_mirror: str | None = None
-    sandbox_trees: tuple[str, ...] = ()
-    package_cache_directory: str | None = None
-    init_script: str | None = None
-    generate_version_script: bool = False
-    generate_cloud_postoutput: bool = True
-    environment: dict[str, str] | None = None
-    environment_passthrough: tuple[str, ...] | None = None
-    emit_mode: Literal["per_directory", "native_profiles"] = "per_directory"
-    init: Init = field(default_factory=Init)
+    default_profile: str = "default"
+    mkosi: MkosiOptions = field(default_factory=MkosiOptions)
+    logger: StructuredLogger = field(init=False, default_factory=StructuredLogger, repr=False)
+    init: Init = field(init=False, default_factory=Init, repr=False)
     _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
     _modules: dict[str, list[Module]] = field(init=False, default_factory=dict, repr=False)
@@ -265,6 +260,23 @@ class Image:
 
     def set_policy(self, policy: Policy) -> Self:
         self.policy = policy
+        return self
+
+    def set_kernel(self, kernel: Kernel) -> Self:
+        """Build *kernel* instead of the distribution kernel (image-wide)."""
+        self.kernel = kernel
+        return self
+
+    def mkosi_options(self, **overrides: object) -> Self:
+        """Replace fields of ``self.mkosi`` (image-wide), e.g. ``mkosi_options(seed="...")``."""
+        known = {f.name for f in fields(MkosiOptions)}
+        unknown = sorted(set(overrides) - known)
+        if unknown:
+            raise ValidationError(
+                f"Unknown mkosi option(s): {', '.join(unknown)}.",
+                hint=f"Expected one of: {', '.join(sorted(known))}.",
+            )
+        self.mkosi = replace(self.mkosi, **overrides)  # type: ignore[arg-type]
         return self
 
     def apply(self, *modules: Applicable) -> Self:
@@ -1015,8 +1027,9 @@ class Image:
             "mkosi.builddir/debian-backports.sources"
             ":/etc/apt/sources.list.d/debian-backports.sources"
         )
-        if backports_entry not in self.sandbox_trees:
-            self.sandbox_trees = (*self.sandbox_trees, backports_entry)
+        trees = self.mkosi.sandbox_trees
+        if backports_entry not in trees:
+            self.mkosi = replace(self.mkosi, sandbox_trees=(*trees, backports_entry))
 
         return self
 
@@ -1168,7 +1181,9 @@ class Image:
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
         pins = self.source_pins()
         self._enforce_source_policy(pins)
-        compile_key = self._compile_key(digest, pins)
+        config = self._emit_config()
+        # The mkosi options and kernel shape the tree without entering the digest.
+        compile_key = self._compile_key(digest, pins) + ":" + _short_sha(repr(config))
         if (
             not force
             and self._last_compile_digest == compile_key
@@ -1185,7 +1200,7 @@ class Image:
             destination=destination,
             profile_names=self._active_profiles,
             base=self.base,
-            config=self._emit_config(),
+            config=config,
         )
         self._last_compile_digest = compile_key
         self._last_compile_path = destination
@@ -1194,15 +1209,6 @@ class Image:
             profiles=self._active_profiles,
             digest=digest,
         )
-
-    def emit_mkosi(self, path: str | Path) -> CompileResult:
-        """Deprecated: use compile() instead."""
-        warnings.warn(
-            "emit_mkosi() is deprecated, use compile() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.compile(path)
 
     def bake(
         self,
@@ -1413,8 +1419,17 @@ class Image:
         *,
         backend: Literal["rtmr", "azure", "gcp"],
         profile: str | None = None,
+        allow_placeholder: bool = False,
     ) -> Measurements:
-        """Derive expected TDX measurements from the last bake result."""
+        """Derive expected TDX measurements from the last bake result.
+
+        Values come from ``measured-boot`` or ``dstack-mr`` (``rtmr`` only). Without
+        a tool this raises ``MeasurementError`` (``E_MEASUREMENT``), unless
+        *allow_placeholder* is true: then the result has ``source="placeholder"``
+        (digest-derived values no TEE reproduces) and a
+        ``PlaceholderMeasurementWarning`` is emitted. ``azure`` and ``gcp`` are
+        always placeholders.
+        """
         selected_profile = self._resolve_operation_profile(profile)
         profile_result = self.last_bake().profiles.get(selected_profile)
         if profile_result is None:
@@ -1427,6 +1442,7 @@ class Image:
             backend=backend,
             profile=selected_profile,
             profile_result=profile_result,
+            allow_placeholder=allow_placeholder,
         )
 
     def deploy(
@@ -1478,7 +1494,8 @@ class Image:
         return self._last_bake_result
 
     def _emit_config(self) -> EmitConfig:
-        """Build an EmitConfig from the Image's settings."""
+        """Build an EmitConfig from the Image's settings and ``self.mkosi``."""
+        options = self.mkosi
         emit_kwargs: dict[str, object] = {
             "base": self.base,
             "arch": self.arch,
@@ -1486,24 +1503,22 @@ class Image:
             "kernel": self.kernel,
             "mirror": self.mirror,
             "tools_tree_mirror": self.tools_tree_mirror,
-            "with_network": self.with_network,
-            "clean_package_metadata": self.clean_package_metadata,
-            "manifest_format": self.manifest_format,
-            "sandbox_trees": self.sandbox_trees,
-            "package_cache_directory": self.package_cache_directory,
-            "init_script": self.init_script,
-            "generate_version_script": self.generate_version_script,
-            "generate_cloud_postoutput": self.generate_cloud_postoutput,
-            "emit_mode": self.emit_mode,
-            "environment": self.environment,
-            "environment_passthrough": self.environment_passthrough,
+            "with_network": options.with_network,
+            "clean_package_metadata": options.clean_package_metadata,
+            "manifest_format": options.manifest_format,
+            "compress_output": options.compress_output,
+            "output_directory": options.output_directory,
+            "sandbox_trees": options.sandbox_trees,
+            "package_cache_directory": options.package_cache_directory,
+            "init_script": options.init_script,
+            "generate_version_script": options.generate_version_script,
+            "generate_cloud_postoutput": options.generate_cloud_postoutput,
+            "emit_mode": options.emit_mode,
+            "environment": dict(options.environment) or None,
+            "environment_passthrough": options.environment_passthrough,
         }
-        if self.compress_output is not None:
-            emit_kwargs["compress_output"] = self.compress_output
-        if self.output_directory is not None:
-            emit_kwargs["output_directory"] = self.output_directory
-        if self.seed is not None:
-            emit_kwargs["seed"] = self.seed
+        if options.seed is not None:
+            emit_kwargs["seed"] = options.seed
         return EmitConfig(**emit_kwargs)  # type: ignore[arg-type]
 
     def _artifact_filename(self, target: OutputTarget) -> str:

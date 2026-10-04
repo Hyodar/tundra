@@ -84,8 +84,8 @@ def test_getattr_falls_back_to_declaration_methods() -> None:
 
 def test_getattr_rejects_non_declaration_attributes() -> None:
     dev = Image().profile("dev")
-    with pytest.raises(AttributeError, match="profile.image.emit_mkosi"):
-        _ = dev.emit_mkosi
+    with pytest.raises(AttributeError, match="profile.image.mkosi"):
+        _ = dev.mkosi
     with pytest.raises(AttributeError, match="no attribute 'nope'"):
         _ = dev.nope
 

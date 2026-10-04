@@ -58,7 +58,7 @@ The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full
 - **Linter.** `tundravm check` / `img.check()` returns `Diagnostic`s: services running as undeclared users, duplicate or relative file paths, missing platform modules, init priority collisions, undelivered secrets, and module-specific checks. `bake()` refuses recipes with errors.
 - **Drift diff.** `tundravm diff` shows a recipe change as a unified diff of the compiled tree. `compile --check` fails CI when the committed tree is stale.
 - **Lockfile.** `tundravm lock` pins the recipe digest per section. `lock --check` names what drifted (`~ profiles.default.packages: +htop`). `bake --frozen` refuses a stale lock.
-- **Multi-cloud.** Per-profile output targets, measurements (`rtmr`, `azure`, `gcp`) and deploy adapters (`qemu`, `azure`, `gcp`).
+- **Multi-cloud.** Per-profile output targets, measurements (`rtmr` via `measured-boot`/`dstack-mr`; `azure`/`gcp` placeholders are opt-in, never silent) and deploy adapters (`qemu`, `azure`, `gcp`).
 - **Modules.** One `Module` base class with `requires`, init priorities and checks.
 - **Testing toolkit.** `tundravm.testing` and a pytest plugin: compiled-tree readers, lint asserts, golden trees, in-process bakes.
 

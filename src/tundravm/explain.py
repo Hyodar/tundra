@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 from .compiler import PHASE_ORDER
 from .formats import md_cell, md_table
 from .models import InitScriptEntry, ProfileState, UnitAction, unit_name
+from .options import MkosiOptions
 
 if TYPE_CHECKING:
     from .image import Image
@@ -42,6 +43,7 @@ def describe(image: Image, *, profile: str | None = None) -> dict[str, object]:
     return {
         "arch": state.arch,
         "base": state.base,
+        "build_options": _describe_build_options(image.mkosi),
         "build_packages": sorted(profile_state.build_packages),
         "build_sources": [
             {"host_path": host_path, "target": target}
@@ -155,6 +157,11 @@ def render(description: dict[str, object]) -> str:
     policy = _as_dict(description.get("policy"))
     if policy:
         lines.append("Policy: " + " ".join(f"{k}={_fmt(v)}" for k, v in sorted(policy.items())))
+    build_options = _as_dict(description.get("build_options"))
+    if build_options:
+        lines.append(
+            "Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in build_options.items())
+        )
     if description.get("extends"):
         inherited = _as_list(description.get("extends_modules"))
         modules = f" (modules: {', '.join(inherited)})" if inherited else ""
@@ -528,6 +535,22 @@ def _describe_init_scripts(entries: Sequence[InitScriptEntry]) -> dict[str, obje
     }
 
 
+def _describe_build_options(options: MkosiOptions) -> dict[str, object]:
+    """``MkosiOptions`` fields that differ from the defaults; the init script as a digest."""
+    described: dict[str, object] = {}
+    for name, value in options.non_defaults().items():
+        if name == "init_script" and isinstance(value, str):
+            digest = hashlib.sha256(value.encode()).hexdigest()[:SHORT_DIGEST_LEN]
+            described[name] = f"sha256:{digest}"
+        elif isinstance(value, Mapping):
+            described[name] = dict(sorted(value.items()))
+        elif isinstance(value, tuple):
+            described[name] = list(value)
+        else:
+            described[name] = value
+    return described
+
+
 def _render_kernel(kernel: dict[str, Any]) -> str:
     parts = [f"Kernel: {kernel.get('version') or kernel.get('config_file') or 'custom'}"]
     if kernel.get("tdx"):
@@ -569,7 +592,13 @@ def _yes_no(value: object) -> str:
 
 
 def _fmt(value: object) -> str:
-    return _yes_no(value) if isinstance(value, bool) else str(value)
+    if isinstance(value, bool):
+        return _yes_no(value)
+    if isinstance(value, Mapping):
+        return ",".join(f"{k}={v}" for k, v in value.items())
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value)
+    return str(value)
 
 
 def _as_list(value: object) -> list[Any]:

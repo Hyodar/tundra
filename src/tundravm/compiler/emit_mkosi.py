@@ -1207,7 +1207,7 @@ def _require_profile(recipe: RecipeState, name: str) -> None:
     if name not in recipe.profiles:
         raise ValidationError(
             "Profile does not exist for mkosi emission.",
-            hint="Create the profile before calling emit_mkosi().",
+            hint="Create the profile before calling compile().",
             context={"profile": name, "operation": "emit_mkosi"},
         )
 

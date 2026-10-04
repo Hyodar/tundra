@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from examples.modules import Nethermind, Raiko, TaikoClient
 
-from tundravm import Image
+from tundravm import Image, MkosiOptions
 from tundravm.modules import (
     DiskEncryption,
     KeyGeneration,
@@ -23,8 +23,10 @@ def _build_base_image() -> Image:
     img = Image(
         reproducible=False,
         base="debian/bookworm",
-        environment={"SOURCE_DATE_EPOCH": "0"},
-        environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
+        mkosi=MkosiOptions(
+            environment={"SOURCE_DATE_EPOCH": "0"},
+            environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
+        ),
     )
     img.install("systemd", "dbus")
     img.debloat(

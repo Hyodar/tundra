@@ -4,21 +4,33 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Literal
 
 from tundravm.errors import MeasurementError
-from tundravm.measure.model import MeasurementMismatch, Measurements, VerificationResult
+from tundravm.measure.model import (
+    MEASUREMENTS_SCHEMA_VERSION,
+    MeasurementBackend,
+    MeasurementMismatch,
+    Measurements,
+    MeasurementSource,
+    PlaceholderMeasurementWarning,
+    VerificationResult,
+)
 from tundravm.models import ProfileBuildResult
 
 from . import azure, gcp, rtmr
+from .rtmr import ToolLocator, ToolRunner
 
 
 def derive_measurements(
     *,
-    backend: Literal["rtmr", "azure", "gcp"],
+    backend: MeasurementBackend,
     profile: str,
     profile_result: ProfileBuildResult,
+    allow_placeholder: bool = False,
+    tool_locator: ToolLocator | None = None,
+    runner: ToolRunner | None = None,
 ) -> Measurements:
+    """Measure *profile_result*'s artifacts; placeholder values need ``allow_placeholder``."""
     artifact_paths, digests_by_target, digests_by_path = _artifact_data(profile_result)
     if not digests_by_target:
         raise MeasurementError(
@@ -27,18 +39,19 @@ def derive_measurements(
             context={"profile": profile, "backend": backend},
         )
     if backend == "rtmr":
-        values = rtmr.derive(
+        return rtmr.derive(
             profile,
             artifact_digests=digests_by_path,
             artifact_paths=artifact_paths,
+            allow_placeholder=allow_placeholder,
+            tool_locator=tool_locator,
+            runner=runner,
         )
-    elif backend == "azure":
-        values = azure.derive(profile, digests_by_target)
-    elif backend == "gcp":
-        values = gcp.derive(profile, digests_by_target)
-    else:
-        raise MeasurementError("Unsupported measurement backend.", context={"backend": backend})
-    return Measurements(backend=backend, values=values)
+    if backend == "azure":
+        return azure.derive(profile, digests_by_target, allow_placeholder=allow_placeholder)
+    if backend == "gcp":
+        return gcp.derive(profile, digests_by_target, allow_placeholder=allow_placeholder)
+    raise MeasurementError("Unsupported measurement backend.", context={"backend": backend})
 
 
 def _artifact_data(
@@ -58,8 +71,14 @@ def _artifact_data(
 
 
 __all__ = [
+    "MEASUREMENTS_SCHEMA_VERSION",
+    "MeasurementBackend",
     "MeasurementMismatch",
+    "MeasurementSource",
     "Measurements",
+    "PlaceholderMeasurementWarning",
+    "ToolLocator",
+    "ToolRunner",
     "VerificationResult",
     "derive_measurements",
 ]

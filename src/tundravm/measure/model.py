@@ -10,6 +10,15 @@ from typing import Literal
 import cbor2
 
 MismatchReason = Literal["missing_actual", "unexpected_actual", "value_mismatch"]
+MeasurementBackend = Literal["rtmr", "azure", "gcp"]
+MeasurementSource = Literal["measured-boot", "dstack-mr", "placeholder"]
+"""Where measurement values came from; ``placeholder`` values are not real measurements."""
+
+MEASUREMENTS_SCHEMA_VERSION = 2
+
+
+class PlaceholderMeasurementWarning(UserWarning):
+    """``measure(..., allow_placeholder=True)`` returned values no tool measured."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,12 +38,26 @@ class VerificationResult:
 
 @dataclass(frozen=True, slots=True)
 class Measurements:
-    backend: Literal["rtmr", "azure", "gcp"]
+    """Measurement values plus their provenance.
+
+    ``source`` names the tool that measured ``artifact`` (with ``tool_version``
+    when the tool reports one), or ``"placeholder"`` for values derived from
+    artifact digests that no attestation will ever reproduce.
+    """
+
+    backend: MeasurementBackend
     values: dict[str, str] = field(default_factory=dict)
-    schema_version: int = 1
+    schema_version: int = MEASUREMENTS_SCHEMA_VERSION
+    source: MeasurementSource = field(kw_only=True)
+    tool_version: str | None = field(default=None, kw_only=True)
+    artifact: str | None = field(default=None, kw_only=True)
+
+    @property
+    def is_placeholder(self) -> bool:
+        return self.source == "placeholder"
 
     def to_dict(self) -> dict[str, object]:
-        """Return the JSON-ready payload (schema_version, backend, sorted values)."""
+        """Return the JSON-ready payload (schema_version, backend, provenance, sorted values)."""
         return self._payload()
 
     def to_json(self, path: str | Path | None = None) -> str:
@@ -99,5 +122,8 @@ class Measurements:
         return {
             "schema_version": self.schema_version,
             "backend": self.backend,
+            "source": self.source,
+            "tool_version": self.tool_version,
+            "artifact": self.artifact,
             "values": dict(sorted(self.values.items())),
         }

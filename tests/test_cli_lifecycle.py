@@ -51,15 +51,18 @@ def test_bake_prints_next_deploy_hint(recipe: Path) -> None:
 def test_measure_after_bake_in_separate_invocation(recipe: Path) -> None:
     assert run("bake", str(recipe), "--all-profiles")[0] == EXIT_OK
 
-    code, out = run("measure", str(recipe), "--backend", "rtmr", "--json")
+    code, out = run("measure", str(recipe), "--backend", "rtmr", "--json", "--allow-placeholder")
     assert code == EXIT_OK
     payload = json.loads(out)
     assert payload["backend"] == "rtmr"
+    assert payload["source"] == "placeholder"
     assert payload["values"]
 
-    code, out = run("measure", str(recipe), "--backend", "azure", "--profile", "azure")
+    code, out = run(
+        "measure", str(recipe), "--backend", "azure", "--profile", "azure", "--allow-placeholder"
+    )
     assert code == EXIT_OK
-    assert out.startswith("measurements azure (azure)\n")
+    assert out.startswith("measurements azure (azure)\nsource: placeholder\n")
 
 
 def test_measure_without_bake_reports_state_error(
@@ -200,6 +203,15 @@ def test_measure_follows_bake_out_dir(recipe: Path, tmp_path: Path) -> None:
     code, _ = run("measure", str(recipe), "--backend", "rtmr")
     assert code == EXIT_SDK_ERROR
 
-    code, out = run("measure", str(recipe), "--backend", "rtmr", "--json", "--out", str(out_dir))
+    code, out = run(
+        "measure",
+        str(recipe),
+        "--backend",
+        "rtmr",
+        "--json",
+        "--out",
+        str(out_dir),
+        "--allow-placeholder",
+    )
     assert code == EXIT_OK
     assert json.loads(out)["backend"] == "rtmr"

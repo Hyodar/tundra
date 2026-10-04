@@ -10,37 +10,42 @@ from tundravm import Image
 
 ### Construction and fields
 
-`Image` is a dataclass. All fields are keyword arguments to the constructor and remain assignable afterwards (`img.kernel = Kernel.tdx_kernel("6.8")`).
+`Image` is a keyword-only dataclass. Fields remain assignable afterwards (`img.kernel = Kernel.tdx_kernel("6.8")`), and `set_kernel()` / `mkosi_options()` are the chainable forms.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `build_dir` | `Path("build")` | Default bake output and lockfile directory; accepts `str` or `Path` |
 | `base` | `"debian/bookworm"` | Distribution/release |
 | `arch` | `"x86_64"` | `"x86_64"` or `"aarch64"` |
-| `default_profile` | `"default"` | Name of the implicit profile |
 | `backend` | `None` | `BuildBackend` used by `bake()`; required for `bake()` only |
+| `build_dir` | `Path("build")` | Default bake output and lockfile directory; accepts `str` or `Path` |
 | `reproducible` | `True` | Registers `strip_image_version()` on construction |
 | `policy` | `Policy()` | Strictness settings; see `set_policy()` |
 | `kernel` | `None` | `Kernel` spec (custom or TDX kernel build) |
+| `mirror` | `None` | Package mirror, e.g. a Debian snapshot URL; see `pin_mirror()` |
+| `tools_tree_mirror` | `None` | Mirror for the mkosi tools tree |
+| `default_profile` | `"default"` | Name of the implicit profile |
+| `mkosi` | `MkosiOptions()` | mkosi emitter knobs, see below; `img.mkosi_options(seed=...)` replaces fields |
+
+`MkosiOptions` (frozen; `from tundravm import MkosiOptions`):
+
+| Option | Default | Meaning |
+| --- | --- | --- |
 | `with_network` | `True` | mkosi `WithNetwork=` |
 | `clean_package_metadata` | `True` | mkosi `CleanPackageMetadata=` |
 | `manifest_format` | `"json"` | mkosi `ManifestFormat=` |
 | `compress_output` | `None` | mkosi `CompressOutput=` |
 | `output_directory` | `None` | mkosi `OutputDirectory=` |
 | `seed` | `None` | mkosi `Seed=` for partition UUIDs |
-| `mirror` | `None` | Package mirror, e.g. a Debian snapshot URL |
-| `tools_tree_mirror` | `None` | Mirror for the mkosi tools tree |
-| `sandbox_trees` | `()` | `host:guest` sandbox tree entries |
+| `sandbox_trees` | `()` | `host:guest` sandbox tree entries; `backports()` appends one |
 | `package_cache_directory` | `None` | mkosi `PackageCacheDirectory=` |
-| `init_script` | `None` | Override for the default TDX init script |
+| `init_script` | `None` | Skeleton `/init` script text; `None` emits no init file |
+| `environment` | `{}` | mkosi `Environment=KEY=VALUE` entries |
+| `environment_passthrough` | `None` | mkosi `Environment=KEY` entries passed through from the host |
+| `emit_mode` | `"per_directory"` | `"per_directory"` (one dir per profile) or `"native_profiles"` (`mkosi.profiles/`) |
 | `generate_version_script` | `False` | Emit `mkosi.version` |
 | `generate_cloud_postoutput` | `True` | Emit Azure/GCP conversion postoutput scripts |
-| `environment` | `None` | mkosi `Environment=` entries |
-| `environment_passthrough` | `None` | mkosi `PassEnvironment=` |
-| `emit_mode` | `"per_directory"` | `"per_directory"` (one dir per profile) or `"native_profiles"` (`mkosi.profiles/`) |
-| `init` | `Init()` | Runtime-init builder; receives `add_init_script()` fragments |
 
-`Image.DEFAULT_TDX_INIT` holds the built-in init script text.
+None of these enter the recipe digest. `explain`/`summary` show a `Build options:` line only for non-default values. `Image.DEFAULT_TDX_INIT` holds the built-in init script text; `img.init` (not a constructor argument) is the runtime-init generator.
 
 ### Profiles
 
@@ -165,9 +170,10 @@ The same views are available from the shell: `tundravm explain`, `check` and `di
 | `pin_mirror(url, *, tools_tree=True) -> Self` | Chainable form of the `mirror`/`tools_tree_mirror` attributes |
 | `lock_status(path=None, *, resolver=None) -> LockDrift` | Compare the lockfile with the recipe section by section; never writes. `LockfileError` if the lockfile is missing |
 | `compile(path, *, force=False) -> CompileResult` | Emit the mkosi tree for the active profiles; skipped when digest and path are unchanged. Each profile directory is recreated, so files dropped from the recipe disappear |
-| `emit_mkosi(path) -> CompileResult` | Deprecated alias of `compile()` |
+| `mkosi_options(**overrides) -> Self` | Replace fields of `img.mkosi` (image-wide, chainable); unknown names raise `ValidationError` |
+| `set_kernel(kernel) -> Self` | Chainable form of the `kernel` field |
 | `bake(output_dir=None, *, frozen=False, force=False) -> BakeResult` | Run `check()` (error-level findings raise `LintError`), `compile()` into `<output_dir>/mkosi`, then build each active profile with the backend into `<output_dir>/<profile>/` and write `<output_dir>/bake-result.json`; `frozen=True` fails on a stale lockfile with `LockfileError` listing the drifted sections, and on any source build without a lockfile pin |
-| `measure(*, backend, profile=None) -> Measurements` | Derive measurements from `last_bake()`; `backend` is `"rtmr"`, `"azure"` or `"gcp"` |
+| `measure(*, backend, profile=None, allow_placeholder=False) -> Measurements` | Derive measurements from `last_bake()`; `backend` is `"rtmr"` (real via `measured-boot`/`dstack-mr`), `"azure"` or `"gcp"` (placeholders). Without a tool it raises `MeasurementError` unless `allow_placeholder=True`, which returns `source="placeholder"` and warns |
 | `deploy(*, target, profile=None, parameters=None, memory=None, cpus=None) -> DeployResult` | Deploy an artifact from `last_bake()`; `parameters` are adapter-specific strings |
 | `last_bake(build_dir=None) -> BakeResult` | The latest bake result, loaded from `<build_dir>/bake-result.json` when this process has not baked. With `build_dir` it reloads from that directory (for a bake made with `output_dir`). `StateError` if there is none |
 
@@ -217,7 +223,7 @@ All errors derive from `TdxError(message, *, code, hint=None, context=None)` and
 | `LockfileError` | `E_LOCKFILE` | `bake(frozen=True)` with a missing or stale lockfile |
 | `ReproducibilityError` | `E_REPRODUCIBILITY` | Artifact digests differ between equivalent builds |
 | `BackendExecutionError` | `E_BACKEND_EXECUTION` | mkosi/backend failure, unsupported mkosi version |
-| `MeasurementError` | `E_MEASUREMENT` | `measure()` for a profile the last bake did not build, or unknown backend |
+| `MeasurementError` | `E_MEASUREMENT` | `measure()` for a profile the last bake did not build, no measurement tool on PATH (without `allow_placeholder`), or invalid tool output |
 | `DeploymentError` | `E_DEPLOYMENT` | `deploy()` without a baked artifact for the target, or a missing deploy tool |
 | `StateError` | `E_STATE` | `measure()`/`deploy()`/`last_bake()` with no `bake-result.json` |
 | `PolicyError` | `E_POLICY` | Policy violation (non-frozen bake, mutable ref, offline network) |

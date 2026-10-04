@@ -188,8 +188,15 @@ class Profile:
         with self.image.profiles(self.name):
             return self.image.bake(output_dir, frozen=frozen, force=force)
 
-    def measure(self, *, backend: Literal["rtmr", "azure", "gcp"]) -> Measurements:
-        return self.image.measure(backend=backend, profile=self.name)
+    def measure(
+        self,
+        *,
+        backend: Literal["rtmr", "azure", "gcp"],
+        allow_placeholder: bool = False,
+    ) -> Measurements:
+        return self.image.measure(
+            backend=backend, profile=self.name, allow_placeholder=allow_placeholder
+        )
 
     def deploy(
         self,

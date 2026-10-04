@@ -15,7 +15,7 @@ The SDK's integration tests verify this configuration produces output that
 matches the upstream repo file-for-file (see integration_tests/).
 """
 
-from tundravm import Image, Kernel
+from tundravm import Image, Kernel, MkosiOptions
 from tundravm.backends import LimaMkosiBackend
 from tundravm.modules.tdxs import Tdxs
 
@@ -56,23 +56,21 @@ def build_nethermind_base() -> Image:
     img = Image(
         base="debian/trixie",
         reproducible=True,
-        with_network=True,
-        clean_package_metadata=True,
-        manifest_format="json",
-        init_script=Image.DEFAULT_TDX_INIT,
-        seed="630b5f72-a36a-4e83-b23d-6ef47c82fd9c",
-        output_directory="build",
-        package_cache_directory="mkosi.cache",
-        environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
         backend=LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB"),
-    )
-
-    # Real kernel build from source with hardened command line
-    img.kernel = Kernel.tdx_kernel(
-        "6.13.12",
-        cmdline=KERNEL_CMDLINE,
-        config_file="kernel/kernel-yocto.config",
-        source_repo="https://github.com/gregkh/linux",
+        # Real kernel build from source with hardened command line
+        kernel=Kernel.tdx_kernel(
+            "6.13.12",
+            cmdline=KERNEL_CMDLINE,
+            config_file="kernel/kernel-yocto.config",
+            source_repo="https://github.com/gregkh/linux",
+        ),
+        mkosi=MkosiOptions(
+            init_script=Image.DEFAULT_TDX_INIT,
+            seed="630b5f72-a36a-4e83-b23d-6ef47c82fd9c",
+            output_directory="build",
+            package_cache_directory="mkosi.cache",
+            environment_passthrough=("KERNEL_IMAGE", "KERNEL_VERSION"),
+        ),
     )
 
     # Reproducibility hooks

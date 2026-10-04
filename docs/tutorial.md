@@ -326,7 +326,7 @@ Besides the artifact and `report.json`, bake writes `build/bake-result.json`. La
 ## 9. Measure
 
 ```bash
-$ tundravm measure node.py --backend rtmr
+$ tundravm measure node.py --backend rtmr --allow-placeholder
 measurements default (rtmr)
   RTMR0  7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7
   RTMR1  dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd
@@ -338,7 +338,7 @@ The in-process artifact is a placeholder, so these values are only deterministic
 Without a bake there is nothing to measure:
 
 ```bash
-$ tundravm measure node.py --backend rtmr --out elsewhere
+$ tundravm measure node.py --backend rtmr --allow-placeholder --out elsewhere
 error [E_STATE]: No bake result found.
 Hint: Run bake() / tundravm bake first.
   path: elsewhere/bake-result.json

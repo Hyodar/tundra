@@ -9,6 +9,7 @@ import pytest
 
 from tundravm import Image, StateError
 from tundravm.backends import InProcessBackend
+from tundravm.measure import PlaceholderMeasurementWarning
 from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
 
 
@@ -88,4 +89,5 @@ def test_bake_saves_and_fresh_image_measures_and_finds_it(tmp_path: Path) -> Non
 
     fresh = make()
     assert fresh.last_bake() == baked
-    assert fresh.measure(backend="rtmr").values
+    with pytest.warns(PlaceholderMeasurementWarning):
+        assert fresh.measure(backend="rtmr", allow_placeholder=True).values

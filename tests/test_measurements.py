@@ -1,3 +1,5 @@
+import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -5,13 +7,15 @@ import pytest
 from tundravm import Image
 from tundravm.backends import InProcessBackend
 from tundravm.errors import StateError
-from tundravm.measure import rtmr
+from tundravm.measure import PlaceholderMeasurementWarning, rtmr
+
+RTMR_A = "aa" * 48
+RTMR_B = "bb" * 48
+RTMR_C = "cc" * 48
 
 
-class _FakeRunResult:
-    def __init__(self, returncode: int = 0, stdout: str = "") -> None:
-        self.returncode = returncode
-        self.stdout = stdout
+def _measured_boot(name: str) -> str | None:
+    return "/usr/bin/measured-boot" if name == "measured-boot" else None
 
 
 def _image_with_backend(tmp_path: Path) -> Image:
@@ -29,9 +33,10 @@ def test_measure_supports_rtmr_azure_and_gcp(tmp_path: Path) -> None:
     image.output_targets("qemu")
     image.bake()
 
-    rtmr_measurements = image.measure(backend="rtmr")
-    azure = image.measure(backend="azure")
-    gcp = image.measure(backend="gcp")
+    with pytest.warns(PlaceholderMeasurementWarning):
+        rtmr_measurements = image.measure(backend="rtmr", allow_placeholder=True)
+        azure = image.measure(backend="azure", allow_placeholder=True)
+        gcp = image.measure(backend="gcp", allow_placeholder=True)
 
     assert rtmr_measurements.backend == "rtmr"
     assert azure.backend == "azure"
@@ -45,7 +50,8 @@ def test_measure_export_json_and_cbor_are_stable(tmp_path: Path) -> None:
     image = _image_with_backend(tmp_path)
     image.output_targets("qemu")
     image.bake()
-    measurements = image.measure(backend="rtmr")
+    with pytest.warns(PlaceholderMeasurementWarning):
+        measurements = image.measure(backend="rtmr", allow_placeholder=True)
 
     json_first = measurements.to_json()
     json_second = measurements.to_json()
@@ -67,7 +73,8 @@ def test_measure_verification_reports_actionable_mismatches(tmp_path: Path) -> N
     image = _image_with_backend(tmp_path)
     image.output_targets("qemu")
     image.bake()
-    measurements = image.measure(backend="rtmr")
+    with pytest.warns(PlaceholderMeasurementWarning):
+        measurements = image.measure(backend="rtmr", allow_placeholder=True)
 
     result = measurements.verify(
         {
@@ -82,56 +89,49 @@ def test_measure_verification_reports_actionable_mismatches(tmp_path: Path) -> N
     assert "missing_actual" in reasons
 
 
-def test_rtmr_derive_uses_measured_boot_for_uki(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
+def test_rtmr_derive_uses_measured_boot_for_uki(tmp_path: Path) -> None:
     uki = tmp_path / "linux.efi"
     uki.write_bytes(b"uki")
     commands: list[list[str]] = []
 
-    def fake_run(command: list[str], **_: object) -> _FakeRunResult:
-        commands.append(command)
-        output_path = Path(command[2])
-        output_path.write_text(
-            '{"rtmr":{"0":{"expected":"aa"},"1":{"expected":"bb"},"2":{"expected":"cc"}}}',
+    def fake_run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(list(command))
+        if "--version" in command:
+            return subprocess.CompletedProcess(list(command), 1, "", "unknown flag")
+        Path(command[2]).write_text(
+            f'{{"rtmr":{{"0":{{"expected":"{RTMR_A}"}},"1":{{"expected":"{RTMR_B}"}},'
+            f'"2":{{"expected":"{RTMR_C}"}}}}}}',
             encoding="utf-8",
         )
-        return _FakeRunResult()
+        return subprocess.CompletedProcess(list(command), 0, "", "")
 
-    monkeypatch.setattr(
-        "tundravm.measure.rtmr.shutil.which",
-        lambda name: "/usr/bin/measured-boot" if name == "measured-boot" else None,
+    measurements = rtmr.derive(
+        "default", {str(uki): "deadbeef"}, (uki,), tool_locator=_measured_boot, runner=fake_run
     )
-    monkeypatch.setattr("tundravm.measure.rtmr.subprocess.run", fake_run)
 
-    values = rtmr.derive("default", {str(uki): "deadbeef"}, (uki,))
+    assert commands[0] == ["/usr/bin/measured-boot", str(uki), commands[0][2], "--direct-uki"]
+    assert measurements.values == {"RTMR0": RTMR_A, "RTMR1": RTMR_B, "RTMR2": RTMR_C}
+    assert measurements.source == "measured-boot"
+    assert measurements.tool_version is None
+    assert measurements.artifact == str(uki)
 
-    assert commands == [["/usr/bin/measured-boot", str(uki), commands[0][2], "--direct-uki"]]
-    assert values == {"RTMR0": "aa", "RTMR1": "bb", "RTMR2": "cc"}
 
-
-def test_rtmr_derive_uses_measured_boot_for_disk_images(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
+def test_rtmr_derive_uses_measured_boot_for_disk_images(tmp_path: Path) -> None:
     disk = tmp_path / "image.raw"
     disk.write_bytes(b"raw")
     commands: list[list[str]] = []
 
-    def fake_run(command: list[str], **_: object) -> _FakeRunResult:
-        commands.append(command)
-        output_path = Path(command[2])
-        output_path.write_text('{"rtmr":{"0":{"expected":"ff"}}}', encoding="utf-8")
-        return _FakeRunResult()
+    def fake_run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(list(command))
+        if "--version" in command:
+            return subprocess.CompletedProcess(list(command), 0, "measured-boot v0.4.2\n", "")
+        Path(command[2]).write_text(f'{{"rtmr":{{"0":{{"expected":"{RTMR_A}"}}}}}}')
+        return subprocess.CompletedProcess(list(command), 0, "", "")
 
-    monkeypatch.setattr(
-        "tundravm.measure.rtmr.shutil.which",
-        lambda name: "/usr/bin/measured-boot" if name == "measured-boot" else None,
+    measurements = rtmr.derive(
+        "default", {str(disk): "deadbeef"}, (disk,), tool_locator=_measured_boot, runner=fake_run
     )
-    monkeypatch.setattr("tundravm.measure.rtmr.subprocess.run", fake_run)
 
-    values = rtmr.derive("default", {str(disk): "deadbeef"}, (disk,))
-
-    assert commands == [["/usr/bin/measured-boot", str(disk), commands[0][2]]]
-    assert values == {"RTMR0": "ff"}
+    assert commands[0] == ["/usr/bin/measured-boot", str(disk), commands[0][2]]
+    assert measurements.values == {"RTMR0": RTMR_A}
+    assert measurements.tool_version == "v0.4.2"
