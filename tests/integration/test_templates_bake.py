@@ -191,8 +191,9 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         kernels = re.findall(r"Unpacking (linux-image-\S+) \((\S+)\)", fetched)
         assert kernels, "\n".join(line for line in backend.lines if "linux-image" in line)
         assert all(version.startswith("6.12.") for _, version in kernels), kernels
-        # EfiStub installed its pinned package from the image root and cleaned up.
-        assert "Preparing to unpack /systemd-boot-efi.deb" in fetched
+        # EfiStub installed its pinned package from the mounted host-fetched .deb.
+        unpack = [line for line in fetched.splitlines() if "Preparing to unpack" in line]
+        assert any("systemd-boot-efi" in line for line in unpack), unpack
         stub = root / "usr/lib/systemd/boot/efi/linuxx64.efi.stub"
         assert (
             subprocess.run(
