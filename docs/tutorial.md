@@ -1,6 +1,6 @@
 # Tutorial
 
-This walk-through starts from an empty directory and follows the project `tundravm init` writes: inspect the starter recipe, lint it (and see what happens without a kernel), add a variant, lock and compile, change the recipe and see the diff and the lock drift, bake, measure and deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`.
+This walk-through starts from an empty directory and follows the project `tundravm init` writes: inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock and compile, change the recipe and see the diff and the lock drift, bake, measure and export a verifier policy, deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`.
 
 You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 11 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
 
@@ -116,6 +116,30 @@ recipe = Recipe(
 
 The `.gitignore` block ignores `build/` but keeps `build/tundravm.lock`, which you commit.
 
+`pyproject.toml` ends with the project's `[tool.tundravm]` table:
+
+```toml
+[tool.tundravm]
+recipe = "node.py"
+out = "build"
+tree = "mkosi"
+lockfile = "build/tundravm.lock"
+backend = "inprocess"
+```
+
+Every command looks for it in the working directory and its parents, so in this project `node.py` may be left out: `tundravm lint` lints `node.py`, `tundravm compile` writes `mkosi/`, and `tundravm status` reports on the whole project. The steps below spell `node.py` and `--out mkosi` out so that each command reads on its own; a flag always wins over the table. `tundravm config` prints what applies:
+
+```console
+$ tundravm config
+pyproject: /home/me/node/pyproject.toml
+  recipe    node.py              pyproject
+  out       build                pyproject
+  tree      mkosi                pyproject
+  lockfile  build/tundravm.lock  pyproject
+  backend   inprocess            pyproject
+[exit 0]
+```
+
 ## 2. Inspect
 
 `inspect` is a dry run: what each variant will contain, without writing anything.
@@ -147,6 +171,25 @@ Targets: qemu
 ```
 
 `Parent:` is the variant `dev` builds on and `Fragments:` the fragments it includes: `base` (the `common` fragment), `app` from `App`, and `devtools` from its own `add`. Without `--variant` every variant is shown. `--format json` adds the recipe digest the lockfile records; `--format markdown` renders tables for a CI job summary.
+
+To ask where one object comes from, name it with `--why`: an image path, or `unit:`, `package:`, `hook:` or `init:` and a name.
+
+```console
+$ tundravm inspect node.py --variant dev --why unit:app
+why unit:app (variant dev)
+  Service(app.service)
+    declared in common via base > app (App)
+files (in dev/):
+  mkosi.extra/usr/lib/systemd/system/app.service
+generated:
+  After=runtime-init.service (after_init=True)
+  Requires=runtime-init.service (after_init=True)
+  scripts/06-postinst.sh: mkosi-chroot systemctl enable app.service
+  scripts/06-postinst.sh: minimal.target.wants/app.service link
+[exit 0]
+```
+
+The service is declared in `common`, inside the `app` fragment that the `App` composite returns, nested in `base`. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `Init`) and the enablement into `minimal.target`. A declaration a variant adds, replaces or removes lists that step too. `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
 
 ## 3. Lint
 
@@ -344,6 +387,57 @@ source: placeholder (build/default/disk.qcow2)
 
 `measure` takes the manifest (or the directory holding it) and first checks the artifact against the sha256 the bake recorded: a disk file changed since the bake is `E_ARTIFACT_CHANGED`. With a real bake and `measured-boot` or `dstack-mr` on `PATH`, the `source:` line names that tool instead of `placeholder`.
 
+A verifier, an image that checks its peers' quotes, needs these values as its expected measurements. `--export-policy` writes them to a policy file:
+
+```console
+$ tundravm measure build --variant default --allow-placeholder --export-policy peer.json
+PLACEHOLDER: not real measurements. These values are derived from artifact digests; never put them in an attestation policy.
+wrote policy peer.json
+measurements default (rtmr)
+source: placeholder (build/default/disk.qcow2)
+  RTMR0  7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7
+  RTMR1  dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd
+  RTMR2  44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279
+[exit 0]
+
+$ cat peer.json
+{
+  "artifact": {
+    "path": "build/default/disk.qcow2",
+    "sha256": "1fa043adea909e9ad008e0db46ed1c9935adf90aee9c49d20940d6316c5c2e79"
+  },
+  "note": "PLACEHOLDER: these registers are derived from artifact digests, not measured; no TEE reproduces them. Replace this file with `tundravm measure --export-policy` output from a real bake before trusting a verifier built from it.",
+  "registers": {
+    "RTMR0": "7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7",
+    "RTMR1": "dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd",
+    "RTMR2": "44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279"
+  },
+  "schema_version": 1,
+  "scheme": "rtmr",
+  "tool": "placeholder",
+  "tool_version": null
+}
+```
+
+Placeholder values are written only with `--allow-placeholder`, and then with the `note`. `Tdxs.from_policy()` turns the file into the verifier fragment, renaming the registers to the keys the tundra-tools validator reads:
+
+```pycon
+>>> from tundravm.declarative.utils import Tdxs
+>>> verifier = Tdxs.from_policy("peer.json", validator="tdx", allow_placeholder=True)
+>>> verifier.validator
+'tdx'
+>>> dict(verifier.expected_measurements)
+{'rtmr0': '7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7', 'rtmr1': 'dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd', 'rtmr2': '44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279'}
+>>> Tdxs.from_policy("peer.json", validator="tdx")
+Traceback (most recent call last):
+  ...
+tundravm.errors.MeasurementError: Refusing to build a verifier from a placeholder policy.
+Hint: Export the policy from a real measurement, or pass allow_placeholder=True for a test image.
+  policy: peer.json
+```
+
+A policy exported from a real measurement needs no `allow_placeholder`. MRTD is not in the policy: RTMR tools do not report it, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", parent="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, anchor it to the recipe file with `Path(__file__).resolve().parent / "peer.json"` (see [Concepts: Lowering and compiling](concepts.md#lowering-and-compiling)).
+
 ## 9. Deploy
 
 ```console
@@ -361,7 +455,7 @@ Hint: Install QEMU and ensure it is in PATH.
 [exit 2]
 ```
 
-On a host with QEMU and a real bake, `deploy` boots the qcow2 and prints the deployment id and endpoint. Target settings are `--param KEY=VALUE` (`memory`, `cpus`, `ssh_port`, `tdx`, `daemonize` for qemu).
+On a host with QEMU and a real bake, `deploy` boots the baked image (a UKI, on OVMF firmware) and prints the deployment id and its `ssh://localhost:PORT` endpoint. Target settings are `--param KEY=VALUE` (`memory`, `cpus`, `ssh_port`, `tdx`, `daemonize` for qemu). [CLI: Deploying to each target](cli.md#deploying-to-each-target) has the whole sequence for QEMU, Azure and GCP, including how to check the VM and tear it down.
 
 ## 10. Write a fragment
 

@@ -47,7 +47,7 @@ tundravm measure build --variant default        # expected RTMRs of the baked ar
 tundravm deploy build --variant default --target qemu
 ```
 
-`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). Commands run on every declared variant unless you pass `--variant NAME` (repeatable). tundravm is not on PyPI yet: until the first release, install it from a checkout (`uv add --editable PATH/TO/tundravm` in your project, or `uv sync` in this repo), which also installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init` also writes a `[tool.tundravm]` table into `pyproject.toml`, so in a scaffolded project `RECIPE` is optional: `tundravm status` with no arguments reports on `node.py`. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). tundravm is not on PyPI yet: until the first release, install it from a checkout (`uv add --editable PATH/TO/tundravm` in your project, or `uv sync` in this repo), which also installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
 
 ## Why
 
@@ -153,20 +153,23 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | Command | Does |
 |---|---|
 | `init [DIR]` | Scaffold a recipe, tests, `pyproject.toml` and a `.gitignore` block, then probe the backend (`--ci github` adds a workflow) |
-| `inspect RECIPE` | Dry run per variant (`--format text\|json\|markdown`) |
+| `inspect RECIPE` | Dry run per variant (`--format text\|json\|markdown`); `--variant V --why SUBJECT` explains one emitted object (a path, `unit:`, `package:`, `hook:`, `init:`) |
 | `lint RECIPE` | Every diagnostic; exit 1 on errors (`--strict`: also warnings) |
 | `compile RECIPE` | Emit the mkosi tree; `--check` exits 1 if the tree at `--out` is stale |
 | `diff RECIPE` | Unified diff from a compiled tree to the recipe (`--stat`) |
 | `lock RECIPE` | Write the lockfile; `--check` reports drift, `--update`, `--offline`, `--explain` |
 | `fetch RECIPE` | Check the pinned sources out on the host into `build/.sources/` |
 | `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `-v`/`-q`/`--json-logs` |
-| `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`) |
+| `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`); `--export-policy FILE` writes the verifier policy `Tdxs.from_policy()` reads |
 | `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`) |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
+| `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
+| `clean [RECIPE]` | Remove build output by part (`--sources`, `--tree`, `--artifacts`, `--state`, `--all`) |
+| `config [RECIPE]` | The effective `recipe`, `out`, `tree`, `lockfile` and `backend`, and whether each came from a flag, `[tool.tundravm]` or the default |
 | `completion SHELL` | Print a bash, zsh or fish completion script; `inspect RECIPE --diff-variants A B` lists what differs between two variants |
 
-`--variant NAME` is repeatable on every recipe command; omitting it selects every variant. See [`docs/cli.md`](docs/cli.md) for flags, recipe loading, output formats and exit codes.
+`--variant NAME` is repeatable on every recipe command; omitting it selects every variant. `RECIPE` may be omitted wherever a `pyproject.toml` with a `[tool.tundravm]` table is found in the working directory or above it. See [`docs/cli.md`](docs/cli.md) for flags, recipe loading, output formats and exit codes.
 
 ## Backends
 

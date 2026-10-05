@@ -525,6 +525,78 @@ Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to re
 - `measure --export-policy FILE` (rtmr only) also writes a verifier policy: `{"schema_version": 1, "scheme": "rtmr", "tool", "tool_version", "artifact": {"path", "sha256"}, "registers": {"RTMR0", "RTMR1", "RTMR2"}}` (`RTMR3` when measured). Missing `RTMR0`..`RTMR2` is `E_VALIDATION`; placeholder values are refused unless `--allow-placeholder`, and then carry a `"note"` that says they are placeholders. `Tdxs.from_policy(FILE)` turns it into a validator's `expected_measurements`.
 - `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`; azure `storage_account` (required), `resource_group`, `location`, `vm_size`; gcp `project` and `bucket` (required), `zone`, `machine_type`. Simulated artifacts are refused unless `--allow-simulated-artifact`.
 
+### Deploying to each target
+
+A successful `deploy` means the target accepted the image: QEMU started, or the cloud created the VM. It does not mean the image booted, that its services run, or that it attests; each sequence below ends with those checks. These sequences have not been run end to end against QEMU, Azure or GCP: the command lines and the `deploy` output below are what the adapters in `src/tundravm/deploy/` run and print, captured with their tool calls stubbed out, and the checks after `deploy` are the platforms' own commands.
+
+**QEMU.** Needs `qemu-system-x86_64` on `PATH` and KVM (`/dev/kvm`: the adapter always passes `-machine q35,accel=kvm -cpu host`). A bootable variant bakes to a UKI (`.efi`), which boots with `-kernel` on OVMF firmware: `OVMF_CODE.fd`/`OVMF_VARS.fd` (or the `_4M` files) under `/usr/share/OVMF`, `/usr/share/edk2/ovmf` or `/usr/share/qemu`. A `.qcow2`, `.vhd` or raw disk boots as a virtio drive instead.
+
+```console
+$ tundravm bake image.py --variant default --backend local
+$ tundravm measure build --variant default --export-policy peer.json
+$ tundravm deploy build --variant default --target qemu --param memory=4G --param cpus=4 --param ssh_port=2222
+deployed default to qemu
+  deployment     qemu-default-030a44c0
+  endpoint       ssh://localhost:2222
+  artifact_path  build/default/output/node_0.1.0.efi
+  cpus           4
+  is_uki         true
+  memory         4G
+  ssh_port       2222
+  tdx            false
+```
+
+That runs:
+
+```
+qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -nographic -serial mon:stdio -no-reboot
+  -drive file=/usr/share/OVMF/OVMF_CODE_4M.fd,if=pflash,format=raw,readonly=on
+  -drive file=/usr/share/OVMF/OVMF_VARS_4M.fd,if=pflash,format=raw
+  -kernel build/default/output/node_0.1.0.efi
+  -netdev user,id=net0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netdev=net0
+  -daemonize -pidfile build/default/output/qemu-default-030a44c0.pid
+```
+
+- The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's port 22, and nothing else. The `secrets` step's port (8080) is not forwarded, so a variant with `Secrets` cannot receive its key from the host through this adapter.
+- `tdx=true` adds `confidential-guest-support=tdx0` and `-object tdx-guest,id=tdx0`, which need a TDX host (kernel, QEMU and firmware).
+- With `daemonize=true` (the default) QEMU detaches and writes its pid next to the artifact: stop the VM with `kill "$(cat build/default/output/qemu-default-030a44c0.pid)"`. With `daemonize=false` `deploy` returns only when QEMU exits, and the console output is captured, not shown.
+- Checks: `ssh -p 2222 root@localhost` once the image's `sshd` has a key for you (boot), `systemctl status` of your services there (application), and the quote checked against `peer.json` by a verifier built with `Tdxs.from_policy("peer.json")` (attestation; needs `tdx=true` on a TDX host).
+
+**Azure.** Needs `az` on `PATH` after `az login`, an existing resource group (`resource_group`, default `tdx-vms`) and a storage account (`storage_account`, required) holding a container named `tdx-images`, which the adapter does not create. The blob upload passes no credentials, so `az` must be able to look up the account key (or read `AZURE_STORAGE_KEY`). Bake an `azure` variant, which converts its disk to a fixed VHD:
+
+```console
+$ tundravm bake image.py --variant azure --backend local
+$ tundravm deploy build --variant azure --target azure --param storage_account=mystorage --param vm_size=Standard_DC2es_v5
+deployed azure to azure
+  deployment      azure-azure-336db4ce
+  endpoint        azure://tdx-vms/tdx-azure-6fdd87
+  artifact_path   build/azure/output/node_0.1.0.vhd
+  location        eastus
+  resource_group  tdx-vms
+  vm_name         tdx-azure-6fdd87
+  vm_size         Standard_DC2es_v5
+```
+
+That runs `az storage blob upload --account-name mystorage --container-name tdx-images --name node_0.1.0-<8 hex>.vhd --file build/azure/output/node_0.1.0.vhd --type page --output json`, then `az vm create --resource-group tdx-vms --name tdx-azure-<6 hex> --location eastus --size Standard_DC2es_v5 --image https://mystorage.blob.core.windows.net/tdx-images/node_0.1.0-<8 hex>.vhd --security-type ConfidentialVM --os-disk-security-encryption-type VMGuestStateOnly --output json`. `--security-type ConfidentialVM` needs a confidential VM size; the default `vm_size`, `Standard_DC2s_v3`, is an SGX size, so pass a TDX one (the DCesv5 series, as above). The endpoint names the VM, not an address: `az vm show -d -g tdx-vms -n tdx-azure-6fdd87 --query publicIps -o tsv` prints its IP, and `az vm boot-diagnostics get-boot-log -g tdx-vms -n tdx-azure-6fdd87` its serial console. `az vm create` also creates a NIC, a public IP and a disk; deleting the VM leaves them, so deploy into a resource group of its own and tear down with `az group delete -n tdx-vms`, then remove the blob (`az storage blob delete --account-name mystorage -c tdx-images -n node_0.1.0-<8 hex>.vhd`; its name is not in the output: `az storage blob list --account-name mystorage -c tdx-images -o table`).
+
+**GCP.** Needs `gcloud` on `PATH` after `gcloud auth login`, and `gsutil`, which the adapter uploads with but does not check for; `project` and `bucket` (an existing GCS bucket) are required. Bake a `gcp` variant, which packs its disk as a `tar.gz`:
+
+```console
+$ tundravm bake image.py --variant gcp --backend local
+$ tundravm deploy build --variant gcp --target gcp --param project=my-project --param bucket=my-bucket
+deployed gcp to gcp
+  deployment     gcp-gcp-ef5e8a92
+  endpoint       gcp://my-project/us-central1-a/tdx-gcp-c95cfe
+  artifact_path  build/gcp/output/node_0.1.0.tar.gz
+  image_name     tdx-gcp-45c3b6c0
+  machine_type   n2d-standard-2
+  project        my-project
+  vm_name        tdx-gcp-c95cfe
+  zone           us-central1-a
+```
+
+That runs `gsutil cp build/gcp/output/node_0.1.0.tar.gz gs://my-bucket/tdx-images/node_0.1.0.tar.gz`, `gcloud compute images create tdx-gcp-<8 hex> --project my-project --source-uri gs://my-bucket/tdx-images/node_0.1.0.tar.gz --guest-os-features UEFI_COMPATIBLE` and `gcloud compute instances create tdx-gcp-<6 hex> --project my-project --zone us-central1-a --machine-type n2d-standard-2 --image tdx-gcp-<8 hex> --confidential-compute --maintenance-policy TERMINATE --format json`. `--confidential-compute` on an `n2d` (AMD) machine type requests AMD SEV; an Intel TDX instance needs `--confidential-compute-type=TDX` on a C3 machine type, which this adapter does not pass yet, so a TDX deployment on GCP is not available through `deploy` today. `gcloud compute instances get-serial-port-output tdx-gcp-c95cfe --zone us-central1-a --project my-project` shows the boot. Tear down with `gcloud compute instances delete tdx-gcp-c95cfe --zone us-central1-a --project my-project`, `gcloud compute images delete tdx-gcp-45c3b6c0 --project my-project` and `gsutil rm gs://my-bucket/tdx-images/node_0.1.0.tar.gz`.
+
 ## Project status
 
 `tundravm status RECIPE` answers "where is this project at?" without writing anything or touching the network. It prints one line per item, `LABEL VERDICT DETAIL`, for the selected variants (`--variant`, default all), then `next: COMMAND`:
