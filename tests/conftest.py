@@ -22,8 +22,14 @@ def inprocess_backend() -> InProcessBackend:
 
 
 @pytest.fixture(autouse=True)
-def _no_network_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail fast if a test resolves source pins over the network by accident."""
+def _no_network_resolution(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail fast if a test resolves source pins over the network by accident.
+
+    Integration tests (marked ``integration``) build real images and may resolve
+    and fetch sources for real, so the guard does not apply to them.
+    """
+    if request.node.get_closest_marker("integration") is not None:
+        return
     import tundravm._source as source_module
 
     def _refuse(source: object) -> str:
