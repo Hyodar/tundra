@@ -277,6 +277,8 @@ class EmitConfig:
     kernel: Kernel | None = None
     mirror: str | None = None
     tools_tree_mirror: str | None = None
+    snapshot: str | None = None
+    """mkosi's ``Snapshot=``: the distribution snapshot the build's packages come from."""
     output_format: str = "uki"
     seed: str = DEFAULT_SEED
     compress_output: str | None = None
@@ -364,6 +366,37 @@ def _write_file_entry(dest: Path, entry: FileEntry) -> None:
     else:
         dest.write_text(entry.content, encoding="utf-8")
     dest.chmod(_parse_mode(entry.mode))
+
+
+def _write_repository(
+    root: Path, repo: RepositorySpec, safe_name: str, suite: str, *, types: str
+) -> None:
+    """Write *repo* as ``<root>/etc/apt/sources.list.d/<safe_name>.sources`` and its pin."""
+    source_lines = [
+        f"Types: {types}",
+        f"URIs: {repo.url}",
+        f"Suites: {suite}",
+        f"Components: {' '.join(repo.components or ('main',))}",
+        "Enabled: yes",
+    ]
+    if repo.keyring:
+        source_lines.append(f"Signed-By: {repo.keyring}")
+    source_path = root / "etc" / "apt" / "sources.list.d" / f"{safe_name}.sources"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
+    source_path.chmod(0o644)
+
+    if repo.priority != 100:
+        host = urlparse(repo.url).netloc or repo.url
+        pref_lines = [
+            "Package: *",
+            f'Pin: origin "{host}"',
+            f"Pin-Priority: {repo.priority}",
+        ]
+        pref_path = root / "etc" / "apt" / "preferences.d" / f"{safe_name}.pref"
+        pref_path.parent.mkdir(parents=True, exist_ok=True)
+        pref_path.write_text("\n".join(pref_lines) + "\n", encoding="utf-8")
+        pref_path.chmod(0o644)
 
 
 def _systemd_unit_content(svc: ServiceSpec) -> str:
@@ -924,7 +957,11 @@ class DeterministicMkosiEmitter:
     def _emit_skeleton_tree(
         self, profile_dir: Path, profile: ProfileState, config: EmitConfig
     ) -> None:
-        """Generate mkosi.skeleton/ with pre-package-manager files."""
+        """Generate mkosi.skeleton/ with pre-package-manager files.
+
+        Outside ``nethermind-v1``, repositories also go under ``mkosi.sandbox/``
+        (where the build's apt reads them) with any keyring the profile declares.
+        """
         skeleton_dir = profile_dir / "mkosi.skeleton"
         skeleton_dir.mkdir(parents=True, exist_ok=True)
 
@@ -940,36 +977,22 @@ class DeterministicMkosiEmitter:
 
         # Additional apt repositories from image.repository(...)
         distribution, release = _parse_base(config.base)
+        historical = config.dialect == "nethermind-v1"
+        declared = {entry.path: entry for entry in (*profile.skeleton_files, *profile.files)}
+        sandbox_dir = profile_dir / "mkosi.sandbox"
         for repo in profile.repositories:
             safe_name = repo.name.lower().replace("/", "-").replace(" ", "-")
             suite = repo.suite or release or distribution
-            components = " ".join(repo.components or ("main",))
-            source_lines = [
-                "Types: deb deb-src",
-                f"URIs: {repo.url}",
-                f"Suites: {suite}",
-                f"Components: {components}",
-                "Enabled: yes",
-            ]
-            if repo.keyring:
-                source_lines.append(f"Signed-By: {repo.keyring}")
-
-            source_path = skeleton_dir / "etc" / "apt" / "sources.list.d" / f"{safe_name}.sources"
-            source_path.parent.mkdir(parents=True, exist_ok=True)
-            source_path.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
-            source_path.chmod(0o644)
-
-            if repo.priority != 100:
-                host = urlparse(repo.url).netloc or repo.url
-                pref_lines = [
-                    "Package: *",
-                    f'Pin: origin "{host}"',
-                    f"Pin-Priority: {repo.priority}",
-                ]
-                pref_path = skeleton_dir / "etc" / "apt" / "preferences.d" / f"{safe_name}.pref"
-                pref_path.parent.mkdir(parents=True, exist_ok=True)
-                pref_path.write_text("\n".join(pref_lines) + "\n", encoding="utf-8")
-                pref_path.chmod(0o644)
+            if historical or repo.in_image:
+                # nethermind-v1 lists every repository in the image only, as it always has.
+                _write_repository(skeleton_dir, repo, safe_name, suite, types="deb deb-src")
+            if historical:
+                continue
+            # mkosi's apt reads only the sandbox's /etc/apt during the build.
+            _write_repository(sandbox_dir, repo, safe_name, suite, types="deb")
+            keyring = declared.get(repo.keyring or "")
+            if keyring is not None:
+                _write_file_entry(sandbox_dir / keyring.path.lstrip("/"), keyring)
 
         # Auto-emit minimal.target when systemd debloat sets it as default
         if profile.debloat.enabled and profile.debloat.systemd_minimize:
@@ -1248,6 +1271,8 @@ class DeterministicMkosiEmitter:
             lines.append(f"Architecture={mkosi_arch}")
         if config.mirror:
             lines.append(f"Mirror={config.mirror}")
+        if config.snapshot:
+            lines.append(f"Snapshot={config.snapshot}")
         lines.extend(extra.pop("Distribution", ()))
         lines.append("")
 

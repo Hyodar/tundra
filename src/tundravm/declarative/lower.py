@@ -19,10 +19,11 @@ are read here.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlparse
 
 from tundravm._image import Image, _read_source, _walk_tree
 from tundravm._modules import (
@@ -86,11 +87,13 @@ from .resolve import (
     order_inits,
     resolve,
 )
-from .utils import BACKPORTS_TREE, Backports
+from .utils import BACKPORTS_TREE, Backports, EfiStub
 
 INIT_SERVICE = "runtime-init.service"
 BACKPORTS_SOURCES = BACKPORTS_TREE.partition(":")[2]
 """Where :class:`Backports` sources go in the build sandbox (``current`` dialect)."""
+BACKPORTS_PINS = "/etc/apt/preferences.d/debian-backports.pref"
+"""Where :class:`Backports` pins go in the build sandbox (``current`` dialect)."""
 UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
 _OVERRIDABLE = (File, User, Group, Partition, Repository, Debloat)
@@ -161,14 +164,15 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
     resolved = {variant.name: resolve(recipe, variant=variant.name) for variant in selected}
     base = resolved[default.name]
     dialect = recipe.mkosi.dialect
+    if dialect != HISTORICAL:
+        _check_mirrors(recipe)
     backports = {} if dialect == HISTORICAL else _backports_sources(recipe)
+    scripts = {} if dialect == HISTORICAL else _efi_stub_scripts(recipe)
     options = {
         name: _mkosi_options(
             recipe,
             [i for i in r.items if isinstance(i, Setting)],
-            sandbox_files=tuple(
-                (BACKPORTS_SOURCES, backports[i]) for i in r.items if i in backports
-            ),
+            sandbox_files=tuple(file for i in r.items if i in backports for file in backports[i]),
         )
         for name, r in resolved.items()
     }
@@ -179,6 +183,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
         arch=recipe.arch,
         mirror=recipe.mirror,
         tools_tree_mirror=recipe.tools_mirror,
+        snapshot=recipe.snapshot,
         reproducible=recipe.epoch is not None,
         default_profile=default.name,
         mkosi=options[default.name],
@@ -190,7 +195,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
         img.strip_image_version(enabled=strip)
 
     with img.profiles(default.name):
-        _declare(img, base.items, full=base.items, dialect=dialect, skip=backports)
+        _declare(img, base.items, full=base.items, dialect=dialect, skip=backports, scripts=scripts)
     _apply_target(img, default.name, base.targets, inherited=(DEFAULT_TARGET,))
 
     rejected: list[tuple[str, str]] = []
@@ -220,7 +225,14 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
                 img.profile_kernels[variant.name] = kernels[variant.name]
             img.profile(variant.name, extends=None)
             with img.profiles(variant.name):
-                _declare(img, child.items, full=child.items, dialect=dialect, skip=backports)
+                _declare(
+                    img,
+                    child.items,
+                    full=child.items,
+                    dialect=dialect,
+                    skip=backports,
+                    scripts=scripts,
+                )
                 if not any(isinstance(i, Debloat) for i in child.items) and any(
                     isinstance(i, Debloat) for i in base.items
                 ):
@@ -229,7 +241,15 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
             continue
         img.profile(variant.name, extends=default.name)
         with img.profiles(variant.name):
-            _declare(img, own, full=child.items, reemit=reemit, dialect=dialect, skip=backports)
+            _declare(
+                img,
+                own,
+                full=child.items,
+                reemit=reemit,
+                dialect=dialect,
+                skip=backports,
+                scripts=scripts,
+            )
         _apply_target(img, variant.name, child.targets, inherited=base.targets)
     if rejected:
         plural = "s" if len(rejected) > 1 else ""
@@ -247,29 +267,69 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
     return img
 
 
-def _backports_sources(recipe: Recipe) -> dict[Declaration, str]:
-    """The sync hook of each :class:`Backports` in *recipe*, mapped to the sources it stands for.
+def _check_mirrors(recipe: Recipe) -> None:
+    """Reject a ``Recipe.mirror``/``tools_mirror`` that names an archive, not a mirror root.
 
-    The ``current`` dialect writes those sources into ``mkosi.sandbox`` in place of
-    the hook: mkosi 26 reads ``SandboxTrees=`` before any script runs and gives sync
-    scripts no ``$BUILDDIR``.
+    mkosi appends ``<distribution>`` (or ``archive/<distribution>/<snapshot>``) to
+    ``Mirror=``, so a URL that already ends there resolves to nothing.
     """
-    release = recipe.base.partition("/")[2]
-    found: dict[Declaration, str] = {}
+    distribution = recipe.base.partition("/")[0]
+    for what, url in (("mirror", recipe.mirror), ("tools_mirror", recipe.tools_mirror)):
+        if url is None:
+            continue
+        path = urlparse(url).path.rstrip("/")
+        if path.endswith(f"/{distribution}") or "/archive/" in f"{path}/":
+            raise ValidationError(
+                f"Recipe.{what} {url!r} names an archive; mkosi appends "
+                f"'{distribution}' (or 'archive/{distribution}/<snapshot>') to it.",
+                hint="Pass the mirror root, e.g. 'https://deb.debian.org', and pin a "
+                "snapshot with Recipe(snapshot='20251113T083151Z') (mirror defaults to "
+                "https://snapshot.debian.org then).",
+                context={"field": f"Recipe.{what}"},
+            )
 
-    def walk(fragment: Fragment) -> None:
-        if isinstance(fragment, Backports):
-            hook = next(item for item in fragment.items if isinstance(item, Hook))
-            found[hook] = fragment.render_sources(mirror=recipe.mirror, release=release)
-            return
+
+def _fragments(recipe: Recipe) -> Iterator[Fragment]:
+    """Every fragment of *recipe*, nested ones included, in declaration order."""
+
+    def walk(fragment: Fragment) -> Iterator[Fragment]:
+        yield fragment
         for item in fragment.items:
             if isinstance(item, Fragment):
-                walk(item)
+                yield from walk(item)
 
-    walk(recipe.common)
+    yield from walk(recipe.common)
     for variant in recipe.variants:
-        walk(variant.add)
+        yield from walk(variant.add)
+
+
+def _backports_sources(recipe: Recipe) -> dict[Declaration, tuple[tuple[str, str], ...]]:
+    """The sync hook of each :class:`Backports` in *recipe*, mapped to its sandbox files.
+
+    The ``current`` dialect writes those sources and pins into ``mkosi.sandbox`` in
+    place of the hook: mkosi 26 reads ``SandboxTrees=`` before any script runs and
+    gives sync scripts no ``$BUILDDIR``.
+    """
+    release = recipe.base.partition("/")[2]
+    found: dict[Declaration, tuple[tuple[str, str], ...]] = {}
+    for fragment in _fragments(recipe):
+        if isinstance(fragment, Backports):
+            hook = next(item for item in fragment.items if isinstance(item, Hook))
+            sources = fragment.render_sources(
+                mirror=recipe.mirror, release=release, snapshot=recipe.snapshot
+            )
+            pins = fragment.render_preferences(release=release)
+            found[hook] = ((BACKPORTS_SOURCES, sources), (BACKPORTS_PINS, pins))
     return found
+
+
+def _efi_stub_scripts(recipe: Recipe) -> dict[Declaration, str]:
+    """The postinst hook of each :class:`EfiStub` in *recipe*, mapped to its ``current`` script."""
+    return {
+        next(item for item in fragment.items if isinstance(item, Hook)): fragment.render_script()
+        for fragment in _fragments(recipe)
+        if isinstance(fragment, EfiStub)
+    }
 
 
 def _wide(items: Sequence[Declaration]) -> dict[tuple[str, ...], Declaration]:
@@ -363,13 +423,15 @@ def _declare(
     reemit: Sequence[Unit] = (),
     dialect: str = "current",
     skip: Collection[Declaration] = (),
+    scripts: Mapping[Declaration, str] | None = None,
 ) -> None:
     """Issue the fluent calls for *items* on the active profile.
 
     *full* is the whole resolved variant: it decides runtime-init wiring.
     Under the ``nethermind-v1`` dialect groups and users are postinst lines
     at their declaration position, spelled as the historical tree spells them.
-    Hooks in *skip* keep their place in the hook order but are not emitted.
+    Hooks in *skip* keep their place in the hook order but are not emitted;
+    hooks in *scripts* run the script they map to instead of their own.
     """
     historical = dialect == HISTORICAL
     after_init = has_init(full)
@@ -414,7 +476,8 @@ def _declare(
             case Hook():
                 hook = next(hooks)
                 if hook not in skip:
-                    img.shell(hook.script, phase=hook.phase, env=dict(hook.env), cwd=hook.cwd)
+                    script = (scripts or {}).get(hook, hook.script)
+                    img.shell(script, phase=hook.phase, env=dict(hook.env), cwd=hook.cwd)
             case Repository():
                 img.repository(
                     item.url,
@@ -423,6 +486,7 @@ def _declare(
                     components=item.components,
                     keyring=item.keyring,
                     priority=item.priority,
+                    in_image=item.in_image,
                 )
             case Partition():
                 img.partition(item.name, size=item.size, mount_at=item.mount, fs=item.filesystem)

@@ -109,6 +109,7 @@ class RepositorySpec:
     components: tuple[str, ...] = ()
     keyring: str | None = None
     priority: int = 100
+    in_image: bool = True
 
 
 @dataclass(frozen=True, slots=True)

@@ -30,6 +30,7 @@ from tundravm.declarative import diff, measure, deploy
 | `epoch` | `int \| None` | `0`: reproducible (`SOURCE_DATE_EPOCH=0`, stable seed, `IMAGE_VERSION` stripped); `None`: not reproducible; other values set `SourceDateEpoch=` and `SOURCE_DATE_EPOCH` to that value |
 | `mkosi` | `Mkosi` | `Mkosi()` |
 | `policy` | `Policy \| None` | `None` (the default `Policy()`); see [policy](policy.md) |
+| `snapshot` | `str \| None` | `None`; a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=` (with no `mirror`, mkosi reads `https://snapshot.debian.org`) |
 
 At least one variant; names are unique. `recipe.variant(name)` returns one or raises `ValidationError`.
 
@@ -101,7 +102,7 @@ The default variant is the one named `default`, else the first whose parent is `
 
 | Type | Fields (defaults) | Identity |
 |---|---|---|
-| `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100` | name |
+| `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100`, `in_image=True` (`False`: the build's apt only) | name |
 | `Partition` | `name`, `size`, `mount`, `filesystem="ext4"` | name |
 | `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant=()` (`(variant, paths)` kept only in that variant) | one per variant |
 | `Setting` | `section`, `key`, `values: tuple[str, ...]`; per variant | section, key |

@@ -226,17 +226,17 @@ recipe = Recipe(
 """
 
 _CLOUD_CONSTANTS = r"""
-# Packages and the EFI stub come from this Debian snapshot, so rebuilds see the same archive.
-SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
-EFI_STUB_VERSION = "255.4-1"
+# Packages and the EFI stub come from this snapshot.debian.org snapshot, so rebuilds see the
+# same archive. The stub version is the systemd-boot-efi trixie ships in it.
+SNAPSHOT = "20251113T083151Z"
+EFI_STUB_VERSION = "257.8-1~deb13u1"
 """
 
 _CLOUD_RECIPE = r"""
 recipe = Recipe(
     name="$title",
     base="$base",
-    mirror=SNAPSHOT,
-    tools_mirror=SNAPSHOT,
+    snapshot=SNAPSHOT,
     common=Fragment(
         "base",
         items=(
@@ -275,8 +275,7 @@ secrets = Secrets(
 recipe = Recipe(
     name="$title",
     base="$base",
-    mirror=SNAPSHOT,
-    tools_mirror=SNAPSHOT,
+    snapshot=SNAPSHOT,
     common=Fragment(
         "base",
         items=(

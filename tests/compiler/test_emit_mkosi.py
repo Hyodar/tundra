@@ -19,6 +19,7 @@ from tundravm.declarative import (
     Mkosi,
     Package,
     Recipe,
+    Repository,
     Service,
     Setting,
     Template,
@@ -666,8 +667,8 @@ def test_compile_efi_stub_postinst_hook(tmp_path: Path) -> None:
     # Verify it downloads and installs the .deb
     assert "systemd-boot-efi" in content
     assert "dpkg -i" in content
-    # Verify EFI file copy from /usr/lib/systemd/boot/efi
-    assert "/usr/lib/systemd/boot/efi" in content
+    # The package's own stub stays: nothing is copied over linuxx64.efi.stub
+    assert "/usr/lib/systemd/boot/efi" not in content
 
 
 def test_compile_efi_stub_registered_in_postinst_phase() -> None:
@@ -807,20 +808,25 @@ def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
 def test_compile_backports_writes_static_sandbox_sources(tmp_path: Path) -> None:
     """current: Backports() is a compile-time mkosi.sandbox file, with no hook or builddir tree."""
     recipe = _recipe(Package("systemd"), Backports(), epoch=None)
-    recipe = replace(recipe, mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z/")
+    recipe = replace(recipe, snapshot="20251113T083151Z")
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
     sources = output_dir / "default/mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
     stanza = (
         "Types: deb deb-src\n"
-        "URIs: https://snapshot.debian.org/archive/debian/20251113T083151Z/\n"
+        "URIs: https://snapshot.debian.org/archive/debian/20251113T083151Z\n"
         "Suites: {}\n"
         "Components: main\n"
         "Enabled: yes\n"
         "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
     )
     assert sources.read_text() == stanza.format("bookworm-backports") + "\n" + stanza.format("sid")
+    pins = output_dir / "default/mkosi.sandbox/etc/apt/preferences.d/debian-backports.pref"
+    assert pins.read_text() == (
+        "Package: *\nPin: release n=bookworm-backports\nPin-Priority: 200\n\n"
+        "Package: *\nPin: release n=sid\nPin-Priority: 100\n"
+    )
     assert not _script(output_dir, "01-sync.sh").exists()
     conf = _conf(output_dir)
     assert "SandboxTrees=" not in conf and "mkosi.builddir" not in conf
@@ -830,16 +836,117 @@ def test_compile_backports_writes_static_sandbox_sources(tmp_path: Path) -> None
 def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
     """current: Backports' mirror/release win; without either, deb.debian.org and the base."""
     pinned = lower(_recipe(Backports(mirror="http://m", release="trixie"), epoch=None))
-    ((path, text),) = pinned.mkosi.sandbox_files
+    ((path, text), (pins_path, pins)) = pinned.mkosi.sandbox_files
     assert path == "/etc/apt/sources.list.d/debian-backports.sources"
     assert "URIs: http://m\nSuites: trixie-backports\n" in text
     assert "URIs: http://m\nSuites: sid\n" in text
+    assert pins_path == "/etc/apt/preferences.d/debian-backports.pref"
+    assert "Pin: release n=trixie-backports\n" in pins
     plain = lower(_recipe(Backports(), epoch=None))
     assert (
         "URIs: http://deb.debian.org/debian\nSuites: bookworm-backports\n"
         in (plain.mkosi.sandbox_files[0][1])
     )
     assert not _phase_scripts(_recipe(Backports(), epoch=None), "sync")
+    rooted = lower(replace(_recipe(Backports(), epoch=None), mirror="https://m.example/"))
+    assert "URIs: https://m.example/debian\n" in rooted.mkosi.sandbox_files[0][1]
+    snap = replace(
+        _recipe(Backports(), epoch=None), mirror="https://m.example", snapshot="20250101T000000Z"
+    )
+    assert (
+        "URIs: https://m.example/archive/debian/20250101T000000Z\n"
+        in (lower(snap).mkosi.sandbox_files[0][1])
+    )
+
+
+def test_compile_snapshot_writes_the_snapshot_line(tmp_path: Path) -> None:
+    """Recipe.snapshot is mkosi's Snapshot=; the mirror stays a root."""
+    recipe = replace(
+        _recipe(Package("systemd")),
+        mirror="https://snapshot.debian.org",
+        snapshot="20251113T083151Z",
+    )
+    conf = _conf(_compile(recipe, tmp_path / "mkosi"))
+    assert "Mirror=https://snapshot.debian.org\nSnapshot=20251113T083151Z\n" in conf
+
+
+@pytest.mark.parametrize(
+    ("field", "url"),
+    [
+        ("mirror", "https://snapshot.debian.org/archive/debian/20251113T083151Z/"),
+        ("mirror", "https://deb.debian.org/debian"),
+        ("tools_mirror", "https://deb.debian.org/debian/"),
+    ],
+)
+def test_compile_rejects_an_archive_url_as_the_mirror(field: str, url: str) -> None:
+    """current: mkosi appends the archive path to Mirror=, so a full archive URL is refused."""
+    with pytest.raises(ValidationError, match=f"Recipe.{field} .* names an archive"):
+        recipe = _recipe(Package("systemd"))
+        if field == "mirror":
+            lower(replace(recipe, mirror=url))
+        else:
+            lower(replace(recipe, tools_mirror=url))
+
+
+def test_compile_historical_dialect_keeps_an_archive_mirror(tmp_path: Path) -> None:
+    """nethermind-v1 writes the historical full archive URL unchanged."""
+    url = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
+    recipe = replace(_recipe(Package("systemd"), mkosi=Mkosi(dialect="nethermind-v1")), mirror=url)
+    assert f"Mirror={url}\n" in _conf(_compile(recipe, tmp_path / "mkosi"))
+
+
+def test_compile_efi_stub_current_script_installs_from_the_image_root() -> None:
+    """current: the .deb goes to $BUILDROOT/ (mkosi-chroot has its own /tmp); IDs expand."""
+    (script,) = [
+        cmd
+        for cmd in _phase_scripts(
+            _recipe(EfiStub(snapshot="20251113T083151Z", version="1")), "postinst"
+        )
+        if "systemd-boot-efi" in cmd
+    ]
+    assert (
+        'EFI_SNAPSHOT_URL="https://snapshot.debian.org/archive/debian/20251113T083151Z"' in script
+    )
+    assert 'curl -sSfL -o "$BUILDROOT/systemd-boot-efi.deb" "$DEB_URL"' in script
+    assert "mkosi-chroot dpkg -i /systemd-boot-efi.deb\n" in script
+    assert 'rm -f "$BUILDROOT/systemd-boot-efi.deb"' in script
+    assert "/tmp/" not in script and "systemd-bootx64.efi" not in script
+    assert "pick the version a suite of that snapshot ships" in script
+
+
+def test_compile_repository_reaches_the_build_and_the_image(tmp_path: Path) -> None:
+    """current: a Repository goes to mkosi.sandbox (with its declared keyring) and the image."""
+    keyring = "/etc/apt/keyrings/extra.asc"
+    recipe = _recipe(
+        Repository("extra", "https://repo.example/debian", "stable", keyring=keyring, priority=10),
+        Repository("tools", "https://tools.example/apt", "stable", in_image=False),
+        File(keyring, "KEY\n"),
+    )
+    out = _compile(recipe, tmp_path / "mkosi") / "default"
+    sandbox = out / "mkosi.sandbox/etc/apt"
+    skeleton = out / "mkosi.skeleton/etc/apt"
+    assert (sandbox / "sources.list.d/extra.sources").read_text() == (
+        "Types: deb\nURIs: https://repo.example/debian\nSuites: stable\nComponents: main\n"
+        f"Enabled: yes\nSigned-By: {keyring}\n"
+    )
+    assert "Pin-Priority: 10\n" in (sandbox / "preferences.d/extra.pref").read_text()
+    assert (out / "mkosi.sandbox" / keyring.lstrip("/")).read_text() == "KEY\n"
+    assert (
+        (skeleton / "sources.list.d/extra.sources").read_text().startswith("Types: deb deb-src\n")
+    )
+    assert (sandbox / "sources.list.d/tools.sources").is_file()
+    assert not (skeleton / "sources.list.d/tools.sources").exists()
+
+
+def test_compile_historical_repository_stays_in_the_skeleton(tmp_path: Path) -> None:
+    """nethermind-v1: repositories are image-only skeleton files, as before."""
+    recipe = _recipe(
+        Repository("extra", "https://repo.example/debian", "stable"),
+        mkosi=Mkosi(dialect="nethermind-v1"),
+    )
+    out = _compile(recipe, tmp_path / "mkosi") / "default"
+    assert (out / "mkosi.skeleton/etc/apt/sources.list.d/extra.sources").is_file()
+    assert not (out / "mkosi.sandbox").exists()
 
 
 def test_compile_backports_only_in_the_variant_that_adds_it(tmp_path: Path) -> None:

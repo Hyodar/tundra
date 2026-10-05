@@ -6,6 +6,7 @@ Run with: uv run pytest tests/integration/test_templates_bake.py -m integration
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from dataclasses import replace
@@ -15,7 +16,9 @@ import pytest
 
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.declarative import Repository, lower
 from tundravm.declarative.lifecycle import bake_image
+from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
@@ -125,44 +128,84 @@ class _Capturing:
         self.inner.cleanup(request)
 
 
-TEMPLATE_FIXES = (
-    ("    mirror=SNAPSHOT,\n    tools_mirror=SNAPSHOT,\n", ""),
-    ("            EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),\n", ""),
-)
-"""Edits the cloud template needs to build on mkosi 26: ``Mirror=`` gets ``debian``
-appended, so the full ``snapshot.debian.org/archive/debian/<ts>/`` URL does not
-resolve; the 20251113 snapshot no longer carries the pinned EFI stub, and mkosi-chroot
-mounts its own ``/tmp`` over the one ``EfiStub`` copies the package to."""
+SNAPSHOT_ARCHIVE = "https://snapshot.debian.org/archive/{}/20251113T083151Z"
+"""The template's snapshot; the test's extra repositories read from it too."""
 
 
 @requires_mkosi
 def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) -> None:
-    """Backports reach apt through mkosi.sandbox; runtime-init waits for network-online."""
-    source = render_recipe_template(
-        title="node", filename="node.py", base="debian/trixie", backend="local", template="cloud"
-    )
-    for before, after in TEMPLATE_FIXES:
-        assert before in source
-        source = source.replace(before, after)
+    """The cloud template bakes unpatched: snapshot, pinned backports, EFI stub, repositories."""
     recipe_path = tmp_path / "node.py"
-    recipe_path.write_text(source, encoding="utf-8")
-    loaded = load_file(recipe_path)
+    recipe_path.write_text(
+        render_recipe_template(
+            title="node",
+            filename="node.py",
+            base="debian/trixie",
+            backend="local",
+            template="cloud",
+        ),
+        encoding="utf-8",
+    )
+    recipe = load_file(recipe_path).recipe
+    keyring = "/usr/share/keyrings/debian-archive-keyring.gpg"
+    repositories = (
+        Repository(
+            "debian-updates", SNAPSHOT_ARCHIVE.format("debian"), "trixie-updates", keyring=keyring
+        ),
+        Repository(
+            "bookworm-security",
+            SNAPSHOT_ARCHIVE.format("debian-security"),
+            "bookworm-security",
+            keyring=keyring,
+            in_image=False,
+        ),
+    )
+    recipe = replace(
+        recipe, common=replace(recipe.common, items=(*recipe.common.items, *repositories))
+    )
     backend = _Capturing(LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"]))
     out = tmp_path / "build"
     try:
-        bake_image(loaded.lowered(), ("default",), locked=None, backend=backend, out=out)
+        try:
+            bake_image(lower(recipe), ("default",), locked=None, backend=backend, out=out)
+        except BackendExecutionError:
+            print("\n".join(backend.lines[-80:]))  # pytest shows it with the failure
+            raise
 
         tree = out / "mkosi" / "default"
-        sources = tree / "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
-        assert "Suites: trixie-backports\n" in sources.read_text(encoding="utf-8")
-        assert "SandboxTrees=" not in (tree / "mkosi.conf").read_text(encoding="utf-8")
+        conf = (tree / "mkosi.conf").read_text(encoding="utf-8")
+        assert "Snapshot=20251113T083151Z\n" in conf
+        assert "Mirror=" not in conf and "SandboxTrees=" not in conf
+        sandbox = tree / "mkosi.sandbox/etc/apt"
+        sources = (sandbox / "sources.list.d/debian-backports.sources").read_text(encoding="utf-8")
+        assert "Suites: trixie-backports\n" in sources
+        assert "Pin: release n=sid\nPin-Priority: 100\n" in (
+            sandbox / "preferences.d/debian-backports.pref"
+        ).read_text(encoding="utf-8")
         fetched = "\n".join(backend.lines)
-        assert "trixie-backports InRelease" in fetched
-        assert " sid InRelease" in fetched
+        for suite in ("trixie-backports", "sid", "trixie-updates", "bookworm-security"):
+            assert f" {suite} InRelease" in fetched, suite
 
         root = out / "default" / "output" / "default"
-        # The sources configure apt during the build only.
-        assert not _sudo_test("-e", root / "etc/apt/sources.list.d/debian-backports.sources")
+        # The image runs trixie's kernel (6.12): sid, pinned to 100, ships a newer one.
+        kernels = re.findall(r"Unpacking (linux-image-\S+) \((\S+)\)", fetched)
+        assert kernels, "\n".join(line for line in backend.lines if "linux-image" in line)
+        assert all(version.startswith("6.12.") for _, version in kernels), kernels
+        # EfiStub installed its pinned package from the image root and cleaned up.
+        assert "Preparing to unpack /systemd-boot-efi.deb" in fetched
+        stub = root / "usr/lib/systemd/boot/efi/linuxx64.efi.stub"
+        assert (
+            subprocess.run(
+                ["sudo", "grep", "-q", "LoaderInfo: systemd-stub ", str(stub)]
+            ).returncode
+            == 0
+        )
+        assert not _sudo_test("-e", root / "systemd-boot-efi.deb")
+        # Only repositories declared for the image are listed in it.
+        listed = root / "etc/apt/sources.list.d"
+        assert "trixie-updates" in _sudo_read(listed / "debian-updates.sources")
+        assert not _sudo_test("-e", listed / "bookworm-security.sources")
+        assert not _sudo_test("-e", listed / "debian-backports.sources")
         unit = _sudo_read(root / "usr/lib/systemd/system/runtime-init.service")
         assert "After=network-online.target\nWants=network-online.target\n" in unit
         assert "network-setup" not in unit

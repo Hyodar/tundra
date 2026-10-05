@@ -5,8 +5,12 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
-from tundravm.declarative import Fragment, Recipe, Variant, compile, resolve
-from tundravm.platforms.azure import AZURE_PROVISIONING_SCRIPT, AZURE_PROVISIONING_SERVICE
+from tundravm.declarative import Fragment, Mkosi, Recipe, Unit, Variant, compile, resolve
+from tundravm.platforms.azure import (
+    AZURE_PROVISIONING_SCRIPT,
+    AZURE_PROVISIONING_SERVICE,
+    AZURE_PROVISIONING_SERVICE_ONLINE,
+)
 from tundravm.testing import CompiledTree, compile_tree
 
 SCRIPT = "mkosi.extra/usr/bin/azure-complete-provisioning"
@@ -46,6 +50,30 @@ def test_azure_provisioning_script_content() -> None:
 
 
 def test_azure_variant_emits_service_unit(tree: CompiledTree) -> None:
+    """Without network-setup.service the unit waits for network-online.target."""
+    unit = tree.unit(SERVICE, profile="azure")
+    assert unit == AZURE_PROVISIONING_SERVICE_ONLINE
+    assert "After=network-online.target\nWants=network-online.target\n" in unit
+    assert "network-setup" not in unit
+
+
+def test_azure_unit_requires_network_setup_when_the_variant_ships_it(tmp_path: Path) -> None:
+    net = Fragment("net", items=(Unit("network-setup.service", "[Service]\n", enabled=True),))
+    recipe = Recipe(
+        "cloud", net, variants=(Variant("default", target="qemu"), Variant("azure", target="azure"))
+    )
+    tree = compile_tree(recipe, path=tmp_path / "tree")
+    assert tree.unit(SERVICE, profile="azure") == AZURE_PROVISIONING_SERVICE
+
+
+def test_azure_unit_is_historical_under_nethermind_v1(tmp_path: Path) -> None:
+    recipe = Recipe(
+        "cloud",
+        Fragment("common"),
+        variants=RECIPE.variants,
+        mkosi=Mkosi(dialect="nethermind-v1"),
+    )
+    tree = compile_tree(recipe, path=tmp_path / "tree")
     assert tree.unit(SERVICE, profile="azure") == AZURE_PROVISIONING_SERVICE
 
 

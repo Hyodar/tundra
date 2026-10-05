@@ -95,6 +95,7 @@ def describe(
                 "priority": repo.priority,
                 "suite": repo.suite,
                 "url": repo.url,
+                **({} if repo.in_image else {"in_image": False}),
             }
             for repo in sorted(
                 profile_state.repositories,
@@ -202,6 +203,8 @@ def render(description: dict[str, object]) -> str:
             if repo.get("components"):
                 parts.append(",".join(repo["components"]))
             parts.append(f"prio={repo['priority']}")
+            if repo.get("in_image") is False:
+                parts.append("build only")
             lines.append("  " + "  ".join(parts))
 
     _append_files(lines, "Files", _as_list(description.get("files")))

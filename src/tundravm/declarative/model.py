@@ -238,6 +238,13 @@ class Recipe:
     epoch: int | None = 0
     mkosi: Mkosi = Mkosi()
     policy: Policy | None = None
+    snapshot: str | None = None
+    """A distribution snapshot ID (``20251113T083151Z`` for Debian): mkosi's ``Snapshot=``.
+
+    ``mirror`` and ``tools_mirror`` are mirror roots that mkosi completes itself
+    (``debian`` or ``archive/debian/<snapshot>``); with a snapshot and no ``mirror``
+    mkosi reads ``https://snapshot.debian.org``.
+    """
 
     def __post_init__(self) -> None:
         _freeze(self, "variants")
@@ -258,6 +265,15 @@ class Recipe:
         for what, url in (("mirror", self.mirror), ("tools_mirror", self.tools_mirror)):
             if url is not None:
                 _require_name(self, url, what)
+        if self.snapshot is not None:
+            _require_name(self, self.snapshot, "snapshot")
+            if "/" in self.snapshot or any(ch.isspace() for ch in self.snapshot):
+                raise _fail(
+                    self,
+                    f"snapshot {self.snapshot!r} must be a snapshot ID, not a URL.",
+                    hint="Pass the ID alone, e.g. snapshot='20251113T083151Z'; the mirror "
+                    "root goes in mirror= (default https://snapshot.debian.org).",
+                )
         if self.epoch is not None and (isinstance(self.epoch, bool) or self.epoch < 0):
             raise _fail(self, f"epoch {self.epoch!r} must be a non-negative int or None.")
         if not isinstance(self.mkosi, Mkosi):
@@ -556,9 +572,13 @@ class Repository:
     components: tuple[str, ...] = ("main",)
     keyring: str | None = None
     priority: int = 100
+    in_image: bool = True
+    """Also list the repository in the image's ``/etc/apt``, not only for the build's apt."""
 
     def __post_init__(self) -> None:
         _freeze(self, "components")
+        if not isinstance(self.in_image, bool):
+            raise _fail(self, f"in_image {self.in_image!r} must be a bool.")
         _require_name(self, self.name)
         _require_name(self, self.url, "url")
         _require_name(self, self.suite, "suite")

@@ -1,7 +1,7 @@
 """Shipped fragments: :class:`EfiStub`, :class:`Backports`, :class:`Tdxs` and :class:`DevTools`.
 
 Each is a :class:`Composite`: a :class:`Fragment` whose configuration is its own
-dataclass fields, so ``EfiStub(snapshot=MIRROR, version="255.4-1")`` reads like a
+dataclass fields, so ``EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1")`` reads like a
 declaration and goes wherever a ``Fragment`` does.
 
 The committed ``examples/surge-tdx-prover/mkosi`` trees pin their output. Under
@@ -47,6 +47,11 @@ BACKPORTS_TREE = (
 """The ``nethermind-v1`` ``SandboxTrees=`` entry that exposes the generated sources to apt."""
 DEFAULT_DEBIAN_MIRROR = "http://deb.debian.org/debian"
 """The mirror :class:`Backports` uses when neither it nor the recipe sets one."""
+_SNAPSHOT_ROOT = "https://snapshot.debian.org"
+"""The mirror root mkosi reads a ``Snapshot=`` from when ``Mirror=`` is unset."""
+_BACKPORTS_PRIORITY = 200
+"""Above sid, below the release (500): backports fill gaps before sid, never shadow the release."""
+_SID_PRIORITY = 100
 _SOURCES_STANZA = (
     "Types: deb deb-src\n"
     "URIs: {mirror}\n"
@@ -101,10 +106,14 @@ class Backports(Composite):
 
     The ``current`` dialect writes them at compile time to the variant's
     ``mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources`` (see
-    :meth:`render_sources`): without *mirror* they use ``Recipe.mirror``, else
-    ``deb.debian.org``; without *release*, the release of ``Recipe.base``. Under
-    ``nethermind-v1`` a sync hook generates them into ``mkosi.builddir``, reading
-    the build's mirror and ``$RELEASE``. Fragment name: ``backports``.
+    :meth:`render_sources`), with ``preferences.d/debian-backports.pref`` pinning
+    backports to 200 and sid to 100 (see :meth:`render_preferences`): packages
+    come from the release unless it lacks them. *mirror* is the apt URI used
+    verbatim; without it the sources follow ``Recipe.mirror`` (a mirror root) and
+    ``Recipe.snapshot`` the way mkosi does, else ``deb.debian.org``. Without
+    *release*, the release of ``Recipe.base``. Under ``nethermind-v1`` a sync hook
+    generates them into ``mkosi.builddir``, reading the build's mirror and
+    ``$RELEASE``, with no pins. Fragment name: ``backports``.
     """
 
     mirror: str | None = None
@@ -140,12 +149,22 @@ class Backports(Composite):
             ),
         )
 
-    def render_sources(self, *, mirror: str | None, release: str) -> str:
+    def render_sources(
+        self, *, mirror: str | None, release: str, snapshot: str | None = None
+    ) -> str:
         """The deb822 sources file the ``current`` dialect writes into the build sandbox.
 
-        *mirror* and *release* are the recipe's; the fragment's own fields win.
+        *mirror* (a mirror root), *release* and *snapshot* are the recipe's; the
+        fragment's own fields win.
         """
-        uri = self.mirror or mirror or DEFAULT_DEBIAN_MIRROR
+        if self.mirror:
+            uri = self.mirror
+        elif snapshot:
+            uri = _join(mirror or _SNAPSHOT_ROOT, f"archive/debian/{snapshot}")
+        elif mirror:
+            uri = _join(mirror, "debian")
+        else:
+            uri = DEFAULT_DEBIAN_MIRROR
         suite = self.release or release
         if not suite:
             raise ValidationError(
@@ -158,12 +177,39 @@ class Backports(Composite):
             + _SOURCES_STANZA.format(mirror=uri, suite="sid")
         )
 
+    def render_preferences(self, *, release: str) -> str:
+        """The apt pins the ``current`` dialect writes next to :meth:`render_sources`' file.
+
+        sid has no ``NotAutomatic`` flag, so unpinned it would outrank the release
+        wherever its versions are newer.
+        """
+        suite = self.release or release
+        return (
+            f"Package: *\nPin: release n={suite}-backports\nPin-Priority: {_BACKPORTS_PRIORITY}\n"
+            f"\nPackage: *\nPin: release n=sid\nPin-Priority: {_SID_PRIORITY}\n"
+        )
+
+
+def _join(root: str, path: str) -> str:
+    """*path* under mirror *root*, as mkosi joins ``Mirror=`` and its suffixes."""
+    return f"{root.rstrip('/')}/{path}"
+
+
+def _snapshot_archive(snapshot: str) -> str:
+    """*snapshot* as a URL: a snapshot ID becomes its ``snapshot.debian.org`` archive."""
+    return snapshot if "/" in snapshot else _join(_SNAPSHOT_ROOT, f"archive/debian/{snapshot}")
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class EfiStub(Composite):
     """``systemd-boot-efi`` *version* from the Debian *snapshot*, for a pinned EFI stub.
 
-    A postinst hook. Fragment name: ``efi-stub``.
+    *snapshot* is a snapshot ID (``20251113T083151Z``, read from
+    ``snapshot.debian.org``) or the URL of a snapshot archive. The snapshot must
+    carry *version*: the pool keeps only what some suite listed at that time, so
+    pick the version a suite of that snapshot ships. The ``current`` dialect
+    fails the build with that advice when the download fails (see
+    :meth:`render_script`). A postinst hook. Fragment name: ``efi-stub``.
     """
 
     snapshot: str
@@ -173,10 +219,11 @@ class EfiStub(Composite):
         if not self.snapshot or not self.version:
             raise ValidationError(
                 "EfiStub requires a non-empty snapshot and version.",
-                hint="Pass snapshot= a snapshot.debian.org URL and version= e.g. '255.4-1'.",
+                hint="Pass snapshot= a snapshot ID such as '20251113T083151Z' and version= "
+                "the systemd-boot-efi version it ships, e.g. '257.8-1~deb13u1'.",
             )
         script = (
-            f'EFI_SNAPSHOT_URL="{self.snapshot}"\n'
+            f'EFI_SNAPSHOT_URL="{_snapshot_archive(self.snapshot)}"\n'
             f'EFI_PACKAGE_VERSION="{self.version}"\n'
             'DEB_URL="${EFI_SNAPSHOT_URL}/pool/main/s/systemd/'
             'systemd-boot-efi_${EFI_PACKAGE_VERSION}_amd64.deb"\n'
@@ -184,11 +231,38 @@ class EfiStub(Composite):
             'curl -sSfL -o "$WORK_DIR/systemd-boot-efi.deb" "$DEB_URL"\n'
             'cp "$WORK_DIR/systemd-boot-efi.deb" "$BUILDROOT/tmp/"\n'
             "mkosi-chroot dpkg -i /tmp/systemd-boot-efi.deb\n"
-            'cp "$BUILDROOT/usr/lib/systemd/boot/efi/systemd-bootx64.efi" '
-            '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
-            'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
+            + _STUB_COPY
+            + 'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
         )
         return Fragment("efi-stub", items=(Hook("efi-stub", "postinst", script),))
+
+    def render_script(self) -> str:
+        """The postinst script the ``current`` dialect runs in place of the composed hook's.
+
+        mkosi-chroot mounts its own ``/tmp``, so the package goes to the image root;
+        a failed download names the version and snapshot. Unlike ``nethermind-v1``,
+        it leaves ``linuxx64.efi.stub`` alone: copying ``systemd-bootx64.efi`` over
+        it makes the UKI a systemd-boot binary.
+        """
+        return (
+            f'EFI_SNAPSHOT_URL="{_snapshot_archive(self.snapshot)}"\n'
+            f'EFI_PACKAGE_VERSION="{self.version}"\n'
+            'DEB_URL="${EFI_SNAPSHOT_URL}/pool/main/s/systemd/'
+            'systemd-boot-efi_${EFI_PACKAGE_VERSION}_amd64.deb"\n'
+            'if ! curl -sSfL -o "$BUILDROOT/systemd-boot-efi.deb" "$DEB_URL"; then\n'
+            '    echo "EfiStub: no systemd-boot-efi ${EFI_PACKAGE_VERSION} in'
+            ' ${EFI_SNAPSHOT_URL}; pick the version a suite of that snapshot ships" >&2\n'
+            "    exit 1\n"
+            "fi\n"
+            "mkosi-chroot dpkg -i /systemd-boot-efi.deb\n"
+            'rm -f "$BUILDROOT/systemd-boot-efi.deb"'
+        )
+
+
+_STUB_COPY = (
+    'cp "$BUILDROOT/usr/lib/systemd/boot/efi/systemd-bootx64.efi" '
+    '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -133,6 +133,13 @@ RemainAfterExit=yes
 [Install]
 WantedBy=minimal.target
 """
+"""The unit for a profile that ships ``network-setup.service`` (always under ``nethermind-v1``)."""
+
+AZURE_PROVISIONING_SERVICE_ONLINE = AZURE_PROVISIONING_SERVICE.replace(
+    "After=network.target network-setup.service\nRequires=network-setup.service",
+    "After=network-online.target\nWants=network-online.target",
+)
+"""The unit for any other profile: it waits for ``network-online.target``, as runtime-init does."""
 
 
 @dataclass(slots=True)
@@ -142,7 +149,9 @@ class AzurePlatform(Module):
     Adds:
     * ``dmidecode`` runtime package
     * ``/usr/bin/azure-complete-provisioning`` executable script
-    * ``azure-complete-provisioning.service`` systemd unit
+    * ``azure-complete-provisioning.service`` systemd unit, after ``network-setup.service``
+      when the profile ships it (always under ``nethermind-v1``), else after
+      ``network-online.target``
     * Service enablement + symlink into ``minimal.target.wants/``
     * ``"azure"`` output target (triggers VHD postoutput auto-generation)
     """
@@ -165,11 +174,17 @@ class AzurePlatform(Module):
             mode="0755",
         )
 
-        # Systemd service unit
-        image.file(
-            "/usr/lib/systemd/system/azure-complete-provisioning.service",
-            content=AZURE_PROVISIONING_SERVICE,
-        )
+        # Systemd service unit: network-setup.service only where the profile ships it
+        for profile in image._active_profiles:
+            with image.profiles(profile):
+                image.file(
+                    "/usr/lib/systemd/system/azure-complete-provisioning.service",
+                    content=(
+                        AZURE_PROVISIONING_SERVICE
+                        if image._init_needs_network_setup(profile)
+                        else AZURE_PROVISIONING_SERVICE_ONLINE
+                    ),
+                )
 
         # Enable the service and symlink into minimal.target.wants
         image.shell(

@@ -228,6 +228,7 @@ class Image:
     kernel: Kernel | None = None
     mirror: str | None = None
     tools_tree_mirror: str | None = None
+    snapshot: str | None = None
     default_profile: str = "default"
     mkosi: MkosiOptions = field(default_factory=MkosiOptions)
     profile_mkosi: dict[str, MkosiOptions] = field(default_factory=dict)
@@ -425,6 +426,7 @@ class Image:
         components: tuple[str, ...] | list[str] = (),
         keyring: str | None = None,
         priority: int = 100,
+        in_image: bool = True,
     ) -> Self:
         if not url:
             raise ValidationError(
@@ -439,6 +441,7 @@ class Image:
             components=tuple(components),
             keyring=keyring,
             priority=priority,
+            in_image=in_image,
         )
         for profile in self._iter_active_profiles():
             profile.repositories.append(entry)
@@ -1275,6 +1278,7 @@ class Image:
             "kernel": kernel,
             "mirror": self.mirror,
             "tools_tree_mirror": self.tools_tree_mirror,
+            "snapshot": self.snapshot,
             "with_network": options.with_network,
             "clean_package_metadata": options.clean_package_metadata,
             "manifest_format": options.manifest_format,
@@ -1513,6 +1517,7 @@ class Image:
                     "components": list(repository.components),
                     "keyring": repository.keyring,
                     "priority": repository.priority,
+                    **({} if repository.in_image else {"in_image": False}),
                 }
                 for repository in sorted(
                     profile.repositories,

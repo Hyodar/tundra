@@ -64,6 +64,11 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `SPEC.md`, which described the fluent API. The design record is `docs/design/declarative-api.md`.
 
 ### Fixed
+- Debian snapshots on mkosi 26: `Recipe.snapshot` (a snapshot ID such as `20251113T083151Z`) lowers to mkosi's `Snapshot=`; `mirror`/`tools_mirror` are mirror roots that mkosi completes itself. Templates use a (snapshot, `systemd-boot-efi` version) pair that exists.
+- `EfiStub` in the current dialect installs the package from `$BUILDROOT/` because `mkosi-chroot` mounts its own `/tmp`.
+- `Backports()` pins backports to 200 and sid to 100 through `preferences.d`, so images no longer drift to sid.
+- `Repository()` declarations reach the build's apt (written under `mkosi.sandbox/` in the current dialect) and, with `in_image=True` (default), the image's `/etc/apt`.
+- The Azure provisioning unit depends on `network-online.target` unless the variant ships `network-setup.service`.
 - `Backports()` works on mkosi 26: the current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` at compile time (mirror from the fragment, the recipe or deb.debian.org; release from the recipe base) instead of a sync hook that mkosi 26 cannot run.
 - Azure/GCP conversions run inside mkosi's tools tree when one is used: the local backend adds `--tools-tree-package=qemu-utils,gdisk,parted`, reuses a cached tree only when it has those tools, and skips the host pre-check in that case (azure VHD and gcp tar.gz bake for real on a host without qemu-img).
 - Current-dialect postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so recipes without a version no longer die under `set -u`.
