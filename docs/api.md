@@ -25,12 +25,12 @@ from tundravm.declarative import diff, measure, deploy
 | `variants` | `tuple[Variant, ...]` | `(Variant("default", target="qemu"),)` |
 | `base` | `str` | `"debian/trixie"` |
 | `arch` | `"x86_64" \| "aarch64"` | `"x86_64"` |
-| `mirror` | `str \| None` | `None` (the distribution default) |
-| `tools_mirror` | `str \| None` | `None` |
+| `mirror` | `str \| None` | `None` (the distribution default); a mirror root written as `Mirror=`, which mkosi completes itself (`<mirror>/debian`, or `<mirror>/archive/debian/<snapshot>` with `snapshot`), so it is never a full archive URL |
+| `tools_mirror` | `str \| None` | `None`; the tools tree's mirror root (`ToolsTreeMirror=`), completed the same way |
 | `epoch` | `int \| None` | `0`: reproducible (`SOURCE_DATE_EPOCH=0`, stable seed, `IMAGE_VERSION` stripped); `None`: not reproducible; other values set `SourceDateEpoch=` and `SOURCE_DATE_EPOCH` to that value |
 | `mkosi` | `Mkosi` | `Mkosi()` |
 | `policy` | `Policy \| None` | `None` (the default `Policy()`); see [policy](policy.md) |
-| `snapshot` | `str \| None` | `None`; a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=` (with no `mirror`, mkosi reads `https://snapshot.debian.org`) |
+| `snapshot` | `str \| None` | `None`; a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=` (with no `mirror`, mkosi reads `https://snapshot.debian.org`). A URL or a value with whitespace raises `ValidationError`: the root goes in `mirror` |
 
 At least one variant; names are unique. `recipe.variant(name)` returns one or raises `ValidationError`.
 
@@ -62,13 +62,13 @@ The default variant is the one named `default`, else the first whose parent is `
 | Field | Type | Default |
 |---|---|---|
 | `layout` | `"directories" \| "native"` | `"directories"`; `"native"` writes one root `mkosi.conf` (the default variant) that mkosi applies to every profile, so it supports only variants that extend the default as overlays. Otherwise lowering raises `ValidationError` listing each offending variant with its reason (`'solo' (it is parentless)`, `'big' (it has its own Setting(Content, Locale))`) |
-| `dialect` | `"current" \| "nethermind-v1"` | `"current"` |
+| `dialect` | `"current" \| "nethermind-v1"` | `"current"`, the mkosi 26 emission: source builds and built kernels are locked and [fetched on the host](#fetch), `Backports` and `Repository` sources are written under `mkosi.sandbox/` at compile time, and postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`. `"nethermind-v1"` reproduces the historical nethermind-tdx tree |
 | `init_script` | `str \| None` | `None`; text written to `mkosi.skeleton/init` (mode 0755) |
 | `version_script` | `bool` | `False`; emit `mkosi.version` |
 | `cloud_postoutput` | `bool` | `True`; emit the Azure/GCP disk conversion postoutput scripts |
 | `strip_os_release` | `bool \| None` | `None`: strip `IMAGE_VERSION` from `os-release` when `Recipe.epoch` is set |
 
-`nethermind-v1` spells groups and users as postinst `groupadd`/`useradd` lines and omits the `# unpinned:` build marker, matching the historical nethermind-tdx tree.
+`nethermind-v1` spells groups and users as postinst `groupadd`/`useradd` lines, omits the `# unpinned:` build marker, clones sources inside the build sandbox, leaves kernel sources out of the lockfile and generates backports with a sync hook, matching the historical nethermind-tdx tree.
 
 ## Declarations
 
@@ -102,7 +102,7 @@ The default variant is the one named `default`, else the first whose parent is `
 
 | Type | Fields (defaults) | Identity |
 |---|---|---|
-| `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100`, `in_image=True` (`False`: the build's apt only) | name |
+| `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100`, `in_image=True`: the current dialect writes the source (and its keyring) under `mkosi.sandbox/`, where the build's apt reads it, and with `in_image=True` also into the image's `/etc/apt`; `False` keeps it out of the image | name |
 | `Partition` | `name`, `size`, `mount`, `filesystem="ext4"` | name |
 | `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant=()` (`(variant, paths)` kept only in that variant) | one per variant |
 | `Setting` | `section`, `key`, `values: tuple[str, ...]`; per variant | section, key |
@@ -110,7 +110,7 @@ The default variant is the one named `default`, else the first whose parent is `
 
 No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkosi escape hatch, and settings belong to the variant that declares them. `Output.Seed`, `Output.OutputDirectory`, `Output.CompressOutput`, `Output.ManifestFormat`, `Build.PackageCacheDirectory`, `Build.WithNetwork`, `Build.Environment`, `Build.SandboxTrees` and `Content.CleanPackageMetadata` map onto compiler options. Any other key is written verbatim into that variant's `mkosi.conf`, under its section, one `Key=value` line per value. Keys the compiler writes itself (`Packages`, `BuildPackages`, `Mirror`, `Format`, `ImageId`, `KernelCommandLine`, `ExtraTrees`, the phase script keys such as `BuildScripts`, ...) raise `ValidationError` naming the declaration to use instead (`Package(name)`, `Recipe.mirror`, `Hook(name, phase, script)`, ...). `Setting("Build", "BuildSources", ("src[:dest]", ...))` mounts host directories into the variant's build.
 
-`Kernel.source` is a `Git` branch, tag or full commit hash, with `subdir` and `submodules`, or an `Http` tarball, which needs `sha256=` and is checked against it before unpacking. The kernel source is not covered by the lockfile (`lock` pins no kernel ref), which is why `Http` carries its digest in the recipe. A variant whose settings or kernel differ from the default variant's lowers standalone with its own `mkosi.conf` lines, kernel build and config.
+`Kernel.source` is a `Git` branch, tag or full commit hash, with `subdir` and `submodules`, or an `Http` tarball, which needs `sha256=` and is checked against it before unpacking. In the current dialect a built kernel's source (a `Kernel` with `config`) is locked and fetched like a source build: its lockfile pin is named `kernel`, or `kernel-<variant>` for a variant whose kernel source differs from the default variant's, `lock --update kernel` re-resolves it, and the kernel build script copies the host checkout without its `.git` (so the kernel version string stays clean). Under `nethermind-v1` the lockfile pins no kernel and the build clones it. A variant whose settings or kernel differ from the default variant's lowers standalone with its own `mkosi.conf` lines, kernel build and config.
 
 ## Keys, disks and secrets
 
@@ -184,7 +184,7 @@ lock(recipe, *, previous=None, update=(), offline=False, resolver=None, variants
 lock_status(recipe, locked: Lock, *, variants=None, resolver=None) -> tuple[Diagnostic, ...]
 read_lock(path: Path) -> Lock
 write_lock(locked: Lock, path: Path) -> None
-bake(recipe, *, locked: Lock, backend: Backend, out: Path, variants=None, progress=None) -> tuple[Artifact, ...]
+bake(recipe, *, locked: Lock, backend: Backend, out: Path, variants=None, progress=None, fetch=True) -> tuple[Artifact, ...]
 read_artifacts(manifest: Path) -> tuple[Artifact, ...]
 measure(artifact, *, scheme="rtmr", allow_placeholder=False) -> Measurements
 deploy(artifact, *, using: Qemu | Azure | Gcp, allow_placeholder=False, adapter=None) -> Deployment
@@ -193,6 +193,14 @@ load(path, *, attribute="recipe", extra_paths=()) -> Recipe
 lower(recipe, *, variants=None)  # internal: the compiler's image for the recipe
 ```
 
+```python
+from tundravm.declarative.lifecycle import FetchedSource, fetch
+
+fetch(recipe, *, locked: Lock | None, out: Path, variants=None, resolver=None) -> tuple[FetchedSource, ...]
+```
+
+`fetch` and `FetchedSource` are exported from neither `tundravm` nor `tundravm.declarative`; import them from `tundravm.declarative.lifecycle`.
+
 `variants=None` means every declared variant; unknown names raise `ValidationError`.
 
 - **`lint`** returns resolution and fragment-check diagnostics first, in resolution order. When none is an error it adds the compiler's rules on the lowered recipe, sorted by variant, level and code. With `lock`, drift is added as `lock-changed`, `lock-added` and `lock-removed` diagnostics whose `subject` is the section.
@@ -200,7 +208,8 @@ lower(recipe, *, variants=None)  # internal: the compiler's image for the recipe
 - **`diff`** is a unified diff from `against` (a `Tree` or a directory) to `tree`, empty when they match. Variant directories in `against` that `tree` does not hold are not compared.
 - **`lock`** keeps every pin in `previous` whose source is unchanged and resolves the rest, plus the sources named in `update` (unknown names raise). The default lookup runs `git ls-remote` for a git ref and hashes the download for an `Http` source without `sha256`; `resolver`, a function from source to pin, replaces it; `offline=True` fails for any source without a previous pin. Every source is tried before failing: one `LockfileError` lists all of them (`.failures`, name to `SourceError`), with reasons `ref '<ref>' not found`, `repository unreachable: <git stderr>`, `HTTP <status>` or `timed out after 60s` (every network call times out after 60s, and git never prompts for credentials).
 - **`lock_status`** is the drift between the recipe and `locked`, one diagnostic per section; empty when current. With `resolver` (as for `lock`) it also reports git refs that moved since the lock, as `sources.<name>`. When `variants` leaves out some declared variant, see [subsets](#locks-and-variant-subsets).
-- **`bake`** writes `locked` to `out/tundravm.lock` when that file is absent or identical; a different lockfile already there is left alone and the bake reads a scratch copy of `locked`. It bakes frozen into `out` and writes `out/bake-result.json`, whose `declarative.lockfile` is the path of the lockfile it used (`null` for a scratch copy). It fails before building on lint errors (`LintError`) or drift (`LockfileError`); a `locked` of every variant covers `variants=` naming a [subset](#locks-and-variant-subsets). `progress` receives the CLI's progress lines.
+- <a id="fetch"></a>**`fetch`** checks the sources of `variants` out on this host, as the invoking user (git credentials and the SSH agent apply), into `out/.sources/<name>-<pin[:12]>/`: every source build and, outside `nethermind-v1`, every built kernel's source (named `kernel`, or `kernel-<variant>` where a variant's kernel source differs). A git source is checked out at its pinned commit (with submodules when the `Git` asks for them), an http source is downloaded and checked against its sha256. Pins come from `locked`; a source it does not pin (every source, with `locked=None`) is resolved first through `resolver` (default: the network, as `lock` does), which `Policy(mutable_ref_policy="error")` refuses. A complete checkout carries a marker naming its pin and is kept, so a second fetch touches nothing; there is one checkout per (source, pin). Returns one `FetchedSource` per source.
+- **`bake`** writes `locked` to `out/tundravm.lock` when that file is absent or identical; a different lockfile already there is left alone and the bake reads a scratch copy of `locked`. It bakes frozen into `out` and writes `out/bake-result.json`, whose `declarative.lockfile` is the path of the lockfile it used (`null` for a scratch copy). It fails before building on lint errors (`LintError`) or drift (`LockfileError`); a `locked` of every variant covers `variants=` naming a [subset](#locks-and-variant-subsets). `progress` receives the CLI's progress lines. Outside `nethermind-v1`, a bake with a real backend first runs `fetch` at the pins it builds; the backend mounts `out/.sources` into the build (`BakeRequest.sources_dir`, at `$SRCDIR/tundravm-sources`, ephemerally) and each source hook (and kernel build script) copies its checkout, so the build sandbox never fetches a source. `fetch=False` builds from the checkouts already in `out/.sources` (copied to an air-gapped host, say) and raises `StateError` (`E_STATE`) before mkosi runs when one is missing. The in-process backend fetches nothing.
 - **`read_artifacts`** reads `bake-result.json` (or the directory holding it).
 - **`measure`** derives expected measurements with `measured-boot` or `dstack-mr`; without one it raises `MeasurementError` unless `allow_placeholder`, which also emits a `PlaceholderMeasurementWarning`. Simulated artifacts are refused unless `allow_placeholder`.
 - **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_placeholder`. `adapter` replaces the default adapter (tests).
@@ -214,7 +223,8 @@ lower(recipe, *, variants=None)  # internal: the compiler's image for the recipe
 | `Tree` | `entries: tuple[Entry, ...]`, `digest: str`, `variants: tuple[str, ...]`; `write(path)` writes it, replacing its variant directories and dropping stale ones |
 | `Entry` | `path`, `content: bytes \| None`, `mode: int`, `symlink: str \| None = None` (a directory has neither content nor symlink) |
 | `Lock` | `recipe_digest`, `sections: Pairs` (section to digest, see [below](#locks-and-variant-subsets)), `pins: tuple[Pin, ...]`, `compiler_version`; `text()` is the serialized lockfile |
-| `Pin` | `identity` (build name, or URL for anonymous fetches), `source: Git \| Http` (the resolved commit or hash), `digest` |
+| `Pin` | `identity` (build name, `kernel`/`kernel-<variant>` for a built kernel, or URL for anonymous fetches), `source: Git \| Http` (the resolved commit or hash), `digest` |
+| `FetchedSource` | `name` (a build's, or `kernel`/`kernel-<variant>`), `kind` (`"git"`, `"http"`), `url`, `pin` (commit or sha256), `path` (`<out>/.sources/<name>-<pin[:12]>`), `cached=False` (an earlier fetch had completed it), `ref=None` (the git ref the pin came from); `locked()` is the lockfile entry it matches |
 | `Backend` | `kind` (`"lima"`, `"nix"`, `"local"`, `"inprocess"`), `cpus=2`, `memory="4GiB"`, `disk="40GiB"` (the last three for Lima) |
 | `Artifact` | `path`, `variant`, `target`, `sha256`, `recipe_digest`, `lock_digest`, `tree_digest`, `simulated=False` |
 | `Measurements` | `scheme` (`"rtmr"`, `"azure"`, `"gcp"`), `values: Pairs`, `tool` (`"measured-boot <version>"`, `"dstack-mr <version>"` or `"placeholder"`), `artifact_digest`; `to_json(path=None) -> str` is the four fields as JSON (sorted keys, trailing newline), also written to `path` when given; `verify(expected: Mapping[str, str]) -> tuple[str, ...]` is the sorted registers whose value differs from `expected` (a register only one side has counts), empty when all match |
@@ -251,10 +261,10 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 |---|---|---|
 | `Tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements=(), check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
 | `DevTools(*, root_password="tdx")` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it. |
-| `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot |
-| `Backports(*, mirror=None, release=None)` | `backports` | A sync hook generating backports and sid apt sources, plus `Setting("Build", "SandboxTrees", ...)` |
+| `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot: `snapshot` is a snapshot ID (`"20251113T083151Z"`, read from `snapshot.debian.org`) or a snapshot archive URL, and it must carry `version` (the templates pair `20251113T083151Z` with `257.8-1~deb13u1`). The current dialect downloads the package into `$BUILDROOT/` (mkosi-chroot mounts its own `/tmp`) and fails with that advice when the download fails |
+| `Backports(*, mirror=None, release=None)` | `backports` | Debian backports and sid apt sources for the build's apt, not the image. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `mirror` verbatim, else `Recipe.mirror` and `Recipe.snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the release of `Recipe.base`. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
 
-`issuer`/`validator` are a `TdxsType` (`"tdx"`, `"azure"`, `"gcp"` or `"simulator"`) or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. `BACKPORTS_TREE` is the `SandboxTrees` entry `Backports` adds, `"mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"`. Each class is an instance of `Fragment`, so it goes wherever a `Fragment` does: in `common`, in a variant's `add`, or among another fragment's `items`.
+`issuer`/`validator` are a `TdxsType` (`"tdx"`, `"azure"`, `"gcp"` or `"simulator"`) or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. `Backports.render_sources(*, mirror, release, snapshot=None)` and `render_preferences(*, release)` return the two files' text (the recipe's mirror root, release and snapshot; the fragment's own fields win). `BACKPORTS_TREE` is the `SandboxTrees` entry `Backports` adds under `nethermind-v1`, `"mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"`. Each class is an instance of `Fragment`, so it goes wherever a `Fragment` does: in `common`, in a variant's `add`, or among another fragment's `items`.
 
 ### `Composite`
 
@@ -297,7 +307,7 @@ Every SDK error subclasses `TdxError(message, *, code, hint=None, context=None)`
 | `MeasurementError` | `E_MEASUREMENT` | No measurement tool, or a simulated artifact, without `allow_placeholder` |
 | `DeploymentError` | `E_DEPLOYMENT` | A simulated artifact, a target mismatch, or a missing target tool |
 | `PolicyError` | `E_POLICY` | A `Policy` setting refused the operation |
-| `StateError` | `E_STATE` | `bake-result.json` is missing or unreadable, or has no artifact for the requested variant/target |
+| `StateError` | `E_STATE` | `bake-result.json` is missing or unreadable, or has no artifact for the requested variant/target; `bake(fetch=False)` (`bake --no-fetch`) finds a source checkout missing from `out/.sources` |
 
 ## Lint rules
 
@@ -333,7 +343,7 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `init-priority-collision` | warning | Several runtime-init steps share a priority |
 | `debloat-removes-needed-unit` | warning | Debloat masks a unit a service needs |
 | `debloat-removes-declared-file` | warning | Debloat deletes a declared file at finalize |
-| `source-unpinned` | warning (error / info by policy) | A source build has no pin in `build/tundravm.lock` |
+| `source-unpinned` | warning (error / info by policy) | A source build, or a built kernel's source in the current dialect, has no pin in `build/tundravm.lock` |
 | `disk-key-path-mismatch` | warning | A disk reads a key file the key does not write |
 | `key-pipe-outside-run` | info | A pipe key's path is outside `/run` |
 | `variant-empty` | info | A variant declares nothing of its own |

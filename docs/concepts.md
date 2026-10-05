@@ -26,7 +26,11 @@ recipe = Recipe(
 )
 ```
 
-`Recipe` fields: `name`, `common`, `variants` (default: one `Variant("default", target="qemu")`), `base` (`debian/trixie`), `arch` (`x86_64` or `aarch64`), `mirror`, `tools_mirror`, `epoch` (`0`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults).
+`Recipe` fields: `name`, `common`, `variants` (default: one `Variant("default", target="qemu")`), `base` (`debian/trixie`), `arch` (`x86_64` or `aarch64`), `mirror`, `tools_mirror`, `snapshot`, `epoch` (`0`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults).
+
+### Mirrors and snapshots
+
+`mirror` and `tools_mirror` are mirror roots, written as mkosi's `Mirror=` and `ToolsTreeMirror=`: mkosi appends `debian` (or `archive/debian/<snapshot>`) itself, so a full archive URL there is wrong. `snapshot` is a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=`; with no `mirror`, mkosi reads it from `https://snapshot.debian.org`, so every package comes from that point in time. A URL in `snapshot` is a `ValidationError` that says to put the root in `mirror`. The `cloud` and `prover` templates set `snapshot="20251113T083151Z"` and pin `EfiStub(snapshot=..., version="257.8-1~deb13u1")`, a `systemd-boot-efi` version that snapshot carries; `Backports` derives its sources from the same mirror and snapshot.
 
 Declarations validate themselves at construction: relative paths, empty names, unknown phases, out-of-range modes, a `Disk` whose `key` is a string, or a `Unit` that ships a file without a type suffix raise `ValidationError` right where the value is built.
 
@@ -82,7 +86,7 @@ Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `p
 
 Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, kernel configs) are read at lowering time. The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
 
-The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. `dialect="nethermind-v1"` spells user and group creation as postinst lines and leaves build hooks unmarked, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
+The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. The current dialect targets mkosi 26: apt sources that the build needs (`Repository`, `Backports`) are written at compile time under `mkosi.sandbox/`, where mkosi's apt reads them, and postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so a recipe without a version works under `set -u`. `dialect="nethermind-v1"` spells user and group creation as postinst lines, leaves build hooks unmarked and clones sources inside the build, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
 
 ### Bootable images
 
@@ -90,7 +94,7 @@ By default every variant compiles to `Format=uki`, a bootable unified kernel ima
 
 ## Runtime init
 
-Some declarations need work at boot, before services start: generating keys, opening and mounting encrypted disks, receiving secrets. tundravm collects that work into one script, `/usr/bin/runtime-init`, run by `runtime-init.service`.
+Some declarations need work at boot, before services start: generating keys, opening and mounting encrypted disks, receiving secrets. tundravm collects that work into one script, `/usr/bin/runtime-init`, run by `runtime-init.service`. The unit requires and orders after `network-setup.service` only when the variant ships that unit; otherwise it orders after `network-online.target` (`Wants=`), and so does an `azure` variant's provisioning unit.
 
 The script is a sequence of steps sorted by priority, lowest first:
 
@@ -151,13 +155,19 @@ Build(
 )
 ```
 
-The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in the fetched source with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. Built outputs are cached in the build directory under `cache_key` (derived from name, URL and ref when omitted).
+The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in a copy of the source checkout with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. Built outputs are cached in the build directory under `cache_key` (derived from name, URL and ref when omitted).
 
-The recipe records the symbolic source (`master`), never a commit. `tundravm lock` resolves each `Git` ref to a commit and each `Http` without `sha256` to a hash and stores the pins in the lockfile; compile and bake then fetch exactly those. A build without a pin is the `source-unpinned` warning.
+The recipe records the symbolic source (`master`), never a commit. `tundravm lock` resolves each `Git` ref to a commit and each `Http` without `sha256` to a hash and stores the pins in the lockfile; compile and bake then build exactly those. A build without a pin is the `source-unpinned` warning.
+
+### Fetched on the host
+
+In the current dialect the build sandbox never fetches a source. `tundravm fetch` (and `bake`, which runs it first) checks each pinned source out on the host, as the invoking user, into `build/.sources/<name>-<pin12>/`: a git source at its pinned commit, an http source verified against its sha256. Your git credentials and SSH agent apply, so private repositories work, and one checkout serves every variant that builds that (source, pin). The backend mounts `build/.sources` into the build at `$SRCDIR/tundravm-sources` (ephemerally: nothing a script writes there reaches the host), and each build hook copies its checkout into `$BUILDROOT/build/<name>` before running the script. A hook whose source has no pin fails with a pointer to `tundravm lock` and `tundravm fetch`.
+
+A built kernel (a `Kernel` with `config`) is a source too: its lockfile pin is named `kernel`, or `kernel-<variant>` when a variant's kernel source differs from the default variant's; `inspect` shows `pinned=`; `source-unpinned` covers it; and the kernel build script copies the checkout without `.git`, so the kernel version string stays clean. `nethermind-v1` keeps cloning sources and kernels inside the sandbox, as the historical tree does. See [reproducibility](reproducibility.md#sources-fetched-on-the-host).
 
 ## Variants and targets
 
-A variant produces one mkosi directory and, when baked, one artifact. Its `target` (`qemu`, `azure` or `gcp`, inherited from the parent, `qemu` at the root) decides the disk format and adds the platform integration: an `azure` variant gets the Azure provisioning service and `dmidecode`; a `gcp` variant gets the GCP equivalents.
+A variant produces one mkosi directory and, when baked, one artifact. Its `target` (`qemu`, `azure` or `gcp`, inherited from the parent, `qemu` at the root) decides the disk format and adds the platform integration: an `azure` variant gets the Azure provisioning service and `dmidecode` and converts its disk to a fixed VHD (`parted`, `qemu-img`) in a postoutput script; a `gcp` variant gets the GCP equivalents and a `tar.gz` disk (`sgdisk`). Those scripts run wherever mkosi runs its tools: on the host, or inside mkosi's tools tree when the build uses one, in which case the local backend installs `qemu-utils`, `gdisk` and `parted` into it.
 
 ```python
 variants=(
@@ -194,6 +204,8 @@ Recipe ──compile──▶ Tree ──write──▶ mkosi/            (commi
    │
    └──lock──▶ Lock ──write_lock──▶ build/tundravm.lock  (committed, lock --check)
                 │
+                └──fetch──▶ build/.sources/<name>-<pin12>/  (host checkouts)
+                                     │
 Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
                                      │
                                      ├──measure──▶ Measurements
@@ -206,11 +218,12 @@ Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
 | Lint | `lint(recipe, lock=None)` | `lint` | the recipe (and a lock for drift) |
 | Compile | `compile(recipe, lock=None) -> Tree` | `compile` | the recipe; a lock applies its pins |
 | Lock | `lock(recipe, previous=None) -> Lock` | `lock` | the network, unless every source is already pinned |
-| Bake | `bake(recipe, locked=, backend=, out=) -> tuple[Artifact, ...]` | `bake` | a backend |
+| Fetch | `fetch(recipe, locked=, out=) -> tuple[FetchedSource, ...]` (from `tundravm.declarative.lifecycle`) | `fetch` | the network (as you), unless the checkouts are already there |
+| Bake | `bake(recipe, locked=, backend=, out=, fetch=True) -> tuple[Artifact, ...]` | `bake` | a backend; fetches first unless `fetch=False` (`--no-fetch`) |
 | Measure | `measure(artifact, scheme="rtmr") -> Measurements` | `measure` | `measured-boot` or `dstack-mr`, or `allow_placeholder` |
 | Deploy | `deploy(artifact, using=Qemu()/Azure(...)/Gcp(...)) -> Deployment` | `deploy` | the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 
-A lock of every variant covers a bake or `lock --check` of any subset of them: only the selected variants' sections and the recipe-wide ones are compared.
+A lock of every variant covers a bake or `lock --check` of any subset of them: only the selected variants' sections and the recipe-wide ones are compared. `bake` fetches the locked sources into `build/.sources` before it builds, so `tundravm fetch` on its own is for checking sources out ahead of time (or for a host that bakes offline). `tundravm status RECIPE` checks each of these steps without writing anything or touching the network and names the next command to run.
 
 `bake` writes `out/bake-result.json`, the manifest `read_artifacts()`, `tundravm measure` and `tundravm deploy` read, so measuring and deploying work in a later process. Each `Artifact` carries the recipe digest, the lockfile digest and the tree digest it was built from.
 
@@ -229,11 +242,11 @@ A recipe file names its backend in a module-level `backend` variable; the Python
 
 `bake` compiles the tree into `OUT/mkosi/` and every mkosi backend gives mkosi absolute paths: `--directory` is the variant's directory of that tree (or the tree root plus `--profile` for native profiles) and `--output-dir` is `OUT/<variant>/output/`, so artifacts land there whatever the working directory.
 
-- `LocalLinuxBackend` keeps mkosi's workspace, cache and tools tree in `OUT/.mkosi/`. After a `sudo` run it chowns what mkosi wrote back to the invoking user, warning with the `sudo chown` to run if that fails. When the host has no `ukify` and the recipe sets no `ToolsTree`, it adds `--tools-tree=default` for a variant that builds a UKI (`Format=uki` or a bootable disk) to the mkosi command, and a later bake into the same `OUT` (also one whose recipe sets `ToolsTree=default`) reuses `OUT/.mkosi/mkosi.tools`. See [CLI: Local backend](cli.md#local-backend).
+- `LocalLinuxBackend` keeps mkosi's workspace, cache and tools tree in `OUT/.mkosi/`. After a `sudo` run it chowns what mkosi wrote back to the invoking user, warning with the `sudo chown` to run if that fails. When the recipe sets no `ToolsTree` and the host lacks a tool the build needs (`ukify` for a UKI; `pefile`, under the Python that runs mkosi, for any build that is not `Bootable=no`), it adds `--tools-tree=default` to the mkosi command, and a later bake into the same `OUT` (also one whose recipe sets `ToolsTree=default`) reuses `OUT/.mkosi/mkosi.tools`. An `azure` or `gcp` variant built in the default tools tree gets `--tools-tree-package=qemu-utils,gdisk,parted` and reuses a cached tree only when it holds those tools; only a build on host tools needs `qemu-img` or `sgdisk` on the host, which `bake` checks before mkosi runs. See [CLI: Local backend](cli.md#local-backend) for the measured template bakes.
 - `NixMkosiBackend` runs mkosi inside `nix develop path:OUT/mkosi` (an absolute path), with the tools the generated flake provides; inside a Nix shell already, it runs mkosi directly.
 - `LimaMkosiBackend` mounts `OUT` in the VM at `/home/debian/mnt` and translates each host path under it to the VM path, so `OUT/mkosi/<variant>` is `/home/debian/mnt/mkosi/<variant>`; a tree or output path outside `OUT` is an `E_BACKEND_EXECUTION` error. mkosi writes to `/home/debian/mkosi-output` in the VM, with its cache in `/home/debian/mkosi-cache`, and the backend moves the output to `OUT/<variant>/output/`.
 
-A backend gets one `BakeRequest` per variant (`profile`, `build_dir`, `emit_dir`, `output_targets`). It streams mkosi's output lines to `on_output(line)` and reports what it decided on the user's behalf, such as adding a tools tree, to `on_notice(level, message)` with `level` `"info"` or `"warning"`; `request.notice(level, message)` calls it when it is set. `bake` prints an `info` notice as a `note` line and a `warning` as a `warning` line, both hidden by `-q`; with `--json-logs` they are a `log` event whose `extra.source` is `notice` and a `warning` event.
+A backend gets one `BakeRequest` per variant (`profile`, `build_dir`, `emit_dir`, `output_targets`, and `sources_dir`, the host checkouts `OUT/.sources` that it mounts at `$SRCDIR/tundravm-sources`, or `None` when the build fetches nothing on the host). It streams mkosi's output lines to `on_output(line)` and reports what it decided on the user's behalf, such as adding a tools tree, to `on_notice(level, message)` with `level` `"info"` or `"warning"`; `request.notice(level, message)` calls it when it is set. `bake` prints an `info` notice as a `note` line and a `warning` as a `warning` line, both hidden by `-q`; with `--json-logs` they are a `log` event whose `extra.source` is `notice` and a `warning` event.
 
 ## Measurements
 

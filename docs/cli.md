@@ -11,7 +11,8 @@ tundravm lint    RECIPE [--variant NAME]... [--format auto|text|json|github|mark
 tundravm compile RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--check] [--format auto|text|markdown|github]
 tundravm diff    RECIPE [--variant NAME]... [--against DIR] [--lockfile PATH] [--format auto|text|stat|markdown|github | --stat] [--color auto|always|never]
 tundravm lock    RECIPE [--variant NAME]... [--path PATH] [--update SOURCE]... [--check | --offline] [--explain] [--format auto|text|github|markdown]
-tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--backend KIND] [-v | -q | --json-logs] [--color auto|always|never]
+tundravm fetch   RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH]
+tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--backend KIND] [--no-fetch] [-v | -q | --json-logs] [--color auto|always|never]
 tundravm measure MANIFEST [--variant NAME] [--scheme rtmr|azure|gcp] [--json] [--allow-placeholder]
 tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--allow-placeholder]
 tundravm doctor  [RECIPE] [--backend KIND]
@@ -59,17 +60,17 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `compile` | Writes the mkosi tree to `--out` (default `build/mkosi`), one directory per variant. `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
 | `diff` | Unified diff from the tree at `--against` (default `build/mkosi`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
 | `lock` | Writes the lockfile to `--path` (default `build/tundravm.lock`) for the selected variants. `--check` prints the drift instead (see [Lockfile drift](#lockfile-drift)). | `--check` and the lock is stale |
-| `fetch` | Checks the source builds of the selected variants out on this host, as the invoking user, into `OUT/.sources/<name>-<pin12>` (`--out`, default `build`) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are kept. Outside `nethermind-v1`, `bake` runs it first and mounts `OUT/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing. | |
+| `fetch` | Checks the source builds and built kernels' sources of the selected variants out on this host, as the invoking user, into `OUT/.sources/<name>-<pin12>` (`--out`, default `build`) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are kept. Outside `nethermind-v1`, `bake` runs it first and mounts `OUT/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing (see [Fetch](#fetch)). | |
 | `bake` | Compiles and builds every selected variant into `--out` (default `build`), then writes `OUT/bake-result.json`. | |
 | `measure` | Expected measurements of one baked variant. | |
 | `deploy` | Deploys one baked variant's artifact. | |
-| `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart` and `apt`, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk images need, which `bake` checks before mkosi runs; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
+| `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart`, `apt` and `pefile`, probed under the Python that runs mkosi, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk conversion needs on the host; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
 | `ci` | `lint --strict`, `compile --check`, `lock --check` in order; stops at the first failure. | any step fails, including a missing lockfile |
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
 | `clean` | Removes the chosen parts of the build output directory: `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
-`compile`, `diff` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH` names another one.
+`compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH` names another one.
 
 ## Init
 
@@ -257,7 +258,7 @@ Sections are the recipe-wide `base`, `arch`, `default_profile` and `init_scripts
 
 `lock --check --variant NAME` checks only the named variants' sections and the recipe-wide ones. A lockfile written for every variant is therefore up to date for any selection, and the lockfile's sections for the other variants are never reported. The whole-recipe digest (`recipe_digest`) is compared only when the selection is every variant the lockfile holds. A lockfile written with `lock --variant NAME` holds only that variant, so checking or baking more variants against it reports their sections as `+`.
 
-`lock` keeps the existing lockfile's pins while their source is unchanged. `--update NAME` resolves that source again; an unknown name is an error. `--offline` never touches the network and fails for a source with no pin. `--explain` prints the drift before writing.
+`lock` keeps the existing lockfile's pins while their source is unchanged. `--update NAME` resolves that source again (`--update kernel` or `--update kernel-<variant>` for a built kernel's source in the current dialect); an unknown name is an error. `--offline` never touches the network and fails for a source with no pin. `--explain` prints the drift before writing.
 
 `lock` tries every source that needs resolving and writes nothing unless all of them resolve. Otherwise it exits 2 with one error that lists every failure:
 
@@ -278,6 +279,32 @@ Each line is `<name>: git <url> @ <ref>: <reason>`. The reason is `ref '<ref>' n
 ```
 
 `lock --offline` lists every source without a pin in one error, `Cannot lock offline: 2 sources need the network to resolve:`, one `<name>: git <url> @ <ref>: not pinned in the lockfile` line each. `lock --check` never uses the network; an unpinned source drifts as `+ sources.<name>: source <name> is not pinned`.
+
+## Fetch
+
+`tundravm fetch RECIPE` checks out, on this host and as you, every source the selected variants build from: each `Build` source and, outside `nethermind-v1`, each built kernel's source (a `Kernel` with `config`), named `kernel` or `kernel-<variant>` where a variant's kernel source differs. A git source is checked out at its pinned commit, an http source is downloaded and checked against its sha256. Each lands in `OUT/.sources/<name>-<pin12>/` with a completion marker; a complete checkout is kept, so a second run touches nothing, and there is one checkout per (source, pin). Because it runs as you, your git credentials and SSH agent apply, so private repositories work.
+
+Pins come from `--lockfile` (default `build/tundravm.lock` when it exists). A source the lockfile does not pin is resolved first, as `lock` would, unless the recipe's `Policy(mutable_ref_policy="error")` forbids it. For a recipe whose `hello` build is `Git("file:///work/hello", "v1.0.0")`, before and after `tundravm lock`:
+
+```console
+$ tundravm fetch node.py
+[tundravm] fetch 1 source ...
+[tundravm] note hello: fetched git file:///work/hello @ v1.0.0 at cdd0a5257ba9
+[tundravm] fetch 1 source ... ok (0.0s)
+fetched build/.sources
+  hello  cdd0a5257ba9  fetched
+note: no lockfile at build/tundravm.lock; fetched the refs as they resolve now
+$ tundravm lock node.py
+locked build/tundravm.lock
+$ tundravm fetch node.py
+[tundravm] fetch 1 source ...
+[tundravm] note hello: cdd0a5257ba9 already fetched
+[tundravm] fetch 1 source ... ok (0.0s)
+fetched build/.sources
+  hello  cdd0a5257ba9  kept
+```
+
+`inspect` shows each source's pin (`hello  git file:///work/hello  ref=v1.0.0  pinned=cdd0a52`). In the current dialect a build hook never clones: it copies its checkout from the mounted `.sources` into `$BUILDROOT/build/<name>` (a kernel's without `.git`), and a hook whose source has no pin only fails, with `run tundravm lock, then tundravm fetch`. `lock --update kernel` (or `kernel-<variant>`) moves a kernel's pin like any other source.
 
 ## Bake
 
@@ -300,6 +327,19 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
 - Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a terminal), ending `baked N variants`; the summary table (one row per variant and target) and the `next:` line go to stdout.
 - `-v`/`--verbose` echoes every backend output line. `-q`/`--quiet` prints only the summary and errors. `--json-logs` writes progress events to stdout as JSON lines (`kind`, `message`, `variant`, `elapsed_s`, `extra`) and no summary.
 - Backend output is hidden by default, but its last lines are shown when the build fails.
+- Outside `nethermind-v1`, a bake with a real backend first runs `fetch` (a `fetch` progress step) at the pins it builds, then mounts `OUT/.sources` into the build: the mkosi command gets `--build-sources=OUT/.sources:tundravm-sources` (absolute paths) (so `$SRCDIR/tundravm-sources` in the scripts), the config directory again as the first `--build-sources` (unless the recipe sets `BuildSources`), and `--build-sources-ephemeral=yes` (unless the recipe sets `BuildSourcesEphemeral`), so nothing a script writes there reaches the host. The build sandbox never fetches a source. The in-process backend fetches nothing.
+- `--no-fetch` skips the fetch and builds from the checkouts already in `OUT/.sources`, for example ones copied to an air-gapped host. A missing or incomplete checkout fails after `compile`, before mkosi runs:
+
+  ```console
+  $ tundravm bake node.py --backend local --no-fetch
+  ...
+  [default] failed after 0.0s
+  error [E_STATE]: Source build 'hello' is not fetched: build/.sources/hello-cdd0a5257ba9 is missing or incomplete.
+  Hint: Run `tundravm fetch RECIPE --out build` first, or bake without --no-fetch.
+    pin: cdd0a5257ba950088a826755fa832f40e87fc5c3
+  [exit 2]
+  ```
+
 - The bake is frozen when `--lockfile` is given or `build/tundravm.lock` exists: a recipe that drifted from the lock fails at `verify lockfile` with `E_LOCKFILE`. Without a lockfile it bakes unpinned and prints a note.
 - The lockfile is copied to `OUT/tundravm.lock` when that file is absent or identical. A different `OUT/tundravm.lock` is never overwritten: `bake --out OUT --lockfile PATH` bakes against `PATH` and leaves it alone.
 - The frozen check compares like `lock --check` with the same `--variant` selection: a lockfile of every variant covers `bake --variant default`, while a lockfile written for fewer variants than the bake selects fails at `verify lockfile`.
@@ -320,18 +360,33 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
 - A bootable variant's artifact is the UKI `OUT/<variant>/output/<variant>.efi`, next to the other files mkosi writes there; `bake-result.json` records it with its sha256.
 - mkosi's workspace, package cache and tools tree live in `OUT/.mkosi/` (`workspace/`, `cache/`, `mkosi.tools`), never in the compiled tree. A recipe that sets `WorkspaceDirectory` or `CacheDirectory` keeps its own.
 - Under `sudo`, what mkosi wrote (`OUT/<variant>/output/`, `OUT/.mkosi/`) is chowned back to you, so the build directory holds no root-owned files. If that fails, a `warning` names the `sudo chown -R UID:GID OUT` to run.
-- mkosi builds a UKI with the host's `ukify` unless it uses a tools tree. When the host has no `ukify` and the recipe sets no `ToolsTree`, the backend adds `--tools-tree=default` for a variant that builds a UKI (`Format=uki` or a bootable disk) to the mkosi command (the compiled tree is unchanged) and says so on a `note` line, which `-q` hides:
+- mkosi builds a UKI with the host's `ukify`, and reads the installed kernel with Python's `pefile` in any build that is not `Bootable=no` (directory builds included), unless it uses a tools tree. When the host lacks one of them (`pefile` is probed under the Python that runs mkosi) and the recipe sets no `ToolsTree`, the backend adds `--tools-tree=default` for that variant to the mkosi command (the compiled tree is unchanged) and says so on a `note` line, which `-q` hides:
 
   ```
   [default] note ukify not found on the host; building with mkosi's default tools tree (--tools-tree=default). Install systemd-ukify to use the host tools.
   ```
 
 - The first bake builds the tools tree; a later bake into the same `OUT` passes `--tools-tree=OUT/.mkosi/mkosi.tools` (the note then says `reusing` and the path) instead of building it again. In the run above, a second bake took 32s against 1m24s for the first.
+- An `azure` variant's postoutput script lays out a disk with `parted` and converts it to a VHD with `qemu-img`; a `gcp` variant's partitions a raw disk with `sgdisk` and packs it as a `tar.gz`. In a build with mkosi's default tools tree those scripts run inside it: the backend adds `--tools-tree-package=qemu-utils,gdisk,parted` and reuses a cached `OUT/.mkosi/mkosi.tools` only when it already holds `qemu-img`, `sgdisk` and `parted`, so the host needs none of them. Only a build on host tools needs `qemu-img` or `sgdisk` on the host; `bake` checks for them before mkosi runs and fails with `E_BACKEND_EXECUTION` (`Variant 'azure' needs `qemu-img` on the host for its cloud disk image.`, hint `install qemu-utils, or bake --variant default`).
+- Source builds and built kernels are fetched on the host and mounted into the build (see [Fetch](#fetch) and [Bake](#bake)).
 
-`tundravm doctor --backend local` probes `ukify`, `systemd-repart` and `apt` as optional tools, the ones mkosi takes from the host when there is no tools tree:
+Measured on this host (Ubuntu 24.04, mkosi 26, no `ukify`, so every build used the default tools tree) with the `init` templates as written:
+
+| Template | Variant | Artifact | Size | Time |
+|---|---|---|---|---|
+| `minimal` | `default` | UKI | 47.2 MiB | 1m24s (building the tools tree), 32s reusing it |
+| `service` | `default` | UKI | 48 MiB | |
+| `cloud` | `default` | UKI | 55 MiB | 35s |
+| `cloud` | `azure` | VHD (502 MiB) and UKI | | 40s |
+| `cloud` | `gcp` | `tar.gz` (55.6 MiB) and UKI | | 46s |
+| `prover` | `default` | UKI, with `tdxs`, `key-gen`, `disk-setup` and `secret-delivery` built from source and in the initrd | 64 MiB | 2m09s |
+
+The `cloud` times are with a cached tools tree. CI bakes the `service` and `cloud` templates in directory format on every push (see [testing](testing.md#template-bakes)).
+
+`tundravm doctor --backend local` probes `ukify`, `systemd-repart`, `apt` and `pefile` as optional tools, the ones mkosi takes from the host when there is no tools tree. `doctor RECIPE` adds the cloud tools its `azure` and `gcp` variants convert their disks with; for the `cloud` template:
 
 ```console
-$ tundravm doctor --backend local
+$ tundravm doctor node.py
 tundravm 0.1.0
 python 3.12.3
 backend local_linux: available
@@ -340,13 +395,18 @@ backend local_linux: available
   missing (optional) ukify — mkosi can use its own tools tree: add Setting("Build", "ToolsTree", ("default",)) to the recipe, or install systemd-ukify
   ok systemd-repart systemd 255 (255.4-1ubuntu8.17)
   ok apt apt 2.8.3 (amd64)
+  ok pefile 2023.2.7
+cloud image tools:
+  missing (optional) qemu-img — The azure variant converts its disk to a VHD with it: install qemu-utils, or bake --variant default
+  ok sgdisk GPT fdisk (sgdisk) version 1.0.10
 measurement tools:
   missing (optional) measured-boot — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
   missing (optional) dstack-mr — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
+lint: no findings
 [exit 0]
 ```
 
-A missing `ukify` alone needs no action, since the backend then adds the tools tree itself. With `ukify` present but `systemd-repart` or `apt` missing, add the `ToolsTree` setting the hint names.
+A missing `ukify` or `pefile` needs no action, since the backend then adds the tools tree itself, and with a tools tree (as here) a missing `qemu-img` or `sgdisk` needs none either. With `ukify` and `pefile` present but `systemd-repart` or `apt` missing, add the `ToolsTree` setting the hint names.
 
 ## Measure and deploy
 

@@ -159,3 +159,15 @@ uv run pytest tests/unit/test_public_surface.py    # tundravm.__all__ against th
 ```
 
 `tests/unit/test_public_surface.py` freezes `tundravm.__all__` and checks that every name in the `__all__` of `tundravm`, `tundravm.declarative` and `tundravm.declarative.utils` imports. Adding, renaming or removing a public name means updating its `EXPECTED_TOP_LEVEL` list in the same change, so the API change is visible in review.
+
+### Template bakes
+
+`tests/integration/test_templates_bake.py` (marker `integration`) bakes two `init` templates for real with `LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"])`, so it needs mkosi 25+ and non-interactive `sudo` and is skipped without them. The directory format skips the UKI and the disk image but still runs every build script and installs the kernel, which is why the CI workflow installs `python3-pefile` next to mkosi and `uv run pytest` runs both bakes on every push.
+
+- **`service`**: the generated `app.service` (its `ExecStart`, `User=app`, `Requires=runtime-init.service`) is linked into `minimal.target.wants`, the runtime-init step creates `/var/lib/app`, and `/etc/app/app.conf` and the `app` user are in the tree.
+- **`cloud`** (the `default` variant, plus two extra `Repository` declarations, one with `in_image=False`): `mkosi.conf` sets `Snapshot=20251113T083151Z` and no `Mirror=` or `SandboxTrees=`; `Backports` writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and pins sid to 100, and the image still runs trixie's 6.12 kernel; `EfiStub` installs its pinned `systemd-boot-efi` from the image root and leaves no `.deb` behind; only the `in_image=True` repository is listed in the image's `/etc/apt`; `runtime-init.service` waits for `network-online.target` because the variant ships no `network-setup.service`.
+
+```bash
+uv run pytest tests/integration/test_templates_bake.py -m integration   # the template bakes alone
+uv run pytest -m "not integration"                                      # everything but them
+```

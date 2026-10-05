@@ -42,6 +42,7 @@ tundravm lint node.py                           # every diagnostic; exit 1 on er
 tundravm compile node.py --out mkosi            # emit the mkosi tree, one directory per variant
 tundravm lock node.py                           # write build/tundravm.lock (section digests + source pins)
 tundravm bake node.py                           # build every variant, frozen against the lock
+tundravm status node.py                         # where the project stands, and the next command to run
 tundravm measure build --variant default        # expected RTMRs of the baked artifact
 tundravm deploy build --variant default --target qemu
 ```
@@ -140,7 +141,8 @@ variants=(
 
 - **Byte-stable trees.** `epoch=0` (the default) emits a fixed `SourceDateEpoch`/`SOURCE_DATE_EPOCH`, a stable `Seed` and strips `IMAGE_VERSION`. `tundravm compile --check` exits 1 when the committed tree differs from the recipe; `tundravm.testing.assert_tree` does the same in a test.
 - **Lock sections.** `tundravm lock` writes one digest per section (`base`, `arch`, `variants.<variant>.packages`, `variants.<variant>.files`, ...). `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
-- **Pinned sources.** Every `Build` source is resolved to a commit (`Git`) or a hash (`Http`) at lock time; compile and bake fetch exactly that. `lock --update NAME` re-resolves one source; `lock --offline` never touches the network.
+- **Pinned archive.** `Recipe(snapshot="20251113T083151Z")` builds from that Debian snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `EfiStub(snapshot=, version=)` pins the EFI stub to a version the snapshot carries.
+- **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and `bake --no-fetch` works on an air-gapped host. `lock --update NAME` re-resolves one source; `lock --offline` never touches the network.
 - **Frozen bakes.** `bake` is frozen against `build/tundravm.lock` whenever it exists and refuses a recipe that drifted (`E_LOCKFILE`).
 - **Snapshot mirrors.** `Recipe(mirror=..., tools_mirror=...)` pins the Debian archive; `EfiStub()` pins the EFI stub.
 
@@ -156,7 +158,8 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `compile RECIPE` | Emit the mkosi tree; `--check` exits 1 if the tree at `--out` is stale |
 | `diff RECIPE` | Unified diff from a compiled tree to the recipe (`--stat`) |
 | `lock RECIPE` | Write the lockfile; `--check` reports drift, `--update`, `--offline`, `--explain` |
-| `bake RECIPE` | Build the variants; `--backend`, `--lockfile`, `--out`, `-v`/`-q`/`--json-logs` |
+| `fetch RECIPE` | Check the pinned sources out on the host into `build/.sources/` |
+| `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `-v`/`-q`/`--json-logs` |
 | `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`) |
 | `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`) |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
@@ -224,7 +227,7 @@ Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and contex
 | `E_VALIDATION` | A declaration is malformed, or the recipe has error diagnostics. `tundravm lint RECIPE` lists them all. Also raised for an unknown `--variant` |
 | `E_LINT` | `bake` refused a recipe with error-level compiler findings. Run `tundravm lint RECIPE` |
 | `E_LOCKFILE` | The recipe drifted from the lockfile. `tundravm lock RECIPE --check` shows what; `tundravm lock RECIPE` accepts it |
-| `E_STATE` | No `bake-result.json` where `measure`/`deploy` looked, or no artifact for that variant/target. Bake first, and pass the bake's `--out` directory |
+| `E_STATE` | No `bake-result.json` where `measure`/`deploy` looked, or no artifact for that variant/target: bake first, and pass the bake's `--out` directory. Or `bake --no-fetch` found a source checkout missing: run `tundravm fetch RECIPE` |
 | `E_MEASUREMENT` | No `measured-boot`/`dstack-mr` on `PATH`, or a simulated artifact. Install a tool, or pass `--allow-placeholder` for test values |
 | `E_DEPLOYMENT` | A simulated artifact, an artifact of another target, or a missing target tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 | `E_POLICY` | A `Policy` setting refused the operation (frozen lock, offline network) |
