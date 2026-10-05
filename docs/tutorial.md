@@ -455,7 +455,7 @@ Hint: Install QEMU and ensure it is in PATH.
 [exit 2]
 ```
 
-On a host with QEMU and a real bake, `deploy` boots the baked image (a UKI, on OVMF firmware) and prints the deployment id and its `ssh://localhost:PORT` endpoint. Target settings are `--param KEY=VALUE` (`memory`, `cpus`, `ssh_port`, `tdx`, `daemonize` for qemu). [CLI: Deploying to each target](cli.md#deploying-to-each-target) has the whole sequence for QEMU, Azure and GCP, including how to check the VM and tear it down.
+On a host with QEMU and a real bake, `deploy` boots the baked image (a UKI, on OVMF firmware) in the background and prints the deployment id, its `ssh://localhost:PORT` endpoint, and the `serial_log`, `monitor` socket and `pidfile` it left in `build/default/`; `--attach` keeps QEMU in the foreground with its console on the terminal instead. Target settings are `--param KEY=VALUE` (`memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward=HOST:GUEST,...` for qemu). [CLI: Deploying to each target](cli.md#deploying-to-each-target) has the whole sequence for QEMU, Azure and GCP, including how to check the VM and tear it down.
 
 ## 10. Write a fragment
 

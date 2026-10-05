@@ -64,7 +64,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `compile` | Writes the mkosi tree to `--out` (default `build/mkosi`), one directory per variant, then prints `variants:`, `recipe_digest:` (the digest `lock` records) and `tree_digest:` (`Tree.digest`). `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
 | `diff` | Unified diff from the tree at `--against` (default `build/mkosi`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
 | `lock` | Writes the lockfile to `--lockfile` (default `build/tundravm.lock`) for the selected variants: version 4, with the `distribution`, `compiler`, `variants.<name>.kernel` and `variants.<name>.debloat` sections. A build whose source differs between variants is pinned per variant as `<variant>/<name>` (drift line `sources.<variant>.<name>`); `--update <variant>/<name>` re-resolves one variant's pin, `--update <name>` every variant's. `--check` prints the drift instead (see [Lockfile drift](#lockfile-drift)); a version 3 lockfile drifts as `~ version: 3 -> 4` until locked again. | `--check` and the lock is stale |
-| `fetch` | Checks the source builds and built kernels' sources of the selected variants out on this host, as the invoking user, into `OUT/.sources/<name>-<pin12>-<id8>` (`--out`, default `build`; `id8` hashes the url, subdirectory and submodules) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are verified and kept: git `HEAD` is the pin, `git status` is empty (untracked and ignored files included) and requested submodules are initialised; an http checkout matches the sha256 manifest written at fetch time. A modified one fails with `E_SOURCE` (`source <name> checkout modified/incomplete: run tundravm fetch --force`); `--force` checks every source out again. Outside `nethermind-v1`, `bake` runs it first and mounts `OUT/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing (see [Fetch](#fetch)). | |
+| `fetch` | Checks the source builds, built kernels' sources and `EfiStub` package (`efi-stub`) of the selected variants out on this host, as the invoking user, into `OUT/.sources/<name>-<pin12>-<id8>` (`--out`, default `build`; `id8` hashes the url, subdirectory and submodules) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are verified and kept: git `HEAD` is the pin, `git status` is empty (untracked and ignored files included) and requested submodules are initialised; an http checkout matches the sha256 manifest written at fetch time. A modified one fails with `E_SOURCE` (`source <name> checkout modified/incomplete: run tundravm fetch --force`); `--force` checks every source out again. Outside `nethermind-v1`, `bake` runs it first and mounts `OUT/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing. It also prefetches each `Go`, `Cargo` and `Dotnet` build's dependencies with the host's toolchain into `OUT/.sources/deps/{go,cargo,nuget}` and lists the outcome in a `deps:` column: `go: prefetched`, `go: kept`, `skipped (no host go)`, `skipped (offline)` or `failed (...)` (see [Fetch](#fetch)). | |
 | `bake` | Compiles and builds every selected variant into `--out` (default `build`), then writes `OUT/bake-result.json`. | |
 | `measure` | Expected measurements of one baked variant. `--export-policy FILE` also writes the verifier policy `Tdxs.from_policy` reads (see [Measure and deploy](#measure-and-deploy)). | |
 | `deploy` | Deploys one baked variant's artifact. | |
@@ -366,7 +366,7 @@ Each line is `<name>: git <url> @ <ref>: <reason>`. The reason is `ref '<ref>' n
 
 ## Fetch
 
-`tundravm fetch RECIPE` checks out, on this host and as you, every source the selected variants build from: each `Build` source and, outside `nethermind-v1`, each built kernel's source (a `Kernel` with `config`), named `kernel` or `kernel-<variant>` where a variant's kernel source differs. A git source is checked out at its pinned commit, an http source is downloaded and checked against its sha256. Each lands in `OUT/.sources/<name>-<pin12>-<id8>/`, `id8` being the first 8 hex of a sha256 over the url, kind and, for git, subdirectory and submodules, with a JSON `.tundravm-complete` marker that records the pin and that identity (and, for http, a sha256 manifest of every file). There is one checkout per (source, pin). A complete checkout is verified and kept, so a second run touches nothing: git `HEAD` must be the pin, `git status` must list nothing (untracked and ignored files included) and requested submodules must be at their recorded commits; an http checkout must match its manifest. A modified checkout fails with `E_SOURCE` until `fetch --force` checks every source out again:
+`tundravm fetch RECIPE` checks out, on this host and as you, every source the selected variants build from: each `Build` source and, outside `nethermind-v1`, each built kernel's source (a `Kernel` with `config`), named `kernel` or `kernel-<variant>` where a variant's kernel source differs, and the `.deb` an `EfiStub` installs, an http source named `efi-stub` (`efi-stub-<variant>` where a variant's package differs). A git source is checked out at its pinned commit, an http source is downloaded and checked against its sha256. Each lands in `OUT/.sources/<name>-<pin12>-<id8>/`, `id8` being the first 8 hex of a sha256 over the url, kind and, for git, subdirectory and submodules, with a JSON `.tundravm-complete` marker that records the pin and that identity (and, for http, a sha256 manifest of every file). There is one checkout per (source, pin). A complete checkout is verified and kept, so a second run touches nothing: git `HEAD` must be the pin, `git status` must list nothing (untracked and ignored files included) and requested submodules must be at their recorded commits; an http checkout must match its manifest. A modified checkout fails with `E_SOURCE` until `fetch --force` checks every source out again:
 
 ```console
 $ tundravm fetch node.py
@@ -377,7 +377,9 @@ error [E_SOURCE]: source dev/app checkout modified/incomplete: run tundravm fetc
 Hint: 1 file changed since the fetch: hi.sh. Run `tundravm fetch RECIPE --force` to check dev/app out again (it replaces the checkout).
   path: build/.sources/app-70c99ab8a545-2d2fd0fc
 [exit 2]
-``` Because it runs as you, your git credentials and SSH agent apply, so private repositories work.
+```
+
+Because it runs as you, your git credentials and SSH agent apply, so private repositories work.
 
 Pins come from `--lockfile` (default `build/tundravm.lock` when it exists). A source the lockfile does not pin is resolved first, as `lock` would, unless the recipe's `Policy(mutable_ref_policy="error")` forbids it. For a recipe whose `hello` build is `Git("file:///work/hello", "v1.0.0")`, before and after `tundravm lock`:
 
@@ -402,6 +404,39 @@ fetched build/.sources
 A build whose source differs between variants is pinned and fetched once per variant, as `<variant>/<name>` (`default/app`, `dev/app`); both checkouts are `app-<pin12>-<id8>`.
 
 `inspect` shows each source's pin (`hello  git file:///work/hello  ref=v1.0.0  pinned=cdd0a52`). In the current dialect a build hook never clones: it copies its checkout from the mounted `.sources` into `$BUILDROOT/build/<name>` (a kernel's without `.git`), and a hook whose source has no pin only fails, with `run tundravm lock, then tundravm fetch`. `lock --update kernel` (or `kernel-<variant>`) moves a kernel's pin like any other source.
+
+### Dependencies
+
+For each `Go`, `Cargo` and `Dotnet` build, `fetch` then prefetches the dependencies with the host's toolchain, as you, in a scratch copy of the checkout: `go mod download` into `OUT/.sources/deps/go`, `cargo fetch --locked` into `OUT/.sources/deps/cargo`, `dotnet restore --runtime RID --packages` into `OUT/.sources/deps/nuget`. A marker, `deps/<name>-<pin12>-<id8>.<cache>.json`, records the command and environment, so the next fetch keeps the cache. The result lists the outcome in a `deps:` column, and each build gets a `note` line (a `warning` for a failure). For a recipe with a `Go` build `app` and a `Cargo` build `app-rs` of the same repository, on a host with `cargo` but no `go`:
+
+```console
+$ tundravm fetch node.py
+[tundravm] fetch 2 sources ...
+[tundravm] note app: fetched git file:///work/app @ v1.0.0 at cd6fb81f6fb2
+[tundravm] note app: deps: skipped (no host go)
+[tundravm] note app-rs: copied from app-cd6fb81f6fb2-902554f9: git file:///work/app @ v1.0.0 at cd6fb81f6fb2
+[tundravm] note app-rs: deps: cargo: prefetched
+[tundravm] fetch 2 sources ... ok (0.1s)
+fetched build/.sources
+  app     cd6fb81f6fb2  fetched  deps: skipped (no host go)
+  app-rs  cd6fb81f6fb2  fetched  deps: cargo: prefetched
+$ tundravm fetch node.py
+...
+  app     cd6fb81f6fb2  kept     deps: skipped (no host go)
+  app-rs  cd6fb81f6fb2  kept     deps: cargo: kept
+```
+
+| `deps:` | Meaning |
+|---|---|
+| `go: prefetched`, `cargo: prefetched`, `nuget: prefetched` | the host toolchain filled the cache for this pin |
+| `go: kept`, ... | an earlier fetch's marker matches; nothing ran |
+| `skipped (no host go)` (`cargo`, `dotnet`) | the toolchain is not on `PATH`; the build downloads its dependencies in the sandbox |
+| `skipped (offline)` | `Policy(network_mode="offline")` or `bake --offline`: nothing is downloaded |
+| `failed (cargo fetch: <last stderr line>)`, ... | the prefetch failed (a `warning`); the build downloads its dependencies in the sandbox |
+
+Script builds, kernels and `efi-stub` have no dependency cache and no `deps:` column. In the current dialect a build hook copies its cache to `$BUILDROOT/build/.tundravm-deps/<cache>` and exports `GOMODCACHE`/`GOFLAGS=-mod=mod`, `CARGO_HOME` or `NUGET_PACKAGES` at it, adding `GOPROXY=off` or `CARGO_NET_OFFLINE=true` when the script runs without network; `bake --offline` requires the cache (see [Bake](#bake)). The host's and the image's toolchains must agree: both cargo 1.85 or newer, the same .NET SDK, and an image Go that satisfies `go.mod` (see [reproducibility](reproducibility.md#hermetic-builds)).
+
+`efi-stub` is fetched like any http source and installed by the postinst hook from the mounted copy with `dpkg -i`, after a sha256 check. A lockfile written before `EfiStub` became a source drifts as `+ sources.efi-stub` until `tundravm lock` pins it; compiled without that pin, the hook downloads the package in the sandbox.
 
 ## Bake
 
@@ -437,7 +472,21 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
   [exit 2]
   ```
 
-- `--offline` (or `Policy(network_mode="offline")` in the recipe) gives the build sandbox no network: the mkosi command gets `--with-network=no`, so build and postinst scripts cannot download anything (mkosi still installs the distribution packages from the configured mirror). The fetch step only reuses complete checkouts, and every `Go`, `Cargo` and `Dotnet` build must find the dependency cache `tundravm fetch` prefetched into `OUT/.sources/deps`; a missing one fails before mkosi runs with `E_STATE` naming the build and `tundravm fetch`. A `nethermind-v1` recipe with source builds fails with `E_POLICY`: its hooks fetch in the sandbox.
+- `--offline` (or `Policy(network_mode="offline")` in the recipe) gives the build sandbox no network: the mkosi command gets `--with-network=no`, so build and postinst scripts cannot download anything (mkosi still installs the distribution packages from the configured mirror). The fetch step only reuses complete checkouts (a missing one fails it with `E_POLICY`, `Cannot fetch 'NAME': policy network_mode is offline.`), and every `Go`, `Cargo` and `Dotnet` build must find the dependency cache `tundravm fetch` prefetched into `OUT/.sources/deps`; a missing one fails before mkosi runs with `E_STATE` naming the build and `tundravm fetch`. A `nethermind-v1` recipe with source builds fails with `E_POLICY`: its hooks fetch in the sandbox. For the `app`/`app-rs` recipe of [Dependencies](#dependencies), fetched on a host without `go`:
+
+  ```console
+  $ tundravm bake node.py --backend local --offline
+  ...
+  [tundravm] note app: deps: skipped (offline)
+  [tundravm] note app-rs: cd6fb81f6fb2 already fetched
+  [tundravm] note app-rs: deps: cargo: kept
+  [tundravm] fetch 2 sources ... ok (0.0s)
+  ...
+  [default] failed after 0.0s
+  error [E_STATE]: Source build 'app' has no prefetched go dependencies, and an offline bake gives the build no network to download them.
+  Hint: Run `tundravm fetch RECIPE --out build` on a host with `go` on PATH (it fills build/.sources/deps/go), or bake without --offline.
+    marker: build/.sources/deps/app-cd6fb81f6fb2-902554f9.go.json
+  ```
 - The bake is frozen when `--lockfile` is given or `build/tundravm.lock` exists: a recipe that drifted from the lock fails at `verify lockfile` with `E_LOCKFILE`. Without a lockfile it bakes unpinned and prints a note.
 - The lockfile is copied to `OUT/tundravm.lock` when that file is absent or identical. A different `OUT/tundravm.lock` is never overwritten: `bake --out OUT --lockfile PATH` bakes against `PATH` and leaves it alone.
 - The frozen check compares like `lock --check` with the same `--variant` selection: a lockfile of every variant covers `bake --variant default`, while a lockfile written for fewer variants than the bake selects fails at `verify lockfile`.
@@ -649,7 +698,7 @@ A C3 instance has a gVNIC network interface and NVMe disks, so the image's kerne
 | `recipe` | path, recipe digest (as `inspect --format json`), variants, mkosi dialect, base and snapshot | `ok` |
 | `lint` | diagnostic counts by level | `ok`, `error` when there are errors |
 | `lock` | `--lockfile` (default `build/tundravm.lock`): present, version, drifted sections (as `lock --check`), unpinned sources and kernels | `ok`, `stale`, `missing` |
-| `source` | one per source build and built kernel, by lock key: whether `OUT/.sources/<name>-<pin12>-<id8>` holds a complete, unmodified checkout of the locked pin (verified as `fetch` does) | `ok`, `stale` (another pin, an incomplete checkout, or one modified since the fetch: `checkout at PATH modified since the fetch (...); run tundravm fetch --force`), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
+| `source` | one per source build, built kernel and `EfiStub` package (`efi-stub`), by lock key: whether `OUT/.sources/<name>-<pin12>-<id8>` holds a complete, unmodified checkout of the locked pin (verified as `fetch` does) | `ok`, `stale` (another pin, an incomplete checkout, or one modified since the fetch: `checkout at PATH modified since the fetch (...); run tundravm fetch --force`), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
 | `tree` | `OUT/mkosi` (`--out`, default `build`) against what the recipe compiles to now, as `compile --check` | `ok`, `stale`, `missing` |
 | `artifact` | one per baked variant and target in `OUT/bake-result.json`: path, size, sha256 prefix, integrity (`unchecked`; with `--verify` the file is hashed: `verified` or `mismatch`), `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches, or on an integrity mismatch | `ok`, `stale`, `missing` |
 | `backend` | the recipe file's `backend` and how many of its host tools `doctor` finds | `ok`, `missing`, `n/a` (no backend) |

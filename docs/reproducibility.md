@@ -36,7 +36,7 @@ recipe = Recipe(
 )
 ```
 
-`snapshot` is the snapshot ID, written as mkosi's `Snapshot=`; mkosi reads it from `https://snapshot.debian.org` unless `mirror` names another root. `mirror` and `tools_mirror` are mirror roots that mkosi completes (`<root>/debian`, `<root>/archive/debian/<snapshot>`), never full archive URLs. `EfiStub` takes the same ID (or a snapshot archive URL), and its `version` must be one that snapshot carries: the `cloud` and `prover` templates pair `20251113T083151Z` with `257.8-1~deb13u1`. `Backports` follows the recipe's mirror and snapshot, and pins backports to 200 and sid to 100 so the release's packages win.
+`snapshot` is the snapshot ID, written as mkosi's `Snapshot=`; mkosi reads it from `https://snapshot.debian.org` unless `mirror` names another root. `mirror` and `tools_mirror` are mirror roots that mkosi completes (`<root>/debian`, `<root>/archive/debian/<snapshot>`), never full archive URLs. `EfiStub` takes the same ID (or a snapshot archive URL), and its `version` must be one that snapshot carries: the `cloud` and `prover` templates pair `20251113T083151Z` with `257.8-1~deb13u1`. `Backports` follows the recipe's mirror and snapshot, and pins backports to 200 and sid to 100 so the release's packages win. Outside `nethermind-v1`, `tundravm lock` also pins the `EfiStub` package's sha256 as the source `efi-stub`, and `fetch` downloads it on the host (see [Hermetic builds](#hermetic-builds)).
 
 ## Committed trees
 
@@ -61,7 +61,7 @@ The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this s
 | `sections` | One SHA-256 per section (below) |
 | `recipe` | The payload itself, so drift can name the changed items |
 | `dependencies` | The package list of each variant |
-| `fetches` | One pin per source build and, in the current dialect, per built kernel (`kernel`, or `kernel-<variant>` when a variant's kernel source differs): `name`, `kind` (`git`/`http`), `source` URL, requested `ref`, resolved `digest` (commit or sha256) |
+| `fetches` | One pin per source build and, in the current dialect, per built kernel (`kernel`, or `kernel-<variant>` when a variant's kernel source differs) and per `EfiStub` package (`efi-stub`, or `efi-stub-<variant>`): `name`, `kind` (`git`/`http`), `source` URL, requested `ref`, resolved `digest` (commit or sha256) |
 
 Version 4 covers every input that defines the image:
 
@@ -132,11 +132,27 @@ Outside `nethermind-v1`, a source build caches its output under `<namespace>-<fi
 
 The backend mounts `build/.sources` into the build and each hook copies its checkout; a kernel's is copied without `.git`. `inspect` shows each source's `pinned=` commit.
 
-That makes an air-gapped bake possible: run `tundravm fetch RECIPE` on a host with network access, copy `build/` (lockfile and `.sources/`) to the builder, and run `tundravm bake RECIPE --no-fetch` there. A missing or incomplete checkout fails before mkosi runs with `E_STATE`, naming the `tundravm fetch` to run. This covers sources only: mkosi still needs its package mirror, and `EfiStub` downloads from its snapshot.
+A missing or incomplete checkout fails `bake --no-fetch` (and `bake --offline`) before mkosi runs with `E_STATE`, naming the `tundravm fetch` to run. [Hermetic builds](#hermetic-builds) extends this to dependencies and the build sandbox's network.
 
 A hook whose source has no pin fails in the build with `run tundravm lock, then tundravm fetch`, so an unpinned source never builds from whatever the ref points to that day. `nethermind-v1` recipes, such as `surge-tdx-prover`, keep the historical tree's in-sandbox clones and have no kernel pins.
 
 A lockfile written for a current-dialect recipe with a source build or a built kernel before sources moved to the host needs re-locking: run `tundravm lock RECIPE` once and commit the result.
+
+## Hermetic builds
+
+`tundravm fetch` also prefetches the dependencies of every `Go`, `Cargo` and `Dotnet` build, with the host's toolchain, into `build/.sources/deps/`: `go mod download` into `deps/go` (a `GOMODCACHE`), `cargo fetch --locked` into `deps/cargo` (a `CARGO_HOME`) and `dotnet restore --runtime RID --packages deps/nuget`. Each runs as you in a scratch copy of the checkout, and a marker `deps/<name>-<pin12>-<id8>.<cache>.json` records the command and environment it ran, so a later fetch keeps the cache. In the current dialect the build hook copies the cache into the build and points the toolchain at it (`GOMODCACHE`, `CARGO_HOME`, `NUGET_PACKAGES`; with `GOPROXY=off` or `CARGO_NET_OFFLINE=true` when the script has no network). A host without the toolchain skips the prefetch with a notice (`deps: skipped (no host go)`) and a failed prefetch is a warning (`deps: failed (<reason>)`); that build then downloads its dependencies in the sandbox, as it did before.
+
+`EfiStub` is a source too: outside `nethermind-v1`, `lock` pins its `.deb`'s sha256 as `efi-stub` (`efi-stub-<variant>` where a variant's package differs), `fetch` downloads it on the host, and the postinst hook checks the mounted copy against the pin and installs it with `dpkg -i`. Unpinned, the hook downloads it in the sandbox as before; `nethermind-v1` keeps its `curl`. A current-dialect lockfile written before `EfiStub` became a source drifts as `+ sources.efi-stub` under `lock --check`: run `tundravm lock RECIPE` once and commit the result.
+
+`tundravm bake --offline`, or `Policy(network_mode="offline")` in the recipe, then builds without network: mkosi runs with `--with-network=no`, so build and postinst scripts reach nothing, and nothing is downloaded before it either: the fetch step reuses complete checkouts and fails with `E_POLICY` (`Cannot fetch 'app': policy network_mode is offline.`) when one, the `EfiStub` package included, is missing, and the bake fails with `E_STATE` before mkosi runs when a language build's dependency cache is missing (`Source build 'app' has no prefetched go dependencies, and an offline bake gives the build no network to download them.`, with the `tundravm fetch` to run on a host that has `go`). With `--no-fetch`, a missing checkout is `E_STATE` as well. A `nethermind-v1` recipe with source builds is refused offline (`E_POLICY`): its hooks clone inside the sandbox. mkosi still installs the distribution packages from the configured mirror, so the builder needs that mirror (or a local copy of the snapshot) and nothing else.
+
+An air-gapped bake is then: run `tundravm fetch RECIPE` on a host with network access and the toolchains, copy `build/` (lockfile and `.sources/`, `deps/` included) to the builder, and run `tundravm bake RECIPE --offline` there.
+
+Three caveats follow from the cache being filled by the host's toolchain and read by the image's:
+
+- **Cargo.** Cargo 1.85 renamed the registry cache's directories, so the host's and the image's cargo must both be 1.85 or newer for the build to find the cache.
+- **.NET.** The host's .NET SDK must match the image's: the restore resolves package versions (runtime packs included) for the SDK that ran it.
+- **Go.** A `go.mod` whose `go` or `toolchain` line asks for a newer Go than the image's makes the build download a toolchain, which the module cache does not cover and an offline bake cannot do.
 
 ## Frozen bakes
 

@@ -20,7 +20,8 @@ recipe = Recipe(
 |---|---|---|
 | `require_frozen_lock` | `False` | `True`: a bake without a lockfile fails with `E_POLICY` instead of baking unpinned |
 | `mutable_ref_policy` | `"warn"` | How an unpinned source build (a `Git` branch or tag, an `Http` without `sha256`, and no pin in the lockfile) is treated: `"warn"` reports `source-unpinned` as a warning; `"error"` makes it a lint error and makes `compile` and `bake` fail with `E_POLICY`; `"allow"` reports it as info |
-| `network_mode` | `"online"` | `"offline"`: `lock` behaves as `lock --offline` and fails with `E_LOCKFILE` for any source it would have to resolve |
+| `network_mode` | `"online"` | `"offline"`: `lock` behaves as `lock --offline` and fails with `E_LOCKFILE` for any source it would have to resolve; `fetch` reuses complete checkouts, fails with `E_POLICY` for a missing one and prefetches no dependencies; `bake` behaves as `bake --offline`: mkosi runs with `--with-network=no`, and a missing Go/Cargo/.NET dependency cache fails with `E_STATE` before mkosi runs (see [reproducibility](reproducibility.md#hermetic-builds)) |
+| `storage_safety` | `"warn"` | `"error"`: the `disk-auto-format` lint (a `Disk(device=None)` whose `format` is not `"never"`, which can pick and format the boot disk) is an error instead of a warning |
 
 A pin in `build/tundravm.lock` satisfies `mutable_ref_policy` for that source, so the usual flow under `"error"` is `tundravm lock` first, then compile and bake.
 

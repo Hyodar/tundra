@@ -142,7 +142,7 @@ variants=(
 - **Byte-stable trees.** `epoch=0` (the default) emits a fixed `SourceDateEpoch`/`SOURCE_DATE_EPOCH`, a stable `Seed` and strips `IMAGE_VERSION`. `tundravm compile --check` exits 1 when the committed tree differs from the recipe; `tundravm.testing.assert_tree` does the same in a test.
 - **Lock sections.** `tundravm lock` writes a version 4 lockfile with one digest per section: `distribution`, `compiler`, and per variant `packages`, `files`, `kernel`, `debloat`, ... (`variants.<variant>.packages`). The recipe digest includes the tundravm version. `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
 - **Pinned archive.** `Recipe(snapshot="20251113T083151Z")` builds from that Debian snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `EfiStub(snapshot=, version=)` pins the EFI stub to a version the snapshot carries.
-- **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and `bake --no-fetch` works on an air-gapped host. Checkouts are verified before reuse and `fetch --force` replaces a modified one. `lock --update NAME` re-resolves one source (`<variant>/<name>` for a build pinned per variant); `lock --offline` never touches the network.
+- **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and `bake --no-fetch` works on an air-gapped host. Checkouts are verified before reuse and `fetch --force` replaces a modified one. `lock --update NAME` re-resolves one source (`<variant>/<name>` for a build pinned per variant); `lock --offline` never touches the network. `fetch` also prefetches each Go, Cargo and .NET build's dependencies with the host toolchain into `build/.sources/deps/` and downloads the `EfiStub` package, so `bake --offline` (mkosi `--with-network=no`) builds with no network in the sandbox.
 - **Frozen bakes.** `bake` is frozen against `build/tundravm.lock` whenever it exists and refuses a recipe that drifted (`E_LOCKFILE`).
 - **Snapshot mirrors.** `Recipe(mirror=..., tools_mirror=...)` pins the Debian archive; `EfiStub()` pins the EFI stub.
 
@@ -158,10 +158,10 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `compile RECIPE` | Emit the mkosi tree; `--check` exits 1 if the tree at `--out` is stale |
 | `diff RECIPE` | Unified diff from a compiled tree to the recipe (`--stat`) |
 | `lock RECIPE` | Write the lockfile; `--check` reports drift, `--update`, `--offline`, `--explain` |
-| `fetch RECIPE` | Check the pinned sources out on the host into `build/.sources/` |
-| `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `-v`/`-q`/`--json-logs` |
+| `fetch RECIPE` | Check the pinned sources out on the host into `build/.sources/` and prefetch Go, Cargo and .NET dependencies |
+| `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `--offline` (no network in the build sandbox), `-v`/`-q`/`--json-logs` |
 | `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`); `--export-policy FILE` writes the verifier policy `Tdxs.from_policy()` reads |
-| `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`) |
+| `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`; `--attach` keeps QEMU in the foreground) |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
