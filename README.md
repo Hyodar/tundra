@@ -44,6 +44,7 @@ tundravm compile node.py --out mkosi            # emit the mkosi tree, one direc
 tundravm bake node.py                           # build every variant, frozen against the lock
 tundravm status node.py                         # where the project stands, and the next command to run
 tundravm sbom build --variant default     # SPDX/CycloneDX bill of materials
+tundravm evidence --bundle evidence.tar.gz      # auditor record of the bake, with a pass/fail verdict
 tundravm attest --endpoint unix:./tdxs.sock --policy peer.json   # check a running image's quote against a policy
 tundravm measure build --variant default        # expected RTMRs of the baked artifact
 tundravm deploy build --variant default --target qemu
@@ -59,6 +60,8 @@ Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and
 - **One definition, several targets.** A variant with `target="azure"` or `target="gcp"` gets the platform integration; QEMU qcow2, Azure VHD and GCP tar.gz come from one recipe.
 - **Composition without mutation.** Fragments are values: a plain `Fragment(...)`, or a `Composite` subclass configured by its fields. Keys, disks and secrets reference each other as objects, and the runtime-init sequence they need is derived, not hand-ordered.
 - **Locked inputs.** The lockfile records a digest per recipe section and a commit or hash per source build. Bakes are frozen against it, and `lock --check` names what drifted.
+- **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the measurements policy, SBOMs, lint) into an `evidence.json` index with a pass/fail verdict, a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
+- **Secrets lint.** `secret-in-file` and `secret-in-env` refuse private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments, naming the kind and line but never the value; credentials go in `Secrets` and arrive at boot.
 
 The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image as one declarative recipe. It compiles byte-for-byte to the committed upstream tree, all four variants (`default`, `azure`, `gcp`, `devtools`).
 
@@ -161,11 +164,12 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `diff RECIPE` | Unified diff from a compiled tree to the recipe (`--stat`) |
 | `lock RECIPE` | Write the lockfile; `--check` reports drift, `--update`, `--offline`, `--explain` |
 | `fetch RECIPE` | Check the pinned sources out on the host into `build/.sources/` and prefetch Go, Cargo and .NET dependencies |
-| `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `--offline` (no network in the build sandbox), `-v`/`-q`/`--json-logs` |; `--verify-reproducible` bakes twice and compares artifacts
+| `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `--offline` (no network in the build sandbox), `-v`/`-q`/`--json-logs`; `--verify-reproducible` bakes twice and compares artifacts |
 | `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`); `--export-policy FILE` writes the verifier policy `Tdxs.from_policy()` reads |
 | `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`; `--attach` keeps QEMU in the foreground) |
-| `attest` | Ask a running image's `tdxs` issuer for a nonce-bound quote and check its MRTD and RTMR0..RTMR3 against a policy (`--endpoint unix:PATH\|tcp://\|http(s)://`, `--policy FILE`); exit 1 when `untrusted`. Measurements only: `Tdxs.from_policy()` verifies collateral |
+| `attest` | Ask a running image's `tdxs` issuer for a nonce-bound quote and check its MRTD and RTMR0..RTMR3 against a policy (`--endpoint unix:PATH\|tcp://HOST:PORT`, `--policy FILE`; tdxs serves no http); exit 1 when `untrusted`. Measurements only: `Tdxs.from_policy()` verifies collateral |
 | `sbom [MANIFEST]` | Bill of materials of a baked variant: mkosi's package manifest, the lockfile's source pins and the recipe metadata (`--format spdx-json\|cyclonedx-json\|text\|markdown`, `--output FILE`) |
+| `evidence [RECIPE]` | An auditor's record of a bake in `OUT/evidence/`: recipe and tree digests, the lockfile with its drift, each artifact re-hashed, the reproducibility outcome, the measurements policy, SPDX SBOMs, lint and provenance summaries, tool versions, indexed by `evidence.json`; `--bundle FILE.tar.gz` (deterministic under `SOURCE_DATE_EPOCH`), `--html FILE`; exit 1 when the verdict is `fail` |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
@@ -233,8 +237,9 @@ Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and contex
 |---|---|
 | `E_VALIDATION` | A declaration is malformed, or the recipe has error diagnostics. `tundravm lint RECIPE` lists them all. Also raised for an unknown `--variant` |
 | `E_LINT` | `bake` refused a recipe with error-level compiler findings. Run `tundravm lint RECIPE` |
+| `secret-in-file` (lint) | A `File`, `Template` or `Directory` ships what looks like a private key, token or password, which every copy of the image would carry. Deliver it at boot with `Secrets` and a `SecretFile` (or `SecretEnv`; `secret-in-env` is the same for `Service(env=...)` and unit files), or pass `allow_secret=True` to the declaration when the value only looks like a credential |
 | `E_LOCKFILE` | The recipe drifted from the lockfile, or `bake` found that the lockfile `[tool.tundravm]` configures does not exist. `tundravm lock RECIPE --check` shows the drift; `tundravm lock RECIPE` accepts it or writes the missing lockfile |
-| `E_STATE` | No `bake-result.json` where `measure`/`deploy` looked, or no artifact for that variant/target: bake first, and pass the bake's `--out` directory. Or `bake --no-fetch` found a source checkout missing, or `bake --offline` a dependency cache missing or incomplete (the error names the entry): run `tundravm fetch RECIPE` |
+| `E_STATE` | No `bake-result.json` where `measure`/`deploy`/`sbom`/`evidence` looked, or no artifact for that variant/target: bake first, and pass the bake's `--out` directory. Or `bake --no-fetch` found a source checkout missing, or `bake --offline` a dependency cache missing or incomplete (the error names the entry): run `tundravm fetch RECIPE` |
 | `E_MEASUREMENT` | No `measured-boot`/`dstack-mr` on `PATH`, or a simulated artifact. Install a tool, or pass `--allow-placeholder` for test values |
 | `E_DEPLOYMENT` | A simulated artifact (`--allow-simulated-artifact` for a test run), an artifact of another target, or a missing target tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 | `E_ARTIFACT_CHANGED` | The artifact's bytes no longer match the sha256 the bake recorded (`measure`, `deploy`, `status --verify`). Bake again |

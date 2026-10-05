@@ -2,7 +2,7 @@
 
 This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, change the recipe and see the diff and the lock drift, bake, prove the bake reproducible, measure and export a verifier policy, list what is in the image, deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`. The one command that needs a running TDX VM, attesting it, is shown but not run.
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 13 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 14 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
 
 ## 1. Start a project
 
@@ -148,7 +148,7 @@ locked build/tundravm.lock
 [exit 0]
 ```
 
-`tundravm config` now prints `lockfile  build/tundravm.lock  pyproject`. Every later change to the recipe drifts from this lock until you lock again, which steps 5, 6 and 12 do.
+`tundravm config` now prints `lockfile  build/tundravm.lock  pyproject`. Every later change to the recipe drifts from this lock until you lock again, which steps 5, 6 and 13 do.
 
 ## 2. Inspect
 
@@ -241,6 +241,20 @@ no findings
 ```
 
 Warnings do not fail `lint` unless you pass `--strict`.
+
+A credential baked into the image is refused the same way, since every copy of the disk would carry it. Generate a key with `ssh-keygen -t ed25519 -N "" -f deploy.key`, ship it with `File("/etc/app/deploy.key", Path("deploy.key").read_text())` in `common` (and `from pathlib import Path`), and lint:
+
+```console
+$ tundravm lint node.py
+error secret-in-file [default] /etc/app/deploy.key: the file holds a private key (line 1); it is baked into the image
+    hint: Deliver it at boot with Secrets(...) and a SecretFile or SecretEnv target instead of baking it into the image, where every copy and every registry holding it exposes it; if it is not a secret, pass allow_secret=True to the declaration.
+error secret-in-file [dev] /etc/app/deploy.key: the file holds a private key (line 1); it is baked into the image
+    hint: Deliver it at boot with Secrets(...) and a SecretFile or SecretEnv target instead of baking it into the image, where every copy and every registry holding it exposes it; if it is not a secret, pass allow_secret=True to the declaration.
+2 errors, 0 warnings, 0 infos
+[exit 1]
+```
+
+The message names the kind of credential and its line, never the value. A real key goes in `Secrets` and reaches the VM at boot; `allow_secret=True` on the `File` is for a value that only looks like one (see [Concepts: Secrets never belong in the image](concepts.md#secrets-never-belong-in-the-image)). Remove the `File`, the import and `deploy.key` before going on.
 
 ## 4. Add a variant
 
@@ -528,7 +542,38 @@ wrote spdx-json build/default.spdx.json
 
 `--format cyclonedx-json` writes CycloneDX 1.5 instead. Every list is sorted and the ids derive from the content, so with `SOURCE_DATE_EPOCH` set the same bake gives the same document.
 
-## 11. Deploy
+## 11. Package the evidence
+
+The lockfile, step 8's reproducibility check, `peer.json` and the SBOM each answer one question about the bake. `evidence` gathers them into one record that someone without your machine can check:
+
+```console
+$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --variant default --policy peer.json --bundle evidence.tar.gz --html report.html
+wrote build/evidence
+wrote evidence.tar.gz
+wrote report.html
+evidence 2023-11-14T22:13:20Z  verdict pass
+  recipe     node.py  digest 2f0041479c07
+  integrity  verified
+  lock       current
+  reproduce  reproducible
+  lint       clean
+  default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
+members:
+  3b2f3058f0f74fa6361994d400c8a76492f1aec1f93a73c98d1f78c97798b8c1  bake-result.json
+  37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570  lint.json
+  259d38ee530784c61ae5514f21c8dd11670025d41ece1992946c7b77224179e8  tundravm.lock
+  489d22bcf640902f1aa464238184967658d0236d461e68b81b59b77664d11d2d  variants/default/policy.json
+  d930bca4b8373fdbc3b055fb16a045efb1e170b8b9bfe704ea1b5780b1ec80d7  variants/default/sbom-qemu.spdx.json
+note: default/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
+note: default/qemu sbom: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
+[exit 0]
+```
+
+`evidence` builds nothing: it reads `build/bake-result.json`, hashes each artifact again against the sha256 the bake recorded (`integrity`), compares the lockfile with the recipe (`lock`), reads back the outcome step 8 recorded (`reproduce`) and lints the recipe with the lock's pins (`lint`). The verdict is `pass` only when all four hold; a bake never checked for reproducibility passes as `not checked`. Append one byte to `build/default/disk.qcow2` and the same command prints `integrity  mismatch` and `verdict fail` and exits 1. `build/evidence/` holds the files under `members`, indexed with their sha256 by `evidence.json`; `--policy peer.json` adds step 9's policy, which the index marks as a placeholder (without the flag, `evidence` looks for `build/default/policy.json`). The notes say what could not be included, here the package manifest a simulated bake never has.
+
+`evidence.tar.gz` is what you hand a reviewer: publish its sha256 with it, and they unpack it and check every member against `evidence/evidence.json`. Its members are sorted, owned by `0:0` and stamped with `SOURCE_DATE_EPOCH`, so packing the same bake again gives the same bytes. `report.html` is the same record as one self-contained page, opening with a pass/fail banner. See [CLI: Evidence](cli.md#evidence).
+
+## 12. Deploy
 
 ```console
 $ tundravm deploy build --variant default --target qemu
@@ -547,7 +592,7 @@ Hint: Install QEMU and ensure it is in PATH.
 
 On a host with QEMU and a real bake, `deploy` boots the baked image (a UKI, on OVMF firmware) in the background and prints the deployment id, its `ssh://localhost:PORT` endpoint, and the `serial_log`, `monitor` socket and `pidfile` it left in `build/default/`; `--attach` keeps QEMU in the foreground with its console on the terminal instead. Target settings are `--param KEY=VALUE` (`memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward=HOST:GUEST,...` for qemu). [CLI: Deploying to each target](cli.md#deploying-to-each-target) has the whole sequence for QEMU, Azure and GCP, including how to check the VM and tear it down.
 
-## 12. Write a fragment
+## 13. Write a fragment
 
 Say every image that runs the app should also probe it once a minute. Write that as a `Composite`, like `App`, in `fragments.py` next to the recipe:
 
@@ -658,7 +703,7 @@ compiled mkosi
 
 `mkosi.conf` gained `curl`, and `06-postinst.sh` enables the probe and its timer. The recipe directory is importable while the recipe loads, so `fragments.py` needs no packaging. The [fragment guide](module-authoring.md) covers builds, units and ordering in depth.
 
-## 13. Test it
+## 14. Test it
 
 `tests/test_node.py`, which `init` wrote, has three tests:
 
@@ -715,7 +760,7 @@ $ uv run pytest -q tests
 
 In a project of your own, the loop is: edit the recipe, `tundravm compile node.py --out mkosi`, `uv run pytest tests`, `tundravm lock node.py`.
 
-## 14. CI
+## 15. CI
 
 `tundravm ci` runs `lint --strict`, `compile --check` and `lock --check` and stops at the first failure:
 

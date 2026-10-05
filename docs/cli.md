@@ -17,6 +17,8 @@ tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--bac
 tundravm measure MANIFEST [--variant NAME] [--scheme rtmr|azure|gcp] [--json] [--allow-placeholder] [--export-policy FILE]
 tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--attach] [--allow-simulated-artifact]
 tundravm attest  --endpoint URL --policy FILE [--nonce HEX] [--format text|json|markdown]
+tundravm sbom    [MANIFEST] [--out DIR] [--variant NAME] [--lockfile PATH] [--format spdx-json|cyclonedx-json|text|markdown] [--output FILE]
+tundravm evidence [RECIPE] [--variant NAME]... [--out DIR] [--lockfile PATH] [--policy FILE] [--bundle FILE] [--html FILE] [--format text|json]
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--format auto|text|github]
 tundravm status  RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
@@ -618,7 +620,7 @@ verdict: untrusted
 [exit 1]
 ```
 
-- `--endpoint` is `unix:PATH` (or a bare path) or `tcp://HOST:PORT`. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by forwarding the socket over SSH as above, or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). tdxs serves no http, so an `http://` or `https://` endpoint fails with `E_VALIDATION`.
+- `--endpoint` is `unix:PATH` (or a bare path) or `tcp://HOST:PORT`. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by forwarding the socket over SSH as above, or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). tdxs serves no http, so an `http://` or `https://` endpoint fails with `E_VALIDATION` (`Endpoint 'http://x' is http, which tdxs does not serve.`) before anything is contacted.
 - A `simulator` issuer's quote is not a TDX quote: its registers come from the issuer's `metadata` reply (`(simulator, issuer metadata)` in the header), and its nonce check reads the quote's first 32 bytes.
 - An unreachable endpoint or an issuer that replies with an `error` (`issuer error: tdx: failed to get raw quote: ...`) is `E_DEPLOYMENT`; a reply that is not a TDX quote is `E_MEASUREMENT`; a placeholder policy is refused with `E_MEASUREMENT`; a bad `--nonce` or policy file is `E_VALIDATION`.
 - `--format json` prints `{"checks", "endpoint", "nonce": {"value", "report_data", "verdict"}, "platform", "policy", "quote_version", "registers": {NAME: {"actual", "expected", "verdict"}}, "source": "quote"|"metadata", "trusted", "verdict"}` with sorted keys; `--format markdown` a table of the registers under the verdict.
@@ -798,19 +800,42 @@ The `verdict` holds `integrity` (`verified` when every artifact still hashes to 
 | `--html FILE` | Also write one self-contained HTML page (inline CSS, no scripts or external assets, every value escaped): a verdict banner (integrity, lock, reproducible, lint), the recipe, lockfile, lint and tools tables, a section per variant (artifacts, policy, SBOM, provenance), the notes and the members with their sha256 |
 | `--format text\|json` | How the index is printed: a summary with every member's sha256 (default), or `evidence.json` itself |
 
+After the [tutorial](tutorial.md)'s bake and `bake --verify-reproducible` (three variants, no `policy.json` beside them):
+
 ```console
-$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --bundle evidence.tar.gz --html evidence.html
+$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --html report.html --bundle evidence.tar.gz
+wrote build/evidence
+wrote evidence.tar.gz
+wrote report.html
 evidence 2023-11-14T22:13:20Z  verdict pass
-  recipe     node.py  digest 92efc03f419a
+  recipe     node.py  digest 2f0041479c07
   integrity  verified
   lock       current
-  reproduce  not checked
+  reproduce  reproducible
   lint       clean
+  debug/qemu  build/debug/disk.qcow2  sha256 b50a5a5aeaac  verified
   default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
+  dev/qemu  build/dev/disk.qcow2  sha256 9cfb8b5c2f31  verified
 members:
-  e10905461284...  bake-result.json
-  ...
+  3b2f3058f0f74fa6361994d400c8a76492f1aec1f93a73c98d1f78c97798b8c1  bake-result.json
+  37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570  lint.json
+  259d38ee530784c61ae5514f21c8dd11670025d41ece1992946c7b77224179e8  tundravm.lock
+  40aaef0e03ddc74a93c949daf7dbd6a33cdb766b3aa0a17da68675b22016e94e  variants/debug/sbom-qemu.spdx.json
+  d930bca4b8373fdbc3b055fb16a045efb1e170b8b9bfe704ea1b5780b1ec80d7  variants/default/sbom-qemu.spdx.json
+  fee9c7aac5a2bc7bbc328df750748b2c0da52bbd746f36309375642ca3206c99  variants/dev/sbom-qemu.spdx.json
+note: debug/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
+note: debug/qemu sbom: no mkosi package manifest at build/debug/debug.manifest: listing the packages the recipe declares, without versions
+note: no measurements policy for variant debug (build/debug/policy.json does not exist); write one with `tundravm measure ... --variant debug --export-policy build/debug/policy.json`
+note: default/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
+note: default/qemu sbom: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
+note: no measurements policy for variant default (build/default/policy.json does not exist); write one with `tundravm measure ... --variant default --export-policy build/default/policy.json`
+note: dev/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
+note: dev/qemu sbom: no mkosi package manifest at build/dev/dev.manifest: listing the packages the recipe declares, without versions
+note: no measurements policy for variant dev (build/dev/policy.json does not exist); write one with `tundravm measure ... --variant dev --export-policy build/dev/policy.json`
+[exit 0]
 ```
+
+The `wrote` lines go to stderr, the summary to stdout. Running it again with the same `SOURCE_DATE_EPOCH` writes a byte-identical `evidence.tar.gz`. With one byte appended to `build/default/disk.qcow2`, the summary reads `integrity  mismatch`, the artifact line ends in `mismatch`, `verdict fail`, and the command exits 1.
 
 ## Project status
 
@@ -824,9 +849,10 @@ members:
 | `source` | one per source build, built kernel and `EfiStub` package (`efi-stub`), by lock key: whether `OUT/.sources/<name>-<pin12>-<id8>` holds a complete, unmodified checkout of the locked pin (verified as `fetch` does) | `ok`, `stale` (another pin, an incomplete checkout, or one modified since the fetch: `checkout at PATH modified since the fetch (...); run tundravm fetch --force`), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
 | `tree` | `OUT/mkosi` (`--out`, default `build`) against what the recipe compiles to now, as `compile --check` | `ok`, `stale`, `missing` |
 | `artifact` | one per baked variant and target in `OUT/bake-result.json`: path, size, sha256 prefix, integrity (`unchecked`; with `--verify` the file is hashed: `verified` or `mismatch`), `reproducible` or `not reproducible` when `bake --verify-reproducible` recorded it (`"reproducible": true`, `false` or `null` in JSON), `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches, or on an integrity mismatch | `ok`, `stale`, `missing` |
+| `manifest` | one per baked variant: mkosi's package manifest beside the artifact (`<variant>.manifest`), which `sbom` and `evidence` read | `ok`, `missing` (the SBOM lists the declared packages only), `n/a` (a simulated artifact: nothing was installed) |
 | `backend` | the recipe file's `backend` and how many of its host tools `doctor` finds | `ok`, `missing`, `n/a` (no backend) |
 
-`next` follows the lifecycle: `tundravm lint` when there are errors, else `tundravm lock`, `tundravm fetch`, `tundravm compile --out OUT/mkosi`, `tundravm bake` (or `tundravm doctor` when the backend lacks a tool), and `everything is up to date` once every line is `ok` or `n/a`. It repeats `--variant`, `--out` and `--lockfile` as given (values from `[tool.tundravm]` are left out, so a configured project gets `next: tundravm lock`); a checkout modified since the fetch makes it `tundravm fetch --force`. `status` always exits 0. `--format json` prints one object per section (`recipe`, `lint`, `lock`, `sources`, `tree`, `artifacts`, `backend`), each with a `verdict`, plus `next`; `sources` and `artifacts` hold `items`. `--format markdown` prints a table per section.
+`next` follows the lifecycle: `tundravm lint` when there are errors, else `tundravm lock`, `tundravm fetch`, `tundravm compile --out OUT/mkosi`, `tundravm bake` (or `tundravm doctor` when the backend lacks a tool), and `everything is up to date` once every line is `ok` or `n/a` (a `manifest` line does not change `next`). It repeats `--variant`, `--out` and `--lockfile` as given (values from `[tool.tundravm]` are left out, so a configured project gets `next: tundravm lock`); a checkout modified since the fetch makes it `tundravm fetch --force`. `status` always exits 0. `--format json` prints one object per section (`recipe`, `lint`, `lock`, `sources`, `tree`, `artifacts`, `backend`), each with a `verdict`, plus `manifests`, a list of `{"variant", "path", "present"}` per baked variant, and `next`; `sources` and `artifacts` hold `items`. `--format markdown` prints a table per section.
 
 After `init --backend inprocess`, `lock` and `bake --backend inprocess`, adding a package to the recipe:
 
@@ -839,6 +865,8 @@ source    n/a      no source builds or kernels
 tree      stale    build/mkosi: 2 files differ from the recipe
 artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
 artifact  stale    dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  integrity unchecked (--verify hashes it)  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+manifest  n/a      build/default/default.manifest  simulated: nothing was installed
+manifest  n/a      build/dev/dev.manifest  simulated: nothing was installed
 backend   ok       inprocess: no host tools needed
 next: tundravm lock node.py
 ```

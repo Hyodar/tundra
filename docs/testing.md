@@ -107,7 +107,7 @@ def test_measure_placeholder(recipe, tmp_path):  # `recipe` is the plugin's mini
 
 For a full bake without tools, `bake_in_process(recipe, out=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `lock=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
 
-## Reproducibility and SBOM in tests
+## Reproducibility, SBOM and evidence in tests
 
 The in-process backend is deterministic, so a test can bake twice and compare digests, or let `bake(..., verify_reproducible=True)` do it (it raises `ReproducibilityError` on a mismatch, as `tundravm bake --verify-reproducible` does). `sbom(artifact, lock=...)` returns the bill of materials as values: `Sbom.packages` and `Sbom.sources` are tuples of `Component` (`name`, `version`, `url`, `ref`, `commit`, `installs`, ...), and `Sbom.render(format)` gives the document `tundravm sbom` writes.
 
@@ -137,6 +137,50 @@ def test_sbom_lists_the_declared_kernel(recipe, tmp_path):
 ```
 
 An in-process bake leaves no mkosi manifest, so its packages are the ones the recipe declares, unversioned (`Component.declared`, `Sbom.manifest_found` false). For a recipe with source builds, lock with a `resolver=` and assert on the pins: `{s.name: s.commit for s in bom.sources}`. To test against versioned packages, pass `manifest=` a JSON file in mkosi's shape (`{"manifest_version": 1, "config": {...}, "packages": [{"type", "name", "version", "architecture"}]}`).
+
+`evidence(recipe, out=tmp_path, lock=locked)` reads a bake back and returns its verdict as a value, so a test can assert that the bake would pass review: `Evidence.passed`, or `Evidence.index["verdict"]` for each check (`integrity`, `lock`, `reproducible`, `lint`). A bake never run with `verify_reproducible=True` reads `not checked`, which still passes; an artifact changed after the bake reads `mismatch` and fails. The `secret-in-file` and `secret-in-env` rules are tested like any lint rule: plant a key or token in a `File`, `Template` or `Service(env=...)` and assert the diagnostic, then check that `allow_secret=True` exempts it. The planted key needs a body after its PEM header: a header alone does not trigger the rule.
+
+```python
+from tundravm import File, Fragment, Package, Recipe, evidence, lint, lock
+from tundravm.testing import assert_diagnostic, bake_in_process
+
+KEY = (
+    "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+    "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n"
+    "-----END OPENSSH PRIVATE KEY-----\n"
+)
+
+
+def image(*items):
+    return Recipe(name="t", common=Fragment("t", items=(Package("linux-image-amd64"), *items)))
+
+
+def test_the_bake_passes_review(tmp_path):
+    recipe = image()
+    locked = lock(recipe, offline=True)
+    bake_in_process(recipe, out=tmp_path, lock=locked)
+    record = evidence(recipe, out=tmp_path, lock=locked)
+    assert record.passed, record.index["verdict"]
+    assert record.index["verdict"]["reproducible"] == "not checked"
+
+
+def test_a_changed_artifact_fails_review(tmp_path):
+    recipe = image()
+    locked = lock(recipe, offline=True)
+    (artifact,) = bake_in_process(recipe, out=tmp_path, lock=locked)
+    artifact.path.write_bytes(artifact.path.read_bytes() + b"x")
+    assert evidence(recipe, out=tmp_path, lock=locked).index["verdict"]["integrity"] == "mismatch"
+
+
+def test_a_baked_key_is_refused():
+    found = lint(image(File("/etc/app/deploy.key", KEY)))
+    assert_diagnostic(found, "secret-in-file", variant="default", subject="/etc/app/deploy.key")
+
+
+def test_allow_secret_exempts_a_lookalike():
+    found = lint(image(File("/etc/app/deploy.key", KEY, allow_secret=True)))
+    assert "secret-in-file" not in {d.code for d in found}
+```
 
 ## Composition fakes
 
