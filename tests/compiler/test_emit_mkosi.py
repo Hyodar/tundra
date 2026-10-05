@@ -29,6 +29,7 @@ from tundravm.declarative import (
     compile,
     lower,
 )
+from tundravm.declarative._compile import emit
 from tundravm.declarative.utils import BACKPORTS_TREE, Backports, EfiStub
 from tundravm.errors import ValidationError
 from tundravm.models import Phase
@@ -143,7 +144,7 @@ def test_compile_rejects_invalid_phase(tmp_path: Path) -> None:
     image.state.profiles["default"].phases[cast(Phase, "invalid-phase")] = []
 
     with pytest.raises(ValidationError) as excinfo:
-        image.compile(tmp_path / "mkosi")
+        emit(image, tmp_path / "mkosi")
 
     assert excinfo.value.code == "E_VALIDATION"
 

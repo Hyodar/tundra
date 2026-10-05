@@ -15,9 +15,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
-from ._image import Image
 from ._source import SOURCES_DIRNAME, is_fetched
 from .check import summarize
+from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
     INPROCESS,
     MANIFEST_KEY,
@@ -35,7 +35,7 @@ from .declarative.lifecycle import (
 from .diff import diff_against
 from .errors import TdxError
 from .formats import md_cell, md_table
-from .lockfile import lock_variants, recipe_digest
+from .lockfile import lock_variants
 from .models import BAKE_RESULT_FILENAME
 from .recipe import RecipeFile
 
@@ -159,9 +159,8 @@ def project_status(
     return replace(status, next=_next(status, invocation, out))
 
 
-def _recipe(loaded: RecipeFile, img: Image, names: tuple[str, ...], shown: str) -> StatusItem:
-    with img._operation_scope(names) as active:
-        digest = recipe_digest(img._recipe_payload(profile_names=active))
+def _recipe(loaded: RecipeFile, img: Lowered, names: tuple[str, ...], shown: str) -> StatusItem:
+    digest = img.select(names).digest()
     recipe = loaded.recipe
     data = {
         "path": shown,
@@ -186,16 +185,16 @@ def _lint(loaded: RecipeFile, names: tuple[str, ...]) -> StatusItem:
     return StatusItem("lint", verdict, detail, dict(counts))
 
 
-def _lock(img: Image, names: tuple[str, ...], path: Path) -> tuple[Lock | None, StatusItem]:
-    with img._operation_scope(names):
-        builds = img.lock_sources()
+def _lock(img: Lowered, names: tuple[str, ...], path: Path) -> tuple[Lock | None, StatusItem]:
+    scoped = img.select(names)
+    builds = scoped.lock_sources()
     data: dict[str, object] = {"path": str(path), "present": path.is_file()}
     if not path.is_file():
         data.update(up_to_date=False, drift=[], unpinned=sorted(builds), version=None)
         return None, StatusItem("lock", "missing", f"{path}: no lockfile", data)
     try:
         lock = read_lock(path)
-        drift = img.lock_status(path, profiles=names)
+        drift = scoped.lock_status(path)
     except TdxError as exc:
         data.update(up_to_date=False, drift=[], unpinned=sorted(builds), version=None)
         return None, StatusItem("lock", "stale", f"{path}: unreadable: {exc}", data)
@@ -220,10 +219,9 @@ def _lock(img: Image, names: tuple[str, ...], path: Path) -> tuple[Lock | None, 
 
 
 def _sources(
-    img: Image, names: tuple[str, ...], lock: Lock | None, out: Path
+    img: Lowered, names: tuple[str, ...], lock: Lock | None, out: Path
 ) -> tuple[StatusItem, ...]:
-    with img._operation_scope(names):
-        builds = img.lock_sources()
+    builds = img.select(names).lock_sources()
     pins = {} if lock is None else {f.name: f for f in lock.lockfile.fetches if f.name is not None}
     root = out / SOURCES_DIRNAME
     simulated = img.backend is not None and img.backend.name == INPROCESS
@@ -270,13 +268,13 @@ def _other_checkouts(root: Path, name: str, path: Path) -> list[str]:
     )
 
 
-def _tree(img: Image, names: tuple[str, ...], lock: Lock | None, path: Path) -> StatusItem:
+def _tree(img: Lowered, names: tuple[str, ...], lock: Lock | None, path: Path) -> StatusItem:
     data: dict[str, object] = {"path": str(path), "present": path.is_dir(), "changed": []}
     if not path.is_dir():
         return StatusItem("tree", "missing", f"{path}: not compiled", data)
     try:
-        with using_lock(img, lock):
-            result = diff_against(img, path, profiles=names)
+        with using_lock(img, lock) as pinned:
+            result = diff_against(pinned, path, profiles=names)
     except TdxError as exc:
         return StatusItem("tree", "n/a", f"{path}: cannot compile: {exc}", data)
     changed = sorted(change.path for change in result.changes)
@@ -289,7 +287,7 @@ def _tree(img: Image, names: tuple[str, ...], lock: Lock | None, path: Path) -> 
 
 
 def _artifacts(
-    img: Image, names: tuple[str, ...], lock: Lock | None, manifest: Path
+    img: Lowered, names: tuple[str, ...], lock: Lock | None, manifest: Path
 ) -> tuple[StatusItem, ...]:
     if not manifest.is_file():
         return tuple(
@@ -318,7 +316,7 @@ def _artifacts(
 
 
 def _current_digests(
-    img: Image, lock: Lock | None, artifacts: Sequence[Artifact]
+    img: Lowered, lock: Lock | None, artifacts: Sequence[Artifact]
 ) -> tuple[str | None, set[str]]:
     """The tree digest the baked variants compile to now, and the recipe digests to accept."""
     baked = tuple(sorted({artifact.variant for artifact in artifacts}))
@@ -332,10 +330,7 @@ def _current_digests(
     scopes = {tuple(sorted(declared)), baked}
     if lock is not None and set(lock_variants(lock.lockfile)) <= declared:
         scopes.add(lock_variants(lock.lockfile))
-    recipes: set[str] = set()
-    for scope in scopes:
-        with img._operation_scope(scope) as active:
-            recipes.add(recipe_digest(img._recipe_payload(profile_names=active)))
+    recipes = {img.select(scope).digest() for scope in scopes}
     return tree, recipes
 
 

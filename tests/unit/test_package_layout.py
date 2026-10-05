@@ -1,7 +1,7 @@
 import importlib
 
 CORE_MODULES = [
-    "tundravm._image",
+    "tundravm.declarative._lowered",
     "tundravm.compiler",
     "tundravm.backends",
     "tundravm.lockfile",

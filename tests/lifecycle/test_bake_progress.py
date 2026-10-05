@@ -300,7 +300,6 @@ def test_bake_forwards_logger_records_only_while_attached(tmp_path: Path) -> Non
     )
     logged = [e for e in capture.events if e.extra.get("source") == "logger"]
     assert [e.extra["operation"] for e in logged] == ["bake_profile_start", "bake_profile_complete"]
-    assert img.logger.reporter is None
 
 
 def test_bake_without_reporter_records_digests_and_durations(tmp_path: Path) -> None:

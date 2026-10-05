@@ -47,6 +47,7 @@ from tundravm.declarative import (
     read_lock,
     write_lock,
 )
+from tundravm.declarative._compile import emit
 from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from tundravm.measure import PlaceholderMeasurementWarning
@@ -105,7 +106,7 @@ def test_compile_tree_round_trip_matches_lowered_compile(tmp_path: Path) -> None
     assert compile(recipe).digest == tree.digest
 
     expected = tmp_path / "image"
-    lower(recipe).compile(expected, profiles=("default", "azure"))
+    emit(lower(recipe).select(("default", "azure")), expected)
     written = tmp_path / "tree"
     (written / "stale").mkdir(parents=True)
     (written / "stale" / "mkosi.conf").write_text("old\n")

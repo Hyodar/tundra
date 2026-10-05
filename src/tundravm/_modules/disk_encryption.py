@@ -15,7 +15,7 @@ from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
-    from tundravm._image import Image
+    from tundravm.declarative._lowered import Lowered
 
 DISK_ENCRYPTION_BUILD_PACKAGES = (
     "golang",
@@ -155,7 +155,7 @@ class DiskEncryption(Module):
                 ),
             )
 
-    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+    def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
         keys: dict[str, KeySpec] = {}
         for module in image.applied_modules(profile, inherited=True):
             if isinstance(module, KeyGeneration):

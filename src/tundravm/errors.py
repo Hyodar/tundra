@@ -189,7 +189,7 @@ class StateError(TdxError):
 
 
 class LintError(TdxError):
-    """``bake()`` refused: ``Image.check()`` reported error-level diagnostics."""
+    """``bake()`` refused: the compiler's checks reported error-level diagnostics."""
 
     def __init__(
         self,

@@ -1,7 +1,7 @@
 """Source builds: a fetched source plus a build recipe, pinned through the lockfile.
 
 ``declarative.lower`` turns each declarative ``Build`` into a :class:`SourceBuild`
-and hands it to ``Image.build_from``; the internal modules declare theirs directly.
+recorded on its profile's state; the internal modules declare theirs directly.
 
 ``install=`` lists what lands in the image, in order: :meth:`Install.artifact` is
 the recipe's own output, :meth:`Install.file` and :meth:`Install.tree` copy further

@@ -530,6 +530,25 @@ def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
     assert f"pinned={SHA_A[:7]}" in summary
 
 
+def test_inspect_renders_hooks_at_the_pins_it_shows(tmp_path: Path) -> None:
+    path = tmp_path / "recipe.py"
+    path.write_text(RECIPE_FILE.format(repo=REPO), encoding="utf-8")
+    write_lock(lock(load_recipe(path), resolver=_Fixed(SHA_A)), tmp_path / "pins.lock")
+
+    def shown(*flags: str) -> tuple[str, object]:
+        info = json.loads(_inspect(path, "--json", *flags))["variants"]["default"]
+        return info["hooks"]["build"][0], info["sources"][0]["pinned"]
+
+    hook, pinned = shown()
+    assert "not pinned" in hook and pinned is None
+    hook, pinned = shown("--lockfile", str(tmp_path / "pins.lock"))
+    assert "not pinned" not in hook and SHA_A[:12] in hook and pinned == SHA_A[:7]
+    (tmp_path / "build").mkdir()
+    (tmp_path / "pins.lock").rename(tmp_path / "build" / "tundravm.lock")
+    assert shown() == (hook, pinned)
+    assert f"pinned={SHA_A[:7]}" in _inspect(path) and SHA_A[:12] in _inspect(path)
+
+
 def test_check_rule_source_unpinned() -> None:
     recipe = _recipe(_build())
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]

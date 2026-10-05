@@ -4,9 +4,9 @@ A :class:`Recipe` is an immutable value: recipe-wide settings, a ``common``
 :class:`Fragment` of declarations and the :class:`Variant` overlays.
 :func:`resolve` expands one variant, :func:`lint` reports every problem as a
 :class:`Diagnostic`, and :func:`lower` hands it to the compiler, which every CLI
-command consumes. The lifecycle (:func:`compile`, :func:`lint`,
-:func:`lock`, :func:`bake`, :func:`measure`, :func:`deploy`, :func:`doctor`)
-takes a recipe and explicit inputs and returns explicit results.
+command consumes. The lifecycle (:func:`compile`, :func:`lint`, :func:`lock`,
+:func:`fetch`, :func:`bake`, :func:`measure`, :func:`deploy`, :func:`doctor`) takes
+a recipe and explicit inputs and returns explicit results.
 """
 
 from tundravm.policy import Policy
@@ -17,6 +17,7 @@ from .lifecycle import (
     Backend,
     Deployment,
     Entry,
+    FetchedSource,
     Gcp,
     Lock,
     Measurements,
@@ -28,6 +29,7 @@ from .lifecycle import (
     deploy,
     diff,
     doctor,
+    fetch,
     lint,
     lock,
     lock_status,
@@ -98,6 +100,7 @@ __all__ = [
     "Disk",
     "Dotnet",
     "Entry",
+    "FetchedSource",
     "File",
     "Fragment",
     "Gcp",
@@ -142,6 +145,7 @@ __all__ = [
     "deploy",
     "diff",
     "doctor",
+    "fetch",
     "identity",
     "lint",
     "load",

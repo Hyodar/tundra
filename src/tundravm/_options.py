@@ -1,4 +1,4 @@
-"""mkosi build-tree options of the lowered :class:`~tundravm._image.Image` (internal)."""
+"""mkosi build-tree options of a lowered recipe (``declarative._lowered.Lowered``; internal)."""
 
 from __future__ import annotations
 

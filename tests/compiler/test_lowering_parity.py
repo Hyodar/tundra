@@ -16,7 +16,6 @@ import pytest
 
 from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
 from tundravm.declarative import compile, load, lower
-from tundravm.lockfile import recipe_digest
 from tundravm.templates import TEMPLATES, render_recipe_template
 from tundravm.testing import assert_tree
 
@@ -51,8 +50,7 @@ def measure(path: Path) -> dict[str, Any]:
     names = tuple(variant.name for variant in recipe.variants)
 
     def recipe_of(selected: tuple[str, ...]) -> str:
-        payload = lower(recipe, variants=selected)._recipe_payload(profile_names=selected)
-        return recipe_digest(payload)
+        return lower(recipe, variants=selected).select(selected).digest()
 
     return {
         "tree": compile(recipe).digest,

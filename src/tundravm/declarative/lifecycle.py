@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Literal, get_args
 
 from tundravm import check as _check
-from tundravm._image import Image
 from tundravm._source import (
     FETCH_MARKER,
     SOURCES_DIRNAME,
@@ -69,6 +68,8 @@ from tundravm.models import (
 )
 from tundravm.observability import Event, Progress, Reporter, TextReporter
 
+from . import _bake, _compile
+from ._lowered import LOCK_FILENAME, Lowered
 from .lower import lower
 from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
 from .resolve import lint as _resolution_lint
@@ -77,7 +78,6 @@ Scheme = Literal["rtmr", "azure", "gcp"]
 BackendKind = Literal["lima", "nix", "local", "inprocess"]
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
-LOCK_FILENAME = "tundravm.lock"
 INPROCESS = "inprocess"
 MANIFEST_KEY = "declarative"
 """Top-level ``bake-result.json`` key holding the recipe/tree digests and ``simulated``."""
@@ -303,29 +303,23 @@ def variant_names(recipe: Recipe, variants: Sequence[str] | None) -> tuple[str, 
 
 
 @contextmanager
-def using_lock(img: Image, locked: Lock | None) -> Iterator[Path]:
-    """Point *img* at a scratch build dir holding *locked* (or no lockfile) while it runs."""
-    saved = img.build_dir
+def using_lock(img: Lowered, locked: Lock | None) -> Iterator[Lowered]:
+    """*img* reading a scratch copy of *locked* (or no lockfile at all) as its lockfile."""
     with tempfile.TemporaryDirectory(prefix="tundravm-lock-") as tmp:
-        img.build_dir = Path(tmp)
+        path = Path(tmp) / LOCK_FILENAME
         if locked is not None:
-            (img.build_dir / LOCK_FILENAME).write_text(locked.text(), encoding="utf-8")
-        try:
-            yield img.build_dir
-        finally:
-            img.build_dir = saved
+            path.write_text(locked.text(), encoding="utf-8")
+        yield replace(img, lock_file=path)
 
 
-def compile_image(img: Image, profiles: Sequence[str] | None, *, locked: Lock | None) -> Tree:
-    """The tree *img* compiles to for *profiles*, without touching its compile cache."""
-    saved = (img._last_compile_digest, img._last_compile_path, img._last_compile_emission)
-    with tempfile.TemporaryDirectory(prefix="tundravm-tree-") as tmp:
-        try:
-            with using_lock(img, locked):  # never the working directory's build/ lockfile
-                result = img.compile(Path(tmp), force=True, profiles=profiles)
-        finally:
-            img._last_compile_digest, img._last_compile_path, img._last_compile_emission = saved
-        return read_tree(Path(tmp), variants=result.profiles)
+def compile_image(img: Lowered, profiles: Sequence[str] | None, *, locked: Lock | None) -> Tree:
+    """The tree *img* compiles to for *profiles*, pinned by *locked* alone."""
+    with (
+        tempfile.TemporaryDirectory(prefix="tundravm-tree-") as tmp,
+        using_lock(img.select(profiles), locked) as pinned,
+    ):
+        _compile.emit(pinned, Path(tmp))
+        return read_tree(Path(tmp), variants=pinned.active)
 
 
 def read_tree(
@@ -430,7 +424,7 @@ def _foreign_variant_globs(root: Path, compiled: Sequence[str]) -> list[str]:
 
 
 def check_report(
-    recipe: Recipe | None, img: Image | None, *, variants: Sequence[str] | None
+    recipe: Recipe | None, img: Lowered | None, *, variants: Sequence[str] | None
 ) -> list[_check.Diagnostic]:
     """Declarative and compiler diagnostics in the compiler's report form.
 
@@ -502,7 +496,7 @@ def _pin(fetch: LockedFetch) -> Pin:
 
 
 def lock_image(
-    img: Image,
+    img: Lowered,
     profiles: Sequence[str] | None,
     *,
     previous: Lock | None = None,
@@ -513,12 +507,12 @@ def lock_image(
     """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
 
     The sources are the source builds and, outside ``nethermind-v1``, the built
-    kernels' sources (``kernel``, or ``kernel-<variant>``; see ``Image.lock_sources``).
+    kernels' sources (``kernel``, or ``kernel-<variant>``; see ``Lowered.lock_sources``).
     """
     offline = offline or img.policy.network_mode == "offline"
-    with img._operation_scope(profiles) as names:
-        payload = img._recipe_payload(profile_names=names)
-        builds = img.lock_sources()
+    scoped = img.select(profiles)
+    payload = scoped.payload()
+    builds = scoped.lock_sources()
     unknown = [name for name in update if name not in builds]
     if unknown:
         raise ValidationError(
@@ -580,7 +574,7 @@ def drift_diagnostics(drift_lines: Iterator[tuple[str, str, str]]) -> tuple[Diag
 
 
 def image_lock_status(
-    img: Image,
+    img: Lowered,
     locked: Lock,
     profiles: Sequence[str] | None,
     *,
@@ -592,8 +586,7 @@ def image_lock_status(
     *partial* compares only the selected profiles' sections
     (see :func:`~tundravm.lockfile.compare_lock`).
     """
-    with img._operation_scope(profiles):
-        drift = img._lock_drift(locked.lockfile, resolver=resolver, partial=partial)
+    drift = img.select(profiles).drift(locked.lockfile, resolver=resolver, partial=partial)
     details = drift.details
 
     def lines() -> Iterator[tuple[str, str, str]]:
@@ -674,7 +667,7 @@ class FetchedSource:
 
 
 def fetch_image(
-    img: Image,
+    img: Lowered,
     profiles: Sequence[str] | None,
     *,
     locked: Lock | None,
@@ -685,14 +678,13 @@ def fetch_image(
     """Check out every source of *img*'s *profiles* under ``<out>/.sources``.
 
     The sources are the source builds and, outside ``nethermind-v1``, the built
-    kernels' sources (``Image.lock_sources``).
+    kernels' sources (``Lowered.lock_sources``).
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
     refuses. A checkout whose marker already names its pin is kept.
     """
-    with img._operation_scope(profiles):
-        builds = img.lock_sources()
+    builds = img.select(profiles).lock_sources()
     if not builds:
         return ()
     prior = {} if locked is None else _named_pins(locked)
@@ -721,7 +713,7 @@ def fetch_image(
 
 
 def _resolve_for_fetch(
-    img: Image, pending: Mapping[str, NamedSource], *, resolver: Resolver | None, offline: bool
+    img: Lowered, pending: Mapping[str, NamedSource], *, resolver: Resolver | None, offline: bool
 ) -> dict[str, str]:
     """Pins for the *pending* sources no lockfile pins, under the recipe's policy."""
     if img.policy.mutable_ref_policy == "error":
@@ -842,7 +834,7 @@ class _LineStream(io.StringIO):
 
 
 def bake_image(
-    img: Image,
+    img: Lowered,
     profiles: Sequence[str] | None,
     *,
     locked: Lock | None,
@@ -872,29 +864,20 @@ def bake_image(
     lock_path = destination / LOCK_FILENAME
     with ExitStack() as stack:
         used = _bake_lock(locked, lock_path, lock_source, stack)
-        saved = (img.build_dir, img.backend, img.lock_file, img.fetched_pins)
-        img.build_dir = destination
-        img.lock_file = None if used == lock_path else used
-        if backend is not None:
-            img.backend = backend
-        try:
-            simulated = img.backend is not None and img.backend.name == INPROCESS
-            if fetch and img.fetches_sources and not simulated:
-                pinned = locked if locked is not None else _lock_at(lock_path)
-                fetched = fetch_image(
-                    img,
-                    profiles,
-                    locked=pinned,
-                    out=destination,
-                    resolver=resolver,
-                    reporter=reporter,
-                )
-                img.fetched_pins = {source.name: source.locked() for source in fetched}
-            result = img.bake(
-                destination, frozen=locked is not None, reporter=reporter, profiles=profiles
+        baking = replace(
+            img.select(profiles),
+            build_dir=destination,
+            lock_file=None if used == lock_path else used,
+            backend=img.backend if backend is None else backend,
+        )
+        simulated = baking.backend is not None and baking.backend.name == INPROCESS
+        if fetch and baking.fetches_sources and not simulated:
+            pinned = locked if locked is not None else _lock_at(lock_path)
+            fetched = fetch_image(
+                baking, None, locked=pinned, out=destination, resolver=resolver, reporter=reporter
             )
-        finally:
-            img.build_dir, img.backend, img.lock_file, img.fetched_pins = saved
+            baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
+        result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
     tree = read_tree(destination / "mkosi", warn=_tree_warning(reporter))
     recipe_digest = (
         locked.recipe_digest

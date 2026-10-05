@@ -19,7 +19,7 @@ from .backends.base import is_mkosi_state
 from .formats import annotation_path, md_cell, md_fence, md_table, resolve_format, workflow_command
 
 if TYPE_CHECKING:
-    from ._image import Image
+    from .declarative._lowered import Lowered
 
 ChangeStatus = Literal["added", "removed", "modified", "mode"]
 
@@ -159,7 +159,7 @@ def diff_trees(old: Path, new: Path, *, ignore: Sequence[str] = ()) -> TreeDiff:
 
 
 def diff_against(
-    image: Image, against: str | Path, *, profiles: Sequence[str] | None = None
+    image: Lowered, against: str | Path, *, profiles: Sequence[str] | None = None
 ) -> TreeDiff:
     """Diff the tree at *against* to what *image* compiles to for *profiles*.
 
@@ -168,22 +168,17 @@ def diff_against(
     Profile directories on disk that were not compiled are left out, so a tree
     holding more profiles than are active is not reported as removed.
     """
+    from .declarative._compile import emit
+
     root = Path(against)
-    saved = (image._last_compile_digest, image._last_compile_path, image._last_compile_emission)
+    scoped = image.select(profiles)
     with tempfile.TemporaryDirectory(prefix="tundravm-diff-") as tmp:
-        try:
-            result = image.compile(tmp, force=True, profiles=profiles)
-        finally:
-            (
-                image._last_compile_digest,
-                image._last_compile_path,
-                image._last_compile_emission,
-            ) = saved
-        return diff_trees(root, Path(tmp), ignore=_foreign_profile_globs(root, result.profiles))
+        emit(scoped, Path(tmp))
+        return diff_trees(root, Path(tmp), ignore=_foreign_profile_globs(root, scoped.active))
 
 
 def cmd_diff(
-    args: argparse.Namespace, out: TextIO, img: Image, *, profiles: Sequence[str] | None = None
+    args: argparse.Namespace, out: TextIO, img: Lowered, *, profiles: Sequence[str] | None = None
 ) -> int:
     against = args.against if args.against is not None else Path(img.build_dir) / "mkosi"
     result = diff_against(img, against, profiles=profiles)

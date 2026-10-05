@@ -12,7 +12,7 @@ from tundravm.backends.inprocess import TARGET_FILENAMES
 from tundravm.declarative import Recipe, compile, lint
 from tundravm.recipe import load_image, load_recipe
 
-INTERNAL_MODULES = ("tundravm._image", "tundravm._modules", "tundravm._options", "tundravm._source")
+INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source")
 
 INHERENT_WARNINGS = frozenset({"source-unpinned"})
 """Warning codes an example may report: unpinned refs clear with ``tundravm lock``."""

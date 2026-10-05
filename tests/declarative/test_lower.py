@@ -39,9 +39,9 @@ from tundravm.declarative import (
     lower,
     resolve,
 )
+from tundravm.declarative._compile import emit
 from tundravm.declarative.lower import inject_after_init
 from tundravm.errors import ValidationError
-from tundravm.lockfile import recipe_digest
 from tundravm.models import Kernel as FluentKernel
 
 TOOLS = "https://example.com/tundra-tools.git"
@@ -136,7 +136,7 @@ fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` d
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     lowered = lower(declarative_recipe())
 
-    assert recipe_digest(lowered._recipe_payload(profile_names=PROFILES)) == EQUIVALENCE_RECIPE
+    assert lowered.select(PROFILES).digest() == EQUIVALENCE_RECIPE
     assert compile(declarative_recipe()).digest == EQUIVALENCE_TREE
     assert [(d.level, d.code, d.profile, d.subject) for d in check(lowered)] == [
         ("error", "kernel-missing", "default", None),
@@ -147,7 +147,7 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
         ("warning", "source-unpinned", "default", "secret-delivery"),
     ]
 
-    lowered.compile(tmp_path / "lowered", profiles=PROFILES)
+    emit(lowered.select(PROFILES), tmp_path / "lowered")
     runtime_init = (tmp_path / "lowered/default/mkosi.extra/usr/bin/runtime-init").read_text()
     order = ["key-gen", "disk-setup", "test -d", "echo up", "secret-delivery"]
     assert [runtime_init.index(marker) for marker in order] == sorted(
@@ -408,7 +408,7 @@ def test_service_after_init_false_skips_the_runtime_init_dependency(tmp_path: Pa
         Service("late", "/usr/bin/late"),
         Init("ready", "true"),
     )
-    lower(recipe).compile(tmp_path / "tree")
+    emit(lower(recipe), tmp_path / "tree")
     units = tmp_path / "tree" / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
     assert "runtime-init.service" not in (units / "early.service").read_text()
     assert "After=runtime-init.service" in (units / "late.service").read_text()

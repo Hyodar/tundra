@@ -13,16 +13,18 @@ import sys
 import traceback
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-from ._image import Image
 from .backends.base import BuildBackend
 from .declarative.model import Recipe
 from .errors import TdxError, ValidationError
 from .observability import display_path
+
+if TYPE_CHECKING:
+    from .declarative._lowered import Lowered
 
 RECIPE_OBJECT_NAMES: tuple[str, ...] = ("recipe", "RECIPE")
 """Module-level names checked first when looking for a ``Recipe``."""
@@ -64,7 +66,7 @@ def load_image(
     *,
     attr: str | None = None,
     extra_paths: Sequence[str | Path] = (),
-) -> Image:
+) -> Lowered:
     """The recipe file at *path*, lowered for the compiler with its ``backend``."""
     return load_file(path, attr=attr, extra_paths=extra_paths).lowered()
 
@@ -317,7 +319,7 @@ class RecipeFile:
 
     path: Path
     recipe: Recipe
-    image: Image | None
+    image: Lowered | None
     backend: BuildBackend | None
 
     @property
@@ -325,14 +327,12 @@ class RecipeFile:
         """Declared variant names."""
         return tuple(v.name for v in self.recipe.variants)
 
-    def lowered(self) -> Image:
-        """The compiler's image (every variant lowered), with the file's backend."""
+    def lowered(self) -> Lowered:
+        """The recipe with every variant lowered, building with the file's backend."""
         if self.image is None:
             from .declarative.lower import lower
 
-            self.image = lower(self.recipe)
-            if self.backend is not None:
-                self.image.backend = self.backend
+            self.image = replace(lower(self.recipe), backend=self.backend)
         return self.image
 
 

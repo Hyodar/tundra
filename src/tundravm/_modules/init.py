@@ -1,8 +1,8 @@
 """Init — minimal runtime-init script builder.
 
 Lowering registers bash fragments per profile
-(``ProfileState.init_scripts``); during ``compile()`` the Image hands each
-profile's merged fragments to its Init, which sorts them by priority and
+(``ProfileState.init_scripts``); compiling hands each profile's merged
+fragments to an Init, which sorts them by priority and
 generates ``/usr/bin/runtime-init`` plus ``runtime-init.service``.
 """
 

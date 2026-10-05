@@ -15,6 +15,7 @@ from tundravm.declarative import (
     Variant,
     lower,
 )
+from tundravm.declarative._compile import emit
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.models import RecipeState
 
@@ -34,7 +35,7 @@ def _recipe(*items: Declaration) -> Recipe:
 
 def test_recompile_removes_stale_variant_files(tmp_path: Path) -> None:
     dest = tmp_path / "mkosi"
-    lower(_recipe(File("/etc/old.conf", "old\n"))).compile(dest, profiles=VARIANTS)
+    emit(lower(_recipe(File("/etc/old.conf", "old\n"))).select(VARIANTS), dest)
     old_path = dest / "default" / "mkosi.extra" / "etc" / "old.conf"
     assert old_path.exists()
     stray = dest / "default" / "stray.txt"
@@ -42,7 +43,7 @@ def test_recompile_removes_stale_variant_files(tmp_path: Path) -> None:
     root_note = dest / "NOTES.md"
     root_note.write_text("kept\n", encoding="utf-8")
 
-    lower(_recipe()).compile(dest, profiles=VARIANTS)
+    emit(lower(_recipe()).select(VARIANTS), dest)
 
     assert not old_path.exists()
     assert not stray.exists()
@@ -53,11 +54,11 @@ def test_recompile_removes_stale_variant_files(tmp_path: Path) -> None:
 def test_compile_of_one_variant_leaves_other_variants_alone(tmp_path: Path) -> None:
     image = lower(_recipe())
     dest = tmp_path / "mkosi"
-    image.compile(dest, profiles=VARIANTS)
+    emit(image.select(VARIANTS), dest)
     marker = dest / "dev" / "marker"
     marker.write_text("x", encoding="utf-8")
 
-    image.compile(dest, force=True, profiles=("default",))
+    emit(image.select(("default",)), dest)
 
     assert marker.exists()
     assert (dest / "default" / "mkosi.conf").exists()
@@ -85,16 +86,16 @@ def _init_service_count(state: RecipeState, profile: str) -> int:
 
 def test_recompile_with_more_variants_does_not_duplicate_runtime_init(tmp_path: Path) -> None:
     img = lower(_init_recipe(Variant("dev", add=Fragment("dev", items=(Package("vim"),)))))
-    payload = img._recipe_payload(profile_names=("default", "dev"))
+    payload = img.select(VARIANTS).payload()
 
-    img.compile(tmp_path / "first")
-    img.compile(tmp_path / "second", profiles=("default", "dev"))
-    img.compile(tmp_path / "third", force=True)
+    emit(img, tmp_path / "first")
+    emit(img.select(VARIANTS), tmp_path / "second")
+    emit(img, tmp_path / "third")
 
     # Compiling generates runtime-init into the tree only, never into the declared state.
     assert _init_service_count(img.state, "default") == 0
     assert _init_service_count(img.state, "dev") == 0
-    assert img._recipe_payload(profile_names=("default", "dev")) == payload
+    assert img.select(VARIANTS).payload() == payload
     for tree in ("first", "second", "third"):
         assert (tmp_path / tree / "default/mkosi.extra/usr/bin/runtime-init").is_file()
     assert (tmp_path / "second/dev/mkosi.extra/usr/bin/runtime-init").is_file()
@@ -105,7 +106,7 @@ def test_bake_after_compile_across_variants(
 ) -> None:
     img = lower(_init_recipe(Variant("azure", target="azure")))
 
-    img.compile(tmp_path / "preview")
+    emit(img, tmp_path / "preview")
     result, artifacts = bake_image(
         img,
         ("default", "azure"),

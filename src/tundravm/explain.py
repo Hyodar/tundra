@@ -1,4 +1,4 @@
-"""Dry-run description of what an :class:`~tundravm._image.Image` recipe will produce.
+"""Dry-run description of what a lowered recipe will produce.
 
 ``describe()`` returns a JSON-serializable, deterministically ordered dict for
 one variant without compiling or baking; ``render()`` turns that dict into a
@@ -19,10 +19,11 @@ from .declarative.model import Declaration, Resolved
 from .declarative.resolve import describe as describe_identity
 from .declarative.resolve import identity
 from .formats import md_cell, md_table
+from .lockfile import LockedFetch
 from .models import InitScriptEntry, Kernel, ProfileState, UnitAction, unit_name
 
 if TYPE_CHECKING:
-    from ._image import Image
+    from .declarative._lowered import Lowered
 
 PREVIEW_WIDTH = 80
 SHORT_DIGEST_LEN = 12
@@ -35,7 +36,7 @@ _IMAGE_PARENT: Any = object()
 
 
 def describe(
-    image: Image,
+    image: Lowered,
     *,
     profile: str | None = None,
     parent: str | None = _IMAGE_PARENT,
@@ -46,16 +47,18 @@ def describe(
     Keys are sorted; lists are sorted by their natural identity (path, name,
     ...) except hooks, which keep registration order within each phase.
     File and init-script contents are summarized as short sha256 digests.
-    A variant built on another is described as built: merged over it.
+    A variant built on another is described as built: merged over it. Hooks and
+    sources show the pins of the lockfile *image* reads, as compile renders them.
     *parent* and *fragments* are the recipe's ``Variant.parent`` and the
     fragment names the variant resolved to.
     """
-    selected = image._resolve_operation_profile(profile)
-    state = image.state
+    selected = image.profile(profile)
+    pins = image.build_pins()
+    state = image.pinned_state(pins)
     profile_state = state.effective_profile(selected)
     kernel = image.kernel_for(selected)
     kernel_source = image.kernel_source(selected)
-    kernel_pin = None if kernel_source is None else kernel_source.pin_from(image.source_pins())
+    kernel_pin = None if kernel_source is None else kernel_source.pin_from(pins)
     return {
         "arch": state.arch,
         "base": state.base,
@@ -131,7 +134,7 @@ def describe(
             for svc in sorted(profile_state.services, key=lambda item: item.name)
         ],
         "skeleton_files": _describe_files(profile_state.skeleton_files),
-        "sources": _describe_sources(image, profile_state),
+        "sources": _describe_sources(profile_state, pins),
         "targets": list(profile_state.output_targets),
         "units": _describe_units(profile_state),
         "templates": [
@@ -484,8 +487,9 @@ def _describe_files(entries: Sequence[Any]) -> list[dict[str, object]]:
     ]
 
 
-def _describe_sources(image: Image, profile_state: ProfileState) -> list[dict[str, object]]:
-    pins = image.source_pins() if profile_state.source_builds else {}
+def _describe_sources(
+    profile_state: ProfileState, pins: Mapping[str, LockedFetch]
+) -> list[dict[str, object]]:
     described: list[dict[str, object]] = []
     for name, spec in sorted(profile_state.source_builds.items()):
         pin = spec.pin_from(pins)

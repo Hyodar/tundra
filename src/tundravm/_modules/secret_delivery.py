@@ -16,7 +16,7 @@ from tundravm.errors import ValidationError
 from tundravm.models import SecretSpec
 
 if TYPE_CHECKING:
-    from tundravm._image import Image
+    from tundravm.declarative._lowered import Lowered
 
 SECRET_DELIVERY_BUILD_PACKAGES = (
     "golang",
@@ -71,7 +71,7 @@ class SecretDelivery(Module):
             return self.store_at.name
         return self.store_at or None
 
-    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+    def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
         store = self.store_disk
         if store is None:
             return

@@ -41,7 +41,9 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 ### Changed
 
-- Internal: lowering writes `RecipeState` directly from resolved declarations (`declarative/state.py`); the retired fluent declaration methods, `Module.apply`/`configure` and the platform classes are gone; `_image.py` holds lifecycle glue only. No output change (parity fixture over 12 recipes and 29 variants).
+- Internal: `_image.py` is gone; `lower()` returns the frozen `Lowered` (selection, lockfile and build dir are copies), compiling lives in `declarative/_compile.py` and baking in `declarative/_bake.py`; the unused compile cache is removed. No output change.
+- `inspect --lockfile`: inspect renders Hooks at the lockfile's pins, as compile does. `fetch` and `FetchedSource` are exported from `tundravm` and `tundravm.declarative`. The Http-kernel-without-sha256 error names `sha256=` or a git source.
+- Internal: lowering writes `RecipeState` directly from resolved declarations (`declarative/state.py`); the retired fluent declaration methods, `Module.apply`/`configure` and the platform classes are gone; lifecycle glue now lives in `declarative/_lowered.py`, `_compile.py` and `_bake.py`. No output change (parity fixture over 12 recipes and 29 variants).
 - Kernel sources are locked and fetched on the host in the current dialect: `kernel` (or `kernel-<variant>` when a variant's source differs) lockfile pins, the build script copies the mounted checkout (no `.git`, so the version string stays clean), `inspect` shows `pinned=`, `source-unpinned` covers kernels; http kernels no longer pull `curl` into the build. Re-lock recipes with a built kernel.
 - Current-dialect source hooks copy host-fetched checkouts instead of cloning; unpinned hooks fail with a pointer to `tundravm lock` and `tundravm fetch`; `$BUILDDIR` falls back to `$BUILDROOT/build` in source and kernel scripts (mkosi 26 sets it only with `BuildDirectory=`); existing locks for current-dialect recipes with source builds need re-locking.
 
@@ -61,7 +63,7 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 ### Removed
 
-- The fluent `Image`, `Profile` and `Module` API (`img.install()`, `img.service()`, `img.profile()`, `img.apply()`, `Module` subclasses, `MkosiOptions`, `SourceBuild`/`GitSource`/`HttpSource`/`GoBuild`/`CargoBuild`/`DotnetBuild`/`ScriptBuild`). It remains as internal lowering machinery (`tundravm._image`, `tundravm._modules`, ...), not as API. Use `Recipe`, `Fragment` and the declarations.
+- The fluent `Image`, `Profile` and `Module` API (`img.install()`, `img.service()`, `img.profile()`, `img.apply()`, `Module` subclasses, `MkosiOptions`, `SourceBuild`/`GitSource`/`HttpSource`/`GoBuild`/`CargoBuild`/`DotnetBuild`/`ScriptBuild`). It remains as internal lowering machinery (`tundravm.declarative._lowered`, `tundravm._modules`, ...), not as API. Use `Recipe`, `Fragment` and the declarations.
 - `tundravm.modules` and its module classes: `KeyGeneration`, `DiskEncryption` and `SecretDelivery` (use the `Key`, `Disk` and `Secrets` declarations), `AzurePlatform` and `GcpPlatform` (use `Variant(target="azure"|"gcp")`). `Tdxs` and `DevTools` are now fragments in `tundravm.declarative.utils`, next to `EfiStub` and `Backports`.
 - CLI verbs `explain` (use `inspect`), `check` (use `lint`), `digest` (use `inspect --json`, key `digest`) and `new` (use `init`), with no aliases.
 - `--profile`/`-p` and `--all-profiles` (use repeatable `--variant`; omit it for every variant), `bake --lock`/`--frozen`/`--force`, `measure --backend` (use `--scheme`), `deploy --memory`/`--cpus` (use `--param`), `measure --out`/`deploy --out` (pass the bake directory).

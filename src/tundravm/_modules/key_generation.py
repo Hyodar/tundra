@@ -14,7 +14,7 @@ from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
-    from tundravm._image import Image
+    from tundravm.declarative._lowered import Lowered
 
 KEY_GENERATION_BUILD_PACKAGES = (
     "golang",
@@ -121,7 +121,7 @@ class KeyGeneration(Module):
                     )
                 output_paths.add(spec.output)
 
-    def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
+    def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
         for spec in self.keys:
             if spec.pipe_path is None or spec.pipe_path.startswith("/run/"):
                 continue

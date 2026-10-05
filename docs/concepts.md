@@ -70,6 +70,7 @@ Equal repeats deduplicate silently. Two different declarations with the same ide
 `compile(recipe)` resolves each variant and lowers it onto the internal compiler, which emits one mkosi directory per variant:
 
 Lowering writes each variant's compiler state directly from its resolved declarations, in declaration order (hooks per phase, `Init` steps by priority, runtime tools after the declarations they belong to), and the compiler emits that state.
+Internally `lower()` returns a frozen `Lowered` value (`declarative/_lowered.py`); `declarative/_compile.py` emits it and `declarative/_bake.py` builds it.
 
 ```
 mkosi/

@@ -190,7 +190,7 @@ measure(artifact, *, scheme="rtmr", allow_placeholder=False) -> Measurements
 deploy(artifact, *, using: Qemu | Azure | Gcp, allow_placeholder=False, adapter=None) -> Deployment
 doctor(backend: Backend, *, runner=None) -> tuple[Diagnostic, ...]
 load(path, *, attribute="recipe", extra_paths=()) -> Recipe
-lower(recipe, *, variants=None)  # internal: the compiler's image for the recipe
+lower(recipe, *, variants=None)  # internal: the lowered recipe for the recipe
 ```
 
 ```python
@@ -199,7 +199,7 @@ from tundravm.declarative.lifecycle import FetchedSource, fetch
 fetch(recipe, *, locked: Lock | None, out: Path, variants=None, resolver=None) -> tuple[FetchedSource, ...]
 ```
 
-`fetch` and `FetchedSource` are exported from neither `tundravm` nor `tundravm.declarative`; import them from `tundravm.declarative.lifecycle`.
+`fetch` and `FetchedSource` are exported from `tundravm` and `tundravm.declarative` `tundravm` nor `tundravm.declarative`; import them from `tundravm.declarative.lifecycle`.
 
 `variants=None` means every declared variant; unknown names raise `ValidationError`.
 

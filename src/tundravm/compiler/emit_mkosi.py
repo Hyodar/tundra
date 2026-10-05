@@ -270,7 +270,7 @@ MKOSI_VERSION_SCRIPT = textwrap.dedent("""\
 
 @dataclass(frozen=True, slots=True)
 class EmitConfig:
-    """Configuration passed from Image to the emitter."""
+    """Configuration a lowered recipe passes to the emitter."""
 
     base: str
     arch: Arch = "x86_64"

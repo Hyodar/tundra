@@ -69,7 +69,7 @@ def _recipe(*extra: Package | File) -> Recipe:
 
 
 def _payload(recipe: Recipe) -> dict[str, object]:
-    return lower(recipe)._recipe_payload(profile_names=("default",))
+    return lower(recipe).payload()
 
 
 @pytest.fixture

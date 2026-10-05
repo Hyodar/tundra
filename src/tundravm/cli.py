@@ -27,12 +27,11 @@ import re
 import sys
 import warnings
 from collections.abc import Callable, Sequence
-from dataclasses import MISSING, fields
+from dataclasses import MISSING, fields, replace
 from pathlib import Path
 from typing import TextIO, cast, get_args
 
 from . import __version__
-from ._image import Image
 from ._source import SOURCES_DIRNAME
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
@@ -40,6 +39,8 @@ from .backends.local_linux import cloud_tools
 from .check import failing, render_as, render_summary
 from .clean import PARTS, clean_paths, owner_hint, remove, sudo_runner
 from .completion import SHELLS, Shell, render_completion
+from .declarative._compile import emit
+from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
     Artifact,
@@ -63,7 +64,6 @@ from .declarative.lifecycle import (
     requirements_of,
     run_probe,
     select_artifact,
-    using_lock,
     write_lock,
 )
 from .declarative.model import Target
@@ -79,7 +79,7 @@ from .explain import (
     render_variant_diff_markdown,
 )
 from .formats import annotation_path, format_help, resolve_format, workflow_command
-from .lockfile import LockDrift, recipe_digest
+from .lockfile import LockDrift
 from .measure import PlaceholderMeasurementWarning
 from .measure import rtmr as rtmr_measure
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
@@ -106,7 +106,6 @@ EXIT_SDK_ERROR = 2
 
 MEASUREMENT_SCHEMES: tuple[Scheme, ...] = ("rtmr", "azure", "gcp")
 BACKEND_KINDS: tuple[BackendKind, ...] = get_args(BackendKind)
-LOCK_FILENAME = "tundravm.lock"
 
 QUICKSTART = """\
 quickstart:
@@ -221,6 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     inspect_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
+    _add_lockfile(inspect)
     inspect.add_argument(
         "--diff-variants",
         nargs=2,
@@ -806,7 +806,7 @@ def _require_variants(loaded: RecipeFile, names: Sequence[str], recipe: Path) ->
         )
 
 
-def _listed(img: Image, names: tuple[str, ...] | None) -> tuple[str, ...]:
+def _listed(img: Lowered, names: tuple[str, ...] | None) -> tuple[str, ...]:
     return names if names is not None else (img.default_profile,)
 
 
@@ -816,13 +816,11 @@ def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
     if args.diff_variants is not None:
         return _inspect_diff(loaded, args, fmt, out)
     names = _variants(loaded, args)
-    img = loaded.lowered()
+    img = _with_lockfile(loaded.lowered(), args)
     variants = _listed(img, names)
     described = {name: _describe(loaded, img, name) for name in variants}
     if fmt == "json":
-        with img._operation_scope(variants) as active:
-            digest = recipe_digest(img._recipe_payload(profile_names=active))
-        payload = {"digest": digest, "variants": described}
+        payload = {"digest": img.select(variants).digest(), "variants": described}
         print(json.dumps(payload, indent=2, sort_keys=True), file=out)
         return EXIT_OK
     if fmt == "markdown":
@@ -852,7 +850,7 @@ def _inspect_diff(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: T
     return EXIT_OK
 
 
-def _describe(loaded: RecipeFile, img: Image, name: str) -> dict[str, object]:
+def _describe(loaded: RecipeFile, img: Lowered, name: str) -> dict[str, object]:
     """*name*'s dry-run description with the recipe's parent and resolved fragment names."""
     fragments = resolve(loaded.recipe, variant=name).fragments
     parent = loaded.recipe.variant(name).parent
@@ -868,9 +866,13 @@ def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
 
 
-def _lockfile(args: argparse.Namespace) -> Lock | None:
+def _with_lockfile(img: Lowered, args: argparse.Namespace) -> Lowered:
+    """*img* reading ``--lockfile`` (checked readable) instead of ``build/tundravm.lock``."""
     path: Path | None = getattr(args, "lockfile", None)
-    return None if path is None else read_lock(path)
+    if path is None:
+        return img
+    read_lock(path)
+    return replace(img, lock_file=path)
 
 
 def _cmd_diff(args: argparse.Namespace, out: TextIO) -> int:
@@ -893,12 +895,7 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
         args.color = "never"
         return _cmd_diff_loaded(args, out, img, _variants(loaded, args))
     names = _variants(loaded, args)
-    locked = _lockfile(args)
-    if locked is None:
-        result = img.compile(destination, force=True, profiles=names)
-    else:
-        with using_lock(img, locked):
-            result = img.compile(destination, force=True, profiles=names)
+    result, _ = emit(_with_lockfile(img, args).select(names), destination)
     print(f"compiled {result.path}", file=out)
     print(f"  variants: {', '.join(result.profiles)}", file=out)
     print(f"  digest:   {result.digest}", file=out)
@@ -906,13 +903,9 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _cmd_diff_loaded(
-    args: argparse.Namespace, out: TextIO, img: Image, names: tuple[str, ...] | None
+    args: argparse.Namespace, out: TextIO, img: Lowered, names: tuple[str, ...] | None
 ) -> int:
-    locked = _lockfile(args)
-    if locked is None:
-        return cmd_diff(args, out, img, profiles=names)
-    with using_lock(img, locked):
-        return cmd_diff(args, out, img, profiles=names)
+    return cmd_diff(args, out, _with_lockfile(img, args), profiles=names)
 
 
 def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
@@ -921,13 +914,13 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     img = loaded.lowered()
     path = _lock_path(img, args.path)
     if args.check:
-        drift = img.lock_status(path, profiles=names)
+        drift = img.select(names).lock_status(path)
         print(render_drift(drift, resolve_format(args.format), path), file=out)
         return EXIT_OK if drift.is_clean else EXIT_FAILURE
     previous = read_lock(path) if path.exists() else None
     if args.explain:
         if previous is not None:
-            print(img.lock_status(path, profiles=names).render(), file=out)
+            print(img.select(names).lock_status(path).render(), file=out)
         else:
             print(f"no lockfile at {path}; every section is new", file=out)
     try:
@@ -954,8 +947,8 @@ def _failure_annotations(exc: LockfileError, recipe: str | Path) -> str:
     )
 
 
-def _lock_path(img: Image, path: Path | None) -> Path:
-    return path if path is not None else Path(img.build_dir) / LOCK_FILENAME
+def _lock_path(img: Lowered, path: Path | None) -> Path:
+    return path if path is not None else img.lock_path
 
 
 def render_drift(drift: LockDrift, fmt: str, lock_path: Path) -> str:
@@ -1319,7 +1312,7 @@ def _ci_compile(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple
 def _ci_lock(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
     img = loaded.lowered()
     path = _lock_path(img, args.lockfile)
-    drift = img.lock_status(path, profiles=_variants(loaded, args))
+    drift = img.select(_variants(loaded, args)).lock_status(path)
     if drift.is_clean:
         return True, "", f"{path} is up to date"
     count = len(drift.sections) or 1

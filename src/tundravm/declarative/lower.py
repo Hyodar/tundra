@@ -2,8 +2,9 @@
 
 ``lower`` maps variants onto compiler profiles and has
 :class:`~tundravm.declarative.state.StateBuilder` write each profile's
-declarations; the result is wrapped in the internal ``Image``, which compile,
-lint, diff, lock, bake and explain work on.
+declarations; the result, with the recipe-wide mkosi options and kernels, is
+the internal :class:`~tundravm.declarative._lowered.Lowered`, which compile,
+lint, diff, lock, bake and inspect work on.
 
 Variants map onto compiler profiles. The default variant (the one named
 ``default``, else the first root variant) is the default profile and receives
@@ -25,13 +26,13 @@ from collections.abc import Iterator, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
-from tundravm._image import Image
 from tundravm._options import MkosiOptions
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel as FluentKernel
 from tundravm.models import RecipeState
 
+from ._lowered import Lowered
 from .model import (
     BASE_PARENT,
     Debloat,
@@ -121,8 +122,8 @@ class _Standalone(Exception):
 _FALSE = frozenset({"false", "no", "0"})
 
 
-def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
-    """Build the compiler's image *recipe* describes, with *variants* (default: all).
+def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
+    """Lower *recipe* onto the compiler, with *variants* (default: all).
 
     The default variant is always lowered: the other profiles build on it.
     Variants whose settings or kernel differ from the default variant's get
@@ -218,7 +219,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Image:
             context={"variants": ", ".join(name for name, _ in rejected)},
         )
     extra: dict[str, Any] = {} if recipe.policy is None else {"policy": recipe.policy}
-    return Image(
+    return Lowered(
         state=builder.state,
         modules=builder.modules,
         mirror=recipe.mirror,
@@ -398,9 +399,9 @@ def _kernel(kernel: Kernel) -> FluentKernel:
     if isinstance(source, Http):
         if source.sha256 is None:
             raise ValidationError(
-                f"Kernel {kernel.version}: Http({source.url!r}) needs sha256=; the kernel "
-                "archive is not a lockfile source, so its digest is pinned in the recipe.",
-                hint="Pass Http(url, sha256=...), or use Git(url, ref).",
+                f"Kernel {kernel.version}: an http kernel source needs sha256=; "
+                f"Http({source.url!r}) has none.",
+                hint="Pass Http(url, sha256=...), or use a git source: Git(url, ref).",
             )
         return FluentKernel(**common, source_archive=source.url, source_sha256=source.sha256)
     return FluentKernel(

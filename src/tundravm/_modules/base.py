@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 from tundravm._source import GitSource
 
 if TYPE_CHECKING:
-    from tundravm._image import Image
     from tundravm.check import Diagnostic
+    from tundravm.declarative._lowered import Lowered
 
 TUNDRA_TOOLS = GitSource("https://github.com/Hyodar/tundra-tools.git", "master")
 """The ``tundra-tools`` repository Tdxs, KeyGeneration, DiskEncryption and
@@ -30,7 +30,7 @@ class Module:
 
     __slots__ = ()
 
-    def check(self, image: Image, profile: str) -> Iterable[Diagnostic]:
+    def check(self, image: Lowered, profile: str) -> Iterable[Diagnostic]:
         """Module-specific diagnostics for *profile*, surfaced by ``check()``."""
         return ()
 

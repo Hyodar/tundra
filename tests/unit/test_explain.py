@@ -23,7 +23,6 @@ from tundravm import (
 from tundravm.declarative import lower
 from tundravm.errors import ValidationError
 from tundravm.explain import describe, render
-from tundravm.lockfile import recipe_digest
 
 
 def _recipe() -> Recipe:
@@ -148,16 +147,14 @@ def test_explain_is_json_serializable_and_stable() -> None:
 
 def test_explain_does_not_mutate_state() -> None:
     image = lower(_recipe())
-    digest_before = recipe_digest(image._recipe_payload(profile_names=image._active_profiles))
+    digest_before = image.digest()
     first = describe(image, profile="default")
     state_after_first = deepcopy(image.state)
     second = describe(image, profile="default")
 
     assert first == second
     assert image.state == state_after_first
-    assert (
-        recipe_digest(image._recipe_payload(profile_names=image._active_profiles)) == digest_before
-    )
+    assert image.digest() == digest_before
 
 
 def test_explain_per_variant() -> None:
@@ -174,12 +171,9 @@ def test_explain_per_variant() -> None:
     assert azure["users"] == describe(image, profile="default")["users"]
     assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]
 
-    with image._operation_scope(("azure",)):
-        assert describe(image) == azure
-
-    with image._operation_scope(("default", "azure")):
-        with pytest.raises(ValidationError):
-            describe(image)
+    assert describe(image.select(("azure",))) == azure
+    with pytest.raises(ValidationError):
+        describe(image.select(("default", "azure")))
 
 
 def test_explain_includes_kernel() -> None:

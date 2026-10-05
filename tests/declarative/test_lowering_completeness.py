@@ -130,9 +130,10 @@ def test_kernel_from_a_checked_tarball(tmp_path: Path, config: Path) -> None:
 
 
 def test_unpinned_kernel_tarball_names_the_fix() -> None:
-    with pytest.raises(ValidationError, match=r"Kernel 6\.1: Http.*needs sha256=") as err:
+    with pytest.raises(ValidationError, match=r"Kernel 6\.1: an http kernel source needs") as err:
         lower(_recipe(Kernel("6.1", Http("https://example.com/linux.tar.xz"))))
-    assert "sha256" in (err.value.hint or "")
+    assert "lockfile" not in str(err.value)
+    assert "sha256=" in (err.value.hint or "") and "Git(url, ref)" in (err.value.hint or "")
 
 
 # ── 2. Per-variant settings and kernels ─────────────────────────────────

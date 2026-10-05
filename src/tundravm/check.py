@@ -22,7 +22,7 @@ from .formats import annotation_path, md_cell, md_table, workflow_command
 from .models import InitScriptEntry, ProfileState, unit_name
 
 if TYPE_CHECKING:
-    from ._image import Image
+    from .declarative._lowered import Lowered
 
 Level = Literal["error", "warning", "info"]
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
@@ -50,7 +50,7 @@ class Diagnostic:
         }
 
 
-Rule = Callable[["Image", str, ProfileState], Iterator[Diagnostic]]
+Rule = Callable[["Lowered", str, ProfileState], Iterator[Diagnostic]]
 
 _INIT_FILE_PATHS = frozenset(
     {"/usr/bin/runtime-init", "/usr/lib/systemd/system/runtime-init.service"}
@@ -187,7 +187,7 @@ def _command_text(state: ProfileState) -> str:
     return "\n".join(" ".join(argv) for argv in argvs)
 
 
-def _init_entries(image: Image, state: ProfileState) -> list[InitScriptEntry]:
+def _init_entries(image: Lowered, state: ProfileState) -> list[InitScriptEntry]:
     merged: list[InitScriptEntry] = []
     seen: set[tuple[int, str]] = set()
     for entry in state.init_scripts:
@@ -199,7 +199,7 @@ def _init_entries(image: Image, state: ProfileState) -> list[InitScriptEntry]:
 
 
 def _rule_service_user_missing(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     declared = {u.name for u in state.users}
     commands = _command_text(state)
@@ -232,7 +232,7 @@ def _rule_service_user_missing(
 
 
 def _rule_user_group_undefined(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     declared = {g.name for g in state.groups}
     # useradd creates a same-named private group unless the user has a primary gid.
@@ -259,7 +259,7 @@ def _rule_user_group_undefined(
 
 
 def _rule_file_path_duplicate(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     extra: dict[str, list[tuple[str, str | bytes, str]]] = {}
     for f in state.files:
@@ -291,7 +291,7 @@ def _rule_file_path_duplicate(
 
 
 def _rule_file_path_relative(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     entries = [
         *(("file", f.path) for f in state.files),
@@ -311,7 +311,7 @@ def _rule_file_path_relative(
 
 
 def _rule_service_command_not_shipped(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     if state.packages:
         return
@@ -346,7 +346,7 @@ def _rule_service_command_not_shipped(
 
 
 def _rule_variant_empty(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     if profile_name == image.default_profile:
         return
@@ -395,7 +395,7 @@ def _rule_variant_empty(
 
 
 def _rule_init_priority_collision(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     by_priority: dict[int, list[InitScriptEntry]] = {}
     for entry in _init_entries(image, state):
@@ -421,7 +421,7 @@ def _rule_init_priority_collision(
 
 
 def _rule_debloat_removes_needed_unit(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     config = state.debloat
     if not (config.enabled and config.systemd_minimize):
@@ -466,7 +466,7 @@ def _rule_debloat_removes_needed_unit(
 
 
 def _rule_debloat_removes_declared_file(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     config = state.debloat
     if not config.enabled:
@@ -490,7 +490,7 @@ def _rule_debloat_removes_declared_file(
 
 
 def _rule_source_unpinned(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     kernel = image.kernel_source(profile_name) if image.fetches_sources else None
     if not state.source_builds and kernel is None:
@@ -550,7 +550,7 @@ def _installs_kernel(packages: Iterable[str]) -> bool:
 
 
 def _rule_kernel_missing(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     if not image.mkosi_for(profile_name).bootable or image.kernel_for(profile_name) is not None:
         return
@@ -574,7 +574,7 @@ def _rule_kernel_missing(
 
 
 def _rule_module_checks(
-    image: Image, profile_name: str, state: ProfileState
+    image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     for module in image.applied_modules(profile_name, inherited=True):
         yield from module.check(image, profile_name)
@@ -600,9 +600,9 @@ def _sort_key(d: Diagnostic) -> tuple[str, int, str, str, str]:
     return (d.profile, _SEVERITY[d.level], d.code, d.subject or "", d.message)
 
 
-def check(image: Image, *, profiles: Sequence[str] | None = None) -> list[Diagnostic]:
+def check(image: Lowered, *, profiles: Sequence[str] | None = None) -> list[Diagnostic]:
     """Run every rule over *profiles* (default: the image's active profiles)."""
-    names = tuple(profiles) if profiles is not None else image._active_profiles
+    names = tuple(profiles) if profiles is not None else image.active
     found: dict[Diagnostic, None] = {}
     for name in dict.fromkeys(names):
         state = image.state.effective_profile(name)

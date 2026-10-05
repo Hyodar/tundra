@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
+from tundravm.declarative._compile import emit
 from tundravm.recipe import load_image
 
 _IMAGE_PATH = SURGE_EXAMPLE / "image.py"
@@ -47,7 +48,7 @@ def sdk_output(tmp_path_factory: pytest.TempPathFactory) -> Path:
     img = load_image(_IMAGE_PATH, extra_paths=[REPO_ROOT])
     out = tmp_path_factory.mktemp("sdk_emission")
     # Every variant, so the emission includes azure, gcp and devtools
-    img.compile(out / "mkosi", profiles=sorted(img.state.profiles))
+    emit(img.select(img.profile_names), out / "mkosi")
     return out / "mkosi"
 
 

@@ -2,7 +2,7 @@
 
 A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
 :class:`Variant` overlays) is the whole public model; ``resolve``/``lint``/
-``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``bake``,
+``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``fetch``, ``bake``,
 ``read_artifacts``, ``doctor``) take one. ``diff``, ``measure`` and ``deploy``
 are ``tundravm.declarative.diff``/``measure``/``deploy`` (at the top level those
 names are modules). The shipped fragments are in :mod:`tundravm.declarative.utils`.
@@ -24,6 +24,7 @@ from .declarative import (
     Disk,
     Dotnet,
     Entry,
+    FetchedSource,
     File,
     Fragment,
     Gcp,
@@ -63,6 +64,7 @@ from .declarative import (
     bake,
     compile,
     doctor,
+    fetch,
     lint,
     load,
     lock,
@@ -105,6 +107,7 @@ __all__ = [
     "Disk",
     "Dotnet",
     "Entry",
+    "FetchedSource",
     "File",
     "Fragment",
     "Gcp",
@@ -153,6 +156,7 @@ __all__ = [
     "bake",
     "compile",
     "doctor",
+    "fetch",
     "lint",
     "load",
     "load_recipe",

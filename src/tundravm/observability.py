@@ -1,6 +1,6 @@
 """Structured logging, progress events, and reporters for long-running operations.
 
-``Image.bake`` stamps every step as an :class:`Event` and hands it to a
+A bake stamps every step as an :class:`Event` and hands it to a
 :class:`Reporter`: :class:`TextReporter` for people, :class:`JsonReporter` for
 machines (one JSON object per line), :class:`NullReporter` to discard.
 """
