@@ -508,7 +508,7 @@ def _declare(
                     runtime_done = True
             case Build():
                 img.build_from(_source_build(item, mark_unpinned=not historical))
-            case Kernel(source=Http()):
+            case Kernel(source=Http()) if historical:
                 img.build_packages("curl")  # the build hook downloads the archive
             case Init() | Setting() | Kernel() | RuntimeTools():
                 pass  # inits register below; the rest is per-tree configuration

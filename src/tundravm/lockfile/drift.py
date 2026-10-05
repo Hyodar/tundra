@@ -124,12 +124,17 @@ def unselected_variants(lock: Lockfile, payload: Mapping[str, object]) -> tuple[
 
 
 def unselected_sources(lock: Lockfile, payload: Mapping[str, object]) -> frozenset[str]:
-    """Source builds the lock records for variants the recipe *payload* does not select."""
+    """Sources the lock may record for variants the recipe *payload* does not select.
+
+    Their source builds and kernel sources: ``kernel-<variant>``, and the shared
+    ``kernel``, which an unselected variant may build too.
+    """
     entries = lock.recipe.get(VARIANTS_KEY)
     if not isinstance(entries, Mapping):
         return frozenset()
     names: set[str] = set()
     for variant in unselected_variants(lock, payload):
+        names.update(("kernel", f"kernel-{variant}"))
         entry = entries.get(variant)
         builds = entry.get("source_builds") if isinstance(entry, Mapping) else None
         if isinstance(builds, Mapping):

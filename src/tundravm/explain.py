@@ -54,6 +54,8 @@ def describe(
     state = image.state
     profile_state = state.effective_profile(selected)
     kernel = image.kernel_for(selected)
+    kernel_source = image.kernel_source(selected)
+    kernel_pin = None if kernel_source is None else kernel_source.pin_from(image.source_pins())
     return {
         "arch": state.arch,
         "base": state.base,
@@ -75,6 +77,7 @@ def describe(
         else {
             "cmdline": kernel.cmdline,
             "config_file": None if kernel.config_file is None else str(kernel.config_file),
+            "pinned": kernel_pin[:7] if kernel_pin else None,
             "source": _describe_kernel_source(kernel),
             "tdx": kernel.tdx,
             "version": kernel.version,
@@ -574,6 +577,8 @@ def _render_kernel(kernel: dict[str, Any]) -> str:
         parts.append("tdx=yes")
     if kernel.get("cmdline"):
         parts.append(f"cmdline={kernel['cmdline']}")
+    if kernel.get("config_file"):
+        parts.append(f"pinned={kernel.get('pinned') or '-'}")
     return "  ".join(parts)
 
 

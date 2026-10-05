@@ -29,8 +29,8 @@ from tundravm._source import (
     FETCH_MARKER,
     SOURCES_DIRNAME,
     GitSource,
+    NamedSource,
     Resolver,
-    SourceBuild,
     fetch_source,
     is_fetched,
     resolve_pins,
@@ -510,11 +510,15 @@ def lock_image(
     offline: bool = False,
     resolver: Resolver | None = None,
 ) -> Lock:
-    """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources."""
+    """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
+
+    The sources are the source builds and, outside ``nethermind-v1``, the built
+    kernels' sources (``kernel``, or ``kernel-<variant>``; see ``Image.lock_sources``).
+    """
     offline = offline or img.policy.network_mode == "offline"
     with img._operation_scope(profiles) as names:
         payload = img._recipe_payload(profile_names=names)
-        builds = img.source_builds()
+        builds = img.lock_sources()
     unknown = [name for name in update if name not in builds]
     if unknown:
         raise ValidationError(
@@ -523,7 +527,7 @@ def lock_image(
         )
     prior = {} if previous is None else _named_pins(previous)
     kept: list[LockedFetch] = []
-    pending = {}
+    pending: dict[str, NamedSource] = {}
     for name, build in builds.items():
         pin = None if name in update else build.pin_from(prior)
         if pin is None:
@@ -646,9 +650,10 @@ def write_lock(locked: Lock, path: Path) -> None:
 
 @dataclass(frozen=True, slots=True)
 class FetchedSource:
-    """A source build's checkout at *path* (``<out>/.sources/<name>-<pin[:12]>``).
+    """A source's checkout at *path* (``<out>/.sources/<name>-<pin[:12]>``).
 
-    *pin* is the commit (git) or sha256 (http) it holds; *cached* when an
+    *name* is a source build's, or ``kernel`` (``kernel-<variant>``) for a built
+    kernel's source. *pin* is the commit (git) or sha256 (http) it holds; *cached* when an
     earlier fetch had already completed it.
     """
 
@@ -677,19 +682,22 @@ def fetch_image(
     resolver: Resolver | None = None,
     reporter: Reporter | None = None,
 ) -> tuple[FetchedSource, ...]:
-    """Check out every source build of *img*'s *profiles* under ``<out>/.sources``.
+    """Check out every source of *img*'s *profiles* under ``<out>/.sources``.
+
+    The sources are the source builds and, outside ``nethermind-v1``, the built
+    kernels' sources (``Image.lock_sources``).
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
     refuses. A checkout whose marker already names its pin is kept.
     """
     with img._operation_scope(profiles):
-        builds = img.source_builds()
+        builds = img.lock_sources()
     if not builds:
         return ()
     prior = {} if locked is None else _named_pins(locked)
     pins: dict[str, str] = {}
-    pending: dict[str, SourceBuild] = {}
+    pending: dict[str, NamedSource] = {}
     for name, build in builds.items():
         pin = build.pin_from(prior)
         if pin is None:
@@ -713,7 +721,7 @@ def fetch_image(
 
 
 def _resolve_for_fetch(
-    img: Image, pending: Mapping[str, SourceBuild], *, resolver: Resolver | None, offline: bool
+    img: Image, pending: Mapping[str, NamedSource], *, resolver: Resolver | None, offline: bool
 ) -> dict[str, str]:
     """Pins for the *pending* sources no lockfile pins, under the recipe's policy."""
     if img.policy.mutable_ref_policy == "error":
@@ -736,7 +744,7 @@ def _resolve_for_fetch(
 
 
 def _checkout(
-    build: SourceBuild,
+    build: NamedSource,
     pin: str,
     root: Path,
     progress: Progress,
@@ -790,16 +798,19 @@ def fetch(
     variants: Sequence[str] | None = None,
     resolver: Resolver | None = None,
 ) -> tuple[FetchedSource, ...]:
-    """Check out the source builds of *variants* (default: all) under ``<out>/.sources``.
+    """Check out the sources of *variants* (default: all) under ``<out>/.sources``.
 
-    Each lands in ``<out>/.sources/<name>-<pin[:12]>``, fetched on this host as
-    the invoking user (git credentials and SSH agent apply) at *locked*'s pin.
-    Sources *locked* does not pin (or every source, without *locked*) are
-    resolved first through *resolver* (default: the network), which
-    ``mutable_ref_policy="error"`` refuses. Complete checkouts are kept, so a
-    second fetch touches nothing. Outside ``nethermind-v1`` the bake mounts
-    ``<out>/.sources`` into the build and the build hooks copy their checkout
-    from it; :func:`bake` fetches first.
+    The sources are the source builds and, outside ``nethermind-v1``, each built
+    kernel's source (git ref or commit with its submodules, or the sha256-checked
+    tarball), named ``kernel`` (``kernel-<variant>`` where a variant's kernel
+    source differs). Each lands in ``<out>/.sources/<name>-<pin[:12]>``, fetched
+    on this host as the invoking user (git credentials and SSH agent apply) at
+    *locked*'s pin. Sources *locked* does not pin (or every source, without
+    *locked*) are resolved first through *resolver* (default: the network),
+    which ``mutable_ref_policy="error"`` refuses. Complete checkouts are kept,
+    so a second fetch touches nothing. Outside ``nethermind-v1`` the bake mounts
+    ``<out>/.sources`` into the build and the build hooks and kernel build
+    script copy their checkout from it; :func:`bake` fetches first.
     """
     names = variant_names(recipe, variants)
     return fetch_image(

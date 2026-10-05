@@ -189,6 +189,7 @@ def test_explain_includes_kernel() -> None:
     assert info["kernel"] == {
         "cmdline": "quiet",
         "config_file": None,
+        "pinned": None,
         "source": {
             "ref": "v6.12.1",
             "repo": "https://github.com/gregkh/linux",

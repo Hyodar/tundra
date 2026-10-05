@@ -492,7 +492,8 @@ def _rule_debloat_removes_declared_file(
 def _rule_source_unpinned(
     image: Image, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    if not state.source_builds:
+    kernel = image.kernel_source(profile_name) if image.fetches_sources else None
+    if not state.source_builds and kernel is None:
         return
     pins = image.source_pins()
     policy = image.policy.mutable_ref_policy
@@ -520,6 +521,21 @@ def _rule_source_unpinned(
             ),
             profile=profile_name,
             subject=name,
+        )
+    if kernel is not None and kernel.pin_from(pins) is None:
+        yield Diagnostic(
+            level=level,
+            code="source-unpinned",
+            message=(
+                f"kernel {kernel.version} ({kernel.source.kind} {kernel.source.url} "
+                f"@ {kernel.source.requested}) is not pinned in the lockfile"
+            ),
+            hint=(
+                f"Run `tundravm lock RECIPE` to pin it as {kernel.name!r}{fetch}, or give "
+                "Kernel a Git source with a 40-hex commit ref."
+            ),
+            profile=profile_name,
+            subject=kernel.name,
         )
 
 

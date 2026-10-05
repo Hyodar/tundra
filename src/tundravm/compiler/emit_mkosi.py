@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal, Protocol, get_args
 from urllib.parse import urlparse
 
+from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource
 from tundravm.errors import ValidationError
 from tundravm.models import (
     Arch,
@@ -302,6 +303,11 @@ class EmitConfig:
     """``False`` writes ``Bootable=no`` and ``Format=disk``: mkosi needs a kernel for a UKI."""
     dialect: Literal["current", "nethermind-v1"] = "current"
     """``nethermind-v1`` keeps the historical cloud postoutput scripts."""
+    kernel_pin: str | None = None
+    """The kernel source's pin (commit or sha256); ``None`` while unpinned."""
+    kernel_checkout: str | None = None
+    """Outside ``nethermind-v1``: the kernel's host-fetched checkout ``<name>-<pin[:12]>``,
+    which the build script copies from ``$SRCDIR/tundravm-sources``."""
     profiles: Mapping[str, EmitConfig] = field(default_factory=dict)
     """Profiles with their own settings or kernel; the rest use this configuration."""
 
@@ -583,6 +589,37 @@ def _kernel_fetch(kernel: Kernel) -> list[str]:
     return lines
 
 
+def _kernel_copy(kernel: Kernel, checkout: str | None) -> list[str]:
+    """Shell lines that copy the host-fetched kernel *checkout* to ``$KERNEL_CACHE/src``.
+
+    The copy leaves out ``.git`` (the release string is the version, whatever
+    ref was fetched), the fetch marker and a downloaded archive. Without
+    *checkout* the kernel is unpinned and the lines only fail.
+    """
+    if checkout is None:
+        version = kernel.version or "unknown"
+        message = (
+            f"tundravm: kernel {version} is not pinned: run tundravm lock, then tundravm fetch"
+        )
+        return [f"echo {shlex.quote(message)} >&2", "exit 1"]
+    source = f'"$SRCDIR/{SOURCES_MOUNT}/{checkout}"'
+    missing = f"tundravm: {checkout} is not fetched: run tundravm fetch RECIPE"
+    dest = '"$KERNEL_CACHE/repo"' if kernel.source_subdir else '"$KERNEL_CACHE/src"'
+    skip = [".git", FETCH_MARKER]
+    if kernel.source_archive is not None:
+        skip.append(HttpSource(kernel.source_archive).filename)
+    names = " ".join(f"! -name {shlex.quote(name)}" for name in skip)
+    lines = [
+        f"[ -f {source}/{FETCH_MARKER} ] || {{ echo {shlex.quote(missing)} >&2; exit 1; }}",
+        f"mkdir -p {dest}",
+        f"find {source} -mindepth 1 -maxdepth 1 {names} \\",
+        f"    -exec cp -a --no-preserve=ownership -t {dest} {{}} +",
+    ]
+    if kernel.source_subdir:
+        lines.append(f'ln -s {shlex.quote("repo/" + kernel.source_subdir)} "$KERNEL_CACHE/src"')
+    return lines
+
+
 def _kernel_source_identity(kernel: Kernel) -> str:
     """What the cache key adds for a source other than tag ``v<version>`` of a repository."""
     if _tagged_kernel(kernel):
@@ -600,14 +637,23 @@ def _kernel_source_identity(kernel: Kernel) -> str:
     )
 
 
-def _render_kernel_build_script(kernel: Kernel, dialect: str = "current") -> str:
+def _render_kernel_build_script(
+    kernel: Kernel,
+    dialect: str = "current",
+    *,
+    pin: str | None = None,
+    checkout: str | None = None,
+) -> str:
     """Render a build script that fetches, configures, and compiles the Linux kernel.
 
-    The kernel cache lives in ``$BUILDDIR``; outside ``nethermind-v1`` it falls
-    back to the build overlay, since mkosi sets ``$BUILDDIR`` only with
-    ``BuildDirectory=``.
+    Under ``nethermind-v1`` the script clones (or downloads) the kernel in the
+    sandbox and caches it in ``$BUILDDIR``. Every other dialect copies the
+    host-fetched *checkout* of *pin* (see :func:`_kernel_copy`), keys the cache
+    by the pin and falls back to the build overlay for it, since mkosi sets
+    ``$BUILDDIR`` only with ``BuildDirectory=``.
     """
-    cache_root = "${BUILDDIR}" if dialect == "nethermind-v1" else "${BUILDDIR:-$BUILDROOT/build}"
+    historical = dialect == "nethermind-v1"
+    cache_root = "${BUILDDIR}" if historical else "${BUILDDIR:-$BUILDROOT/build}"
     version = kernel.version or "unknown"
     config_hash_source = str(kernel.config_file)
     if kernel.config_file:
@@ -619,7 +665,13 @@ def _render_kernel_build_script(kernel: Kernel, dialect: str = "current") -> str
         config_hash_source += "\n" + source_identity
     config_hash = hashlib.sha256(config_hash_source.encode()).hexdigest()[:12]
     cache_key = f"kernel-{version}-{config_hash}"
-    fetch = ("\n" + " " * 12).join(_kernel_fetch(kernel))
+    if historical:
+        fetch_lines = _kernel_fetch(kernel)
+    else:
+        fetch_lines = _kernel_copy(kernel, checkout if pin is not None else None)
+        if pin is not None:
+            cache_key += f"-{pin[:12]}"
+    fetch = ("\n" + " " * 12).join(fetch_lines)
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash
         set -euo pipefail
@@ -1072,7 +1124,12 @@ class DeterministicMkosiEmitter:
 
             # For build: prepend kernel build script if kernel has config_file
             if phase == "build" and config and config.kernel and config.kernel.config_file:
-                kernel_script = _render_kernel_build_script(config.kernel, config.dialect)
+                kernel_script = _render_kernel_build_script(
+                    config.kernel,
+                    config.dialect,
+                    pin=config.kernel_pin,
+                    checkout=config.kernel_checkout,
+                )
                 if commands:
                     # Combine kernel build + user-defined build commands
                     user_script = self._render_script(commands)

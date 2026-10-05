@@ -25,7 +25,15 @@ from typing import Final, Literal, Self
 from ._modules.base import Module
 from ._modules.init import Init
 from ._options import MkosiOptions
-from ._source import SOURCES_DIRNAME, Resolver, SourceBuild, is_fetched, source_drift
+from ._source import (
+    SOURCES_DIRNAME,
+    KernelSource,
+    NamedSource,
+    Resolver,
+    SourceBuild,
+    is_fetched,
+    source_drift,
+)
 from .backends.base import BuildBackend
 from .check import check as run_checks
 from .compiler import (
@@ -378,9 +386,10 @@ class Image:
     def fetches_sources(self) -> bool:
         """Whether source builds build host-fetched checkouts (every dialect but nethermind-v1).
 
-        Their hooks copy ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``, which
-        ``tundravm fetch`` writes to ``<build_dir>/.sources`` and the backend
-        mounts; under ``nethermind-v1`` the hooks fetch in the build sandbox.
+        Their hooks, and the kernel build script, copy
+        ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``, which ``tundravm fetch``
+        writes to ``<build_dir>/.sources`` and the backend mounts; under
+        ``nethermind-v1`` the hooks and the kernel script fetch in the build sandbox.
         """
         return self.mkosi.dialect != "nethermind-v1"
 
@@ -417,6 +426,49 @@ class Image:
             builds.update(self._state.effective_profile(name).source_builds)
         return dict(sorted(builds.items()))
 
+    def kernel_source(self, profile: str) -> KernelSource | None:
+        """The source of the kernel *profile* builds, under its lockfile name.
+
+        ``None`` when the profile builds no kernel (none, or one without a
+        config). The name is ``kernel``, or ``kernel-<profile>`` when the
+        profile's kernel source differs from the default profile's.
+        """
+        kernel = self.kernel_for(profile)
+        if kernel is None or not kernel.config_file:
+            return None
+        spec = KernelSource.of(kernel)
+        if profile in self.profile_kernels and (
+            self.kernel is None or KernelSource.of(self.kernel).source != spec.source
+        ):
+            return replace(spec, name=f"kernel-{profile}")
+        return spec
+
+    def lock_sources(self) -> dict[str, NamedSource]:
+        """What ``lock`` pins and ``fetch`` checks out for the active profiles, by name.
+
+        The source builds and, outside ``nethermind-v1`` (:attr:`fetches_sources`),
+        the built kernels' sources (:meth:`kernel_source`).
+        """
+        builds = self.source_builds()
+        sources: dict[str, NamedSource] = dict(builds)
+        if not self.fetches_sources:
+            return sources
+        for profile in self._active_profiles:
+            spec = self.kernel_source(profile)
+            if spec is None:
+                continue
+            if spec.name in builds:
+                raise ValidationError(
+                    f"Source build {spec.name!r} takes the name of the kernel's source.",
+                    hint=(
+                        f"Rename the Build: {spec.name!r} names the kernel's lockfile pin "
+                        "and checkout."
+                    ),
+                    context={"profile": profile},
+                )
+            sources[spec.name] = spec
+        return dict(sorted(sources.items()))
+
     def source_pins(self, path: str | Path | None = None) -> dict[str, LockedFetch]:
         """Source-build entries of the lockfile at *path* (default ``<build_dir>/tundravm.lock``).
 
@@ -429,9 +481,9 @@ class Image:
         return {fetch.name: fetch for fetch in lock.fetches if fetch.name is not None}
 
     def unpinned_sources(self, path: str | Path | None = None) -> list[str]:
-        """Names of active source builds the lockfile at *path* does not pin."""
+        """Names of the active :meth:`lock_sources` the lockfile at *path* does not pin."""
         pins = self.source_pins(path)
-        return [name for name, spec in self.source_builds().items() if spec.pin_from(pins) is None]
+        return [name for name, spec in self.lock_sources().items() if spec.pin_from(pins) is None]
 
     def repository(
         self,
@@ -980,7 +1032,7 @@ class Image:
         drift = compare_lock(lock, payload, partial=partial)
         pins = {fetch.name: fetch for fetch in lock.fetches if fetch.name is not None}
         added, changed, removed, details = source_drift(
-            self.source_builds(), pins, resolver=resolver
+            self.lock_sources(), pins, resolver=resolver
         )
         if partial:
             elsewhere = unselected_sources(lock, payload)
@@ -1019,7 +1071,7 @@ class Image:
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
         pins = self._build_pins()
         self._enforce_source_policy(pins)
-        config = self._emit_config()
+        config = self._emit_config(pins)
         # The mkosi options and kernel shape the tree without entering the digest.
         compile_key = self._compile_key(digest, pins) + ":" + _short_sha(repr(config))
         if (
@@ -1154,7 +1206,9 @@ class Image:
                     output_targets=profile.output_targets,
                     on_output=None if reporter is None else progress.output(profile_name),
                     on_notice=None if reporter is None else progress.notice(profile_name),
-                    sources_dir=sources_dir if profile.source_builds else None,
+                    sources_dir=sources_dir
+                    if profile.source_builds or self.kernel_source(profile_name)
+                    else None,
                 )
 
                 with progress.phase("prepare", f"prepare {backend.name}", profile=profile_name):
@@ -1274,21 +1328,38 @@ class Image:
         """The kernel profile *profile* builds."""
         return self.profile_kernels.get(profile, self.kernel)
 
-    def _emit_config(self) -> EmitConfig:
+    def _emit_config(self, pins: Mapping[str, LockedFetch]) -> EmitConfig:
         """Build an EmitConfig from the Image's settings and ``self.mkosi``.
 
         Profiles with their own options or kernel get their own configuration.
+        Outside ``nethermind-v1`` each built kernel carries its pin from *pins*.
         """
         own = sorted(set(self.profile_mkosi) | set(self.profile_kernels))
+        default = self._kernel_pin(self.kernel_source(self.default_profile), pins)
         return replace(
-            self._emit_config_for(self.mkosi, self.kernel),
+            self._emit_config_for(self.mkosi, self.kernel, default),
             profiles={
-                name: self._emit_config_for(self.mkosi_for(name), self.kernel_for(name))
+                name: self._emit_config_for(
+                    self.mkosi_for(name),
+                    self.kernel_for(name),
+                    self._kernel_pin(self.kernel_source(name), pins),
+                )
                 for name in own
             },
         )
 
-    def _emit_config_for(self, options: MkosiOptions, kernel: Kernel | None) -> EmitConfig:
+    def _kernel_pin(
+        self, spec: KernelSource | None, pins: Mapping[str, LockedFetch]
+    ) -> dict[str, object]:
+        """``EmitConfig`` fields for the kernel source *spec*: its pin and checkout directory."""
+        pin = None if spec is None or not self.fetches_sources else spec.pin_from(pins)
+        if spec is None or pin is None:
+            return {}
+        return {"kernel_pin": pin, "kernel_checkout": spec.pin_dir(pin)}
+
+    def _emit_config_for(
+        self, options: MkosiOptions, kernel: Kernel | None, pinned: Mapping[str, object]
+    ) -> EmitConfig:
         emit_kwargs: dict[str, object] = {
             "base": self.base,
             "arch": self.arch,
@@ -1317,6 +1388,7 @@ class Image:
         }
         if options.seed is not None:
             emit_kwargs["seed"] = options.seed
+        emit_kwargs.update(pinned)
         return EmitConfig(**emit_kwargs)  # type: ignore[arg-type]
 
     def _artifact_filename(self, target: OutputTarget) -> str:
@@ -1706,7 +1778,7 @@ class Image:
     def _compile_key(self, digest: str, pins: Mapping[str, LockedFetch]) -> str:
         used = {
             name: pin
-            for name, spec in self.source_builds().items()
+            for name, spec in self.lock_sources().items()
             if (pin := spec.pin_from(pins)) is not None
         }
         if not used:
@@ -1721,7 +1793,7 @@ class Image:
         """
         if self.policy.mutable_ref_policy != "error":
             return
-        unpinned = [spec for spec in self.source_builds().values() if spec.pin_from(pins) is None]
+        unpinned = [spec for spec in self.lock_sources().values() if spec.pin_from(pins) is None]
         if not unpinned:
             return
         names = ", ".join(f"{spec.name}@{spec.source.requested}" for spec in unpinned)
@@ -1774,19 +1846,20 @@ class Image:
     def _fetched_sources(self, destination: Path, backend: BuildBackend) -> Path | None:
         """``<destination>/.sources`` when the build mounts it; fails if a checkout is missing.
 
-        ``None`` under ``nethermind-v1``, without source builds, and for the
-        in-process backend, which builds nothing.
+        ``None`` under ``nethermind-v1``, without source builds or a built
+        kernel, and for the in-process backend, which builds nothing.
         """
-        builds = self.source_builds()
+        builds = self.lock_sources()
         if not self.fetches_sources or not builds or backend.name == "inprocess":
             return None
         root = destination / SOURCES_DIRNAME
         pins = self._build_pins()
         for name, spec in builds.items():
+            what = "Kernel source" if isinstance(spec, KernelSource) else "Source build"
             pin = spec.pin_from(pins)
             if pin is None:
                 raise StateError(
-                    f"Source build {name!r} is not pinned, so nothing is fetched to build it from.",
+                    f"{what} {name!r} is not pinned, so nothing is fetched to build it from.",
                     hint=(
                         "Run `tundravm lock RECIPE` and `tundravm fetch RECIPE`, or bake "
                         "without --no-fetch."
@@ -1796,7 +1869,7 @@ class Image:
             checkout = root / spec.pin_dir(pin)
             if not is_fetched(checkout, pin):
                 raise StateError(
-                    f"Source build {name!r} is not fetched: {checkout} is missing or incomplete.",
+                    f"{what} {name!r} is not fetched: {checkout} is missing or incomplete.",
                     hint=(
                         f"Run `tundravm fetch RECIPE --out {destination}` first, or bake "
                         "without --no-fetch."

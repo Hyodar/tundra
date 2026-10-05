@@ -369,6 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check out the recipe's source builds on this host, at their lockfile pins.",
     )
     fetch_cmd.epilog = (
+        "A built kernel's source (Kernel with config=) is fetched too, as `kernel` "
+        "(`kernel-<variant>` where a variant's kernel source differs). "
         "Each source lands in OUT/.sources/<name>-<pin12>, fetched as the invoking user "
         "(git credentials and SSH agent apply); a complete checkout is kept. Sources the "
         "lockfile does not pin are resolved first, as `lock` would, unless the recipe's "

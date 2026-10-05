@@ -42,6 +42,8 @@ SHA = "a" * 64
 
 
 NATIVE = Mkosi(layout="native")
+HISTORICAL = Mkosi(dialect="nethermind-v1")
+"""The dialect whose kernel script still fetches in the sandbox (see tests/lifecycle)."""
 
 
 def _recipe(
@@ -78,7 +80,9 @@ def config(tmp_path: Path) -> Path:
 
 def test_tagged_kernel_keeps_the_historical_clone(tmp_path: Path, config: Path) -> None:
     kernel = Kernel("6.13.12", Git(LINUX, "v6.13.12"), config=config)
-    build = _read(_tree(_recipe(kernel), tmp_path / "t"), "default/scripts/04-build.sh")
+    build = _read(
+        _tree(_recipe(kernel, mkosi=HISTORICAL), tmp_path / "t"), "default/scripts/04-build.sh"
+    )
     assert (
         '    git clone --depth 1 --branch "v${KERNEL_VERSION}" \\\n'
         f'        {LINUX} "$KERNEL_CACHE/src"\n'
@@ -88,19 +92,22 @@ def test_tagged_kernel_keeps_the_historical_clone(tmp_path: Path, config: Path) 
 def test_kernel_from_a_branch(tmp_path: Path, config: Path) -> None:
     tagged = Kernel("6.13.12", Git(LINUX, "v6.13.12"), config=config)
     branch = Kernel("6.13.12", Git(LINUX, "linux-6.13.y"), config=config)
-    out = _tree(_recipe(branch), tmp_path / "b")
+    out = _tree(_recipe(branch, mkosi=HISTORICAL), tmp_path / "b")
     build = _read(out, "default/scripts/04-build.sh")
     clone = 'git clone --depth 1 --branch linux-6.13.y \\\n        {} "$KERNEL_CACHE/src"'
     assert clone.format(LINUX) in build
     cache = build.split("\n")[3]
-    tagged_build = _read(_tree(_recipe(tagged), tmp_path / "t"), "default/scripts/04-build.sh")
+    tagged_tree = _tree(_recipe(tagged, mkosi=HISTORICAL), tmp_path / "t")
+    tagged_build = _read(tagged_tree, "default/scripts/04-build.sh")
     assert cache.startswith("KERNEL_CACHE=") and cache != tagged_build.split("\n")[3]
 
 
 def test_kernel_from_a_commit_subdirectory_with_submodules(tmp_path: Path, config: Path) -> None:
     commit = "0123456789abcdef0123456789abcdef01234567"
     kernel = Kernel("6.13", Git(LINUX, commit, subdir="linux", submodules=True), config=config)
-    build = _read(_tree(_recipe(kernel), tmp_path / "c"), "default/scripts/04-build.sh")
+    build = _read(
+        _tree(_recipe(kernel, mkosi=HISTORICAL), tmp_path / "c"), "default/scripts/04-build.sh"
+    )
     assert f'git -C "$KERNEL_CACHE/repo" fetch --depth 1 {LINUX} {commit}' in build
     assert 'git -C "$KERNEL_CACHE/repo" checkout -q FETCH_HEAD' in build
     assert "submodule update --init --recursive --depth 1" in build
@@ -110,7 +117,7 @@ def test_kernel_from_a_commit_subdirectory_with_submodules(tmp_path: Path, confi
 def test_kernel_from_a_checked_tarball(tmp_path: Path, config: Path) -> None:
     url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.13.12.tar.xz"
     kernel = Kernel("6.13.12", Http(url, sha256=SHA), config=config, cmdline="console=ttyS0")
-    out = _tree(_recipe(kernel), tmp_path / "h")
+    out = _tree(_recipe(kernel, mkosi=HISTORICAL), tmp_path / "h")
     build = _read(out, "default/scripts/04-build.sh")
     assert f'curl -fsSL {url} -o "$KERNEL_CACHE/linux.tar"' in build
     assert f'echo "{SHA}  $KERNEL_CACHE/linux.tar" | sha256sum -c -' in build

@@ -38,6 +38,7 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 ### Changed
 
+- Kernel sources are locked and fetched on the host in the current dialect: `kernel` (or `kernel-<variant>` when a variant's source differs) lockfile pins, the build script copies the mounted checkout (no `.git`, so the version string stays clean), `inspect` shows `pinned=`, `source-unpinned` covers kernels; http kernels no longer pull `curl` into the build. Re-lock recipes with a built kernel.
 - Current-dialect source hooks copy host-fetched checkouts instead of cloning; unpinned hooks fail with a pointer to `tundravm lock` and `tundravm fetch`; `$BUILDDIR` falls back to `$BUILDROOT/build` in source and kernel scripts (mkosi 26 sets it only with `BuildDirectory=`); existing locks for current-dialect recipes with source builds need re-locking.
 
 - Lockfile version 1 → 3. Per-variant sections are named `variants.<variant>.<section>` (version 2 said `profiles.`). Version 2 files still load with their sections renamed and digests unchanged; version 1 files load too, and `lock --check` reports every section as added until you re-lock.

@@ -14,7 +14,9 @@ pinned, then fetches exactly that commit. Every other dialect renders the hook
 *mounted*: :func:`fetch_source` checks the pinned source out on the host as the
 invoking user, into ``<out>/.sources/<name>-<pin[:12]>``, the backend mounts that
 directory at ``$SRCDIR/tundravm-sources`` and the hook copies the checkout into the
-build tree, so the sandbox never fetches a source.
+build tree, so the sandbox never fetches a source. A built kernel's source joins
+them as a :class:`KernelSource` named ``kernel`` (``kernel-<variant>`` for a variant
+whose kernel source differs): locked, fetched and mounted the same way.
 """
 
 from __future__ import annotations
@@ -28,13 +30,16 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
 from .errors import LockfileError, SourceError, TdxError, ValidationError
 from .lockfile.model import LockedFetch
+
+if TYPE_CHECKING:
+    from .models import Kernel
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -354,8 +359,82 @@ class Install:
             )
 
 
+class NamedSource:
+    """A source under its lockfile name: what ``lock`` pins and ``fetch`` checks out.
+
+    :class:`SourceBuild` and :class:`KernelSource` share the pin bookkeeping:
+    the lockfile entry is ``fetches[name]``, the host checkout
+    ``.sources/<name>-<pin[:12]>``.
+    """
+
+    __slots__ = ()
+    name: str
+    source: Source
+
+    @property
+    def mutable(self) -> bool:
+        """True when the declaration alone does not pin the source."""
+        return self.source.inline_pin is None
+
+    def pin_from(self, fetches: Mapping[str, LockedFetch]) -> str | None:
+        """This source's pin: inline, or a lockfile entry recorded for the same source."""
+        if self.source.inline_pin is not None:
+            return self.source.inline_pin
+        locked = fetches.get(self.name)
+        if locked is None or not self.matches(locked):
+            return None
+        return locked.digest
+
+    def matches(self, locked: LockedFetch) -> bool:
+        """True when *locked* was resolved from exactly this source declaration."""
+        ref = self.source.ref if isinstance(self.source, GitSource) else None
+        return (
+            locked.kind == self.source.kind
+            and locked.source == self.source.url
+            and locked.ref == ref
+        )
+
+    def locked(self, digest: str) -> LockedFetch:
+        ref = self.source.ref if isinstance(self.source, GitSource) else None
+        return LockedFetch(
+            source=self.source.url, kind=self.source.kind, digest=digest, name=self.name, ref=ref
+        )
+
+    def pin_dir(self, pin: str) -> str:
+        """``<name>-<pin[:12]>``: the directory under ``.sources`` that holds *pin*'s checkout."""
+        return f"{self.name}-{pin[:12]}"
+
+
 @dataclass(frozen=True, slots=True)
-class SourceBuild:
+class KernelSource(NamedSource):
+    """The source of a built kernel (one with a config), named ``kernel`` or ``kernel-<variant>``.
+
+    Outside ``nethermind-v1`` the kernel build script copies its host-fetched
+    checkout from ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``.
+    """
+
+    name: str
+    source: Source
+    version: str
+
+    @classmethod
+    def of(cls, kernel: Kernel, name: str = "kernel") -> KernelSource:
+        """*kernel*'s source: its tarball, or its repository at ``source_ref`` (``v<version>``)."""
+        version = kernel.version or "unknown"
+        if kernel.source_archive is not None:
+            source: Source = HttpSource(kernel.source_archive, sha256=kernel.source_sha256)
+        else:
+            source = GitSource(
+                kernel.source_repo,
+                kernel.source_ref or f"v{version}",
+                subdir=kernel.source_subdir,
+                submodules=kernel.source_submodules,
+            )
+        return cls(name, source, version)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBuild(NamedSource):
     """Fetch *source*, run *build* inside mkosi-chroot, install the results.
 
     *install* lists the :class:`Install` steps; artifacts are cached under their
@@ -425,35 +504,6 @@ class SourceBuild:
         fetch = ("git",) if isinstance(self.source, GitSource) else ("curl",)
         return tuple(dict.fromkeys((*fetch, *self.build.packages)))
 
-    @property
-    def mutable(self) -> bool:
-        """True when the declaration alone does not pin the source."""
-        return self.source.inline_pin is None
-
-    def pin_from(self, fetches: Mapping[str, LockedFetch]) -> str | None:
-        """This source's pin: inline, or a lockfile entry recorded for the same source."""
-        if self.source.inline_pin is not None:
-            return self.source.inline_pin
-        locked = fetches.get(self.name)
-        if locked is None or not self.matches(locked):
-            return None
-        return locked.digest
-
-    def matches(self, locked: LockedFetch) -> bool:
-        """True when *locked* was resolved from exactly this source declaration."""
-        ref = self.source.ref if isinstance(self.source, GitSource) else None
-        return (
-            locked.kind == self.source.kind
-            and locked.source == self.source.url
-            and locked.ref == ref
-        )
-
-    def locked(self, digest: str) -> LockedFetch:
-        ref = self.source.ref if isinstance(self.source, GitSource) else None
-        return LockedFetch(
-            source=self.source.url, kind=self.source.kind, digest=digest, name=self.name, ref=ref
-        )
-
     def to_payload(self) -> dict[str, object]:
         return {
             "name": self.name,
@@ -466,10 +516,6 @@ class SourceBuild:
             "cache_key": self.cache_key,
             "mark_unpinned": self.mark_unpinned,
         }
-
-    def pin_dir(self, pin: str) -> str:
-        """``<name>-<pin[:12]>``: the directory under ``.sources`` that holds *pin*'s checkout."""
-        return f"{self.name}-{pin[:12]}"
 
     def render(self, pin: str | None = None, *, mounted: bool = False) -> str:
         """The build-phase hook: fetch, build, cache, install.
@@ -792,7 +838,7 @@ def _network_reason(cause: object) -> str:
 
 
 def resolve_pins(
-    builds: Mapping[str, SourceBuild],
+    builds: Mapping[str, NamedSource],
     previous: Mapping[str, LockedFetch],
     *,
     resolver: Resolver | None = None,
@@ -874,7 +920,7 @@ def _unresolved(failures: Mapping[str, SourceError], total: int, *, offline: boo
 
 
 def source_drift(
-    builds: Mapping[str, SourceBuild],
+    builds: Mapping[str, NamedSource],
     fetches: Mapping[str, LockedFetch],
     *,
     resolver: Resolver | None = None,
@@ -921,6 +967,8 @@ __all__ = [
     "HttpSource",
     "Install",
     "InstallKind",
+    "KernelSource",
+    "NamedSource",
     "Resolver",
     "ScriptBuild",
     "Source",

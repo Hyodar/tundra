@@ -539,7 +539,7 @@ def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
     config_file = tmp_path / "kernel-yocto.config"
     config_file.write_text("# CONFIG_LOCALVERSION is not set\n", encoding="utf-8")
 
-    recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None)
+    recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None, mkosi=HISTORICAL)
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
     build_script = _script(output_dir, "04-build.sh")
@@ -607,7 +607,7 @@ def test_compile_kernel_without_config_no_build_script(tmp_path: Path) -> None:
 
 
 def test_compile_kernel_build_script_with_user_hooks(tmp_path: Path) -> None:
-    """Kernel build script is combined with user-defined build hooks."""
+    """Kernel build script is combined with user-defined build hooks (in-sandbox clone)."""
     config_file = tmp_path / "my.config"
     config_file.write_text("# config\n", encoding="utf-8")
 
@@ -616,6 +616,7 @@ def test_compile_kernel_build_script_with_user_hooks(tmp_path: Path) -> None:
         _kernel("6.13.12", config_file),
         Hook("custom", "build", "echo custom-build-step"),
         epoch=None,
+        mkosi=HISTORICAL,
     )
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
@@ -638,6 +639,7 @@ def test_compile_kernel_custom_source_repo(tmp_path: Path) -> None:
         Package("curl"),
         _kernel("6.13.12", config_file, repo="https://github.com/custom/linux"),
         epoch=None,
+        mkosi=HISTORICAL,
     )
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
