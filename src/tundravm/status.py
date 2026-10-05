@@ -345,6 +345,8 @@ def _artifacts(
         detail = f"{manifest} is unreadable: {exc}"
         return tuple(StatusItem("artifact", "stale", detail, {"variant": n}) for n in names)
     lockfile = extra.get("lockfile") if isinstance(extra, Mapping) else None
+    recorded = extra.get("reproducible") if isinstance(extra, Mapping) else None
+    reproducible = recorded if isinstance(recorded, bool) else None
     current = _current_digests(img, lock, artifacts)
     items: list[StatusItem] = []
     for name in names:
@@ -353,7 +355,9 @@ def _artifacts(
             detail = f"{name}: not in {manifest}"
             items.append(StatusItem("artifact", "missing", detail, {"variant": name}))
         for artifact in baked:
-            items.append(_artifact(artifact, current, lockfile, verify=verify))
+            items.append(
+                _artifact(artifact, current, lockfile, verify=verify, reproducible=reproducible)
+            )
     return tuple(items)
 
 
@@ -387,8 +391,14 @@ def _integrity(artifact: Artifact, *, verify: bool) -> Integrity:
 
 
 def _artifact(
-    artifact: Artifact, current: tuple[str | None, set[str]], lockfile: object, *, verify: bool
+    artifact: Artifact,
+    current: tuple[str | None, set[str]],
+    lockfile: object,
+    *,
+    verify: bool,
+    reproducible: bool | None = None,
 ) -> StatusItem:
+    """*reproducible* is what ``bake --verify-reproducible`` recorded; ``None``: not checked."""
     tree, recipes = current
     path = artifact.path
     size = path.stat().st_size if path.is_file() else None
@@ -406,6 +416,7 @@ def _artifact(
         "recipe_matches": recipe_ok,
         "tree_matches": tree_ok,
         "integrity": integrity,
+        "reproducible": reproducible,
     }
     parts = [f"{artifact.variant}/{artifact.target}", str(path)]
     if size is None:
@@ -417,6 +428,8 @@ def _artifact(
             if integrity == "unchecked"
             else f"integrity {integrity}"
         )
+    if reproducible is not None:
+        parts.append("reproducible" if reproducible else "not reproducible")
     if artifact.simulated:
         parts.append("simulated")
     parts.append(f"lock {lockfile}" if isinstance(lockfile, str) else "unpinned")

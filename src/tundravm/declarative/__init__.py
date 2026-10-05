@@ -12,6 +12,7 @@ a recipe and explicit inputs and returns explicit results.
 from tundravm.policy import Policy
 from tundravm.recipe import load
 
+from .bom import Sbom, sbom
 from .lifecycle import (
     Artifact,
     Azure,
@@ -128,6 +129,7 @@ __all__ = [
     "Repository",
     "Resolved",
     "RuntimeTools",
+    "Sbom",
     "Schema",
     "Secret",
     "SecretEnv",
@@ -158,6 +160,7 @@ __all__ = [
     "read_lock",
     "resolve",
     "resolve_all",
+    "sbom",
     "verify_artifact",
     "write_lock",
 ]

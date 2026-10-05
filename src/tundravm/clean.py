@@ -2,8 +2,9 @@
 
 The parts are ``sources`` (``OUT/.sources``), ``tree`` (``OUT/mkosi``),
 ``artifacts`` (each ``OUT/<variant>/`` and ``OUT/bake-result.json``) and
-``state`` (``OUT/.mkosi``, which holds the cached tools tree, and the mkosi
-state next to the tree's config). The lockfile is never one of them.
+``state`` (``OUT/.mkosi``, which holds the cached tools tree, the mkosi state
+next to the tree's config, and ``OUT/.reproduce``, the second build a failed
+``bake --verify-reproducible`` keeps). The lockfile is never one of them.
 """
 
 from __future__ import annotations
@@ -18,11 +19,11 @@ from shutil import which
 from ._source import SOURCES_DIRNAME
 from .backends.base import MKOSI_STATE_NAMES
 from .backends.local_linux import STATE_DIRNAME
-from .models import BAKE_RESULT_FILENAME
+from .models import BAKE_RESULT_FILENAME, REPRODUCE_DIRNAME
 
 PARTS: tuple[str, ...] = ("sources", "tree", "artifacts", "state")
 TREE_DIRNAME = "mkosi"
-RESERVED = frozenset({SOURCES_DIRNAME, TREE_DIRNAME, STATE_DIRNAME})
+RESERVED = frozenset({SOURCES_DIRNAME, TREE_DIRNAME, STATE_DIRNAME, REPRODUCE_DIRNAME})
 
 SudoRunner = Callable[[Sequence[str]], int]
 """Runs ``sudo rm -rf -- PATH`` and returns its exit status."""
@@ -65,6 +66,7 @@ def clean_paths(out: Path, parts: Collection[str], *, variants: Iterable[str] = 
         paths.append(out / BAKE_RESULT_FILENAME)
     if "state" in parts:
         paths.append(out / STATE_DIRNAME)
+        paths.append(out / REPRODUCE_DIRNAME)
         if "tree" not in parts:
             paths.extend(_tree_state(out / TREE_DIRNAME))
     return [path for path in paths if path.exists() or path.is_symlink()]

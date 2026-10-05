@@ -3,13 +3,16 @@
 A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
 :class:`Variant` overlays) is the whole public model; ``resolve``/``lint``/
 ``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``fetch``, ``bake``,
-``read_artifacts``, ``verify_artifact``, ``doctor``) take one. ``diff``, ``measure`` and ``deploy``
+``read_artifacts``, ``verify_artifact``, ``doctor``) take one; ``attest`` checks a
+running image's quote against a verifier policy and ``sbom`` lists what a baked
+artifact contains. ``diff``, ``measure`` and ``deploy``
 are ``tundravm.declarative.diff``/``measure``/``deploy`` (at the top level those
 names are modules). The shipped fragments are in :mod:`tundravm.declarative.utils`.
 """
 
 __version__ = "0.1.0"
 
+from .attestation import Attestation, attest
 from .declarative import (
     Artifact,
     Azure,
@@ -49,6 +52,7 @@ from .declarative import (
     Repository,
     Resolved,
     RuntimeTools,
+    Sbom,
     Schema,
     Secret,
     SecretEnv,
@@ -74,6 +78,7 @@ from .declarative import (
     read_lock,
     resolve,
     resolve_all,
+    sbom,
     verify_artifact,
     write_lock,
 )
@@ -97,6 +102,7 @@ from .recipe import load_recipe
 __all__ = [
     "Artifact",
     "ArtifactError",
+    "Attestation",
     "Azure",
     "Backend",
     "BackendExecutionError",
@@ -141,6 +147,7 @@ __all__ = [
     "ReproducibilityError",
     "Resolved",
     "RuntimeTools",
+    "Sbom",
     "Schema",
     "Secret",
     "SecretEnv",
@@ -158,6 +165,7 @@ __all__ = [
     "ValidationError",
     "Variant",
     "Why",
+    "attest",
     "bake",
     "compile",
     "doctor",
@@ -173,6 +181,7 @@ __all__ = [
     "read_lock",
     "resolve",
     "resolve_all",
+    "sbom",
     "verify_artifact",
     "write_lock",
     "__version__",

@@ -55,6 +55,7 @@ from tundravm.errors import (
     LockfileError,
     MeasurementError,
     PolicyError,
+    ReproducibilityError,
     StateError,
     ValidationError,
 )
@@ -67,12 +68,13 @@ from tundravm.lockfile import (
 from tundravm.measure import derive_measurements
 from tundravm.models import (
     BAKE_RESULT_FILENAME,
+    REPRODUCE_DIRNAME,
     ArtifactRef,
     BakeResult,
     DeployRequest,
     ProfileBuildResult,
 )
-from tundravm.observability import Event, Progress, Reporter, TextReporter
+from tundravm.observability import Event, Progress, Reporter, TextReporter, display_path
 
 from . import _bake, _compile
 from ._lowered import LOCK_FILENAME, Lowered
@@ -1006,6 +1008,7 @@ def bake_image(
     fetch: bool = True,
     resolver: Resolver | None = None,
     offline: bool = False,
+    verify_reproducible: bool = False,
 ) -> tuple[BakeResult, tuple[Artifact, ...]]:
     """Bake *img* into *out*, frozen against *locked*, and record the artifact manifest.
 
@@ -1025,6 +1028,13 @@ def bake_image(
     complete checkouts and downloads nothing, every Go, Cargo and .NET build must
     find its prefetched dependencies (else ``E_STATE`` before mkosi runs), and
     mkosi runs the build scripts with ``--with-network=no``.
+
+    *verify_reproducible* bakes the same selection a second time into
+    ``out/.reproduce`` (same lockfile, the same ``out/.sources`` checkouts
+    hard-linked, everything compiled and built again) and compares every
+    artifact's sha256: ``bake-result.json`` records ``declarative.reproducible``,
+    and a mismatch raises ``ReproducibilityError`` with a per-artifact table,
+    keeping the second build for comparison (it is removed when all match).
     """
     if offline and img.policy.network_mode != "offline":
         img = replace(img, policy=replace(img.policy, network_mode="offline"))
@@ -1047,6 +1057,11 @@ def bake_image(
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
         result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
+        rows: list[tuple[str, str, str, str, str]] = []
+        if verify_reproducible:
+            scratch = destination / REPRODUCE_DIRNAME
+            again = _rebake(baking, scratch, used, frozen=locked is not None, reporter=reporter)
+            rows = _compare_digests(result, again)
     tree = read_tree(destination / "mkosi", warn=_tree_warning(reporter))
     recipe_digest = (
         locked.recipe_digest
@@ -1069,8 +1084,103 @@ def bake_image(
         payload[MANIFEST_KEY]["lockfile"] = (
             str(source) if lock_source is not None or used == lock_path else None
         )
+    if verify_reproducible:
+        payload[MANIFEST_KEY]["reproducible"] = all(row[4] == "match" for row in rows)
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if verify_reproducible:
+        _report_reproducibility(rows, destination / REPRODUCE_DIRNAME, reporter)
     return result, read_artifacts(manifest)
+
+
+def _rebake(
+    baking: Lowered, scratch: Path, used: Path, *, frozen: bool, reporter: Reporter | None
+) -> BakeResult:
+    """Bake *baking* again into *scratch*, against lockfile *used* and the same checkouts."""
+    try:
+        if scratch.exists():
+            shutil.rmtree(scratch)
+        scratch.mkdir(parents=True)
+    except OSError as exc:
+        raise StateError(
+            f"Cannot reset {scratch} for the second build: {exc.strerror or exc}.",
+            hint=f"Remove it as its owner (`sudo rm -rf -- {scratch}`, or "
+            "`tundravm clean --state`), then bake again.",
+            context={"path": str(exc.filename or scratch)},
+        ) from exc
+    sources = Path(baking.build_dir) / SOURCES_DIRNAME
+    if sources.is_dir():
+        try:
+            shutil.copytree(sources, scratch / SOURCES_DIRNAME, symlinks=True, copy_function=_link)
+        except (OSError, shutil.Error) as exc:
+            raise StateError(
+                f"Cannot link the fetched sources into {scratch} for the second build: {exc}",
+                hint="Make OUT/.sources readable by this user (`tundravm fetch RECIPE --force` "
+                "checks it out again), then bake again.",
+                context={"sources": str(sources)},
+            ) from exc
+    if reporter is not None:
+        message = f"verify reproducibility: baking again into {display_path(scratch)}"
+        reporter.emit(Event("log", None, message, 0.0, {"source": "notice"}))
+    again = replace(baking, build_dir=scratch, lock_file=used)
+    return _bake.bake(again, scratch, frozen=frozen, reporter=reporter)
+
+
+def _link(source: str, target: str) -> object:
+    """Hard-link *source* to *target* (the build mounts sources ephemerally), else copy it."""
+    try:
+        os.link(source, target)
+    except OSError:
+        return shutil.copy2(source, target)
+    return target
+
+
+def _compare_digests(first: BakeResult, second: BakeResult) -> list[tuple[str, str, str, str, str]]:
+    """``(variant, target, first sha256, second sha256, match|mismatch)`` per artifact."""
+    rows: list[tuple[str, str, str, str, str]] = []
+    for variant in sorted({*first.profiles, *second.profiles}):
+        ours = first.profiles.get(variant)
+        theirs = second.profiles.get(variant)
+        a = {} if ours is None else {t: r.digest or "" for t, r in ours.artifacts.items()}
+        b = {} if theirs is None else {t: r.digest or "" for t, r in theirs.artifacts.items()}
+        for target in sorted({*a, *b}):
+            left, right = a.get(target, ""), b.get(target, "")
+            verdict = "match" if left and left == right else "mismatch"
+            rows.append((variant, target, left or "-", right or "-", verdict))
+    return rows
+
+
+def _report_reproducibility(
+    rows: Sequence[tuple[str, str, str, str, str]], scratch: Path, reporter: Reporter | None
+) -> None:
+    """Remove *scratch* when every row matches, else raise ``ReproducibilityError``."""
+    differing = [row for row in rows if row[4] != "match"]
+    if not differing:
+        shutil.rmtree(scratch, ignore_errors=True)
+        if reporter is not None:
+            message = f"reproducible: {len(rows)} artifact(s) match a second build"
+            reporter.emit(Event("log", None, message, 0.0, {"source": "notice"}))
+        return
+    header = ("variant", "target", "first", "second", "")
+    table = [header, *((v, t, a[:12], b[:12], verdict) for v, t, a, b, verdict in rows)]
+    widths = [max(len(row[i]) for row in table) for i in range(len(header))]
+    lines = [
+        "  " + "  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)).rstrip()
+        for row in table
+    ]
+    raise ReproducibilityError(
+        f"The bake is not reproducible: {len(differing)} of {len(rows)} artifact(s) differ "
+        "between two builds.\n" + "\n".join(lines),
+        hint=(
+            f"The second build is kept in {scratch}. Compare the compiled trees with "
+            f"`tundravm diff RECIPE --against {scratch / 'mkosi'}` and the images with "
+            "diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and "
+            "packages installed without a snapshot (Recipe(snapshot=...))."
+        ),
+        context={
+            "second_build": str(scratch),
+            "differ": ", ".join(f"{v}/{t}" for v, t, *_ in differing),
+        },
+    )
 
 
 def secret_ports(img: Lowered, variant: str) -> tuple[int, ...]:
@@ -1122,6 +1232,7 @@ def bake(
     progress: Callable[[str], None] | None = None,
     fetch: bool = True,
     offline: bool = False,
+    verify_reproducible: bool = False,
 ) -> tuple[Artifact, ...]:
     """Build *variants* (default: all) with *backend* into *out*, frozen against *lock*.
 
@@ -1134,7 +1245,9 @@ def bake(
     prefetched every Go, Cargo and .NET build's dependencies, else ``E_STATE``.
     *progress* receives the CLI's progress lines. Writes
     ``out/bake-result.json``, which :func:`read_artifacts` reads back.
-    In-process artifacts are ``simulated``.
+    In-process artifacts are ``simulated``. *verify_reproducible* bakes a
+    second time into ``out/.reproduce`` and raises ``ReproducibilityError``
+    unless every artifact's sha256 matches (see :func:`bake_image`).
     """
     names = variant_names(recipe, variants)
     reporter = None if progress is None else TextReporter(_LineStream(progress), live=False)
@@ -1148,6 +1261,7 @@ def bake(
             reporter=reporter,
             fetch=fetch,
             offline=offline,
+            verify_reproducible=verify_reproducible,
         )
     finally:
         if reporter is not None:

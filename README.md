@@ -43,6 +43,8 @@ tundravm lock node.py                           # write build/tundravm.lock (sec
 tundravm compile node.py --out mkosi            # emit the mkosi tree, one directory per variant
 tundravm bake node.py                           # build every variant, frozen against the lock
 tundravm status node.py                         # where the project stands, and the next command to run
+tundravm sbom build --variant default     # SPDX/CycloneDX bill of materials: packages, source pins, metadata
+tundravm attest --endpoint unix:./tdxs.sock --policy peer.json   # check a running image's quote against a policy
 tundravm measure build --variant default        # expected RTMRs of the baked artifact
 tundravm deploy build --variant default --target qemu
 ```

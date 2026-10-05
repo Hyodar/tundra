@@ -11,9 +11,10 @@ output; ``completion`` prints a shell completion script. With no arguments the
 help and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
 codes) or a usage error (unknown verbs and flags get a "did you mean"), 1 for a
 failed check (``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``,
-``doctor``) or an unexpected failure. A recipe file that fails to import (syntax
-error, missing module, an exception while it runs) is an ``E_VALIDATION`` error
-naming ``file:line``; ``--traceback`` raises SDK errors with the Python traceback.
+``doctor``, an untrusted ``attest``) or an unexpected failure. A recipe file that
+fails to import (syntax error, missing module, an exception while it runs) is an
+``E_VALIDATION`` error naming ``file:line``; ``--traceback`` raises SDK errors
+with the Python traceback.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from typing import TextIO, cast, get_args
 
 from . import __version__
 from ._source import SOURCES_DIRNAME
+from .attestation import attest, connect, render_attestation
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
@@ -42,6 +44,7 @@ from .clean import PARTS, clean_paths, owner_hint, remove, sudo_runner
 from .completion import SHELLS, Shell, render_completion
 from .declarative._compile import emit
 from .declarative._lowered import Lowered
+from .declarative.bom import SBOM_FORMATS, sbom
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
     NO_LOCK,
@@ -482,6 +485,16 @@ def build_parser() -> argparse.ArgumentParser:
             "dependency caches, and fail before mkosi when one is missing."
         ),
     )
+    bake.add_argument(
+        "--verify-reproducible",
+        action="store_true",
+        help=(
+            "Bake the same variants a second time into OUT/.reproduce (same lockfile, same "
+            "fetched sources, compiled and built again) and compare every artifact's sha256; "
+            "a mismatch prints a table per artifact and fails with E_REPRODUCIBILITY, keeping "
+            "the second build. bake-result.json records declarative.reproducible."
+        ),
+    )
     bake.epilog = (
         RESOLUTION_HELP
         + " "
@@ -572,6 +585,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Deploy a simulated (in-process) artifact anyway.",
     )
+
+    _add_attest(sub)
+
+    _add_sbom(sub)
 
     doctor_cmd = sub.add_parser(
         "doctor",
@@ -837,7 +854,10 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     clean.add_argument(
         "--state",
         action="store_true",
-        help="Remove OUT/.mkosi (incl. the cached tools tree) and mkosi state in OUT/mkosi.",
+        help=(
+            "Remove OUT/.mkosi (incl. the cached tools tree), mkosi state in OUT/mkosi and "
+            "OUT/.reproduce (the second build of bake --verify-reproducible)."
+        ),
     )
     clean.add_argument("--all", action="store_true", help="All of the parts above.")
     clean.add_argument(
@@ -848,6 +868,130 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     )
     clean.add_argument(
         "--dry-run", action="store_true", help="Print what would be removed; remove nothing."
+    )
+
+
+def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Check a running image's TDX quote against a verifier policy."
+    attest_cmd = sub.add_parser(
+        "attest",
+        help=help_text,
+        description=(
+            help_text + " Asks the image's tdxs issuer for a quote bound to a nonce, reads "
+            "MRTD and RTMR0..RTMR3 from it and compares them with the policy `measure "
+            "--export-policy` wrote. It checks measurements only; collateral verification "
+            "is done by a Tdxs validator."
+        ),
+        epilog=(
+            "Prints one line per register (match, mismatch, or unchecked when the policy "
+            "does not hold it), the nonce check (the quote's report_data must be "
+            "SHA-256(nonce)) and `verdict: trusted` or `verdict: untrusted`. Exit 0 when "
+            "trusted, 1 when untrusted, 2 on an SDK error (unreachable issuer, not a TDX "
+            "quote, a bad or placeholder policy)."
+        ),
+    )
+    attest_cmd.set_defaults(handler=_cmd_attest)
+    attest_cmd.add_argument(
+        "--endpoint",
+        required=True,
+        metavar="URL",
+        help=(
+            "The tdxs issuer: unix:PATH (the image's /var/tdxs.sock, e.g. forwarded with "
+            "`ssh -L ./tdxs.sock:/var/tdxs.sock`), tcp://HOST:PORT (tdxs's JSON lines), or "
+            "an http(s):// URL the request is POSTed to (a gateway in front of tdxs)."
+        ),
+    )
+    attest_cmd.add_argument(
+        "--policy",
+        type=Path,
+        required=True,
+        metavar="FILE",
+        help="Verifier policy from `tundravm measure --export-policy FILE`.",
+    )
+    attest_cmd.add_argument(
+        "--nonce",
+        default=None,
+        metavar="HEX",
+        help="Challenge the quote must bind, as hex (default: 32 random bytes).",
+    )
+    attest_cmd.add_argument(
+        "--format",
+        choices=("text", "json", "markdown"),
+        default="text",
+        help=(
+            "Output format (default: %(default)s). json holds endpoint, platform, source, "
+            "quote_version, nonce {value, report_data, verdict}, registers {NAME: {actual, "
+            "expected, verdict}}, trusted and verdict; markdown is a table."
+        ),
+    )
+    attest_cmd.add_argument(
+        "--insecure",
+        action="store_true",
+        help="https endpoints: do not verify the server's TLS certificate.",
+    )
+    attest_cmd.add_argument(
+        "--traceback",
+        action="store_true",
+        help="On an error, raise it with the full Python traceback instead of one message.",
+    )
+
+
+def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Write the software bill of materials of a baked variant."
+    sbom_cmd = sub.add_parser(
+        "sbom",
+        help=help_text,
+        description=(
+            help_text + " It merges mkosi's package manifest next to the artifact (every "
+            "installed distribution package and version), the lockfile's source pins (each "
+            "source build, kernel and efi-stub with URL, ref, commit or sha256, and the "
+            "paths a build installs) and the recipe metadata (base, arch, snapshot, mirror, "
+            "recipe, tree and artifact digests, tundravm version)."
+        ),
+        epilog=(
+            "Without a manifest (a simulated bake) the document says so and lists the "
+            "packages the recipe declares, unversioned. Lists are sorted; set "
+            "SOURCE_DATE_EPOCH to fix the creation time."
+        ),
+    )
+    sbom_cmd.set_defaults(handler=_cmd_sbom)
+    sbom_cmd.add_argument(
+        "manifest",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="bake-result.json written by `tundravm bake` (or the bake --out directory).",
+    )
+    sbom_cmd.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Bake output directory holding bake-result.json, for MANIFEST (default: build).",
+    )
+    sbom_cmd.add_argument(
+        "--variant", default=None, metavar="NAME", help="Baked variant (default: the only one)."
+    )
+    sbom_cmd.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help=(
+            "Lockfile with the source pins (default: the one the bake recorded, else "
+            "tundravm.lock in the bake directory; without one sources are not listed)."
+        ),
+    )
+    sbom_cmd.add_argument(
+        "--format",
+        choices=SBOM_FORMATS,
+        default="spdx-json",
+        help="Document format (default: %(default)s).",
+    )
+    sbom_cmd.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Write the document to FILE instead of stdout.",
     )
 
 
@@ -1407,6 +1551,7 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
             lock_source=None if locked is None else lock_path,
             fetch=not args.no_fetch,
             offline=args.offline,
+            verify_reproducible=args.verify_reproducible,
         )
     finally:
         reporter.close()
@@ -1415,6 +1560,8 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
     if not args.quiet:
         print(file=out)
     print(render_bake_summary(result), file=out)
+    if args.verify_reproducible:
+        print(f"reproducible: yes ({len(artifacts)} artifacts match a second build)", file=out)
     if artifacts:
         first = artifacts[0]
         manifest = destination / "bake-result.json"
@@ -1681,10 +1828,60 @@ def doctor(
     return EXIT_OK if ready else EXIT_FAILURE
 
 
+def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
+    result = attest(
+        args.endpoint,
+        args.policy,
+        nonce=args.nonce,
+        transport=connect(args.endpoint, insecure=args.insecure),
+    )
+    print(render_attestation(result, args.format), file=out)
+    return EXIT_OK if result.trusted else EXIT_FAILURE
+
+
 def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args) if args.recipe is not None else None
     backend = None if args.backend is None else Backend(args.backend).build_backend()
     return doctor(loaded, out, runner=args.runner, backend=backend)
+
+
+def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
+    if args.manifest is not None and args.out is not None:
+        raise ValidationError(
+            "Pass MANIFEST or --out, not both.",
+            hint="MANIFEST is the bake-result.json (or its directory) that --out names.",
+        )
+    args.manifest = args.manifest or args.out or Path("build")
+    artifact = _artifact(args, None)
+    document = sbom(artifact, lock=_sbom_lock(args.manifest, args.lockfile))
+    text = document.render(args.format)
+    if args.output is not None or args.format.endswith("-json"):
+        for note in document.notes:
+            print(f"note: {note}", file=sys.stderr)
+    if args.output is None:
+        out.write(text)
+        return EXIT_OK
+    target: Path = args.output
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    print(f"wrote {args.format} {target}", file=sys.stderr)
+    return EXIT_OK
+
+
+def _sbom_lock(manifest: Path, flag: Path | None) -> Lock | None:
+    """``--lockfile``, else the lockfile the bake recorded or ``tundravm.lock`` beside it."""
+    if flag is not None:
+        return read_lock(flag)
+    base = manifest if manifest.is_dir() else manifest.parent
+    try:
+        payload = json.loads((base / "bake-result.json").read_text(encoding="utf-8"))
+        recorded = (payload.get("declarative") or {}).get("lockfile")
+    except (OSError, ValueError, AttributeError):
+        recorded = None
+    for candidate in (recorded and Path(recorded), base / "tundravm.lock"):
+        if candidate and candidate.is_file():
+            return read_lock(candidate)
+    return None
 
 
 def _cmd_completion(args: argparse.Namespace, out: TextIO) -> int:

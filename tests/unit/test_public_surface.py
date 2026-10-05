@@ -13,6 +13,7 @@ from tundravm import declarative
 EXPECTED_TOP_LEVEL = [
     "Artifact",
     "ArtifactError",
+    "Attestation",
     "Azure",
     "Backend",
     "BackendExecutionError",
@@ -57,6 +58,7 @@ EXPECTED_TOP_LEVEL = [
     "ReproducibilityError",
     "Resolved",
     "RuntimeTools",
+    "Sbom",
     "Schema",
     "Secret",
     "SecretEnv",
@@ -75,6 +77,7 @@ EXPECTED_TOP_LEVEL = [
     "Variant",
     "Why",
     "__version__",
+    "attest",
     "bake",
     "compile",
     "doctor",
@@ -90,6 +93,7 @@ EXPECTED_TOP_LEVEL = [
     "read_lock",
     "resolve",
     "resolve_all",
+    "sbom",
     "verify_artifact",
     "write_lock",
 ]

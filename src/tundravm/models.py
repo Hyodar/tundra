@@ -603,6 +603,8 @@ class CompileResult:
 
 
 BAKE_RESULT_FILENAME = "bake-result.json"
+REPRODUCE_DIRNAME = ".reproduce"
+"""Where ``bake --verify-reproducible`` builds the second time (``OUT/.reproduce``)."""
 BAKE_RESULT_SCHEMA_VERSION = 1
 
 
@@ -728,6 +730,7 @@ __all__ = [
     "ArtifactRef",
     "BakeRequest",
     "BAKE_RESULT_FILENAME",
+    "REPRODUCE_DIRNAME",
     "BakeResult",
     "CommandSpec",
     "CompileResult",
