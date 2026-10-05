@@ -6,7 +6,8 @@ Every recipe command loads the ``Recipe`` a Python file binds (see
 ``--variant NAME``, or omit it for every declared variant. ``measure`` and
 ``deploy`` read the ``bake-result.json`` manifest a ``bake`` wrote. ``init``
 bootstraps a recipe project and ``ci`` runs lint, compile and lock checks in
-one go; ``completion`` prints a shell completion script. With no arguments the
+one go; ``status`` reports where the project stands and ``clean`` removes build
+output; ``completion`` prints a shell completion script. With no arguments the
 help and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
 codes) or a usage error (unknown verbs and flags get a "did you mean"), 1 for a
 failed check (``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``,
@@ -37,6 +38,7 @@ from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requ
 from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
 from .check import failing, render_as, render_summary
+from .clean import PARTS, clean_paths, owner_hint, remove, sudo_runner
 from .completion import SHELLS, Shell, render_completion
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
@@ -82,6 +84,7 @@ from .measure import PlaceholderMeasurementWarning
 from .measure import rtmr as rtmr_measure
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
 from .recipe import RecipeFile, load_file
+from .status import Invocation, project_status, render_status
 from .templates import (
     BACKEND_SNIPPETS,
     DEFAULT_TEMPLATE,
@@ -526,6 +529,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report format for failing steps (default: auto). " + format_help(),
     )
 
+    _add_status(sub)
+    _add_clean(sub)
+
     completion = sub.add_parser(
         "completion",
         help="Print a shell completion script (bash, zsh or fish).",
@@ -613,6 +619,93 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         "--no-doctor",
         action="store_true",
         help="Skip probing the chosen backend's host tools (`tundravm doctor --backend`).",
+    )
+
+
+def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    status = _add_command(
+        sub,
+        "status",
+        _cmd_status,
+        help="Report where the project stands: lock, sources, tree, artifacts, next step.",
+    )
+    status.epilog = (
+        "Read-only and network-free; always exits 0. One line per item with a verdict "
+        "(ok, stale, missing, n/a; lint says error when the recipe has errors), then "
+        "`next: COMMAND`, the single most useful command to run (or `everything is up "
+        "to date`). Artifacts are stale when the recipe or the tree they were baked "
+        "from changed since."
+    )
+    status.add_argument(
+        "--out", type=Path, default=None, help="Build output directory (default: build)."
+    )
+    status.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="Lockfile to report on (default: build/tundravm.lock).",
+    )
+    status.add_argument(
+        "--format",
+        choices=("text", "json", "markdown"),
+        default="text",
+        help=(
+            "Output format (default: %(default)s). json is one object per section, each "
+            "with a `verdict`; markdown is a table per section."
+        ),
+    )
+
+
+def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    clean = sub.add_parser(
+        "clean",
+        help="Remove build output: source checkouts, the tree, artifacts, mkosi state.",
+        description=(
+            "Remove the chosen parts of the build output directory (--out, default: the "
+            "recipe's build). With no part flag, list what --all would remove and exit 0. "
+            "The lockfile is removed only when --lockfile names it."
+        ),
+        epilog=(
+            "A path this user cannot delete (root-owned mkosi output) is removed with "
+            "`sudo rm -rf` when sudo is available; otherwise it is reported and clean "
+            "exits 1."
+        ),
+    )
+    clean.set_defaults(handler=_cmd_clean)
+    clean.add_argument(
+        "recipe",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Recipe .py file (optional with --out).",
+    )
+    _add_import_options(clean)
+    clean.add_argument(
+        "--out", type=Path, default=None, help="Build output directory (default: build)."
+    )
+    clean.add_argument(
+        "--sources", action="store_true", help="Remove OUT/.sources (the fetched checkouts)."
+    )
+    clean.add_argument("--tree", action="store_true", help="Remove OUT/mkosi.")
+    clean.add_argument(
+        "--artifacts",
+        action="store_true",
+        help="Remove each OUT/<variant>/ artifact directory and OUT/bake-result.json.",
+    )
+    clean.add_argument(
+        "--state",
+        action="store_true",
+        help="Remove OUT/.mkosi (incl. the cached tools tree) and mkosi state in OUT/mkosi.",
+    )
+    clean.add_argument("--all", action="store_true", help="All of the parts above.")
+    clean.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="Also remove this lockfile (never removed otherwise).",
+    )
+    clean.add_argument(
+        "--dry-run", action="store_true", help="Print what would be removed; remove nothing."
     )
 
 
@@ -1265,6 +1358,75 @@ def _cmd_ci(args: argparse.Namespace, out: TextIO) -> int:
             for skipped, _step in CI_STEPS[index + 1 :]:
                 print(f"skip {skipped}", file=out)
             return EXIT_FAILURE
+    return EXIT_OK
+
+
+def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args)
+    img = loaded.lowered()
+    call = Invocation(
+        recipe=str(args.recipe),
+        out=args.out,
+        lockfile=args.lockfile,
+        variants=names if args.variant else (),
+    )
+    status = project_status(
+        loaded,
+        names,
+        out=args.out if args.out is not None else Path(img.build_dir),
+        lock_path=_lock_path(img, args.lockfile),
+        runner=args.runner if args.runner is not None else run_probe,
+        invocation=call,
+    )
+    print(render_status(status, args.format), file=out)
+    return EXIT_OK
+
+
+def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
+    if args.recipe is None and args.out is None:
+        raise ValidationError(
+            "clean needs RECIPE or --out DIR.",
+            hint="Pass the recipe file (its build directory is cleaned) or --out DIR.",
+        )
+    variants: tuple[str, ...] = ()
+    destination: Path | None = args.out
+    if args.recipe is not None:
+        loaded = _load(args)
+        variants = loaded.variants
+        if destination is None:
+            destination = Path(loaded.lowered().build_dir)
+    assert destination is not None
+    chosen = PARTS if args.all else tuple(part for part in PARTS if getattr(args, part))
+    listing = not chosen and args.lockfile is None
+    paths = clean_paths(destination, PARTS if listing else chosen, variants=variants)
+    if args.lockfile is not None and args.lockfile.is_file():
+        paths.append(args.lockfile)
+    if not paths:
+        print(f"nothing to clean in {destination}", file=out)
+        return EXIT_OK
+    if args.dry_run or listing:
+        for path in paths:
+            print(f"would remove {path}", file=out)
+        if listing:
+            print(
+                "pass --all to remove them, or --sources, --tree, --artifacts or --state "
+                "for some (the lockfile stays unless --lockfile names it)",
+                file=out,
+            )
+        return EXIT_OK
+    sudo = sudo_runner()
+    failed: list[Path] = []
+    for path in paths:
+        problem = remove(path, sudo=sudo)
+        if problem is None:
+            print(f"removed {path}", file=out)
+        else:
+            print(f"not removed {path}: {problem}", file=out)
+            failed.append(path)
+    if failed:
+        print(owner_hint(failed), file=out)
+        return EXIT_FAILURE
     return EXIT_OK
 
 

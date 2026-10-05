@@ -36,6 +36,9 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 - `tundravm fetch RECIPE [--lockfile] [--out] [--variant]` checks every source build out on the host as the invoking user (git: pinned commit; http: sha256-verified download) into `build/.sources/<name>-<pin12>/`, idempotently; `bake` runs it first (`--no-fetch` to skip) and mounts `.sources` ephemerally into the build, so the sandbox never fetches sources and private repositories work. `lifecycle.fetch()` / `FetchedSource`; `bake(..., fetch=True)`; `BakeRequest.sources_dir`.
 
+- `tundravm status RECIPE [--format text|json|markdown]`: a read-only, network-free report with a verdict per item (recipe, lint, lock drift and unpinned sources, source checkouts in `OUT/.sources`, the `OUT/mkosi` tree, each baked artifact with staleness, the backend's host tools) and `next:` with the single most useful command; always exits 0.
+- `tundravm clean RECIPE|--out DIR` removes build output by part (`--sources`, `--tree`, `--artifacts`, `--state` incl. the cached tools tree, `--all`), lists what it would remove with no part flag or `--dry-run`, keeps the lockfile unless `--lockfile` names it, and falls back to `sudo rm -rf` for root-owned paths.
+
 ### Changed
 
 - Kernel sources are locked and fetched on the host in the current dialect: `kernel` (or `kernel-<variant>` when a variant's source differs) lockfile pins, the build script copies the mounted checkout (no `.git`, so the version string stays clean), `inspect` shows `pinned=`, `source-unpinned` covers kernels; http kernels no longer pull `curl` into the build. Re-lock recipes with a built kernel.

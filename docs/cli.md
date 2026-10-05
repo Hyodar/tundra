@@ -16,6 +16,8 @@ tundravm measure MANIFEST [--variant NAME] [--scheme rtmr|azure|gcp] [--json] [-
 tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--allow-placeholder]
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--format auto|text|github]
+tundravm status  RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--format text|json|markdown]
+tundravm clean   [RECIPE] [--out DIR] [--sources] [--tree] [--artifacts] [--state] [--all] [--lockfile PATH] [--dry-run]
 tundravm completion bash|zsh|fish
 ```
 
@@ -63,6 +65,8 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `deploy` | Deploys one baked variant's artifact. | |
 | `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart` and `apt`, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk images need, which `bake` checks before mkosi runs; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
 | `ci` | `lint --strict`, `compile --check`, `lock --check` in order; stops at the first failure. | any step fails, including a missing lockfile |
+| `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
+| `clean` | Removes the chosen parts of the build output directory: `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
 `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH` names another one.
@@ -351,6 +355,50 @@ A missing `ukify` alone needs no action, since the backend then adds the tools t
 - `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. `--json` prints `artifact`, `artifact_digest`, `scheme`, `tool`, `values`, `variant`.
 - `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`; azure `storage_account` (required), `resource_group`, `location`, `vm_size`; gcp `project` and `bucket` (required), `zone`, `machine_type`. Simulated artifacts are refused unless `--allow-placeholder`.
 
+## Project status
+
+`tundravm status RECIPE` answers "where is this project at?" without writing anything or touching the network. It prints one line per item, `LABEL VERDICT DETAIL`, for the selected variants (`--variant`, default all), then `next: COMMAND`:
+
+| Line | Reports | Verdicts |
+|---|---|---|
+| `recipe` | path, recipe digest (as `inspect --format json`), variants, mkosi dialect, base and snapshot | `ok` |
+| `lint` | diagnostic counts by level | `ok`, `error` when there are errors |
+| `lock` | `--lockfile` (default `build/tundravm.lock`): present, version, drifted sections (as `lock --check`), unpinned sources and kernels | `ok`, `stale`, `missing` |
+| `source` | one per source build and built kernel: whether `OUT/.sources/<name>-<pin12>` holds a complete checkout of the locked pin | `ok`, `stale` (another pin or an incomplete checkout), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
+| `tree` | `OUT/mkosi` (`--out`, default `build`) against what the recipe compiles to now, as `compile --check` | `ok`, `stale`, `missing` |
+| `artifact` | one per baked variant and target in `OUT/bake-result.json`: path, size, sha256 prefix, `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches | `ok`, `stale`, `missing` |
+| `backend` | the recipe file's `backend` and how many of its host tools `doctor` finds | `ok`, `missing`, `n/a` (no backend) |
+
+`next` follows the lifecycle: `tundravm lint` when there are errors, else `tundravm lock`, `tundravm fetch`, `tundravm compile --out OUT/mkosi`, `tundravm bake` (or `tundravm doctor` when the backend lacks a tool), and `everything is up to date` once every line is `ok` or `n/a`. It repeats `--variant`, `--out` and `--lockfile` as given. `status` always exits 0. `--format json` prints one object per section (`recipe`, `lint`, `lock`, `sources`, `tree`, `artifacts`, `backend`), each with a `verdict`, plus `next`; `sources` and `artifacts` hold `items`. `--format markdown` prints a table per section.
+
+After `init --backend inprocess`, `lock` and `bake --backend inprocess`, adding a package to the recipe:
+
+```console
+$ tundravm status node.py
+recipe    ok       node.py  digest 837071dff8c5  variants default, dev  dialect current  base debian/trixie
+lint      ok       0 errors, 0 warnings, 0 infos
+lock      stale    build/tundravm.lock  v3  2 sections drifted
+source    n/a      no source builds or kernels
+tree      stale    build/mkosi: 2 files differ from the recipe
+artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+artifact  stale    dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+backend   ok       inprocess: no host tools needed
+next: tundravm lock node.py
+```
+
+`tundravm clean RECIPE` (or `clean --out DIR` without a recipe) removes build output by part: `--sources` (`OUT/.sources`), `--tree` (`OUT/mkosi`), `--artifacts` (each `OUT/<variant>/` and `OUT/bake-result.json`), `--state` (`OUT/.mkosi`, which holds the cached tools tree, and the mkosi state next to the tree's config), or `--all`. The lockfile is never removed unless `--lockfile PATH` names it. It prints `removed PATH` per path, or `would remove PATH` with `--dry-run`; with no part flag it lists what `--all` would remove and removes nothing:
+
+```console
+$ tundravm clean node.py
+would remove build/mkosi
+would remove build/default
+would remove build/dev
+would remove build/bake-result.json
+pass --all to remove them, or --sources, --tree, --artifacts or --state for some (the lockfile stays unless --lockfile names it)
+```
+
+A path the user cannot delete (mkosi output a `local` bake left root-owned) is removed with `sudo rm -rf` when `sudo` is available; otherwise `clean` prints `not removed PATH: ...` and a hint, and exits 1.
+
 ## Shell completion
 
 `tundravm completion bash|zsh|fish` prints a static script generated from this version's verbs, flags, flag choices (`--format`, `--backend`, `--scheme`, `--target`, ...) and file arguments. Its header repeats the install line; regenerate it after upgrading.
@@ -366,7 +414,7 @@ A missing `ukify` alone needs no action, since the backend then adds the tools t
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, or `doctor` missing a required tool |
+| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, or `doctor` missing a required tool; or `clean` could not remove a path |
 | 2 | An SDK error, printed as `error [E_CODE]: message` with a `Hint:` and context lines; also a usage error (unknown verb or flag, with a did-you-mean suggestion) |
 | 130 | Interrupted |
 
