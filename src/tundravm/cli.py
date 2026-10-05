@@ -36,6 +36,7 @@ from ._source import SOURCES_DIRNAME
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
+from .check import Diagnostic as CheckDiagnostic
 from .check import failing, render_as, render_summary
 from .clean import PARTS, clean_paths, owner_hint, remove, sudo_runner
 from .completion import SHELLS, Shell, render_completion
@@ -57,6 +58,7 @@ from .declarative.lifecycle import (
     deploy,
     fetch_image,
     lock_image,
+    lock_status,
     measure,
     probe,
     read_artifacts,
@@ -75,16 +77,30 @@ from .errors import LockfileError, TdxError, ValidationError
 from .explain import (
     describe,
     diff_variants,
+    explain_why,
     render,
     render_markdown,
     render_variant_diff,
     render_variant_diff_markdown,
+    render_why,
+    render_why_markdown,
 )
 from .formats import annotation_path, format_help, resolve_format, workflow_command
 from .lockfile import LockDrift
 from .measure import PlaceholderMeasurementWarning
 from .measure import rtmr as rtmr_measure
+from .measure.policy import policy_payload, write_policy
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
+from .project import (
+    DEFAULTS,
+    PATH_KEYS,
+    RESOLUTION_HELP,
+    TABLE,
+    ConfigKey,
+    ProjectConfig,
+    find_project,
+    render_table,
+)
 from .recipe import RecipeFile, load_file
 from .status import Invocation, project_status, render_status
 from .templates import (
@@ -139,6 +155,7 @@ def main(
     args.runner = runner
     handler: Callable[[argparse.Namespace, TextIO], int] = args.handler
     try:
+        _apply_project(parser, args)
         return handler(args, out)
     except TdxError as exc:
         if getattr(args, "traceback", False):
@@ -200,7 +217,8 @@ def build_parser() -> argparse.ArgumentParser:
             "RECIPE is a Python file that binds a tundravm.Recipe to `recipe` or defines a "
             "zero-argument `build() -> Recipe` function; --attr picks another name. A "
             "module-level `backend` is the build backend `bake` uses unless --backend is given. "
-            "`tundravm completion bash|zsh|fish` prints a shell completion script."
+            "`tundravm completion bash|zsh|fish` prints a shell completion script. "
+            + RESOLUTION_HELP
         ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -209,6 +227,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect = _add_command(
         sub, "inspect", _cmd_inspect, help="Show what the recipe will produce (dry run)."
+    )
+    inspect.add_argument(
+        "--why",
+        default=None,
+        metavar="SUBJECT",
+        help=(
+            "Explain one emitted object of one --variant instead: an absolute image path, "
+            "unit:NAME, package:NAME, hook:NAME or init:NAME. Prints the declarations that "
+            "produce it with the fragment chain and overlay steps (declared, added, "
+            "replaced, removed), the compiled-tree files that hold it and the lines the "
+            "compiler generated for it (runtime-init ordering, enablement links, drop-ins)."
+        ),
     )
     inspect_format = inspect.add_mutually_exclusive_group()
     inspect_format.add_argument(
@@ -310,14 +340,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     lock = _add_command(sub, "lock", _cmd_lock, help="Write the lockfile for the recipe.")
     lock.epilog = (
-        "Pins already in the lockfile are kept while their source is unchanged; "
-        "--update NAME resolves that source again. Drift is reported one section per "
-        "line: `~` changed, `+` only in the recipe, `-` only in the lockfile, e.g. "
-        "`~ variants.default.packages: +htop -jq`. Source builds are pinned under "
-        "`fetches` and drift as `+ sources.<name>: source <name> is not pinned` or "
-        "`~ sources.<name>: <old> -> <new>`; --check never touches the network. Locking "
-        "tries every source and writes nothing unless all resolve: the error lists each "
-        "failed source as `<name>: git <url> @ <ref>: <reason>` and exits 2."
+        RESOLUTION_HELP
+        + " "
+        + (
+            "Pins already in the lockfile are kept while their source is unchanged; "
+            "--update NAME resolves that source again. Drift is reported one section per "
+            "line: `~` changed, `+` only in the recipe, `-` only in the lockfile, e.g. "
+            "`~ variants.default.packages: +htop -jq`. Source builds are pinned under "
+            "`fetches` and drift as `+ sources.<name>: source <name> is not pinned` or "
+            "`~ sources.<name>: <old> -> <new>`; --check never touches the network. Locking "
+            "tries every source and writes nothing unless all resolve: the error lists each "
+            "failed source as `<name>: git <url> @ <ref>: <reason>` and exits 2."
+        )
     )
     lock.add_argument(
         "--lockfile",
@@ -375,16 +409,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check out the recipe's source builds on this host, at their lockfile pins.",
     )
     fetch_cmd.epilog = (
-        "A built kernel's source (Kernel with config=) is fetched too, as `kernel` "
-        "(`kernel-<variant>` where a variant's kernel source differs). "
-        "Each source lands in OUT/.sources/<name>-<pin12>-<id8>, fetched as the invoking "
-        "user (git credentials and SSH agent apply); a complete checkout is verified and "
-        "kept (git: HEAD is the pin and the tree is clean, submodules initialised when "
-        "asked for; http: the files match the manifest written at fetch time), and one "
-        "that changed fails until --force checks it out again. Sources the "
-        "lockfile does not pin are resolved first, as `lock` would, unless the recipe's "
-        "policy forbids unpinned sources. `bake` fetches the same way before it builds "
-        "and mounts OUT/.sources into the build."
+        RESOLUTION_HELP
+        + " "
+        + (
+            "A built kernel's source (Kernel with config=) is fetched too, as `kernel` "
+            "(`kernel-<variant>` where a variant's kernel source differs). "
+            "Each source lands in OUT/.sources/<name>-<pin12>-<id8>, fetched as the invoking "
+            "user (git credentials and SSH agent apply); a complete checkout is verified and "
+            "kept (git: HEAD is the pin and the tree is clean, submodules initialised when "
+            "asked for; http: the files match the manifest written at fetch time), and one "
+            "that changed fails until --force checks it out again. Sources the "
+            "lockfile does not pin are resolved first, as `lock` would, unless the recipe's "
+            "policy forbids unpinned sources. `bake` fetches the same way before it builds "
+            "and mounts OUT/.sources into the build."
+        )
     )
     fetch_cmd.add_argument(
         "--lockfile",
@@ -432,10 +470,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     bake.epilog = (
-        "Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a "
-        "terminal); the summary table goes to stdout. Backend output is hidden unless "
-        "--verbose, but its last lines are shown when the build fails. The artifact "
-        "manifest is OUT/bake-result.json, which `measure` and `deploy` read."
+        RESOLUTION_HELP
+        + " "
+        + (
+            "Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a "
+            "terminal); the summary table goes to stdout. Backend output is hidden unless "
+            "--verbose, but its last lines are shown when the build fails. The artifact "
+            "manifest is OUT/bake-result.json, which `measure` and `deploy` read."
+        )
     )
     output = bake.add_mutually_exclusive_group()
     output.add_argument(
@@ -463,6 +505,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--scheme", default="rtmr", choices=MEASUREMENT_SCHEMES, help="Measurement scheme."
     )
     measure_cmd.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    measure_cmd.add_argument(
+        "--export-policy",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Also write a verifier policy for Tdxs.from_policy(): JSON with schema_version, "
+            "scheme, tool, tool_version, artifact {path, sha256} and registers RTMR0..RTMR2 "
+            "(RTMR3 when measured). rtmr only; placeholder values need --allow-placeholder "
+            "and carry a note saying they are placeholders."
+        ),
+    )
     measure_cmd.add_argument(
         "--allow-placeholder",
         action="store_true",
@@ -521,8 +575,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run lint --strict, compile --check and lock --check; stop at the first failure.",
     )
     ci.epilog = (
-        "Prints `ok STEP: ...` or `FAIL STEP: ...` per step (and `skip STEP` after a "
-        "failure) and exits 1 on the first failure, including a missing lockfile."
+        RESOLUTION_HELP
+        + " "
+        + (
+            "Prints `ok STEP: ...` or `FAIL STEP: ...` per step (and `skip STEP` after a "
+            "failure) and exits 1 on the first failure, including a missing lockfile."
+        )
     )
     ci.add_argument(
         "--out",
@@ -545,6 +603,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_status(sub)
     _add_clean(sub)
+    _add_config(sub)
 
     completion = sub.add_parser(
         "completion",
@@ -644,12 +703,16 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         help="Report where the project stands: lock, sources, tree, artifacts, next step.",
     )
     status.epilog = (
-        "Read-only and network-free; always exits 0. One line per item with a verdict "
-        "(ok, stale, missing, n/a; lint says error when the recipe has errors), then "
-        "`next: COMMAND`, the single most useful command to run (or `everything is up "
-        "to date`). Artifacts are stale when the recipe or the tree they were baked "
-        "from changed since, or (with --verify) when their bytes no longer match the "
-        "sha256 the bake recorded."
+        RESOLUTION_HELP
+        + " "
+        + (
+            "Read-only and network-free; always exits 0. One line per item with a verdict "
+            "(ok, stale, missing, n/a; lint says error when the recipe has errors), then "
+            "`next: COMMAND`, the single most useful command to run (or `everything is up "
+            "to date`). Artifacts are stale when the recipe or the tree they were baked "
+            "from changed since, or (with --verify) when their bytes no longer match the "
+            "sha256 the bake recorded."
+        )
     )
     status.add_argument(
         "--out", type=Path, default=None, help="Build output directory (default: build)."
@@ -676,6 +739,33 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "Output format (default: %(default)s). json is one object per section, each "
             "with a `verdict`; markdown is a table per section."
         ),
+    )
+
+
+def _add_config(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    config = sub.add_parser(
+        "config",
+        help="Print the effective project configuration and where each value came from.",
+        description=(
+            "Print recipe, out, tree, lockfile and backend as every command would use "
+            "them here, each with its origin: flag (given on this command line), "
+            f"pyproject (the [{TABLE}] table) or default (built in)."
+        ),
+        epilog=RESOLUTION_HELP,
+    )
+    config.set_defaults(handler=_cmd_config)
+    config.add_argument(
+        "recipe", type=Path, nargs="?", default=None, help="Recipe .py file (overrides the table)."
+    )
+    config.add_argument("--out", type=Path, default=None, help="Build output directory.")
+    config.add_argument("--tree", type=Path, default=None, help="Compiled mkosi tree.")
+    config.add_argument("--lockfile", type=Path, default=None, help="Lockfile.")
+    config.add_argument("--backend", choices=BACKEND_KINDS, default=None, help="Build backend.")
+    config.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format (default: %(default)s); json maps each key to value and origin.",
     )
 
 
@@ -759,9 +849,15 @@ def _add_command(
     *,
     help: str,
 ) -> argparse.ArgumentParser:
-    parser = sub.add_parser(name, help=help, description=help)
+    parser = sub.add_parser(name, help=help, description=help, epilog=RESOLUTION_HELP)
     parser.set_defaults(handler=handler)
-    parser.add_argument("recipe", type=Path, help="Path to the recipe .py file.")
+    parser.add_argument(
+        "recipe",
+        type=Path,
+        nargs="?",
+        default=None,
+        help=f"Path to the recipe .py file (default: recipe in [{TABLE}] of pyproject.toml).",
+    )
     _add_import_options(parser)
     parser.add_argument(
         "--variant",
@@ -801,8 +897,117 @@ def _add_lockfile(parser: argparse.ArgumentParser) -> None:
         "--lockfile",
         type=Path,
         default=None,
-        help="Apply this lockfile's source pins (default: build/tundravm.lock if present).",
+        help=(
+            "Apply this lockfile's source pins (default: build/tundravm.lock if present); "
+            "lint also reports drift against it, as lint(recipe, lock=...) does."
+        ),
     )
+
+
+_PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
+    "inspect": (("lockfile", "lockfile"),),
+    "lint": (("lockfile", "lockfile"),),
+    "compile": (("out", "tree"), ("lockfile", "lockfile")),
+    "diff": (("against", "tree"), ("lockfile", "lockfile")),
+    "lock": (("lockfile", "lockfile"),),
+    "fetch": (("out", "out"), ("lockfile", "lockfile")),
+    "bake": (("out", "out"), ("lockfile", "lockfile"), ("backend", "backend")),
+    "ci": (("out", "tree"), ("lockfile", "lockfile")),
+    "status": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile")),
+    "clean": (("out", "out"),),
+    "doctor": (("backend", "backend"),),
+    "config": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile"), ("backend", "backend")),
+}
+"""Per verb: the argument each ``[tool.tundravm]`` key defaults (``tree`` is compile's --out)."""
+
+_LOCK_READERS = frozenset({"inspect", "lint", "compile", "diff", "fetch", "bake"})
+"""Verbs that require an explicit --lockfile to exist: the table's applies once it does."""
+
+_RECIPE_OPTIONAL = frozenset({"doctor", "clean", "config"})
+
+MISSING_RECIPE = (
+    "the following arguments are required: recipe (no pyproject.toml with a "
+    f"[{TABLE}] table in this directory or its parents; pass RECIPE, or add "
+    f'[{TABLE}] recipe = "image.py" as `tundravm init` does)'
+)
+
+
+def _apply_project(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Fill RECIPE, --out, --lockfile and --backend from ``[tool.tundravm]`` when omitted.
+
+    Records each value's origin (``flag``/``pyproject``) in ``args.origins``. The
+    table's paths apply only when RECIPE is omitted or names the table's recipe.
+    """
+    verb: str = args.command
+    args.origins = {}
+    args.project = None
+    if not hasattr(args, "recipe") or verb == "completion":
+        return
+    project = find_project()
+    args.project = project
+    origins: dict[str, str] = args.origins
+    configured = None if project is None else project.path_of("recipe")
+    if args.recipe is not None:
+        origins["recipe"] = "flag"
+        if configured is None or not _same_path(args.recipe, configured):
+            project = None
+    elif configured is not None:
+        args.recipe = configured
+        origins["recipe"] = "pyproject"
+    elif verb not in _RECIPE_OPTIONAL:
+        _subcommands(parser)[verb].error(MISSING_RECIPE)
+    for attr, key in _PROJECT_FLAGS.get(verb, ()):
+        if getattr(args, attr, None) is not None:
+            origins[key] = "flag"
+            continue
+        if project is None or project.get(key) is None:
+            continue
+        value: object = project.path_of(key) if key in PATH_KEYS else project.get(key)
+        if key == "lockfile" and verb in _LOCK_READERS and not Path(str(value)).is_file():
+            continue
+        if key == "backend" and value not in BACKEND_KINDS:
+            raise ValidationError(
+                f"[{TABLE}] backend {value!r} in {project.path} is not a build backend.",
+                hint=f"Use one of: {', '.join(BACKEND_KINDS)}",
+            )
+        setattr(args, attr, value)
+        origins[key] = "pyproject"
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    return a.resolve() == b.resolve()
+
+
+def _cmd_config(args: argparse.Namespace, out: TextIO) -> int:
+    project: ProjectConfig | None = args.project
+    origins: dict[str, str] = args.origins
+    recipe = None if args.recipe is None else str(args.recipe)
+    values: dict[str, tuple[str | None, str]] = {
+        "recipe": (recipe, origins.get("recipe", "default"))
+    }
+    for key in ("out", "tree", "lockfile", "backend"):
+        value = getattr(args, key)
+        if value is not None:
+            values[key] = (str(value), origins.get(key, "flag"))
+        else:
+            values[key] = (DEFAULTS.get(key), "default")
+    source = None if project is None else str(project.path)
+    if args.format == "json":
+        payload = {
+            "pyproject": source,
+            "values": {k: {"value": v, "origin": o} for k, (v, o) in values.items()},
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
+        return EXIT_OK
+    print(f"pyproject: {source or f'none (no [{TABLE}] table here or above)'}", file=out)
+    width = max(len(str(v or "-")) for v, _ in values.values())
+    for key, (value, origin) in values.items():
+        shown = value if value is not None else "-"
+        if key == "backend" and value is None:
+            shown = "-"
+            origin = "default (the recipe file's `backend`)"
+        print(f"  {key:<8}  {shown:<{width}}  {origin}", file=out)
+    return EXIT_OK
 
 
 def _load(args: argparse.Namespace) -> RecipeFile:
@@ -838,6 +1043,8 @@ def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
     fmt = args.format or ("json" if args.json else "text")
     if args.diff_variants is not None:
         return _inspect_diff(loaded, args, fmt, out)
+    if args.why is not None:
+        return _inspect_why(loaded, args, fmt, out)
     names = _variants(loaded, args)
     img = _with_lockfile(loaded.lowered(), args)
     variants = _listed(img, names)
@@ -873,6 +1080,25 @@ def _inspect_diff(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: T
     return EXIT_OK
 
 
+def _inspect_why(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: TextIO) -> int:
+    names = _variants(loaded, args)
+    if len(names) != 1:
+        raise ValidationError(
+            "--why explains one variant at a time.",
+            hint=f"Pass --variant NAME (declared: {', '.join(loaded.variants)}).",
+        )
+    why = explain_why(
+        loaded.recipe, names[0], args.why, lowered=_with_lockfile(loaded.lowered(), args)
+    )
+    if fmt == "json":
+        print(json.dumps(why.to_dict(), indent=2, sort_keys=True), file=out)
+    elif fmt == "markdown":
+        print(render_why_markdown(why), file=out)
+    else:
+        print(render_why(why), file=out)
+    return EXIT_OK
+
+
 def _describe(loaded: RecipeFile, img: Lowered, name: str) -> dict[str, object]:
     """*name*'s dry-run description with the recipe's parent and resolved fragment names."""
     fragments = resolve(loaded.recipe, variant=name).fragments
@@ -885,6 +1111,20 @@ def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
     names = _variants(loaded, args)
     lock = None if args.lockfile is None else read_lock(args.lockfile)
     diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=lock)
+    explicit = args.origins.get("lockfile") == "flag"
+    if lock is not None and explicit and not any(d.level == "error" for d in diagnostics):
+        # as lint(recipe, lock=...): drift against an explicit --lockfile is a finding
+        diagnostics.extend(
+            CheckDiagnostic(
+                level=d.level,
+                code=d.code,
+                message=d.message,
+                hint=None,
+                profile=d.variant or "common",
+                subject=d.subject or None,
+            )
+            for d in lock_status(loaded.recipe, lock, variants=names)
+        )
     fmt = resolve_format(args.format, alias="json" if args.json else None)
     print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
     return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
@@ -1032,6 +1272,13 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
                 file=sys.stderr,
             )
     backend = None if args.backend is None else Backend(args.backend).build_backend()
+    if (
+        backend is not None
+        and args.origins.get("backend") == "pyproject"
+        and loaded.backend is not None
+        and loaded.backend.name == backend.name
+    ):
+        backend = None  # the recipe file's own instance carries its settings
     err = sys.stderr
     reporter = (
         JsonReporter(out)
@@ -1094,6 +1341,17 @@ def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
         measurements = measure(artifact, scheme=scheme, allow_placeholder=args.allow_placeholder)
     if measurements.tool == "placeholder":
         print(PLACEHOLDER_BANNER, file=sys.stderr)
+    if args.export_policy is not None:
+        payload = policy_payload(
+            scheme=measurements.scheme,
+            tool=measurements.tool,
+            values=dict(measurements.values),
+            artifact_path=str(artifact.path),
+            artifact_sha256=artifact.sha256,
+            allow_placeholder=args.allow_placeholder,
+        )
+        write_policy(payload, args.export_policy)
+        print(f"wrote policy {args.export_policy}", file=sys.stderr)
     if args.json:
         payload = {
             "artifact": str(artifact.path),
@@ -1432,11 +1690,13 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
     img = loaded.lowered()
+    origins: dict[str, str] = args.origins
     call = Invocation(
-        recipe=str(args.recipe),
-        out=args.out,
-        lockfile=args.lockfile,
+        recipe="" if origins.get("recipe") == "pyproject" else str(args.recipe),
+        out=args.out if origins.get("out") == "flag" else None,
+        lockfile=args.lockfile if origins.get("lockfile") == "flag" else None,
         variants=names if args.variant else (),
+        tree_flag=origins.get("tree") != "pyproject",
     )
     status = project_status(
         loaded,
@@ -1446,6 +1706,7 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         runner=args.runner if args.runner is not None else run_probe,
         invocation=call,
         verify=args.verify,
+        tree=getattr(args, "tree", None),
     )
     print(render_status(status, args.format), file=out)
     return EXIT_OK
@@ -1533,7 +1794,9 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
     pyproject = root / "pyproject.toml"
     had_pyproject = pyproject.exists()
     files_if_absent = {
-        pyproject: render_pyproject(name=_project_name(name)),
+        pyproject: render_pyproject(
+            name=_project_name(name), recipe=recipe.name, backend=args.backend
+        ),
         root / "README.md": render_readme(
             title=title, filename=recipe.name, template=args.template, tests=args.tests
         ),
@@ -1553,6 +1816,12 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
             f"`{EDITABLE_INSTALL}`)",
             file=out,
         )
+        if "[tool.tundravm]" not in pyproject.read_text(encoding="utf-8"):
+            print(
+                "note: add this table to it so commands run without RECIPE:\n"
+                + render_table(recipe=recipe.name, backend=args.backend).rstrip(),
+                file=out,
+            )
     _init_lint(recipe, out)
     _init_next(root, recipe, tests if args.tests else None, args.ci == "github", out)
     if not args.no_doctor:

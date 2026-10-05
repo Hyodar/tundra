@@ -50,6 +50,11 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `Directory` preserves what it imports: permission bits (without `mode`), symlinks and empty directories. `Directory(symlinks="preserve"|"follow")` (default `preserve`).
 - `recipe-arch-unsupported` lint error: `Recipe(arch="aarch64")` with `EfiStub` (amd64 systemd-boot-efi only) or a `qemu` target (`qemu-system-x86_64`).
 
+- `tundravm inspect RECIPE --variant V --why SUBJECT` (path, `unit:`, `package:`, `hook:`, `init:`) and `explain_why()`/`Why`: which declarations produced an emitted object, the fragment chain (Composite classes named), overlay actions (declared/added/replaced/removed, via `resolve.provenance()`), generated dependencies and destination files; unknown subjects list close matches.
+- `[tool.tundravm]` in the generated `pyproject.toml` (`recipe`, `out`, `tree`, `lockfile`, `backend`); every verb accepts RECIPE omitted when the table is found in the working directory or a parent, flags override; `tundravm config` prints the effective values with their origin.
+- `tundravm measure MANIFEST --scheme rtmr --export-policy FILE` writes a normalised policy (schema, scheme, tool, artifact sha256, RTMR registers; placeholders refused unless allowed and then marked) and `Tdxs.from_policy()`/`Tdxs.from_measurements()` build the verifier fragment with the register names the validator expects (`mrtd=` optional); `examples/06_attestation.py` uses `examples/peer.policy.json`.
+- `status` suggests `fetch --force` for a modified checkout; `lint --lockfile` reports lock drift like the Python API.
+
 ### Changed
 
 - Internal: `_image.py` is gone; `lower()` returns the frozen `Lowered` (selection, lockfile and build dir are copies), compiling lives in `declarative/_compile.py` and baking in `declarative/_bake.py`; the unused compile cache is removed. No output change.

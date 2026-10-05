@@ -312,6 +312,13 @@ def test_status_reports_source_checkouts(tmp_path: Path, monkeypatch: pytest.Mon
     assert (source["verdict"], source["fetched"]) == ("ok", True)
     assert fetched["next"] == f"tundravm compile {path} --out {BUILD / 'mkosi'}"
 
+    checkout = BUILD / ".sources" / source_dir("tool", pin, upstream.as_uri())
+    (checkout / "main.go").write_text("package changed\n", encoding="utf-8")
+    modified = _status(str(path))
+    (source,) = _items(modified, "sources")
+    assert source["verdict"] == "stale"
+    assert modified["next"] == f"tundravm fetch {path} --force"
+
 
 def test_status_probes_the_backend_with_the_injected_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from tundravm.declarative import (
     lint,
     load,
     lock,
+    read_lock,
     write_lock,
 )
 
@@ -123,3 +125,19 @@ def test_lock_lockfile_writes_there(custom_lock: tuple[Path, Path], tmp_path: Pa
     with pytest.raises(SystemExit) as excinfo:
         run_main("lock", str(recipe), "--path", str(target))
     assert excinfo.value.code == 2
+
+
+def test_lint_lockfile_reports_drift_as_lint_lock_does(custom_lock: tuple[Path, Path]) -> None:
+    recipe, custom = custom_lock
+    path = Path(recipe)
+    path.write_text(
+        path.read_text().replace(
+            'Package("linux-image-amd64"),', 'Package("linux-image-amd64"), Package("jq"),'
+        ),
+        encoding="utf-8",
+    )
+    expected = _codes(lint(load(path), lock=read_lock(custom)))
+    assert any(code.startswith("lock-") for code in expected)
+    code, out = run_main("lint", str(path), "--lockfile", str(custom), "--format", "json")
+    found = [d["code"] for d in json.loads(out)["diagnostics"]]
+    assert sorted(found) == sorted(expected)

@@ -1,0 +1,16 @@
+{
+  "artifact": {
+    "path": "build/default/disk.qcow2",
+    "sha256": "1fa043adea909e9ad008e0db46ed1c9935adf90aee9c49d20940d6316c5c2e79"
+  },
+  "note": "PLACEHOLDER: these registers are derived from artifact digests, not measured; no TEE reproduces them. Replace this file with `tundravm measure --export-policy` output from a real bake before trusting a verifier built from it.",
+  "registers": {
+    "RTMR0": "7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7",
+    "RTMR1": "dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd",
+    "RTMR2": "44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279"
+  },
+  "schema_version": 1,
+  "scheme": "rtmr",
+  "tool": "placeholder",
+  "tool_version": null
+}

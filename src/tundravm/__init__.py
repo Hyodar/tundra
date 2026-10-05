@@ -91,6 +91,7 @@ from .errors import (
     TdxError,
     ValidationError,
 )
+from .explain import Why, explain_why
 from .recipe import load_recipe
 
 __all__ = [
@@ -156,9 +157,11 @@ __all__ = [
     "User",
     "ValidationError",
     "Variant",
+    "Why",
     "bake",
     "compile",
     "doctor",
+    "explain_why",
     "fetch",
     "lint",
     "load",

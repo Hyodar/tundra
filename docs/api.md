@@ -176,6 +176,14 @@ identity(item: Declaration) -> tuple[str, ...]
 
 `Diagnostic` has `code: str`, `message: str`, `level="error"` (`"error"`, `"warning"`, `"info"`), `variant=""` and `subject=""`. A fragment check may leave `variant` empty; resolution fills it in.
 
+### Explaining one object
+
+```python
+explain_why(recipe: Recipe, variant: str, subject: str) -> Why
+```
+
+`explain_why` answers `tundravm inspect --why`: `subject` is an absolute image path or `unit:NAME`, `package:NAME`, `hook:NAME`, `init:NAME`; an unknown one raises `ValidationError` naming close matches. `Why` has `variant`, `subject`, `declarations` (each with `declaration`, `type`, `key`, `present` and `origins`: `(action, variant, fragments)` steps, `action` one of `declared`, `added`, `replaced`, `removed`), `fragments` (as `Resolved.fragments`), `files` (compiled-tree paths relative to the variant directory), `generated` (lines the compiler added) and `to_dict()`. The steps come from `tundravm.declarative.resolve.provenance(recipe, *, variant)`.
+
 ## Lifecycle
 
 ```python
@@ -267,6 +275,8 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 | `DevTools(*, root_password="tdx")` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it. |
 | `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot: `snapshot` is a snapshot ID (`"20251113T083151Z"`, read from `snapshot.debian.org`) or a snapshot archive URL, and it must carry `version` (the templates pair `20251113T083151Z` with `257.8-1~deb13u1`). The current dialect downloads the package into `$BUILDROOT/` (mkosi-chroot mounts its own `/tmp`) and fails with that advice when the download fails |
 | `Backports(*, archive_url=None, release=None)` | `backports` | Debian backports and sid apt sources for the build's apt, not the image. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `archive_url` verbatim, else `Recipe.mirror` and `Recipe.snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the release of `Recipe.base`. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
+
+`Tdxs.from_policy(policy, *, validator="tdx", mrtd=None, allow_placeholder=False, **fields)` builds a verifier from a policy file `tundravm measure --export-policy` wrote (or its dict): its `RTMR0`..`RTMR3` become `expected_measurements` under the keys the tundra-tools validator reads (`rtmr0`..`rtmr3`, lower-case hex). RTMR tools do not report MRTD and the validator checks only the registers it is given, so pass `mrtd=` to check it too. A placeholder policy raises `MeasurementError` unless `allow_placeholder=True`; a missing required register or a wrong `schema_version` raises `ValidationError`. `Tdxs.from_measurements(measurements, ...)` does the same for a `measure()` result. Other keyword arguments are `Tdxs` fields.
 
 `issuer`/`validator` are a `TdxsType` (`"tdx"`, `"azure"`, `"gcp"` or `"simulator"`) or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. `Backports.render_sources(*, mirror, release, snapshot=None)` and `render_preferences(*, release)` return the two files' text (the recipe's mirror root, release and snapshot; the fragment's own fields win). `BACKPORTS_TREE` is the `SandboxTrees` entry `Backports` adds under `nethermind-v1`, `"mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"`. Each class is an instance of `Fragment`, so it goes wherever a `Fragment` does: in `common`, in a variant's `add`, or among another fragment's `items`.
 

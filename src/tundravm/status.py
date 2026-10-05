@@ -75,6 +75,8 @@ class Invocation:
     out: Path | None = None
     lockfile: Path | None = None
     variants: tuple[str, ...] = ()
+    tree_flag: bool = True
+    """Whether a ``compile`` suggestion spells out ``--out TREE`` (not when configured)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,16 +140,19 @@ def project_status(
     runner: ProbeRunner,
     invocation: Invocation,
     verify: bool = False,
+    tree: Path | None = None,
 ) -> ProjectStatus:
     """Report *variants* of *loaded* against the build output in *out*; never writes.
 
-    With *verify* each artifact's file is hashed against its recorded sha256.
+    *tree* is the compiled mkosi tree (default: ``OUT/mkosi``). With *verify*
+    each artifact's file is hashed against its recorded sha256.
     """
+    tree_path = tree if tree is not None else out / TREE_DIRNAME
     img = loaded.lowered()
     names = tuple(variants)
     lock, lock_item = _lock(img, names, lock_path)
     sources = _sources(img, names, lock, out)
-    tree = _tree(img, names, lock, out / TREE_DIRNAME)
+    tree_item = _tree(img, names, lock, tree_path)
     manifest = out / BAKE_RESULT_FILENAME
     artifacts = _artifacts(img, names, lock, manifest, verify=verify)
     backend = _backend(loaded, runner)
@@ -157,13 +162,13 @@ def project_status(
         lint=lint,
         lock=lock_item,
         sources=sources,
-        tree=tree,
+        tree=tree_item,
         manifest=manifest,
         artifacts=artifacts,
         backend=backend,
         next="",
     )
-    return replace(status, next=_next(status, invocation, out))
+    return replace(status, next=_next(status, invocation, tree_path))
 
 
 def _recipe(loaded: RecipeFile, img: Lowered, names: tuple[str, ...], shown: str) -> StatusItem:
@@ -441,7 +446,11 @@ def _backend(loaded: RecipeFile, runner: ProbeRunner) -> StatusItem:
     return StatusItem("backend", "missing" if missing else "ok", ", ".join(parts), data)
 
 
-def _next(status: ProjectStatus, call: Invocation, out: Path) -> str:
+def _next(status: ProjectStatus, call: Invocation, tree: Path) -> str:
+    return " ".join(_next_command(status, call, tree).split())
+
+
+def _next_command(status: ProjectStatus, call: Invocation, tree: Path) -> str:
     variants = "".join(f" --variant {name}" for name in call.variants)
     out_flag = "" if call.out is None else f" --out {call.out}"
     lock_flag = "" if call.lockfile is None else f" --lockfile {call.lockfile}"
@@ -451,9 +460,12 @@ def _next(status: ProjectStatus, call: Invocation, out: Path) -> str:
         path = "" if call.lockfile is None else f" --lockfile {call.lockfile}"
         return f"tundravm lock {call.recipe}{variants}{path}"
     if overall(status.sources) in ("missing", "stale"):
-        return f"tundravm fetch {call.recipe}{variants}{out_flag}{lock_flag}"
+        modified = any("modified" in item.data for item in status.sources)
+        force = " --force" if modified else ""
+        return f"tundravm fetch {call.recipe}{variants}{out_flag}{lock_flag}{force}"
     if status.tree.verdict in ("missing", "stale"):
-        return f"tundravm compile {call.recipe}{variants} --out {out / TREE_DIRNAME}{lock_flag}"
+        tree_flag = f" --out {tree}" if call.tree_flag else ""
+        return f"tundravm compile {call.recipe}{variants}{tree_flag}{lock_flag}"
     if overall(status.artifacts) in ("missing", "stale"):
         if status.backend.verdict == "missing":
             return f"tundravm doctor {call.recipe}"

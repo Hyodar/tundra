@@ -70,20 +70,20 @@
     }
   },
   "06_attestation": {
-    "recipe": "4156769563315909d7b62afff611707265d9068400fb467dbfbe1f7a5949aa86",
-    "tree": "ebcf618d43a454d17725d244f131772434465be770474866736e48b3695b9416",
+    "recipe": "6f1f76f1c51fc5800f6b73c5ee9bd05f9f40cea9beefb2d6a96288e22ff84d8a",
+    "tree": "90cdda2a0949ddf0ef04d04df387f8f954146ca8f949b74517622974e8df8f89",
     "variants": {
       "attester": {
         "recipe": "6789a23286c94924fe78e3dde4e39f6fb11fa09483d00c63e2ba17242687a7fa",
         "tree": "6f7b823fb2dae83b8fb762df48e7bfbef1a23248b09ae2a995ba9afe1b6d0a07"
       },
       "azure-verifier": {
-        "recipe": "3daeb744d936dbe758e3b65225ac0971b28d105190c7d772065c7ebccdb44308",
-        "tree": "31328cfce5ae89bcff784dd03b2ddc82d2d4d042e881b05746aa2aa182c2d322"
+        "recipe": "72f9097f6769d0535ce5932ad412a4ff0a1c28ce3a3045d27ec7f3fc6e852119",
+        "tree": "44a8b92c421db84725bd12ee6e29de70b1d9124e4f01beb92e419a63036ab994"
       },
       "verifier": {
-        "recipe": "507935d07ae96543313748bf9bceddf77d65dc10a40b7da88d570f1ccdcc8357",
-        "tree": "354ad8d984ada1b0c560cc23ce60994a68fd89ae68416cd28cff7c4089ce887f"
+        "recipe": "e9cdb14215e7cfaea44887f91bced7f5448a08faf7b7cbf4c5fb2a7247a9ebdb",
+        "tree": "57278cbb3b63119f95887ad4940bbe5fcbfdb0ef43f878536e23c9fefaf66e7d"
       }
     }
   },

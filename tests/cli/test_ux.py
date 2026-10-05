@@ -54,8 +54,8 @@ def test_zsh_script_is_an_autoloadable_compdef() -> None:
     script = render_completion(build_parser(), "zsh")
     assert script.startswith("#compdef tundravm\n")
     assert "'--format[Output format]:format:(text json markdown)'" in script
-    assert "'1:recipe:_files'" in script
-    assert "'1::recipe:_files'" in script  # doctor's optional RECIPE
+    assert "'1:manifest:_files'" in script  # measure's required MANIFEST
+    assert "'1::recipe:_files'" in script  # RECIPE: optional under [tool.tundravm]
 
 
 def test_fish_script_completes_files_for_recipes() -> None:

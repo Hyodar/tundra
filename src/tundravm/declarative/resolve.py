@@ -51,6 +51,30 @@ from .model import (
 
 Identity = tuple[str, ...]
 
+FragmentRef = tuple[str, str]
+"""One fragment on an item's path: its name and its class (``Fragment`` or a Composite)."""
+
+Action = Literal["declared", "added", "replaced", "removed"]
+"""How one level touched an item: ``common`` declares, a variant adds, replaces or removes."""
+
+COMMON_LEVEL = "common"
+"""The :attr:`Origin.variant` of declarations that come from ``Recipe.common``."""
+
+
+@dataclass(frozen=True, slots=True)
+class Origin:
+    """One step of an item's resolution: who touched it, how, and through which fragments.
+
+    ``variant`` is ``"common"`` for ``Recipe.common``; ``fragments`` runs from the
+    level's own fragment down to the one holding the declaration (empty for
+    ``replace=``/``remove=``, which name declarations directly).
+    """
+
+    action: Action
+    variant: str
+    fragments: tuple[FragmentRef, ...] = ()
+
+
 CLOUD_TARGETS: frozenset[str] = frozenset({"azure", "gcp"})
 DEFAULT_TARGET: Target = "qemu"
 
@@ -102,6 +126,7 @@ class _Resolution:
     items: dict[Identity, Declaration] = field(default_factory=dict)
     fragments: dict[str, Fragment] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
+    trace: dict[Identity, list[Origin]] = field(default_factory=dict)
 
     def report(
         self,
@@ -115,13 +140,21 @@ class _Resolution:
             Diagnostic(code, message, level=level, variant=self.variant, subject=subject)
         )
 
-    def expand(self, fragment: Fragment) -> list[Declaration]:
-        """*fragment*'s declarations in order; repeated identical fragments expand once."""
-        out: list[Declaration] = []
-        self._expand(fragment, out)
+    def expand(self, fragment: Fragment) -> list[tuple[Declaration, tuple[FragmentRef, ...]]]:
+        """*fragment*'s declarations in order with their fragment paths.
+
+        Repeated identical fragments expand once.
+        """
+        out: list[tuple[Declaration, tuple[FragmentRef, ...]]] = []
+        self._expand(fragment, out, ())
         return out
 
-    def _expand(self, fragment: Fragment, out: list[Declaration]) -> None:
+    def _expand(
+        self,
+        fragment: Fragment,
+        out: list[tuple[Declaration, tuple[FragmentRef, ...]]],
+        parents: tuple[FragmentRef, ...],
+    ) -> None:
         seen = self.fragments.get(fragment.name)
         if seen is not None:
             if seen != fragment:
@@ -132,17 +165,30 @@ class _Resolution:
                 )
             return
         self.fragments[fragment.name] = fragment
+        path = (*parents, (fragment.name, type(fragment).__name__))
         for item in fragment.items:
             if isinstance(item, Fragment):
-                self._expand(item, out)
+                self._expand(item, out, path)
             else:
-                out.append(item)
+                out.append((item, path))
 
-    def add_level(self, items: Iterable[Declaration], *, where: str) -> None:
+    def record(self, key: Identity, origin: Origin) -> None:
+        self.trace.setdefault(key, []).append(origin)
+
+    def add_level(
+        self,
+        items: Iterable[tuple[Declaration, tuple[FragmentRef, ...]]],
+        *,
+        where: str,
+        level: str,
+    ) -> None:
         """Add one level's declarations; equal repeats dedupe, different ones collide."""
-        for item in items:
+        action: Action = "declared" if level == COMMON_LEVEL else "added"
+        for item, path in items:
             key = identity(item)
             existing = self.items.get(key)
+            if existing is None or existing == item:
+                self.record(key, Origin(action, level, path))
             if existing is None:
                 self.items[key] = item
             elif existing != item:
@@ -157,6 +203,7 @@ class _Resolution:
             key = identity(item)
             if key in self.items:
                 self.items[key] = item
+                self.record(key, Origin("replaced", variant.name))
             else:
                 self.report(
                     "replace-missing",
@@ -165,7 +212,9 @@ class _Resolution:
                 )
         for item in variant.remove:
             key = identity(item)
-            if self.items.pop(key, None) is None:
+            if self.items.pop(key, None) is not None:
+                self.record(key, Origin("removed", variant.name))
+            else:
                 self.report(
                     "remove-missing",
                     f"variant {variant.name!r} removes {describe(key)}, which it does not inherit",
@@ -408,16 +457,23 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
 
 
 def _resolve(recipe: Recipe, name: str) -> tuple[Resolved, list[Diagnostic]]:
+    resolved, state = _run(recipe, name)
+    return resolved, state.diagnostics
+
+
+def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     chain = ancestry(recipe, name)
     # Problems inside ``common`` belong to no single variant: lint() reports them once.
     state = _Resolution(variant="")
     if chain[0].parent == BASE_PARENT:
-        state.add_level(state.expand(recipe.common), where="common")
+        state.add_level(state.expand(recipe.common), where="common", level=COMMON_LEVEL)
     state.variant = name
     for variant in chain:
         state.apply_changes(variant)
         if variant.add != EMPTY_FRAGMENT:
-            state.add_level(state.expand(variant.add), where=f"variant {variant.name!r}")
+            state.add_level(
+                state.expand(variant.add), where=f"variant {variant.name!r}", level=variant.name
+            )
     _check_targets(state, chain)
     items = tuple(state.items.values())
     _check_references(state, items)
@@ -442,7 +498,17 @@ def _resolve(recipe: Recipe, name: str) -> tuple[Resolved, list[Diagnostic]]:
             for diagnostic in check(resolved):
                 found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
                 state.diagnostics.append(found)
-    return resolved, state.diagnostics
+    return resolved, state
+
+
+def provenance(recipe: Recipe, *, variant: str) -> dict[Identity, tuple[Origin, ...]]:
+    """Every identity *variant*'s resolution touched, with the steps that touched it.
+
+    Removed items are included (their last origin is ``removed``). Resolution
+    problems are not raised here; :func:`resolve` and :func:`lint` report them.
+    """
+    _, state = _run(recipe, variant)
+    return {key: tuple(origins) for key, origins in state.trace.items()}
 
 
 def resolve(recipe: Recipe, *, variant: str) -> Resolved:
@@ -477,7 +543,11 @@ def lint(recipe: Recipe, *, variants: Sequence[str] | None = None) -> tuple[Diag
 
 __all__ = [
     "CLOUD_TARGETS",
+    "COMMON_LEVEL",
+    "Action",
+    "FragmentRef",
     "Identity",
+    "Origin",
     "ancestry",
     "describe",
     "has_init",
@@ -485,6 +555,7 @@ __all__ = [
     "lint",
     "order_hooks",
     "order_inits",
+    "provenance",
     "resolve",
     "resolve_all",
 ]

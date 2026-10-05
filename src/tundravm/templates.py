@@ -10,6 +10,8 @@ from __future__ import annotations
 from string import Template
 from typing import Literal
 
+from .project import render_table
+
 BACKEND_SNIPPETS: dict[str, tuple[str, str]] = {
     "lima": (
         "from tundravm.backends import LimaMkosiBackend",
@@ -378,7 +380,8 @@ dev = ["pytest"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-"""
+
+$table"""
 
 README_TEMPLATE = r"""# $title: a tundravm VM image recipe (`$filename`, $template template)
 
@@ -486,9 +489,13 @@ def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> st
     )
 
 
-def render_pyproject(*, name: str) -> str:
-    """Return the minimal ``pyproject.toml`` ``init`` writes when the project has none."""
-    return Template(PYPROJECT_TEMPLATE).substitute(name=name)
+def render_pyproject(*, name: str, recipe: str = "image.py", backend: str = "lima") -> str:
+    """Return the minimal ``pyproject.toml`` ``init`` writes when the project has none.
+
+    It ends with the ``[tool.tundravm]`` table naming *recipe* and *backend*.
+    """
+    table = render_table(recipe=recipe, backend=backend)
+    return Template(PYPROJECT_TEMPLATE).substitute(name=name, table=table)
 
 
 def render_readme(*, title: str, filename: str, template: str, tests: bool) -> str:

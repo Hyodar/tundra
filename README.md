@@ -188,7 +188,7 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 | [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment` and a `Composite` with fields, `requires=` and a lint `checks=` rule |
 | [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | TPM-sealed `Key`, encrypted `Disk`, `Secrets` with `Schema`s and file/env targets, `RuntimeTools`, `Partition` |
 | [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball with the `Go` recipe and from a `Git` tag with a script; file and directory installs; `cache_key` |
-| [`06_attestation.py`](examples/06_attestation.py) | `Tdxs()` as attester and as verifier with `expected_measurements`, and `Policy(require_frozen_lock=True)` |
+| [`06_attestation.py`](examples/06_attestation.py) | `Tdxs()` as attester and as verifier built with `Tdxs.from_policy()` from `peer.policy.json` (a placeholder export of `measure --export-policy`), plus `Policy(require_frozen_lock=True)` |
 | [`nethermind_base.py`](examples/nethermind_base.py) | The nethermind-tdx base layer as one `Composite`: TDX kernel, EFI stub, backports, debloat, `Tdxs()` |
 | [`fragments/`](examples/fragments/) | `Raiko()`, `TaikoClient()`, `Nethermind()`: each with a `Build`, a user, a unit and an env file |
 | [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The flagship: the full nethermind-tdx image, byte-identical to the committed tree for all four variants |

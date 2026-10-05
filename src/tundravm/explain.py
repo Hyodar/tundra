@@ -8,16 +8,35 @@ Markdown section (tables per kind, long package lists collapsed).
 
 from __future__ import annotations
 
+import difflib
 import hashlib
+import os
+import posixpath
+import re
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 from ._options import MkosiOptions
 from .compiler import PHASE_ORDER
-from .declarative.model import Declaration, Resolved
+from .declarative.model import (
+    Declaration,
+    Directory,
+    File,
+    Hook,
+    Init,
+    Package,
+    Recipe,
+    Resolved,
+    Service,
+    Template,
+    Unit,
+)
+from .declarative.resolve import COMMON_LEVEL, Identity, Origin, identity
 from .declarative.resolve import describe as describe_identity
-from .declarative.resolve import identity
+from .errors import ValidationError
 from .formats import md_cell, md_table
 from .lockfile import LockedFetch
 from .models import InitScriptEntry, Kernel, ProfileState, UnitAction, unit_name
@@ -727,12 +746,384 @@ def render_variant_diff_markdown(diff: VariantDiff, *, recipe: str) -> str:
     return "\n".join(lines)
 
 
+UNIT_DIRS = ("/usr/lib/systemd/system/", "/etc/systemd/system/")
+STAGE_DIRS = ("mkosi.extra", "mkosi.skeleton")
+WHY_PREFIXES = ("unit", "package", "hook", "init")
+"""``KIND:NAME`` subject prefixes :func:`explain_why` accepts besides absolute paths."""
+
+
+@dataclass(frozen=True, slots=True)
+class WhyDeclaration:
+    """One declaration behind a subject, with the resolution steps that touched it."""
+
+    declaration: str
+    """``identity()`` rendered: ``Service(app.service)``, ``File(extra, /etc/app.conf)``."""
+    type: str
+    key: tuple[str, ...]
+    origins: tuple[Origin, ...]
+    present: bool
+    """False when a variant removed it: it is explained but nothing is emitted."""
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "declaration": self.declaration,
+            "type": self.type,
+            "key": list(self.key),
+            "present": self.present,
+            "origins": [
+                {
+                    "action": origin.action,
+                    "variant": origin.variant,
+                    "fragments": [{"name": name, "class": kind} for name, kind in origin.fragments],
+                }
+                for origin in self.origins
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Why:
+    """Why an emitted object exists in one variant: :func:`explain_why`'s answer.
+
+    ``files`` are the compiled tree's files that hold it and ``generated`` the
+    lines the compiler added on its behalf, both relative to the variant's
+    directory in the tree (``mkosi.extra/...``, ``scripts/06-postinst.sh: ...``).
+    """
+
+    variant: str
+    subject: str
+    declarations: tuple[WhyDeclaration, ...]
+    fragments: tuple[str, ...]
+    """Every fragment the variant resolved, in expansion order (``Resolved.fragments``)."""
+    files: tuple[str, ...]
+    generated: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "variant": self.variant,
+            "subject": self.subject,
+            "declarations": [entry.to_dict() for entry in self.declarations],
+            "fragments": list(self.fragments),
+            "files": list(self.files),
+            "generated": list(self.generated),
+        }
+
+
+def explain_why(
+    recipe: Recipe, variant: str, subject: str, *, lowered: Lowered | None = None
+) -> Why:
+    """Which declarations produced *subject* in *variant*, and where it lands.
+
+    *subject* is an absolute image path (``/usr/lib/systemd/system/app.service``)
+    or ``unit:NAME``, ``package:NAME``, ``hook:NAME``, ``init:NAME``; a bare
+    name is tried as each of those. The variant is compiled into a scratch
+    directory to find the destination files and generated lines. *lowered*
+    replaces ``lower(recipe)`` (the CLI passes the recipe file's, with its
+    lockfile). An unknown subject raises ``ValidationError`` with close matches.
+    """
+    from .declarative._compile import emit
+    from .declarative.lower import lower
+    from .declarative.resolve import provenance, resolve
+
+    recipe.variant(variant)
+    resolved = resolve(recipe, variant=variant)
+    trace = provenance(recipe, variant=variant)
+    img = lowered if lowered is not None else lower(recipe)
+    with tempfile.TemporaryDirectory(prefix="tundravm-why-") as scratch:
+        root = Path(scratch)
+        emit(img.select((variant,)), root)
+        tree = _read_tree(root / variant if (root / variant).is_dir() else root)
+    items = {identity(item): item for item in resolved.items}
+    keys = _match_subject(subject, items, trace, tree)
+    declarations = tuple(
+        WhyDeclaration(
+            declaration=describe_identity(key),
+            type=key[0],
+            key=tuple(key[1:]),
+            origins=trace.get(key, ()),
+            present=key in items,
+        )
+        for key in keys
+    )
+    files: list[str] = []
+    generated: list[str] = []
+    if subject.startswith("/"):
+        files.extend(_stage_paths(tree, subject))
+    for key in keys:
+        item = items.get(key)
+        if item is None:
+            continue
+        found, extra = _emitted_for(item, tree)
+        files.extend(found)
+        generated.extend(extra)
+    return Why(
+        variant=variant,
+        subject=subject,
+        declarations=declarations,
+        fragments=resolved.fragments,
+        files=tuple(dict.fromkeys(files)),
+        generated=tuple(dict.fromkeys(generated)),
+    )
+
+
+def _read_tree(root: Path) -> dict[str, str]:
+    """Every file under *root* (relative POSIX path -> text; a symlink is ``-> target``)."""
+    tree: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            tree[rel] = f"-> {os.readlink(path)}"
+        elif path.is_file():
+            tree[rel] = path.read_bytes().decode("utf-8", errors="replace")
+    return tree
+
+
+def _image_paths(tree: Mapping[str, str]) -> dict[str, str]:
+    """Image path (``/etc/app.conf``) -> tree path, for the files the stage trees hold."""
+    found: dict[str, str] = {}
+    for rel in tree:
+        stage, _, rest = rel.partition("/")
+        if stage in STAGE_DIRS and rest:
+            found.setdefault(f"/{rest}", rel)
+    return found
+
+
+def _stage_paths(tree: Mapping[str, str], path: str) -> list[str]:
+    norm = posixpath.normpath(path)
+    return [rel for rel in tree if any(rel == f"{stage}{norm}" for stage in STAGE_DIRS)] or [
+        rel for rel in tree if any(rel.startswith(f"{stage}{norm}/") for stage in STAGE_DIRS)
+    ]
+
+
+def _match_subject(
+    subject: str,
+    items: Mapping[Identity, Declaration],
+    trace: Mapping[Identity, tuple[Origin, ...]],
+    tree: Mapping[str, str],
+) -> tuple[Identity, ...]:
+    """The identities *subject* names; ``ValidationError`` with close matches when none."""
+    known = list(dict.fromkeys([*items, *trace]))
+    prefix, sep, name = subject.partition(":")
+    if subject.startswith("/"):
+        keys = _path_keys(posixpath.normpath(subject), known)
+        if keys or posixpath.normpath(subject) in _image_paths(tree):
+            return keys
+    elif sep and prefix in WHY_PREFIXES:
+        keys = _named_keys(prefix, name, known)
+        if keys:
+            return keys
+    else:
+        keys = tuple(k for kind in WHY_PREFIXES for k in _named_keys(kind, subject, known))
+        if keys:
+            return keys
+    raise ValidationError(
+        f"Nothing in the variant matches {subject!r}.",
+        hint=_close_hint(subject, known, tree),
+    )
+
+
+def _named_keys(kind: str, name: str, known: Sequence[Identity]) -> tuple[Identity, ...]:
+    if kind == "unit":
+        unit = unit_name(name)
+        return tuple(k for k in known if k[0] in ("Unit", "Service") and k[1] == unit)
+    wanted = {"package": "Package", "hook": "Hook", "init": "Init"}[kind]
+    return tuple(k for k in known if k[0] == wanted and k[1] == name)
+
+
+def _path_keys(path: str, known: Sequence[Identity]) -> tuple[Identity, ...]:
+    """Declarations that emit *path*: files at it, a directory holding it, or a unit file."""
+    keys: list[Identity] = []
+    for key in known:
+        kind = key[0]
+        if kind in ("File", "Template") and key[2] == path:
+            keys.append(key)
+        elif kind == "Directory" and (path == key[2] or path.startswith(f"{key[2]}/")):
+            keys.append(key)
+        elif kind in ("Unit", "Service"):
+            unit = key[1]
+            if any(
+                path in (f"{d}{unit}", f"{d}{unit}.d") or path.startswith(f"{d}{unit}.d/")
+                for d in UNIT_DIRS
+            ):
+                keys.append(key)
+    if not keys and "runtime-init" in path:
+        keys.extend(k for k in known if k[0] in ("Init", "Key", "Disk", "Secrets"))
+    return tuple(keys)
+
+
+def _close_hint(subject: str, known: Sequence[Identity], tree: Mapping[str, str]) -> str:
+    names = [
+        *sorted(_image_paths(tree)),
+        *(f"unit:{k[1]}" for k in known if k[0] in ("Unit", "Service")),
+        *(f"{k[0].lower()}:{k[1]}" for k in known if k[0] in ("Package", "Hook", "Init")),
+    ]
+    candidates = list(dict.fromkeys(names))
+    close = difflib.get_close_matches(subject, candidates, n=5, cutoff=0.5)
+    if not close:
+        _, _, tail = subject.rpartition("/")
+        close = [c for c in candidates if tail and tail in c][:5]
+    shown = ", ".join(close) if close else ", ".join(candidates[:5])
+    lead = "Close matches" if close else "Emitted objects include"
+    return (
+        f"{lead}: {shown}. Pass an absolute image path or unit:NAME, package:NAME, "
+        "hook:NAME, init:NAME."
+    )
+
+
+def _emitted_for(item: Declaration, tree: Mapping[str, str]) -> tuple[list[str], list[str]]:
+    """The tree files holding *item* and the lines the compiler generated for it."""
+    files: list[str] = []
+    generated: list[str] = []
+    match item:
+        case File() | Template() | Directory():
+            norm = posixpath.normpath(item.path)
+            prefix = f"mkosi.{item.stage}{norm}"
+            files.extend(rel for rel in tree if rel == prefix or rel.startswith(f"{prefix}/"))
+        case Unit() | Service():
+            unit = unit_name(item.name)
+            for rel, text in tree.items():
+                stage, _, rest = rel.partition("/")
+                if stage not in STAGE_DIRS:
+                    continue
+                if posixpath.basename(rel) == unit:
+                    files.append(rel)
+                    generated.extend(_injected_lines(item, text))
+                elif f"/{unit}.d/" in f"/{rest}":
+                    files.append(rel)
+                    generated.append(f"drop-in {rel}")
+            generated.extend(_script_lines(tree, unit))
+        case Package():
+            files.extend(_conf_lines(tree, item.name))
+        case Hook() | Init():
+            first = _first_command_line(item.script)
+            name = item.name
+            files.extend(
+                rel
+                for rel, text in tree.items()
+                if (first and first in text)
+                or posixpath.basename(rel).removesuffix(".sh") in (name, f"init-{name}")
+            )
+    return files, generated
+
+
+def _injected_lines(item: Unit | Service, text: str) -> list[str]:
+    """``After=``/``Requires=`` lines naming runtime-init that the declaration did not write."""
+    declared = item.content if isinstance(item, Unit) and isinstance(item.content, str) else ""
+    if isinstance(item, Service):
+        declared = " ".join((*item.after, *item.requires))
+    if "runtime-init.service" in declared or not item.after_init:
+        return []
+    return [
+        f"{line.strip()} (after_init=True)"
+        for line in text.splitlines()
+        if line.split("=", 1)[0] in ("After", "Requires") and "runtime-init.service" in line
+    ]
+
+
+def _script_lines(tree: Mapping[str, str], unit: str) -> list[str]:
+    """Enablement the scripts generate for *unit*: ``systemctl`` calls and ``.wants`` links."""
+    word = re.compile(rf"(?<![\w.@-]){re.escape(unit)}(?![\w.@-])")
+    lines: list[str] = []
+    for rel, text in tree.items():
+        if not rel.startswith("scripts/"):
+            continue
+        for line in text.splitlines():
+            if not word.search(line):
+                continue
+            if "systemctl" in line:
+                lines.append(f"{rel}: {line.strip()}")
+            elif ".wants" in line:
+                target = re.search(r"([\w.@-]+\.wants)", line)
+                link = target.group(1) if target else "wants"
+                lines.append(f"{rel}: {link}/{unit} link")
+    return lines
+
+
+def _conf_lines(tree: Mapping[str, str], package: str) -> list[str]:
+    """``mkosi.conf (Packages=)`` for each config list that names *package*."""
+    found: list[str] = []
+    for rel, text in tree.items():
+        if posixpath.basename(rel) != "mkosi.conf":
+            continue
+        key = ""
+        for line in text.splitlines():
+            if line and not line[0].isspace():
+                key, _, value = line.partition("=")
+            else:
+                value = line
+            if package in value.replace(",", " ").split():
+                found.append(f"{rel} ({key}=)")
+    return list(dict.fromkeys(found))
+
+
+def _fragment_chain(origin: Origin) -> str:
+    return " > ".join(
+        name if kind in ("Fragment", "") else f"{name} ({kind})" for name, kind in origin.fragments
+    )
+
+
+def _origin_text(origin: Origin) -> str:
+    where = "in common" if origin.variant == COMMON_LEVEL else f"in variant {origin.variant}"
+    chain = _fragment_chain(origin)
+    return f"{origin.action} {where}" + (f" via {chain}" if chain else "")
+
+
+def render_why(why: Why) -> str:
+    """Plain text: declarations with their history, destination files, generated lines."""
+    lines = [f"why {why.subject} (variant {why.variant})"]
+    if not why.declarations:
+        lines.append("  generated by the compiler; no declaration names it")
+    for entry in why.declarations:
+        state = "" if entry.present else " (removed: not emitted)"
+        lines.append(f"  {entry.declaration}{state}")
+        lines.extend(f"    {_origin_text(origin)}" for origin in entry.origins)
+    lines.append(f"files (in {why.variant}/):")
+    lines.extend(f"  {path}" for path in why.files)
+    if not why.files:
+        lines.append("  (none)")
+    if why.generated:
+        lines.append("generated:")
+        lines.extend(f"  {line}" for line in why.generated)
+    return "\n".join(lines)
+
+
+def render_why_markdown(why: Why) -> str:
+    """A Markdown section: one table of declarations and origins, then files and generated."""
+    lines = [f"# tundravm: why {md_cell(why.subject, code=True)} in `{why.variant}`", ""]
+    rows = [
+        (
+            md_cell(entry.declaration, code=True),
+            md_cell(origin.action),
+            md_cell(origin.variant),
+            md_cell(_fragment_chain(origin)),
+        )
+        for entry in why.declarations
+        for origin in entry.origins
+    ]
+    if rows:
+        lines.append(md_table(("Declaration", "Action", "Level", "Fragments"), rows))
+    else:
+        lines.append("Generated by the compiler; no declaration names it.")
+    lines += ["", f"Files (in `{why.variant}/`):", ""]
+    lines.extend(f"- {md_cell(path, code=True)}" for path in why.files)
+    if why.generated:
+        lines += ["", "Generated:", ""]
+        lines.extend(f"- {md_cell(line, code=True)}" for line in why.generated)
+    return "\n".join(lines)
+
+
 __all__ = [
+    "WHY_PREFIXES",
     "VariantDiff",
+    "Why",
+    "WhyDeclaration",
     "describe",
     "diff_variants",
+    "explain_why",
     "render",
     "render_markdown",
     "render_variant_diff",
     "render_variant_diff_markdown",
+    "render_why",
+    "render_why_markdown",
 ]

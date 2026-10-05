@@ -12,12 +12,20 @@ declarations through the compiler's account prelude instead.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
-from typing import Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 from tundravm._modules import devtools as _devtools
 from tundravm._modules import tdxs as _tdxs
-from tundravm.errors import ValidationError
+from tundravm.errors import MeasurementError, ValidationError
+from tundravm.measure.policy import (
+    is_placeholder,
+    policy_payload,
+    read_policy,
+    validator_measurements,
+)
 
 from .model import (
     Build,
@@ -35,6 +43,9 @@ from .model import (
     Unit,
     User,
 )
+
+if TYPE_CHECKING:
+    from .lifecycle import Measurements
 
 TdxsType = Literal["tdx", "azure", "gcp", "simulator"]
 
@@ -283,6 +294,69 @@ class Tdxs(Composite):
     verify_imds: bool = False
     verify_identity_token: bool = False
     after_init: bool = False
+
+    @classmethod
+    def from_policy(
+        cls,
+        policy: str | Path | Mapping[str, object],
+        *,
+        validator: TdxsType = "tdx",
+        mrtd: str | None = None,
+        allow_placeholder: bool = False,
+        **kwargs: Any,
+    ) -> Tdxs:
+        """A verifier whose ``expected_measurements`` are *policy*'s registers.
+
+        *policy* is a file ``tundravm measure --export-policy`` wrote (or its
+        dict). Registers become the validator's lower-case keys (``rtmr0``..);
+        RTMR tools do not report MRTD, so pass *mrtd* to have it checked too.
+        A placeholder policy is refused unless *allow_placeholder*. Other
+        keyword arguments are ``Tdxs`` fields (``issuer``, ``check_revocations``...).
+        """
+        if "expected_measurements" in kwargs:
+            raise ValidationError(
+                "Tdxs.from_policy() takes the measurements from the policy.",
+                hint="Drop expected_measurements=, or build Tdxs(...) directly.",
+            )
+        data = read_policy(policy)
+        if is_placeholder(data) and not allow_placeholder:
+            raise MeasurementError(
+                "Refusing to build a verifier from a placeholder policy.",
+                hint="Export the policy from a real measurement, or pass "
+                "allow_placeholder=True for a test image.",
+                context={"policy": str(policy) if not isinstance(policy, Mapping) else "dict"},
+            )
+        registers = data["registers"]
+        assert isinstance(registers, dict)
+        expected = validator_measurements(registers, mrtd=mrtd)
+        return cls(validator=validator, expected_measurements=expected, **kwargs)
+
+    @classmethod
+    def from_measurements(
+        cls,
+        measurements: Measurements,
+        *,
+        validator: TdxsType = "tdx",
+        mrtd: str | None = None,
+        allow_placeholder: bool = False,
+        **kwargs: Any,
+    ) -> Tdxs:
+        """:meth:`from_policy` for a ``measure()`` result (rtmr scheme) in memory."""
+        payload = policy_payload(
+            scheme=measurements.scheme,
+            tool=measurements.tool,
+            values=dict(measurements.values),
+            artifact_path="",
+            artifact_sha256=measurements.artifact_digest,
+            allow_placeholder=allow_placeholder,
+        )
+        return cls.from_policy(
+            payload,
+            validator=validator,
+            mrtd=mrtd,
+            allow_placeholder=allow_placeholder,
+            **kwargs,
+        )
 
     def compose(self) -> Fragment:
         spec = _tdxs.Tdxs(
