@@ -303,6 +303,7 @@ Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
 | Inspect | `resolve`, `resolve_all`, `explain_why` | `inspect`, `inspect --why` | the recipe |
 | Lint | `lint(recipe, lock=None)` | `lint` | the recipe; a lock applies its pins and adds drift |
 | Compile | `compile(recipe, lock=None) -> Tree` | `compile` | the recipe; a lock applies its pins |
+| Watch | `lint` and `compile --check` again on each change (`tundravm.watch.Watch`) | `watch` | the recipe; writes the tree only with `--write` |
 | Lock | `lock(recipe, previous=None) -> Lock` | `lock` | the network, unless every source is already pinned |
 | Fetch | `fetch(recipe, lock=, out=, force=False) -> tuple[FetchedSource, ...]` | `fetch` | the network (as you), unless the checkouts are already there; `go`, `cargo` or `dotnet` on `PATH` to prefetch dependencies |
 | Bake | `bake(recipe, lock=, backend=, out=, fetch=True, offline=False) -> tuple[Artifact, ...]` | `bake` | a backend; fetches first unless `fetch=False` (`--no-fetch`); `offline=True` (`--offline`) needs every checkout and dependency cache fetched |
@@ -321,6 +322,16 @@ A lock of every variant covers a bake or `lock --check` of any subset of them: o
 `deploy` hands the artifact to the target's adapter. On QEMU the VM detaches by default, with its serial console in `OUT/<variant>/qemu-serial.log`, a monitor socket `qemu.monitor` and a pid file `qemu.pid` beside it (`deploy --attach` keeps it in the foreground on the terminal instead); every port the variant's `Secrets` listen on, which the bake records in `bake-result.json`, is forwarded from the same host port, besides `ssh_port` and `Qemu(forward=...)`; and `tdx=True` boots TDVF through `-bios` with a `tdx-guest` object and a split irqchip. On Azure the VHD is published as an image version in a Compute Gallery (`Azure(gallery=)`, default `tdx_images`) whose definition supports confidential VMs, and the VM is a TDX confidential VM (`Standard_DC2es_v5` by default) with Secure Boot off: Azure's Secure Boot firmware boots only signed images and tundravm does not sign the UKI, so `Azure(secure_boot=True)` also needs `signed=True`, your statement that the UKI was signed outside tundravm with keys Azure trusts. On GCP the image is created `TDX_CAPABLE` and the instance requests `--confidential-compute-type=TDX` on the C3 series (`c3-standard-4` by default). See [CLI: Deploying to each target](cli.md#deploying-to-each-target).
 
 The in-process backend writes simulated artifacts (`Artifact.simulated`). `measure` refuses them unless you pass `allow_placeholder=True` (`--allow-placeholder`), and `deploy` unless you pass `allow_simulated=True` (`--allow-simulated-artifact`); placeholder measurements say so (`tool="placeholder"`).
+
+### Day-to-day loop
+
+1. Edit the recipe, or a module beside it, with `tundravm watch` running in another terminal.
+2. Each save prints one line, `lint N errors N warnings; tree up to date`, `tree stale (N files)` or `tree missing (N files to write)`, or the error that stopped the recipe from loading.
+3. Once the line says `tree stale`, `tundravm compile --out mkosi` rewrites the committed tree (`watch --write` does that on every change).
+4. `uv run pytest tests` runs the generated tests, which lint the recipe strictly and compare `mkosi/` with what it compiles to.
+5. `tundravm lock` records the changed sections, and `tundravm ci` runs `lint --strict`, `compile --check` and `lock --check`, as the `check` job of the `init --ci github` workflow does on every push to `main` and pull request.
+6. The workflow's `bake` job is opt-in: once the repository variable `TUNDRAVM_BAKE_BACKEND` names a backend, it bakes twice with it after `check` passes (`bake --verify-reproducible`).
+7. It then runs `evidence --bundle --html` and uploads the bundle, its HTML report and the built images as the `tundravm-bake` artifact, the record a reviewer checks without your machine.
 
 ### Supply chain
 

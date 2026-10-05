@@ -213,6 +213,37 @@ def test_lint_fails_on_a_dangling_key(tmp_path):
     assert "disk-key-undefined" in out
 ```
 
+`watch` polls until Ctrl-C, so `run_cli("watch", ...)` never returns. To drive it from a test, or from tooling of your own, call `tundravm.cli.main(argv, stdout=out, ticks=...)`: `ticks` is any iterable, and `watch` polls once per item (after sleeping `--interval`, so pass a tiny one) and returns 0 when it runs out. A generator can edit the recipe between `yield`s, so each poll after an edit prints that edit's line, and raising `KeyboardInterrupt` from it is Ctrl-C: `watch` prints `stopped` and returns 0. The first line is the `watching ... (Ctrl-C stops)` header, then one `HH:MM:SS` line for the check at start and one per change. Underneath, `tundravm.watch.Watch(sources, check, out, interval=, sleep=, clock=)` is the bare loop, with `run(ticks)`, for a `check` of your own.
+
+```python
+import io
+
+from tundravm.cli import main
+from tundravm.testing import recipe_file
+
+
+def test_watch_reports_a_stale_tree(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = recipe_file(tmp_path, """
+        from tundravm import File, Fragment, Package, Recipe
+        recipe = Recipe(name="t", common=Fragment("t", items=(Package("linux-image-amd64"), File("/etc/motd", "hi\\n"))))
+    """)
+    assert main(["compile", str(path)], stdout=io.StringIO()) == 0
+
+    def ticks():
+        yield  # one poll: nothing changed
+        path.write_text(path.read_text().replace('"hi', '"hello'))
+        yield  # the next poll sees the edit
+        raise KeyboardInterrupt  # what Ctrl-C does
+
+    out = io.StringIO()
+    assert main(["watch", str(path), "--interval", "0.001"], stdout=out, ticks=ticks()) == 0
+    header, start, edited, stopped = out.getvalue().splitlines()
+    assert start.endswith("; tree up to date")
+    assert edited.endswith("; tree stale (1 file)")
+    assert stopped == "stopped"
+```
+
 ## Pytest fixtures
 
 The `tundravm` pytest plugin is registered through an entry point, so installing tundravm makes its fixtures available (disable with `pytest -p no:tundravm`):

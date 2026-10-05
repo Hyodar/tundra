@@ -41,6 +41,7 @@ tundravm inspect node.py                        # dry run: what each variant wil
 tundravm lint node.py                           # every diagnostic; exit 1 on errors
 tundravm lock node.py                           # write build/tundravm.lock (section digests + source pins)
 tundravm compile node.py --out mkosi            # emit the mkosi tree, one directory per variant
+tundravm watch node.py                          # one lint + tree-check line per save; Ctrl-C stops
 tundravm bake node.py                           # build every variant, frozen against the lock
 tundravm status node.py                         # where the project stands, and the next command to run
 tundravm sbom build --variant default     # SPDX/CycloneDX bill of materials
@@ -51,6 +52,8 @@ tundravm deploy build --variant default --target qemu
 ```
 
 `init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init` also writes a `[tool.tundravm]` table into `pyproject.toml`, so in a scaffolded project `RECIPE` is optional: `tundravm status` with no arguments reports on `node.py`. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). tundravm is not on PyPI yet: until the first release, install it from a checkout (`uv add --editable PATH/TO/tundravm` in your project, or `uv sync` in this repo), which also installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+
+`init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and every pull request: it posts `inspect --format markdown` to the job summary and runs `tundravm ci`, which fails on lint findings or a stale committed tree or lockfile. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` names a backend (`local`, `nix`, `lima` or `inprocess`), then fetches, bakes with `--verify-reproducible`, and uploads the `evidence --bundle --html` output with the built images as the `tundravm-bake` artifact.
 
 ## Why
 
@@ -157,7 +160,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 
 | Command | Does |
 |---|---|
-| `init [DIR]` | Scaffold a recipe, tests, `pyproject.toml` and a `.gitignore` block, then probe the backend (`--ci github` adds a workflow) |
+| `init [DIR]` | Scaffold a recipe, tests, `pyproject.toml` and a `.gitignore` block, then probe the backend (`--ci github` adds a workflow: a `check` job and an opt-in `bake` job) |
 | `inspect RECIPE` | Dry run per variant (`--format text\|json\|markdown`); `--variant V --why SUBJECT` explains one emitted object (a path, `unit:`, `package:`, `hook:`, `init:`) |
 | `lint RECIPE` | Every diagnostic; exit 1 on errors (`--strict`: also warnings) |
 | `compile RECIPE` | Emit the mkosi tree; `--check` exits 1 if the tree at `--out` is stale |
@@ -172,7 +175,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `evidence [RECIPE]` | An auditor's record of a bake in `OUT/evidence/`: recipe and tree digests, the lockfile with its drift, each artifact re-hashed, the reproducibility outcome, the measurements policy, SPDX SBOMs, lint and provenance summaries, tool versions, indexed by `evidence.json`; `--bundle FILE.tar.gz` (deterministic under `SOURCE_DATE_EPOCH`), `--html FILE`; exit 1 when the verdict is `fail` |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
-| `watch [RECIPE]` | Re-run lint and the tree check against `OUT/mkosi` whenever the recipe or a `.py` beside it changes, one line per change (`--interval SECONDS`, `--write` recompiles); Ctrl-C exits 0 |
+| `watch [RECIPE]` | Lint the recipe and compare it with its committed tree (`[tool.tundravm]` `tree`, or `OUT/mkosi`) at start and whenever the recipe or a `.py` beside it changes, one line per check; never writes unless `--write`; `--interval SECONDS`; Ctrl-C exits 0 |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
 | `clean [RECIPE]` | Remove build output by part (`--sources`, `--tree`, `--artifacts`, `--state`, `--all`) |
 | `config [RECIPE]` | The `recipe`, `out`, `tree`, `lockfile` and `backend` the commands resolve, whether each came from a flag, `[tool.tundravm]`, the default or (the backend) the recipe file, and whether the recipe and lockfile exist |
@@ -212,7 +215,7 @@ Every example loads, lints without errors and compiles deterministically; `tests
 | Doc | Contents |
 |---|---|
 | [`docs/concepts.md`](docs/concepts.md) | The seven concepts, resolution, lowering, runtime-init, keys/disks/secrets, variants, lifecycle |
-| [`docs/tutorial.md`](docs/tutorial.md) | From `tundravm init` to bake, measure, deploy, a fragment and a test, with real output |
+| [`docs/tutorial.md`](docs/tutorial.md) | From `tundravm init` through `watch`, bake, measure, deploy, a fragment, a test and the CI workflow, with real output |
 | [`docs/cli.md`](docs/cli.md) | Every command and flag, recipe loading, output formats, exit codes, CI |
 | [`docs/api.md`](docs/api.md) | Every declaration, lifecycle function, result type, error and lint rule |
 | [`docs/module-authoring.md`](docs/module-authoring.md) | Writing fragments: `requires`, `checks`, `Init` ordering, builds, tests |
