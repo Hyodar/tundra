@@ -31,6 +31,7 @@ from tundravm.declarative import (
     Setting,
     Variant,
     compile,
+    lock,
     lower,
 )
 from tundravm.errors import ValidationError
@@ -194,7 +195,8 @@ def _secrets(name: str, path: str) -> Secrets:
 
 def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> None:
     recipe = _recipe(_secrets("app", "/run/app"), _secrets("ops", "/run/ops"))
-    out = _tree(recipe, tmp_path / "s")
+    out = tmp_path / "s"
+    compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40)).write(out)
     extra = out / "default/mkosi.extra/etc/tdx"
     assert sorted(p.name for p in extra.iterdir()) == [
         "secrets-app.json",

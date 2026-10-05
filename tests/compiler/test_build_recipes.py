@@ -32,6 +32,11 @@ def _recipe(build: Build) -> Recipe:
     return Recipe("tool", Fragment("tool", items=(build,)))
 
 
+def _pinned(recipe: Recipe) -> Tree:
+    """*recipe*'s tree with its sources pinned to SHA_A: the hooks build the fetched checkout."""
+    return compile(recipe, lock=lock(recipe, resolver=lambda source: SHA_A))
+
+
 def _hooks(tree: Tree) -> str:
     entry = next(e for e in tree.entries if e.path == "default/scripts/04-build.sh")
     assert entry.content is not None
@@ -60,9 +65,9 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
         build=go,
         install=(SourceInstall("file", "/usr/bin/tool", "build/tool", "0755"),),
     )
-    tree = compile(_recipe(build))
+    tree = _pinned(_recipe(build))
     hooks = _hooks(tree)
-    assert hooks == spec.render()
+    assert hooks == spec.render(SHA_A, mounted=True)
     assert (
         "mkosi-chroot bash -c 'cd /build/tool && mkdir -p ./build && go build -trimpath "
         '-ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool\'' in hooks
@@ -80,7 +85,7 @@ def test_go_recipe_renders_like_the_equivalent_script() -> None:
         "tool", Git(REPO, "main"), recipe=Go(package="./cmd/tool", output="tool"), install=install
     )
     by_script = Build("tool", Git(REPO, "main"), script=script, install=install)
-    assert _hooks(compile(_recipe(by_recipe))) == _hooks(compile(_recipe(by_script)))
+    assert _hooks(_pinned(_recipe(by_recipe))) == _hooks(_pinned(_recipe(by_script)))
 
 
 def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
@@ -92,7 +97,7 @@ def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
         recipe=cargo,
         install=(Install(cargo.artifact, "/usr/bin/tool"),),
     )
-    tree = compile(_recipe(build))
+    tree = _pinned(_recipe(build))
     hooks = _hooks(tree)
     assert (
         'mkosi-chroot bash -c \'export RUSTFLAGS="-C x" && cd /build/tool && cargo fetch && '
@@ -110,7 +115,7 @@ def test_dotnet_recipe_renders_dotnet_publish() -> None:
         recipe=dotnet,
         install=(Install("publish", "/usr/lib/app/", mode=None, directory=True),),
     )
-    hooks = _hooks(compile(_recipe(build)))
+    hooks = _hooks(_pinned(_recipe(build)))
     assert "dotnet restore src/App/App.csproj --runtime linux-x64 && dotnet publish" in hooks
     assert "--output /build/app/publish -p:Deterministic=true" in hooks
     assert 'cp -r "$BUILDROOT/build/app/publish"/*' in hooks

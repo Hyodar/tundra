@@ -518,6 +518,9 @@ class BakeRequest:
     output_targets: tuple[OutputTarget, ...] = ("qemu",)
     on_output: Callable[[str], None] | None = field(default=None, compare=False, repr=False)
     on_notice: Callable[[str, str], None] | None = field(default=None, compare=False, repr=False)
+    sources_dir: Path | None = None
+    """The host-fetched checkouts (``<build_dir>/.sources``) the backend mounts at
+    ``$SRCDIR/tundravm-sources``; ``None`` when the build fetches nothing on the host."""
 
     def notice(self, level: str, message: str) -> None:
         """Pass *message* to ``on_notice``, if set."""

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
+from tundravm._source import GitSource
 from tundravm.declarative import (
     Declaration,
     Disk,
@@ -20,9 +21,12 @@ from tundravm.declarative import (
     SecretEnv,
     SecretFile,
     Secrets,
+    compile,
+    lock,
+    lower,
 )
 from tundravm.errors import ValidationError
-from tundravm.testing import CompiledTree, compile_tree
+from tundravm.testing import CompiledTree
 
 KEY_CONFIG = "mkosi.extra/etc/tdx/key-gen.yaml"
 DISK_CONFIG = "mkosi.extra/etc/tdx/disk-setup.yaml"
@@ -36,12 +40,20 @@ def _recipe(*items: Declaration) -> Recipe:
 
 
 def _compile(tmp_path: Path, *items: Declaration) -> CompiledTree:
-    return compile_tree(_recipe(*items), path=tmp_path / "tree")
+    """The tree with every source build pinned, so its hook copies the fetched checkout."""
+    recipe = _recipe(*items)
+    tree = compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40))
+    tree.write(tmp_path / "tree")
+    return CompiledTree(tmp_path / "tree", tree.variants, default_profile=tree.variants[0])
 
 
 def _builds(tree: CompiledTree) -> list[str]:
     """The build script's source-build lines, one per build."""
-    return [line for line in tree.script("build").splitlines() if "git clone" in line]
+    return [line for line in tree.script("build").splitlines() if "tundravm-sources/" in line]
+
+
+def _source(*items: Declaration, name: str) -> object:
+    return lower(_recipe(*items)).source_builds()[name].source
 
 
 def _probes(priority: int) -> tuple[Init, Init]:
@@ -65,8 +77,7 @@ def test_key_generation_adds_build_hook(tmp_path: Path) -> None:
     builds = _builds(tree)
     assert len(builds) == 1
     build_script = builds[0]
-    assert "git clone" in build_script
-    assert "Hyodar/tundra-tools" in build_script
+    assert "-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "go build" in build_script
@@ -114,9 +125,9 @@ def test_key_generation_custom_repo_and_branch(tmp_path: Path) -> None:
     tools = RuntimeTools(Git("https://github.com/custom/fork", "v2.0"))
     tree = _compile(tmp_path, Key("key_persistent"), tools)
 
-    (build_script,) = _builds(tree)
-    assert "custom/fork" in build_script
-    assert "-b v2.0" in build_script
+    assert len(_builds(tree)) == 1
+    source = _source(Key("key_persistent"), tools, name="key-generation")
+    assert source == GitSource("https://github.com/custom/fork", "v2.0")
 
 
 def test_key_generation_supports_multiple_keys(tmp_path: Path) -> None:
@@ -173,8 +184,7 @@ def test_disk_encryption_adds_build_hook(tmp_path: Path) -> None:
     builds = _builds(tree)
     assert len(builds) == 1
     build_script = builds[0]
-    assert "git clone" in build_script
-    assert "Hyodar/tundra-tools" in build_script
+    assert "-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "./cmd/disk-setup" in build_script
@@ -229,9 +239,9 @@ def test_disk_encryption_custom_repo(tmp_path: Path) -> None:
     tools = RuntimeTools(Git("https://github.com/custom/disk", "v3"))
     tree = _compile(tmp_path, Disk("disk_persistent", "/persistent"), tools)
 
-    (build_script,) = _builds(tree)
-    assert "custom/disk" in build_script
-    assert "-b v3" in build_script
+    assert len(_builds(tree)) == 1
+    source = _source(Disk("disk_persistent", "/persistent"), tools, name="disk-encryption")
+    assert source == GitSource("https://github.com/custom/disk", "v3")
 
 
 def test_disk_encryption_supports_multiple_disks(tmp_path: Path) -> None:
@@ -295,8 +305,7 @@ def test_secret_delivery_adds_build_hook(tmp_path: Path) -> None:
     builds = _builds(tree)
     assert len(builds) == 1
     build_script = builds[0]
-    assert "git clone" in build_script
-    assert "Hyodar/tundra-tools" in build_script
+    assert "-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "./cmd/secret-delivery" in build_script

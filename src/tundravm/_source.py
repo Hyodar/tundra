@@ -7,9 +7,14 @@ and hands it to ``Image.build_from``; the internal modules declare theirs direct
 the recipe's own output, :meth:`Install.file` and :meth:`Install.tree` copy further
 paths of the source tree.
 
-The build hook clones the symbolic ref until ``tundravm.lock()`` resolves it to a
-commit (``LockedFetch`` entries in ``tundravm.lock``); from then on the emitted
-hook fetches exactly that commit and the cache key carries it.
+``tundravm.lock()`` resolves each source to a pin (``LockedFetch`` entries in
+``tundravm.lock``) and the cache key carries it. Under ``nethermind-v1`` the build
+hook fetches in the build sandbox: it clones the symbolic ref until the source is
+pinned, then fetches exactly that commit. Every other dialect renders the hook
+*mounted*: :func:`fetch_source` checks the pinned source out on the host as the
+invoking user, into ``<out>/.sources/<name>-<pin[:12]>``, the backend mounts that
+directory at ``$SRCDIR/tundravm-sources`` and the hook copies the checkout into the
+build tree, so the sandbox never fetches a source.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -35,6 +41,15 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PLAIN_ENV_VALUE = re.compile(r"^[A-Za-z0-9_@%+=:,./-]*$")
 _ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar.zst")
+SOURCES_DIRNAME = ".sources"
+"""Directory of the build output that ``tundravm fetch`` writes the checkouts to."""
+SOURCES_MOUNT = "tundravm-sources"
+"""Where a mounted hook finds the host-fetched checkouts: ``$SRCDIR/tundravm-sources``."""
+FETCH_MARKER = ".tundravm-complete"
+"""File :func:`fetch_source`'s caller writes, holding the pin, once a checkout is complete."""
+MOUNTED_CACHE_ROOT = "${BUILDDIR:-$BUILDROOT/build}"
+"""The build cache of a mounted hook: mkosi's ``$BUILDDIR`` when ``BuildDirectory=`` is
+configured (kept across builds), else the build overlay (discarded after the build)."""
 _NETWORK_TIMEOUT = 60.0
 """Seconds :func:`default_resolver` waits on ``git ls-remote`` or a stalled download."""
 
@@ -452,21 +467,51 @@ class SourceBuild:
             "mark_unpinned": self.mark_unpinned,
         }
 
-    def render(self, pin: str | None = None) -> str:
+    def pin_dir(self, pin: str) -> str:
+        """``<name>-<pin[:12]>``: the directory under ``.sources`` that holds *pin*'s checkout."""
+        return f"{self.name}-{pin[:12]}"
+
+    def render(self, pin: str | None = None, *, mounted: bool = False) -> str:
         """The build-phase hook: fetch, build, cache, install.
 
         *pin* is a lockfile pin; an inline pin (commit ref, ``sha256=``) wins.
+        *mounted* copies the host-fetched checkout ``$SRCDIR/tundravm-sources/
+        <name>-<pin[:12]>`` instead of fetching in the sandbox; unpinned, the
+        mounted hook only fails, naming ``tundravm lock`` and ``tundravm fetch``.
         """
         effective = self.source.inline_pin or pin
         workdir = Build.chroot_path(self.name).rel
         if isinstance(self.source, GitSource) and self.source.subdir:
             workdir = f"{workdir}/{self.source.subdir.strip('/')}"
         inner = self.build.command(f"/build/{workdir}").replace("'", "'\\''")
+        if mounted:
+            if effective is None:
+                message = (
+                    f"tundravm: source build {self.name} is not pinned: "
+                    "run tundravm lock, then tundravm fetch"
+                )
+                return (
+                    f"# unpinned: {self.source.requested}\n"
+                    f"echo {shlex.quote(message)} >&2 && exit 1"
+                )
+            command = f"{self._copy(effective)} && mkosi-chroot bash -c '{inner}'"
+            return self._cache(effective, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
         command = f"{self._fetch(effective)} && mkosi-chroot bash -c '{inner}'"
         hook = self._cache(effective, workdir).wrap(command)
         if effective is None and self.mark_unpinned:
             return f"# unpinned: {self.source.requested}\n{hook}"
         return hook
+
+    def _copy(self, pin: str) -> str:
+        """Copy the mounted checkout of *pin* to the build tree, without its marker."""
+        source = f'"$SRCDIR/{SOURCES_MOUNT}/{self.pin_dir(pin)}"'
+        target = f'"{Build.build_path(self.name)}"'
+        missing = f"tundravm: {self.pin_dir(pin)} is not fetched: run tundravm fetch RECIPE"
+        return (
+            f"[ -f {source}/{FETCH_MARKER} ] || {{ echo {shlex.quote(missing)} >&2; exit 1; }}"
+            f" && mkdir -p {target} && cp -a --no-preserve=ownership {source}/. {target}/"
+            f" && rm -f {target}/{FETCH_MARKER}"
+        )
 
     def _cache(self, pin: str | None, workdir: str) -> CacheDecl:
         if self.cache_key is not None:
@@ -521,6 +566,126 @@ class SourceBuild:
         if self.source.filename.endswith(_ARCHIVE_SUFFIXES):
             command += f" && tar -xf {file} -C {target} --strip-components=1"
         return command
+
+
+def is_fetched(checkout: Path, pin: str) -> bool:
+    """Whether *checkout* holds a complete fetch of *pin* (its marker names the pin)."""
+    try:
+        return (checkout / FETCH_MARKER).read_text(encoding="utf-8").strip() == pin
+    except OSError:
+        return False
+
+
+def fetch_source(source: Source, pin: str, dest: Path) -> None:
+    """Check *source* out at *pin* into the new directory *dest*, as the invoking user.
+
+    git: ``git init`` + ``fetch --depth=1 <url> <pin>`` + ``checkout FETCH_HEAD``
+    (and the submodules when the source asks for them); git never prompts, so
+    its credential helpers and SSH agent apply. http: the download, checked
+    against *pin* and unpacked (``--strip-components=1``) next to the archive
+    when it is a tarball, as the in-sandbox hook did. Raises
+    :class:`~tundravm.errors.SourceError` naming the source and the reason.
+    """
+    dest.mkdir(parents=True)
+    if isinstance(source, HttpSource):
+        _download(source, pin, dest)
+        return
+    _git(source, "init", "-q", str(dest))
+    _git(source, "-C", str(dest), "fetch", "-q", "--depth=1", source.url, pin)
+    _git(source, "-C", str(dest), "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD")
+    if source.submodules:
+        _git(
+            source,
+            "-C",
+            str(dest),
+            "submodule",
+            "update",
+            "-q",
+            "--init",
+            "--recursive",
+            "--depth=1",
+        )
+
+
+def _git(source: GitSource, *args: str) -> None:
+    described = source.describe()
+    command = ["git", *args]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except OSError as exc:
+        reason = f"cannot run git: {exc.strerror or exc}"
+        raise SourceError(
+            f"Cannot fetch {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Install git on the host that runs `tundravm fetch`.",
+        ) from exc
+    if completed.returncode != 0:
+        reason = _git_error(completed)
+        raise SourceError(
+            f"Cannot fetch {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint=(
+                "Check the repository URL and that git on this host can read it "
+                "(credentials, network), then run `tundravm fetch RECIPE` again."
+            ),
+            context={"argv": " ".join(command)},
+        )
+
+
+def _download(source: HttpSource, pin: str, dest: Path) -> None:
+    described = source.describe()
+    file = dest / source.filename
+    digest = hashlib.sha256()
+    try:
+        with urlopen(source.url, timeout=_NETWORK_TIMEOUT) as response, file.open("wb") as out:
+            while chunk := response.read(1 << 20):
+                digest.update(chunk)
+                out.write(chunk)
+    except HTTPError as exc:
+        exc.close()
+        reason = f"HTTP {exc.code}"
+        raise SourceError(
+            f"Cannot fetch {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Check the URL with `curl -I URL`; it must serve the file.",
+        ) from exc
+    except OSError as exc:
+        reason = _network_reason(exc.reason if isinstance(exc, URLError) else exc)
+        raise SourceError(
+            f"Cannot fetch {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="Check the URL and the network path to its host.",
+        ) from exc
+    if digest.hexdigest() != pin:
+        reason = f"sha256 {digest.hexdigest()[:12]} does not match the pin {pin[:12]}"
+        raise SourceError(
+            f"Cannot fetch {described}: {reason}.",
+            source=described,
+            reason=reason,
+            hint="The file changed upstream: `tundravm lock RECIPE --update NAME` pins it again.",
+        )
+    if source.filename.endswith(_ARCHIVE_SUFFIXES):
+        unpack = ["tar", "-xf", str(file), "-C", str(dest), "--strip-components=1"]
+        completed = subprocess.run(unpack, check=False, text=True, capture_output=True)
+        if completed.returncode != 0:
+            lines = completed.stderr.strip().splitlines()
+            reason = f"cannot unpack {source.filename}: {lines[-1] if lines else 'tar failed'}"
+            raise SourceError(
+                f"Cannot fetch {described}: {reason}.",
+                source=described,
+                reason=reason,
+                hint="Check that the archive is a tarball the host's tar can read.",
+            )
 
 
 def default_resolver(source: Source) -> str:
@@ -761,6 +926,8 @@ __all__ = [
     "Source",
     "SourceBuild",
     "default_resolver",
+    "fetch_source",
+    "is_fetched",
     "resolve_pins",
     "source_drift",
 ]

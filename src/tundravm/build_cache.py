@@ -98,16 +98,17 @@ class CacheDecl:
     key: str
     artifacts: tuple[CacheFile | CacheDir, ...]
 
-    def wrap(self, build_cmd: str) -> str:
+    def wrap(self, build_cmd: str, *, root: str = "$BUILDDIR") -> str:
         """Wrap *build_cmd* with cache check/store/restore logic.
 
+        The cache lives in ``<root>/<key>``; *root* is a shell expression.
         Generates::
 
             if ! (cache_exists); then
                 {build_cmd} && store artifacts
             fi && restore artifacts
         """
-        cache_dir = f'"$BUILDDIR/{self.key}"'
+        cache_dir = f'"{root}/{self.key}"'
         check = f'[ -d {cache_dir} ] && [ "$(ls -A {cache_dir} 2>/dev/null)" ]'
 
         store_parts: list[str] = [f"mkdir -p {cache_dir}"]

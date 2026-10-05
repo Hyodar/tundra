@@ -21,6 +21,7 @@ from tundravm.backends.base import (
     TOOLS_TREE_NAMES,
     MountSpec,
     Requirement,
+    build_sources_args,
     collect_artifacts,
     failure_message,
     mkosi_project,
@@ -291,7 +292,8 @@ class LocalLinuxBackend:
 
         mkosi's workspace and incremental cache go under ``<build_dir>/.mkosi/``
         unless the recipe sets them; a tools tree is added when the host lacks
-        ``ukify`` (see :meth:`tools_tree`).
+        ``ukify`` (see :meth:`tools_tree`). Host-fetched sources
+        (``request.sources_dir``) are mounted with :func:`build_sources_args`.
         """
         build_dir = request.build_dir.resolve()
         mkosi_dir, native = mkosi_project(request.emit_dir.resolve(), request.profile)
@@ -320,6 +322,15 @@ class LocalLinuxBackend:
             cmd.append(f"--tools-tree={tools}")
             if tools == "default" and cloud_tools(request.output_targets):
                 cmd.append(f"--tools-tree-package={','.join(CLOUD_TOOLS_TREE_PACKAGES)}")
+        if request.sources_dir is not None:
+            cmd.extend(
+                build_sources_args(
+                    mkosi_dir,
+                    sources=str(request.sources_dir.resolve()),
+                    config_dir=str(mkosi_dir),
+                    mkosi_args=self.mkosi_args,
+                )
+            )
         if native:
             cmd.append(f"--profile={request.profile}")
         cmd.extend([*self.mkosi_args, "build"])

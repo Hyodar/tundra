@@ -600,8 +600,14 @@ def _kernel_source_identity(kernel: Kernel) -> str:
     )
 
 
-def _render_kernel_build_script(kernel: Kernel) -> str:
-    """Render a build script that fetches, configures, and compiles the Linux kernel."""
+def _render_kernel_build_script(kernel: Kernel, dialect: str = "current") -> str:
+    """Render a build script that fetches, configures, and compiles the Linux kernel.
+
+    The kernel cache lives in ``$BUILDDIR``; outside ``nethermind-v1`` it falls
+    back to the build overlay, since mkosi sets ``$BUILDDIR`` only with
+    ``BuildDirectory=``.
+    """
+    cache_root = "${BUILDDIR}" if dialect == "nethermind-v1" else "${BUILDDIR:-$BUILDROOT/build}"
     version = kernel.version or "unknown"
     config_hash_source = str(kernel.config_file)
     if kernel.config_file:
@@ -618,7 +624,7 @@ def _render_kernel_build_script(kernel: Kernel) -> str:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        KERNEL_CACHE="${{BUILDDIR}}/{cache_key}"
+        KERNEL_CACHE="{cache_root}/{cache_key}"
         KERNEL_VERSION="{version}"
 
         if [ -d "$KERNEL_CACHE/done" ]; then
@@ -1066,7 +1072,7 @@ class DeterministicMkosiEmitter:
 
             # For build: prepend kernel build script if kernel has config_file
             if phase == "build" and config and config.kernel and config.kernel.config_file:
-                kernel_script = _render_kernel_build_script(config.kernel)
+                kernel_script = _render_kernel_build_script(config.kernel, config.dialect)
                 if commands:
                     # Combine kernel build + user-defined build commands
                     user_script = self._render_script(commands)

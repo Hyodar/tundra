@@ -497,6 +497,11 @@ def _rule_source_unpinned(
     pins = image.source_pins()
     policy = image.policy.mutable_ref_policy
     level: Level = "error" if policy == "error" else "warning" if policy == "warn" else "info"
+    fetch = (
+        " and `tundravm fetch RECIPE` to check it out on the host (`bake` fetches too)"
+        if image.fetches_sources
+        else ""
+    )
     for name, spec in sorted(state.source_builds.items()):
         if spec.pin_from(pins) is not None:
             continue
@@ -508,7 +513,7 @@ def _rule_source_unpinned(
                 f"@ {spec.source.requested}) is not pinned in the lockfile"
             ),
             hint=(
-                "Run `tundravm lock RECIPE` to pin it, or declare an immutable source "
+                f"Run `tundravm lock RECIPE` to pin it{fetch}, or declare an immutable source "
                 "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)). "
                 "Locking reports a dead upstream ref, with every other source it cannot "
                 "resolve, before anything is written."

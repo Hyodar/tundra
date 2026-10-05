@@ -34,7 +34,11 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `kernel-missing` lint error: a bootable variant must declare `Kernel(...)` or install a `linux-image-*` package; `Setting("Content", "Bootable", ("no",))` builds a non-bootable disk instead. `init` templates install the Debian kernel (`linux-image-amd64`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`) so they bake a bootable UKI.
 - Examples consolidated into six numbered teaching recipes (`01_minimal` … `06_attestation`) plus `nethermind_base.py`, `fragments/` and the flagship; `examples/*.py` are loaded, linted and compiled by the test suite.
 
+- `tundravm fetch RECIPE [--lockfile] [--out] [--variant]` checks every source build out on the host as the invoking user (git: pinned commit; http: sha256-verified download) into `build/.sources/<name>-<pin12>/`, idempotently; `bake` runs it first (`--no-fetch` to skip) and mounts `.sources` ephemerally into the build, so the sandbox never fetches sources and private repositories work. `lifecycle.fetch()` / `FetchedSource`; `bake(..., fetch=True)`; `BakeRequest.sources_dir`.
+
 ### Changed
+
+- Current-dialect source hooks copy host-fetched checkouts instead of cloning; unpinned hooks fail with a pointer to `tundravm lock` and `tundravm fetch`; `$BUILDDIR` falls back to `$BUILDROOT/build` in source and kernel scripts (mkosi 26 sets it only with `BuildDirectory=`); existing locks for current-dialect recipes with source builds need re-locking.
 
 - Lockfile version 1 → 3. Per-variant sections are named `variants.<variant>.<section>` (version 2 said `profiles.`). Version 2 files still load with their sections renamed and digests unchanged; version 1 files load too, and `lock --check` reports every section as added until you re-lock.
 - User-facing output says variant: `inspect` prints `variant=NAME`, `Parent:` and `Fragments:` (JSON keys `variant`, `parent`, `fragments`; Markdown heading `## Variant`), the bake summary has a `variant` column and ends `baked N variants`, and `lint --format json` and `bake --json-logs` use `variant`. The lint code `profile-empty` is now `variant-empty`.

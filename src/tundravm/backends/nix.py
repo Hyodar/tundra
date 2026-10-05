@@ -23,6 +23,7 @@ from pathlib import Path
 from tundravm.backends.base import (
     MountSpec,
     Requirement,
+    build_sources_args,
     collect_artifacts,
     failure_message,
     mkosi_project,
@@ -125,6 +126,15 @@ class NixMkosiBackend:
             f"--image-id={request.profile}",
             f"--output-dir={output_dir.resolve()}",
         ]
+        if request.sources_dir is not None:
+            cmd.extend(
+                build_sources_args(
+                    mkosi_dir,
+                    sources=str(request.sources_dir.resolve()),
+                    config_dir=str(mkosi_dir),
+                    mkosi_args=self.mkosi_args,
+                )
+            )
         if native:
             cmd.append(f"--profile={request.profile}")
         cmd.extend(self.mkosi_args)

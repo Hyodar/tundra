@@ -11,7 +11,7 @@ import pytest
 
 from tundravm import File, Fragment, Package, Recipe, Service, Setting, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import lower
+from tundravm.declarative import lock, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.declarative.utils import Tdxs
 from tundravm.models import BakeResult
@@ -79,7 +79,7 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     )
 
     emit_dir = tmp_path / "mkosi"
-    compile(recipe).write(emit_dir)
+    compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40)).write(emit_dir)
 
     conf_text = (emit_dir / "default" / "mkosi.conf").read_text()
     assert "BuildPackages=" in conf_text
@@ -115,7 +115,7 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     assert build_scripts, "No build script emitted"
     build_text = build_scripts[0].read_text()
     assert "go build" in build_text
-    assert "Hyodar/tundra-tools" in build_text
+    assert "tdxs-2bddc6a617e7-aaaaaaaaaaaa" in build_text  # Hyodar/tundra-tools at the pin
     assert "./cmd/tdxs" in build_text
     assert "sync-constellation" not in build_text
     assert "-trimpath" in build_text

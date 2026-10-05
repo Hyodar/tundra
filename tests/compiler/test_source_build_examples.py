@@ -121,7 +121,19 @@ def test_nethermind_hook_is_byte_identical_to_legacy_bash() -> None:
 
 def test_current_dialect_marks_unpinned_app_builds() -> None:
     hooks = _hooks(compile(_surge_stack("current")))
-    assert "\n# unpinned: feat/tdx-proving\n" + TAIKO_CLIENT_LEGACY_HOOK + "\n" in hooks
+    assert (
+        "\n# unpinned: feat/tdx-proving\necho 'tundravm: source build taiko-client is not "
+        "pinned: run tundravm lock, then tundravm fetch' >&2 && exit 1\n"
+    ) in hooks
+
+
+def test_current_dialect_builds_copy_the_fetched_checkouts() -> None:
+    recipe = _surge_stack("current")
+    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
+    assert "git clone" not in pinned and "fetch -q" not in pinned
+    (hook,) = (line for line in pinned.splitlines() if '"$BUILDROOT/build/taiko-client"' in line)
+    assert f'"$SRCDIR/tundravm-sources/taiko-client-{SHA_A[:12]}"/. ' in hook
+    assert f'"${{BUILDDIR:-$BUILDROOT/build}}/taiko-client-feat_tdx-proving-{SHA_A[:12]}"' in hook
 
 
 @pytest.mark.parametrize(
@@ -158,13 +170,11 @@ def test_every_declaration_that_builds_from_source_is_a_source_build() -> None:
         "secret-delivery",
         "tdxs",
     ]
-    lines = _hooks(compile(recipe)).splitlines()
-    hooks = [line for line in lines if not line.startswith("# unpinned: ")]
-    assert lines[0] == "# unpinned: master"
+    lines = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all))).splitlines()
     emitted = ("tdxs", "key-generation", "disk-encryption", "secret-delivery")
-    assert len(hooks) == len(emitted)
-    for hook, name in zip(hooks, emitted, strict=True):
-        assert f'"$BUILDROOT/build/{name}" && ' in hook
+    assert len(lines) == len(emitted)
+    for hook, name in zip(lines, emitted, strict=True):
+        assert f'mkdir -p "$BUILDROOT/build/{name}" && ' in hook
 
 
 # ── GoBuild / DotnetBuild generalizations ───────────────────────────

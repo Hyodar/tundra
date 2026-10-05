@@ -32,6 +32,7 @@ from typing import TextIO, cast, get_args
 
 from . import __version__
 from ._image import Image
+from ._source import SOURCES_DIRNAME
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
@@ -51,6 +52,7 @@ from .declarative.lifecycle import (
     bake_image,
     check_report,
     deploy,
+    fetch_image,
     lock_image,
     measure,
     probe,
@@ -360,6 +362,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    fetch_cmd = _add_command(
+        sub,
+        "fetch",
+        _cmd_fetch,
+        help="Check out the recipe's source builds on this host, at their lockfile pins.",
+    )
+    fetch_cmd.epilog = (
+        "Each source lands in OUT/.sources/<name>-<pin12>, fetched as the invoking user "
+        "(git credentials and SSH agent apply); a complete checkout is kept. Sources the "
+        "lockfile does not pin are resolved first, as `lock` would, unless the recipe's "
+        "policy forbids unpinned sources. `bake` fetches the same way before it builds "
+        "and mounts OUT/.sources into the build."
+    )
+    fetch_cmd.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="Fetch this lockfile's pins (default: build/tundravm.lock when it exists).",
+    )
+    fetch_cmd.add_argument(
+        "--out", type=Path, default=None, help="Build output directory (default: build)."
+    )
+
     bake = _add_command(sub, "bake", _cmd_bake, help="Compile and build the image.")
     bake.add_argument(
         "--out", type=Path, default=None, help="Build output directory (default: build)."
@@ -378,6 +403,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=BACKEND_KINDS,
         default=None,
         help="Build backend (default: the recipe file's `backend`).",
+    )
+    bake.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help=(
+            "Do not fetch the source builds first; build from the checkouts already in "
+            "OUT/.sources (e.g. copied to an air-gapped host) and fail if one is missing."
+        ),
     )
     bake.epilog = (
         "Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a "
@@ -839,6 +872,32 @@ def render_drift(drift: LockDrift, fmt: str, lock_path: Path) -> str:
     return drift.render()
 
 
+def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args)
+    img = loaded.lowered()
+    destination: Path = args.out if args.out is not None else Path(img.build_dir)
+    lock_path = args.lockfile if args.lockfile is not None else _lock_path(img, None)
+    locked = read_lock(lock_path) if args.lockfile is not None or lock_path.exists() else None
+    err = sys.stderr
+    reporter = TextReporter(err, color=_wants_color("auto", err))
+    try:
+        fetched = fetch_image(img, names, locked=locked, out=destination, reporter=reporter)
+    finally:
+        reporter.close()
+    if not fetched:
+        print("no source builds to fetch", file=out)
+        return EXIT_OK
+    print(f"fetched {destination / SOURCES_DIRNAME}", file=out)
+    width = max(len(source.name) for source in fetched)
+    for source in fetched:
+        state = "kept" if source.cached else "fetched"
+        print(f"  {source.name:<{width}}  {source.pin[:12]}  {state}", file=out)
+    if locked is None:
+        print(f"note: no lockfile at {lock_path}; fetched the refs as they resolve now", file=out)
+    return EXIT_OK
+
+
 def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
@@ -876,6 +935,7 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
             out=destination,
             reporter=reporter,
             lock_source=None if locked is None else lock_path,
+            fetch=not args.no_fetch,
         )
     finally:
         reporter.close()

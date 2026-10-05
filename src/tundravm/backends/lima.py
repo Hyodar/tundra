@@ -21,6 +21,7 @@ from tundravm.backends.base import (
     MountSpec,
     Requirement,
     StreamResult,
+    build_sources_args,
     collect_artifacts,
     failure_message,
     mkosi_project,
@@ -211,6 +212,16 @@ class LimaMkosiBackend:
             f"--cache-directory={MKOSI_CACHE_DIR}",
             f"--output-dir={MKOSI_OUTPUT_DIR}",
         ]
+        if request.sources_dir is not None:
+            # under the build directory, so the VM sees it through the same mount
+            args.extend(
+                build_sources_args(
+                    mkosi_dir,
+                    sources=self._vm_path(request, request.sources_dir),
+                    config_dir=self._vm_path(request, mkosi_dir),
+                    mkosi_args=self.mkosi_args,
+                )
+            )
         if native:
             args.append(f"--profile={request.profile}")
         args.extend(self.mkosi_args)

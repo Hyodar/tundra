@@ -6,6 +6,7 @@ from typing import Literal
 import pytest
 
 from tests.helpers import conf_list
+from tundravm._source import GitSource
 from tundravm.declarative import (
     Declaration,
     Fragment,
@@ -14,7 +15,10 @@ from tundravm.declarative import (
     Package,
     Recipe,
     Setting,
+    compile,
     lint,
+    lock,
+    lower,
 )
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import ValidationError
@@ -31,6 +35,14 @@ def _compile(tmp_path: Path, *items: Declaration | Fragment) -> CompiledTree:
     return compile_tree(_recipe(*items), path=tmp_path / "tree")
 
 
+def _pinned(tmp_path: Path, *items: Declaration | Fragment) -> CompiledTree:
+    """The tree with every source pinned, so the hooks build the fetched checkout."""
+    recipe = _recipe(*items)
+    tree = compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40))
+    tree.write(tmp_path / "tree")
+    return CompiledTree(tmp_path / "tree", tree.variants, default_profile=tree.variants[0])
+
+
 def test_tdxs_declares_build_packages(tmp_path: Path) -> None:
     tree = _compile(tmp_path, Tdxs())
 
@@ -41,13 +53,13 @@ def test_tdxs_declares_build_packages(tmp_path: Path) -> None:
 
 
 def test_tdxs_adds_build_hook(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Tdxs())
+    tree = _pinned(tmp_path, Tdxs())
 
-    builds = [line for line in tree.script("build").splitlines() if "git clone" in line]
+    builds = [line for line in tree.script("build").splitlines() if "tundravm-sources/" in line]
     assert len(builds) == 1
     build_script = builds[0]
-    assert "git clone" in build_script
-    assert "Hyodar/tundra-tools" in build_script
+    assert '"$SRCDIR/tundravm-sources/tdxs-aaaaaaaaaaaa"' in build_script
+    assert "tdxs-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "go build" in build_script
@@ -59,11 +71,11 @@ def test_tdxs_adds_build_hook(tmp_path: Path) -> None:
 
 
 def test_tdxs_custom_source(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Tdxs(source=Git("https://github.com/custom/tdxs-fork", "v2.0")))
-
-    build_script = tree.script("build")
-    assert "custom/tdxs-fork" in build_script
-    assert "-b v2.0" in build_script
+    source = Git("https://github.com/custom/tdxs-fork", "v2.0")
+    spec = lower(_recipe(Tdxs(source=source))).source_builds()["tdxs"]
+    assert spec.source == GitSource("https://github.com/custom/tdxs-fork", "v2.0")
+    assert "-b v2.0" in spec.render()
+    assert "tdxs-aaaaaaaaaaaa" in _pinned(tmp_path, Tdxs(source=source)).script("build")
 
 
 def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:

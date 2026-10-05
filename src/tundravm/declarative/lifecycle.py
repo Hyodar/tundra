@@ -19,13 +19,22 @@ import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Literal, get_args
 
 from tundravm import check as _check
 from tundravm._image import Image
-from tundravm._source import Resolver, resolve_pins
+from tundravm._source import (
+    FETCH_MARKER,
+    SOURCES_DIRNAME,
+    GitSource,
+    Resolver,
+    SourceBuild,
+    fetch_source,
+    is_fetched,
+    resolve_pins,
+)
 from tundravm.backends import (
     InProcessBackend,
     LimaMkosiBackend,
@@ -36,7 +45,14 @@ from tundravm.backends import (
 from tundravm.backends.base import BuildBackend, is_mkosi_state
 from tundravm.deploy import DeployAdapter, get_adapter
 from tundravm.diff import diff_trees
-from tundravm.errors import DeploymentError, MeasurementError, StateError, ValidationError
+from tundravm.errors import (
+    DeploymentError,
+    LockfileError,
+    MeasurementError,
+    PolicyError,
+    StateError,
+    ValidationError,
+)
 from tundravm.lockfile import (
     LockedFetch,
     Lockfile,
@@ -51,7 +67,7 @@ from tundravm.models import (
     DeployRequest,
     ProfileBuildResult,
 )
-from tundravm.observability import Event, Reporter, TextReporter
+from tundravm.observability import Event, Progress, Reporter, TextReporter
 
 from .lower import lower
 from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
@@ -625,6 +641,172 @@ def write_lock(locked: Lock, path: Path) -> None:
     target.write_text(locked.text(), encoding="utf-8")
 
 
+# ── fetch ────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class FetchedSource:
+    """A source build's checkout at *path* (``<out>/.sources/<name>-<pin[:12]>``).
+
+    *pin* is the commit (git) or sha256 (http) it holds; *cached* when an
+    earlier fetch had already completed it.
+    """
+
+    name: str
+    kind: Literal["git", "http"]
+    url: str
+    pin: str
+    path: Path
+    cached: bool = False
+    ref: str | None = None
+    """The git ref the pin was resolved from; ``None`` for http."""
+
+    def locked(self) -> LockedFetch:
+        """The lockfile entry this checkout matches."""
+        return LockedFetch(
+            source=self.url, kind=self.kind, digest=self.pin, name=self.name, ref=self.ref
+        )
+
+
+def fetch_image(
+    img: Image,
+    profiles: Sequence[str] | None,
+    *,
+    locked: Lock | None,
+    out: Path,
+    resolver: Resolver | None = None,
+    reporter: Reporter | None = None,
+) -> tuple[FetchedSource, ...]:
+    """Check out every source build of *img*'s *profiles* under ``<out>/.sources``.
+
+    Pins come from *locked*; sources it does not pin are resolved first (as
+    :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
+    refuses. A checkout whose marker already names its pin is kept.
+    """
+    with img._operation_scope(profiles):
+        builds = img.source_builds()
+    if not builds:
+        return ()
+    prior = {} if locked is None else _named_pins(locked)
+    pins: dict[str, str] = {}
+    pending: dict[str, SourceBuild] = {}
+    for name, build in builds.items():
+        pin = build.pin_from(prior)
+        if pin is None:
+            pending[name] = build
+        else:
+            pins[name] = pin
+    offline = img.policy.network_mode == "offline"
+    if pending:
+        pins.update(_resolve_for_fetch(img, pending, resolver=resolver, offline=offline))
+    root = Path(out) / SOURCES_DIRNAME
+    progress = Progress(reporter)
+    fetched: list[FetchedSource] = []
+    noun = "source" if len(builds) == 1 else "sources"
+    copies: dict[tuple[object, str], Path] = {}
+    with progress.phase("fetch", f"fetch {len(builds)} {noun}", profile=None):
+        for name, build in builds.items():
+            source = _checkout(build, pins[name], root, progress, offline=offline, copies=copies)
+            copies.setdefault((build.source, source.pin), source.path)
+            fetched.append(source)
+    return tuple(fetched)
+
+
+def _resolve_for_fetch(
+    img: Image, pending: Mapping[str, SourceBuild], *, resolver: Resolver | None, offline: bool
+) -> dict[str, str]:
+    """Pins for the *pending* sources no lockfile pins, under the recipe's policy."""
+    if img.policy.mutable_ref_policy == "error":
+        names = ", ".join(f"{b.name}@{b.source.requested}" for b in pending.values())
+        raise PolicyError(
+            f"Unpinned source builds are not allowed by policy: {names}.",
+            hint="Run `tundravm lock RECIPE` to pin them, then fetch from that lockfile.",
+            context={"operation": "fetch", "sources": names},
+        )
+    try:
+        resolved = resolve_pins(pending, {}, resolver=resolver, offline=offline)
+    except LockfileError as exc:
+        message = str(exc.args[0]).replace("Cannot lock", "Cannot fetch", 1)
+        raise LockfileError(
+            message.replace("; nothing written.", "; nothing fetched."),
+            hint="Fix the sources above, or `tundravm lock RECIPE` and fetch from its lockfile.",
+            failures=exc.failures,
+        ) from exc
+    return {fetch.name: fetch.digest for fetch in resolved if fetch.name is not None}
+
+
+def _checkout(
+    build: SourceBuild,
+    pin: str,
+    root: Path,
+    progress: Progress,
+    *,
+    offline: bool,
+    copies: Mapping[tuple[object, str], Path],
+) -> FetchedSource:
+    """*build*'s checkout of *pin* under *root*: kept when complete, else fetched afresh.
+
+    A complete checkout of the same source and pin in *copies* is copied
+    instead of fetched again (builds of one repository share it).
+    """
+    path = root / build.pin_dir(pin)
+    ref = build.source.ref if isinstance(build.source, GitSource) else None
+    result = FetchedSource(build.name, build.source.kind, build.source.url, pin, path, ref=ref)
+    if is_fetched(path, pin):
+        progress.emit("log", None, f"{build.name}: {pin[:12]} already fetched", source="notice")
+        return replace(result, cached=True)
+    donor = copies.get((build.source, pin))
+    if offline and donor is None:
+        raise PolicyError(
+            f"Cannot fetch {build.name!r}: policy network_mode is offline.",
+            hint=f"Populate {path} on a connected host (`tundravm fetch`), or relax network_mode.",
+            context={"operation": "fetch", "source": build.source.describe()},
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix=f".{path.name}.", dir=root))
+    try:
+        if donor is not None:
+            shutil.copytree(donor, scratch / "tree", symlinks=True)
+        else:
+            fetch_source(build.source, pin, scratch / "tree")
+        (scratch / "tree" / FETCH_MARKER).write_text(pin + "\n", encoding="utf-8")
+        if path.exists():
+            shutil.rmtree(path)  # incomplete: an interrupted fetch or another pin's marker
+        (scratch / "tree").rename(path)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    how = "fetched" if donor is None else f"copied from {donor.name}:"
+    progress.emit(
+        "log", None, f"{build.name}: {how} {build.source.describe()} at {pin[:12]}", source="notice"
+    )
+    return result
+
+
+def fetch(
+    recipe: Recipe,
+    *,
+    locked: Lock | None,
+    out: Path,
+    variants: Sequence[str] | None = None,
+    resolver: Resolver | None = None,
+) -> tuple[FetchedSource, ...]:
+    """Check out the source builds of *variants* (default: all) under ``<out>/.sources``.
+
+    Each lands in ``<out>/.sources/<name>-<pin[:12]>``, fetched on this host as
+    the invoking user (git credentials and SSH agent apply) at *locked*'s pin.
+    Sources *locked* does not pin (or every source, without *locked*) are
+    resolved first through *resolver* (default: the network), which
+    ``mutable_ref_policy="error"`` refuses. Complete checkouts are kept, so a
+    second fetch touches nothing. Outside ``nethermind-v1`` the bake mounts
+    ``<out>/.sources`` into the build and the build hooks copy their checkout
+    from it; :func:`bake` fetches first.
+    """
+    names = variant_names(recipe, variants)
+    return fetch_image(
+        lower(recipe, variants=names), names, locked=locked, out=out, resolver=resolver
+    )
+
+
 # ── bake ─────────────────────────────────────────────────────────────────
 
 
@@ -657,6 +839,8 @@ def bake_image(
     out: Path,
     reporter: Reporter | None = None,
     lock_source: Path | None = None,
+    fetch: bool = True,
+    resolver: Resolver | None = None,
 ) -> tuple[BakeResult, tuple[Artifact, ...]]:
     """Bake *img* into *out*, frozen against *locked*, and record the artifact manifest.
 
@@ -665,24 +849,41 @@ def bake_image(
     lockfile already there is left alone: the bake reads *lock_source* (or a
     scratch copy of *locked*) instead, and ``bake-result.json`` records which
     lockfile it used. ``None`` bakes unfrozen with whatever lockfile ``out`` holds.
+
+    Outside ``nethermind-v1``, *fetch* first checks the source builds out under
+    ``out/.sources`` (:func:`fetch_image`, at the pins the bake builds; an
+    unfrozen bake builds the pins it resolves). Without *fetch* the checkouts
+    must already be there, or the bake fails with ``E_STATE``. The in-process
+    backend builds nothing and fetches nothing.
     """
     destination = Path(out)
     destination.mkdir(parents=True, exist_ok=True)
     lock_path = destination / LOCK_FILENAME
     with ExitStack() as stack:
         used = _bake_lock(locked, lock_path, lock_source, stack)
-        saved = (img.build_dir, img.backend, img.lock_file)
+        saved = (img.build_dir, img.backend, img.lock_file, img.fetched_pins)
         img.build_dir = destination
         img.lock_file = None if used == lock_path else used
         if backend is not None:
             img.backend = backend
         try:
+            simulated = img.backend is not None and img.backend.name == INPROCESS
+            if fetch and img.fetches_sources and not simulated:
+                pinned = locked if locked is not None else _lock_at(lock_path)
+                fetched = fetch_image(
+                    img,
+                    profiles,
+                    locked=pinned,
+                    out=destination,
+                    resolver=resolver,
+                    reporter=reporter,
+                )
+                img.fetched_pins = {source.name: source.locked() for source in fetched}
             result = img.bake(
                 destination, frozen=locked is not None, reporter=reporter, profiles=profiles
             )
-            simulated = img.backend is not None and img.backend.name == INPROCESS
         finally:
-            img.build_dir, img.backend, img.lock_file = saved
+            img.build_dir, img.backend, img.lock_file, img.fetched_pins = saved
     tree = read_tree(destination / "mkosi", warn=_tree_warning(reporter))
     recipe_digest = (
         locked.recipe_digest
@@ -704,6 +905,11 @@ def bake_image(
         )
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result, read_artifacts(manifest)
+
+
+def _lock_at(path: Path) -> Lock | None:
+    """The lockfile at *path*, or ``None`` when there is none."""
+    return read_lock(path) if path.is_file() else None
 
 
 def _tree_warning(reporter: Reporter | None) -> Callable[[str], None] | None:
@@ -742,11 +948,15 @@ def bake(
     out: Path,
     variants: Sequence[str] | None = None,
     progress: Callable[[str], None] | None = None,
+    fetch: bool = True,
 ) -> tuple[Artifact, ...]:
     """Build *variants* (default: all) with *backend* into *out*, frozen against *locked*.
 
     Fails before building when the recipe has error diagnostics or drifted
-    from *locked*. *progress* receives the CLI's progress lines. Writes
+    from *locked*. Outside ``nethermind-v1`` the source builds are fetched
+    first (:func:`fetch`); ``fetch=False`` builds from the checkouts already in
+    ``out/.sources`` and fails with ``E_STATE`` when one is missing.
+    *progress* receives the CLI's progress lines. Writes
     ``out/bake-result.json``, which :func:`read_artifacts` reads back.
     In-process artifacts are ``simulated``.
     """
@@ -760,6 +970,7 @@ def bake(
             backend=backend.build_backend(),
             out=out,
             reporter=reporter,
+            fetch=fetch,
         )
     finally:
         if reporter is not None:
@@ -964,6 +1175,7 @@ __all__ = [
     "BackendKind",
     "Deployment",
     "Entry",
+    "FetchedSource",
     "Gcp",
     "Lock",
     "Measurements",
@@ -976,6 +1188,7 @@ __all__ = [
     "deploy",
     "diff",
     "doctor",
+    "fetch",
     "lint",
     "lock",
     "lock_status",

@@ -25,7 +25,7 @@ from typing import Final, Literal, Self
 from ._modules.base import Module
 from ._modules.init import Init
 from ._options import MkosiOptions
-from ._source import Resolver, SourceBuild, source_drift
+from ._source import SOURCES_DIRNAME, Resolver, SourceBuild, is_fetched, source_drift
 from .backends.base import BuildBackend
 from .check import check as run_checks
 from .compiler import (
@@ -38,6 +38,7 @@ from .errors import (
     LintError,
     LockfileError,
     PolicyError,
+    StateError,
     ValidationError,
 )
 from .lockfile import (
@@ -237,6 +238,8 @@ class Image:
     """Profiles whose kernel differs from ``kernel`` (``None``: no kernel)."""
     lock_file: Path | None = None
     """The lockfile to read instead of ``<build_dir>/tundravm.lock``."""
+    fetched_pins: dict[str, LockedFetch] = field(default_factory=dict, repr=False)
+    """Pins ``tundravm fetch`` resolved for sources the lockfile does not pin (unlocked bakes)."""
     logger: StructuredLogger = field(init=False, default_factory=StructuredLogger, repr=False)
     init: Init = field(init=False, default_factory=Init, repr=False)
     _state: RecipeState = field(init=False, repr=False)
@@ -371,13 +374,26 @@ class Image:
             profile.build_sources.append((src, dest))
         return self
 
+    @property
+    def fetches_sources(self) -> bool:
+        """Whether source builds build host-fetched checkouts (every dialect but nethermind-v1).
+
+        Their hooks copy ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``, which
+        ``tundravm fetch`` writes to ``<build_dir>/.sources`` and the backend
+        mounts; under ``nethermind-v1`` the hooks fetch in the build sandbox.
+        """
+        return self.mkosi.dialect != "nethermind-v1"
+
     def build_from(self, spec: SourceBuild) -> Self:
         """Fetch, build and install *spec* in the build phase, pinned through the lockfile.
 
         Adds the build packages the source and recipe need and one cached build
-        hook. Until :meth:`lock` pins the source, the hook clones the symbolic
-        ref; once ``<build_dir>/tundravm.lock`` records a pin, ``compile()``
-        emits a fetch of exactly that commit (or a sha256-checked download).
+        hook. Under ``nethermind-v1`` the hook clones the symbolic ref until
+        :meth:`lock` pins the source; once ``<build_dir>/tundravm.lock`` records
+        a pin, ``compile()`` emits a fetch of exactly that commit (or a
+        sha256-checked download). In every other dialect (:attr:`fetches_sources`)
+        the pinned hook copies the host-fetched checkout instead, and an unpinned
+        one fails, naming ``tundravm lock`` and ``tundravm fetch``.
         """
         profiles = self._iter_active_profiles()
         for profile in profiles:
@@ -391,7 +407,7 @@ class Image:
             self.build_packages(*spec.packages)
         for profile in profiles:
             profile.source_builds[spec.name] = spec
-        return self.shell(spec.render(), phase="build")
+        return self.shell(spec.render(mounted=self.fetches_sources), phase="build")
 
     def source_builds(self, *, profile: str | None = None) -> dict[str, SourceBuild]:
         """Source builds declared for *profile* (default: every active profile), by name."""
@@ -1001,7 +1017,7 @@ class Image:
     def _emit(self, destination: Path, *, force: bool) -> CompileResult:
         self._apply_init()
         digest = recipe_digest(self._recipe_payload(profile_names=self._active_profiles))
-        pins = self.source_pins()
+        pins = self._build_pins()
         self._enforce_source_policy(pins)
         config = self._emit_config()
         # The mkosi options and kernel shape the tree without entering the digest.
@@ -1112,6 +1128,7 @@ class Image:
                     ),
                 )
             backend = self.backend
+            sources_dir = self._fetched_sources(destination, backend)
 
             profiles_result: dict[str, ProfileBuildResult] = {}
             for profile_name in self._sorted_active_profile_names():
@@ -1137,6 +1154,7 @@ class Image:
                     output_targets=profile.output_targets,
                     on_output=None if reporter is None else progress.output(profile_name),
                     on_notice=None if reporter is None else progress.notice(profile_name),
+                    sources_dir=sources_dir if profile.source_builds else None,
                 )
 
                 with progress.phase("prepare", f"prepare {backend.name}", profile=profile_name):
@@ -1713,15 +1731,21 @@ class Image:
             context={"operation": "compile", "sources": names},
         )
 
+    def _build_pins(self) -> dict[str, LockedFetch]:
+        """The lockfile's source pins, then :attr:`fetched_pins` for the sources it lacks."""
+        return {**self.source_pins(), **self.fetched_pins}
+
     def _pinned_state(self, pins: Mapping[str, LockedFetch]) -> RecipeState:
         """The recipe state with every pinned source build's hook rendered at its pin."""
         profiles: dict[str, ProfileState] = {}
         changed = False
+        mounted = self.fetches_sources
         for name, profile in self._state.profiles.items():
             swaps = {
-                spec.render(): pinned
+                spec.render(mounted=mounted): pinned
                 for spec in profile.source_builds.values()
-                if (pinned := spec.render(spec.pin_from(pins))) != spec.render()
+                if (pinned := spec.render(spec.pin_from(pins), mounted=mounted))
+                != spec.render(mounted=mounted)
             }
             if not swaps:
                 profiles[name] = profile
@@ -1746,6 +1770,40 @@ class Image:
                 ],
             )
         return replace(self._state, profiles=profiles) if changed else self._state
+
+    def _fetched_sources(self, destination: Path, backend: BuildBackend) -> Path | None:
+        """``<destination>/.sources`` when the build mounts it; fails if a checkout is missing.
+
+        ``None`` under ``nethermind-v1``, without source builds, and for the
+        in-process backend, which builds nothing.
+        """
+        builds = self.source_builds()
+        if not self.fetches_sources or not builds or backend.name == "inprocess":
+            return None
+        root = destination / SOURCES_DIRNAME
+        pins = self._build_pins()
+        for name, spec in builds.items():
+            pin = spec.pin_from(pins)
+            if pin is None:
+                raise StateError(
+                    f"Source build {name!r} is not pinned, so nothing is fetched to build it from.",
+                    hint=(
+                        "Run `tundravm lock RECIPE` and `tundravm fetch RECIPE`, or bake "
+                        "without --no-fetch."
+                    ),
+                    context={"source": f"{spec.source.kind} {spec.source.url}"},
+                )
+            checkout = root / spec.pin_dir(pin)
+            if not is_fetched(checkout, pin):
+                raise StateError(
+                    f"Source build {name!r} is not fetched: {checkout} is missing or incomplete.",
+                    hint=(
+                        f"Run `tundravm fetch RECIPE --out {destination}` first, or bake "
+                        "without --no-fetch."
+                    ),
+                    context={"pin": pin},
+                )
+        return root
 
     def _assert_frozen_lock(self, *, profile_names: tuple[str, ...]) -> None:
         lock_path = self._default_lock_path()

@@ -200,7 +200,7 @@ def test_build_lowers_to_source_build_packages_and_hook() -> None:
     tree = compile(recipe)
     assert "BuildPackages=\n    git\n    golang\n" in _read(tree, "default/mkosi.conf")
     hooks = _hooks(tree)
-    assert hooks == _spec().render()
+    assert hooks == _spec().render(mounted=True)
     assert hooks.startswith("# unpinned: main\n")
 
 
@@ -238,23 +238,49 @@ def test_variant_inherits_common_source_builds() -> None:
     variants = (Variant("default", target="qemu"), Variant("azure", target="azure"))
     recipe = _recipe(_build(), variants=variants)
     assert "tool" in lower(recipe).source_builds(profile="azure")
-    assert _hooks(compile(recipe), "azure") == _spec().render()
+    assert _hooks(compile(recipe), "azure") == _spec().render(mounted=True)
 
 
 # ── Rendering ───────────────────────────────────────────────────────
 
 
 def test_unpinned_and_pinned_rendering() -> None:
-    recipe = _recipe(_build())
-    unpinned = _hooks(compile(recipe))
+    spec = _spec()
+    unpinned = spec.render()
     assert f"git clone --depth=1 -b main {REPO}" in unpinned
     assert "tool-" in unpinned and "-main" in unpinned
-    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
+    pinned = spec.render(SHA_A)
     assert "unpinned" not in pinned
     assert "git clone" not in pinned
     assert f"fetch -q --depth=1 {REPO} {SHA_A}" in pinned
     assert "checkout -q FETCH_HEAD" in pinned
     assert f"-{SHA_A[:12]}" in pinned  # the cache key carries the pin
+
+
+def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
+    recipe = _recipe(_build())
+    unpinned = _hooks(compile(recipe))
+    assert unpinned == (
+        "# unpinned: main\n"
+        "echo 'tundravm: source build tool is not pinned: run tundravm lock, then "
+        "tundravm fetch' >&2 && exit 1"
+    )
+    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
+    checkout = f'"$SRCDIR/tundravm-sources/tool-{SHA_A[:12]}"'
+    cache = f'"${{BUILDDIR:-$BUILDROOT/build}}/tool-a283cbf9717c-{SHA_A[:12]}"'
+    assert pinned == (
+        f'if ! ([ -d {cache} ] && [ "$(ls -A {cache} 2>/dev/null)" ]); then '
+        f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: tool-{SHA_A[:12]} is not "
+        "fetched: run tundravm fetch RECIPE' >&2; exit 1; } && "
+        f'mkdir -p "$BUILDROOT/build/tool" && cp -a --no-preserve=ownership {checkout}/. '
+        '"$BUILDROOT/build/tool"/ && rm -f "$BUILDROOT/build/tool"/.tundravm-complete && '
+        f"mkosi-chroot bash -c 'cd /build/tool && {GO_SCRIPT}' && mkdir -p {cache} && "
+        f'install -D -m 0755 "$BUILDROOT/build/tool/build/tool" {cache}/tool; fi && '
+        f'install -D -m 0755 {cache}/tool "$DESTDIR/usr/bin/tool"'
+    )
+    assert "git" not in pinned and "$BUILDDIR/" not in pinned
+    moved = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_B))))
+    assert f"tool-{SHA_B[:12]}" in moved and SHA_A[:12] not in moved
 
 
 def test_commit_ref_is_pinned_inline() -> None:
@@ -263,7 +289,7 @@ def test_commit_ref_is_pinned_inline() -> None:
     elsewhere = lock(_recipe(_build()), resolver=_Fixed(SHA_A))  # pins tool@main
     tree = compile(recipe)
     assert compile(recipe, lock=elsewhere).digest == tree.digest
-    assert SHA_B in _hooks(tree)
+    assert f"tool-{SHA_B[:12]}" in _hooks(tree)
     assert "unpinned" not in _hooks(tree)
 
 
@@ -276,15 +302,19 @@ def test_subdir_submodules_env_and_quoting() -> None:
         env=(("CGO_CFLAGS", "-O -D__X__"), ("GO111MODULE", "on")),
     )
     recipe = _recipe(build)
-    hook = _hooks(compile(recipe))
+    spec = lower(recipe).source_builds()["tool"]
+    hook = spec.render()
     assert "--recurse-submodules --shallow-submodules" in hook
-    assert (
+    command = (
         '\'export CGO_CFLAGS="-O -D__X__" GO111MODULE=on && cd /build/tool/pkg/tool && '
         "mkdir -p ./build && go build -o ./build/tool '\\''./cmd/tool'\\'''"
-    ) in hook
+    )
+    assert command in hook
     assert '"$BUILDROOT/build/tool/pkg/tool/build/tool"' in hook
-    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
-    assert "submodule update" in pinned
+    assert "submodule update" in spec.render(SHA_A)
+    mounted = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
+    assert command in mounted  # the whole checkout is copied; the build enters the subdir
+    assert '"$BUILDROOT/build/tool/pkg/tool/build/tool"' in mounted
 
 
 def test_http_source_rendering() -> None:
@@ -297,14 +327,19 @@ def test_http_source_rendering() -> None:
         packages=("cargo",),
     )
     recipe = _recipe(build)
-    assert lower(recipe).source_builds()["prover"].packages == ("curl", "cargo")
-    hook = _hooks(compile(recipe))
+    spec = lower(recipe).source_builds()["prover"]
+    assert spec.packages == ("curl", "cargo")
+    assert _hooks(compile(recipe)).startswith(f"# unpinned: {url}\n")
+    hook = spec.render()
     assert hook.startswith(f"# unpinned: {url}\n")
     assert "cargo build --release --frozen --features a,b --bin prover" in hook
     assert "sha256sum" not in hook
-    pinned = _hooks(compile(_recipe(replace(build, source=Http(url, sha256="c" * 64)))))
+    pinned = spec.render("c" * 64)
     assert f'echo "{"c" * 64}  "' in pinned
     assert "--strip-components=1" in pinned
+    inline = _hooks(compile(_recipe(replace(build, source=Http(url, sha256="c" * 64)))))
+    assert f'"$SRCDIR/tundravm-sources/prover-{"c" * 12}"' in inline
+    assert "curl" not in inline and "sha256sum" not in inline
 
 
 def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
@@ -312,20 +347,21 @@ def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
     assert TDXS_LEGACY_HOOK in _hooks(compile(historical)).splitlines()
     assert lower(historical).source_builds()["tdxs"].render() == TDXS_LEGACY_HOOK
     current = _hooks(compile(_recipe(Tdxs())))
-    assert current.startswith("# unpinned: master\n" + TDXS_LEGACY_HOOK)
+    assert current.startswith("# unpinned: master\n")
+    assert "run tundravm lock, then tundravm fetch" in current
 
 
-def _runtime_recipe() -> Recipe:
+def _runtime_recipe(dialect: Literal["current", "nethermind-v1"] = "current") -> Recipe:
     key = Key("key_persistent", output="/tmp/key_persistent")
     disk = Disk("disk_persistent", "/persistent", key=key)
-    return _recipe(Package("linux-image-amd64"), key, disk, Secrets(store=disk))
+    return _recipe(Package("linux-image-amd64"), key, disk, Secrets(store=disk), dialect=dialect)
 
 
 def _assert_runtime_tool_hook(name: str, binary: str) -> None:
     legacy = _legacy_go_hook(name, binary)
+    assert legacy in _hooks(compile(_runtime_recipe("nethermind-v1"))).splitlines()
     recipe = _runtime_recipe()
     tree = compile(recipe)
-    assert legacy in _hooks(tree).splitlines()
     assert lower(recipe).source_builds()[name].render() == legacy
     runtime_init = _read(tree, "default/mkosi.extra/usr/bin/runtime-init")
     assert runtime_init.count(f"/usr/bin/{binary} setup ") == 1
@@ -357,7 +393,7 @@ def test_lock_records_fetches_and_compile_uses_pin() -> None:
     ]
     assert locked.pins == (Pin("tool", Git(REPO, "main"), SHA_A),)
     script = _hooks(compile(recipe, lock=locked))
-    assert SHA_A in script
+    assert f"tool-{SHA_A[:12]}" in script
     assert "unpinned" not in script
     # The recipe payload keeps the symbolic declaration: the lock stays fresh.
     assert lock_status(recipe, locked) == ()
@@ -366,7 +402,8 @@ def test_lock_records_fetches_and_compile_uses_pin() -> None:
 def test_unpinned_compile_emits_marker() -> None:
     script = _hooks(compile(_recipe(_build())))
     assert "# unpinned: main" in script
-    assert "git clone --depth=1 -b main" in script
+    assert "tundravm fetch" in script
+    assert "git clone --depth=1 -b main" in _spec().render()
 
 
 def test_pin_for_another_ref_is_ignored() -> None:

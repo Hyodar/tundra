@@ -251,6 +251,34 @@ def mkosi_setting(project: Path, key: str) -> str | None:
     return value
 
 
+def build_sources_args(
+    project: Path, *, sources: str, config_dir: str, mkosi_args: Sequence[str] = ()
+) -> list[str]:
+    """mkosi flags that mount the host-fetched checkouts *sources* at ``$SRCDIR/tundravm-sources``.
+
+    *project* is the mkosi directory on this host; *config_dir* and *sources*
+    are paths as mkosi sees them. Any ``--build-sources`` replaces mkosi's
+    default (the config directory at ``$SRCDIR``, which build scripts run in),
+    so it is passed again unless the recipe or *mkosi_args* set ``BuildSources=``.
+    ``BuildSourcesEphemeral=yes`` (unless set) puts both behind an overlay: the
+    mount point inside the config directory and anything a script writes there
+    never reach the host.
+    """
+    from tundravm._source import SOURCES_MOUNT
+
+    def chosen(key: str, flag: str) -> bool:
+        passed = any(arg.startswith(flag) for arg in mkosi_args)
+        return passed or mkosi_setting(project, key) is not None
+
+    args: list[str] = []
+    if not chosen("BuildSources", "--build-sources="):
+        args.append(f"--build-sources={config_dir}")
+    args.append(f"--build-sources={sources}:{SOURCES_MOUNT}")
+    if not chosen("BuildSourcesEphemeral", "--build-sources-ephemeral"):
+        args.append("--build-sources-ephemeral=yes")
+    return args
+
+
 def collect_artifacts(output_dir: Path) -> dict[OutputTarget, ArtifactRef]:
     """Scan *output_dir* for mkosi build artifacts (files only; unreadable dirs yield none)."""
     artifacts: dict[OutputTarget, ArtifactRef] = {}
