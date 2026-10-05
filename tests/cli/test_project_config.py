@@ -50,6 +50,7 @@ def test_init_prints_the_table_for_an_existing_pyproject(tmp_path: Path) -> None
 def test_status_lint_and_compile_check_run_without_recipe(project: Path) -> None:
     code, out = run_main("status")
     assert code == EXIT_OK
+    assert out.startswith("recipe    ok       node.py  digest ")
     assert "tree      missing  mkosi: not compiled" in out
     assert out.rstrip().endswith("next: tundravm lock")
     assert run_main("lint") == (EXIT_OK, "no findings\n")
@@ -60,6 +61,7 @@ def test_status_lint_and_compile_check_run_without_recipe(project: Path) -> None
     assert (project / "build" / "tundravm.lock").is_file()
     assert run_main("ci")[0] == EXIT_OK
     status = json.loads(run_main("status", "--format", "json")[1])
+    assert status["recipe"]["path"] == "node.py"
     assert status["tree"]["verdict"] == "ok"
     assert status["next"] == "tundravm bake"
 

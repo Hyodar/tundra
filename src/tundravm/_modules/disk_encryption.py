@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.key_generation import KeyGeneration, KeySpec, validate_entry_name
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
-from tundravm.check import Diagnostic
+from tundravm.check import Diagnostic, Level
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -35,7 +35,12 @@ class DiskSpec:
     A disk is encrypted when it has a key: ``key=`` a :class:`KeySpec` (read from
     ``key.output``, which ``key_path`` then holds), ``key_path`` alone, or
     ``key_name`` (written to the config as ``encryption_key``). ``device=None``
-    picks the largest unpartitioned disk.
+    lets ``disk-setup`` pick the largest whole ``/dev/sd*`` disk, the boot disk
+    included (never a virtio ``/dev/vd*`` one). ``format_policy``: ``always``
+    formats on every boot, ``on_initialize`` while ``disk-setup`` has not initialised
+    the disk (an encrypted disk without its init token), ``on_fail`` when an
+    encrypted disk is not LUKS yet; both format a plain disk that does not mount.
+    ``never`` does not format.
     """
 
     name: str
@@ -156,6 +161,7 @@ class DiskEncryption(Module):
             )
 
     def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
+        yield from self._check_auto_format(image, profile)
         keys: dict[str, KeySpec] = {}
         for module in image.applied_modules(profile, inherited=True):
             if isinstance(module, KeyGeneration):
@@ -197,6 +203,29 @@ class DiskEncryption(Module):
                     profile=profile,
                     subject=disk.name,
                 )
+
+    def _check_auto_format(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
+        """``disk-auto-format`` for each disk that is both picked automatically and formatted."""
+        level: Level = "error" if image.policy.storage_safety == "error" else "warning"
+        for disk in self.disks:
+            if disk.device is not None or disk.format_policy == "never":
+                continue
+            yield Diagnostic(
+                level=level,
+                code="disk-auto-format",
+                message=(
+                    f"disk {disk.name!r} sets no device and format={disk.format_policy!r}: "
+                    "automatic device selection can pick the boot disk and format it"
+                ),
+                hint=(
+                    "device=None takes the largest whole /dev/sd* disk, boot disk included. "
+                    "For production set an explicit device= (e.g. '/dev/sdb'), or "
+                    "format='never' for a disk prepared beforehand; "
+                    "Policy(storage_safety='error') makes this an error."
+                ),
+                profile=profile,
+                subject=disk.name,
+            )
 
     def source_spec(self) -> SourceBuild:
         """The ``disk-setup`` source build from ``source``.

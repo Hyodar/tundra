@@ -279,6 +279,18 @@ def build_sources_args(
     return args
 
 
+OFFLINE_ARGS = ("--with-network=no",)
+"""The mkosi flag of an offline bake: build and postinst scripts get no network.
+
+It overrides the emitted ``WithNetwork=``; mkosi itself still installs the
+distribution packages from the configured mirror."""
+
+
+def network_args(request: BakeRequest) -> list[str]:
+    """:data:`OFFLINE_ARGS` when *request* bakes offline, else nothing."""
+    return [] if request.network else list(OFFLINE_ARGS)
+
+
 def collect_artifacts(output_dir: Path) -> dict[OutputTarget, ArtifactRef]:
     """Scan *output_dir* for mkosi build artifacts (files only; unreadable dirs yield none)."""
     artifacts: dict[OutputTarget, ArtifactRef] = {}

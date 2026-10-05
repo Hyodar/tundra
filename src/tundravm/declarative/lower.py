@@ -27,12 +27,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from tundravm._options import MkosiOptions
+from tundravm._source import DebFile, HttpSource
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel as FluentKernel
 from tundravm.models import RecipeState
 
-from ._lowered import Lowered
+from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
     BASE_PARENT,
     Build,
@@ -234,6 +235,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         profile_mkosi=profile_mkosi,
         profile_kernels=profile_kernels,
         local_sources=_local_sources(recipe, resolved),
+        deb_files=() if dialect == HISTORICAL else _efi_stub_debs(recipe),
         **extra,
     )
 
@@ -311,6 +313,17 @@ def _backports_sources(recipe: Recipe) -> dict[Declaration, tuple[tuple[str, str
             pins = fragment.render_preferences(release=release)
             found[hook] = ((BACKPORTS_SOURCES, sources), (BACKPORTS_PINS, pins))
     return found
+
+
+def _efi_stub_debs(recipe: Recipe) -> tuple[DebFile, ...]:
+    """The package of each distinct :class:`EfiStub` in *recipe*, as a ``current`` source."""
+    return tuple(
+        dict.fromkeys(
+            DebFile(EFI_STUB_SOURCE, HttpSource(fragment.deb_url), fragment.render_script())
+            for fragment in _fragments(recipe)
+            if isinstance(fragment, EfiStub)
+        )
+    )
 
 
 def _efi_stub_scripts(recipe: Recipe) -> dict[Declaration, str]:

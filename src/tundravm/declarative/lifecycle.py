@@ -24,13 +24,16 @@ from pathlib import Path
 from typing import Literal, get_args
 
 from tundravm import check as _check
+from tundravm._modules import SecretDelivery
 from tundravm._source import (
     SOURCES_DIRNAME,
     GitSource,
     NamedSource,
     Resolver,
+    SourceBuild,
     fetch_source,
     is_fetched,
+    prefetch_deps,
     resolve_pins,
     write_marker,
 )
@@ -219,6 +222,8 @@ class Artifact:
     lock_digest: str
     tree_digest: str
     simulated: bool = False
+    ports: tuple[int, ...] = ()
+    """Guest ports the variant's ``Secrets`` deliveries listen on; ``deploy`` forwards them."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +268,9 @@ class Qemu:
     ssh_port: int = 2222
     tdx: bool = False
     daemonize: bool = True
+    """``False`` runs QEMU in the foreground with its console on this terminal."""
+    forward: tuple[tuple[int, int], ...] = ()
+    """``(host, guest)`` TCP ports forwarded besides ``ssh_port``; ``Secrets`` ports are added."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,7 +278,11 @@ class Azure:
     storage_account: str
     resource_group: str = "tdx-vms"
     location: str = "eastus"
-    vm_size: str = "Standard_DC2s_v3"
+    vm_size: str = "Standard_DC2es_v5"
+    """A TDX confidential VM size: the DCesv5/DCedsv5 or ECesv5/ECedsv5 series."""
+    gallery: str = "tdx_images"
+    """The Compute Gallery (in ``resource_group``) the image version is published to."""
+    secure_boot: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,7 +290,8 @@ class Gcp:
     project: str
     bucket: str
     zone: str = "us-central1-a"
-    machine_type: str = "n2d-standard-2"
+    machine_type: str = "c3-standard-4"
+    """An Intel TDX machine type: the C3 series."""
 
 
 DeployTarget = Qemu | Azure | Gcp
@@ -702,9 +715,10 @@ def write_lock(locked: Lock, path: Path) -> None:
 class FetchedSource:
     """A source's checkout at *path* (``<out>/.sources/<name>-<pin[:12]>``).
 
-    *name* is a source build's, or ``kernel`` (``kernel-<variant>``) for a built
-    kernel's source. *pin* is the commit (git) or sha256 (http) it holds; *cached* when an
-    earlier fetch had already completed it.
+    *name* is a source build's, ``kernel`` (``kernel-<variant>``) for a built
+    kernel's source, or ``efi-stub`` for an ``EfiStub`` package. *pin* is the commit
+    (git) or sha256 (http) it holds; *cached* when an earlier fetch had already
+    completed it.
     """
 
     name: str
@@ -715,6 +729,10 @@ class FetchedSource:
     cached: bool = False
     ref: str | None = None
     """The git ref the pin was resolved from; ``None`` for http."""
+    deps: str | None = None
+    """A Go, Cargo or .NET build's dependency prefetch into ``<out>/.sources/deps``:
+    ``go: prefetched``, ``go: kept``, ``skipped (no host go)``, ``skipped (offline)`` or
+    ``failed (<reason>)``; ``None`` for other sources."""
 
     def locked(self) -> LockedFetch:
         """The lockfile entry this checkout matches."""
@@ -736,7 +754,10 @@ def fetch_image(
     """Check out every source of *img*'s *profiles* under ``<out>/.sources``.
 
     The sources are the source builds and, outside ``nethermind-v1``, the built
-    kernels' sources (``Lowered.lock_sources``).
+    kernels' sources and ``EfiStub`` packages (``Lowered.lock_sources``). Each Go,
+    Cargo and .NET build's dependencies are then prefetched into
+    ``<out>/.sources/deps`` with the host's toolchain (``prefetch_deps``); without
+    it the build downloads them as before.
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
@@ -779,8 +800,27 @@ def fetch_image(
             )
             copies.setdefault((build.source, source.pin), source.path)
             done.add(source.path)
+            if isinstance(build, SourceBuild):
+                source = replace(
+                    source, deps=_prefetch(build, source, root, progress, offline=offline)
+                )
             fetched.append(source)
     return tuple(fetched)
+
+
+def _prefetch(
+    build: SourceBuild, source: FetchedSource, root: Path, progress: Progress, *, offline: bool
+) -> str | None:
+    """Prefetch *build*'s dependencies next to its checkout (``prefetch_deps``), with a notice."""
+    outcome = prefetch_deps(build, source.pin, source.path, root, offline=offline)
+    if outcome is None:
+        return None
+    message = f"{build.key}: deps: {outcome}"
+    if outcome.startswith("failed"):
+        progress.emit("warning", None, f"{message}; the build downloads them", level="warning")
+    else:
+        progress.emit("log", None, message, source="notice")
+    return outcome
 
 
 def _resolve_for_fetch(
@@ -882,7 +922,11 @@ def fetch(
     changed raises ``SourceError``; *force* checks every source out again.
     Outside ``nethermind-v1`` the bake mounts ``<out>/.sources`` into the build
     and the build hooks and kernel build script copy their checkout from it;
-    :func:`bake` fetches first.
+    :func:`bake` fetches first. Each Go, Cargo and .NET build's dependencies are
+    prefetched with the host's ``go``, ``cargo`` or ``dotnet`` into
+    ``<out>/.sources/deps/{go,cargo,nuget}``, which the build hooks copy and point
+    the toolchain at; a host without the toolchain skips it (``FetchedSource.deps``)
+    and the build downloads them, unless it bakes offline.
     """
     names = variant_names(recipe, variants)
     return fetch_image(
@@ -924,6 +968,7 @@ def bake_image(
     lock_source: Path | None = None,
     fetch: bool = True,
     resolver: Resolver | None = None,
+    offline: bool = False,
 ) -> tuple[BakeResult, tuple[Artifact, ...]]:
     """Bake *img* into *out*, frozen against *locked*, and record the artifact manifest.
 
@@ -938,7 +983,14 @@ def bake_image(
     unfrozen bake builds the pins it resolves). Without *fetch* the checkouts
     must already be there, or the bake fails with ``E_STATE``. The in-process
     backend builds nothing and fetches nothing.
+
+    *offline* bakes as ``Policy(network_mode="offline")`` does: the fetch reuses
+    complete checkouts and downloads nothing, every Go, Cargo and .NET build must
+    find its prefetched dependencies (else ``E_STATE`` before mkosi runs), and
+    mkosi runs the build scripts with ``--with-network=no``.
     """
+    if offline and img.policy.network_mode != "offline":
+        img = replace(img, policy=replace(img.policy, network_mode="offline"))
     destination = Path(out)
     destination.mkdir(parents=True, exist_ok=True)
     lock_path = destination / LOCK_FILENAME
@@ -971,6 +1023,9 @@ def bake_image(
         "simulated": simulated,
         "tree_digest": tree.digest,
     }
+    ports = {name: secret_ports(baking, name) for name in sorted(result.profiles)}
+    if any(ports.values()):
+        payload[MANIFEST_KEY]["ports"] = {name: list(p) for name, p in ports.items() if p}
     if locked is not None:
         source = lock_source if lock_source is not None else lock_path
         # None: an in-memory Lock read through a scratch copy
@@ -979,6 +1034,12 @@ def bake_image(
         )
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result, read_artifacts(manifest)
+
+
+def secret_ports(img: Lowered, variant: str) -> tuple[int, ...]:
+    """The guest ports *variant*'s ``Secrets`` deliveries listen on, sorted."""
+    modules = img.applied_modules(variant, inherited=True)
+    return tuple(sorted({m.port for m in modules if isinstance(m, SecretDelivery)}))
 
 
 def _lock_at(path: Path) -> Lock | None:
@@ -1023,6 +1084,7 @@ def bake(
     variants: Sequence[str] | None = None,
     progress: Callable[[str], None] | None = None,
     fetch: bool = True,
+    offline: bool = False,
 ) -> tuple[Artifact, ...]:
     """Build *variants* (default: all) with *backend* into *out*, frozen against *lock*.
 
@@ -1030,6 +1092,9 @@ def bake(
     from *lock*. Outside ``nethermind-v1`` the source builds are fetched
     first (:func:`fetch`); ``fetch=False`` builds from the checkouts already in
     ``out/.sources`` and fails with ``E_STATE`` when one is missing.
+    ``offline=True`` (or ``Policy(network_mode="offline")``) gives the build
+    sandbox no network: :func:`fetch` must have checked out every source and
+    prefetched every Go, Cargo and .NET build's dependencies, else ``E_STATE``.
     *progress* receives the CLI's progress lines. Writes
     ``out/bake-result.json``, which :func:`read_artifacts` reads back.
     In-process artifacts are ``simulated``.
@@ -1045,6 +1110,7 @@ def bake(
             out=out,
             reporter=reporter,
             fetch=fetch,
+            offline=offline,
         )
     finally:
         if reporter is not None:
@@ -1067,6 +1133,7 @@ def read_artifacts(manifest: Path) -> tuple[Artifact, ...]:
             context={"path": str(path)},
         ) from exc
     simulated = bool(extra.get("simulated", result.backend == INPROCESS))
+    ports = extra.get("ports") or {}
     artifacts: list[Artifact] = []
     for variant, profile in sorted(result.profiles.items()):
         for target, ref in sorted(profile.artifacts.items()):
@@ -1080,6 +1147,7 @@ def read_artifacts(manifest: Path) -> tuple[Artifact, ...]:
                     lock_digest=result.lock_digest or "",
                     tree_digest=str(extra.get("tree_digest", "")),
                     simulated=simulated,
+                    ports=tuple(int(port) for port in ports.get(variant, ())),
                 )
             )
     return tuple(artifacts)
@@ -1175,12 +1243,26 @@ def measure(
 
 
 def deploy_parameters(using: DeployTarget) -> dict[str, str]:
-    """*using*'s fields as the adapter's string parameters."""
+    """*using*'s fields as the adapter's string parameters (``forward`` as ``HOST:GUEST,...``)."""
     params: dict[str, str] = {}
     for item in fields(using):
         value = getattr(using, item.name)
-        params[item.name] = str(value).lower() if isinstance(value, bool) else str(value)
+        if isinstance(value, bool):
+            params[item.name] = str(value).lower()
+        elif isinstance(value, tuple):
+            params[item.name] = ",".join(f"{host}:{guest}" for host, guest in value)
+        else:
+            params[item.name] = str(value)
     return params
+
+
+def with_secret_ports(using: DeployTarget, ports: Sequence[int]) -> DeployTarget:
+    """*using* forwarding every guest port in *ports* it does not forward yet, host port = guest."""
+    if not isinstance(using, Qemu):
+        return using
+    taken = {guest for _, guest in using.forward}
+    added = tuple((port, port) for port in ports if port not in taken)
+    return replace(using, forward=using.forward + added) if added else using
 
 
 def target_of(using: DeployTarget) -> Target:
@@ -1199,6 +1281,8 @@ def deploy(
     The artifact's bytes are checked against their recorded sha256 first
     (``verify_artifact``). Simulated artifacts are refused unless
     *allow_simulated*. *adapter* replaces the target's default adapter (tests).
+    On QEMU every port in ``artifact.ports`` that ``using.forward`` does not
+    forward is forwarded from the same host port.
     """
     verify_artifact(artifact)
     target = target_of(using)
@@ -1218,7 +1302,7 @@ def deploy(
         profile=artifact.variant,
         target=target,
         artifact_path=artifact.path,
-        parameters=deploy_parameters(using),
+        parameters=deploy_parameters(with_secret_ports(using, artifact.ports)),
     )
     result = (adapter if adapter is not None else get_adapter(target)).deploy(request)
     return Deployment(

@@ -52,6 +52,7 @@ from .declarative.lifecycle import (
     Lock,
     Measurements,
     ProbeRunner,
+    Qemu,
     Scheme,
     bake_image,
     check_report,
@@ -469,6 +470,15 @@ def build_parser() -> argparse.ArgumentParser:
             "OUT/.sources (e.g. copied to an air-gapped host) and fail if one is missing."
         ),
     )
+    bake.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "Give the build sandbox no network (mkosi --with-network=no): build only from "
+            "what `tundravm fetch` put in OUT/.sources, including the Go/Cargo/.NET "
+            "dependency caches, and fail before mkosi when one is missing."
+        ),
+    )
     bake.epilog = (
         RESOLUTION_HELP
         + " "
@@ -539,9 +549,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="KEY=VALUE",
         help=(
-            "Target setting (repeatable). qemu: memory, cpus, ssh_port, tdx, daemonize; "
-            "azure: storage_account, resource_group, location, vm_size; "
+            "Target setting (repeatable). qemu: memory, cpus, ssh_port, tdx, daemonize, "
+            "forward (HOST:GUEST[,HOST:GUEST...]); "
+            "azure: storage_account, resource_group, location, vm_size, gallery, secure_boot; "
             "gcp: project, bucket, zone, machine_type."
+        ),
+    )
+    deploy_cmd.add_argument(
+        "--attach",
+        action="store_true",
+        help=(
+            "qemu only: run QEMU in the foreground with the serial console on this terminal "
+            "(Ctrl-A X quits, Ctrl-A C toggles the monitor) instead of detaching it."
         ),
     )
     deploy_cmd.add_argument(
@@ -1249,7 +1268,8 @@ def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
     width = max(len(source.name) for source in fetched)
     for source in fetched:
         state = "kept" if source.cached else "fetched"
-        print(f"  {source.name:<{width}}  {source.pin[:12]}  {state}", file=out)
+        deps = f"  deps: {source.deps}" if source.deps is not None else ""
+        print(f"  {source.name:<{width}}  {source.pin[:12]}  {state:<7}{deps}".rstrip(), file=out)
     if locked is None:
         print(f"note: no lockfile at {lock_path}; fetched the refs as they resolve now", file=out)
     return EXIT_OK
@@ -1300,6 +1320,7 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
             reporter=reporter,
             lock_source=None if locked is None else lock_path,
             fetch=not args.no_fetch,
+            offline=args.offline,
         )
     finally:
         reporter.close()
@@ -1414,7 +1435,9 @@ def parse_deploy_target(target: Target, params: dict[str, str]) -> DeployTarget:
     values: dict[str, object] = {}
     for name, raw in params.items():
         kind_name = str(known[name].type)
-        if kind_name == "int":
+        if kind_name.startswith("tuple[tuple[int, int]"):
+            values[name] = _parse_forward(target, name, raw)
+        elif kind_name == "int":
             try:
                 values[name] = int(raw)
             except ValueError:
@@ -1440,9 +1463,29 @@ def parse_deploy_target(target: Target, params: dict[str, str]) -> DeployTarget:
     return kind(**values)  # type: ignore[arg-type]
 
 
+def _parse_forward(target: Target, name: str, raw: str) -> tuple[tuple[int, int], ...]:
+    pairs: list[tuple[int, int]] = []
+    for item in filter(None, (part.strip() for part in raw.split(","))):
+        host, sep, guest = item.partition(":")
+        if not (sep and host.isdigit() and guest.isdigit()):
+            raise ValidationError(
+                f"{target} parameter {name} must be HOST:GUEST port pairs.",
+                hint=f"Pass e.g. --param {name}=8443:443,9000:9000",
+            )
+        pairs.append((int(host), int(guest)))
+    return tuple(pairs)
+
+
 def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
     target = cast(Target, args.target)
     using = parse_deploy_target(target, _parse_params(args.param))
+    if args.attach:
+        if not isinstance(using, Qemu):
+            raise ValidationError(
+                f"--attach applies to --target qemu, not {target}.",
+                hint="Drop --attach; a cloud VM's console is read with the cloud's CLI.",
+            )
+        using = replace(using, daemonize=False)
     artifact = _artifact(args, target)
     result = deploy(artifact, using=using, allow_simulated=args.allow_simulated_artifact)
     print(render_deployment(result, variant=artifact.variant), file=out)
@@ -1697,6 +1740,7 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         lockfile=args.lockfile if origins.get("lockfile") == "flag" else None,
         variants=names if args.variant else (),
         tree_flag=origins.get("tree") != "pyproject",
+        recipe_path=str(args.recipe),
     )
     status = project_status(
         loaded,

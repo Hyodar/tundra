@@ -27,6 +27,7 @@ from tundravm.backends.base import (
     collect_artifacts,
     failure_message,
     mkosi_project,
+    network_args,
     run_streaming,
     write_flake_nix,
 )
@@ -135,6 +136,7 @@ class NixMkosiBackend:
                     mkosi_args=self.mkosi_args,
                 )
             )
+        cmd.extend(network_args(request))
         if native:
             cmd.append(f"--profile={request.profile}")
         cmd.extend(self.mkosi_args)

@@ -26,6 +26,7 @@ from tundravm.backends.base import (
     failure_message,
     mkosi_project,
     mkosi_setting,
+    network_args,
     run_streaming,
 )
 from tundravm.errors import BackendExecutionError
@@ -331,6 +332,7 @@ class LocalLinuxBackend:
                     mkosi_args=self.mkosi_args,
                 )
             )
+        cmd.extend(network_args(request))
         if native:
             cmd.append(f"--profile={request.profile}")
         cmd.extend([*self.mkosi_args, "build"])

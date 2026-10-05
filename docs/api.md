@@ -224,7 +224,7 @@ fetch(recipe, *, lock: Lock | None, out: Path, variants=None, resolver=None, for
 - **`read_artifacts`** reads `bake-result.json` (or the directory holding it).
 - **`verify_artifact`** hashes `artifact.path` and raises `ArtifactError` (`E_ARTIFACT_CHANGED`) when the file is unreadable, has no recorded sha256, or no longer matches the sha256 `bake-result.json` recorded. `measure` and `deploy` call it before anything else.
 - **`measure`** derives expected measurements with `measured-boot` or `dstack-mr`; without one it raises `MeasurementError` unless `allow_placeholder`, which also emits a `PlaceholderMeasurementWarning`. Simulated artifacts are refused unless `allow_placeholder`.
-- **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_simulated`. `adapter` replaces the default adapter (tests).
+- **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_simulated`. `adapter` replaces the default adapter (tests). On QEMU every port in `artifact.ports` that `Qemu.forward` does not already forward (by guest port) is forwarded from the same host port. The adapters in `tundravm.deploy` take `runner=` (an argv to `subprocess.CompletedProcess` function) that replaces every `qemu-system-x86_64`, `az` or `gcloud` call, so their command lines can be asserted without the tools.
 - **`doctor`** returns one `tool-missing` diagnostic per missing host tool of the backend (a warning when the tool is optional).
 - **`load`** imports a recipe file and returns its `Recipe`; `attribute` may also name a zero-argument factory, and `attribute=None` discovers it as the [CLI does](cli.md#recipe-files). `load_recipe(path, *, attribute=None, extra_paths=())` is the same with CLI discovery by default.
 
@@ -238,11 +238,11 @@ fetch(recipe, *, lock: Lock | None, out: Path, variants=None, resolver=None, for
 | `Pin` | `identity` (build name, `kernel`/`kernel-<variant>` for a built kernel, or URL for anonymous fetches), `source: Git \| Http` (the resolved commit or hash), `digest` |
 | `FetchedSource` | `name` (a build's lock key: its name or `<variant>/<name>`, or `kernel`/`kernel-<variant>`), `kind` (`"git"`, `"http"`), `url`, `pin` (commit or sha256), `path` (`<out>/.sources/<name>-<pin[:12]>-<id[:8]>`), `cached=False` (an earlier fetch had completed it), `ref=None` (the git ref the pin came from); `locked()` is the lockfile entry it matches |
 | `Backend` | `kind` (`"lima"`, `"nix"`, `"local"`, `"inprocess"`), `cpus=2`, `memory="4GiB"`, `disk="40GiB"` (the last three for Lima) |
-| `Artifact` | `path`, `variant`, `target`, `sha256`, `recipe_digest`, `lock_digest`, `tree_digest`, `simulated=False` |
+| `Artifact` | `path`, `variant`, `target`, `sha256`, `recipe_digest`, `lock_digest`, `tree_digest`, `simulated=False`, `ports=()` (the guest ports the variant's `Secrets` deliveries listen on, as `bake-result.json` records them under `declarative.ports`) |
 | `Measurements` | `scheme` (`"rtmr"`, `"azure"`, `"gcp"`), `values: Pairs`, `tool` (`"measured-boot <version>"`, `"dstack-mr <version>"` or `"placeholder"`), `artifact_digest`; `to_json(path=None) -> str` is the four fields as JSON (sorted keys, trailing newline), also written to `path` when given; `verify(expected: Mapping[str, str]) -> tuple[str, ...]` is the sorted registers whose value differs from `expected` (a register only one side has counts), empty when all match |
-| `Qemu` | `memory="2G"`, `cpus=2`, `ssh_port=2222`, `tdx=False`, `daemonize=True` |
-| `Azure` | `storage_account`, `resource_group="tdx-vms"`, `location="eastus"`, `vm_size="Standard_DC2s_v3"` |
-| `Gcp` | `project`, `bucket`, `zone="us-central1-a"`, `machine_type="n2d-standard-2"` |
+| `Qemu` | `memory="2G"`, `cpus=2`, `ssh_port=2222`, `tdx=False` (TDVF through `-bios`, `tdx-guest` object, split irqchip), `daemonize=True` (`False`: QEMU runs in the foreground with its console on the terminal), `forward: tuple[tuple[int, int], ...] = ()` (`(host, guest)` TCP ports forwarded besides `ssh_port`) |
+| `Azure` | `storage_account`, `resource_group="tdx-vms"`, `location="eastus"`, `vm_size="Standard_DC2es_v5"` (a TDX confidential size: DCesv5/DCedsv5 or ECesv5/ECedsv5), `gallery="tdx_images"` (the Compute Gallery the image version goes to), `secure_boot=True` |
+| `Gcp` | `project`, `bucket`, `zone="us-central1-a"`, `machine_type="c3-standard-4"` (TDX runs on the C3 series) |
 | `Deployment` | `id`, `target`, `endpoint: str \| None`, `metadata: Pairs` |
 
 ```python
@@ -360,6 +360,7 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `debloat-removes-declared-file` | warning | Debloat deletes a declared file at finalize |
 | `source-unpinned` | warning (error / info by policy) | A source build, or a built kernel's source in the current dialect, has no pin in `build/tundravm.lock` |
 | `disk-key-path-mismatch` | warning | A disk reads a key file the key does not write |
+| `disk-auto-format` | warning (error with `Policy(storage_safety="error")`) | A `Disk(device=None)` with `format` other than `"never"`: `disk-setup` picks the largest whole `/dev/sd*` disk, boot disk included, and can format it. Set an explicit `device`, or `format="never"` for a disk prepared beforehand |
 | `key-pipe-outside-run` | info | A pipe key's path is outside `/run` |
 | `variant-empty` | info | A variant declares nothing of its own |
 | `kernel-missing` | error | A bootable variant has no `Kernel` and installs no `linux-image-*` package; mkosi cannot build its UKI. `Setting("Content", "Bootable", ("no",))` disables both |

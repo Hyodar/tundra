@@ -13,11 +13,20 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tundravm._source import SOURCES_DIRNAME, KernelSource, is_fetched
+from tundravm._source import (
+    DEPS_DIRNAME,
+    SOURCES_DIRNAME,
+    DebFile,
+    KernelSource,
+    LanguageBuild,
+    SourceBuild,
+    deps_prefetched,
+    is_fetched,
+)
 from tundravm.backends.base import BuildBackend
 from tundravm.check import check
 from tundravm.compiler import PHASE_ORDER, MkosiEmission
-from tundravm.errors import LintError, LockfileError, StateError, ValidationError
+from tundravm.errors import LintError, LockfileError, PolicyError, StateError, ValidationError
 from tundravm.lockfile import LOCKFILE_VERSION, compare_lock, read_lockfile, recipe_digest
 from tundravm.models import (
     ArtifactRef,
@@ -86,7 +95,8 @@ def bake(
                 ),
             )
         backend = lowered.backend
-        sources_dir = _fetched_sources(lowered, destination, backend)
+        offline = lowered.policy.network_mode == "offline"
+        sources_dir = _fetched_sources(lowered, destination, backend, offline=offline)
         profiles: dict[str, ProfileBuildResult] = {}
         for name in sorted(active):
             started = progress.elapsed()
@@ -101,7 +111,9 @@ def bake(
                 sources_dir=sources_dir
                 if lowered.state.effective_profile(name).source_builds
                 or lowered.kernel_source(name)
+                or lowered.deb_file(name)
                 else None,
+                network=not offline,
             )
             logger.log(
                 operation="bake_profile_start",
@@ -246,19 +258,43 @@ def _lock_digest(lowered: Lowered) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _fetched_sources(lowered: Lowered, destination: Path, backend: BuildBackend) -> Path | None:
+def _fetched_sources(
+    lowered: Lowered, destination: Path, backend: BuildBackend, *, offline: bool = False
+) -> Path | None:
     """``<destination>/.sources`` when the build mounts it; fails if a checkout is missing.
 
-    ``None`` under ``nethermind-v1``, without source builds or a built kernel,
-    and for the in-process backend, which builds nothing.
+    ``None`` under ``nethermind-v1``, without source builds, a built kernel or an
+    ``EfiStub`` package, and for the in-process backend, which builds nothing.
+    *offline* (no network in the build sandbox) also requires every language
+    build's prefetched dependencies, and refuses ``nethermind-v1`` source builds,
+    which fetch in the sandbox.
     """
     builds = lowered.lock_sources()
-    if not lowered.fetches_sources or not builds or backend.name == "inprocess":
+    if backend.name == "inprocess" or not builds:
+        return None
+    if not lowered.fetches_sources:
+        if offline:
+            raise PolicyError(
+                f"An offline bake cannot build {', '.join(builds)}: under "
+                f"{lowered.mkosi.dialect} the build hooks fetch their sources in the sandbox.",
+                hint=(
+                    "Bake with network (drop --offline, or Policy(network_mode='online')), "
+                    "or move the recipe to the current dialect, whose sources "
+                    "`tundravm fetch` checks out on the host."
+                ),
+                context={"operation": "bake", "dialect": lowered.mkosi.dialect},
+            )
         return None
     root = destination / SOURCES_DIRNAME
     pins = lowered.build_pins()
     for name, spec in builds.items():
-        what = "Kernel source" if isinstance(spec, KernelSource) else "Source build"
+        what = (
+            "Kernel source"
+            if isinstance(spec, KernelSource)
+            else "EfiStub package"
+            if isinstance(spec, DebFile)
+            else "Source build"
+        )
         pin = spec.pin_from(pins)
         if pin is None:
             raise StateError(
@@ -278,6 +314,20 @@ def _fetched_sources(lowered: Lowered, destination: Path, backend: BuildBackend)
                     "without --no-fetch."
                 ),
                 context={"pin": pin},
+            )
+        if not offline or not isinstance(spec, SourceBuild):
+            continue
+        recipe = spec.build
+        if isinstance(recipe, LanguageBuild) and not deps_prefetched(spec, pin, root):
+            raise StateError(
+                f"Source build {name!r} has no prefetched {recipe.kind} dependencies, "
+                "and an offline bake gives the build no network to download them.",
+                hint=(
+                    f"Run `tundravm fetch RECIPE --out {destination}` on a host with "
+                    f"`{recipe.tool}` on PATH (it fills {root / DEPS_DIRNAME / recipe.deps}), "
+                    "or bake without --offline."
+                ),
+                context={"marker": str(root / DEPS_DIRNAME / (spec.deps_marker(pin) or ""))},
             )
     return root
 

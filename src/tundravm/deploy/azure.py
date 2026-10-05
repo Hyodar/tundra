@@ -1,24 +1,34 @@
 """Azure deployment adapter.
 
-Uploads a VHD artifact to Azure and creates a VM from it.
+Uploads a VHD artifact to Azure, publishes it as a confidential-VM-capable
+Compute Gallery image version and creates a confidential VM from it.
 Requires the `az` CLI to be installed and authenticated.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
-import subprocess
+import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 
 from tundravm.errors import DeploymentError
 from tundravm.models import DeployRequest, DeployResult
+
+from ._run import CommandRunner, run_captured, stderr_of
+
+CONTAINER = "tdx-images"
+# TDX confidential VMs: the DCesv5/DCedsv5 (and ECesv5/ECedsv5) families.
+DEFAULT_VM_SIZE = "Standard_DC2es_v5"
+DEFAULT_GALLERY = "tdx_images"
 
 
 @dataclass(slots=True)
 class AzureDeployAdapter:
     name: str = "azure"
+    # None: require `az` on PATH and run it via subprocess.
+    runner: CommandRunner | None = None
 
     def deploy(self, request: DeployRequest) -> DeployResult:
         deployment_id = f"azure-{request.profile}-{uuid.uuid4().hex[:8]}"
@@ -26,11 +36,13 @@ class AzureDeployAdapter:
 
         resource_group = params.pop("resource_group", "tdx-vms")
         location = params.pop("location", "eastus")
-        vm_size = params.pop("vm_size", "Standard_DC2s_v3")
+        vm_size = params.pop("vm_size", DEFAULT_VM_SIZE)
         storage_account = params.pop("storage_account", "")
+        gallery = params.pop("gallery", DEFAULT_GALLERY)
+        secure_boot = params.pop("secure_boot", "true").lower() == "true"
 
         # Check if az CLI is available
-        if shutil.which("az") is None:
+        if self.runner is None and shutil.which("az") is None:
             raise DeploymentError(
                 "Azure CLI (`az`) not found in PATH.",
                 hint="Install Azure CLI and run `az login` before deploying.",
@@ -49,47 +61,164 @@ class AzureDeployAdapter:
                 hint="Pass storage_account=... in deploy parameters.",
                 context={"adapter": self.name},
             )
-        blob_url = self._upload_vhd(
-            request.artifact_path,
-            storage_account=storage_account,
-            resource_group=resource_group,
+
+        blob_name = f"{request.artifact_path.stem}-{uuid.uuid4().hex[:8]}.vhd"
+        blob_url = f"https://{storage_account}.blob.core.windows.net/{CONTAINER}/{blob_name}"
+        self._az(
+            [
+                "storage",
+                "container",
+                "create",
+                "--account-name",
+                storage_account,
+                "--name",
+                CONTAINER,
+                "--output",
+                "json",
+            ],
+            "Azure storage container creation failed.",
+            "Check the storage account name and your permissions on it.",
+        )
+        self._az(
+            [
+                "storage",
+                "blob",
+                "upload",
+                "--account-name",
+                storage_account,
+                "--container-name",
+                CONTAINER,
+                "--name",
+                blob_name,
+                "--file",
+                str(request.artifact_path),
+                "--type",
+                "page",
+                "--output",
+                "json",
+            ],
+            "Azure VHD upload failed.",
+            "Check storage account permissions and connectivity.",
+        )
+        account_id = self._az(
+            ["storage", "account", "show", "--name", storage_account, "--query", "id"],
+            "Azure storage account lookup failed.",
+            "Check that the storage account exists in this subscription.",
         )
 
-        # Create VM from the uploaded VHD
-        vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"
-        cmd = [
-            "az",
-            "vm",
-            "create",
-            "--resource-group",
-            resource_group,
-            "--name",
-            vm_name,
-            "--location",
-            location,
-            "--size",
-            vm_size,
-            "--image",
-            blob_url,
-            "--security-type",
-            "ConfidentialVM",
-            "--os-disk-security-encryption-type",
-            "VMGuestStateOnly",
-            "--output",
-            "json",
-        ]
+        # A confidential VM boots only a gallery image whose definition supports it.
+        definition = f"tdx-{request.profile}"
+        version = f"1.0.{int(time.time())}"
+        self._az(
+            [
+                "sig",
+                "create",
+                "--resource-group",
+                resource_group,
+                "--gallery-name",
+                gallery,
+                "--location",
+                location,
+                "--output",
+                "json",
+            ],
+            "Azure Compute Gallery creation failed.",
+            "Check the resource group exists and you may create galleries in it.",
+        )
+        self._az(
+            [
+                "sig",
+                "image-definition",
+                "create",
+                "--resource-group",
+                resource_group,
+                "--gallery-name",
+                gallery,
+                "--gallery-image-definition",
+                definition,
+                "--location",
+                location,
+                "--publisher",
+                "tundravm",
+                "--offer",
+                request.profile,
+                "--sku",
+                request.profile,
+                "--os-type",
+                "Linux",
+                "--os-state",
+                "specialized",
+                "--hyper-v-generation",
+                "V2",
+                "--features",
+                "SecurityType=ConfidentialVMSupported",
+                "--output",
+                "json",
+            ],
+            "Azure gallery image definition creation failed.",
+            "An existing definition of that name must be a specialized V2 Linux one "
+            "with SecurityType=ConfidentialVMSupported.",
+        )
+        image_id = self._az(
+            [
+                "sig",
+                "image-version",
+                "create",
+                "--resource-group",
+                resource_group,
+                "--gallery-name",
+                gallery,
+                "--gallery-image-definition",
+                definition,
+                "--gallery-image-version",
+                version,
+                "--location",
+                location,
+                "--os-vhd-storage-account",
+                account_id,
+                "--os-vhd-uri",
+                blob_url,
+                "--query",
+                "id",
+            ],
+            "Azure gallery image version creation failed.",
+            "Check the uploaded blob is a fixed-size VHD and the gallery is in its region.",
+        )
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            raise DeploymentError(
-                "Azure VM creation failed.",
-                hint="Check Azure CLI authentication and resource group permissions.",
-                context={
-                    "returncode": str(result.returncode),
-                    "stderr": result.stderr[:2000] if result.stderr else "",
-                    "command": " ".join(cmd),
-                },
-            )
+        # Create VM from the gallery image version
+        vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"
+        self._az(
+            [
+                "vm",
+                "create",
+                "--resource-group",
+                resource_group,
+                "--name",
+                vm_name,
+                "--location",
+                location,
+                "--size",
+                vm_size,
+                "--image",
+                image_id,
+                "--specialized",
+                "--security-type",
+                "ConfidentialVM",
+                "--os-disk-security-encryption-type",
+                "VMGuestStateOnly",
+                "--enable-vtpm",
+                "true",
+                "--enable-secure-boot",
+                str(secure_boot).lower(),
+                "--public-ip-sku",
+                "Standard",
+                "--output",
+                "json",
+            ],
+            "Azure VM creation failed.",
+            "Check Azure CLI authentication and resource group permissions; "
+            f"vm_size must be a TDX confidential size such as {DEFAULT_VM_SIZE}.",
+        )
 
         metadata = {
             "artifact_path": str(request.artifact_path),
@@ -97,6 +226,8 @@ class AzureDeployAdapter:
             "location": location,
             "vm_size": vm_size,
             "vm_name": vm_name,
+            "blob": f"{CONTAINER}/{blob_name}",
+            "image": image_id,
             **params,
         }
 
@@ -107,39 +238,34 @@ class AzureDeployAdapter:
             metadata=metadata,
         )
 
-    def _upload_vhd(self, artifact_path: Path, *, storage_account: str, resource_group: str) -> str:
-        """Upload VHD to Azure blob storage."""
-        container = "tdx-images"
-        blob_name = f"{artifact_path.stem}-{uuid.uuid4().hex[:8]}.vhd"
-
-        cmd = [
-            "az",
-            "storage",
-            "blob",
-            "upload",
-            "--account-name",
-            storage_account,
-            "--container-name",
-            container,
-            "--name",
-            blob_name,
-            "--file",
-            str(artifact_path),
-            "--type",
-            "page",
-            "--output",
-            "json",
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    def _az(self, args: list[str], message: str, hint: str) -> str:
+        """Run ``az *args``; the value a ``--query`` printed, else its stdout."""
+        cmd = ["az", *args]
+        if "--query" in args:
+            cmd.extend(["--output", "json"])
+        runner = self.runner if self.runner is not None else run_captured
+        result = runner(cmd)
         if result.returncode != 0:
             raise DeploymentError(
-                "Azure VHD upload failed.",
-                hint="Check storage account permissions and connectivity.",
+                message,
+                hint=hint,
                 context={
-                    "storage_account": storage_account,
-                    "stderr": result.stderr[:2000] if result.stderr else "",
+                    "returncode": str(result.returncode),
+                    "stderr": stderr_of(result),
+                    "command": " ".join(cmd),
                 },
             )
-
-        return f"https://{storage_account}.blob.core.windows.net/{container}/{blob_name}"
+        text = (result.stdout or "").strip()
+        if "--query" not in args:
+            return text
+        try:
+            value = json.loads(text)
+        except ValueError:
+            value = None
+        if not isinstance(value, str) or not value:
+            raise DeploymentError(
+                f"{message.removesuffix('.')}: `az` printed no resource id.",
+                hint="Run the command below by hand to see what `az` returns.",
+                context={"command": " ".join(cmd), "stdout": text[:2000]},
+            )
+        return value

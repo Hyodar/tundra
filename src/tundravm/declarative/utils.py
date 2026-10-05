@@ -218,9 +218,13 @@ class EfiStub(Composite):
     *snapshot* is a snapshot ID (``20251113T083151Z``, read from
     ``snapshot.debian.org``) or the URL of a snapshot archive. The snapshot must
     carry *version*: the pool keeps only what some suite listed at that time, so
-    pick the version a suite of that snapshot ships. The ``current`` dialect
-    fails the build with that advice when the download fails (see
-    :meth:`render_script`). A postinst hook. Fragment name: ``efi-stub``.
+    pick the version a suite of that snapshot ships. Outside ``nethermind-v1`` the
+    package (:attr:`deb_url`) is a source named ``efi-stub``: ``tundravm lock`` pins
+    its sha256, ``tundravm fetch`` downloads it on the host and the postinst hook
+    installs the mounted copy with ``dpkg -i``, so the build sandbox downloads
+    nothing. Compiled without a pin, the hook downloads it instead and fails the
+    build with that advice when the download fails (see :meth:`render_script`).
+    A postinst hook. Fragment name: ``efi-stub``.
     """
 
     snapshot: str
@@ -246,6 +250,14 @@ class EfiStub(Composite):
             + 'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
         )
         return Fragment("efi-stub", items=(Hook("efi-stub", "postinst", script),))
+
+    @property
+    def deb_url(self) -> str:
+        """The package in the snapshot's pool: ``systemd-boot-efi_<version>_amd64.deb``."""
+        return (
+            f"{_snapshot_archive(self.snapshot)}/pool/main/s/systemd/"
+            f"systemd-boot-efi_{self.version}_amd64.deb"
+        )
 
     def render_script(self) -> str:
         """The postinst script the ``current`` dialect runs in place of the composed hook's.

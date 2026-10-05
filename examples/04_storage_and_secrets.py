@@ -2,13 +2,17 @@
 
 Teaches the runtime-init chain the compiler emits, in order: ``keys`` creates the
 ``Key`` and seals it to the TPM, ``disks`` opens (or formats) the ``Disk`` with it and
-mounts it, ``secrets`` waits for the secrets over HTTP, validates each against its
-``Schema`` and delivers it to its ``SecretFile``/``SecretEnv`` targets, keeping a copy on
-``store``. ``RuntimeTools`` names the source of the helper binaries those steps run;
-``Partition`` is a plain partition baked into the image instead.
+mounts it, ``secrets`` runs ``secret-delivery``, which waits for an SSH key POSTed over
+HTTP, writes it to the SSH directory and keeps it in a LUKS token on the ``store`` disk.
+The ``Secret`` entries (``Schema``, ``SecretFile``/``SecretEnv`` targets) are recorded in
+the image's secrets manifest only: the runtime tool does not validate or deliver them yet.
+``RuntimeTools`` names the source of the helper binaries those steps run; ``Partition``
+is a plain partition baked into the image instead. ``Disk`` without ``device=`` lets
+``disk-setup`` pick the largest whole ``/dev/sd*`` disk, so lint warns
+``disk-auto-format``.
 
     tundravm inspect examples/04_storage_and_secrets.py
-    tundravm lint examples/04_storage_and_secrets.py   # source-unpinned until locked
+    tundravm lint examples/04_storage_and_secrets.py   # disk-auto-format, source-unpinned
     tundravm compile examples/04_storage_and_secrets.py --out build/storage/mkosi
 """
 

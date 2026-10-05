@@ -268,7 +268,16 @@ recipe = Recipe(
 _PROVER_RECIPE = r"""
 # Boot-time init: TPM-sealed key -> encrypted /persistent -> secrets over HTTP.
 key = Key("key_persistent", output="/tmp/key_persistent")
-disk = Disk("disk_persistent", mount="/persistent", key=key, mapper="cryptroot")
+# device=None picks the largest whole /dev/sd* disk, boot disk included: name the device and
+# pick format="never" or "on_initialize" for production (lint: disk-auto-format).
+disk = Disk(
+    "disk_persistent",
+    mount="/persistent",
+    device=None,
+    format="on_fail",
+    key=key,
+    mapper="cryptroot",
+)
 secrets = Secrets(
     store=disk,
     entries=(Secret("app_token", (SecretFile("/etc/app/token", owner="app"),)),),
@@ -445,9 +454,10 @@ EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
     "minimal": (),
     "service": (),
     "cloud": (),
-    "prover": ("source-unpinned",),
+    "prover": ("disk-auto-format", "source-unpinned"),
 }
-"""Lint codes a freshly generated template reports by design (cleared by ``tundravm lock``)."""
+"""Lint codes a freshly generated template reports by design: ``tundravm lock`` clears
+``source-unpinned``, naming the disk's device clears ``disk-auto-format``."""
 
 
 def render_recipe_template(
@@ -478,7 +488,8 @@ def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> st
     if expected:
         codes = ", ".join(f'"{code}"' for code in expected)
         lint_call = (
-            "    # The tundra-tools builds track a branch until `tundravm lock` pins them.\n"
+            "    # The tundra-tools builds track a branch until `tundravm lock` pins them;\n"
+            "    # the disk picks its device at boot until the recipe names one.\n"
             f"    assert_clean(RECIPE, strict=True, allow=({codes},))"
         )
     else:

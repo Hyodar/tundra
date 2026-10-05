@@ -71,9 +71,18 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
     hooks = _hooks(tree)
     assert hooks == spec.render(SHA_A, mounted=True)
     assert (
-        "mkosi-chroot bash -c 'cd /build/tool && mkdir -p ./build && go build -trimpath "
+        "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/go ]; then export "
+        "GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod && "
+        '{ [ "$WITH_NETWORK" != 0 ] || export GOPROXY=off; }; fi && '
+        "cd /build/tool && mkdir -p ./build && go build -trimpath "
         '-ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool\'' in hooks
     )
+    assert (
+        '{ [ ! -d "$SRCDIR/tundravm-sources/deps/go" ] || '
+        '[ -d "$BUILDROOT/build/.tundravm-deps/go" ] || '
+        '{ mkdir -p "$BUILDROOT/build/.tundravm-deps" && cp -a --no-preserve=ownership '
+        '"$SRCDIR/tundravm-sources/deps/go" "$BUILDROOT/build/.tundravm-deps/go"; }; }'
+    ) in hooks
     assert "BuildPackages=\n    git\n    golang\n" in _conf(tree)
 
 
@@ -88,6 +97,9 @@ def test_go_recipe_renders_like_the_equivalent_script() -> None:
     )
     by_script = Build("tool", Git(REPO, "main"), script=script, install=install)
     recipe_hook, script_hook = (_hooks(_pinned(_recipe(b))) for b in (by_recipe, by_script))
+    copy_deps, uses_deps = lower(_recipe(by_recipe)).source_builds()["tool"]._deps()
+    assert copy_deps and uses_deps  # a script build has no dependency cache to use
+    recipe_hook = recipe_hook.replace(copy_deps, "").replace(uses_deps, "")
     unkeyed = re.compile(r"build\}/tool-[0-9a-f]{16}")
     assert unkeyed.sub("KEY", recipe_hook) == unkeyed.sub("KEY", script_hook)
     assert recipe_hook != script_hook  # the cache fingerprint covers the build spec
@@ -105,7 +117,10 @@ def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
     tree = _pinned(_recipe(build))
     hooks = _hooks(tree)
     assert (
-        'mkosi-chroot bash -c \'export RUSTFLAGS="-C x" && cd /build/tool && cargo fetch && '
+        "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/cargo ]; then export "
+        "CARGO_HOME=/build/.tundravm-deps/cargo && "
+        '{ [ "$WITH_NETWORK" != 0 ] || export CARGO_NET_OFFLINE=true; }; fi && '
+        'export RUSTFLAGS="-C x" && cd /build/tool && cargo fetch && '
         "cargo build --release --frozen --features tdx --bin tool'"
     ) in hooks
     assert '"$BUILDROOT/build/tool/target/release/tool"' in hooks
@@ -121,6 +136,10 @@ def test_dotnet_recipe_renders_dotnet_publish() -> None:
         install=(Install("publish", "/usr/lib/app/", mode=None, directory=True),),
     )
     hooks = _hooks(_pinned(_recipe(build)))
+    assert (
+        "bash -c 'if [ -d /build/.tundravm-deps/nuget ]; then "
+        "export NUGET_PACKAGES=/build/.tundravm-deps/nuget; fi && cd /build/app && "
+    ) in hooks
     assert "dotnet restore src/App/App.csproj --runtime linux-x64 && dotnet publish" in hooks
     assert "--output /build/app/publish -p:Deterministic=true" in hooks
     assert 'cp -r "$BUILDROOT/build/app/publish"/*' in hooks

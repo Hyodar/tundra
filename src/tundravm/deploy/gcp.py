@@ -1,6 +1,7 @@
 """GCP deployment adapter.
 
-Uploads a raw disk image to GCS and creates a Compute Engine VM.
+Uploads a raw disk image to GCS, creates a TDX-capable Compute Engine image and
+an Intel TDX Confidential VM from it.
 Requires the `gcloud` CLI to be installed and authenticated.
 """
 
@@ -15,10 +16,18 @@ from pathlib import Path
 from tundravm.errors import DeploymentError
 from tundravm.models import DeployRequest, DeployResult
 
+from ._run import CommandRunner, run_captured, stderr_of
+
+# Intel TDX Confidential VMs run on the C3 machine series.
+DEFAULT_MACHINE_TYPE = "c3-standard-4"
+GUEST_OS_FEATURES = "UEFI_COMPATIBLE,GVNIC,TDX_CAPABLE"
+
 
 @dataclass(slots=True)
 class GcpDeployAdapter:
     name: str = "gcp"
+    # None: require `gcloud` on PATH and run it via subprocess.
+    runner: CommandRunner | None = None
 
     def deploy(self, request: DeployRequest) -> DeployResult:
         deployment_id = f"gcp-{request.profile}-{uuid.uuid4().hex[:8]}"
@@ -26,11 +35,11 @@ class GcpDeployAdapter:
 
         project = params.pop("project", "")
         zone = params.pop("zone", "us-central1-a")
-        machine_type = params.pop("machine_type", "n2d-standard-2")
+        machine_type = params.pop("machine_type", DEFAULT_MACHINE_TYPE)
         bucket = params.pop("bucket", "")
 
         # Check if gcloud is available
-        if shutil.which("gcloud") is None:
+        if self.runner is None and shutil.which("gcloud") is None:
             raise DeploymentError(
                 "Google Cloud CLI (`gcloud`) not found in PATH.",
                 hint="Install gcloud CLI and run `gcloud auth login` before deploying.",
@@ -58,7 +67,7 @@ class GcpDeployAdapter:
 
         # Upload image to GCS
         image_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:8]}"
-        gcs_uri = self._upload_image(request.artifact_path, bucket=bucket)
+        gcs_uri = self._upload_image(request.artifact_path, bucket=bucket, image_name=image_name)
         self._create_image(image_name, gcs_uri=gcs_uri, project=project)
 
         # Create VM instance
@@ -69,29 +78,25 @@ class GcpDeployAdapter:
             "instances",
             "create",
             vm_name,
-            "--project",
-            project,
-            "--zone",
-            zone,
-            "--machine-type",
-            machine_type,
-            "--image",
-            image_name,
-            "--confidential-compute",
-            "--maintenance-policy",
-            "TERMINATE",
-            "--format",
-            "json",
+            f"--project={project}",
+            f"--zone={zone}",
+            f"--machine-type={machine_type}",
+            f"--image={image_name}",
+            "--confidential-compute-type=TDX",
+            "--maintenance-policy=TERMINATE",
+            "--format=json",
         ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = self._run(cmd)
         if result.returncode != 0:
             raise DeploymentError(
                 "GCP VM creation failed.",
-                hint="Check gcloud authentication and project permissions.",
+                hint=(
+                    "Check gcloud authentication and project permissions; machine_type "
+                    f"must be a C3 type such as {DEFAULT_MACHINE_TYPE} in a zone offering TDX."
+                ),
                 context={
                     "returncode": str(result.returncode),
-                    "stderr": result.stderr[:2000] if result.stderr else "",
+                    "stderr": stderr_of(result),
                     "command": " ".join(cmd),
                 },
             )
@@ -103,6 +108,7 @@ class GcpDeployAdapter:
             "machine_type": machine_type,
             "vm_name": vm_name,
             "image_name": image_name,
+            "blob": gcs_uri,
             **params,
         }
 
@@ -113,17 +119,31 @@ class GcpDeployAdapter:
             metadata=metadata,
         )
 
-    def _upload_image(self, artifact_path: Path, *, bucket: str) -> str:
-        blob_name = f"tdx-images/{artifact_path.name}"
-        gcs_uri = f"gs://{bucket}/{blob_name}"
+    def _run(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        runner = self.runner if self.runner is not None else run_captured
+        return runner(cmd)
 
-        cmd = ["gsutil", "cp", str(artifact_path), gcs_uri]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    def _copy_command(self) -> list[str]:
+        """``gcloud storage cp`` when this gcloud has it, else ``gsutil cp``."""
+        if self._run(["gcloud", "storage", "cp", "--help"]).returncode == 0:
+            return ["gcloud", "storage", "cp"]
+        if self.runner is not None or shutil.which("gsutil") is not None:
+            return ["gsutil", "cp"]
+        raise DeploymentError(
+            "Neither `gcloud storage` nor `gsutil` is available to upload the image.",
+            hint="Update the gcloud CLI (`gcloud components update`) or install gsutil.",
+            context={"adapter": self.name},
+        )
+
+    def _upload_image(self, artifact_path: Path, *, bucket: str, image_name: str) -> str:
+        gcs_uri = f"gs://{bucket}/tdx-images/{image_name}.tar.gz"
+        cmd = [*self._copy_command(), str(artifact_path), gcs_uri]
+        result = self._run(cmd)
         if result.returncode != 0:
             raise DeploymentError(
                 "GCS upload failed.",
                 hint="Check GCS bucket permissions.",
-                context={"bucket": bucket, "stderr": result.stderr[:2000] if result.stderr else ""},
+                context={"bucket": bucket, "stderr": stderr_of(result), "command": " ".join(cmd)},
             )
         return gcs_uri
 
@@ -134,20 +154,18 @@ class GcpDeployAdapter:
             "images",
             "create",
             image_name,
-            "--project",
-            project,
-            "--source-uri",
-            gcs_uri,
-            "--guest-os-features",
-            "UEFI_COMPATIBLE",
+            f"--project={project}",
+            f"--source-uri={gcs_uri}",
+            f"--guest-os-features={GUEST_OS_FEATURES}",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = self._run(cmd)
         if result.returncode != 0:
             raise DeploymentError(
                 "GCP image creation failed.",
                 hint="Check project permissions and image name uniqueness.",
                 context={
                     "image_name": image_name,
-                    "stderr": result.stderr[:2000] if result.stderr else "",
+                    "stderr": stderr_of(result),
+                    "command": " ".join(cmd),
                 },
             )

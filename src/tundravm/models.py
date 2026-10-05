@@ -563,6 +563,8 @@ class BakeRequest:
     sources_dir: Path | None = None
     """The host-fetched checkouts (``<build_dir>/.sources``) the backend mounts at
     ``$SRCDIR/tundravm-sources``; ``None`` when the build fetches nothing on the host."""
+    network: bool = True
+    """``False`` for an offline bake: mkosi runs the build scripts with ``--with-network=no``."""
 
     def notice(self, level: str, message: str) -> None:
         """Pass *message* to ``on_notice``, if set."""

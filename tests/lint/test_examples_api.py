@@ -14,8 +14,9 @@ from tundravm.recipe import load_image, load_recipe
 
 INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source")
 
-INHERENT_WARNINGS = frozenset({"source-unpinned"})
-"""Warning codes an example may report: unpinned refs clear with ``tundravm lock``."""
+INHERENT_WARNINGS = frozenset({"source-unpinned", "disk-auto-format"})
+"""Warning codes an example may report: unpinned refs clear with ``tundravm lock``; a
+``Disk`` that picks its device at boot stays a warning until the recipe names one."""
 
 COMMAND = re.compile(r"^\s+tundravm (\w+) (\S+)", re.MULTILINE)
 

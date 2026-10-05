@@ -72,11 +72,14 @@ class Invocation:
     """How ``status`` was called, so ``next`` repeats the paths and variants it was given."""
 
     recipe: str
+    """RECIPE as ``next`` repeats it: empty when it came from ``[tool.tundravm]``."""
     out: Path | None = None
     lockfile: Path | None = None
     variants: tuple[str, ...] = ()
     tree_flag: bool = True
     """Whether a ``compile`` suggestion spells out ``--out TREE`` (not when configured)."""
+    recipe_path: str = ""
+    """The path the ``recipe`` line shows; empty: ``recipe``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +161,7 @@ def project_status(
     backend = _backend(loaded, runner)
     lint = _lint(loaded, names)
     status = ProjectStatus(
-        recipe=_recipe(loaded, img, names, invocation.recipe),
+        recipe=_recipe(loaded, img, names, invocation.recipe_path or invocation.recipe),
         lint=lint,
         lock=lock_item,
         sources=sources,

@@ -325,7 +325,7 @@ ITEMS = (
     Package("linux-image-amd64"),
     TOOLS,
     KEY,
-    Disk("disk_persistent", "/persistent", key=KEY),
+    Disk("disk_persistent", "/persistent", device="/dev/sdb", key=KEY),
     Secrets(entries=(Secret("token", (SecretFile("/run/app/token"),)),)),
     Service("app", "/usr/bin/app"),
 )

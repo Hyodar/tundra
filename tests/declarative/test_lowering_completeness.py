@@ -311,6 +311,7 @@ def test_policy_has_no_inert_integrity_switch() -> None:
         "require_frozen_lock",
         "mutable_ref_policy",
         "network_mode",
+        "storage_safety",
     ]
     text = render(describe(lower(_recipe(Package("curl"))), profile="default"))
     assert "integrity" not in text

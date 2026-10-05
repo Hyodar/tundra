@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from tundravm._options import MkosiOptions
 from tundravm._source import (
+    DebFile,
     KernelSource,
     NamedSource,
     Resolver,
@@ -49,6 +50,9 @@ if TYPE_CHECKING:
     from tundravm.backends.base import BuildBackend
 
 LOCK_FILENAME = "tundravm.lock"
+EFI_STUB_SOURCE = "efi-stub"
+"""The lockfile name of the package an ``EfiStub`` installs (``efi-stub-<variant>`` where a
+variant's differs from the default variant's)."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -87,6 +91,9 @@ class Lowered:
     local_sources: frozenset[str] = frozenset()
     """Source builds whose source differs between the recipe's variants (every variant,
     selected or not): each variant's is pinned on its own, as ``<variant>/<name>``."""
+    deb_files: tuple[DebFile, ...] = ()
+    """The packages the recipe's ``EfiStub`` hooks install, outside ``nethermind-v1``:
+    sources :meth:`deb_file` names per profile."""
 
     @property
     def base(self) -> str:
@@ -285,30 +292,59 @@ class Lowered:
             return replace(spec, name=f"kernel-{profile}")
         return spec
 
+    def deb_file(self, profile: str) -> DebFile | None:
+        """The ``EfiStub`` package *profile*'s postinst hooks install, under its lockfile name.
+
+        ``None`` when it installs none (or under ``nethermind-v1``). The name is
+        ``efi-stub``, or ``efi-stub-<profile>`` when the profile's package differs
+        from the default profile's.
+        """
+        found = self._deb_of(profile)
+        if found is None:
+            return None
+        default = self._deb_of(self.default_profile)
+        if found == default or (default is None and len(self.deb_files) == 1):
+            return found
+        return replace(found, name=f"{EFI_STUB_SOURCE}-{profile}")
+
+    def _deb_of(self, profile: str) -> DebFile | None:
+        if not self.deb_files:
+            return None
+        scripts = {
+            hook.command.argv[0]
+            for hook in self.state.effective_profile(profile).hooks
+            if hook.command.argv
+        }
+        return next((deb for deb in self.deb_files if deb.script in scripts), None)
+
     def lock_sources(self) -> dict[str, NamedSource]:
         """What ``lock`` pins and ``fetch`` checks out for the active profiles, by name.
 
         The source builds and, outside ``nethermind-v1`` (:attr:`fetches_sources`),
-        the built kernels' sources (:meth:`kernel_source`).
+        the built kernels' sources (:meth:`kernel_source`) and the ``EfiStub``
+        packages (:meth:`deb_file`).
         """
         builds = self.source_builds()
         sources: dict[str, NamedSource] = dict(builds)
         if not self.fetches_sources:
             return sources
         for profile in self.active:
-            spec = self.kernel_source(profile)
-            if spec is None:
-                continue
-            if spec.name in builds:
-                raise ValidationError(
-                    f"Source build {spec.name!r} takes the name of the kernel's source.",
-                    hint=(
-                        f"Rename the Build: {spec.name!r} names the kernel's lockfile pin "
-                        "and checkout."
-                    ),
-                    context={"profile": profile},
-                )
-            sources[spec.name] = spec
+            for spec, what, owner in (
+                (self.kernel_source(profile), "the kernel's source", "the kernel's"),
+                (self.deb_file(profile), "the EfiStub package", "the EfiStub package's"),
+            ):
+                if spec is None:
+                    continue
+                if spec.name in builds:
+                    raise ValidationError(
+                        f"Source build {spec.name!r} takes the name of {what}.",
+                        hint=(
+                            f"Rename the Build: {spec.name!r} names {owner} lockfile pin "
+                            "and checkout."
+                        ),
+                        context={"profile": profile},
+                    )
+                sources[spec.name] = spec
         return dict(sorted(sources.items()))
 
     @property
@@ -349,6 +385,9 @@ class Lowered:
                 )
                 != spec.render(mounted=mounted)
             }
+            deb = self.deb_file(name)
+            if deb is not None and (pinned := deb.render(deb.pin_from(pins))) != deb.script:
+                swaps[deb.script] = pinned
             if not swaps:
                 profiles[name] = profile
                 continue

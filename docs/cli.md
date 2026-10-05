@@ -13,9 +13,9 @@ tundravm compile RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--che
 tundravm diff    RECIPE [--variant NAME]... [--against DIR] [--lockfile PATH] [--format auto|text|stat|markdown|github | --stat] [--color auto|always|never]
 tundravm lock    RECIPE [--variant NAME]... [--lockfile PATH] [--update SOURCE]... [--check | --offline] [--explain] [--format auto|text|github|markdown]
 tundravm fetch   RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--force]
-tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--backend KIND] [--no-fetch] [-v | -q | --json-logs] [--color auto|always|never]
+tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--backend KIND] [--no-fetch] [--offline] [-v | -q | --json-logs] [--color auto|always|never]
 tundravm measure MANIFEST [--variant NAME] [--scheme rtmr|azure|gcp] [--json] [--allow-placeholder] [--export-policy FILE]
-tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--allow-simulated-artifact]
+tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--attach] [--allow-simulated-artifact]
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--format auto|text|github]
 tundravm status  RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
@@ -437,6 +437,7 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
   [exit 2]
   ```
 
+- `--offline` (or `Policy(network_mode="offline")` in the recipe) gives the build sandbox no network: the mkosi command gets `--with-network=no`, so build and postinst scripts cannot download anything (mkosi still installs the distribution packages from the configured mirror). The fetch step only reuses complete checkouts, and every `Go`, `Cargo` and `Dotnet` build must find the dependency cache `tundravm fetch` prefetched into `OUT/.sources/deps`; a missing one fails before mkosi runs with `E_STATE` naming the build and `tundravm fetch`. A `nethermind-v1` recipe with source builds fails with `E_POLICY`: its hooks fetch in the sandbox.
 - The bake is frozen when `--lockfile` is given or `build/tundravm.lock` exists: a recipe that drifted from the lock fails at `verify lockfile` with `E_LOCKFILE`. Without a lockfile it bakes unpinned and prints a note.
 - The lockfile is copied to `OUT/tundravm.lock` when that file is absent or identical. A different `OUT/tundravm.lock` is never overwritten: `bake --out OUT --lockfile PATH` bakes against `PATH` and leaves it alone.
 - The frozen check compares like `lock --check` with the same `--variant` selection: a lockfile of every variant covers `bake --variant default`, while a lockfile written for fewer variants than the bake selects fails at `verify lockfile`.
@@ -523,13 +524,13 @@ Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to re
 
 - `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. `--json` prints `artifact`, `artifact_digest`, `scheme`, `tool`, `values`, `variant`.
 - `measure --export-policy FILE` (rtmr only) also writes a verifier policy: `{"schema_version": 1, "scheme": "rtmr", "tool", "tool_version", "artifact": {"path", "sha256"}, "registers": {"RTMR0", "RTMR1", "RTMR2"}}` (`RTMR3` when measured). Missing `RTMR0`..`RTMR2` is `E_VALIDATION`; placeholder values are refused unless `--allow-placeholder`, and then carry a `"note"` that says they are placeholders. `Tdxs.from_policy(FILE)` turns it into a validator's `expected_measurements`.
-- `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`; azure `storage_account` (required), `resource_group`, `location`, `vm_size`; gcp `project` and `bucket` (required), `zone`, `machine_type`. Simulated artifacts are refused unless `--allow-simulated-artifact`.
+- `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward` (`HOST:GUEST[,HOST:GUEST...]`); azure `storage_account` (required), `resource_group`, `location`, `vm_size`, `gallery`, `secure_boot`; gcp `project` and `bucket` (required), `zone`, `machine_type`. `--attach` (qemu only, the same as `--param daemonize=false`) runs QEMU in the foreground with the serial console on the terminal: Ctrl-A X quits QEMU, Ctrl-A C toggles its monitor, and `deploy` prints its result once QEMU exits. Simulated artifacts are refused unless `--allow-simulated-artifact`.
 
 ### Deploying to each target
 
 A successful `deploy` means the target accepted the image: QEMU started, or the cloud created the VM. It does not mean the image booted, that its services run, or that it attests; each sequence below ends with those checks. These sequences have not been run end to end against QEMU, Azure or GCP: the command lines and the `deploy` output below are what the adapters in `src/tundravm/deploy/` run and print, captured with their tool calls stubbed out, and the checks after `deploy` are the platforms' own commands.
 
-**QEMU.** Needs `qemu-system-x86_64` on `PATH` and KVM (`/dev/kvm`: the adapter always passes `-machine q35,accel=kvm -cpu host`). A bootable variant bakes to a UKI (`.efi`), which boots with `-kernel` on OVMF firmware: `OVMF_CODE.fd`/`OVMF_VARS.fd` (or the `_4M` files) under `/usr/share/OVMF`, `/usr/share/edk2/ovmf` or `/usr/share/qemu`. A `.qcow2`, `.vhd` or raw disk boots as a virtio drive instead.
+**QEMU.** Needs `qemu-system-x86_64` on `PATH` and KVM (`/dev/kvm`: the adapter always passes `-machine q35,accel=kvm -cpu host`). A bootable variant bakes to a UKI (`.efi`), which boots with `-kernel` on OVMF firmware: `OVMF_CODE.fd` (or `OVMF_CODE_4M.fd`) under `/usr/share/OVMF`, `/usr/share/edk2/ovmf` or `/usr/share/qemu`, plus a copy of the matching `OVMF_VARS` file made once at `OUT/<variant>/qemu-ovmf-vars.fd`, since the guest writes its variables there. A `.qcow2`, `.vhd` or raw disk boots as a virtio drive instead.
 
 ```console
 $ tundravm bake image.py --variant default --backend local
@@ -540,46 +541,76 @@ deployed default to qemu
   endpoint       ssh://localhost:2222
   artifact_path  build/default/output/node_0.1.0.efi
   cpus           4
+  forward        8080:8080
   is_uki         true
   memory         4G
+  monitor        /work/build/default/qemu.monitor
+  pidfile        /work/build/default/qemu.pid
+  serial_log     /work/build/default/qemu-serial.log
   ssh_port       2222
   tdx            false
 ```
 
-That runs:
+That runs (the variant declares `Secrets`, whose delivery listens on port 8080):
 
 ```
-qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -nographic -serial mon:stdio -no-reboot
+qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -no-reboot
   -drive file=/usr/share/OVMF/OVMF_CODE_4M.fd,if=pflash,format=raw,readonly=on
-  -drive file=/usr/share/OVMF/OVMF_VARS_4M.fd,if=pflash,format=raw
+  -drive file=/work/build/default/qemu-ovmf-vars.fd,if=pflash,format=raw
   -kernel build/default/output/node_0.1.0.efi
-  -netdev user,id=net0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netdev=net0
-  -daemonize -pidfile build/default/output/qemu-default-030a44c0.pid
+  -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:8080 -device virtio-net-pci,netdev=net0
+  -display none -serial file:/work/build/default/qemu-serial.log
+  -monitor unix:/work/build/default/qemu.monitor,server,nowait
+  -daemonize -pidfile /work/build/default/qemu.pid
 ```
 
-- The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's port 22, and nothing else. The `secrets` step's port (8080) is not forwarded, so a variant with `Secrets` cannot receive its key from the host through this adapter.
-- `tdx=true` adds `confidential-guest-support=tdx0` and `-object tdx-guest,id=tdx0`, which need a TDX host (kernel, QEMU and firmware).
-- With `daemonize=true` (the default) QEMU detaches and writes its pid next to the artifact: stop the VM with `kill "$(cat build/default/output/qemu-default-030a44c0.pid)"`. With `daemonize=false` `deploy` returns only when QEMU exits, and the console output is captured, not shown.
+- The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's port 22. Every port a `Secrets` of the variant listens on (recorded by the bake in `bake-result.json`) is forwarded from the same host port, so the host can deliver secrets to `localhost:8080`; `--param forward=HOST:GUEST,...` adds forwards, and one naming a `Secrets` port as its guest port replaces that default (`forward=18080:8080`). Two forwards on one host port are refused.
+- QEMU detaches by default (`daemonize=true`): the serial console goes to `serial_log` (`tail -f build/default/qemu-serial.log`), the monitor listens on the `monitor` socket (`socat - UNIX-CONNECT:build/default/qemu.monitor`, then `info status` or `quit`) and the pid to `pidfile` (`kill "$(cat build/default/qemu.pid)"`). The three live in `OUT/<variant>`, so a second `deploy` of a variant that is still running fails on its pid file. The socket path must fit a unix socket (107 bytes), or `deploy` fails before starting QEMU. `--attach` keeps QEMU in the foreground instead, with `-nographic -serial mon:stdio` and no log, socket or pid file.
+- `tdx=true` boots TDVF, OVMF built with TDX support, through `-bios` (a TDX guest cannot run firmware from pflash): `/usr/share/ovmf/OVMF.fd`, `/usr/share/edk2/ovmf/OVMF.inteltdx.fd`, `/usr/share/OVMF/OVMF.fd` or `/usr/share/qemu/OVMF.fd`, the first found. It replaces the two pflash drives above with `-bios /usr/share/ovmf/OVMF.fd` and passes `-machine q35,accel=kvm,kernel-irqchip=split,confidential-guest-support=tdx0 -object tdx-guest,id=tdx0`, which needs a TDX host (kernel, KVM and QEMU with TDX support).
 - Checks: `ssh -p 2222 root@localhost` once the image's `sshd` has a key for you (boot), `systemctl status` of your services there (application), and the quote checked against `peer.json` by a verifier built with `Tdxs.from_policy("peer.json")` (attestation; needs `tdx=true` on a TDX host).
 
-**Azure.** Needs `az` on `PATH` after `az login`, an existing resource group (`resource_group`, default `tdx-vms`) and a storage account (`storage_account`, required) holding a container named `tdx-images`, which the adapter does not create. The blob upload passes no credentials, so `az` must be able to look up the account key (or read `AZURE_STORAGE_KEY`). Bake an `azure` variant, which converts its disk to a fixed VHD:
+**Azure.** Needs `az` on `PATH` after `az login`, an existing resource group (`resource_group`, default `tdx-vms`) and a storage account (`storage_account`, required); the adapter creates the `tdx-images` container in it when missing. The blob upload passes no credentials, so `az` must be able to look up the account key (or read `AZURE_STORAGE_KEY`). A confidential VM boots only from an Azure Compute Gallery image whose definition supports it, so the adapter publishes the VHD as a gallery image version first. `vm_size` must be a TDX confidential size: the DCesv5/DCedsv5 series (default `Standard_DC2es_v5`) or the ECesv5/ECedsv5 series. Bake an `azure` variant, which converts its disk to a fixed VHD:
 
 ```console
 $ tundravm bake image.py --variant azure --backend local
-$ tundravm deploy build --variant azure --target azure --param storage_account=mystorage --param vm_size=Standard_DC2es_v5
+$ tundravm deploy build --variant azure --target azure --param storage_account=mystorage
 deployed azure to azure
   deployment      azure-azure-336db4ce
   endpoint        azure://tdx-vms/tdx-azure-6fdd87
   artifact_path   build/azure/output/node_0.1.0.vhd
+  blob            tdx-images/node_0.1.0-e79c907b.vhd
+  image           /subscriptions/<sub>/resourceGroups/tdx-vms/providers/Microsoft.Compute/galleries/tdx_images/images/tdx-azure/versions/1.0.1791175553
   location        eastus
   resource_group  tdx-vms
   vm_name         tdx-azure-6fdd87
   vm_size         Standard_DC2es_v5
 ```
 
-That runs `az storage blob upload --account-name mystorage --container-name tdx-images --name node_0.1.0-<8 hex>.vhd --file build/azure/output/node_0.1.0.vhd --type page --output json`, then `az vm create --resource-group tdx-vms --name tdx-azure-<6 hex> --location eastus --size Standard_DC2es_v5 --image https://mystorage.blob.core.windows.net/tdx-images/node_0.1.0-<8 hex>.vhd --security-type ConfidentialVM --os-disk-security-encryption-type VMGuestStateOnly --output json`. `--security-type ConfidentialVM` needs a confidential VM size; the default `vm_size`, `Standard_DC2s_v3`, is an SGX size, so pass a TDX one (the DCesv5 series, as above). The endpoint names the VM, not an address: `az vm show -d -g tdx-vms -n tdx-azure-6fdd87 --query publicIps -o tsv` prints its IP, and `az vm boot-diagnostics get-boot-log -g tdx-vms -n tdx-azure-6fdd87` its serial console. `az vm create` also creates a NIC, a public IP and a disk; deleting the VM leaves them, so deploy into a resource group of its own and tear down with `az group delete -n tdx-vms`, then remove the blob (`az storage blob delete --account-name mystorage -c tdx-images -n node_0.1.0-<8 hex>.vhd`; its name is not in the output: `az storage blob list --account-name mystorage -c tdx-images -o table`).
+That runs:
 
-**GCP.** Needs `gcloud` on `PATH` after `gcloud auth login`, and `gsutil`, which the adapter uploads with but does not check for; `project` and `bucket` (an existing GCS bucket) are required. Bake a `gcp` variant, which packs its disk as a `tar.gz`:
+```
+az storage container create --account-name mystorage --name tdx-images --output json
+az storage blob upload --account-name mystorage --container-name tdx-images --name node_0.1.0-<8 hex>.vhd
+  --file build/azure/output/node_0.1.0.vhd --type page --output json
+az storage account show --name mystorage --query id --output json
+az sig create --resource-group tdx-vms --gallery-name tdx_images --location eastus --output json
+az sig image-definition create --resource-group tdx-vms --gallery-name tdx_images --gallery-image-definition tdx-azure
+  --location eastus --publisher tundravm --offer azure --sku azure --os-type Linux --os-state specialized
+  --hyper-v-generation V2 --features SecurityType=ConfidentialVMSupported --output json
+az sig image-version create --resource-group tdx-vms --gallery-name tdx_images --gallery-image-definition tdx-azure
+  --gallery-image-version 1.0.<unix time> --location eastus --os-vhd-storage-account <storage account id>
+  --os-vhd-uri https://mystorage.blob.core.windows.net/tdx-images/node_0.1.0-<8 hex>.vhd --query id --output json
+az vm create --resource-group tdx-vms --name tdx-azure-<6 hex> --location eastus --size Standard_DC2es_v5
+  --image <image version id> --specialized --security-type ConfidentialVM
+  --os-disk-security-encryption-type VMGuestStateOnly --enable-vtpm true --enable-secure-boot true
+  --public-ip-sku Standard --output json
+```
+
+- The image definition is `tdx-<variant>` in the gallery `gallery` (default `tdx_images`; letters, digits, `_` and `.` only); an existing one must already be a specialized V2 Linux definition with `SecurityType=ConfidentialVMSupported`. Each deploy adds an image version `1.0.<unix time>`.
+- `secure_boot=false` passes `--enable-secure-boot false`: with secure boot on, the firmware boots only images signed with keys it trusts, which a locally built UKI usually is not.
+- The endpoint names the VM, not an address: `az vm show -d -g tdx-vms -n tdx-azure-6fdd87 --query publicIps -o tsv` prints its IP, and `az vm boot-diagnostics get-boot-log -g tdx-vms -n tdx-azure-6fdd87` its serial console. `az vm create` also creates a NIC, a public IP and a disk; deleting the VM leaves them, so deploy into a resource group of its own and tear down with `az group delete -n tdx-vms` (the gallery goes with it), then remove the blob named by `blob`: `az storage blob delete --account-name mystorage -c tdx-images -n node_0.1.0-e79c907b.vhd`.
+
+**GCP.** Needs `gcloud` on `PATH` after `gcloud auth login`; `project` and `bucket` (an existing GCS bucket) are required. The upload uses `gcloud storage cp` when this gcloud has it (it probes `gcloud storage cp --help`), else `gsutil cp`, and fails before uploading when neither is there. Intel TDX instances run on the C3 machine series (default `c3-standard-4`) in zones that offer it. Bake a `gcp` variant, which packs its disk as a `tar.gz`:
 
 ```console
 $ tundravm bake image.py --variant gcp --backend local
@@ -588,14 +619,26 @@ deployed gcp to gcp
   deployment     gcp-gcp-ef5e8a92
   endpoint       gcp://my-project/us-central1-a/tdx-gcp-c95cfe
   artifact_path  build/gcp/output/node_0.1.0.tar.gz
+  blob           gs://my-bucket/tdx-images/tdx-gcp-45c3b6c0.tar.gz
   image_name     tdx-gcp-45c3b6c0
-  machine_type   n2d-standard-2
+  machine_type   c3-standard-4
   project        my-project
   vm_name        tdx-gcp-c95cfe
   zone           us-central1-a
 ```
 
-That runs `gsutil cp build/gcp/output/node_0.1.0.tar.gz gs://my-bucket/tdx-images/node_0.1.0.tar.gz`, `gcloud compute images create tdx-gcp-<8 hex> --project my-project --source-uri gs://my-bucket/tdx-images/node_0.1.0.tar.gz --guest-os-features UEFI_COMPATIBLE` and `gcloud compute instances create tdx-gcp-<6 hex> --project my-project --zone us-central1-a --machine-type n2d-standard-2 --image tdx-gcp-<8 hex> --confidential-compute --maintenance-policy TERMINATE --format json`. `--confidential-compute` on an `n2d` (AMD) machine type requests AMD SEV; an Intel TDX instance needs `--confidential-compute-type=TDX` on a C3 machine type, which this adapter does not pass yet, so a TDX deployment on GCP is not available through `deploy` today. `gcloud compute instances get-serial-port-output tdx-gcp-c95cfe --zone us-central1-a --project my-project` shows the boot. Tear down with `gcloud compute instances delete tdx-gcp-c95cfe --zone us-central1-a --project my-project`, `gcloud compute images delete tdx-gcp-45c3b6c0 --project my-project` and `gsutil rm gs://my-bucket/tdx-images/node_0.1.0.tar.gz`.
+That runs:
+
+```
+gcloud storage cp build/gcp/output/node_0.1.0.tar.gz gs://my-bucket/tdx-images/tdx-gcp-<8 hex>.tar.gz
+gcloud compute images create tdx-gcp-<8 hex> --project=my-project
+  --source-uri=gs://my-bucket/tdx-images/tdx-gcp-<8 hex>.tar.gz --guest-os-features=UEFI_COMPATIBLE,GVNIC,TDX_CAPABLE
+gcloud compute instances create tdx-gcp-<6 hex> --project=my-project --zone=us-central1-a
+  --machine-type=c3-standard-4 --image=tdx-gcp-<8 hex> --confidential-compute-type=TDX
+  --maintenance-policy=TERMINATE --format=json
+```
+
+A C3 instance has a gVNIC network interface and NVMe disks, so the image's kernel needs the `gve` and `nvme` drivers. `gcloud compute instances get-serial-port-output tdx-gcp-c95cfe --zone us-central1-a --project my-project` shows the boot. Tear down with `gcloud compute instances delete tdx-gcp-c95cfe --zone us-central1-a --project my-project`, `gcloud compute images delete tdx-gcp-45c3b6c0 --project my-project` and `gcloud storage rm gs://my-bucket/tdx-images/tdx-gcp-45c3b6c0.tar.gz`.
 
 ## Project status
 

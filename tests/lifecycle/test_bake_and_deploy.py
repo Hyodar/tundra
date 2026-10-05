@@ -12,11 +12,13 @@ from tundravm.declarative import (
     Package,
     Qemu,
     Recipe,
+    Secrets,
     Variant,
     bake,
     deploy,
     lock,
     measure,
+    read_artifacts,
     verify_artifact,
 )
 from tundravm.deploy import qemu as qemu_mod
@@ -160,3 +162,54 @@ def test_deploy_requires_explicit_variant_for_multi_variant_manifest(
     lines = out.getvalue().splitlines()
     assert lines[0] == "deployed dev to qemu"
     assert lines[1].split() == ["deployment", "qemu-dev"]
+
+
+def test_deploy_forwards_the_secrets_ports_the_bake_recorded(tmp_path: Path) -> None:
+    kernel = Package("linux-image-amd64")
+    recipe = Recipe(
+        "deploy",
+        Fragment("deploy", items=(kernel, Secrets(port=8443))),
+        variants=(
+            Variant("default", target="qemu"),
+            Variant("plain", parent=None, add=Fragment("k", items=(kernel,)), target="qemu"),
+        ),
+    )
+    locked = lock(recipe, resolver=lambda source: "a" * 40)
+    artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), out=tmp_path / "build")
+    ports = {a.variant: a.ports for a in artifacts}
+    assert ports == {"default": (8443,), "plain": ()}
+    assert read_artifacts(tmp_path / "build") == artifacts
+
+    calls: list[DeployRequest] = []
+
+    class Recording:
+        name = "qemu"
+
+        def deploy(self, request: DeployRequest) -> DeployResult:
+            calls.append(request)
+            return DeployResult(target="qemu", deployment_id="qemu-x", endpoint=None)
+
+    default = next(a for a in artifacts if a.variant == "default")
+    deploy(default, using=Qemu(forward=((9000, 9000),)), allow_simulated=True, adapter=Recording())
+    deploy(default, using=Qemu(forward=((18443, 8443),)), allow_simulated=True, adapter=Recording())
+    assert [r.parameters["forward"] for r in calls] == ["9000:9000,8443:8443", "18443:8443"]
+
+
+def test_deploy_cli_attach_and_forward_reach_the_qemu_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _bake(tmp_path, Variant("default", target="qemu"), Variant("azure", target="azure"))
+    _mock_qemu(monkeypatch)
+    manifest = str(tmp_path / "build")
+    argv = ["deploy", manifest, "--variant", "default", "--target", "qemu"]
+    flags = ["--allow-simulated-artifact", "--attach", "--param", "forward=8443:443"]
+
+    out = io.StringIO()
+    assert main([*argv, *flags], stdout=out) == EXIT_OK
+    rows = dict(line.split(maxsplit=1) for line in out.getvalue().splitlines()[1:])
+    assert rows["daemonize"] == "false"
+    assert rows["forward"] == "8443:443"
+
+    azure = ["deploy", manifest, "--variant", "azure", "--target", "azure", "--attach"]
+    assert main([*azure, "--param", "storage_account=a"], stdout=io.StringIO()) == EXIT_SDK_ERROR
+    assert main([*argv, "--param", "forward=8443"], stdout=io.StringIO()) == EXIT_SDK_ERROR

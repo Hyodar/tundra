@@ -27,11 +27,13 @@ import os
 import posixpath
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -56,6 +58,12 @@ FETCH_MARKER = ".tundravm-complete"
 MOUNTED_CACHE_ROOT = "${BUILDDIR:-$BUILDROOT/build}"
 """The build cache of a mounted hook: mkosi's ``$BUILDDIR`` when ``BuildDirectory=`` is
 configured (kept across builds), else the build overlay (discarded after the build)."""
+DEPS_DIRNAME = "deps"
+"""``<out>/.sources/deps``: the dependency caches ``tundravm fetch`` fills with the host's
+toolchains (``go``, ``cargo``, ``nuget``), mounted with the checkouts."""
+DEPS_BUILD_DIR = ".tundravm-deps"
+"""Where a mounted hook copies a dependency cache: ``$BUILDROOT/build/.tundravm-deps/<cache>``
+(``/build/.tundravm-deps/<cache>`` inside mkosi-chroot), so the mounted tree stays read-only."""
 _NETWORK_TIMEOUT = 60.0
 """Seconds :func:`default_resolver` waits on ``git ls-remote`` or a stalled download."""
 
@@ -217,9 +225,29 @@ class GoBuild:
     mkdir: bool = field(default=True, metadata=_since(True))
 
     kind: Literal["go"] = field(default="go", init=False, repr=False)
+    tool: ClassVar[str] = "go"
+    """The host executable ``tundravm fetch`` prefetches the dependencies with."""
+    deps: ClassVar[str] = "go"
+    """The dependency cache, ``<out>/.sources/deps/go``: a ``GOMODCACHE``."""
 
     def __post_init__(self) -> None:
         _freeze_recipe(self, ("env",), ("tags", "packages"))
+
+    def prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        """``go mod download`` into the module cache *cache*, and its environment.
+
+        ``-modcacherw`` keeps the cache removable without ``go clean -modcache``.
+        """
+        env = {**self.env, "GOMODCACHE": cache, "GOFLAGS": "-mod=mod -modcacherw"}
+        return ("go", "mod", "download"), env
+
+    @staticmethod
+    def deps_env(cache: str) -> str:
+        """The exports pointing the in-build ``go`` at the copied module cache *cache*."""
+        return (
+            f"export GOMODCACHE={cache} GOFLAGS=-mod=mod && "
+            '{ [ "$WITH_NETWORK" != 0 ] || export GOPROXY=off; }'
+        )
 
     @property
     def artifact(self) -> str:
@@ -248,9 +276,25 @@ class CargoBuild:
     packages: tuple[str, ...] = ("cargo",)
 
     kind: Literal["cargo"] = field(default="cargo", init=False, repr=False)
+    tool: ClassVar[str] = "cargo"
+    """The host executable ``tundravm fetch`` prefetches the dependencies with."""
+    deps: ClassVar[str] = "cargo"
+    """The dependency cache, ``<out>/.sources/deps/cargo``: a ``CARGO_HOME`` registry cache."""
 
     def __post_init__(self) -> None:
         _freeze_recipe(self, ("env",), ("features", "packages"))
+
+    def prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        """``cargo fetch --locked`` into the cargo home *cache*, and its environment."""
+        return ("cargo", "fetch", "--locked"), {**self.env, "CARGO_HOME": cache}
+
+    @staticmethod
+    def deps_env(cache: str) -> str:
+        """The exports pointing the in-build ``cargo`` at the copied cargo home *cache*."""
+        return (
+            f"export CARGO_HOME={cache} && "
+            '{ [ "$WITH_NETWORK" != 0 ] || export CARGO_NET_OFFLINE=true; }'
+        )
 
     @property
     def artifact(self) -> str:
@@ -287,9 +331,33 @@ class DotnetBuild:
     properties: Mapping[str, str] = field(default_factory=FrozenMap, metadata=_since({}))
 
     kind: Literal["dotnet"] = field(default="dotnet", init=False, repr=False)
+    tool: ClassVar[str] = "dotnet"
+    """The host executable ``tundravm fetch`` prefetches the dependencies with."""
+    deps: ClassVar[str] = "nuget"
+    """The dependency cache, ``<out>/.sources/deps/nuget``: a NuGet global packages folder."""
 
     def __post_init__(self) -> None:
         _freeze_recipe(self, ("env", "properties"), ("packages", "restore_args"))
+
+    def prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        """``dotnet restore`` of *project* for *runtime* into the packages folder *cache*."""
+        argv = (
+            "dotnet",
+            "restore",
+            self.project,
+            "--runtime",
+            self.runtime,
+            *self.restore_args,
+            "--packages",
+            cache,
+        )
+        env = {**self.env, "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1"}
+        return argv, env
+
+    @staticmethod
+    def deps_env(cache: str) -> str:
+        """The export pointing the in-build ``dotnet restore`` at the copied packages *cache*."""
+        return f"export NUGET_PACKAGES={cache}"
 
     @property
     def artifact(self) -> str:
@@ -334,6 +402,8 @@ class ScriptBuild:
 
 
 BuildRecipe = GoBuild | CargoBuild | DotnetBuild | ScriptBuild
+LanguageBuild = GoBuild | CargoBuild | DotnetBuild
+"""The build recipes whose dependencies ``tundravm fetch`` prefetches on the host."""
 
 
 def _recipe_payload(build: BuildRecipe) -> dict[str, object]:
@@ -510,6 +580,40 @@ class KernelSource(NamedSource):
 
 
 @dataclass(frozen=True, slots=True)
+class DebFile(NamedSource):
+    """A ``.deb`` a postinst hook installs with ``dpkg -i``: :class:`EfiStub`'s package.
+
+    Outside ``nethermind-v1`` it is a source like the others: ``lock`` pins its
+    sha256 as ``fetches[name]``, ``fetch`` downloads it on the host into
+    ``.sources/<name>-<pin[:12]>-<id[:8]>`` and the backend mounts it. *script* is
+    the hook compiled without a pin, which downloads it in the build sandbox;
+    :meth:`render` with a pin installs the mounted, sha256-checked copy instead.
+    """
+
+    name: str
+    source: HttpSource
+    script: str = field(repr=False)
+    lock_name: str | None = field(default=None, compare=False, repr=False, kw_only=True)
+
+    def render(self, pin: str | None) -> str:
+        """The postinst hook: *script* unpinned, else ``dpkg -i`` of the mounted copy."""
+        effective = self.source.inline_pin or pin
+        if effective is None:
+            return self.script
+        directory = f"{SOURCES_MOUNT}/{self.pin_dir(effective)}"
+        deb = f"{directory}/{self.source.filename}"
+        missing = f"tundravm: {self.pin_dir(effective)} is not fetched: run tundravm fetch RECIPE"
+        return (
+            f'if [ ! -f "$SRCDIR/{directory}/{FETCH_MARKER}" ]; then\n'
+            f"    echo {shlex.quote(missing)} >&2\n"
+            "    exit 1\n"
+            "fi\n"
+            f'echo "{effective}  $SRCDIR/{deb}" | sha256sum -c --quiet -\n'
+            f'mkosi-chroot dpkg -i "$CHROOT_SRCDIR/{deb}"'
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceBuild(NamedSource):
     """Fetch *source*, run *build* inside mkosi-chroot, install the results.
 
@@ -611,7 +715,8 @@ class SourceBuild(NamedSource):
         workdir = Build.chroot_path(self.name).rel
         if isinstance(self.source, GitSource) and self.source.subdir:
             workdir = f"{workdir}/{self.source.subdir.strip('/')}"
-        inner = self.build.command(f"/build/{workdir}").replace("'", "'\\''")
+        build = self.build.command(f"/build/{workdir}")
+        inner = build.replace("'", "'\\''")
         if mounted:
             if effective is None:
                 message = (
@@ -622,7 +727,9 @@ class SourceBuild(NamedSource):
                     f"# unpinned: {self.source.requested}\n"
                     f"echo {shlex.quote(message)} >&2 && exit 1"
                 )
-            command = f"{self._copy(effective)} && mkosi-chroot bash -c '{inner}'"
+            copy_deps, uses_deps = self._deps()
+            inner = f"{uses_deps}{build}".replace("'", "'\\''")
+            command = f"{self._copy(effective)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
             key = f"{self.cache_key or self.name}-{self.cache_fingerprint(effective, arch=arch)}"
             return self._cache(key, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
         command = f"{self._fetch(effective)} && mkosi-chroot bash -c '{inner}'"
@@ -641,6 +748,49 @@ class SourceBuild(NamedSource):
             f" && mkdir -p {target} && cp -a --no-preserve=ownership {source}/. {target}/"
             f" && rm -f {target}/{FETCH_MARKER}"
         )
+
+    def _deps(self) -> tuple[str, str]:
+        """``(copy, exports)``: a mounted hook's use of the prefetched dependency cache.
+
+        *copy* (``&&``-joined after the checkout copy) copies
+        ``$SRCDIR/tundravm-sources/deps/<cache>`` to ``$BUILDROOT/build/.tundravm-deps``
+        once, when ``tundravm fetch`` filled it; *exports* (inside mkosi-chroot) point
+        the toolchain at that copy, offline when mkosi runs the build without network.
+        Both are empty for a script build.
+        """
+        if not isinstance(self.build, LanguageBuild):
+            return "", ""
+        cache = self.build.deps
+        mounted = f'"$SRCDIR/{SOURCES_MOUNT}/{DEPS_DIRNAME}/{cache}"'
+        parent = f'"{Build.build_path(DEPS_BUILD_DIR)}"'
+        target = f'"{Build.build_path(f"{DEPS_BUILD_DIR}/{cache}")}"'
+        copy = (
+            f" && {{ [ ! -d {mounted} ] || [ -d {target} ] || "
+            f"{{ mkdir -p {parent} && cp -a --no-preserve=ownership {mounted} {target}; }}; }}"
+        )
+        chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{cache}")
+        return copy, f"if [ -d {chroot} ]; then {self.build.deps_env(str(chroot))}; fi && "
+
+    def deps_marker(self, pin: str) -> str | None:
+        """``<pin_dir>.<cache>.json``: the file in ``.sources/deps`` that records a prefetch.
+
+        ``tundravm fetch`` writes it once the host toolchain filled the cache for
+        *pin*'s checkout; ``None`` for a script build, which has no dependency cache.
+        """
+        if not isinstance(self.build, LanguageBuild):
+            return None
+        return f"{self.pin_dir(pin)}.{self.build.deps}.json"
+
+    def deps_spec(self) -> dict[str, object]:
+        """What a prefetch ran, as its marker records it: toolchain, command and environment."""
+        if not isinstance(self.build, LanguageBuild):
+            return {}
+        argv, env = self.build.prefetch(f"<{DEPS_DIRNAME}/{self.build.deps}>")
+        return {
+            "toolchain": self.build.kind,
+            "command": list(argv),
+            "env": dict(sorted(env.items())),
+        }
 
     def cache_fingerprint(self, pin: str, *, arch: str) -> str:
         """The first 16 hex of the sha256 over what a mounted build produces.
@@ -923,6 +1073,83 @@ def fetch_source(source: Source, pin: str, dest: Path) -> None:
             "--recursive",
             "--depth=1",
         )
+
+
+def run_tool(
+    argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run a host toolchain command for :func:`prefetch_deps` (tests replace it)."""
+    return subprocess.run(
+        list(argv), cwd=cwd, env=dict(env), check=False, text=True, capture_output=True
+    )
+
+
+def deps_prefetched(build: SourceBuild, pin: str, root: Path) -> bool:
+    """Whether ``<root>/deps`` holds *build*'s dependencies for *pin* (its marker matches).
+
+    *root* is ``<out>/.sources``. ``True`` for a script build, which has none.
+    """
+    marker = build.deps_marker(pin)
+    if marker is None:
+        return True
+    try:
+        recorded = json.loads((root / DEPS_DIRNAME / marker).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(recorded, dict) and recorded.get("spec") == build.deps_spec()
+
+
+def prefetch_deps(
+    build: SourceBuild, pin: str, checkout: Path, root: Path, *, offline: bool = False
+) -> str | None:
+    """Fill ``<root>/deps/<cache>`` with *build*'s dependencies; the outcome, for the notice.
+
+    The host's toolchain (``go mod download``, ``cargo fetch --locked``, ``dotnet
+    restore --packages``) runs as the invoking user in a scratch copy of
+    *checkout* (subdirectory included), so the checkout stays clean, and a marker
+    (:meth:`SourceBuild.deps_marker`) records the success. Returns ``None`` for a
+    script build, ``"<cache>: kept"`` when the marker already matches,
+    ``"<cache>: prefetched"``, ``"skipped (no host <tool>)"`` when the toolchain is
+    not on ``PATH``, ``"skipped (offline)"`` under an offline policy, or
+    ``"failed (<reason>)"``; the build then fetches its dependencies online.
+    """
+    marker = build.deps_marker(pin)
+    if marker is None or not isinstance(build.build, LanguageBuild):
+        return None
+    recipe = build.build
+    deps = root / DEPS_DIRNAME
+    if deps_prefetched(build, pin, root):
+        return f"{recipe.deps}: kept"
+    if offline:
+        return "skipped (offline)"
+    if shutil.which(recipe.tool) is None:
+        return f"skipped (no host {recipe.tool})"
+    cache = deps / recipe.deps
+    cache.mkdir(parents=True, exist_ok=True)
+    argv, env = recipe.prefetch(str(cache.resolve()))
+    scratch = Path(tempfile.mkdtemp(prefix=f".{build.pin_dir(pin)}.", dir=deps))
+    try:
+        tree = scratch / "tree"
+        shutil.copytree(
+            checkout, tree, symlinks=True, ignore=shutil.ignore_patterns(".git", FETCH_MARKER)
+        )
+        workdir = tree
+        if isinstance(build.source, GitSource) and build.source.subdir:
+            workdir = tree / build.source.subdir.strip("/")
+        try:
+            completed = run_tool(argv, cwd=workdir, env={**os.environ, **env})
+        except OSError as exc:
+            return f"failed (cannot run {recipe.tool}: {exc.strerror or exc})"
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if completed.returncode != 0:
+        lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
+        last = lines[-1] if lines else f"exit status {completed.returncode}"
+        return f"failed ({' '.join(argv[:2])}: {last})"
+    record = {"build": build.key, "checkout": build.pin_dir(pin), "spec": build.deps_spec()}
+    text = json.dumps(record, indent=2, sort_keys=True) + "\n"
+    (deps / marker).write_text(text, encoding="utf-8")
+    return f"{recipe.deps}: prefetched"
 
 
 def _git(source: GitSource, *args: str) -> None:
@@ -1242,6 +1469,7 @@ def source_section(key: str) -> str:
 __all__ = [
     "BuildRecipe",
     "CargoBuild",
+    "DebFile",
     "DotnetBuild",
     "GitSource",
     "GoBuild",
@@ -1249,6 +1477,7 @@ __all__ = [
     "Install",
     "InstallKind",
     "KernelSource",
+    "LanguageBuild",
     "NamedSource",
     "Resolver",
     "ScriptBuild",
@@ -1256,8 +1485,10 @@ __all__ = [
     "SourceBuild",
     "checkout_identity",
     "default_resolver",
+    "deps_prefetched",
     "fetch_source",
     "is_fetched",
+    "prefetch_deps",
     "resolve_pins",
     "source_drift",
     "source_section",

@@ -89,6 +89,7 @@ def test_explain_structure() -> None:
         "require_frozen_lock": False,
         "mutable_ref_policy": "warn",
         "network_mode": "online",
+        "storage_safety": "warn",
     }
 
     repositories = info["repositories"]
