@@ -22,6 +22,7 @@ from tundravm._source import (
     NamedSource,
     Resolver,
     SourceBuild,
+    fingerprint,
     source_drift,
     source_section,
 )
@@ -416,13 +417,27 @@ class Lowered:
             },
         }
 
-    def pinned_state(self, pins: Mapping[str, LockedFetch]) -> RecipeState:
-        """The state with every pinned source build's hook rendered at its pin from *pins*."""
+    def distribution_fingerprint(self, profile: str) -> str:
+        """The :func:`~tundravm._source.fingerprint` of *profile*'s :meth:`build_distribution`."""
+        return fingerprint(self.build_distribution(profile))
+
+    def pinned_state(
+        self, pins: Mapping[str, LockedFetch], *, variant: str | None = None
+    ) -> RecipeState:
+        """The state with every pinned source build's hook rendered at its pin from *pins*.
+
+        A mounted hook's fingerprint takes the distribution of the profile that
+        declares the build, or with *variant* that of *variant* for every
+        profile, the builds *variant* inherits included: what its own tree runs.
+        """
         profiles: dict[str, ProfileState] = {}
         changed = False
         mounted = self.fetches_sources
+        shared = self.build_distribution(variant) if mounted and variant is not None else None
         for name, profile in self.state.profiles.items():
-            distribution = self.build_distribution(name) if mounted else None
+            distribution = shared
+            if mounted and shared is None:
+                distribution = self.build_distribution(name)
             swaps = {
                 spec.render(mounted=mounted): pinned
                 for spec in profile.source_builds.values()

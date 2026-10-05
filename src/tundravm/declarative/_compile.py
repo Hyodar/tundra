@@ -2,7 +2,8 @@
 
 :func:`emit` generates runtime-init into a scratch copy of the state (so
 compiling never changes what lint, lock or a second compile see), renders each
-pinned source build's hook at its pin, and hands the state with one
+pinned source build's hook at its pin (per variant in the per-directory layout,
+whose trees each run their inherited builds), and hands the state with one
 ``EmitConfig`` per profile to the emitter.
 """
 
@@ -15,9 +16,8 @@ from pathlib import Path
 
 from tundravm._modules.init import Init
 from tundravm._options import MkosiOptions
-from tundravm._source import KernelSource
 from tundravm.compiler import EmitConfig, MkosiEmission, emit_mkosi_tree
-from tundravm.errors import PolicyError
+from tundravm.errors import PolicyError, ValidationError
 from tundravm.lockfile import LockedFetch
 from tundravm.models import (
     NETWORK_SETUP_UNIT,
@@ -40,15 +40,61 @@ def emit(lowered: Lowered, destination: Path) -> tuple[CompileResult, MkosiEmiss
     pins = lowered.build_pins()
     _enforce_source_policy(lowered, pins)
     initialized = _with_init(lowered)
-    emission = emit_mkosi_tree(
-        recipe=initialized.pinned_state(pins),
-        destination=Path(destination),
-        profile_names=lowered.active,
-        base=lowered.base,
-        config=_emit_config(lowered, pins),
+    config = _emit_config(lowered, pins)
+    if config.emit_mode == "native_profiles":
+        _require_shared_distribution(lowered)
+        groups = [(initialized.pinned_state(pins), lowered.active)]
+    else:
+        # Each variant's directory runs its inherited builds too, keyed by its own distribution.
+        groups = [
+            (initialized.pinned_state(pins, variant=name), (name,)) for name in lowered.active
+        ]
+    emissions = [
+        emit_mkosi_tree(
+            recipe=state,
+            destination=Path(destination),
+            profile_names=names,
+            base=lowered.base,
+            config=config,
+        )
+        for state, names in groups
+    ]
+    emission = MkosiEmission(
+        root=emissions[0].root,
+        profile_paths={k: v for each in emissions for k, v in each.profile_paths.items()},
+        script_paths={k: v for each in emissions for k, v in each.script_paths.items()},
     )
     digest = initialized.digest()
     return CompileResult(path=Path(destination), profiles=lowered.active, digest=digest), emission
+
+
+def _require_shared_distribution(lowered: Lowered) -> None:
+    """Refuse a native layout whose root builds run in a variant with another distribution.
+
+    The root tree's kernel script and source build hooks run in every variant
+    and are keyed by the default variant's :meth:`~Lowered.build_distribution`;
+    a variant that builds against another distribution would restore, or cache
+    under the default variant's key, a build from its own toolchain.
+    """
+    default = lowered.default_profile
+    if not lowered.fetches_sources or not (
+        lowered.kernel_source(default) is not None
+        or lowered.state.effective_profile(default).source_builds
+    ):
+        return
+    expected = lowered.distribution_fingerprint(default)
+    for name in lowered.active:
+        if name != default and lowered.distribution_fingerprint(name) != expected:
+            raise ValidationError(
+                f"native_profiles mode cannot build variant {name!r}: it builds against "
+                f"another distribution than the default variant {default!r}, whose kernel "
+                "and source builds the root tree runs (and caches) for every variant.",
+                hint=(
+                    "Give the variant the default variant's repositories, build packages "
+                    "and Build settings, or use emit_mode='per_directory'."
+                ),
+                context={"profile": name, "operation": "emit_mkosi"},
+            )
 
 
 def _with_init(lowered: Lowered) -> Lowered:
@@ -141,25 +187,31 @@ def _emit_config(lowered: Lowered, pins: Mapping[str, LockedFetch]) -> EmitConfi
             lowered,
             lowered.mkosi_for(profile),
             lowered.kernel_for(profile),
-            _kernel_pin(lowered, lowered.kernel_source(profile), pins),
+            _kernel_pin(lowered, profile, pins),
         )
 
-    own = sorted(set(lowered.profile_mkosi) | set(lowered.profile_kernels))
-    default = _kernel_pin(lowered, lowered.kernel_source(lowered.default_profile), pins)
+    default = _kernel_pin(lowered, lowered.default_profile, pins)
+    own = set(lowered.profile_mkosi) | set(lowered.profile_kernels)
+    own.update(name for name in lowered.active if _kernel_pin(lowered, name, pins) != default)
     return replace(
         _emit_config_for(lowered, lowered.mkosi, lowered.kernel, default),
-        profiles={name: config(name) for name in own},
+        profiles={name: config(name) for name in sorted(own)},
     )
 
 
 def _kernel_pin(
-    lowered: Lowered, spec: KernelSource | None, pins: Mapping[str, LockedFetch]
+    lowered: Lowered, profile: str, pins: Mapping[str, LockedFetch]
 ) -> dict[str, object]:
-    """``EmitConfig`` fields for the kernel source *spec*: its pin and checkout directory."""
+    """``EmitConfig`` fields for *profile*'s kernel: pin, checkout and distribution fingerprint."""
+    spec = lowered.kernel_source(profile)
     pin = None if spec is None or not lowered.fetches_sources else spec.pin_from(pins)
     if spec is None or pin is None:
         return {}
-    return {"kernel_pin": pin, "kernel_checkout": spec.pin_dir(pin)}
+    return {
+        "kernel_pin": pin,
+        "kernel_checkout": spec.pin_dir(pin),
+        "kernel_distribution": lowered.distribution_fingerprint(profile),
+    }
 
 
 def _emit_config_for(

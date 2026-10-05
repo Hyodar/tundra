@@ -834,8 +834,7 @@ class SourceBuild(NamedSource):
             "distribution": dict(distribution),
             "toolchain": {"kind": self.build.kind, "packages": list(self.packages)},
         }
-        canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        return fingerprint(spec)
 
     def _historical_key(self, pin: str | None) -> str:
         """The ``nethermind-v1`` cache key: ``cache_key`` or name, url digest and ref, + pin."""
@@ -892,6 +891,16 @@ class SourceBuild(NamedSource):
         if self.source.filename.endswith(_ARCHIVE_SUFFIXES):
             command += f" && tar -xf {file} -C {target} --strip-components=1"
         return command
+
+
+def fingerprint(spec: Mapping[str, object]) -> str:
+    """The first 16 hex of the sha256 over the canonical JSON of *spec*.
+
+    :meth:`SourceBuild.cache_fingerprint` hashes a build this way, and the
+    current-dialect kernel cache key a variant's ``Lowered.build_distribution``.
+    """
+    canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def checkout_identity(source: Source) -> str:
@@ -1658,6 +1667,7 @@ __all__ = [
     "deps_prefetched",
     "deps_problem",
     "fetch_source",
+    "fingerprint",
     "is_fetched",
     "prefetch_deps",
     "resolve_pins",

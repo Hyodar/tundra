@@ -73,7 +73,7 @@ def describe(
     """
     selected = image.profile(profile)
     pins = image.build_pins()
-    state = image.pinned_state(pins)
+    state = image.pinned_state(pins, variant=selected)
     profile_state = state.effective_profile(selected)
     kernel = image.kernel_for(selected)
     kernel_source = image.kernel_source(selected)

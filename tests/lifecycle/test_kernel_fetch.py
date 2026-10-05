@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 import subprocess
 import tarfile
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -26,6 +28,7 @@ from tundravm.declarative import (
     Kernel,
     Lock,
     Mkosi,
+    Package,
     Recipe,
     Variant,
     compile,
@@ -274,7 +277,7 @@ def test_the_current_script_copies_the_fetched_kernel(tmp_path: Path, config: Pa
     ) in script
     cache = script.split("\n")[3]
     assert cache.startswith('KERNEL_CACHE="${BUILDDIR:-$BUILDROOT/build}/kernel-6.1-')
-    assert cache.endswith(f'-{pin[:12]}"')
+    assert re.search(f'-{pin[:12]}-[0-9a-f]{{16}}"$', cache)  # the pin, then the distribution
     assert "git clone" not in script and "k.example" not in script
     moved = _script(recipe, tmp_path / "moved", lock(recipe, resolver=lambda s: "d" * 40))
     assert moved.split("\n")[3] == cache.replace(pin[:12], "d" * 12)
@@ -306,6 +309,80 @@ def test_nethermind_v1_keeps_the_sandbox_clone(tmp_path: Path, config: Path) -> 
     assert 'git clone --depth 1 --branch "v${KERNEL_VERSION}" \\' in script
     assert 'KERNEL_CACHE="${BUILDDIR}/kernel-6.1-' in script
     assert "tundravm-sources" not in script
+
+
+def test_the_kernel_cache_key_covers_the_distribution_outside_nethermind_v1(
+    tmp_path: Path, config: Path
+) -> None:
+    def keyed(dialect: str, snapshot: str | None) -> tuple[str, Recipe]:
+        kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
+        recipe = replace(_recipe(kernel, dialect=dialect), snapshot=snapshot)
+        locked = lock(recipe, resolver=lambda s: "c" * 40)
+        script = _script(recipe, tmp_path / f"{dialect}-{snapshot}", locked)
+        return script.split("\n")[3], recipe
+
+    current, recipe = keyed("current", None)
+    fingerprint = lower(recipe).distribution_fingerprint("default")
+    assert current.endswith(f'-{"c" * 12}-{fingerprint}"')
+    snapshots = [keyed("current", s)[0] for s in ("20260101T000000Z", "20260201T000000Z")]
+    assert current not in snapshots and len(set(snapshots)) == 2
+    historical = [keyed("nethermind-v1", s)[0] for s in (None, "20260101T000000Z")]
+    assert historical[0] == historical[1]
+
+
+TOOL = Build(
+    "tool", Git("https://x.example/tool", "main"), script="make", install=(Install("t", "/t"),)
+)
+BUILD_PACKAGE = Variant("dev", add=Fragment("dev", items=(Package("gcc-14", role="build"),)))
+IMAGE_PACKAGE = Variant("slim", add=Fragment("slim", items=(Package("htop"),)))
+
+
+def _cache_keys(script: Path) -> set[str]:
+    """The kernel's and the source builds' cache directories *script* uses."""
+    return set(re.findall(r'build\}/([^"/]+)"', script.read_text(encoding="utf-8")))
+
+
+def test_each_variant_directory_keys_its_inherited_builds_by_its_distribution(
+    tmp_path: Path, config: Path
+) -> None:
+    kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
+    variants = (Variant("default"), BUILD_PACKAGE, IMAGE_PACKAGE)
+    recipe = _recipe(kernel, variants=variants, builds=(TOOL,))
+    compile(recipe, lock=lock(recipe, resolver=lambda s: "c" * 40)).write(tmp_path)
+    default, dev, slim = (
+        _cache_keys(tmp_path / name / "scripts" / "04-build.sh")
+        for name in ("default", "dev", "slim")
+    )
+    assert len(default) == 2 and slim == default  # an image package is not the toolchain
+    assert len(dev) == 2 and dev.isdisjoint(default)
+    lowered = lower(recipe)
+    assert {key.rsplit("-", 1)[1] for key in dev if key.startswith("kernel-")} == {
+        lowered.distribution_fingerprint("dev")
+    }
+    hook = lowered.source_builds()["tool"].render(
+        "c" * 40, mounted=True, distribution=lowered.build_distribution("dev")
+    )
+    assert hook in (tmp_path / "dev" / "scripts" / "04-build.sh").read_text(encoding="utf-8")
+
+
+def test_the_native_layout_refuses_a_variant_with_another_distribution(
+    tmp_path: Path, config: Path
+) -> None:
+    kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
+
+    def native(*variants: Variant) -> Recipe:
+        recipe = _recipe(kernel, variants=(Variant("default"), *variants), builds=(TOOL,))
+        return replace(recipe, mkosi=Mkosi(layout="native"))
+
+    refused = native(BUILD_PACKAGE, IMAGE_PACKAGE)
+    with pytest.raises(ValidationError, match="cannot build variant 'dev'") as error:
+        compile(refused, lock=lock(refused, resolver=lambda s: "c" * 40))
+    assert error.value.context["profile"] == "dev"
+    assert "emit_mode='per_directory'" in str(error.value.hint)
+    shared = native(IMAGE_PACKAGE)
+    compile(shared, lock=lock(shared, resolver=lambda s: "c" * 40)).write(tmp_path)
+    assert len(_cache_keys(tmp_path / "scripts" / "04-build.sh")) == 2
+    assert not (tmp_path / "mkosi.profiles" / "slim" / "scripts" / "04-build.sh").exists()
 
 
 # ── bake ─────────────────────────────────────────────────────────────

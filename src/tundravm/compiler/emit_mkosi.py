@@ -315,6 +315,9 @@ class EmitConfig:
     kernel_checkout: str | None = None
     """Outside ``nethermind-v1``: the kernel's host-fetched checkout ``<name>-<pin[:12]>``,
     which the build script copies from ``$SRCDIR/tundravm-sources``."""
+    kernel_distribution: str | None = None
+    """Outside ``nethermind-v1``: the fingerprint of what the pinned kernel compiles
+    against (``Lowered.build_distribution``), which its cache key ends with."""
     profiles: Mapping[str, EmitConfig] = field(default_factory=dict)
     """Profiles with their own settings or kernel; the rest use this configuration."""
 
@@ -673,14 +676,16 @@ def _render_kernel_build_script(
     *,
     pin: str | None = None,
     checkout: str | None = None,
+    distribution: str | None = None,
 ) -> str:
     """Render a build script that fetches, configures, and compiles the Linux kernel.
 
     Under ``nethermind-v1`` the script clones (or downloads) the kernel in the
     sandbox and caches it in ``$BUILDDIR``. Every other dialect copies the
     host-fetched *checkout* of *pin* (see :func:`_kernel_copy`), keys the cache
-    by the pin and falls back to the build overlay for it, since mkosi sets
-    ``$BUILDDIR`` only with ``BuildDirectory=``.
+    by the pin and the *distribution* fingerprint, so another snapshot, mirror
+    or toolchain rebuilds, and falls back to the build overlay for it, since
+    mkosi sets ``$BUILDDIR`` only with ``BuildDirectory=``.
     """
     historical = dialect == "nethermind-v1"
     cache_root = "${BUILDDIR}" if historical else "${BUILDDIR:-$BUILDROOT/build}"
@@ -701,6 +706,8 @@ def _render_kernel_build_script(
         fetch_lines = _kernel_copy(kernel, checkout if pin is not None else None)
         if pin is not None:
             cache_key += f"-{pin[:12]}"
+            if distribution is not None:
+                cache_key += f"-{distribution}"
     fetch = ("\n" + " " * 12).join(fetch_lines)
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash
@@ -1146,6 +1153,7 @@ class DeterministicMkosiEmitter:
                     config.dialect,
                     pin=config.kernel_pin,
                     checkout=config.kernel_checkout,
+                    distribution=config.kernel_distribution,
                 )
                 if commands:
                     # Combine kernel build + user-defined build commands
