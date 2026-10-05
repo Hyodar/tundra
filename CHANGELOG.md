@@ -67,6 +67,9 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - Lint `secret-in-file` and `secret-in-env` (errors): private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments; `allow_secret=True` on `File`, `Template`, `Directory`, `Unit` and `Service` exempts a declaration without changing the digest.
 - `attest` speaks only what tdxs serves (`unix:PATH` or `tcp://HOST:PORT`); the http mode and `--insecure` are gone. `status` lists mkosi's package manifest per baked variant (`manifests` in JSON).
 
+- `tundravm watch [RECIPE] [--out DIR] [--variant NAME]... [--interval SECONDS] [--write]`: polls the recipe file and every `.py` under its directory and on each change re-runs lint and the tree check against `OUT/mkosi` (or recompiles it with `--write`), one `HH:MM:SS lint N errors N warnings; tree ...` line per change; Ctrl-C exits 0.
+- `tundravm init --ci github` adds an opt-in `bake` job (repository variable `TUNDRAVM_BAKE_BACKEND`): installs mkosi, runs `fetch`, `bake --verify-reproducible` and `evidence --bundle --html`, and uploads the evidence bundle, the HTML report and `build/*/output/*`.
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

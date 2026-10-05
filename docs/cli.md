@@ -21,6 +21,7 @@ tundravm sbom    [MANIFEST] [--out DIR] [--variant NAME] [--lockfile PATH] [--fo
 tundravm evidence [RECIPE] [--variant NAME]... [--out DIR] [--lockfile PATH] [--policy FILE] [--bundle FILE] [--html FILE] [--format text|json]
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--format auto|text|github]
+tundravm watch   RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--interval SECONDS] [--write]
 tundravm status  RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
 tundravm clean   [RECIPE] [--out DIR] [--sources] [--tree] [--artifacts] [--state] [--all] [--lockfile PATH] [--dry-run]
 tundravm config  [RECIPE] [--out DIR] [--tree DIR] [--lockfile PATH] [--backend KIND] [--format text|json]
@@ -76,6 +77,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `evidence` | An auditor's record of one bake (`--out DIR`, default `build`; `--variant`, default every baked variant): recipe and tree digests, the lockfile with its drift verdict, each artifact with a fresh sha256 check, the reproducibility verdict, the measurements policy, an SPDX SBOM, the lint summary, a provenance summary and the tool versions, written to `OUT/evidence/` with an `evidence.json` index; `--bundle FILE.tar.gz` and `--html FILE` package it (see [Evidence](#evidence)). | the verdict is `fail` |
 | `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart`, `apt` and `pefile`, probed under the Python that runs mkosi, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk conversion needs on the host; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
 | `ci` | `lint --strict`, `compile --check`, `lock --check` in order; stops at the first failure. The one `--lockfile` (default `build/tundravm.lock`) is loaded once and shared: lint and the tree check apply its pins, the lock check compares against it. | any step fails, including a missing lockfile |
+| `watch` | Polls the recipe file and every `.py` under its directory; on each change re-runs lint and the tree check against `OUT/mkosi` (`--out`, default `build`), or recompiles it with `--write`, printing one line (see [Watch](#watch)). | never (Ctrl-C exits 0) |
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
 | `clean` | Removes the chosen parts of the build output directory: `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
 | `config` | Prints the `recipe`, `out`, `tree`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
@@ -101,7 +103,7 @@ Every command that takes `RECIPE` then runs without it: `tundravm status`, `tund
 - The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`.
 - Precedence per value: an explicit argument or flag, then the table, then the built-in default (`build`, `build/mkosi`, `build/tundravm.lock`, the recipe file's `backend`).
 - The table's paths apply when `RECIPE` is omitted or names the table's recipe; another explicit `RECIPE` uses the built-in defaults.
-- `out` is `--out` of `fetch`, `bake`, `status` and `clean`; `tree` is `--out` of `compile` and `ci`, `--against` of `diff` and the tree `status` checks; `lockfile` is `--lockfile` everywhere except `clean`, drift diagnostics of `lint` included; `backend` is `bake --backend` and `doctor --backend`, and `bake` keeps the recipe file's own backend instance when it is of that kind.
+- `out` is `--out` of `fetch`, `bake`, `status`, `watch` and `clean`; `tree` is `--out` of `compile` and `ci`, `--against` of `diff` and the tree `status` and `watch` check; `lockfile` is `--lockfile` everywhere except `clean`, drift diagnostics of `lint` included; `backend` is `bake --backend` and `doctor --backend`, and `bake` keeps the recipe file's own backend instance when it is of that kind.
 - A configured `lockfile` stays selected before the file exists and is never replaced by `build/tundravm.lock`. Until `tundravm lock` writes it, `inspect`, `lint`, `compile`, `diff` and `fetch` print `` note: configured lockfile PATH does not exist; run `tundravm lock` to create it `` on stderr and run without pins, `status` reports `configured lockfile PATH does not exist; run tundravm lock` on its `lock` line, and `bake` fails with `E_LOCKFILE` instead of baking unfrozen.
 - Without `RECIPE` and without a table, a recipe command exits 2 with `the following arguments are required: recipe (no pyproject.toml with a [tool.tundravm] table ...)`; `doctor`, `clean` and `config` keep working without one.
 
@@ -837,6 +839,20 @@ note: no measurements policy for variant dev (build/dev/policy.json does not exi
 
 The `wrote` lines go to stderr, the summary to stdout. Running it again with the same `SOURCE_DATE_EPOCH` writes a byte-identical `evidence.tar.gz`. With one byte appended to `build/default/disk.qcow2`, the summary reads `integrity  mismatch`, the artifact line ends in `mismatch`, `verdict fail`, and the command exits 1.
 
+## Watch
+
+`tundravm watch RECIPE` keeps the edit loop short: it polls the mtimes of the recipe file and every `.py` under its directory (hidden directories, `__pycache__`, installed packages and the build output are left out) every `--interval SECONDS` (default `1`). It checks once at start, then once per change: the recipe is loaded again (modules it imports from its directory are re-imported from their current source), linted with the pins of `--lockfile` (default `build/tundravm.lock` when it exists), and compared with `OUT/mkosi` (`--out`, default `build`; without `--out`, a `[tool.tundravm]` `tree` replaces it) without writing, as `compile --check` does. Each check prints one line, `HH:MM:SS lint N errors N warnings; TREE`, where `TREE` is `tree up to date`, `tree stale (N files)` or `tree missing (N files to write)`; with `--write` a stale tree is recompiled and the line ends `wrote OUT/mkosi`. A recipe that fails to load prints `HH:MM:SS error [E_CODE] message` and is watched on. Ctrl-C stops it with exit 0.
+
+```console
+$ tundravm watch node.py
+watching node.py every 1s (Ctrl-C stops)
+14:02:11 lint 0 errors 0 warnings; tree up to date
+14:02:40 lint 0 errors 0 warnings; tree stale (1 file)
+14:03:05 error [E_VALIDATION] Recipe node.py failed to load: syntax error at node.py:96: invalid syntax
+14:03:12 lint 0 errors 0 warnings; tree stale (1 file)
+^Cstopped
+```
+
 ## Project status
 
 `tundravm status RECIPE` answers "where is this project at?" without writing anything or touching the network. It prints one line per item, `LABEL VERDICT DETAIL`, for the selected variants (`--variant`, default all), then `next: COMMAND`:
@@ -929,4 +945,4 @@ A failing step prints its report, then `FAIL step: ...` and `skip` for the remai
 
 The steps share one loaded recipe and one lockfile (`--lockfile`, default `build/tundravm.lock`, read once): `lint --strict` and `compile --check` apply its pins, so a pinned source never reports `source-unpinned`, and the lock step compares against it. The compile step works on a copy of the recipe, so a recipe with runtime-init steps (keys, disks, secrets, `Init`) passes the lock step whenever `tundravm lock --check` passes on its own.
 
-`tundravm init --ci github` writes a workflow that runs `uv sync`, appends `tundravm inspect RECIPE --format markdown` to `$GITHUB_STEP_SUMMARY`, then runs `tundravm ci RECIPE --out mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the workflow checks both.
+`tundravm init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and pull request: `uv sync`, `tundravm inspect RECIPE --format markdown` appended to `$GITHUB_STEP_SUMMARY`, then `tundravm ci RECIPE --out mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the job checks both. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` is set (`if: vars.TUNDRAVM_BAKE_BACKEND != ''`) to the backend kind to bake with. It installs mkosi as tundravm's own CI does (`bubblewrap`, `debian-archive-keyring` and `python3-pefile` from apt, mkosi from git with `pipx`), runs `tundravm fetch RECIPE --out build`, `tundravm bake RECIPE --backend $TUNDRAVM_BAKE_BACKEND --out build --verify-reproducible` and `tundravm evidence RECIPE --out build --bundle evidence.tar.gz --html evidence.html`, then uploads `evidence.tar.gz`, `evidence.html` and `build/*/output/*` as the `tundravm-bake` workflow artifact.

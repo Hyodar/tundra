@@ -172,6 +172,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `evidence [RECIPE]` | An auditor's record of a bake in `OUT/evidence/`: recipe and tree digests, the lockfile with its drift, each artifact re-hashed, the reproducibility outcome, the measurements policy, SPDX SBOMs, lint and provenance summaries, tool versions, indexed by `evidence.json`; `--bundle FILE.tar.gz` (deterministic under `SOURCE_DATE_EPOCH`), `--html FILE`; exit 1 when the verdict is `fail` |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
+| `watch [RECIPE]` | Re-run lint and the tree check against `OUT/mkosi` whenever the recipe or a `.py` beside it changes, one line per change (`--interval SECONDS`, `--write` recompiles); Ctrl-C exits 0 |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
 | `clean [RECIPE]` | Remove build output by part (`--sources`, `--tree`, `--artifacts`, `--state`, `--all`) |
 | `config [RECIPE]` | The `recipe`, `out`, `tree`, `lockfile` and `backend` the commands resolve, whether each came from a flag, `[tool.tundravm]`, the default or (the backend) the recipe file, and whether the recipe and lockfile exist |

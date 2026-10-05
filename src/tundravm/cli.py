@@ -6,9 +6,10 @@ Every recipe command loads the ``Recipe`` a Python file binds (see
 ``--variant NAME``, or omit it for every declared variant. ``measure`` and
 ``deploy`` read the ``bake-result.json`` manifest a ``bake`` wrote. ``init``
 bootstraps a recipe project and ``ci`` runs lint, compile and lock checks in
-one go; ``status`` reports where the project stands and ``clean`` removes build
-output; ``completion`` prints a shell completion script. With no arguments the
-help and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
+one go; ``watch`` re-runs lint and the tree check whenever the recipe changes;
+``status`` reports where the project stands and ``clean`` removes build output;
+``completion`` prints a shell completion script. With no arguments the help
+and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
 codes) or a usage error (unknown verbs and flags get a "did you mean"), 1 for a
 failed check (``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``,
 ``doctor``, an untrusted ``attest``, a failing ``evidence``) or an unexpected
@@ -26,8 +27,9 @@ import os
 import platform
 import re
 import sys
+import traceback
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import MISSING, dataclass, fields, replace
 from pathlib import Path
 from typing import TextIO, cast, get_args
@@ -40,7 +42,7 @@ from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
 from .check import Diagnostic as CheckDiagnostic
 from .check import failing, render_as, render_summary
-from .clean import PARTS, clean_paths, owner_hint, remove, sudo_runner
+from .clean import PARTS, TREE_DIRNAME, clean_paths, owner_hint, remove, sudo_runner
 from .completion import SHELLS, Shell, render_completion
 from .declarative._compile import emit
 from .declarative._lowered import Lowered
@@ -124,6 +126,7 @@ from .templates import (
     render_test_module,
     render_workflow,
 )
+from .watch import Sources, Watch, tree_verdict, verdict
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -145,10 +148,12 @@ def main(
     *,
     stdout: TextIO | None = None,
     runner: ProbeRunner | None = None,
+    ticks: Iterable[object] | None = None,
 ) -> int:
     """Run the CLI and return an exit code (never raises for SDK errors).
 
-    *runner* replaces the host-tool probe ``doctor`` and ``init`` run (tests).
+    *runner* replaces the host-tool probe ``doctor`` and ``init`` run (tests);
+    *ticks* bounds ``watch``'s polling loop to one poll per item (tests).
     Usage errors exit 2 through argparse's ``SystemExit``.
     """
     out = stdout if stdout is not None else sys.stdout
@@ -160,6 +165,7 @@ def main(
         return EXIT_OK
     args = _parse(parser, tokens)
     args.runner = runner
+    args.ticks = ticks
     handler: Callable[[argparse.Namespace, TextIO], int] = args.handler
     try:
         _apply_project(parser, args)
@@ -644,6 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report format for failing steps (default: auto). " + format_help(),
     )
 
+    _add_watch(sub)
     _add_status(sub)
     _add_clean(sub)
     _add_config(sub)
@@ -735,6 +742,62 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         "--no-doctor",
         action="store_true",
         help="Skip probing the chosen backend's host tools (`tundravm doctor --backend`).",
+    )
+
+
+def _interval(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not a number of seconds") from None
+    if not value > 0:
+        raise argparse.ArgumentTypeError(f"{raw!r} must be more than 0 seconds")
+    return value
+
+
+def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    watch = _add_command(
+        sub,
+        "watch",
+        _cmd_watch,
+        help="Re-run lint and the compiled-tree check whenever the recipe or its modules change.",
+    )
+    watch.epilog = (
+        RESOLUTION_HELP
+        + " "
+        + (
+            "Polls the mtimes of RECIPE and every .py under its directory (hidden "
+            "directories, __pycache__ and the build output left out). Checks once at "
+            "start, then once per change, printing `HH:MM:SS lint N errors N warnings; "
+            "tree up to date` (or `tree stale (N files)`, `tree missing (N files to "
+            "write)`, or with --write `wrote OUT/mkosi`); a recipe that fails to load "
+            "prints `HH:MM:SS error [E_CODE] message` and is watched on. Never writes "
+            "unless --write. Ctrl-C stops it with exit 0."
+        )
+    )
+    watch.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Build output directory whose mkosi/ tree is checked (default: build).",
+    )
+    watch.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="Lockfile whose pins lint and the tree apply (default: build/tundravm.lock).",
+    )
+    watch.add_argument(
+        "--interval",
+        type=_interval,
+        default=1.0,
+        metavar="SECONDS",
+        help="Seconds between polls (default: %(default)s).",
+    )
+    watch.add_argument(
+        "--write",
+        action="store_true",
+        help="Recompile into OUT/mkosi when it is stale instead of only comparing.",
     )
 
 
@@ -1152,6 +1215,7 @@ _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
     "fetch": (("out", "out"), ("lockfile", "lockfile")),
     "bake": (("out", "out"), ("lockfile", "lockfile"), ("backend", "backend")),
     "ci": (("out", "tree"), ("lockfile", "lockfile")),
+    "watch": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile")),
     "status": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile")),
     "evidence": (("out", "out"), ("lockfile", "lockfile")),
     "clean": (("out", "out"),),
@@ -2099,6 +2163,61 @@ def _cmd_ci(args: argparse.Namespace, out: TextIO) -> int:
                 print(f"skip {skipped}", file=out)
             return EXIT_FAILURE
     return EXIT_OK
+
+
+def _cmd_watch(args: argparse.Namespace, out: TextIO) -> int:
+    recipe: Path = args.recipe
+    print(f"watching {recipe} every {args.interval:g}s (Ctrl-C stops)", file=out, flush=True)
+    sources = Sources.of(recipe)
+    loop = Watch(sources, lambda: _watch_check(args, sources), out, interval=args.interval)
+    return loop.run(args.ticks)
+
+
+def _watch_check(args: argparse.Namespace, sources: Sources) -> str:
+    """One ``watch`` verdict: lint counts and the tree against the recipe, as ``ci`` checks."""
+    try:
+        loaded = _load(args)
+        names = _variants(loaded, args)
+        img = loaded.lowered()
+        locked = _lock_at(_lock_path(img, args.lockfile))
+        lock: Lock | Path = locked or _lock_path(img, args.lockfile)
+        diagnostics = check_report(loaded.recipe, None, variants=names, lock=lock)
+    except TdxError as exc:
+        return _watch_error(args, exc)
+    errors = sum(d.level == "error" for d in diagnostics)
+    warnings_ = sum(d.level == "warning" for d in diagnostics)
+    build: Path = args.out if args.out is not None else Path(img.build_dir)
+    configured: Path | None = getattr(args, "tree", None)
+    explicit = args.origins.get("out") == "flag"
+    tree = configured if configured is not None and not explicit else build / TREE_DIRNAME
+    sources.ignore(build, tree)
+    try:
+        line = _watch_tree(args, img, names, locked, tree)
+    except TdxError as exc:
+        line = f"tree not checked ([{exc.code}] {exc.args[0]})"
+    return verdict(errors=errors, warnings=warnings_, tree=line)
+
+
+def _watch_tree(
+    args: argparse.Namespace,
+    img: Lowered,
+    names: tuple[str, ...],
+    locked: Lock | None,
+    destination: Path,
+) -> str:
+    exists = destination.is_dir()
+    with using_lock(img, locked) as pinned:
+        result = diff_against(pinned, destination, profiles=names)
+        if args.write and not result.is_clean:
+            emit(pinned.select(names), destination)
+            return tree_verdict(changed=len(result.changes), exists=exists, wrote=destination)
+    return tree_verdict(changed=len(result.changes), exists=exists)
+
+
+def _watch_error(args: argparse.Namespace, exc: TdxError) -> str:
+    if args.traceback:
+        traceback.print_exception(exc, file=sys.stderr)
+    return f"error [{exc.code}] {exc.args[0]}"
 
 
 def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:

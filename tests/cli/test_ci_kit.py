@@ -84,16 +84,72 @@ def test_init_writes_recipe_and_gitignore_without_ci(tmp_path: Path) -> None:
     assert code == EXIT_OK and set(json.loads(payload)["variants"]) == {"default", "dev"}
 
 
+def _workflow_jobs(text: str) -> dict[str, tuple[dict[str, str], list[str]]]:
+    """Job name -> (job keys, step bodies in order) of a generated workflow.
+
+    A structural read of the layout ``render_workflow`` writes (no YAML parser in the
+    dev dependencies): jobs at two spaces under ``jobs:``, job keys at four, steps as
+    ``- name:`` items at six, each body its lines stripped and joined by spaces.
+    """
+    jobs: dict[str, tuple[dict[str, str], list[str]]] = {}
+    lines = text.splitlines()
+    for line in lines[lines.index("jobs:") + 1 :]:
+        if job := re.fullmatch(r"  ([\w-]+):", line):
+            keys, steps = jobs.setdefault(job.group(1), ({}, []))
+        elif key := re.fullmatch(r"    ([\w-]+): (.+)", line):
+            keys[key.group(1)] = key.group(2)
+        elif line.startswith("      - "):
+            steps.append(line.strip()[2:])
+        elif line.startswith("        ") and steps:
+            steps[-1] += " " + line.strip()
+    return jobs
+
+
+def _in_order(steps: list[str], *markers: str) -> bool:
+    """Each marker is in a step body, none in an earlier step than the marker before it."""
+    found = [next((i for i, body in enumerate(steps) if m in body), -1) for m in markers]
+    return -1 not in found and found == sorted(found)
+
+
 def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
     code, out = run_main("init", str(tmp_path), "--name", "node", "--ci", "github")
     assert code == EXIT_OK
     workflow = tmp_path / ".github" / "workflows" / "tundravm.yml"
     assert f"created {workflow}" in out
-    text = workflow.read_text(encoding="utf-8")
-    assert "run: uv sync" in text
-    assert 'uv run tundravm inspect node.py --format markdown >> "$GITHUB_STEP_SUMMARY"' in text
-    assert "run: uv run tundravm ci node.py --out mkosi" in text
     assert f"created {tmp_path / 'pyproject.toml'}" in out  # what `uv sync` installs from
+    text = workflow.read_text(encoding="utf-8")
+    jobs = _workflow_jobs(text)
+
+    assert list(jobs) == ["check", "bake"]
+    check_keys, check = jobs["check"]
+    assert "if" not in check_keys
+    assert _in_order(
+        check,
+        "uses: actions/checkout@v4",
+        "run: uv sync",
+        'uv run tundravm inspect node.py --format markdown >> "$GITHUB_STEP_SUMMARY"',
+        "run: uv run tundravm ci node.py --out mkosi",
+    )
+
+    bake_keys, bake = jobs["bake"]
+    assert bake_keys["if"] == "vars.TUNDRAVM_BAKE_BACKEND != ''"
+    assert bake_keys["needs"] == "check"
+    assert _in_order(
+        bake,
+        "uses: actions/checkout@v4",
+        "apt-get install -y -qq bubblewrap debian-archive-keyring python3-pefile",
+        "pipx install git+https://github.com/systemd/mkosi.git",
+        "run: uv sync",
+        "uv run tundravm fetch node.py",
+        "uv run tundravm bake node.py --backend ${{ vars.TUNDRAVM_BAKE_BACKEND }} "
+        "--out build --verify-reproducible",
+        "uv run tundravm evidence node.py --out build "
+        "--bundle evidence.tar.gz --html evidence.html",
+        "uses: actions/upload-artifact@v4",
+    )
+    assert "path: | evidence.tar.gz evidence.html build/*/output/*" in bake[-1]
+    opt_in = [line for line in text.splitlines() if line.startswith("#")]
+    assert any("TUNDRAVM_BAKE_BACKEND" in line for line in opt_in)
 
 
 def test_init_refuses_overwrite_without_force(
