@@ -81,6 +81,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
 | `clean` | Removes the chosen parts of the build output directory: `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
 | `config` | Prints the `recipe`, `out`, `tree`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
+| `import` | Generates a recipe module from an existing mkosi tree (`TREE`: one variant directory or a directory of them): `--out FILE` writes it (`--force` overwrites), else it goes to stdout; `--name`, `--dialect`, `--format text\|json`. Reports the declared/verbatim coverage, notes for what it skipped or could not map, and whether the recipe compiles back to `TREE` (see [Import](#import)). | |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
 `inspect`, `lint`, `compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH`, or the `lockfile` of a [`[tool.tundravm]` table](#project-configuration), names another one. `ci` needs the lockfile and loads it once for all three steps; `status` reports on it.
@@ -195,6 +196,83 @@ measurement tools:
   missing (optional) dstack-mr — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
 the nix backend is not ready: install the missing tools above, or bake with --backend inprocess for a simulated build
 ```
+
+## Import
+
+`tundravm import TREE` reads an mkosi tree and writes a recipe module that compiles back to it. `TREE` is one variant directory (it holds `mkosi.conf`) or a directory of them as `compile` writes them. The first directory (`default` when there is one) becomes `Fragment("common", ...)` and its `Variant`; every other directory becomes a `Variant` that adds, replaces or removes only what differs (a whole `Fragment` with `parent=None` when an overlay cannot reproduce its order).
+
+| Flag | Effect |
+|---|---|
+| `--out FILE` | Write the module to `FILE` (ruff formats it with `FILE`'s configuration); without it the module goes to stdout and the report to stderr. An existing `FILE` is refused unless `--force`. |
+| `--name NAME` | Recipe name (default: the tree's directory name, or its parent's for `mkosi/`). |
+| `--dialect current\|nethermind-v1` | Dialect `TREE` was written with (default: guessed; `nethermind-v1` when the tree spells something only that dialect writes, with a note). |
+| `--format text\|json` | `text` prints `coverage: N declared, M verbatim` and one `note:` per note; `json` prints the `Imported` fields (`recipe_source`, `recipe` name and variants, `notes`, `coverage`). |
+
+What maps back:
+
+- `mkosi.conf` and `mkosi.conf.d/*.conf`: `Distribution`/`Release`, `Architecture`, `Mirror`, `ToolsTreeMirror`, `Snapshot`, `SourceDateEpoch` become `Recipe(base=, arch=, mirror=, tools_mirror=, snapshot=, epoch=)`; `Packages=` and `BuildPackages=` become `Package(...)` (`role="build"`); the kernel comment and build script a `Kernel`; every other key a `Setting(section, key, values)`. Keys the compiler writes itself (`ImageId`, `ExtraTrees`, `ManifestFormat=json`, the script keys, ...) are dropped.
+- `mkosi.extra/**` and `mkosi.skeleton/**`: a unit under `usr/lib/systemd/system` whose content is exactly what `Service(...)` renders becomes that `Service`, any other unit a `Unit(name, content)`; text files become `File(path, content, mode=)` (`stage="skeleton"` for the skeleton). Binary files and files over 64 KiB become `File(path, TREE / ...)`, read from the tree at compile time, with a note. Symlinks and empty directories are noted and not imported. The group write bit a `002` umask leaves is dropped from modes.
+- The compiler's own lines become declarations again: the synthetic postinst (`User`, `Group`, unit enablement, masking and disabling, `Debloat`'s systemd minimisation), the finalize debloat block, `runtime-init` (`Init`), the cloud glue (`target="azure"`/`"gcp"`), backports (`Backports`) and the EFI stub (`EfiStub`).
+- `scripts/*` and `mkosi.sync`, `mkosi.prepare`, `mkosi.build`, `mkosi.postinst`, `mkosi.finalize`, `mkosi.postoutput`, `mkosi.clean`: what is left becomes `Hook(name, phase, script)`, verbatim, without the `#!/usr/bin/env bash` / `set -euo pipefail` preamble the compiler adds (or the script's own shebang line), so importing tundravm's output does not nest preambles.
+- `mkosi.sandbox`, `mkosi.cache`, `mkosi.tools`, `mkosi.builddir`, `mkosi.output` and `.sources` files are skipped with a note; anything else unread is noted `not mapped`.
+
+The last note is the round trip: the module is executed and compiled, and either `round trip: the recipe compiles back to this tree` or the paths that compile differently (a foreign tree's `mkosi.conf` and `mkosi.postinst` always do, since the compiler writes its own layout: `scripts/06-postinst.sh` and its default keys). Every tree tundravm writes, including `examples/surge-tdx-prover/mkosi` under `nethermind-v1`, imports to a recipe whose `tundravm diff` against the tree is empty.
+
+```console
+$ tundravm init --name node --template service --backend local --no-doctor .
+$ tundravm compile node.py --out mkosi
+...
+$ tundravm import mkosi --name node --out node_imported.py
+wrote node_imported.py
+coverage: 24 declared, 3 verbatim
+note: round trip: the recipe compiles back to this tree
+$ tundravm diff node_imported.py --against mkosi
+tree is up to date with the recipe
+```
+
+The generated `node_imported.py` binds `recipe`:
+
+```python
+recipe = Recipe(
+    "node",
+    Fragment(
+        "common",
+        items=(
+            Package("ca-certificates"),
+            ...
+            User("app", home="/var/lib/app"),
+            File("/etc/app/app.conf", APP_CONF),
+            Service(
+                "app",
+                "/usr/bin/app --config /etc/app/app.conf",
+                description="app 0.1.0",
+                user="app",
+                working_dir="/var/lib/app",
+                restart="on-failure",
+            ),
+            Init("runtime-init", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
+        ),
+    ),
+    variants=(
+        Variant("default", target="qemu"),
+        Variant(
+            "dev",
+            add=Fragment(
+                "dev",
+                items=(
+                    Package("apt"),
+                    ...
+                    Unit("serial-console.service", content=SERIAL_CONSOLE_SERVICE),
+                    Hook("postinst", "postinst", POSTINST_SCRIPT),
+                ),
+            ),
+            target="qemu",
+        ),
+    ),
+)
+```
+
+What the template expressed as an `App` composite and a `DevTools` fragment comes back as the declarations they expand to: the import recovers what the tree holds, not how the recipe was factored.
 
 ## Recipe files
 

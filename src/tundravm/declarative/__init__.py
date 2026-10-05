@@ -13,6 +13,7 @@ from tundravm.policy import Policy
 from tundravm.recipe import load
 
 from .bom import Sbom, sbom
+from .importer import Imported, import_tree
 from .lifecycle import (
     Artifact,
     Azure,
@@ -111,6 +112,7 @@ __all__ = [
     "Group",
     "Hook",
     "Http",
+    "Imported",
     "Init",
     "Install",
     "Kernel",
@@ -149,6 +151,7 @@ __all__ = [
     "diff",
     "doctor",
     "fetch",
+    "import_tree",
     "identity",
     "lint",
     "load",

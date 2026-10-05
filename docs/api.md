@@ -204,6 +204,7 @@ sbom(subject: Artifact | lowered, *, lock=None, manifest=None) -> Sbom
 evidence(recipe | lowered, *, out: Path, variants=None, lock=None, policy=None, recipe_path=None, runner=None) -> Evidence
 doctor(backend: Backend, *, runner=None) -> tuple[Diagnostic, ...]
 load(path, *, attribute=None, extra_paths=()) -> Recipe  # load_recipe
+import_tree(tree: Path, *, name=None, variants=None, dialect=None, out=None) -> Imported
 lower(recipe, *, variants=None)  # internal: the lowered recipe for the recipe
 ```
 
@@ -232,12 +233,14 @@ fetch(recipe, *, lock: Lock | None, out: Path, variants=None, resolver=None, for
 - **`sbom`** says what is in an image: an `Artifact`, or a lowered recipe with one variant (`lower(recipe, variants=["default"])`, before any bake). Its packages come from mkosi's JSON package manifest, `manifest` or by default `<variant>.manifest` beside the artifact (`<build_dir>/<variant>/output/<variant>.manifest` for a lowered recipe); when that file does not exist it adds a note and lists the packages the recipe declares (the lock's `dependencies` for an artifact), unversioned, and an unreadable manifest or a `manifest_version` other than 1 raises `ArtifactError`. Its sources are `lock`'s pins for the variant: each source build with its install destinations, the built kernel, the `efi-stub` package; for a lowered recipe they are its declared sources, unpinned (ref only) without `lock`. The metadata (base, arch, snapshot, mirror) comes from the lock's `distribution` section for an artifact, else the manifest's `config`. See [CLI: SBOM](cli.md#sbom) for the document shapes and package URLs.
 - **`evidence`** reads the bake in `out` (the directory holding `bake-result.json`) for `variants` (default: every baked variant; one not baked raises `StateError`) and returns an `Evidence`; it writes nothing. `lock` (a `Lock` or a lockfile path) defaults to the lockfile the bake recorded, else `out/tundravm.lock`; `policy` is a `measure --export-policy` file used for every variant instead of `out/<variant>/policy.json`; `recipe_path` records the recipe file and its sha256; `runner` replaces the `mkosi --version` probe. A lowered recipe instead of a `Recipe` leaves out the provenance summary. See [CLI: Evidence](cli.md#evidence) for the index and the members.
 - **`doctor`** returns one `tool-missing` diagnostic per missing host tool of the backend (a warning when the tool is optional).
+- **`import_tree`** reads the mkosi tree at `tree` (one variant directory, or a directory of them as `compile` writes them; `variants` picks some, the first becoming `Recipe.common`) and returns an `Imported`: the generated recipe module, ruff-formatted with `out`'s configuration when given (with a note when ruff is missing), and that module executed. `name` is the recipe name (default: the directory name), `dialect` the dialect the tree was written with (default: guessed). A path that is not a directory, or holds no `mkosi.conf`, raises `ValidationError`. What maps to which declaration is in [CLI: Import](cli.md#import); `tundravm import` is the command.
 - **`load`** is `load_recipe`: it imports a recipe file and returns its `Recipe`. `attribute` names the module-level `Recipe` or a zero-argument factory returning one; without it (`attribute=None`, the default) the recipe is discovered as the [CLI does](cli.md#recipe-files). The file's directory and every `extra_paths` entry are importable while it runs.
 
 ### Result and input types
 
 | Type | Fields |
 |---|---|
+| `Imported` | `recipe_source: str` (the module; it binds `recipe`), `recipe: Recipe` (that module executed), `notes: tuple[str, ...]` (what was skipped or not mapped, then the round-trip verdict), `coverage: Mapping[str, int]` (`declared`: first-class declarations; `verbatim`: `File`, `Unit` with content, `Hook` and `Setting`, which keep tree text as is); `to_json()` is what `import --format json` prints |
 | `Tree` | `entries: tuple[Entry, ...]`, `digest: str`, `variants: tuple[str, ...]`; `write(path)` writes it, replacing its variant directories and dropping stale ones |
 | `Entry` | `path`, `content: bytes \| None`, `mode: int`, `symlink: str \| None = None` (a directory has neither content nor symlink) |
 | `Lock` | `recipe_digest`, `sections: Pairs` (section to digest, see [below](#locks-and-variant-subsets)), `pins: tuple[Pin, ...]`, `compiler_version` (the tundravm version that wrote it, from its `compiler` section); `text()` is the serialized lockfile |

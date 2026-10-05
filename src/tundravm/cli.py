@@ -47,6 +47,7 @@ from .completion import SHELLS, Shell, render_completion
 from .declarative._compile import emit
 from .declarative._lowered import Lowered
 from .declarative.bom import SBOM_FORMATS, sbom
+from .declarative.importer import import_tree
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
     NO_LOCK,
@@ -654,6 +655,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_status(sub)
     _add_clean(sub)
     _add_config(sub)
+    _add_import(sub)
 
     completion = sub.add_parser(
         "completion",
@@ -755,6 +757,51 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         action="store_true",
         help="Skip probing the chosen backend's host tools (`tundravm doctor --backend`).",
     )
+
+
+def _add_import(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Generate a recipe module from an existing mkosi tree."
+    cmd = sub.add_parser(
+        "import",
+        help=help_text,
+        description=(
+            help_text + " TREE is one variant directory (it holds mkosi.conf) or a "
+            "directory of them as `compile` writes them; the first (default first) becomes "
+            "the common fragment and every other one a Variant holding what differs. "
+            "mkosi.conf, mkosi.extra, mkosi.skeleton, the phase scripts and the lines the "
+            "compiler generates map back to declarations; what has none is kept verbatim "
+            "(File, Unit, Hook, Setting); what cannot be kept is listed as a note."
+        ),
+        epilog=(
+            "Without --out the module goes to stdout and the report to stderr. The report "
+            "ends with a round-trip line: whether the recipe compiles back to TREE."
+        ),
+    )
+    cmd.set_defaults(handler=_cmd_import)
+    cmd.add_argument("tree", type=Path, help="The mkosi tree to read.")
+    cmd.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Write the recipe module to FILE (default: print it).",
+    )
+    cmd.add_argument(
+        "--name", default=None, help="Recipe name (default: the tree's directory name)."
+    )
+    cmd.add_argument(
+        "--dialect",
+        choices=("current", "nethermind-v1"),
+        default=None,
+        help="Emission dialect TREE was written with (default: guessed from the tree).",
+    )
+    cmd.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Report format (default: %(default)s); json prints the Imported fields.",
+    )
+    cmd.add_argument("--force", action="store_true", help="Overwrite --out FILE if it exists.")
 
 
 def _interval(raw: str) -> float:
@@ -2340,6 +2387,38 @@ def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
     if failed:
         print(owner_hint(failed), file=out)
         return EXIT_FAILURE
+    return EXIT_OK
+
+
+def _cmd_import(args: argparse.Namespace, out: TextIO) -> int:
+    target: Path | None = args.out
+    if target is not None and target.exists() and not args.force:
+        raise ValidationError(
+            f"{target} exists.",
+            hint="Pass --force to overwrite it, or another --out.",
+            context={"out": str(target)},
+        )
+    found = import_tree(args.tree, name=args.name, dialect=args.dialect, out=target)
+    if target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(found.recipe_source, encoding="utf-8")
+    if args.format == "json":
+        out.write(json.dumps(found.to_json(), indent=2) + "\n")
+        if target is not None:
+            print(f"wrote {target}", file=sys.stderr)
+        return EXIT_OK
+    report = out if target is not None else sys.stderr
+    if target is None:
+        out.write(found.recipe_source)
+    else:
+        print(f"wrote {target}", file=report)
+    coverage = found.coverage
+    print(
+        f"coverage: {coverage['declared']} declared, {coverage['verbatim']} verbatim",
+        file=report,
+    )
+    for note in found.notes:
+        print(f"note: {note}", file=report)
     return EXIT_OK
 
 
