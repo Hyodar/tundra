@@ -176,6 +176,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
 | `watch [RECIPE]` | Lint the recipe and compare it with its committed tree (`[tool.tundravm]` `tree`, or `OUT/mkosi`) at start and whenever the recipe or a `.py` beside it changes, one line per check; never writes unless `--write`; `--interval SECONDS`; Ctrl-C exits 0 |
+| `import TREE` | Generate a recipe module from an existing mkosi tree; prints coverage, notes and whether it compiles back (`--out FILE`, `--name`, `--dialect`) |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
 | `clean [RECIPE]` | Remove build output by part (`--sources`, `--tree`, `--artifacts`, `--state`, `--all`) |
 | `config [RECIPE]` | The `recipe`, `out`, `tree`, `lockfile` and `backend` the commands resolve, whether each came from a flag, `[tool.tundravm]`, the default or (the backend) the recipe file, and whether the recipe and lockfile exist |
