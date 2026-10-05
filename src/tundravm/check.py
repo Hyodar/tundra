@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from ._secret_scan import Finding, is_unit_path, scan_env, scan_file, scan_unit
 from ._source import DebFile, KernelSource, NamedSource
 from .formats import annotation_path, md_cell, md_table, workflow_command
 from .models import InitScriptEntry, ProfileState, unit_name
@@ -619,6 +620,89 @@ def _rule_recipe_arch_unsupported(
         )
 
 
+SECRET_HINT = (
+    "Deliver it at boot with Secrets(...) and a SecretFile or SecretEnv target instead "
+    "of baking it into the image, where every copy and every registry holding it "
+    "exposes it; if it is not a secret, pass allow_secret=True to the declaration."
+)
+
+
+def _secret_allowed(image: Lowered, profile_name: str, subject: str) -> bool:
+    """Whether a declaration with ``allow_secret=True`` exempts *subject* in *profile_name*."""
+    allowed = image.secret_allowed.get(profile_name, frozenset())
+    return subject in allowed or any(
+        entry.endswith("/") and subject.startswith(entry) for entry in allowed
+    )
+
+
+def _shipped_files(state: ProfileState) -> Iterator[tuple[str, str | bytes]]:
+    for entry in (*state.files, *state.skeleton_files):
+        if entry.kind == "file":
+            yield _norm(entry.path), entry.content
+    for template in state.templates:
+        yield _norm(template.path), template.rendered
+
+
+def _secret_message(what: str, findings: Sequence[Finding]) -> str:
+    more = len(findings) - 1
+    extra = f", and {more} more finding{'s' if more > 1 else ''}" if more else ""
+    return f"{what} holds {findings[0].where()}{extra}; it is baked into the image"
+
+
+def _rule_secret_in_file(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    for path, content in _shipped_files(state):
+        if is_unit_path(path) or _secret_allowed(image, profile_name, path):
+            continue
+        findings = scan_file(path, content)
+        if findings:
+            yield Diagnostic(
+                level="error",
+                code="secret-in-file",
+                message=_secret_message("the file", findings),
+                hint=SECRET_HINT,
+                profile=profile_name,
+                subject=path,
+            )
+
+
+def _rule_secret_in_env(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    for svc in state.services:
+        name = unit_name(svc.name)
+        if _secret_allowed(image, profile_name, name):
+            continue
+        found = [
+            finding
+            for key, value in sorted(svc.env.items())
+            if (finding := scan_env(key, value)) is not None
+        ]
+        if found:
+            yield Diagnostic(
+                level="error",
+                code="secret-in-env",
+                message=_secret_message(f"the environment of service {name!r}", found),
+                hint=SECRET_HINT,
+                profile=profile_name,
+                subject=name,
+            )
+    for path, content in _shipped_files(state):
+        if not is_unit_path(path) or _secret_allowed(image, profile_name, path):
+            continue
+        findings = scan_unit(content)
+        if findings:
+            yield Diagnostic(
+                level="error",
+                code="secret-in-env",
+                message=_secret_message("the unit file", findings),
+                hint=SECRET_HINT,
+                profile=profile_name,
+                subject=path,
+            )
+
+
 def _rule_module_checks(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -639,6 +723,8 @@ RULES: list[Rule] = [
     _rule_source_unpinned,
     _rule_kernel_missing,
     _rule_recipe_arch_unsupported,
+    _rule_secret_in_file,
+    _rule_secret_in_env,
     _rule_module_checks,
 ]
 

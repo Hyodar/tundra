@@ -96,6 +96,9 @@ class Lowered:
     deb_files: tuple[DebFile, ...] = ()
     """The packages the recipe's ``EfiStub`` hooks install, outside ``nethermind-v1``:
     sources :meth:`deb_file` names per profile."""
+    secret_allowed: Mapping[str, frozenset[str]] = field(default_factory=dict, repr=False)
+    """Per profile, what declares ``allow_secret=True``: file paths, ``Directory`` paths
+    ending in ``/`` and service unit names. Outside the recipe digest."""
 
     @property
     def base(self) -> str:

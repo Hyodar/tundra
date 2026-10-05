@@ -63,6 +63,10 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `tundravm attest` / `attest()` / `Attestation`: ask a running image's `tdxs` issuer (unix socket, tcp or an http gateway) for a quote bound to a fresh nonce, parse MRTD and RTMR0–3 from the DCAP quote (v4/v5), compare against a `measure --export-policy` file and report per-register verdicts and trusted/untrusted (exit 0/1/2; measurements only, collateral verification stays with a `Tdxs` validator).
 - `bake --verify-reproducible` / `bake(verify_reproducible=True)`: bake the selection twice (sources hard-linked, mkosi state fresh) and compare artifact sha256s; `E_REPRODUCIBILITY` with a per-artifact table and a hint on diffing the two trees; `declarative.reproducible` recorded in `bake-result.json` and shown by `status`; `clean --state` removes `OUT/.reproduce`.
 
+- `tundravm evidence` / `evidence()` / `Evidence`: an auditor record of a bake (`evidence.json` index with member sha256s; lockfile verbatim with drift verdict; each artifact re-hashed; reproducibility verdict; measurements policy; SPDX SBOM; lint and provenance summaries; tool versions), `--bundle` as a byte-reproducible tar.gz under `SOURCE_DATE_EPOCH`, `--html` as one self-contained page with a pass/fail banner; exit 1 when the verdict fails.
+- Lint `secret-in-file` and `secret-in-env` (errors): private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments; `allow_secret=True` on `File`, `Template`, `Directory`, `Unit` and `Service` exempts a declaration without changing the digest.
+- `attest` speaks only what tdxs serves (`unix:PATH` or `tcp://HOST:PORT`); the http mode and `--insecure` are gone. `status` lists mkosi's package manifest per baked variant (`manifests` in JSON).
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

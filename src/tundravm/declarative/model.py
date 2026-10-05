@@ -82,6 +82,11 @@ def _require_absolute(owner: object, path: str, what: str = "path") -> None:
         raise _fail(owner, f"{what} {path!r} must be an absolute path.")
 
 
+def _require_bool(owner: object, value: object, what: str) -> None:
+    if not isinstance(value, bool):
+        raise _fail(owner, f"{what} must be True or False, got {value!r}.")
+
+
 def _require_relative(owner: object, path: str, what: str) -> None:
     parts = path.rstrip("/").split("/")
     if not path or path.startswith("/") or ".." in parts:
@@ -307,10 +312,13 @@ class Package:
 
 @dataclass(frozen=True, slots=True)
 class File:
+    """*content* at *path*; ``allow_secret`` silences ``secret-in-file`` for it."""
+
     path: str
     content: str | bytes | Path
     mode: int = 0o644
     stage: Literal["skeleton", "extra"] = "extra"
+    allow_secret: bool = False
 
     def __post_init__(self) -> None:
         _require_absolute(self, self.path)
@@ -318,6 +326,7 @@ class File:
             raise _fail(self, f"content of {self.path!r} must be str, bytes or Path.")
         _require_mode(self, self.mode)
         _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
+        _require_bool(self, self.allow_secret, "allow_secret")
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,7 +335,8 @@ class Directory:
 
     ``mode=None`` keeps each file's and empty directory's permission bits;
     a ``mode`` sets every file to it. ``symlinks="preserve"`` ships links as
-    links, ``"follow"`` ships what they point to.
+    links, ``"follow"`` ships what they point to. ``allow_secret`` silences
+    ``secret-in-file`` for every file it imports.
     """
 
     path: str
@@ -335,6 +345,7 @@ class Directory:
     mode: int | None = None
     stage: Literal["skeleton", "extra"] = "extra"
     symlinks: Literal["preserve", "follow"] = "preserve"
+    allow_secret: bool = False
 
     def __post_init__(self) -> None:
         _freeze(self, "exclude")
@@ -345,6 +356,7 @@ class Directory:
         _require_mode(self, self.mode)
         _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
         _require_choice(self, self.symlinks, ("preserve", "follow"), "symlinks")
+        _require_bool(self, self.allow_secret, "allow_secret")
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,17 +400,22 @@ class User:
 
 @dataclass(frozen=True, slots=True)
 class Unit:
-    """A systemd unit: ``content`` ships the unit file, ``None`` controls a packaged one."""
+    """A systemd unit: ``content`` ships the unit file, ``None`` controls a packaged one.
+
+    ``allow_secret`` silences ``secret-in-env`` for the shipped unit file.
+    """
 
     name: str
     content: str | Path | None = None
     enabled: bool | None = None
     masked: bool | None = None
     after_init: bool = False
+    allow_secret: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid unit name {self.name!r}.")
+        _require_bool(self, self.allow_secret, "allow_secret")
         if self.content is not None:
             if not isinstance(self.content, (str, Path)):
                 raise _fail(self, f"content of {self.name!r} must be str or Path.")
@@ -422,6 +439,7 @@ class Service:
     ``security`` selects the hardening profile (``strict``, ``default`` or
     ``none``). With ``after_init`` the unit waits for ``runtime-init.service``
     whenever the variant has a runtime-init step. ``Unit`` ships verbatim text.
+    ``allow_secret`` silences ``secret-in-env`` for ``env``.
     """
 
     name: str
@@ -445,9 +463,11 @@ class Service:
     timeout_stop: str | None = None
     security: Literal["strict", "default", "none"] = "default"
     after_init: bool = True
+    allow_secret: bool = False
 
     def __post_init__(self) -> None:
         _freeze(self, "exec_start", "env", "exec_start_pre", "after", "requires", "wants")
+        _require_bool(self, self.allow_secret, "allow_secret")
         _freeze(self, "limits")
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid service name {self.name!r}.")
@@ -497,17 +517,22 @@ class Service:
 
 @dataclass(frozen=True, slots=True)
 class Template:
-    """A file rendered from *template* with ``str.format_map(variables)`` at lowering time."""
+    """A file rendered from *template* with ``str.format_map(variables)`` at lowering time.
+
+    ``allow_secret`` silences ``secret-in-file`` for the rendered file.
+    """
 
     path: str
     template: str | Path
     variables: tuple[tuple[str, str | int | float], ...] = ()
     mode: int = 0o644
     stage: Literal["skeleton", "extra"] = "extra"
+    allow_secret: bool = False
 
     def __post_init__(self) -> None:
         _freeze(self, "variables")
         _require_absolute(self, self.path)
+        _require_bool(self, self.allow_secret, "allow_secret")
         if not isinstance(self.template, (str, Path)):
             raise _fail(self, f"template of {self.path!r} must be str or Path.")
         seen: set[str] = set()

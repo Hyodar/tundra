@@ -1,8 +1,9 @@
 """``tundravm status``: where a recipe project stands, read-only and network-free.
 
 One :class:`StatusItem` per thing the lifecycle produces (the lockfile, each
-source checkout, the mkosi tree, each baked artifact) plus the recipe, its lint
-summary and the build backend's host tools, each with a verdict. ``next`` is the
+source checkout, the mkosi tree, each baked artifact and its variant's package
+manifest) plus the recipe, its lint summary and the build backend's host tools,
+each with a verdict. ``next`` is the
 single most useful command to run next.
 """
 
@@ -18,6 +19,7 @@ from typing import Literal
 from ._source import SOURCES_DIRNAME, is_fetched
 from .check import summarize
 from .declarative._lowered import Lowered
+from .declarative.bom import manifest_path
 from .declarative.lifecycle import (
     INPROCESS,
     MANIFEST_KEY,
@@ -94,6 +96,8 @@ class ProjectStatus:
     tree: StatusItem
     manifest: Path
     artifacts: tuple[StatusItem, ...]
+    manifests: tuple[StatusItem, ...]
+    """One ``manifest`` line per baked variant: mkosi's package manifest beside its artifact."""
     backend: StatusItem
     next: str
 
@@ -107,6 +111,7 @@ class ProjectStatus:
             *sources,
             self.tree,
             *self.artifacts,
+            *self.manifests,
             self.backend,
         )
 
@@ -127,6 +132,7 @@ class ProjectStatus:
                 "present": self.manifest.is_file(),
                 "items": [item.to_dict() for item in self.artifacts],
             },
+            "manifests": [dict(item.data) for item in self.manifests],
             "backend": self.backend.to_dict(),
             "next": self.next,
         }
@@ -160,7 +166,7 @@ def project_status(
     sources = _sources(img, names, lock, out)
     tree_item = _tree(img, names, lock, tree_path)
     manifest = out / BAKE_RESULT_FILENAME
-    artifacts = _artifacts(img, names, lock, manifest, verify=verify)
+    artifacts, baked = _artifacts(img, names, lock, manifest, verify=verify)
     backend = _backend(loaded, runner)
     lint = _lint(loaded, names, lock)
     status = ProjectStatus(
@@ -171,6 +177,7 @@ def project_status(
         tree=tree_item,
         manifest=manifest,
         artifacts=artifacts,
+        manifests=_manifests(baked, names),
         backend=backend,
         next="",
     )
@@ -330,20 +337,21 @@ def _tree(img: Lowered, names: tuple[str, ...], lock: Lock | None, path: Path) -
 
 def _artifacts(
     img: Lowered, names: tuple[str, ...], lock: Lock | None, manifest: Path, *, verify: bool
-) -> tuple[StatusItem, ...]:
+) -> tuple[tuple[StatusItem, ...], tuple[Artifact, ...]]:
+    """The ``artifact`` lines of *names*, and the artifacts *manifest* records."""
     if not manifest.is_file():
         return tuple(
             StatusItem(
                 "artifact", "missing", f"{name}: not baked (no {manifest})", {"variant": name}
             )
             for name in names
-        )
+        ), ()
     try:
         artifacts = read_artifacts(manifest)
         extra = json.loads(manifest.read_text(encoding="utf-8")).get(MANIFEST_KEY) or {}
     except (TdxError, OSError, ValueError) as exc:
         detail = f"{manifest} is unreadable: {exc}"
-        return tuple(StatusItem("artifact", "stale", detail, {"variant": n}) for n in names)
+        return tuple(StatusItem("artifact", "stale", detail, {"variant": n}) for n in names), ()
     lockfile = extra.get("lockfile") if isinstance(extra, Mapping) else None
     recorded = extra.get("reproducible") if isinstance(extra, Mapping) else None
     reproducible = recorded if isinstance(recorded, bool) else None
@@ -358,6 +366,27 @@ def _artifacts(
             items.append(
                 _artifact(artifact, current, lockfile, verify=verify, reproducible=reproducible)
             )
+    return tuple(items), tuple(artifacts)
+
+
+def _manifests(artifacts: Sequence[Artifact], names: tuple[str, ...]) -> tuple[StatusItem, ...]:
+    """Per baked variant of *names*, whether mkosi's package manifest is beside its artifact."""
+    items: list[StatusItem] = []
+    for name in names:
+        artifact = next((a for a in artifacts if a.variant == name), None)
+        if artifact is None:
+            continue
+        path = manifest_path(artifact)
+        present = path.is_file()
+        data: dict[str, object] = {"variant": name, "path": str(path), "present": present}
+        verdict: Verdict
+        if artifact.simulated:
+            verdict, detail = "n/a", f"{path}  simulated: nothing was installed"
+        elif present:
+            verdict, detail = "ok", str(path)
+        else:
+            verdict, detail = "missing", f"{path}  sbom lists declared packages only"
+        items.append(StatusItem("manifest", verdict, detail, data))
     return tuple(items)
 
 
@@ -518,7 +547,7 @@ def render_status(status: ProjectStatus, fmt: str) -> str:
     return "\n".join(lines)
 
 
-_SECTIONS = ("Recipe", "Lint", "Lock", "Sources", "Tree", "Artifacts", "Backend")
+_SECTIONS = ("Recipe", "Lint", "Lock", "Sources", "Tree", "Artifacts", "Manifests", "Backend")
 
 
 def _markdown(status: ProjectStatus) -> str:
@@ -530,10 +559,13 @@ def _markdown(status: ProjectStatus) -> str:
         sources,
         (status.tree,),
         status.artifacts,
+        status.manifests,
         (status.backend,),
     )
     blocks = [f"# tundravm status: `{status.recipe.data['path']}`"]
     for heading, items in zip(_SECTIONS, groups, strict=True):
+        if not items:
+            continue
         rows = [(md_cell(item.verdict), md_cell(item.detail, code=False)) for item in items]
         blocks.append(f"## {heading}\n\n{md_table(('Verdict', 'Detail'), rows)}")
     blocks.append(f"**Next:** {md_cell(status.next, code=status.next != UP_TO_DATE)}")

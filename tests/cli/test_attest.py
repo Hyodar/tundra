@@ -10,7 +10,6 @@ import socketserver
 import struct
 import threading
 from collections.abc import Iterator, Mapping
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -236,34 +235,6 @@ def test_to_dict_is_the_stable_json_shape() -> None:
 # ── over the wire: fake tdxs servers ─────────────────────────────────────
 
 
-@pytest.fixture
-def http_endpoint() -> Iterator[tuple[str, FakeIssuer]]:
-    """An HTTP gateway that POSTs straight through to the fake issuer."""
-    issuer = FakeIssuer()
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802 - http.server's method name
-            length = int(self.headers["Content-Length"])
-            reply = json.dumps(issuer(json.loads(self.rfile.read(length)))).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(reply)))
-            self.end_headers()
-            self.wfile.write(reply)
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/tdxs", issuer
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
 class _Lines(socketserver.StreamRequestHandler):
     """tdxs's own protocol: one JSON object per line in, one per line out."""
 
@@ -319,7 +290,7 @@ def peer_file(tmp_path: Path) -> Path:
     return path
 
 
-@pytest.mark.parametrize("endpoint", ["http_endpoint", "tcp_endpoint", "unix_endpoint"])
+@pytest.mark.parametrize("endpoint", ["tcp_endpoint", "unix_endpoint"])
 def test_cli_attest_is_trusted_over_each_transport(
     endpoint: str, peer_file: Path, request: pytest.FixtureRequest
 ) -> None:
@@ -351,9 +322,9 @@ def test_cli_attest_exits_1_when_untrusted_and_prints_both_values(
 
 
 def test_cli_attest_json_and_markdown(
-    http_endpoint: tuple[str, FakeIssuer], peer_file: Path
+    tcp_endpoint: tuple[str, FakeIssuer], peer_file: Path
 ) -> None:
-    url, _ = http_endpoint
+    url, _ = tcp_endpoint
     code, out = run_main(
         "attest", "--endpoint", url, "--policy", str(peer_file), "--format", "json"
     )
@@ -391,6 +362,15 @@ def test_cli_attest_exits_2_when_the_issuer_is_unreachable(
     code, _ = run_main("attest", "--endpoint", "ftp://x", "--policy", str(peer_file))
     assert code == EXIT_SDK_ERROR
     assert "Unsupported endpoint" in capsys.readouterr().err
+    for url in ("http://127.0.0.1:7000/tdxs", "https://gateway.example/tdxs"):
+        code, _ = run_main("attest", "--endpoint", url, "--policy", str(peer_file))
+        assert code == EXIT_SDK_ERROR
+        err = capsys.readouterr().err
+        assert f"error [E_VALIDATION]: Endpoint {url!r} is http" in err
+        assert (
+            "tdxs serves a unix socket or tcp; forward it with ssh -L ./tdxs.sock:/var/tdxs.sock"
+            in " ".join(err.split())
+        )
     code, _ = run_main(
         "attest", "--endpoint", "tcp://h:1", "--policy", str(tmp_path / "missing.json")
     )
@@ -405,3 +385,4 @@ def test_cli_attest_help_says_collateral_is_the_validators_job(
         run_main("attest", "--help")
     text = " ".join(capsys.readouterr().out.split())
     assert "collateral verification is done by a Tdxs validator" in text
+    assert "http" not in text and "--insecure" not in text

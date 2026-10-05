@@ -144,6 +144,7 @@ def test_status_json_shape(recipe: Path) -> None:
         "backend",
         "lint",
         "lock",
+        "manifests",
         "next",
         "recipe",
         "sources",

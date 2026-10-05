@@ -11,10 +11,10 @@ output; ``completion`` prints a shell completion script. With no arguments the
 help and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
 codes) or a usage error (unknown verbs and flags get a "did you mean"), 1 for a
 failed check (``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``,
-``doctor``, an untrusted ``attest``) or an unexpected failure. A recipe file that
-fails to import (syntax error, missing module, an exception while it runs) is an
-``E_VALIDATION`` error naming ``file:line``; ``--traceback`` raises SDK errors
-with the Python traceback.
+``doctor``, an untrusted ``attest``, a failing ``evidence``) or an unexpected
+failure. A recipe file that fails to import (syntax error, missing module, an
+exception while it runs) is an ``E_VALIDATION`` error naming ``file:line``;
+``--traceback`` raises SDK errors with the Python traceback.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from typing import TextIO, cast, get_args
 
 from . import __version__
 from ._source import SOURCES_DIRNAME
-from .attestation import attest, connect, render_attestation
+from .attestation import attest, render_attestation
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
@@ -80,6 +80,7 @@ from .declarative.model import Target
 from .declarative.resolve import resolve
 from .diff import _wants_color, cmd_diff, diff_against
 from .errors import LockfileError, TdxError, ValidationError
+from .evidence import EVIDENCE_FORMATS, evidence
 from .explain import (
     describe,
     diff_variants,
@@ -590,6 +591,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_sbom(sub)
 
+    _add_evidence(sub)
+
     doctor_cmd = sub.add_parser(
         "doctor",
         help="Check the host tools the build backends need.",
@@ -896,9 +899,9 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         required=True,
         metavar="URL",
         help=(
-            "The tdxs issuer: unix:PATH (the image's /var/tdxs.sock, e.g. forwarded with "
-            "`ssh -L ./tdxs.sock:/var/tdxs.sock`), tcp://HOST:PORT (tdxs's JSON lines), or "
-            "an http(s):// URL the request is POSTed to (a gateway in front of tdxs)."
+            "The tdxs issuer, which speaks JSON lines: unix:PATH or a path (the image's "
+            "/var/tdxs.sock, e.g. forwarded with `ssh -L ./tdxs.sock:/var/tdxs.sock`) or "
+            "tcp://HOST:PORT."
         ),
     )
     attest_cmd.add_argument(
@@ -923,11 +926,6 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "quote_version, nonce {value, report_data, verdict}, registers {NAME: {actual, "
             "expected, verdict}}, trusted and verdict; markdown is a table."
         ),
-    )
-    attest_cmd.add_argument(
-        "--insecure",
-        action="store_true",
-        help="https endpoints: do not verify the server's TLS certificate.",
     )
     attest_cmd.add_argument(
         "--traceback",
@@ -992,6 +990,74 @@ def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         default=None,
         metavar="FILE",
         help="Write the document to FILE instead of stdout.",
+    )
+
+
+def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Assemble auditor-facing evidence of a bake: digests, lock, integrity, SBOM."
+    cmd = _add_command(sub, "evidence", _cmd_evidence, help=help_text)
+    cmd.description = (
+        help_text + " For each baked variant (--variant, default: every one in "
+        "OUT/bake-result.json) it records the recipe and tree digests, the lockfile "
+        "(verbatim, with its version and drift), each artifact with a fresh sha256 "
+        "check, the recorded reproducibility verdict, the measurements policy "
+        "(OUT/<variant>/policy.json or --policy), an SPDX SBOM, the lint summary, a "
+        "provenance summary and the tool versions, and writes them to OUT/evidence "
+        "with an evidence.json index holding every member's sha256."
+    )
+    cmd.epilog = (
+        RESOLUTION_HELP
+        + " "
+        + (
+            "Prints the index; exits 1 when the verdict is fail (an artifact changed or "
+            "is gone, the lockfile drifted or is missing, lint errors, or a recorded "
+            "non-reproducible bake). Set SOURCE_DATE_EPOCH to fix the timestamps."
+        )
+    )
+    cmd.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Bake output directory holding bake-result.json (default: build).",
+    )
+    cmd.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help=(
+            "Lockfile to record and check for drift (default: the one the bake recorded, "
+            "else OUT/tundravm.lock)."
+        ),
+    )
+    cmd.add_argument(
+        "--policy",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Measurements policy from `measure --export-policy` for every selected variant "
+            "(default: OUT/<variant>/policy.json when it exists)."
+        ),
+    )
+    cmd.add_argument(
+        "--bundle",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Also write the evidence as a deterministic FILE.tar.gz.",
+    )
+    cmd.add_argument(
+        "--html",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Also write a self-contained HTML report with a verdict banner.",
+    )
+    cmd.add_argument(
+        "--format",
+        choices=EVIDENCE_FORMATS,
+        default="text",
+        help="Index format (default: %(default)s); json is evidence.json.",
     )
 
 
@@ -1087,6 +1153,7 @@ _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
     "bake": (("out", "out"), ("lockfile", "lockfile"), ("backend", "backend")),
     "ci": (("out", "tree"), ("lockfile", "lockfile")),
     "status": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile")),
+    "evidence": (("out", "out"), ("lockfile", "lockfile")),
     "clean": (("out", "out"),),
     "doctor": (("backend", "backend"),),
     "config": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile"), ("backend", "backend")),
@@ -1829,12 +1896,7 @@ def doctor(
 
 
 def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
-    result = attest(
-        args.endpoint,
-        args.policy,
-        nonce=args.nonce,
-        transport=connect(args.endpoint, insecure=args.insecure),
-    )
+    result = attest(args.endpoint, args.policy, nonce=args.nonce)
     print(render_attestation(result, args.format), file=out)
     return EXIT_OK if result.trusted else EXIT_FAILURE
 
@@ -1882,6 +1944,33 @@ def _sbom_lock(manifest: Path, flag: Path | None) -> Lock | None:
         if candidate and candidate.is_file():
             return read_lock(candidate)
     return None
+
+
+def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args) if args.variant else None
+    base: Path = args.out if args.out is not None else Path(loaded.lowered().build_dir)
+    lockfile = None if _missing_lock(args) else args.lockfile
+    found = evidence(
+        loaded.recipe,
+        out=base,
+        variants=names,
+        lock=lockfile,
+        policy=args.policy,
+        recipe_path=args.recipe,
+        runner=args.runner,
+    )
+    directory = found.write(base / "evidence")
+    print(found.render(args.format), file=out, end="")
+    print(f"wrote {directory}", file=sys.stderr)
+    if args.bundle is not None:
+        print(f"wrote {found.bundle(args.bundle)}", file=sys.stderr)
+    if args.html is not None:
+        target: Path = args.html
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(found.html(), encoding="utf-8")
+        print(f"wrote {target}", file=sys.stderr)
+    return EXIT_OK if found.passed else EXIT_FAILURE
 
 
 def _cmd_completion(args: argparse.Namespace, out: TextIO) -> int:

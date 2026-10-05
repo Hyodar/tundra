@@ -22,10 +22,7 @@ import hashlib
 import json
 import secrets
 import socket
-import ssl
 import struct
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -212,10 +209,9 @@ def attest(
 ) -> Attestation:
     """Request a quote from the tdxs issuer at *endpoint* and check it against *policy*.
 
-    *endpoint* is ``unix:PATH`` (or a path), ``tcp://HOST:PORT`` (both speak
-    tdxs's JSON lines) or an ``http(s)://`` URL the request envelope is POSTed
-    to (a gateway in front of the socket). *policy* is a file ``measure
-    --export-policy`` wrote, or its dict; a placeholder policy is refused.
+    *endpoint* is ``unix:PATH`` (or a path) or ``tcp://HOST:PORT``; both speak
+    tdxs's JSON lines. *policy* is a file ``measure --export-policy`` wrote,
+    or its dict; a placeholder policy is refused.
     *nonce* (hex or bytes; default 32 random bytes) must come back in the
     quote's ``report_data``. *transport* replaces the network (tests). Raises
     ``DeploymentError`` when the issuer cannot be reached or reports an error,
@@ -360,10 +356,15 @@ def _metadata_registers(meta: Mapping[str, object], endpoint: str) -> dict[str, 
 # ── transports ───────────────────────────────────────────────────────────
 
 
-def connect(endpoint: str, *, insecure: bool = False, timeout: float = TIMEOUT_S) -> Transport:
-    """The transport for *endpoint*; *insecure* skips TLS certificate checks for ``https``."""
+def connect(endpoint: str, *, timeout: float = TIMEOUT_S) -> Transport:
+    """The transport for *endpoint*: tdxs's JSON lines over a unix socket or tcp."""
     if endpoint.startswith(("http://", "https://")):
-        return _http(endpoint, insecure=insecure, timeout=timeout)
+        raise ValidationError(
+            f"Endpoint {endpoint!r} is http, which tdxs does not serve.",
+            hint="tdxs serves a unix socket or tcp; forward it with "
+            "ssh -L ./tdxs.sock:/var/tdxs.sock and pass --endpoint unix:./tdxs.sock.",
+            context={"endpoint": endpoint},
+        )
     if endpoint.startswith("tcp://"):
         host, sep, port = endpoint.removeprefix("tcp://").rstrip("/").rpartition(":")
         if not sep or not host or not port.isdigit():
@@ -380,13 +381,13 @@ def connect(endpoint: str, *, insecure: bool = False, timeout: float = TIMEOUT_S
     if path == endpoint and "://" in endpoint:
         raise ValidationError(
             f"Unsupported endpoint {endpoint!r}.",
-            hint="Use unix:PATH, tcp://HOST:PORT, http://HOST:PORT/PATH or https://...",
+            hint="Use unix:PATH (or a path) or tcp://HOST:PORT.",
         )
     return _stream(endpoint, socket.AF_UNIX, path, timeout=timeout)
 
 
-def _unreachable(endpoint: str, exc: OSError | urllib.error.URLError) -> DeploymentError:
-    reason = getattr(exc, "reason", None) or getattr(exc, "strerror", None) or exc
+def _unreachable(endpoint: str, exc: OSError) -> DeploymentError:
+    reason = exc.strerror or exc
     return DeploymentError(
         f"Cannot reach the tdxs issuer at {endpoint}: {reason}.",
         hint="Check the VM is running and the socket is forwarded to this host, e.g. "
@@ -434,33 +435,6 @@ def _stream(
         except OSError as exc:
             raise _unreachable(endpoint, exc) from exc
         return _decode(endpoint, buffer.split(b"\n", 1)[0])
-
-    return send
-
-
-def _http(endpoint: str, *, insecure: bool, timeout: float) -> Transport:
-    """POST the request envelope as JSON to *endpoint*; the reply body is the reply envelope."""
-    context = None
-    if insecure and endpoint.startswith("https://"):
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-
-    def send(request: Mapping[str, object]) -> Mapping[str, object]:
-        body = json.dumps(request).encode()
-        call = urllib.request.Request(
-            endpoint, data=body, method="POST", headers={"Content-Type": "application/json"}
-        )
-        try:
-            with urllib.request.urlopen(call, timeout=timeout, context=context) as response:
-                payload: bytes = response.read()
-        except urllib.error.HTTPError as exc:
-            payload = exc.read()
-            if not payload:
-                raise _unreachable(endpoint, exc) from exc
-        except (urllib.error.URLError, OSError) as exc:
-            raise _unreachable(endpoint, exc) from exc
-        return _decode(endpoint, payload)
 
     return send
 

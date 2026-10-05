@@ -22,6 +22,7 @@ are read here.
 
 from __future__ import annotations
 
+import posixpath
 from collections.abc import Iterator, Sequence
 from typing import Any
 from urllib.parse import urlparse
@@ -31,7 +32,7 @@ from tundravm._source import DebFile, HttpSource
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel as FluentKernel
-from tundravm.models import RecipeState
+from tundravm.models import RecipeState, unit_name
 
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
@@ -39,6 +40,7 @@ from .model import (
     Build,
     Debloat,
     Declaration,
+    Directory,
     Disk,
     Fragment,
     Git,
@@ -53,7 +55,9 @@ from .model import (
     Resolved,
     RuntimeTools,
     Secrets,
+    Service,
     Setting,
+    Template,
     Unit,
     User,
     Variant,
@@ -64,6 +68,7 @@ from .state import (
     BUILD_SOURCES,
     HISTORICAL,
     INIT_SERVICE,
+    UNIT_DIRECTORY,
     StateBuilder,
     groupadd_line,
     inject_after_init,
@@ -236,6 +241,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         profile_kernels=profile_kernels,
         local_sources=_local_sources(recipe, resolved),
         deb_files=() if dialect == HISTORICAL else _efi_stub_debs(recipe),
+        secret_allowed={name: _secret_allowed(r.items) for name, r in resolved.items()},
         **extra,
     )
 
@@ -447,6 +453,23 @@ def _kernel(kernel: Kernel) -> FluentKernel:
         source_subdir=source.subdir,
         source_submodules=source.submodules,
     )
+
+
+def _secret_allowed(items: Sequence[Declaration]) -> frozenset[str]:
+    """What *items* exempt from the secret lints (see ``Lowered.secret_allowed``)."""
+    allowed: set[str] = set()
+    for item in items:
+        if not getattr(item, "allow_secret", False):
+            continue
+        if isinstance(item, Directory):
+            allowed.add(posixpath.normpath(item.path).rstrip("/") + "/")
+        elif isinstance(item, FileDeclaration | Template):
+            allowed.add(posixpath.normpath(item.path))
+        elif isinstance(item, Unit):
+            allowed.add(f"{UNIT_DIRECTORY}/{item.name}")
+        elif isinstance(item, Service):
+            allowed.add(unit_name(item.name))
+    return frozenset(allowed)
 
 
 def _setting_bool(setting: Setting, value: str) -> bool:

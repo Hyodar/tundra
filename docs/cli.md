@@ -16,7 +16,7 @@ tundravm fetch   RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--for
 tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--backend KIND] [--no-fetch] [--offline] [--verify-reproducible] [-v | -q | --json-logs] [--color auto|always|never]
 tundravm measure MANIFEST [--variant NAME] [--scheme rtmr|azure|gcp] [--json] [--allow-placeholder] [--export-policy FILE]
 tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--attach] [--allow-simulated-artifact]
-tundravm attest  --endpoint URL --policy FILE [--nonce HEX] [--format text|json|markdown] [--insecure]
+tundravm attest  --endpoint URL --policy FILE [--nonce HEX] [--format text|json|markdown]
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--format auto|text|github]
 tundravm status  RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
@@ -71,6 +71,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `deploy` | Deploys one baked variant's artifact. | |
 | `attest` | Asks a running image's `tdxs` issuer (`--endpoint`) for a quote bound to a nonce and checks its MRTD and RTMR0..RTMR3 against a verifier policy (`--policy`, from `measure --export-policy`): one `match`/`mismatch`/`unchecked` line per register, the nonce check, then `verdict: trusted` or `verdict: untrusted`. It checks measurements only; collateral verification is done by a Tdxs validator (see [Attest](#attest)). | the verdict is `untrusted` |
 | `sbom` | The software bill of materials of one baked variant (`MANIFEST` or `--out DIR`, `--variant`): mkosi's package manifest beside the artifact, the lockfile's source pins and the recipe metadata, merged into SPDX 2.3 JSON (default), CycloneDX 1.5 JSON, text or Markdown (`--format`); `--output FILE` writes it to a file (see [SBOM](#sbom)). | |
+| `evidence` | An auditor's record of one bake (`--out DIR`, default `build`; `--variant`, default every baked variant): recipe and tree digests, the lockfile with its drift verdict, each artifact with a fresh sha256 check, the reproducibility verdict, the measurements policy, an SPDX SBOM, the lint summary, a provenance summary and the tool versions, written to `OUT/evidence/` with an `evidence.json` index; `--bundle FILE.tar.gz` and `--html FILE` package it (see [Evidence](#evidence)). | the verdict is `fail` |
 | `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart`, `apt` and `pefile`, probed under the Python that runs mkosi, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk conversion needs on the host; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
 | `ci` | `lint --strict`, `compile --check`, `lock --check` in order; stops at the first failure. The one `--lockfile` (default `build/tundravm.lock`) is loaded once and shared: lint and the tree check apply its pins, the lock check compares against it. | any step fails, including a missing lockfile |
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
@@ -617,7 +618,7 @@ verdict: untrusted
 [exit 1]
 ```
 
-- `--endpoint` is `unix:PATH` (or a bare path), `tcp://HOST:PORT` or an `http(s)://` URL. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by forwarding the socket over SSH as above, or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). An `http(s)://` endpoint POSTs the same request as a JSON body and expects the reply as the response body, for a gateway in front of the socket; `--insecure` skips the TLS certificate check for `https://`.
+- `--endpoint` is `unix:PATH` (or a bare path) or `tcp://HOST:PORT`. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by forwarding the socket over SSH as above, or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). tdxs serves no http, so an `http://` or `https://` endpoint fails with `E_VALIDATION`.
 - A `simulator` issuer's quote is not a TDX quote: its registers come from the issuer's `metadata` reply (`(simulator, issuer metadata)` in the header), and its nonce check reads the quote's first 32 bytes.
 - An unreachable endpoint or an issuer that replies with an `error` (`issuer error: tdx: failed to get raw quote: ...`) is `E_DEPLOYMENT`; a reply that is not a TDX quote is `E_MEASUREMENT`; a placeholder policy is refused with `E_MEASUREMENT`; a bad `--nonce` or policy file is `E_VALIDATION`.
 - `--format json` prints `{"checks", "endpoint", "nonce": {"value", "report_data", "verdict"}, "platform", "policy", "quote_version", "registers": {NAME: {"actual", "expected", "verdict"}}, "source": "quote"|"metadata", "trusted", "verdict"}` with sorted keys; `--format markdown` a table of the registers under the verdict.
@@ -773,6 +774,44 @@ $ tundravm sbom build --variant default --output build/default.spdx.json
 wrote spdx-json build/default.spdx.json
 ```
 
+## Evidence
+
+`tundravm evidence [RECIPE]` gathers what an auditor asks about a bake into `OUT/evidence/` (`--out DIR`, default `build`, the directory holding `bake-result.json`), for every baked variant or the `--variant` names (a variant that was not baked is an `E_STATE` error):
+
+| Member | Holds |
+|---|---|
+| `evidence.json` | The index: `schema_version`, `created` (ISO 8601 UTC; `SOURCE_DATE_EPOCH` when set), `recipe` (`name`, `path`, `file_sha256`, `digest` now, `baked_digest` the bake recorded, `matches_bake`), `bake` (`path`, `backend`, `simulated`), `lockfile` (`source`, `version`, `compiler_version`, `recipe_digest`, `sha256`, `drift`, `verdict`: `current` or `drifted`; `null` without one), `lint` (`errors`, `warnings`, `infos`, `codes`), `tools` (`tundravm`, `python`, `mkosi` as `mkosi --version` prints it on this host, `null` when absent), per variant its `artifacts` (`target`, `path`, `size`, `sha256`, `integrity`: `verified`, `mismatch` or `missing`, `simulated`), `tree_digest`, `tree_matches`, `reproducible` (what `bake --verify-reproducible` recorded, `null` when not checked), `policy`, `sbom` and `provenance` (declarations per fragment and resolution actions: `declared`, `added`, `replaced`, `removed`), the `verdict`, the `notes` and `members` (`sha256` and `size` of every other file) |
+| `bake-result.json` | The bake manifest, verbatim |
+| `tundravm.lock` | The lockfile, verbatim: `--lockfile FILE`, else the one the bake recorded, else `OUT/tundravm.lock` |
+| `lint.json` | Every lint diagnostic of the selected variants, with the lockfile's pins applied |
+| `variants/<variant>/sbom-<target>.spdx.json` | The SPDX 2.3 SBOM of each artifact, as `tundravm sbom` writes it |
+| `variants/<variant>/policy.json` | The measurements policy: `--policy FILE` for every selected variant, else `OUT/<variant>/policy.json` when it exists; the index says whether it is a placeholder and whether its `artifact.sha256` is the artifact's |
+
+The `verdict` holds `integrity` (`verified` when every artifact still hashes to the sha256 the bake recorded), `lock` (`current`, `drifted` or `missing`), `reproducible` (`reproducible`, `not reproducible` or `not checked`), `lint` (`clean`, `warnings` or `errors`) and `overall`: `pass` when integrity is verified, the lock current, lint has no errors and the bake was not recorded as not reproducible, else `fail`, and `evidence` exits 1. What could not be included (no lockfile, no policy, no mkosi manifest beside a simulated artifact) is a note in the index and in the output.
+
+| Flag | Effect |
+|---|---|
+| `--out DIR` | The bake output directory (default `build`, or `out` of `[tool.tundravm]`) |
+| `--lockfile FILE` | The lockfile to record and check for drift |
+| `--policy FILE` | A `measure --export-policy` file for every selected variant |
+| `--bundle FILE` | Also write a deterministic `tar.gz`: members sorted under `evidence/`, owned by `0:0` with mode `0644`, every mtime (and the gzip header's) `SOURCE_DATE_EPOCH`, else 0, so two runs over the same bake with the same `SOURCE_DATE_EPOCH` give the same bytes |
+| `--html FILE` | Also write one self-contained HTML page (inline CSS, no scripts or external assets, every value escaped): a verdict banner (integrity, lock, reproducible, lint), the recipe, lockfile, lint and tools tables, a section per variant (artifacts, policy, SBOM, provenance), the notes and the members with their sha256 |
+| `--format text\|json` | How the index is printed: a summary with every member's sha256 (default), or `evidence.json` itself |
+
+```console
+$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --bundle evidence.tar.gz --html evidence.html
+evidence 2023-11-14T22:13:20Z  verdict pass
+  recipe     node.py  digest 92efc03f419a
+  integrity  verified
+  lock       current
+  reproduce  not checked
+  lint       clean
+  default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
+members:
+  e10905461284...  bake-result.json
+  ...
+```
+
 ## Project status
 
 `tundravm status RECIPE` answers "where is this project at?" without writing anything or touching the network. It prints one line per item, `LABEL VERDICT DETAIL`, for the selected variants (`--variant`, default all), then `next: COMMAND`:
@@ -843,7 +882,7 @@ A path the user cannot delete (mkosi output a `local` bake left root-owned) is r
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, `doctor` missing a required tool, or an `untrusted` `attest` verdict; or `clean` could not remove a path |
+| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, `doctor` missing a required tool, an `untrusted` `attest` verdict, or an `evidence` verdict of `fail`; or `clean` could not remove a path |
 | 2 | An SDK error, printed as `error [E_CODE]: message` with a `Hint:` and context lines; also a usage error (unknown verb or flag, with a did-you-mean suggestion) |
 | 130 | Interrupted |
 
