@@ -22,12 +22,13 @@ whose kernel source differs): locked, fetched and mounted the same way.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import posixpath
 import re
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -148,6 +149,56 @@ def _since(default: object) -> dict[str, object]:
     return {"payload_default": default}
 
 
+class FrozenMap(Mapping[str, str]):
+    """An immutable copy of a ``str -> str`` mapping, in the caller's order.
+
+    Build recipes store ``env`` and ``properties`` as one, so changing the dict
+    passed at construction changes nothing; it compares equal to a dict with
+    the same items and hashes like one ``frozenset`` of them.
+    """
+
+    __slots__ = ("_items", "_lookup")
+
+    def __init__(self, items: Mapping[str, str] | Iterable[tuple[str, str]] = ()) -> None:
+        pairs = tuple(items.items() if isinstance(items, Mapping) else items)
+        self._items: tuple[tuple[str, str], ...] = pairs
+        self._lookup: dict[str, str] = dict(pairs)
+
+    def __getitem__(self, key: str) -> str:
+        return self._lookup[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._lookup)
+
+    def __len__(self) -> int:
+        return len(self._lookup)
+
+    def __hash__(self) -> int:
+        return hash(frozenset(self._lookup.items()))
+
+    def __repr__(self) -> str:
+        return f"FrozenMap({self._lookup!r})"
+
+    def __reduce__(self) -> tuple[type[FrozenMap], tuple[tuple[tuple[str, str], ...]]]:
+        return (FrozenMap, (self._items,))
+
+    def __copy__(self) -> FrozenMap:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> FrozenMap:
+        return self
+
+
+def _freeze_recipe(build: object, mappings: Sequence[str], sequences: Sequence[str]) -> None:
+    """Copy *build*'s *mappings* into :class:`FrozenMap` and its *sequences* into tuples."""
+    for name in mappings:
+        object.__setattr__(build, name, FrozenMap(getattr(build, name)))
+    for name in sequences:
+        value = getattr(build, name)
+        if not isinstance(value, str | tuple):
+            object.__setattr__(build, name, tuple(value))
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GoBuild:
     """``go build -trimpath`` of *package* into ``<output_dir>/<output>``.
@@ -160,12 +211,15 @@ class GoBuild:
     package: str = "./..."
     ldflags: str = "-s -w -buildid="
     tags: tuple[str, ...] = ()
-    env: Mapping[str, str] = field(default_factory=dict)
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
     packages: tuple[str, ...] = ("golang",)
     output_dir: str = field(default="./build", metadata=_since("./build"))
     mkdir: bool = field(default=True, metadata=_since(True))
 
     kind: Literal["go"] = field(default="go", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _freeze_recipe(self, ("env",), ("tags", "packages"))
 
     @property
     def artifact(self) -> str:
@@ -190,10 +244,13 @@ class CargoBuild:
     package: str | None = None
     features: tuple[str, ...] = ()
     profile: str = "release"
-    env: Mapping[str, str] = field(default_factory=dict)
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
     packages: tuple[str, ...] = ("cargo",)
 
     kind: Literal["cargo"] = field(default="cargo", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _freeze_recipe(self, ("env",), ("features", "packages"))
 
     @property
     def artifact(self) -> str:
@@ -224,12 +281,15 @@ class DotnetBuild:
     output: str
     configuration: str = "Release"
     runtime: str = "linux-x64"
-    env: Mapping[str, str] = field(default_factory=dict)
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
     packages: tuple[str, ...] = ("dotnet-sdk-8.0",)
     restore_args: tuple[str, ...] = field(default=(), metadata=_since(()))
-    properties: Mapping[str, str] = field(default_factory=dict, metadata=_since({}))
+    properties: Mapping[str, str] = field(default_factory=FrozenMap, metadata=_since({}))
 
     kind: Literal["dotnet"] = field(default="dotnet", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _freeze_recipe(self, ("env", "properties"), ("packages", "restore_args"))
 
     @property
     def artifact(self) -> str:
@@ -257,9 +317,12 @@ class ScriptBuild:
     script: str
     output: str
     packages: tuple[str, ...] = ()
-    env: Mapping[str, str] = field(default_factory=dict, metadata=_since({}))
+    env: Mapping[str, str] = field(default_factory=FrozenMap, metadata=_since({}))
 
     kind: Literal["script"] = field(default="script", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _freeze_recipe(self, ("env",), ("packages",))
 
     @property
     def artifact(self) -> str:
@@ -363,13 +426,21 @@ class NamedSource:
     """A source under its lockfile name: what ``lock`` pins and ``fetch`` checks out.
 
     :class:`SourceBuild` and :class:`KernelSource` share the pin bookkeeping:
-    the lockfile entry is ``fetches[name]``, the host checkout
-    ``.sources/<name>-<pin[:12]>``.
+    the lockfile entry is ``fetches[key]``, the host checkout
+    ``.sources/<name>-<pin[:12]>-<identity[:8]>`` (:meth:`pin_dir`). The *key* is
+    the name, or ``<variant>/<name>`` (``lock_name``) for a build whose source
+    differs between variants.
     """
 
     __slots__ = ()
     name: str
     source: Source
+    lock_name: str | None
+
+    @property
+    def key(self) -> str:
+        """The lockfile name of this source: ``lock_name``, else ``name``."""
+        return self.lock_name or self.name
 
     @property
     def mutable(self) -> bool:
@@ -380,7 +451,7 @@ class NamedSource:
         """This source's pin: inline, or a lockfile entry recorded for the same source."""
         if self.source.inline_pin is not None:
             return self.source.inline_pin
-        locked = fetches.get(self.name)
+        locked = fetches.get(self.key)
         if locked is None or not self.matches(locked):
             return None
         return locked.digest
@@ -397,12 +468,16 @@ class NamedSource:
     def locked(self, digest: str) -> LockedFetch:
         ref = self.source.ref if isinstance(self.source, GitSource) else None
         return LockedFetch(
-            source=self.source.url, kind=self.source.kind, digest=digest, name=self.name, ref=ref
+            source=self.source.url, kind=self.source.kind, digest=digest, name=self.key, ref=ref
         )
 
     def pin_dir(self, pin: str) -> str:
-        """``<name>-<pin[:12]>``: the directory under ``.sources`` that holds *pin*'s checkout."""
-        return f"{self.name}-{pin[:12]}"
+        """``<name>-<pin[:12]>-<identity[:8]>``: the ``.sources`` directory of *pin*'s checkout.
+
+        The identity (:func:`checkout_identity`) covers what the checkout holds
+        besides the pin: url, and for git the subdirectory and submodules.
+        """
+        return f"{self.name}-{pin[:12]}-{checkout_identity(self.source)[:8]}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,6 +491,7 @@ class KernelSource(NamedSource):
     name: str
     source: Source
     version: str
+    lock_name: str | None = field(default=None, compare=False, repr=False, kw_only=True)
 
     @classmethod
     def of(cls, kernel: Kernel, name: str = "kernel") -> KernelSource:
@@ -440,11 +516,15 @@ class SourceBuild(NamedSource):
     *install* lists the :class:`Install` steps; artifacts are cached under their
     destination's file name and installed in that order.
 
-    ``cache_key`` overrides the default ``<name>-<url sha256[:12]>-<ref>`` build
-    cache key; a lockfile pin appends ``-<pin[:12]>`` to it (default key: replaces
-    the ref) so moving a pin rebuilds. ``mark_unpinned`` prefixes the unpinned hook
-    with ``# unpinned: <ref>``; modules that must keep the exact hook bytes they
-    emitted before source builds existed turn it off.
+    A mounted (current-dialect) hook caches under ``<namespace>-<fingerprint>``:
+    the namespace is ``cache_key`` (default: the build name) and the
+    fingerprint (:meth:`cache_fingerprint`) covers the pin, the build and install
+    specs, the architecture and the toolchain, so changing any of them rebuilds.
+    Under ``nethermind-v1`` ``cache_key`` replaces the default
+    ``<name>-<url sha256[:12]>-<ref>`` key and a lockfile pin appends
+    ``-<pin[:12]>`` to it (default key: replaces the ref). ``mark_unpinned``
+    prefixes the unpinned hook with ``# unpinned: <ref>``; modules that must keep
+    the exact hook bytes they emitted before source builds existed turn it off.
     """
 
     name: str
@@ -453,6 +533,7 @@ class SourceBuild(NamedSource):
     install: tuple[Install, ...] = ()
     cache_key: str | None = None
     mark_unpinned: bool = True
+    lock_name: str | None = field(default=None, compare=False, repr=False, kw_only=True)
 
     def __post_init__(self) -> None:
         if not _NAME_PATTERN.fullmatch(self.name):
@@ -517,13 +598,14 @@ class SourceBuild(NamedSource):
             "mark_unpinned": self.mark_unpinned,
         }
 
-    def render(self, pin: str | None = None, *, mounted: bool = False) -> str:
+    def render(self, pin: str | None = None, *, mounted: bool = False, arch: str = "x86_64") -> str:
         """The build-phase hook: fetch, build, cache, install.
 
         *pin* is a lockfile pin; an inline pin (commit ref, ``sha256=``) wins.
         *mounted* copies the host-fetched checkout ``$SRCDIR/tundravm-sources/
         <name>-<pin[:12]>`` instead of fetching in the sandbox; unpinned, the
         mounted hook only fails, naming ``tundravm lock`` and ``tundravm fetch``.
+        *arch* (the recipe's) enters the mounted hook's cache fingerprint.
         """
         effective = self.source.inline_pin or pin
         workdir = Build.chroot_path(self.name).rel
@@ -541,9 +623,10 @@ class SourceBuild(NamedSource):
                     f"echo {shlex.quote(message)} >&2 && exit 1"
                 )
             command = f"{self._copy(effective)} && mkosi-chroot bash -c '{inner}'"
-            return self._cache(effective, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
+            key = f"{self.cache_key or self.name}-{self.cache_fingerprint(effective, arch=arch)}"
+            return self._cache(key, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
         command = f"{self._fetch(effective)} && mkosi-chroot bash -c '{inner}'"
-        hook = self._cache(effective, workdir).wrap(command)
+        hook = self._cache(self._historical_key(effective), workdir).wrap(command)
         if effective is None and self.mark_unpinned:
             return f"# unpinned: {self.source.requested}\n{hook}"
         return hook
@@ -559,18 +642,43 @@ class SourceBuild(NamedSource):
             f" && rm -f {target}/{FETCH_MARKER}"
         )
 
-    def _cache(self, pin: str | None, workdir: str) -> CacheDecl:
+    def cache_fingerprint(self, pin: str, *, arch: str) -> str:
+        """The first 16 hex of the sha256 over what a mounted build produces.
+
+        Canonical JSON of the source pin (with git's ``subdir`` and
+        ``submodules``), the build recipe and install steps as the lockfile
+        records them, *arch*, and the toolchain (recipe kind and packages).
+        """
+        source: dict[str, object] = {"kind": self.source.kind, "pin": pin}
+        if isinstance(self.source, GitSource):
+            source.update(subdir=self.source.subdir, submodules=self.source.submodules)
+        spec = {
+            "source": source,
+            "build": _recipe_payload(self.build),
+            "install": [
+                {"kind": step.kind, "path": step.path, "dest": step.dest, "mode": step.mode}
+                for step in self.install
+            ],
+            "arch": arch,
+            "toolchain": {"kind": self.build.kind, "packages": list(self.packages)},
+        }
+        canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+    def _historical_key(self, pin: str | None) -> str:
+        """The ``nethermind-v1`` cache key: ``cache_key`` or name, url digest and ref, + pin."""
         if self.cache_key is not None:
-            key = self.cache_key if pin is None else f"{self.cache_key}-{pin[:12]}"
+            return self.cache_key if pin is None else f"{self.cache_key}-{pin[:12]}"
+        url_hash = hashlib.sha256(self.source.url.encode("utf-8")).hexdigest()[:12]
+        if pin is not None:
+            version = pin[:12]
+        elif isinstance(self.source, GitSource):
+            version = self.source.ref
         else:
-            url_hash = hashlib.sha256(self.source.url.encode("utf-8")).hexdigest()[:12]
-            if pin is not None:
-                version = pin[:12]
-            elif isinstance(self.source, GitSource):
-                version = self.source.ref
-            else:
-                version = "unpinned"
-            key = f"{self.name}-{url_hash}-{version}"
+            version = "unpinned"
+        return f"{self.name}-{url_hash}-{version}"
+
+    def _cache(self, key: str, workdir: str) -> CacheDecl:
         artifacts: list[CacheFile | CacheDir] = []
         for path, dest, mode, is_dir in self._targets():
             src = Build.build_path(f"{workdir}/{path.rstrip('/')}")
@@ -614,12 +722,176 @@ class SourceBuild(NamedSource):
         return command
 
 
-def is_fetched(checkout: Path, pin: str) -> bool:
-    """Whether *checkout* holds a complete fetch of *pin* (its marker names the pin)."""
+def checkout_identity(source: Source) -> str:
+    """The sha256 of what a checkout of *source* holds besides its pin.
+
+    The url and kind, and for git the subdirectory and whether submodules are
+    checked out; the ref is left out, since one pin checks out the same tree
+    whichever ref resolved to it.
+    """
+    payload = _identity_payload(source)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _identity_payload(source: Source) -> dict[str, object]:
+    if isinstance(source, GitSource):
+        return {
+            "kind": source.kind,
+            "url": source.url,
+            "subdir": source.subdir,
+            "submodules": source.submodules,
+        }
+    return {"kind": source.kind, "url": source.url}
+
+
+def write_marker(checkout: Path, source: Source, pin: str) -> None:
+    """Mark *checkout* complete: its pin, its source identity and, for http, a file manifest.
+
+    :func:`is_fetched` verifies the checkout against it before reuse.
+    """
+    marker: dict[str, object] = {"pin": pin, "source": _identity_payload(source)}
+    if isinstance(source, HttpSource):
+        marker["files"] = _manifest(checkout)
+    text = json.dumps(marker, indent=2, sort_keys=True) + "\n"
+    (checkout / FETCH_MARKER).write_text(text, encoding="utf-8")
+
+
+def _read_marker(checkout: Path) -> dict[str, object] | None:
     try:
-        return (checkout / FETCH_MARKER).read_text(encoding="utf-8").strip() == pin
+        raw = (checkout / FETCH_MARKER).read_text(encoding="utf-8")
     except OSError:
+        return None
+    try:
+        marker = json.loads(raw)
+    except ValueError:
+        return None
+    return marker if isinstance(marker, dict) else None
+
+
+def _manifest(root: Path) -> dict[str, str]:
+    """``{path: sha256[ x] | -> target}`` of every file and symlink under *root* but the marker."""
+    found: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        base = Path(dirpath)
+        dirnames.sort()
+        for name in sorted([*filenames, *(d for d in dirnames if (base / d).is_symlink())]):
+            path = base / name
+            rel = path.relative_to(root).as_posix()
+            if rel == FETCH_MARKER:
+                continue
+            if path.is_symlink():
+                found[rel] = f"-> {os.readlink(path)}"
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            found[rel] = digest + (" x" if path.stat().st_mode & 0o111 else "")
+    return found
+
+
+def is_fetched(
+    checkout: Path, pin: str, source: Source | None = None, *, name: str | None = None
+) -> bool:
+    """Whether *checkout* holds a complete, unmodified fetch of *pin*.
+
+    ``False`` when it was never completed (no marker naming *pin*): fetching it
+    again replaces it. With *source*, a completed checkout is also verified:
+    git ``HEAD`` is the pin, the tree is clean (``git status`` lists nothing,
+    ignored and untracked files included) and, when the source asks for them,
+    the submodules are initialised at their recorded commits; an http checkout
+    still matches the manifest written when it was fetched. A mismatch raises
+    :class:`~tundravm.errors.SourceError` naming *name* and the repair command.
+    """
+    marker = _read_marker(checkout)
+    if marker is None or marker.get("pin") != pin:
         return False
+    if source is None:
+        return True
+    problem = _checkout_problem(checkout, source, pin, marker)
+    if problem is None:
+        return True
+    label = name or checkout.name
+    raise SourceError(
+        f"source {label} checkout modified/incomplete: run tundravm fetch --force",
+        source=source.describe(),
+        reason=problem,
+        hint=(
+            f"{problem}. Run `tundravm fetch RECIPE --force` to check {label} out again "
+            "(it replaces the checkout)."
+        ),
+        context={"path": str(checkout)},
+    )
+
+
+def _checkout_problem(
+    checkout: Path, source: Source, pin: str, marker: Mapping[str, object]
+) -> str | None:
+    """Why *checkout* no longer holds *source* at *pin*, or ``None`` when it does."""
+    if marker.get("source") != _identity_payload(source):
+        return "the checkout was fetched for another source declaration"
+    if isinstance(source, HttpSource):
+        recorded = marker.get("files")
+        if not isinstance(recorded, dict):
+            return "the checkout has no file manifest"
+        current = _manifest(checkout)
+        changed = sorted(
+            path
+            for path in recorded.keys() | current.keys()
+            if recorded.get(path) != current.get(path)
+        )
+        return None if not changed else _changed_files(changed)
+    head = _git_output(checkout, "rev-parse", "HEAD")
+    if head is None:
+        return "it is not a git checkout"
+    if head.strip() != pin:
+        # an annotated tag's pin names the tag object; HEAD is the commit it tags
+        tagged = _git_output(checkout, "rev-parse", "--verify", "-q", f"{pin}^{{commit}}")
+        if tagged is None or tagged.strip() != head.strip():
+            return f"HEAD is {head.strip()[:12]}, not the pin {pin[:12]}"
+    status = _git_output(
+        checkout,
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--ignored",
+        "--",
+        ".",
+        f":(exclude){FETCH_MARKER}",
+    )
+    if status is None:
+        return "git status failed"
+    changed = [line[3:] for line in status.splitlines() if line.strip()]
+    if changed:
+        return _changed_files(changed)
+    if source.submodules:
+        listing = _git_output(checkout, "submodule", "status", "--recursive")
+        if listing is None:
+            return "git submodule status failed"
+        stale = [line[1:].split()[1] for line in listing.splitlines() if line[:1] in "-+U"]
+        if stale:
+            return f"submodules not initialised at their recorded commits: {', '.join(stale)}"
+    return None
+
+
+def _changed_files(paths: Sequence[str]) -> str:
+    shown = ", ".join(paths[:3])
+    more = f" and {len(paths) - 3} more" if len(paths) > 3 else ""
+    noun = "file" if len(paths) == 1 else "files"
+    return f"{len(paths)} {noun} changed since the fetch: {shown}{more}"
+
+
+def _git_output(checkout: Path, *args: str) -> str | None:
+    """git's stdout for *args* run in *checkout*, or ``None`` when git fails."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(checkout), *args],
+            check=False,
+            text=True,
+            capture_output=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except OSError:
+        return None
+    return completed.stdout if completed.returncode == 0 else None
 
 
 def fetch_source(source: Source, pin: str, dest: Path) -> None:
@@ -927,6 +1199,9 @@ def source_drift(
 ) -> tuple[list[str], list[str], list[str], dict[str, str]]:
     """``(added, changed, removed, details)`` for the ``sources.<name>`` drift lines.
 
+    *builds* and *fetches* are keyed by lock key; a per-variant key
+    ``<variant>/<name>`` drifts as ``sources.<variant>.<name>`` (:func:`source_section`).
+
     A declared source without a lockfile entry is added, detailed as
     ``source <name> is not pinned`` unless the declaration pins it inline; one
     whose entry was resolved from a different url/ref, or (with *resolver*) whose
@@ -937,7 +1212,7 @@ def source_drift(
     changed: list[str] = []
     details: dict[str, str] = {}
     for name, build in sorted(builds.items()):
-        section = f"sources.{name}"
+        section = source_section(name)
         locked = fetches.get(name)
         if locked is None:
             added.append(section)
@@ -954,8 +1229,14 @@ def source_drift(
         changed.append(section)
         new = current[:7] if current else build.source.requested
         details[section] = f"{locked.digest[:7]} -> {new}"
-    removed = sorted(f"sources.{name}" for name in fetches if name not in builds)
+    removed = sorted(source_section(name) for name in fetches if name not in builds)
     return added, changed, removed, details
+
+
+def source_section(key: str) -> str:
+    """The drift section of the lockfile source *key*: ``sources.<name>``, or
+    ``sources.<variant>.<name>`` for a variant-local ``<variant>/<name>``."""
+    return "sources." + key.replace("/", ".")
 
 
 __all__ = [
@@ -973,9 +1254,12 @@ __all__ = [
     "ScriptBuild",
     "Source",
     "SourceBuild",
+    "checkout_identity",
     "default_resolver",
     "fetch_source",
     "is_fetched",
     "resolve_pins",
     "source_drift",
+    "source_section",
+    "write_marker",
 ]

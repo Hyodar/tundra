@@ -223,7 +223,7 @@ def _baked(tmp_path: Path, lines: list[str] | None = None) -> tuple[Artifact, ..
     recipe = _recipe()
     return bake(
         recipe,
-        locked=lock(recipe),
+        lock=lock(recipe),
         backend=Backend("inprocess"),
         out=tmp_path / "out",
         progress=None if lines is None else lines.append,
@@ -246,7 +246,7 @@ def test_bake_refuses_a_stale_lock(tmp_path: Path) -> None:
     with pytest.raises(LockfileError, match="stale"):
         bake(
             _recipe(motd="bye\n"),
-            locked=lock(_recipe()),
+            lock=lock(_recipe()),
             backend=Backend("inprocess"),
             out=tmp_path / "out",
         )
@@ -257,14 +257,14 @@ def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> Non
     assert lock_status(_recipe(), locked, variants=("azure",)) == ()
 
     artifacts = bake(
-        _recipe(), locked=locked, backend=Backend("inprocess"), out=tmp_path, variants=("azure",)
+        _recipe(), lock=locked, backend=Backend("inprocess"), out=tmp_path, variants=("azure",)
     )
 
     assert {(a.variant, a.target) for a in artifacts} == {("azure", "azure")}
     with pytest.raises(LockfileError, match="stale"):
         bake(
             _recipe(motd="bye\n"),
-            locked=locked,
+            lock=locked,
             backend=Backend("inprocess"),
             out=tmp_path / "stale",
             variants=("azure",),
@@ -320,9 +320,9 @@ def test_deploy_with_fake_qemu_runner(tmp_path: Path) -> None:
     with pytest.raises(DeploymentError, match="simulated"):
         deploy(artifact, using=Qemu(), adapter=adapter)
     with pytest.raises(DeploymentError, match="Cannot deploy a qemu artifact to azure"):
-        deploy(artifact, using=Azure("acct"), allow_placeholder=True, adapter=adapter)
+        deploy(artifact, using=Azure("acct"), allow_simulated=True, adapter=adapter)
     found = deploy(
-        artifact, using=Qemu(memory="4G", ssh_port=2223), allow_placeholder=True, adapter=adapter
+        artifact, using=Qemu(memory="4G", ssh_port=2223), allow_simulated=True, adapter=adapter
     )
     assert found.target == "qemu" and found.id.startswith("qemu-default-")
     assert seen and "4G" in " ".join(seen[0]) and "2223" in " ".join(seen[0])

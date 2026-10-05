@@ -394,7 +394,18 @@ def _write(dest: Path, content: str | bytes, mode: int) -> None:
 
 
 def _write_file_entry(dest: Path, entry: FileEntry) -> None:
-    _write(dest, entry.content, _parse_mode(entry.mode))
+    """Write *entry* at *dest*: its bytes, a symlink to its target or a directory."""
+    if entry.kind == "symlink":
+        _make_dir(dest.parent)
+        if dest.is_symlink() or dest.is_file():
+            dest.unlink()
+        target = entry.content.decode() if isinstance(entry.content, bytes) else entry.content
+        dest.symlink_to(target)
+    elif entry.kind == "directory":
+        _make_dir(dest)
+        dest.chmod(_parse_mode(entry.mode))
+    else:
+        _write(dest, entry.content, _parse_mode(entry.mode))
 
 
 def _write_repository(

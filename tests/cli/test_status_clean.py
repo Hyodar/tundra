@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
+from tests.helpers import run_main, source_dir, write_recipe_file
 from tundravm import clean as clean_module
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.declarative import lock, write_lock
@@ -237,10 +237,33 @@ def test_status_flags_artifacts_stale_after_editing_the_recipe(recipe: Path) -> 
     assert _status(str(recipe))["next"] == UP_TO_DATE
 
 
+def test_status_verify_hashes_artifacts(recipe: Path) -> None:
+    assert run_main("lock", str(recipe))[0] == EXIT_OK
+    assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
+    unchecked = _items(_status(str(recipe)), "artifacts")
+    assert {item["integrity"] for item in unchecked} == {"unchecked"}
+    assert "integrity unchecked (--verify hashes it)" in str(unchecked[0]["detail"])
+
+    verified = _status(str(recipe), "--verify")
+    items = _items(verified, "artifacts")
+    assert {(item["verdict"], item["integrity"]) for item in items} == {("ok", "verified")}
+    assert "integrity verified" in str(items[0]["detail"])
+    assert verified["next"] == UP_TO_DATE
+
+    (BUILD / "default" / "disk.qcow2").write_bytes(b"swapped after the bake\n")
+    assert {item["verdict"] for item in _items(_status(str(recipe)), "artifacts")} == {"ok"}
+    changed = _status(str(recipe), "--verify")
+    found = {item["variant"]: item for item in _items(changed, "artifacts")}
+    assert (found["default"]["verdict"], found["default"]["integrity"]) == ("stale", "mismatch")
+    assert "integrity mismatch" in str(found["default"]["detail"])
+    assert found["azure"]["integrity"] == "verified"
+    assert changed["next"] == f"tundravm bake {recipe}"
+
+
 def test_status_out_and_lockfile_are_repeated_in_next(recipe: Path, tmp_path: Path) -> None:
     out = tmp_path / "elsewhere"
     lockfile = tmp_path / "pins.lock"
-    assert run_main("lock", str(recipe), "--path", str(lockfile))[0] == EXIT_OK
+    assert run_main("lock", str(recipe), "--lockfile", str(lockfile))[0] == EXIT_OK
     payload = _status(str(recipe), "--out", str(out), "--lockfile", str(lockfile))
     assert payload["next"] == (
         f"tundravm compile {recipe} --out {out / 'mkosi'} --lockfile {lockfile}"
@@ -279,7 +302,7 @@ def test_status_reports_source_checkouts(tmp_path: Path, monkeypatch: pytest.Mon
     locked = _status(str(path))
     (source,) = _items(locked, "sources")
     assert source["verdict"] == "missing"
-    assert source["path"] == str(BUILD / ".sources" / f"tool-{pin[:12]}")
+    assert source["path"] == str(BUILD / ".sources" / source_dir("tool", pin, upstream.as_uri()))
     assert locked["next"] == f"tundravm fetch {path}"
     assert _verdict(locked, "backend") == "n/a"
 

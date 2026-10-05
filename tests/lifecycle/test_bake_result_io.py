@@ -89,7 +89,7 @@ def test_bake_saves_and_a_fresh_read_measures_and_finds_it(tmp_path: Path) -> No
     recipe = Recipe("io", Fragment("io", items=(Package("curl"), Package("linux-image-amd64"))))
     build_dir = tmp_path / "build"
 
-    baked = bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=build_dir)
+    baked = bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=build_dir)
     assert (build_dir / BAKE_RESULT_FILENAME).is_file()
     assert BakeResult.load(build_dir).backend == "inprocess"
 

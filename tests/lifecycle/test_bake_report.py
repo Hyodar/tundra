@@ -10,7 +10,7 @@ def _bake(tmp_path: Path, *items: Hook) -> Path:
     """Bake a qemu recipe in-process; return the default variant's ``report.json``."""
     recipe = Recipe("report", Fragment("report", items=(Package("linux-image-amd64"), *items)))
     out = tmp_path / "build"
-    bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=out)
+    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=out)
     report_path = BakeResult.load(out).profiles["default"].report_path
     assert report_path is not None
     return report_path

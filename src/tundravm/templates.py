@@ -42,8 +42,8 @@ _HEADER = r'''"""$title image recipe ($template template).
 
 Inspect:  tundravm inspect $filename
 Lint:     tundravm lint $filename
-Compile:  tundravm compile $filename --out mkosi
 Lock:     tundravm lock $filename
+Compile:  tundravm compile $filename --out mkosi
 Build:    tundravm bake $filename --out build
 """
 

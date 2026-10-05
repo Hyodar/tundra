@@ -130,7 +130,7 @@ def test_backports_pins_mirror_and_release() -> None:
     default = _text(compile(_recipe(Backports())), "default/scripts/01-sync.sh")
     assert 'jq -r .Mirror "$BUILDDIR/config.json"' in default
     pinned = _text(
-        compile(_recipe(Backports(mirror="http://m", release="trixie"))),
+        compile(_recipe(Backports(archive_url="http://m", release="trixie"))),
         "default/scripts/01-sync.sh",
     )
     assert 'MIRROR="http://m"\nRELEASE="trixie"\n' in pinned
@@ -164,7 +164,7 @@ def test_utils_are_fragments_configured_by_their_fields() -> None:
     assert repr(efi) == f"EfiStub(snapshot={SNAPSHOT!r}, version='255.4-1')"
     assert str(inspect.signature(EfiStub)) == "(*, snapshot: 'str', version: 'str') -> None"
     assert repr(DevTools()) == "DevTools(root_password='tdx')"
-    assert repr(Backports(release="trixie")) == "Backports(mirror=None, release='trixie')"
+    assert repr(Backports(release="trixie")) == "Backports(archive_url=None, release='trixie')"
     assert Tdxs().source == TUNDRA_TOOLS
     assert Tdxs().name == "tdxs" and Tdxs(after_init=True) != Tdxs()
     assert Tdxs() == Tdxs() and hash(Tdxs()) == hash(Tdxs())

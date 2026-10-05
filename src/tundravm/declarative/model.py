@@ -322,11 +322,19 @@ class File:
 
 @dataclass(frozen=True, slots=True)
 class Directory:
+    """The host tree *source* at *path*.
+
+    ``mode=None`` keeps each file's and empty directory's permission bits;
+    a ``mode`` sets every file to it. ``symlinks="preserve"`` ships links as
+    links, ``"follow"`` ships what they point to.
+    """
+
     path: str
     source: Path
     exclude: tuple[str, ...] = ()
     mode: int | None = None
     stage: Literal["skeleton", "extra"] = "extra"
+    symlinks: Literal["preserve", "follow"] = "preserve"
 
     def __post_init__(self) -> None:
         _freeze(self, "exclude")
@@ -336,6 +344,7 @@ class Directory:
         _require_names(self, self.exclude, "exclude pattern")
         _require_mode(self, self.mode)
         _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
+        _require_choice(self, self.symlinks, ("preserve", "follow"), "symlinks")
 
 
 @dataclass(frozen=True, slots=True)
@@ -763,14 +772,30 @@ class SecretFile:
 
 @dataclass(frozen=True, slots=True)
 class SecretEnv:
+    """Environment variable *name*: of *service* (``"app"`` or ``"app.service"``), else global."""
+
     name: str
-    service: str | None = None  # None means global environment.
+    service: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _ENV_KEY.fullmatch(self.name):
             raise _fail(self, f"invalid environment variable name {self.name!r}.")
         if self.service is not None:
-            _require_name(self, self.service, "service")
+            if not isinstance(self.service, str) or not _UNIT_NAME.fullmatch(self.service):
+                raise _fail(self, f"invalid service name {self.service!r}.")
+            if "." in self.service and not self.service.endswith(".service"):
+                raise _fail(
+                    self,
+                    f"service {self.service!r} must be a .service unit.",
+                    hint=f"Use {self.service.rsplit('.', 1)[0]!r}.",
+                )
+
+    @property
+    def unit(self) -> str | None:
+        """The service's unit name (``app.service``); ``None`` for the global environment."""
+        if self.service is None:
+            return None
+        return self.service if self.service.endswith(".service") else f"{self.service}.service"
 
 
 @dataclass(frozen=True, slots=True)
@@ -899,8 +924,11 @@ class Build:
     :class:`Cargo` or :class:`Dotnet`, which carry their own ``env`` and
     ``packages``). ``install`` paths are relative to the source tree; a recipe's
     output is at its ``artifact`` path, e.g. ``build/<output>`` for ``Go``.
-    ``cache_key`` names the build cache entry; ``None`` derives
-    ``<name>-<url digest>-<ref>`` from the source.
+    ``cache_key`` is the build cache namespace (default: ``name``): the
+    ``current`` dialect caches under ``<namespace>-<fingerprint>``, a digest of
+    the source pin, the build and install specs, the architecture and the
+    toolchain, so changing any of them rebuilds. ``nethermind-v1`` keeps its
+    ``<cache_key>-<pin>`` (default ``<name>-<url digest>-<ref>``) keys.
     """
 
     name: str

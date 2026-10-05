@@ -35,10 +35,12 @@ from tundravm.models import RecipeState
 from ._lowered import Lowered
 from .model import (
     BASE_PARENT,
+    Build,
     Debloat,
     Declaration,
     Disk,
     Fragment,
+    Git,
     Group,
     Hook,
     Http,
@@ -225,13 +227,34 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         mirror=recipe.mirror,
         tools_tree_mirror=recipe.tools_mirror,
         snapshot=recipe.snapshot,
+        epoch=recipe.epoch,
         reproducible=reproducible,
         mkosi=options[default.name],
         kernel=kernels[default.name],
         profile_mkosi=profile_mkosi,
         profile_kernels=profile_kernels,
+        local_sources=_local_sources(recipe, resolved),
         **extra,
     )
+
+
+def _local_sources(recipe: Recipe, resolved: dict[str, Resolved]) -> frozenset[str]:
+    """Names of the builds whose source differs between *recipe*'s variants.
+
+    Every variant counts, lowered or not, so a lock of some variants keys a
+    build the same way as a lock of all; a variant that does not resolve is
+    left out (lowering it reports why).
+    """
+    sources: dict[str, set[Git | Http]] = {}
+    for variant in recipe.variants:
+        try:
+            items = (resolved.get(variant.name) or resolve(recipe, variant=variant.name)).items
+        except ValidationError:
+            continue
+        for item in items:
+            if isinstance(item, Build):
+                sources.setdefault(item.name, set()).add(item.source)
+    return frozenset(name for name, found in sources.items() if len(found) > 1)
 
 
 def _check_mirrors(recipe: Recipe) -> None:

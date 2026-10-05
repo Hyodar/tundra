@@ -504,7 +504,7 @@ def _rule_source_unpinned(
         else ""
     )
     for name, spec in sorted(state.source_builds.items()):
-        if spec.pin_from(pins) is not None:
+        if image.keyed(profile_name, spec).pin_from(pins) is not None:
             continue
         yield Diagnostic(
             level=level,
@@ -573,6 +573,46 @@ def _rule_kernel_missing(
     )
 
 
+_EFI_STUB_DEB = re.compile(r"systemd-boot-efi_\S*_amd64\.deb")
+
+
+def _rule_recipe_arch_unsupported(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    if image.arch != "aarch64":
+        return
+    if _EFI_STUB_DEB.search(_command_text(state)):
+        yield Diagnostic(
+            level="error",
+            code="recipe-arch-unsupported",
+            message=(
+                "Recipe.arch is aarch64 but EfiStub installs the amd64 systemd-boot-efi "
+                "package, whose x86-64 EFI stub cannot boot an arm64 UKI"
+            ),
+            hint=(
+                "EfiStub downloads systemd-boot-efi_<version>_amd64.deb only: drop EfiStub "
+                "from aarch64 recipes, or build for x86_64."
+            ),
+            profile=profile_name,
+            subject="EfiStub",
+        )
+    if "qemu" in state.output_targets:
+        yield Diagnostic(
+            level="error",
+            code="recipe-arch-unsupported",
+            message=(
+                "Recipe.arch is aarch64 but the variant targets qemu, whose deploy adapter "
+                "boots images with qemu-system-x86_64"
+            ),
+            hint=(
+                "The qemu adapter runs qemu-system-x86_64 only, and TDX guests are x86-64: "
+                "set Recipe(arch='x86_64')."
+            ),
+            profile=profile_name,
+            subject="qemu",
+        )
+
+
 def _rule_module_checks(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -592,6 +632,7 @@ RULES: list[Rule] = [
     _rule_debloat_removes_declared_file,
     _rule_source_unpinned,
     _rule_kernel_missing,
+    _rule_recipe_arch_unsupported,
     _rule_module_checks,
 ]
 

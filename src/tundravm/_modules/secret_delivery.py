@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -13,7 +13,7 @@ from tundravm._modules.disk_encryption import DiskEncryption, DiskSpec
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
 from tundravm.check import Diagnostic
 from tundravm.errors import ValidationError
-from tundravm.models import SecretSpec
+from tundravm.models import SecretSpec, ships_unit
 
 if TYPE_CHECKING:
     from tundravm.declarative._lowered import Lowered
@@ -27,6 +27,9 @@ SECRET_DELIVERY_BUILD_PACKAGES = (
 SECRET_DELIVERY_DEFAULT_CONFIG_PATH = "/etc/tdx/secrets.yaml"
 SECRET_DELIVERY_DEFAULT_MANIFEST_PATH = "/etc/tdx/secrets.json"
 SECRET_DELIVERY_INIT_PRIORITY = 30
+SECRET_ENV_DIRECTORY = "/run/secrets"
+"""Where a service's ``SecretEnv`` values are delivered, one ``<service>.env`` file each."""
+_UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
 
 @dataclass(slots=True)
@@ -37,6 +40,12 @@ class SecretDelivery(Module):
     *store_at* names the ``DiskEncryption`` disk (a name or the ``DiskSpec``) that
     received secrets are stored on; ``check()`` warns when no disk applied to the
     profile has that name (``secret-store-undefined``).
+
+    An env target with a ``service`` goes to that service's environment file
+    (:meth:`env_file`), which a drop-in makes the unit read
+    (:meth:`service_dropins`); ``check()`` rejects a service the profile neither
+    generates, ships nor enables (``secret-env-service-unknown``). *env_suffix*
+    tells apart the files of several deliveries in one profile.
     """
 
     secrets: tuple[SecretSpec, ...] = ()
@@ -49,6 +58,7 @@ class SecretDelivery(Module):
     config_path: str = SECRET_DELIVERY_DEFAULT_CONFIG_PATH
     manifest_path: str = SECRET_DELIVERY_DEFAULT_MANIFEST_PATH
     source: GitSource = TUNDRA_TOOLS
+    env_suffix: str | None = None
 
     def __post_init__(self) -> None:
         self.secrets = tuple(self.secrets)
@@ -71,7 +81,37 @@ class SecretDelivery(Module):
             return self.store_at.name
         return self.store_at or None
 
+    def env_file(self, service: str) -> str:
+        """The file *service*'s (``app.service``) env targets are delivered to."""
+        stem = service.removesuffix(".service")
+        suffix = "" if self.env_suffix is None else f"-{self.env_suffix}"
+        return f"{SECRET_ENV_DIRECTORY}/{stem}{suffix}.env"
+
+    def env_services(self) -> dict[str, bool]:
+        """Each service an env target names, and whether a required secret targets it."""
+        services: dict[str, bool] = {}
+        for spec in self.secrets:
+            for target in spec.targets:
+                if target.kind == "env" and target.service is not None:
+                    services[target.service] = services.get(target.service, False) or spec.required
+        return dict(sorted(services.items()))
+
+    def service_dropins(self) -> dict[str, str]:
+        """Drop-in path to text: each service of :meth:`env_services` reads its env file.
+
+        The file is required when a required secret targets the service, so the
+        unit does not start without it; otherwise a missing file is skipped.
+        """
+        name = "tundravm-secrets" if self.env_suffix is None else f"tundravm-{self.env_suffix}"
+        return {
+            f"{_UNIT_DIRECTORY}/{service}.d/{name}.conf": (
+                f"[Service]\nEnvironmentFile={'' if required else '-'}{self.env_file(service)}\n"
+            )
+            for service, required in self.env_services().items()
+        }
+
     def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
+        yield from self._check_services(image, profile)
         store = self.store_disk
         if store is None:
             return
@@ -98,6 +138,28 @@ class SecretDelivery(Module):
             subject=store,
         )
 
+    def _check_services(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
+        state = image.state.effective_profile(profile)
+        controlled = {spec.unit for spec in state.unit_states}
+        for service in self.env_services():
+            if service in controlled or ships_unit(state, service):
+                continue
+            yield Diagnostic(
+                level="error",
+                code="secret-env-service-unknown",
+                message=(
+                    f"a SecretEnv delivers to service {service!r}, which this variant "
+                    "neither generates, ships nor enables"
+                ),
+                hint=(
+                    f"Declare Service({service.removesuffix('.service')!r}, ...) or "
+                    f"Unit({service!r}, ...) in this variant, Unit({service!r}, "
+                    "enabled=True) for a packaged unit, or fix the SecretEnv's service=."
+                ),
+                profile=profile,
+                subject=service,
+            )
+
     def init_script(self) -> str:
         """The runtime-init step: ``secret-delivery setup`` on the config (priority 30)."""
         return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
@@ -119,7 +181,7 @@ class SecretDelivery(Module):
     def render_manifest(self) -> str:
         """The JSON manifest of the expected secrets and their delivery targets."""
         return _render_manifest_json(
-            self.secrets, method=self.method, host=self.host, port=self.port
+            self.secrets, method=self.method, host=self.host, port=self.port, env_file=self.env_file
         )
 
     def render_config(self) -> str:
@@ -150,6 +212,7 @@ def _render_manifest_json(
     method: str,
     host: str,
     port: int,
+    env_file: Callable[[str], str],
 ) -> str:
     entries = []
     for spec in sorted(secrets, key=lambda s: s.name):
@@ -181,6 +244,9 @@ def _render_manifest_json(
                     target["owner"] = target_spec.owner
             if target_spec.kind == "env":
                 target["scope"] = target_spec.scope
+                if target_spec.service is not None:
+                    target["service"] = target_spec.service
+                    target["env_file"] = env_file(target_spec.service)
             targets.append(target)
         entry["targets"] = targets
         entries.append(entry)

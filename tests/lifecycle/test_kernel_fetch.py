@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import source_dir
 from tundravm._source import GitSource
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.declarative import (
@@ -205,12 +206,17 @@ def test_drift_reports_a_moved_or_changed_kernel_ref(config: Path) -> None:
     ]
     bumped = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1.1"), config=config))
     assert [(d.code, d.subject) for d in lock_status(bumped, locked)] == [
-        ("lock-changed", "sources.kernel")
+        ("lock-changed", "variants.default.kernel"),
+        ("lock-changed", "sources.kernel"),
     ]
     no_config = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1")))
     unlocked = lock(no_config, resolver=lambda s: "c" * 40)
     assert [(d.code, d.message) for d in lock_status(recipe, unlocked)] == [
-        ("lock-added", "source kernel is not pinned")
+        (
+            "lock-changed",
+            "variants.default.kernel changed since the lock: ~config_sha256",
+        ),
+        ("lock-added", "source kernel is not pinned"),
     ]
 
 
@@ -222,12 +228,12 @@ def test_fetch_checks_out_a_tagged_kernel(
 ) -> None:
     url, commit, tag = linux
     recipe = _recipe(Kernel("6.1", Git(url, "v6.1"), config=config))
-    (fetched,) = fetch(recipe, locked=None, out=tmp_path / "out", resolver=lambda s: tag)
-    checkout = tmp_path / "out" / ".sources" / f"kernel-{tag[:12]}"
+    (fetched,) = fetch(recipe, lock=None, out=tmp_path / "out", resolver=lambda s: tag)
+    checkout = tmp_path / "out" / ".sources" / source_dir("kernel", tag, url)
     assert fetched == FetchedSource("kernel", "git", url, tag, checkout, ref="v6.1")
     assert _git("rev-parse", "HEAD", cwd=checkout) == commit
     assert (checkout / "Makefile").is_file() and not (checkout / "later.c").exists()
-    (again,) = fetch(recipe, locked=lock(recipe, resolver=lambda s: tag), out=tmp_path / "out")
+    (again,) = fetch(recipe, lock=lock(recipe, resolver=lambda s: tag), out=tmp_path / "out")
     assert again.cached
 
 
@@ -236,8 +242,8 @@ def test_fetch_checks_out_a_kernel_commit_without_resolving(
 ) -> None:
     url, commit, _ = linux
     recipe = _recipe(Kernel("6.1", Git(url, commit), config=config))
-    (fetched,) = fetch(recipe, locked=None, out=tmp_path)  # an inline pin: no resolver runs
-    assert fetched.path == tmp_path / ".sources" / f"kernel-{commit[:12]}"
+    (fetched,) = fetch(recipe, lock=None, out=tmp_path)  # an inline pin: no resolver runs
+    assert fetched.path == tmp_path / ".sources" / source_dir("kernel", commit, url)
     assert _git("rev-parse", "HEAD", cwd=fetched.path) == commit
 
 
@@ -246,7 +252,7 @@ def test_fetch_downloads_and_unpacks_a_kernel_tarball(
 ) -> None:
     url, digest = tarball
     recipe = _recipe(Kernel("6.1", Http(url, sha256=digest), config=config))
-    (fetched,) = fetch(recipe, locked=None, out=tmp_path)
+    (fetched,) = fetch(recipe, lock=None, out=tmp_path)
     assert (fetched.name, fetched.kind, fetched.pin) == ("kernel", "http", digest)
     assert (fetched.path / "Makefile").read_text(encoding="utf-8") == "all:\n"
     script = _script(recipe, tmp_path / "tree")
@@ -260,7 +266,7 @@ def test_the_current_script_copies_the_fetched_kernel(tmp_path: Path, config: Pa
     recipe = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config))
     pin = "c" * 40
     script = _script(recipe, tmp_path / "tree", lock(recipe, resolver=lambda s: pin))
-    checkout = f'"$SRCDIR/tundravm-sources/kernel-{pin[:12]}"'
+    checkout = f'"$SRCDIR/tundravm-sources/{source_dir("kernel", pin, "https://k.example/linux")}"'
     assert f"[ -f {checkout}/.tundravm-complete ] ||" in script
     assert (
         f"find {checkout} -mindepth 1 -maxdepth 1 ! -name .git ! -name .tundravm-complete \\\n"
@@ -346,9 +352,9 @@ def test_bake_refuses_a_missing_kernel_checkout_then_builds_the_fetched_one(
     bake_image(lower(recipe), None, locked=locked, backend=backend, out=out)
     (request,) = backend.requests
     assert request.sources_dir == out / ".sources"
-    assert (out / ".sources" / f"kernel-{tag[:12]}" / "Makefile").is_file()
+    assert (out / ".sources" / source_dir("kernel", tag, url) / "Makefile").is_file()
     script = (out / "mkosi" / SCRIPT).read_text(encoding="utf-8")
-    assert f'"$SRCDIR/tundravm-sources/kernel-{tag[:12]}"' in script
+    assert f'"$SRCDIR/tundravm-sources/{source_dir("kernel", tag, url)}"' in script
 
 
 # ── inspect and lint ─────────────────────────────────────────────────

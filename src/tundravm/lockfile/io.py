@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from tundravm.errors import LockfileError
-from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
+from tundravm.lockfile.model import LockedFetch, Lockfile
 from tundravm.lockfile.resolve import VARIANTS_SECTION
 
 _REGENERATE = "The lockfile is generated: run `tundravm lock RECIPE` to rewrite it."
@@ -44,7 +44,7 @@ def parse_lockfile(raw: str) -> Lockfile:
     fetches = [_parse_locked_fetch(item) for item in fetches_raw]
     sections = _optional_sections(payload, "sections")
     if version == _PROFILE_SECTIONS_VERSION:
-        version = LOCKFILE_VERSION
+        version = _VARIANT_SECTIONS_VERSION
         sections = {_variant_section(name): digest for name, digest in sections.items()}
     return Lockfile(
         version=version,
@@ -58,6 +58,8 @@ def parse_lockfile(raw: str) -> Lockfile:
 
 _PROFILE_SECTIONS_VERSION = 2
 """The lockfile version whose per-variant sections are named ``profiles.<name>.<key>``."""
+_VARIANT_SECTIONS_VERSION = 3
+"""The first lockfile version naming them ``variants.<name>.<key>``."""
 
 
 def _variant_section(name: str) -> str:

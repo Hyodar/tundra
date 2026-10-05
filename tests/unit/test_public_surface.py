@@ -12,6 +12,7 @@ from tundravm import declarative
 # Changing this list changes the public API: update it deliberately, in review.
 EXPECTED_TOP_LEVEL = [
     "Artifact",
+    "ArtifactError",
     "Azure",
     "Backend",
     "BackendExecutionError",
@@ -87,6 +88,7 @@ EXPECTED_TOP_LEVEL = [
     "read_lock",
     "resolve",
     "resolve_all",
+    "verify_artifact",
     "write_lock",
 ]
 

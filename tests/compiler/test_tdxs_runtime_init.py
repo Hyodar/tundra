@@ -1,5 +1,6 @@
 """The ``Tdxs()`` fragment: source build, config, socket-activated units and account."""
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -58,8 +59,8 @@ def test_tdxs_adds_build_hook(tmp_path: Path) -> None:
     builds = [line for line in tree.script("build").splitlines() if "tundravm-sources/" in line]
     assert len(builds) == 1
     build_script = builds[0]
-    assert '"$SRCDIR/tundravm-sources/tdxs-aaaaaaaaaaaa"' in build_script
-    assert "tdxs-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
+    assert re.search(r'"\$SRCDIR/tundravm-sources/tdxs-a{12}-[0-9a-f]{8}"', build_script)
+    assert re.search(r'build\}/tdxs-[0-9a-f]{16}"', build_script)
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "go build" in build_script

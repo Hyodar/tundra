@@ -128,7 +128,7 @@ def declarative_recipe() -> Recipe:
 
 
 EQUIVALENCE_TREE = "9f9e6b98aac49ff870e81b97801bcd01b742ec6575800773550e628050c8ff77"
-EQUIVALENCE_RECIPE = "5ac7b2b189748e60058e9e21f056f0299c089455eb98bf5ce17df6d2b31acabf"
+EQUIVALENCE_RECIPE = "8b91d4ae612c237aa879c98cf87be2348c5e5c8ff167f08a97433111314c4d04"
 """The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
 fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly."""
 

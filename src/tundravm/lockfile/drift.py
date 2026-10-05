@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from tundravm.formats import annotation_path, md_cell, md_table, workflow_command
-from tundravm.lockfile.model import Lockfile
+from tundravm.lockfile.model import LOCKFILE_VERSION, Lockfile
 from tundravm.lockfile.resolve import (
     VARIANTS_KEY,
     VARIANTS_SECTION,
@@ -35,6 +35,9 @@ class LockDrift:
     ``+htop -jq`` for packages or ``~/etc/motd`` for files. ``digest_matches``
     reports whether the whole-recipe digest, which frozen bakes enforce, still
     matches; it stays true when only some of the lock's variants were compared.
+    ``lock_version`` is the version of a lockfile older than
+    :data:`~tundravm.lockfile.LOCKFILE_VERSION` (``None``: current), which drifts
+    until it is locked again.
     """
 
     changed: tuple[str, ...] = ()
@@ -42,11 +45,16 @@ class LockDrift:
     removed: tuple[str, ...] = ()
     details: dict[str, str] = field(default_factory=dict)
     digest_matches: bool = True
+    lock_version: int | None = None
 
     @property
     def is_clean(self) -> bool:
-        """True when the lockfile matches the recipe digest and every section digest."""
-        return self.digest_matches and not (self.changed or self.added or self.removed)
+        """True when the lockfile is current and matches the recipe and every section digest."""
+        return (
+            self.lock_version is None
+            and self.digest_matches
+            and not (self.changed or self.added or self.removed)
+        )
 
     @property
     def sections(self) -> tuple[str, ...]:
@@ -93,6 +101,16 @@ class LockDrift:
         markers.update({name: "+" for name in self.added})
         markers.update({name: "-" for name in self.removed})
         entries = [(markers[name], name, self.details.get(name)) for name in sorted(markers)]
+        if self.lock_version is not None:
+            entries.insert(
+                0,
+                (
+                    "~",
+                    "version",
+                    f"{self.lock_version} -> {LOCKFILE_VERSION}: lock again to record the "
+                    "distribution, compiler and kernel sections",
+                ),
+            )
         if not entries and not self.digest_matches:
             entries.append(
                 ("~", "recipe_digest", "every section matches; the lockfile digest was edited")
@@ -124,10 +142,11 @@ def unselected_variants(lock: Lockfile, payload: Mapping[str, object]) -> tuple[
 
 
 def unselected_sources(lock: Lockfile, payload: Mapping[str, object]) -> frozenset[str]:
-    """Sources the lock may record for variants the recipe *payload* does not select.
+    """Source keys the lock may record for variants the recipe *payload* does not select.
 
-    Their source builds and kernel sources: ``kernel-<variant>``, and the shared
-    ``kernel``, which an unselected variant may build too.
+    Their source builds (by name, and as ``<variant>/<name>`` when pinned per
+    variant) and kernel sources: ``kernel-<variant>``, and the shared ``kernel``,
+    which an unselected variant may build too.
     """
     entries = lock.recipe.get(VARIANTS_KEY)
     if not isinstance(entries, Mapping):
@@ -139,6 +158,7 @@ def unselected_sources(lock: Lockfile, payload: Mapping[str, object]) -> frozens
         builds = entry.get("source_builds") if isinstance(entry, Mapping) else None
         if isinstance(builds, Mapping):
             names.update(str(name) for name in builds)
+            names.update(f"{variant}/{name}" for name in builds)
     return frozenset(names)
 
 
@@ -193,6 +213,7 @@ def compare_lock(
         removed=removed,
         details=details,
         digest_matches=bool(others) or lock.recipe_digest == recipe_digest(payload),
+        lock_version=lock.version if lock.version < LOCKFILE_VERSION else None,
     )
 
 

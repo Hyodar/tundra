@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import warnings
 from dataclasses import replace
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Literal
 
 import pytest
 
-from tests.helpers import write_recipe_file
+from tests.helpers import source_dir, write_recipe_file
 from tundravm._source import (
     GitSource,
     ScriptBuild,
@@ -82,7 +83,7 @@ recipe = Recipe(
 
 backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 '''
-QEMU_BASIC_DIGEST = "571668210b9086615b19fde56a4b86cf0aa65f2ec480b2497a42641739d15c8e"
+QEMU_BASIC_DIGEST = "e5b76ccba49652aaa80470a44e57c8c9acb94562c8d96f3cc0513b17830f1e1a"
 GO_SCRIPT = (
     'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
 )
@@ -266,11 +267,12 @@ def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
         "tundravm fetch' >&2 && exit 1"
     )
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
-    checkout = f'"$SRCDIR/tundravm-sources/tool-{SHA_A[:12]}"'
-    cache = f'"${{BUILDDIR:-$BUILDROOT/build}}/tool-a283cbf9717c-{SHA_A[:12]}"'
+    directory = source_dir("tool", SHA_A, REPO)
+    checkout = f'"$SRCDIR/tundravm-sources/{directory}"'
+    cache = '"${BUILDDIR:-$BUILDROOT/build}/tool-114cfef2b31621d2"'
     assert pinned == (
         f'if ! ([ -d {cache} ] && [ "$(ls -A {cache} 2>/dev/null)" ]); then '
-        f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: tool-{SHA_A[:12]} is not "
+        f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: {directory} is not "
         "fetched: run tundravm fetch RECIPE' >&2; exit 1; } && "
         f'mkdir -p "$BUILDROOT/build/tool" && cp -a --no-preserve=ownership {checkout}/. '
         '"$BUILDROOT/build/tool"/ && rm -f "$BUILDROOT/build/tool"/.tundravm-complete && '
@@ -338,7 +340,7 @@ def test_http_source_rendering() -> None:
     assert f'echo "{"c" * 64}  "' in pinned
     assert "--strip-components=1" in pinned
     inline = _hooks(compile(_recipe(replace(build, source=Http(url, sha256="c" * 64)))))
-    assert f'"$SRCDIR/tundravm-sources/prover-{"c" * 12}"' in inline
+    assert f'"$SRCDIR/tundravm-sources/{source_dir("prover", "c" * 64, url, http=True)}"' in inline
     assert "curl" not in inline and "sha256sum" not in inline
 
 
@@ -457,7 +459,7 @@ def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
     pinned = lock(recipe, resolver=_Fixed(SHA_A))
     unpinned = Lock.of(build_lockfile(recipe=pinned.lockfile.recipe))
     with pytest.raises(LockfileError, match="unpinned: tool") as excinfo:
-        bake(recipe, locked=unpinned, backend=Backend("inprocess"), out=tmp_path / "out")
+        bake(recipe, lock=unpinned, backend=Backend("inprocess"), out=tmp_path / "out")
     assert excinfo.value.hint is not None
     assert "run tundravm lock" in excinfo.value.hint
 
@@ -542,11 +544,13 @@ def test_inspect_renders_hooks_at_the_pins_it_shows(tmp_path: Path) -> None:
     hook, pinned = shown()
     assert "not pinned" in hook and pinned is None
     hook, pinned = shown("--lockfile", str(tmp_path / "pins.lock"))
-    assert "not pinned" not in hook and SHA_A[:12] in hook and pinned == SHA_A[:7]
+    assert "not pinned" not in hook and pinned == SHA_A[:7]
+    assert re.search(r"build\}/tool-[0-9a-f]{16}", hook)
     (tmp_path / "build").mkdir()
     (tmp_path / "pins.lock").rename(tmp_path / "build" / "tundravm.lock")
     assert shown() == (hook, pinned)
-    assert f"pinned={SHA_A[:7]}" in _inspect(path) and SHA_A[:12] in _inspect(path)
+    text = _inspect(path)
+    assert f"pinned={SHA_A[:7]}" in text and re.search(r"build\}/tool-[0-9a-f]{16}", text)
 
 
 def test_check_rule_source_unpinned() -> None:

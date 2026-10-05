@@ -18,7 +18,7 @@ from tundravm._options import MkosiOptions
 from tundravm._source import KernelSource
 from tundravm.compiler import EmitConfig, MkosiEmission, emit_mkosi_tree
 from tundravm.errors import PolicyError
-from tundravm.lockfile import LockedFetch, recipe_digest
+from tundravm.lockfile import LockedFetch
 from tundravm.models import (
     NETWORK_SETUP_UNIT,
     CompileResult,
@@ -29,7 +29,7 @@ from tundravm.models import (
     ships_unit,
 )
 
-from ._lowered import Lowered, recipe_payload
+from ._lowered import Lowered
 
 
 def emit(lowered: Lowered, destination: Path) -> tuple[CompileResult, MkosiEmission]:
@@ -47,7 +47,7 @@ def emit(lowered: Lowered, destination: Path) -> tuple[CompileResult, MkosiEmiss
         base=lowered.base,
         config=_emit_config(lowered, pins),
     )
-    digest = recipe_digest(recipe_payload(initialized.state, lowered.active))
+    digest = initialized.digest()
     return CompileResult(path=Path(destination), profiles=lowered.active, digest=digest), emission
 
 

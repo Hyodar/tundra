@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
+FileKind = Literal["file", "symlink", "directory"]
 SecurityProfile = Literal["strict", "default", "none"]
 RestartPolicy = Literal["always", "on-failure", "no"]
 ServiceType = Literal["simple", "exec", "oneshot", "notify", "forking"]
@@ -114,9 +115,12 @@ class RepositorySpec:
 
 @dataclass(frozen=True, slots=True)
 class FileEntry:
+    """A path in the image: file bytes, a symlink (``content`` is its target) or a directory."""
+
     path: str
     content: str | bytes
     mode: str = "0644"
+    kind: FileKind = "file"
 
     @property
     def data(self) -> bytes:
@@ -230,11 +234,18 @@ class SecretSchema:
 
 @dataclass(frozen=True, slots=True)
 class SecretTarget:
+    """Where a secret is delivered: a file, or an environment variable.
+
+    An env target with *service* (a unit name, ``app.service``) is that
+    service's; without one, with ``scope="global"``, it is the global environment.
+    """
+
     kind: Literal["file", "env"]
     location: str
     mode: str = "0400"
     scope: Literal["service", "global"] = "service"
     owner: str | None = None
+    service: str | None = None
 
     @classmethod
     def file(
@@ -247,8 +258,14 @@ class SecretTarget:
         return cls(kind="file", location=path, mode=mode, scope="service", owner=owner)
 
     @classmethod
-    def env(cls, name: str, *, scope: Literal["service", "global"] = "service") -> SecretTarget:
-        return cls(kind="env", location=name, mode="0400", scope=scope)
+    def env(
+        cls,
+        name: str,
+        *,
+        scope: Literal["service", "global"] = "service",
+        service: str | None = None,
+    ) -> SecretTarget:
+        return cls(kind="env", location=name, mode="0400", scope=scope, service=service)
 
 
 @dataclass(frozen=True, slots=True)
@@ -719,6 +736,7 @@ __all__ = [
     "DeployRequest",
     "DeployResult",
     "FileEntry",
+    "FileKind",
     "GroupSpec",
     "HookSpec",
     "Kernel",

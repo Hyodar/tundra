@@ -320,7 +320,7 @@ def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
     progress: list[str] = []
     [artifact] = bake(
         recipe,
-        locked=lock(recipe),
+        lock=lock(recipe),
         backend=Backend("inprocess"),
         out=tmp_path / "out",
         progress=progress.append,

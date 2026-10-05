@@ -40,12 +40,12 @@ RECIPE_FACTORY_NAMES: tuple[str, ...] = ("build", "recipe")
 def load_recipe(
     path: str | Path,
     *,
-    attr: str | None = None,
+    attribute: str | None = None,
     extra_paths: Sequence[str | Path] = (),
 ) -> Recipe:
     """Import a recipe file and return the ``Recipe`` it defines.
 
-    Resolution order when *attr* is not given:
+    Resolution order when *attribute* is not given:
 
     1. A module-level ``Recipe`` bound to one of ``RECIPE_OBJECT_NAMES``.
     2. A zero-argument callable named in ``RECIPE_FACTORY_NAMES`` returning one.
@@ -58,17 +58,17 @@ def load_recipe(
     every entry of *extra_paths* are importable while it runs, so sibling helper
     modules and project-local packages resolve.
     """
-    return load_file(path, attr=attr, extra_paths=extra_paths).recipe
+    return load_file(path, attribute=attribute, extra_paths=extra_paths).recipe
 
 
 def load_image(
     path: str | Path,
     *,
-    attr: str | None = None,
+    attribute: str | None = None,
     extra_paths: Sequence[str | Path] = (),
 ) -> Lowered:
     """The recipe file at *path*, lowered for the compiler with its ``backend``."""
-    return load_file(path, attr=attr, extra_paths=extra_paths).lowered()
+    return load_file(path, attribute=attribute, extra_paths=extra_paths).lowered()
 
 
 def _backend(value: object, recipe_path: Path) -> BuildBackend:
@@ -339,7 +339,7 @@ class RecipeFile:
 def load_file(
     path: str | Path,
     *,
-    attr: str | None = None,
+    attribute: str | None = None,
     extra_paths: Sequence[str | Path] = (),
 ) -> RecipeFile:
     """Import a recipe file without lowering it; discovery as in :func:`load_recipe`."""
@@ -352,8 +352,8 @@ def load_file(
         )
     module = _import_recipe_module(recipe_path, extra_paths=extra_paths)
     found = (
-        _resolve_attr(module, attr, recipe_path)
-        if attr is not None
+        _resolve_attr(module, attribute, recipe_path)
+        if attribute is not None
         else _discover(module, recipe_path)
     )
     raw = getattr(module, BACKEND_NAME, None)

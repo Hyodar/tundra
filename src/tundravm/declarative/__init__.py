@@ -36,6 +36,7 @@ from .lifecycle import (
     measure,
     read_artifacts,
     read_lock,
+    verify_artifact,
     write_lock,
 )
 from .load import load
@@ -157,5 +158,6 @@ __all__ = [
     "read_lock",
     "resolve",
     "resolve_all",
+    "verify_artifact",
     "write_lock",
 ]

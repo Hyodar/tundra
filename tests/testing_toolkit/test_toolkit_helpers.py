@@ -337,7 +337,7 @@ def test_bake_in_process_writes_simulated_artifacts(tmp_path: Path) -> None:
 def test_bake_in_process_defaults_to_temp_dir_and_takes_a_lock() -> None:
     recipe = _recipe()
     locked = lock(recipe, variants=["azure"])
-    (artifact,) = bake_in_process(recipe, variants=["azure"], locked=locked)
+    (artifact,) = bake_in_process(recipe, variants=["azure"], lock=locked)
     assert (artifact.variant, artifact.target) == ("azure", "azure")
     assert artifact.path.is_file()
 

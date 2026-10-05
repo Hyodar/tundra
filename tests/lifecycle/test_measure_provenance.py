@@ -92,7 +92,7 @@ def _baked(tmp_path: Path, *, simulated: bool = False) -> tuple[Artifact, ...]:
         variants=(Variant("default", target="qemu"), Variant("gcp", target="gcp")),
     )
     artifacts = bake(
-        recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
+        recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
     )
     return artifacts if simulated else tuple(replace(a, simulated=False) for a in artifacts)
 

@@ -3,7 +3,7 @@
 A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
 :class:`Variant` overlays) is the whole public model; ``resolve``/``lint``/
 ``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``fetch``, ``bake``,
-``read_artifacts``, ``doctor``) take one. ``diff``, ``measure`` and ``deploy``
+``read_artifacts``, ``verify_artifact``, ``doctor``) take one. ``diff``, ``measure`` and ``deploy``
 are ``tundravm.declarative.diff``/``measure``/``deploy`` (at the top level those
 names are modules). The shipped fragments are in :mod:`tundravm.declarative.utils`.
 """
@@ -74,9 +74,11 @@ from .declarative import (
     read_lock,
     resolve,
     resolve_all,
+    verify_artifact,
     write_lock,
 )
 from .errors import (
+    ArtifactError,
     BackendExecutionError,
     DeploymentError,
     LintError,
@@ -93,6 +95,7 @@ from .recipe import load_recipe
 
 __all__ = [
     "Artifact",
+    "ArtifactError",
     "Azure",
     "Backend",
     "BackendExecutionError",
@@ -167,6 +170,7 @@ __all__ = [
     "read_lock",
     "resolve",
     "resolve_all",
+    "verify_artifact",
     "write_lock",
     "__version__",
 ]

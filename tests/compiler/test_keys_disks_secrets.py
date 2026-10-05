@@ -1,6 +1,7 @@
 """Keys, disks and secrets lower to the tundra-tools builds, configs and runtime-init steps."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,10 @@ from tundravm.declarative import (
     SecretEnv,
     SecretFile,
     Secrets,
+    Service,
+    Unit,
     compile,
+    lint,
     lock,
     lower,
 )
@@ -77,7 +81,7 @@ def test_key_generation_adds_build_hook(tmp_path: Path) -> None:
     builds = _builds(tree)
     assert len(builds) == 1
     build_script = builds[0]
-    assert "-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
+    assert re.search(r'build\}/key-generation-[0-9a-f]{16}"', build_script)
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "go build" in build_script
@@ -184,7 +188,7 @@ def test_disk_encryption_adds_build_hook(tmp_path: Path) -> None:
     builds = _builds(tree)
     assert len(builds) == 1
     build_script = builds[0]
-    assert "-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
+    assert re.search(r'build\}/disk-encryption-[0-9a-f]{16}"', build_script)
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "./cmd/disk-setup" in build_script
@@ -305,7 +309,7 @@ def test_secret_delivery_adds_build_hook(tmp_path: Path) -> None:
     builds = _builds(tree)
     assert len(builds) == 1
     build_script = builds[0]
-    assert "-2bddc6a617e7-aaaaaaaaaaaa" in build_script  # Hyodar/tundra-tools at the pin
+    assert re.search(r'build\}/secret-delivery-[0-9a-f]{16}"', build_script)
     assert "mkosi-chroot bash -c" in build_script
     assert "mkdir -p ./build" in build_script
     assert "./cmd/secret-delivery" in build_script
@@ -382,6 +386,77 @@ def test_secret_delivery_writes_config_from_declared_secrets(tmp_path: Path) -> 
         "owner": "app",
     }
     assert jwt["targets"][1] == {"kind": "env", "location": "JWT_SECRET", "scope": "global"}
+
+
+def _service_secrets(*extra: Declaration, service: str = "app") -> tuple[Declaration, ...]:
+    secrets = Secrets(
+        entries=(
+            Secret("token", targets=(SecretEnv("API_TOKEN", service=service),)),
+            Secret("flags", targets=(SecretEnv("FLAGS", service="worker"),), required=False),
+        ),
+    )
+    units = (Service("app", "/usr/bin/app"), Service("worker", "/usr/bin/worker"))
+    return (*units, secrets, *extra)
+
+
+def test_secret_env_keeps_its_service_in_the_manifest(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, *_service_secrets())
+    manifest = json.loads(tree.read(SECRET_MANIFEST))
+    targets = {s["name"]: s["targets"] for s in manifest["secrets"]}
+    assert targets["token"] == [
+        {
+            "env_file": "/run/secrets/app.env",
+            "kind": "env",
+            "location": "API_TOKEN",
+            "scope": "service",
+            "service": "app.service",
+        }
+    ]
+    assert targets["flags"][0]["service"] == "worker.service"
+    assert targets["flags"][0]["env_file"] == "/run/secrets/worker.env"
+
+
+def test_secret_env_service_reads_its_environment_file(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, *_service_secrets(service="app.service"))
+    dropin = "mkosi.extra/usr/lib/systemd/system/{}.service.d/tundravm-secrets.conf"
+    assert tree.read(dropin.format("app")) == ("[Service]\nEnvironmentFile=/run/secrets/app.env\n")
+    assert tree.read(dropin.format("worker")) == (
+        "[Service]\nEnvironmentFile=-/run/secrets/worker.env\n"
+    )
+
+
+def test_several_deliveries_keep_their_service_files_apart(tmp_path: Path) -> None:
+    first = Secrets("api", entries=(Secret("a", targets=(SecretEnv("A", "app"),)),))
+    second = Secrets("ops", entries=(Secret("b", targets=(SecretEnv("B", "app"),)),))
+    tree = _compile(tmp_path, Service("app", "/usr/bin/app"), first, second)
+    base = "mkosi.extra/usr/lib/systemd/system/app.service.d"
+    assert tree.read(f"{base}/tundravm-api.conf").endswith("=/run/secrets/app-api.env\n")
+    assert tree.read(f"{base}/tundravm-ops.conf").endswith("=/run/secrets/app-ops.env\n")
+
+
+def test_global_secret_env_writes_no_dropin(tmp_path: Path) -> None:
+    secrets = Secrets(entries=(Secret("t", targets=(SecretEnv("T"),)),))
+    tree = _compile(tmp_path, secrets)
+    assert not [path for path in tree.files() if ".service.d/" in path]
+
+
+def test_secret_env_rejects_an_unknown_service() -> None:
+    recipe = _recipe(*_service_secrets(service="ap"))
+    found = [d for d in lint(recipe) if d.code == "secret-env-service-unknown"]
+    assert [(d.level, d.subject) for d in found] == [("error", "ap.service")]
+    assert "'ap.service'" in found[0].message
+
+
+def test_secret_env_accepts_a_packaged_unit_the_variant_enables() -> None:
+    packaged = Unit("nginx.service", enabled=True)
+    recipe = _recipe(*_service_secrets(packaged, service="nginx"))
+    assert [d for d in lint(recipe) if d.code == "secret-env-service-unknown"] == []
+
+
+@pytest.mark.parametrize("service", ["app.socket", "bad name"])
+def test_secret_env_rejects_a_service_that_is_not_one(service: str) -> None:
+    with pytest.raises(ValidationError):
+        SecretEnv("TOKEN", service=service)
 
 
 # ── Composition through runtime-init ─────────────────────────────────

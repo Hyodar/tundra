@@ -31,15 +31,18 @@ from .declarative.lifecycle import (
     read_lock,
     requirements_of,
     using_lock,
+    verify_artifact,
 )
 from .diff import diff_against
-from .errors import TdxError
+from .errors import SourceError, TdxError
 from .formats import md_cell, md_table
 from .lockfile import lock_variants
 from .models import BAKE_RESULT_FILENAME
 from .recipe import RecipeFile
 
 Verdict = Literal["ok", "stale", "missing", "n/a", "error"]
+Integrity = Literal["verified", "unchecked", "mismatch"]
+"""An artifact's bytes against their recorded sha256; ``unchecked`` unless ``verify``."""
 VERDICTS: tuple[Verdict, ...] = ("ok", "stale", "missing", "n/a", "error")
 """``error`` is only the lint verdict: the recipe has error diagnostics."""
 
@@ -134,15 +137,19 @@ def project_status(
     lock_path: Path,
     runner: ProbeRunner,
     invocation: Invocation,
+    verify: bool = False,
 ) -> ProjectStatus:
-    """Report *variants* of *loaded* against the build output in *out*; never writes."""
+    """Report *variants* of *loaded* against the build output in *out*; never writes.
+
+    With *verify* each artifact's file is hashed against its recorded sha256.
+    """
     img = loaded.lowered()
     names = tuple(variants)
     lock, lock_item = _lock(img, names, lock_path)
     sources = _sources(img, names, lock, out)
     tree = _tree(img, names, lock, out / TREE_DIRNAME)
     manifest = out / BAKE_RESULT_FILENAME
-    artifacts = _artifacts(img, names, lock, manifest)
+    artifacts = _artifacts(img, names, lock, manifest, verify=verify)
     backend = _backend(loaded, runner)
     lint = _lint(loaded, names)
     status = ProjectStatus(
@@ -240,7 +247,22 @@ def _sources(
         path = root / build.pin_dir(pin)
         data["path"] = str(path)
         others = _other_checkouts(root, name, path)
-        if is_fetched(path, pin):
+        try:
+            fetched = is_fetched(path, pin, build.source, name=name)
+        except SourceError as exc:
+            data["fetched"] = False
+            data["modified"] = exc.reason
+            items.append(
+                StatusItem(
+                    "source",
+                    "stale",
+                    f"{name}: checkout at {path} modified since the fetch ({exc.reason}); "
+                    "run tundravm fetch --force",
+                    data,
+                )
+            )
+            continue
+        if fetched:
             data["fetched"] = True
             items.append(StatusItem("source", "ok", f"{name}: {pin[:12]} at {path}", data))
             continue
@@ -287,7 +309,7 @@ def _tree(img: Lowered, names: tuple[str, ...], lock: Lock | None, path: Path) -
 
 
 def _artifacts(
-    img: Lowered, names: tuple[str, ...], lock: Lock | None, manifest: Path
+    img: Lowered, names: tuple[str, ...], lock: Lock | None, manifest: Path, *, verify: bool
 ) -> tuple[StatusItem, ...]:
     if not manifest.is_file():
         return tuple(
@@ -311,7 +333,7 @@ def _artifacts(
             detail = f"{name}: not in {manifest}"
             items.append(StatusItem("artifact", "missing", detail, {"variant": name}))
         for artifact in baked:
-            items.append(_artifact(artifact, current, lockfile))
+            items.append(_artifact(artifact, current, lockfile, verify=verify))
     return tuple(items)
 
 
@@ -334,12 +356,23 @@ def _current_digests(
     return tree, recipes
 
 
+def _integrity(artifact: Artifact, *, verify: bool) -> Integrity:
+    if not verify:
+        return "unchecked"
+    try:
+        verify_artifact(artifact)
+    except TdxError:
+        return "mismatch"
+    return "verified"
+
+
 def _artifact(
-    artifact: Artifact, current: tuple[str | None, set[str]], lockfile: object
+    artifact: Artifact, current: tuple[str | None, set[str]], lockfile: object, *, verify: bool
 ) -> StatusItem:
     tree, recipes = current
     path = artifact.path
     size = path.stat().st_size if path.is_file() else None
+    integrity = _integrity(artifact, verify=verify and size is not None)
     recipe_ok = None if not artifact.recipe_digest else artifact.recipe_digest in recipes
     tree_ok = None if not artifact.tree_digest else artifact.tree_digest == tree
     data: dict[str, object] = {
@@ -352,18 +385,26 @@ def _artifact(
         "lockfile": lockfile if isinstance(lockfile, str) else None,
         "recipe_matches": recipe_ok,
         "tree_matches": tree_ok,
+        "integrity": integrity,
     }
     parts = [f"{artifact.variant}/{artifact.target}", str(path)]
     if size is None:
         parts.append("file is gone")
     else:
         parts.extend((_size(size), f"sha256 {artifact.sha256[:12]}"))
+        parts.append(
+            "integrity unchecked (--verify hashes it)"
+            if integrity == "unchecked"
+            else f"integrity {integrity}"
+        )
     if artifact.simulated:
         parts.append("simulated")
     parts.append(f"lock {lockfile}" if isinstance(lockfile, str) else "unpinned")
     changed = [what for what, ok in (("recipe", recipe_ok), ("tree", tree_ok)) if ok is False]
     if changed:
         parts.append(f"{' and '.join(changed)} changed since the bake")
+    if integrity == "mismatch":
+        changed.append("bytes")
     verdict: Verdict = "missing" if size is None else ("stale" if changed else "ok")
     return StatusItem("artifact", verdict, "  ".join(parts), data)
 
@@ -407,7 +448,7 @@ def _next(status: ProjectStatus, call: Invocation, out: Path) -> str:
     if status.lint.verdict == "error":
         return f"tundravm lint {call.recipe}{variants}"
     if status.lock.verdict != "ok":
-        path = "" if call.lockfile is None else f" --path {call.lockfile}"
+        path = "" if call.lockfile is None else f" --lockfile {call.lockfile}"
         return f"tundravm lock {call.recipe}{variants}{path}"
     if overall(status.sources) in ("missing", "stale"):
         return f"tundravm fetch {call.recipe}{variants}{out_flag}{lock_flag}"

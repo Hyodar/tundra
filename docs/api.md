@@ -81,7 +81,7 @@ The default variant is the one named `default`, else the first whose parent is `
 | `Package` | `name`, `role="runtime"` (`"runtime"` or `"build"`) | name, role |
 | `File` | `path` (absolute), `content: str \| bytes \| Path`, `mode=0o644`, `stage="extra"` (`"skeleton"` or `"extra"`) | stage, path |
 | `Template` | `path` (absolute), `template: str \| Path`, `variables: tuple[tuple[str, str \| int \| float], ...] = ()`, `mode=0o644`, `stage="extra"` | stage, path |
-| `Directory` | `path` (absolute), `source: Path`, `exclude=()`, `mode=None` (keep), `stage="extra"` | stage, path |
+| `Directory` | `path` (absolute), `source: Path`, `exclude=()`, `mode=None` (keep each file's and empty directory's permission bits; a mode sets every file to it and empty directories to `0755`), `stage="extra"`, `symlinks="preserve"` (ship links as links; `"follow"` ships what they point to) | stage, path |
 | `Group` | `name`, `system=True`, `gid=None` | name |
 | `User` | `name`, `system=True`, `home=None`, `shell="/usr/sbin/nologin"`, `uid=None`, `primary_group=None`, `groups=()` | name |
 | `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `after_init=False` | unit name |
@@ -121,7 +121,7 @@ No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkos
 | `Secrets` | `name="secrets"`, `entries: tuple[Secret, ...] = ()`, `store: Disk \| None = None`, `host="0.0.0.0"`, `port=8080`, `ssh_directory="/root/.ssh"`, `ssh_key_path="/etc/root_key"` | name |
 | `Secret` | `name`, `targets: tuple[SecretFile \| SecretEnv, ...]` (at least one), `required=True`, `schema: Schema \| None = None` | (inside `Secrets`) |
 | `SecretFile` | `path`, `mode=0o400`, `owner=None` | |
-| `SecretEnv` | `name`, `service=None` (`None`: global environment) | |
+| `SecretEnv` | `name`, `service=None` (`None`: global environment; `"app"` or `"app.service"`: delivered to `/run/secrets/app.env`, which a generated `app.service.d/tundravm-secrets.conf` drop-in makes the unit read, required when the secret is) | |
 | `Schema` | `kind="string"` (`"string"` or `"json"`), `min_length=None`, `max_length=None`, `pattern=None`, `enum=()` | |
 | `RuntimeTools` | `source: Git`, `key_config="/etc/tdx/key-gen.yaml"`, `disk_config="/etc/tdx/disk-setup.yaml"`, `secret_config="/etc/tdx/secrets.yaml"`, `secret_manifest="/etc/tdx/secrets.json"` | one per variant |
 
@@ -136,7 +136,7 @@ A variant may declare several `Secrets`. A single one uses the `RuntimeTools` `s
 | `Git` | `url`, `ref`, `subdir=None` (relative), `submodules=False` |
 | `Http` | `url`, `sha256=None` (64 lowercase hex) |
 | `Install` | `source` (relative to the build's source tree), `destination` (absolute), `mode=0o755`, `directory=False` (requires `mode=None`) |
-| `Build` | `name`, `source: Git \| Http`, `script=None`, `install: tuple[Install, ...]` (at least one), `packages=()`, `env: Pairs = ()`, `cache_key=None`, `recipe: Go \| Cargo \| Dotnet \| None = None` |
+| `Build` | `name`, `source: Git \| Http`, `script=None`, `install: tuple[Install, ...]` (at least one), `packages=()`, `env: Pairs = ()`, `cache_key=None` (the build cache namespace, default `name`: the current dialect caches under `<namespace>-<sha256(source pin, build spec, install spec, arch, toolchain)[:16]>`, so changing any of them rebuilds), `recipe: Go \| Cargo \| Dotnet \| None = None` |
 | `Go` | keyword-only: `output`, `package="./..."`, `ldflags="-s -w -buildid="`, `tags=()`, `env: Mapping = {}`, `packages=("golang",)`, `output_dir="./build"`, `mkdir=True` |
 | `Cargo` | keyword-only: `output`, `bin=None`, `package=None`, `features=()`, `profile="release"`, `env: Mapping = {}`, `packages=("cargo",)` |
 | `Dotnet` | keyword-only: `project`, `output`, `configuration="Release"`, `runtime="linux-x64"`, `env: Mapping = {}`, `packages=("dotnet-sdk-8.0",)`, `restore_args=()`, `properties: Mapping = {}` |
@@ -184,10 +184,11 @@ lock(recipe, *, previous=None, update=(), offline=False, resolver=None, variants
 lock_status(recipe, locked: Lock, *, variants=None, resolver=None) -> tuple[Diagnostic, ...]
 read_lock(path: Path) -> Lock
 write_lock(locked: Lock, path: Path) -> None
-bake(recipe, *, locked: Lock, backend: Backend, out: Path, variants=None, progress=None, fetch=True) -> tuple[Artifact, ...]
+bake(recipe, *, lock: Lock, backend: Backend, out: Path, variants=None, progress=None, fetch=True) -> tuple[Artifact, ...]
 read_artifacts(manifest: Path) -> tuple[Artifact, ...]
+verify_artifact(artifact: Artifact) -> None
 measure(artifact, *, scheme="rtmr", allow_placeholder=False) -> Measurements
-deploy(artifact, *, using: Qemu | Azure | Gcp, allow_placeholder=False, adapter=None) -> Deployment
+deploy(artifact, *, using: Qemu | Azure | Gcp, allow_simulated=False, adapter=None) -> Deployment
 doctor(backend: Backend, *, runner=None) -> tuple[Diagnostic, ...]
 load(path, *, attribute="recipe", extra_paths=()) -> Recipe
 lower(recipe, *, variants=None)  # internal: the lowered recipe for the recipe
@@ -196,25 +197,25 @@ lower(recipe, *, variants=None)  # internal: the lowered recipe for the recipe
 ```python
 from tundravm.declarative.lifecycle import FetchedSource, fetch
 
-fetch(recipe, *, locked: Lock | None, out: Path, variants=None, resolver=None) -> tuple[FetchedSource, ...]
+fetch(recipe, *, lock: Lock | None, out: Path, variants=None, resolver=None, force=False) -> tuple[FetchedSource, ...]
 ```
 
 `fetch` and `FetchedSource` are exported from `tundravm` and `tundravm.declarative` `tundravm` nor `tundravm.declarative`; import them from `tundravm.declarative.lifecycle`.
 
 `variants=None` means every declared variant; unknown names raise `ValidationError`.
 
-- **`lint`** returns resolution and fragment-check diagnostics first, in resolution order. When none is an error it adds the compiler's rules on the lowered recipe, sorted by variant, level and code. With `lock`, drift is added as `lock-changed`, `lock-added` and `lock-removed` diagnostics whose `subject` is the section.
+- **`lint`** returns resolution and fragment-check diagnostics first, in resolution order. When none is an error it adds the compiler's rules on the lowered recipe, sorted by variant, level and code. With `lock`, its source pins apply before the compiler's rules run (a pinned source never reports `source-unpinned`) and drift is added as `lock-changed`, `lock-added` and `lock-removed` diagnostics whose `subject` is the section.
 - **`compile`** returns the tree in memory. Without `lock` no lockfile is consulted, so source builds use their refs; with one, its pins apply.
 - **`diff`** is a unified diff from `against` (a `Tree` or a directory) to `tree`, empty when they match. Variant directories in `against` that `tree` does not hold are not compared.
-- **`lock`** keeps every pin in `previous` whose source is unchanged and resolves the rest, plus the sources named in `update` (unknown names raise). The default lookup runs `git ls-remote` for a git ref and hashes the download for an `Http` source without `sha256`; `resolver`, a function from source to pin, replaces it; `offline=True` fails for any source without a previous pin. Every source is tried before failing: one `LockfileError` lists all of them (`.failures`, name to `SourceError`), with reasons `ref '<ref>' not found`, `repository unreachable: <git stderr>`, `HTTP <status>` or `timed out after 60s` (every network call times out after 60s, and git never prompts for credentials).
-- **`lock_status`** is the drift between the recipe and `locked`, one diagnostic per section; empty when current. With `resolver` (as for `lock`) it also reports git refs that moved since the lock, as `sources.<name>`. When `variants` leaves out some declared variant, see [subsets](#locks-and-variant-subsets).
-- <a id="fetch"></a>**`fetch`** checks the sources of `variants` out on this host, as the invoking user (git credentials and the SSH agent apply), into `out/.sources/<name>-<pin[:12]>/`: every source build and, outside `nethermind-v1`, every built kernel's source (named `kernel`, or `kernel-<variant>` where a variant's kernel source differs). A git source is checked out at its pinned commit (with submodules when the `Git` asks for them), an http source is downloaded and checked against its sha256. Pins come from `locked`; a source it does not pin (every source, with `locked=None`) is resolved first through `resolver` (default: the network, as `lock` does), which `Policy(mutable_ref_policy="error")` refuses. A complete checkout carries a marker naming its pin and is kept, so a second fetch touches nothing; there is one checkout per (source, pin). Returns one `FetchedSource` per source.
-- **`bake`** writes `locked` to `out/tundravm.lock` when that file is absent or identical; a different lockfile already there is left alone and the bake reads a scratch copy of `locked`. It bakes frozen into `out` and writes `out/bake-result.json`, whose `declarative.lockfile` is the path of the lockfile it used (`null` for a scratch copy). It fails before building on lint errors (`LintError`) or drift (`LockfileError`); a `locked` of every variant covers `variants=` naming a [subset](#locks-and-variant-subsets). `progress` receives the CLI's progress lines. Outside `nethermind-v1`, a bake with a real backend first runs `fetch` at the pins it builds; the backend mounts `out/.sources` into the build (`BakeRequest.sources_dir`, at `$SRCDIR/tundravm-sources`, ephemerally) and each source hook (and kernel build script) copies its checkout, so the build sandbox never fetches a source. `fetch=False` builds from the checkouts already in `out/.sources` (copied to an air-gapped host, say) and raises `StateError` (`E_STATE`) before mkosi runs when one is missing. The in-process backend fetches nothing.
+- **`lock`** keeps every pin in `previous` whose source is unchanged and resolves the rest, plus the sources named in `update` (unknown names raise). A build whose source differs between variants is pinned once per variant under `<variant>/<name>`; `update` takes that key, or the build's name for every variant's pin. The default lookup runs `git ls-remote` for a git ref and hashes the download for an `Http` source without `sha256`; `resolver`, a function from source to pin, replaces it; `offline=True` fails for any source without a previous pin. Every source is tried before failing: one `LockfileError` lists all of them (`.failures`, name to `SourceError`), with reasons `ref '<ref>' not found`, `repository unreachable: <git stderr>`, `HTTP <status>` or `timed out after 60s` (every network call times out after 60s, and git never prompts for credentials).
+- **`lock_status`** is the drift between the recipe and `locked`, one diagnostic per section; empty when current. With `resolver` (as for `lock`) it also reports git refs that moved since the lock, as `sources.<name>` (`sources.<variant>.<name>` for a per-variant pin). A version 3 lockfile reports a `lock-changed` diagnostic for `version` and the new sections as added. When `variants` leaves out some declared variant, see [subsets](#locks-and-variant-subsets).
+- <a id="fetch"></a>**`fetch`** checks the sources of `variants` out on this host, as the invoking user (git credentials and the SSH agent apply), into `out/.sources/<name>-<pin[:12]>-<id[:8]>/` (`id` hashes the url, subdirectory and submodules): every source build and, outside `nethermind-v1`, every built kernel's source (named `kernel`, or `kernel-<variant>` where a variant's kernel source differs). A git source is checked out at its pinned commit (with submodules when the `Git` asks for them), an http source is downloaded and checked against its sha256. Pins come from `lock`; a source it does not pin (every source, with `lock=None`) is resolved first through `resolver` (default: the network, as `lock` does), which `Policy(mutable_ref_policy="error")` refuses. A complete checkout carries a marker naming its pin (and, for http, a sha256 manifest of its files) and is verified before it is kept, so a second fetch touches nothing: git `HEAD` must be the pin with an empty `git status` (untracked and ignored files included) and initialised submodules when asked for. A modified checkout raises `SourceError` (`E_SOURCE`, `source <name> checkout modified/incomplete: run tundravm fetch --force`); `force=True` checks every source out again. There is one checkout per (source, pin). Returns one `FetchedSource` per source.
+- **`bake`** writes `lock` to `out/tundravm.lock` when that file is absent or identical; a different lockfile already there is left alone and the bake reads a scratch copy of `lock`. It bakes frozen into `out` and writes `out/bake-result.json`, whose `declarative.lockfile` is the path of the lockfile it used (`null` for a scratch copy). It fails before building on lint errors (`LintError`) or drift (`LockfileError`); a `lock` of every variant covers `variants=` naming a [subset](#locks-and-variant-subsets). `progress` receives the CLI's progress lines. Outside `nethermind-v1`, a bake with a real backend first runs `fetch` at the pins it builds; the backend mounts `out/.sources` into the build (`BakeRequest.sources_dir`, at `$SRCDIR/tundravm-sources`, ephemerally) and each source hook (and kernel build script) copies its checkout, so the build sandbox never fetches a source. `fetch=False` builds from the checkouts already in `out/.sources` (copied to an air-gapped host, say) and raises `StateError` (`E_STATE`) before mkosi runs when one is missing. The in-process backend fetches nothing.
 - **`read_artifacts`** reads `bake-result.json` (or the directory holding it).
 - **`measure`** derives expected measurements with `measured-boot` or `dstack-mr`; without one it raises `MeasurementError` unless `allow_placeholder`, which also emits a `PlaceholderMeasurementWarning`. Simulated artifacts are refused unless `allow_placeholder`.
-- **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_placeholder`. `adapter` replaces the default adapter (tests).
+- **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_simulated`. `adapter` replaces the default adapter (tests).
 - **`doctor`** returns one `tool-missing` diagnostic per missing host tool of the backend (a warning when the tool is optional).
-- **`load`** imports a recipe file and returns its `Recipe`; `attribute` may also name a zero-argument factory, and `attribute=None` discovers it as the [CLI does](cli.md#recipe-files). `load_recipe(path, *, attr=None, extra_paths=())` is the same with CLI discovery by default.
+- **`load`** imports a recipe file and returns its `Recipe`; `attribute` may also name a zero-argument factory, and `attribute=None` discovers it as the [CLI does](cli.md#recipe-files). `load_recipe(path, *, attribute=None, extra_paths=())` is the same with CLI discovery by default.
 
 ### Result and input types
 
@@ -222,9 +223,9 @@ fetch(recipe, *, locked: Lock | None, out: Path, variants=None, resolver=None) -
 |---|---|
 | `Tree` | `entries: tuple[Entry, ...]`, `digest: str`, `variants: tuple[str, ...]`; `write(path)` writes it, replacing its variant directories and dropping stale ones |
 | `Entry` | `path`, `content: bytes \| None`, `mode: int`, `symlink: str \| None = None` (a directory has neither content nor symlink) |
-| `Lock` | `recipe_digest`, `sections: Pairs` (section to digest, see [below](#locks-and-variant-subsets)), `pins: tuple[Pin, ...]`, `compiler_version`; `text()` is the serialized lockfile |
+| `Lock` | `recipe_digest`, `sections: Pairs` (section to digest, see [below](#locks-and-variant-subsets)), `pins: tuple[Pin, ...]`, `compiler_version` (the tundravm version that wrote it, from its `compiler` section); `text()` is the serialized lockfile |
 | `Pin` | `identity` (build name, `kernel`/`kernel-<variant>` for a built kernel, or URL for anonymous fetches), `source: Git \| Http` (the resolved commit or hash), `digest` |
-| `FetchedSource` | `name` (a build's, or `kernel`/`kernel-<variant>`), `kind` (`"git"`, `"http"`), `url`, `pin` (commit or sha256), `path` (`<out>/.sources/<name>-<pin[:12]>`), `cached=False` (an earlier fetch had completed it), `ref=None` (the git ref the pin came from); `locked()` is the lockfile entry it matches |
+| `FetchedSource` | `name` (a build's lock key: its name or `<variant>/<name>`, or `kernel`/`kernel-<variant>`), `kind` (`"git"`, `"http"`), `url`, `pin` (commit or sha256), `path` (`<out>/.sources/<name>-<pin[:12]>-<id[:8]>`), `cached=False` (an earlier fetch had completed it), `ref=None` (the git ref the pin came from); `locked()` is the lockfile entry it matches |
 | `Backend` | `kind` (`"lima"`, `"nix"`, `"local"`, `"inprocess"`), `cpus=2`, `memory="4GiB"`, `disk="40GiB"` (the last three for Lima) |
 | `Artifact` | `path`, `variant`, `target`, `sha256`, `recipe_digest`, `lock_digest`, `tree_digest`, `simulated=False` |
 | `Measurements` | `scheme` (`"rtmr"`, `"azure"`, `"gcp"`), `values: Pairs`, `tool` (`"measured-boot <version>"`, `"dstack-mr <version>"` or `"placeholder"`), `artifact_digest`; `to_json(path=None) -> str` is the four fields as JSON (sorted keys, trailing newline), also written to `path` when given; `verify(expected: Mapping[str, str]) -> tuple[str, ...]` is the sorted registers whose value differs from `expected` (a register only one side has counts), empty when all match |
@@ -242,7 +243,7 @@ assert not [d for d in lint(recipe) if d.level == "error"]
 locked = lock(recipe)
 write_lock(locked, Path("build/tundravm.lock"))
 compile(recipe, lock=locked).write(Path("mkosi"))
-artifacts = bake(recipe, locked=locked, backend=Backend("inprocess"), out=Path("build"))
+artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), out=Path("build"))
 default = next(a for a in artifacts if a.variant == "default")
 measured = measure(default, allow_placeholder=True)
 measured.to_json(Path("build/default.measurements.json"))
@@ -262,7 +263,7 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 | `Tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements=(), check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
 | `DevTools(*, root_password="tdx")` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it. |
 | `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot: `snapshot` is a snapshot ID (`"20251113T083151Z"`, read from `snapshot.debian.org`) or a snapshot archive URL, and it must carry `version` (the templates pair `20251113T083151Z` with `257.8-1~deb13u1`). The current dialect downloads the package into `$BUILDROOT/` (mkosi-chroot mounts its own `/tmp`) and fails with that advice when the download fails |
-| `Backports(*, mirror=None, release=None)` | `backports` | Debian backports and sid apt sources for the build's apt, not the image. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `mirror` verbatim, else `Recipe.mirror` and `Recipe.snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the release of `Recipe.base`. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
+| `Backports(*, archive_url=None, release=None)` | `backports` | Debian backports and sid apt sources for the build's apt, not the image. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `archive_url` verbatim, else `Recipe.mirror` and `Recipe.snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the release of `Recipe.base`. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
 
 `issuer`/`validator` are a `TdxsType` (`"tdx"`, `"azure"`, `"gcp"` or `"simulator"`) or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. `Backports.render_sources(*, mirror, release, snapshot=None)` and `render_preferences(*, release)` return the two files' text (the recipe's mirror root, release and snapshot; the fragment's own fields win). `BACKPORTS_TREE` is the `SandboxTrees` entry `Backports` adds under `nethermind-v1`, `"mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"`. Each class is an instance of `Fragment`, so it goes wherever a `Fragment` does: in `common`, in a variant's `add`, or among another fragment's `items`.
 
@@ -306,6 +307,7 @@ Every SDK error subclasses `TdxError(message, *, code, hint=None, context=None)`
 | `BackendExecutionError` | `E_BACKEND_EXECUTION` | The backend failed or its tools are unusable |
 | `MeasurementError` | `E_MEASUREMENT` | No measurement tool, or a simulated artifact, without `allow_placeholder` |
 | `DeploymentError` | `E_DEPLOYMENT` | A simulated artifact, a target mismatch, or a missing target tool |
+| `ArtifactError` | `E_ARTIFACT_CHANGED` | `verify_artifact`, and `measure`/`deploy` before they start, found an artifact unreadable or its bytes no longer matching the sha256 `bake-result.json` recorded |
 | `PolicyError` | `E_POLICY` | A `Policy` setting refused the operation |
 | `StateError` | `E_STATE` | `bake-result.json` is missing or unreadable, or has no artifact for the requested variant/target; `bake(fetch=False)` (`bake --no-fetch`) finds a source checkout missing from `out/.sources` |
 
@@ -348,6 +350,8 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `key-pipe-outside-run` | info | A pipe key's path is outside `/run` |
 | `variant-empty` | info | A variant declares nothing of its own |
 | `kernel-missing` | error | A bootable variant has no `Kernel` and installs no `linux-image-*` package; mkosi cannot build its UKI. `Setting("Content", "Bootable", ("no",))` disables both |
+| `secret-env-service-unknown` | error | A `SecretEnv(service=)` names a service the variant neither generates (`Service`), ships (`Unit` with content) nor enables, disables or masks (`Unit(name, enabled=...)`, for a packaged unit) |
+| `recipe-arch-unsupported` | error | `Recipe(arch="aarch64")` with `EfiStub` (it installs the `_amd64.deb` systemd-boot-efi) or a `qemu` target (the QEMU adapter runs `qemu-system-x86_64`) |
 
 Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`, `lock-removed` (each with the section as `subject`), and `lock-stale` when every section matches but the whole-recipe digest does not. Host tools (from `doctor`): `tool-missing`.
 
@@ -366,7 +370,7 @@ assert_diagnostic(diagnostics_or_recipe, code, /, *, level=None, variant=None, s
 assert_tree(tree: Tree, golden: str | Path, *, update=None) -> None
 assert_tree_matches(recipe, golden_dir, *, variants=None, update=None) -> TreeDiff
 fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact
-bake_in_process(recipe, *, out=None, variants=None, locked=None) -> tuple[Artifact, ...]
+bake_in_process(recipe, *, out=None, variants=None, lock=None) -> tuple[Artifact, ...]
 fake_fragment(name="fake", *, packages=(), files=None, init=None, priority=50, requires=(), checks=()) -> Fragment
 recipe_file(tmp_path: Path, source: str, name="recipe.py") -> Path
 run_cli(*argv) -> tuple[int, str, str]

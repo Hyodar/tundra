@@ -5,12 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-LOCKFILE_VERSION = 3
+LOCKFILE_VERSION = 4
 """Current lockfile schema version.
 
 Version 2 added per-section digests (``sections``); version 3 names the
 per-variant ones ``variants.<name>.<key>`` (version 2 said ``profiles.``, which
-:func:`~tundravm.lockfile.parse_lockfile` maps on read).
+:func:`~tundravm.lockfile.parse_lockfile` maps on read, as version 3). Version 4
+covers every image-defining input: the ``distribution`` and ``compiler``
+sections, ``variants.<name>.kernel`` and the complete ``variants.<name>.debloat``
+(``base`` and ``arch`` moved into ``distribution``), and pins a source build
+whose source differs between variants once per variant (``<variant>/<name>``).
+Older lockfiles still load; they drift until locked again, and frozen bakes
+refuse them.
 """
 
 
@@ -19,8 +25,8 @@ class LockedFetch:
     """A resolved fetch: ``source`` url, ``kind`` (``git``/``http``) and its pin.
 
     ``digest`` is a commit sha for git and a sha256 for http. Source builds also
-    record their ``name`` and the git ``ref`` that was resolved, so a changed ref
-    invalidates the pin.
+    record their ``name`` (``<variant>/<name>`` for a build pinned per variant)
+    and the git ``ref`` that was resolved, so a changed ref invalidates the pin.
     """
 
     source: str

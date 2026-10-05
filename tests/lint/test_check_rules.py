@@ -43,6 +43,7 @@ from tundravm.check import Diagnostic, check, render
 from tundravm.cli import main
 from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import check_report
+from tundravm.declarative.utils import EfiStub
 
 DEFAULT = Variant("default", target="qemu")
 KERNEL = Package("linux-image-amd64")
@@ -320,6 +321,38 @@ def test_kernel_missing_is_per_variant() -> None:
     ]
 
 
+# l. recipe-arch-unsupported
+
+
+def _arm(*items: Declaration | Fragment, target: str = "azure") -> Recipe:
+    variant = Variant("default", target=target)  # type: ignore[arg-type]
+    common = Fragment("common", items=(*CLEAN, *items))
+    return Recipe("check", common, variants=(variant,), arch="aarch64")
+
+
+def test_aarch64_with_efi_stub_is_unsupported() -> None:
+    [diag] = [
+        d
+        for d in report(_arm(EfiStub(snapshot="20251113T083151Z", version="257")))
+        if d.code == "recipe-arch-unsupported"
+    ]
+    assert (diag.level, diag.subject) == ("error", "EfiStub")
+    assert "_amd64.deb" in (diag.hint or "")
+
+
+def test_aarch64_qemu_target_is_unsupported() -> None:
+    [diag] = [d for d in report(_arm(target="qemu")) if d.code == "recipe-arch-unsupported"]
+    assert (diag.level, diag.subject) == ("error", "qemu")
+    assert "qemu-system-x86_64" in (diag.hint or "")
+
+
+def test_x86_64_and_plain_aarch64_are_fine() -> None:
+    efi = EfiStub(snapshot="20251113T083151Z", version="257")
+    x86 = Recipe("check", Fragment("common", items=(*CLEAN, efi)), variants=(DEFAULT,))
+    assert "recipe-arch-unsupported" not in codes(x86)
+    assert "recipe-arch-unsupported" not in codes(_arm())
+
+
 def test_bootable_setting_takes_only_no() -> None:
     subject = recipe(Setting("Content", "Bootable", ("yes",)))
     with pytest.raises(ValidationError, match="writes Bootable= itself"):
@@ -461,7 +494,7 @@ def test_cli_variant_selection(tmp_path: Path) -> None:
 def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
     subject = recipe(File("/etc/../../escape", "x"))
     with pytest.raises(LintError) as excinfo:
-        bake(subject, locked=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out")
+        bake(subject, lock=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out")
     assert excinfo.value.code == "E_LINT"
     assert "1 error-level diagnostics" in str(excinfo.value)
     assert excinfo.value.context["codes"] == "file-path-relative"
@@ -470,6 +503,6 @@ def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
 def test_clean_recipe_bakes(tmp_path: Path) -> None:
     subject = recipe()
     artifacts = bake(
-        subject, locked=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out"
+        subject, lock=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out"
     )
     assert [a.variant for a in artifacts] == ["default"]

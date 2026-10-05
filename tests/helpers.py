@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tundravm._source import GitSource, HttpSource, checkout_identity
 from tundravm.cli import main
 from tundravm.models import BakeRequest
 
@@ -16,6 +17,22 @@ EXAMPLE_RECIPES = tuple(
     path for path in sorted((REPO_ROOT / "examples").glob("*.py")) if path.name != "__init__.py"
 )
 """The top-level example recipe files (the surge flagship lives in its own directory)."""
+
+
+def source_dir(
+    name: str,
+    pin: str,
+    url: str,
+    *,
+    http: bool = False,
+    subdir: str | None = None,
+    submodules: bool = False,
+) -> str:
+    """The ``.sources`` directory of *name*'s checkout of *pin* from *url* (``pin_dir``)."""
+    source = (
+        HttpSource(url) if http else GitSource(url, "ref", subdir=subdir, submodules=submodules)
+    )
+    return f"{name}-{pin[:12]}-{checkout_identity(source)[:8]}"
 
 
 def run_main(*argv: str) -> tuple[int, str]:

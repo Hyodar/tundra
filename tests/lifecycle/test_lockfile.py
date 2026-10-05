@@ -69,8 +69,9 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
 
     lockfile = lock(recipe).lockfile
 
-    assert lockfile.version == 3
-    assert lockfile.recipe["base"] == "debian/bookworm"
+    assert lockfile.version == 4
+    assert lockfile.recipe["distribution"]["base"] == "debian/bookworm"
+    assert lockfile.recipe["compiler"]["dialect"] == "current"
     assert lockfile.dependencies["default"] == ["curl"]
     assert lockfile.dependencies["dev"] == ["curl", "jq"]
     assert lockfile.recipe_digest
@@ -97,7 +98,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
     locked = lock(_recipe("curl"))
 
     with pytest.raises(LockfileError) as excinfo:
-        bake(_recipe("curl", "jq"), locked=locked, backend=Backend("inprocess"), out=tmp_path)
+        bake(_recipe("curl", "jq"), lock=locked, backend=Backend("inprocess"), out=tmp_path)
 
     assert "stale" in str(excinfo.value).lower()
 
@@ -105,7 +106,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
 def test_bake_frozen_succeeds_with_current_lock(tmp_path: Path) -> None:
     recipe = _recipe("curl")
 
-    artifacts = bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path)
+    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path)
 
     assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
     assert artifacts[0].path.is_file()

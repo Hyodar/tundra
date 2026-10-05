@@ -18,7 +18,7 @@ from tundravm.backends.base import BuildBackend
 from tundravm.check import check
 from tundravm.compiler import PHASE_ORDER, MkosiEmission
 from tundravm.errors import LintError, LockfileError, StateError, ValidationError
-from tundravm.lockfile import compare_lock, read_lockfile, recipe_digest
+from tundravm.lockfile import LOCKFILE_VERSION, compare_lock, read_lockfile, recipe_digest
 from tundravm.models import (
     ArtifactRef,
     BakeRequest,
@@ -270,7 +270,7 @@ def _fetched_sources(lowered: Lowered, destination: Path, backend: BuildBackend)
                 context={"source": f"{spec.source.kind} {spec.source.url}"},
             )
         checkout = root / spec.pin_dir(pin)
-        if not is_fetched(checkout, pin):
+        if not is_fetched(checkout, pin, spec.source, name=name):
             raise StateError(
                 f"{what} {name!r} is not fetched: {checkout} is missing or incomplete.",
                 hint=(
@@ -285,6 +285,13 @@ def _fetched_sources(lowered: Lowered, destination: Path, backend: BuildBackend)
 def _assert_frozen_lock(lowered: Lowered) -> None:
     lock_path = lowered.lock_path
     lock = read_lockfile(lock_path)
+    if lock.version < LOCKFILE_VERSION:
+        raise LockfileError(
+            f"Frozen bake needs a version {LOCKFILE_VERSION} lockfile; {lock_path} is version "
+            f"{lock.version}, which does not cover the distribution, compiler and kernel inputs.",
+            hint="Run `tundravm lock RECIPE` to lock the recipe again, then commit the lockfile.",
+            context={"lock": str(lock_path), "version": str(lock.version)},
+        )
     current = lowered.payload()
     # A lock written for more variants than this bake selects covers it when
     # every section of the selected variants and the recipe-wide ones matches.

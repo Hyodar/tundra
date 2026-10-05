@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -141,8 +142,19 @@ def test_scaffold_writes_the_project_files_and_lists_next_steps(tmp_path: Path) 
     assert "from tundravm.testing import" in test_module
     assert all(name in test_module for name in ("compile_tree", "assert_clean", "assert_tree"))
     assert "TUNDRAVM_UPDATE_GOLDEN=1" in test_module
-    assert "  1. tundravm compile my-node.py --out mkosi" in out
-    assert "  2. uv run pytest tests" in out
+    steps = [line.split()[1:3] for line in out.splitlines() if re.match(r"  \d\. ", line)]
+    assert steps == [
+        ["tundravm", "lock"],
+        ["tundravm", "compile"],
+        ["uv", "run"],
+        ["tundravm", "ci"],
+        ["tundravm", "bake"],
+    ]
+    assert "  1. tundravm lock my-node.py" in out
+    assert "record recipe sections and pin source repositories/downloads" in out
+    assert "  2. tundravm compile my-node.py --out mkosi" in out
+    assert "  3. uv run pytest tests" in out
+    assert "  4. tundravm ci my-node.py --out mkosi" in out
     assert "  5. tundravm bake my-node.py --out build" in out
     assert "  tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm`" in out
     assert "note:" not in out

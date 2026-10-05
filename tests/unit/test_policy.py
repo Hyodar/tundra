@@ -44,15 +44,13 @@ def test_policy_requires_frozen_lock_for_bake(
     assert main(["bake", str(path), "--out", str(out)], stdout=io.StringIO()) == EXIT_SDK_ERROR
     assert "error [E_POLICY]" in capsys.readouterr().err
 
-    assert main(["lock", str(path), "--path", str(lock_path)], stdout=io.StringIO()) == EXIT_OK
+    assert main(["lock", str(path), "--lockfile", str(lock_path)], stdout=io.StringIO()) == EXIT_OK
     argv = ["bake", str(path), "--lockfile", str(lock_path), "--out", str(out)]
     assert main(argv, stdout=io.StringIO()) == EXIT_OK
 
     recipe = load_recipe(path)
     assert isinstance(recipe.policy, Policy) and recipe.policy.require_frozen_lock
-    artifacts = bake(
-        recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "api"
-    )
+    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "api")
     assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
 
 

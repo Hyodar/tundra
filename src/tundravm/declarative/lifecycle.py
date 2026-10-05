@@ -25,7 +25,6 @@ from typing import Literal, get_args
 
 from tundravm import check as _check
 from tundravm._source import (
-    FETCH_MARKER,
     SOURCES_DIRNAME,
     GitSource,
     NamedSource,
@@ -33,6 +32,7 @@ from tundravm._source import (
     fetch_source,
     is_fetched,
     resolve_pins,
+    write_marker,
 )
 from tundravm.backends import (
     InProcessBackend,
@@ -45,6 +45,7 @@ from tundravm.backends.base import BuildBackend, is_mkosi_state
 from tundravm.deploy import DeployAdapter, get_adapter
 from tundravm.diff import diff_trees
 from tundravm.errors import (
+    ArtifactError,
     DeploymentError,
     LockfileError,
     MeasurementError,
@@ -103,7 +104,11 @@ class Pin:
 
 @dataclass(frozen=True, slots=True)
 class Lock:
-    """A lockfile as a value; ``sections`` maps payload sections to their digests."""
+    """A lockfile as a value; ``sections`` maps payload sections to their digests.
+
+    ``compiler_version`` is the tundravm version that wrote it (its ``compiler``
+    section; this version for a lockfile older than version 4).
+    """
 
     recipe_digest: str
     sections: Pairs
@@ -113,11 +118,13 @@ class Lock:
 
     @classmethod
     def of(cls, lockfile: Lockfile) -> Lock:
+        compiler = lockfile.recipe.get("compiler")
+        written = compiler.get("tundravm") if isinstance(compiler, dict) else None
         return cls(
             recipe_digest=lockfile.recipe_digest,
             sections=tuple(sorted(lockfile.sections.items())),
             pins=tuple(_pin(fetch) for fetch in lockfile.fetches),
-            compiler_version=_version(),
+            compiler_version=str(written) if written is not None else _version(),
             lockfile=lockfile,
         )
 
@@ -374,6 +381,13 @@ def read_tree(
     return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
 
 
+def read_variant_tree(root: Path, variants: Sequence[str]) -> Tree:
+    """The tree of *variants*' directories under *root*, as :func:`compile` returns it."""
+    whole = read_tree(root, variants=variants)
+    entries = [entry for entry in whole.entries if entry.path.split("/", 1)[0] in variants]
+    return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
+
+
 def _digest_mode(entry: Entry) -> int:
     """*entry*'s mode as the tree digest sees it: ``0755``/``0644`` by exec bit for files."""
     if entry.symlink is not None:
@@ -439,12 +453,19 @@ def _foreign_variant_globs(root: Path, compiled: Sequence[str]) -> list[str]:
 
 
 def check_report(
-    recipe: Recipe | None, img: Lowered | None, *, variants: Sequence[str] | None
+    recipe: Recipe | None,
+    img: Lowered | None,
+    *,
+    variants: Sequence[str] | None,
+    lock: Lock | Path | None = None,
 ) -> list[_check.Diagnostic]:
     """Declarative and compiler diagnostics in the compiler's report form.
 
     The recipe's resolution diagnostics come first, in resolution order. When
     none is an error, the lowered image's ``check()`` findings follow, sorted.
+    The compiler checks see *lock*'s source pins (a :class:`Lock`, or the
+    lockfile at a path, none when it is missing); without it the image reads
+    its own lockfile (``build/tundravm.lock``).
     """
     found: list[_check.Diagnostic] = []
     names: tuple[str, ...] | None = None
@@ -466,7 +487,12 @@ def check_report(
         img = lower(recipe, variants=names)
     assert img is not None
     profiles = names if names is not None else (None if variants is None else tuple(variants))
-    checked = _check.check(img, profiles=profiles)
+    with ExitStack() as stack:
+        if isinstance(lock, Lock):
+            img = stack.enter_context(using_lock(img, lock))
+        elif lock is not None:
+            img = replace(img, lock_file=Path(lock))
+        checked = _check.check(img, profiles=profiles)
     checked = sorted(checked, key=lambda d: (d.profile, _LEVELS[d.level], d.code, d.subject or ""))
     found.extend(d for d in checked if d not in found)
     return found
@@ -483,7 +509,9 @@ def lint(
 ) -> tuple[Diagnostic, ...]:
     """Every problem with *variants* (default: all): resolution, fragment checks, compiler rules.
 
-    With *lock*, drift against it is reported too (:func:`lock_status`).
+    With *lock*, its source pins apply before the compiler rules run (a pinned
+    source never reports ``source-unpinned``) and drift against it is reported
+    too (:func:`lock_status`).
     """
     found = [
         Diagnostic(
@@ -493,7 +521,7 @@ def lint(
             variant="" if d.profile == "common" else d.profile,
             subject=d.subject or "",
         )
-        for d in check_report(recipe, None, variants=variants)
+        for d in check_report(recipe, None, variants=variants, lock=lock)
     ]
     if lock is not None and not any(d.level == "error" for d in found):
         found.extend(lock_status(recipe, lock, variants=variants))
@@ -528,12 +556,17 @@ def lock_image(
     scoped = img.select(profiles)
     payload = scoped.payload()
     builds = scoped.lock_sources()
-    unknown = [name for name in update if name not in builds]
+    unknown = [
+        name
+        for name in update
+        if name not in builds and not any(b.name == name for b in builds.values())
+    ]
     if unknown:
         raise ValidationError(
             f"Cannot update unknown source(s): {', '.join(unknown)}.",
             hint=f"Declared sources: {', '.join(builds) or '(none)'}",
         )
+    update = [key for key, build in builds.items() if key in update or build.name in update]
     prior = {} if previous is None else _named_pins(previous)
     kept: list[LockedFetch] = []
     pending: dict[str, NamedSource] = {}
@@ -564,7 +597,9 @@ def lock(
     """Lock every variant (or *variants*): section digests plus a pin per source build.
 
     Pins in *previous* that still match their source are kept; sources named in
-    *update* are resolved again. *resolver* replaces the network lookup;
+    *update* are resolved again (a build whose source differs between variants is
+    pinned per variant, as ``<variant>/<name>``: name that key, or the build's
+    name for every variant's pin). *resolver* replaces the network lookup;
     ``offline=True`` fails for any source *previous* does not pin. Every source is
     attempted before failing: one :class:`~tundravm.errors.LockfileError` lists
     each source that could not be resolved, with the reason, and its ``failures``
@@ -605,6 +640,13 @@ def image_lock_status(
     details = drift.details
 
     def lines() -> Iterator[tuple[str, str, str]]:
+        if drift.lock_version is not None:
+            yield (
+                "lock-changed",
+                "version",
+                f"the lockfile is version {drift.lock_version}: lock again to record the "
+                "distribution, compiler and kernel sections",
+            )
         for section in drift.changed:
             detail = f": {details[section]}" if section in details else ""
             yield "lock-changed", section, f"{section} changed since the lock{detail}"
@@ -689,6 +731,7 @@ def fetch_image(
     out: Path,
     resolver: Resolver | None = None,
     reporter: Reporter | None = None,
+    force: bool = False,
 ) -> tuple[FetchedSource, ...]:
     """Check out every source of *img*'s *profiles* under ``<out>/.sources``.
 
@@ -697,7 +740,10 @@ def fetch_image(
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
-    refuses. A checkout whose marker already names its pin is kept.
+    refuses. A complete checkout is verified (``is_fetched``) and kept; one that
+    changed since it was fetched raises ``SourceError`` unless *force*, which
+    checks every source out again. Sources with the same checkout (the same
+    source and pin, e.g. a build pinned per variant) share one.
     """
     builds = img.select(profiles).lock_sources()
     if not builds:
@@ -719,10 +765,20 @@ def fetch_image(
     fetched: list[FetchedSource] = []
     noun = "source" if len(builds) == 1 else "sources"
     copies: dict[tuple[object, str], Path] = {}
+    done: set[Path] = set()
     with progress.phase("fetch", f"fetch {len(builds)} {noun}", profile=None):
         for name, build in builds.items():
-            source = _checkout(build, pins[name], root, progress, offline=offline, copies=copies)
+            source = _checkout(
+                build,
+                pins[name],
+                root,
+                progress,
+                offline=offline,
+                copies=copies,
+                force=force and root / build.pin_dir(pins[name]) not in done,
+            )
             copies.setdefault((build.source, source.pin), source.path)
+            done.add(source.path)
             fetched.append(source)
     return tuple(fetched)
 
@@ -758,17 +814,20 @@ def _checkout(
     *,
     offline: bool,
     copies: Mapping[tuple[object, str], Path],
+    force: bool = False,
 ) -> FetchedSource:
     """*build*'s checkout of *pin* under *root*: kept when complete, else fetched afresh.
 
-    A complete checkout of the same source and pin in *copies* is copied
-    instead of fetched again (builds of one repository share it).
+    A complete checkout is verified first (``is_fetched``: a changed one raises
+    ``SourceError``); *force* replaces it without looking. A complete checkout
+    of the same source and pin in *copies* is copied instead of fetched again
+    (builds of one repository share it).
     """
     path = root / build.pin_dir(pin)
     ref = build.source.ref if isinstance(build.source, GitSource) else None
-    result = FetchedSource(build.name, build.source.kind, build.source.url, pin, path, ref=ref)
-    if is_fetched(path, pin):
-        progress.emit("log", None, f"{build.name}: {pin[:12]} already fetched", source="notice")
+    result = FetchedSource(build.key, build.source.kind, build.source.url, pin, path, ref=ref)
+    if not force and is_fetched(path, pin, build.source, name=build.key):
+        progress.emit("log", None, f"{build.key}: {pin[:12]} already fetched", source="notice")
         return replace(result, cached=True)
     donor = copies.get((build.source, pin))
     if offline and donor is None:
@@ -784,15 +843,15 @@ def _checkout(
             shutil.copytree(donor, scratch / "tree", symlinks=True)
         else:
             fetch_source(build.source, pin, scratch / "tree")
-        (scratch / "tree" / FETCH_MARKER).write_text(pin + "\n", encoding="utf-8")
+        write_marker(scratch / "tree", build.source, pin)
         if path.exists():
-            shutil.rmtree(path)  # incomplete: an interrupted fetch or another pin's marker
+            shutil.rmtree(path)  # incomplete (an interrupted fetch), or replaced by force
         (scratch / "tree").rename(path)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     how = "fetched" if donor is None else f"copied from {donor.name}:"
     progress.emit(
-        "log", None, f"{build.name}: {how} {build.source.describe()} at {pin[:12]}", source="notice"
+        "log", None, f"{build.key}: {how} {build.source.describe()} at {pin[:12]}", source="notice"
     )
     return result
 
@@ -800,28 +859,34 @@ def _checkout(
 def fetch(
     recipe: Recipe,
     *,
-    locked: Lock | None,
+    lock: Lock | None,
     out: Path,
     variants: Sequence[str] | None = None,
     resolver: Resolver | None = None,
+    force: bool = False,
 ) -> tuple[FetchedSource, ...]:
     """Check out the sources of *variants* (default: all) under ``<out>/.sources``.
 
     The sources are the source builds and, outside ``nethermind-v1``, each built
     kernel's source (git ref or commit with its submodules, or the sha256-checked
     tarball), named ``kernel`` (``kernel-<variant>`` where a variant's kernel
-    source differs). Each lands in ``<out>/.sources/<name>-<pin[:12]>``, fetched
+    source differs). Each lands in ``<out>/.sources/<name>-<pin[:12]>-<id[:8]>`` (*id*
+    the source's url, subdirectory and submodules), fetched
     on this host as the invoking user (git credentials and SSH agent apply) at
-    *locked*'s pin. Sources *locked* does not pin (or every source, without
-    *locked*) are resolved first through *resolver* (default: the network),
-    which ``mutable_ref_policy="error"`` refuses. Complete checkouts are kept,
-    so a second fetch touches nothing. Outside ``nethermind-v1`` the bake mounts
-    ``<out>/.sources`` into the build and the build hooks and kernel build
-    script copy their checkout from it; :func:`bake` fetches first.
+    *lock*'s pin. Sources *lock* does not pin (or every source, without
+    *lock*) are resolved first through *resolver* (default: the network),
+    which ``mutable_ref_policy="error"`` refuses. Complete checkouts are verified
+    and kept, so a second fetch touches nothing: git ``HEAD`` must be the pin with
+    a clean tree (and initialised submodules when asked for), an http checkout
+    must match the file manifest written when it was fetched. A checkout that
+    changed raises ``SourceError``; *force* checks every source out again.
+    Outside ``nethermind-v1`` the bake mounts ``<out>/.sources`` into the build
+    and the build hooks and kernel build script copy their checkout from it;
+    :func:`bake` fetches first.
     """
     names = variant_names(recipe, variants)
     return fetch_image(
-        lower(recipe, variants=names), names, locked=locked, out=out, resolver=resolver
+        lower(recipe, variants=names), names, locked=lock, out=out, resolver=resolver, force=force
     )
 
 
@@ -952,17 +1017,17 @@ def _bake_lock(
 def bake(
     recipe: Recipe,
     *,
-    locked: Lock,
+    lock: Lock,
     backend: Backend,
     out: Path,
     variants: Sequence[str] | None = None,
     progress: Callable[[str], None] | None = None,
     fetch: bool = True,
 ) -> tuple[Artifact, ...]:
-    """Build *variants* (default: all) with *backend* into *out*, frozen against *locked*.
+    """Build *variants* (default: all) with *backend* into *out*, frozen against *lock*.
 
     Fails before building when the recipe has error diagnostics or drifted
-    from *locked*. Outside ``nethermind-v1`` the source builds are fetched
+    from *lock*. Outside ``nethermind-v1`` the source builds are fetched
     first (:func:`fetch`); ``fetch=False`` builds from the checkouts already in
     ``out/.sources`` and fails with ``E_STATE`` when one is missing.
     *progress* receives the CLI's progress lines. Writes
@@ -975,7 +1040,7 @@ def bake(
         _, artifacts = bake_image(
             lower(recipe, variants=names),
             names,
-            locked=locked,
+            locked=lock,
             backend=backend.build_backend(),
             out=out,
             reporter=reporter,
@@ -1042,15 +1107,45 @@ def select_artifact(
 # ── measure / deploy ─────────────────────────────────────────────────────
 
 
+def verify_artifact(artifact: Artifact) -> None:
+    """Raise ``ArtifactError`` unless *artifact*'s file still hashes to its recorded sha256."""
+    context = {"variant": artifact.variant, "target": artifact.target, "path": str(artifact.path)}
+    rebake = "Bake the variant again to record the artifact it should be."
+    if not artifact.sha256:
+        raise ArtifactError(
+            f"No sha256 recorded for {artifact.path}.",
+            hint=rebake,
+            context=context,
+        )
+    try:
+        with artifact.path.open("rb") as handle:
+            actual = hashlib.file_digest(handle, "sha256").hexdigest()
+    except OSError as exc:
+        raise ArtifactError(
+            f"Cannot read artifact {artifact.path}: {exc.strerror or exc}.",
+            hint=rebake,
+            context=context,
+        ) from exc
+    if actual != artifact.sha256:
+        raise ArtifactError(
+            f"Artifact {artifact.path} changed since the bake.",
+            hint=f"bake-result.json records sha256 {artifact.sha256[:12]}; {rebake}",
+            context={**context, "recorded": artifact.sha256, "actual": actual},
+        )
+
+
 def measure(
     artifact: Artifact, *, scheme: Scheme = "rtmr", allow_placeholder: bool = False
 ) -> Measurements:
     """Expected measurements of *artifact* from ``measured-boot``/``dstack-mr``.
 
-    Without a tool this raises ``MeasurementError``; *allow_placeholder* returns
-    digest-derived values instead (``tool="placeholder"``). Simulated artifacts
-    are refused unless *allow_placeholder*.
+    The artifact's bytes are checked against their recorded sha256 first
+    (``verify_artifact``). Without a tool this raises ``MeasurementError``;
+    *allow_placeholder* returns digest-derived values instead
+    (``tool="placeholder"``). Simulated artifacts are refused unless
+    *allow_placeholder*.
     """
+    verify_artifact(artifact)
     if artifact.simulated and not allow_placeholder:
         raise MeasurementError(
             "Refusing to measure a simulated artifact.",
@@ -1096,19 +1191,21 @@ def deploy(
     artifact: Artifact,
     *,
     using: DeployTarget,
-    allow_placeholder: bool = False,
+    allow_simulated: bool = False,
     adapter: DeployAdapter | None = None,
 ) -> Deployment:
     """Deploy *artifact* with *using*'s settings; its target must match the artifact's.
 
-    Simulated artifacts are refused unless *allow_placeholder*. *adapter*
-    replaces the target's default adapter (tests).
+    The artifact's bytes are checked against their recorded sha256 first
+    (``verify_artifact``). Simulated artifacts are refused unless
+    *allow_simulated*. *adapter* replaces the target's default adapter (tests).
     """
+    verify_artifact(artifact)
     target = target_of(using)
-    if artifact.simulated and not allow_placeholder:
+    if artifact.simulated and not allow_simulated:
         raise DeploymentError(
             "Refusing to deploy a simulated artifact.",
-            hint="Bake with a real backend first.",
+            hint="Bake with a real backend first, or pass allow_simulated=True for a test run.",
             context={"variant": artifact.variant, "path": str(artifact.path)},
         )
     if artifact.target != target:
@@ -1205,5 +1302,6 @@ __all__ = [
     "read_artifacts",
     "read_lock",
     "read_tree",
+    "verify_artifact",
     "write_lock",
 ]

@@ -39,7 +39,7 @@ def _baked(tmp_path: Path) -> Artifact:
         "measured", Fragment("measured", items=(Package("curl"), Package("linux-image-amd64")))
     )
     (artifact,) = bake(
-        recipe, locked=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
+        recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
     )
     return artifact
 

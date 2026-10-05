@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from typing import Literal
 
@@ -132,8 +133,11 @@ def test_current_dialect_builds_copy_the_fetched_checkouts() -> None:
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
     assert "git clone" not in pinned and "fetch -q" not in pinned
     (hook,) = (line for line in pinned.splitlines() if '"$BUILDROOT/build/taiko-client"' in line)
-    assert f'"$SRCDIR/tundravm-sources/taiko-client-{SHA_A[:12]}"/. ' in hook
-    assert f'"${{BUILDDIR:-$BUILDROOT/build}}/taiko-client-feat_tdx-proving-{SHA_A[:12]}"' in hook
+    assert re.search(
+        rf'"\$SRCDIR/tundravm-sources/taiko-client-{SHA_A[:12]}-[0-9a-f]{{8}}"/. ', hook
+    )
+    # cache_key="taiko-client-feat/tdx-proving" is the namespace of the fingerprinted key
+    assert re.search(r'build\}/taiko-client-feat_tdx-proving-[0-9a-f]{16}"', hook)
 
 
 @pytest.mark.parametrize(

@@ -77,15 +77,15 @@ def test_attr_override_selects_instance_or_factory(tmp_path: Path) -> None:
         "def third() -> Recipe:\n    return Recipe('r', Fragment('c'), base='debian/sid')\n",
     )
     assert load_recipe(recipe).base == "debian/bookworm"
-    assert load_recipe(recipe, attr="other").base == "debian/trixie"
-    assert load_recipe(recipe, attr="third").base == "debian/sid"
-    assert load_image(recipe, attr="third").state.base == "debian/sid"
+    assert load_recipe(recipe, attribute="other").base == "debian/trixie"
+    assert load_recipe(recipe, attribute="third").base == "debian/sid"
+    assert load_image(recipe, attribute="third").state.base == "debian/sid"
 
 
 def test_attr_missing_lists_candidates(tmp_path: Path) -> None:
     recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r', Fragment('c'))\n")
     with pytest.raises(ValidationError) as excinfo:
-        load_recipe(recipe, attr="nope")
+        load_recipe(recipe, attribute="nope")
     assert "recipe" in str(excinfo.value)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -108,9 +109,14 @@ def test_lockfile_records_section_digests_and_keeps_whole_digest() -> None:
     assert locked.recipe_digest == recipe_digest(payload)
     assert locked.lockfile.sections == section_digests(payload)
     assert dict(locked.sections) == section_digests(payload)
-    assert {"base", "arch", "variants.default.packages", "variants.default.files"} <= set(
-        locked.lockfile.sections
-    )
+    assert {
+        "distribution",
+        "compiler",
+        "variants.default.packages",
+        "variants.default.files",
+        "variants.default.kernel",
+        "variants.default.debloat",
+    } <= set(locked.lockfile.sections)
     assert lock_status(recipe, locked) == ()
     assert compare_lock(locked.lockfile, payload).render() == "lock is up to date"
 
@@ -147,7 +153,7 @@ def test_frozen_bake_error_carries_drift(tmp_path: Path) -> None:
     locked = lock(_recipe())
 
     with pytest.raises(LockfileError) as excinfo:
-        bake(_recipe(Package("htop")), locked=locked, backend=Backend("inprocess"), out=tmp_path)
+        bake(_recipe(Package("htop")), lock=locked, backend=Backend("inprocess"), out=tmp_path)
 
     error = excinfo.value
     assert "stale" in str(error)
@@ -164,7 +170,7 @@ def test_lock_status_missing_lockfile_raises(tmp_path: Path) -> None:
     assert "lock" in excinfo.value.hint
 
 
-def test_old_format_lockfile_still_freezes_and_reports_all_sections_added(
+def test_old_format_lockfile_reports_all_sections_added_and_refuses_frozen_bakes(
     tmp_path: Path,
 ) -> None:
     recipe = _recipe()
@@ -181,16 +187,20 @@ def test_old_format_lockfile_still_freezes_and_reports_all_sections_added(
 
     locked = read_lock(lock_path)
     assert locked.lockfile.sections == {}
-    bake(recipe, locked=locked, backend=Backend("inprocess"), out=tmp_path / "out")
+    with pytest.raises(LockfileError, match="needs a version 4 lockfile") as raised:
+        bake(recipe, lock=locked, backend=Backend("inprocess"), out=tmp_path / "out")
+    assert raised.value.hint is not None and "tundravm lock RECIPE" in raised.value.hint
 
     found = lock_status(recipe, locked)
-    assert found
-    assert {d.code for d in found} == {"lock-added"}
-    assert {d.subject for d in found} == set(section_digests(payload))
+    assert {d.code for d in found} == {"lock-added", "lock-changed"}
+    assert {d.subject for d in found if d.code == "lock-added"} == set(section_digests(payload))
+    assert [d.subject for d in found if d.code == "lock-changed"] == ["version"]
     drift = compare_lock(locked.lockfile, payload)
     assert drift.digest_matches
     assert drift.changed == ()
-    assert all(line.startswith("+ ") for line in drift.render().splitlines())
+    first, *rest = drift.render().splitlines()
+    assert first.startswith("~ version: 1 -> 4: lock again")
+    assert rest and all(line.startswith("+ ") for line in rest)
 
 
 def test_removed_profile_sections_and_scalar_detail() -> None:
@@ -237,17 +247,17 @@ def test_drift_ignores_embedded_recipe_that_does_not_match_section_digest() -> N
 
 def test_cli_lock_check_exit_codes(recipe: Path) -> None:
     lock_path = recipe.parent / "app.lock"
-    code, out = run_main("lock", str(recipe), "--path", str(lock_path), "--check")
+    code, out = run_main("lock", str(recipe), "--lockfile", str(lock_path), "--check")
     assert code == EXIT_SDK_ERROR
     assert out == ""
 
-    assert run_main("lock", str(recipe), "--path", str(lock_path))[0] == EXIT_OK
-    code, out = run_main("lock", str(recipe), "--path", str(lock_path), "--check")
+    assert run_main("lock", str(recipe), "--lockfile", str(lock_path))[0] == EXIT_OK
+    code, out = run_main("lock", str(recipe), "--lockfile", str(lock_path), "--check")
     assert (code, out) == (EXIT_OK, "lock is up to date\n")
 
     _add_htop(recipe)
     before = lock_path.read_text()
-    code, out = run_main("lock", str(recipe), "--path", str(lock_path), "--check")
+    code, out = run_main("lock", str(recipe), "--lockfile", str(lock_path), "--check")
     assert code == EXIT_FAILURE
     assert out == "~ variants.default.packages: +htop\n"
     assert lock_path.read_text() == before
@@ -255,24 +265,24 @@ def test_cli_lock_check_exit_codes(recipe: Path) -> None:
 
 def test_cli_lock_explain_prints_drift_then_writes(recipe: Path) -> None:
     path = str(recipe.parent / "app.lock")
-    code, out = run_main("lock", str(recipe), "--path", path, "--explain")
+    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain")
     assert code == EXIT_OK
     assert out.startswith("no lockfile at ")
     assert "locked " in out
 
-    code, out = run_main("lock", str(recipe), "--path", path, "--explain")
+    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain")
     assert code == EXIT_OK
     assert out.splitlines()[0] == "lock is up to date"
 
     _add_htop(recipe)
-    code, out = run_main("lock", str(recipe), "--path", path, "--explain", "--check")
+    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain", "--check")
     assert code == EXIT_FAILURE
     assert out == "~ variants.default.packages: +htop\n"
 
-    code, out = run_main("lock", str(recipe), "--path", path, "--explain")
+    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain")
     assert code == EXIT_OK
     assert out.splitlines()[0] == "~ variants.default.packages: +htop"
-    assert run_main("lock", str(recipe), "--path", path, "--check") == (
+    assert run_main("lock", str(recipe), "--lockfile", path, "--check") == (
         EXIT_OK,
         "lock is up to date\n",
     )
@@ -280,7 +290,7 @@ def test_cli_lock_explain_prints_drift_then_writes(recipe: Path) -> None:
 
 def test_cli_bake_frozen_surfaces_drift(recipe: Path, capsys: pytest.CaptureFixture[str]) -> None:
     lock_path = str(recipe.parent / "app.lock")
-    run_main("lock", str(recipe), "--path", lock_path)
+    run_main("lock", str(recipe), "--lockfile", lock_path)
     _add_htop(recipe)
 
     code, _ = run_main(
@@ -339,29 +349,36 @@ def test_version_2_lockfile_sections_load_as_variants() -> None:
 
     parsed = parse_lockfile(json.dumps(old))
 
-    assert parsed == current
-    assert parsed.version == LOCKFILE_VERSION == 3
-    assert compare_lock(parsed, current.recipe).is_clean
+    assert parsed == replace(current, version=3)
+    assert LOCKFILE_VERSION == 4
+    drift = compare_lock(parsed, current.recipe)
+    assert drift.sections == ()
+    assert drift.lock_version == 3
+    assert drift.render().startswith("~ version: 3 -> 4")
 
 
 def test_cli_lock_check_of_one_variant_against_a_full_lock(tmp_path: Path) -> None:
     path = tmp_path / "recipe.py"
     path.write_text(VARIANTS_RECIPE, encoding="utf-8")
     lock_path = tmp_path / "app.lock"
-    assert run_main("lock", str(path), "--path", str(lock_path))[0] == EXIT_OK
+    assert run_main("lock", str(path), "--lockfile", str(lock_path))[0] == EXIT_OK
 
-    assert run_main("lock", str(path), "--path", str(lock_path), "--check", "--variant", "dev") == (
+    assert run_main(
+        "lock", str(path), "--lockfile", str(lock_path), "--check", "--variant", "dev"
+    ) == (
         EXIT_OK,
         "lock is up to date\n",
     )
     path.write_text(VARIANTS_RECIPE.replace('Package("vim")', 'Package("vim"), Package("gdb")'))
     assert run_main(
-        "lock", str(path), "--path", str(lock_path), "--check", "--variant", "default"
+        "lock", str(path), "--lockfile", str(lock_path), "--check", "--variant", "default"
     ) == (
         EXIT_OK,
         "lock is up to date\n",
     )
-    code, out = run_main("lock", str(path), "--path", str(lock_path), "--check", "--variant", "dev")
+    code, out = run_main(
+        "lock", str(path), "--lockfile", str(lock_path), "--check", "--variant", "dev"
+    )
     assert (code, out) == (EXIT_FAILURE, "~ variants.dev.packages: +gdb\n")
 
 

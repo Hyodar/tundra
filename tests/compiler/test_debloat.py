@@ -53,7 +53,7 @@ def test_bake_report_contains_debloat_section(tmp_path: Path) -> None:
     recipe = _recipe(_prod(target=True))
     out = tmp_path / "build"
 
-    bake(recipe, locked=lock(recipe), backend=Backend("inprocess"), out=out)
+    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=out)
 
     result = BakeResult.load(out)
     default_report = _read_report(result.profiles["default"].report_path)

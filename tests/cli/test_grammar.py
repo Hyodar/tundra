@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
+from tundravm import declarative
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 
 RECIPE = """
@@ -76,16 +77,20 @@ def test_compile_writes_tree(recipe: Path, tmp_path: Path) -> None:
     code, out = run_main("compile", str(recipe), "--out", str(out_dir))
     assert code == EXIT_OK
     assert f"compiled {out_dir}" in out
-    assert "variants: default, azure" in out
+    assert "  variants:      default, azure\n" in out
     assert out_dir.exists()
     assert any(out_dir.rglob("mkosi.conf"))
+    labels = dict(line.split(":", 1) for line in out.splitlines()[1:])
+    loaded = declarative.load(recipe, attribute=None)
+    assert labels["  recipe_digest"].strip() == declarative.lock(loaded).recipe_digest
+    assert labels["  tree_digest"].strip() == declarative.compile(loaded).digest
 
 
 def test_compile_defaults_to_build_dir(recipe: Path, tmp_path: Path) -> None:
     code, out = run_main("compile", str(recipe), "--variant", "default")
     assert code == EXIT_OK
     assert f"compiled {Path('build') / 'mkosi'}\n" in out
-    assert "variants: default\n" in out
+    assert "variants:      default\n" in out
     assert (tmp_path / "build" / "mkosi" / "default" / "mkosi.conf").is_file()
 
 

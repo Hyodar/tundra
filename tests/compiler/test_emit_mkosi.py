@@ -731,7 +731,7 @@ def test_compile_backports_sync_hook(tmp_path: Path) -> None:
     """nethermind-v1: Backports() declares a sync hook that generates debian-backports.sources."""
     recipe = _recipe(
         Package("systemd"),
-        Backports(mirror="https://snapshot.debian.org/archive/debian/20251113T083151Z"),
+        Backports(archive_url="https://snapshot.debian.org/archive/debian/20251113T083151Z"),
         epoch=None,
         mkosi=HISTORICAL,
     )
@@ -750,7 +750,9 @@ def test_compile_backports_sync_hook(tmp_path: Path) -> None:
 
 def test_compile_backports_registered_in_sync_phase() -> None:
     """nethermind-v1: Backports() lowers to a hook in the sync phase of the profile state."""
-    recipe = _recipe(Backports(mirror="https://example.com/debian"), epoch=None, mkosi=HISTORICAL)
+    recipe = _recipe(
+        Backports(archive_url="https://example.com/debian"), epoch=None, mkosi=HISTORICAL
+    )
 
     scripts = _phase_scripts(recipe, "sync")
     assert len(scripts) >= 1
@@ -838,7 +840,7 @@ def test_compile_backports_writes_static_sandbox_sources(tmp_path: Path) -> None
 
 def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
     """current: Backports' mirror/release win; without either, deb.debian.org and the base."""
-    pinned = lower(_recipe(Backports(mirror="http://m", release="trixie"), epoch=None))
+    pinned = lower(_recipe(Backports(archive_url="http://m", release="trixie"), epoch=None))
     ((path, text), (pins_path, pins)) = pinned.mkosi.sandbox_files
     assert path == "/etc/apt/sources.list.d/debian-backports.sources"
     assert "URIs: http://m\nSuites: trixie-backports\n" in text

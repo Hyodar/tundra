@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tundravm._options import MkosiOptions
-from tundravm._source import KernelSource, NamedSource, Resolver, SourceBuild, source_drift
+from tundravm._source import (
+    KernelSource,
+    NamedSource,
+    Resolver,
+    SourceBuild,
+    source_drift,
+    source_section,
+)
 from tundravm.compiler import PHASE_ORDER
 from tundravm.errors import ValidationError
 from tundravm.lockfile import (
@@ -27,7 +34,14 @@ from tundravm.lockfile import (
     recipe_digest,
     unselected_sources,
 )
-from tundravm.models import Arch, InitScriptEntry, Kernel, ProfileState, RecipeState
+from tundravm.models import (
+    Arch,
+    FileEntry,
+    InitScriptEntry,
+    Kernel,
+    ProfileState,
+    RecipeState,
+)
 from tundravm.policy import Policy
 
 if TYPE_CHECKING:
@@ -58,6 +72,8 @@ class Lowered:
     mirror: str | None = None
     tools_tree_mirror: str | None = None
     snapshot: str | None = None
+    epoch: int | None = None
+    """``Recipe.epoch``: ``SOURCE_DATE_EPOCH``, ``None`` for a non-reproducible build."""
     reproducible: bool = True
     policy: Policy = field(default_factory=Policy)
     backend: BuildBackend | None = None
@@ -68,6 +84,9 @@ class Lowered:
     """Pins ``fetch`` resolved for sources the lockfile does not pin (unlocked bakes)."""
     selected: tuple[str, ...] = ()
     """The profiles operations run on; empty: the default profile."""
+    local_sources: frozenset[str] = frozenset()
+    """Source builds whose source differs between the recipe's variants (every variant,
+    selected or not): each variant's is pinned on its own, as ``<variant>/<name>``."""
 
     @property
     def base(self) -> str:
@@ -166,8 +185,39 @@ class Lowered:
         }
 
     def payload(self) -> dict[str, object]:
-        """The active profiles' lockfile payload (:func:`recipe_payload`)."""
-        return recipe_payload(self.state, self.active)
+        """The active profiles' lockfile payload.
+
+        :func:`recipe_payload` of the state, plus what lies outside it: the
+        ``distribution`` (base, arch, mirrors, snapshot, epoch), the ``compiler``
+        (tundravm version, dialect, the default variant's mkosi options) and per
+        variant its ``kernel`` (version, source, cmdline, tdx, sha256 of the config
+        bytes) and, where they differ from the default variant's, its ``mkosi`` options.
+        """
+        from tundravm import __version__
+
+        payload = recipe_payload(self.state, self.active)
+        profiles = payload["profiles"]
+        assert isinstance(profiles, dict)
+        for name, entry in profiles.items():
+            entry["kernel"] = kernel_payload(self.kernel_for(name))
+            if name in self.profile_mkosi:
+                entry["mkosi"] = mkosi_payload(self.profile_mkosi[name])
+        return {
+            "distribution": {
+                "base": self.state.base,
+                "arch": self.state.arch,
+                "mirror": self.mirror,
+                "tools_mirror": self.tools_tree_mirror,
+                "snapshot": self.snapshot,
+                "epoch": self.epoch,
+            },
+            "compiler": {
+                "tundravm": __version__,
+                "dialect": self.mkosi.dialect,
+                "mkosi": mkosi_payload(self.mkosi),
+            },
+            **payload,
+        }
 
     def digest(self) -> str:
         """The recipe digest of the active profiles, as the lockfile records it."""
@@ -187,11 +237,36 @@ class Lowered:
         return self.mkosi.dialect != "nethermind-v1"
 
     def source_builds(self, *, profile: str | None = None) -> dict[str, SourceBuild]:
-        """Source builds declared for *profile* (default: every active profile), by name."""
+        """Source builds declared for *profile* (default: every active profile), by lock key.
+
+        The key is the build's name, or ``<variant>/<name>`` for a build in
+        :attr:`local_sources` (:meth:`keyed`).
+        """
         builds: dict[str, SourceBuild] = {}
         for name in (profile,) if profile is not None else self.active:
-            builds.update(self.state.effective_profile(name).source_builds)
+            for build in self.state.effective_profile(name).source_builds.values():
+                spec = self.keyed(name, build)
+                builds[spec.key] = spec
         return dict(sorted(builds.items()))
+
+    def source_key(self, profile: str, name: str) -> str:
+        """The lockfile key of *profile*'s source build *name*.
+
+        *name* itself, unless the build's source differs between variants: then
+        ``<variant>/<name>``, the variant being the one whose hook builds it (the
+        default variant for a build an extending variant inherits).
+        """
+        if name not in self.local_sources:
+            return name
+        own = self.state.ensure_profile(profile)
+        if name not in own.source_builds and own.extends is not None:
+            profile = own.extends
+        return f"{profile}/{name}"
+
+    def keyed(self, profile: str, build: SourceBuild) -> SourceBuild:
+        """*build* (declared for *profile*) under its lockfile key (:meth:`source_key`)."""
+        key = self.source_key(profile, build.name)
+        return build if key == build.name else replace(build, lock_name=key)
 
     def kernel_source(self, profile: str) -> KernelSource | None:
         """The source of the kernel *profile* builds, under its lockfile name.
@@ -267,7 +342,11 @@ class Lowered:
             swaps = {
                 spec.render(mounted=mounted): pinned
                 for spec in profile.source_builds.values()
-                if (pinned := spec.render(spec.pin_from(pins), mounted=mounted))
+                if (
+                    pinned := spec.render(
+                        self.keyed(name, spec).pin_from(pins), mounted=mounted, arch=self.arch
+                    )
+                )
                 != spec.render(mounted=mounted)
             }
             if not swaps:
@@ -325,8 +404,8 @@ class Lowered:
             self.lock_sources(), pins, resolver=resolver
         )
         if partial:
-            elsewhere = unselected_sources(lock, payload)
-            removed = [s for s in removed if s.removeprefix("sources.") not in elsewhere]
+            elsewhere = {source_section(key) for key in unselected_sources(lock, payload)}
+            removed = [s for s in removed if s not in elsewhere]
         return replace(
             drift,
             added=(*drift.added, *added),
@@ -334,6 +413,67 @@ class Lowered:
             removed=(*drift.removed, *removed),
             details={**drift.details, **details},
         )
+
+
+def kernel_payload(kernel: Kernel | None) -> dict[str, object] | None:
+    """The lockfile section of the kernel a variant builds: ``None`` when it builds none.
+
+    The config is hashed by its bytes; a config file that does not exist is
+    recorded by its path (compiling it fails).
+    """
+    if kernel is None:
+        return None
+    config: dict[str, object] = {"config_sha256": None}
+    if kernel.config_file:
+        path = Path(kernel.config_file)
+        if path.is_file():
+            config["config_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            config["config_missing"] = str(kernel.config_file)
+    return {
+        "version": kernel.version,
+        "source": KernelSource.of(kernel).source.to_payload(),
+        "cmdline": kernel.cmdline,
+        "tdx": kernel.tdx,
+        **config,
+    }
+
+
+def mkosi_payload(options: MkosiOptions) -> dict[str, object]:
+    """*options* that differ from the defaults, JSON-ready; sandbox files by sha256.
+
+    The dialect is the ``compiler`` section's own key.
+    """
+    found: dict[str, object] = {}
+    for name, value in options.non_defaults().items():
+        if name == "dialect":
+            continue
+        if name == "sandbox_files":
+            found[name] = [
+                {"path": path, "sha256": hashlib.sha256(text.encode()).hexdigest()}
+                for path, text in options.sandbox_files
+            ]
+            continue
+        found[name] = _json_ready(value)
+    return found
+
+
+def _json_ready(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _json_ready(item) for key, item in sorted(value.items())}
+    if isinstance(value, tuple | list):
+        return [_json_ready(item) for item in value]
+    return value
+
+
+def _file_payload(entry: FileEntry) -> dict[str, object]:
+    """A path in the image: its kind (file, symlink or directory), mode and content sha256."""
+    return {
+        "path": entry.path,
+        "kind": entry.kind,
+        "mode": entry.mode,
+        "sha256": hashlib.sha256(entry.data).hexdigest(),
+    }
 
 
 def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, object]]:
@@ -374,14 +514,7 @@ def recipe_payload(state: RecipeState, profile_names: Sequence[str]) -> dict[str
                 key=lambda item: (item.priority, item.name, item.url),
             )
         ]
-        files = [
-            {
-                "path": file_entry.path,
-                "mode": file_entry.mode,
-                "sha256": hashlib.sha256(file_entry.data).hexdigest(),
-            }
-            for file_entry in sorted(profile.files, key=lambda item: item.path)
-        ]
+        files = [_file_payload(entry) for entry in sorted(profile.files, key=lambda e: e.path)]
         templates = [
             {
                 "path": tmpl.path,
@@ -461,12 +594,7 @@ def recipe_payload(state: RecipeState, profile_names: Sequence[str]) -> dict[str
             for secret in sorted(profile.secrets, key=lambda item: item.name)
         ]
         skeleton_files = [
-            {
-                "path": file_entry.path,
-                "mode": file_entry.mode,
-                "sha256": hashlib.sha256(file_entry.data).hexdigest(),
-            }
-            for file_entry in sorted(profile.skeleton_files, key=lambda item: item.path)
+            _file_payload(entry) for entry in sorted(profile.skeleton_files, key=lambda e: e.path)
         ]
         # The default profile's payload carries no "extends" key so default-only
         # recipes keep their digests.
@@ -514,13 +642,19 @@ def recipe_payload(state: RecipeState, profile_names: Sequence[str]) -> dict[str
             "debloat": {
                 "enabled": profile.debloat.enabled,
                 "paths_remove": list(profile.debloat.effective_paths_remove),
+                "paths_skip": sorted(profile.debloat.paths_skip),
+                "variant_paths": {
+                    variant: list(paths)
+                    for variant, paths in sorted(profile.debloat.profile_conditional_paths.items())
+                },
                 "systemd_minimize": profile.debloat.systemd_minimize,
+                "systemd_units_keep": list(profile.debloat.effective_units_keep),
+                "systemd_bins_keep": sorted(profile.debloat.systemd_bins_keep),
+                "clean_var_dirs": list(profile.debloat.clean_var_dirs),
             },
         }
 
     return {
-        "base": state.base,
-        "arch": state.arch,
         "default_profile": state.default_profile,
         "init_scripts": _init_scripts_payload(
             state.ensure_profile(state.default_profile).init_scripts
@@ -529,4 +663,4 @@ def recipe_payload(state: RecipeState, profile_names: Sequence[str]) -> dict[str
     }
 
 
-__all__ = ["LOCK_FILENAME", "Lowered", "recipe_payload"]
+__all__ = ["LOCK_FILENAME", "Lowered", "kernel_payload", "mkosi_payload", "recipe_payload"]

@@ -27,7 +27,7 @@ import re
 import sys
 import warnings
 from collections.abc import Callable, Sequence
-from dataclasses import MISSING, fields, replace
+from dataclasses import MISSING, dataclass, fields, replace
 from pathlib import Path
 from typing import TextIO, cast, get_args
 
@@ -61,9 +61,11 @@ from .declarative.lifecycle import (
     probe,
     read_artifacts,
     read_lock,
+    read_variant_tree,
     requirements_of,
     run_probe,
     select_artifact,
+    using_lock,
     write_lock,
 )
 from .declarative.model import Target
@@ -251,6 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lint_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
     lint.add_argument("--strict", action="store_true", help="Treat warnings as errors (exit 1).")
+    _add_lockfile(lint)
 
     compile_cmd = _add_command(
         sub, "compile", _cmd_compile, help="Emit the mkosi project tree for the recipe."
@@ -317,10 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
         "failed source as `<name>: git <url> @ <ref>: <reason>` and exits 2."
     )
     lock.add_argument(
-        "--path",
+        "--lockfile",
         type=Path,
         default=None,
-        help="Lockfile path (default: build/tundravm.lock).",
+        help="Lockfile to write or check (default: build/tundravm.lock).",
     )
     lock.add_argument(
         "--update",
@@ -374,8 +377,11 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_cmd.epilog = (
         "A built kernel's source (Kernel with config=) is fetched too, as `kernel` "
         "(`kernel-<variant>` where a variant's kernel source differs). "
-        "Each source lands in OUT/.sources/<name>-<pin12>, fetched as the invoking user "
-        "(git credentials and SSH agent apply); a complete checkout is kept. Sources the "
+        "Each source lands in OUT/.sources/<name>-<pin12>-<id8>, fetched as the invoking "
+        "user (git credentials and SSH agent apply); a complete checkout is verified and "
+        "kept (git: HEAD is the pin and the tree is clean, submodules initialised when "
+        "asked for; http: the files match the manifest written at fetch time), and one "
+        "that changed fails until --force checks it out again. Sources the "
         "lockfile does not pin are resolved first, as `lock` would, unless the recipe's "
         "policy forbids unpinned sources. `bake` fetches the same way before it builds "
         "and mounts OUT/.sources into the build."
@@ -388,6 +394,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch_cmd.add_argument(
         "--out", type=Path, default=None, help="Build output directory (default: build)."
+    )
+    fetch_cmd.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Check every source out again, replacing its checkout (repairs one that was "
+            "modified or left incomplete)."
+        ),
     )
 
     bake = _add_command(sub, "bake", _cmd_bake, help="Compile and build the image.")
@@ -477,7 +491,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     deploy_cmd.add_argument(
-        "--allow-placeholder",
+        "--allow-simulated-artifact",
         action="store_true",
         help="Deploy a simulated (in-process) artifact anyway.",
     )
@@ -634,7 +648,8 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         "(ok, stale, missing, n/a; lint says error when the recipe has errors), then "
         "`next: COMMAND`, the single most useful command to run (or `everything is up "
         "to date`). Artifacts are stale when the recipe or the tree they were baked "
-        "from changed since."
+        "from changed since, or (with --verify) when their bytes no longer match the "
+        "sha256 the bake recorded."
     )
     status.add_argument(
         "--out", type=Path, default=None, help="Build output directory (default: build)."
@@ -644,6 +659,14 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         type=Path,
         default=None,
         help="Lockfile to report on (default: build/tundravm.lock).",
+    )
+    status.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "Hash each artifact and compare it with the sha256 the bake recorded "
+            "(integrity verified or mismatch); without it integrity is unchecked."
+        ),
     )
     status.add_argument(
         "--format",
@@ -784,7 +807,7 @@ def _add_lockfile(parser: argparse.ArgumentParser) -> None:
 
 def _load(args: argparse.Namespace) -> RecipeFile:
     extra: list[str] = [os.getcwd(), *(args.pythonpath or [])]
-    return load_file(args.recipe, attr=args.attr, extra_paths=extra)
+    return load_file(args.recipe, attribute=args.attr, extra_paths=extra)
 
 
 def _variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...]:
@@ -860,7 +883,8 @@ def _describe(loaded: RecipeFile, img: Lowered, name: str) -> dict[str, object]:
 def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
-    diagnostics = check_report(loaded.recipe, loaded.image, variants=names)
+    lock = None if args.lockfile is None else read_lock(args.lockfile)
+    diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=lock)
     fmt = resolve_format(args.format, alias="json" if args.json else None)
     print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
     return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
@@ -895,10 +919,13 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
         args.color = "never"
         return _cmd_diff_loaded(args, out, img, _variants(loaded, args))
     names = _variants(loaded, args)
-    result, _ = emit(_with_lockfile(img, args).select(names), destination)
+    selected = _with_lockfile(img, args).select(names)
+    result, _ = emit(selected, destination)
+    tree = read_variant_tree(destination, result.profiles)
     print(f"compiled {result.path}", file=out)
-    print(f"  variants: {', '.join(result.profiles)}", file=out)
-    print(f"  digest:   {result.digest}", file=out)
+    print(f"  variants:      {', '.join(result.profiles)}", file=out)
+    print(f"  recipe_digest: {selected.digest()}", file=out)
+    print(f"  tree_digest:   {tree.digest}", file=out)
     return EXIT_OK
 
 
@@ -912,7 +939,7 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
     img = loaded.lowered()
-    path = _lock_path(img, args.path)
+    path = _lock_path(img, args.lockfile)
     if args.check:
         drift = img.select(names).lock_status(path)
         print(render_drift(drift, resolve_format(args.format), path), file=out)
@@ -970,7 +997,9 @@ def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
     err = sys.stderr
     reporter = TextReporter(err, color=_wants_color("auto", err))
     try:
-        fetched = fetch_image(img, names, locked=locked, out=destination, reporter=reporter)
+        fetched = fetch_image(
+            img, names, locked=locked, out=destination, reporter=reporter, force=args.force
+        )
     finally:
         reporter.close()
     if not fetched:
@@ -1157,7 +1186,7 @@ def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
     target = cast(Target, args.target)
     using = parse_deploy_target(target, _parse_params(args.param))
     artifact = _artifact(args, target)
-    result = deploy(artifact, using=using, allow_placeholder=args.allow_placeholder)
+    result = deploy(artifact, using=using, allow_simulated=args.allow_simulated_artifact)
     print(render_deployment(result, variant=artifact.variant), file=out)
     return EXIT_OK
 
@@ -1276,12 +1305,55 @@ def _cmd_completion(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
-CiStep = Callable[[RecipeFile, argparse.Namespace, str], tuple[bool, str, str]]
+@dataclass(frozen=True, slots=True)
+class _CiRun:
+    """What every ``ci`` step shares: the recipe and the one lock loaded for every step.
+
+    The lockfile at :attr:`path` is ``--lockfile``, else the image's own
+    ``build/tundravm.lock``; it is read once into :attr:`locked` (``None``: there
+    is none, so lint and the tree check apply no pins and the lock step fails).
+    An unreadable one fails every step with :attr:`problem`.
+    """
+
+    loaded: RecipeFile
+    args: argparse.Namespace
+    fmt: str
+    path: Path
+    locked: Lock | None
+    problem: TdxError | None = None
+
+    @classmethod
+    def load(cls, args: argparse.Namespace) -> _CiRun:
+        loaded = _load(args)
+        path = _lock_path(loaded.lowered(), args.lockfile)
+        try:
+            return cls(loaded, args, resolve_format(args.format), path, _lock_at(path))
+        except TdxError as exc:
+            return cls(loaded, args, resolve_format(args.format), path, None, exc)
+
+    def lock(self) -> Lock | None:
+        """The shared lock; raises the error that kept it from loading."""
+        if self.problem is not None:
+            raise self.problem
+        return self.locked
+
+    def variants(self) -> tuple[str, ...]:
+        return _variants(self.loaded, self.args)
 
 
-def _ci_lint(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
-    diagnostics = check_report(loaded.recipe, loaded.image, variants=_ci_variants(loaded, args))
-    report = render_as(diagnostics, fmt, recipe_path=args.recipe, strict=True)
+def _lock_at(path: Path) -> Lock | None:
+    return read_lock(path) if path.is_file() else None
+
+
+CiStep = Callable[[_CiRun], tuple[bool, str, str]]
+
+
+def _ci_lint(run: _CiRun) -> tuple[bool, str, str]:
+    locked = run.lock()
+    diagnostics = check_report(
+        run.loaded.recipe, None, variants=run.variants(), lock=locked or run.path
+    )
+    report = render_as(diagnostics, run.fmt, recipe_path=run.args.recipe, strict=True)
     return (
         not failing(diagnostics, strict=True),
         report if diagnostics else "",
@@ -1289,38 +1361,40 @@ def _ci_lint(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bo
     )
 
 
-def _ci_variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...]:
-    names = _variants(loaded, args)
-    return names if names is not None else loaded.variants
-
-
-def _ci_compile(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
-    img = loaded.lowered()
-    destination: Path = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
-    result = diff_against(img, destination, profiles=_variants(loaded, args))
+def _ci_compile(run: _CiRun) -> tuple[bool, str, str]:
+    locked = run.lock()
+    img = run.loaded.lowered()
+    out: Path | None = run.args.out
+    destination = out if out is not None else Path(img.build_dir) / "mkosi"
+    with using_lock(img, locked) as pinned:
+        result = diff_against(pinned, destination, profiles=run.variants())
     if result.is_clean:
         return True, "", f"{destination} is up to date"
-    report = result.render("stat" if fmt == "text" else fmt, root=annotation_path(destination))
+    fmt = "stat" if run.fmt == "text" else run.fmt
+    report = result.render(fmt, root=annotation_path(destination))
     count = len(result.changes)
     verdict = (
         f"{count} file{'' if count == 1 else 's'} stale in {destination}; "
-        f"run `tundravm compile {args.recipe} --out {destination}`"
+        f"run `tundravm compile {run.args.recipe} --out {destination}`"
     )
     return False, report.rstrip(), verdict
 
 
-def _ci_lock(loaded: RecipeFile, args: argparse.Namespace, fmt: str) -> tuple[bool, str, str]:
-    img = loaded.lowered()
-    path = _lock_path(img, args.lockfile)
-    drift = img.select(_variants(loaded, args)).lock_status(path)
+def _ci_lock(run: _CiRun) -> tuple[bool, str, str]:
+    path = run.path
+    locked = run.lock() or read_lock(path)  # no lockfile: read_lock says so
+    img = run.loaded.lowered()
+    scoped = img.select(run.variants())
+    partial = not set(img.state.profiles) <= set(scoped.active)
+    drift = scoped.drift(locked.lockfile, resolver=None, partial=partial)
     if drift.is_clean:
         return True, "", f"{path} is up to date"
     count = len(drift.sections) or 1
     verdict = (
         f"{count} section{'' if count == 1 else 's'} drifted from {path}; "
-        f"run `tundravm lock {args.recipe}`"
+        f"run `tundravm lock {run.args.recipe}`"
     )
-    return False, render_drift(drift, fmt, path), verdict
+    return False, render_drift(drift, run.fmt, path), verdict
 
 
 CI_STEPS: tuple[tuple[str, CiStep], ...] = (
@@ -1331,11 +1405,11 @@ CI_STEPS: tuple[tuple[str, CiStep], ...] = (
 
 
 def _cmd_ci(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    fmt = resolve_format(args.format)
+    run = _CiRun.load(args)
+    fmt = run.fmt
     for index, (name, step) in enumerate(CI_STEPS):
         try:
-            ok, report, verdict = step(loaded, args, fmt)
+            ok, report, verdict = step(run)
         except TdxError as exc:
             hint = f" ({exc.hint})" if exc.hint else ""
             ok, verdict = False, f"[{exc.code}] {exc.args[0]}{hint}"
@@ -1371,6 +1445,7 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         lock_path=_lock_path(img, args.lockfile),
         runner=args.runner if args.runner is not None else run_probe,
         invocation=call,
+        verify=args.verify,
     )
     print(render_status(status, args.format), file=out)
     return EXIT_OK
@@ -1510,13 +1585,16 @@ def _init_next(root: Path, recipe: Path, tests: Path | None, github: bool, out: 
     """Print the numbered follow-up commands, run from *root*."""
     name = recipe.name
     steps = [
+        (
+            f"tundravm lock {name}",
+            "record recipe sections and pin source repositories/downloads in build/tundravm.lock",
+        ),
         (f"tundravm compile {name} --out mkosi", "write the mkosi tree; commit it"),
         *(
             [(f"uv run pytest {tests.parent.name}", f"run {tests.name} against mkosi/")]
             if tests is not None
             else []
         ),
-        (f"tundravm lock {name}", "pin packages and sources in build/tundravm.lock"),
         (f"tundravm ci {name} --out mkosi", "the lint, tree and lockfile checks CI runs"),
         (f"tundravm bake {name} --out build", "build the image"),
     ]

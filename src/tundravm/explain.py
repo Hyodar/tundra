@@ -134,7 +134,7 @@ def describe(
             for svc in sorted(profile_state.services, key=lambda item: item.name)
         ],
         "skeleton_files": _describe_files(profile_state.skeleton_files),
-        "sources": _describe_sources(profile_state, pins),
+        "sources": _describe_sources(image, selected, profile_state, pins),
         "targets": list(profile_state.output_targets),
         "units": _describe_units(profile_state),
         "templates": [
@@ -476,23 +476,28 @@ def _append_section(
 
 
 def _describe_files(entries: Sequence[Any]) -> list[dict[str, object]]:
-    return [
-        {
+    described: list[dict[str, object]] = []
+    for entry in sorted(entries, key=lambda item: item.path):
+        row: dict[str, object] = {
             "bytes": len(entry.data),
             "mode": entry.mode,
             "path": entry.path,
             "sha256": hashlib.sha256(entry.data).hexdigest()[:SHORT_DIGEST_LEN],
         }
-        for entry in sorted(entries, key=lambda item: item.path)
-    ]
+        if entry.kind == "symlink":
+            row["symlink"] = entry.data.decode()
+        elif entry.kind == "directory":
+            row["directory"] = True
+        described.append(row)
+    return described
 
 
 def _describe_sources(
-    profile_state: ProfileState, pins: Mapping[str, LockedFetch]
+    image: Lowered, profile: str, profile_state: ProfileState, pins: Mapping[str, LockedFetch]
 ) -> list[dict[str, object]]:
     described: list[dict[str, object]] = []
     for name, spec in sorted(profile_state.source_builds.items()):
-        pin = spec.pin_from(pins)
+        pin = image.keyed(profile, spec).pin_from(pins)
         described.append(
             {
                 "build": spec.build.kind,
@@ -597,10 +602,13 @@ def _append_files(lines: list[str], label: str, files: list[Any]) -> None:
     lines.append(f"{label} ({len(files)}):")
     width = _column_width(files, "path")
     for entry in files:
-        lines.append(
-            f"  {entry['path']:<{width}}  {entry['mode']}  {entry['bytes']}B"
-            f"  sha256:{entry['sha256']}"
-        )
+        if "symlink" in entry:
+            what = f"-> {entry['symlink']}"
+        elif entry.get("directory"):
+            what = "directory"
+        else:
+            what = f"{entry['bytes']}B  sha256:{entry['sha256']}"
+        lines.append(f"  {entry['path']:<{width}}  {entry['mode']}  {what}")
 
 
 def _column_width(rows: list[Any], key: str) -> int:

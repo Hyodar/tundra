@@ -17,6 +17,7 @@ import fnmatch
 import os
 import re
 import shlex
+import stat
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -44,6 +45,7 @@ from tundravm.models import (
     CommandSpec,
     DebloatConfig,
     FileEntry,
+    FileKind,
     GroupSpec,
     HookSpec,
     InitScriptEntry,
@@ -354,6 +356,7 @@ class StateBuilder:
                 config_path=config_path,
                 manifest_path=manifest_path,
                 source=source,
+                env_suffix=None if len(secrets) == 1 else entry.name,
             )
             spec = delivery.source_spec()
             if spec.name not in profile.source_builds:  # a second delivery reuses the binary
@@ -362,6 +365,8 @@ class StateBuilder:
             profile.secrets.extend(delivery.secrets)
             _add_file(profile, delivery.config_path, delivery.render_config())
             _add_file(profile, delivery.manifest_path, delivery.render_manifest())
+            for path, dropin in delivery.service_dropins().items():
+                _add_file(profile, path, dropin)
             _runtime_init(profile, delivery.init_script(), SECRET_DELIVERY_INIT_PRIORITY)
             applied.append(delivery)
 
@@ -610,16 +615,68 @@ def _file(profile: ProfileState, item: File) -> None:
     entries.append(FileEntry(path=item.path, content=data, mode=_mode(item.mode)))
 
 
+def walk_directory(
+    root: Path, exclude: Sequence[str], *, follow: bool
+) -> list[tuple[str, Path, FileKind]]:
+    """``(relative posix path, host path, kind)`` of what ``Directory`` imports from *root*.
+
+    Files, directories empty on the host, and (unless *follow*) symlinks, which
+    are not descended into. *follow* reads through symlinks and descends into
+    linked directories, each real directory once. *exclude* is as for
+    :func:`walk_tree`.
+    """
+    patterns = tuple(exclude)
+
+    def excluded(rel: str) -> bool:
+        return any(fnmatch.fnmatchcase(rel, pattern) for pattern in patterns)
+
+    found: list[tuple[str, Path, FileKind]] = []
+    seen: set[Path] = set()
+    for current, dirnames, filenames in os.walk(root, followlinks=follow):
+        here = Path(current)
+        if follow:
+            real = here.resolve()
+            if real in seen:
+                dirnames[:] = []
+                continue
+            seen.add(real)
+        base = here.relative_to(root)
+        if base != Path(".") and not dirnames and not filenames:
+            found.append((base.as_posix(), here, "directory"))
+        kept = sorted(d for d in dirnames if not excluded((base / d).as_posix()))
+        links = [] if follow else [d for d in kept if (here / d).is_symlink()]
+        dirnames[:] = [d for d in kept if d not in links]
+        for name in sorted(
+            {*links, *(f for f in filenames if not excluded((base / f).as_posix()))}
+        ):
+            path = here / name
+            rel = (base / name).as_posix()
+            if not follow and path.is_symlink():
+                found.append((rel, path, "symlink"))
+            elif path.is_file():
+                found.append((rel, path, "file"))
+            elif path.is_symlink():
+                raise ValidationError(
+                    f"Directory: symlink {path} points to nothing to follow.",
+                    hint="Fix the link, exclude it, or pass symlinks='preserve' to ship it as is.",
+                    context={"path": str(path)},
+                )
+    return sorted(found)
+
+
 def _directory(profile: ProfileState, item: Directory) -> None:
-    """Every file under ``item.source`` at ``item.path``: *mode*, else 0755 if executable."""
-    mode = None if item.mode is None else _mode(item.mode)
+    """What lies under ``item.source``, at ``item.path`` (see :class:`Directory`).
+
+    Without *mode* each file and empty directory keeps its permission bits;
+    with it every file gets *mode* and every empty directory 0755.
+    """
     if not item.source.is_dir():
         raise ValidationError(
             f"Directory {item.path}: source {item.source} is not an existing directory.",
             hint="Relative paths resolve against the working directory; check source= exists.",
             context={"path": item.path, "source": str(item.source)},
         )
-    found = walk_tree(item.source, item.exclude)
+    found = walk_directory(item.source, item.exclude, follow=item.symlinks == "follow")
     if not found:
         raise ValidationError(
             f"Directory {item.path}: no files to copy from {item.source}.",
@@ -627,10 +684,18 @@ def _directory(profile: ProfileState, item: Directory) -> None:
         )
     entries = profile.skeleton_files if item.stage == "skeleton" else profile.files
     prefix = item.path.rstrip("/")
-    for rel, host in sorted(found):
-        file_mode = mode or ("0755" if host.stat().st_mode & 0o111 else "0644")
-        content = _read(host, owner="Directory")
-        entries.append(FileEntry(path=f"{prefix}/{rel}", content=content, mode=file_mode))
+    for rel, host, kind in found:
+        path = f"{prefix}/{rel}"
+        if kind == "symlink":
+            entries.append(FileEntry(path, os.readlink(host), "0777", kind="symlink"))
+            continue
+        kept = _mode(stat.S_IMODE(host.stat().st_mode))
+        if kind == "directory":
+            mode = kept if item.mode is None else "0755"
+            entries.append(FileEntry(path, b"", mode, kind="directory"))
+            continue
+        mode = kept if item.mode is None else _mode(item.mode)
+        entries.append(FileEntry(path, _read(host, owner="Directory"), mode))
 
 
 def _template(profile: ProfileState, item: Template) -> None:
@@ -879,7 +944,11 @@ def _disk_spec(disk: Disk) -> DiskSpec:
 def _secret_spec(secret: Secret) -> SecretSpec:
     schema = secret.schema
     targets = tuple(
-        SecretTarget.env(target.name, scope="global" if target.service is None else "service")
+        SecretTarget.env(
+            target.name,
+            scope="global" if target.unit is None else "service",
+            service=target.unit,
+        )
         if isinstance(target, SecretEnv)
         else SecretTarget.file(target.path, mode=_mode(target.mode), owner=target.owner)
         for target in secret.targets
@@ -955,5 +1024,6 @@ __all__ = [
     "read_source",
     "source_build",
     "useradd_line",
+    "walk_directory",
     "walk_tree",
 ]

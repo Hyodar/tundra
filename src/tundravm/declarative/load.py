@@ -24,7 +24,7 @@ def load(
     """
     from tundravm.recipe import load_recipe
 
-    return load_recipe(path, attr=attribute, extra_paths=extra_paths)
+    return load_recipe(path, attribute=attribute, extra_paths=extra_paths)
 
 
 __all__ = ["load"]

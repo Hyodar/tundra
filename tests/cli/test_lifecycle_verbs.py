@@ -154,7 +154,7 @@ def test_deploy_qemu_after_bake_in_separate_invocation(
     assert run_main(*command)[0] == EXIT_SDK_ERROR  # in-process artifacts are simulated
     assert not launched
 
-    code, out = run_main(*command, "--allow-placeholder")
+    code, out = run_main(*command, "--allow-simulated-artifact")
 
     assert code == EXIT_OK
     (argv,) = launched

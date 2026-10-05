@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tundravm._source import CargoBuild, DotnetBuild, GitSource, GoBuild, ScriptBuild, SourceBuild
@@ -85,7 +87,10 @@ def test_go_recipe_renders_like_the_equivalent_script() -> None:
         "tool", Git(REPO, "main"), recipe=Go(package="./cmd/tool", output="tool"), install=install
     )
     by_script = Build("tool", Git(REPO, "main"), script=script, install=install)
-    assert _hooks(_pinned(_recipe(by_recipe))) == _hooks(_pinned(_recipe(by_script)))
+    recipe_hook, script_hook = (_hooks(_pinned(_recipe(b))) for b in (by_recipe, by_script))
+    unkeyed = re.compile(r"build\}/tool-[0-9a-f]{16}")
+    assert unkeyed.sub("KEY", recipe_hook) == unkeyed.sub("KEY", script_hook)
+    assert recipe_hook != script_hook  # the cache fingerprint covers the build spec
 
 
 def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
@@ -175,3 +180,68 @@ def test_build_needs_exactly_one_of_script_and_recipe(
 ) -> None:
     with pytest.raises(ValidationError):
         Build("tool", Git(REPO, "main"), install=INSTALL, **kwargs)  # type: ignore[arg-type]
+
+
+def test_recipes_copy_the_callers_mappings_and_sequences() -> None:
+    env = {"CGO_ENABLED": "0"}
+    tags, features, restore, packages = ["netgo"], ["tdx"], ["--locked-mode"], ["make"]
+    properties = {"Version": "1"}
+    go = Go(output="tool", env=env, tags=tags)  # type: ignore[arg-type]
+    cargo = Cargo(output="tool", env=env, features=features)  # type: ignore[arg-type]
+    dotnet = Dotnet(
+        project="App.csproj",
+        output="app",
+        env=env,
+        properties=properties,
+        restore_args=restore,  # type: ignore[arg-type]
+    )
+    script = ScriptBuild(script="make", output="tool", env=env, packages=packages)  # type: ignore[arg-type]
+    recipe = _recipe(Build("tool", Git(REPO, "main"), recipe=go, install=INSTALL))
+    commands = [build.command("/build/tool") for build in (go, cargo, dotnet, script)]
+    tree = _pinned(recipe)
+
+    env["CGO_ENABLED"] = "1"
+    env["EXTRA"] = "x"
+    properties["Version"] = "2"
+    for values in (tags, features, restore, packages):
+        values.append("changed")
+
+    assert go.env == {"CGO_ENABLED": "0"} and go.tags == ("netgo",)
+    assert cargo.features == ("tdx",) and dotnet.restore_args == ("--locked-mode",)
+    assert dotnet.properties == {"Version": "1"} and script.packages == ("make",)
+    assert [build.command("/build/tool") for build in (go, cargo, dotnet, script)] == commands
+    assert _pinned(recipe).digest == tree.digest
+    with pytest.raises(TypeError):
+        go.env["CGO_ENABLED"] = "1"  # type: ignore[index]
+    assert hash(go) == hash(Go(output="tool", env={"CGO_ENABLED": "0"}, tags=("netgo",)))
+
+
+def _cache_key(recipe: Recipe) -> str:
+    """The build cache directory of *recipe*'s one pinned source build hook."""
+    keys: set[str] = set(re.findall(r'build\}/([^"/]+)"', _hooks(_pinned(recipe))))
+    (key,) = keys
+    return key
+
+
+def _keyed(**changes: object) -> Build:
+    fields: dict[str, object] = {"recipe": Go(output="tool"), "install": INSTALL}
+    fields.update(changes)
+    return Build("tool", Git(REPO, "main"), **fields)  # type: ignore[arg-type]
+
+
+def test_mounted_cache_key_fingerprints_what_the_build_produces() -> None:
+    key = _cache_key(_recipe(_keyed()))
+    namespace, _, fingerprint = key.rpartition("-")
+    assert namespace == "tool" and re.fullmatch("[0-9a-f]{16}", fingerprint)
+    changed = [
+        _keyed(recipe=Go(output="tool", tags=("netgo",))),
+        _keyed(recipe=Go(output="tool", env={"CGO_ENABLED": "0"})),
+        _keyed(recipe=Go(output="tool", packages=("golang-1.22",))),
+        _keyed(recipe=None, script="make", install=(Install("tool", "/usr/bin/tool"),)),
+        _keyed(install=(Install("build/tool", "/usr/local/bin/tool"),)),
+    ]
+    keys = [_cache_key(_recipe(build)) for build in changed]
+    arm = Recipe("tool", Fragment("tool", items=(_keyed(),)), arch="aarch64")
+    keys.append(_cache_key(arm))
+    assert key not in keys and len(set(keys)) == len(keys)
+    assert _cache_key(_recipe(_keyed(cache_key="team/tool"))) == f"team_tool-{fingerprint}"

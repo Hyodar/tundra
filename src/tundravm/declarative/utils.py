@@ -108,7 +108,7 @@ class Backports(Composite):
     ``mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources`` (see
     :meth:`render_sources`), with ``preferences.d/debian-backports.pref`` pinning
     backports to 200 and sid to 100 (see :meth:`render_preferences`): packages
-    come from the release unless it lacks them. *mirror* is the apt URI used
+    come from the release unless it lacks them. *archive_url* is the apt URI used
     verbatim; without it the sources follow ``Recipe.mirror`` (a mirror root) and
     ``Recipe.snapshot`` the way mkosi does, else ``deb.debian.org``. Without
     *release*, the release of ``Recipe.base``. Under ``nethermind-v1`` a sync hook
@@ -116,13 +116,13 @@ class Backports(Composite):
     ``$RELEASE``, with no pins. Fragment name: ``backports``.
     """
 
-    mirror: str | None = None
+    archive_url: str | None = None
     release: str | None = None
 
     def compose(self) -> Fragment:
         lines: list[str] = []
-        if self.mirror is not None:
-            lines.append(f'MIRROR="{self.mirror}"')
+        if self.archive_url is not None:
+            lines.append(f'MIRROR="{self.archive_url}"')
         else:
             lines.extend(
                 (
@@ -157,8 +157,8 @@ class Backports(Composite):
         *mirror* (a mirror root), *release* and *snapshot* are the recipe's; the
         fragment's own fields win.
         """
-        if self.mirror:
-            uri = self.mirror
+        if self.archive_url:
+            uri = self.archive_url
         elif snapshot:
             uri = _join(mirror or _SNAPSHOT_ROOT, f"archive/debian/{snapshot}")
         elif mirror:

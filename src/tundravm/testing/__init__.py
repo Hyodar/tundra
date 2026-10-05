@@ -394,7 +394,7 @@ def fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> A
 
     Writes ``out/<variant>/<disk file>`` and ``out/bake-result.json`` (merging with
     one already there), so :func:`tundravm.read_artifacts` reads it back.
-    Measurement and deployment refuse it unless told to allow placeholders.
+    ``measure`` refuses it without ``allow_placeholder``, ``deploy`` without ``allow_simulated``.
     """
     base = Path(out)
     path = base / variant / _FAKE_FILENAMES[target]
@@ -417,20 +417,20 @@ def bake_in_process(
     *,
     out: str | Path | None = None,
     variants: Variants = None,
-    locked: Lock | None = None,
+    lock: Lock | None = None,
 ) -> tuple[Artifact, ...]:
     """Bake *variants* (default: all) with the in-process backend into *out* or a temp dir.
 
-    The artifacts are simulated placeholders. Without *locked*, the recipe is
+    The artifacts are simulated placeholders. Without *lock*, the recipe is
     locked offline first, which fails for a source build: pass a lock built
     with a ``resolver=`` for those.
     """
     names = _names(variants)
     destination = Path(out) if out is not None else Path(tempfile.mkdtemp(prefix="tundravm-bake-"))
-    if locked is None:
-        locked = lifecycle.lock(recipe, offline=True, variants=names)
+    if lock is None:
+        lock = lifecycle.lock(recipe, offline=True, variants=names)
     return lifecycle.bake(
-        recipe, locked=locked, backend=Backend("inprocess"), out=destination, variants=names
+        recipe, lock=lock, backend=Backend("inprocess"), out=destination, variants=names
     )
 
 

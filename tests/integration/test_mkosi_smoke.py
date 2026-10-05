@@ -5,6 +5,7 @@ Run with: uv run pytest tests/integration/test_mkosi_smoke.py -m integration
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -115,7 +116,7 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     assert build_scripts, "No build script emitted"
     build_text = build_scripts[0].read_text()
     assert "go build" in build_text
-    assert "tdxs-2bddc6a617e7-aaaaaaaaaaaa" in build_text  # Hyodar/tundra-tools at the pin
+    assert re.search(r'build\}/tdxs-[0-9a-f]{16}"', build_text)
     assert "./cmd/tdxs" in build_text
     assert "sync-constellation" not in build_text
     assert "-trimpath" in build_text
