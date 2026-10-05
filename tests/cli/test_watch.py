@@ -131,6 +131,53 @@ def test_watch_reports_a_broken_recipe_and_keeps_watching(recipe: Path) -> None:
     assert re.fullmatch(r"lint 0 errors 0 warnings; tree missing \(\d+ files to write\)", lines[2])
 
 
+@pytest.fixture
+def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An ``init`` service project in *tmp_path* (the CWD), compiled and locked."""
+    monkeypatch.chdir(tmp_path)
+    init = ("init", ".", "--name", "node", "--backend", "inprocess", "--no-doctor")
+    assert run_main(*init)[0] == EXIT_OK
+    assert run_main("compile")[0] == EXIT_OK
+    assert run_main("lock")[0] == EXIT_OK
+    return tmp_path / "node.py"
+
+
+def _lint_summary() -> str:
+    """The summary line of ``tundravm lint`` on the configured project."""
+    out = io.StringIO()
+    main(["lint"], stdout=out)
+    return out.getvalue().splitlines()[-1]
+
+
+def test_watch_counts_lockfile_drift_as_lint_does(project: Path) -> None:
+    text = project.read_text(encoding="utf-8")
+    project.write_text(text.replace('APP_VERSION = "0.1.0"', 'APP_VERSION = "0.2.0"'))
+
+    _, lines = _watch(ticks=iter(()))
+
+    assert _lint_summary() == "4 errors, 0 warnings, 0 infos"  # lock-changed, one per section
+    assert lines == ["lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (4 files)"]
+
+
+def test_watch_names_the_first_error_a_fragment_check_raises(project: Path) -> None:
+    good = project.read_text(encoding="utf-8")
+    privileged = good.replace("APP_PORT = 8080", "APP_PORT = 80")
+
+    def ticks() -> Iterator[object]:
+        project.write_text(privileged, encoding="utf-8")
+        yield "port 80"
+        project.write_text(good, encoding="utf-8")
+        yield "fixed"
+
+    _, lines = _watch(ticks=ticks())
+
+    assert lines == [
+        "lint 0 errors 0 warnings; tree up to date",
+        "lint 2 errors (app-privileged-port: app runs as user app and cannot bind port 80)",
+        "lint 0 errors 0 warnings; tree up to date",
+    ]
+
+
 def test_watch_ctrl_c_exits_0(recipe: Path) -> None:
     def interrupted() -> Iterator[object]:
         raise KeyboardInterrupt

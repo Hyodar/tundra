@@ -126,7 +126,7 @@ from .templates import (
     render_test_module,
     render_workflow,
 )
-from .watch import Sources, Watch, tree_verdict, verdict
+from .watch import Sources, Watch, lint_failure, tree_verdict, verdict
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -683,7 +683,9 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
             "README.md when the directory has none, and a .gitignore block for build/ that "
             f"keeps build/tundravm.lock committed. With --ci github, also write {WORKFLOW_PATH}, "
             "which posts `inspect --format markdown` to the job summary and runs `tundravm ci`. "
-            "Then lint the new recipe and probe the chosen backend."
+            "Then lint the new recipe and probe the chosen backend. On an existing project "
+            "(DIR's pyproject.toml has a [tool.tundravm] table, or --recipe names the recipe), "
+            "--ci github writes only the workflow and the .gitignore block when missing."
         ),
     )
     init.set_defaults(handler=_cmd_init)
@@ -736,7 +738,17 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         "--force",
         action="store_true",
         help="Overwrite the recipe, tests module and workflow if they exist "
-        "(an existing pyproject.toml or README.md is always kept).",
+        "(an existing pyproject.toml or README.md is always kept; on an existing "
+        "project, only the workflow).",
+    )
+    init.add_argument(
+        "--recipe",
+        dest="existing",
+        type=Path,
+        default=None,
+        metavar="RECIPE",
+        help="With --ci github: the existing project's recipe, relative to DIR (default: "
+        "the [tool.tundravm] recipe); write only the workflow for it.",
     )
     init.add_argument(
         "--no-doctor",
@@ -770,9 +782,13 @@ def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "directories, __pycache__ and the build output left out). Checks once at "
             "start, then once per change, printing `HH:MM:SS lint N errors N warnings; "
             "tree up to date` (or `tree stale (N files)`, `tree missing (N files to "
-            "write)`, or with --write `wrote OUT/mkosi`); a recipe that fails to load "
-            "prints `HH:MM:SS error [E_CODE] message` and is watched on. Never writes "
-            "unless --write. Ctrl-C stops it with exit 0."
+            "write)`, or with --write `wrote OUT/mkosi`). The counts are `tundravm "
+            "lint`'s, drift against the selected lockfile included; when drift is every "
+            "error, `; lock drifted (N sections)` precedes the tree. Lint errors that keep "
+            "the recipe from lowering (an error-level fragment check) print `HH:MM:SS lint "
+            "N errors (code: first message)`; a recipe that fails to load (a syntax or "
+            "import error) prints `HH:MM:SS error [E_CODE] message`; both are watched on. "
+            "Never writes unless --write. Ctrl-C stops it with exit 0."
         )
     )
     watch.add_argument(
@@ -785,7 +801,10 @@ def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         "--lockfile",
         type=Path,
         default=None,
-        help="Lockfile whose pins lint and the tree apply (default: build/tundravm.lock).",
+        help=(
+            "Lockfile whose pins lint and the tree apply and whose drift lint reports, "
+            "as `lint --lockfile` (default: build/tundravm.lock, pins only)."
+        ),
     )
     watch.add_argument(
         "--interval",
@@ -1454,14 +1473,27 @@ def _describe(loaded: RecipeFile, img: Lowered, name: str) -> dict[str, object]:
 def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
-    lock: Lock | None = None
-    selected: Lock | NoLock | None = None  # None: the image's own build/tundravm.lock
+    diagnostics = _lint_findings(loaded, names, args, missing=_missing_lock(args))
+    fmt = resolve_format(args.format, alias="json" if args.json else None)
+    print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
+    return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
+
+
+def _lint_findings(
+    loaded: RecipeFile, names: tuple[str, ...], args: argparse.Namespace, *, missing: bool
+) -> list[CheckDiagnostic]:
+    """What ``tundravm lint`` reports for *names*, as ``lint`` and ``watch`` share it.
+
+    The selected lockfile (``--lockfile`` or ``[tool.tundravm]``'s) pins the sources
+    and drift against it is a finding, as ``lint(recipe, lock=...)``; *missing*: it is
+    the configured one and does not exist, so nothing is pinned. Without one, the
+    image's own ``build/tundravm.lock`` pins the sources and drift is not checked.
+    """
+    selected: Lock | NoLock | None = None
     if args.lockfile is not None:
-        selected = NO_LOCK if _missing_lock(args) else read_lock(args.lockfile)
-        lock = selected if isinstance(selected, Lock) else None
+        selected = NO_LOCK if missing else read_lock(args.lockfile)
     diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=selected)
-    if lock is not None and not any(d.level == "error" for d in diagnostics):
-        # as lint(recipe, lock=...): drift against a selected lockfile is a finding
+    if isinstance(selected, Lock) and not any(d.level == "error" for d in diagnostics):
         diagnostics.extend(
             CheckDiagnostic(
                 level=d.level,
@@ -1471,11 +1503,9 @@ def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
                 profile=d.variant or "common",
                 subject=d.subject or None,
             )
-            for d in lock_status(loaded.recipe, lock, variants=names)
+            for d in lock_status(loaded.recipe, selected, variants=names)
         )
-    fmt = resolve_format(args.format, alias="json" if args.json else None)
-    print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
-    return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
+    return diagnostics
 
 
 def _with_lockfile(img: Lowered, args: argparse.Namespace) -> Lowered:
@@ -1498,11 +1528,16 @@ def _missing_lock(args: argparse.Namespace, then: str = "") -> bool:
     The note goes to stderr; *then* says what the command does without it. A
     missing ``--lockfile`` is not this case: :func:`read_lock` fails on it.
     """
-    path: Path | None = getattr(args, "lockfile", None)
-    if path is None or args.origins.get("lockfile") != "pyproject" or path.is_file():
+    if not _configured_lock_missing(args):
         return False
-    print(f"note: {missing_lock_message(path)}{then}", file=sys.stderr)
+    print(f"note: {missing_lock_message(args.lockfile)}{then}", file=sys.stderr)
     return True
+
+
+def _configured_lock_missing(args: argparse.Namespace) -> bool:
+    """:func:`_missing_lock` without the note (``watch`` would repeat it every check)."""
+    path: Path | None = getattr(args, "lockfile", None)
+    return path is not None and args.origins.get("lockfile") == "pyproject" and not path.is_file()
 
 
 def missing_lock_message(path: Path) -> str:
@@ -2173,29 +2208,42 @@ def _cmd_watch(args: argparse.Namespace, out: TextIO) -> int:
     return loop.run(args.ticks)
 
 
+_DRIFT_CODES = frozenset({"lock-changed", "lock-added", "lock-removed", "lock-stale"})
+
+
 def _watch_check(args: argparse.Namespace, sources: Sources) -> str:
-    """One ``watch`` verdict: lint counts and the tree against the recipe, as ``ci`` checks."""
+    """One ``watch`` verdict: ``tundravm lint``'s counts and the tree against the recipe.
+
+    A recipe that does not load is ``error [E_CODE] message``; lint errors that keep
+    it from lowering (an error-level fragment check) are ``lint N errors (code: message)``.
+    """
     try:
         loaded = _load(args)
         names = _variants(loaded, args)
-        img = loaded.lowered()
-        locked = _lock_at(_lock_path(img, args.lockfile))
-        lock: Lock | Path = locked or _lock_path(img, args.lockfile)
-        diagnostics = check_report(loaded.recipe, None, variants=names, lock=lock)
+        diagnostics = _lint_findings(loaded, names, args, missing=_configured_lock_missing(args))
     except TdxError as exc:
         return _watch_error(args, exc)
-    errors = sum(d.level == "error" for d in diagnostics)
+    errors = [d for d in diagnostics if d.level == "error"]
     warnings_ = sum(d.level == "warning" for d in diagnostics)
+    try:
+        img = loaded.lowered()
+    except TdxError as exc:
+        if not errors:
+            return _watch_error(args, exc)
+        first = errors[0]
+        return lint_failure(errors=len(errors), code=first.code, message=first.message)
+    drifted = len(errors) if all(d.code in _DRIFT_CODES for d in errors) else 0
     build: Path = args.out if args.out is not None else Path(img.build_dir)
     configured: Path | None = getattr(args, "tree", None)
     explicit = args.origins.get("out") == "flag"
     tree = configured if configured is not None and not explicit else build / TREE_DIRNAME
     sources.ignore(build, tree)
     try:
+        locked = _lock_at(_lock_path(img, args.lockfile))
         line = _watch_tree(args, img, names, locked, tree)
     except TdxError as exc:
         line = f"tree not checked ([{exc.code}] {exc.args[0]})"
-    return verdict(errors=errors, warnings=warnings_, tree=line)
+    return verdict(errors=len(errors), warnings=warnings_, tree=line, drifted=drifted)
 
 
 def _watch_tree(
@@ -2303,6 +2351,9 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
             print(f"{template:<{width}}  {summary}{default}", file=out)
         return EXIT_OK
     root: Path = args.dir
+    ci_only = _init_existing(args, root)
+    if ci_only is not None:
+        return _init_ci_only(args, root, *ci_only, out)
     name = _init_name(args.name, root)
     title = name.replace("_", "-")
     recipe = root / f"{name}.py"
@@ -2362,6 +2413,75 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
     _init_next(root, recipe, tests if args.tests else None, args.ci == "github", out)
     if not args.no_doctor:
         _init_doctor(args.backend, args.runner, out)
+    return EXIT_OK
+
+
+def _init_existing(args: argparse.Namespace, root: Path) -> tuple[str, str] | None:
+    """The recipe and tree, relative to *root*, of the project ``--ci github`` adds CI to.
+
+    ``None`` scaffolds a new project: no ``--recipe`` and no ``[tool.tundravm]`` table
+    in *root*'s own ``pyproject.toml``. The tree is the table's, else ``mkosi``.
+    """
+    given: Path | None = args.existing
+    if args.ci != "github":
+        if given is not None:
+            raise ValidationError(
+                "--recipe adds CI to an existing project and needs --ci github.",
+                hint="Pass --ci github with --recipe, or drop --recipe to scaffold a project.",
+            )
+        return None
+    project = find_project(root)
+    if project is not None and project.root != root.resolve():
+        project = None
+    if given is None and project is None:
+        return None
+    if given is None:
+        assert project is not None
+        configured = project.get("recipe")
+        if configured is None:
+            raise ValidationError(
+                f"[{TABLE}] in {project.path} names no recipe.",
+                hint="Pass --recipe RECIPE naming the project's recipe, relative to DIR.",
+            )
+        given = Path(configured)
+    recipe = root / given
+    if not recipe.is_file():
+        raise ValidationError(
+            f"Recipe file not found: {recipe}",
+            hint="Pass --recipe RECIPE naming the project's existing recipe, relative to DIR.",
+            context={"dir": str(root)},
+        )
+    try:
+        relative = recipe.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise ValidationError(
+            f"Recipe {recipe} is outside {root}.",
+            hint="The workflow runs from DIR; pass a recipe inside it.",
+            context={"dir": str(root)},
+        ) from None
+    tree = None if project is None else project.get("tree")
+    return relative.as_posix(), tree or "mkosi"
+
+
+def _init_ci_only(args: argparse.Namespace, root: Path, recipe: str, tree: str, out: TextIO) -> int:
+    """Write the workflow (and the ``.gitignore`` block) into an existing project."""
+    workflow = root / WORKFLOW_PATH
+    replaced = workflow.exists()
+    if replaced and not args.force:
+        raise ValidationError(
+            f"Refusing to overwrite existing file(s): {workflow}",
+            hint="Pass --force to overwrite the workflow; the project's other files are kept.",
+            context={"dir": str(root)},
+        )
+    print(f"adding CI for {recipe} to the existing project in {root}", file=out)
+    verb = "overwrote" if replaced else "created"
+    _init_write(workflow, render_workflow(recipe=recipe, out=tree), verb, out)
+    print(_init_gitignore(root / ".gitignore"), file=out)
+    print(
+        f"next: `tundravm ci {recipe} --out {tree}` runs the workflow's checks; "
+        f"commit {tree}/ and the lockfile they compare against",
+        file=out,
+    )
     return EXIT_OK
 
 

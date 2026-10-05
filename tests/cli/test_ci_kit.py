@@ -10,9 +10,11 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
+from tundravm.backends.inprocess import TARGET_FILENAMES
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.diff import TreeDiff
 from tundravm.formats import md_cell, resolve_format, workflow_command
+from tundravm.templates import render_workflow
 
 RECIPE = """
 from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
@@ -147,9 +149,108 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
         "--bundle evidence.tar.gz --html evidence.html",
         "uses: actions/upload-artifact@v4",
     )
-    assert "path: | evidence.tar.gz evidence.html build/*/output/*" in bake[-1]
-    opt_in = [line for line in text.splitlines() if line.startswith("#")]
-    assert any("TUNDRAVM_BAKE_BACKEND" in line for line in opt_in)
+    uploads = bake[-1].split("path: | ")[1].split()
+    assert uploads == [
+        "evidence.tar.gz",
+        "evidence.html",
+        "build/bake-result.json",
+        "build/*/output/*",
+        "build/*/*.qcow2",
+        "build/*/*.vhd",
+        "build/*/*.tar.gz",
+    ]
+    opt_in = " ".join(line[1:].strip() for line in text.splitlines() if line.startswith("#"))
+    assert "TUNDRAVM_BAKE_BACKEND" in opt_in
+    assert "names a backend: local or inprocess." in opt_in
+
+
+def test_workflow_uploads_match_what_the_inprocess_backend_writes(tmp_path: Path) -> None:
+    out = tmp_path / "build"
+    for variant in ("default", "azure"):
+        for name in TARGET_FILENAMES.values():
+            (out / variant).mkdir(parents=True, exist_ok=True)
+            (out / variant / name).write_text("x", encoding="utf-8")
+    globs = ("*/output/*", "*/*.qcow2", "*/*.vhd", "*/*.tar.gz")
+    matched = {path.relative_to(out).as_posix() for glob in globs for path in out.glob(glob)}
+    assert matched == {
+        f"{variant}/{name}"
+        for variant in ("default", "azure")
+        for name in TARGET_FILENAMES.values()
+    }
+
+
+def _files(root: Path) -> dict[str, str]:
+    """Every file under *root*: relative path -> text."""
+    return {
+        str(path.relative_to(root)): path.read_text(encoding="utf-8")
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_init_ci_on_an_existing_project_writes_only_the_workflow(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = run_main("init", str(tmp_path), "--name", "node", "--backend", "inprocess")
+    assert code == EXIT_OK, out
+    before = _files(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "tundravm.yml"
+
+    code, out = run_main("init", str(tmp_path), "--ci", "github")
+
+    assert code == EXIT_OK, out
+    assert out.splitlines() == [
+        f"adding CI for node.py to the existing project in {tmp_path}",
+        f"created {workflow}",
+        f"kept {tmp_path / '.gitignore'} (already ignores build output)",
+        "next: `tundravm ci node.py --out mkosi` runs the workflow's checks; "
+        "commit mkosi/ and the lockfile they compare against",
+    ]
+    after = _files(tmp_path)
+    assert after.pop(".github/workflows/tundravm.yml") == render_workflow(recipe="node.py")
+    assert after == before
+
+    workflow.write_text("mine\n", encoding="utf-8")
+    code, _ = run_main("init", str(tmp_path), "--ci", "github")
+    assert code == EXIT_SDK_ERROR
+    err = capsys.readouterr().err
+    assert "[E_VALIDATION]" in err and f"Refusing to overwrite existing file(s): {workflow}" in err
+    assert "Pass --force to overwrite the workflow" in err
+    assert workflow.read_text(encoding="utf-8") == "mine\n"
+
+    code, out = run_main("init", str(tmp_path), "--ci", "github", "--force")
+    assert code == EXIT_OK and f"overwrote {workflow}" in out
+    after = _files(tmp_path)
+    assert after.pop(".github/workflows/tundravm.yml") == render_workflow(recipe="node.py")
+    assert after == before
+
+
+def test_init_ci_with_recipe_adds_the_workflow_and_gitignore_block(tmp_path: Path) -> None:
+    recipe = tmp_path / "images" / "edge.py"
+    recipe.parent.mkdir()
+    recipe.write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
+
+    code, out = run_main("init", str(tmp_path), "--ci", "github", "--recipe", "images/edge.py")
+
+    assert code == EXIT_OK, out
+    files = [".github/workflows/tundravm.yml", ".gitignore", "images/edge.py"]
+    assert list(_files(tmp_path)) == files
+    workflow = (tmp_path / ".github" / "workflows" / "tundravm.yml").read_text()
+    assert "run: uv run tundravm ci images/edge.py --out mkosi" in workflow
+    assert (tmp_path / ".gitignore").read_text().startswith("*.pyc\n\n# tundravm")
+    assert recipe.read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_init_recipe_needs_ci_github_and_an_existing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_main("init", str(tmp_path), "--recipe", "edge.py")[0] == EXIT_SDK_ERROR
+    assert "needs --ci github" in capsys.readouterr().err
+    code, _ = run_main("init", str(tmp_path), "--ci", "github", "--recipe", "edge.py")
+    assert code == EXIT_SDK_ERROR
+    assert "Recipe file not found" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_init_refuses_overwrite_without_force(

@@ -415,9 +415,11 @@ WORKFLOW_TEMPLATE = """\
 #
 # The bake job is opt-in: it runs after check only when the repository variable
 # TUNDRAVM_BAKE_BACKEND (Settings > Secrets and variables > Actions > Variables)
-# names a backend: local, nix, lima or inprocess. It bakes the image twice to
-# prove it reproducible, then uploads the evidence bundle, its HTML report and
-# the built artifacts.
+# names a backend: local or inprocess. (lima and nix need limactl or Nix, which
+# ubuntu-latest does not have; install them in a step of your own first.) It
+# bakes the image twice to prove it reproducible, then uploads the evidence
+# bundle, its HTML report, bake-result.json and the built artifacts: mkosi's
+# under build/<variant>/output/, the in-process backend's disk.* beside them.
 name: tundravm
 
 on:
@@ -489,7 +491,11 @@ jobs:
           path: |
             evidence.tar.gz
             evidence.html
+            build/bake-result.json
             build/*/output/*
+            build/*/*.qcow2
+            build/*/*.vhd
+            build/*/*.tar.gz
 """
 
 TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {

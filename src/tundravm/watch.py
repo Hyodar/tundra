@@ -112,9 +112,20 @@ def plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
-def verdict(*, errors: int, warnings: int, tree: str) -> str:
-    """``lint 0 errors 1 warning; tree stale (2 files)``."""
-    return f"lint {plural(errors, 'error')} {plural(warnings, 'warning')}; {tree}"
+def verdict(*, errors: int, warnings: int, tree: str, drifted: int = 0) -> str:
+    """``lint 0 errors 1 warning; tree stale (2 files)``.
+
+    *drifted* sections (lockfile drift being every error) add ``; lock drifted (N sections)``
+    before the tree half.
+    """
+    lock = f"; lock drifted ({plural(drifted, 'section')})" if drifted else ""
+    return f"lint {plural(errors, 'error')} {plural(warnings, 'warning')}{lock}; {tree}"
+
+
+def lint_failure(*, errors: int, code: str, message: str) -> str:
+    """``lint 1 error (app-privileged-port: ...)``: lint errors that keep the recipe from
+    lowering, so no tree is checked; *code* and *message* are the first finding's."""
+    return f"lint {plural(errors, 'error')} ({code}: {message})"
 
 
 def tree_verdict(*, changed: int, exists: bool, wrote: Path | None = None) -> str:
@@ -172,6 +183,7 @@ __all__ = [
     "Stamp",
     "Watch",
     "imported_under",
+    "lint_failure",
     "plural",
     "python_files",
     "stamp",

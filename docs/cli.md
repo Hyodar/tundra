@@ -128,9 +128,10 @@ pyproject: /home/me/node/pyproject.toml
 | `--template minimal\|service\|cloud\|prover` | Starter recipe (default `service`). `--list-templates` prints the four with a one-line description and exits. |
 | `--base BASE` | Base distribution (default `debian/trixie`). |
 | `--backend KIND` | Backend the recipe binds to `backend` (default `lima`). |
-| `--ci github\|none` | `github` also writes `.github/workflows/tundravm.yml` (default `none`). |
+| `--ci github\|none` | `github` also writes `.github/workflows/tundravm.yml` (default `none`); on an existing project, only the workflow (see below). |
+| `--recipe RECIPE` | With `--ci github`: the existing project's recipe, relative to `DIR`; only the workflow is written. |
 | `--with-tests` / `--no-tests` | Write `tests/test_NAME.py` (default) or skip it. |
-| `--force` | Overwrite the recipe, tests module and workflow if they exist. |
+| `--force` | Overwrite the recipe, tests module and workflow if they exist; on an existing project, the workflow only. |
 | `--no-doctor` | Skip the backend probe. |
 
 ```console
@@ -169,6 +170,16 @@ next (from svc):
   4. tundravm ci my-node.py --out mkosi       the lint, tree and lockfile checks CI runs
   5. tundravm bake my-node.py --out build     build the image
   tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm` uses a local checkout
+```
+
+To add CI to a project that already exists, run `tundravm init --ci github` in it. The project exists when `DIR/pyproject.toml` has a `[tool.tundravm]` table (its `recipe` names the recipe, its `tree` the `--out` the workflow checks, default `mkosi`) or `--recipe RECIPE` names the recipe. Then `init` writes only `.github/workflows/tundravm.yml` and the `.gitignore` block when it is missing; the recipe, tests, `pyproject.toml` and `README.md` are never touched, and nothing is linted or probed. An existing workflow is refused with `E_VALIDATION`; `--force` overwrites the workflow only:
+
+```console
+$ tundravm init --ci github
+adding CI for node.py to the existing project in .
+created .github/workflows/tundravm.yml
+kept .gitignore (already ignores build output)
+next: `tundravm ci node.py --out mkosi` runs the workflow's checks; commit mkosi/ and the lockfile they compare against
 ```
 
 The `note:` line appears only when `pyproject.toml` already existed; add `[tool.pytest.ini_options] pythonpath = ["."]` to that file yourself if your tests import project modules. Until tundravm's first release, install it from a checkout: `uv add --editable PATH/TO/tundravm` in the project, with `PATH/TO/tundravm` the directory holding tundravm's `pyproject.toml`. A missing backend tool never fails `init`; the probe ends with a pointer to the in-process backend:
@@ -841,13 +852,21 @@ The `wrote` lines go to stderr, the summary to stdout. Running it again with the
 
 ## Watch
 
-`tundravm watch RECIPE` keeps the edit loop short: it polls the mtimes of the recipe file and every `.py` under its directory (hidden directories, `__pycache__`, installed packages and the build output are left out) every `--interval SECONDS` (default `1`). It checks once at start, then once per change: the recipe is loaded again (modules it imports from its directory are re-imported from their current source), linted with the pins of `--lockfile` (default `build/tundravm.lock` when it exists), and compared with `OUT/mkosi` (`--out`, default `build`; without `--out`, a `[tool.tundravm]` `tree` replaces it) without writing, as `compile --check` does. Each check prints one line, `HH:MM:SS lint N errors N warnings; TREE`, where `TREE` is `tree up to date`, `tree stale (N files)` or `tree missing (N files to write)`; with `--write` a stale tree is recompiled and the line ends `wrote OUT/mkosi`. A recipe that fails to load prints `HH:MM:SS error [E_CODE] message` and is watched on. Ctrl-C stops it with exit 0.
+`tundravm watch RECIPE` keeps the edit loop short: it polls the mtimes of the recipe file and every `.py` under its directory (hidden directories, `__pycache__`, installed packages and the build output are left out) every `--interval SECONDS` (default `1`). It checks once at start, then once per change: the recipe is loaded again (modules it imports from its directory are re-imported from their current source), linted as `tundravm lint` lints it, and compared with `OUT/mkosi` (`--out`, default `build`; without `--out`, a `[tool.tundravm]` `tree` replaces it) without writing, as `compile --check` does. The lockfile is chosen as `lint` chooses it: `--lockfile`, else a `[tool.tundravm]` `lockfile`, applies its pins and reports drift against it (`lock-changed` and the other [lock codes](#lockfile-drift)); with neither, `build/tundravm.lock` only pins the sources when it exists. So the counts are always `lint`'s.
+
+Each check prints one line, `HH:MM:SS lint N errors N warnings; TREE`, where `TREE` is `tree up to date`, `tree stale (N files)` or `tree missing (N files to write)`; with `--write` a stale tree is recompiled and the line ends `wrote OUT/mkosi`. When lockfile drift is every error, `; lock drifted (N sections)` comes before `TREE`. Two failures print a different single line, and `watch` keeps polling after both:
+
+- Lint errors that keep the recipe from lowering, such as an error-level fragment check (`App`'s `app-privileged-port`), print `HH:MM:SS lint N errors (CODE: MESSAGE)` with the first error's code and message. No tree is checked.
+- A recipe that fails to load (a syntax or import error, an unknown `--variant`, an unreadable `--lockfile`) prints `HH:MM:SS error [E_CODE] message`.
+
+Ctrl-C stops it with exit 0.
 
 ```console
 $ tundravm watch node.py
 watching node.py every 1s (Ctrl-C stops)
 14:02:11 lint 0 errors 0 warnings; tree up to date
-14:02:40 lint 0 errors 0 warnings; tree stale (1 file)
+14:02:40 lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (4 files)
+14:02:58 lint 2 errors (app-privileged-port: app runs as user app and cannot bind port 80)
 14:03:05 error [E_VALIDATION] Recipe node.py failed to load: syntax error at node.py:96: invalid syntax
 14:03:12 lint 0 errors 0 warnings; tree stale (1 file)
 ^Cstopped
@@ -945,4 +964,4 @@ A failing step prints its report, then `FAIL step: ...` and `skip` for the remai
 
 The steps share one loaded recipe and one lockfile (`--lockfile`, default `build/tundravm.lock`, read once): `lint --strict` and `compile --check` apply its pins, so a pinned source never reports `source-unpinned`, and the lock step compares against it. The compile step works on a copy of the recipe, so a recipe with runtime-init steps (keys, disks, secrets, `Init`) passes the lock step whenever `tundravm lock --check` passes on its own.
 
-`tundravm init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and pull request: `uv sync`, `tundravm inspect RECIPE --format markdown` appended to `$GITHUB_STEP_SUMMARY`, then `tundravm ci RECIPE --out mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the job checks both. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` is set (`if: vars.TUNDRAVM_BAKE_BACKEND != ''`) to the backend kind to bake with. It installs mkosi as tundravm's own CI does (`bubblewrap`, `debian-archive-keyring` and `python3-pefile` from apt, mkosi from git with `pipx`), runs `tundravm fetch RECIPE --out build`, `tundravm bake RECIPE --backend $TUNDRAVM_BAKE_BACKEND --out build --verify-reproducible` and `tundravm evidence RECIPE --out build --bundle evidence.tar.gz --html evidence.html`, then uploads `evidence.tar.gz`, `evidence.html` and `build/*/output/*` as the `tundravm-bake` workflow artifact.
+`tundravm init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and pull request: `uv sync`, `tundravm inspect RECIPE --format markdown` appended to `$GITHUB_STEP_SUMMARY`, then `tundravm ci RECIPE --out mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the job checks both. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` is set (`if: vars.TUNDRAVM_BAKE_BACKEND != ''`) to the backend kind to bake with: `local` or `inprocess`. `lima` and `nix` need `limactl` or Nix, which `ubuntu-latest` lacks; add a step that installs one before using it. It installs mkosi as tundravm's own CI does (`bubblewrap`, `debian-archive-keyring` and `python3-pefile` from apt, mkosi from git with `pipx`), runs `tundravm fetch RECIPE --out build`, `tundravm bake RECIPE --backend $TUNDRAVM_BAKE_BACKEND --out build --verify-reproducible` and `tundravm evidence RECIPE --out build --bundle evidence.tar.gz --html evidence.html`, then uploads `evidence.tar.gz`, `evidence.html`, `build/bake-result.json`, mkosi's artifacts (`build/*/output/*`) and the in-process backend's (`build/*/*.qcow2`, `build/*/*.vhd`, `build/*/*.tar.gz`) as the `tundravm-bake` workflow artifact.
