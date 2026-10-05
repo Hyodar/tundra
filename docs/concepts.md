@@ -289,8 +289,9 @@ Recipe ──compile──▶ Tree ──write──▶ mkosi/            (commi
                                      │
 Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
                                      │
-                                     ├──measure──▶ Measurements
-                                     └──deploy───▶ Deployment
+                                     ├──measure──▶ Measurements ──export──▶ peer.json (policy)
+                                     ├──sbom─────▶ Sbom
+                                     └──deploy───▶ Deployment ──attest(peer.json)──▶ Attestation
 ```
 
 | Step | Function | CLI | Needs |
@@ -303,6 +304,7 @@ Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
 | Bake | `bake(recipe, lock=, backend=, out=, fetch=True, offline=False) -> tuple[Artifact, ...]` | `bake` | a backend; fetches first unless `fetch=False` (`--no-fetch`); `offline=True` (`--offline`) needs every checkout and dependency cache fetched |
 | Measure | `measure(artifact, scheme="rtmr") -> Measurements` | `measure` | `measured-boot` or `dstack-mr`, or `allow_placeholder` |
 | Deploy | `deploy(artifact, using=Qemu()/Azure(...)/Gcp(...), allow_simulated=False) -> Deployment` | `deploy` | the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
+| Attest | `attest(endpoint, policy, nonce=None) -> Attestation` | `attest` | the running image's `tdxs` issuer (`unix:PATH`, `tcp://` or `http(s)://`) and a policy from `measure --export-policy`, not a placeholder |
 | SBOM | `sbom(artifact, lock=None, manifest=None) -> Sbom` | `sbom` | a real bake (its mkosi package manifest); a lock for the source pins |
 
 A lock of every variant covers a bake or `lock --check` of any subset of them: only the selected variants' sections and the recipe-wide ones are compared. `bake` fetches the locked sources into `build/.sources` before it builds, so `tundravm fetch` on its own is for checking sources out ahead of time (or for a host that bakes offline). `tundravm status RECIPE` checks each of these steps without writing anything or touching the network and names the next command to run.
@@ -351,4 +353,4 @@ Placeholder values are derived from the artifact digest. They are never real mea
 
 ### Attesting a running image
 
-A policy from `measure --export-policy` can be checked two ways. `tundravm attest --endpoint unix:./tdxs.sock --policy peer.json` (or `attest()`) asks the running image's `tdxs` issuer for a quote bound to a fresh nonce, reads MRTD and RTMR0..RTMR3 from it and reports `match`, `mismatch` or `unchecked` per register plus a trusted/untrusted verdict. It checks measurements only, not the quote's signature, certificate chain or collateral, so it is a quick operator check. A `Tdxs` validator built with `Tdxs.from_policy("peer.json")` verifies the collateral as well and is what a relying service should run. `bake --verify-reproducible` is the build-side counterpart: it bakes twice and proves the artifacts are identical.
+A policy from `measure --export-policy` can be checked two ways. `tundravm attest --endpoint unix:./tdxs.sock --policy peer.json` (or `attest()`) asks the running image's `tdxs` issuer for a quote bound to a fresh nonce, reads MRTD and RTMR0..RTMR3 from it and reports `match`, `mismatch` or `unchecked` per register plus a trusted/untrusted verdict (see [CLI: Attest](cli.md#attest)). It checks measurements only, not the quote's signature, certificate chain or collateral, so it is a quick operator check. A `Tdxs` validator built with `Tdxs.from_policy("peer.json")` verifies the collateral as well and is what a relying service should run. `bake --verify-reproducible` is the build-side counterpart: it bakes twice and proves the artifacts are identical.

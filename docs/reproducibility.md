@@ -158,6 +158,10 @@ Three caveats follow from the cache being filled by the host's toolchain and rea
 
 `tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The check follows the subset rule above, so `bake --variant NAME` works against the lock of every variant. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from, and `bake-result.json` its sha256: `measure` and `deploy` (and `verify_artifact`, `status --verify`) hash the file first and refuse one that changed since the bake with `E_ARTIFACT_CHANGED`.
 
+## Proving and recording a bake
+
+The checks above pin the inputs; `tundravm bake --verify-reproducible` checks the output. It bakes the same selection a second time into `OUT/.reproduce`, from the same lockfile and the same `OUT/.sources` checkouts, compares every artifact's sha256, and records the outcome as `declarative.reproducible` in `bake-result.json` (`status` shows it per artifact): `reproducible: yes (N artifacts match a second build)`, or `E_REPRODUCIBILITY` with the second build kept for `tundravm diff` and diffoscope (see [CLI: Bake](cli.md#bake)). `tundravm sbom` is the record of what that bake contains: mkosi's package manifest (every installed package and version from the snapshot), the lockfile's source pins and the recipe metadata and digests, as SPDX 2.3 or CycloneDX 1.5 with a package URL per component (the purl rules are in [CLI: SBOM](cli.md#sbom)). Its lists are sorted and its ids derive from the content, so with `SOURCE_DATE_EPOCH` set a reproducible bake gives the same document too, ready to publish next to the measurements.
+
 ## mkosi
 
 The `local` backend needs mkosi v25 or newer (v26 recommended) on `PATH` and checks the version before building. The `lima` and `nix` backends bring their own.

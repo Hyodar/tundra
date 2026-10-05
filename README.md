@@ -43,7 +43,7 @@ tundravm lock node.py                           # write build/tundravm.lock (sec
 tundravm compile node.py --out mkosi            # emit the mkosi tree, one directory per variant
 tundravm bake node.py                           # build every variant, frozen against the lock
 tundravm status node.py                         # where the project stands, and the next command to run
-tundravm sbom build --variant default     # SPDX/CycloneDX bill of materials: packages, source pins, metadata
+tundravm sbom build --variant default     # SPDX/CycloneDX bill of materials
 tundravm attest --endpoint unix:./tdxs.sock --policy peer.json   # check a running image's quote against a policy
 tundravm measure build --variant default        # expected RTMRs of the baked artifact
 tundravm deploy build --variant default --target qemu
@@ -161,9 +161,11 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `diff RECIPE` | Unified diff from a compiled tree to the recipe (`--stat`) |
 | `lock RECIPE` | Write the lockfile; `--check` reports drift, `--update`, `--offline`, `--explain` |
 | `fetch RECIPE` | Check the pinned sources out on the host into `build/.sources/` and prefetch Go, Cargo and .NET dependencies |
-| `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `--offline` (no network in the build sandbox), `-v`/`-q`/`--json-logs` |
+| `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `--offline` (no network in the build sandbox), `-v`/`-q`/`--json-logs` |; `--verify-reproducible` bakes twice and compares artifacts
 | `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`); `--export-policy FILE` writes the verifier policy `Tdxs.from_policy()` reads |
 | `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`; `--attach` keeps QEMU in the foreground) |
+| `attest` | Ask a running image's `tdxs` issuer for a nonce-bound quote and check its MRTD and RTMR0..RTMR3 against a policy (`--endpoint unix:PATH\|tcp://\|http(s)://`, `--policy FILE`); exit 1 when `untrusted`. Measurements only: `Tdxs.from_policy()` verifies collateral |
+| `sbom [MANIFEST]` | Bill of materials of a baked variant: mkosi's package manifest, the lockfile's source pins and the recipe metadata (`--format spdx-json\|cyclonedx-json\|text\|markdown`, `--output FILE`) |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |

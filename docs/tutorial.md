@@ -1,8 +1,8 @@
 # Tutorial
 
-This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, change the recipe and see the diff and the lock drift, bake, measure and export a verifier policy, deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`.
+This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, change the recipe and see the diff and the lock drift, bake, prove the bake reproducible, measure and export a verifier policy, list what is in the image, deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`. The one command that needs a running TDX VM, attesting it, is shown but not run.
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 11 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 13 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
 
 ## 1. Start a project
 
@@ -34,7 +34,7 @@ measurement tools:
 [exit 0]
 ```
 
-The recipe is named after the directory (`--name` overrides it). `init` writes the `service` starter (`--template` picks another, `tundravm init --list-templates` lists them), a tests module for it, and `pyproject.toml` and `README.md` when they are absent. It lints the recipe, prints the next steps, and ends with `tundravm doctor --backend inprocess`, which needs no tools; the measurement tools are optional (see [Measure](#8-measure)). `--no-doctor` skips the probe. For tab completion of verbs and flags, see [CLI: Shell completion](cli.md#shell-completion).
+The recipe is named after the directory (`--name` overrides it). `init` writes the `service` starter (`--template` picks another, `tundravm init --list-templates` lists them), a tests module for it, and `pyproject.toml` and `README.md` when they are absent. It lints the recipe, prints the next steps, and ends with `tundravm doctor --backend inprocess`, which needs no tools; the measurement tools are optional (see [Measure](#9-measure)). `--no-doctor` skips the probe. For tab completion of verbs and flags, see [CLI: Shell completion](cli.md#shell-completion).
 
 `node.py` binds a `Recipe` to `recipe` and a backend to `backend`. Below its docstring and imports:
 
@@ -148,7 +148,7 @@ locked build/tundravm.lock
 [exit 0]
 ```
 
-`tundravm config` now prints `lockfile  build/tundravm.lock  pyproject`. Every later change to the recipe drifts from this lock until you lock again, which steps 5, 6 and 10 do.
+`tundravm config` now prints `lockfile  build/tundravm.lock  pyproject`. Every later change to the recipe drifts from this lock until you lock again, which steps 5, 6 and 12 do.
 
 ## 2. Inspect
 
@@ -374,7 +374,22 @@ next: tundravm deploy build/bake-result.json --variant debug --target qemu
 
 Progress lines go to stderr and the summary to stdout. The bake was frozen against `build/tundravm.lock`: had the recipe drifted from it, the `verify lockfile` step would have failed with `E_LOCKFILE`, and without the file, which the table configures, `bake` would have refused before `lint`, with `E_LOCKFILE` too. The backend came from `node.py`; `--backend lima|nix|local|inprocess` overrides it. The manifest `build/bake-result.json` records every artifact with its digest, the recipe digest and the tree digest.
 
-## 8. Measure
+## 8. Prove it is reproducible
+
+```console
+$ tundravm bake node.py --verify-reproducible -q
+variant  target  artifact                  size   sha256        time
+debug    qemu    build/debug/disk.qcow2    112 B  b50a5a5aeaac  0.0s
+default  qemu    build/default/disk.qcow2  114 B  1fa043adea90  0.0s
+dev      qemu    build/dev/disk.qcow2      110 B  9cfb8b5c2f31  0.0s
+reproducible: yes (3 artifacts match a second build)
+next: tundravm deploy build/bake-result.json --variant debug --target qemu
+[exit 0]
+```
+
+`--verify-reproducible` bakes the same variants a second time into `build/.reproduce`, from the same lockfile and source checkouts, and compares every artifact's sha256 with the first build's (`-q` hides the progress of both bakes). All three match, so the second build is removed; `bake-result.json` records the outcome as `declarative.reproducible`, and `tundravm status` shows `reproducible` on each artifact line. A mismatch keeps `build/.reproduce` and fails with `E_REPRODUCIBILITY`, a table of the artifacts that differ and a hint naming `tundravm diff` and the usual causes (see [CLI: Bake](cli.md#bake)). The in-process backend is deterministic, so here the check only exercises the pipeline. With a real backend the second build runs mkosi again from scratch, which catches timestamps, build ids and packages installed without an archive snapshot (`Recipe(snapshot=...)`; see [Reproducibility](reproducibility.md)).
+
+## 9. Measure
 
 ```console
 $ tundravm measure build --variant default
@@ -447,7 +462,73 @@ Hint: Export the policy from a real measurement, or pass allow_placeholder=True 
 
 A policy exported from a real measurement needs no `allow_placeholder`. MRTD is not in the policy: RTMR tools do not report it, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", parent="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, anchor it to the recipe file with `Path(__file__).resolve().parent / "peer.json"` (see [Concepts: Lowering and compiling](concepts.md#lowering-and-compiling)).
 
-## 9. Deploy
+Once the image runs, `tundravm attest` checks it against the policy: it asks the image's `tdxs` issuer for a quote bound to a fresh nonce and compares the quote's registers with the policy's. It refuses a placeholder policy before contacting anything:
+
+```console
+$ tundravm attest --endpoint unix:./tdxs.sock --policy peer.json
+error [E_MEASUREMENT]: Refusing to attest against a placeholder policy.
+Hint: Export the policy from a real measurement: `tundravm measure MANIFEST --export-policy FILE` with measured-boot or dstack-mr.
+  policy: peer.json
+[exit 2]
+```
+
+With a policy from a real measurement and the image running on a TDX host with the `tdxs` service (`Tdxs()` in the variant; the `prover` template has it), forward the service's socket over SSH and attest. This was not run here, since it needs a TDX VM:
+
+```bash
+ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock root@localhost &
+tundravm attest --endpoint unix:./tdxs.sock --policy peer.json
+```
+
+It prints the nonce check and one `match`, `mismatch` or `unchecked` line per register (MRTD, RTMR0..RTMR3), then `verdict: trusted` (exit 0) or `verdict: untrusted` (exit 1); [CLI: Attest](cli.md#attest) shows the output. It checks measurements only: a verifier built with `Tdxs.from_policy()` also verifies the quote's signature and collateral.
+
+## 10. What is in the image
+
+```console
+$ tundravm sbom build --variant default --format text
+sbom default
+  variant          default
+  base             debian/trixie
+  arch             x86_64
+  snapshot         -
+  mirror           -
+  recipe digest    2f0041479c07b652bd4fad98f7e86c1547d4078945ac68948f19d704f31e4cd3
+  tree digest      873688c6d6945f9349f34c551331afff8a627b58838fdc5e834358f4475b2efc
+  artifact         build/default/disk.qcow2
+  artifact sha256  1fa043adea909e9ad008e0db46ed1c9935adf90aee9c49d20940d6316c5c2e79
+  manifest         build/default/default.manifest (missing)
+  tundravm         0.1.0
+
+packages (7)
+  NAME               VERSION  ARCH   ORIGIN
+  ca-certificates    -        amd64  declared
+  kmod               -        amd64  declared
+  linux-image-amd64  -        amd64  declared
+  systemd            -        amd64  declared
+  systemd-boot-efi   -        amd64  declared
+  systemd-sysv       -        amd64  declared
+  udev               -        amd64  declared
+
+sources (0)
+note: the artifact is simulated (in-process backend): nothing was installed
+note: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
+[exit 0]
+```
+
+`sbom` merges three records of one baked variant: mkosi's package manifest beside the artifact, the lockfile's source pins, and the recipe metadata and digests from `bake-result.json`. The in-process bake installed nothing, so there is no manifest: the notes say so, and the table lists the packages the recipe declares, without versions. After a real bake the table lists every installed package with the version and architecture from mkosi's manifest, `sources` lists each source build, built kernel and `EfiStub` package with its pin, and `snapshot` names the archive snapshot when the recipe pins one (the starter does not). See [CLI: SBOM](cli.md#sbom).
+
+The default format is SPDX 2.3 JSON, and `--output` writes it to a file to publish next to `peer.json`:
+
+```console
+$ tundravm sbom build --variant default --output build/default.spdx.json
+note: the artifact is simulated (in-process backend): nothing was installed
+note: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
+wrote spdx-json build/default.spdx.json
+[exit 0]
+```
+
+`--format cyclonedx-json` writes CycloneDX 1.5 instead. Every list is sorted and the ids derive from the content, so with `SOURCE_DATE_EPOCH` set the same bake gives the same document.
+
+## 11. Deploy
 
 ```console
 $ tundravm deploy build --variant default --target qemu
@@ -466,7 +547,7 @@ Hint: Install QEMU and ensure it is in PATH.
 
 On a host with QEMU and a real bake, `deploy` boots the baked image (a UKI, on OVMF firmware) in the background and prints the deployment id, its `ssh://localhost:PORT` endpoint, and the `serial_log`, `monitor` socket and `pidfile` it left in `build/default/`; `--attach` keeps QEMU in the foreground with its console on the terminal instead. Target settings are `--param KEY=VALUE` (`memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward=HOST:GUEST,...` for qemu). [CLI: Deploying to each target](cli.md#deploying-to-each-target) has the whole sequence for QEMU, Azure and GCP, including how to check the VM and tear it down.
 
-## 10. Write a fragment
+## 12. Write a fragment
 
 Say every image that runs the app should also probe it once a minute. Write that as a `Composite`, like `App`, in `fragments.py` next to the recipe:
 
@@ -577,7 +658,7 @@ compiled mkosi
 
 `mkosi.conf` gained `curl`, and `06-postinst.sh` enables the probe and its timer. The recipe directory is importable while the recipe loads, so `fragments.py` needs no packaging. The [fragment guide](module-authoring.md) covers builds, units and ordering in depth.
 
-## 11. Test it
+## 13. Test it
 
 `tests/test_node.py`, which `init` wrote, has three tests:
 
@@ -634,7 +715,7 @@ $ uv run pytest -q tests
 
 In a project of your own, the loop is: edit the recipe, `tundravm compile node.py --out mkosi`, `uv run pytest tests`, `tundravm lock node.py`.
 
-## 12. CI
+## 14. CI
 
 `tundravm ci` runs `lint --strict`, `compile --check` and `lock --check` and stops at the first failure:
 

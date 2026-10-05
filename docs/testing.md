@@ -107,6 +107,37 @@ def test_measure_placeholder(recipe, tmp_path):  # `recipe` is the plugin's mini
 
 For a full bake without tools, `bake_in_process(recipe, out=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `lock=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
 
+## Reproducibility and SBOM in tests
+
+The in-process backend is deterministic, so a test can bake twice and compare digests, or let `bake(..., verify_reproducible=True)` do it (it raises `ReproducibilityError` on a mismatch, as `tundravm bake --verify-reproducible` does). `sbom(artifact, lock=...)` returns the bill of materials as values: `Sbom.packages` and `Sbom.sources` are tuples of `Component` (`name`, `version`, `url`, `ref`, `commit`, `installs`, ...), and `Sbom.render(format)` gives the document `tundravm sbom` writes.
+
+```python
+from tundravm import Backend, bake, lock, sbom
+from tundravm.testing import bake_in_process
+
+
+def test_bakes_the_same_bytes_twice(recipe, tmp_path):
+    first = bake_in_process(recipe, out=tmp_path / "a")
+    second = bake_in_process(recipe, out=tmp_path / "b")
+    assert [a.sha256 for a in first] == [a.sha256 for a in second]
+
+
+def test_bake_verifies_itself(recipe, tmp_path):
+    locked = lock(recipe, offline=True)
+    bake(recipe, lock=locked, backend=Backend("inprocess"), out=tmp_path, verify_reproducible=True)
+
+
+def test_sbom_lists_the_declared_kernel(recipe, tmp_path):
+    locked = lock(recipe, offline=True)
+    (artifact,) = bake_in_process(recipe, out=tmp_path, lock=locked)
+    bom = sbom(artifact, lock=locked)
+    assert {p.name for p in bom.packages} == {"linux-image-amd64"}
+    assert all(p.declared and not p.version for p in bom.packages)  # simulated: no mkosi manifest
+    assert bom.sources == ()
+```
+
+An in-process bake leaves no mkosi manifest, so its packages are the ones the recipe declares, unversioned (`Component.declared`, `Sbom.manifest_found` false). For a recipe with source builds, lock with a `resolver=` and assert on the pins: `{s.name: s.commit for s in bom.sources}`. To test against versioned packages, pass `manifest=` a JSON file in mkosi's shape (`{"manifest_version": 1, "config": {...}, "packages": [{"type", "name", "version", "architecture"}]}`).
+
 ## Composition fakes
 
 ```python
