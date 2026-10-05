@@ -252,7 +252,7 @@ class StatusPage(Composite):
 - `recipe=Go(...)`, `Cargo(...)` or `Dotnet(...)` renders the toolchain's build command and installs its build packages (`golang`, `cargo`, `dotnet-sdk-8.0` by default; `packages=` and `env=` go on the recipe). The output lands at `build/<output>` (`Go`), `target/<profile>/<bin>` (`Cargo`) or `publish/<output>` (`Dotnet`) in the source tree. See [API: sources and builds](api.md#sources-and-builds).
 - For anything else pass `script=` instead: a shell script run inside the fetched source with `Build(env=...)` exported and `Build(packages=...)` installed for it. A `Build` takes exactly one of `script` and `recipe`.
 - `Install(source, destination, mode=0o755)` copies one built file; `Install("out/", "/opt/app", mode=None, directory=True)` copies a directory.
-- The built output is cached in the build directory under `cache_key` (default `<name>-<url digest>-<ref>`), so rebuilding an unchanged source is a copy.
+- The built output is cached in the build directory under `<namespace>-<fingerprint16>`, the namespace being `cache_key` (default: the build's name) and the fingerprint a hash of the source pin, build, install steps, architecture and toolchain, so rebuilding an unchanged build is a copy and changing any of them rebuilds (`nethermind-v1` keeps its historical `<name>-<url digest>-<pin>` keys).
 - Until the recipe is locked, `lint` warns `source-unpinned` for each build.
 
 ## Testing a fragment

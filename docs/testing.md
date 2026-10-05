@@ -92,7 +92,7 @@ TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_recipe.py   # accept the new t
 fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact
 ```
 
-Writes a simulated disk file for one variant under `out` and records it in `out/bake-result.json` (merging with one already there), so `read_artifacts()`, `tundravm measure` and `tundravm deploy` find it. The artifact is `simulated`: `measure` and `deploy` refuse it unless `allow_placeholder=True`.
+Writes a simulated disk file for one variant under `out` and records it in `out/bake-result.json` (merging with one already there), so `read_artifacts()`, `tundravm measure` and `tundravm deploy` find it. The artifact is `simulated`: `measure` refuses it unless `allow_placeholder=True`, and `deploy` unless `allow_simulated=True` (`tundravm deploy --allow-simulated-artifact`). Both first check the file against the sha256 recorded in `bake-result.json` (`verify_artifact`), so a test that rewrites the disk file gets `ArtifactError`.
 
 ```python
 from tundravm import compile
@@ -105,7 +105,7 @@ def test_measure_placeholder(recipe, tmp_path):  # `recipe` is the plugin's mini
     assert measure(artifact, allow_placeholder=True).tool == "placeholder"
 ```
 
-For a full bake without tools, `bake_in_process(recipe, out=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `locked=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
+For a full bake without tools, `bake_in_process(recipe, out=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `lock=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
 
 ## Composition fakes
 

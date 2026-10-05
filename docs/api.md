@@ -121,13 +121,13 @@ No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkos
 | `Secrets` | `name="secrets"`, `entries: tuple[Secret, ...] = ()`, `store: Disk \| None = None`, `host="0.0.0.0"`, `port=8080`, `ssh_directory="/root/.ssh"`, `ssh_key_path="/etc/root_key"` | name |
 | `Secret` | `name`, `targets: tuple[SecretFile \| SecretEnv, ...]` (at least one), `required=True`, `schema: Schema \| None = None` | (inside `Secrets`) |
 | `SecretFile` | `path`, `mode=0o400`, `owner=None` | |
-| `SecretEnv` | `name`, `service=None` (`None`: global environment; `"app"` or `"app.service"`: delivered to `/run/secrets/app.env`, which a generated `app.service.d/tundravm-secrets.conf` drop-in makes the unit read, required when the secret is) | |
+| `SecretEnv` | `name`, `service=None` (`None`: global environment; `"app"` or `"app.service"`: delivered to `/run/secrets/app.env`, which a generated `app.service.d/tundravm-secrets.conf` drop-in makes the unit read with `EnvironmentFile=`, required when the secret is; the manifest's env target carries `service` and `env_file`) | |
 | `Schema` | `kind="string"` (`"string"` or `"json"`), `min_length=None`, `max_length=None`, `pattern=None`, `enum=()` | |
 | `RuntimeTools` | `source: Git`, `key_config="/etc/tdx/key-gen.yaml"`, `disk_config="/etc/tdx/disk-setup.yaml"`, `secret_config="/etc/tdx/secrets.yaml"`, `secret_manifest="/etc/tdx/secrets.json"` | one per variant |
 
 `Disk.key` and `Secrets.store` take the declaration object, not its name. Without `RuntimeTools` the tools build from `tundra-tools` `master`.
 
-A variant may declare several `Secrets`. A single one uses the `RuntimeTools` `secret_config` and `secret_manifest` paths. With more than one, each writes `<stem>-<name>` paths instead (`/etc/tdx/secrets-api.yaml`, `/etc/tdx/secrets-api.json` for `Secrets("api")`) and gets its own `secret-delivery setup` runtime-init step. Two declarations whose paths overlap (a config path another `Secrets` or a `RuntimeTools` path writes, or a `SecretFile` path another `Secrets` delivers) raise `ValidationError` naming both.
+A variant may declare several `Secrets`. A single one uses the `RuntimeTools` `secret_config` and `secret_manifest` paths. With more than one, each writes `<stem>-<name>` paths instead (`/etc/tdx/secrets-api.yaml`, `/etc/tdx/secrets-api.json` for `Secrets("api")`) and gets its own `secret-delivery setup` runtime-init step; its `SecretEnv(service=)` files are `/run/secrets/<service>-<name>.env`, read through a `tundravm-<name>.conf` drop-in. The `secret-delivery` binary built from `tundra-tools` does not deliver the manifest's targets yet: the manifest, env files' paths and drop-ins are what the image declares. Two declarations whose paths overlap (a config path another `Secrets` or a `RuntimeTools` path writes, or a `SecretFile` path another `Secrets` delivers) raise `ValidationError` naming both.
 
 ## Sources and builds
 
@@ -140,6 +140,8 @@ A variant may declare several `Secrets`. A single one uses the `RuntimeTools` `s
 | `Go` | keyword-only: `output`, `package="./..."`, `ldflags="-s -w -buildid="`, `tags=()`, `env: Mapping = {}`, `packages=("golang",)`, `output_dir="./build"`, `mkdir=True` |
 | `Cargo` | keyword-only: `output`, `bin=None`, `package=None`, `features=()`, `profile="release"`, `env: Mapping = {}`, `packages=("cargo",)` |
 | `Dotnet` | keyword-only: `project`, `output`, `configuration="Release"`, `runtime="linux-x64"`, `env: Mapping = {}`, `packages=("dotnet-sdk-8.0",)`, `restore_args=()`, `properties: Mapping = {}` |
+
+`Go`, `Cargo` and `Dotnet` copy `env` (and `Dotnet.properties`) into an immutable mapping, and their sequence fields into tuples, at construction: changing the dict you passed changes nothing, and the builder stays hashable.
 
 A `Build` sets exactly one of `script` and `recipe`. `script` is a shell script run in the fetched source tree, with `env` exported and `packages` installed as build packages. `recipe` renders the toolchain's command and carries its own `packages` and `env`, so `Build(packages=, env=)` must stay empty. `install` paths are relative to the source tree, and each recipe leaves its output at a fixed path:
 
@@ -160,7 +162,7 @@ Build("prover", Git("https://github.com/example/prover.git", "v2.1.0"),
       install=(Install("target/release/prover", "/usr/bin/prover"),))
 ```
 
-`Build` identity is its name. `cache_key=None` derives `<name>-<url digest>-<ref>`; install destinations of one build need distinct file names.
+`Build` identity is its name; install destinations of one build need distinct file names. Outside `nethermind-v1` a build caches under `<namespace>-<fingerprint16>`: the namespace is `cache_key` (default the build's name) and the fingerprint is the first 16 hex of a sha256 over the source pin (with git `subdir` and `submodules`), the build script or recipe, the install steps, the recipe's `arch` and the toolchain (recipe kind and packages). Changing any of them rebuilds, so `cache_key` names a family of cache entries, not one. `nethermind-v1` keeps its historical keys: `<name>-<sha256(url)[:12]>-<pin12>`, or `cache_key` with `-<pin12>` appended.
 
 ## Resolution
 
@@ -200,7 +202,7 @@ from tundravm.declarative.lifecycle import FetchedSource, fetch
 fetch(recipe, *, lock: Lock | None, out: Path, variants=None, resolver=None, force=False) -> tuple[FetchedSource, ...]
 ```
 
-`fetch` and `FetchedSource` are exported from `tundravm` and `tundravm.declarative` `tundravm` nor `tundravm.declarative`; import them from `tundravm.declarative.lifecycle`.
+`fetch` and `FetchedSource` are exported from `tundravm` and `tundravm.declarative` as well as `tundravm.declarative.lifecycle`.
 
 `variants=None` means every declared variant; unknown names raise `ValidationError`.
 
@@ -212,6 +214,7 @@ fetch(recipe, *, lock: Lock | None, out: Path, variants=None, resolver=None, for
 - <a id="fetch"></a>**`fetch`** checks the sources of `variants` out on this host, as the invoking user (git credentials and the SSH agent apply), into `out/.sources/<name>-<pin[:12]>-<id[:8]>/` (`id` hashes the url, subdirectory and submodules): every source build and, outside `nethermind-v1`, every built kernel's source (named `kernel`, or `kernel-<variant>` where a variant's kernel source differs). A git source is checked out at its pinned commit (with submodules when the `Git` asks for them), an http source is downloaded and checked against its sha256. Pins come from `lock`; a source it does not pin (every source, with `lock=None`) is resolved first through `resolver` (default: the network, as `lock` does), which `Policy(mutable_ref_policy="error")` refuses. A complete checkout carries a marker naming its pin (and, for http, a sha256 manifest of its files) and is verified before it is kept, so a second fetch touches nothing: git `HEAD` must be the pin with an empty `git status` (untracked and ignored files included) and initialised submodules when asked for. A modified checkout raises `SourceError` (`E_SOURCE`, `source <name> checkout modified/incomplete: run tundravm fetch --force`); `force=True` checks every source out again. There is one checkout per (source, pin). Returns one `FetchedSource` per source.
 - **`bake`** writes `lock` to `out/tundravm.lock` when that file is absent or identical; a different lockfile already there is left alone and the bake reads a scratch copy of `lock`. It bakes frozen into `out` and writes `out/bake-result.json`, whose `declarative.lockfile` is the path of the lockfile it used (`null` for a scratch copy). It fails before building on lint errors (`LintError`) or drift (`LockfileError`); a `lock` of every variant covers `variants=` naming a [subset](#locks-and-variant-subsets). `progress` receives the CLI's progress lines. Outside `nethermind-v1`, a bake with a real backend first runs `fetch` at the pins it builds; the backend mounts `out/.sources` into the build (`BakeRequest.sources_dir`, at `$SRCDIR/tundravm-sources`, ephemerally) and each source hook (and kernel build script) copies its checkout, so the build sandbox never fetches a source. `fetch=False` builds from the checkouts already in `out/.sources` (copied to an air-gapped host, say) and raises `StateError` (`E_STATE`) before mkosi runs when one is missing. The in-process backend fetches nothing.
 - **`read_artifacts`** reads `bake-result.json` (or the directory holding it).
+- **`verify_artifact`** hashes `artifact.path` and raises `ArtifactError` (`E_ARTIFACT_CHANGED`) when the file is unreadable, has no recorded sha256, or no longer matches the sha256 `bake-result.json` recorded. `measure` and `deploy` call it before anything else.
 - **`measure`** derives expected measurements with `measured-boot` or `dstack-mr`; without one it raises `MeasurementError` unless `allow_placeholder`, which also emits a `PlaceholderMeasurementWarning`. Simulated artifacts are refused unless `allow_placeholder`.
 - **`deploy`** deploys with the target's adapter. The `using` type must match `artifact.target`; simulated artifacts are refused unless `allow_simulated`. `adapter` replaces the default adapter (tests).
 - **`doctor`** returns one `tool-missing` diagnostic per missing host tool of the backend (a warning when the tool is optional).
@@ -252,7 +255,7 @@ assert measured.verify(dict(measured.values)) == ()
 
 ### Locks and variant subsets
 
-`Lock.sections` holds one digest per recipe section: the recipe-wide `base`, `arch`, `default_profile` and `init_scripts`, and `variants.<variant>.<key>` per variant, for `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `debloat`, `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `source_builds`, `output_targets`, and `extends` for a variant with a parent. Drift diagnostics name these sections in `subject`. The lockfile is version 3; version 2 files, which named the per-variant sections `profiles.<variant>.<key>`, load with the names mapped and the digests unchanged.
+`Lock.sections` holds one digest per recipe section: the recipe-wide `distribution` (base, arch, mirror, tools mirror, snapshot, epoch), `compiler` (tundravm version, dialect, mkosi options), `default_profile` and `init_scripts`, and `variants.<variant>.<key>` per variant, for `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `debloat` (the complete debloat configuration), `kernel` (version, source, cmdline, tdx, sha256 of the config bytes), `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `source_builds`, `output_targets`, `mkosi` for a variant whose mkosi options differ from the default variant's, and `extends` for a variant with a parent. File entries record each path's `kind` (`file`, `symlink` or `directory`), mode and content sha256. Drift diagnostics name these sections in `subject`. The lockfile is version 4; a version 3 lockfile (which had `base` and `arch` sections) still loads, drifts with a `version` diagnostic and the new sections as added, and a frozen `bake` refuses it until it is locked again. Version 2 files, which named the per-variant sections `profiles.<variant>.<key>`, load with the names mapped. The recipe digest covers the `compiler` section, so it changes with the tundravm version.
 
 A lock of every variant covers any subset. When `variants` leaves out a declared variant, `lock_status` and the frozen check in `bake` compare only the selected variants' sections and the recipe-wide ones; the lock's sections for the other variants, and sources pinned only for them, are not reported. The whole-recipe digest is compared only when the selection is every variant the lock holds. A lock written for a subset (`lock(recipe, variants=("default",))`) does not cover a bake of more variants: the missing variants' sections are `lock-added`.
 

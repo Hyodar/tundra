@@ -39,8 +39,8 @@ backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 tundravm init . --name node --ci github         # or start from the starter recipe and a CI workflow
 tundravm inspect node.py                        # dry run: what each variant will contain
 tundravm lint node.py                           # every diagnostic; exit 1 on errors
-tundravm compile node.py --out mkosi            # emit the mkosi tree, one directory per variant
 tundravm lock node.py                           # write build/tundravm.lock (section digests + source pins)
+tundravm compile node.py --out mkosi            # emit the mkosi tree, one directory per variant
 tundravm bake node.py                           # build every variant, frozen against the lock
 tundravm status node.py                         # where the project stands, and the next command to run
 tundravm measure build --variant default        # expected RTMRs of the baked artifact
@@ -67,7 +67,7 @@ The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full
 | **Recipe** | The whole image: name, base, arch, mirrors, epoch, the `common` fragment and the variants. An immutable value bound to `recipe` in a Python file. |
 | **Declaration** | One typed fact about the image: `Package`, `File`, `Template`, `User`, `Group`, `Service`, `Unit`, `Hook`, `Init`, `Key`, `Disk`, `Secrets`, `Build`, `Kernel`, `Setting`, ... Identified by type plus natural key (package name, file path, unit name). |
 | **Fragment** | A named group of declarations and nested fragments, with `requires` (fragments that must also be present) and `checks` (lint functions). A reusable "module" is a `Composite`: a `Fragment` subclass whose fields are its configuration. |
-| **Variant** | An overlay on its parent: `add` a fragment, `replace` or `remove` inherited declarations, set the `target`. One mkosi directory and one artifact per variant. |
+| **Variant** | An overlay on its parent: `add` a fragment, `replace` or `remove` inherited declarations, set the `target`. One mkosi directory per variant and one artifact per target. |
 | **Lock** | Section digests of the resolved recipe plus a pin per source build. `tundravm.lock`, committed next to the tree. |
 | **Tree** | The compiled mkosi project, held in memory until written. Its digest is what `compile --check` and golden tests compare. |
 | **Artifact** | A baked disk image of one variant and target, with the recipe, lock and tree digests it came from. Measurements and deployments take an artifact. |
@@ -140,9 +140,9 @@ variants=(
 ## Reproducibility
 
 - **Byte-stable trees.** `epoch=0` (the default) emits a fixed `SourceDateEpoch`/`SOURCE_DATE_EPOCH`, a stable `Seed` and strips `IMAGE_VERSION`. `tundravm compile --check` exits 1 when the committed tree differs from the recipe; `tundravm.testing.assert_tree` does the same in a test.
-- **Lock sections.** `tundravm lock` writes one digest per section (`base`, `arch`, `variants.<variant>.packages`, `variants.<variant>.files`, ...). `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
+- **Lock sections.** `tundravm lock` writes a version 4 lockfile with one digest per section: `distribution`, `compiler`, and per variant `packages`, `files`, `kernel`, `debloat`, ... (`variants.<variant>.packages`). The recipe digest includes the tundravm version. `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
 - **Pinned archive.** `Recipe(snapshot="20251113T083151Z")` builds from that Debian snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `EfiStub(snapshot=, version=)` pins the EFI stub to a version the snapshot carries.
-- **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and `bake --no-fetch` works on an air-gapped host. `lock --update NAME` re-resolves one source; `lock --offline` never touches the network.
+- **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and `bake --no-fetch` works on an air-gapped host. Checkouts are verified before reuse and `fetch --force` replaces a modified one. `lock --update NAME` re-resolves one source (`<variant>/<name>` for a build pinned per variant); `lock --offline` never touches the network.
 - **Frozen bakes.** `bake` is frozen against `build/tundravm.lock` whenever it exists and refuses a recipe that drifted (`E_LOCKFILE`).
 - **Snapshot mirrors.** `Recipe(mirror=..., tools_mirror=...)` pins the Debian archive; `EfiStub()` pins the EFI stub.
 
@@ -229,7 +229,9 @@ Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and contex
 | `E_LOCKFILE` | The recipe drifted from the lockfile. `tundravm lock RECIPE --check` shows what; `tundravm lock RECIPE` accepts it |
 | `E_STATE` | No `bake-result.json` where `measure`/`deploy` looked, or no artifact for that variant/target: bake first, and pass the bake's `--out` directory. Or `bake --no-fetch` found a source checkout missing: run `tundravm fetch RECIPE` |
 | `E_MEASUREMENT` | No `measured-boot`/`dstack-mr` on `PATH`, or a simulated artifact. Install a tool, or pass `--allow-placeholder` for test values |
-| `E_DEPLOYMENT` | A simulated artifact, an artifact of another target, or a missing target tool (`qemu-system-x86_64`, `az`, `gcloud`) |
+| `E_DEPLOYMENT` | A simulated artifact (`--allow-simulated-artifact` for a test run), an artifact of another target, or a missing target tool (`qemu-system-x86_64`, `az`, `gcloud`) |
+| `E_ARTIFACT_CHANGED` | The artifact's bytes no longer match the sha256 the bake recorded (`measure`, `deploy`, `status --verify`). Bake again |
+| `E_SOURCE` | A source could not be resolved, or a checkout in `build/.sources` changed since the fetch: `tundravm fetch RECIPE --force` |
 | `E_POLICY` | A `Policy` setting refused the operation (frozen lock, offline network) |
 | `E_BACKEND_EXECUTION` | The build failed. Run `tundravm doctor RECIPE`; check the mkosi version (>= 25) and platform |
 | `E_REPRODUCIBILITY` | Two builds that should match did not |

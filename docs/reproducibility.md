@@ -53,17 +53,45 @@ The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this s
 
 ## The lockfile
 
-`tundravm lock RECIPE` writes `build/tundravm.lock` (JSON, version 3):
+`tundravm lock RECIPE` writes `build/tundravm.lock` (JSON, version 4):
 
 | Key | Holds |
 |---|---|
 | `recipe_digest` | SHA-256 of the canonical recipe payload of the locked variants |
-| `sections` | One SHA-256 per section: `base`, `arch`, `default_profile`, `init_scripts`, and `variants.<variant>.<section>` for `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `debloat`, `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `source_builds`, `output_targets` (and `extends` for a variant with a parent) |
+| `sections` | One SHA-256 per section (below) |
 | `recipe` | The payload itself, so drift can name the changed items |
 | `dependencies` | The package list of each variant |
 | `fetches` | One pin per source build and, in the current dialect, per built kernel (`kernel`, or `kernel-<variant>` when a variant's kernel source differs): `name`, `kind` (`git`/`http`), `source` URL, requested `ref`, resolved `digest` (commit or sha256) |
 
-Version 2 lockfiles named the per-variant sections `profiles.<variant>.<section>`; they still load, with the names mapped and the digests unchanged, so they check clean without re-locking.
+Version 4 covers every input that defines the image:
+
+| Section | Covers |
+|---|---|
+| `distribution` | `base`, `arch`, `mirror`, `tools_mirror`, `snapshot`, `epoch` |
+| `compiler` | the tundravm version, the mkosi dialect and the recipe's mkosi options (sandbox files by sha256) |
+| `default_profile`, `init_scripts` | the default variant's name; its runtime-init scripts by priority and sha256 |
+| `variants.<name>.<section>` | `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `source_builds`, `output_targets`, and `extends` for a variant with a parent |
+| `variants.<name>.kernel` | the kernel's version, source identity, cmdline, `tdx` flag and the sha256 of its config bytes (`null` when the variant builds no kernel) |
+| `variants.<name>.mkosi` | the variant's mkosi options, only where they differ from the default variant's |
+| `variants.<name>.debloat` | the complete debloat configuration: enabled, paths removed and skipped, per-variant paths, systemd minimisation, units and binaries kept, cleaned `/var` directories |
+
+The recipe-wide `base` and `arch` sections of version 3 are gone (they live in `distribution`). File entries (`files`, `skeleton_files`) record each path's `kind` (`file`, `symlink` or `directory`), mode and content sha256. Because `compiler` records the tundravm version, the recipe digest changes with it: lock again after upgrading tundravm.
+
+A version 3 lockfile still loads. `lock --check` reports it until you lock again, and a frozen bake refuses it with `E_LOCKFILE` (`Frozen bake needs a version 4 lockfile`):
+
+```console
+$ tundravm lock node.py --check
+~ version: 3 -> 4: lock again to record the distribution, compiler and kernel sections
+- arch
+- base
++ compiler
++ distribution
++ variants.default.kernel
++ variants.dev.kernel
+[exit 1]
+```
+
+Version 2 lockfiles named the per-variant sections `profiles.<variant>.<section>`; they load with the names mapped.
 
 The sections explain a mismatch; a frozen bake of every variant also compares the whole-recipe digest.
 
@@ -88,6 +116,7 @@ The recipe records what you asked for (`Git(url, "master")`), never the commit, 
 `compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock`: the build gets exactly the pinned commit, or the download with the pinned hash. In Python, `compile(recipe, lock=locked)` applies the pins and `compile(recipe)` uses the refs.
 
 - `lock` keeps every existing pin whose source is unchanged; `--update NAME` re-resolves one source (`--update kernel` or `--update kernel-<variant>` for a kernel).
+- A build whose source differs between variants (a `dev` variant that replaces `app` with another ref, say) is pinned once per variant under `<variant>/<name>` (`default/app`, `dev/app`); its drift line is `sources.<variant>.<name>`. `--update dev/app` re-resolves the `dev` pin only, `--update app` every variant's.
 - `lock` tries every source and writes nothing unless all resolve; one `E_LOCKFILE` error lists each failure as `<name>: git <url> @ <ref>: <reason>` (`ref '<ref>' not found`, `repository unreachable: <git stderr>`, `HTTP <status>`, `timed out after 60s`). A dead upstream ref therefore shows up at `lock` together with every other failure, not one per run.
 - `lock --offline` reuses the pins and lists every source without one in a single error: `Cannot lock offline: N sources need the network to resolve:`.
 - An unpinned build is the `source-unpinned` lint warning. `lock --check` never uses the network; drift shows as `+ sources.<name>: source <name> is not pinned` or `~ sources.<name>: <old> -> <new>`.
@@ -95,7 +124,13 @@ The recipe records what you asked for (`Git(url, "master")`), never the commit, 
 
 ## Sources fetched on the host
 
-In the current dialect the build sandbox never fetches a source. `tundravm fetch RECIPE`, which `bake` runs first, checks every pinned source build and built kernel out on the host, as the invoking user, into `build/.sources/<name>-<pin12>/`: git at the pinned commit, http verified against the pinned sha256. A marker records each completed checkout, so fetching again touches nothing, and the directory name carries the pin, so a new pin gets a new checkout. The backend mounts `build/.sources` into the build and each hook copies its checkout; a kernel's is copied without `.git`. `inspect` shows each source's `pinned=` commit.
+In the current dialect the build sandbox never fetches a source. `tundravm fetch RECIPE`, which `bake` runs first, checks every pinned source build and built kernel out on the host, as the invoking user, into `build/.sources/<name>-<pin12>-<id8>/`: git at the pinned commit, http verified against the pinned sha256. `id8` is the first 8 hex of a sha256 over what the checkout holds besides the pin (url and kind, and for git the subdirectory and submodules), so a new pin or a changed declaration gets a new checkout.
+
+A JSON marker, `.tundravm-complete`, records each completed checkout: its pin, that source identity and, for http, a manifest of every file's sha256 (and exec bit) or symlink target. Before reusing a checkout, `fetch`, `bake --no-fetch` and `status` verify it: the marker names the pin and the same source; for git, `HEAD` is the pin, `git status` lists nothing (untracked and ignored files included) and requested submodules sit at their recorded commits; for http, the files match the manifest. A checkout without a marker for the pin is fetched again. A modified one fails with `E_SOURCE` (`source <name> checkout modified/incomplete: run tundravm fetch --force`), and `tundravm fetch RECIPE --force` checks every source out again, replacing the checkouts.
+
+Outside `nethermind-v1`, a source build caches its output under `<namespace>-<fingerprint16>`: `cache_key` (default: the build's name) is the namespace, and the fingerprint is the first 16 hex of a sha256 over the source pin (with git `subdir` and `submodules`), the build script or recipe, the install steps, the recipe's `arch` and the toolchain (recipe kind and packages). Changing any of them rebuilds instead of reusing a stale result. `nethermind-v1` keeps its historical keys.
+
+The backend mounts `build/.sources` into the build and each hook copies its checkout; a kernel's is copied without `.git`. `inspect` shows each source's `pinned=` commit.
 
 That makes an air-gapped bake possible: run `tundravm fetch RECIPE` on a host with network access, copy `build/` (lockfile and `.sources/`) to the builder, and run `tundravm bake RECIPE --no-fetch` there. A missing or incomplete checkout fails before mkosi runs with `E_STATE`, naming the `tundravm fetch` to run. This covers sources only: mkosi still needs its package mirror, and `EfiStub` downloads from its snapshot.
 
@@ -105,7 +140,7 @@ A lockfile written for a current-dialect recipe with a source build or a built k
 
 ## Frozen bakes
 
-`tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The check follows the subset rule above, so `bake --variant NAME` works against the lock of every variant. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from.
+`tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The check follows the subset rule above, so `bake --variant NAME` works against the lock of every variant. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from, and `bake-result.json` its sha256: `measure` and `deploy` (and `verify_artifact`, `status --verify`) hash the file first and refuse one that changed since the bake with `E_ARTIFACT_CHANGED`.
 
 ## mkosi
 

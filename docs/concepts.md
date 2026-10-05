@@ -87,7 +87,7 @@ mkosi/
 
 Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. Inside a phase, hooks keep their declaration order except where `after=` moves one behind another hook of the same phase. A hook that runs `after` a hook of a later phase is `hook-order`.
 
-Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, kernel configs) are read at lowering time. The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
+Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, kernel configs) are read at lowering time. A `Directory` keeps what it reads: without `mode` each file's and empty directory's permission bits, symlinks as links (`symlinks="follow"` ships what they point to instead) and empty directories; the lockfile records each entry's `kind` (`file`, `symlink`, `directory`). The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
 
 The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. The current dialect targets mkosi 26: apt sources that the build needs (`Repository`, `Backports`) are written at compile time under `mkosi.sandbox/`, where mkosi's apt reads them, and postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so a recipe without a version works under `set -u`. `dialect="nethermind-v1"` spells user and group creation as postinst lines, leaves build hooks unmarked and clones sources inside the build, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
 
@@ -139,7 +139,7 @@ secrets = Secrets(store=disk, entries=(
 
 - `Key(name, output=None, strategy="random"|"pipe", persist_in_tpm=True, size=64, pipe=None)`.
 - `Disk(name, mount, device=None, key=None, mapper=None, format="on_fail", directories=("ssh", "data", "logs"))`. `device=None` picks the largest unpartitioned disk; `key=None` is a plain disk; `key` may also be a `Path` to a key file.
-- `Secrets(name="secrets", entries=(), store=None, host="0.0.0.0", port=8080, ssh_directory="/root/.ssh", ssh_key_path="/etc/root_key")` receives secrets over HTTP at boot, validates them against each `Secret`'s `Schema`, and delivers them to files and environment variables.
+- `Secrets(name="secrets", entries=(), store=None, host="0.0.0.0", port=8080, ssh_directory="/root/.ssh", ssh_key_path="/etc/root_key")` receives secrets over HTTP at boot, validates them against each `Secret`'s `Schema`, and delivers them to files and environment variables. `SecretEnv(name)` targets the global environment; `SecretEnv(name, service="app")` targets one service: its values go to `/run/secrets/app.env`, and a generated drop-in, `/usr/lib/systemd/system/app.service.d/tundravm-secrets.conf`, makes the unit read that file with `EnvironmentFile=` (a hard requirement when the secret is required, `-` optional otherwise). The secrets manifest (`/etc/tdx/secrets.json`) records `service` and `env_file` on that env target. A service the variant neither generates (`Service`), ships (`Unit` with content) nor enables, disables or masks is the `secret-env-service-unknown` lint error. The `secret-delivery` binary from `tundra-tools` does not deliver manifest targets yet; the image carries the manifest, the env file paths and the drop-ins.
 
 The variant must declare the very key a disk uses and the very disk secrets are stored on: `disk-key-undefined` / `disk-key-mismatch` and `secret-store-undefined` / `secret-store-mismatch` report the gaps.
 
@@ -158,13 +158,13 @@ Build(
 )
 ```
 
-The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in a copy of the source checkout with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. Built outputs are cached in the build directory under `cache_key` (derived from name, URL and ref when omitted).
+The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in a copy of the source checkout with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. Built outputs are cached in the build directory under `<namespace>-<fingerprint16>`: `cache_key` (default: the build's name) is the namespace, and the fingerprint hashes the source pin, the build script or recipe, the install steps, the architecture and the toolchain, so changing any of them rebuilds. `nethermind-v1` keeps its historical keys.
 
 The recipe records the symbolic source (`master`), never a commit. `tundravm lock` resolves each `Git` ref to a commit and each `Http` without `sha256` to a hash and stores the pins in the lockfile; compile and bake then build exactly those. A build without a pin is the `source-unpinned` warning.
 
 ### Fetched on the host
 
-In the current dialect the build sandbox never fetches a source. `tundravm fetch` (and `bake`, which runs it first) checks each pinned source out on the host, as the invoking user, into `build/.sources/<name>-<pin12>/`: a git source at its pinned commit, an http source verified against its sha256. Your git credentials and SSH agent apply, so private repositories work, and one checkout serves every variant that builds that (source, pin). The backend mounts `build/.sources` into the build at `$SRCDIR/tundravm-sources` (ephemerally: nothing a script writes there reaches the host), and each build hook copies its checkout into `$BUILDROOT/build/<name>` before running the script. A hook whose source has no pin fails with a pointer to `tundravm lock` and `tundravm fetch`.
+In the current dialect the build sandbox never fetches a source. `tundravm fetch` (and `bake`, which runs it first) checks each pinned source out on the host, as the invoking user, into `build/.sources/<name>-<pin12>-<id8>/` (`id8` hashes the url, subdirectory and submodules): a git source at its pinned commit, an http source verified against its sha256. A JSON marker records each completed checkout, and a checkout is verified before reuse (git `HEAD` at the pin with a clean tree and initialised submodules, http files matching the recorded manifest); a modified one fails with `E_SOURCE` until `tundravm fetch --force` replaces it. A build whose source differs between variants is pinned per variant, as `<variant>/<name>`. Your git credentials and SSH agent apply, so private repositories work, and one checkout serves every variant that builds that (source, pin). The backend mounts `build/.sources` into the build at `$SRCDIR/tundravm-sources` (ephemerally: nothing a script writes there reaches the host), and each build hook copies its checkout into `$BUILDROOT/build/<name>` before running the script. A hook whose source has no pin fails with a pointer to `tundravm lock` and `tundravm fetch`.
 
 A built kernel (a `Kernel` with `config`) is a source too: its lockfile pin is named `kernel`, or `kernel-<variant>` when a variant's kernel source differs from the default variant's; `inspect` shows `pinned=`; `source-unpinned` covers it; and the kernel build script copies the checkout without `.git`, so the kernel version string stays clean. `nethermind-v1` keeps cloning sources and kernels inside the sandbox, as the historical tree does. See [reproducibility](reproducibility.md#sources-fetched-on-the-host).
 
@@ -207,7 +207,7 @@ Recipe ──compile──▶ Tree ──write──▶ mkosi/            (commi
    │
    └──lock──▶ Lock ──write_lock──▶ build/tundravm.lock  (committed, lock --check)
                 │
-                └──fetch──▶ build/.sources/<name>-<pin12>/  (host checkouts)
+                └──fetch──▶ build/.sources/<name>-<pin12>-<id8>/  (host checkouts)
                                      │
 Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
                                      │
@@ -218,19 +218,19 @@ Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
 | Step | Function | CLI | Needs |
 |---|---|---|---|
 | Inspect | `resolve`, `resolve_all` | `inspect` | the recipe |
-| Lint | `lint(recipe, lock=None)` | `lint` | the recipe (and a lock for drift) |
+| Lint | `lint(recipe, lock=None)` | `lint` | the recipe; a lock applies its pins and adds drift |
 | Compile | `compile(recipe, lock=None) -> Tree` | `compile` | the recipe; a lock applies its pins |
 | Lock | `lock(recipe, previous=None) -> Lock` | `lock` | the network, unless every source is already pinned |
-| Fetch | `fetch(recipe, locked=, out=) -> tuple[FetchedSource, ...]` (from `tundravm.declarative.lifecycle`) | `fetch` | the network (as you), unless the checkouts are already there |
-| Bake | `bake(recipe, locked=, backend=, out=, fetch=True) -> tuple[Artifact, ...]` | `bake` | a backend; fetches first unless `fetch=False` (`--no-fetch`) |
+| Fetch | `fetch(recipe, lock=, out=, force=False) -> tuple[FetchedSource, ...]` | `fetch` | the network (as you), unless the checkouts are already there |
+| Bake | `bake(recipe, lock=, backend=, out=, fetch=True) -> tuple[Artifact, ...]` | `bake` | a backend; fetches first unless `fetch=False` (`--no-fetch`) |
 | Measure | `measure(artifact, scheme="rtmr") -> Measurements` | `measure` | `measured-boot` or `dstack-mr`, or `allow_placeholder` |
-| Deploy | `deploy(artifact, using=Qemu()/Azure(...)/Gcp(...)) -> Deployment` | `deploy` | the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
+| Deploy | `deploy(artifact, using=Qemu()/Azure(...)/Gcp(...), allow_simulated=False) -> Deployment` | `deploy` | the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 
 A lock of every variant covers a bake or `lock --check` of any subset of them: only the selected variants' sections and the recipe-wide ones are compared. `bake` fetches the locked sources into `build/.sources` before it builds, so `tundravm fetch` on its own is for checking sources out ahead of time (or for a host that bakes offline). `tundravm status RECIPE` checks each of these steps without writing anything or touching the network and names the next command to run.
 
-`bake` writes `out/bake-result.json`, the manifest `read_artifacts()`, `tundravm measure` and `tundravm deploy` read, so measuring and deploying work in a later process. Each `Artifact` carries the recipe digest, the lockfile digest and the tree digest it was built from.
+`bake` writes `out/bake-result.json`, the manifest `read_artifacts()`, `tundravm measure` and `tundravm deploy` read, so measuring and deploying work in a later process. Each `Artifact` carries the recipe digest, the lockfile digest and the tree digest it was built from. `measure` and `deploy` first hash the artifact (`verify_artifact`) and refuse one whose bytes changed since the bake with `ArtifactError` (`E_ARTIFACT_CHANGED`); `tundravm status --verify` reports the same check.
 
-The in-process backend writes simulated artifacts (`Artifact.simulated`). `measure` and `deploy` refuse them unless you pass `allow_placeholder=True` (`--allow-placeholder`), and placeholder measurements say so (`tool="placeholder"`).
+The in-process backend writes simulated artifacts (`Artifact.simulated`). `measure` refuses them unless you pass `allow_placeholder=True` (`--allow-placeholder`), and `deploy` unless you pass `allow_simulated=True` (`--allow-simulated-artifact`); placeholder measurements say so (`tool="placeholder"`).
 
 ## Backends
 

@@ -57,7 +57,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `init` | Scaffolds a project from a starter template, lints it, prints the next steps and probes the chosen backend (see [Init](#init)). | |
 | `inspect` | Dry run per variant: parent, fragments, packages, files with digests, users, units, hooks, runtime-init steps, sources, targets (see [Inspect](#inspect)). `--format json` adds the recipe `digest` the lockfile records. `--diff-variants A B` lists what differs between two variants instead. | |
 | `lint` | Every diagnostic: resolution, fragment checks, compiler rules. The compiler rules see the source pins of `--lockfile` (default `build/tundravm.lock` when it exists), so a pinned source never reports `source-unpinned`. | an error (with `--strict`, a warning) |
-| `compile` | Writes the mkosi tree to `--out` (default `build/mkosi`), one directory per variant. `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
+| `compile` | Writes the mkosi tree to `--out` (default `build/mkosi`), one directory per variant, then prints `variants:`, `recipe_digest:` (the digest `lock` records) and `tree_digest:` (`Tree.digest`). `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
 | `diff` | Unified diff from the tree at `--against` (default `build/mkosi`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
 | `lock` | Writes the lockfile to `--lockfile` (default `build/tundravm.lock`) for the selected variants: version 4, with the `distribution`, `compiler`, `variants.<name>.kernel` and `variants.<name>.debloat` sections. A build whose source differs between variants is pinned per variant as `<variant>/<name>` (drift line `sources.<variant>.<name>`); `--update <variant>/<name>` re-resolves one variant's pin, `--update <name>` every variant's. `--check` prints the drift instead (see [Lockfile drift](#lockfile-drift)); a version 3 lockfile drifts as `~ version: 3 -> 4` until locked again. | `--check` and the lock is stale |
 | `fetch` | Checks the source builds and built kernels' sources of the selected variants out on this host, as the invoking user, into `OUT/.sources/<name>-<pin12>-<id8>` (`--out`, default `build`; `id8` hashes the url, subdirectory and submodules) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are verified and kept: git `HEAD` is the pin, `git status` is empty (untracked and ignored files included) and requested submodules are initialised; an http checkout matches the sha256 manifest written at fetch time. A modified one fails with `E_SOURCE` (`source <name> checkout modified/incomplete: run tundravm fetch --force`); `--force` checks every source out again. Outside `nethermind-v1`, `bake` runs it first and mounts `OUT/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing (see [Fetch](#fetch)). | |
@@ -70,7 +70,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `clean` | Removes the chosen parts of the build output directory: `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
-`compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH` names another one.
+`inspect`, `lint`, `compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH` names another one. `ci` needs the lockfile and loads it once for all three steps; `status` reports on it.
 
 ## Init
 
@@ -116,9 +116,9 @@ created svc/.gitignore
 note: svc/pyproject.toml already exists; add the dependencies with `uv add tundravm` and `uv add --dev pytest` (tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm`)
 lint my-node.py: no findings
 next (from svc):
-  1. tundravm compile my-node.py --out mkosi  write the mkosi tree; commit it
-  2. uv run pytest tests                      run test_my_node.py against mkosi/
-  3. tundravm lock my-node.py                 pin packages and sources in build/tundravm.lock
+  1. tundravm lock my-node.py                 record recipe sections and pin source repositories/downloads in build/tundravm.lock
+  2. tundravm compile my-node.py --out mkosi  write the mkosi tree; commit it
+  3. uv run pytest tests                      run test_my_node.py against mkosi/
   4. tundravm ci my-node.py --out mkosi       the lint, tree and lockfile checks CI runs
   5. tundravm bake my-node.py --out build     build the image
   tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm` uses a local checkout
@@ -252,13 +252,32 @@ error kernel-missing [default]: variant builds a bootable UKI but installs no ke
 ~ variants.dev.packages: +htop
 ```
 
-`~` changed, `+` only in the recipe, `-` only in the lockfile. Source builds drift as `+ sources.<name>` (not pinned yet) or `~ sources.<name>: <old> -> <new>`. A clean lock prints `lock is up to date`. With `--format github` each line is `::error file=build/tundravm.lock,title=lock drift::variants.default.packages changed: +htop. Run `tundravm lock` and commit the lockfile.`; with `--format markdown` it is a `Change | Section | Detail` table.
+`~` changed, `+` only in the recipe, `-` only in the lockfile. Source builds drift as `+ sources.<name>` (not pinned yet) or `~ sources.<name>: <old> -> <new>`; a build pinned per variant drifts as `sources.<variant>.<name>`, here after the `dev` variant's `app` build moved from `main` to `main~1`:
 
-Sections are the recipe-wide `base`, `arch`, `default_profile` and `init_scripts`, and `variants.<variant>.<key>` per variant (`packages`, `files`, `users`, `services`, `hooks`, `source_builds`, ...). The lockfile is version 3; a version 2 lockfile, which named the per-variant sections `profiles.<variant>.<key>`, still loads and checks clean.
+```
+~ sources.dev.app: 3791980 -> main~1
+~ variants.dev.source_builds: ~app
+```
+
+A clean lock prints `lock is up to date`. With `--format github` each line is `::error file=build/tundravm.lock,title=lock drift::variants.default.packages changed: +htop. Run `tundravm lock` and commit the lockfile.`; with `--format markdown` it is a `Change | Section | Detail` table.
+
+Sections are the recipe-wide `distribution` (base, arch, mirrors, snapshot, epoch), `compiler` (tundravm version, dialect, mkosi options), `default_profile` and `init_scripts`, and `variants.<variant>.<key>` per variant (`packages`, `files`, `users`, `services`, `hooks`, `source_builds`, `kernel`, `debloat`, `mkosi` where it differs from the default variant's, ...). The lockfile is version 4. A version 3 lockfile still loads; `lock --check` reports it until it is locked again, and a frozen `bake` refuses it with `E_LOCKFILE` (`Frozen bake needs a version 4 lockfile`):
+
+```
+~ version: 3 -> 4: lock again to record the distribution, compiler and kernel sections
+- arch
+- base
++ compiler
++ distribution
++ variants.default.kernel
++ variants.dev.kernel
+```
+
+A version 2 lockfile, which named the per-variant sections `profiles.<variant>.<key>`, loads with the names mapped. The recipe digest covers the `compiler` section, so upgrading tundravm drifts the `compiler` section until you lock again.
 
 `lock --check --variant NAME` checks only the named variants' sections and the recipe-wide ones. A lockfile written for every variant is therefore up to date for any selection, and the lockfile's sections for the other variants are never reported. The whole-recipe digest (`recipe_digest`) is compared only when the selection is every variant the lockfile holds. A lockfile written with `lock --variant NAME` holds only that variant, so checking or baking more variants against it reports their sections as `+`.
 
-`lock` keeps the existing lockfile's pins while their source is unchanged. `--update NAME` resolves that source again (`--update kernel` or `--update kernel-<variant>` for a built kernel's source in the current dialect); an unknown name is an error. `--offline` never touches the network and fails for a source with no pin. `--explain` prints the drift before writing.
+`lock` keeps the existing lockfile's pins while their source is unchanged. `--update NAME` resolves that source again (`--update kernel` or `--update kernel-<variant>` for a built kernel's source in the current dialect; `--update dev/app` for the `dev` variant's pin of a build pinned per variant, `--update app` for every variant's); an unknown name is an error. `--offline` never touches the network and fails for a source with no pin. `--explain` prints the drift before writing.
 
 `lock` tries every source that needs resolving and writes nothing unless all of them resolve. Otherwise it exits 2 with one error that lists every failure:
 
@@ -282,7 +301,18 @@ Each line is `<name>: git <url> @ <ref>: <reason>`. The reason is `ref '<ref>' n
 
 ## Fetch
 
-`tundravm fetch RECIPE` checks out, on this host and as you, every source the selected variants build from: each `Build` source and, outside `nethermind-v1`, each built kernel's source (a `Kernel` with `config`), named `kernel` or `kernel-<variant>` where a variant's kernel source differs. A git source is checked out at its pinned commit, an http source is downloaded and checked against its sha256. Each lands in `OUT/.sources/<name>-<pin12>/` with a completion marker; a complete checkout is kept, so a second run touches nothing, and there is one checkout per (source, pin). Because it runs as you, your git credentials and SSH agent apply, so private repositories work.
+`tundravm fetch RECIPE` checks out, on this host and as you, every source the selected variants build from: each `Build` source and, outside `nethermind-v1`, each built kernel's source (a `Kernel` with `config`), named `kernel` or `kernel-<variant>` where a variant's kernel source differs. A git source is checked out at its pinned commit, an http source is downloaded and checked against its sha256. Each lands in `OUT/.sources/<name>-<pin12>-<id8>/`, `id8` being the first 8 hex of a sha256 over the url, kind and, for git, subdirectory and submodules, with a JSON `.tundravm-complete` marker that records the pin and that identity (and, for http, a sha256 manifest of every file). There is one checkout per (source, pin). A complete checkout is verified and kept, so a second run touches nothing: git `HEAD` must be the pin, `git status` must list nothing (untracked and ignored files included) and requested submodules must be at their recorded commits; an http checkout must match its manifest. A modified checkout fails with `E_SOURCE` until `fetch --force` checks every source out again:
+
+```console
+$ tundravm fetch node.py
+[tundravm] fetch 2 sources ...
+[tundravm] note default/app: dffeffe8aaf0 already fetched
+[tundravm] fetch 2 sources ... FAILED (0.0s)
+error [E_SOURCE]: source dev/app checkout modified/incomplete: run tundravm fetch --force
+Hint: 1 file changed since the fetch: hi.sh. Run `tundravm fetch RECIPE --force` to check dev/app out again (it replaces the checkout).
+  path: build/.sources/app-70c99ab8a545-2d2fd0fc
+[exit 2]
+``` Because it runs as you, your git credentials and SSH agent apply, so private repositories work.
 
 Pins come from `--lockfile` (default `build/tundravm.lock` when it exists). A source the lockfile does not pin is resolved first, as `lock` would, unless the recipe's `Policy(mutable_ref_policy="error")` forbids it. For a recipe whose `hello` build is `Git("file:///work/hello", "v1.0.0")`, before and after `tundravm lock`:
 
@@ -303,6 +333,8 @@ $ tundravm fetch node.py
 fetched build/.sources
   hello  cdd0a5257ba9  kept
 ```
+
+A build whose source differs between variants is pinned and fetched once per variant, as `<variant>/<name>` (`default/app`, `dev/app`); both checkouts are `app-<pin12>-<id8>`.
 
 `inspect` shows each source's pin (`hello  git file:///work/hello  ref=v1.0.0  pinned=cdd0a52`). In the current dialect a build hook never clones: it copies its checkout from the mounted `.sources` into `$BUILDROOT/build/<name>` (a kernel's without `.git`), and a hook whose source has no pin only fails, with `run tundravm lock, then tundravm fetch`. `lock --update kernel` (or `kernel-<variant>`) moves a kernel's pin like any other source.
 
@@ -334,7 +366,7 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
   $ tundravm bake node.py --backend local --no-fetch
   ...
   [default] failed after 0.0s
-  error [E_STATE]: Source build 'hello' is not fetched: build/.sources/hello-cdd0a5257ba9 is missing or incomplete.
+  error [E_STATE]: Source build 'hello' is not fetched: build/.sources/hello-cdd0a5257ba9-2c640da8 is missing or incomplete.
   Hint: Run `tundravm fetch RECIPE --out build` first, or bake without --no-fetch.
     pin: cdd0a5257ba950088a826755fa832f40e87fc5c3
   [exit 2]
@@ -410,7 +442,19 @@ A missing `ukify` or `pefile` needs no action, since the backend then adds the t
 
 ## Measure and deploy
 
-`measure MANIFEST` and `deploy MANIFEST` take `bake-result.json` or the directory holding it.
+`measure MANIFEST` and `deploy MANIFEST` take `bake-result.json` or the directory holding it. Both hash the artifact first and fail with `E_ARTIFACT_CHANGED` when it is unreadable or no longer matches the sha256 the bake recorded:
+
+```console
+$ tundravm measure build --variant default --allow-placeholder
+error [E_ARTIFACT_CHANGED]: Artifact build/default/disk.qcow2 changed since the bake.
+Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to record the artifact it should be.
+  variant: default
+  target: qemu
+  path: build/default/disk.qcow2
+  recorded: 1fa043adea909e9ad008e0db46ed1c9935adf90aee9c49d20940d6316c5c2e79
+  actual: e9f650ccebad2410588216a77dc68623887949de69b8165992133992d805053d
+[exit 2]
+```
 
 - `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. `--json` prints `artifact`, `artifact_digest`, `scheme`, `tool`, `values`, `variant`.
 - `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`; azure `storage_account` (required), `resource_group`, `location`, `vm_size`; gcp `project` and `bucket` (required), `zone`, `machine_type`. Simulated artifacts are refused unless `--allow-simulated-artifact`.
@@ -424,7 +468,7 @@ A missing `ukify` or `pefile` needs no action, since the backend then adds the t
 | `recipe` | path, recipe digest (as `inspect --format json`), variants, mkosi dialect, base and snapshot | `ok` |
 | `lint` | diagnostic counts by level | `ok`, `error` when there are errors |
 | `lock` | `--lockfile` (default `build/tundravm.lock`): present, version, drifted sections (as `lock --check`), unpinned sources and kernels | `ok`, `stale`, `missing` |
-| `source` | one per source build and built kernel: whether `OUT/.sources/<name>-<pin12>` holds a complete checkout of the locked pin | `ok`, `stale` (another pin or an incomplete checkout), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
+| `source` | one per source build and built kernel, by lock key: whether `OUT/.sources/<name>-<pin12>-<id8>` holds a complete, unmodified checkout of the locked pin (verified as `fetch` does) | `ok`, `stale` (another pin, an incomplete checkout, or one modified since the fetch: `checkout at PATH modified since the fetch (...); run tundravm fetch --force`), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
 | `tree` | `OUT/mkosi` (`--out`, default `build`) against what the recipe compiles to now, as `compile --check` | `ok`, `stale`, `missing` |
 | `artifact` | one per baked variant and target in `OUT/bake-result.json`: path, size, sha256 prefix, integrity (`unchecked`; with `--verify` the file is hashed: `verified` or `mismatch`), `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches, or on an integrity mismatch | `ok`, `stale`, `missing` |
 | `backend` | the recipe file's `backend` and how many of its host tools `doctor` finds | `ok`, `missing`, `n/a` (no backend) |
@@ -435,15 +479,26 @@ After `init --backend inprocess`, `lock` and `bake --backend inprocess`, adding 
 
 ```console
 $ tundravm status node.py
-recipe    ok       node.py  digest 837071dff8c5  variants default, dev  dialect current  base debian/trixie
+recipe    ok       node.py  digest 49222658d740  variants default, dev  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
-lock      stale    build/tundravm.lock  v3  2 sections drifted
+lock      stale    build/tundravm.lock  v4  2 sections drifted
 source    n/a      no source builds or kernels
 tree      stale    build/mkosi: 2 files differ from the recipe
-artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
-artifact  stale    dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+artifact  stale    dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  integrity unchecked (--verify hashes it)  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
 backend   ok       inprocess: no host tools needed
 next: tundravm lock node.py
+```
+
+`status --verify` hashes each artifact; an artifact whose bytes changed since the bake is `stale`:
+
+```console
+$ tundravm status node.py --verify
+...
+artifact  stale    default/qemu  build/default/disk.qcow2  116 B  sha256 1fa043adea90  integrity mismatch  simulated  lock build/tundravm.lock
+artifact  ok       dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  integrity verified  simulated  lock build/tundravm.lock
+...
+next: tundravm bake node.py
 ```
 
 `tundravm clean RECIPE` (or `clean --out DIR` without a recipe) removes build output by part: `--sources` (`OUT/.sources`), `--tree` (`OUT/mkosi`), `--artifacts` (each `OUT/<variant>/` and `OUT/bake-result.json`), `--state` (`OUT/.mkosi`, which holds the cached tools tree, and the mkosi state next to the tree's config), or `--all`. The lockfile is never removed unless `--lockfile PATH` names it. It prints `removed PATH` per path, or `would remove PATH` with `--dry-run`; with no part flag it lists what `--all` would remove and removes nothing:
@@ -491,6 +546,6 @@ ok lock: build/tundravm.lock is up to date
 
 A failing step prints its report, then `FAIL step: ...` and `skip` for the remaining steps, and exits 1. Under GitHub Actions the reports are workflow annotations. With `--variant`, every step checks only those variants, the lock step as `lock --check --variant` does.
 
-The steps share one loaded recipe, and the compile step works on a copy of it, so a recipe with runtime-init steps (keys, disks, secrets, `Init`) passes the lock step whenever `tundravm lock --check` passes on its own.
+The steps share one loaded recipe and one lockfile (`--lockfile`, default `build/tundravm.lock`, read once): `lint --strict` and `compile --check` apply its pins, so a pinned source never reports `source-unpinned`, and the lock step compares against it. The compile step works on a copy of the recipe, so a recipe with runtime-init steps (keys, disks, secrets, `Init`) passes the lock step whenever `tundravm lock --check` passes on its own.
 
 `tundravm init --ci github` writes a workflow that runs `uv sync`, appends `tundravm inspect RECIPE --format markdown` to `$GITHUB_STEP_SUMMARY`, then runs `tundravm ci RECIPE --out mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the workflow checks both.

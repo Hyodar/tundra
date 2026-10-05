@@ -472,7 +472,7 @@ tundravm inspect RECIPE [--variant NAME ...] [--json]
 tundravm lint RECIPE [--variant NAME ...] [--strict]
 tundravm compile RECIPE --out DIRECTORY [--lockfile FILE] [--check]
 tundravm diff RECIPE --against DIRECTORY [--lockfile FILE]
-tundravm lock RECIPE --path FILE [--update SOURCE ...] [--offline | --check]
+tundravm lock RECIPE --lockfile FILE [--update SOURCE ...] [--offline | --check]
 tundravm bake RECIPE --lockfile FILE --backend lima|nix|local --out DIRECTORY
 tundravm measure MANIFEST --variant NAME --scheme rtmr|azure|gcp
 tundravm deploy MANIFEST --variant NAME --config FILE
