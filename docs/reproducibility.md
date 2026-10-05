@@ -113,7 +113,7 @@ The recipe records what you asked for (`Git(url, "master")`), never the commit, 
 - every `Git` ref to a commit, with `git ls-remote`;
 - every `Http` source without `sha256` to the sha256 of its download.
 
-`compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock`: the build gets exactly the pinned commit, or the download with the pinned hash. In Python, `compile(recipe, lock=locked)` applies the pins and `compile(recipe)` uses the refs.
+`compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock`: the build gets exactly the pinned commit, or the download with the pinned hash. In Python, `compile(recipe, lock=locked)` applies the pins and unpinned current-dialect builds emit failure hooks (`compile(recipe)` without a lock).
 
 - `lock` keeps every existing pin whose source is unchanged; `--update NAME` re-resolves one source (`--update kernel` or `--update kernel-<variant>` for a kernel).
 - A build whose source differs between variants (a `dev` variant that replaces `app` with another ref, say) is pinned once per variant under `<variant>/<name>` (`default/app`, `dev/app`); its drift line is `sources.<variant>.<name>`. `--update dev/app` re-resolves the `dev` pin only, `--update app` every variant's.
