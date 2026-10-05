@@ -322,7 +322,7 @@ def _current_digests(
 ) -> tuple[str | None, set[str]]:
     """The tree digest the baked variants compile to now, and the recipe digests to accept."""
     baked = tuple(sorted({artifact.variant for artifact in artifacts}))
-    declared = set(img._state.profiles)
+    declared = set(img.state.profiles)
     if not baked or not set(baked) <= declared:
         return None, set()
     try:

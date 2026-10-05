@@ -1,4 +1,4 @@
-"""Reusable SDK configuration bundles built on the ``Module`` base class."""
+"""The runtime tools lowering configures: their specs, renderers and ``check()`` rules."""
 
 from __future__ import annotations
 

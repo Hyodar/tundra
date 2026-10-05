@@ -155,14 +155,6 @@ class DiskEncryption(Module):
                 ),
             )
 
-    def configure(self, image: Image) -> None:
-        """Build disk-setup, write the aggregate disk config, run it at boot (priority 20)."""
-        image.build_packages(*DISK_ENCRYPTION_BUILD_PACKAGES)
-        image.build_from(self.source_spec())
-        image.install("cryptsetup")
-        image.file(self.config_path, content=self._render_config())
-        image.runtime_init(self._render_init_script(), priority=DISK_ENCRYPTION_INIT_PRIORITY)
-
     def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
         keys: dict[str, KeySpec] = {}
         for module in image.applied_modules(profile, inherited=True):
@@ -220,7 +212,8 @@ class DiskEncryption(Module):
             mark_unpinned=False,
         )
 
-    def _render_config(self) -> str:
+    def render_config(self) -> str:
+        """The aggregate ``disk-setup`` config: one entry per disk."""
         lines = ["disks:"]
         for spec in self.disks:
             lines.extend(
@@ -247,7 +240,8 @@ class DiskEncryption(Module):
             )
         return ('    strategy: "largest"',)
 
-    def _render_init_script(self) -> str:
+    def render_init_script(self) -> str:
+        """The runtime-init step (priority 20): ``disk-setup``, then any mapper renames."""
         lines = [f"/usr/bin/disk-setup setup {shlex.quote(self.config_path)}"]
         for spec in self.disks:
             if spec.encrypted and spec.mapper_name:

@@ -6,7 +6,7 @@ import json
 import posixpath
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from .errors import StateError, ValidationError
@@ -479,6 +479,31 @@ def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
 def unit_name(name: str) -> str:
     """Systemd unit name for a service name (``foo`` -> ``foo.service``)."""
     return name if "." in name else f"{name}.service"
+
+
+NETWORK_SETUP_UNIT = "network-setup.service"
+"""The unit runtime-init requires when a profile ships it (else ``network-online.target``)."""
+
+
+def enable_unit(profile: ProfileState, unit: str) -> None:
+    """Enable *unit* in *profile*: postinst ``systemctl enable`` plus a ``minimal.target`` link.
+
+    A unit *profile* already lists as a service is switched on in place.
+    """
+    key = unit_name(unit)
+    index = next((i for i, s in enumerate(profile.services) if unit_name(s.name) == key), None)
+    if index is None:
+        profile.services.append(ServiceSpec(name=unit, enabled=True))
+    elif not profile.services[index].enabled:
+        profile.services[index] = replace(profile.services[index], enabled=True)
+
+
+def ships_unit(profile: ProfileState, unit: str) -> bool:
+    """Whether *profile* (an effective profile) ships, generates or enables *unit*."""
+    files = (*profile.files, *profile.skeleton_files)
+    return any(PurePosixPath(f.path).name == unit for f in files) or any(
+        unit_name(s.name) == unit for s in profile.services
+    )
 
 
 def _norm_path(path: str) -> str:

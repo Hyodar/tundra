@@ -1,6 +1,6 @@
 """Init — minimal runtime-init script builder.
 
-Bash fragments are registered per profile via ``image.runtime_init()``
+Lowering registers bash fragments per profile
 (``ProfileState.init_scripts``); during ``compile()`` the Image hands each
 profile's merged fragments to its Init, which sorts them by priority and
 generates ``/usr/bin/runtime-init`` plus ``runtime-init.service``.

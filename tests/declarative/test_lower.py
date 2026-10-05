@@ -1,17 +1,12 @@
-"""Lowering: a declarative Recipe builds the same RecipeState as the fluent calls."""
+"""Lowering: a declarative Recipe as the compiler's RecipeState, variants as profiles."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
-from tundravm._image import Image
-from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
 from tundravm._options import MkosiOptions
-from tundravm._source import GitSource, ScriptBuild, SourceBuild
-from tundravm._source import Install as FluentInstall
 from tundravm.check import check
 from tundravm.declarative import (
     Build,
@@ -40,16 +35,14 @@ from tundravm.declarative import (
     Unit,
     User,
     Variant,
+    compile,
     lower,
     resolve,
 )
 from tundravm.declarative.lower import inject_after_init
-from tundravm.diff import diff_trees
 from tundravm.errors import ValidationError
 from tundravm.lockfile import recipe_digest
 from tundravm.models import Kernel as FluentKernel
-from tundravm.models import SecretSpec, SecretTarget
-from tundravm.platforms import AzurePlatform
 
 TOOLS = "https://example.com/tundra-tools.git"
 APP_REPO = "https://example.com/app.git"
@@ -134,87 +127,27 @@ def declarative_recipe() -> Recipe:
     )
 
 
-def fluent_image() -> Image:
-    """The fluent calls lowering issues for :func:`declarative_recipe`, written by hand."""
-    tools = GitSource(TOOLS, "v1")
-    key = KeySpec("key_persistent", output="/tmp/key_persistent")
-    disk = DiskSpec("disk_persistent", device=None, key=key, mapper_name="cryptroot")
-    img = Image(base="debian/bookworm", mkosi=MkosiOptions())
-    img.install("curl", "jq").build_packages("golang")
-    img.file("/etc/motd", content="hello\n")
-    img.skeleton("/etc/resolv.conf", content="nameserver 1.1.1.1\n")
-    img.file("/usr/bin/blob", content=b"\x00\xff\x01", mode="0755")
-    img.group("eth", system=True)
-    img.user("app", system=True, home="/home/app", groups=("eth",))
-    img.file("/usr/lib/systemd/system/app.service", content=UNIT_AFTER_INIT)
-    img.enable("app.service")
-    img.disable("ssh.service").mask("ssh.service")
-    img.shell("echo first", phase="postinst", env={"STAGE": "1"})
-    img.shell("echo second", phase="postinst")
-    img.apply(
-        KeyGeneration(keys=(key,), source=tools),
-        DiskEncryption(disks=(disk,), source=tools),
-        SecretDelivery(
-            secrets=(
-                SecretSpec(
-                    "token",
-                    targets=(
-                        SecretTarget.file("/etc/app/token", owner="app"),
-                        SecretTarget.env("APP_TOKEN", scope="global"),
-                    ),
-                ),
-            ),
-            store_at=disk,
-            source=tools,
-        ),
-    )
-    img.build_from(
-        SourceBuild(
-            name="app",
-            source=GitSource(APP_REPO, "main"),
-            build=ScriptBuild(
-                script="make", output="out/app", packages=("make",), env={"CFLAGS": "-O2"}
-            ),
-            install=(
-                FluentInstall.file("out/app", "/usr/bin/app"),
-                FluentInstall.tree("share", "/usr/share/app-data"),
-            ),
-        )
-    )
-    img.debloat(extra_remove_paths=("/usr/share/foo",))
-    img.runtime_init("test -d /persistent\n", priority=25)
-    img.runtime_init("echo up\n", priority=25)
-    img.profile("azure")
-    with img.profiles("azure"):
-        img.file("/etc/motd", content="azure\n")
-        img.install("waagent")
-        img.targets("azure")
-        img.apply(AzurePlatform())
-    return img
+EQUIVALENCE_TREE = "cdff4239522280f60c05a941ccac8d9e2e5be907e191e9c25edc740d322ec79b"
+EQUIVALENCE_RECIPE = "5ac7b2b189748e60058e9e21f056f0299c089455eb98bf5ce17df6d2b31acabf"
+"""The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
+fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly."""
 
 
-def modes(root: Path) -> dict[str, int]:
-    return {str(path.relative_to(root)): os.lstat(path).st_mode for path in sorted(root.rglob("*"))}
-
-
-def test_lowered_recipe_compiles_to_the_fluent_tree(tmp_path: Path) -> None:
+def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     lowered = lower(declarative_recipe())
-    fluent = fluent_image()
 
-    assert lowered._recipe_payload(profile_names=PROFILES) == fluent._recipe_payload(
-        profile_names=PROFILES
-    )
-    assert recipe_digest(lowered._recipe_payload(profile_names=PROFILES)) == recipe_digest(
-        fluent._recipe_payload(profile_names=PROFILES)
-    )
+    assert recipe_digest(lowered._recipe_payload(profile_names=PROFILES)) == EQUIVALENCE_RECIPE
+    assert compile(declarative_recipe()).digest == EQUIVALENCE_TREE
+    assert [(d.level, d.code, d.profile, d.subject) for d in check(lowered)] == [
+        ("error", "kernel-missing", "default", None),
+        ("warning", "init-priority-collision", "default", "priority 25"),
+        ("warning", "source-unpinned", "default", "app"),
+        ("warning", "source-unpinned", "default", "disk-encryption"),
+        ("warning", "source-unpinned", "default", "key-generation"),
+        ("warning", "source-unpinned", "default", "secret-delivery"),
+    ]
 
     lowered.compile(tmp_path / "lowered", profiles=PROFILES)
-    fluent.compile(tmp_path / "fluent", profiles=PROFILES)
-    diff = diff_trees(tmp_path / "fluent", tmp_path / "lowered")
-    assert diff.is_clean, diff.unified()
-    assert modes(tmp_path / "fluent") == modes(tmp_path / "lowered")
-    assert check(lowered) == check(fluent)
-
     runtime_init = (tmp_path / "lowered/default/mkosi.extra/usr/bin/runtime-init").read_text()
     order = ["key-gen", "disk-setup", "test -d", "echo up", "secret-delivery"]
     assert [runtime_init.index(marker) for marker in order] == sorted(

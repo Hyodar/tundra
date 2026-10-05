@@ -121,18 +121,6 @@ class KeyGeneration(Module):
                     )
                 output_paths.add(spec.output)
 
-    def configure(self, image: Image) -> None:
-        """Build key-gen, write the aggregate key config, run it at boot (priority 10)."""
-        image.build_packages(*KEY_GENERATION_BUILD_PACKAGES)
-        image.build_from(self.source_spec())
-        if any(spec.tpm_enabled() for spec in self.keys):
-            image.install("tpm2-tools")
-        image.file(self.config_path, content=self._render_config())
-        image.runtime_init(
-            f"/usr/bin/key-gen setup {shlex.quote(self.config_path)}\n",
-            priority=KEY_GENERATION_INIT_PRIORITY,
-        )
-
     def check(self, image: Image, profile: str) -> Iterator[Diagnostic]:
         for spec in self.keys:
             if spec.pipe_path is None or spec.pipe_path.startswith("/run/"):
@@ -163,7 +151,12 @@ class KeyGeneration(Module):
             mark_unpinned=False,
         )
 
-    def _render_config(self) -> str:
+    def init_script(self) -> str:
+        """The runtime-init step: ``key-gen setup`` on the config (priority 10)."""
+        return f"/usr/bin/key-gen setup {shlex.quote(self.config_path)}\n"
+
+    def render_config(self) -> str:
+        """The aggregate ``key-gen`` config: one entry per key."""
         lines = ["keys:"]
         for spec in self.keys:
             lines.extend(

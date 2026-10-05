@@ -1,8 +1,8 @@
 """Immutable declaration values of the declarative frontend (design doc section 2).
 
-Every record is a frozen, slotted dataclass. ``__post_init__`` rejects what the
-fluent ``Image`` API rejects at declaration time (empty names, relative paths,
-unknown phases, out-of-range modes) plus the structural rules of the design
+Every record is a frozen, slotted dataclass. ``__post_init__`` rejects malformed
+values at declaration time (empty names, relative paths, unknown phases,
+out-of-range modes) plus the structural rules of the design
 (a ``Disk`` references a ``Key`` object, ``Secrets.store`` is a ``Disk``).
 Lists passed for tuple fields are frozen into tuples.
 """

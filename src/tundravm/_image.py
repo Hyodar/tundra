@@ -1,26 +1,21 @@
-"""Internal lowering target; not a public API.
+"""The lowered recipe's lifecycle glue; not a public API.
 
-``tundravm.declarative.lower`` turns a declarative ``Recipe`` into an
-:class:`Image` (every variant a profile) and the lifecycle compiles, locks and
-bakes it. Nothing outside ``tundravm`` should build one by hand.
+``tundravm.declarative.lower`` builds the compiler's ``RecipeState`` (through
+``tundravm.declarative.state``) and wraps it, with the recipe-wide mkosi
+options and kernels, in an :class:`Image`, which compiles, locks and bakes it.
+Nothing outside ``tundravm`` should build one by hand.
 """
 
 from __future__ import annotations
 
 import copy
-import fnmatch
 import hashlib
 import json
-import os
-import re
-import shlex
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from enum import Enum
-from pathlib import Path, PurePosixPath
-from typing import Final, Literal, Self
+from pathlib import Path
 
 from ._modules.base import Module
 from ._modules.init import Init
@@ -59,36 +54,22 @@ from .lockfile import (
     unselected_sources,
 )
 from .models import (
-    VALID_PHASES,
+    NETWORK_SETUP_UNIT,
     Arch,
     ArtifactRef,
     BakeRequest,
     BakeResult,
-    CommandSpec,
     CompileResult,
-    DebloatConfig,
-    FileEntry,
-    GroupSpec,
-    HookSpec,
     InitScriptEntry,
     Kernel,
-    KillMode,
     OutputTarget,
-    PartitionSpec,
     Phase,
     ProfileBuildResult,
     ProfileState,
     RecipeState,
-    RepositorySpec,
-    RestartPolicy,
-    SecurityProfile,
     ServiceSpec,
-    ServiceType,
-    TemplateEntry,
-    UnitAction,
-    UnitStateSpec,
-    UserSpec,
-    unit_name,
+    enable_unit,
+    ships_unit,
 )
 from .observability import (
     Progress,
@@ -100,100 +81,11 @@ from .observability import (
 )
 from .policy import Policy, ensure_bake_policy
 
-_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-NETWORK_SETUP_UNIT = "network-setup.service"
-"""The unit runtime-init requires when a profile declares it (else ``network-online.target``)."""
-_UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+")
-_GROUP_NAME = re.compile(r"[a-z_][a-z0-9_-]*\$?")
-# systemd resource limits (``Limit<RESOURCE>=``), see systemd.exec(5).
-_LIMIT_RESOURCES = frozenset(
-    {
-        "AS",
-        "CORE",
-        "CPU",
-        "DATA",
-        "FSIZE",
-        "LOCKS",
-        "MEMLOCK",
-        "MSGQUEUE",
-        "NICE",
-        "NOFILE",
-        "NPROC",
-        "RSS",
-        "RTPRIO",
-        "RTTIME",
-        "SIGPENDING",
-        "STACK",
-    }
-)
-
-
-class _Unset(Enum):
-    TOKEN = 0
-
-
-_UNSET: Final = _Unset.TOKEN
 _DRIFT_MESSAGE_LINES = 15
-
-
-def _read_source(path: Path) -> str | bytes:
-    """Read *path* as UTF-8 text, or as raw bytes when it is not valid UTF-8."""
-    data = path.read_bytes()
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data
-
-
-def _normalize_limits(service: str, limits: Mapping[str, str | int] | None) -> dict[str, str]:
-    """``{"NOFILE": 1048576}`` (or ``LimitNOFILE``) as ``{"NOFILE": "1048576"}``."""
-    normalized: dict[str, str] = {}
-    for key, value in (limits or {}).items():
-        resource = key.removeprefix("Limit").upper()
-        if resource not in _LIMIT_RESOURCES:
-            raise ValidationError(
-                f"Unknown resource limit {key!r} for service '{service}'.",
-                hint=f"Expected one of: {', '.join(sorted(_LIMIT_RESOURCES))}.",
-            )
-        text = str(value)
-        if not text or any(ch.isspace() for ch in text):
-            raise ValidationError(
-                f"Invalid value {value!r} for limit {key!r} in service '{service}'.",
-                hint="Use a number, 'infinity', or soft:hard.",
-            )
-        normalized[resource] = text
-    return dict(sorted(normalized.items()))
-
-
-def _walk_tree(root: Path, exclude: Sequence[str]) -> list[tuple[str, Path]]:
-    """``(relative posix path, host path)`` of every file under *root* not *exclude*d.
-
-    *exclude* holds fnmatch globs matched against the relative path (``*`` also
-    matches ``/``); a matching directory is skipped whole. Symlinked directories
-    are not followed.
-    """
-    patterns = (exclude,) if isinstance(exclude, str) else tuple(exclude)
-
-    def excluded(rel: str) -> bool:
-        return any(fnmatch.fnmatchcase(rel, pattern) for pattern in patterns)
-
-    found: list[tuple[str, Path]] = []
-    for current, dirnames, filenames in os.walk(root):
-        base = Path(current).relative_to(root)
-        dirnames[:] = sorted(d for d in dirnames if not excluded((base / d).as_posix()))
-        for filename in sorted(filenames):
-            rel = (base / filename).as_posix()
-            if not excluded(rel) and (Path(current) / filename).is_file():
-                found.append((rel, Path(current) / filename))
-    return found
 
 
 def _short_sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
-
-
-def _is_strip_hook(hook: HookSpec) -> bool:
-    return hook.phase == "finalize" and "IMAGE_VERSION" in hook.command.argv[0]
 
 
 def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, object]]:
@@ -203,33 +95,19 @@ def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, 
     ]
 
 
-def _validate_units(action: str, units: tuple[str, ...]) -> tuple[str, ...]:
-    if not units:
-        raise ValidationError(
-            f"{action}() requires at least one unit.",
-            hint="Name at least one systemd unit, e.g. 'ssh.service'.",
-        )
-    for unit in units:
-        if not unit or not _UNIT_NAME.fullmatch(unit):
-            raise ValidationError(
-                f"Invalid unit name {unit!r} for {action}().",
-                hint="Pass systemd unit names such as 'ssh.service' or 'ssh.socket'.",
-            )
-    return tuple(dict.fromkeys(units))
-
-
 @dataclass(slots=True, kw_only=True)
 class Image:
     """The lowered recipe: per-profile state the compiler emits as an mkosi tree.
 
-    ``declarative.lower`` fills it through the declaration methods (``install``,
-    ``file``, ``service``, ``apply`` for the internal modules, ...) inside
-    ``profiles(name)`` blocks; ``compile()`` emits the tree and ``bake()`` runs
-    the backend. mkosi-only knobs live in :class:`~tundravm._options.MkosiOptions`.
+    ``declarative.lower`` builds :attr:`state` and the runtime tools applied
+    to each profile (:attr:`modules`); ``compile()`` emits the tree and
+    ``bake()`` runs the backend. mkosi-only knobs live in
+    :class:`~tundravm._options.MkosiOptions`.
     """
 
-    base: str = "debian/bookworm"
-    arch: Arch = "x86_64"
+    state: RecipeState
+    modules: dict[str, list[Module]] = field(default_factory=dict, repr=False)
+    """The runtime tools configured on each profile, which ``check()`` inspects."""
     backend: BuildBackend | None = None
     build_dir: Path = field(default_factory=lambda: Path("build"))
     reproducible: bool = True
@@ -238,7 +116,6 @@ class Image:
     mirror: str | None = None
     tools_tree_mirror: str | None = None
     snapshot: str | None = None
-    default_profile: str = "default"
     mkosi: MkosiOptions = field(default_factory=MkosiOptions)
     profile_mkosi: dict[str, MkosiOptions] = field(default_factory=dict)
     """Profiles whose mkosi options differ from ``mkosi``."""
@@ -250,55 +127,31 @@ class Image:
     """Pins ``tundravm fetch`` resolved for sources the lockfile does not pin (unlocked bakes)."""
     logger: StructuredLogger = field(init=False, default_factory=StructuredLogger, repr=False)
     init: Init = field(init=False, default_factory=Init, repr=False)
-    _state: RecipeState = field(init=False, repr=False)
     _active_profiles: tuple[str, ...] = field(init=False, repr=False)
-    _modules: dict[str, list[Module]] = field(init=False, default_factory=dict, repr=False)
     _last_compile_digest: str | None = field(init=False, default=None, repr=False)
     _last_compile_path: Path | None = field(init=False, default=None, repr=False)
     _last_compile_emission: MkosiEmission | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.build_dir = Path(self.build_dir)
-        self._state = RecipeState.initialize(
-            base=self.base,
-            arch=self.arch,
-            default_profile=self.default_profile,
-        )
         self._active_profiles = (self.default_profile,)
-        if self.reproducible:
-            self.strip_image_version()
 
     @property
-    def state(self) -> RecipeState:
-        return self._state
+    def base(self) -> str:
+        return self.state.base
+
+    @property
+    def arch(self) -> Arch:
+        return self.state.arch
+
+    @property
+    def default_profile(self) -> str:
+        return self.state.default_profile
 
     @property
     def profile_names(self) -> tuple[str, ...]:
         """Every profile declared so far, sorted."""
-        return tuple(sorted(self._state.profiles))
-
-    def apply(self, *modules: Module) -> Self:
-        """Apply one or more modules to the active profiles, in order.
-
-        Equivalent to ``module.apply(self)`` for each module, but chainable::
-
-            img.apply(KeyGeneration(), DiskEncryption(), Tdxs())
-
-        Each module records itself in ``applied_modules()``.
-        """
-        if not modules:
-            raise ValidationError(
-                "apply() requires at least one module.",
-                hint="Pass at least one module instance.",
-            )
-        for module in modules:
-            if not isinstance(module, Module):
-                raise ValidationError(
-                    f"{type(module).__name__} is not a module.",
-                    hint="Subclass tundravm._modules.Module; see docs/module-authoring.md.",
-                )
-            module.apply(self)
-        return self
+        return tuple(sorted(self.state.profiles))
 
     def applied_modules(
         self, profile: str | None = None, *, inherited: bool = False
@@ -308,79 +161,12 @@ class Image:
         With ``inherited=True`` the modules of the profile it extends come first.
         """
         selected = self._resolve_operation_profile(profile)
-        own = tuple(self._modules.get(selected, ()))
-        extends = self._state.ensure_profile(selected).extends
+        own = tuple(self.modules.get(selected, ()))
+        extends = self.state.ensure_profile(selected).extends
         if not inherited or extends is None:
             return own
-        base = tuple(self._modules.get(extends, ()))
+        base = tuple(self.modules.get(extends, ()))
         return base + tuple(m for m in own if not any(m is b for b in base))
-
-    def profile(self, name: str, *, extends: str | None | Literal[_Unset.TOKEN] = _UNSET) -> str:
-        """Declare profile *name* (extending the default one unless *extends* says otherwise).
-
-        Declarations go to it inside ``with img.profiles(name): ...``. Pass
-        ``extends=None`` for a standalone profile. Returns the normalized name.
-        """
-        (selected,) = self._normalize_profile_names((name,))
-        self._ensure_profile(selected, extends=extends)
-        return selected
-
-    @contextmanager
-    def profiles(self, *names: str) -> Iterator[Self]:
-        """Make *names* (declared with :meth:`profile` unless default) active inside the block."""
-        selected = self._normalize_profile_names(names)
-        previous_profiles = self._active_profiles
-        for profile_name in selected:
-            self._ensure_profile(profile_name, extends=_UNSET)
-        self._active_profiles = selected
-        try:
-            yield self
-        finally:
-            self._active_profiles = previous_profiles
-
-    def install(self, *packages: str) -> Self:
-        if not packages:
-            raise ValidationError(
-                "install() requires at least one package.",
-                hint="Declare packages with Package('curl').",
-            )
-        for package in packages:
-            if not package:
-                raise ValidationError(
-                    "Package names must be non-empty.",
-                    hint="Give every Package() a non-empty name.",
-                )
-        for profile in self._iter_active_profiles():
-            profile.packages.update(packages)
-        return self
-
-    def build_packages(self, *packages: str) -> Self:
-        """Declare packages required at build time (removed after build)."""
-        if not packages:
-            raise ValidationError(
-                "build_packages() requires at least one package.",
-                hint="Declare build-time packages with Package('golang', role='build').",
-            )
-        for package in packages:
-            if not package:
-                raise ValidationError(
-                    "Package names must be non-empty.",
-                    hint="Give every Package() a non-empty name.",
-                )
-        for profile in self._iter_active_profiles():
-            profile.build_packages.update(packages)
-        return self
-
-    def mount_build_source(self, src: str, *, dest: str = "") -> Self:
-        """Mount the host directory *src* into the build environment at *dest* (BuildSources)."""
-        if not src:
-            raise ValidationError(
-                "mount_build_source() requires a non-empty src path.",
-                hint="Pass the host directory to mount into the build.",
-            )
-        for profile in self._iter_active_profiles():
-            profile.build_sources.append((src, dest))
-        return self
 
     @property
     def fetches_sources(self) -> bool:
@@ -393,37 +179,12 @@ class Image:
         """
         return self.mkosi.dialect != "nethermind-v1"
 
-    def build_from(self, spec: SourceBuild) -> Self:
-        """Fetch, build and install *spec* in the build phase, pinned through the lockfile.
-
-        Adds the build packages the source and recipe need and one cached build
-        hook. Under ``nethermind-v1`` the hook clones the symbolic ref until
-        :meth:`lock` pins the source; once ``<build_dir>/tundravm.lock`` records
-        a pin, ``compile()`` emits a fetch of exactly that commit (or a
-        sha256-checked download). In every other dialect (:attr:`fetches_sources`)
-        the pinned hook copies the host-fetched checkout instead, and an unpinned
-        one fails, naming ``tundravm lock`` and ``tundravm fetch``.
-        """
-        profiles = self._iter_active_profiles()
-        for profile in profiles:
-            if spec.name in profile.source_builds:
-                raise ValidationError(
-                    f"Source build {spec.name!r} is already declared.",
-                    hint="Give each source build a unique name.",
-                    context={"profile": profile.name, "build_from": spec.name},
-                )
-        if spec.packages:
-            self.build_packages(*spec.packages)
-        for profile in profiles:
-            profile.source_builds[spec.name] = spec
-        return self.shell(spec.render(mounted=self.fetches_sources), phase="build")
-
     def source_builds(self, *, profile: str | None = None) -> dict[str, SourceBuild]:
         """Source builds declared for *profile* (default: every active profile), by name."""
         names = (profile,) if profile is not None else self._active_profiles
         builds: dict[str, SourceBuild] = {}
         for name in names:
-            builds.update(self._state.effective_profile(name).source_builds)
+            builds.update(self.state.effective_profile(name).source_builds)
         return dict(sorted(builds.items()))
 
     def kernel_source(self, profile: str) -> KernelSource | None:
@@ -485,424 +246,9 @@ class Image:
         pins = self.source_pins(path)
         return [name for name, spec in self.lock_sources().items() if spec.pin_from(pins) is None]
 
-    def repository(
-        self,
-        url: str,
-        *,
-        name: str | None = None,
-        suite: str | None = None,
-        components: tuple[str, ...] | list[str] = (),
-        keyring: str | None = None,
-        priority: int = 100,
-        in_image: bool = True,
-    ) -> Self:
-        if not url:
-            raise ValidationError(
-                "repository() requires a non-empty URL.",
-                hint="Give Repository() the archive base URL, e.g. 'https://deb.debian.org/debian'.",
-            )
-        repo_name = name or url.split("/")[-1] or url
-        entry = RepositorySpec(
-            name=repo_name,
-            url=url,
-            suite=suite,
-            components=tuple(components),
-            keyring=keyring,
-            priority=priority,
-            in_image=in_image,
-        )
-        for profile in self._iter_active_profiles():
-            profile.repositories.append(entry)
-        return self
-
-    def file(
-        self,
-        dest: str,
-        *,
-        content: str | bytes | None = None,
-        src: str | Path | None = None,
-        mode: str = "0644",
-    ) -> Self:
-        """Place a file at *dest* in the image; *src* that is not UTF-8 is copied as bytes."""
-        if not dest:
-            raise ValidationError(
-                "file() requires a destination path.",
-                hint="Give File() an absolute path in the image, e.g. File('/etc/motd', 'hi\\n').",
-            )
-        if content is None and src is None:
-            raise ValidationError(
-                "file() requires content= or src=.",
-                hint="Give File() inline content or a host Path to copy.",
-            )
-        if content is not None and src is not None:
-            raise ValidationError(
-                "file() accepts content= or src=, not both.",
-                hint="Pass either inline content or a host file, not both.",
-            )
-        resolved_content = content if content is not None else _read_source(Path(src or ""))
-        for profile in self._iter_active_profiles():
-            profile.files.append(FileEntry(path=dest, content=resolved_content, mode=mode))
-        return self
-
-    def copy_tree(
-        self,
-        dest: str,
-        *,
-        src: str | Path,
-        mode: str | None = None,
-        exclude: Sequence[str] = (),
-    ) -> Self:
-        """Place every file under the host directory *src* at *dest* in the image.
-
-        Files keep their relative paths. Each gets *mode*, or 0755 when executable on
-        the host and 0644 otherwise. *exclude* holds fnmatch globs matched against the
-        path relative to *src* (``*`` also matches ``/``); a matching directory is
-        skipped whole. Symlinked files are copied, symlinked directories are not followed.
-        """
-        if not dest:
-            raise ValidationError(
-                "copy_tree() requires a destination path.",
-                hint="Give Directory() an absolute path in the image, e.g. '/opt/app'.",
-            )
-        root = Path(src)
-        if not root.is_dir():
-            raise ValidationError(
-                "copy_tree() src must be an existing directory.",
-                hint="Paths are relative to the working directory; check src= exists.",
-                context={"src": str(root)},
-            )
-        found = _walk_tree(root, exclude)
-        if not found:
-            raise ValidationError(
-                "copy_tree() found no files to copy.",
-                hint="Check src= and exclude=.",
-                context={"src": str(root)},
-            )
-        prefix = dest.rstrip("/")
-        for rel, host_path in sorted(found):
-            file_mode = mode or ("0755" if host_path.stat().st_mode & 0o111 else "0644")
-            self.file(f"{prefix}/{rel}", content=_read_source(host_path), mode=file_mode)
-        return self
-
-    def template(
-        self,
-        dest: str,
-        *,
-        src: str | Path | None = None,
-        template: str | None = None,
-        variables: Mapping[str, str | int | float] | None = None,
-        mode: str = "0644",
-    ) -> Self:
-        if not dest:
-            raise ValidationError(
-                "template() requires a destination path.",
-                hint="Give Template() the absolute path of the rendered file in the image.",
-            )
-
-        if src is not None and template is not None:
-            raise ValidationError(
-                "template() accepts src= or template=, not both.",
-                hint="Pass either an inline template string or a host file, not both.",
-            )
-        if src is not None:
-            template_content = Path(src).read_text(encoding="utf-8")
-        elif template is not None:
-            template_content = template
-        else:
-            raise ValidationError(
-                "template() requires src= or template=.",
-                hint="Give Template() an inline template string or a host Path.",
-            )
-
-        resolved_vars: dict[str, str] = {}
-        if variables is not None:
-            resolved_vars = {k: str(v) for k, v in sorted(variables.items())}
-
-        try:
-            rendered = template_content.format_map(resolved_vars)
-        except KeyError as exc:
-            raise ValidationError(
-                "template() variables are missing required placeholders.",
-                hint="Provide all placeholder keys used in the template string.",
-                context={"path": dest, "missing_key": str(exc)},
-            ) from exc
-        entry = TemplateEntry(
-            path=dest,
-            template=template_content,
-            variables=resolved_vars,
-            rendered=rendered,
-            mode=mode,
-        )
-        for profile in self._iter_active_profiles():
-            profile.templates.append(entry)
-        return self
-
-    def group(self, name: str, *, system: bool = False, gid: int | None = None) -> Self:
-        """Create group *name* in postinst (``groupadd``), before any user is created.
-
-        Users join it with ``user(..., groups=(name,))``; ``check()`` reports users that
-        list a group nobody declares (``user-group-undefined``).
-        """
-        if not name or not _GROUP_NAME.fullmatch(name):
-            raise ValidationError(
-                f"Invalid group name {name!r}.",
-                hint="Use lowercase letters, digits, '_' and '-', starting with a letter or '_'.",
-            )
-        entry = GroupSpec(name=name, system=system, gid=gid)
-        for profile in self._iter_active_profiles():
-            if any(g.name == name for g in profile.groups):
-                raise ValidationError(
-                    f"Duplicate group name '{name}' in variant '{profile.name}'.",
-                    hint="Group names must be unique within a profile.",
-                    context={"group": name, "profile": profile.name},
-                )
-            profile.groups.append(entry)
-        return self
-
-    def user(
-        self,
-        name: str,
-        *,
-        system: bool = False,
-        home: str | None = None,
-        shell: str = "/usr/sbin/nologin",
-        uid: int | None = None,
-        gid: int | str | None = None,
-        groups: tuple[str, ...] | list[str] = (),
-    ) -> Self:
-        """Create user *name* in postinst; *gid* is its primary group, by number or name."""
-        if not name:
-            raise ValidationError(
-                "user() requires a non-empty user name.",
-                hint="Give User() an account name, e.g. User('app').",
-            )
-        entry = UserSpec(
-            name=name,
-            system=system,
-            home=home,
-            shell=shell,
-            uid=uid,
-            gid=gid,
-            groups=tuple(groups),
-        )
-        for profile in self._iter_active_profiles():
-            existing_names = {u.name for u in profile.users}
-            if name in existing_names:
-                raise ValidationError(
-                    f"Duplicate user name '{name}' in variant '{profile.name}'.",
-                    hint="User names must be unique within a profile.",
-                    context={"user": name, "profile": profile.name},
-                )
-            profile.users.append(entry)
-        return self
-
-    def service(
-        self,
-        name: str,
-        *,
-        command: tuple[str, ...] | list[str] | str,
-        description: str | None = None,
-        user: str | None = None,
-        working_dir: str | None = None,
-        env: Mapping[str, str] | None = None,
-        env_file: str | None = None,
-        exec_start_pre: Sequence[str] = (),
-        after: tuple[str, ...] | list[str] = (),
-        requires: tuple[str, ...] | list[str] = (),
-        wants: tuple[str, ...] | list[str] = (),
-        restart: RestartPolicy = "no",
-        enabled: bool = True,
-        extra_unit: Mapping[str, Mapping[str, str]] | None = None,
-        security_profile: SecurityProfile = "default",
-        group: str | None = None,
-        wanted_by: str | None = None,
-        type: ServiceType | None = None,
-        limits: Mapping[str, str | int] | None = None,
-        kill_mode: KillMode | None = None,
-        timeout_stop: str | None = None,
-        after_init: bool = True,
-    ) -> Self:
-        """Register a systemd service unit in the current profile(s).
-
-        *env* becomes ``Environment=`` lines (sorted, quoted when needed), *env_file*
-        ``EnvironmentFile=``, *working_dir* ``WorkingDirectory=``, each *exec_start_pre*
-        command an ``ExecStartPre=`` line, and *description* ``Description=``
-        (default: the service name). *group* sets ``Group=``, *type* ``Type=`` (default
-        ``simple``), *wanted_by* ``WantedBy=`` (default ``minimal.target``), *limits*
-        one ``Limit<RESOURCE>=`` line each (``{"NOFILE": 1048576}``, sorted),
-        *kill_mode* ``KillMode=`` and *timeout_stop* ``TimeoutStopSec=``.
-
-        To enable a unit that a package or ``file()`` already ships, use :meth:`enable`.
-        """
-        if not name:
-            raise ValidationError(
-                "service() requires a non-empty service name.",
-                hint="Give Service() a name, e.g. Service('app', '/usr/bin/app').",
-            )
-        if not command:
-            raise ValidationError(
-                f"service() requires a non-empty command for '{name}'.",
-                hint=f"To enable a unit a package or file() ships, use enable({name!r}).",
-            )
-        limit_data = _normalize_limits(name, limits)
-        env_data = dict(env or {})
-        for key, value in env_data.items():
-            if not _ENV_KEY.fullmatch(key):
-                raise ValidationError(
-                    f"Invalid environment variable name {key!r} for service '{name}'.",
-                    hint="Use letters, digits and underscores, not starting with a digit.",
-                )
-            if "\n" in value:
-                raise ValidationError(
-                    f"Environment value for {key!r} in service '{name}' contains a newline.",
-                    hint="Use env_file= for multi-line values.",
-                )
-        pre_commands = (exec_start_pre,) if isinstance(exec_start_pre, str) else exec_start_pre
-        exec_argv: tuple[str, ...]
-        exec_argv = tuple(shlex.split(command)) if isinstance(command, str) else tuple(command)
-        entry = ServiceSpec(
-            name=name,
-            command=exec_argv,
-            user=user,
-            after=tuple(after),
-            requires=tuple(requires),
-            wants=tuple(dict.fromkeys(wants)),
-            restart=restart,
-            enabled=enabled,
-            extra_unit=dict(extra_unit) if extra_unit else {},
-            security_profile=security_profile,
-            description=description or None,
-            env=env_data,
-            env_file=env_file or None,
-            working_dir=working_dir or None,
-            exec_start_pre=tuple(pre_commands),
-            group=group or None,
-            wanted_by=wanted_by or None,
-            type=type,
-            limits=limit_data,
-            kill_mode=kill_mode,
-            timeout_stop=timeout_stop or None,
-            after_init=after_init,
-        )
-        for profile in self._iter_active_profiles():
-            existing_names = {s.name for s in profile.services}
-            if name in existing_names:
-                raise ValidationError(
-                    f"Duplicate service name '{name}' in variant '{profile.name}'.",
-                    hint="Service names must be unique within a profile.",
-                    context={"service": name, "profile": profile.name},
-                )
-            profile.services.append(entry)
-        return self
-
-    def enable(self, *units: str) -> Self:
-        """Enable units that a package or ``file()`` ships (``systemctl enable``).
-
-        Each unit is enabled in postinst together with the units of ``service()``, in
-        declaration order, and linked into ``minimal.target.wants``. ``foo`` means
-        ``foo.service``. Enabling a unit twice, or one a ``service()`` already enables,
-        is a no-op.
-        """
-        for unit in _validate_units("enable", units):
-            for profile in self._iter_active_profiles():
-                key = unit_name(unit)
-                index = next(
-                    (i for i, s in enumerate(profile.services) if unit_name(s.name) == key),
-                    None,
-                )
-                if index is None:
-                    profile.services.append(ServiceSpec(name=unit, enabled=True))
-                elif not profile.services[index].enabled:
-                    profile.services[index] = replace(profile.services[index], enabled=True)
-        return self
-
-    def disable(self, *units: str) -> Self:
-        """``systemctl disable`` installed units, after every postinst hook ran."""
-        return self._unit_state("disable", units)
-
-    def mask(self, *units: str) -> Self:
-        """``systemctl mask`` installed units, after every postinst hook and ``disable()``."""
-        return self._unit_state("mask", units)
-
-    def _unit_state(self, action: UnitAction, units: tuple[str, ...]) -> Self:
-        names = [unit_name(unit) for unit in _validate_units(action, units)]
-        for profile in self._iter_active_profiles():
-            for name in names:
-                spec = UnitStateSpec(action=action, unit=name)
-                if spec not in profile.unit_states:
-                    profile.unit_states.append(spec)
-        return self
-
-    def partition(self, name: str, *, size: str, mount_at: str, fs: str = "ext4") -> Self:
-        if not name:
-            raise ValidationError(
-                "partition() requires a non-empty name.",
-                hint="Give Partition() a name, e.g. Partition('data', size='10G', mount='/data').",
-            )
-        if not size or not mount_at:
-            raise ValidationError(
-                "partition() requires both size and mount_at values.",
-                hint="Give Partition() a size (e.g. '10G') and a mount point (e.g. '/data').",
-            )
-        entry = PartitionSpec(name=name, size=size, mount_at=mount_at, fs=fs)
-        for profile in self._iter_active_profiles():
-            profile.partitions.append(entry)
-        return self
-
-    def targets(self, *targets: OutputTarget) -> Self:
-        """Set the artifacts the active profiles bake (``qemu``, ``azure``, ``gcp``)."""
-        if not targets:
-            raise ValidationError(
-                "targets() requires at least one target.",
-                hint="Set Variant(target=...) to 'qemu', 'azure' or 'gcp'.",
-            )
-        deduped = tuple(dict.fromkeys(targets))
-        for profile in self._iter_active_profiles():
-            profile.output_targets = deduped
-            profile.output_targets_explicit = True
-        return self
-
-    def debloat(
-        self,
-        *,
-        enabled: bool = True,
-        paths_remove: tuple[str, ...] | None = None,
-        paths_skip: tuple[str, ...] | list[str] = (),
-        extra_remove_paths: tuple[str, ...] | list[str] = (),
-        paths_skip_for_profiles: dict[str, tuple[str, ...]] | None = None,
-        systemd_minimize: bool = True,
-        systemd_units_keep: tuple[str, ...] | None = None,
-        extra_keep_units: tuple[str, ...] | list[str] = (),
-        systemd_bins_keep: tuple[str, ...] | None = None,
-    ) -> Self:
-        """Configure image debloating — removal of unnecessary files and systemd units."""
-        _defaults = DebloatConfig()
-        if not enabled:
-            config = DebloatConfig(enabled=False)
-        else:
-            profile_skips: tuple[tuple[str, tuple[str, ...]], ...] = ()
-            if paths_skip_for_profiles:
-                profile_skips = tuple((k, v) for k, v in sorted(paths_skip_for_profiles.items()))
-            config = DebloatConfig(
-                enabled=True,
-                paths_remove=paths_remove or _defaults.paths_remove,
-                paths_skip=tuple(paths_skip),
-                extra_remove_paths=tuple(extra_remove_paths),
-                paths_skip_for_profiles=profile_skips,
-                systemd_minimize=systemd_minimize,
-                systemd_units_keep=systemd_units_keep or _defaults.systemd_units_keep,
-                extra_keep_units=tuple(extra_keep_units),
-                systemd_bins_keep=systemd_bins_keep or _defaults.systemd_bins_keep,
-            )
-
-        for profile in self._iter_active_profiles():
-            profile.debloat = config
-            profile.debloat_explicit = True
-        return self
-
     def explain_debloat(self, *, profile: str | None = None) -> dict[str, object]:
         selected_profile = self._resolve_operation_profile(profile)
-        config = self._state.effective_profile(selected_profile).debloat
+        config = self.state.effective_profile(selected_profile).debloat
         return {
             "profile": selected_profile,
             "enabled": config.enabled,
@@ -913,90 +259,14 @@ class Image:
             "systemd_bins_keep": list(config.systemd_bins_keep),
         }
 
-    def skeleton(self, dest: str, *, content: str | bytes, mode: str = "0644") -> Self:
-        """Place a file in ``mkosi.skeleton/``: in the image before the package manager runs."""
-        if not dest:
-            raise ValidationError(
-                "skeleton() requires a destination path.",
-                hint="Give File(..., stage='skeleton') an absolute path in the image.",
-            )
-        for profile in self._iter_active_profiles():
-            profile.skeleton_files.append(FileEntry(path=dest, content=content, mode=mode))
-        return self
-
-    def strip_image_version(self, *, enabled: bool = True) -> Self:
-        """Strip IMAGE_VERSION from /etc/os-release for reproducible attestation."""
-        if not enabled:
-            # Remove any existing finalize hooks that match the strip command
-            for profile in self._iter_active_profiles():
-                if "finalize" in profile.phases:
-                    profile.phases["finalize"] = [
-                        cmd
-                        for cmd in profile.phases["finalize"]
-                        if "IMAGE_VERSION" not in cmd.argv[0]
-                    ]
-                    profile.hooks = [
-                        h
-                        for h in profile.hooks
-                        if not (h.phase == "finalize" and "IMAGE_VERSION" in h.command.argv[0])
-                    ]
-            return self
-        script = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release" """
-        return self.shell(script, phase="finalize")
-
-    def runtime_init(self, script: str, *, priority: int = 100) -> Self:
-        """Append a bash fragment to the active profiles' runtime-init script.
-
-        Fragments are ordered by *priority* (lower runs first) when Init
-        generates ``/usr/bin/runtime-init``. Profiles that extend the default
-        profile run its fragments too; standalone profiles only their own.
-        Modules use this to register their binary invocations into the boot
-        sequence.
-        """
-        if not script:
-            raise ValidationError(
-                "runtime_init() requires non-empty script content.",
-                hint="Give Init() the shell script runtime-init runs at boot.",
-            )
-        entry = InitScriptEntry(script=script, priority=priority)
-        for profile in self._iter_active_profiles():
-            profile.init_scripts.append(entry)
-        return self
-
     def init_scripts(self, profile: str | None = None) -> tuple[InitScriptEntry, ...]:
         """Runtime-init fragments *profile* (default: the active one) runs, deduplicated.
 
         Registration order, the default profile's first for a profile that extends it.
         """
         selected = self._resolve_operation_profile(profile)
-        entries = self._state.effective_profile(selected).init_scripts
+        entries = self.state.effective_profile(selected).init_scripts
         return tuple({(e.priority, e.script): e for e in entries}.values())
-
-    def shell(
-        self,
-        command: str,
-        *,
-        phase: Phase,
-        env: Mapping[str, str] | None = None,
-        cwd: str | None = None,
-    ) -> Self:
-        """Run the shell *command* in build *phase* (``boot`` runs it at VM boot)."""
-        if not command:
-            raise ValidationError(
-                "shell() requires a command.",
-                hint="Give Hook() a non-empty script.",
-            )
-        if phase not in VALID_PHASES:
-            raise ValidationError(
-                f"Invalid phase {phase!r}.",
-                hint=f"Expected one of: {', '.join(sorted(VALID_PHASES))}",
-            )
-        env_data = dict(env or {})
-        for profile in self._iter_active_profiles():
-            spec = CommandSpec(argv=(command,), env=dict(env_data), cwd=cwd)
-            profile.phases.setdefault(phase, []).append(spec)
-            profile.hooks.append(HookSpec(phase=phase, command=spec))
-        return self
 
     def lock_status(
         self,
@@ -1023,7 +293,7 @@ class Image:
         lock_path = self._normalize_path(path, fallback=self._default_lock_path())
         lock = read_lockfile(lock_path)
         with self._operation_scope(profiles) as names:
-            partial = not set(self._state.profiles) <= set(names)
+            partial = not set(self.state.profiles) <= set(names)
             return self._lock_drift(lock, resolver=resolver, partial=partial)
 
     def _lock_drift(self, lock: Lockfile, *, resolver: Resolver | None, partial: bool) -> LockDrift:
@@ -1059,12 +329,12 @@ class Image:
     def _compile(self, destination: Path, *, force: bool) -> CompileResult:
         # Runtime-init is generated into a scratch copy so compiling never changes what
         # later steps (lint, lock, a second compile) see.
-        declared = self._state
-        self._state = copy.deepcopy(declared)
+        declared = self.state
+        self.state = copy.deepcopy(declared)
         try:
             return self._emit(destination, force=force)
         finally:
-            self._state = declared
+            self.state = declared
 
     def _emit(self, destination: Path, *, force: bool) -> CompileResult:
         self._apply_init()
@@ -1185,7 +455,7 @@ class Image:
             profiles_result: dict[str, ProfileBuildResult] = {}
             for profile_name in self._sorted_active_profile_names():
                 profile_started = progress.elapsed()
-                profile = self._state.effective_profile(profile_name)
+                profile = self.state.effective_profile(profile_name)
                 profile_dir = destination / profile_name
                 profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1435,7 +705,7 @@ class Image:
         names = self._normalize_profile_names(
             (profiles,) if isinstance(profiles, str) else tuple(profiles)
         )
-        unknown = [name for name in names if name not in self._state.profiles]
+        unknown = [name for name in names if name not in self.state.profiles]
         if unknown:
             raise ValidationError(
                 f"Unknown variant(s): {', '.join(unknown)}.",
@@ -1480,11 +750,11 @@ class Image:
         """
         if self.init is None:
             return
-        default_name = self._state.default_profile
+        default_name = self.state.default_profile
         names = list(self._active_profiles)
-        if any(self._ensure_profile(n).extends is not None for n in names):
+        if any(self.state.ensure_profile(n).extends is not None for n in names):
             names.insert(0, default_name)
-        targets = [self._ensure_profile(n) for n in dict.fromkeys(names)]
+        targets = [self.state.ensure_profile(n) for n in dict.fromkeys(names)]
         generators: list[ProfileState] = []
         for profile in targets:
             merged = self.init_scripts(profile.name)
@@ -1515,17 +785,10 @@ class Image:
                 patched.append(replace(svc, after=after, requires=requires))
             profile.services = patched
         # Register runtime-init for enablement (systemctl enable + minimal.target.wants)
-        # in each generating profile that does not have it yet. enable() appends to every
-        # active profile, so scope it to one profile at a time to stay idempotent
-        # across compiles with different profile selections.
-        missing = [
-            profile.name
-            for profile in generators
-            if not any(s.name == init_svc for s in profile.services)
-        ]
-        for profile_name in missing:
-            with self.profiles(profile_name):
-                self.enable(init_svc)
+        # in each generating profile that does not have it yet.
+        for profile in generators:
+            if not any(s.name == init_svc for s in profile.services):
+                enable_unit(profile, init_svc)
 
     def _init_needs_network_setup(self, profile_name: str) -> bool:
         """Whether runtime-init requires ``network-setup.service`` in *profile_name*.
@@ -1535,59 +798,12 @@ class Image:
         """
         if self.mkosi_for(profile_name).dialect == "nethermind-v1":
             return True
-        return self._declares_unit(profile_name, NETWORK_SETUP_UNIT)
-
-    def _declares_unit(self, profile_name: str, unit: str) -> bool:
-        """Whether profile *profile_name* ships, generates or enables *unit*."""
-        profile = self._state.effective_profile(profile_name)
-        files = (*profile.files, *profile.skeleton_files)
-        return any(PurePosixPath(f.path).name == unit for f in files) or any(
-            unit_name(s.name) == unit for s in profile.services
-        )
-
-    def _record_module(self, module: Module) -> None:
-        for profile_name in self._active_profiles:
-            applied = self._modules.setdefault(profile_name, [])
-            if not any(existing is module for existing in applied):
-                applied.append(module)
-
-    def _iter_active_profiles(self) -> list[ProfileState]:
-        profiles: list[ProfileState] = []
-        for profile_name in self._active_profiles:
-            profiles.append(self._ensure_profile(profile_name))
-        return profiles
-
-    def _ensure_profile(
-        self, name: str, *, extends: str | None | Literal[_Unset.TOKEN] = _UNSET
-    ) -> ProfileState:
-        if extends is not _UNSET:
-            self._state.set_extends(name, extends)
-            self._sync_strip_hook(name)
-        return self._state.ensure_profile(name)
-
-    def _sync_strip_hook(self, name: str) -> None:
-        """Give a standalone profile the default profile's IMAGE_VERSION strip hook.
-
-        Extending profiles inherit it through the merge; a standalone one would
-        otherwise silently lose it.
-        """
-        default = self._state.ensure_profile(self._state.default_profile)
-        profile = self._state.ensure_profile(name)
-        if profile is default:
-            return
-        strip = next((h for h in default.hooks if _is_strip_hook(h)), None)
-        own = [h for h in profile.hooks if _is_strip_hook(h)]
-        if profile.extends is None and strip is not None and not own:
-            profile.phases.setdefault("finalize", []).append(strip.command)
-            profile.hooks.append(strip)
-        elif profile.extends is not None and strip is not None and strip in own:
-            profile.hooks.remove(strip)
-            profile.phases["finalize"].remove(strip.command)
+        return ships_unit(self.state.effective_profile(profile_name), NETWORK_SETUP_UNIT)
 
     def _recipe_payload(self, *, profile_names: tuple[str, ...]) -> dict[str, object]:
         profiles_data: dict[str, dict[str, object]] = {}
         for profile_name in sorted(profile_names):
-            profile = self._state.effective_profile(profile_name)
+            profile = self.state.effective_profile(profile_name)
             phases = {
                 phase: [
                     {
@@ -1711,7 +927,7 @@ class Image:
             # The default profile's payload carries no "extends" key so default-only
             # recipes keep their digests.
             inheritance: dict[str, object] = (
-                {} if profile_name == self._state.default_profile else {"extends": profile.extends}
+                {} if profile_name == self.state.default_profile else {"extends": profile.extends}
             )
             # Groups and unit states are keyed only when declared so older recipes keep
             # their digests.
@@ -1722,8 +938,8 @@ class Image:
                     for g in sorted(profile.groups, key=lambda item: item.name)
                 ]
             # The default profile's fragments are the top-level "init_scripts".
-            own_init = self._state.ensure_profile(profile_name).init_scripts
-            if profile_name != self._state.default_profile and own_init:
+            own_init = self.state.ensure_profile(profile_name).init_scripts
+            if profile_name != self.state.default_profile and own_init:
                 declared["init_scripts"] = _init_scripts_payload(own_init)
             if profile.source_builds:
                 declared["source_builds"] = {
@@ -1759,11 +975,11 @@ class Image:
             }
 
         return {
-            "base": self._state.base,
-            "arch": self._state.arch,
-            "default_profile": self._state.default_profile,
+            "base": self.state.base,
+            "arch": self.state.arch,
+            "default_profile": self.state.default_profile,
             "init_scripts": _init_scripts_payload(
-                self._state.ensure_profile(self._state.default_profile).init_scripts
+                self.state.ensure_profile(self.state.default_profile).init_scripts
             ),
             "profiles": profiles_data,
         }
@@ -1812,7 +1028,7 @@ class Image:
         profiles: dict[str, ProfileState] = {}
         changed = False
         mounted = self.fetches_sources
-        for name, profile in self._state.profiles.items():
+        for name, profile in self.state.profiles.items():
             swaps = {
                 spec.render(mounted=mounted): pinned
                 for spec in profile.source_builds.values()
@@ -1841,7 +1057,7 @@ class Image:
                     for hook in profile.hooks
                 ],
             )
-        return replace(self._state, profiles=profiles) if changed else self._state
+        return replace(self.state, profiles=profiles) if changed else self.state
 
     def _fetched_sources(self, destination: Path, backend: BuildBackend) -> Path | None:
         """``<destination>/.sources`` when the build mounts it; fails if a checkout is missing.

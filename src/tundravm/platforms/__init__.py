@@ -1,11 +1,7 @@
-"""Platform profiles for the TDX VM SDK."""
+"""Cloud platform integration files lowering adds for the ``azure`` and ``gcp`` targets."""
 
 from __future__ import annotations
 
-from .azure import AzurePlatform
-from .gcp import GcpPlatform
+from . import azure, gcp
 
-__all__ = [
-    "AzurePlatform",
-    "GcpPlatform",
-]
+__all__ = ["azure", "gcp"]

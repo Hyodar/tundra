@@ -174,10 +174,10 @@ def test_explain_per_variant() -> None:
     assert azure["users"] == describe(image, profile="default")["users"]
     assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]
 
-    with image.profiles("azure"):
+    with image._operation_scope(("azure",)):
         assert describe(image) == azure
 
-    with image.profiles("default", "azure"):
+    with image._operation_scope(("default", "azure")):
         with pytest.raises(ValidationError):
             describe(image)
 

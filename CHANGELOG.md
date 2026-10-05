@@ -41,6 +41,7 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 ### Changed
 
+- Internal: lowering writes `RecipeState` directly from resolved declarations (`declarative/state.py`); the retired fluent declaration methods, `Module.apply`/`configure` and the platform classes are gone; `_image.py` holds lifecycle glue only. No output change (parity fixture over 12 recipes and 29 variants).
 - Kernel sources are locked and fetched on the host in the current dialect: `kernel` (or `kernel-<variant>` when a variant's source differs) lockfile pins, the build script copies the mounted checkout (no `.git`, so the version string stays clean), `inspect` shows `pinned=`, `source-unpinned` covers kernels; http kernels no longer pull `curl` into the build. Re-lock recipes with a built kernel.
 - Current-dialect source hooks copy host-fetched checkouts instead of cloning; unpinned hooks fail with a pointer to `tundravm lock` and `tundravm fetch`; `$BUILDDIR` falls back to `$BUILDROOT/build` in source and kernel scripts (mkosi 26 sets it only with `BuildDirectory=`); existing locks for current-dialect recipes with source builds need re-locking.
 

@@ -98,20 +98,9 @@ class SecretDelivery(Module):
             subject=store,
         )
 
-    def configure(self, image: Image) -> None:
-        """Build secret-delivery, record the secrets, write the configs, run it at boot.
-
-        A second delivery on the same profiles reuses the first one's binary.
-        """
-        spec = self.source_spec()
-        if not all(spec.name in p.source_builds for p in image._iter_active_profiles()):
-            image.build_packages(*SECRET_DELIVERY_BUILD_PACKAGES)
-            image.build_from(spec)
-        self._add_config(image)
-        image.runtime_init(
-            f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n",
-            priority=SECRET_DELIVERY_INIT_PRIORITY,
-        )
+    def init_script(self) -> str:
+        """The runtime-init step: ``secret-delivery setup`` on the config (priority 30)."""
+        return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
 
     def source_spec(self) -> SourceBuild:
         """The ``secret-delivery`` source build from ``source``.
@@ -127,22 +116,14 @@ class SecretDelivery(Module):
             mark_unpinned=False,
         )
 
-    def _add_config(self, image: Image) -> None:
-        for profile in image._iter_active_profiles():
-            profile.secrets.extend(self.secrets)
-
-        image.file(self.config_path, content=self._render_yaml_config())
-        image.file(
-            self.manifest_path,
-            content=_render_manifest_json(
-                self.secrets,
-                method=self.method,
-                host=self.host,
-                port=self.port,
-            ),
+    def render_manifest(self) -> str:
+        """The JSON manifest of the expected secrets and their delivery targets."""
+        return _render_manifest_json(
+            self.secrets, method=self.method, host=self.host, port=self.port
         )
 
-    def _render_yaml_config(self) -> str:
+    def render_config(self) -> str:
+        """The ``secret-delivery`` YAML config: where to listen, where to store."""
         if self.method != "http_post":
             raise ValidationError(
                 "Only http_post secret delivery is supported.",
