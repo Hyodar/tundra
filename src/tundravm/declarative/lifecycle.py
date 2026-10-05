@@ -138,7 +138,12 @@ class Entry:
 
 @dataclass(frozen=True, slots=True)
 class Tree:
-    """A compiled mkosi project held in memory; ``variants`` are its top-level directories."""
+    """A compiled mkosi project held in memory; ``variants`` are its top-level directories.
+
+    ``digest`` covers each path, its bytes or symlink target and, for files, the
+    exec bit alone: the umask and git keep nothing more, so the same tree hashes
+    the same on every host.
+    """
 
     entries: tuple[Entry, ...]
     digest: str
@@ -369,10 +374,20 @@ def read_tree(
     return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
 
 
+def _digest_mode(entry: Entry) -> int:
+    """*entry*'s mode as the tree digest sees it: ``0755``/``0644`` by exec bit for files."""
+    if entry.symlink is not None:
+        return 0o777
+    if entry.content is None:
+        return 0o755
+    return 0o755 if entry.mode & 0o111 else 0o644
+
+
 def _tree_digest(entries: Sequence[Entry]) -> str:
     digest = hashlib.sha256()
     for entry in entries:
-        digest.update(entry.path.encode() + b"\0" + f"{entry.mode:o}".encode() + b"\0")
+        mode = _digest_mode(entry)
+        digest.update(entry.path.encode() + b"\0" + f"{mode:o}".encode() + b"\0")
         if entry.symlink is not None:
             digest.update(b"L" + entry.symlink.encode())
         elif entry.content is not None:

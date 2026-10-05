@@ -75,6 +75,7 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `SPEC.md`, which described the fluent API. The design record is `docs/design/declarative-api.md`.
 
 ### Fixed
+- The emitter sets every file and directory mode explicitly, so compiled trees and `Tree.digest` no longer depend on the umask (002 and 022 produced different tree digests). `Tree.digest` covers each file's exec bit, not its full mode; tree digests recorded on a umask-002 host change, and artifacts baked from them show as stale in `status` until rebaked.
 - Debian snapshots on mkosi 26: `Recipe.snapshot` (a snapshot ID such as `20251113T083151Z`) lowers to mkosi's `Snapshot=`; `mirror`/`tools_mirror` are mirror roots that mkosi completes itself. Templates use a (snapshot, `systemd-boot-efi` version) pair that exists.
 - `EfiStub` in the current dialect installs the package from `$BUILDROOT/` because `mkosi-chroot` mounts its own `/tmp`.
 - `Backports()` pins backports to 200 and sid to 100 through `preferences.d`, so images no longer drift to sid.

@@ -122,3 +122,5 @@ tundravm ci node.py --out mkosi    # lint --strict, compile --check, lock --chec
 ```
 
 Add `Policy(require_frozen_lock=True, mutable_ref_policy="error")` to refuse unpinned bakes and unpinned sources outright (see [policy](policy.md)).
+
+Emitted trees are umask-independent: files are written `0644` (generated scripts `0755`, declared files at their declared mode) and directories `0755`, and `Tree.digest` hashes each file's exec bit rather than its full mode.

@@ -67,6 +67,13 @@ PHASE_TO_MKOSI_KEY: dict[Phase, str] = {
     "boot": "BootScripts",
 }
 
+DIR_MODE = 0o755
+"""Every directory the emitter creates, whatever the umask."""
+FILE_MODE = 0o644
+"""Every file written without a declared mode."""
+EXEC_MODE = 0o755
+"""Every script the emitter generates."""
+
 # Stable seed for reproducible partition UUIDs
 DEFAULT_SEED = "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d"
 
@@ -365,13 +372,29 @@ def _systemd_env_assignment(key: str, value: str) -> str:
     return f'"{escaped}"'
 
 
-def _write_file_entry(dest: Path, entry: FileEntry) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(entry.content, bytes):
-        dest.write_bytes(entry.content)
+def _make_dir(path: Path) -> None:
+    """Create *path* and its missing parents as ``DIR_MODE``, whatever the umask."""
+    missing: list[Path] = []
+    while not path.is_dir():
+        missing.append(path)
+        path = path.parent
+    for directory in reversed(missing):
+        directory.mkdir()
+        directory.chmod(DIR_MODE)
+
+
+def _write(dest: Path, content: str | bytes, mode: int) -> None:
+    """Write *content* to *dest* with exactly *mode*, whatever the umask."""
+    _make_dir(dest.parent)
+    if isinstance(content, bytes):
+        dest.write_bytes(content)
     else:
-        dest.write_text(entry.content, encoding="utf-8")
-    dest.chmod(_parse_mode(entry.mode))
+        dest.write_text(content, encoding="utf-8")
+    dest.chmod(mode)
+
+
+def _write_file_entry(dest: Path, entry: FileEntry) -> None:
+    _write(dest, entry.content, _parse_mode(entry.mode))
 
 
 def _write_repository(
@@ -388,9 +411,7 @@ def _write_repository(
     if repo.keyring:
         source_lines.append(f"Signed-By: {repo.keyring}")
     source_path = root / "etc" / "apt" / "sources.list.d" / f"{safe_name}.sources"
-    source_path.parent.mkdir(parents=True, exist_ok=True)
-    source_path.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
-    source_path.chmod(0o644)
+    _write(source_path, "\n".join(source_lines) + "\n", FILE_MODE)
 
     if repo.priority != 100:
         host = urlparse(repo.url).netloc or repo.url
@@ -400,9 +421,7 @@ def _write_repository(
             f"Pin-Priority: {repo.priority}",
         ]
         pref_path = root / "etc" / "apt" / "preferences.d" / f"{safe_name}.pref"
-        pref_path.parent.mkdir(parents=True, exist_ok=True)
-        pref_path.write_text("\n".join(pref_lines) + "\n", encoding="utf-8")
-        pref_path.chmod(0o644)
+        _write(pref_path, "\n".join(pref_lines) + "\n", FILE_MODE)
 
 
 def _systemd_unit_content(svc: ServiceSpec) -> str:
@@ -756,9 +775,7 @@ class DeterministicMkosiEmitter:
 
         # Emit mkosi.version at emission root when enabled
         if config.generate_version_script:
-            version_path = destination / "mkosi.version"
-            version_path.write_text(MKOSI_VERSION_SCRIPT, encoding="utf-8")
-            version_path.chmod(0o755)
+            _write(destination / "mkosi.version", MKOSI_VERSION_SCRIPT, EXEC_MODE)
 
         for profile_name in sorted(profile_names):
             _require_profile(recipe, profile_name)
@@ -808,7 +825,7 @@ class DeterministicMkosiEmitter:
             )
 
             conf_path = profile_dir / "mkosi.conf"
-            conf_path.write_text(conf_content, encoding="utf-8")
+            _write(conf_path, conf_content, FILE_MODE)
 
             profile_paths[profile_name] = conf_path
             script_paths[profile_name] = phase_scripts
@@ -838,9 +855,7 @@ class DeterministicMkosiEmitter:
 
         # Emit mkosi.version at emission root when enabled
         if config.generate_version_script:
-            version_path = destination / "mkosi.version"
-            version_path.write_text(MKOSI_VERSION_SCRIPT, encoding="utf-8")
-            version_path.chmod(0o755)
+            _write(destination / "mkosi.version", MKOSI_VERSION_SCRIPT, EXEC_MODE)
 
         for profile_name in profile_names:
             _require_profile(recipe, profile_name)
@@ -873,8 +888,8 @@ class DeterministicMkosiEmitter:
         root_cloud: tuple[Path, ...] = ()
         if config.generate_cloud_postoutput:
             root_cloud = self._emit_cloud_postoutput(destination, default, config)
-        root_conf_path = destination / "mkosi.conf"
-        root_conf_path.write_text(
+        _write(
+            destination / "mkosi.conf",
             self._render_conf(
                 profile_name=default_name,
                 config=config,
@@ -885,13 +900,13 @@ class DeterministicMkosiEmitter:
                 phase_scripts=root_scripts,
                 cloud_postoutput_scripts=root_cloud,
             ),
-            encoding="utf-8",
+            FILE_MODE,
         )
 
         # Per-profile overlays under mkosi.profiles/<name>/; the root already built
         # the kernel and wrote the init script.
         profiles_dir = destination / "mkosi.profiles"
-        profiles_dir.mkdir(parents=True, exist_ok=True)
+        _make_dir(profiles_dir)
         overlay_config = replace(config, kernel=None, init_script=None)
 
         for profile_name in sorted(profile_names):
@@ -924,7 +939,7 @@ class DeterministicMkosiEmitter:
                 cloud_postoutput_scripts=cloud_scripts,
             )
             conf_path = profile_dir / "mkosi.conf"
-            conf_path.write_text(conf_content, encoding="utf-8")
+            _write(conf_path, conf_content, FILE_MODE)
 
             profile_paths[profile_name] = conf_path
             script_paths[profile_name] = (
@@ -945,19 +960,19 @@ class DeterministicMkosiEmitter:
         targets = profile.output_targets
         if "gcp" in targets:
             gcp_script = profile_dir / "scripts" / "gcp-postoutput.sh"
-            gcp_script.parent.mkdir(parents=True, exist_ok=True)
-            gcp_script.write_text(
-                cloud_postoutput_script(GCP_POSTOUTPUT_SCRIPT, config.dialect), encoding="utf-8"
+            _write(
+                gcp_script,
+                cloud_postoutput_script(GCP_POSTOUTPUT_SCRIPT, config.dialect),
+                EXEC_MODE,
             )
-            gcp_script.chmod(0o755)
             emitted.append(gcp_script)
         if "azure" in targets:
             azure_script = profile_dir / "scripts" / "azure-postoutput.sh"
-            azure_script.parent.mkdir(parents=True, exist_ok=True)
-            azure_script.write_text(
-                cloud_postoutput_script(AZURE_POSTOUTPUT_SCRIPT, config.dialect), encoding="utf-8"
+            _write(
+                azure_script,
+                cloud_postoutput_script(AZURE_POSTOUTPUT_SCRIPT, config.dialect),
+                EXEC_MODE,
             )
-            azure_script.chmod(0o755)
             emitted.append(azure_script)
         return tuple(emitted)
 
@@ -968,10 +983,7 @@ class DeterministicMkosiEmitter:
         the sandbox its package manager runs in; nothing of it reaches the image.
         """
         for path, content in config.sandbox_files:
-            dest = profile_dir / "mkosi.sandbox" / path.lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content, encoding="utf-8")
-            dest.chmod(0o644)
+            _write(profile_dir / "mkosi.sandbox" / path.lstrip("/"), content, FILE_MODE)
 
     def _validate_profile_phases(self, *, profile_name: str, profile: ProfileState) -> None:
         allowed = set(PHASE_ORDER)
@@ -986,7 +998,7 @@ class DeterministicMkosiEmitter:
     def _emit_extra_tree(self, profile_dir: Path, profile: ProfileState) -> None:
         """Generate mkosi.extra/ with files, templates, and systemd units."""
         extra_dir = profile_dir / "mkosi.extra"
-        extra_dir.mkdir(parents=True, exist_ok=True)
+        _make_dir(extra_dir)
 
         # Files from img.file()
         for entry in profile.files:
@@ -994,10 +1006,7 @@ class DeterministicMkosiEmitter:
 
         # Rendered templates from img.template()
         for tmpl in profile.templates:
-            dest = extra_dir / tmpl.path.lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(tmpl.rendered, encoding="utf-8")
-            dest.chmod(_parse_mode(tmpl.mode))
+            _write(extra_dir / tmpl.path.lstrip("/"), tmpl.rendered, _parse_mode(tmpl.mode))
 
         # Systemd service unit files from img.service()
         for svc in profile.services:
@@ -1009,8 +1018,7 @@ class DeterministicMkosiEmitter:
             if svc.name.endswith(".target"):
                 continue
             dest = extra_dir / "usr" / "lib" / "systemd" / "system" / unit_name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(_systemd_unit_content(svc), encoding="utf-8")
+            _write(dest, _systemd_unit_content(svc), FILE_MODE)
 
     def _emit_skeleton_tree(
         self, profile_dir: Path, profile: ProfileState, config: EmitConfig
@@ -1021,13 +1029,11 @@ class DeterministicMkosiEmitter:
         (where the build's apt reads them) with any keyring the profile declares.
         """
         skeleton_dir = profile_dir / "mkosi.skeleton"
-        skeleton_dir.mkdir(parents=True, exist_ok=True)
+        _make_dir(skeleton_dir)
 
         # Write custom init script if configured
         if config.init_script:
-            init_path = skeleton_dir / "init"
-            init_path.write_text(config.init_script, encoding="utf-8")
-            init_path.chmod(0o755)
+            _write(skeleton_dir / "init", config.init_script, EXEC_MODE)
 
         # Write skeleton files from img.skeleton()
         for entry in profile.skeleton_files:
@@ -1056,23 +1062,23 @@ class DeterministicMkosiEmitter:
         if profile.debloat.enabled and profile.debloat.systemd_minimize:
             target_path = skeleton_dir / "etc" / "systemd" / "system" / "minimal.target"
             if not target_path.exists():
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(MINIMAL_TARGET_UNIT, encoding="utf-8")
+                _write(target_path, MINIMAL_TARGET_UNIT, FILE_MODE)
 
     def _emit_kernel_config(self, profile_dir: Path, config: EmitConfig) -> None:
         """Copy kernel config file into the output tree if present."""
         if config.kernel and config.kernel.config_file:
-            kernel_dir = profile_dir / "kernel"
-            kernel_dir.mkdir(parents=True, exist_ok=True)
             config_src = Path(config.kernel.config_file)
-            config_dest = kernel_dir / "kernel.config"
             if not config_src.exists():
                 raise ValidationError(
                     "Kernel config file does not exist.",
                     hint="Provide a valid kernel config file before compiling.",
                     context={"path": str(config.kernel.config_file)},
                 )
-            config_dest.write_text(config_src.read_text(encoding="utf-8"), encoding="utf-8")
+            _write(
+                profile_dir / "kernel" / "kernel.config",
+                config_src.read_text(encoding="utf-8"),
+                FILE_MODE,
+            )
 
     def _emit_all_scripts(
         self,
@@ -1085,7 +1091,7 @@ class DeterministicMkosiEmitter:
     ) -> dict[Phase, Path]:
         """Emit phase scripts + synthetic postinst/finalize."""
         scripts_dir = profile_dir / "scripts"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
+        _make_dir(scripts_dir)
         phase_scripts: dict[Phase, Path] = {}
 
         # Emit user-defined phase scripts
@@ -1100,11 +1106,11 @@ class DeterministicMkosiEmitter:
                 if all_commands or needs_debloat:
                     script_name = f"{index:02d}-{phase}.sh"
                     script_path = scripts_dir / script_name
-                    script_path.write_text(
+                    _write(
+                        script_path,
                         self._render_postinst_script(all_commands, profile),
-                        encoding="utf-8",
+                        EXEC_MODE,
                     )
-                    script_path.chmod(0o755)
                     phase_scripts[phase] = script_path
                 continue
 
@@ -1114,11 +1120,11 @@ class DeterministicMkosiEmitter:
                 if synthetic_lines or commands:
                     script_name = f"{index:02d}-{phase}.sh"
                     script_path = scripts_dir / script_name
-                    script_path.write_text(
+                    _write(
+                        script_path,
                         self._render_finalize_script(synthetic_lines, commands),
-                        encoding="utf-8",
+                        EXEC_MODE,
                     )
-                    script_path.chmod(0o755)
                     phase_scripts[phase] = script_path
                 continue
 
@@ -1145,8 +1151,7 @@ class DeterministicMkosiEmitter:
                     combined = kernel_script
                 script_name = f"{index:02d}-{phase}.sh"
                 script_path = scripts_dir / script_name
-                script_path.write_text(combined, encoding="utf-8")
-                script_path.chmod(0o755)
+                _write(script_path, combined, EXEC_MODE)
                 phase_scripts[phase] = script_path
                 continue
 
@@ -1154,8 +1159,7 @@ class DeterministicMkosiEmitter:
                 continue
             script_name = f"{index:02d}-{phase}.sh"
             script_path = scripts_dir / script_name
-            script_path.write_text(self._render_script(commands), encoding="utf-8")
-            script_path.chmod(0o755)
+            _write(script_path, self._render_script(commands), EXEC_MODE)
             phase_scripts[phase] = script_path
 
         return phase_scripts
@@ -1509,7 +1513,7 @@ def _reset_dir(path: Path) -> None:
         path.unlink()
     elif path.is_dir():
         shutil.rmtree(path)
-    path.mkdir(parents=True, exist_ok=True)
+    _make_dir(path)
 
 
 def emit_mkosi_tree(
