@@ -1,6 +1,6 @@
 # Tutorial
 
-This walk-through starts from an empty directory and follows the project `tundravm init` writes: inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock and compile, change the recipe and see the diff and the lock drift, bake, measure and export a verifier policy, deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`.
+This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, change the recipe and see the diff and the lock drift, bake, measure and export a verifier policy, deploy, then write a fragment of your own, test it next to the generated tests and run the CI gate. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`.
 
 You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 11 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
 
@@ -135,10 +135,20 @@ pyproject: /home/me/node/pyproject.toml
   recipe    node.py              pyproject
   out       build                pyproject
   tree      mkosi                pyproject
-  lockfile  build/tundravm.lock  pyproject
+  lockfile  build/tundravm.lock  pyproject; does not exist; run `tundravm lock`
   backend   inprocess            pyproject
 [exit 0]
 ```
+
+The lockfile the table configures does not exist yet. Until `tundravm lock` writes it, `inspect`, `lint`, `compile`, `diff` and `fetch` print `` note: configured lockfile build/tundravm.lock does not exist; run `tundravm lock` to create it `` and run without pins, and `bake` refuses with `E_LOCKFILE` instead of baking unfrozen. Lock first:
+
+```console
+$ tundravm lock node.py
+locked build/tundravm.lock
+[exit 0]
+```
+
+`tundravm config` now prints `lockfile  build/tundravm.lock  pyproject`. Every later change to the recipe drifts from this lock until you lock again, which steps 5, 6 and 10 do.
 
 ## 2. Inspect
 
@@ -147,7 +157,7 @@ pyproject: /home/me/node/pyproject.toml
 ```console
 $ tundravm inspect node.py --variant dev
 Image: debian/trixie (x86_64)  variant=dev  reproducible=yes
-Policy: mutable_ref_policy=warn network_mode=online require_frozen_lock=no
+Policy: mutable_ref_policy=warn network_mode=online require_frozen_lock=no storage_safety=warn
 Parent: default
 Fragments (3): base app devtools
 Packages (20): apt bash-completion ca-certificates curl dnsutils iputils-ping kmod linux-image-amd64 net-tools netcat-openbsd openssh-server socat strace systemd systemd-boot-efi systemd-sysv tcpdump tcpflow udev vim
@@ -211,7 +221,6 @@ error kernel-missing [dev]: variant builds a bootable UKI but installs no kernel
 [exit 1]
 
 $ tundravm bake node.py
-note: no lockfile at build/tundravm.lock; baking unpinned (run `tundravm lock node.py` to freeze the bake)
 [tundravm] lint ...
 [default] error kernel-missing: variant builds a bootable UKI but installs no kernel, so mkosi stops with 'A kernel must be installed in the image to build a UKI'
 [dev] error kernel-missing: variant builds a bootable UKI but installs no kernel, so mkosi stops with 'A kernel must be installed in the image to build a UKI'
@@ -269,7 +278,7 @@ compiled mkosi
 [exit 0]
 ```
 
-The lockfile (version 4) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest) and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` holds one directory per variant (`mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Commit it: it is the reviewable form of the image.
+The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports each of its sections as a `lock-added` error (`variants.debug.packages is not in the lock`, ...). The lockfile (version 4) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest) and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` holds one directory per variant (`mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Commit it: it is the reviewable form of the image.
 
 ## 6. Change the recipe
 
@@ -363,7 +372,7 @@ next: tundravm deploy build/bake-result.json --variant debug --target qemu
 [exit 0]
 ```
 
-Progress lines go to stderr and the summary to stdout. The bake was frozen against `build/tundravm.lock`: had the recipe drifted from it, the `verify lockfile` step would have failed with `E_LOCKFILE`. The backend came from `node.py`; `--backend lima|nix|local|inprocess` overrides it. The manifest `build/bake-result.json` records every artifact with its digest, the recipe digest and the tree digest.
+Progress lines go to stderr and the summary to stdout. The bake was frozen against `build/tundravm.lock`: had the recipe drifted from it, the `verify lockfile` step would have failed with `E_LOCKFILE`, and without the file, which the table configures, `bake` would have refused before `lint`, with `E_LOCKFILE` too. The backend came from `node.py`; `--backend lima|nix|local|inprocess` overrides it. The manifest `build/bake-result.json` records every artifact with its digest, the recipe digest and the tree digest.
 
 ## 8. Measure
 
@@ -527,12 +536,15 @@ error healthcheck-port [default]: the app does not listen on port 8080
 [exit 1]
 ```
 
-That was `HealthCheck(port=8080)`. With `port=APP_PORT`:
+That was `HealthCheck(port=8080)`. With `port=APP_PORT` the `healthcheck-port` error is gone, and what `lint` reports is drift: it checks the recipe against the lockfile the table configures, which step 6 wrote before the probe existed:
 
 ```console
-$ tundravm lint node.py
-no findings
-[exit 0]
+$ tundravm lint node.py --variant default
+error lock-changed [common] variants.default.files: variants.default.files changed since the lock: +/usr/lib/systemd/system/app-healthcheck…
+error lock-changed [common] variants.default.packages: variants.default.packages changed since the lock: +curl
+error lock-changed [common] variants.default.services: variants.default.services changed since the lock: +app-healthcheck +app-healthcheck.timer
+3 errors, 0 warnings, 0 infos
+[exit 1]
 
 $ tundravm inspect node.py --variant default | grep -E "Fragments|Units|app-healthcheck "
 Fragments (3): base app healthcheck
@@ -549,6 +561,10 @@ M  default/scripts/06-postinst.sh
 
 $ tundravm lock node.py
 locked build/tundravm.lock
+[exit 0]
+
+$ tundravm lint node.py
+no findings
 [exit 0]
 
 $ tundravm compile node.py --out mkosi
