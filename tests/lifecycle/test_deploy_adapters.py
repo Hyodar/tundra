@@ -224,7 +224,7 @@ def test_azure_publishes_a_confidential_gallery_image_then_creates_the_vm(
         profile="dev",
         target="azure",
         artifact_path=_artifact(tmp_path, "disk.vhd"),
-        parameters={"storage_account": "acct"},
+        parameters={"storage_account": "acct", "secure_boot": "true", "signed": "true"},
     )
     result = AzureDeployAdapter(runner=run).deploy(request)
 
@@ -264,6 +264,43 @@ def test_azure_publishes_a_confidential_gallery_image_then_creates_the_vm(
     assert result.metadata["image"] == AZURE_IMAGE
 
 
+def test_azure_defaults_to_secure_boot_off(tmp_path: Path) -> None:
+    run = Recorder(
+        {
+            "az storage account show": _reply('"/subscriptions/s/storageAccounts/acct"\n'),
+            "az sig image-version create": _reply(f'"{AZURE_IMAGE}"\n'),
+        }
+    )
+    request = DeployRequest(
+        profile="dev",
+        target="azure",
+        artifact_path=_artifact(tmp_path, "disk.vhd"),
+        parameters={"storage_account": "acct"},
+    )
+    result = AzureDeployAdapter(runner=run).deploy(request)
+    create = run.calls[-1]
+    assert create[create.index("--enable-secure-boot") + 1] == "false"
+    assert "signed" not in result.metadata
+
+
+def test_azure_refuses_secure_boot_for_an_unsigned_image_before_uploading(
+    tmp_path: Path,
+) -> None:
+    run = Recorder()
+    request = DeployRequest(
+        profile="dev",
+        target="azure",
+        artifact_path=_artifact(tmp_path, "disk.vhd"),
+        parameters={"storage_account": "acct", "secure_boot": "true"},
+    )
+    with pytest.raises(DeploymentError, match="Secure Boot needs a signed image") as exc:
+        AzureDeployAdapter(runner=run).deploy(request)
+    assert exc.value.code == "E_DEPLOYMENT"
+    hint = exc.value.hint or ""
+    assert "--param secure_boot=false" in hint and "--param signed=true" in hint
+    assert run.calls == []
+
+
 def test_azure_reports_a_missing_image_id(tmp_path: Path) -> None:
     request = DeployRequest(
         profile="dev",
@@ -285,8 +322,7 @@ def test_gcp_creates_a_tdx_instance_on_c3_after_gcloud_storage_upload(tmp_path: 
     )
     result = GcpDeployAdapter(runner=run).deploy(request)
 
-    probe, upload, image, instance = run.calls
-    assert probe == ["gcloud", "storage", "cp", "--help"]
+    upload, image, instance = run.calls
     assert upload[:3] == ["gcloud", "storage", "cp"]
     image_name = result.metadata["image_name"]
     assert upload[-1] == f"gs://bkt/tdx-images/{image_name}.tar.gz"
@@ -299,26 +335,19 @@ def test_gcp_creates_a_tdx_instance_on_c3_after_gcloud_storage_upload(tmp_path: 
     assert result.metadata["blob"] == upload[-1]
 
 
-def test_gcp_falls_back_to_gsutil_and_fails_without_either(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_gcp_upload_failure_names_the_gcloud_storage_command(tmp_path: Path) -> None:
     request = DeployRequest(
         profile="dev",
         target="gcp",
         artifact_path=_artifact(tmp_path, "disk.raw.tar.gz"),
         parameters={"project": "proj", "bucket": "bkt"},
     )
-    run = Recorder({"gcloud storage cp --help": _reply(returncode=2)})
-    GcpDeployAdapter(runner=run).deploy(request)
-    assert run.calls[1][:2] == ["gsutil", "cp"]
-
-    on_path = {"gcloud": "/usr/bin/gcloud"}
-    monkeypatch.setattr("tundravm.deploy.gcp.shutil.which", on_path.get)
-    monkeypatch.setattr(
-        "tundravm.deploy.gcp.run_captured", Recorder({"gcloud storage": _reply(returncode=2)})
-    )
-    with pytest.raises(DeploymentError, match="Neither `gcloud storage` nor `gsutil`"):
-        GcpDeployAdapter().deploy(request)
+    run = Recorder({"gcloud storage cp": _reply(returncode=2)})
+    with pytest.raises(DeploymentError, match="GCS upload failed") as exc:
+        GcpDeployAdapter(runner=run).deploy(request)
+    assert exc.value.context["command"].startswith("gcloud storage cp ")
+    assert "gcloud components update" in (exc.value.hint or "")
+    assert [cmd[:3] for cmd in run.calls] == [["gcloud", "storage", "cp"]]
 
 
 def _artifact(tmp_path: Path, name: str) -> Path:

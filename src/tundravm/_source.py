@@ -30,6 +30,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -630,7 +631,8 @@ class SourceBuild(NamedSource):
     A mounted (current-dialect) hook caches under ``<namespace>-<fingerprint>``:
     the namespace is ``cache_key`` (default: the build name) and the
     fingerprint (:meth:`cache_fingerprint`) covers the pin, the build and install
-    specs, the architecture and the toolchain, so changing any of them rebuilds.
+    specs, the toolchain and the distribution it comes from, so changing any of
+    them rebuilds.
     Under ``nethermind-v1`` ``cache_key`` replaces the default
     ``<name>-<url sha256[:12]>-<ref>`` key and a lockfile pin appends
     ``-<pin[:12]>`` to it (default key: replaces the ref). ``mark_unpinned``
@@ -709,14 +711,21 @@ class SourceBuild(NamedSource):
             "mark_unpinned": self.mark_unpinned,
         }
 
-    def render(self, pin: str | None = None, *, mounted: bool = False, arch: str = "x86_64") -> str:
+    def render(
+        self,
+        pin: str | None = None,
+        *,
+        mounted: bool = False,
+        distribution: Mapping[str, object] | None = None,
+    ) -> str:
         """The build-phase hook: fetch, build, cache, install.
 
         *pin* is a lockfile pin; an inline pin (commit ref, ``sha256=``) wins.
         *mounted* copies the host-fetched checkout ``$SRCDIR/tundravm-sources/
         <name>-<pin[:12]>`` instead of fetching in the sandbox; unpinned, the
         mounted hook only fails, naming ``tundravm lock`` and ``tundravm fetch``.
-        *arch* (the recipe's) enters the mounted hook's cache fingerprint.
+        *distribution* (the variant's ``Lowered.build_distribution``) enters the
+        mounted hook's cache fingerprint.
         """
         effective = self.source.inline_pin or pin
         workdir = Build.chroot_path(self.name).rel
@@ -737,8 +746,11 @@ class SourceBuild(NamedSource):
             copy_deps, uses_deps = self._deps()
             inner = f"{uses_deps}{build}".replace("'", "'\\''")
             command = f"{self._copy(effective)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
-            key = f"{self.cache_key or self.name}-{self.cache_fingerprint(effective, arch=arch)}"
-            return self._cache(key, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
+            fingerprint = self.cache_fingerprint(effective, distribution=distribution or {})
+            key = f"{self.cache_key or self.name}-{fingerprint}"
+            return self._cache(key, workdir).wrap(
+                command, root=MOUNTED_CACHE_ROOT, exact_trees=True
+            )
         command = f"{self._fetch(effective)} && mkosi-chroot bash -c '{inner}'"
         hook = self._cache(self._historical_key(effective), workdir).wrap(command)
         if effective is None and self.mark_unpinned:
@@ -799,12 +811,15 @@ class SourceBuild(NamedSource):
             "env": dict(sorted(env.items())),
         }
 
-    def cache_fingerprint(self, pin: str, *, arch: str) -> str:
+    def cache_fingerprint(self, pin: str, *, distribution: Mapping[str, object]) -> str:
         """The first 16 hex of the sha256 over what a mounted build produces.
 
         Canonical JSON of the source pin (with git's ``subdir`` and
         ``submodules``), the build recipe and install steps as the lockfile
-        records them, *arch*, and the toolchain (recipe kind and packages).
+        records them, the toolchain (recipe kind and packages) and the
+        *distribution* it comes from: base, architecture, mirror, snapshot,
+        repositories, build packages and build settings
+        (``Lowered.build_distribution``).
         """
         source: dict[str, object] = {"kind": self.source.kind, "pin": pin}
         if isinstance(self.source, GitSource):
@@ -816,7 +831,7 @@ class SourceBuild(NamedSource):
                 {"kind": step.kind, "path": step.path, "dest": step.dest, "mode": step.mode}
                 for step in self.install
             ],
-            "arch": arch,
+            "distribution": dict(distribution),
             "toolchain": {"kind": self.build.kind, "packages": list(self.packages)},
         }
         canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"))
@@ -1091,47 +1106,186 @@ def run_tool(
     )
 
 
-def deps_prefetched(build: SourceBuild, pin: str, root: Path) -> bool:
-    """Whether ``<root>/deps`` holds *build*'s dependencies for *pin* (its marker matches).
+NOT_PREFETCHED = "not prefetched"
+""":func:`deps_problem` of a build whose dependencies no fetch has recorded."""
 
-    *root* is ``<out>/.sources``. ``True`` for a script build, which has none.
+
+def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
+    """Why ``<root>/deps`` lacks *build*'s dependencies for *pin*, or ``None`` when complete.
+
+    *root* is ``<out>/.sources``. Complete means the marker records this
+    prefetch command and every entry of its content manifest is still there:
+    each Go module directory and ``.mod`` file ``go.sum`` names, each ``.crate``
+    of ``Cargo.lock`` (size and sha256), each NuGet package directory of the
+    restore's ``project.assets.json``. ``None`` for a script build, which has none;
+    :data:`NOT_PREFETCHED` without a marker.
     """
     marker = build.deps_marker(pin)
-    if marker is None:
-        return True
+    if marker is None or not isinstance(build.build, LanguageBuild):
+        return None
     try:
         recorded = json.loads((root / DEPS_DIRNAME / marker).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
-    return isinstance(recorded, dict) and recorded.get("spec") == build.deps_spec()
+        return NOT_PREFETCHED
+    if not isinstance(recorded, dict):
+        return NOT_PREFETCHED
+    if recorded.get("spec") != build.deps_spec():
+        return "prefetched by another toolchain command"
+    contents = recorded.get("contents")
+    if not isinstance(contents, dict):
+        return "the marker has no content manifest"
+    cache = root / DEPS_DIRNAME / build.build.deps
+    label = f"{DEPS_DIRNAME}/{build.build.deps}"
+    if not cache.is_dir():
+        return f"{label} is missing"
+    for rel, expected in sorted(contents.items()):
+        if _cache_entry(cache / rel) != expected:
+            return f"{label}/{rel} is missing or changed"
+    return None
+
+
+def deps_prefetched(build: SourceBuild, pin: str, root: Path) -> bool:
+    """Whether ``<root>/deps`` holds *build*'s dependencies for *pin* (:func:`deps_problem`)."""
+    return deps_problem(build, pin, root) is None
+
+
+def _cache_entry(path: Path) -> str | None:
+    """A content-manifest value: ``dir`` (non-empty directory) or ``<size> <sha256>``."""
+    if path.is_dir():
+        return "dir" if any(path.iterdir()) else None
+    if not path.is_file():
+        return None
+    return f"{path.stat().st_size} {hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def _go_escape(text: str) -> str:
+    """The module cache's case encoding: an upper-case letter becomes ``!`` + lower case."""
+    return re.sub(r"[A-Z]", lambda match: "!" + match.group(0).lower(), text)
+
+
+def _go_entries(workdir: Path) -> list[str]:
+    """The module directories and ``.mod`` files ``go.sum`` in *workdir* names."""
+    try:
+        lines = (workdir / "go.sum").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    found: list[str] = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        module, version = _go_escape(parts[0]), _go_escape(parts[1])
+        if version.endswith("/go.mod"):
+            found.append(f"cache/download/{module}/@v/{version.removesuffix('/go.mod')}.mod")
+        else:
+            found.append(f"{module}@{version}")
+    return found
+
+
+def _cargo_entries(workdir: Path, tree: Path, cache: Path) -> list[str]:
+    """The registry ``.crate`` files of the ``Cargo.lock`` at or above *workdir*."""
+    for directory in (workdir, *workdir.parents):
+        lock = directory / "Cargo.lock"
+        if lock.is_file() or directory == tree:
+            break
+    try:
+        packages = tomllib.loads(lock.read_text(encoding="utf-8")).get("package", [])
+    except (OSError, ValueError):
+        return []
+    found: list[str] = []
+    for package in packages if isinstance(packages, list) else []:
+        if not isinstance(package, dict):
+            continue
+        if not str(package.get("source", "")).startswith(("registry+", "sparse+")):
+            continue
+        crate = f"{package.get('name')}-{package.get('version')}.crate"
+        found.extend(
+            path.relative_to(cache).as_posix()
+            for path in sorted(cache.glob(f"registry/cache/*/{crate}"))
+        )
+    return found
+
+
+def _nuget_entries(workdir: Path) -> list[str]:
+    """The package directories the restore's ``obj/project.assets.json`` files list."""
+    found: list[str] = []
+    for assets in sorted(workdir.rglob("obj/project.assets.json")):
+        try:
+            libraries = json.loads(assets.read_text(encoding="utf-8")).get("libraries", {})
+        except (OSError, ValueError):
+            continue
+        for library in libraries.values() if isinstance(libraries, dict) else []:
+            if isinstance(library, dict) and library.get("type") == "package":
+                found.append(str(library.get("path", "")).lower().rstrip("/"))
+    return found
+
+
+def _deps_contents(recipe: LanguageBuild, workdir: Path, tree: Path, cache: Path) -> dict[str, str]:
+    """The content manifest of a prefetch into *cache*: what it holds for this build.
+
+    Entries the toolchain did not put in the cache (a module the build list
+    prunes) are left out.
+    """
+    if isinstance(recipe, GoBuild):
+        names = _go_entries(workdir)
+    elif isinstance(recipe, CargoBuild):
+        names = _cargo_entries(workdir, tree, cache)
+    else:
+        names = _nuget_entries(workdir)
+    contents: dict[str, str] = {}
+    for rel in names:
+        if rel and ".." not in rel.split("/"):
+            entry = _cache_entry(cache / rel)
+            if entry is not None:
+                contents[rel] = entry
+    return dict(sorted(contents.items()))
 
 
 def prefetch_deps(
-    build: SourceBuild, pin: str, checkout: Path, root: Path, *, offline: bool = False
+    build: SourceBuild,
+    pin: str,
+    checkout: Path,
+    root: Path,
+    *,
+    offline: bool = False,
+    force: bool = False,
+    clear: bool = False,
 ) -> str | None:
     """Fill ``<root>/deps/<cache>`` with *build*'s dependencies; the outcome, for the notice.
 
     The host's toolchain (``go mod download``, ``cargo fetch --locked``, ``dotnet
     restore --packages``) runs as the invoking user in a scratch copy of
     *checkout* (subdirectory included), so the checkout stays clean, and a marker
-    (:meth:`SourceBuild.deps_marker`) records the success. Returns ``None`` for a
-    script build, ``"<cache>: kept"`` when the marker already matches,
-    ``"<cache>: prefetched"``, ``"skipped (no host <tool>)"`` when the toolchain is
-    not on ``PATH``, ``"skipped (offline)"`` under an offline policy, or
-    ``"failed (<reason>)"``; the build then fetches its dependencies online.
+    (:meth:`SourceBuild.deps_marker`) records the success with a content manifest
+    (:func:`deps_problem`). Returns ``None`` for a script build, ``"<cache>: kept"``
+    when the marker and its manifest still match, ``"<cache>: prefetched"`` (with
+    ``(was incomplete: ...)`` when it repaired a cache), ``"<cache>: incomplete
+    (...)"`` when an incomplete cache cannot be prefetched again, ``"skipped (no
+    host <tool>)"`` when the toolchain is not on ``PATH``, ``"skipped (offline)"``
+    under an offline policy, or ``"failed (<reason>)"``; the build then fetches
+    its dependencies online. *force* prefetches even a complete cache; *clear*
+    first removes the cache and every marker of it (``fetch --force``).
     """
     marker = build.deps_marker(pin)
     if marker is None or not isinstance(build.build, LanguageBuild):
         return None
     recipe = build.build
     deps = root / DEPS_DIRNAME
-    if deps_prefetched(build, pin, root):
+    problem = deps_problem(build, pin, root)
+    if problem is None and not force:
         return f"{recipe.deps}: kept"
-    if offline:
-        return "skipped (offline)"
-    if shutil.which(recipe.tool) is None:
-        return f"skipped (no host {recipe.tool})"
+    incomplete = problem not in (None, NOT_PREFETCHED)
+    if offline or shutil.which(recipe.tool) is None:
+        if problem is None:
+            return f"{recipe.deps}: kept"
+        if incomplete:
+            return f"{recipe.deps}: incomplete ({problem})"
+        return "skipped (offline)" if offline else f"skipped (no host {recipe.tool})"
     cache = deps / recipe.deps
+    if clear:
+        shutil.rmtree(cache, ignore_errors=True)
+        for stale in deps.glob(f"*.{recipe.deps}.json"):
+            stale.unlink()
     cache.mkdir(parents=True, exist_ok=True)
     argv, env = recipe.prefetch(str(cache.resolve()))
     scratch = Path(tempfile.mkdtemp(prefix=f".{build.pin_dir(pin)}.", dir=deps))
@@ -1147,15 +1301,23 @@ def prefetch_deps(
             completed = run_tool(argv, cwd=workdir, env={**os.environ, **env})
         except OSError as exc:
             return f"failed (cannot run {recipe.tool}: {exc.strerror or exc})"
+        contents = _deps_contents(recipe, workdir, tree, cache)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     if completed.returncode != 0:
         lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
         last = lines[-1] if lines else f"exit status {completed.returncode}"
         return f"failed ({' '.join(argv[:2])}: {last})"
-    record = {"build": build.key, "checkout": build.pin_dir(pin), "spec": build.deps_spec()}
+    record = {
+        "build": build.key,
+        "checkout": build.pin_dir(pin),
+        "spec": build.deps_spec(),
+        "contents": contents,
+    }
     text = json.dumps(record, indent=2, sort_keys=True) + "\n"
     (deps / marker).write_text(text, encoding="utf-8")
+    if incomplete:
+        return f"{recipe.deps}: prefetched (was incomplete: {problem})"
     return f"{recipe.deps}: prefetched"
 
 
@@ -1485,6 +1647,7 @@ __all__ = [
     "InstallKind",
     "KernelSource",
     "LanguageBuild",
+    "NOT_PREFETCHED",
     "NamedSource",
     "Resolver",
     "ScriptBuild",
@@ -1493,6 +1656,7 @@ __all__ = [
     "checkout_identity",
     "default_resolver",
     "deps_prefetched",
+    "deps_problem",
     "fetch_source",
     "is_fetched",
     "prefetch_deps",

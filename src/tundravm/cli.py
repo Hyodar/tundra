@@ -44,6 +44,7 @@ from .declarative._compile import emit
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
+    NO_LOCK,
     Artifact,
     Backend,
     BackendKind,
@@ -51,6 +52,7 @@ from .declarative.lifecycle import (
     DeployTarget,
     Lock,
     Measurements,
+    NoLock,
     ProbeRunner,
     Qemu,
     Scheme,
@@ -452,8 +454,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Bake frozen against this lockfile (default: build/tundravm.lock when it "
-            "exists; without one the bake is unpinned)."
+            "Bake frozen against this lockfile (default: the [tool.tundravm] lockfile, "
+            "which must exist; else build/tundravm.lock when it exists; without one the "
+            "bake is unpinned)."
         ),
     )
     bake.add_argument(
@@ -551,7 +554,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Target setting (repeatable). qemu: memory, cpus, ssh_port, tdx, daemonize, "
             "forward (HOST:GUEST[,HOST:GUEST...]); "
-            "azure: storage_account, resource_group, location, vm_size, gallery, secure_boot; "
+            "azure: storage_account, resource_group, location, vm_size, gallery, secure_boot "
+            "(needs signed=true), signed; "
             "gcp: project, bucket, zone, machine_type."
         ),
     )
@@ -764,11 +768,13 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
 def _add_config(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     config = sub.add_parser(
         "config",
-        help="Print the effective project configuration and where each value came from.",
+        help="Print the project configuration the commands resolve and where each value came from.",
         description=(
             "Print recipe, out, tree, lockfile and backend as every command would use "
             "them here, each with its origin: flag (given on this command line), "
-            f"pyproject (the [{TABLE}] table) or default (built in)."
+            f"pyproject (the [{TABLE}] table), default (built in) or, for backend, recipe "
+            "(the kind of the `backend` the recipe file binds, loaded to find it). A "
+            "recipe or lockfile that does not exist is marked so."
         ),
         epilog=RESOLUTION_HELP,
     )
@@ -784,8 +790,12 @@ def _add_config(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         "--format",
         choices=("text", "json"),
         default="text",
-        help="Output format (default: %(default)s); json maps each key to value and origin.",
+        help=(
+            "Output format (default: %(default)s); json maps each key to value and origin, "
+            "plus exists for recipe and lockfile."
+        ),
     )
+    _add_import_options(config)
 
 
 def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -939,9 +949,6 @@ _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
 }
 """Per verb: the argument each ``[tool.tundravm]`` key defaults (``tree`` is compile's --out)."""
 
-_LOCK_READERS = frozenset({"inspect", "lint", "compile", "diff", "fetch", "bake"})
-"""Verbs that require an explicit --lockfile to exist: the table's applies once it does."""
-
 _RECIPE_OPTIONAL = frozenset({"doctor", "clean", "config"})
 
 MISSING_RECIPE = (
@@ -955,7 +962,9 @@ def _apply_project(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     """Fill RECIPE, --out, --lockfile and --backend from ``[tool.tundravm]`` when omitted.
 
     Records each value's origin (``flag``/``pyproject``) in ``args.origins``. The
-    table's paths apply only when RECIPE is omitted or names the table's recipe.
+    table's paths apply only when RECIPE is omitted or names the table's recipe. A
+    configured lockfile stays selected when it does not exist: its readers say so
+    (:func:`_missing_lock`) and never fall back to ``build/tundravm.lock``.
     """
     verb: str = args.command
     args.origins = {}
@@ -982,8 +991,6 @@ def _apply_project(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         if project is None or project.get(key) is None:
             continue
         value: object = project.path_of(key) if key in PATH_KEYS else project.get(key)
-        if key == "lockfile" and verb in _LOCK_READERS and not Path(str(value)).is_file():
-            continue
         if key == "backend" and value not in BACKEND_KINDS:
             raise ValidationError(
                 f"[{TABLE}] backend {value!r} in {project.path} is not a build backend.",
@@ -999,34 +1006,78 @@ def _same_path(a: Path, b: Path) -> bool:
 
 def _cmd_config(args: argparse.Namespace, out: TextIO) -> int:
     project: ProjectConfig | None = args.project
-    origins: dict[str, str] = args.origins
-    recipe = None if args.recipe is None else str(args.recipe)
-    values: dict[str, tuple[str | None, str]] = {
-        "recipe": (recipe, origins.get("recipe", "default"))
-    }
-    for key in ("out", "tree", "lockfile", "backend"):
-        value = getattr(args, key)
-        if value is not None:
-            values[key] = (str(value), origins.get(key, "flag"))
-        else:
-            values[key] = (DEFAULTS.get(key), "default")
+    values = _config_values(args)
     source = None if project is None else str(project.path)
     if args.format == "json":
-        payload = {
-            "pyproject": source,
-            "values": {k: {"value": v, "origin": o} for k, (v, o) in values.items()},
-        }
+        payload = {"pyproject": source, "values": values}
         print(json.dumps(payload, indent=2, sort_keys=True), file=out)
         return EXIT_OK
     print(f"pyproject: {source or f'none (no [{TABLE}] table here or above)'}", file=out)
-    width = max(len(str(v or "-")) for v, _ in values.values())
-    for key, (value, origin) in values.items():
-        shown = value if value is not None else "-"
-        if key == "backend" and value is None:
-            shown = "-"
-            origin = "default (the recipe file's `backend`)"
-        print(f"  {key:<8}  {shown:<{width}}  {origin}", file=out)
+    width = max(len(str(entry["value"] or "-")) for entry in values.values())
+    for key, entry in values.items():
+        shown = str(entry["value"] or "-")
+        loaded = values["recipe"]["exists"] is True
+        print(f"  {key:<8}  {shown:<{width}}  {_config_origin(key, entry, loaded)}", file=out)
     return EXIT_OK
+
+
+def _config_values(args: argparse.Namespace) -> dict[str, dict[str, object]]:
+    """Each key as the commands resolve it: value, origin and, for recipe and lockfile, existence.
+
+    ``backend`` without ``--backend`` or the table's is the kind of the instance
+    the recipe file binds (origin ``recipe``), loaded as ``bake`` loads it.
+    """
+    origins: dict[str, str] = args.origins
+    recipe: Path | None = args.recipe
+    values: dict[str, dict[str, object]] = {
+        "recipe": {
+            "value": None if recipe is None else str(recipe),
+            "origin": origins.get("recipe", "default"),
+            "exists": recipe is not None and recipe.is_file(),
+        }
+    }
+    for key in ("out", "tree", "lockfile"):
+        value = getattr(args, key)
+        values[key] = (
+            {"value": str(value), "origin": origins.get(key, "flag")}
+            if value is not None
+            else {"value": DEFAULTS[key], "origin": "default"}
+        )
+    values["lockfile"]["exists"] = Path(str(values["lockfile"]["value"])).is_file()
+    if args.backend is not None:
+        values["backend"] = {"value": args.backend, "origin": origins.get("backend", "flag")}
+    elif recipe is not None and recipe.is_file():
+        bound = _load(args).backend
+        kind = None if bound is None else _backend_kind(bound)
+        values["backend"] = {"value": kind, "origin": "default" if bound is None else "recipe"}
+    else:
+        values["backend"] = {"value": None, "origin": "default"}
+    return values
+
+
+def _backend_kind(backend: BuildBackend) -> str:
+    """The ``--backend`` kind that builds *backend*'s class, else its ``name``."""
+    for kind in BACKEND_KINDS:
+        if type(Backend(kind).build_backend()) is type(backend):
+            return kind
+    return backend.name
+
+
+def _config_origin(key: str, entry: dict[str, object], loaded: bool) -> str:
+    """*entry*'s origin as ``config`` prints it, noting a path that does not exist.
+
+    *loaded*: the recipe file exists, so an unset backend is one it does not bind.
+    """
+    origin = str(entry["origin"])
+    if key == "backend" and origin == "recipe":
+        return "recipe (the recipe file's `backend`)"
+    if key == "backend" and entry["value"] is None:
+        if loaded:
+            return "default (the recipe file binds no `backend`; bake needs --backend)"
+        return "default (the recipe file's `backend`)"
+    if entry.get("exists") is False and entry["value"] is not None:
+        origin += "; does not exist" + ("; run `tundravm lock`" if key == "lockfile" else "")
+    return origin
 
 
 def _load(args: argparse.Namespace) -> RecipeFile:
@@ -1128,11 +1179,14 @@ def _describe(loaded: RecipeFile, img: Lowered, name: str) -> dict[str, object]:
 def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
-    lock = None if args.lockfile is None else read_lock(args.lockfile)
-    diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=lock)
-    explicit = args.origins.get("lockfile") == "flag"
-    if lock is not None and explicit and not any(d.level == "error" for d in diagnostics):
-        # as lint(recipe, lock=...): drift against an explicit --lockfile is a finding
+    lock: Lock | None = None
+    selected: Lock | NoLock | None = None  # None: the image's own build/tundravm.lock
+    if args.lockfile is not None:
+        selected = NO_LOCK if _missing_lock(args) else read_lock(args.lockfile)
+        lock = selected if isinstance(selected, Lock) else None
+    diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=selected)
+    if lock is not None and not any(d.level == "error" for d in diagnostics):
+        # as lint(recipe, lock=...): drift against a selected lockfile is a finding
         diagnostics.extend(
             CheckDiagnostic(
                 level=d.level,
@@ -1150,12 +1204,35 @@ def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _with_lockfile(img: Lowered, args: argparse.Namespace) -> Lowered:
-    """*img* reading ``--lockfile`` (checked readable) instead of ``build/tundravm.lock``."""
+    """*img* reading the selected lockfile instead of ``build/tundravm.lock``.
+
+    ``--lockfile`` must be readable; a configured one that does not exist is
+    reported and read as no lockfile (:func:`_missing_lock`).
+    """
     path: Path | None = getattr(args, "lockfile", None)
     if path is None:
         return img
-    read_lock(path)
+    if not _missing_lock(args):
+        read_lock(path)
     return replace(img, lock_file=path)
+
+
+def _missing_lock(args: argparse.Namespace, then: str = "") -> bool:
+    """Whether the selected lockfile is ``[tool.tundravm]``'s and does not exist; says so.
+
+    The note goes to stderr; *then* says what the command does without it. A
+    missing ``--lockfile`` is not this case: :func:`read_lock` fails on it.
+    """
+    path: Path | None = getattr(args, "lockfile", None)
+    if path is None or args.origins.get("lockfile") != "pyproject" or path.is_file():
+        return False
+    print(f"note: {missing_lock_message(path)}{then}", file=sys.stderr)
+    return True
+
+
+def missing_lock_message(path: Path) -> str:
+    """What every reader of a configured lockfile *path* that does not exist reports."""
+    return f"configured lockfile {path} does not exist; run `tundravm lock` to create it"
 
 
 def _cmd_diff(args: argparse.Namespace, out: TextIO) -> int:
@@ -1251,8 +1328,10 @@ def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
     names = _variants(loaded, args)
     img = loaded.lowered()
     destination: Path = args.out if args.out is not None else Path(img.build_dir)
-    lock_path = args.lockfile if args.lockfile is not None else _lock_path(img, None)
-    locked = read_lock(lock_path) if args.lockfile is not None or lock_path.exists() else None
+    lock_path = _lock_path(img, args.lockfile)
+    missing = _missing_lock(args, "; fetching the refs as they resolve now")
+    present = args.lockfile is not None or lock_path.exists()
+    locked = read_lock(lock_path) if present and not missing else None
     err = sys.stderr
     reporter = TextReporter(err, color=_wants_color("auto", err))
     try:
@@ -1270,7 +1349,7 @@ def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
         state = "kept" if source.cached else "fetched"
         deps = f"  deps: {source.deps}" if source.deps is not None else ""
         print(f"  {source.name:<{width}}  {source.pin[:12]}  {state:<7}{deps}".rstrip(), file=out)
-    if locked is None:
+    if locked is None and not missing:
         print(f"note: no lockfile at {lock_path}; fetched the refs as they resolve now", file=out)
     return EXIT_OK
 
@@ -1280,7 +1359,14 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
     names = _variants(loaded, args)
     img = loaded.lowered()
     destination: Path = args.out if args.out is not None else Path(img.build_dir)
-    lock_path = args.lockfile if args.lockfile is not None else _lock_path(img, None)
+    lock_path = _lock_path(img, args.lockfile)
+    if args.origins.get("lockfile") == "pyproject" and not lock_path.is_file():
+        # frozen against the configured lockfile, never another one or none
+        raise LockfileError(
+            f"Configured lockfile {lock_path} does not exist.",
+            hint="Run `tundravm lock` to create it; bake freezes against the configured lockfile.",
+            context={"path": str(lock_path)},
+        )
     if args.lockfile is not None or lock_path.exists():
         locked: Lock | None = read_lock(lock_path)
     else:
@@ -1738,6 +1824,7 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         recipe="" if origins.get("recipe") == "pyproject" else str(args.recipe),
         out=args.out if origins.get("out") == "flag" else None,
         lockfile=args.lockfile if origins.get("lockfile") == "flag" else None,
+        lock_configured=origins.get("lockfile") == "pyproject",
         variants=names if args.variant else (),
         tree_flag=origins.get("tree") != "pyproject",
         recipe_path=str(args.recipe),

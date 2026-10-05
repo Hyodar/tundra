@@ -10,6 +10,7 @@ import pytest
 from tests.helpers import run_main, write_recipe_file
 from tundravm import ValidationError, explain_why
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.declarative import Directory, Fragment, Recipe, Variant
 from tundravm.declarative.resolve import Origin, provenance
 from tundravm.recipe import load_recipe
 
@@ -167,3 +168,29 @@ def test_provenance_records_every_step(recipe: Path) -> None:
         Origin("declared", "common", (("base", "Fragment"),)),
     )
     assert trace[("Unit", "tdxs.service")][0].fragments == (("tdxs", "Tdxs"),)
+
+
+def test_why_under_a_directory_needs_an_emitted_path(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "app"
+    (source / "conf.d").mkdir(parents=True)
+    (source / "app.conf").write_text("a\n", encoding="utf-8")
+    (source / "conf.d" / "10-net.conf").write_text("b\n", encoding="utf-8")
+    (source / "empty").mkdir()
+    recipe = Recipe(
+        "dir",
+        Fragment("base", items=(Directory("/etc/app", source),)),
+        variants=(Variant("dev", target="qemu"),),
+    )
+    why = explain_why(recipe, "dev", "/etc/app/app.conf")
+    assert [entry.declaration for entry in why.declarations] == ["Directory(extra, /etc/app)"]
+    assert why.files == ("mkosi.extra/etc/app/app.conf",)
+    nested = explain_why(recipe, "dev", "/etc/app/conf.d")
+    assert nested.files == ("mkosi.extra/etc/app/conf.d/10-net.conf",)
+    assert explain_why(recipe, "dev", "/etc/app/empty").declarations == why.declarations
+    whole = explain_why(recipe, "dev", "/etc/app")
+    assert len(whole.files) == 2
+    with pytest.raises(ValidationError, match="Nothing in the variant matches") as exc:
+        explain_why(recipe, "dev", "/etc/app/typo.conf")
+    assert "Close matches: /etc/app/app.conf" in (exc.value.hint or "")

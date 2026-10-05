@@ -269,7 +269,7 @@ def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
     directory = source_dir("tool", SHA_A, REPO)
     checkout = f'"$SRCDIR/tundravm-sources/{directory}"'
-    cache = '"${BUILDDIR:-$BUILDROOT/build}/tool-114cfef2b31621d2"'
+    cache = '"${BUILDDIR:-$BUILDROOT/build}/tool-4e1ad77c7e3da2b6"'
     assert pinned == (
         f'if ! ([ -d {cache} ] && [ "$(ls -A {cache} 2>/dev/null)" ]); then '
         f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: {directory} is not "

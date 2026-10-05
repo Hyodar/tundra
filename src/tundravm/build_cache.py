@@ -98,7 +98,7 @@ class CacheDecl:
     key: str
     artifacts: tuple[CacheFile | CacheDir, ...]
 
-    def wrap(self, build_cmd: str, *, root: str = "$BUILDDIR") -> str:
+    def wrap(self, build_cmd: str, *, root: str = "$BUILDDIR", exact_trees: bool = False) -> str:
         """Wrap *build_cmd* with cache check/store/restore logic.
 
         The cache lives in ``<root>/<key>``; *root* is a shell expression.
@@ -107,6 +107,11 @@ class CacheDecl:
             if ! (cache_exists); then
                 {build_cmd} && store artifacts
             fi && restore artifacts
+
+        With *exact_trees* a directory artifact is stored and restored whole
+        (``cp -a "<dir>/." "<target>/"``: dotfiles, symlinks, modes and empty
+        directories); without it, ``nethermind-v1``'s ``cp -r "<dir>"/*`` copies
+        its visible entries.
         """
         cache_dir = f'"{root}/{self.key}"'
         check = f'[ -d {cache_dir} ] && [ "$(ls -A {cache_dir} 2>/dev/null)" ]'
@@ -115,6 +120,10 @@ class CacheDecl:
         for a in self.artifacts:
             if isinstance(a, CacheFile):
                 store_parts.append(f'install -D -m {a.mode} "{a.src}" {cache_dir}/{a.name}')
+            elif exact_trees:
+                store_parts.append(
+                    f'mkdir -p {cache_dir}/{a.name} && cp -a "{a.src}/." {cache_dir}/{a.name}/'
+                )
             else:
                 store_parts.append(
                     f'mkdir -p {cache_dir}/{a.name} && cp -r "{a.src}"/* {cache_dir}/{a.name}/'
@@ -125,6 +134,10 @@ class CacheDecl:
         for a in self.artifacts:
             if isinstance(a, CacheFile):
                 restore_parts.append(f'install -D -m {a.mode} {cache_dir}/{a.name} "{a.dest}"')
+            elif exact_trees:
+                restore_parts.append(
+                    f'mkdir -p "{a.dest}" && cp -a {cache_dir}/{a.name}/. "{a.dest}/"'
+                )
             else:
                 restore_parts.append(
                     f'mkdir -p "{a.dest}" && cp -r {cache_dir}/{a.name}/* "{a.dest}"/'

@@ -18,7 +18,10 @@ from tundravm.declarative import (
     Git,
     Go,
     Install,
+    Package,
     Recipe,
+    Repository,
+    Setting,
     Tree,
     compile,
     lock,
@@ -62,7 +65,8 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
     build = Build(
         "tool", Git(REPO, "main"), recipe=go, install=(Install("build/tool", "/usr/bin/tool"),)
     )
-    spec = lower(_recipe(build)).source_builds()["tool"]
+    lowered = lower(_recipe(build))
+    spec = lowered.source_builds()["tool"]
     assert spec == SourceBuild(
         name="tool",
         source=GitSource(REPO, "main"),
@@ -71,7 +75,8 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
     )
     tree = _pinned(_recipe(build))
     hooks = _hooks(tree)
-    assert hooks == spec.render(SHA_A, mounted=True)
+    distribution = lowered.build_distribution("default")
+    assert hooks == spec.render(SHA_A, mounted=True, distribution=distribution)
     assert (
         "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/go ]; then export "
         "GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod && "
@@ -146,7 +151,8 @@ def test_dotnet_recipe_renders_dotnet_publish() -> None:
     ) in hooks
     assert "dotnet restore src/App/App.csproj --runtime linux-x64 && dotnet publish" in hooks
     assert "--output /build/app/publish -p:Deterministic=true" in hooks
-    assert 'cp -r "$BUILDROOT/build/app/publish"/*' in hooks
+    assert 'cp -a "$BUILDROOT/build/app/publish/."' in hooks
+    assert 'cp -a "${BUILDDIR:-$BUILDROOT/build}/app-' in hooks and "cp -r" not in hooks
 
 
 @pytest.mark.parametrize(("network", "sources"), [("1", ""), ("0", "/deps/nuget")])
@@ -282,3 +288,27 @@ def test_mounted_cache_key_fingerprints_what_the_build_produces() -> None:
     keys.append(_cache_key(arm))
     assert key not in keys and len(set(keys)) == len(keys)
     assert _cache_key(_recipe(_keyed(cache_key="team/tool"))) == f"team_tool-{fingerprint}"
+
+
+def test_mounted_cache_key_fingerprints_the_distribution() -> None:
+    def with_(*items: object, **recipe: object) -> str:
+        fragment = Fragment("tool", items=(_keyed(), *items))  # type: ignore[arg-type]
+        return _cache_key(Recipe("tool", fragment, **recipe))  # type: ignore[arg-type]
+
+    key = with_()
+    assert with_(Package("htop")) == key  # image packages are not the toolchain
+    assert with_(Setting("Build", "PackageCacheDirectory", ("mkosi.cache",))) == key
+    changed = [
+        with_(snapshot="20260101T000000Z"),
+        with_(snapshot="20260201T000000Z"),
+        with_(mirror="https://mirror.example.com"),
+        with_(base="debian/bookworm"),
+        with_(Repository("extra", "https://repo.example.com/debian", "trixie")),
+        with_(
+            Repository("extra", "https://repo.example.com/debian", "trixie", ("main", "contrib"))
+        ),
+        with_(Package("gcc-14", role="build")),
+        with_(Setting("Build", "ToolsTree", ("default",))),
+        with_(Setting("Build", "Environment", ("CC=clang",))),
+    ]
+    assert key not in changed and len(set(changed)) == len(changed)

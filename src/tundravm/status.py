@@ -21,6 +21,7 @@ from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
     INPROCESS,
     MANIFEST_KEY,
+    NO_LOCK,
     Artifact,
     Lock,
     ProbeRunner,
@@ -75,6 +76,8 @@ class Invocation:
     """RECIPE as ``next`` repeats it: empty when it came from ``[tool.tundravm]``."""
     out: Path | None = None
     lockfile: Path | None = None
+    lock_configured: bool = False
+    """Whether the lockfile is ``[tool.tundravm]``'s, reported as configured when missing."""
     variants: tuple[str, ...] = ()
     tree_flag: bool = True
     """Whether a ``compile`` suggestion spells out ``--out TREE`` (not when configured)."""
@@ -153,13 +156,13 @@ def project_status(
     tree_path = tree if tree is not None else out / TREE_DIRNAME
     img = loaded.lowered()
     names = tuple(variants)
-    lock, lock_item = _lock(img, names, lock_path)
+    lock, lock_item = _lock(img, names, lock_path, configured=invocation.lock_configured)
     sources = _sources(img, names, lock, out)
     tree_item = _tree(img, names, lock, tree_path)
     manifest = out / BAKE_RESULT_FILENAME
     artifacts = _artifacts(img, names, lock, manifest, verify=verify)
     backend = _backend(loaded, runner)
-    lint = _lint(loaded, names)
+    lint = _lint(loaded, names, lock)
     status = ProjectStatus(
         recipe=_recipe(loaded, img, names, invocation.recipe_path or invocation.recipe),
         lint=lint,
@@ -193,20 +196,29 @@ def _recipe(loaded: RecipeFile, img: Lowered, names: tuple[str, ...], shown: str
     return StatusItem("recipe", "ok", detail, data)
 
 
-def _lint(loaded: RecipeFile, names: tuple[str, ...]) -> StatusItem:
-    counts = summarize(check_report(loaded.recipe, loaded.image, variants=names))
+def _lint(loaded: RecipeFile, names: tuple[str, ...], lock: Lock | None) -> StatusItem:
+    """Lint against *lock*, the one status selected; ``None`` is no lockfile, never the default."""
+    selected = NO_LOCK if lock is None else lock
+    counts = summarize(check_report(loaded.recipe, loaded.image, variants=names, lock=selected))
     detail = ", ".join(f"{count} {level}" for level, count in counts.items())
     verdict: Verdict = "error" if counts["errors"] else "ok"
     return StatusItem("lint", verdict, detail, dict(counts))
 
 
-def _lock(img: Lowered, names: tuple[str, ...], path: Path) -> tuple[Lock | None, StatusItem]:
+def _lock(
+    img: Lowered, names: tuple[str, ...], path: Path, *, configured: bool = False
+) -> tuple[Lock | None, StatusItem]:
     scoped = img.select(names)
     builds = scoped.lock_sources()
     data: dict[str, object] = {"path": str(path), "present": path.is_file()}
     if not path.is_file():
         data.update(up_to_date=False, drift=[], unpinned=sorted(builds), version=None)
-        return None, StatusItem("lock", "missing", f"{path}: no lockfile", data)
+        detail = (
+            f"configured lockfile {path} does not exist; run tundravm lock"
+            if configured
+            else f"{path}: no lockfile"
+        )
+        return None, StatusItem("lock", "missing", detail, data)
     try:
         lock = read_lock(path)
         drift = scoped.lock_status(path)

@@ -2,7 +2,11 @@
 
 Uploads a raw disk image to GCS, creates a TDX-capable Compute Engine image and
 an Intel TDX Confidential VM from it.
-Requires the `gcloud` CLI to be installed and authenticated.
+Requires the `gcloud` CLI to be installed and authenticated, and current: one
+whose GA ``gcloud compute instances create`` takes ``--confidential-compute-type=TDX``
+(any release since Intel TDX on C3 became generally available, late 2024). Such a
+gcloud has ``gcloud storage cp``, which the upload calls directly; ``gsutil`` is
+not used. ``gcloud components update`` brings an older one up to date.
 """
 
 from __future__ import annotations
@@ -123,26 +127,17 @@ class GcpDeployAdapter:
         runner = self.runner if self.runner is not None else run_captured
         return runner(cmd)
 
-    def _copy_command(self) -> list[str]:
-        """``gcloud storage cp`` when this gcloud has it, else ``gsutil cp``."""
-        if self._run(["gcloud", "storage", "cp", "--help"]).returncode == 0:
-            return ["gcloud", "storage", "cp"]
-        if self.runner is not None or shutil.which("gsutil") is not None:
-            return ["gsutil", "cp"]
-        raise DeploymentError(
-            "Neither `gcloud storage` nor `gsutil` is available to upload the image.",
-            hint="Update the gcloud CLI (`gcloud components update`) or install gsutil.",
-            context={"adapter": self.name},
-        )
-
     def _upload_image(self, artifact_path: Path, *, bucket: str, image_name: str) -> str:
         gcs_uri = f"gs://{bucket}/tdx-images/{image_name}.tar.gz"
-        cmd = [*self._copy_command(), str(artifact_path), gcs_uri]
+        cmd = ["gcloud", "storage", "cp", str(artifact_path), gcs_uri]
         result = self._run(cmd)
         if result.returncode != 0:
             raise DeploymentError(
                 "GCS upload failed.",
-                hint="Check GCS bucket permissions.",
+                hint=(
+                    "Check GCS bucket permissions; if `gcloud storage` is unknown, update "
+                    "the gcloud CLI (`gcloud components update`)."
+                ),
                 context={"bucket": bucket, "stderr": stderr_of(result), "command": " ".join(cmd)},
             )
         return gcs_uri

@@ -832,9 +832,11 @@ def explain_why(
     with tempfile.TemporaryDirectory(prefix="tundravm-why-") as scratch:
         root = Path(scratch)
         emit(img.select((variant,)), root)
-        tree = _read_tree(root / variant if (root / variant).is_dir() else root)
+        variant_root = root / variant if (root / variant).is_dir() else root
+        tree = _read_tree(variant_root)
+        emitted = _emitted_paths(variant_root)
     items = {identity(item): item for item in resolved.items}
-    keys = _match_subject(subject, items, trace, tree)
+    keys = _match_subject(subject, items, trace, emitted, tree)
     declarations = tuple(
         WhyDeclaration(
             declaration=describe_identity(key),
@@ -847,13 +849,14 @@ def explain_why(
     )
     files: list[str] = []
     generated: list[str] = []
-    if subject.startswith("/"):
-        files.extend(_stage_paths(tree, subject))
+    path = posixpath.normpath(subject) if subject.startswith("/") else None
+    if path is not None:
+        files.extend(_stage_paths(tree, path))
     for key in keys:
         item = items.get(key)
         if item is None:
             continue
-        found, extra = _emitted_for(item, tree)
+        found, extra = _emitted_for(item, tree, path)
         files.extend(found)
         generated.extend(extra)
     return Why(
@@ -878,6 +881,16 @@ def _read_tree(root: Path) -> dict[str, str]:
     return tree
 
 
+def _emitted_paths(root: Path) -> frozenset[str]:
+    """Every image path the stage trees under *root* emit: files, symlinks and directories."""
+    found: set[str] = set()
+    for stage in STAGE_DIRS:
+        base = root / stage
+        if base.is_dir():
+            found.update(f"/{entry.relative_to(base).as_posix()}" for entry in base.rglob("*"))
+    return frozenset(found)
+
+
 def _image_paths(tree: Mapping[str, str]) -> dict[str, str]:
     """Image path (``/etc/app.conf``) -> tree path, for the files the stage trees hold."""
     found: dict[str, str] = {}
@@ -899,14 +912,19 @@ def _match_subject(
     subject: str,
     items: Mapping[Identity, Declaration],
     trace: Mapping[Identity, tuple[Origin, ...]],
+    emitted: frozenset[str],
     tree: Mapping[str, str],
 ) -> tuple[Identity, ...]:
-    """The identities *subject* names; ``ValidationError`` with close matches when none."""
+    """The identities *subject* names; ``ValidationError`` with close matches when none.
+
+    *emitted* is every image path the variant's tree holds (:func:`_emitted_paths`).
+    """
     known = list(dict.fromkeys([*items, *trace]))
     prefix, sep, name = subject.partition(":")
     if subject.startswith("/"):
-        keys = _path_keys(posixpath.normpath(subject), known)
-        if keys or posixpath.normpath(subject) in _image_paths(tree):
+        path = posixpath.normpath(subject)
+        keys = _path_keys(path, known, emitted)
+        if keys or path in emitted:
             return keys
     elif sep and prefix in WHY_PREFIXES:
         keys = _named_keys(prefix, name, known)
@@ -930,14 +948,22 @@ def _named_keys(kind: str, name: str, known: Sequence[Identity]) -> tuple[Identi
     return tuple(k for k in known if k[0] == wanted and k[1] == name)
 
 
-def _path_keys(path: str, known: Sequence[Identity]) -> tuple[Identity, ...]:
-    """Declarations that emit *path*: files at it, a directory holding it, or a unit file."""
+def _path_keys(
+    path: str, known: Sequence[Identity], emitted: frozenset[str]
+) -> tuple[Identity, ...]:
+    """Declarations that emit *path*: files at it, a directory holding it, or a unit file.
+
+    A ``Directory`` matches its own path (also once a variant removed it) and only
+    the descendants in *emitted*, never a path it does not hold.
+    """
     keys: list[Identity] = []
     for key in known:
         kind = key[0]
         if kind in ("File", "Template") and key[2] == path:
             keys.append(key)
-        elif kind == "Directory" and (path == key[2] or path.startswith(f"{key[2]}/")):
+        elif kind == "Directory" and (
+            path == key[2] or (path.startswith(f"{key[2]}/") and path in emitted)
+        ):
             keys.append(key)
         elif kind in ("Unit", "Service"):
             unit = key[1]
@@ -970,13 +996,21 @@ def _close_hint(subject: str, known: Sequence[Identity], tree: Mapping[str, str]
     )
 
 
-def _emitted_for(item: Declaration, tree: Mapping[str, str]) -> tuple[list[str], list[str]]:
-    """The tree files holding *item* and the lines the compiler generated for it."""
+def _emitted_for(
+    item: Declaration, tree: Mapping[str, str], path: str | None = None
+) -> tuple[list[str], list[str]]:
+    """The tree files holding *item* and the lines the compiler generated for it.
+
+    With *path* (the asked-about image path) inside a ``Directory``, only the
+    files at or below *path* are its.
+    """
     files: list[str] = []
     generated: list[str] = []
     match item:
         case File() | Template() | Directory():
             norm = posixpath.normpath(item.path)
+            if path is not None and path.startswith(f"{norm}/"):
+                norm = path
             prefix = f"mkosi.{item.stage}{norm}"
             files.extend(rel for rel in tree if rel == prefix or rel.startswith(f"{prefix}/"))
         case Unit() | Service():

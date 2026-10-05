@@ -2,17 +2,29 @@
 
 Lowering registers bash fragments per profile
 (``ProfileState.init_scripts``); compiling hands each profile's merged
-fragments to an Init, which sorts them by priority and
-generates ``/usr/bin/runtime-init`` plus ``runtime-init.service``.
+fragments to an Init, which orders them (:func:`runtime_init_order`) and
+generates ``/usr/bin/runtime-init`` plus ``runtime-init.service``. The lockfile
+records the same order.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from textwrap import dedent
 
 from tundravm.models import FileEntry, InitScriptEntry, ProfileState
+
+
+def runtime_init_order(entries: Iterable[InitScriptEntry]) -> list[InitScriptEntry]:
+    """*entries* in the order ``/usr/bin/runtime-init`` runs them.
+
+    Duplicate ``(priority, script)`` fragments run once, at the first one's place;
+    lower priorities run first and equal ones keep their registration order
+    (which ``Init.after`` decides).
+    """
+    unique = {(entry.priority, entry.script): entry for entry in entries}
+    return sorted(unique.values(), key=lambda entry: entry.priority)
 
 
 @dataclass(slots=True)
@@ -42,18 +54,9 @@ class Init:
         *network_setup* the unit requires ``network-setup.service``; without it, it
         waits for ``network-online.target``.
         """
-        merged_scripts = list(profile.init_scripts if scripts is None else scripts)
-        if not merged_scripts:
+        sorted_scripts = runtime_init_order(profile.init_scripts if scripts is None else scripts)
+        if not sorted_scripts:
             return
-        deduped: list[InitScriptEntry] = []
-        seen: set[tuple[int, str]] = set()
-        for entry in merged_scripts:
-            key = (entry.priority, entry.script)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(entry)
-        sorted_scripts = sorted(deduped, key=lambda e: e.priority)
 
         parts = [
             dedent("""\

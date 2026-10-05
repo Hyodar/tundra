@@ -3,6 +3,11 @@
 Uploads a VHD artifact to Azure, publishes it as a confidential-VM-capable
 Compute Gallery image version and creates a confidential VM from it.
 Requires the `az` CLI to be installed and authenticated.
+
+Secure Boot is off by default: tundravm does not sign the UKI, and Azure's
+firmware boots only signed ones with Secure Boot on. ``secure_boot=true``
+requires ``signed=true``, the statement that the UKI was signed with keys the
+firmware trusts; without it the deploy fails before anything is uploaded.
 """
 
 from __future__ import annotations
@@ -39,7 +44,18 @@ class AzureDeployAdapter:
         vm_size = params.pop("vm_size", DEFAULT_VM_SIZE)
         storage_account = params.pop("storage_account", "")
         gallery = params.pop("gallery", DEFAULT_GALLERY)
-        secure_boot = params.pop("secure_boot", "true").lower() == "true"
+        secure_boot = params.pop("secure_boot", "false").lower() == "true"
+        signed = params.pop("signed", "false").lower() == "true"
+        if secure_boot and not signed:
+            raise DeploymentError(
+                "Secure Boot needs a signed image; this one is not declared signed.",
+                hint=(
+                    "Pass --param secure_boot=false (Azure(secure_boot=False)) to boot the "
+                    "unsigned UKI, or sign it with keys Azure's firmware trusts and pass "
+                    "--param signed=true (Azure(signed=True))."
+                ),
+                context={"adapter": self.name, "variant": request.profile},
+            )
 
         # Check if az CLI is available
         if self.runner is None and shutil.which("az") is None:

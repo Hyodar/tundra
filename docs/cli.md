@@ -60,7 +60,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 |---|---|---|
 | `init` | Scaffolds a project from a starter template, lints it, prints the next steps and probes the chosen backend (see [Init](#init)). | |
 | `inspect` | Dry run per variant: parent, fragments, packages, files with digests, users, units, hooks, runtime-init steps, sources, targets (see [Inspect](#inspect)). `--format json` adds the recipe `digest` the lockfile records. `--diff-variants A B` lists what differs between two variants instead. `--variant NAME --why SUBJECT` explains one emitted object (see [Explaining one object](#explaining-one-object)). | |
-| `lint` | Every diagnostic: resolution, fragment checks, compiler rules. The compiler rules see the source pins of `--lockfile` (default `build/tundravm.lock` when it exists), so a pinned source never reports `source-unpinned`. An explicit `--lockfile` also adds its drift diagnostics (`lock-*`), as `lint(recipe, lock=...)` does. | an error (with `--strict`, a warning) |
+| `lint` | Every diagnostic: resolution, fragment checks, compiler rules. The compiler rules see the source pins of `--lockfile` (default `build/tundravm.lock` when it exists), so a pinned source never reports `source-unpinned`. A selected lockfile, `--lockfile` or the table's `lockfile`, also adds its drift diagnostics (`lock-*`), as `lint(recipe, lock=...)` does. | an error (with `--strict`, a warning) |
 | `compile` | Writes the mkosi tree to `--out` (default `build/mkosi`), one directory per variant, then prints `variants:`, `recipe_digest:` (the digest `lock` records) and `tree_digest:` (`Tree.digest`). `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
 | `diff` | Unified diff from the tree at `--against` (default `build/mkosi`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
 | `lock` | Writes the lockfile to `--lockfile` (default `build/tundravm.lock`) for the selected variants: version 4, with the `distribution`, `compiler`, `variants.<name>.kernel` and `variants.<name>.debloat` sections. A build whose source differs between variants is pinned per variant as `<variant>/<name>` (drift line `sources.<variant>.<name>`); `--update <variant>/<name>` re-resolves one variant's pin, `--update <name>` every variant's. `--check` prints the drift instead (see [Lockfile drift](#lockfile-drift)); a version 3 lockfile drifts as `~ version: 3 -> 4` until locked again. | `--check` and the lock is stale |
@@ -72,7 +72,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `ci` | `lint --strict`, `compile --check`, `lock --check` in order; stops at the first failure. The one `--lockfile` (default `build/tundravm.lock`) is loaded once and shared: lint and the tree check apply its pins, the lock check compares against it. | any step fails, including a missing lockfile |
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
 | `clean` | Removes the chosen parts of the build output directory: `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
-| `config` | Prints the effective `recipe`, `out`, `tree`, `lockfile` and `backend` and where each came from: `flag`, `pyproject` or `default` (see [Project configuration](#project-configuration)). | |
+| `config` | Prints the `recipe`, `out`, `tree`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
 `inspect`, `lint`, `compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH` names another one. `ci` needs the lockfile and loads it once for all three steps; `status` reports on it.
@@ -95,10 +95,11 @@ Every command that takes `RECIPE` then runs without it: `tundravm status`, `tund
 - The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`.
 - Precedence per value: an explicit argument or flag, then the table, then the built-in default (`build`, `build/mkosi`, `build/tundravm.lock`, the recipe file's `backend`).
 - The table's paths apply when `RECIPE` is omitted or names the table's recipe; another explicit `RECIPE` uses the built-in defaults.
-- `out` is `--out` of `fetch`, `bake`, `status` and `clean`; `tree` is `--out` of `compile` and `ci`, `--against` of `diff` and the tree `status` checks; `lockfile` is `--lockfile` everywhere except `clean` (applied for `inspect`, `lint`, `compile`, `diff`, `fetch` and `bake` once the file exists); `backend` is `bake --backend` and `doctor --backend`, and `bake` keeps the recipe file's own backend instance when it is of that kind.
+- `out` is `--out` of `fetch`, `bake`, `status` and `clean`; `tree` is `--out` of `compile` and `ci`, `--against` of `diff` and the tree `status` checks; `lockfile` is `--lockfile` everywhere except `clean`, drift diagnostics of `lint` included; `backend` is `bake --backend` and `doctor --backend`, and `bake` keeps the recipe file's own backend instance when it is of that kind.
+- A configured `lockfile` stays selected before the file exists and is never replaced by `build/tundravm.lock`. Until `tundravm lock` writes it, `inspect`, `lint`, `compile`, `diff` and `fetch` print `note: configured lockfile PATH does not exist; run `tundravm lock` to create it` on stderr and run without pins, `status` reports `configured lockfile PATH does not exist; run tundravm lock` on its `lock` line, and `bake` fails with `E_LOCKFILE` instead of baking unfrozen.
 - Without `RECIPE` and without a table, a recipe command exits 2 with `the following arguments are required: recipe (no pyproject.toml with a [tool.tundravm] table ...)`; `doctor`, `clean` and `config` keep working without one.
 
-`tundravm config` prints the effective values (`--format json`: `{"pyproject", "values": {KEY: {"value", "origin"}}}`); its `--out`, `--tree`, `--lockfile` and `--backend` show how flags override the table:
+`tundravm config` prints each value as the commands resolve it: the recipe path, the `out`, `tree` and `lockfile` paths, whether the recipe and the lockfile exist and, without `--backend` or a table `backend`, the kind of the backend the recipe file binds (origin `recipe`; `config` imports the recipe file to find it, with `--attr` and `--pythonpath` as the other commands take them). `--format json` prints `{"pyproject", "values": {KEY: {"value", "origin"}}}`, plus `exists` for `recipe` and `lockfile`. Its `--out`, `--tree`, `--lockfile` and `--backend` show how flags override the table. In a project `init` just wrote:
 
 ```console
 $ tundravm config
@@ -106,7 +107,7 @@ pyproject: /home/me/node/pyproject.toml
   recipe    node.py              pyproject
   out       build                pyproject
   tree      mkosi                pyproject
-  lockfile  build/tundravm.lock  pyproject
+  lockfile  build/tundravm.lock  pyproject; does not exist; run `tundravm lock`
   backend   inprocess            pyproject
 ```
 
@@ -573,7 +574,7 @@ Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to re
 
 - `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. `--json` prints `artifact`, `artifact_digest`, `scheme`, `tool`, `values`, `variant`.
 - `measure --export-policy FILE` (rtmr only) also writes a verifier policy: `{"schema_version": 1, "scheme": "rtmr", "tool", "tool_version", "artifact": {"path", "sha256"}, "registers": {"RTMR0", "RTMR1", "RTMR2"}}` (`RTMR3` when measured). Missing `RTMR0`..`RTMR2` is `E_VALIDATION`; placeholder values are refused unless `--allow-placeholder`, and then carry a `"note"` that says they are placeholders. `Tdxs.from_policy(FILE)` turns it into a validator's `expected_measurements`.
-- `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward` (`HOST:GUEST[,HOST:GUEST...]`); azure `storage_account` (required), `resource_group`, `location`, `vm_size`, `gallery`, `secure_boot`; gcp `project` and `bucket` (required), `zone`, `machine_type`. `--attach` (qemu only, the same as `--param daemonize=false`) runs QEMU in the foreground with the serial console on the terminal: Ctrl-A X quits QEMU, Ctrl-A C toggles its monitor, and `deploy` prints its result once QEMU exits. Simulated artifacts are refused unless `--allow-simulated-artifact`.
+- `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward` (`HOST:GUEST[,HOST:GUEST...]`); azure `storage_account` (required), `resource_group`, `location`, `vm_size`, `gallery`, `secure_boot`, `signed`; gcp `project` and `bucket` (required), `zone`, `machine_type`. `--attach` (qemu only, the same as `--param daemonize=false`) runs QEMU in the foreground with the serial console on the terminal: Ctrl-A X quits QEMU, Ctrl-A C toggles its monitor, and `deploy` prints its result once QEMU exits. Simulated artifacts are refused unless `--allow-simulated-artifact`.
 
 ### Deploying to each target
 
@@ -651,15 +652,15 @@ az sig image-version create --resource-group tdx-vms --gallery-name tdx_images -
   --os-vhd-uri https://mystorage.blob.core.windows.net/tdx-images/node_0.1.0-<8 hex>.vhd --query id --output json
 az vm create --resource-group tdx-vms --name tdx-azure-<6 hex> --location eastus --size Standard_DC2es_v5
   --image <image version id> --specialized --security-type ConfidentialVM
-  --os-disk-security-encryption-type VMGuestStateOnly --enable-vtpm true --enable-secure-boot true
+  --os-disk-security-encryption-type VMGuestStateOnly --enable-vtpm true --enable-secure-boot false
   --public-ip-sku Standard --output json
 ```
 
 - The image definition is `tdx-<variant>` in the gallery `gallery` (default `tdx_images`; letters, digits, `_` and `.` only); an existing one must already be a specialized V2 Linux definition with `SecurityType=ConfidentialVMSupported`. Each deploy adds an image version `1.0.<unix time>`.
-- `secure_boot=false` passes `--enable-secure-boot false`: with secure boot on, the firmware boots only images signed with keys it trusts, which a locally built UKI usually is not.
+- Secure Boot is off by default (`--enable-secure-boot false`): with it on, Azure's firmware boots only images signed with keys it trusts, and tundravm does not sign the UKI. `secure_boot=true` requires `signed=true`, your statement that the UKI was signed with such keys outside tundravm (`Azure(secure_boot=True, signed=True)`); without it `deploy` fails with `E_DEPLOYMENT` before uploading anything, and its hint names `--param secure_boot=false` and signing.
 - The endpoint names the VM, not an address: `az vm show -d -g tdx-vms -n tdx-azure-6fdd87 --query publicIps -o tsv` prints its IP, and `az vm boot-diagnostics get-boot-log -g tdx-vms -n tdx-azure-6fdd87` its serial console. `az vm create` also creates a NIC, a public IP and a disk; deleting the VM leaves them, so deploy into a resource group of its own and tear down with `az group delete -n tdx-vms` (the gallery goes with it), then remove the blob named by `blob`: `az storage blob delete --account-name mystorage -c tdx-images -n node_0.1.0-e79c907b.vhd`.
 
-**GCP.** Needs `gcloud` on `PATH` after `gcloud auth login`; `project` and `bucket` (an existing GCS bucket) are required. The upload uses `gcloud storage cp` when this gcloud has it (it probes `gcloud storage cp --help`), else `gsutil cp`, and fails before uploading when neither is there. Intel TDX instances run on the C3 machine series (default `c3-standard-4`) in zones that offer it. Bake a `gcp` variant, which packs its disk as a `tar.gz`:
+**GCP.** Needs `gcloud` on `PATH` after `gcloud auth login`; `project` and `bucket` (an existing GCS bucket) are required. The gcloud must be current: one whose GA `gcloud compute instances create` takes `--confidential-compute-type=TDX`, which any release since Intel TDX on C3 became generally available (late 2024) does (`gcloud components update` updates an older one). The upload runs `gcloud storage cp` directly; `gsutil` is not used. Intel TDX instances run on the C3 machine series (default `c3-standard-4`) in zones that offer it. Bake a `gcp` variant, which packs its disk as a `tar.gz`:
 
 ```console
 $ tundravm bake image.py --variant gcp --backend local
@@ -696,8 +697,8 @@ A C3 instance has a gVNIC network interface and NVMe disks, so the image's kerne
 | Line | Reports | Verdicts |
 |---|---|---|
 | `recipe` | path, recipe digest (as `inspect --format json`), variants, mkosi dialect, base and snapshot | `ok` |
-| `lint` | diagnostic counts by level | `ok`, `error` when there are errors |
-| `lock` | `--lockfile` (default `build/tundravm.lock`): present, version, drifted sections (as `lock --check`), unpinned sources and kernels | `ok`, `stale`, `missing` |
+| `lint` | diagnostic counts by level, linted with the `lock` line's lockfile (no pins when it is missing or unreadable) | `ok`, `error` when there are errors |
+| `lock` | `--lockfile` or the table's `lockfile` (default `build/tundravm.lock`; a configured one that does not exist reads `configured lockfile PATH does not exist; run tundravm lock`): present, version, drifted sections (as `lock --check`), unpinned sources and kernels | `ok`, `stale`, `missing` |
 | `source` | one per source build, built kernel and `EfiStub` package (`efi-stub`), by lock key: whether `OUT/.sources/<name>-<pin12>-<id8>` holds a complete, unmodified checkout of the locked pin (verified as `fetch` does) | `ok`, `stale` (another pin, an incomplete checkout, or one modified since the fetch: `checkout at PATH modified since the fetch (...); run tundravm fetch --force`), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
 | `tree` | `OUT/mkosi` (`--out`, default `build`) against what the recipe compiles to now, as `compile --check` | `ok`, `stale`, `missing` |
 | `artifact` | one per baked variant and target in `OUT/bake-result.json`: path, size, sha256 prefix, integrity (`unchecked`; with `--verify` the file is hashed: `verified` or `mismatch`), `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches, or on an integrity mismatch | `ok`, `stale`, `missing` |

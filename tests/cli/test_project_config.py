@@ -74,7 +74,7 @@ def test_the_table_is_found_from_a_subdirectory(
     assert code == EXIT_OK
     values = json.loads(out)["values"]
     recipe = (project / "node.py").resolve()
-    assert values["recipe"] == {"value": str(recipe), "origin": "pyproject"}
+    assert values["recipe"] == {"value": str(recipe), "origin": "pyproject", "exists": True}
     assert run_main("lint")[0] == EXIT_OK
 
 
@@ -87,10 +87,10 @@ def test_explicit_flags_override_the_table(project: Path) -> None:
     payload = json.loads(out)
     assert payload["pyproject"] == str(project / "pyproject.toml")
     assert payload["values"] == {
-        "recipe": {"value": "node.py", "origin": "pyproject"},
+        "recipe": {"value": "node.py", "origin": "pyproject", "exists": True},
         "out": {"value": "o", "origin": "flag"},
         "tree": {"value": "mkosi", "origin": "pyproject"},
-        "lockfile": {"value": "build/tundravm.lock", "origin": "pyproject"},
+        "lockfile": {"value": "build/tundravm.lock", "origin": "pyproject", "exists": False},
         "backend": {"value": "lima", "origin": "flag"},
     }
 
@@ -111,9 +111,24 @@ def test_config_text_names_each_origin(project: Path) -> None:
         "  recipe    node.py              pyproject",
         "  out       build                pyproject",
         "  tree      mkosi                pyproject",
-        "  lockfile  build/tundravm.lock  pyproject",
+        "  lockfile  build/tundravm.lock  pyproject; does not exist; run `tundravm lock`",
         "  backend   inprocess            pyproject",
     ]
+    assert run_main("lock")[0] == EXIT_OK
+    assert "  lockfile  build/tundravm.lock  pyproject\n" in run_main("config")[1]
+
+
+def test_config_reports_the_backend_the_recipe_file_binds(project: Path) -> None:
+    pyproject = project / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace('backend = "inprocess"\n', ""),
+        encoding="utf-8",
+    )
+    values = json.loads(run_main("config", "--format", "json")[1])["values"]
+    assert values["backend"] == {"value": "inprocess", "origin": "recipe"}
+    assert run_main("config")[1].splitlines()[-1] == (
+        "  backend   inprocess            recipe (the recipe file's `backend`)"
+    )
 
 
 def test_missing_table_is_the_recipe_usage_error(
@@ -151,5 +166,6 @@ def test_a_bad_table_is_a_validation_error(
 
 
 def test_bake_uses_the_configured_out(project: Path) -> None:
+    assert run_main("lock")[0] == EXIT_OK
     assert run_main("bake", "-q")[0] == EXIT_OK
     assert (project / "build" / "bake-result.json").is_file()

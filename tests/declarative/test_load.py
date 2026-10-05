@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main
-from tundravm import Recipe, load
+from tundravm import Recipe, load, load_recipe
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 from tundravm.errors import ValidationError
 from tundravm.recipe import load_image
@@ -52,7 +52,11 @@ def test_load_returns_the_recipe(recipe_file: Path) -> None:
     assert load(recipe_file, attribute=None) == recipe
 
 
-def test_load_discovers_a_build_factory_and_rejects_other_values(tmp_path: Path) -> None:
+def test_load_is_load_recipe() -> None:
+    assert load is load_recipe
+
+
+def test_load_discovers_like_the_cli_and_rejects_other_values(tmp_path: Path) -> None:
     factory = tmp_path / "factory.py"
     factory.write_text(
         "from tundravm import Fragment, Recipe\n"
@@ -60,10 +64,16 @@ def test_load_discovers_a_build_factory_and_rejects_other_values(tmp_path: Path)
         "    return Recipe('f', Fragment('c'))\n",
         encoding="utf-8",
     )
-    assert load(factory, attribute=None).name == "f"
+    assert load(factory).name == "f"
     assert load(factory, attribute="build").name == "f"
     with pytest.raises(ValidationError, match="no attribute 'recipe'"):
-        load(factory)
+        load(factory, attribute="recipe")
+    upper = tmp_path / "upper.py"
+    upper.write_text(
+        "from tundravm import Fragment, Recipe\nRECIPE = Recipe('u', Fragment('c'))\n",
+        encoding="utf-8",
+    )
+    assert load(upper).name == "u"
     nothing = tmp_path / "nothing.py"
     nothing.write_text("x = 1\n", encoding="utf-8")
     with pytest.raises(ValidationError, match="does not define a Recipe"):

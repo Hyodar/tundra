@@ -36,6 +36,7 @@ from tundravm.declarative import (
     User,
     Variant,
     compile,
+    lock,
     lower,
     resolve,
 )
@@ -128,7 +129,7 @@ def declarative_recipe() -> Recipe:
 
 
 EQUIVALENCE_TREE = "9f9e6b98aac49ff870e81b97801bcd01b742ec6575800773550e628050c8ff77"
-EQUIVALENCE_RECIPE = "8b91d4ae612c237aa879c98cf87be2348c5e5c8ff167f08a97433111314c4d04"
+EQUIVALENCE_RECIPE = "9a4c9a5ec0e619b154ad097cc63d1d0c98eca22ebf5df9d2a4af34e9fcd78cd9"
 """The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
 fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly."""
 
@@ -153,6 +154,36 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     order = ["key-gen", "disk-setup", "test -d", "echo up", "secret-delivery"]
     assert [runtime_init.index(marker) for marker in order] == sorted(
         runtime_init.index(marker) for marker in order
+    )
+
+
+def test_runtime_init_order_between_equal_priorities_enters_the_recipe_digest(
+    tmp_path: Path,
+) -> None:
+    def ordered(first: str, second: str) -> Recipe:
+        steps = {"a": "echo a\n", "b": "echo b\n"}
+        return Recipe(
+            "inits",
+            Fragment(
+                "c",
+                items=(
+                    Init(first, steps[first], priority=50),
+                    Init(second, steps[second], priority=50, after=(first,)),
+                ),
+            ),
+        )
+
+    a_first, b_first = ordered("a", "b"), ordered("b", "a")
+    scripts = []
+    for name, recipe in (("a", a_first), ("b", b_first)):
+        emit(lower(recipe), tmp_path / name)
+        scripts.append((tmp_path / name / "default/mkosi.extra/usr/bin/runtime-init").read_text())
+    assert scripts[0].index("echo a") < scripts[0].index("echo b")
+    assert scripts[1].index("echo b") < scripts[1].index("echo a")
+    assert lower(a_first).digest() != lower(b_first).digest()
+    assert (
+        lock(a_first).lockfile.sections["init_scripts"]
+        != (lock(b_first).lockfile.sections["init_scripts"])
     )
 
 

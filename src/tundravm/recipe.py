@@ -43,9 +43,10 @@ def load_recipe(
     attribute: str | None = None,
     extra_paths: Sequence[str | Path] = (),
 ) -> Recipe:
-    """Import a recipe file and return the ``Recipe`` it defines.
+    """Import a recipe file and return the ``Recipe`` it defines (also ``tundravm.load``).
 
-    Resolution order when *attribute* is not given:
+    *attribute* names the module-level ``Recipe``, or a zero-argument factory
+    returning one. Without it, discovery is the CLI's:
 
     1. A module-level ``Recipe`` bound to one of ``RECIPE_OBJECT_NAMES``.
     2. A zero-argument callable named in ``RECIPE_FACTORY_NAMES`` returning one.
@@ -59,6 +60,10 @@ def load_recipe(
     modules and project-local packages resolve.
     """
     return load_file(path, attribute=attribute, extra_paths=extra_paths).recipe
+
+
+load = load_recipe
+"""``tundravm.load``: the same function as :func:`load_recipe`."""
 
 
 def load_image(
@@ -366,6 +371,7 @@ __all__ = [
     "RECIPE_FACTORY_NAMES",
     "RECIPE_OBJECT_NAMES",
     "RecipeFile",
+    "load",
     "load_file",
     "load_image",
     "load_recipe",

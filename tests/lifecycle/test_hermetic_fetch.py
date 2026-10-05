@@ -272,6 +272,164 @@ def test_cli_fetch_lists_the_dependency_outcome(
     assert "tool: deps: skipped (no host go)" in captured.err
 
 
+MODULE = "example.com/Dep"
+MODULE_DIR = "example.com/!dep@v1.2.0"
+"""The module ``go.sum`` names, and its directory in the module cache (case-encoded)."""
+
+
+@pytest.fixture
+def go_repo(tmp_path: Path) -> tuple[str, str]:
+    """A Go module with one dependency in ``go.sum``: ``(url, commit)``."""
+    path = tmp_path / "go-upstream"
+    path.mkdir()
+    _git("init", "-q", "-b", "main", cwd=path)
+    (path / "go.mod").write_text("module example.com/tool\n\ngo 1.22\n", encoding="utf-8")
+    (path / "go.sum").write_text(
+        f"{MODULE} v1.2.0 h1:zip=\n{MODULE} v1.2.0/go.mod h1:mod=\n", encoding="utf-8"
+    )
+    _git("add", ".", cwd=path)
+    _git("commit", "-qm", "one", cwd=path)
+    return path.as_uri(), _git("rev-parse", "HEAD", cwd=path)
+
+
+class _GoModules(_Toolchain):
+    """A fake ``go mod download`` that fills the module cache from ``go.sum``."""
+
+    def run(
+        self, argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append((tuple(argv), cwd, dict(env)))
+        cache = Path(env["GOMODCACHE"])
+        assert (cwd / "go.sum").is_file()
+        (cache / MODULE_DIR).mkdir(parents=True, exist_ok=True)
+        (cache / MODULE_DIR / "dep.go").write_text("package dep\n", encoding="utf-8")
+        download = cache / "cache/download/example.com/!dep/@v"
+        download.mkdir(parents=True, exist_ok=True)
+        (download / "v1.2.0.mod").write_text("module example.com/Dep\n", encoding="utf-8")
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+
+def test_fetch_keeps_the_deps_only_while_their_manifest_is_complete(
+    tmp_path: Path, go_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, first = go_repo
+    tools = _GoModules(monkeypatch, ["go"])
+    recipe = _recipe(_build(url, "go"))
+    out = tmp_path / "out"
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    assert fetched.deps == "go: prefetched"
+    deps = out / ".sources" / "deps"
+    (marker,) = deps.glob("*.go.json")
+    contents = json.loads(marker.read_text(encoding="utf-8"))["contents"]
+    assert sorted(contents) == ["cache/download/example.com/!dep/@v/v1.2.0.mod", MODULE_DIR]
+    assert contents[MODULE_DIR] == "dir"
+
+    (kept,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    assert kept.deps == "go: kept" and len(tools.calls) == 1
+
+    shutil.rmtree(deps / "go" / MODULE_DIR)
+    (repaired,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    assert repaired.deps == (
+        f"go: prefetched (was incomplete: deps/go/{MODULE_DIR} is missing or changed)"
+    )
+    assert len(tools.calls) == 2 and (deps / "go" / MODULE_DIR / "dep.go").is_file()
+
+    shutil.rmtree(deps / "go" / MODULE_DIR)
+    _GoModules(monkeypatch, [])
+    (unrepaired,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    assert unrepaired.deps == f"go: incomplete (deps/go/{MODULE_DIR} is missing or changed)"
+
+
+def test_fetch_force_refills_the_dependency_caches(
+    tmp_path: Path, go_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, first = go_repo
+    tools = _GoModules(monkeypatch, ["go"])
+    recipe = _recipe(_build(url, "go"))
+    out = tmp_path / "out"
+    fetch(recipe, lock=_locked(recipe, first), out=out)
+    stale = out / ".sources" / "deps" / "go" / "stale"
+    stale.write_text("left over\n", encoding="utf-8")
+    (forced,) = fetch(recipe, lock=_locked(recipe, first), out=out, force=True)
+    assert forced.deps == "go: prefetched" and len(tools.calls) == 2
+    assert not stale.exists()
+    assert (out / ".sources" / "deps" / "go" / MODULE_DIR / "dep.go").is_file()
+
+
+def test_a_marker_without_a_manifest_is_prefetched_again(
+    tmp_path: Path, go_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, first = go_repo
+    tools = _GoModules(monkeypatch, ["go"])
+    recipe = _recipe(_build(url, "go"))
+    out = tmp_path / "out"
+    fetch(recipe, lock=_locked(recipe, first), out=out)
+    (marker,) = (out / ".sources" / "deps").glob("*.go.json")
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    del record["contents"]
+    marker.write_text(json.dumps(record), encoding="utf-8")
+    (again,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    assert again.deps == "go: prefetched (was incomplete: the marker has no content manifest)"
+    assert len(tools.calls) == 2
+
+
+@pytest.mark.parametrize("kind", ["cargo", "dotnet"])
+def test_cargo_and_nuget_manifests_come_from_the_lock_and_the_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    path = tmp_path / "upstream"
+    path.mkdir()
+    _git("init", "-q", "-b", "main", cwd=path)
+    (path / "Cargo.toml").write_text('[package]\nname = "tool"\n', encoding="utf-8")
+    (path / "Cargo.lock").write_text(
+        'version = 3\n\n[[package]]\nname = "tool"\nversion = "0.1.0"\n\n'
+        '[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\n',
+        encoding="utf-8",
+    )
+    (path / "App.csproj").write_text("<Project />\n", encoding="utf-8")
+    _git("add", ".", cwd=path)
+    _git("commit", "-qm", "one", cwd=path)
+    url, first = path.as_uri(), _git("rev-parse", "HEAD", cwd=path)
+    crate = "registry/cache/index.crates.io-6f17d22bba15001f/serde-1.0.0.crate"
+
+    def run(
+        argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        if kind == "cargo":
+            target = Path(env["CARGO_HOME"]) / crate
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"crate")
+        else:
+            (Path(argv[-1]) / "newtonsoft.json" / "13.0.1").mkdir(parents=True)
+            (Path(argv[-1]) / "newtonsoft.json" / "13.0.1" / ".nupkg.metadata").write_text("{}")
+            (cwd / "obj").mkdir()
+            assets = {
+                "libraries": {
+                    "Newtonsoft.Json/13.0.1": {"type": "package", "path": "newtonsoft.json/13.0.1"}
+                }
+            }
+            (cwd / "obj" / "project.assets.json").write_text(json.dumps(assets))
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+    _Toolchain(monkeypatch, ["cargo", "dotnet"])
+    monkeypatch.setattr(_source, "run_tool", run)
+    recipe = _recipe(_build(url, kind))
+    out = tmp_path / "out"
+    fetch(recipe, lock=_locked(recipe, first), out=out)
+    (marker,) = (out / ".sources" / "deps").glob(f"*.{CACHES[kind]}.json")
+    contents = json.loads(marker.read_text(encoding="utf-8"))["contents"]
+    if kind == "cargo":
+        assert contents == {crate: f"5 {hashlib.sha256(b'crate').hexdigest()}"}
+        (out / ".sources" / "deps" / "cargo" / crate).write_bytes(b"other")
+    else:
+        assert contents == {"newtonsoft.json/13.0.1": "dir"}
+        shutil.rmtree(out / ".sources" / "deps" / "nuget" / "newtonsoft.json")
+    _Toolchain(monkeypatch, [])
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    assert fetched.deps is not None and fetched.deps.startswith(f"{CACHES[kind]}: incomplete (")
+
+
 # ── bake --offline ───────────────────────────────────────────────────
 
 
@@ -295,6 +453,31 @@ def test_offline_bake_refuses_a_build_without_prefetched_deps(
         )
     assert missing.value.code == ErrorCode.STATE
     assert "tundravm fetch" in str(missing.value.hint) and "`go`" in str(missing.value.hint)
+    assert backend.requests == []
+
+
+def test_offline_bake_names_the_missing_cache_entry(
+    tmp_path: Path, go_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, first = go_repo
+    _GoModules(monkeypatch, ["go"])
+    recipe = _recipe(_build(url, "go"))
+    out = tmp_path / "out"
+    fetch(recipe, lock=_locked(recipe, first), out=out)
+    shutil.rmtree(out / ".sources" / "deps" / "go" / MODULE_DIR)
+    backend = _Recording()
+    with pytest.raises(StateError, match="incomplete go dependency cache") as incomplete:
+        bake_image(
+            lower(recipe),
+            None,
+            locked=_locked(recipe, first),
+            backend=backend,
+            out=out,
+            offline=True,
+            fetch=False,
+        )
+    assert f"deps/go/{MODULE_DIR} is missing or changed" in str(incomplete.value)
+    assert f"tundravm fetch RECIPE --out {out}" in str(incomplete.value.hint)
     assert backend.requests == []
 
 

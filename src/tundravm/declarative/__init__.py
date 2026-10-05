@@ -10,6 +10,7 @@ a recipe and explicit inputs and returns explicit results.
 """
 
 from tundravm.policy import Policy
+from tundravm.recipe import load
 
 from .lifecycle import (
     Artifact,
@@ -39,7 +40,6 @@ from .lifecycle import (
     verify_artifact,
     write_lock,
 )
-from .load import load
 from .lower import lower
 from .model import (
     Build,

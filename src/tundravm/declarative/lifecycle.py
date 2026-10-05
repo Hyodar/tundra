@@ -20,14 +20,16 @@ import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, fields, replace
+from enum import Enum
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Final, Literal, get_args
 
 from tundravm import check as _check
 from tundravm._modules import SecretDelivery
 from tundravm._source import (
     SOURCES_DIRNAME,
     GitSource,
+    LanguageBuild,
     NamedSource,
     Resolver,
     SourceBuild,
@@ -282,7 +284,10 @@ class Azure:
     """A TDX confidential VM size: the DCesv5/DCedsv5 or ECesv5/ECedsv5 series."""
     gallery: str = "tdx_images"
     """The Compute Gallery (in ``resource_group``) the image version is published to."""
-    secure_boot: bool = True
+    secure_boot: bool = False
+    """Create the VM with Secure Boot on; requires ``signed`` (an unsigned UKI cannot boot)."""
+    signed: bool = False
+    """The UKI was signed, outside tundravm, with keys Azure's Secure Boot firmware trusts."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,20 +470,30 @@ def _foreign_variant_globs(root: Path, compiled: Sequence[str]) -> list[str]:
 # ── lint ─────────────────────────────────────────────────────────────────
 
 
+class NoLock(Enum):
+    """The type of :data:`NO_LOCK`."""
+
+    NO_LOCK = "no lock"
+
+
+NO_LOCK: Final = NoLock.NO_LOCK
+"""``check_report(lock=NO_LOCK)``: no lockfile at all, never the image's default one."""
+
+
 def check_report(
     recipe: Recipe | None,
     img: Lowered | None,
     *,
     variants: Sequence[str] | None,
-    lock: Lock | Path | None = None,
+    lock: Lock | Path | NoLock | None = None,
 ) -> list[_check.Diagnostic]:
     """Declarative and compiler diagnostics in the compiler's report form.
 
     The recipe's resolution diagnostics come first, in resolution order. When
     none is an error, the lowered image's ``check()`` findings follow, sorted.
     The compiler checks see *lock*'s source pins (a :class:`Lock`, or the
-    lockfile at a path, none when it is missing); without it the image reads
-    its own lockfile (``build/tundravm.lock``).
+    lockfile at a path, none when it is missing; :data:`NO_LOCK`: none at
+    all); without it the image reads its own lockfile (``build/tundravm.lock``).
     """
     found: list[_check.Diagnostic] = []
     names: tuple[str, ...] | None = None
@@ -501,8 +516,8 @@ def check_report(
     assert img is not None
     profiles = names if names is not None else (None if variants is None else tuple(variants))
     with ExitStack() as stack:
-        if isinstance(lock, Lock):
-            img = stack.enter_context(using_lock(img, lock))
+        if isinstance(lock, Lock | NoLock):
+            img = stack.enter_context(using_lock(img, lock if isinstance(lock, Lock) else None))
         elif lock is not None:
             img = replace(img, lock_file=Path(lock))
         checked = _check.check(img, profiles=profiles)
@@ -757,7 +772,8 @@ def fetch_image(
     kernels' sources and ``EfiStub`` packages (``Lowered.lock_sources``). Each Go,
     Cargo and .NET build's dependencies are then prefetched into
     ``<out>/.sources/deps`` with the host's toolchain (``prefetch_deps``); without
-    it the build downloads them as before.
+    it the build downloads them as before. *force* also refills the dependency
+    caches.
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
@@ -787,6 +803,7 @@ def fetch_image(
     noun = "source" if len(builds) == 1 else "sources"
     copies: dict[tuple[object, str], Path] = {}
     done: set[Path] = set()
+    cleared: set[str] = set()
     with progress.phase("fetch", f"fetch {len(builds)} {noun}", profile=None):
         for name, build in builds.items():
             source = _checkout(
@@ -801,22 +818,39 @@ def fetch_image(
             copies.setdefault((build.source, source.pin), source.path)
             done.add(source.path)
             if isinstance(build, SourceBuild):
-                source = replace(
-                    source, deps=_prefetch(build, source, root, progress, offline=offline)
+                deps = _prefetch(
+                    build, source, root, progress, offline=offline, force=force, cleared=cleared
                 )
+                source = replace(source, deps=deps)
             fetched.append(source)
     return tuple(fetched)
 
 
 def _prefetch(
-    build: SourceBuild, source: FetchedSource, root: Path, progress: Progress, *, offline: bool
+    build: SourceBuild,
+    source: FetchedSource,
+    root: Path,
+    progress: Progress,
+    *,
+    offline: bool,
+    force: bool,
+    cleared: set[str],
 ) -> str | None:
-    """Prefetch *build*'s dependencies next to its checkout (``prefetch_deps``), with a notice."""
-    outcome = prefetch_deps(build, source.pin, source.path, root, offline=offline)
-    if outcome is None:
+    """Prefetch *build*'s dependencies next to its checkout (``prefetch_deps``), with a notice.
+
+    With *force* each dependency cache is removed before its first prefetch of
+    this fetch (*cleared* names the caches already removed) and prefetched again.
+    """
+    cache = build.build.deps if isinstance(build.build, LanguageBuild) else None
+    clear = force and cache is not None and cache not in cleared
+    outcome = prefetch_deps(
+        build, source.pin, source.path, root, offline=offline, force=force, clear=clear
+    )
+    if outcome is None or cache is None:
         return None
+    cleared.add(cache)
     message = f"{build.key}: deps: {outcome}"
-    if outcome.startswith("failed"):
+    if outcome.startswith("failed") or ": incomplete" in outcome:
         progress.emit("warning", None, f"{message}; the build downloads them", level="warning")
     else:
         progress.emit("log", None, message, source="notice")
@@ -926,7 +960,10 @@ def fetch(
     prefetched with the host's ``go``, ``cargo`` or ``dotnet`` into
     ``<out>/.sources/deps/{go,cargo,nuget}``, which the build hooks copy and point
     the toolchain at; a host without the toolchain skips it (``FetchedSource.deps``)
-    and the build downloads them, unless it bakes offline.
+    and the build downloads them, unless it bakes offline. A cache is kept only
+    while every entry of its content manifest (the modules ``go.sum`` names, the
+    crates of ``Cargo.lock``, the restored NuGet packages) is still there; an
+    incomplete one is prefetched again, and *force* refills every cache.
     """
     names = variant_names(recipe, variants)
     return fetch_image(

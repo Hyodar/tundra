@@ -15,12 +15,13 @@ from pathlib import Path
 
 from tundravm._source import (
     DEPS_DIRNAME,
+    NOT_PREFETCHED,
     SOURCES_DIRNAME,
     DebFile,
     KernelSource,
     LanguageBuild,
     SourceBuild,
-    deps_prefetched,
+    deps_problem,
     is_fetched,
 )
 from tundravm.backends.base import BuildBackend
@@ -318,7 +319,11 @@ def _fetched_sources(
         if not offline or not isinstance(spec, SourceBuild):
             continue
         recipe = spec.build
-        if isinstance(recipe, LanguageBuild) and not deps_prefetched(spec, pin, root):
+        problem = deps_problem(spec, pin, root)
+        if not isinstance(recipe, LanguageBuild) or problem is None:
+            continue
+        marker = str(root / DEPS_DIRNAME / (spec.deps_marker(pin) or ""))
+        if problem == NOT_PREFETCHED:
             raise StateError(
                 f"Source build {name!r} has no prefetched {recipe.kind} dependencies, "
                 "and an offline bake gives the build no network to download them.",
@@ -327,8 +332,18 @@ def _fetched_sources(
                     f"`{recipe.tool}` on PATH (it fills {root / DEPS_DIRNAME / recipe.deps}), "
                     "or bake without --offline."
                 ),
-                context={"marker": str(root / DEPS_DIRNAME / (spec.deps_marker(pin) or ""))},
+                context={"marker": marker},
             )
+        raise StateError(
+            f"Source build {name!r} has an incomplete {recipe.kind} dependency cache: "
+            f"{problem}, and an offline bake gives the build no network to download it.",
+            hint=(
+                f"Run `tundravm fetch RECIPE --out {destination}` on a host with "
+                f"`{recipe.tool}` on PATH: it prefetches the dependencies again "
+                "(`--force` refills every cache). Or bake without --offline."
+            ),
+            context={"marker": marker},
+        )
     return root
 
 

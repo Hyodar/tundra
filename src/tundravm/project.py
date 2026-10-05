@@ -24,7 +24,8 @@ ConfigKey = Literal["recipe", "out", "tree", "lockfile", "backend"]
 CONFIG_KEYS: tuple[ConfigKey, ...] = get_args(ConfigKey)
 PATH_KEYS: frozenset[str] = frozenset({"recipe", "out", "tree", "lockfile"})
 
-Origin = Literal["flag", "pyproject", "default"]
+Origin = Literal["flag", "pyproject", "default", "recipe"]
+"""Where a value came from; ``recipe``: the kind of the recipe file's ``backend``."""
 
 DEFAULTS: dict[ConfigKey, str] = {
     "out": "build",
@@ -41,8 +42,11 @@ RESOLUTION_HELP = (
     "and ci --out, diff --against), lockfile (--lockfile; not clean's) and backend "
     "(bake and doctor --backend), with paths relative to the pyproject.toml. They apply "
     "when RECIPE is omitted or names the table's recipe. An explicit RECIPE or flag "
-    "always wins; then the table; then the built-in default. `tundravm config` prints "
-    "the effective values and where each came from."
+    "always wins; then the table; then the built-in default. A configured lockfile is "
+    "never replaced by build/tundravm.lock: until `tundravm lock` writes it, commands say "
+    "it does not exist and bake refuses. `tundravm config` prints the values the "
+    "commands resolve (the recipe file's backend kind when none is set; whether the "
+    "recipe and lockfile exist) and where each came from."
 )
 
 

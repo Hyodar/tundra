@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tundravm._modules.init import runtime_init_order
 from tundravm._options import MkosiOptions
 from tundravm._source import (
     DebFile,
@@ -369,18 +370,67 @@ class Lowered:
         pins = self.source_pins(path)
         return [name for name, spec in self.lock_sources().items() if spec.pin_from(pins) is None]
 
+    def build_distribution(self, profile: str) -> dict[str, object]:
+        """What *profile*'s source builds compile against, for their cache fingerprint.
+
+        The base, architecture, mirror and snapshot, the variant's repositories
+        and build packages, and its ``Build`` settings that shape the build
+        sandbox (environment, sandbox trees and files, verbatim keys such as
+        ``ToolsTree``), so a persistent ``BuildDirectory`` never restores a binary
+        built by another toolchain. ``PackageCacheDirectory`` and ``WithNetwork``
+        choose where packages come from, not which, and stay out.
+        """
+        effective = self.state.effective_profile(profile)
+        options = self.mkosi_for(profile)
+        return {
+            "base": self.state.base,
+            "arch": self.arch,
+            "mirror": self.mirror,
+            "snapshot": self.snapshot,
+            "repositories": [
+                {
+                    "name": repository.name,
+                    "url": repository.url,
+                    "suite": repository.suite,
+                    "components": list(repository.components),
+                    "priority": repository.priority,
+                }
+                for repository in sorted(
+                    effective.repositories, key=lambda item: (item.name, item.url)
+                )
+            ],
+            "build_packages": sorted(effective.build_packages),
+            "build_settings": {
+                "environment": dict(sorted(options.environment.items())),
+                "environment_passthrough": list(options.environment_passthrough or ()),
+                "sandbox_trees": list(options.sandbox_trees),
+                "sandbox_files": [
+                    {"path": path, "sha256": hashlib.sha256(text.encode()).hexdigest()}
+                    for path, text in options.sandbox_files
+                ],
+                "settings": [
+                    [key, list(values)]
+                    for section, key, values in options.settings
+                    if section == "Build"
+                ],
+            },
+        }
+
     def pinned_state(self, pins: Mapping[str, LockedFetch]) -> RecipeState:
         """The state with every pinned source build's hook rendered at its pin from *pins*."""
         profiles: dict[str, ProfileState] = {}
         changed = False
         mounted = self.fetches_sources
         for name, profile in self.state.profiles.items():
+            distribution = self.build_distribution(name) if mounted else None
             swaps = {
                 spec.render(mounted=mounted): pinned
                 for spec in profile.source_builds.values()
                 if (
                     pinned := spec.render(
-                        self.keyed(name, spec).pin_from(pins), mounted=mounted, arch=self.arch
+                        self.keyed(name, spec).pin_from(pins),
+                        mounted=mounted,
+                        distribution=distribution,
                     )
                 )
                 != spec.render(mounted=mounted)
@@ -516,9 +566,10 @@ def _file_payload(entry: FileEntry) -> dict[str, object]:
 
 
 def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, object]]:
+    """The runtime-init fragments in the order the emitted script runs them."""
     return [
         {"priority": entry.priority, "sha256": hashlib.sha256(entry.script.encode()).hexdigest()}
-        for entry in sorted(entries, key=lambda item: (item.priority, item.script))
+        for entry in runtime_init_order(entries)
     ]
 
 
@@ -648,10 +699,11 @@ def recipe_payload(state: RecipeState, profile_names: Sequence[str]) -> dict[str
                 {"name": g.name, "system": g.system, "gid": g.gid}
                 for g in sorted(profile.groups, key=lambda item: item.name)
             ]
-        # The default profile's fragments are the top-level "init_scripts".
+        # The default profile's fragments are the top-level "init_scripts"; a variant
+        # adding its own records the merged sequence its runtime-init runs.
         own_init = state.ensure_profile(profile_name).init_scripts
         if profile_name != state.default_profile and own_init:
-            declared["init_scripts"] = _init_scripts_payload(own_init)
+            declared["init_scripts"] = _init_scripts_payload(profile.init_scripts)
         if profile.source_builds:
             declared["source_builds"] = {
                 name: spec.to_payload() for name, spec in sorted(profile.source_builds.items())
