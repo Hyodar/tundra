@@ -46,7 +46,7 @@ tundravm bake node.py                           # build every variant, frozen ag
 tundravm status node.py                         # where the project stands, and the next command to run
 tundravm sbom build --variant default     # SPDX/CycloneDX bill of materials
 tundravm evidence --bundle evidence.tar.gz      # auditor record of the bake, with a pass/fail verdict
-tundravm attest --endpoint unix:./tdxs.sock --policy peer.json   # check a running image's quote against a policy
+tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json   # validator + policy verdict
 tundravm measure build --variant default        # expected RTMRs of the baked artifact
 tundravm deploy build --variant default --target qemu
 ```
@@ -170,7 +170,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `bake RECIPE` | Fetch, then build the variants; `--backend`, `--lockfile`, `--out`, `--no-fetch`, `--offline` (no network in the build sandbox), `-v`/`-q`/`--json-logs`; `--verify-reproducible` bakes twice and compares artifacts |
 | `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`); `--export-policy FILE` writes the verifier policy `Tdxs.from_policy()` reads |
 | `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`; `--attach` keeps QEMU in the foreground) |
-| `attest` | Ask a running image's `tdxs` issuer for a nonce-bound quote and check its MRTD and RTMR0..RTMR3 against a policy (`--endpoint unix:PATH\|tcp://HOST:PORT`, `--policy FILE`; tdxs serves no http); exit 1 when `untrusted`. Measurements only: `Tdxs.from_policy()` verifies collateral |
+| `attest` | Ask a running image's `tdxs` issuer (`--issuer`) for a nonce-bound quote, have a `tdxs` validator (`--validator`) judge its signature and collateral, and check MRTD and RTMR0..RTMR3 against a policy (`--policy FILE`). `trusted` needs the validator; without one the verdict is `measurements-match`/`measurements-mismatch`; a simulator is `simulated` (exit 1 unless `--allow-simulated`) |
 | `sbom [MANIFEST]` | Bill of materials of a baked variant: mkosi's package manifest, the lockfile's source pins and the recipe metadata (`--format spdx-json\|cyclonedx-json\|text\|markdown`, `--output FILE`) |
 | `evidence [RECIPE]` | An auditor's record of a bake in `OUT/evidence/`: recipe and tree digests, the lockfile with its drift, each artifact re-hashed, the reproducibility outcome, the measurements policy, SPDX SBOMs, lint and provenance summaries, tool versions, indexed by `evidence.json`; `--bundle FILE.tar.gz` (deterministic under `SOURCE_DATE_EPOCH`), `--html FILE`; exit 1 when the verdict is `fail` |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
@@ -246,6 +246,7 @@ Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and contex
 | `E_LOCKFILE` | The recipe drifted from the lockfile, or `bake` found that the lockfile `[tool.tundravm]` configures does not exist. `tundravm lock RECIPE --check` shows the drift; `tundravm lock RECIPE` accepts it or writes the missing lockfile |
 | `E_STATE` | No `bake-result.json` where `measure`/`deploy`/`sbom`/`evidence` looked, or no artifact for that variant/target: bake first, and pass the bake's `--out` directory. Or `bake --no-fetch` found a source checkout missing, or `bake --offline` a dependency cache missing or incomplete (the error names the entry): run `tundravm fetch RECIPE` |
 | `E_MEASUREMENT` | No `measured-boot`/`dstack-mr` on `PATH`, or a simulated artifact. Install a tool, or pass `--allow-placeholder` for test values |
+| `E_ATTESTATION` | `attest` could not reach the tdxs issuer or validator, or either failed |
 | `E_DEPLOYMENT` | A simulated artifact (`--allow-simulated-artifact` for a test run), an artifact of another target, or a missing target tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 | `E_ARTIFACT_CHANGED` | The artifact's bytes no longer match the sha256 the bake recorded (`measure`, `deploy`, `status --verify`). Bake again |
 | `E_SOURCE` | A source could not be resolved, or a checkout in `build/.sources` changed since the fetch: `tundravm fetch RECIPE --force` |

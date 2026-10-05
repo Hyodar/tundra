@@ -1011,26 +1011,40 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         description=(
             help_text + " Asks the image's tdxs issuer for a quote bound to a nonce, reads "
             "MRTD and RTMR0..RTMR3 from it and compares them with the policy `measure "
-            "--export-policy` wrote. It checks measurements only; collateral verification "
-            "is done by a Tdxs validator."
+            "--export-policy` wrote. With --validator a tdxs validator checks the quote's "
+            "signature, certificate chain and collateral; only then can the verdict be "
+            "trusted."
         ),
         epilog=(
-            "Prints one line per register (match, mismatch, or unchecked when the policy "
-            "does not hold it), the nonce check (the quote's report_data must be "
-            "SHA-256(nonce)) and `verdict: trusted` or `verdict: untrusted`. Exit 0 when "
-            "trusted, 1 when untrusted, 2 on an SDK error (unreachable issuer, not a TDX "
-            "quote, a bad or placeholder policy)."
+            "Prints the signature status, the nonce check (the quote's 64-byte report_data "
+            "must be SHA-256(nonce) followed by 32 zero bytes), one line per register "
+            "(match, mismatch, or unchecked when the policy does not hold it) and the "
+            "verdict: trusted or untrusted with --validator, measurements-match or "
+            "measurements-mismatch without one, simulated for a simulator issuer. Exit 0 "
+            "for trusted or measurements-match (simulated with --allow-simulated), 1 for "
+            "every other verdict, 2 on an SDK error (unreachable issuer or validator, not a "
+            "TDX quote, a bad or placeholder policy)."
         ),
     )
     attest_cmd.set_defaults(handler=_cmd_attest)
     attest_cmd.add_argument(
-        "--endpoint",
+        "--issuer",
         required=True,
-        metavar="URL",
+        metavar="ENDPOINT",
         help=(
             "The tdxs issuer, which speaks JSON lines: unix:PATH or a path (the image's "
             "/var/tdxs.sock, e.g. forwarded with `ssh -L ./tdxs.sock:/var/tdxs.sock`) or "
             "tcp://HOST:PORT."
+        ),
+    )
+    attest_cmd.add_argument(
+        "--validator",
+        default=None,
+        metavar="ENDPOINT",
+        help=(
+            "A tdxs validator (unix:PATH or tcp://HOST:PORT) that judges the quote's "
+            "signature, certificate chain and collateral. Without it the signature is "
+            "unchecked and the verdict is never trusted."
         ),
     )
     attest_cmd.add_argument(
@@ -1047,13 +1061,19 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         help="Challenge the quote must bind, as hex (default: 32 random bytes).",
     )
     attest_cmd.add_argument(
+        "--allow-simulated",
+        action="store_true",
+        help="Exit 0 for a simulator issuer whose measurements match (verdict: simulated).",
+    )
+    attest_cmd.add_argument(
         "--format",
         choices=("text", "json", "markdown"),
         default="text",
         help=(
-            "Output format (default: %(default)s). json holds endpoint, platform, source, "
-            "quote_version, nonce {value, report_data, verdict}, registers {NAME: {actual, "
-            "expected, verdict}}, trusted and verdict; markdown is a table."
+            "Output format (default: %(default)s). json holds issuer, validator, platform, "
+            "source, quote_version, signature_status, validator_error, nonce {value, "
+            "report_data, expected_report_data, verdict}, registers {NAME: {actual, "
+            "expected, verdict}}, reasons, verdict, trusted and passed; markdown is a table."
         ),
     )
     attest_cmd.add_argument(
@@ -2042,9 +2062,15 @@ def doctor(
 
 
 def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
-    result = attest(args.endpoint, args.policy, nonce=args.nonce)
+    result = attest(
+        args.issuer,
+        args.policy,
+        validator=args.validator,
+        nonce=args.nonce,
+        allow_simulated=args.allow_simulated,
+    )
     print(render_attestation(result, args.format), file=out)
-    return EXIT_OK if result.trusted else EXIT_FAILURE
+    return EXIT_OK if result.passed else EXIT_FAILURE
 
 
 def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:

@@ -87,6 +87,7 @@ from .declarative import (
 )
 from .errors import (
     ArtifactError,
+    AttestationError,
     BackendExecutionError,
     DeploymentError,
     LintError,
@@ -107,6 +108,7 @@ __all__ = [
     "Artifact",
     "ArtifactError",
     "Attestation",
+    "AttestationError",
     "Azure",
     "Backend",
     "BackendExecutionError",

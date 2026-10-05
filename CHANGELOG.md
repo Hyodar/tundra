@@ -72,6 +72,8 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 - `tundravm import TREE [--out FILE] [--name NAME] [--dialect] [--format text|json]` and `import_tree()`/`Imported`: read an existing mkosi tree (one variant directory or a `compile` output) into a readable recipe module; configuration keys, packages, files and units become declarations, what tundravm generated itself becomes the declaration that generates it again, the rest stays verbatim; every tree tundravm writes, the surge example included, round-trips with an empty `diff`.
 
+- **Breaking:** `tundravm attest --endpoint` is now `--issuer`. A new `--validator ENDPOINT` sends the attestation document and nonce to a `tdxs` validator, and only its acceptance plus matching registers gives `trusted`. Without one the verdict is `measurements-match`/`measurements-mismatch` (`signature_status: "unchecked"`). A simulator is `simulated` (exit 1 unless `--allow-simulated`). The full 64-byte `report_data` is compared. Transport failures raise the new `AttestationError` (`E_ATTESTATION`) instead of `DeploymentError`. The JSON gains `issuer`, `validator`, `signature_status`, `validator_error`, `reasons`, `passed` and `nonce.expected_report_data`, and drops `endpoint`.
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

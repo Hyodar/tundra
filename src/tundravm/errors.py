@@ -21,6 +21,7 @@ class ErrorCode(StrEnum):
     STATE = "E_STATE"
     LINT = "E_LINT"
     SOURCE = "E_SOURCE"
+    ATTESTATION = "E_ATTESTATION"
 
 
 class TdxError(Exception):
@@ -165,6 +166,22 @@ class DeploymentError(TdxError):
         super().__init__(message, code=ErrorCode.DEPLOYMENT, hint=hint, context=context)
 
 
+class AttestationError(TdxError):
+    """``attest`` could not complete: a tdxs issuer or validator is unreachable or failed.
+
+    A rejected quote or a register mismatch is not this error but a verdict.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        hint: str | None = None,
+        context: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(message, code=ErrorCode.ATTESTATION, hint=hint, context=context)
+
+
 class ArtifactError(TdxError):
     """A baked artifact's bytes no longer match the sha256 ``bake-result.json`` recorded."""
 
@@ -217,6 +234,7 @@ class LintError(TdxError):
 
 __all__ = [
     "ArtifactError",
+    "AttestationError",
     "BackendExecutionError",
     "DeploymentError",
     "ErrorCode",

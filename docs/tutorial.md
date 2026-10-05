@@ -502,7 +502,7 @@ A policy exported from a real measurement needs no `allow_placeholder`. MRTD is 
 Once the image runs, `tundravm attest` checks it against the policy: it asks the image's `tdxs` issuer for a quote bound to a fresh nonce and compares the quote's registers with the policy's. It refuses a placeholder policy before contacting anything:
 
 ```console
-$ tundravm attest --endpoint unix:./tdxs.sock --policy peer.json
+$ tundravm attest --issuer unix:./tdxs.sock --policy peer.json
 error [E_MEASUREMENT]: Refusing to attest against a placeholder policy.
 Hint: Export the policy from a real measurement: `tundravm measure MANIFEST --export-policy FILE` with measured-boot or dstack-mr.
   policy: peer.json
@@ -513,10 +513,10 @@ With a policy from a real measurement and the image running on a TDX host with t
 
 ```bash
 ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock root@localhost &
-tundravm attest --endpoint unix:./tdxs.sock --policy peer.json
+tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json
 ```
 
-It prints the nonce check and one `match`, `mismatch` or `unchecked` line per register (MRTD, RTMR0..RTMR3), then `verdict: trusted` (exit 0) or `verdict: untrusted` (exit 1); [CLI: Attest](cli.md#attest) shows the output. It checks measurements only: a verifier built with `Tdxs.from_policy()` also verifies the quote's signature and collateral.
+`--validator` points at a `tdxs` validator on your side (not in the image), which checks the quote's signature, certificate chain and collateral. It prints the signature status, the nonce check and one `match`, `mismatch` or `unchecked` line per register (MRTD, RTMR0..RTMR3), then `verdict: trusted` (exit 0) or `verdict: untrusted` (exit 1); [CLI: Attest](cli.md#attest) shows the output. Without `--validator` the signature is unchecked and the verdict is only `measurements-match` (exit 0) or `measurements-mismatch` (exit 1), never `trusted`.
 
 ## 11. What is in the image
 

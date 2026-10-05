@@ -16,7 +16,7 @@ tundravm fetch   RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--for
 tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--backend KIND] [--no-fetch] [--offline] [--verify-reproducible] [-v | -q | --json-logs] [--color auto|always|never]
 tundravm measure MANIFEST [--variant NAME] [--scheme rtmr|azure|gcp] [--json] [--allow-placeholder] [--export-policy FILE]
 tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--attach] [--allow-simulated-artifact]
-tundravm attest  --endpoint URL --policy FILE [--nonce HEX] [--format text|json|markdown]
+tundravm attest  --issuer ENDPOINT [--validator ENDPOINT] --policy FILE [--nonce HEX] [--allow-simulated] [--format text|json|markdown]
 tundravm sbom    [MANIFEST] [--out DIR] [--variant NAME] [--lockfile PATH] [--format spdx-json|cyclonedx-json|text|markdown] [--output FILE]
 tundravm evidence [RECIPE] [--variant NAME]... [--out DIR] [--lockfile PATH] [--policy FILE] [--bundle FILE] [--html FILE] [--format text|json]
 tundravm doctor  [RECIPE] [--backend KIND]
@@ -72,7 +72,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `bake` | Compiles and builds every selected variant into `--out` (default `build`), then writes `OUT/bake-result.json`. `--verify-reproducible` builds them a second time into `OUT/.reproduce` and fails with `E_REPRODUCIBILITY` unless every artifact's sha256 matches (see [Bake](#bake)). | |
 | `measure` | Expected measurements of one baked variant. `--export-policy FILE` also writes the verifier policy `Tdxs.from_policy` reads (see [Measure and deploy](#measure-and-deploy)). | |
 | `deploy` | Deploys one baked variant's artifact. | |
-| `attest` | Asks a running image's `tdxs` issuer (`--endpoint`) for a quote bound to a nonce and checks its MRTD and RTMR0..RTMR3 against a verifier policy (`--policy`, from `measure --export-policy`): one `match`/`mismatch`/`unchecked` line per register, the nonce check, then `verdict: trusted` or `verdict: untrusted`. It checks measurements only; collateral verification is done by a Tdxs validator (see [Attest](#attest)). | the verdict is `untrusted` |
+| `attest` | Asks a running image's `tdxs` issuer (`--issuer`) for a quote bound to a nonce, has a `tdxs` validator (`--validator`) judge its signature and collateral, and checks its MRTD and RTMR0..RTMR3 against a verifier policy (`--policy`, from `measure --export-policy`): the signature status, the nonce check, one `match`/`mismatch`/`unchecked` line per register, then the verdict. `trusted` needs the validator; without one the verdict is `measurements-match` or `measurements-mismatch` (see [Attest](#attest)). | the verdict is `untrusted`, `measurements-mismatch` or `simulated` (without `--allow-simulated`) |
 | `sbom` | The software bill of materials of one baked variant (`MANIFEST` or `--out DIR`, `--variant`): mkosi's package manifest beside the artifact, the lockfile's source pins and the recipe metadata, merged into SPDX 2.3 JSON (default), CycloneDX 1.5 JSON, text or Markdown (`--format`); `--output FILE` writes it to a file (see [SBOM](#sbom)). | |
 | `evidence` | An auditor's record of one bake (`--out DIR`, default `build`; `--variant`, default every baked variant): recipe and tree digests, the lockfile with its drift verdict, each artifact with a fresh sha256 check, the reproducibility verdict, the measurements policy, an SPDX SBOM, the lint summary, a provenance summary and the tool versions, written to `OUT/evidence/` with an `evidence.json` index; `--bundle FILE.tar.gz` and `--html FILE` package it (see [Evidence](#evidence)). | the verdict is `fail` |
 | `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart`, `apt` and `pefile`, probed under the Python that runs mkosi, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk conversion needs on the host; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
@@ -692,13 +692,24 @@ Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to re
 
 ### Attest
 
-`tundravm attest --endpoint URL --policy FILE` checks what a running image measured. It sends the image's `tdxs` issuer an `issue` request with a nonce (`--nonce HEX`, default 32 random bytes), reads MRTD and RTMR0..RTMR3 from the TDX quote in the reply (DCAP quote v4 or v5), and compares them with the policy's `registers`: `match`, `mismatch` (both values printed), or `unchecked` for a register the policy does not hold (MRTD and RTMR3 unless it does). The quote's `report_data` must be `SHA-256(nonce)` followed by 32 zero bytes, as the issuer binds it, so a replayed quote fails the `nonce` line. The verdict is `trusted` only when the nonce matches and no register mismatches; exit 0 when trusted, 1 when untrusted, 2 on an SDK error. It checks measurements only: the quote's signature, certificate chain and collateral are verified by a Tdxs validator (`Tdxs.from_policy`), not here.
+`tundravm attest --issuer ENDPOINT --validator ENDPOINT --policy FILE` checks what a running image measured and whether its quote is genuine. It sends the image's `tdxs` issuer an `issue` request with a nonce (`--nonce HEX`, default 32 random bytes), reads MRTD and RTMR0..RTMR3 from the TDX quote in the reply (DCAP quote v4 or v5), and compares them with the policy's `registers`: `match`, `mismatch` (both values printed), or `unchecked` for a register the policy does not hold (MRTD and RTMR3 unless it does). The quote's whole 64-byte `report_data` must be `SHA-256(nonce)` followed by 32 zero bytes, as the issuer binds it, so a replayed quote fails the `nonce` line. With `--validator`, the attestation document and the nonce go to a `tdxs` validator, which checks the quote's signature, certificate chain and collateral; its answer decides authenticity.
+
+| Verdict | When | Exit |
+|---|---|---|
+| `trusted` | the validator accepted the document, the nonce matches and no register mismatches | 0 |
+| `untrusted` | the validator rejected the document, or (with a validator) the nonce or a register mismatches | 1 |
+| `measurements-match` | no `--validator` (`signature_status: unchecked`), the nonce matches and no register mismatches | 0 |
+| `measurements-mismatch` | no `--validator`, and the nonce or a register mismatches | 1 |
+| `simulated` | a `simulator` issuer whose nonce and registers match; never `trusted` | 1, or 0 with `--allow-simulated` |
+
+An SDK error (unreachable issuer or validator, not a TDX quote, a bad or placeholder policy) exits 2. `reasons` lists why a verdict is not positive: `validator-rejected`, `nonce-mismatch`, `register-mismatch`, `simulated`.
 
 ```console
 $ ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock root@localhost &
-$ tundravm attest --endpoint unix:./tdxs.sock --policy peer.json
+$ tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json
 attestation unix:./tdxs.sock (tdx, quote v4)
 policy: peer.json
+signature valid (tcp://127.0.0.1:7001)
 nonce  match      000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 MRTD   unchecked  1111...1111
 RTMR0  match      2020...2020
@@ -706,15 +717,17 @@ RTMR1  mismatch   7777...7777
        policy     2121...2121
 RTMR2  match      2222...2222
 RTMR3  unchecked  2323...2323
-note: checks measurements only; collateral verification is done by a Tdxs validator
+reasons: register-mismatch
 verdict: untrusted
 [exit 1]
 ```
 
-- `--endpoint` is `unix:PATH` (or a bare path) or `tcp://HOST:PORT`. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by forwarding the socket over SSH as above, or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). tdxs serves no http, so an `http://` or `https://` endpoint fails with `E_VALIDATION` (`Endpoint 'http://x' is http, which tdxs does not serve.`) before anything is contacted.
-- A `simulator` issuer's quote is not a TDX quote: its registers come from the issuer's `metadata` reply (`(simulator, issuer metadata)` in the header), and its nonce check reads the quote's first 32 bytes.
-- An unreachable endpoint or an issuer that replies with an `error` (`issuer error: tdx: failed to get raw quote: ...`) is `E_DEPLOYMENT`; a reply that is not a TDX quote is `E_MEASUREMENT`; a placeholder policy is refused with `E_MEASUREMENT`; a bad `--nonce` or policy file is `E_VALIDATION`.
-- `--format json` prints `{"checks", "endpoint", "nonce": {"value", "report_data", "verdict"}, "platform", "policy", "quote_version", "registers": {NAME: {"actual", "expected", "verdict"}}, "source": "quote"|"metadata", "trusted", "verdict"}` with sorted keys; `--format markdown` a table of the registers under the verdict.
+- `--issuer` and `--validator` are `unix:PATH` (or a bare path) or `tcp://HOST:PORT`. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by forwarding the socket over SSH as above, or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). tdxs serves no http, so an `http://` or `https://` endpoint fails with `E_VALIDATION` (`Endpoint 'http://x' is http, which tdxs does not serve.`) before anything is contacted.
+- The validator is a `tdxs` with a validator configured, run on the verifying side (not in the image under test). It gets `{"method": "validate", "data": {"document": HEX, "nonce": HEX}}` and answers `{"data": {"userData": HEX, "valid": true}, "error": null}` to accept; a `validator error: ...` reply is a rejection (printed as `signature invalid (ENDPOINT): ...`, reason `validator-rejected`).
+- Without `--validator` the output says `signature unchecked (no --validator)` and ends with a `note:` line; the verdict is never `trusted`.
+- A `simulator` issuer's quote is not a TDX quote: its registers come from the issuer's `metadata` reply (`(simulator, issuer metadata)` in the header), and its nonce check reads the quote's first 32 bytes followed by 32 zero bytes. Its verdict is at best `simulated`, which exits 1 unless `--allow-simulated`.
+- An unreachable issuer or validator, an issuer that replies with an `error` (`issuer error: tdx: failed to get raw quote: ...`), or a validator that cannot judge (`validator not configured`, a reply without `data.valid`) is `E_ATTESTATION`; a reply that is not a TDX quote is `E_MEASUREMENT`; a placeholder policy is refused with `E_MEASUREMENT`; a bad `--nonce` or policy file is `E_VALIDATION`.
+- `--format json` prints `{"checks", "issuer", "validator", "signature_status": "valid"|"invalid"|"unchecked", "validator_error", "nonce": {"value", "report_data", "expected_report_data", "verdict"}, "platform", "policy", "quote_version", "registers": {NAME: {"actual", "expected", "verdict"}}, "source": "quote"|"metadata", "reasons", "verdict", "trusted", "passed"}` with sorted keys; `--format markdown` a table of the registers under the verdict.
 
 ### Deploying to each target
 
@@ -757,7 +770,7 @@ qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -no-reboot
 - The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's port 22. Every port a `Secrets` of the variant listens on (recorded by the bake in `bake-result.json`) is forwarded from the same host port, so the host can deliver secrets to `localhost:8080`; `--param forward=HOST:GUEST,...` adds forwards, and one naming a `Secrets` port as its guest port replaces that default (`forward=18080:8080`). Two forwards on one host port are refused.
 - QEMU detaches by default (`daemonize=true`): the serial console goes to `serial_log` (`tail -f build/default/qemu-serial.log`), the monitor listens on the `monitor` socket (`socat - UNIX-CONNECT:build/default/qemu.monitor`, then `info status` or `quit`) and the pid to `pidfile` (`kill "$(cat build/default/qemu.pid)"`). The three live in `OUT/<variant>`, so a second `deploy` of a variant that is still running fails on its pid file. The socket path must fit a unix socket (107 bytes), or `deploy` fails before starting QEMU. `--attach` keeps QEMU in the foreground instead, with `-nographic -serial mon:stdio` and no log, socket or pid file.
 - `tdx=true` boots TDVF, OVMF built with TDX support, through `-bios` (a TDX guest cannot run firmware from pflash): `/usr/share/ovmf/OVMF.fd`, `/usr/share/edk2/ovmf/OVMF.inteltdx.fd`, `/usr/share/OVMF/OVMF.fd` or `/usr/share/qemu/OVMF.fd`, the first found. It replaces the two pflash drives above with `-bios /usr/share/ovmf/OVMF.fd` and passes `-machine q35,accel=kvm,kernel-irqchip=split,confidential-guest-support=tdx0 -object tdx-guest,id=tdx0`, which needs a TDX host (kernel, KVM and QEMU with TDX support).
-- Checks: `ssh -p 2222 root@localhost` once the image's `sshd` has a key for you (boot), `systemctl status` of your services there (application), and the quote checked against `peer.json` with `tundravm attest --endpoint unix:./tdxs.sock --policy peer.json` after forwarding the image's `/var/tdxs.sock` (see [Attest](#attest)), or by a verifier built with `Tdxs.from_policy("peer.json")`, which also verifies the collateral (attestation; needs `tdx=true` on a TDX host).
+- Checks: `ssh -p 2222 root@localhost` once the image's `sshd` has a key for you (boot), `systemctl status` of your services there (application), and the quote checked against `peer.json` with `tundravm attest --issuer unix:./tdxs.sock --validator ENDPOINT --policy peer.json` after forwarding the image's `/var/tdxs.sock` (see [Attest](#attest)), or by a verifier built with `Tdxs.from_policy("peer.json")`, which also verifies the collateral (attestation; needs `tdx=true` on a TDX host).
 
 **Azure.** Needs `az` on `PATH` after `az login`, an existing resource group (`resource_group`, default `tdx-vms`) and a storage account (`storage_account`, required); the adapter creates the `tdx-images` container in it when missing. The blob upload passes no credentials, so `az` must be able to look up the account key (or read `AZURE_STORAGE_KEY`). A confidential VM boots only from an Azure Compute Gallery image whose definition supports it, so the adapter publishes the VHD as a gallery image version first. `vm_size` must be a TDX confidential size: the DCesv5/DCedsv5 series (default `Standard_DC2es_v5`) or the ECesv5/ECedsv5 series. Bake an `azure` variant, which converts its disk to a fixed VHD:
 
@@ -1023,7 +1036,7 @@ A path the user cannot delete (mkosi output a `local` bake left root-owned) is r
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, `doctor` missing a required tool, an `untrusted` `attest` verdict, or an `evidence` verdict of `fail`; or `clean` could not remove a path |
+| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, `doctor` missing a required tool, an `attest` verdict other than `trusted` or `measurements-match` (`simulated` passes with `--allow-simulated`), or an `evidence` verdict of `fail`; or `clean` could not remove a path |
 | 2 | An SDK error, printed as `error [E_CODE]: message` with a `Hint:` and context lines; also a usage error (unknown verb or flag, with a did-you-mean suggestion) |
 | 130 | Interrupted |
 

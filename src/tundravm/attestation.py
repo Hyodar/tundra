@@ -1,4 +1,4 @@
-"""``attest``: ask a running image's ``tdxs`` issuer for a quote and check it against a policy.
+"""``attest``: ask a running image's ``tdxs`` issuer for a quote, have a validator judge it.
 
 The ``tdxs`` service (``tundra-tools``) speaks newline-delimited JSON over a
 stream socket (``/var/tdxs.sock`` in the image, socket-activated). A request
@@ -6,12 +6,16 @@ is ``{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}`` and the
 reply ``{"data": {"document": HEX}, "error": null}``, where *document* is the
 hex of the JSON ``AttestationDocument`` (``raw_quote``, ``user_data``,
 ``nonce`` base64; ``platform``). The quote's ``report_data`` is
-``SHA-256(userData || nonce)`` zero-padded to 64 bytes. ``{"method":
+``SHA-256(userData || nonce)`` followed by 32 zero bytes. ``{"method":
 "metadata", "data": {}}`` returns the issuer's measurements, which the
 simulator issuer (whose quote is not a TDX quote) is checked with.
 
-Only measurements are checked here: the quote's signature, certificate chain
-and collateral are verified by a ``Tdxs`` validator, not by :func:`attest`.
+Authenticity (the quote's signature, certificate chain and collateral) is the
+job of a ``tdxs`` validator: ``{"method": "validate", "data": {"document":
+HEX, "nonce": HEX}}`` answers ``{"data": {"userData": HEX, "valid": true},
+"error": null}`` for a document it accepts and an ``error`` for one it
+rejects. Without a validator the verdict says only whether the measurements
+match; it is never ``trusted``.
 """
 
 from __future__ import annotations
@@ -28,17 +32,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .errors import DeploymentError, MeasurementError, ValidationError
+from .errors import AttestationError, MeasurementError, ValidationError
 from .formats import md_cell, md_table
 from .measure.policy import is_placeholder, read_policy
 
 Transport = Callable[[Mapping[str, object]], Mapping[str, object]]
 """Sends one tdxs request envelope (``{"method", "data"}``) and returns the reply envelope."""
 RegisterVerdict = Literal["match", "mismatch", "unchecked"]
+Verdict = Literal[
+    "trusted", "untrusted", "measurements-match", "measurements-mismatch", "simulated"
+]
+"""``trusted``/``untrusted`` need a validator; without one the verdict is ``measurements-*``."""
+SignatureStatus = Literal["valid", "invalid", "unchecked"]
 
 REGISTERS = ("MRTD", "RTMR0", "RTMR1", "RTMR2", "RTMR3")
 """The registers :func:`attest` reports, in order."""
-CHECKS_NOTE = "checks measurements only; collateral verification is done by a Tdxs validator"
+VERDICTS: tuple[Verdict, ...] = (
+    "trusted",
+    "untrusted",
+    "measurements-match",
+    "measurements-mismatch",
+    "simulated",
+)
+"""Every verdict :func:`attest` returns; ``trusted`` and ``measurements-match`` pass."""
+CHECKS_NOTE = (
+    "the quote's signature, certificate chain and collateral are checked only by a "
+    "tdxs validator (--validator); without one only measurements and the nonce are checked"
+)
 TIMEOUT_S = 30.0
 SIMULATOR = "simulator"
 
@@ -154,69 +174,130 @@ class RegisterCheck:
 
 @dataclass(frozen=True, slots=True)
 class Attestation:
-    """What :func:`attest` found: per-register verdicts, the nonce check and the verdict.
+    """What :func:`attest` found: the nonce and register checks, the validator's say, the verdict.
 
     ``source`` is ``quote`` when the registers were read from the TDX quote, or
     ``metadata`` for the simulator issuer, whose registers come from its
-    ``metadata`` reply. Trusted means the nonce round-tripped and every
-    register the policy holds matched; collateral is not checked.
+    ``metadata`` reply. ``signature_status`` is ``valid`` or ``invalid`` when a
+    validator judged the document and ``unchecked`` without one.
+    :attr:`verdict` is ``trusted`` only when the validator accepted the document,
+    the full 64-byte ``report_data`` binds the nonce and every register the
+    policy holds matched; a simulator issuer's quote is never trusted.
     """
 
-    endpoint: str
+    issuer: str
     platform: str
     source: Literal["quote", "metadata"]
     quote_version: int | None
     nonce: str
     report_data: str
-    nonce_matches: bool
+    expected_report_data: str
     registers: tuple[RegisterCheck, ...]
+    validator: str | None = None
+    signature_status: SignatureStatus = "unchecked"
+    validator_error: str | None = None
     policy: str | None = None
+    allow_simulated: bool = False
+
+    @property
+    def nonce_matches(self) -> bool:
+        """The quote's whole ``report_data`` is ``SHA-256(userData || nonce)`` + 32 zero bytes."""
+        return self.report_data == self.expected_report_data
+
+    @property
+    def simulated(self) -> bool:
+        return self.platform == SIMULATOR
+
+    @property
+    def reasons(self) -> tuple[str, ...]:
+        """Why the verdict is not positive, in order.
+
+        ``validator-rejected``, ``nonce-mismatch``, ``register-mismatch``, ``simulated``.
+        """
+        found: list[str] = []
+        if self.signature_status == "invalid":
+            found.append("validator-rejected")
+        if not self.nonce_matches:
+            found.append("nonce-mismatch")
+        if any(r.verdict == "mismatch" for r in self.registers):
+            found.append("register-mismatch")
+        if self.simulated:
+            found.append("simulated")
+        return tuple(found)
+
+    @property
+    def verdict(self) -> Verdict:
+        measured = self.nonce_matches and all(r.verdict != "mismatch" for r in self.registers)
+        if self.signature_status == "invalid":
+            return "untrusted"
+        if not measured:
+            return "untrusted" if self.signature_status == "valid" else "measurements-mismatch"
+        if self.simulated:
+            return "simulated"
+        return "trusted" if self.signature_status == "valid" else "measurements-match"
 
     @property
     def trusted(self) -> bool:
-        return self.nonce_matches and all(r.verdict != "mismatch" for r in self.registers)
+        return self.verdict == "trusted"
 
     @property
-    def verdict(self) -> Literal["trusted", "untrusted"]:
-        return "trusted" if self.trusted else "untrusted"
+    def passed(self) -> bool:
+        """``trusted`` or ``measurements-match``; ``simulated`` too with ``allow_simulated``."""
+        verdict = self.verdict
+        return verdict in ("trusted", "measurements-match") or (
+            verdict == "simulated" and self.allow_simulated
+        )
 
     def to_dict(self) -> dict[str, object]:
         """The JSON form ``attest --format json`` prints (sorted keys)."""
         return {
             "checks": CHECKS_NOTE,
-            "endpoint": self.endpoint,
+            "issuer": self.issuer,
             "nonce": {
                 "value": self.nonce,
                 "report_data": self.report_data,
+                "expected_report_data": self.expected_report_data,
                 "verdict": "match" if self.nonce_matches else "mismatch",
             },
+            "passed": self.passed,
             "platform": self.platform,
             "policy": self.policy,
             "quote_version": self.quote_version,
+            "reasons": list(self.reasons),
             "registers": {r.name: r.to_dict() for r in self.registers},
+            "signature_status": self.signature_status,
             "source": self.source,
             "trusted": self.trusted,
+            "validator": self.validator,
+            "validator_error": self.validator_error,
             "verdict": self.verdict,
         }
 
 
 def attest(
-    endpoint: str,
+    issuer: str,
     policy: str | Path | Mapping[str, object],
     *,
+    validator: str | None = None,
     nonce: str | bytes | None = None,
+    allow_simulated: bool = False,
     transport: Transport | None = None,
+    validator_transport: Transport | None = None,
 ) -> Attestation:
-    """Request a quote from the tdxs issuer at *endpoint* and check it against *policy*.
+    """Request a quote from the tdxs issuer at *issuer*, check it against *policy*.
 
-    *endpoint* is ``unix:PATH`` (or a path) or ``tcp://HOST:PORT``; both speak
-    tdxs's JSON lines. *policy* is a file ``measure --export-policy`` wrote,
-    or its dict; a placeholder policy is refused.
-    *nonce* (hex or bytes; default 32 random bytes) must come back in the
-    quote's ``report_data``. *transport* replaces the network (tests). Raises
-    ``DeploymentError`` when the issuer cannot be reached or reports an error,
-    ``MeasurementError`` for a reply that is not a TDX attestation. Checks
-    measurements only: collateral verification is done by a Tdxs validator.
+    *issuer* and *validator* are ``unix:PATH`` (or a path) or
+    ``tcp://HOST:PORT``; both speak tdxs's JSON lines. *policy* is a file
+    ``measure --export-policy`` wrote, or its dict; a placeholder policy is
+    refused. *nonce* (hex or bytes; default 32 random bytes) must come back in
+    the quote's full 64-byte ``report_data``. With *validator* the document and
+    nonce go to that tdxs validator, whose answer decides authenticity
+    (``trusted``/``untrusted``); without it the verdict is
+    ``measurements-match`` or ``measurements-mismatch``. A simulator issuer's
+    verdict is ``simulated`` at best; *allow_simulated* lets it pass.
+    *transport* and *validator_transport* replace the network (tests). Raises
+    ``AttestationError`` when the issuer or validator cannot be reached or
+    fails, ``MeasurementError`` for a reply that is not a TDX attestation.
     """
     data = read_policy(policy)
     if is_placeholder(data):
@@ -229,16 +310,18 @@ def attest(
     expected = data["registers"]
     assert isinstance(expected, dict)
     challenge = _nonce_bytes(nonce)
-    send = transport if transport is not None else connect(endpoint)
-    reply = _call(send, endpoint, "issue", {"userData": "", "nonce": challenge.hex()})
-    document = _document(reply, endpoint)
+    send = transport if transport is not None else connect(issuer)
+    reply = _call(send, issuer, "issue", {"userData": "", "nonce": challenge.hex()})
+    encoded = str(reply.get("document") or "")
+    document = _document(encoded, issuer)
     platform = str(document.get("platform") or "")
     raw = _b64(document.get("raw_quote"), "raw_quote")
     wanted = report_data_for(b"", challenge)
     if platform == SIMULATOR:
-        meta = _call(send, endpoint, "metadata", {})
-        actual = _metadata_registers(meta, endpoint)
-        bound = raw[:32]
+        meta = _call(send, issuer, "metadata", {})
+        actual = _metadata_registers(meta, issuer)
+        # The simulator binds only the 32-byte hash; its padding is implicit.
+        bound = raw[:32] + bytes(32)
         source: Literal["quote", "metadata"] = "metadata"
         version = None
     else:
@@ -246,18 +329,62 @@ def attest(
         actual = quote.registers()
         bound = quote.report_data
         source, version = "quote", quote.version
+    status: SignatureStatus = "unchecked"
+    rejection = None
+    if validator is not None:
+        judge = validator_transport if validator_transport is not None else connect(validator)
+        status, rejection = _validate(judge, validator, encoded, challenge)
     checks = tuple(_check(name, actual.get(name), expected.get(name)) for name in REGISTERS)
     return Attestation(
-        endpoint=endpoint,
+        issuer=issuer,
         platform=platform or "unknown",
         source=source,
         quote_version=version,
         nonce=challenge.hex(),
         report_data=bound.hex(),
-        nonce_matches=bound[:32] == wanted[:32],
+        expected_report_data=wanted.hex(),
         registers=checks,
+        validator=validator,
+        signature_status=status,
+        validator_error=rejection,
         policy=None if isinstance(policy, Mapping) else str(policy),
+        allow_simulated=allow_simulated,
     )
+
+
+_VALIDATOR_BROKEN = ("transport error", "not configured", "not initialized")
+"""tdxs ``error`` replies that say the validator could not judge, rather than that it rejected."""
+
+
+def _validate(
+    send: Transport, endpoint: str, document: str, nonce: bytes
+) -> tuple[SignatureStatus, str | None]:
+    """``("valid", None)`` or ``("invalid", why)``; ``AttestationError`` when it cannot judge."""
+    hint = (
+        "Point --validator at a tdxs validator socket (tdxs with a validator configured), "
+        "e.g. tcp://127.0.0.1:7001 on the verifying host."
+    )
+    reply = send({"method": "validate", "data": {"document": document, "nonce": nonce.hex()}})
+    error = reply.get("error")
+    if error:
+        text = str(error)
+        if any(marker in text for marker in _VALIDATOR_BROKEN):
+            raise AttestationError(
+                f"The tdxs validator at {endpoint} could not judge the document: {text}",
+                hint=hint,
+                context={"validator": endpoint},
+            )
+        return "invalid", text
+    payload = reply.get("data")
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("valid"), bool):
+        raise AttestationError(
+            f"The validate reply from {endpoint} has no data.valid flag.",
+            hint=hint,
+            context={"validator": endpoint},
+        )
+    if payload["valid"]:
+        return "valid", None
+    return "invalid", "the validator answered valid=false"
 
 
 def _check(name: str, actual: str | None, expected: object) -> RegisterCheck:
@@ -293,7 +420,7 @@ def _call(
     reply = send({"method": method, "data": dict(data)})
     error = reply.get("error")
     if error:
-        raise DeploymentError(
+        raise AttestationError(
             f"The tdxs issuer at {endpoint} failed the {method} request: {error}",
             hint="Check `journalctl -u tdxs` in the image; the issuer needs /dev/tdx_guest "
             "(or configfs-tsm) inside a TD.",
@@ -303,17 +430,16 @@ def _call(
     if not isinstance(payload, Mapping):
         raise MeasurementError(
             f"The tdxs reply to {method} from {endpoint} has no data object.",
-            hint="Point --endpoint at a tdxs issuer (the image's /var/tdxs.sock).",
+            hint="Point --issuer at a tdxs issuer (the image's /var/tdxs.sock).",
             context={"endpoint": endpoint},
         )
     return payload
 
 
-def _document(reply: Mapping[str, object], endpoint: str) -> Mapping[str, object]:
-    hint = "Point --endpoint at a tdxs issuer (the image's /var/tdxs.sock)."
-    encoded = reply.get("document")
+def _document(encoded: str, endpoint: str) -> Mapping[str, object]:
+    hint = "Point --issuer at a tdxs issuer (the image's /var/tdxs.sock)."
     try:
-        document = json.loads(bytes.fromhex(str(encoded)))
+        document = json.loads(bytes.fromhex(encoded))
     except (ValueError, TypeError) as exc:
         raise MeasurementError(
             f"The issue reply from {endpoint} does not hold a hex-encoded attestation document.",
@@ -335,7 +461,7 @@ def _b64(value: object, name: str) -> bytes:
     except (binascii.Error, ValueError) as exc:
         raise MeasurementError(
             f"The attestation document's {name} is not base64.",
-            hint="Point --endpoint at a tdxs issuer (the image's /var/tdxs.sock).",
+            hint="Point --issuer at a tdxs issuer (the image's /var/tdxs.sock).",
         ) from exc
 
 
@@ -344,7 +470,7 @@ def _metadata_registers(meta: Mapping[str, object], endpoint: str) -> dict[str, 
     if not isinstance(measurements, Mapping):
         raise MeasurementError(
             f"The metadata reply from {endpoint} carries no measurements.",
-            hint="Point --endpoint at a tdxs issuer (the image's /var/tdxs.sock).",
+            hint="Point --issuer at a tdxs issuer (the image's /var/tdxs.sock).",
         )
     return {
         name: str(measurements[name.lower()]).lower().removeprefix("0x")
@@ -362,7 +488,7 @@ def connect(endpoint: str, *, timeout: float = TIMEOUT_S) -> Transport:
         raise ValidationError(
             f"Endpoint {endpoint!r} is http, which tdxs does not serve.",
             hint="tdxs serves a unix socket or tcp; forward it with "
-            "ssh -L ./tdxs.sock:/var/tdxs.sock and pass --endpoint unix:./tdxs.sock.",
+            "ssh -L ./tdxs.sock:/var/tdxs.sock and pass --issuer unix:./tdxs.sock.",
             context={"endpoint": endpoint},
         )
     if endpoint.startswith("tcp://"):
@@ -386,13 +512,13 @@ def connect(endpoint: str, *, timeout: float = TIMEOUT_S) -> Transport:
     return _stream(endpoint, socket.AF_UNIX, path, timeout=timeout)
 
 
-def _unreachable(endpoint: str, exc: OSError) -> DeploymentError:
+def _unreachable(endpoint: str, exc: OSError) -> AttestationError:
     reason = exc.strerror or exc
-    return DeploymentError(
-        f"Cannot reach the tdxs issuer at {endpoint}: {reason}.",
+    return AttestationError(
+        f"Cannot reach the tdxs endpoint at {endpoint}: {reason}.",
         hint="Check the VM is running and the socket is forwarded to this host, e.g. "
         "`ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock root@localhost` "
-        "and --endpoint unix:./tdxs.sock.",
+        "and --issuer unix:./tdxs.sock (a validator socket likewise for --validator).",
         context={"endpoint": endpoint},
     )
 
@@ -403,13 +529,15 @@ def _decode(endpoint: str, body: bytes) -> Mapping[str, object]:
     except ValueError as exc:
         raise MeasurementError(
             f"The reply from {endpoint} is not JSON.",
-            hint="Point --endpoint at a tdxs issuer (the image's /var/tdxs.sock).",
+            hint="Point --issuer at a tdxs issuer (the image's /var/tdxs.sock) and "
+            "--validator at a tdxs validator.",
             context={"endpoint": endpoint},
         ) from exc
     if not isinstance(reply, dict):
         raise MeasurementError(
             f"The reply from {endpoint} is not a JSON object.",
-            hint="Point --endpoint at a tdxs issuer (the image's /var/tdxs.sock).",
+            hint="Point --issuer at a tdxs issuer (the image's /var/tdxs.sock) and "
+            "--validator at a tdxs validator.",
         )
     return reply
 
@@ -442,12 +570,21 @@ def _stream(
 # ── rendering ────────────────────────────────────────────────────────────
 
 
+def _signature_line(result: Attestation) -> str:
+    if result.validator is None:
+        return "signature unchecked (no --validator)"
+    if result.signature_status == "valid":
+        return f"signature valid ({result.validator})"
+    return f"signature invalid ({result.validator}): {result.validator_error}"
+
+
 def render_attestation(result: Attestation, fmt: str) -> str:
     """*result* as ``text`` (one line per register), ``json`` or ``markdown`` (a table)."""
     if fmt == "json":
         return json.dumps(result.to_dict(), indent=2, sort_keys=True)
     nonce = "match" if result.nonce_matches else "mismatch"
     where = f"quote v{result.quote_version}" if result.source == "quote" else "issuer metadata"
+    reasons = ", ".join(result.reasons)
     if fmt == "markdown":
         rows = [
             (
@@ -458,24 +595,33 @@ def render_attestation(result: Attestation, fmt: str) -> str:
             )
             for r in result.registers
         ]
+        because = f" Reasons: {reasons}." if reasons else ""
         return "\n\n".join(
             (
-                f"# tundravm attest: `{result.endpoint}`",
+                f"# tundravm attest: `{result.issuer}`",
                 f"**Verdict:** `{result.verdict}` ({result.platform}, {where}; "
-                f"nonce {nonce}). {CHECKS_NOTE.capitalize()}.",
+                f"nonce {nonce}; {_signature_line(result)}).{because}",
                 md_table(("Register", "Verdict", "Quote", "Policy"), rows),
+                f"Note: {CHECKS_NOTE}.",
             )
         )
     lines = [
-        f"attestation {result.endpoint} ({result.platform}, {where})",
+        f"attestation {result.issuer} ({result.platform}, {where})",
         f"policy: {result.policy or '(dict)'}",
+        _signature_line(result),
         f"nonce  {nonce:<9}  {result.nonce}",
     ]
+    if not result.nonce_matches:
+        lines.append(f"{'':<6} {'quote':<9}  {result.report_data}")
+        lines.append(f"{'':<6} {'expected':<9}  {result.expected_report_data}")
     for check in result.registers:
         lines.append(f"{check.name:<6} {check.verdict:<9}  {check.actual or '-'}")
         if check.verdict == "mismatch":
             lines.append(f"{'':<6} {'policy':<9}  {check.expected}")
-    lines.append(f"note: {CHECKS_NOTE}")
+    if result.validator is None:
+        lines.append(f"note: {CHECKS_NOTE}")
+    if reasons:
+        lines.append(f"reasons: {reasons}")
     lines.append(f"verdict: {result.verdict}")
     return "\n".join(lines)
 
@@ -483,10 +629,13 @@ def render_attestation(result: Attestation, fmt: str) -> str:
 __all__ = [
     "CHECKS_NOTE",
     "REGISTERS",
+    "VERDICTS",
     "Attestation",
     "Quote",
     "RegisterCheck",
+    "SignatureStatus",
     "Transport",
+    "Verdict",
     "attest",
     "connect",
     "parse_quote",

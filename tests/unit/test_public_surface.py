@@ -14,6 +14,7 @@ EXPECTED_TOP_LEVEL = [
     "Artifact",
     "ArtifactError",
     "Attestation",
+    "AttestationError",
     "Azure",
     "Backend",
     "BackendExecutionError",
