@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from ._source import DebFile, KernelSource, NamedSource
 from .formats import annotation_path, md_cell, md_table, workflow_command
 from .models import InitScriptEntry, ProfileState, unit_name
 
@@ -492,51 +493,56 @@ def _rule_debloat_removes_declared_file(
 def _rule_source_unpinned(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    kernel = image.kernel_source(profile_name) if image.fetches_sources else None
-    if not state.source_builds and kernel is None:
+    sources = image.select(profile_name).lock_sources()
+    if not sources:
         return
     pins = image.source_pins()
     policy = image.policy.mutable_ref_policy
     level: Level = "error" if policy == "error" else "warning" if policy == "warn" else "info"
+    for spec in sources.values():
+        if spec.pin_from(pins) is not None:
+            continue
+        message, hint = _unpinned_advice(spec, fetches=image.fetches_sources)
+        yield Diagnostic(
+            level=level,
+            code="source-unpinned",
+            message=message,
+            hint=hint,
+            profile=profile_name,
+            subject=spec.name,
+        )
+
+
+def _unpinned_advice(spec: NamedSource, *, fetches: bool) -> tuple[str, str]:
+    """The ``source-unpinned`` message and hint for the unpinned lockable source *spec*."""
+    source = spec.source
     fetch = (
         " and `tundravm fetch RECIPE` to check it out on the host (`bake` fetches too)"
-        if image.fetches_sources
+        if fetches
         else ""
     )
-    for name, spec in sorted(state.source_builds.items()):
-        if image.keyed(profile_name, spec).pin_from(pins) is not None:
-            continue
-        yield Diagnostic(
-            level=level,
-            code="source-unpinned",
-            message=(
-                f"source build {name!r} ({spec.source.kind} {spec.source.url} "
-                f"@ {spec.source.requested}) is not pinned in the lockfile"
-            ),
-            hint=(
-                f"Run `tundravm lock RECIPE` to pin it{fetch}, or declare an immutable source "
-                "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)). "
-                "Locking reports a dead upstream ref, with every other source it cannot "
-                "resolve, before anything is written."
-            ),
-            profile=profile_name,
-            subject=name,
+    if isinstance(spec, KernelSource):
+        return (
+            f"kernel {spec.version} ({source.kind} {source.url} @ {source.requested}) "
+            "is not pinned in the lockfile",
+            f"Run `tundravm lock RECIPE` to pin it as {spec.name!r}{fetch}, or give "
+            "Kernel a Git source with a 40-hex commit ref.",
         )
-    if kernel is not None and kernel.pin_from(pins) is None:
-        yield Diagnostic(
-            level=level,
-            code="source-unpinned",
-            message=(
-                f"kernel {kernel.version} ({kernel.source.kind} {kernel.source.url} "
-                f"@ {kernel.source.requested}) is not pinned in the lockfile"
-            ),
-            hint=(
-                f"Run `tundravm lock RECIPE` to pin it as {kernel.name!r}{fetch}, or give "
-                "Kernel a Git source with a 40-hex commit ref."
-            ),
-            profile=profile_name,
-            subject=kernel.name,
+    if isinstance(spec, DebFile):
+        return (
+            f"EfiStub package ({source.kind} {source.url}) is not pinned in the lockfile",
+            f"Run `tundravm lock RECIPE` to pin its sha256 as {spec.name!r} and "
+            "`tundravm fetch RECIPE` to download it on the host (`bake` fetches too). "
+            "Unpinned, the postinst hook downloads it in the build sandbox.",
         )
+    return (
+        f"source build {spec.name!r} ({source.kind} {source.url} @ {source.requested}) "
+        "is not pinned in the lockfile",
+        f"Run `tundravm lock RECIPE` to pin it{fetch}, or declare an immutable source "
+        "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)). "
+        "Locking reports a dead upstream ref, with every other source it cannot "
+        "resolve, before anything is written.",
+    )
 
 
 def _installs_kernel(packages: Iterable[str]) -> bool:

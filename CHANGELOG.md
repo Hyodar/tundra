@@ -61,6 +61,7 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 
 ### Changed
 
+- `source-unpinned` also reports an unpinned `EfiStub` package (`efi-stub`), so the `cloud` template lints with that warning until locked; .NET builds restore offline from the prefetched packages folder (`RestoreSources`) when the sandbox has no network.
 - Internal: `_image.py` is gone; `lower()` returns the frozen `Lowered` (selection, lockfile and build dir are copies), compiling lives in `declarative/_compile.py` and baking in `declarative/_bake.py`; the unused compile cache is removed. No output change.
 - `inspect --lockfile`: inspect renders Hooks at the lockfile's pins, as compile does. `fetch` and `FetchedSource` are exported from `tundravm` and `tundravm.declarative`. The Http-kernel-without-sha256 error names `sha256=` or a git source.
 - Internal: lowering writes `RecipeState` directly from resolved declarations (`declarative/state.py`); the retired fluent declaration methods, `Module.apply`/`configure` and the platform classes are gone; lifecycle glue now lives in `declarative/_lowered.py`, `_compile.py` and `_bake.py`. No output change (parity fixture over 12 recipes and 29 variants).

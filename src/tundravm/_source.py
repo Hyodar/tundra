@@ -356,8 +356,15 @@ class DotnetBuild:
 
     @staticmethod
     def deps_env(cache: str) -> str:
-        """The export pointing the in-build ``dotnet restore`` at the copied packages *cache*."""
-        return f"export NUGET_PACKAGES={cache}"
+        """The exports pointing the in-build ``dotnet restore`` at the copied packages *cache*.
+
+        Without network, MSBuild reads ``RestoreSources`` from the environment, so
+        restore (and ``publish``'s implicit one) resolves from *cache* alone.
+        """
+        return (
+            f"export NUGET_PACKAGES={cache} && "
+            f'{{ [ "$WITH_NETWORK" != 0 ] || export RestoreSources={cache}; }}'
+        )
 
     @property
     def artifact(self) -> str:

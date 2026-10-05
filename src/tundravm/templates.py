@@ -453,11 +453,21 @@ TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {
 EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
     "minimal": (),
     "service": (),
-    "cloud": (),
+    "cloud": ("source-unpinned",),
     "prover": ("disk-auto-format", "source-unpinned"),
 }
 """Lint codes a freshly generated template reports by design: ``tundravm lock`` clears
 ``source-unpinned``, naming the disk's device clears ``disk-auto-format``."""
+
+_ALLOW_COMMENTS: dict[str, str] = {
+    "cloud": "    # The EfiStub package stays unpinned until `tundravm lock` pins its sha256.\n",
+    "prover": (
+        "    # The tundra-tools builds and the EfiStub package stay unpinned until\n"
+        "    # `tundravm lock` pins them; the disk picks its device at boot until the\n"
+        "    # recipe names one.\n"
+    ),
+}
+"""The comment above ``allow=`` in the test module of a template with :data:`EXPECTED_FINDINGS`."""
 
 
 def render_recipe_template(
@@ -488,9 +498,7 @@ def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> st
     if expected:
         codes = ", ".join(f'"{code}"' for code in expected)
         lint_call = (
-            "    # The tundra-tools builds track a branch until `tundravm lock` pins them;\n"
-            "    # the disk picks its device at boot until the recipe names one.\n"
-            f"    assert_clean(RECIPE, strict=True, allow=({codes},))"
+            f"{_ALLOW_COMMENTS[template]}    assert_clean(RECIPE, strict=True, allow=({codes},))"
         )
     else:
         lint_call = "    assert_clean(RECIPE, strict=True)"

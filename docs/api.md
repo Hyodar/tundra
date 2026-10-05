@@ -358,7 +358,7 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `init-priority-collision` | warning | Several runtime-init steps share a priority |
 | `debloat-removes-needed-unit` | warning | Debloat masks a unit a service needs |
 | `debloat-removes-declared-file` | warning | Debloat deletes a declared file at finalize |
-| `source-unpinned` | warning (error / info by policy) | A source build, or a built kernel's source in the current dialect, has no pin in `build/tundravm.lock` |
+| `source-unpinned` | warning (error / info by policy) | A source build, or in the current dialect a built kernel's source or an `EfiStub` package (`efi-stub`), has no pin in `build/tundravm.lock` |
 | `disk-key-path-mismatch` | warning | A disk reads a key file the key does not write |
 | `disk-auto-format` | warning (error with `Policy(storage_safety="error")`) | A `Disk(device=None)` with `format` other than `"never"`: `disk-setup` picks the largest whole `/dev/sd*` disk, boot disk included, and can format it. Set an explicit `device`, or `format="never"` for a disk prepared beforehand |
 | `key-pipe-outside-run` | info | A pipe key's path is outside `/run` |

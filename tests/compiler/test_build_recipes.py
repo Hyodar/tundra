@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 
 import pytest
 
@@ -138,11 +140,27 @@ def test_dotnet_recipe_renders_dotnet_publish() -> None:
     hooks = _hooks(_pinned(_recipe(build)))
     assert (
         "bash -c 'if [ -d /build/.tundravm-deps/nuget ]; then "
-        "export NUGET_PACKAGES=/build/.tundravm-deps/nuget; fi && cd /build/app && "
+        "export NUGET_PACKAGES=/build/.tundravm-deps/nuget && "
+        '{ [ "$WITH_NETWORK" != 0 ] || export RestoreSources=/build/.tundravm-deps/nuget; }; '
+        "fi && cd /build/app && "
     ) in hooks
     assert "dotnet restore src/App/App.csproj --runtime linux-x64 && dotnet publish" in hooks
     assert "--output /build/app/publish -p:Deterministic=true" in hooks
     assert 'cp -r "$BUILDROOT/build/app/publish"/*' in hooks
+
+
+@pytest.mark.parametrize(("network", "sources"), [("1", ""), ("0", "/deps/nuget")])
+def test_dotnet_restores_from_the_packages_cache_alone_offline(network: str, sources: str) -> None:
+    script = f'{DotnetBuild.deps_env("/deps/nuget")} && printf "%s|%s" "$NUGET_PACKAGES" '
+    script += '"${RestoreSources-}"'
+    done = subprocess.run(
+        ["bash", "-c", script],
+        env={"PATH": os.environ["PATH"], "WITH_NETWORK": network},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert done.stdout == f"/deps/nuget|{sources}"
 
 
 def test_lock_payload_records_the_recipe() -> None:

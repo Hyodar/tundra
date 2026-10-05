@@ -33,11 +33,12 @@ from tundravm.declarative import (
     Policy,
     Recipe,
     compile,
+    lint,
     lock,
     lock_status,
     lower,
 )
-from tundravm.declarative.lifecycle import bake_image, compile_image, fetch
+from tundravm.declarative.lifecycle import bake_image, check_report, compile_image, fetch
 from tundravm.declarative.utils import EfiStub
 from tundravm.errors import ErrorCode, PolicyError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
@@ -433,6 +434,20 @@ def test_efi_stub_drifts_until_locked_and_stays_out_of_nethermind_v1(
     assert ("lock-added", "sources.efi-stub") in drift
     assert lock_status(recipe, stale) == ()
     assert lower(_recipe(_stub(archive), dialect="nethermind-v1")).lock_sources() == {}
+
+
+def test_unpinned_efi_stub_is_reported_until_locked() -> None:
+    recipe = _recipe(_stub("20251113T083151Z"))
+    found = [d for d in lint(recipe) if d.code == "source-unpinned"]
+    assert [(d.level, d.subject) for d in found] == [("warning", "efi-stub")]
+    assert "systemd-boot-efi_257.8-1~deb13u1_amd64.deb" in found[0].message
+    strict = _recipe(_stub("20251113T083151Z"), policy=Policy(mutable_ref_policy="error"))
+    assert [d.level for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
+    locked = lock(recipe, resolver=lambda source: "b" * 64)
+    assert not [d for d in lint(recipe, lock=locked) if d.code == "source-unpinned"]
+    report = check_report(recipe, None, variants=None)
+    (unpinned,) = (d for d in report if d.code == "source-unpinned")
+    assert unpinned.hint is not None and "`tundravm lock RECIPE`" in unpinned.hint
 
 
 def test_a_build_named_efi_stub_collides_with_the_package(
