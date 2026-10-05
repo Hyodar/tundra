@@ -270,6 +270,7 @@ The default variant (the one named `default`, else the first root variant) may i
 These still raise `ValidationError` when you compile, lint or bake:
 
 - a standalone-lowered variant under `Mkosi(layout="native")`, because mkosi applies the root configuration to every profile; the error lists each such variant with its reason;
+- in the current dialect, a variant under `Mkosi(layout="native")` whose build distribution (repositories, build packages, Build settings) differs from the default variant's while the root builds a kernel or source builds, because an overlay cannot suppress the root hook; match the default's distribution or use the per-directory layout;
 - unreadable files, `Unit` or `Template` sources that are not UTF-8, and missing or empty `Directory` sources;
 - a `Template` placeholder without a value, and a malformed `Setting` value (a non-boolean `Build.WithNetwork`, several values for a single-valued key);
 - a `Setting` for a key the compiler writes itself (`Packages`, `Mirror`, `Format`, ...), naming the declaration to use instead;
