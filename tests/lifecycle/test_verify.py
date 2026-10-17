@@ -79,7 +79,7 @@ def test_a_clean_bundle_and_directory_pass_with_their_artifacts(
     bundle = found.bundle(tmp_path / "e.tar.gz")
     directory = found.write(build / "evidence")
     for path in (bundle, directory, directory / "evidence.json"):
-        result = verify_evidence(path, artifacts=build)
+        result = verify_evidence(path, build=build)
         assert result.passed, result.render()
         kinds = {c.kind for c in result.checks}
         assert kinds == {"member", "index", "artifact", "verdict"}
@@ -156,7 +156,7 @@ def test_a_changed_artifact_fails_and_a_gone_one_is_missing(tmp_path: Path) -> N
     artifact = copies / "default" / "disk.qcow2"
     artifact.write_bytes(artifact.read_bytes()[:-1] + b"!")
     (copies / "azure" / "disk.vhd").unlink()
-    result = verify_evidence(bundle, artifacts=copies)
+    result = verify_evidence(bundle, build=copies)
     assert _problems(result) == [
         ("missing", "artifact-missing", "azure/azure"),
         ("fail", "artifact-hash-mismatch", "default/qemu"),
@@ -165,7 +165,7 @@ def test_a_changed_artifact_fails_and_a_gone_one_is_missing(tmp_path: Path) -> N
     flat.mkdir()
     shutil.copy(build / "default" / "disk.qcow2", flat / "disk.qcow2")
     shutil.copy(build / "azure" / "disk.vhd", flat / "disk.vhd")
-    assert verify_evidence(bundle, artifacts=flat).passed
+    assert verify_evidence(bundle, build=flat).passed
 
 
 def test_an_edited_index_is_inconsistent(tmp_path: Path) -> None:
@@ -337,7 +337,7 @@ def test_cli_signs_evidence_and_verifies_it(
     assert code == EXIT_OK
     assert (tmp_path / "build" / "evidence" / "evidence.json.sig").is_file()
     code, out = run_main(
-        "verify", "e.tar.gz", "--allowed-signers", str(allowed), "--artifacts", "build"
+        "verify", "e.tar.gz", "--allowed-signers", str(allowed), "--build", "build"
     )
     assert code == EXIT_OK, out
     assert out.startswith("verify e.tar.gz  verdict pass")
@@ -359,7 +359,7 @@ def test_an_index_of_another_shape_is_inconsistent_not_a_crash(tmp_path: Path) -
     index = json.loads(index_path.read_text(encoding="utf-8"))
     index["variants"]["default"] = ["not", "a", "record"]
     index_path.write_text(json.dumps(index), encoding="utf-8")
-    result = verify_evidence(directory, artifacts=build)
+    result = verify_evidence(directory, build=build)
     assert result.verdict == "fail"
     assert {code for _, code, _ in _problems(result)} == {"index-inconsistent"}
     index_path.write_text("[]", encoding="utf-8")

@@ -96,6 +96,31 @@ def sign(data: bytes, key: Path, *, runner: SigRunner | None = None) -> bytes:
         return signature.read_bytes()
 
 
+def public_key(key: Path, *, runner: SigRunner | None = None) -> str:
+    """The public half of the SSH private key at *key* (``ssh-keygen -y``): ``TYPE BASE64``."""
+    path = Path(key)
+    if not path.is_file():
+        raise ValidationError(
+            f"Signing key {path} does not exist.",
+            hint=(
+                "Pass an SSH private key, for example one made with "
+                "`ssh-keygen -t ed25519 -f release-key -N ''`."
+            ),
+            context={"key": str(path)},
+        )
+    run = runner if runner is not None else _run
+    tool = TOOL if runner is not None else _tool()
+    result = run([tool, "-y", "-P", "", "-f", str(path)], None)
+    fields = (result.stdout or b"").decode(errors="replace").split()
+    if result.returncode != 0 or len(fields) < 2:
+        raise ValidationError(
+            f"ssh-keygen could not read the public key of {path}: {_said(result)}.",
+            hint="Pass an SSH private key without a passphrase, readable by this user.",
+            context={"key": str(path)},
+        )
+    return f"{fields[0]} {fields[1]}"
+
+
 def verify(
     data: bytes,
     signature: bytes,

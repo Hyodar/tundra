@@ -353,6 +353,9 @@ def baked(recipe: Path) -> Path:
     (BUILD / ".mkosi" / "mkosi.tools").mkdir(parents=True)
     (BUILD / "mkosi" / "default" / "mkosi.cache").mkdir()
     (BUILD / ".sources" / "tool-0123456789ab").mkdir(parents=True)
+    (BUILD / ".reproduce").mkdir()
+    assert run_main("evidence", str(recipe))[0] in (EXIT_OK, EXIT_FAILURE)
+    assert (BUILD / "evidence" / "evidence.json").is_file()
     return recipe
 
 
@@ -370,21 +373,23 @@ def test_clean_without_flags_lists_everything_and_removes_nothing(baked: Path) -
         f"would remove {BUILD / 'azure'}",
         f"would remove {BUILD / 'default'}",
         f"would remove {BUILD / 'bake-result.json'}",
+        f"would remove {BUILD / 'evidence'}",
         f"would remove {BUILD / '.mkosi'}",
-        "pass --all to remove them, or --sources, --tree, --artifacts or --state for some "
-        "(the lockfile stays unless --lockfile names it)",
+        f"would remove {BUILD / '.reproduce'}",
+        "pass --what all to remove them, or --what with some of sources, tree, artifacts, "
+        "evidence, state, reproduce (the lockfile stays unless --lockfile names it)",
     ]
     assert _listing(BUILD) == before
 
 
 def test_clean_dry_run_then_real(baked: Path) -> None:
-    code, out = run_main("clean", "--build", "build", "--artifacts", "--state", "--dry-run")
+    code, out = run_main("clean", "--build", "build", "--what", "artifacts,state", "--dry-run")
     assert code == EXIT_OK
     assert "would remove build/default" in out.splitlines()
     assert f"would remove {BUILD / 'mkosi' / 'default' / 'mkosi.cache'}" in out.splitlines()
     assert (BUILD / "default").is_dir()
 
-    code, out = run_main("clean", "--build", "build", "--artifacts", "--state")
+    code, out = run_main("clean", "--build", "build", "--what", "state,artifacts")
     assert code == EXIT_OK
     assert out.splitlines() == [
         f"removed {BUILD / 'azure'}",
@@ -393,20 +398,20 @@ def test_clean_dry_run_then_real(baked: Path) -> None:
         f"removed {BUILD / '.mkosi'}",
         f"removed {BUILD / 'mkosi' / 'default' / 'mkosi.cache'}",
     ]
-    assert _listing(BUILD) == [".sources", "mkosi", "tundravm.lock"]
+    assert _listing(BUILD) == [".reproduce", ".sources", "evidence", "mkosi", "tundravm.lock"]
     assert (BUILD / "mkosi" / "default" / "mkosi.conf").is_file()
 
 
 def test_clean_all_keeps_the_lockfile_unless_named(baked: Path) -> None:
-    code, _ = run_main("clean", str(baked), "--all")
+    code, _ = run_main("clean", str(baked), "--what", "all")
     assert code == EXIT_OK
     assert _listing(BUILD) == ["tundravm.lock"]
     assert _status(str(baked))["next"] == f"tundravm compile {baked} --tree {BUILD / 'mkosi'}"
 
-    code, out = run_main("clean", str(baked), "--all", "--lockfile", "build/tundravm.lock")
+    code, out = run_main("clean", str(baked), "--what", "all", "--lockfile", "build/tundravm.lock")
     assert (code, out) == (EXIT_OK, "removed build/tundravm.lock\n")
     assert _listing(BUILD) == []
-    assert run_main("clean", str(baked), "--all")[1] == "nothing to clean in build\n"
+    assert run_main("clean", str(baked), "--what", "all")[1] == "nothing to clean in build\n"
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can delete read-only directories")
@@ -417,7 +422,7 @@ def test_clean_reports_an_undeletable_path_without_sudo(
     locked_dir.chmod(0o555)
     monkeypatch.setattr(clean_module, "which", lambda _: None)
     try:
-        code, out = run_main("clean", str(baked), "--state")
+        code, out = run_main("clean", str(baked), "--what", "state")
     finally:
         locked_dir.chmod(0o755)
     assert code == EXIT_FAILURE
@@ -441,7 +446,7 @@ def test_clean_falls_back_to_sudo(baked: Path, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(clean_module, "which", lambda _: "/usr/bin/sudo")
     monkeypatch.setattr(clean_module, "run_sudo", fake_sudo)
-    code, out = run_main("clean", str(baked), "--state")
+    code, out = run_main("clean", str(baked), "--what", "state")
     assert code == EXIT_OK
     assert calls == [["sudo", "rm", "-rf", "--", str(locked_dir)]]
     assert f"removed {locked_dir}" in out.splitlines()
@@ -456,3 +461,15 @@ def test_clean_without_a_recipe_cleans_build_here(
     code, out = run_main("clean")
     assert code == EXIT_OK
     assert f"would remove {Path('build') / '.sources'}" in out.splitlines()
+
+
+def test_clean_parts_are_checked(baked: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        run_main("clean", str(baked), "--what", "tree,bogus")
+    assert "unknown part(s) bogus; choose from sources, tree" in capsys.readouterr().err
+    code, out = run_main("clean", str(baked), "--what", "evidence,reproduce")
+    assert code == EXIT_OK
+    assert out.splitlines() == [
+        f"removed {BUILD / 'evidence'}",
+        f"removed {BUILD / '.reproduce'}",
+    ]

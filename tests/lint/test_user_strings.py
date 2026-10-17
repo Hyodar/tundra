@@ -30,6 +30,14 @@ DENYLIST = {
     "removed --against flag (--tree)": re.compile(r"--against\b"),
     "removed deploy --target flag (TARGET)": re.compile(r"\bdeploy\b[^\n]*--target\b"),
     "removed MANIFEST positional (--build)": re.compile(r"\b(?:measure|deploy|sbom) MANIFEST\b"),
+    "removed verify --artifacts flag (--build)": re.compile(r"\bverify\b[^\n]*--artifacts\b"),
+    "removed clean part flags (--what)": re.compile(
+        r"\bclean\b[^\n]*--(?:sources|tree|artifacts|state|all)\b"
+    ),
+    "removed --json shorthand (--format json)": re.compile(
+        r"\b(?:inspect|lint)\b[^\n]*--json\b(?!-)"
+    ),
+    "elided measure flags (--build, --variant)": re.compile(r"\bmeasure \.\.\."),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 

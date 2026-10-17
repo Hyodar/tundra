@@ -87,7 +87,7 @@ def test_why_names_the_composite_class_in_the_fragment_chain(recipe: Path) -> No
 
 def test_why_json_reports_a_removed_package_without_files(recipe: Path) -> None:
     code, out = run_main(
-        "inspect", str(recipe), "--variant", "prod", "--why", "package:curl", "--json"
+        "inspect", str(recipe), "--variant", "prod", "--why", "package:curl", "--format", "json"
     )
     assert code == EXIT_OK
     payload = json.loads(out)
@@ -101,7 +101,9 @@ def test_why_json_reports_a_removed_package_without_files(recipe: Path) -> None:
     ]
     assert payload["files"] == []
     dev = json.loads(
-        run_main("inspect", str(recipe), "--variant", "dev", "--why", "package:curl", "--json")[1]
+        run_main(
+            "inspect", str(recipe), "--variant", "dev", "--why", "package:curl", "--format", "json"
+        )[1]
     )
     assert dev["files"] == ["mkosi.conf (Packages=)"]
     assert dev["fragments"] == ["base", "app"]

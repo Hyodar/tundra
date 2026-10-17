@@ -13,6 +13,19 @@
 
 Python SDK for building, measuring and deploying TDX-enabled VM images. An image is an immutable Python value: a `Recipe` of typed declarations, grouped into fragments and specialized by variants. tundravm resolves it, lints it, compiles it to a byte-reproducible [mkosi](https://github.com/systemd/mkosi) project tree, pins every source in a lockfile, and bakes the tree into a bootable disk for QEMU, Azure or GCP. Each lifecycle step is a plain function with explicit inputs and results, and the `tundravm` command runs the same steps.
 
+## Install
+
+tundravm is not on PyPI yet: install it from git. To start a project without installing anything first:
+
+```bash
+uvx --from git+https://github.com/Hyodar/tundra tundravm init my-image --ci github
+cd my-image
+uv sync              # installs the pinned tundravm (and pytest) into .venv, writes uv.lock
+git add uv.lock      # committed, the generated workflow installs exactly it (`uv sync --frozen`)
+```
+
+`init` writes `dependencies = ["tundravm @ git+https://github.com/Hyodar/tundra@COMMIT"]` into `pyproject.toml`, pinned to the commit of the tundravm that ran it (read from its install metadata; when that is unknown the line follows `master` and the comment above it says so), so `uv sync` installs the same tundravm on a fresh machine or a CI runner. `git` must be on `PATH`. In a project that already has a `pyproject.toml`, add it yourself: `uv add "tundravm @ git+https://github.com/Hyodar/tundra@COMMIT"`. The generated workflow syncs with `--frozen` once `uv.lock` is committed and installs a pinned mkosi (`v26`) in its bake job. To work against a local checkout, `uv add --editable PATH/TO/tundravm` replaces the git dependency; in this repository, `uv sync` installs the `tundravm` command (see [Development](#development)). [Installing tundravm in the project](docs/cli.md#installing-tundravm-in-the-project) has the details.
+
 ## Quickstart
 
 ```python
@@ -36,24 +49,24 @@ backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 ```
 
 ```bash
-tundravm init . --name node --ci github         # or start from the starter recipe and a CI workflow
-tundravm inspect node.py                        # dry run: what each variant will contain
-tundravm lint node.py                           # every diagnostic; exit 1 on errors
-tundravm lock node.py                           # write build/tundravm.lock (section digests + source pins)
-tundravm compile node.py --tree mkosi           # emit the mkosi tree, one directory per variant
-tundravm watch node.py                          # one lint + tree-check line per save; Ctrl-C stops
-tundravm bake node.py                           # build every variant, frozen against the lock
-tundravm status node.py                         # where the project stands, and the next command to run
-tundravm sbom --variant default                 # SPDX/CycloneDX bill of materials
-tundravm evidence --require reproducible,lock --bundle evidence.tar.gz  # auditor record: pass/fail/incomplete with reasons
-tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json   # validator + policy verdict
-tundravm measure --variant default              # expected RTMRs of the baked artifact
-tundravm deploy qemu --variant default
+tundravm init . --name node --ci github                 # or scaffold: starter recipe, [tool.tundravm], tests, CI
+tundravm lock                                           # build/tundravm.lock: section digests + source pins
+tundravm compile --tree mkosi                           # emit the mkosi tree, one directory per variant; commit it
+tundravm watch                                          # one lint + tree-check line per save; Ctrl-C stops
+tundravm bake --verify-reproducible                     # build every variant twice, frozen against the lock
+tundravm measure --variant default --export-policy peer.json  # expected RTMRs and the verifier policy
+tundravm deploy qemu --variant default                  # boot the baked artifact
+tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json  # quote vs policy
+tundravm evidence --sign ~/.ssh/id_ed25519 --bundle evidence.tar.gz  # signed auditor record with a verdict
+tundravm verify evidence.tar.gz --allowed-signers allowed_signers    # re-check it anywhere, signature included
+tundravm changes --since evidence.tar.gz --format markdown           # after the next edit: what a reviewer checks
 ```
 
-`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init` also writes a `[tool.tundravm]` table (`recipe`, `tree`, `build`, `lockfile`, `backend`) into `pyproject.toml` that every command reads, so in a scaffolded project `RECIPE` is optional (`tundravm status` with no arguments reports on `node.py`) and `measure`, `deploy` and `sbom` find the bake in the configured `build` directory. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). tundravm is not on PyPI yet: until the first release, install it from a checkout (`uv add --editable PATH/TO/tundravm` in your project, or `uv sync` in this repo), which also installs the `tundravm` command. The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+Run the commands with `uv run` in the project (or with its `.venv` activated); `tundravm status` names the next one to run at any point. `attest` asks the booted image's tdxs service for a quote, so the recipe needs `Tdxs` (the `prover` template declares it); `--validator` names a tdxs validator that checks the quote's signature and collateral. `evidence --sign` signs `evidence.json` with an SSH key (`ssh-keygen -Y sign`); `verify --allowed-signers` checks that signature against an OpenSSH allowed-signers file. `changes --since` compares the recipe and lockfile as they are now with that evidence.
 
-`init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and every pull request: it posts `inspect --format markdown` to the job summary and runs `tundravm ci`, which fails on lint findings or a stale committed tree or lockfile. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` names a backend (`local`, `nix`, `lima` or `inprocess`), then fetches, bakes with `--verify-reproducible`, and uploads the `evidence --bundle --html` output with the built images as the `tundravm-bake` artifact.
+`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init` also writes a `[tool.tundravm]` table (`recipe`, `tree`, `build`, `lockfile`, `backend`) into `pyproject.toml` that every command reads, so in a scaffolded project `RECIPE` is optional (`tundravm status` with no arguments reports on `node.py`) and `measure`, `deploy` and `sbom` find the bake in the configured `build` directory. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+
+`init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and every pull request: it posts `inspect --format markdown` to the job summary and runs `tundravm ci`, which fails on lint findings or a stale committed tree or lockfile. Both install the project with `uv sync`, `uv sync --frozen` once `uv.lock` is committed. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` names a backend (`local` or `inprocess`; `lima` and `nix` need tools `ubuntu-latest` lacks), then installs mkosi `v26`, fetches, bakes with `--verify-reproducible`, and uploads the `evidence --bundle --html` output with the built images as the `tundravm-bake` artifact.
 
 ## Why
 
@@ -173,14 +186,15 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `attest` | Ask a running image's `tdxs` issuer (`--issuer`) for a nonce-bound quote, have a `tdxs` validator (`--validator`) judge its signature and collateral, and check MRTD and RTMR0..RTMR3 against a policy (`--policy FILE`). `trusted` needs the validator; without one the verdict is `measurements-match`/`measurements-mismatch`; a simulator is `simulated` (exit 1 unless `--allow-simulated`) |
 | `sbom` | Bill of materials of a variant baked into `--build DIR`: mkosi's package manifest, the lockfile's source pins and the recipe metadata (`--format spdx-json\|cyclonedx-json\|text\|markdown`, `--output FILE`); bound to the bake's lockfile and manifest (`--allow-unbound`) |
 | `evidence [RECIPE]` | An auditor's record of a bake in `BUILD/evidence/`: recipe and tree digests, the lockfile with its drift, each artifact re-hashed, the reproducibility outcome, the measurements policy, SPDX SBOMs, lint and provenance summaries, tool versions, indexed by `evidence.json`; `--bundle FILE.tar.gz` (deterministic under `SOURCE_DATE_EPOCH`), `--html FILE`; a pass, fail or incomplete verdict with stable reason codes, `--require reproducible,measured,real,lock` makes missing checks count; exit 1 unless the verdict is `pass`; `--sign KEY` writes an SSH signature (`evidence.json.sig`) |
-| `verify EVIDENCE` | Checks an evidence bundle or directory on its own, no recipe or checkout: every member against `evidence.json`, the index against its members, `--artifacts DIR` re-hashed, `evidence.json.sig` against `--allowed-signers FILE`, `--require` checks; one pass/fail/missing per check with a reason code; exit 1 unless all pass |
+| `verify EVIDENCE` | Checks an evidence bundle or directory on its own, no recipe or checkout: every member against `evidence.json`, the index against its members, the artifacts in `--build DIR` re-hashed, `evidence.json.sig` against `--allowed-signers FILE`, `--require` checks; one pass/fail/missing per check with a reason code; exit 1 unless all pass |
 | `changes [RECIPE] --since EVIDENCE` | What changed since a release's evidence: recipe and tree digests, lockfile sections, source pins, packages, emitted files with the declarations behind them, measured registers; `--format markdown` for a pull request |
+| `release [RECIPE] --version X` | Cut `releases/<recipe>-<X>/` from the locked recipe: lock check, fetch, a bake checked by a second build, measure, SBOMs, signed evidence, verify, changes since the last release, `RELEASE.md`; resumable, immutable once it passes; exit 1 when the evidence, verify or a `--require` check fails |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
 | `watch [RECIPE]` | Lint the recipe and compare it with its committed tree (`--tree`, else `[tool.tundravm]` `tree`, else `BUILD/mkosi`) at start and whenever the recipe or a `.py` beside it changes, one line per check; never writes unless `--write`; `--interval SECONDS`; Ctrl-C exits 0 |
 | `import TREE` | Generate a recipe module from an existing mkosi tree; prints coverage, notes and whether it compiles back (`--output FILE`, `--name`, `--dialect`) |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
-| `clean [RECIPE]` | Remove output of the build directory (`--build DIR`) by part (`--sources`, `--tree`, `--artifacts`, `--state`, `--all`) |
+| `clean [RECIPE]` | Remove output of the build directory (`--build DIR`) by part (`--what sources,tree,artifacts,evidence,state,reproduce` or `--what all`); without `--what` it lists what `all` would remove |
 | `config [RECIPE]` | The `recipe`, `tree`, `build`, `lockfile` and `backend` the commands resolve, whether each came from a flag, `[tool.tundravm]`, the default or (the backend) the recipe file, and whether the recipe and lockfile exist |
 | `completion SHELL` | Print a bash, zsh or fish completion script; `inspect RECIPE --diff-variants A B` lists what differs between two variants |
 
@@ -238,7 +252,7 @@ uv run pytest
 
 ## Troubleshooting
 
-Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and context lines, and exits 2. Under `--format json` (and `inspect`/`lint --json`) stderr gets one JSON line instead: `{"schema":"tundravm.error/1","code":...,"message":...,"hint":...,"context":{...}}`.
+Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and context lines, and exits 2. Under `--format json` stderr gets one JSON line instead: `{"schema":"tundravm.error/1","code":...,"message":...,"hint":...,"context":{...}}`.
 
 | Error | Fix |
 |---|---|

@@ -212,6 +212,26 @@ def test_lowered_recipe_and_a_new_variant(tmp_path: Path, released: Path) -> Non
     assert all(c.origins == () for c in report.section("files"))
 
 
+def test_a_variant_that_was_not_baked_is_noted_not_added(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    recipe = Recipe(
+        "node",
+        _recipe().common,
+        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    )
+    locked = _locked(recipe, FIRST)
+    build = tmp_path / "v1"
+    write_lock(locked, build / "tundravm.lock")
+    bake(recipe, lock=locked, backend=Backend("inprocess"), build=build, variants=["default"])
+    bundle = evidence(recipe, build=build, runner=_mkosi).bundle(tmp_path / "v1.tar.gz")
+    report = changes(recipe, since=bundle, lock=locked)
+    assert report.variants == ("default",)
+    assert _subjects(report, "recipe") == []
+    assert "variant azure is not in the evidence (it was not baked): not compared" in report.notes
+
+
 RECIPE = """
 from tundravm import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend

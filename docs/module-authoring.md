@@ -136,7 +136,7 @@ from exporter import PrometheusExporter
 from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant
 
 key = Key("key_persistent")
-disk = Disk("disk_persistent", mount="/persistent", key=key)
+disk = Disk("disk_persistent", mount="/persistent", key=key, device="/dev/sdb")
 storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
 recipe = Recipe(
@@ -276,7 +276,7 @@ def recipe_with(storage: Fragment) -> Recipe:
 
 
 key = Key("key_persistent")
-disk = Disk("disk_persistent", mount="/persistent", key=key)
+disk = Disk("disk_persistent", mount="/persistent", key=key, device="/dev/sdb")
 STORAGE = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
 

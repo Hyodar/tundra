@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import json
 import os
 import re
 import subprocess
@@ -16,16 +17,22 @@ import pytest
 
 import tundravm
 from tests.helpers import REPO_ROOT, run_main
+from tundravm import templates
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.templates import (
     EXPECTED_FINDINGS,
     TEMPLATE_VARIANTS,
     TEMPLATES,
+    TUNDRAVM_REPOSITORY,
+    TundravmSource,
+    render_pyproject,
     render_recipe_template,
+    source_from_direct_url,
 )
 from tundravm.testing import UPDATE_GOLDEN_ENV
 
 NAME = "node"
+COMMIT = "258d089fdc105803ce0080a40aaa35138e5f2cb6"
 NO_DOCTOR = ("--backend", "inprocess", "--no-doctor")
 
 
@@ -121,7 +128,12 @@ def test_service_app_fragment_carries_its_lint_rule(tmp_path: Path) -> None:
     assert {d.code for d in found} == {"app-privileged-port"}
 
 
-def test_scaffold_writes_the_project_files_and_lists_next_steps(tmp_path: Path) -> None:
+def test_scaffold_writes_the_project_files_and_lists_next_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        templates, "tundravm_source", lambda: TundravmSource(TUNDRAVM_REPOSITORY, COMMIT, True)
+    )
     out = scaffold(tmp_path, name="my-node")
     created = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file())
     assert created == [
@@ -133,7 +145,8 @@ def test_scaffold_writes_the_project_files_and_lists_next_steps(tmp_path: Path) 
     ]
     pyproject = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "my-node"' in pyproject and 'requires-python = ">=3.12"' in pyproject
-    assert 'dependencies = ["tundravm"]' in pyproject and 'dev = ["pytest"]' in pyproject
+    assert f'dependencies = ["tundravm @ git+{TUNDRAVM_REPOSITORY}@{COMMIT}"]' in pyproject
+    assert 'dev = ["pytest"]' in pyproject
     assert '[tool.pytest.ini_options]\npythonpath = ["."]\n' in pyproject
     readme = [line for line in (tmp_path / "README.md").read_text().splitlines() if line]
     assert len(readme) == 5 and "service template" in readme[0]
@@ -156,7 +169,7 @@ def test_scaffold_writes_the_project_files_and_lists_next_steps(tmp_path: Path) 
     assert "  3. uv run pytest tests" in out
     assert "  4. tundravm ci my-node.py --tree mkosi" in out
     assert "  5. tundravm bake my-node.py --build build" in out
-    assert "  tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm`" in out
+    assert f"  `uv sync` installs the pinned dependency, tundravm at {COMMIT[:12]}" in out
     assert "note:" not in out
 
 
@@ -195,15 +208,96 @@ def test_no_tests_skips_the_tests_module(tmp_path: Path) -> None:
     assert "uv run pytest" not in (tmp_path / "README.md").read_text()
 
 
-def test_existing_pyproject_is_kept_with_a_note(tmp_path: Path) -> None:
+def test_existing_pyproject_is_kept_with_a_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = TundravmSource(TUNDRAVM_REPOSITORY, COMMIT, True)
+    monkeypatch.setattr(templates, "tundravm_source", lambda: source)
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text('[project]\nname = "theirs"\n', encoding="utf-8")
     out = scaffold(tmp_path)
     assert pyproject.read_text() == '[project]\nname = "theirs"\n'
     assert f"kept {pyproject} (already exists)" in out
     note = next(line for line in out.splitlines() if line.startswith("note:"))
-    assert "`uv add tundravm` and `uv add --dev pytest`" in note
-    assert "`uv add --editable PATH/TO/tundravm`" in note
+    assert f"`{source.install}` and `uv add --dev pytest`" in note
+    assert "uv sync" not in out  # the dependency is not in their pyproject.toml yet
+
+
+def test_an_unpinned_dependency_is_noted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = TundravmSource(TUNDRAVM_REPOSITORY, "master", False)
+    monkeypatch.setattr(templates, "tundravm_source", lambda: source)
+    out = scaffold(tmp_path)
+    assert source.note is not None
+    assert f"note: {source.note}" in out.splitlines()
+    assert "  `uv sync` installs the dependency, tundravm at master" in out.splitlines()
+
+
+def _direct_url(**record: object) -> str:
+    return json.dumps(record)
+
+
+def test_a_git_install_pins_its_commit_and_repository() -> None:
+    raw = _direct_url(
+        url="https://github.com/someone/tundra",
+        vcs_info={"vcs": "git", "commit_id": COMMIT, "requested_revision": "master"},
+    )
+    source = source_from_direct_url(raw)
+    assert source == TundravmSource("https://github.com/someone/tundra", COMMIT, pinned=True)
+    assert source.requirement == f"tundravm @ git+https://github.com/someone/tundra@{COMMIT}"
+    assert source.install == f'uv add "{source.requirement}"'
+    assert source.note is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        "not json",
+        _direct_url(url="https://example.com/tundravm-0.1.0.tar.gz", archive_info={}),
+        _direct_url(url="https://github.com/Hyodar/tundra", vcs_info={"vcs": "git"}),
+        _direct_url(url="file:///nowhere", vcs_info={"vcs": "git", "commit_id": COMMIT}),
+        _direct_url(url="file:///nowhere/at/all", dir_info={"editable": True}),
+    ],
+)
+def test_an_unknown_commit_follows_the_default_branch_with_a_note(raw: str | None) -> None:
+    source = source_from_direct_url(raw)
+    assert source == TundravmSource(TUNDRAVM_REPOSITORY, "master", pinned=False)
+    assert source.note is not None and "follows master" in source.note
+    pyproject = render_pyproject(name="node", source=source)
+    assert f'dependencies = ["tundravm @ git+{TUNDRAVM_REPOSITORY}@master"]' in pyproject
+    assert "could not tell which commit\n# it ran from, so this follows master." in pyproject
+
+
+def _git(cwd: Path, *args: str) -> str:
+    identity = ("-c", "user.name=t", "-c", "user.email=t@example.com")
+    done = subprocess.run(
+        ["git", *identity, *args], cwd=cwd, check=True, capture_output=True, text=True
+    )
+    return done.stdout.strip()
+
+
+def test_an_editable_checkout_pins_head_only_once_a_remote_branch_has_it(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "tundra"
+    checkout.mkdir()
+    _git(checkout, "init", "-q")
+    _git(checkout, "commit", "-q", "--allow-empty", "-m", "first")
+    head = _git(checkout, "rev-parse", "HEAD")
+    _git(checkout, "remote", "add", "origin", "git@github.com:someone/tundra.git")
+    raw = _direct_url(url=checkout.as_uri(), dir_info={"editable": True})
+    assert not source_from_direct_url(raw).pinned  # HEAD is on no remote yet
+
+    _git(checkout, "update-ref", "refs/remotes/origin/master", head)
+    source = source_from_direct_url(raw)
+    assert source == TundravmSource("https://github.com/someone/tundra", head, pinned=True)
+    pyproject = render_pyproject(name="node", source=source)
+    assert f'dependencies = ["tundravm @ git+https://github.com/someone/tundra@{head}"]' in (
+        pyproject
+    )
+    assert "# tundravm is not on PyPI: this pins the commit `tundravm init` ran from." in (
+        pyproject
+    )
 
 
 @pytest.mark.parametrize("template", list(TEMPLATES))

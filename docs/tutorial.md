@@ -1,8 +1,8 @@
 # Tutorial
 
-This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, leave `watch` running while you edit, change the recipe and see the diff and the lock drift, bake, prove the bake reproducible, measure and export a verifier policy, list what is in the image, deploy, then write a fragment of your own, test it next to the generated tests, and run the CI gate and read the workflow that runs it. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`. The one command that needs a running TDX VM, attesting it, is shown but not run.
+This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, leave `watch` running while you edit, change the recipe and see the diff and the lock drift, bake, prove the bake reproducible, measure and export a verifier policy, list what is in the image, package the evidence and verify it, deploy, then write a fragment of your own, test it next to the generated tests, run the CI gate and read the workflow that runs it, sign the evidence of a release and review the next change against it, and finally ask where the project stands and clean the build directory. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`. The one command that needs a running TDX VM, attesting it, is shown but not run.
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in this repository; tundravm is not on PyPI yet). Step 15 runs the project's tests with `uv run`, which installs tundravm into the project's own environment, so run `uv add --editable PATH/TO/tundravm` in the project first, as the last line of `init`'s next steps says.
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in a checkout of this repository installs it in `.venv/bin`; tundravm is not on PyPI yet). The `pyproject.toml` that `init` writes depends on the tundravm you ran it with, pinned as a git requirement, `tundravm @ git+https://github.com/Hyodar/tundra@<commit>` (`master` when the running commit cannot be determined), so `uv sync` and `uv run` in the project install it on a fresh machine and in CI. To use an unreleased local checkout instead, `uv add --editable PATH/TO/tundravm` overrides that requirement; step 15 does so before running the project's tests.
 
 ## 1. Start a project
 
@@ -22,7 +22,7 @@ next:
   3. uv run pytest tests                    run test_node.py against mkosi/
   4. tundravm ci node.py --tree mkosi       the lint, tree and lockfile checks CI runs
   5. tundravm bake node.py --build build    build the image
-  tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm` uses a local checkout
+  `uv sync` installs the pinned dependency, tundravm at 258d089fdc10
 then commit mkosi/ and build/tundravm.lock; the workflow checks both
 
 checking the inprocess backend (tundravm doctor --backend inprocess):
@@ -150,7 +150,7 @@ locked build/tundravm.lock
 [exit 0]
 ```
 
-`tundravm config` now prints `lockfile  build/tundravm.lock  pyproject`. Every later change to the recipe drifts from this lock until you lock again, which steps 5, 7 and 14 do.
+`tundravm config` now prints `lockfile  build/tundravm.lock  pyproject`. Every later change to the recipe drifts from this lock until you lock again, which steps 5, 7, 14 and 17 do.
 
 ## 2. Inspect
 
@@ -303,19 +303,19 @@ The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports e
 ```console
 $ tundravm watch node.py
 watching node.py every 1s (Ctrl-C stops)
-10:01:12 lint 0 errors 0 warnings; tree up to date
-10:01:16 error [E_VALIDATION] variant 'default': app-privileged-port: app runs as user app and cannot bind port 80
-10:01:18 lint 0 errors 0 warnings; tree stale (3 files)
+17:45:27 lint 0 errors 0 warnings; tree up to date
+17:45:30 lint 3 errors (app-privileged-port: app runs as user app and cannot bind port 80)
+17:45:33 lint 3 errors 0 warnings; lock drifted (3 sections); tree stale (3 files)
 ^Cstopped
 [exit 0]
 ```
 
 - The first line is the check at start: `mkosi/` (the table's `tree`) matches what step 5 compiled.
-- Port 80 trips `App`'s `app-privileged-port` check. An error-level finding stops the recipe from loading, so the line is that error rather than the counts, and `watch` keeps polling.
-- Port 9090 passes the check and changes three files of `mkosi/`, one `app.conf` per variant. `watch` never writes the tree; step 7 shows the diff and recompiles.
+- Port 80 trips `App`'s `app-privileged-port` check in all three variants. An error-level fragment check keeps the recipe from lowering, so the line names the first error instead of the counts and checks no tree; `watch` keeps polling.
+- Port 9090 passes the check. The three errors left are lockfile drift, one `variants.<variant>.files` section per variant (`lock drifted (3 sections)`), and three files of `mkosi/` are stale, one `app.conf` per variant. `watch` never writes the tree or the lock; step 7 shows the diff, locks again and recompiles.
 - Ctrl-C prints `stopped` and exits 0.
 
-`watch` polls `node.py` and every `.py` beside it, such as the `fragments.py` of step 14, every second (`--interval` changes that), and re-imports the modules the recipe takes from its directory before each check. Its lint count leaves out lockfile drift, which `lint`, `lock --check` and `ci` report (step 7). `--write` recompiles a stale tree on each change instead of reporting it. See [CLI: Watch](cli.md#watch).
+`watch` polls `node.py` and every `.py` beside it, such as the `fragments.py` of step 14, the files the recipe reads, the lockfile, `pyproject.toml` and the tree, every second (`--interval` changes that), and re-imports the modules the recipe takes from its directory before each check. Its counts are `lint`'s, lockfile drift included, so a `tundravm lock` in another terminal clears them. `--write` recompiles a stale tree on each change instead of reporting it. See [CLI: Watch](cli.md#watch).
 
 ## 7. Change the recipe
 
@@ -530,9 +530,10 @@ sbom default
   mirror           -
   recipe digest    2f0041479c07b652bd4fad98f7e86c1547d4078945ac68948f19d704f31e4cd3
   tree digest      873688c6d6945f9349f34c551331afff8a627b58838fdc5e834358f4475b2efc
-  artifact         build/default/disk.qcow2
+  artifact         default/disk.qcow2
   artifact sha256  1fa043adea909e9ad008e0db46ed1c9935adf90aee9c49d20940d6316c5c2e79
-  manifest         build/default/default.manifest (missing)
+  manifest         default/default.manifest (missing)
+  bound            yes
   tundravm         0.1.0
 
 packages (7)
@@ -547,18 +548,18 @@ packages (7)
 
 sources (0)
 note: the artifact is simulated (in-process backend): nothing was installed
-note: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
+note: no mkosi package manifest at default/default.manifest: listing the packages the recipe declares, without versions
 [exit 0]
 ```
 
-`sbom` merges three records of one baked variant: mkosi's package manifest beside the artifact, the lockfile's source pins, and the recipe metadata and digests from `bake-result.json`. The in-process bake installed nothing, so there is no manifest: the notes say so, and the table lists the packages the recipe declares, without versions. After a real bake the table lists every installed package with the version and architecture from mkosi's manifest, `sources` lists each source build, built kernel and `EfiStub` package with its pin, and `snapshot` names the archive snapshot when the recipe pins one (the starter does not). See [CLI: SBOM](cli.md#sbom).
+`sbom` merges three records of one baked variant: mkosi's package manifest beside the artifact, the lockfile's source pins, and the recipe metadata and digests from `bake-result.json`. Paths are relative to the build directory, so moving `build/` gives the same document. `bound  yes` says the document describes this bake: the artifact still hashes to the sha256 the bake recorded, and the lockfile (and a manifest, when there is one) is the one the bake read; otherwise `sbom` fails with `E_ARTIFACT_CHANGED`. The in-process bake installed nothing, so there is no manifest: the notes say so, and the table lists the packages the recipe declares, without versions. After a real bake the table lists every installed package with the version and architecture from mkosi's manifest, `sources` lists each source build, built kernel and `EfiStub` package with its pin, and `snapshot` names the archive snapshot when the recipe pins one (the starter does not). See [CLI: SBOM](cli.md#sbom).
 
 The default format is SPDX 2.3 JSON, and `--output` writes it to a file to publish next to `peer.json`:
 
 ```console
 $ tundravm sbom --variant default --output build/default.spdx.json
 note: the artifact is simulated (in-process backend): nothing was installed
-note: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
+note: no mkosi package manifest at default/default.manifest: listing the packages the recipe declares, without versions
 wrote spdx-json build/default.spdx.json
 [exit 0]
 ```
@@ -567,34 +568,57 @@ wrote spdx-json build/default.spdx.json
 
 ## 12. Package the evidence
 
-The lockfile, step 9's reproducibility check, `peer.json` and the SBOM each answer one question about the bake. `evidence` gathers them into one record that someone without your machine can check:
+The lockfile, step 9's reproducibility check, the SBOM and, after a real bake, the measurements policy each answer one question about the bake. `evidence` gathers them into one record that someone without your machine can check:
 
 ```console
-$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --variant default --policy peer.json --bundle evidence.tar.gz --html report.html
+$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --variant default --bundle evidence.tar.gz --html report.html
 wrote build/evidence
 wrote evidence.tar.gz
 wrote report.html
 evidence 2023-11-14T22:13:20Z  verdict pass
-  recipe     node.py  digest 2f0041479c07
+  recipe     node.py  digest 2f0041479c07  matches
+  tree       matches
   integrity  verified
   lock       current
-  reproduce  reproducible
+  reproduce  matched
+  policy     missing
+  artifacts  simulated
   lint       clean
   default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
 members:
-  3b2f3058f0f74fa6361994d400c8a76492f1aec1f93a73c98d1f78c97798b8c1  bake-result.json
+  52203462a5ccefa2ff3a6f963a6db26d98b5b4ea724e87289b0c3ec06b55e7c9  bake-result.json
   37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570  lint.json
   259d38ee530784c61ae5514f21c8dd11670025d41ece1992946c7b77224179e8  tundravm.lock
-  489d22bcf640902f1aa464238184967658d0236d461e68b81b59b77664d11d2d  variants/default/policy.json
-  d930bca4b8373fdbc3b055fb16a045efb1e170b8b9bfe704ea1b5780b1ec80d7  variants/default/sbom-qemu.spdx.json
+  89a263d917ce3261d9af02cd8e2c6954b148818140c4dc8bb37b8c36833a95ec  variants/default/sbom-qemu.spdx.json
+  bc5c9c0a302345e7ae5fb7c03197dd453f8caf1b8d77a9f55bac0082ad2eacd4  variants/default/tree.json
 note: default/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
-note: default/qemu sbom: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
+note: default/qemu sbom: no mkosi package manifest at default/default.manifest: listing the packages the recipe declares, without versions
+note: no measurements policy for variant default (build/default/policy.json does not exist); write one with `tundravm measure --build build --variant default --export-policy build/default/policy.json`
+note: the artifacts are simulated (in-process backend): nothing was built
 [exit 0]
 ```
 
-`evidence` builds nothing: it reads `build/bake-result.json`, hashes each artifact again against the sha256 the bake recorded (`integrity`), compares the lockfile with the recipe (`lock`), reads back the outcome step 9 recorded (`reproduce`) and lints the recipe with the lock's pins (`lint`). The verdict is `pass` only when all four hold; a bake never checked for reproducibility passes as `not checked`. Append one byte to `build/default/disk.qcow2` and the same command prints `integrity  mismatch` and `verdict fail` and exits 1. `build/evidence/` holds the files under `members`, indexed with their sha256 by `evidence.json`; `--policy peer.json` adds step 10's policy, which the index marks as a placeholder (without the flag, `evidence` looks for `build/default/policy.json`). The notes say what could not be included, here the package manifest a simulated bake never has.
+`evidence` builds nothing. It reads `build/bake-result.json`, checks that the recipe and its compiled tree are the ones the bake recorded (`recipe`, `tree`), hashes each artifact again against the sha256 the bake recorded (`integrity`), compares the lockfile with the recipe (`lock`), reads back the outcome step 9 recorded (`reproduce`) and lints the recipe with the lock's pins (`lint`). A contradiction makes the verdict `fail`, with one line per reason under `reasons:`, and exits 1: append one byte to `build/default/disk.qcow2` and the summary reads `integrity  mismatch` and the reason `integrity-mismatch  default/qemu: build/default/disk.qcow2 changed since the bake`. What is only absent is a note, here the policy and real artifacts; `--require measured,real` makes those an `incomplete` verdict (exit 1) instead, as the CI workflow of step 16 does with `reproducible,lock`.
 
-`evidence.tar.gz` is what you hand a reviewer: publish its sha256 with it, and they unpack it and check every member against `evidence/evidence.json`. Its members are sorted, owned by `0:0` and stamped with `SOURCE_DATE_EPOCH`, so packing the same bake again gives the same bytes. `report.html` is the same record as one self-contained page, opening with a pass/fail banner. See [CLI: Evidence](cli.md#evidence).
+Step 10's placeholder policy is not evidence: `--policy peer.json` adds it as `variants/default/policy.json`, the summary reads `policy  placeholder`, and the verdict fails with `policy-placeholder  default: peer.json holds placeholder registers`. Without the flag, `evidence` takes `build/default/policy.json` when it exists, so after a real bake export the policy there (`measure --variant default --export-policy build/default/policy.json`).
+
+`build/evidence/` holds the files under `members`, indexed with their sha256 by `evidence.json`; `tree.json` lists every file of the variant's compiled tree, which step 17 compares a later recipe against. `evidence.tar.gz` is what you hand a reviewer. Its members are sorted, owned by `0:0` and stamped with `SOURCE_DATE_EPOCH`, so packing the same bake again gives the same bytes. `report.html` is the same record as one self-contained page, opening with a pass/fail banner. See [CLI: Evidence](cli.md#evidence).
+
+The reviewer checks the bundle with `verify`, which needs neither the recipe nor your build directory: every member against the index, the index against its members, the recorded verdict recomputed from the recorded facts and, with `--build DIR`, the artifacts hashed again:
+
+```console
+$ tundravm verify evidence.tar.gz --build build
+verify evidence.tar.gz  verdict pass  (12 pass, 0 fail, 0 missing)
+  evidence   2023-11-14T22:13:20Z  recipe node  recorded verdict pass
+  member     5/5 pass
+  index      4/4 pass
+  artifact   1/1 pass
+  verdict    2/2 pass
+note: unsigned: the evidence carries no evidence.json.sig
+[exit 0]
+```
+
+A member, index entry or artifact that does not match fails its check and `verify` exits 1. The note says the bundle is unsigned, so nothing says who made it; step 17 signs it. See [CLI: Verify](cli.md#verify).
 
 ## 13. Deploy
 
@@ -774,12 +798,28 @@ The tests import `fragments` and `node` from the project directory, which the ge
 pythonpath = ["."]
 ```
 
+`uv run` runs them in the project's own environment, which `uv sync` fills from `pyproject.toml`: the pinned tundravm from GitHub and `pytest`. This tutorial ran against a local checkout of tundravm, so it pointed the project at that first:
+
 ```console
+$ uv add --editable /home/me/tundra
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .venv
+Resolved 8 packages in 3ms
+   Building tundravm @ file:///home/me/tundra
+      Built tundravm @ file:///home/me/tundra
+Prepared 1 package in 267ms
+Installed 1 package in 1ms
+ + tundravm==0.1.0 (from file:///home/me/tundra)
+[exit 0]
+
 $ uv run pytest -q tests
+Installed 5 packages in 9ms
 ......                                                                   [100%]
-6 passed in 0.07s
+6 passed in 0.66s
 [exit 0]
 ```
+
+The override records your checkout's path in `[tool.uv.sources]` and in `uv.lock`; keep it out of commits, since the path exists only on your machine.
 
 In a project of your own, the loop is: edit the recipe with `tundravm watch node.py` running, `tundravm compile node.py --tree mkosi` once its line says `tree stale`, `uv run pytest tests`, `tundravm lock node.py`.
 
@@ -797,7 +837,7 @@ ok lock: build/tundravm.lock is up to date
 
 A failing step prints its report and `FAIL`, the remaining steps print `skip`, and the command exits 1. See [CLI: CI](cli.md#ci).
 
-`.github/workflows/tundravm.yml`, which `init --ci github` wrote in step 1, runs on pushes to `main` and on pull requests. Its two jobs, with the checkout, uv, mkosi and `uv sync` setup steps cut (`# ...`):
+`.github/workflows/tundravm.yml`, which `init --ci github` wrote in step 1, runs on pushes to `main` and on pull requests. Its two jobs, with the setup steps (checkout, uv, mkosi, dependencies) cut (`# ...`):
 
 ```yaml
 jobs:
@@ -827,21 +867,212 @@ jobs:
           --build build --verify-reproducible
 
       - name: Collect evidence
+        if: ${{ !cancelled() && hashFiles('build/bake-result.json') != '' }}
         run: >-
           uv run tundravm evidence node.py --build build
+          --require ${{ vars.TUNDRAVM_BAKE_BACKEND == 'inprocess'
+          && 'reproducible,lock' || 'reproducible,lock,real' }}
           --bundle evidence.tar.gz --html evidence.html
 
       - name: Upload evidence and artifacts
+        if: ${{ !cancelled() && hashFiles('build/bake-result.json') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: tundravm-bake
+          include-hidden-files: true
           path: |
             evidence.tar.gz
             evidence.html
+            build/bake-result.json
+            build/.reproduce/**/bake-result.json
             build/*/output/*
+            build/*/*.qcow2
+            build/*/*.vhd
+            build/*/*.tar.gz
 ```
 
 - `check` always runs. It posts `inspect --format markdown`, the dry run of step 2, to the job summary, then runs the gate above; its findings show inline on the pull request.
-- `bake` is opt-in. Until the repository variable `TUNDRAVM_BAKE_BACKEND` (Settings > Secrets and variables > Actions > Variables) names a backend, `local`, `nix`, `lima` or `inprocess`, the `if:` skips it. Once set, it runs after `check` passes: it installs mkosi, fetches sources, bakes twice with that backend as step 9 did, packs the evidence bundle and HTML report of step 12, and uploads them with the built images as the `tundravm-bake` artifact.
+- `bake` is opt-in. Until the repository variable `TUNDRAVM_BAKE_BACKEND` (Settings > Secrets and variables > Actions > Variables) names a backend, `local` or `inprocess` (`lima` and `nix` need limactl or Nix, which `ubuntu-latest` lacks), the `if:` skips it. Once set, it runs after `check` passes: it installs mkosi, fetches sources, bakes twice with that backend as step 9 did, packs the evidence bundle and HTML report of step 12, requiring the reproducibility check and the lockfile (and real artifacts, unless the backend is `inprocess`), and uploads them with `bake-result.json` and the built images as the `tundravm-bake` artifact. A bake that fails after writing `bake-result.json` still has its evidence collected and uploaded.
 
 Commit `mkosi/`, `build/tundravm.lock` and the workflow; `check` fails on a pull request whose recipe no longer matches either.
+
+## 17. Review the next change
+
+A reviewer of the next release asks two questions: is this evidence the one the last release shipped with, and what changed since? Step 14 changed the recipe after the bake of step 8, so bake again, then sign the evidence with an SSH key. Here a throwaway key outside the project stands in for the release key, with an allowed-signers file naming its owner:
+
+```console
+$ tundravm bake node.py --verify-reproducible -q
+variant  target  artifact                  size   sha256        time
+debug    qemu    build/debug/disk.qcow2    112 B  b50a5a5aeaac  0.0s
+default  qemu    build/default/disk.qcow2  114 B  1fa043adea90  0.0s
+dev      qemu    build/dev/disk.qcow2      110 B  9cfb8b5c2f31  0.0s
+reproducible: yes (3 artifacts match a second build)
+next: tundravm deploy qemu --variant debug
+[exit 0]
+
+$ ssh-keygen -q -t ed25519 -N '' -C review -f ../review-key
+[exit 0]
+
+$ echo "me@example.com namespaces=\"tundravm-evidence\" $(cat ../review-key.pub)" > ../allowed_signers
+[exit 0]
+
+$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --variant default --sign ../review-key --bundle v1.tar.gz
+wrote build/evidence
+signed evidence.json with ../review-key: evidence.json.sig
+wrote v1.tar.gz
+evidence 2023-11-14T22:13:20Z  verdict pass
+  recipe     node.py  digest d08f2d6df99b  matches
+  tree       matches
+  integrity  verified
+  lock       current
+  reproduce  matched
+  policy     missing
+  artifacts  simulated
+  lint       clean
+  default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
+members:
+  824afd144b24e8aa55e7d0300a6b42ca817e00389d0a5a2fb704ef3aaadc1d7d  bake-result.json
+  37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570  lint.json
+  9bf1c3aa2dc4fce73f71a04bc63fa4f9315a4abbab2f679c857d6d64468d0b6a  tundravm.lock
+  08b17c5f0141e4501313322ff93016d1190ddada2c2d5eb65549f5e53cf217d7  variants/default/sbom-qemu.spdx.json
+  87f960535abd6fe40b4cede20d3ef2c1fc46aedd708534a189c689b6bc0ed40d  variants/default/tree.json
+note: default/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
+note: default/qemu sbom: no mkosi package manifest at default/default.manifest: listing the packages the recipe declares, without versions
+note: no measurements policy for variant default (build/default/policy.json does not exist); write one with `tundravm measure --build build --variant default --export-policy build/default/policy.json`
+note: the artifacts are simulated (in-process backend): nothing was built
+[exit 0]
+
+$ tundravm verify v1.tar.gz --allowed-signers ../allowed_signers --build build
+verify v1.tar.gz  verdict pass  (13 pass, 0 fail, 0 missing)
+  evidence   2023-11-14T22:13:20Z  recipe node  recorded verdict pass
+  member     5/5 pass
+  index      4/4 pass
+  artifact   1/1 pass
+  signature  1/1 pass, signed by me@example.com
+  verdict    2/2 pass
+[exit 0]
+```
+
+`--sign` writes `evidence.json.sig` (`ssh-keygen -Y sign -n tundravm-evidence`) beside the index and into the bundle; the signature covers every member through the sha256 the index lists. `verify --allowed-signers` checks it and names the signer; a bundle whose index or members were edited after signing fails. Publish `v1.tar.gz` with the release.
+
+Now the next change: set `APP_VERSION = "0.2.0"` in `node.py`, lock and compile, and ask what changed since `v1.tar.gz`, as markdown for the pull request:
+
+```console
+$ tundravm lock node.py
+locked build/tundravm.lock
+[exit 0]
+
+$ tundravm compile node.py --tree mkosi
+compiled mkosi
+  variants:      default, dev, debug
+  recipe_digest: 92e819884267072e92c5eb819930391aad94368deb4d83716469a0dde3fefd3a
+  tree_digest:   23c5aad2d4142bda16b33b6de30ec692d8f8450813b697288218792a5bbc7f0b
+[exit 0]
+
+$ tundravm changes node.py --since v1.tar.gz --variant default --format markdown
+## Changes since evidence `2023-11-14T22:13:20Z`
+
+Recipe `node`, variants `default`: 6 changes.
+
+| Section | Changes |
+|---|---|
+| Recipe and tree | 2 |
+| Lockfile sections | 2 |
+| Source pins | 0 |
+| Packages | 0 |
+| Emitted files | 2 |
+| Measurements | 0 |
+
+### Recipe and tree (2)
+
+| Change | Subject | Before | After |
+|---|---|---|---|
+| changed | recipe digest | `d08f2d6df99b` | `92e819884267` |
+| changed | default tree | `c2417f12503e` | `cf245381a9a8` |
+
+### Lockfile sections (2)
+
+| Change | Section | Detail |
+|---|---|---|
+| changed | `variants.default.files` | `~/etc/app/app.conf` |
+| changed | `variants.default.services` | `~app` |
+
+### Emitted files (2)
+
+| Change | Variant | File | What | Declared by |
+|---|---|---|---|---|
+| changed | `default` | `mkosi.extra/etc/app/app.conf` | content | File(extra, /etc/app/app.conf) (declared in base > app) |
+| changed | `default` | `mkosi.extra/usr/lib/systemd/system/app.service` | content | Service(app.service) (declared in base > app) |
+
+<details><summary>Notes</summary>
+
+- current packages are the recipe's declared ones, unversioned (pass --build DIR for the versions a bake installed)
+- default: package versions are not compared where the evidence has none
+
+</details>
+[exit 0]
+```
+
+`changes` reads the bundle and the recipe as it is now, and nothing from the network: the recipe and per-variant tree digests, the lockfile sections that drifted, source pins, packages, every emitted file that changed with the declaration behind it, and the measured registers. The version bump touched two files of `default`, the config and the service's description, both from `App`. `--variant default` matches the bundle, which holds only `default`; without it `debug` and `dev` would be listed as added variants. `--build build` would compare package versions from a new bake's SBOM. The default format is text; `--format json` carries `"schema": "tundravm.changes/1"`. See [CLI: Changes](cli.md#changes).
+
+## 18. Status and clean
+
+`status` answers where the project stands, writing nothing and touching no network:
+
+```console
+$ tundravm status
+recipe    ok       node.py  digest 92e819884267  variants default, dev, debug  dialect current  base debian/trixie
+lint      ok       0 errors, 0 warnings, 0 infos
+lock      ok       build/tundravm.lock  v4  up to date
+source    n/a      no source builds or kernels
+tree      ok       mkosi: up to date with the recipe
+artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+artifact  stale    dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+artifact  stale    debug/qemu  build/debug/disk.qcow2  112 B  sha256 b50a5a5aeaac  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
+manifest  n/a      build/default/default.manifest  simulated: nothing was installed
+manifest  n/a      build/dev/dev.manifest  simulated: nothing was installed
+manifest  n/a      build/debug/debug.manifest  simulated: nothing was installed
+backend   ok       inprocess: no host tools needed
+next: tundravm bake
+[exit 0]
+```
+
+The recipe, lock and committed tree agree, but the version bump came after the bake, so every artifact is `stale` and `next` is the bake. `--verify` also hashes each artifact against the sha256 the bake recorded. `next` leaves out what the `[tool.tundravm]` table supplies. See [CLI: Project status](cli.md#project-status).
+
+`clean` removes the build directory's output by part. Without `--what` it lists what `--what all` would remove:
+
+```console
+$ tundravm clean
+would remove build/mkosi
+would remove build/debug
+would remove build/default
+would remove build/dev
+would remove build/evidence
+would remove build/bake-result.json
+pass --what all to remove them, or --what with some of sources, tree, artifacts, evidence, state, reproduce (the lockfile stays unless --lockfile names it)
+[exit 0]
+
+$ tundravm clean --what all
+removed build/mkosi
+removed build/debug
+removed build/default
+removed build/dev
+removed build/evidence
+removed build/bake-result.json
+[exit 0]
+
+$ tundravm status
+recipe    ok       node.py  digest 92e819884267  variants default, dev, debug  dialect current  base debian/trixie
+lint      ok       0 errors, 0 warnings, 0 infos
+lock      ok       build/tundravm.lock  v4  up to date
+source    n/a      no source builds or kernels
+tree      ok       mkosi: up to date with the recipe
+artifact  missing  default: not baked (no build/bake-result.json)
+artifact  missing  dev: not baked (no build/bake-result.json)
+artifact  missing  debug: not baked (no build/bake-result.json)
+backend   ok       inprocess: no host tools needed
+next: tundravm bake
+[exit 0]
+```
+
+`build/mkosi` is the bake's own copy of the tree; the committed `mkosi/` is never touched. The lockfile stays unless `--lockfile` names it, and `build/evidence/` stays too. From here the loop starts again at step 8.

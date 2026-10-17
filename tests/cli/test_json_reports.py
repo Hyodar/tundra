@@ -24,6 +24,7 @@ REPORTS: dict[str, tuple[str, ...]] = {
     "measure": ("measure", "--variant", "default", "--allow-placeholder", "--format", "json"),
     "verify": ("verify", "build/evidence", "--format", "json"),
     "changes": ("changes", "--since", "build/evidence", "--format", "json"),
+    "release": ("release", "--version", "1.0", "--format", "json"),
 }
 """One JSON run per verb, from inside a scaffolded, compiled, locked and baked project."""
 
@@ -88,7 +89,6 @@ def _error_line(err: str) -> dict[str, object]:
     "argv",
     [
         ("lint", "--variant", "nope", "--format", "json"),  # a recipe verb
-        ("lint", "--variant", "nope", "--json"),  # its --json shorthand
         ("measure", "--build", "nowhere", "--format", "json"),  # an artifact verb
         ("status", "--variant", "nope", "--format", "json"),  # a report verb
         ("evidence", "--build", "nowhere", "--format", "json"),  # an evidence verb

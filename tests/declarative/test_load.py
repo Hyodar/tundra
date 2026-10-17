@@ -88,7 +88,7 @@ def test_load_image_lowers_and_wires_the_backend(recipe_file: Path) -> None:
 
 
 def test_cli_inspect_and_compile_a_declarative_recipe(recipe_file: Path, tmp_path: Path) -> None:
-    code, out = run_main("inspect", str(recipe_file), "--json")
+    code, out = run_main("inspect", str(recipe_file), "--format", "json")
     assert code == EXIT_OK
     payload = json.loads(out)["variants"]
     assert set(payload) == {"default", "azure"}

@@ -1217,7 +1217,7 @@ def _rebake(
         raise StateError(
             f"Cannot reset {scratch} for the second build: {exc.strerror or exc}.",
             hint=f"Remove it as its owner (`sudo rm -rf -- {scratch}`, or "
-            "`tundravm clean --state`), then bake again.",
+            "`tundravm clean --what reproduce`), then bake again.",
             context={"path": str(exc.filename or scratch)},
         ) from exc
     sources = Path(baking.build_dir) / SOURCES_DIRNAME

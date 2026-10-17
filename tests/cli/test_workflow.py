@@ -47,11 +47,11 @@ def test_cli_init_inspect_and_lint(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert code == 0 and (tmp_path / "proj" / "demo.py").is_file()
     recipe = tmp_path / "proj" / "demo.py"
 
-    code, out, _ = run_cli("inspect", recipe, "--json")
+    code, out, _ = run_cli("inspect", recipe, "--format", "json")
     payload = json.loads(out)
     assert code == 0 and set(payload["variants"]) == {"default", "dev"}
     assert len(payload["digest"]) == 64
-    code, one, _ = run_cli("inspect", recipe, "--json", "--variant", "default")
+    code, one, _ = run_cli("inspect", recipe, "--format", "json", "--variant", "default")
     assert set(json.loads(one)["variants"]) == {"default"}
     assert json.loads(one)["digest"] != payload["digest"]
     code, text, _ = run_cli("inspect", recipe, "--format", "markdown")
@@ -85,7 +85,7 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
     assert code == 0
     assert "warning custom-warning [default]" in out and "debloat-removes-declared-file" in out
     assert run_cli("lint", path, "--strict")[0] == 1
-    code, out, _ = run_cli("lint", path, "--json")
+    code, out, _ = run_cli("lint", path, "--format", "json")
     codes = {d["code"] for d in json.loads(out)["diagnostics"]}
     assert {"custom-warning", "debloat-removes-declared-file"} <= codes
 

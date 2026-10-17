@@ -386,7 +386,7 @@ def _selected(
             f"No baked artifact for variant(s) {', '.join(missing)} in {out}.",
             hint=f"Baked: {', '.join(baked) or '(none)'}. Bake those variants first.",
         )
-    return list(dict.fromkeys(variants))
+    return sorted(dict.fromkeys(variants))  # the index's order, which verify recomputes in
 
 
 def _lock(
@@ -627,7 +627,7 @@ def _policy(
     if not source.is_file():
         notes.append(
             f"no measurements policy for variant {name} ({source} does not exist); write one "
-            f"with `tundravm measure ... --variant {name} --export-policy {source}`"
+            f"with `tundravm measure --build {base} --variant {name} --export-policy {source}`"
         )
         return None
     data = source.read_bytes()

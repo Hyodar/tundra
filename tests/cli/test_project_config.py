@@ -207,9 +207,10 @@ def test_a_configured_build_reaches_every_artifact_verb(
     assert status["artifacts"]["manifest"] == str(dist / "bake-result.json")
     run_main("evidence")
     assert (dist / "evidence" / "evidence.json").is_file()
-    code, out = run_main("clean", "--artifacts", "--dry-run")
+    code, out = run_main("clean", "--what", "artifacts,evidence", "--dry-run")
     assert code == EXIT_OK
     assert f"would remove {dist / 'bake-result.json'}" in out.splitlines()
+    assert f"would remove {dist / 'evidence'}" in out.splitlines()
     capsys.readouterr()
     assert run_main("deploy", "qemu", "--variant", "default")[0] == EXIT_SDK_ERROR
     assert "Refusing to deploy a simulated artifact." in capsys.readouterr().err

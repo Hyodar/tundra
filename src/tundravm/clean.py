@@ -1,10 +1,12 @@
 """``tundravm clean``: remove the parts of a build output directory a bake leaves behind.
 
-The parts are ``sources`` (``BUILD/.sources``), ``tree`` (``BUILD/mkosi``),
-``artifacts`` (each ``BUILD/<variant>/`` and ``BUILD/bake-result.json``) and
-``state`` (``BUILD/.mkosi``, which holds the cached tools tree, the mkosi state
-next to the tree's config, and ``BUILD/.reproduce``, the second build a failed
-``bake --verify-reproducible`` keeps). The lockfile is never one of them.
+The parts (``clean --what``) are ``sources`` (``BUILD/.sources``), ``tree``
+(``BUILD/mkosi``, the bake's own tree), ``artifacts`` (each ``BUILD/<variant>/`` and
+``BUILD/bake-result.json``), ``evidence`` (``BUILD/evidence``, what ``tundravm
+evidence`` writes), ``state`` (``BUILD/.mkosi``, which holds the cached tools tree,
+and the mkosi state next to the tree's config) and ``reproduce`` (``BUILD/.reproduce``,
+the second build a failed ``bake --verify-reproducible`` keeps). The lockfile is never
+one of them.
 """
 
 from __future__ import annotations
@@ -21,9 +23,14 @@ from .backends.base import MKOSI_STATE_NAMES
 from .backends.local_linux import STATE_DIRNAME
 from .models import BAKE_RESULT_FILENAME, REPRODUCE_DIRNAME
 
-PARTS: tuple[str, ...] = ("sources", "tree", "artifacts", "state")
+PARTS: tuple[str, ...] = ("sources", "tree", "artifacts", "evidence", "state", "reproduce")
+"""What ``clean --what`` names, in removal order; ``all`` is every one."""
 TREE_DIRNAME = "mkosi"
-RESERVED = frozenset({SOURCES_DIRNAME, TREE_DIRNAME, STATE_DIRNAME, REPRODUCE_DIRNAME})
+EVIDENCE_DIRNAME = "evidence"
+"""``BUILD/evidence``: the directory ``tundravm evidence`` writes."""
+RESERVED = frozenset(
+    {SOURCES_DIRNAME, TREE_DIRNAME, STATE_DIRNAME, REPRODUCE_DIRNAME, EVIDENCE_DIRNAME}
+)
 
 SudoRunner = Callable[[Sequence[str]], int]
 """Runs ``sudo rm -rf -- PATH`` and returns its exit status."""
@@ -64,11 +71,14 @@ def clean_paths(build: Path, parts: Collection[str], *, variants: Iterable[str] 
         names = sorted({*variants, *baked_variants(build)} - RESERVED)
         paths.extend(build / name for name in names if (build / name).is_dir())
         paths.append(build / BAKE_RESULT_FILENAME)
+    if "evidence" in parts:
+        paths.append(build / EVIDENCE_DIRNAME)
     if "state" in parts:
         paths.append(build / STATE_DIRNAME)
-        paths.append(build / REPRODUCE_DIRNAME)
         if "tree" not in parts:
             paths.extend(_tree_state(build / TREE_DIRNAME))
+    if "reproduce" in parts:
+        paths.append(build / REPRODUCE_DIRNAME)
     return [path for path in paths if path.exists() or path.is_symlink()]
 
 
@@ -114,6 +124,7 @@ def owner_hint(failed: Sequence[Path]) -> str:
 
 
 __all__ = [
+    "EVIDENCE_DIRNAME",
     "PARTS",
     "SudoRunner",
     "baked_variants",

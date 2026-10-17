@@ -468,7 +468,7 @@ def test_cli_error_exit_and_json(tmp_path: Path) -> None:
     assert out.startswith("error service-user-missing [default] w:")
     assert out.rstrip().endswith("1 error, 0 warnings, 0 infos")
 
-    code, out = run(str(recipe_path), "--json")
+    code, out = run(str(recipe_path), "--format", "json")
     assert code == 1
     payload = json.loads(out)
     assert payload["summary"] == {"errors": 1, "warnings": 0, "infos": 0}

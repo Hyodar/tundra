@@ -246,17 +246,18 @@ def _read_directory(root: Path) -> _Read:
 def verify_evidence(
     path: Path,
     *,
-    artifacts: Path | None = None,
+    build: Path | None = None,
     require: Sequence[str] = (),
     allowed_signers: Path | None = None,
     signer: str | None = None,
 ) -> EvidenceVerification:
     """Check the evidence at *path* (a bundle, the directory, or its ``evidence.json``).
 
-    Needs no recipe, checkout or bake directory. *artifacts* is a directory holding
-    the artifacts (laid out as the bake was, ``<variant>/<file>``, or by target or
-    file name), re-hashed against the index. *require* names checks from
-    :data:`~tundravm.evidence.EVIDENCE_REQUIREMENTS`, as ``evidence --require``.
+    Needs no recipe, checkout or bake directory. *build* is a build directory (or a
+    release directory) holding the artifacts, laid out as the bake was
+    (``<variant>/<file>``) or by target or file name, re-hashed against the index.
+    *require* names checks from :data:`~tundravm.evidence.EVIDENCE_REQUIREMENTS`, as
+    ``evidence --require``.
     *allowed_signers* (an OpenSSH allowed-signers file) checks ``evidence.json.sig``
     with ``ssh-keygen -Y verify``; *signer* is the principal, else the file's
     principals for the signing key are tried. Raises ``ValidationError`` for a path
@@ -299,11 +300,11 @@ def verify_evidence(
         notes.append({"code": "signature-unchecked", "message": message})
     else:
         notes.append({"code": "unsigned", "message": f"the evidence carries no {SIGNATURE_NAME}"})
-    if artifacts is not None:
-        directory = Path(artifacts)
+    if build is not None:
+        directory = Path(build)
         checks.extend(_guarded("artifact", lambda: _artifact_checks(index, present, directory)))
     else:
-        message = "artifacts were not re-hashed: pass --artifacts DIR"
+        message = "artifacts were not re-hashed: pass --build DIR"
         notes.append({"code": "artifacts-unchecked", "message": message})
     checks.extend(_verdict_checks(index, required))
     order = {kind: n for n, kind in enumerate(CHECK_KINDS)}

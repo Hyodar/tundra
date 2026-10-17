@@ -68,7 +68,7 @@ def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:
         'from tundravm import Fragment, Recipe\nrecipe = Recipe(name="t", common=Fragment("t"))\n'
     )
     path = recipe_file(tmp_path, source)
-    code, out, err = run_cli("inspect", path, "--json")
+    code, out, err = run_cli("inspect", path, "--format", "json")
     assert code == 0
     assert len(json.loads(out)["digest"]) == 64
     assert err == ""

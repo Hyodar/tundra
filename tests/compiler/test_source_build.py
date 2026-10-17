@@ -223,7 +223,7 @@ def test_payload_has_source_builds_only_when_declared() -> None:
 def test_existing_digest_is_unchanged(tmp_path: Path) -> None:
     recipe = write_recipe_file(tmp_path, QEMU_BASIC)
     out = io.StringIO()
-    assert main(["inspect", str(recipe), "--json"], stdout=out) == EXIT_OK
+    assert main(["inspect", str(recipe), "--format", "json"], stdout=out) == EXIT_OK
     assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST
 
 
@@ -517,7 +517,7 @@ def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
     assert f"tool  git {REPO}  ref=main  pinned=-" in _inspect(path)
     locked = lock(load_recipe(path), resolver=_Fixed(SHA_A))
     write_lock(locked, tmp_path / "build" / "tundravm.lock")  # where the CLI looks
-    info = json.loads(_inspect(path, "--json"))["variants"]["default"]
+    info = json.loads(_inspect(path, "--format", "json"))["variants"]["default"]
     assert info["sources"] == [
         {
             "build": "script",
@@ -540,7 +540,7 @@ def test_inspect_renders_hooks_at_the_pins_it_shows(tmp_path: Path) -> None:
     write_lock(lock(load_recipe(path), resolver=_Fixed(SHA_A)), tmp_path / "pins.lock")
 
     def shown(*flags: str) -> tuple[str, object]:
-        info = json.loads(_inspect(path, "--json", *flags))["variants"]["default"]
+        info = json.loads(_inspect(path, "--format", "json", *flags))["variants"]["default"]
         return info["hooks"]["build"][0], info["sources"][0]["pinned"]
 
     hook, pinned = shown()

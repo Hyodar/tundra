@@ -144,8 +144,10 @@ def changes(
 
     *since* is an evidence bundle or directory. *lock* (a :class:`Lock` or a path)
     defaults to the recipe's lockfile when it exists. *variants* defaults to the
-    evidence's variants the recipe still declares. *build* is a bake directory of
-    the current recipe whose SBOMs (mkosi manifests) give the current package
+    evidence's variants the recipe still declares; a declared variant the evidence's
+    lockfile already held but that was not baked is noted, not reported as added.
+    *build* is a bake directory of the current recipe whose SBOMs (mkosi manifests)
+    give the current package
     versions and whose ``<variant>/policy.json`` the current registers; without it
     the current packages are the declared ones, unversioned. Nothing is written.
     """
@@ -158,11 +160,12 @@ def changes(
     found: list[Change] = []
     _note_unverified(files, index, notes)
     declared = tuple(img.state.profiles)
-    names = _variants(index, declared, variants, found)
+    previous = _previous_lock(files, notes)
+    locked_then = () if previous is None else _lock_variant_names(previous)
+    names = _variants(index, declared, variants, found, locked_then, notes)
     current = _current_lock(img, lock, notes)
     found.extend(_recipe_changes(index, img))
     tree = _current_tree(img, names, current, notes)
-    previous = _previous_lock(files, notes)
     found.extend(_lock_changes(previous, current, img, names, declared, notes))
     found.extend(_pin_changes(previous, current, notes))
     for name in names:
@@ -228,7 +231,12 @@ def _variants(
     declared: Sequence[str],
     wanted: Sequence[str] | None,
     found: list[Change],
+    locked_then: Sequence[str],
+    notes: list[str],
 ) -> tuple[str, ...]:
+    """*wanted*, else the evidence's variants the recipe still declares. A variant only in
+    the evidence is removed; one only declared is added unless the evidence's lockfile
+    (*locked_then*) holds it, which means it existed but was not baked: a note."""
     previous = sorted(index["variants"])
     if wanted is not None:
         unknown = [name for name in wanted if name not in declared]
@@ -242,7 +250,11 @@ def _variants(
         if name not in declared:
             found.append(Change("recipe", "removed", f"variant {name}", variant=name))
     for name in sorted(declared):
-        if name not in previous:
+        if name in previous:
+            continue
+        if name in locked_then:
+            notes.append(f"variant {name} is not in the evidence (it was not baked): not compared")
+        else:
             found.append(
                 Change(
                     "recipe", "added", f"variant {name}", variant=name, detail="not in the evidence"

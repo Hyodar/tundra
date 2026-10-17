@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import TextIO, cast, get_args
 
 from . import __version__
+from . import templates as scaffold
 from ._source import SOURCES_DIRNAME
 from .attestation import attest, render_attestation
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
@@ -47,7 +48,15 @@ from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
 from .changes import CHANGES_FORMATS, changes
 from .check import failing, render_as, render_summary
-from .clean import PARTS, TREE_DIRNAME, clean_paths, owner_hint, remove, sudo_runner
+from .clean import (
+    EVIDENCE_DIRNAME,
+    PARTS,
+    TREE_DIRNAME,
+    clean_paths,
+    owner_hint,
+    remove,
+    sudo_runner,
+)
 from .completion import SHELLS, Shell, render_completion
 from .declarative._compile import emit
 from .declarative._lowered import Lowered
@@ -89,7 +98,7 @@ from .declarative.model import Target
 from .declarative.resolve import resolve
 from .diagnostics import Diagnostic
 from .diff import _wants_color, cmd_diff, diff_against
-from .errors import LockfileError, ReproducibilityError, TdxError, ValidationError
+from .errors import LockfileError, ReproducibilityError, StateError, TdxError, ValidationError
 from .evidence import (
     EVIDENCE_FORMATS,
     EVIDENCE_REQUIREMENTS,
@@ -134,15 +143,16 @@ from .project import (
     render_table,
 )
 from .recipe import RecipeFile, load_file
+from .release import RELEASE_FORMATS, STAGES, STATE_NAME, release_image, release_name
 from .status import Invocation, project_status, render_status
 from .templates import (
     BACKEND_SNIPPETS,
     DEFAULT_TEMPLATE,
-    EDITABLE_INSTALL,
     GITIGNORE_BLOCK,
     GITIGNORE_MARKER,
     TEMPLATES,
     WORKFLOW_PATH,
+    TundravmSource,
     render_pyproject,
     render_readme,
     render_recipe_template,
@@ -233,8 +243,8 @@ def json_report(verb: str, payload: Mapping[str, object] | str) -> str:
 
 
 def _wants_json(args: argparse.Namespace) -> bool:
-    """Whether the command was asked for JSON (``--format json``, or ``--json``)."""
-    return getattr(args, "format", None) == "json" or getattr(args, "json", False) is True
+    """Whether the command was asked for JSON (``--format json``)."""
+    return getattr(args, "format", None) == "json"
 
 
 def _parse(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse.Namespace:
@@ -310,8 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
             "compiler generated for it (runtime-init ordering, enablement links, drop-ins)."
         ),
     )
-    inspect_format = inspect.add_mutually_exclusive_group()
-    inspect_format.add_argument(
+    inspect.add_argument(
         "--format",
         choices=("text", "json", "markdown"),
         default=None,
@@ -321,7 +330,6 @@ def build_parser() -> argparse.ArgumentParser:
             "with tables, ready for $GITHUB_STEP_SUMMARY."
         ),
     )
-    inspect_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
     _add_lockfile(inspect)
     inspect.add_argument(
         "--diff-variants",
@@ -340,18 +348,16 @@ def build_parser() -> argparse.ArgumentParser:
         _cmd_lint,
         help="Report every recipe diagnostic: declarations, fragment checks, compiler rules.",
     )
-    lint_format = lint.add_mutually_exclusive_group()
-    lint_format.add_argument(
+    lint.add_argument(
         "--format",
         choices=("auto", "text", "json", "github", "markdown"),
         default=None,
         help=(
             "Output format (default: auto). github prints `::error file=RECIPE,title=CODE::"
             "message` lines that show inline on the pull request; markdown prints a table. "
-            + format_help("--json")
+            + format_help()
         ),
     )
-    lint_format.add_argument("--json", action="store_true", help="Shorthand for --format json.")
     lint.add_argument("--strict", action="store_true", help="Treat warnings as errors (exit 1).")
     _add_lockfile(lint)
 
@@ -664,6 +670,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_verify(sub)
 
     _add_changes(sub)
+
+    _add_release(sub)
 
     doctor_cmd = sub.add_parser(
         "doctor",
@@ -1009,13 +1017,16 @@ def _add_config(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
 def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     clean = sub.add_parser(
         "clean",
-        help="Remove build output: source checkouts, the tree, artifacts, mkosi state.",
+        help="Remove build output: checkouts, the tree, artifacts, evidence, mkosi state.",
         description=(
-            "Remove the chosen parts of the build directory (--build, default: the "
-            "[tool.tundravm] build, else the recipe's build directory, else build). The "
-            "part flags name parts of it (--tree is BUILD/mkosi, never the committed tree). "
-            "With no part flag, list what --all would remove and exit 0. The lockfile is "
-            "removed only when --lockfile names it."
+            "Remove the parts --what names of the build directory (--build, default: the "
+            "[tool.tundravm] build, else the recipe's build directory, else build): "
+            "sources (BUILD/.sources), tree (BUILD/mkosi, the bake's own tree, never the "
+            "committed one), artifacts (each BUILD/<variant>/ and BUILD/bake-result.json), "
+            "evidence (BUILD/evidence), state (BUILD/.mkosi and the mkosi state in "
+            "BUILD/mkosi), reproduce (BUILD/.reproduce, the second build of bake "
+            "--verify-reproducible), or all. Without --what, list what --what all would "
+            "remove and exit 0. The lockfile is removed only when --lockfile names it."
         ),
         epilog=(
             "A path this user cannot delete (root-owned mkosi output) is removed with "
@@ -1034,23 +1045,12 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     _add_import_options(clean)
     _add_build(clean, "Build directory to clean.")
     clean.add_argument(
-        "--sources", action="store_true", help="Remove BUILD/.sources (the fetched checkouts)."
+        "--what",
+        type=_clean_parts,
+        default=(),
+        metavar="LIST",
+        help=f"Comma-separated parts to remove: {', '.join(PARTS)} or all.",
     )
-    clean.add_argument("--tree", action="store_true", help="Remove BUILD/mkosi.")
-    clean.add_argument(
-        "--artifacts",
-        action="store_true",
-        help="Remove each BUILD/<variant>/ artifact directory and BUILD/bake-result.json.",
-    )
-    clean.add_argument(
-        "--state",
-        action="store_true",
-        help=(
-            "Remove BUILD/.mkosi (incl. the cached tools tree), mkosi state in BUILD/mkosi and "
-            "BUILD/.reproduce (the second build of bake --verify-reproducible)."
-        ),
-    )
-    clean.add_argument("--all", action="store_true", help="All of the parts above.")
     clean.add_argument(
         "--lockfile",
         type=Path,
@@ -1299,7 +1299,7 @@ def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "against its members (the lockfile against the lock_sha256 bake-result.json "
             "records, each SBOM, policy and tree.json against the artifact and digests the "
             "index names, the recorded verdict recomputed from the recorded facts); "
-            "--artifacts re-hashed against the index; the signature against "
+            "the artifacts in --build re-hashed against the index; the signature against "
             "--allowed-signers; the --require checks."
         ),
         epilog=(
@@ -1314,15 +1314,11 @@ def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         help="The evidence: a bundle from `evidence --bundle`, its BUILD/evidence directory, "
         "or that directory's evidence.json.",
     )
-    cmd.add_argument(
-        "--artifacts",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help=(
-            "Re-hash the artifacts found under DIR (as the bake laid them out, "
-            "<variant>/<file>, or by target or file name) against the index."
-        ),
+    _add_build(
+        cmd,
+        "Re-hash the artifacts in this build (or release) directory against the index: "
+        "as the bake laid them out, <variant>/<file>, or by target or file name "
+        "(default: not re-hashed).",
     )
     cmd.add_argument(
         "--require",
@@ -1401,6 +1397,124 @@ def _add_changes(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         default="text",
         help="Report format (default: %(default)s); markdown is meant for a pull request.",
     )
+
+
+def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Cut an immutable release directory from the locked recipe, stage by stage."
+    cmd = _add_command(sub, "release", _cmd_release, help=help_text)
+    cmd.description = (
+        help_text + f" The stages: {', '.join(STAGES)}. lock-check refuses a drifted "
+        "lockfile (a release never relocks); bake builds twice and compares the "
+        "artifacts; measure exports BUILD/<variant>/policy.json (skipped for simulated "
+        "artifacts); evidence is bundled, rendered and, with --sign, signed; verify checks "
+        "the bundle just written; changes compares with the previous release; notes "
+        "writes RELEASE.md. Everything lands in RELEASES/<recipe>-<version>/: the artifacts "
+        "(copied from BUILD), evidence.tar.gz, evidence.html, <variant>/policy.json, "
+        "<variant>/sbom-<target>.spdx.json, RELEASE.md and release.json."
+    )
+    cmd.epilog = (
+        RESOLUTION_HELP
+        + " "
+        + (
+            f"Until the release passes, its directory holds {STATE_NAME}: each completed "
+            "stage with the sha256 of its inputs and outputs. Running the same command "
+            "again resumes: stages whose inputs and outputs are unchanged are kept, the "
+            "first stage whose inputs changed runs with every stage after it. A release "
+            "that passed is immutable: releasing its version again fails with E_STATE. "
+            "Prints one line per stage and a last line with the release path and verdict; "
+            "exits 0 when it passes, 1 when the evidence, its verification or a --require "
+            "check fails (the in-process backend's artifacts are simulated: `real` fails), "
+            "2 on an SDK error, after `resume with: COMMAND`."
+        )
+    )
+    cmd.add_argument(
+        "--version",
+        required=True,
+        metavar="VERSION",
+        help="The release's version; the directory is RELEASES/<recipe>-<VERSION>.",
+    )
+    cmd.add_argument(
+        "--sign",
+        type=Path,
+        default=None,
+        metavar="KEY",
+        help=(
+            "Sign the evidence with this SSH private key, as `evidence --sign`; verify then "
+            "checks the signature with its public half."
+        ),
+    )
+    cmd.add_argument(
+        "--require",
+        type=_evidence_requirements,
+        default=(),
+        metavar="LIST",
+        help=(
+            f"Comma-separated checks the evidence must hold ({', '.join(EVIDENCE_REQUIREMENTS)}); "
+            "a missing one fails the release."
+        ),
+    )
+    cmd.add_argument(
+        "--since",
+        type=Path,
+        default=None,
+        metavar="PREVIOUS",
+        help=(
+            "The previous release directory (or an evidence bundle) to list the changes "
+            "since (default: the newest finished release of the recipe in RELEASES)."
+        ),
+    )
+    cmd.add_argument(
+        "--releases",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Directory of releases (default: releases beside pyproject.toml, else ./releases).",
+    )
+    _add_build(cmd, "Build directory to fetch and bake into (default: build).")
+    cmd.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="The lockfile to release from (default: build/tundravm.lock, which must exist).",
+    )
+    cmd.add_argument(
+        "--backend",
+        choices=BACKEND_KINDS,
+        default=None,
+        help="Build backend (default: the recipe file's `backend`).",
+    )
+    mode = cmd.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--resume",
+        action="store_true",
+        help=f"Resume the release in progress (the default when {STATE_NAME} exists); "
+        "fails when there is none.",
+    )
+    mode.add_argument(
+        "--restart",
+        action="store_true",
+        help=f"Discard the release in progress ({STATE_NAME} and its files) and start over.",
+    )
+    cmd.add_argument(
+        "--format",
+        choices=RELEASE_FORMATS,
+        default="text",
+        help=(
+            "Output format (default: %(default)s); json prints release.json and moves the "
+            "stage lines to stderr."
+        ),
+    )
+
+
+def _clean_parts(value: str) -> tuple[str, ...]:
+    names = {name.strip() for name in value.split(",") if name.strip()}
+    unknown = sorted(names - {*PARTS, "all"})
+    if unknown or not names:
+        raise argparse.ArgumentTypeError(
+            f"unknown part(s) {', '.join(unknown) or '(none)'}; "
+            f"choose from {', '.join(PARTS)} or all"
+        )
+    return PARTS if "all" in names else tuple(part for part in PARTS if part in names)
 
 
 def _evidence_requirements(value: str) -> tuple[str, ...]:
@@ -1519,6 +1633,7 @@ _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
     "status": (("build", "build"), ("tree", "tree"), ("lockfile", "lockfile")),
     "evidence": (("build", "build"), ("lockfile", "lockfile")),
     "changes": (("lockfile", "lockfile"),),
+    "release": (("build", "build"), ("lockfile", "lockfile"), ("backend", "backend")),
     "clean": (("build", "build"),),
     "doctor": (("backend", "backend"),),
     "config": (
@@ -1705,7 +1820,7 @@ def _listed(img: Lowered, names: tuple[str, ...] | None) -> tuple[str, ...]:
 
 def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
-    fmt = args.format or ("json" if args.json else "text")
+    fmt = args.format or "text"
     if args.diff_variants is not None:
         return _inspect_diff(loaded, args, fmt, out)
     if args.why is not None:
@@ -1775,7 +1890,7 @@ def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
     diagnostics = _lint_findings(loaded, names, args, missing=_missing_lock(args))
-    fmt = resolve_format(args.format, alias="json" if args.json else None)
+    fmt = resolve_format(args.format)
     report = render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict)
     print(json_report("lint", report) if fmt == "json" else report, file=out)
     return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
@@ -2371,7 +2486,7 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
     )
     if args.sign is not None:
         found = found.sign(args.sign)
-    directory = found.write(base / "evidence")
+    directory = found.write(base / EVIDENCE_DIRNAME)
     print(found.render(args.format), file=out, end="")  # json: evidence.json, schema included
     print(f"wrote {directory}", file=sys.stderr)
     if args.sign is not None:
@@ -2389,7 +2504,7 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
 def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
     result = verify_evidence(
         args.evidence,
-        artifacts=args.artifacts,
+        build=args.build,
         require=args.require,
         allowed_signers=args.allowed_signers,
         signer=args.signer,
@@ -2416,6 +2531,86 @@ def _cmd_changes(args: argparse.Namespace, out: TextIO) -> int:
     )
     print(report.render(args.format), file=out, end="")
     return EXIT_OK
+
+
+def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args) if args.variant else None
+    img = loaded.lowered()
+    backend = None if args.backend is None else Backend(args.backend).build_backend()
+    if backend is not None and not (
+        args.origins.get("backend") == "pyproject"
+        and loaded.backend is not None
+        and loaded.backend.name == backend.name
+    ):
+        img = replace(img, backend=backend)  # else the recipe file's instance, with its settings
+    project: ProjectConfig | None = args.project
+    releases: Path = args.releases or (
+        Path("releases") if project is None else Path(os.path.relpath(project.root / "releases"))
+    )
+    root = releases / release_name(loaded.recipe.name, args.version)
+    if args.resume and not (root / STATE_NAME).is_file():
+        raise StateError(
+            f"No release in progress at {root}: nothing to resume.",
+            hint="Drop --resume to start the release.",
+            context={"release": str(root)},
+        )
+    stages = sys.stderr if args.format == "json" else out
+    resume = _release_command(args)
+    blocked = root.is_dir() and not (root / STATE_NAME).is_file() and any(root.iterdir())
+    try:
+        result = release_image(
+            loaded.recipe,
+            img,
+            version=args.version,
+            variants=names,
+            sign=args.sign,
+            require=args.require,
+            since=args.since,
+            releases=releases,
+            build=args.build if args.build is not None else Path(img.build_dir),
+            lock=_lock_path(img, args.lockfile),
+            restart=args.restart,
+            recipe_path=args.recipe,
+            progress=lambda line: print(line, file=stages, flush=True),
+        )
+    except TdxError as exc:
+        if blocked:  # finished, or not a release: nothing to resume
+            raise
+        if _wants_json(args):
+            exc.context = {**exc.context, "resume": resume}
+        else:
+            print(f"resume with: {resume}", file=sys.stderr)
+        raise
+    print(result.render(args.format), file=out, end="")
+    if not result.passed and args.format != "json":
+        print(f"resume with: {resume}", file=sys.stderr)
+    return EXIT_OK if result.passed else EXIT_FAILURE
+
+
+def _release_command(args: argparse.Namespace) -> str:
+    """The ``tundravm release`` command line that resumes this one."""
+    origins: dict[str, str] = args.origins
+    words = ["tundravm", "release"]
+    if origins.get("recipe") == "flag":
+        words.append(str(args.recipe))
+    words += ["--version", args.version]
+    for name in args.variant or ():
+        words += ["--variant", name]
+    for flag, value in (
+        ("--sign", args.sign),
+        ("--require", ",".join(args.require) or None),
+        ("--since", args.since),
+        ("--releases", args.releases),
+    ):
+        if value is not None:
+            words += [flag, str(value)]
+    for flag, key in (("--build", "build"), ("--lockfile", "lockfile"), ("--backend", "backend")):
+        if origins.get(key) == "flag":
+            words += [flag, str(getattr(args, key))]
+    if args.attr is not None:
+        words += ["--attr", args.attr]
+    return " ".join(words)
 
 
 def _cmd_completion(args: argparse.Namespace, out: TextIO) -> int:
@@ -2689,7 +2884,7 @@ def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
             destination = Path(loaded.lowered().build_dir)
     if destination is None:
         destination = _build_dir(args)
-    chosen = PARTS if args.all else tuple(part for part in PARTS if getattr(args, part))
+    chosen: tuple[str, ...] = args.what
     listing = not chosen and args.lockfile is None
     paths = clean_paths(destination, PARTS if listing else chosen, variants=variants)
     if args.lockfile is not None and args.lockfile.is_file():
@@ -2702,8 +2897,8 @@ def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
             print(f"would remove {path}", file=out)
         if listing:
             print(
-                "pass --all to remove them, or --sources, --tree, --artifacts or --state "
-                "for some (the lockfile stays unless --lockfile names it)",
+                f"pass --what all to remove them, or --what with some of {', '.join(PARTS)} "
+                "(the lockfile stays unless --lockfile names it)",
                 file=out,
             )
         return EXIT_OK
@@ -2791,9 +2986,10 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
         )
     pyproject = root / "pyproject.toml"
     had_pyproject = pyproject.exists()
+    source = scaffold.tundravm_source()
     files_if_absent = {
         pyproject: render_pyproject(
-            name=_project_name(name), recipe=recipe.name, backend=args.backend
+            name=_project_name(name), recipe=recipe.name, backend=args.backend, source=source
         ),
         root / "README.md": render_readme(
             title=title, filename=recipe.name, template=args.template, tests=args.tests
@@ -2810,8 +3006,7 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
     if had_pyproject:
         print(
             f"note: {pyproject} already exists; add the dependencies with "
-            "`uv add tundravm` and `uv add --dev pytest` (tundravm is not on PyPI yet: "
-            f"`{EDITABLE_INSTALL}`)",
+            f"`{source.install}` and `uv add --dev pytest`",
             file=out,
         )
         if "[tool.tundravm]" not in pyproject.read_text(encoding="utf-8"):
@@ -2820,8 +3015,11 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
                 + render_table(recipe=recipe.name, backend=args.backend).rstrip(),
                 file=out,
             )
+    if source.note is not None:
+        print(f"note: {source.note}", file=out)
     _init_lint(recipe, out)
-    _init_next(root, recipe, tests if args.tests else None, args.ci == "github", out)
+    synced = None if had_pyproject else source
+    _init_next(root, recipe, tests if args.tests else None, args.ci == "github", synced, out)
     if not args.no_doctor:
         _init_doctor(args.backend, args.runner, out)
     return EXIT_OK
@@ -2917,8 +3115,16 @@ def _init_lint(recipe: Path, out: TextIO) -> None:
         print(f"  `tundravm lock {recipe.name}` pins the source builds", file=out)
 
 
-def _init_next(root: Path, recipe: Path, tests: Path | None, github: bool, out: TextIO) -> None:
-    """Print the numbered follow-up commands, run from *root*."""
+def _init_next(
+    root: Path,
+    recipe: Path,
+    tests: Path | None,
+    github: bool,
+    synced: TundravmSource | None,
+    out: TextIO,
+) -> None:
+    """Print the numbered follow-up commands, run from *root*; *synced*: the tundravm
+    dependency the pyproject.toml ``init`` wrote holds."""
     name = recipe.name
     steps = [
         (
@@ -2939,7 +3145,10 @@ def _init_next(root: Path, recipe: Path, tests: Path | None, github: bool, out: 
     print(f"next{where}:", file=out)
     for number, (command, why) in enumerate(steps, 1):
         print(f"  {number}. {command:<{width}}  {why}", file=out)
-    print(f"  tundravm is not on PyPI yet: `{EDITABLE_INSTALL}` uses a local checkout", file=out)
+    if synced is not None:
+        pinned = "pinned dependency" if synced.pinned else "dependency"
+        rev = synced.rev[:12] if synced.pinned else synced.rev
+        print(f"  `uv sync` installs the {pinned}, tundravm at {rev}", file=out)
     if github:
         print("then commit mkosi/ and build/tundravm.lock; the workflow checks both", file=out)
 

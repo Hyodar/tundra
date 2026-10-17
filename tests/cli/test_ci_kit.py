@@ -83,7 +83,7 @@ def test_init_writes_recipe_and_gitignore_without_ci(tmp_path: Path) -> None:
     assert "tundravm lock my-node.py" in out
     assert "tundravm ci my-node.py --tree mkosi" in out
 
-    code, payload = run_main("inspect", str(recipe), "--json")
+    code, payload = run_main("inspect", str(recipe), "--format", "json")
     assert code == EXIT_OK and set(json.loads(payload)["variants"]) == {"default", "dev"}
 
 
@@ -129,7 +129,7 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
     assert _in_order(
         check,
         "uses: actions/checkout@v4",
-        "run: uv sync",
+        "run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi",
         'uv run tundravm inspect node.py --format markdown >> "$GITHUB_STEP_SUMMARY"',
         "run: uv run tundravm ci node.py --tree mkosi",
     )
@@ -141,8 +141,8 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
         bake,
         "uses: actions/checkout@v4",
         "apt-get install -y -qq bubblewrap debian-archive-keyring python3-pefile",
-        "pipx install git+https://github.com/systemd/mkosi.git",
-        "run: uv sync",
+        "pipx install git+https://github.com/systemd/mkosi.git@v26",
+        "run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi",
         "uv run tundravm fetch node.py",
         "uv run tundravm bake node.py --backend ${{ vars.TUNDRAVM_BAKE_BACKEND }} "
         "--build build --verify-reproducible",
@@ -334,9 +334,10 @@ def test_inspect_markdown_collapses_long_package_lists(tmp_path: Path) -> None:
     assert "</details>" in out
 
 
-def test_inspect_json_alias_conflicts_with_format(recipe: Path) -> None:
-    with pytest.raises(SystemExit):
-        main(["inspect", str(recipe), "--json", "--format", "markdown"], stdout=io.StringIO())
+def test_inspect_and_lint_have_no_json_shorthand(recipe: Path) -> None:
+    for verb in ("inspect", "lint"):
+        with pytest.raises(SystemExit):
+            main([verb, str(recipe), "--json"], stdout=io.StringIO())
 
 
 # lint --format

@@ -7,8 +7,15 @@ Each recipe template is assembled from the sections below with
 
 from __future__ import annotations
 
+import json
+import re
+import subprocess
+from dataclasses import dataclass
+from importlib import metadata
+from pathlib import Path
 from string import Template
 from typing import Literal
+from urllib.parse import unquote, urlparse
 
 from .project import render_table
 
@@ -378,11 +385,133 @@ def test_matches_committed_tree() -> None:
 EDITABLE_INSTALL = "uv add --editable PATH/TO/tundravm"
 """How ``init`` tells users to use a local tundravm checkout (it is not on PyPI yet)."""
 
+TUNDRAVM_REPOSITORY = "https://github.com/Hyodar/tundra"
+"""The repository a scaffold installs tundravm from (it is not on PyPI)."""
+
+TUNDRAVM_FALLBACK_REV = "master"
+"""The branch a scaffold follows when the running tundravm's commit is unknown."""
+
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+
+
+@dataclass(frozen=True)
+class TundravmSource:
+    """The git revision of tundravm a scaffolded project depends on."""
+
+    url: str
+    rev: str
+    pinned: bool
+    """``rev`` is the commit of the running tundravm; ``False``: a branch that moves."""
+
+    @property
+    def requirement(self) -> str:
+        """The PEP 508 dependency: ``tundravm @ git+URL@REV``."""
+        return f"tundravm @ git+{self.url}@{self.rev}"
+
+    @property
+    def install(self) -> str:
+        """The ``uv add`` command that writes :attr:`requirement` into a project."""
+        return f'uv add "{self.requirement}"'
+
+    @property
+    def note(self) -> str | None:
+        """Why the project follows a branch, or ``None`` when it is pinned."""
+        if self.pinned:
+            return None
+        return (
+            f"could not tell which tundravm commit is running, so the project follows "
+            f'{self.rev}; pin one with `uv add "tundravm @ git+{self.url}@COMMIT"`'
+        )
+
+
+def tundravm_source() -> TundravmSource:
+    """The revision of the running tundravm a scaffold can pin, from its install metadata.
+
+    A ``git+`` install (``uv add``/``uvx``/``pip`` from the repository) records its
+    commit in ``direct_url.json``; an editable install of a git checkout pins the
+    checkout's ``HEAD`` when a remote-tracking branch contains it (so a fresh machine
+    can fetch it). Anything else follows :data:`TUNDRAVM_FALLBACK_REV`.
+    """
+    try:
+        raw = metadata.distribution("tundravm").read_text("direct_url.json")
+    except metadata.PackageNotFoundError:
+        raw = None
+    return source_from_direct_url(raw)
+
+
+def source_from_direct_url(raw: str | None) -> TundravmSource:
+    """The :class:`TundravmSource` a PEP 610 ``direct_url.json`` text names."""
+    fallback = TundravmSource(TUNDRAVM_REPOSITORY, TUNDRAVM_FALLBACK_REV, pinned=False)
+    try:
+        record = json.loads(raw) if raw else {}
+    except ValueError:
+        return fallback
+    if not isinstance(record, dict) or not isinstance(record.get("url"), str):
+        return fallback
+    url: str = record["url"]
+    vcs = record.get("vcs_info")
+    if isinstance(vcs, dict) and vcs.get("vcs") == "git":
+        commit = vcs.get("commit_id")
+        remote = _https_url(url)
+        if isinstance(commit, str) and _COMMIT.fullmatch(commit) and remote is not None:
+            return TundravmSource(remote, commit, pinned=True)
+        return fallback
+    if isinstance(record.get("dir_info"), dict) and url.startswith("file://"):
+        published = _published_head(Path(unquote(urlparse(url).path)))
+        if published is not None:
+            return TundravmSource(*published, pinned=True)
+    return fallback
+
+
+def _https_url(url: str) -> str | None:
+    """*url* as an ``https://`` clone URL without ``.git``; ``None`` for other schemes."""
+    if scp := re.fullmatch(r"[\w.-]+@([\w.-]+):(.+)", url):  # git@github.com:owner/repo
+        url = f"https://{scp.group(1)}/{scp.group(2)}"
+    elif url.startswith("ssh://"):
+        parsed = urlparse(url)
+        url = f"https://{parsed.hostname}{parsed.path}"
+    if not url.startswith("https://"):
+        return None
+    return url.removesuffix("/").removesuffix(".git")
+
+
+def _git(checkout: Path, *args: str) -> str | None:
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(checkout), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def _published_head(checkout: Path) -> tuple[str, str] | None:
+    """``(url, commit)`` of *checkout*'s ``HEAD`` when a remote-tracking branch has it."""
+    commit = _git(checkout, "rev-parse", "HEAD")
+    if commit is None or not _COMMIT.fullmatch(commit):
+        return None
+    branches = _git(
+        checkout, "for-each-ref", "--contains", commit, "--format=%(refname)", "refs/remotes/"
+    )
+    for ref in (branches or "").splitlines():
+        remote = ref.removeprefix("refs/remotes/").split("/", 1)[0]
+        url = _git(checkout, "remote", "get-url", remote)
+        https = None if url is None else _https_url(url)
+        if https is not None:
+            return https, commit
+    return None
+
+
 PYPROJECT_TEMPLATE = r"""[project]
 name = "$name"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tundravm"]
+$comment
+dependencies = ["$requirement"]
 
 [dependency-groups]
 dev = ["pytest"]
@@ -407,23 +536,31 @@ GITIGNORE_BLOCK = f"""\
 
 WORKFLOW_PATH = ".github/workflows/tundravm.yml"
 
+WORKFLOW_MKOSI_REV = "v26"
+"""The mkosi tag the generated workflow's bake job installs."""
+
 WORKFLOW_TEMPLATE = """\
 # Generated by `tundravm init`. The check job posts a dry-run summary of the
 # image to the job page, then fails when the recipe has findings or the
 # committed mkosi tree or lockfile is stale. Findings show inline on the pull
 # request.
 #
+# pyproject.toml pins tundravm to a git commit (it is not on PyPI). Commit
+# uv.lock (`uv lock`) and both jobs install exactly what it locks
+# (`uv sync --frozen`); without it they resolve afresh on every run.
+#
 # The bake job is opt-in: it runs after check only when the repository variable
-# TUNDRAVM_BAKE_BACKEND (Settings > Secrets and variables > Actions > Variables)
-# names a backend: local or inprocess. (lima and nix need limactl or Nix, which
-# ubuntu-latest does not have; install them in a step of your own first.) It
-# bakes the image twice to prove it reproducible, then uploads the evidence
-# bundle, its HTML report, bake-result.json (the second build's too) and the
-# built artifacts: mkosi's under build/<variant>/output/, the in-process
-# backend's disk.* beside them. Evidence requires a matched second build and the
-# lockfile, and real artifacts unless the backend is inprocess. When the bake
-# fails after writing build/bake-result.json, evidence is still collected and
-# uploaded, and the job fails on the bake's (or evidence's) exit status.
+# TUNDRAVM_BAKE_BACKEND (Settings > Secrets and variables > Actions >
+# Variables) names a backend: local or inprocess. (lima and nix need limactl
+# or Nix, which ubuntu-latest does not have; install them in a step of your
+# own first.) It installs mkosi {mkosi}, bakes the image twice to prove it
+# reproducible, then uploads the evidence bundle, its HTML report,
+# bake-result.json (the second build's too) and the built artifacts: mkosi's
+# under build/<variant>/output/, the in-process backend's disk.* beside them.
+# Evidence requires a matched second build and the lockfile, and real
+# artifacts unless the backend is inprocess. When the bake fails after writing
+# build/bake-result.json, evidence is still collected and uploaded, and the
+# job fails on the bake's (or evidence's) exit status.
 name: tundravm
 
 on:
@@ -445,7 +582,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
 
       - name: Sync dependencies
-        run: uv sync
+        run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
       - name: Summarize the image
         run: |
@@ -469,11 +606,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap debian-archive-keyring python3-pefile
-          pipx install git+https://github.com/systemd/mkosi.git
+          pipx install git+https://github.com/systemd/mkosi.git@{mkosi}
           mkosi --version
 
       - name: Sync dependencies
-        run: uv sync
+        run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
       - name: Fetch sources
         run: uv run tundravm fetch {recipe} --build build
@@ -574,13 +711,33 @@ def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> st
     )
 
 
-def render_pyproject(*, name: str, recipe: str = "image.py", backend: str = "lima") -> str:
+def render_pyproject(
+    *,
+    name: str,
+    recipe: str = "image.py",
+    backend: str = "lima",
+    source: TundravmSource | None = None,
+) -> str:
     """Return the minimal ``pyproject.toml`` ``init`` writes when the project has none.
 
-    It ends with the ``[tool.tundravm]`` table naming *recipe* and *backend*.
+    Its dependency is tundravm from git at *source* (default :func:`tundravm_source`),
+    and it ends with the ``[tool.tundravm]`` table naming *recipe* and *backend*.
     """
+    source = tundravm_source() if source is None else source
+    if source.pinned:
+        why = "# tundravm is not on PyPI: this pins the commit `tundravm init` ran from."
+    else:
+        why = (
+            "# tundravm is not on PyPI, and `tundravm init` could not tell which commit\n"
+            f"# it ran from, so this follows {source.rev}."
+        )
+    comment = (
+        f'{why}\n# Move it with `uv add "tundravm @ git+{source.url}@COMMIT"`; commit uv.lock.'
+    )
     table = render_table(recipe=recipe, backend=backend)
-    return Template(PYPROJECT_TEMPLATE).substitute(name=name, table=table)
+    return Template(PYPROJECT_TEMPLATE).substitute(
+        name=name, comment=comment, requirement=source.requirement, table=table
+    )
 
 
 def render_readme(*, title: str, filename: str, template: str, tests: bool) -> str:
@@ -602,7 +759,7 @@ def render_readme(*, title: str, filename: str, template: str, tests: bool) -> s
 
 def render_workflow(*, recipe: str, tree: str = "mkosi") -> str:
     """Return the GitHub Actions workflow ``tundravm init --ci github`` writes."""
-    return WORKFLOW_TEMPLATE.format(recipe=recipe, tree=tree)
+    return WORKFLOW_TEMPLATE.format(recipe=recipe, tree=tree, mkosi=WORKFLOW_MKOSI_REV)
 
 
 __all__ = [
@@ -618,7 +775,11 @@ __all__ = [
     "TEMPLATES",
     "TEMPLATE_VARIANTS",
     "TEST_TEMPLATE",
+    "TUNDRAVM_FALLBACK_REV",
+    "TUNDRAVM_REPOSITORY",
     "TemplateName",
+    "TundravmSource",
+    "WORKFLOW_MKOSI_REV",
     "WORKFLOW_PATH",
     "WORKFLOW_TEMPLATE",
     "render_pyproject",
@@ -626,4 +787,6 @@ __all__ = [
     "render_recipe_template",
     "render_test_module",
     "render_workflow",
+    "source_from_direct_url",
+    "tundravm_source",
 ]

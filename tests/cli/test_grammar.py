@@ -42,14 +42,16 @@ def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_inspect_json_holds_the_sha256_digest(recipe: Path) -> None:
-    code, out = run_main("inspect", str(recipe), "--json")
+    code, out = run_main("inspect", str(recipe), "--format", "json")
     assert code == EXIT_OK
     assert re.fullmatch(r"[0-9a-f]{64}", json.loads(out)["digest"])
 
 
 def test_digest_is_stable_and_variant_sensitive(recipe: Path) -> None:
     def digest(*extra: str) -> str:
-        return str(json.loads(run_main("inspect", str(recipe), "--json", *extra)[1])["digest"])
+        return str(
+            json.loads(run_main("inspect", str(recipe), "--format", "json", *extra)[1])["digest"]
+        )
 
     a, b, c = digest(), digest(), digest("--variant", "azure")
     assert a == b
@@ -64,7 +66,7 @@ def test_inspect_text_and_json(recipe: Path) -> None:
     assert "/etc/motd" in out
 
     code, out = run_main(
-        "inspect", str(recipe), "--json", "--variant", "default", "--variant", "azure"
+        "inspect", str(recipe), "--format", "json", "--variant", "default", "--variant", "azure"
     )
     assert code == EXIT_OK
     payload = json.loads(out)["variants"]
@@ -140,7 +142,7 @@ def test_attr_flag_selects_factory(tmp_path: Path) -> None:
         "def big():\n    return Recipe('r', Fragment('c', items=(Package('b'),)))\n",
         encoding="utf-8",
     )
-    code, out = run_main("inspect", str(recipe), "--attr", "big", "--json")
+    code, out = run_main("inspect", str(recipe), "--attr", "big", "--format", "json")
     assert code == EXIT_OK
     assert json.loads(out)["variants"]["default"]["packages"] == ["b"]
 
@@ -148,7 +150,7 @@ def test_attr_flag_selects_factory(tmp_path: Path) -> None:
 def test_missing_recipe_exits_with_sdk_error(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, _ = run_main("inspect", str(tmp_path / "nope.py"), "--json")
+    code, _ = run_main("inspect", str(tmp_path / "nope.py"), "--format", "json")
     assert code == EXIT_SDK_ERROR
     assert "E_VALIDATION" in capsys.readouterr().err
 
@@ -171,7 +173,7 @@ def test_init_writes_loadable_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert 'base="debian/sid"' in source
     assert "InProcessBackend()" in source
 
-    code, out = run_main("inspect", str(target), "--json")
+    code, out = run_main("inspect", str(target), "--format", "json")
     assert code == EXIT_OK
     payload = json.loads(out)["variants"]
     assert set(payload) == {"default", "dev"}

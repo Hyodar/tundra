@@ -280,7 +280,9 @@ def test_diff_variants_markdown_and_json(two_variants: Path) -> None:
     assert "| removed | `Package(jq, runtime)` | — |" in out
     assert "| content |" in out
 
-    code, out = run("inspect", str(two_variants), "--diff-variants", "default", "dev", "--json")
+    code, out = run(
+        "inspect", str(two_variants), "--diff-variants", "default", "dev", "--format", "json"
+    )
     payload = json.loads(out)
     assert payload["added"] == ["Package(strace, runtime)"]
     assert payload["removed"] == ["Package(jq, runtime)"]
