@@ -23,8 +23,8 @@ from ._options import MkosiOptions
 from .compiler import PHASE_ORDER
 from .declarative.model import (
     Declaration,
-    Directory,
     File,
+    FileTree,
     Hook,
     Init,
     Package,
@@ -51,14 +51,14 @@ MARKDOWN_COLLAPSE_AT = 20
 
 
 _IMAGE_PARENT: Any = object()
-"""``describe(parent=...)`` default: the profile the lowered image builds the variant on."""
+"""``describe(inherits=...)`` default: the profile the lowered image builds the variant on."""
 
 
 def describe(
     image: Lowered,
     *,
     profile: str | None = None,
-    parent: str | None = _IMAGE_PARENT,
+    inherits: str | None = _IMAGE_PARENT,
     fragments: Sequence[str] = (),
 ) -> dict[str, object]:
     """Describe what *image* will produce for variant *profile* (default: the active one).
@@ -68,7 +68,7 @@ def describe(
     File and init-script contents are summarized as short sha256 digests.
     A variant built on another is described as built: merged over it. Hooks and
     sources show the pins of the lockfile *image* reads, as compile renders them.
-    *parent* and *fragments* are the recipe's ``Variant.parent`` and the
+    *inherits* and *fragments* are the recipe's ``Variant.inherits`` and the
     fragment names the variant resolved to.
     """
     selected = image.profile(profile)
@@ -106,7 +106,7 @@ def describe(
         },
         "mirror": image.mirror,
         "packages": sorted(profile_state.packages),
-        "parent": profile_state.extends if parent is _IMAGE_PARENT else parent,
+        "inherits": profile_state.extends if inherits is _IMAGE_PARENT else inherits,
         "partitions": [
             {"fs": p.fs, "mount_at": p.mount_at, "name": p.name, "size": p.size}
             for p in sorted(profile_state.partitions, key=lambda item: item.name)
@@ -200,8 +200,8 @@ def render(description: dict[str, object]) -> str:
         lines.append(
             "Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in build_options.items())
         )
-    if description.get("parent"):
-        lines.append(f"Parent: {description['parent']}")
+    if description.get("inherits"):
+        lines.append(f"Inherits: {description['inherits']}")
     _append_inline_list(lines, "Fragments", _as_list(description.get("fragments")))
 
     _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
@@ -471,9 +471,9 @@ def render_markdown(description: dict[str, object]) -> str:
 
 def _markdown_lineage(description: dict[str, object]) -> str:
     fragments = ", ".join(f"`{f}`" for f in _as_list(description.get("fragments"))) or "none"
-    parent = description.get("parent")
-    shown = f"`{parent}`" if parent else "none"
-    return f"**Parent:** {shown} · **Fragments:** {fragments}"
+    inherits = description.get("inherits")
+    shown = f"`{inherits}`" if inherits else "none"
+    return f"**Inherits:** {shown} · **Fragments:** {fragments}"
 
 
 def _append_section(
@@ -670,7 +670,7 @@ class VariantDiff:
 
     a: str
     b: str
-    targets: tuple[tuple[str, ...], tuple[str, ...]]
+    outputs: tuple[tuple[str, ...], tuple[str, ...]]
     added: tuple[str, ...]
     removed: tuple[str, ...]
     changed: tuple[tuple[str, tuple[str, ...]], ...]
@@ -678,14 +678,14 @@ class VariantDiff:
 
     @property
     def is_empty(self) -> bool:
-        same_targets = self.targets[0] == self.targets[1]
-        return same_targets and not (self.added or self.removed or self.changed)
+        same_outputs = self.outputs[0] == self.outputs[1]
+        return same_outputs and not (self.added or self.removed or self.changed)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "a": self.a,
             "b": self.b,
-            "targets": {self.a: list(self.targets[0]), self.b: list(self.targets[1])},
+            "outputs": {self.a: list(self.outputs[0]), self.b: list(self.outputs[1])},
             "added": list(self.added),
             "removed": list(self.removed),
             "changed": [{"declaration": d, "fields": list(f)} for d, f in self.changed],
@@ -699,7 +699,7 @@ def diff_variants(a: Resolved, b: Resolved) -> VariantDiff:
     return VariantDiff(
         a=a.variant,
         b=b.variant,
-        targets=(tuple(a.targets), tuple(b.targets)),
+        outputs=(tuple(a.outputs), tuple(b.outputs)),
         added=tuple(describe_identity(key) for key in right if key not in left),
         removed=tuple(describe_identity(key) for key in left if key not in right),
         changed=tuple(
@@ -718,8 +718,8 @@ def render_variant_diff(diff: VariantDiff) -> str:
     """Plain text: a count line, then ``+``/``-``/``~`` lines per declaration."""
     counts = f"{len(diff.added)} added, {len(diff.removed)} removed, {len(diff.changed)} changed"
     lines = [f"variants {diff.a} -> {diff.b}: {counts}"]
-    if diff.targets[0] != diff.targets[1]:
-        lines.append(f"  target: {', '.join(diff.targets[0])} -> {', '.join(diff.targets[1])}")
+    if diff.outputs[0] != diff.outputs[1]:
+        lines.append(f"  outputs: {', '.join(diff.outputs[0])} -> {', '.join(diff.outputs[1])}")
     lines.extend(f"  + {item}" for item in diff.added)
     lines.extend(f"  - {item}" for item in diff.removed)
     lines.extend(f"  ~ {item}: {', '.join(changed)}" for item, changed in diff.changed)
@@ -727,11 +727,11 @@ def render_variant_diff(diff: VariantDiff) -> str:
 
 
 def render_variant_diff_markdown(diff: VariantDiff, *, recipe: str) -> str:
-    """A Markdown section: target line when it differs, then one table row per change."""
+    """A Markdown section: outputs line when it differs, then one table row per change."""
     lines = [f"# tundravm: `{recipe}` variants `{diff.a}` → `{diff.b}`", ""]
-    if diff.targets[0] != diff.targets[1]:
-        old, new = (", ".join(t) for t in diff.targets)
-        lines += [f"Target: {md_cell(old, code=True)} → {md_cell(new, code=True)}", ""]
+    if diff.outputs[0] != diff.outputs[1]:
+        old, new = (", ".join(t) for t in diff.outputs)
+        lines += [f"Outputs: {md_cell(old, code=True)} → {md_cell(new, code=True)}", ""]
     rows = [
         *(("added", md_cell(item, code=True), md_cell(None)) for item in diff.added),
         *(("removed", md_cell(item, code=True), md_cell(None)) for item in diff.removed),
@@ -953,7 +953,7 @@ def _path_keys(
 ) -> tuple[Identity, ...]:
     """Declarations that emit *path*: files at it, a directory holding it, or a unit file.
 
-    A ``Directory`` matches its own path (also once a variant removed it) and only
+    A ``FileTree`` matches its own path (also once a variant removed it) and only
     the descendants in *emitted*, never a path it does not hold.
     """
     keys: list[Identity] = []
@@ -961,7 +961,7 @@ def _path_keys(
         kind = key[0]
         if kind in ("File", "Template") and key[2] == path:
             keys.append(key)
-        elif kind == "Directory" and (
+        elif kind == "FileTree" and (
             path == key[2] or (path.startswith(f"{key[2]}/") and path in emitted)
         ):
             keys.append(key)
@@ -1001,13 +1001,13 @@ def _emitted_for(
 ) -> tuple[list[str], list[str]]:
     """The tree files holding *item* and the lines the compiler generated for it.
 
-    With *path* (the asked-about image path) inside a ``Directory``, only the
+    With *path* (the asked-about image path) inside a ``FileTree``, only the
     files at or below *path* are its.
     """
     files: list[str] = []
     generated: list[str] = []
     match item:
-        case File() | Template() | Directory():
+        case File() | Template() | FileTree():
             norm = posixpath.normpath(item.path)
             if path is not None and path.startswith(f"{norm}/"):
                 norm = path

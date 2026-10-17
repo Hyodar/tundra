@@ -22,8 +22,8 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "lifecycle",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
-    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    items=(Package("curl"), Package("linux-image-amd64")),
+    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
 )
 """
 
@@ -32,7 +32,7 @@ from tundravm import Fragment, Package, Recipe
 from tundravm.backends import NixMkosiBackend
 
 backend = NixMkosiBackend()
-recipe = Recipe("nix", Fragment("common", items=(Package("curl"),)))
+recipe = Recipe("nix", items=(Package("curl"),))
 """
 
 BUILD = Path("build")
@@ -317,10 +317,10 @@ from tundravm.backends import LocalLinuxBackend
 backend = LocalLinuxBackend()
 recipe = Recipe(
     "cloud",
-    Fragment("common", items=(Package("systemd"),)),
+    items=(Package("systemd"),),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("azure", parent="default", target="azure"),
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
     ),
 )
 """
@@ -339,7 +339,7 @@ def test_doctor_probes_the_cloud_tools_of_azure_variants(tmp_path: Path) -> None
 
 def test_doctor_skips_cloud_tools_without_cloud_variants(tmp_path: Path) -> None:
     source = CLOUD_RECIPE.replace(
-        '        Variant("azure", parent="default", target="azure"),\n', ""
+        '        Variant("azure", inherits="default", outputs=("azure",)),\n', ""
     )
     out = io.StringIO()
     doctor(load_file(write_recipe_file(tmp_path, source)), out, runner=_runner(0))

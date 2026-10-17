@@ -19,18 +19,15 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "cli",
-    Fragment(
-        "common",
-        items=(
-            Package("curl"),
-            Package("jq"),
-            Package("linux-image-amd64"),
-            File("/etc/motd", "hello\\n"),
-            User("app", system=True),
-            Service("app", "/usr/bin/app"),
-        ),
+    items=(
+        Package("curl"),
+        Package("jq"),
+        Package("linux-image-amd64"),
+        File("/etc/motd", "hello\\n"),
+        User("app", system=True),
+        Service("app", "/usr/bin/app"),
     ),
-    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
 )
 """
 
@@ -138,8 +135,8 @@ def test_attr_flag_selects_factory(tmp_path: Path) -> None:
     recipe = tmp_path / "r.py"
     recipe.write_text(
         "from tundravm import Fragment, Package, Recipe\n"
-        "def small():\n    return Recipe('r', Fragment('c', items=(Package('a'),)))\n"
-        "def big():\n    return Recipe('r', Fragment('c', items=(Package('b'),)))\n",
+        "def small():\n    return Recipe('r', items=(Package('a'),))\n"
+        "def big():\n    return Recipe('r', items=(Package('b'),))\n",
         encoding="utf-8",
     )
     code, out = run_main("inspect", str(recipe), "--attr", "big", "--format", "json")

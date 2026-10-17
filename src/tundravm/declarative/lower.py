@@ -36,12 +36,12 @@ from tundravm.models import RecipeState, unit_name
 
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
-    BASE_PARENT,
+    BASE_VARIANT,
     Build,
     Debloat,
     Declaration,
-    Directory,
     Disk,
+    FileTree,
     Fragment,
     Git,
     Group,
@@ -108,8 +108,8 @@ _COMPILER_KEYS: dict[str, str] = {
     "BuildPackages": "Package(name, role='build')",
     "Bootable": "Kernel(...) or Package('linux-image-amd64'); only Bootable=no is accepted",
     "KernelCommandLine": "Kernel(cmdline=...)",
-    "ExtraTrees": "File/Directory/Template(stage='extra')",
-    "SkeletonTrees": "File/Directory/Template(stage='skeleton')",
+    "ExtraTrees": "File/FileTree/Template(stage='extra')",
+    "SkeletonTrees": "File/FileTree/Template(stage='skeleton')",
     **{key: "Hook(name, phase, script)" for key in PHASE_TO_MKOSI_KEY.values()},
 }
 """mkosi keys the compiler writes itself, and the declaration that sets each."""
@@ -169,7 +169,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         builder.strip_image_version(enabled=strip)
 
     builder.declare(default.name, base.items, full=base.items, skip=backports, scripts=scripts)
-    builder.targets(default.name, base.targets, inherited=(DEFAULT_TARGET,))
+    builder.targets(default.name, base.outputs, inherited=(DEFAULT_TARGET,))
 
     profile_mkosi: dict[str, MkosiOptions] = {}
     profile_kernels: dict[str, FluentKernel | None] = {}
@@ -177,16 +177,16 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     for variant in selected[1:]:
         child = resolved[variant.name]
         try:
-            if variant.parent not in (BASE_PARENT, default.name):
+            if variant.inherits not in (BASE_VARIANT, default.name):
                 raise _Standalone(
-                    "is parentless"
-                    if variant.parent is None
-                    else f"is chained onto variant {variant.parent!r}"
+                    "is standalone"
+                    if variant.inherits is None
+                    else f"inherits variant {variant.inherits!r}"
                 )
-            if any(t in CLOUD_TARGETS for t in base.targets) and child.targets != base.targets:
+            if any(t in CLOUD_TARGETS for t in base.outputs) and child.outputs != base.outputs:
                 raise _Standalone(
-                    f"targets {', '.join(child.targets)} without the default variant's "
-                    f"{', '.join(base.targets)} integration"
+                    f"outputs {', '.join(child.outputs)} without the default variant's "
+                    f"{', '.join(base.outputs)} integration"
                 )
             _same_configuration(base, child)
             own, reemit = _overlay(base, child, dialect=dialect)
@@ -206,13 +206,13 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
                 isinstance(i, Debloat) for i in base.items
             ):
                 builder.default_debloat(variant.name)  # else it falls back to the default's
-            builder.targets(variant.name, child.targets, inherited=None)
+            builder.targets(variant.name, child.outputs, inherited=None)
             continue
         builder.extending(variant.name)
         builder.declare(
             variant.name, own, full=child.items, reemit=reemit, skip=backports, scripts=scripts
         )
-        builder.targets(variant.name, child.targets, inherited=base.targets)
+        builder.targets(variant.name, child.outputs, inherited=base.outputs)
     if rejected:
         plural = "s" if len(rejected) > 1 else ""
         listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)
@@ -221,7 +221,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             f"applies the root mkosi.conf (the default variant {default.name!r}) to every "
             "profile, so a native profile can only add to it.",
             hint=f"Use Mkosi(layout='directories'), or make each a pure addition to "
-            f"{default.name!r}: parent {BASE_PARENT!r} or {default.name!r}, nothing removed, "
+            f"{default.name!r}: inherits {BASE_VARIANT!r} or {default.name!r}, nothing removed, "
             f"{default.name!r}'s settings and kernel, and replace= limited to File, User, "
             "Group, Partition, Repository and Debloat.",
             context={"variants": ", ".join(name for name, _ in rejected)},
@@ -297,7 +297,9 @@ def _fragments(recipe: Recipe) -> Iterator[Fragment]:
             if isinstance(item, Fragment):
                 yield from walk(item)
 
-    yield from walk(recipe.common)
+    for item in recipe.items:
+        if isinstance(item, Fragment):
+            yield from walk(item)
     for variant in recipe.variants:
         yield from walk(variant.add)
 
@@ -363,11 +365,11 @@ def _same_configuration(base: Resolved, child: Resolved) -> None:
 def _default_variant(recipe: Recipe) -> Variant:
     """The variant called ``default``, else the first root variant.
 
-    It may itself be chained onto another variant: it is lowered from its
+    It may itself inherit another variant: it is lowered from its
     resolved declarations either way.
     """
     named = [v for v in recipe.variants if v.name == "default"]
-    roots = [v for v in recipe.variants if v.parent in (BASE_PARENT, None)]
+    roots = [v for v in recipe.variants if v.inherits in (BASE_VARIANT, None)]
     return named[0] if named else (roots[0] if roots else recipe.variants[0])
 
 
@@ -462,7 +464,7 @@ def _secret_allowed(items: Sequence[Declaration]) -> frozenset[str]:
     for item in items:
         if not getattr(item, "allow_secret", False):
             continue
-        if isinstance(item, Directory):
+        if isinstance(item, FileTree):
             allowed.add(posixpath.normpath(item.path).rstrip("/") + "/")
         elif isinstance(item, FileDeclaration | Template):
             allowed.add(posixpath.normpath(item.path))

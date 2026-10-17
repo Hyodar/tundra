@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from tundravm.declarative import (
-    Directory,
     File,
+    FileTree,
     Fragment,
     Git,
     Kernel,
@@ -41,7 +41,7 @@ def test_recipe_inputs_names_every_path_in_every_variant(
             Package("curl"),
             File("/etc/motd", Path("motd.txt")),
             File("/etc/inline", "inline\n"),
-            Fragment("nested", items=(Directory("/opt/app", Path("app")),)),
+            Fragment("nested", items=(FileTree("/opt/app", Path("app")),)),
             Unit("a.service", Path("units/a.service")),
             Template("/etc/t.conf", Path("t.conf.tmpl")),
             Tdxs.from_policy(policy, allow_placeholder=True),
@@ -53,7 +53,7 @@ def test_recipe_inputs_names_every_path_in_every_variant(
         add=Fragment("extra", items=(kernel,)),
         replace=(File("/etc/motd", tmp_path / "other.txt"),),
     )
-    recipe = Recipe("inputs", common, variants=(Variant("default"), variant))
+    recipe = Recipe("inputs", items=(common,), variants=(Variant("default"), variant))
 
     assert recipe_inputs(recipe) == {
         tmp_path / name

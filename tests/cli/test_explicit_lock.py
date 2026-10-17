@@ -12,7 +12,6 @@ from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 from tundravm.declarative import (
     Build,
     Diagnostic,
-    Fragment,
     Git,
     Install,
     Package,
@@ -33,16 +32,13 @@ from tundravm.declarative import Build, Fragment, Git, Install, Package, Recipe
 backend = InProcessBackend()
 recipe = Recipe(
     "tool",
-    Fragment(
-        "tool",
-        items=(
-            Package("linux-image-amd64"),
-            Build(
-                "tool",
-                Git("https://example.invalid/tool.git", "main"),
-                script="make",
-                install=(Install("tool", "/usr/bin/tool"),),
-            ),
+    items=(
+        Package("linux-image-amd64"),
+        Build(
+            "tool",
+            Git("https://example.invalid/tool.git", "main"),
+            script="make",
+            install=(Install("tool", "/usr/bin/tool"),),
         ),
     ),
 )
@@ -56,9 +52,7 @@ def _recipe(policy: Policy | None = None) -> Recipe:
         script="make",
         install=(Install("tool", "/usr/bin/tool"),),
     )
-    return Recipe(
-        "tool", Fragment("tool", items=(Package("linux-image-amd64"), build)), policy=policy
-    )
+    return Recipe("tool", items=(Package("linux-image-amd64"), build), policy=policy)
 
 
 def _codes(found: tuple[Diagnostic, ...]) -> list[str]:

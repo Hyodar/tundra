@@ -1,7 +1,7 @@
 """The declarative frontend: immutable recipes, resolved and lowered onto the compiler.
 
-A :class:`Recipe` is an immutable value: recipe-wide settings, a ``common``
-:class:`Fragment` of declarations and the :class:`Variant` overlays.
+A :class:`Recipe` is an immutable value: recipe-wide settings, its own ``items``
+(declarations and :class:`Fragment` groups) and the :class:`Variant` overlays.
 :func:`resolve` expands one variant, :func:`lint` reports every problem as a
 :class:`Diagnostic`, and :func:`lower` hands it to the compiler, which every CLI
 command consumes. The lifecycle (:func:`compile`, :func:`lint`, :func:`lock`,
@@ -50,11 +50,11 @@ from .model import (
     Debloat,
     Declaration,
     Diagnostic,
-    Directory,
     Disk,
     Dotnet,
     ExternalDelivery,
     File,
+    FileTree,
     Fragment,
     Git,
     Go,
@@ -86,6 +86,7 @@ from .model import (
     Unit,
     User,
     Variant,
+    packages,
 )
 from .resolve import identity, resolve, resolve_all
 
@@ -100,13 +101,13 @@ __all__ = [
     "Declaration",
     "Deployment",
     "Diagnostic",
-    "Directory",
     "Disk",
     "Dotnet",
     "Entry",
     "ExternalDelivery",
     "FetchedSource",
     "File",
+    "FileTree",
     "Fragment",
     "Gcp",
     "Git",
@@ -161,6 +162,7 @@ __all__ = [
     "lock_status",
     "lower",
     "measure",
+    "packages",
     "read_artifacts",
     "read_lock",
     "resolve",

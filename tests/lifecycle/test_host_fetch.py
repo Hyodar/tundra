@@ -22,7 +22,6 @@ from tundravm.backends.base import MountSpec, Requirement
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.declarative import (
     Build,
-    Fragment,
     Git,
     Http,
     Install,
@@ -100,7 +99,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 def _recipe(*builds: Build, dialect: str = "current", policy: Policy | None = None) -> Recipe:
     return Recipe(
         "tool",
-        Fragment("tool", items=(Package("linux-image-amd64"), *builds)),
+        items=(Package("linux-image-amd64"), *builds),
         mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
         policy=policy,
     )
@@ -366,16 +365,13 @@ from tundravm.declarative import Build, Fragment, Git, Install, Package, Recipe
 
 recipe = Recipe(
     "tool",
-    Fragment(
-        "tool",
-        items=(
-            Package("linux-image-amd64"),
-            Build(
-                "tool",
-                Git({url!r}, "main"),
-                script="make",
-                install=(Install("tool", "/usr/bin/tool"),),
-            ),
+    items=(
+        Package("linux-image-amd64"),
+        Build(
+            "tool",
+            Git({url!r}, "main"),
+            script="make",
+            install=(Install("tool", "/usr/bin/tool"),),
         ),
     ),
 )

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import File, Fragment, Package, Recipe, Service, Setting, User, compile
+from tundravm import File, Package, Recipe, Service, Setting, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import lock, lower
 from tundravm.declarative.lifecycle import bake_image
@@ -30,16 +30,13 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     """Emit + bake a minimal Debian image in directory format."""
     recipe = Recipe(
         "smoke",
-        Fragment(
-            "common",
-            items=(
-                Package("systemd"),
-                Package("udev"),
-                File("/etc/tdx-test", "integration-test\n"),
-                Service("hello", "/bin/true", restart="no"),
-                User("appuser", system=True, shell="/bin/false"),
-                Setting("Content", "Bootable", ("no",)),
-            ),
+        items=(
+            Package("systemd"),
+            Package("udev"),
+            File("/etc/tdx-test", "integration-test\n"),
+            Service("hello", "/bin/true", restart="no"),
+            User("appuser", system=True, shell="/bin/false"),
+            Setting("Content", "Bootable", ("no",)),
         ),
         base="debian/bookworm",
     )
@@ -75,7 +72,7 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     """Emit the tdxs fragment and verify config, units, and build script."""
     recipe = Recipe(
         "smoke",
-        Fragment("common", items=(Package("systemd"), Tdxs())),
+        items=(Package("systemd"), Tdxs()),
         base="debian/bookworm",
     )
 
@@ -134,7 +131,7 @@ def test_raw_disk_format(tmp_path: Path) -> None:
     """Bake a raw disk image and verify artifact collection."""
     recipe = Recipe(
         "smoke",
-        Fragment("common", items=(Package("systemd"), Setting("Content", "Bootable", ("no",)))),
+        items=(Package("systemd"), Setting("Content", "Bootable", ("no",))),
         base="debian/bookworm",
     )
 

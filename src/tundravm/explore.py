@@ -7,7 +7,7 @@ there is one), every declaration across the variants with its provenance, the
 compiled tree of each variant with each file's content and the declarations
 that produced it, and the hooks, runtime-init steps and source builds in the
 order they run. :meth:`Exploration.to_dict` is that model as JSON
-(``"schema": "tundravm.explore/2"``) and :meth:`Exploration.html` one
+(``"schema": "tundravm.explore/3"``) and :meth:`Exploration.html` one
 self-contained page: inline CSS and a small inline script (tabs, filters,
 cross-link jumps) that reads as a static page without it.
 """
@@ -51,7 +51,7 @@ from .errors import TdxError, ValidationError
 from .explain import _changed_fields, _emitted_for, _fragment_chain
 from .models import BAKE_RESULT_FILENAME
 
-EXPLORE_SCHEMA = "tundravm.explore/2"
+EXPLORE_SCHEMA = "tundravm.explore/3"
 EXPLORE_FORMATS = ("html", "json")
 PAGE_NAME = "explore.html"
 """``tundravm explore`` writes ``BUILD/explore.html`` unless ``--output`` says otherwise."""
@@ -197,7 +197,7 @@ class _Resolution:
     items: dict[Identity, Declaration]
     trace: dict[Identity, tuple[Origin, ...]]
     fragments: tuple[str, ...]
-    targets: tuple[str, ...]
+    outputs: tuple[str, ...]
 
 
 def _resolutions(recipe: Recipe, names: Sequence[str]) -> dict[str, _Resolution]:
@@ -208,7 +208,7 @@ def _resolutions(recipe: Recipe, names: Sequence[str]) -> dict[str, _Resolution]
             items={identity(item): item for item in resolved.items},
             trace={key: tuple(origins) for key, origins in state.trace.items()},
             fragments=resolved.fragments,
-            targets=tuple(resolved.targets),
+            outputs=tuple(resolved.outputs),
         )
     return found
 
@@ -349,8 +349,8 @@ def _variant_entries(
         entries.append(
             {
                 "name": name,
-                "parent": None if recipe is None else recipe.variant(name).parent,
-                "targets": [] if found is None else list(found.targets),
+                "inherits": None if recipe is None else recipe.variant(name).inherits,
+                "outputs": [] if found is None else list(found.outputs),
                 "fragments": [] if found is None else list(found.fragments),
                 "declarations": 0 if found is None else len(found.items),
             }
@@ -940,12 +940,12 @@ def _variants_html(data: Mapping[str, Any], anchors: _Anchors) -> str:
     variants = [str(v["name"]) for v in data["variants"]]
     parts = [
         _table(
-            ("variant", "parent", "targets", "declarations", "fragments"),
+            ("variant", "inherits", "outputs", "declarations", "fragments"),
             [
                 (
                     _c(v["name"]),
-                    _c(v["parent"]),
-                    _e(", ".join(v["targets"])),
+                    _c(v["inherits"]),
+                    _e(", ".join(v["outputs"])),
                     _e(v["declarations"]),
                     _e(", ".join(v["fragments"])),
                 )

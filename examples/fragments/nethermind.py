@@ -13,27 +13,27 @@ NETHERMIND_RUNTIME = "linux-x64"
 
 NETHERMIND_BUILD_PACKAGES = ("dotnet-sdk-10.0", "dotnet-runtime-10.0", "build-essential", "git")
 
-NETHERMIND_DOTNET_ENV = (
-    ("DOTNET_CLI_TELEMETRY_OPTOUT", "1"),
-    ("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1"),
-    ("DOTNET_NOLOGO", "1"),
-    ("DOTNET_CLI_HOME", "/tmp/dotnet"),
-    ("NUGET_PACKAGES", "/tmp/nuget"),
-)
+NETHERMIND_DOTNET_ENV = {
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+    "DOTNET_NOLOGO": "1",
+    "DOTNET_CLI_HOME": "/tmp/dotnet",
+    "NUGET_PACKAGES": "/tmp/nuget",
+}
 
-NETHERMIND_PUBLISH_PROPERTIES = (
-    ("Deterministic", "true"),
-    ("ContinuousIntegrationBuild", "true"),
-    ("PublishSingleFile", "true"),
-    ("BuildTimestamp", "0"),
-    ("Commit", "0" * 40),
-    ("PublishReadyToRun", "false"),
-    ("DebugType", "none"),
-    ("IncludeAllContentForSelfExtract", "true"),
-    ("IncludePackageReferencesDuringMarkupCompilation", "true"),
-    ("EmbedUntrackedSources", "true"),
-    ("PublishRepositoryUrl", "true"),
-)
+NETHERMIND_PUBLISH_PROPERTIES = {
+    "Deterministic": "true",
+    "ContinuousIntegrationBuild": "true",
+    "PublishSingleFile": "true",
+    "BuildTimestamp": "0",
+    "Commit": "0" * 40,
+    "PublishReadyToRun": "false",
+    "DebugType": "none",
+    "IncludeAllContentForSelfExtract": "true",
+    "IncludePackageReferencesDuringMarkupCompilation": "true",
+    "EmbedUntrackedSources": "true",
+    "PublishRepositoryUrl": "true",
+}
 
 NETHERMIND_UNIT = """\
 [Unit]
@@ -66,7 +66,7 @@ NETHERMIND_JSONRPC_JWTSECRETFILE=/persistent/jwt/jwt.hex"""
 
 
 def _publish_script(name: str, project: str, runtime: str) -> str:
-    properties = " ".join(f"-p:{key}={value}" for key, value in NETHERMIND_PUBLISH_PROPERTIES)
+    properties = " ".join(f"-p:{k}={v}" for k, v in NETHERMIND_PUBLISH_PROPERTIES.items())
     return (
         f"dotnet restore {project} --runtime {runtime} --disable-parallel --force && "
         f"dotnet publish {project} --configuration Release --runtime {runtime} "
@@ -99,7 +99,7 @@ class Nethermind(Composite):
                         Install("publish/plugins", f"{etc}/plugins", mode=None, directory=True),
                     ),
                     env=NETHERMIND_DOTNET_ENV,
-                    cache_key=f"nethermind-{self.source.ref}-{NETHERMIND_RUNTIME}",
+                    cache_namespace=f"nethermind-{self.source.ref}-{NETHERMIND_RUNTIME}",
                 ),
                 User("nethermind-surge", home="/home/nethermind-surge", groups=("eth",)),
                 Unit("nethermind-surge.service", NETHERMIND_UNIT, enabled=True, after_init=True),

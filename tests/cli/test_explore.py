@@ -87,7 +87,7 @@ def test_a_known_file_carries_its_declaration_and_provenance(tmp_path: Path) -> 
     )
     assert record["declarations"] == ["File(extra, /etc/app/app.conf)"]
     assert record["image_path"] == "/etc/app/app.conf"
-    assert "declared in common via base &gt; app (App)" in page
+    assert "declared in common via app (App)" in page
     anchor = re.search(r'<tr class="decl" id="(d\d+)"[^>]*File\(extra, /etc/app/app.conf\)', page)
     assert anchor is not None
     assert f'declared by <a href="#{anchor.group(1)}">' in page
@@ -100,12 +100,12 @@ def test_a_known_file_carries_its_declaration_and_provenance(tmp_path: Path) -> 
 def test_matrix_states_follow_the_overlays() -> None:
     recipe = Recipe(
         "overlays",
-        Fragment("base", items=(Package("curl"), File("/etc/app.conf", "mode=dev\n"))),
+        items=(Package("curl"), File("/etc/app.conf", "mode=dev\n")),
         variants=(
-            Variant("dev", target="qemu"),
+            Variant("dev", outputs=("qemu",)),
             Variant(
                 "prod",
-                parent="dev",
+                inherits="dev",
                 add=Fragment("extras", items=(Package("jq"),)),
                 replace=(File("/etc/app.conf", "mode=prod\n"),),
                 remove=(Package("curl"),),
@@ -127,8 +127,8 @@ def test_markup_in_names_and_contents_is_escaped() -> None:
     evil = "<script>alert(1)</script>"
     recipe = Recipe(
         evil,
-        Fragment("base", items=(File("/etc/evil.html", f"{evil}\n"),)),
-        variants=(Variant("default", target="qemu"),),
+        items=(File("/etc/evil.html", f"{evil}\n"),),
+        variants=(Variant("default", outputs=("qemu",)),),
     )
     page = explore(recipe).html()
     assert page.count("<script>") == 1
@@ -161,7 +161,7 @@ def test_lock_state_missing_current_and_drifted(tmp_path: Path) -> None:
     assert current["sections"] and current["drift"] == []
     changed = Recipe(
         recipe.name,
-        Fragment("more", items=(recipe.common, Package("htop"))),
+        items=(*recipe.items, Package("htop")),
         variants=recipe.variants,
     )
     drifted = explore(changed, lock=path).to_dict()["lock"]
@@ -209,7 +209,7 @@ def test_cli_writes_the_page_into_the_build_directory(
     code, out = run_main("explore", str(path), "--variant", "dev", "--format", "json")
     assert code == EXIT_OK
     data = json.loads(out)
-    assert data["schema"] == "tundravm.explore/2"
+    assert data["schema"] == "tundravm.explore/3"
     assert [v["name"] for v in data["variants"]] == ["dev"]
     assert data["bake"]["artifacts"][0]["sha256"] == digest
 

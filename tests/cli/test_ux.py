@@ -223,16 +223,13 @@ from tundravm import File, Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "two",
-    Fragment(
-        "common",
-        items=(Package("curl"), Package("jq"), File("/etc/motd", "hello\\n")),
-    ),
+    items=(Package("curl"), Package("jq"), File("/etc/motd", "hello\\n")),
     variants=(
-        Variant("default", target="qemu"),
+        Variant("default", outputs=("qemu",)),
         Variant(
             "dev",
-            parent="default",
-            target="azure",
+            inherits="default",
+            outputs=("azure",),
             add=Fragment("dev", items=(Package("strace"),)),
             replace=(File("/etc/motd", "dev\\n"),),
             remove=(Package("jq"),),
@@ -255,7 +252,7 @@ def test_diff_variants_text(two_variants: Path) -> None:
     assert code == EXIT_OK
     lines = out.splitlines()
     assert lines[0] == "variants default -> dev: 1 added, 1 removed, 1 changed"
-    assert "  target: qemu -> azure" in lines
+    assert "  outputs: qemu -> azure" in lines
     assert "  + Package(strace, runtime)" in lines
     assert "  - Package(jq, runtime)" in lines
     assert any(line.startswith("  ~ File(") and line.endswith(": content") for line in lines)
@@ -274,7 +271,7 @@ def test_diff_variants_markdown_and_json(two_variants: Path) -> None:
     )
     assert code == EXIT_OK
     assert out.startswith("# tundravm: `two.py` variants `default` → `dev`")
-    assert "Target: `qemu` → `azure`" in out
+    assert "Outputs: `qemu` → `azure`" in out
     assert "| Change | Declaration | Fields |" in out
     assert "| added | `Package(strace, runtime)` | — |" in out
     assert "| removed | `Package(jq, runtime)` | — |" in out
@@ -287,7 +284,7 @@ def test_diff_variants_markdown_and_json(two_variants: Path) -> None:
     assert payload["added"] == ["Package(strace, runtime)"]
     assert payload["removed"] == ["Package(jq, runtime)"]
     assert [entry["fields"] for entry in payload["changed"]] == [["content"]]
-    assert payload["targets"] == {"default": ["qemu"], "dev": ["azure"]}
+    assert payload["outputs"] == {"default": ["qemu"], "dev": ["azure"]}
 
 
 def test_diff_variants_of_a_variant_with_itself_is_empty(two_variants: Path) -> None:

@@ -13,7 +13,6 @@ from tests.lifecycle.test_sbom import MANIFEST
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.declarative import (
     Build,
-    Fragment,
     Git,
     Install,
     Package,
@@ -30,8 +29,8 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "node",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
-    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    items=(Package("curl"), Package("linux-image-amd64")),
+    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
 )
 """
 
@@ -120,16 +119,13 @@ def test_sbom_lockfile_flag_adds_source_pins(
 ) -> None:
     recipe = Recipe(
         "node",
-        Fragment(
-            "common",
-            items=(
-                Package("curl"),
-                Build(
-                    "app",
-                    Git("https://example.com/app.git", "v1"),
-                    script="make",
-                    install=(Install("app", "/usr/bin/app"),),
-                ),
+        items=(
+            Package("curl"),
+            Build(
+                "app",
+                Git("https://example.com/app.git", "v1"),
+                script="make",
+                install=(Install("app", "/usr/bin/app"),),
             ),
         ),
     )

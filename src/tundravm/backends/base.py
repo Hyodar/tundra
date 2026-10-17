@@ -8,7 +8,7 @@ import subprocess
 import textwrap
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -329,4 +329,21 @@ def collect_artifacts(output_dir: Path) -> dict[OutputTarget, ArtifactRef]:
         artifacts["azure"] = ArtifactRef(target="azure", path=vhd)
     if (tar_gz := first("*.tar.gz*")) is not None:
         artifacts["gcp"] = ArtifactRef(target="gcp", path=tar_gz)
+    ukis = [p for p in names if p.suffix == ".efi"]
+    for target, ref in artifacts.items():
+        if ref.path.suffix != ".efi" and (uki := boot_payload_beside(ref.path, ukis)):
+            artifacts[target] = replace(ref, boot_payload=uki)
     return artifacts
+
+
+def boot_payload_beside(disk: Path, ukis: Sequence[Path]) -> Path | None:
+    """The UKI among *ukis* (mkosi's ``.efi`` outputs beside *disk*) that *disk* boots.
+
+    The compiled postoutput scripts wrap ``<image>.efi`` into ``<image>.vhd`` and
+    ``<image>.tar.gz``, so the UKI whose name minus ``.efi`` prefixes the disk's name
+    (the longest one) is it; else the only UKI there; else ``None``.
+    """
+    named = [uki for uki in ukis if disk.name.startswith(uki.name.removesuffix(".efi") + ".")]
+    if named:
+        return max(named, key=lambda uki: len(uki.name))
+    return ukis[0] if len(ukis) == 1 else None

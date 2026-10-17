@@ -128,6 +128,7 @@ def bake(
             result = _build(backend, request, progress)
             digests = _hash_artifacts(result, request, progress)
             _hash_manifests(result)
+            _hash_boot_payloads(result)
             report = {
                 "profile": name,
                 "lock_digest": lock_digest,
@@ -273,6 +274,21 @@ def _hash_manifests(result: ProfileBuildResult) -> None:
         manifest = package_manifest(Path(artifact.path), result.profile)
         digest = hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.is_file() else None
         result.artifacts[target] = replace(artifact, manifest_digest=digest)
+
+
+def _hash_boot_payloads(result: ProfileBuildResult) -> None:
+    """Record on *result* the sha256 of the UKI each disk artifact boots; a payload the
+    backend named but that is not a file is dropped (the relation is then unknown)."""
+    for target, artifact in sorted(result.artifacts.items()):
+        if artifact.boot_payload is None:
+            continue
+        path = Path(artifact.boot_payload)
+        if not path.is_file():
+            result.artifacts[target] = replace(artifact, boot_payload=None)
+            continue
+        with path.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        result.artifacts[target] = replace(artifact, boot_payload_digest=digest)
 
 
 def _script_checksums(emission: MkosiEmission, profile: str) -> dict[str, str]:

@@ -11,9 +11,9 @@ import pytest
 from tundravm.declarative import (
     Build,
     Debloat,
-    Directory,
     Disk,
     File,
+    FileTree,
     Fragment,
     Git,
     Go,
@@ -46,11 +46,11 @@ GIT = Git("https://example.com/r.git", "main")
 
 
 def test_design_defaults() -> None:
-    recipe = Recipe("r", Fragment("common"))
+    recipe = Recipe("r")
     assert recipe.base == "debian/trixie"
-    assert recipe.variants == (Variant("default", target="qemu"),)
+    assert recipe.variants == (Variant("default", outputs=("qemu",)),)
     assert recipe.epoch == 0 and recipe.mkosi == Mkosi("directories", "current")
-    assert Variant("v").parent == "base" and Variant("v").add == Fragment("empty")
+    assert Variant("v").inherits == "base" and Variant("v").add == Fragment("empty")
     assert User("u").system is True and Group("g").system is True
     assert Disk("d", "/data").device is None and Disk("d", "/data").format == "on_fail"
     assert Secrets().store is None and Secrets().name == "secrets"
@@ -76,19 +76,19 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("generator in items", lambda: Fragment("f", items=((Package("a"),),))),  # type: ignore[arg-type]
     ("non-callable check", lambda: Fragment("f", checks=("nope",))),  # type: ignore[arg-type]
     ("variant named base", lambda: Variant("base")),
-    ("variant own parent", lambda: Variant("v", parent="v")),
-    ("unknown target", lambda: Variant("v", target="aws")),  # type: ignore[arg-type]
+    ("variant own parent", lambda: Variant("v", inherits="v")),
+    ("unknown target", lambda: Variant("v", outputs=("aws",))),  # type: ignore[arg-type]
     ("fragment in replace", lambda: Variant("v", replace=(Fragment("f"),))),  # type: ignore[arg-type]
-    ("no variants", lambda: Recipe("r", Fragment("c"), variants=())),
-    ("duplicate variants", lambda: Recipe("r", Fragment("c"), variants=(Variant("a"),) * 2)),
-    ("negative epoch", lambda: Recipe("r", Fragment("c"), epoch=-1)),
+    ("no variants", lambda: Recipe("r", variants=())),
+    ("duplicate variants", lambda: Recipe("r", variants=(Variant("a"),) * 2)),
+    ("negative epoch", lambda: Recipe("r", epoch=-1)),
     ("bad layout", lambda: Mkosi(layout="flat")),  # type: ignore[arg-type]
     ("empty package", lambda: Package("")),
     ("package role", lambda: Package("a", role="dev")),  # type: ignore[arg-type]
     ("relative file", lambda: File("etc/motd", "x")),
     ("file mode range", lambda: File("/etc/motd", "x", mode=0o10000)),
     ("file stage", lambda: File("/etc/motd", "x", stage="build")),  # type: ignore[arg-type]
-    ("directory source str", lambda: Directory("/opt", "src")),  # type: ignore[arg-type]
+    ("directory source str", lambda: FileTree("/opt", "src")),  # type: ignore[arg-type]
     ("group name", lambda: Group("Bad Name")),
     ("user home relative", lambda: User("u", home="home/u")),
     ("unit name", lambda: Unit("bad unit", enabled=True)),
@@ -96,8 +96,8 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("unit file without suffix", lambda: Unit("app", "[Unit]\n", enabled=True)),
     ("hook phase", lambda: Hook("h", "later", "echo")),  # type: ignore[arg-type]
     ("hook empty script", lambda: Hook("h", "build", "")),
-    ("hook env name", lambda: Hook("h", "build", "echo", env=(("1A", "x"),))),
-    ("hook env duplicate", lambda: Hook("h", "build", "echo", env=(("A", "1"), ("A", "2")))),
+    ("hook env name", lambda: Hook("h", "build", "echo", env={"1A": "x"})),
+    ("hook env not a mapping", lambda: Hook("h", "build", "echo", env=(("A", "1"),))),  # type: ignore[arg-type]
     ("hook after itself", lambda: Hook("h", "build", "echo", after=("h",))),
     ("reserved init name", lambda: Init("disks", "echo")),
     ("init after itself", lambda: Init("i", "echo", after=("i",))),
@@ -136,7 +136,7 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
         lambda: Build(
             "b",
             GIT,
-            recipe=Go(output="tool"),
+            using=Go(output="tool"),
             install=(Install("bin/tool", "/usr/bin/tool", artifact=True),),
         ),
     ),
@@ -164,7 +164,60 @@ def test_valid_declarations_construct() -> None:
         store=disk,
     )
     Install("share", "/usr/share/a", mode=None, directory=True)
-    Build("b", GIT, recipe=Go(output="t"), install=(Install("build/t", "/t", artifact=True),))
+    Build("b", GIT, using=Go(output="t"), install=(Install("build/t", "/t", artifact=True),))
     Unit("ssh.socket", enabled=False, masked=True)
-    Hook("h", "boot", "echo", env=(("A", "1"),), cwd="/tmp", after=("g",))
+    Hook("h", "boot", "echo", env={"A": "1"}, cwd="/tmp", after=("g",))
     Kernel("6.13.12", Git("https://github.com/gregkh/linux", "v6.13.12"), cmdline="quiet")
+
+
+def test_packages_is_a_named_bundle_of_packages() -> None:
+    from tundravm.declarative import packages, resolve
+
+    tools = packages("strace", "gdb")
+    assert tools.items == (Package("strace"), Package("gdb"))
+    assert tools.name == "packages(strace, gdb)" and tools == packages("strace", "gdb")
+    build = packages("gcc", role="build")
+    assert build.items == (Package("gcc", "build"),) and build.name == "packages(gcc, role=build)"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        tools.items = ()  # type: ignore[misc]
+    with pytest.raises(ValidationError, match="at least one"):
+        packages()
+    recipe = Recipe(
+        "r",
+        items=[packages("curl"), Package("jq")],  # type: ignore[arg-type]
+        variants=(Variant("default", outputs=["qemu"]), Variant("dev", add=tools)),  # type: ignore[arg-type]
+    )
+    assert recipe.items == (packages("curl"), Package("jq")) and recipe.variants[0].outputs == (
+        "qemu",
+    )
+    dev = resolve(recipe, variant="dev")
+    assert dev.fragments == ("packages(curl)", "packages(strace, gdb)")
+    assert {item.name for item in dev.items if isinstance(item, Package)} == {
+        "curl",
+        "jq",
+        "strace",
+        "gdb",
+    }
+
+
+def test_mapping_fields_take_only_mappings_and_freeze_them() -> None:
+    from tundravm.declarative import Service, Template
+
+    env = {"B": "2", "A": "1"}
+    service = Service("app", "/bin/app", env=env, limits={"NOFILE": 1024})
+    env["C"] = "3"
+    assert dict(service.env) == {"B": "2", "A": "1"} and list(service.env) == ["B", "A"]
+    assert service == Service("app", "/bin/app", env={"A": "1", "B": "2"}, limits={"NOFILE": 1024})
+    assert hash(service) == hash(
+        Service("app", "/bin/app", env={"A": "1", "B": "2"}, limits={"NOFILE": 1024})
+    )
+    debloat = Debloat(keep_paths_by_variant={"dev": ["/usr/bin/gdb"]})
+    assert debloat.keep_paths_by_variant == {"dev": ("/usr/bin/gdb",)}
+    for bad in (
+        lambda: Service("app", "/bin/app", env=(("A", "1"),)),  # type: ignore[arg-type]
+        lambda: Template("/etc/t", "x", variables=[("a", 1)]),  # type: ignore[arg-type]
+        lambda: Hook("h", "build", "echo", env=[("A", "1")]),  # type: ignore[arg-type]
+        lambda: Debloat(keep_paths_by_variant=(("dev", ("/x",)),)),  # type: ignore[arg-type]
+    ):
+        with pytest.raises(ValidationError, match="must be a mapping"):
+            bad()

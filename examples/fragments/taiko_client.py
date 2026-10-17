@@ -60,7 +60,7 @@ class TaikoClient(Composite):
                     self.source,
                     script=TAIKO_CLIENT_BUILD,
                     install=(Install("bin/taiko-client", "/usr/bin/taiko-client"),),
-                    cache_key=f"taiko-client-{self.source.ref}",
+                    cache_namespace=f"taiko-client-{self.source.ref}",
                 ),
                 User("taiko-client", home="/home/taiko-client", groups=("eth",)),
                 Unit("taiko-client.service", TAIKO_CLIENT_UNIT, enabled=True, after_init=True),

@@ -26,7 +26,7 @@ backend = InProcessBackend()
 def build() -> Recipe:
     packages = (Package(name) for name in ("linux-image-amd64", *PACKAGES))
     items = (*packages, File("/etc/motd", "hi\\n"))
-    return Recipe("watched", Fragment("common", items=items), variants=(Variant("default"),))
+    return Recipe("watched", items=items, variants=(Variant("default"),))
 """
 PKGS = 'PACKAGES = ("curl",)\n'
 LINE = re.compile(r"^\d\d:\d\d:\d\d (.*)$")
@@ -248,7 +248,7 @@ def test_sources_skip_hidden_cache_and_build_directories(tmp_path: Path) -> None
 INPUTS_RECIPE = """
 from pathlib import Path
 
-from tundravm import Directory, File, Fragment, Package, Recipe, Variant
+from tundravm import FileTree, File, Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -258,9 +258,9 @@ def build() -> Recipe:
     items = (
         Package("linux-image-amd64"),
         File("/etc/motd", Path("motd.txt")),
-        Directory("/opt/app", Path("app")),
+        FileTree("/opt/app", Path("app")),
     )
-    return Recipe("inputs", Fragment("common", items=items), variants=(Variant("default"),))
+    return Recipe("inputs", items=items, variants=(Variant("default"),))
 """
 
 

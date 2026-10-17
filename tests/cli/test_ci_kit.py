@@ -33,8 +33,8 @@ ITEMS = [
 
 def build() -> Recipe:
     items = (*(Package(name) for name in PACKAGES), *ITEMS)
-    variants = (Variant("default", target="qemu"), Variant("azure", target="azure"))
-    return Recipe("ci", Fragment("common", items=items), variants=variants)
+    variants = (Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",)))
+    return Recipe("ci", items=items, variants=variants)
 
 """
 GHOST = 'ITEMS.append(Service("w", "/usr/bin/w", user="ghost"))\n'
@@ -312,8 +312,8 @@ def test_inspect_markdown_two_variants(recipe: Path) -> None:
     assert out.startswith("# tundravm: `recipe.py`\n")
     assert "## Variant `default`" in out and "## Variant `azure`" in out
     assert out.index("## Variant `azure`") < out.index("## Variant `default`")
-    assert "**Parent:** `base` · **Fragments:** `common`" in out
-    assert "**Parent:** none" not in out
+    assert "**Inherits:** `base` · **Fragments:** none" in out
+    assert "**Inherits:** none" not in out
     assert "| Package | Installed in |" in out and "| `curl` | image |" in out
     assert "| Path | Mode | Bytes | sha256 |" in out and "| `/etc/motd` | 0644 | 6 |" in out
     assert "### Users (1)" in out and "| `app` | yes |" in out
@@ -326,7 +326,7 @@ def test_inspect_markdown_collapses_long_package_lists(tmp_path: Path) -> None:
     packages = ", ".join(f'Package("pkg{index:02d}")' for index in range(25))
     recipe.write_text(
         "from tundravm import Fragment, Package, Recipe\n"
-        f"recipe = Recipe('big', Fragment('common', items=({packages},)))\n"
+        f"recipe = Recipe('big', items=({packages},))\n"
     )
     code, out = run_main("inspect", str(recipe), "--format", "markdown")
     assert code == EXIT_OK
@@ -360,12 +360,12 @@ def test_lint_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
     recipe = tmp_path / "warn.py"
     recipe.write_text(
         "from tundravm import Fragment, Init, Package, Recipe\n"
-        "recipe = Recipe('warn', Fragment('common', items=(\n"
+        "recipe = Recipe('warn', items=(\n"
         "    Package('curl'),\n"
         "    Package('linux-image-amd64'),\n"
         "    Init('one', 'echo 1\\n', priority=5),\n"
         "    Init('two', 'echo 2\\n', priority=5),\n"
-        ")))\n"
+        "))\n"
     )
     code, out = run_main("lint", str(recipe), "--format", "github")
     assert code == EXIT_OK
@@ -504,8 +504,8 @@ ITEMS = (
 )
 recipe = Recipe(
     "runtime",
-    Fragment("runtime", items=ITEMS),
-    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    items=ITEMS,
+    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
 )
 """.replace("{sha}", "a" * 40)
 

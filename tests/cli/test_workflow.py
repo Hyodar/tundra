@@ -22,14 +22,14 @@ APP = "[Unit]\\nDescription=app\\n\\n[Service]\\nUser=app\\nExecStart=/usr/bin/t
 backend = InProcessBackend()
 recipe = Recipe(
     "demo",
-    Fragment("common", items=(
+    items=(
         Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\\n"),
         User("app", shell="/bin/false"),
         Unit("app.service", APP, enabled=True),
-    )),
+    ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("azure", parent="default", target="azure"),
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
     ),
 )
 """
@@ -73,12 +73,12 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
     def warn(resolved):
         return (Diagnostic("custom-warning", "warning", "from a fragment"),)
 
-    recipe = Recipe("demo", Fragment("common", items=(
+    recipe = Recipe("demo", items=(
         Fragment("tool", items=(Package("curl"),), checks=(warn,)),
         Package("linux-image-amd64"),
         File("/etc/motd", "hi\\n"),
         Debloat(extra_remove=("/etc/motd",)),
-    )))
+    ))
     """
     path = recipe_file(tmp_path, source)
     code, out, _ = run_cli("lint", path, "--format", "text")
@@ -93,7 +93,7 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
         tmp_path,
         """
         from tundravm import File, Fragment, Recipe
-        recipe = Recipe("demo", Fragment("c", items=(File("/etc/a", "1"), File("/etc//a", "2"))))
+        recipe = Recipe("demo", items=(File("/etc/a", "1"), File("/etc//a", "2")))
         """,
         name="broken.py",
     )

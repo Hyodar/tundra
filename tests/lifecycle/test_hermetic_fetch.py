@@ -23,7 +23,6 @@ from tundravm.declarative import (
     Build,
     Cargo,
     Dotnet,
-    Fragment,
     Git,
     Go,
     Install,
@@ -157,14 +156,14 @@ CACHES = {"go": "go", "cargo": "cargo", "dotnet": "nuget"}
 def _recipe(*items: object, dialect: str = "current", policy: Policy | None = None) -> Recipe:
     return Recipe(
         "tool",
-        Fragment("tool", items=(Package("linux-image-amd64"), *items)),  # type: ignore[arg-type]
+        items=(Package("linux-image-amd64"), *items),  # type: ignore[arg-type]
         mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
         policy=policy,
     )
 
 
 def _build(url: str, kind: str = "go") -> Build:
-    return Build("tool", Git(url, "main"), recipe=RECIPES[kind], install=(Install("tool", "/t"),))
+    return Build("tool", Git(url, "main"), using=RECIPES[kind], install=(Install("tool", "/t"),))
 
 
 def _locked(recipe: Recipe, pin: str, deb: str | None = None) -> Lock:
@@ -262,9 +261,9 @@ def test_cli_fetch_lists_the_dependency_outcome(
     path = write_recipe_file(
         tmp_path,
         "from tundravm.declarative import Build, Fragment, Git, Go, Install, Package, Recipe\n"
-        "recipe = Recipe('tool', Fragment('tool', items=(Package('linux-image-amd64'), "
-        f"Build('tool', Git({url!r}, {first!r}), recipe=Go(output='tool'), "
-        "install=(Install('tool', '/t'),)))))\n",
+        "recipe = Recipe('tool', items=(Package('linux-image-amd64'), "
+        f"Build('tool', Git({url!r}, {first!r}), using=Go(output='tool'), "
+        "install=(Install('tool', '/t'),))))\n",
     )
     assert main(["fetch", str(path), "--build", str(tmp_path / "out")]) == EXIT_OK
     captured = capsys.readouterr()

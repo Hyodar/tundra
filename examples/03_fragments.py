@@ -94,7 +94,7 @@ class Metrics(Composite):
 
     def check_exposure(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: a cloud image must not serve metrics on a public address."""
-        if self.listen.startswith("127.") or not {"azure", "gcp"} & set(resolved.targets):
+        if self.listen.startswith("127.") or not {"azure", "gcp"} & set(resolved.outputs):
             return ()
         message = f"prometheus listens on {self.listen} in a cloud image"
         return (Diagnostic("metrics-exposed", "warning", message, variant=resolved.variant),)
@@ -103,18 +103,15 @@ class Metrics(Composite):
 recipe = Recipe(
     name="fragments",
     base="debian/bookworm",
-    common=Fragment(
-        "base",
-        items=(
-            *(Package(name) for name in (*BOOT, "ca-certificates")),
-            hardening,
-            node_exporter,
-            Metrics(),  # Metrics(listen="0.0.0.0") makes lint warn for the gcp variant
-        ),
+    items=(
+        *(Package(name) for name in (*BOOT, "ca-certificates")),
+        hardening,
+        node_exporter,
+        Metrics(),  # Metrics(listen="0.0.0.0") makes lint warn for the gcp variant
     ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("gcp", parent="default", target="gcp"),
+        Variant("default", outputs=("qemu",)),
+        Variant("gcp", inherits="default", outputs=("gcp",)),
     ),
 )
 

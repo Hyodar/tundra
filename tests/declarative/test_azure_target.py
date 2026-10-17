@@ -17,8 +17,7 @@ SCRIPT = "mkosi.extra/usr/bin/azure-complete-provisioning"
 SERVICE = "azure-complete-provisioning.service"
 RECIPE = Recipe(
     "cloud",
-    Fragment("common"),
-    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
 )
 
 
@@ -60,7 +59,9 @@ def test_azure_variant_emits_service_unit(tree: CompiledTree) -> None:
 def test_azure_unit_requires_network_setup_when_the_variant_ships_it(tmp_path: Path) -> None:
     net = Fragment("net", items=(Unit("network-setup.service", "[Service]\n", enabled=True),))
     recipe = Recipe(
-        "cloud", net, variants=(Variant("default", target="qemu"), Variant("azure", target="azure"))
+        "cloud",
+        items=(net,),
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     tree = compile_tree(recipe, path=tmp_path / "tree")
     assert tree.unit(SERVICE, variant="azure") == AZURE_PROVISIONING_SERVICE
@@ -69,7 +70,6 @@ def test_azure_unit_requires_network_setup_when_the_variant_ships_it(tmp_path: P
 def test_azure_unit_is_historical_under_nethermind_v1(tmp_path: Path) -> None:
     recipe = Recipe(
         "cloud",
-        Fragment("common"),
         variants=RECIPE.variants,
         mkosi=Mkosi(dialect="nethermind-v1"),
     )
@@ -102,7 +102,7 @@ def test_azure_variant_symlinks_to_minimal_target(tree: CompiledTree) -> None:
 
 
 def test_azure_variant_sets_output_target(tree: CompiledTree) -> None:
-    assert resolve(RECIPE, variant="azure").target == "azure"
+    assert resolve(RECIPE, variant="azure").outputs == ("azure",)
     conf = tree.conf(variant="azure").splitlines()
     assert "PostOutputScripts=scripts/azure-postoutput.sh" in conf
     assert tree.exists("scripts/azure-postoutput.sh", variant="azure")

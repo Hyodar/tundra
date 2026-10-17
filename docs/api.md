@@ -12,7 +12,7 @@ from tundravm.declarative.utils import Composite, DevTools, Tdxs
 from tundravm.declarative import diff, measure, deploy
 ```
 
-`tundravm` exports the declarations, the build recipes `Go`, `Cargo` and `Dotnet`, the recipe types, the lifecycle functions and result types, `release` and `Release` (from `tundravm.release`; the top-level `tundravm.release` is the function, so import the module as `import tundravm.release` or `from tundravm.release import STAGES`), `attest` and `Attestation` (from `tundravm.attestation`), `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub` and `Backports`, and their base class `Composite`, live in `tundravm.declarative.utils`. `tundravm.__version__` is the package version that `tundravm --version` prints.
+`tundravm` exports the declarations and the `packages()` helper, the build toolchains `Go`, `Cargo` and `Dotnet`, the recipe types, the lifecycle functions and result types, `release` and `Release` (from `tundravm.release`; the top-level `tundravm.release` is the function, so import the module as `import tundravm.release` or `from tundravm.release import STAGES`), `attest` and `Attestation` (from `tundravm.attestation`), `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub` and `Backports`, and their base class `Composite`, live in `tundravm.declarative.utils`. `tundravm.__version__` is the package version that `tundravm --version` prints.
 
 ## Recipe, variants, fragments
 
@@ -21,8 +21,8 @@ from tundravm.declarative import diff, measure, deploy
 | Field | Type | Default |
 |---|---|---|
 | `name` | `str` | required |
-| `common` | `Fragment` | required |
-| `variants` | `tuple[Variant, ...]` | `(Variant("default", target="qemu"),)` |
+| `items` | `tuple[Declaration \| Fragment, ...]` | `()`: the recipe's own declarations and fragments, which every variant inheriting `"base"` starts from (provenance level `common`) |
+| `variants` | `tuple[Variant, ...]` | `(Variant("default", outputs=("qemu",)),)` |
 | `base` | `str` | `"debian/trixie"` |
 | `arch` | `"x86_64" \| "aarch64"` | `"x86_64"` |
 | `mirror` | `str \| None` | `None` (the distribution default); a mirror root written as `Mirror=`, which mkosi completes itself (`<mirror>/debian`, or `<mirror>/archive/debian/<snapshot>` with `snapshot`), so it is never a full archive URL |
@@ -39,15 +39,14 @@ At least one variant; names are unique. `recipe.variant(name)` returns one or ra
 | Field | Type | Default |
 |---|---|---|
 | `name` | `str` | required; `"base"` is reserved |
-| `parent` | `str \| None` | `"base"` (`Recipe.common`); `None` is standalone; else a variant name |
+| `inherits` | `str \| None` | `"base"` (`Recipe.items`); `None` is standalone; else a variant name |
 | `add` | `Fragment` | empty |
 | `replace` | `tuple[Declaration, ...]` | `()` |
 | `remove` | `tuple[Declaration, ...]` | `()` |
-| `target` | `"qemu" \| "azure" \| "gcp" \| None` | `None`: inherited, `qemu` at the root |
-| `targets` | `tuple[Target, ...]` | `()`: several outputs from one variant; `target=X` is the shorthand for `targets=(X,)` and setting both fails |
+| `outputs` | `tuple[Target, ...]` | `()`: inherited, `qemu` at the root; one disk image per target (`"qemu"`, `"azure"`, `"gcp"`), each listed once; a bare string is refused |
 | `release` | `bool` | `True`: `release` ships it by default; `False` (a development variant, such as one adding `DevTools()`) is skipped by `release` unless named with `allow_ineligible=True`. Only `False` enters the recipe digest (the variant's `release` lockfile section) |
 
-The default variant is the one named `default`, else the first whose parent is `base` or `None`. It may have any parent; a variant it is chained onto lowers like any other, standalone when it lacks what the default adds. A variant whose parent is `base` or the default variant, and which only adds declarations or replaces `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant. Every other variant lowers standalone, among them a variant with its own settings or kernel and a `base`-parented variant that leaves a cloud-targeted default's targets (see [variants](concepts.md#variants-and-targets)).
+The default variant is the one named `default`, else the first that inherits `base` or `None`. It may inherit any variant; the variant it inherits lowers like any other, standalone when it lacks what the default adds. A variant that inherits `base` or the default variant, and which only adds declarations or replaces `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant. Every other variant lowers standalone, among them a variant with its own settings or kernel and a variant inheriting `base` that leaves a cloud-targeted default's outputs (see [variants](concepts.md#variants-and-targets)).
 
 ### `Fragment`
 
@@ -73,31 +72,38 @@ The default variant is the one named `default`, else the first whose parent is `
 
 ## Declarations
 
-`Declaration` is the union of the types `Fragment.items`, `Variant.replace` and `Variant.remove` hold: `Package`, `File`, `Template`, `Directory`, `Group`, `User`, `Unit`, `Service`, `Hook`, `Init`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Key`, `Disk`, `Secrets`, `RuntimeTools` and `Build`.
+`Declaration` is the union of the types `Fragment.items`, `Variant.replace` and `Variant.remove` hold: `Package`, `File`, `Template`, `FileTree`, `Group`, `User`, `Unit`, `Service`, `Hook`, `Init`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Key`, `Disk`, `Secrets`, `RuntimeTools` and `Build`.
+
+Mapping fields (`env`, `limits`, `variables`, `keep_paths_by_variant`, `Tdxs.expected_measurements`) take a `Mapping` and nothing else, and keep an immutable copy in the caller's order (equal to any mapping with the same items; payloads and digests sort it). Lists passed for tuple fields are frozen into tuples.
 
 ### Packages, files, accounts, units
 
 | Type | Fields (defaults) | Identity |
 |---|---|---|
 | `Package` | `name`, `role="runtime"` (`"runtime"` or `"build"`) | name, role |
+
+`packages(*names, role="runtime")` returns a frozen `Fragment` of one `Package` per name, named after the call (`packages(curl, jq)`, `packages(gcc, role=build)`), so it goes in `Recipe.items`, a fragment's `items` or `Variant.add` without an invented fragment name.
+
+| Type | Fields (defaults) | Identity |
+|---|---|---|
 | `File` | `path` (absolute), `content: str \| bytes \| Path`, `mode=0o644`, `stage="extra"` (`"skeleton"` or `"extra"`), `allow_secret=False` | stage, path |
-| `Template` | `path` (absolute), `template: str \| Path`, `variables: tuple[tuple[str, str \| int \| float], ...] = ()`, `mode=0o644`, `stage="extra"`, `allow_secret=False` | stage, path |
-| `Directory` | `path` (absolute), `source: Path`, `exclude=()`, `mode=None` (keep each file's and empty directory's permission bits; a mode sets every file to it and empty directories to `0755`), `stage="extra"`, `symlinks="preserve"` (ship links as links; `"follow"` ships what they point to), `allow_secret=False` | stage, path |
+| `Template` | `path` (absolute), `template: str \| Path`, `variables: Mapping[str, str \| int \| float] = {}`, `mode=0o644`, `stage="extra"`, `allow_secret=False` | stage, path |
+| `FileTree` | `path` (absolute), `source: Path`, `exclude=()`, `mode=None` (keep each file's and empty directory's permission bits; a mode sets every file to it and empty directories to `0755`), `stage="extra"`, `symlinks="preserve"` (ship links as links; `"follow"` ships what they point to), `allow_secret=False` | stage, path |
 | `Group` | `name`, `system=True`, `gid=None` | name |
 | `User` | `name`, `system=True`, `home=None`, `shell="/usr/sbin/nologin"`, `uid=None`, `primary_group=None`, `groups=()` | name |
 | `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `after_init=False`, `allow_secret=False` | unit name |
-| `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only: `description=None`, `user=None`, `group=None`, `working_dir=None`, `env: Pairs = ()`, `env_file=None`, `exec_start_pre=()`, `after=()`, `requires=()`, `wants=()`, `wanted_by=None` (`minimal.target`), `type=None` (`"simple"`, `"exec"`, `"oneshot"`, `"notify"`, `"forking"`), `restart="no"` (`"always"`, `"on-failure"`, `"no"`), `limits=()` (`(resource, value)` pairs), `kill_mode=None`, `timeout_stop=None`, `security="default"` (`"strict"`, `"default"`, `"none"`), `after_init=True`, `allow_secret=False` | unit name |
+| `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only: `description=None`, `user=None`, `group=None`, `working_dir=None`, `env: Mapping[str, str] = {}`, `env_file=None`, `exec_start_pre=()`, `after=()`, `requires=()`, `wants=()`, `wanted_by=None` (`minimal.target`), `type=None` (`"simple"`, `"exec"`, `"oneshot"`, `"notify"`, `"forking"`), `restart="no"` (`"always"`, `"on-failure"`, `"no"`), `limits: Mapping[str, str \| int] = {}` (`{"NOFILE": 1048576}`), `kill_mode=None`, `timeout_stop=None`, `security="default"` (`"strict"`, `"default"`, `"none"`), `after_init=True`, `allow_secret=False` | unit name |
 
-`Template` renders `template` with `str.format_map(variables)` at lowering time; a placeholder without a value fails to lower. `Service` renders and enables a `.service` unit; `after_init=True` makes it wait for `runtime-init.service` when the variant has a runtime-init step. `allow_secret=True` exempts a declaration from the `secret-in-file` (`File`, `Template`, every file a `Directory` imports) or `secret-in-env` (the unit a `Service` renders, a `Unit`'s shipped file) lint, for a value that only looks like a credential; it changes neither the recipe digest nor the tree. `Unit` with `content` ships that text verbatim and needs a type suffix (`app.service`). Without `content` it controls a packaged unit and must set `enabled` or `masked`. `after_init=True` adds `After=`/`Requires=runtime-init.service`.
+`Template` renders `template` with `str.format_map(variables)` at lowering time; a placeholder without a value fails to lower. `Service` renders and enables a `.service` unit; `after_init=True` makes it wait for `runtime-init.service` when the variant has a runtime-init step. `allow_secret=True` exempts a declaration from the `secret-in-file` (`File`, `Template`, every file a `FileTree` imports) or `secret-in-env` (the unit a `Service` renders, a `Unit`'s shipped file) lint, for a value that only looks like a credential; it changes neither the recipe digest nor the tree. `Unit` with `content` ships that text verbatim and needs a type suffix (`app.service`). Without `content` it controls a packaged unit and must set `enabled` or `masked`. `after_init=True` adds `After=`/`Requires=runtime-init.service`.
 
 ### Scripts and ordering
 
 | Type | Fields (defaults) | Identity |
 |---|---|---|
-| `Hook` | `name`, `phase: Phase`, `script`, `env: Pairs = ()`, `cwd=None`, `after=()` | name |
+| `Hook` | `name`, `phase: Phase`, `script`, `env: Mapping[str, str] = {}`, `cwd=None`, `after=()` | name |
 | `Init` | `name`, `script`, `priority=100`, `after=()` | name |
 
-`Phase` is one of `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. `Hook.after` names hooks of the same or an earlier phase. `Init` steps run in `/usr/bin/runtime-init` by ascending priority; `after` orders equal priorities and may name the built-in `keys` (10), `disks` (20) and `secrets` (30), which are reserved names. `Pairs` is `tuple[tuple[str, str], ...]`.
+`Phase` is one of `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. `Hook.after` names hooks of the same or an earlier phase. `Init` steps run in `/usr/bin/runtime-init` by ascending priority; `after` orders equal priorities and may name the built-in `keys` (10), `disks` (20) and `secrets` (30), which are reserved names. `Pairs` (`tuple[tuple[str, str], ...]`) types result fields such as `Lock.sections`; declarations take mappings.
 
 ### System configuration
 
@@ -105,7 +111,7 @@ The default variant is the one named `default`, else the first whose parent is `
 |---|---|---|
 | `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100`, `in_image=True`: the current dialect writes the source (and its keyring) under `mkosi.sandbox/`, where the build's apt reads it, and with `in_image=True` also into the image's `/etc/apt`; `False` keeps it out of the image | name |
 | `Partition` | `name`, `size`, `mount`, `filesystem="ext4"` | name |
-| `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant=()` (`(variant, paths)` kept only in that variant) | one per variant |
+| `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant: Mapping[str, Sequence[str]] = {}` (`{variant: paths}` kept only in that variant) | one per variant |
 | `Setting` | `section`, `key`, `values: tuple[str, ...]`; per variant | section, key |
 | `Kernel` | `version`, `source: Git \| Http`, `config: Path \| None = None`, `cmdline=""`, `tdx=True` | one per variant |
 
@@ -140,7 +146,7 @@ A variant may declare several `Secrets`. A single one uses the `RuntimeTools` `s
 | `Git` | `url`, `ref`, `subdir=None` (relative), `submodules=False` |
 | `Http` | `url`, `sha256=None` (64 lowercase hex) |
 | `Install` | `source` (relative to the build's source tree), `destination` (absolute), `mode=0o755`, `directory=False` (requires `mode=None`), `artifact=False` (`source` is the `recipe`'s output path, e.g. `build/<output>` for `Go`: the build installs it as the recipe's artifact, as the builds `Key`/`Disk`/`Secrets` generate do; a file with a mode) |
-| `Build` | `name`, `source: Git \| Http`, `script=None`, `install: tuple[Install, ...]` (at least one), `packages=()`, `env: Pairs = ()`, `cache_key=None` (the build cache namespace, default `name`: the current dialect caches under `<namespace>-<sha256(source pin, build spec, install spec, arch, toolchain)[:16]>`, so changing any of them rebuilds), `recipe: Go \| Cargo \| Dotnet \| None = None` |
+| `Build` | `name`, `source: Git \| Http`, `script=None`, `install: tuple[Install, ...]` (at least one), `packages=()`, `env: Mapping[str, str] = {}`, `cache_namespace=None` (names the build cache entry, default `name`; the key is fingerprinted: the current dialect caches under `<namespace>-<sha256(source pin, build spec, install spec, arch, toolchain)[:16]>`, so changing any of them rebuilds), `using: Go \| Cargo \| Dotnet \| None = None` (the toolchain; exactly one of `script` and `using`) |
 | `Go` | keyword-only: `output`, `package="./..."`, `ldflags="-s -w -buildid="`, `tags=()`, `env: Mapping = {}`, `packages=("golang",)`, `output_dir="./build"`, `mkdir=True` |
 | `Cargo` | keyword-only: `output`, `bin=None`, `package=None`, `features=()`, `profile="release"`, `env: Mapping = {}`, `packages=("cargo",)` |
 | `Dotnet` | keyword-only: `project`, `output`, `configuration="Release"`, `runtime="linux-x64"`, `env: Mapping = {}`, `packages=("dotnet-sdk-8.0",)`, `restore_args=()`, `properties: Mapping = {}` |
@@ -159,14 +165,14 @@ A `Build` sets exactly one of `script` and `recipe`. `script` is a shell script 
 from tundravm import Build, Cargo, Git, Go, Install
 
 Build("app", Git("https://github.com/example/app.git", "v1.0.0"),
-      recipe=Go(output="app", package="./cmd/app", env={"CGO_ENABLED": "0"}),
+      using=Go(output="app", package="./cmd/app", env={"CGO_ENABLED": "0"}),
       install=(Install("build/app", "/usr/bin/app"),))
 Build("prover", Git("https://github.com/example/prover.git", "v2.1.0"),
-      recipe=Cargo(output="prover", bin="prover"),
+      using=Cargo(output="prover", bin="prover"),
       install=(Install("target/release/prover", "/usr/bin/prover"),))
 ```
 
-`Build` identity is its name; install destinations of one build need distinct file names. Outside `nethermind-v1` a build caches under `<namespace>-<fingerprint16>`: the namespace is `cache_key` (default the build's name) and the fingerprint is the first 16 hex of a sha256 over the source pin (with git `subdir` and `submodules`), the build script or recipe, the install steps, the toolchain (recipe kind and packages) and the distribution it builds against: base, `arch`, mirror, snapshot, the variant's repositories and build packages, and its mkosi `Build` settings (environment, sandbox trees and files, verbatim `Build` keys such as `ToolsTree`; not `PackageCacheDirectory` or `WithNetwork`, which choose where packages come from, not which). Changing any of them rebuilds, so `cache_key` names a family of cache entries, not one. `nethermind-v1` keeps its historical keys: `<name>-<sha256(url)[:12]>-<pin12>`, or `cache_key` with `-<pin12>` appended.
+`Build` identity is its name; install destinations of one build need distinct file names. Outside `nethermind-v1` a build caches under `<namespace>-<fingerprint16>`: the namespace is `cache_namespace` (default the build's name) and the fingerprint is the first 16 hex of a sha256 over the source pin (with git `subdir` and `submodules`), the build script or recipe, the install steps, the toolchain (recipe kind and packages) and the distribution it builds against: base, `arch`, mirror, snapshot, the variant's repositories and build packages, and its mkosi `Build` settings (environment, sandbox trees and files, verbatim `Build` keys such as `ToolsTree`; not `PackageCacheDirectory` or `WithNetwork`, which choose where packages come from, not which). Changing any of them rebuilds, so `cache_key` names a family of cache entries, not one. `nethermind-v1` keeps its historical keys: `<name>-<sha256(url)[:12]>-<pin12>`, or `cache_key` with `-<pin12>` appended.
 
 ## Resolution
 
@@ -176,7 +182,7 @@ resolve_all(recipe: Recipe) -> tuple[Resolved, ...]
 identity(item: Declaration) -> tuple[str, ...]
 ```
 
-`resolve` raises `ValidationError` on the first error-level diagnostic (the message names its code and how many more there are). `Resolved` has `variant: str`, `target: Target` (the first output), `targets: tuple[Target, ...]`, `items: tuple[Declaration, ...]` and `fragments: tuple[str, ...]` (the names of the fragments included).
+`resolve` raises `ValidationError` on the first error-level diagnostic (the message names its code and how many more there are). `Resolved` has `variant: str`, `outputs: tuple[Target, ...]` (own or inherited, never empty), `items: tuple[Declaration, ...]` and `fragments: tuple[str, ...]` (the names of the fragments included).
 
 `Diagnostic(code, severity, message, subject="", variant="", location="", hint=None, context=())` is the one finding type: fragment checks return it, and `lint`, `lock_status` and `doctor` return it (`tundravm.Diagnostic`, also `tundravm.check.Diagnostic` and `tundravm.declarative.model.Diagnostic`; a frozen dataclass). `code` is the lint code; `severity` is `"error"`, `"warning"` or `"info"`; `subject` is what the finding is about (`""` for none); `variant` is the variant the finding is in, `""` for the recipe as a whole (the common fragment, the lockfile, the host); `location` is reserved for the source position the finding points at, `file:line` (`""` when unknown, which it is for every built-in check: a declaration does not record where it was written; `lint --format github` annotates that line, text prints it as `at:`, markdown adds a `Location` column); `hint: str | None` is the fix advice; `context` is sorted `(key, value)` string pairs (a dict is accepted). `to_dict()` gives `{"code", "severity", "message", "subject", "variant", "location", "hint", "context"}`, the shape `lint --format json` prints. A fragment check may leave `variant` empty; resolution fills it in.
 
@@ -188,7 +194,7 @@ from tundravm.declarative.inputs import recipe_inputs
 recipe_inputs(recipe: Recipe) -> frozenset[Path]
 ```
 
-`recipe_inputs` is every host path the recipe's declarations read, in every variant (`common`, each variant's `add` and `replace`, nested fragments included): `File` and `Unit` contents and `Template` sources given as a `Path`, `Directory` sources (the directory; its members are inputs too), `Kernel.config` and the policy file a `Tdxs.from_policy` read (`Tdxs.policy_file`). Paths are absolute, relative ones taken from the working directory as lowering reads them, and kept when they do not exist. `Build` sources are remote (`Git`, `Http`) and `Disk.key` paths are guest paths, so neither is an input. `tundravm watch` polls these besides the recipe's modules.
+`recipe_inputs` is every host path the recipe's declarations read, in every variant (`Recipe.items`, each variant's `add` and `replace`, nested fragments included): `File` and `Unit` contents and `Template` sources given as a `Path`, `FileTree` sources (the directory; its members are inputs too), `Kernel.config` and the policy file a `Tdxs.from_policy` read (`Tdxs.policy_file`). Paths are absolute, relative ones taken from the working directory as lowering reads them, and kept when they do not exist. `Build` sources are remote (`Git`, `Http`) and `Disk.key` paths are guest paths, so neither is an input. `tundravm watch` polls these besides the recipe's modules.
 
 ### Explaining one object
 
@@ -263,7 +269,7 @@ fetch(recipe, *, lock: Lock | None, build: Path, variants=None, resolver=None, f
 - **`witness`** rebuilds the release directory at `release` from `recipe`, the witness's own checkout, and returns a `Witness`: the recipe's digest must be the release's `recipe_digest` (else `ValidationError`), the lockfile is the one in the release's evidence bundle and must hash to its `lock_sha256` (else `LockfileError`), the released variants are baked with `backend` into `build` (default `build/witness-<release>`) and every artifact's sha256 is compared with the release's. It writes `witness-<builder>.json` to `output` (default `RELEASES/<release>.witnesses/`, never inside the release) and, with `sign` (an SSH private key), its `.sig` in the `tundravm-witness` namespace for principal `builder` (default `<user>@<host>`). A failed rebuild is the verdict `error`, not an exception; an unfinished release raises `StateError`. See [CLI: Witness](cli.md#witness).
 - **`verify_witnesses`** applies the witness trust policy to the `*.json` files in `witnesses_dir` and returns a `WitnessVerification`: a witness counts when it names this release and the sha256 of its `release-manifest.json`, its `.sig` verifies against `allowed_signers` for its builder, it is not signed by the publisher, says `matched` for every released artifact and is not simulated unless `allow_simulated`; distinct principals (and keys) count once and the policy passes when at least `min_witnesses` count. A failed policy is a value; a directory without `release.json` raises `ValidationError`.
 - **`doctor`** returns one `tool-missing` diagnostic per missing host tool of the backend (a warning when the tool is optional).
-- **`import_tree`** reads the mkosi tree at `tree` (one variant directory, or a directory of them as `compile` writes them; `variants` picks some, the first becoming `Recipe.common`) and returns an `Imported`: the generated recipe module, ruff-formatted with `output`'s configuration when given (with a note when ruff is missing), and that module executed. `name` is the recipe name (default: the directory name), `dialect` the dialect the tree was written with (default: guessed). A path that is not a directory, or holds no `mkosi.conf`, raises `ValidationError`. What maps to which declaration is in [CLI: Import](cli.md#import); `tundravm import` is the command.
+- **`import_tree`** reads the mkosi tree at `tree` (one variant directory, or a directory of them as `compile` writes them; `variants` picks some, the first becoming `Recipe.items`) and returns an `Imported`: the generated recipe module, ruff-formatted with `output`'s configuration when given (with a note when ruff is missing), and that module executed. `name` is the recipe name (default: the directory name), `dialect` the dialect the tree was written with (default: guessed). A path that is not a directory, or holds no `mkosi.conf`, raises `ValidationError`. What maps to which declaration is in [CLI: Import](cli.md#import); `tundravm import` is the command.
 - **`load`** is `load_recipe`: it imports a recipe file and returns its `Recipe`. `attribute` names the module-level `Recipe` or a zero-argument factory returning one; without it (`attribute=None`, the default) the recipe is discovered as the [CLI does](cli.md#recipe-files). The file's directory and every `extra_paths` entry are importable while it runs.
 
 ### Result and input types
@@ -333,7 +339,7 @@ write_policy(measured.to_policy(allow_placeholder=True), Path("peer.json"))
 policy = read_policy(Path("peer.json"))  # checks schema_version, scheme and registers
 verifier = Tdxs.from_policy(Path("peer.json"), allow_placeholder=True)
 print(sorted(policy["registers"]), policy["tool"])
-print([name for name, _ in verifier.expected_measurements])
+print(sorted(verifier.expected_measurements))
 
 # Evidence -> directory -> verify_evidence, with no recipe or bake directory
 gathered = evidence(recipe, build=Path("build"))
@@ -370,10 +376,10 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 
 | Class | Fragment name | Declares |
 |---|---|---|
-| `Tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements=(), check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
+| `Tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements={}, check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
 | `DevTools(*, root_password="tdx", salt=None, reproducible=True)` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it: mark its variant `release=False`. The password is hashed with a fixed salt so a second build matches: `salt` (1 to 16 of `[A-Za-z0-9./]`), else the first 16 hex digits of `sha256("tundravm-devtools:<variant name>")`, which the postinst computes from mkosi's `$IMAGE_ID`. `reproducible=False` keeps the historical random salt (the surge `nethermind-v1` tree). |
 | `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot: `snapshot` is a snapshot ID (`"20251113T083151Z"`, read from `snapshot.debian.org`) or a snapshot archive URL, and it must carry `version` (the templates pair `20251113T083151Z` with `257.8-1~deb13u1`). Outside `nethermind-v1` the package (`systemd-boot-efi_<version>_amd64.deb` in the snapshot's pool) is a source named `efi-stub`: `lock` pins its sha256, `fetch` downloads it on the host, and the current dialect's hook checks the mounted copy against the pin and installs it with `dpkg -i`. Without a pin the hook downloads the package into `$BUILDROOT/` (mkosi-chroot mounts its own `/tmp`) and fails with that advice when the download fails; `nethermind-v1` downloads it with `curl` |
-| `Backports(*, archive_url=None, release=None)` | `backports` | Debian backports and sid apt sources for the build's apt, not the image. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `archive_url` verbatim, else `Recipe.mirror` and `Recipe.snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the release of `Recipe.base`. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
+| `Backports(*, archive_url=None, release=None, include_sid=True)` | `backports` | Debian backports and (with `include_sid`, the default) sid apt sources for the build's apt, not the image; `include_sid=False` leaves sid and its pin out, so a package missing from the release and backports fails the build. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `archive_url` verbatim, else `Recipe.mirror` and `Recipe.snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the release of `Recipe.base`. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
 
 `Tdxs.from_policy(policy, *, validator="tdx", mrtd=None, allow_placeholder=False, **fields)` builds a verifier from a policy file `tundravm measure --export-policy` wrote (or its dict): its `RTMR0`..`RTMR3` become `expected_measurements` under the keys the tundra-tools validator reads (`rtmr0`..`rtmr3`, lower-case hex). RTMR tools do not report MRTD and the validator checks only the registers it is given, so pass `mrtd=` to check it too. A placeholder policy raises `MeasurementError` unless `allow_placeholder=True`; a missing required register or a wrong `schema_version` raises `ValidationError`. `Tdxs.from_measurements(measurements, ...)` does the same for a `measure()` result. Other keyword arguments are `Tdxs` fields. A `Tdxs` read from a file records it in `policy_file` (`None` otherwise; not configuration, so equality and `repr` skip it), which [`recipe_inputs`](#recipe-inputs) reports.
 
@@ -434,7 +440,7 @@ Resolution and references (from `resolve`):
 | `identity-collision` | error | Two different declarations share an identity; use `replace` |
 | `replace-missing` | error | A variant replaces something it does not inherit |
 | `remove-missing` | error | A variant removes something it does not inherit |
-| `target-inconsistent` | error | A variant leaves the cloud target its parent set |
+| `target-inconsistent` | error | A variant leaves a cloud output of the variant it inherits |
 | `disk-key-undefined` | error | A disk's key is not declared in the variant |
 | `disk-key-mismatch` | error | A disk's key differs from the declared key of that name |
 | `secret-store-undefined` | error | The secrets' store disk is not declared in the variant |
@@ -466,7 +472,7 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `kernel-missing` | error | A bootable variant has no `Kernel` and installs no `linux-image-*` package; mkosi cannot build its UKI. `Setting("Content", "Bootable", ("no",))` disables both |
 | `secret-env-service-unknown` | error | A `SecretEnv(service=)` names a service the variant neither generates (`Service`), ships (`Unit` with content) nor enables, disables or masks (`Unit(name, enabled=...)`, for a packaged unit) |
 | `secret-target-unsupported` | error | A `SecretFile` or `SecretEnv` whose provider does not write it at boot: the built-in `tundra-tools` provider writes only the SSH key, an `ExternalDelivery` only its `supports` kinds. Declare `Secrets(delivery=ExternalDelivery(NAME, supports=...))` naming what writes it, or remove the target and use the SSH key flow |
-| `secret-in-file` | error | A `File`, `Template` or `Directory` file holds what looks like a credential: a PEM private key (header and body), an AWS access key id (`AKIA`/`ASIA`), a GitHub token (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), in a config-like file (under `/etc`, or `.conf`, `.ini`, `.env`, `.yaml`, `.toml`, `.json`, ...) a `token`/`secret`/`password`/`api_key = value` assignment with a token-like value, or in a `secrets.yaml` a literal under a sensitive or `value`/`default`/`data` key. Documentation values (`EXAMPLE`, `changeme`, `xxxx`), paths, `$VAR`/`{{ }}` references, commented-out assignments, public keys and certificates do not count; the message names the kind and line, never the value. Deliver it at boot with a `SecretFile` or `SecretEnv` target of a `Secrets` whose `ExternalDelivery` writes it (the hint names the kinds the variant's provider writes), or pass `allow_secret=True` |
+| `secret-in-file` | error | A `File`, `Template` or `FileTree` file holds what looks like a credential: a PEM private key (header and body), an AWS access key id (`AKIA`/`ASIA`), a GitHub token (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), in a config-like file (under `/etc`, or `.conf`, `.ini`, `.env`, `.yaml`, `.toml`, `.json`, ...) a `token`/`secret`/`password`/`api_key = value` assignment with a token-like value, or in a `secrets.yaml` a literal under a sensitive or `value`/`default`/`data` key. Documentation values (`EXAMPLE`, `changeme`, `xxxx`), paths, `$VAR`/`{{ }}` references, commented-out assignments, public keys and certificates do not count; the message names the kind and line, never the value. Deliver it at boot with a `SecretFile` or `SecretEnv` target of a `Secrets` whose `ExternalDelivery` writes it (the hint names the kinds the variant's provider writes), or pass `allow_secret=True` |
 | `secret-in-env` | error | A unit file, a verbatim `Unit`'s or the one a `Service` renders (`Environment=` lines, or a key or token anywhere in it: `exec_start`, `exec_start_pre`, `env`...), holds a credential: a key or token as above, or a token-like literal for a `*TOKEN`, `*SECRET`, `*PASSWORD`, `*API_KEY`, `*ACCESS_KEY` variable. A `Service` finding names its field (`in exec_start`), a `Unit`'s the directive and line (`in ExecStart= (line 3)`). Deliver it with `SecretEnv(NAME, service=...)` under an `ExternalDelivery` that writes env targets, or pass `allow_secret=True` |
 | `recipe-arch-unsupported` | error | `Recipe(arch="aarch64")` with `EfiStub` (it installs the `_amd64.deb` systemd-boot-efi) or a `qemu` target (the QEMU adapter runs `qemu-system-x86_64`) |
 

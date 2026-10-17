@@ -52,7 +52,7 @@ def _recipe(
     mkosi: Mkosi | None = None,
 ) -> Recipe:
     common = Fragment("c", items=items)  # type: ignore[arg-type]
-    return Recipe("r", common, variants=tuple(variants), mkosi=mkosi or Mkosi())
+    return Recipe("r", items=(common,), variants=tuple(variants), mkosi=mkosi or Mkosi())
 
 
 def _tree(recipe: Recipe, out: Path) -> Path:
@@ -273,7 +273,7 @@ def test_native_layout_lists_every_variant_it_cannot_emit() -> None:
         Variant("default"),
         Variant("slim", remove=(Package("curl"),)),
         Variant("seeded", add=Fragment("s", items=(seed,))),
-        Variant("rescue", parent=None),
+        Variant("rescue", inherits=None),
         Variant("ok", add=Fragment("o", items=(Package("vim"),))),
     )
     with pytest.raises(ValidationError) as err:
@@ -281,18 +281,18 @@ def test_native_layout_lists_every_variant_it_cannot_emit() -> None:
     message = str(err.value)
     assert "'slim' (it removes Package(curl, runtime))" in message
     assert "'seeded' (it has its own Setting(Output, Seed))" in message
-    assert "'rescue' (it is parentless)" in message
+    assert "'rescue' (it is standalone)" in message
     assert "'ok'" not in message
     assert "layout='directories'" in (err.value.hint or "")
 
 
-# ── 5. A default variant chained onto another ───────────────────────────
+# ── 5. A default variant inheriting another ───────────────────────────
 
 
 def test_default_variant_may_extend_another_variant(tmp_path: Path) -> None:
     variants = (
         Variant("hardened", add=Fragment("h", items=(Package("apparmor"),))),
-        Variant("default", parent="hardened", add=Fragment("d", items=(Package("vim"),))),
+        Variant("default", inherits="hardened", add=Fragment("d", items=(Package("vim"),))),
     )
     img = lower(_recipe(Package("curl"), variants=variants))
     assert img.default_profile == "default"
@@ -355,7 +355,7 @@ def test_settings_the_compiler_writes_name_their_declaration(
 
 
 def test_variant_leaving_a_cloud_target_lowers_standalone(tmp_path: Path) -> None:
-    variants = (Variant("default", target="azure"), Variant("local", target="qemu"))
+    variants = (Variant("default", outputs=("azure",)), Variant("local", outputs=("qemu",)))
     img = lower(_recipe(Package("curl"), variants=variants))
     assert img.state.profiles["local"].extends is None
     assert img.state.effective_profile("local").output_targets == ("qemu",)
@@ -365,5 +365,5 @@ def test_variant_leaving_a_cloud_target_lowers_standalone(tmp_path: Path) -> Non
 
 def test_build_recipe_hint_names_the_public_alias() -> None:
     with pytest.raises(ValidationError, match="takes packages and env") as err:
-        Build("app", Git("https://x/app", "v1"), recipe=Go(output="app"), packages=("gcc",))
+        Build("app", Git("https://x/app", "v1"), using=Go(output="app"), packages=("gcc",))
     assert (err.value.hint or "").startswith("Pass them to Go(")

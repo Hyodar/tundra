@@ -32,12 +32,14 @@ from tundravm import (
     release,
     verify_evidence,
 )
-from tundravm.backends import InProcessBackend
+from tundravm.backends import InProcessBackend, inprocess
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
-from tundravm.declarative import lower, read_artifacts, write_lock
+from tundravm.declarative import lower, measure, read_artifacts, write_lock
 from tundravm.declarative.bom import manifest_path
+from tundravm.declarative.lifecycle import select_artifact
 from tundravm.errors import ArtifactError, ValidationError
 from tundravm.evidence import _secrets
+from tundravm.measure.policy import write_policy
 
 EPOCH = "1700000000"
 NAME = "<script>alert(1)</script>"
@@ -46,11 +48,8 @@ NAME = "<script>alert(1)</script>"
 def _recipe(name: str = "node") -> Recipe:
     return Recipe(
         name,
-        Fragment(
-            "common",
-            items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\n")),
-        ),
-        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+        items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\n")),
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
 
 
@@ -147,7 +146,7 @@ def test_index_records_the_secret_targets_and_who_delivers_them(tmp_path: Path) 
     token = Secret("token", (SecretFile("/run/token"), SecretEnv("TOKEN", "app")))
     secrets = Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent", ("file",)))
     common = Fragment("common", items=(Package("linux-image-amd64"), secrets))
-    rows = _secrets(lower(Recipe("node", common)), "default")
+    rows = _secrets(lower(Recipe("node", items=(common,))), "default")
     assert [(r["kind"], r["location"], r["provider"], r["supported"]) for r in rows] == [
         ("ssh-key", "/root/.ssh/authorized_keys", "tundra-tools", True),
         ("file", "/run/token", "vault-agent", True),
@@ -306,8 +305,8 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "node",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
-    variants=(Variant("default", target="qemu"),),
+    items=(Package("curl"), Package("linux-image-amd64")),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 """
 
@@ -354,7 +353,7 @@ def test_the_bake_records_what_binds_its_sbom(tmp_path: Path) -> None:
 def test_a_lockfile_other_than_the_bakes_is_refused_unless_allowed(tmp_path: Path) -> None:
     recipe = _recipe()
     out = _baked(tmp_path, recipe)
-    other = lock(Recipe("node", Fragment("common", items=(Package("curl"),))))
+    other = lock(Recipe("node", items=(Package("curl"),)))
     with pytest.raises(ArtifactError) as raised:
         _evidence(recipe, out, lock=other)
     assert "Evidence would not describe the bake: the lockfile" in str(raised.value)
@@ -503,3 +502,64 @@ def test_a_subset_of_the_baked_variants_matches_its_tree(
     assert again.passed, again.index["verdict"]["reasons"]
     assert again.index["variants"]["default"]["tree_matches"] is True
     assert again.index["variants"]["azure"]["tree_matches"] is True
+
+
+def _measured_boot(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    """A fake ``measured-boot``: its version, or RTMR0..2 written to the output file."""
+    if argv[1:] == ["--version"]:
+        return subprocess.CompletedProcess(list(argv), 0, stdout="measured-boot 1.0\n")
+    rtmr = {str(i): {"expected": "ab" * 48} for i in range(3)}
+    Path(argv[2]).write_text(json.dumps({"rtmr": rtmr}), encoding="utf-8")
+    return subprocess.CompletedProcess(list(argv), 0, stdout="", stderr="")
+
+
+def _uki_and_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Recipe, Path]:
+    """One variant baked as the UKI ``disk.efi`` (qemu) and a disk booting it (azure), with
+    the policy ``measure`` exports for the UKI."""
+    monkeypatch.setitem(inprocess.TARGET_FILENAMES, "qemu", "disk.efi")
+    recipe = Recipe(
+        "node",
+        items=(Package("curl"), Package("linux-image-amd64")),
+        variants=(Variant("default", outputs=("qemu", "azure")),),
+    )
+    out = _baked(tmp_path, recipe)
+    monkeypatch.setattr("tundravm.measure.rtmr.shutil.which", lambda tool: tool)
+    monkeypatch.setattr("tundravm.measure.rtmr.run_tool", _measured_boot)
+    uki = select_artifact(read_artifacts(out), variant="default", target="qemu")
+    write_policy(measure(uki, allow_placeholder=True).to_policy(), out / "default" / "policy.json")
+    return recipe, out
+
+
+def test_a_disk_booting_the_measured_uki_is_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recipe, out = _uki_and_disk(tmp_path, monkeypatch)
+    uki, disk = sorted(read_artifacts(out), key=lambda a: a.target != "qemu")
+    assert (disk.boot_payload, disk.boot_payload_sha256) == (uki.path, uki.sha256)
+    found = _evidence(recipe, out, require=("measured",))
+    record = found.index["variants"]["default"]
+    via = f"boot payload {uki.sha256[:12]}"
+    assert [(c["target"], c["state"], c.get("via")) for c in record["coverage"]] == [
+        ("azure", "measured", via),
+        ("qemu", "measured", None),
+    ]
+    assert record["policy"]["measures"]["boot_payload"] == uki.sha256
+    assert found.passed and found.index["verdict"]["measured"] == "full"
+    assert f"default/azure  measured (via {via})" in found.render()
+
+
+def test_a_disk_booting_another_uki_is_unmeasured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recipe, out = _uki_and_disk(tmp_path, monkeypatch)
+    result = out / "bake-result.json"
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    payload["variants"]["default"]["boot_payloads"]["azure"]["sha256"] = "9" * 64
+    result.write_text(json.dumps(payload), encoding="utf-8")
+    found = _evidence(recipe, out, require=("measured",))
+    azure = found.index["variants"]["default"]["coverage"][0]
+    assert (azure["state"], azure["reason"]) == (
+        "unmeasured",
+        f"it boots UKI {'9' * 12}, not the one the policy measured",
+    )
+    assert _codes(found) == [("incomplete", "artifact-unmeasured", "default/azure")]

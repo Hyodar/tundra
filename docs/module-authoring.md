@@ -1,6 +1,6 @@
 # Writing fragments
 
-A reusable piece of an image (a service, a monitoring stack, a hardened SSH setup) is a `Fragment`. There is no registration: a recipe puts the fragment into `common`, into a variant's `add`, or into another fragment's `items`. Write it in one of two ways.
+A reusable piece of an image (a service, a monitoring stack, a hardened SSH setup) is a `Fragment`. There is no registration: a recipe puts the fragment into its `items`, into a variant's `add`, or into another fragment's `items`. Write it in one of two ways.
 
 **A value**, for a one-off with nothing to configure: a `Fragment(...)` bound to a name.
 
@@ -141,8 +141,8 @@ storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
 recipe = Recipe(
     name="monitored",
-    common=Fragment("monitored", items=(PrometheusExporter(storage=storage),)),
-    variants=(Variant("default", target="qemu"),),
+    items=(PrometheusExporter(storage=storage),),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 ```
 
@@ -184,7 +184,7 @@ Resolving the default variant shows what the fragment contributed:
 
 ## Checks
 
-A check receives the `Resolved` variant: `variant`, `target`, every declaration in `items` (after inheritance, `replace` and `remove`) and the included fragment names in `fragments`. It returns diagnostics; an empty tuple means fine.
+A check receives the `Resolved` variant: `variant`, `outputs` (never empty), every declaration in `items` (after inheritance, `replace` and `remove`) and the included fragment names in `fragments`. It returns diagnostics; an empty tuple means fine.
 
 - `Diagnostic(code, severity, message, subject="", variant="", location="", hint=None, context=())`, the same `tundravm.Diagnostic` that `lint()` returns. `severity` is `"error"`, `"warning"` or `"info"`. Leave `variant` empty: resolution fills in the variant the check ran for. `location` is for a source position (`file:line`) when the check knows one; `lint --format github` annotates that line. A `hint` is printed under the finding and carried by `lint --format json`; `context` takes a dict or (key, value) string pairs.
 - Use your own code prefix (`exporter-...`), so tests and `lint --format github` annotations identify the fragment.
@@ -235,7 +235,7 @@ class StatusPage(Composite):
                 Build(
                     "status-page",
                     self.source,
-                    recipe=Go(
+                    using=Go(
                         output="status-page",
                         package="./cmd/status-page",
                         env={"CGO_ENABLED": "0"},
@@ -250,10 +250,10 @@ class StatusPage(Composite):
 ```
 
 - Take the source as a field (`source: Git`) so a recipe can pin a fork or a tag; give it a default if there is a canonical repository, as `Tdxs.source` does.
-- `recipe=Go(...)`, `Cargo(...)` or `Dotnet(...)` renders the toolchain's build command and installs its build packages (`golang`, `cargo`, `dotnet-sdk-8.0` by default; `packages=` and `env=` go on the recipe). The output lands at `build/<output>` (`Go`), `target/<profile>/<bin>` (`Cargo`) or `publish/<output>` (`Dotnet`) in the source tree. See [API: sources and builds](api.md#sources-and-builds).
+- `using=Go(...)`, `Cargo(...)` or `Dotnet(...)` renders the toolchain's build command and installs its build packages (`golang`, `cargo`, `dotnet-sdk-8.0` by default; `packages=` and `env=` go on the toolchain). The output lands at `build/<output>` (`Go`), `target/<profile>/<bin>` (`Cargo`) or `publish/<output>` (`Dotnet`) in the source tree. See [API: sources and builds](api.md#sources-and-builds).
 - For anything else pass `script=` instead: a shell script run inside the fetched source with `Build(env=...)` exported and `Build(packages=...)` installed for it. A `Build` takes exactly one of `script` and `recipe`.
 - `Install(source, destination, mode=0o755)` copies one built file; `Install("out/", "/opt/app", mode=None, directory=True)` copies a directory.
-- The built output is cached in the build directory under `<namespace>-<fingerprint16>`, the namespace being `cache_key` (default: the build's name) and the fingerprint a hash of the source pin, build, install steps, architecture and toolchain, so rebuilding an unchanged build is a copy and changing any of them rebuilds (`nethermind-v1` keeps its historical `<name>-<url digest>-<pin>` keys).
+- The built output is cached in the build directory under `<namespace>-<fingerprint16>`, the namespace being `cache_namespace` (default: the build's name) and the fingerprint a hash of the source pin, build, install steps, architecture and toolchain, so rebuilding an unchanged build is a copy and changing any of them rebuilds (`nethermind-v1` keeps its historical `<name>-<url digest>-<pin>` keys).
 - Until the recipe is locked, `lint` warns `source-unpinned` for each build.
 
 ## Testing a fragment

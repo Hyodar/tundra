@@ -30,7 +30,7 @@ def _bake(tmp_path: Path, *variants: Variant) -> tuple[Artifact, ...]:
     """Bake *variants* with the in-process backend into ``tmp_path / "build"``."""
     recipe = Recipe(
         "deploy",
-        Fragment("deploy", items=(Package("curl"), Package("linux-image-amd64"))),
+        items=(Package("curl"), Package("linux-image-amd64")),
         variants=variants,
     )
     return bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build")
@@ -56,9 +56,9 @@ def _mock_qemu(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bake_respects_global_and_variant_output_targets(tmp_path: Path) -> None:
     artifacts = _bake(
         tmp_path,
-        Variant("default", target="qemu"),
-        Variant("azure", target="azure"),
-        Variant("gcp", target="gcp"),
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", outputs=("azure",)),
+        Variant("gcp", outputs=("gcp",)),
     )
 
     by_variant = {(a.variant, a.target): a for a in artifacts}
@@ -73,7 +73,7 @@ def test_bake_respects_global_and_variant_output_targets(tmp_path: Path) -> None
 def test_deploy_fails_when_target_artifact_not_baked(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (artifact,) = _bake(tmp_path, Variant("default", target="qemu"))
+    (artifact,) = _bake(tmp_path, Variant("default", outputs=("qemu",)))
     using = Azure(storage_account="acct")
 
     with pytest.raises(DeploymentError) as excinfo:
@@ -89,14 +89,14 @@ def test_deploy_fails_when_target_artifact_not_baked(
 
 
 def test_verify_artifact_passes_for_untouched_bytes(tmp_path: Path) -> None:
-    (artifact,) = _bake(tmp_path, Variant("default", target="qemu"))
+    (artifact,) = _bake(tmp_path, Variant("default", outputs=("qemu",)))
     verify_artifact(artifact)
 
 
 def test_changed_artifact_is_refused_by_measure_and_deploy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (artifact,) = _bake(tmp_path, Variant("default", target="qemu"))
+    (artifact,) = _bake(tmp_path, Variant("default", outputs=("qemu",)))
     _mock_qemu(monkeypatch)
     artifact.path.write_bytes(b"swapped after the bake\n")
 
@@ -118,7 +118,7 @@ def test_changed_artifact_is_refused_by_measure_and_deploy(
 def test_deploy_cli_reports_a_changed_artifact(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (artifact,) = _bake(tmp_path, Variant("default", target="qemu"))
+    (artifact,) = _bake(tmp_path, Variant("default", outputs=("qemu",)))
     artifact.path.write_bytes(b"swapped\n")
     manifest = str(tmp_path / "build")
     argv = ["deploy", "qemu", "--build", manifest, "--allow-simulated-artifact"]
@@ -130,7 +130,7 @@ def test_deploy_returns_result_when_target_was_baked(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (artifact,) = _bake(tmp_path, Variant("default", target="qemu"))
+    (artifact,) = _bake(tmp_path, Variant("default", outputs=("qemu",)))
     _mock_qemu(monkeypatch)
 
     result = deploy(artifact, using=Qemu(memory="4G"), allow_simulated=True)
@@ -149,7 +149,7 @@ def test_deploy_requires_explicit_variant_for_multi_variant_manifest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _bake(tmp_path, Variant("dev", target="qemu"), Variant("prod", target="qemu"))
+    _bake(tmp_path, Variant("dev", outputs=("qemu",)), Variant("prod", outputs=("qemu",)))
     _mock_qemu(monkeypatch)
     manifest = str(tmp_path / "build")
     argv = ["deploy", "qemu", "--build", manifest, "--allow-simulated-artifact"]
@@ -168,10 +168,10 @@ def test_deploy_forwards_the_secrets_ports_the_bake_recorded(tmp_path: Path) -> 
     kernel = Package("linux-image-amd64")
     recipe = Recipe(
         "deploy",
-        Fragment("deploy", items=(kernel, Secrets(port=8443))),
+        items=(kernel, Secrets(port=8443)),
         variants=(
-            Variant("default", target="qemu"),
-            Variant("plain", parent=None, add=Fragment("k", items=(kernel,)), target="qemu"),
+            Variant("default", outputs=("qemu",)),
+            Variant("plain", inherits=None, add=Fragment("k", items=(kernel,)), outputs=("qemu",)),
         ),
     )
     locked = lock(recipe, resolver=lambda source: "a" * 40)
@@ -198,7 +198,7 @@ def test_deploy_forwards_the_secrets_ports_the_bake_recorded(tmp_path: Path) -> 
 def test_deploy_cli_attach_and_forward_reach_the_qemu_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _bake(tmp_path, Variant("default", target="qemu"), Variant("azure", target="azure"))
+    _bake(tmp_path, Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",)))
     _mock_qemu(monkeypatch)
     manifest = str(tmp_path / "build")
     argv = ["deploy", "qemu", "--build", manifest, "--variant", "default"]

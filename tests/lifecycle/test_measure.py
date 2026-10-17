@@ -7,7 +7,6 @@ import pytest
 from tundravm.declarative import (
     Artifact,
     Backend,
-    Fragment,
     Package,
     Recipe,
     bake,
@@ -35,9 +34,7 @@ def _measured_boot(name: str) -> str | None:
 
 
 def _baked(tmp_path: Path) -> Artifact:
-    recipe = Recipe(
-        "measured", Fragment("measured", items=(Package("curl"), Package("linux-image-amd64")))
-    )
+    recipe = Recipe("measured", items=(Package("curl"), Package("linux-image-amd64")))
     (artifact,) = bake(
         recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build"
     )

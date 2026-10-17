@@ -580,6 +580,11 @@ class ArtifactRef:
     manifest_digest: str | None = None
     """The sha256 of mkosi's package manifest beside the artifact at bake time; ``None``
     when there was none."""
+    boot_payload: Path | None = None
+    """The UKI the disk artifact boots, when the backend found it beside the disk; ``None``
+    for a UKI artifact itself or when it could not be determined."""
+    boot_payload_digest: str | None = None
+    """The sha256 of ``boot_payload`` at bake time."""
 
 
 @dataclass(slots=True)
@@ -610,7 +615,9 @@ REPRODUCE_DIRNAME = ".reproduce"
 """Where ``bake --verify-reproducible`` builds the second time (``BUILD/.reproduce``)."""
 BAKE_RESULT_SCHEMA_VERSION = 3
 """3: a bake of some variants keeps the others' entries; ``variants_baked`` names the ones
-it built, and each variant entry's ``declarative`` record holds its own provenance."""
+it built, and each variant entry's ``declarative`` record holds its own provenance. A variant
+entry's optional ``boot_payloads`` maps a disk artifact's target to the UKI it boots
+(``path``, ``sha256``); a bake result without it reads as recording none."""
 
 
 @dataclass(slots=True)
@@ -640,6 +647,13 @@ class BakeResult:
             if digests:
                 entry["artifact_digests"] = digests
             entry["manifest_digests"] = {target: ref.manifest_digest for target, ref in artifacts}
+            payloads = {
+                target: {"path": _portable_path(ref.boot_payload, base), "sha256": digest}
+                for target, ref in artifacts
+                if ref.boot_payload is not None and (digest := ref.boot_payload_digest)
+            }
+            if payloads:
+                entry["boot_payloads"] = payloads
             profiles[name] = entry
         payload = {
             "schema_version": BAKE_RESULT_SCHEMA_VERSION,
@@ -684,16 +698,20 @@ class BakeResult:
         for name, entry in payload["variants"].items():
             digests: dict[str, str] = entry.get("artifact_digests", {})
             manifests: dict[str, str | None] = entry.get("manifest_digests", {})
+            payloads: dict[str, dict[str, str]] = entry.get("boot_payloads", {})
             artifacts: dict[OutputTarget, ArtifactRef] = {}
             for target, raw_path in entry["artifacts"].items():
                 if target not in get_args(OutputTarget):
                     raise ValueError(f"unknown output target {target!r}")
                 typed = cast(OutputTarget, target)
+                boot = payloads.get(target)
                 artifacts[typed] = ArtifactRef(
                     target=typed,
                     path=_resolve_path(raw_path, base),
                     digest=digests.get(target),
                     manifest_digest=manifests.get(target),
+                    boot_payload=None if boot is None else _resolve_path(boot["path"], base),
+                    boot_payload_digest=None if boot is None else boot["sha256"],
                 )
             report = entry.get("report_path")
             profiles[str(name)] = ProfileBuildResult(

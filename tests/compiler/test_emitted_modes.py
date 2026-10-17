@@ -69,24 +69,21 @@ def rich_recipe(kernel_config: Path, *, layout: str = "per_directory") -> Recipe
     """A recipe that makes the emitter write every kind of path it writes."""
     return Recipe(
         "modes",
-        Fragment(
-            "common",
-            items=(
-                Package("curl"),
-                File("/etc/motd", "hello\n"),
-                File("/etc/app/secret.key", "key\n", mode=0o600),
-                File("/usr/bin/start", "#!/bin/sh\n", mode=0o755),
-                Template("/etc/app/app.toml", "net={net}\n", variables=(("net", "main"),)),
-                Service("app", "/usr/bin/app"),
-                Hook("prep", "prepare", "echo prep"),
-                Repository("extra", "https://repo.example/debian", "stable", priority=10),
-                Debloat(enabled=True),
-                Kernel("6.1.2", Git("https://example.com/linux", "v6.1.2"), config=kernel_config),
-            ),
+        items=(
+            Package("curl"),
+            File("/etc/motd", "hello\n"),
+            File("/etc/app/secret.key", "key\n", mode=0o600),
+            File("/usr/bin/start", "#!/bin/sh\n", mode=0o755),
+            Template("/etc/app/app.toml", "net={net}\n", variables={"net": "main"}),
+            Service("app", "/usr/bin/app"),
+            Hook("prep", "prepare", "echo prep"),
+            Repository("extra", "https://repo.example/debian", "stable", priority=10),
+            Debloat(enabled=True),
+            Kernel("6.1.2", Git("https://example.com/linux", "v6.1.2"), config=kernel_config),
         ),
         variants=(
-            Variant("default", target="qemu"),
-            Variant("gcp", target="gcp", add=Fragment("gcp", items=(Package("jq"),))),
+            Variant("default", outputs=("qemu",)),
+            Variant("gcp", outputs=("gcp",), add=Fragment("gcp", items=(Package("jq"),))),
         ),
         base="debian/bookworm",
         mkosi=Mkosi(layout="native") if layout == "native" else Mkosi(),

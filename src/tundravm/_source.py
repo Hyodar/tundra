@@ -161,22 +161,23 @@ def _since(default: object) -> dict[str, object]:
     return {"payload_default": default}
 
 
-class FrozenMap(Mapping[str, str]):
-    """An immutable copy of a ``str -> str`` mapping, in the caller's order.
+class FrozenMap[V](Mapping[str, V]):
+    """An immutable copy of a ``str -> V`` mapping, in the caller's order.
 
-    Build recipes store ``env`` and ``properties`` as one, so changing the dict
+    Build recipes store ``env`` and ``properties`` as one, and declarations their
+    mapping fields (``Service.env``, ``Template.variables``...), so changing the dict
     passed at construction changes nothing; it compares equal to a dict with
-    the same items and hashes like one ``frozenset`` of them.
+    the same items and hashes like one ``frozenset`` of them. Payloads sort it.
     """
 
     __slots__ = ("_items", "_lookup")
 
-    def __init__(self, items: Mapping[str, str] | Iterable[tuple[str, str]] = ()) -> None:
+    def __init__(self, items: Mapping[str, V] | Iterable[tuple[str, V]] = ()) -> None:
         pairs = tuple(items.items() if isinstance(items, Mapping) else items)
-        self._items: tuple[tuple[str, str], ...] = pairs
-        self._lookup: dict[str, str] = dict(pairs)
+        self._items: tuple[tuple[str, V], ...] = pairs
+        self._lookup: dict[str, V] = dict(pairs)
 
-    def __getitem__(self, key: str) -> str:
+    def __getitem__(self, key: str) -> V:
         return self._lookup[key]
 
     def __iter__(self) -> Iterator[str]:
@@ -191,13 +192,13 @@ class FrozenMap(Mapping[str, str]):
     def __repr__(self) -> str:
         return f"FrozenMap({self._lookup!r})"
 
-    def __reduce__(self) -> tuple[type[FrozenMap], tuple[tuple[tuple[str, str], ...]]]:
+    def __reduce__(self) -> tuple[type[FrozenMap[V]], tuple[tuple[tuple[str, V], ...]]]:
         return (FrozenMap, (self._items,))
 
-    def __copy__(self) -> FrozenMap:
+    def __copy__(self) -> FrozenMap[V]:
         return self
 
-    def __deepcopy__(self, memo: dict[int, object]) -> FrozenMap:
+    def __deepcopy__(self, memo: dict[int, object]) -> FrozenMap[V]:
         return self
 
 

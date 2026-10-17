@@ -43,7 +43,7 @@ from tundravm.testing import (
     run_cli,
 )
 
-AZURE = Variant("azure", target="azure", add=Fragment("azure", (Package("jq"),)))
+AZURE = Variant("azure", outputs=("azure",), add=Fragment("azure", (Package("jq"),)))
 KERNEL = Package("linux-image-amd64")
 NOT_BOOTABLE = Setting("Content", "Bootable", ("no",))
 """Keeps a package-free recipe free of ``kernel-missing``, so its own findings stand alone."""
@@ -63,11 +63,13 @@ def _recipe(*extra: Package | File) -> Recipe:
             *extra,
         ),
     )
-    return Recipe(name="demo", common=common, variants=(Variant("default", target="qemu"), AZURE))
+    return Recipe(
+        name="demo", items=(common,), variants=(Variant("default", outputs=("qemu",)), AZURE)
+    )
 
 
 def _single(*items: Package | File | User | Service) -> Recipe:
-    return Recipe(name="demo", common=Fragment("app", (NOT_BOOTABLE, *items)))
+    return Recipe(name="demo", items=(NOT_BOOTABLE, *items))
 
 
 def _ghost(*, where: str = "common") -> Recipe:
@@ -75,11 +77,11 @@ def _ghost(*, where: str = "common") -> Recipe:
     service = Service("app", "/usr/bin/app", user="ghost")
     if where == "common":
         return _single(service)
-    variant = Variant("azure", target="azure", add=Fragment("azure", (service,)))
+    variant = Variant("azure", outputs=("azure",), add=Fragment("azure", (service,)))
     return Recipe(
         name="demo",
-        common=Fragment("app", (KERNEL,)),
-        variants=(Variant("default", target="qemu"), variant),
+        items=(KERNEL,),
+        variants=(Variant("default", outputs=("qemu",)), variant),
     )
 
 
@@ -170,11 +172,13 @@ def test_assert_clean_fails_on_warnings_for_every_input() -> None:
     assert assert_clean(_recipe()) == []
 
 
-def test_assert_clean_keeps_strict_as_the_old_spelling() -> None:
+def test_assert_clean_warnings_allow_fails_on_errors_only() -> None:
     recipe = _warning_only()
-    assert_clean(recipe, strict=False)
+    assert_clean(recipe, warnings="allow")
     with pytest.raises(AssertionError, match="warning service-command-not-shipped"):
-        assert_clean(lint(recipe), strict=True)
+        assert_clean(lint(recipe))
+    with pytest.raises(TypeError, match="strict"):
+        assert_clean(recipe, strict=True)  # type: ignore[call-arg]
 
 
 def test_assert_clean_fails_on_errors_with_rendered_report() -> None:
@@ -370,10 +374,9 @@ def test_fake_fragment_lands_only_in_its_variant() -> None:
     assert fake.name == "fake"
     recipe = Recipe(
         name="demo",
-        common=Fragment("app"),
         variants=(
-            Variant("default", target="qemu"),
-            Variant("azure", target="azure", add=Fragment("azure", (fake,))),
+            Variant("default", outputs=("qemu",)),
+            Variant("azure", outputs=("azure",), add=Fragment("azure", (fake,))),
         ),
     )
     assert "pkg" in plan(recipe, "azure").packages
@@ -415,7 +418,7 @@ def test_fake_fragment_init_scripts_compose_by_priority() -> None:
 def test_fake_fragment_collision_is_diagnosed() -> None:
     common = Fragment("app", (fake_fragment("a", init="echo a"), fake_fragment("b", init="echo b")))
     found = assert_diagnostic(
-        Recipe(name="demo", common=common), "init-priority-collision", subject="priority 50"
+        Recipe(name="demo", items=(common,)), "init-priority-collision", subject="priority 50"
     )
     assert found.severity == "warning"
 
@@ -429,8 +432,8 @@ def test_fake_fragment_checks_run_per_variant() -> None:
 
     recipe = Recipe(
         name="demo",
-        common=fake_fragment(checks=(check,)),
-        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+        items=(fake_fragment(checks=(check,)),),
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     found = lint(recipe)
     assert set(seen) == {"azure", "default"}
@@ -449,7 +452,7 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
 
         recipe = Recipe(
             name="demo",
-            common=Fragment("demo", (Package("curl"), Package("linux-image-amd64"))),
+            items=(Package("curl"), Package("linux-image-amd64")),
         )
         """,
     )

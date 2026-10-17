@@ -26,16 +26,13 @@ from tundravm.declarative import Build, Fragment, Git, Http, Install, Recipe
 
 recipe = Recipe(
     "prover",
-    Fragment(
-        "prover",
-        items=(
-            Build("raiko", Git({RAIKO!r}, "feat/tdx"), script="make",
-                  install=(Install("raiko", "/usr/bin/raiko"),)),
-            Build("nethermind", Git({NETHERMIND!r}, "master"), script="make",
-                  install=(Install("nethermind", "/usr/bin/nethermind"),)),
-            Build("tool", Http({TOOL!r}), script="make",
-                  install=(Install("tool", "/usr/bin/tool"),)),
-        ),
+    items=(
+        Build("raiko", Git({RAIKO!r}, "feat/tdx"), script="make",
+              install=(Install("raiko", "/usr/bin/raiko"),)),
+        Build("nethermind", Git({NETHERMIND!r}, "master"), script="make",
+              install=(Install("nethermind", "/usr/bin/nethermind"),)),
+        Build("tool", Http({TOOL!r}), script="make",
+              install=(Install("tool", "/usr/bin/tool"),)),
     ),
 )
 """

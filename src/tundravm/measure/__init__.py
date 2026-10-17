@@ -68,6 +68,9 @@ def _artifact_data(
         artifact_paths.append(path)
         digests_by_target[target] = digest
         digests_by_path[str(path)] = digest
+        if artifact.boot_payload is not None:
+            # a disk no tool reads is measured through the UKI it boots
+            artifact_paths.append(Path(artifact.boot_payload))
     return tuple(artifact_paths), digests_by_target, digests_by_path
 
 

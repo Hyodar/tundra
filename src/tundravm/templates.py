@@ -58,7 +58,7 @@ Build:    tundravm bake $filename --build build
 
 '''
 
-_MINIMAL = r'''from tundravm import File, Fragment, Package, Recipe, Unit, Variant
+_MINIMAL = r'''from tundravm import File, Package, Recipe, Unit, Variant
 $backend_import
 
 HELLO_UNIT = """\
@@ -78,22 +78,19 @@ backend = $backend_expr
 recipe = Recipe(
     name="$title",
     base="$base",
-    common=Fragment(
-        "base",
-        items=(
-            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-            Package("linux-image-amd64"),
-            Package("systemd"),
-            Package("systemd-sysv"),
-            Package("udev"),
-            Package("kmod"),
-            Package("systemd-boot-efi"),
-            Package("ca-certificates"),
-            File("/etc/motd", "$title\n"),
-            Unit("hello.service", HELLO_UNIT, enabled=True),
-        ),
+    items=(
+        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+        Package("linux-image-amd64"),
+        Package("systemd"),
+        Package("systemd-sysv"),
+        Package("udev"),
+        Package("kmod"),
+        Package("systemd-boot-efi"),
+        Package("ca-certificates"),
+        File("/etc/motd", "$title\n"),
+        Unit("hello.service", HELLO_UNIT, enabled=True),
     ),
-    variants=(Variant("default", target="qemu"),),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 '''
 
@@ -211,23 +208,20 @@ _SERVICE_RECIPE = r"""
 recipe = Recipe(
     name="$title",
     base="$base",
-    common=Fragment(
-        "base",
-        items=(
-            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-            Package("linux-image-amd64"),
-            Package("systemd"),
-            Package("systemd-sysv"),
-            Package("udev"),
-            Package("kmod"),
-            Package("systemd-boot-efi"),
-            Package("ca-certificates"),
-            App(version=APP_VERSION, port=APP_PORT),
-        ),
+    items=(
+        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+        Package("linux-image-amd64"),
+        Package("systemd"),
+        Package("systemd-sysv"),
+        Package("udev"),
+        Package("kmod"),
+        Package("systemd-boot-efi"),
+        Package("ca-certificates"),
+        App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("dev", parent="default", add=DevTools(), release=False),  # never ship it
+        Variant("default", outputs=("qemu",)),
+        Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
     ),
 )
 """
@@ -244,28 +238,25 @@ recipe = Recipe(
     name="$title",
     base="$base",
     snapshot=SNAPSHOT,
-    common=Fragment(
-        "base",
-        items=(
-            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-            Package("linux-image-amd64"),
-            Package("systemd"),
-            Package("systemd-sysv"),
-            Package("udev"),
-            Package("kmod"),
-            Package("systemd-boot-efi"),
-            Package("ca-certificates"),
-            Package("curl", role="build"),
-            Backports(),
-            EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),
-            App(version=APP_VERSION, port=APP_PORT),
-        ),
+    items=(
+        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+        Package("linux-image-amd64"),
+        Package("systemd"),
+        Package("systemd-sysv"),
+        Package("udev"),
+        Package("kmod"),
+        Package("systemd-boot-efi"),
+        Package("ca-certificates"),
+        Package("curl", role="build"),
+        Backports(),
+        EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),
+        App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("azure", parent="default", target="azure"),
-        Variant("gcp", parent="default", target="gcp"),
-        Variant("dev", parent="default", add=DevTools(), release=False),  # never ship it
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
+        Variant("gcp", inherits="default", outputs=("gcp",)),
+        Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
     ),
 )
 """
@@ -291,38 +282,35 @@ recipe = Recipe(
     name="$title",
     base="$base",
     snapshot=SNAPSHOT,
-    common=Fragment(
-        "base",
-        items=(
-            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-            Package("linux-image-amd64"),
-            Package("systemd"),
-            Package("systemd-sysv"),
-            Package("udev"),
-            Package("kmod"),
-            Package("systemd-boot-efi"),
-            Package("ca-certificates"),
-            Package("cryptsetup"),
-            # Root logs in over SSH with the key Secrets delivers; socat relays /var/tdxs.sock.
-            Package("openssh-server"),
-            Package("socat"),
-            Package("curl", role="build"),
-            Backports(),
-            EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),
-            # The key, disk and secrets steps run the tundra-tools binaries Tdxs builds from.
-            key,
-            disk,
-            secrets,
-            RuntimeTools(TUNDRA_TOOLS),
-            Tdxs(source=TUNDRA_TOOLS, after_init=True),
-            App(version=APP_VERSION, port=APP_PORT),
-        ),
+    items=(
+        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+        Package("linux-image-amd64"),
+        Package("systemd"),
+        Package("systemd-sysv"),
+        Package("udev"),
+        Package("kmod"),
+        Package("systemd-boot-efi"),
+        Package("ca-certificates"),
+        Package("cryptsetup"),
+        # Root logs in over SSH with the key Secrets delivers; socat relays /var/tdxs.sock.
+        Package("openssh-server"),
+        Package("socat"),
+        Package("curl", role="build"),
+        Backports(),
+        EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),
+        # The key, disk and secrets steps run the tundra-tools binaries Tdxs builds from.
+        key,
+        disk,
+        secrets,
+        RuntimeTools(TUNDRA_TOOLS),
+        Tdxs(source=TUNDRA_TOOLS, after_init=True),
+        App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("azure", parent="default", target="azure"),
-        Variant("gcp", parent="default", target="gcp"),
-        Variant("dev", parent="default", add=DevTools(), release=False),  # never ship it
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
+        Variant("gcp", inherits="default", outputs=("gcp",)),
+        Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
     ),
 )
 """
@@ -700,11 +688,9 @@ def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> st
     expected = EXPECTED_FINDINGS[template]
     if expected:
         codes = ", ".join(f'"{code}"' for code in expected)
-        lint_call = (
-            f"{_ALLOW_COMMENTS[template]}    assert_clean(RECIPE, strict=True, allow=({codes},))"
-        )
+        lint_call = f"{_ALLOW_COMMENTS[template]}    assert_clean(RECIPE, allow=({codes},))"
     else:
-        lint_call = "    assert_clean(RECIPE, strict=True)"
+        lint_call = "    assert_clean(RECIPE)"
     variants = ", ".join(f'"{name}"' for name in TEMPLATE_VARIANTS[template])
     return Template(TEST_TEMPLATE).substitute(
         filename=filename, lint_call=lint_call, variants=variants

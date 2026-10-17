@@ -42,7 +42,7 @@ APP = Fragment(
         File("/usr/bin/app", "#!/bin/sh\n", mode=0o755),
         Group("app"),
         User("app", groups=("app",)),
-        Service("app", "/usr/bin/app --port 80", user="app", env=(("MODE", "a b"),)),
+        Service("app", "/usr/bin/app --port 80", user="app", env={"MODE": "a b"}),
         Hook("configured", "postinst", "echo configured"),
         Hook("seeded", "postinst", "echo seeded", after=("configured",)),
         Init("app-state", "install -d /var/lib/app", priority=40, after=("keys",)),
@@ -160,8 +160,8 @@ def test_base_takes_a_fragment_or_a_recipe() -> None:
     assert "linux-image-amd64" not in bare.packages
     host = Recipe(
         name="host",
-        common=Fragment("host", (Package("linux-image-amd64"),)),
-        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+        items=(Package("linux-image-amd64"),),
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     on_azure = fragment_plan(File("/etc/x", "x"), base=host, variant="azure")
     assert on_azure.variant == "azure"
@@ -177,10 +177,10 @@ def test_include_satisfies_requires() -> None:
 def test_plan_takes_a_variant_and_matches_compile() -> None:
     recipe = Recipe(
         name="demo",
-        common=Fragment("demo", (Package("linux-image-amd64"),)),
+        items=(Package("linux-image-amd64"),),
         variants=(
-            Variant("default", target="qemu"),
-            Variant("azure", target="azure", add=Fragment("azure", (Package("jq"),))),
+            Variant("default", outputs=("qemu",)),
+            Variant("azure", outputs=("azure",), add=Fragment("azure", (Package("jq"),))),
         ),
     )
     assert plan(recipe).variant == "default"

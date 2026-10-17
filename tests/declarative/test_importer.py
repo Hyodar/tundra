@@ -13,7 +13,7 @@ import pytest
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE, run_main
 from tundravm import Build, Git, Go, Imported, Install, Recipe, import_tree
 from tundravm._source import GitSource, Source
-from tundravm.declarative import Fragment, Mkosi, compile, diff, lint, load, lock
+from tundravm.declarative import Mkosi, compile, diff, lint, load, lock
 from tundravm.declarative.lifecycle import read_tree
 from tundravm.errors import ValidationError
 from tundravm.templates import TEMPLATES, render_recipe_template
@@ -130,7 +130,7 @@ PROVER_BUILDS = {
 
 
 def _builds(recipe: Recipe) -> dict[str, Build]:
-    return {item.name: item for item in recipe.common.items if isinstance(item, Build)}
+    return {item.name: item for item in recipe.items if isinstance(item, Build)}
 
 
 def test_locked_prover_tree_round_trips_with_its_builds(tmp_path: Path) -> None:
@@ -146,7 +146,7 @@ def test_locked_prover_tree_round_trips_with_its_builds(tmp_path: Path) -> None:
         assert builds[name] == Build(
             name,
             tools,
-            recipe=Go(package=package, output=output),
+            using=Go(package=package, output=output),
             install=(Install(f"build/{output}", dest, artifact=True),),
         )
     assert builds["tdxs"].script is not None and builds["tdxs"].source == tools
@@ -173,18 +173,18 @@ def test_pinned_nethermind_v1_build_comes_back_at_its_commit(tmp_path: Path) -> 
     build = Build(
         "tool",
         Git("https://example.com/acme/tool.git", "main", subdir="cmd"),
-        recipe=Go(package="./tool", output="tool", env={"CGO_ENABLED": "0", "A": "x y"}),
+        using=Go(package="./tool", output="tool", env={"CGO_ENABLED": "0", "A": "x y"}),
         install=(Install("build/tool", "/usr/bin/tool"),),
-        cache_key="tool-cache",
+        cache_namespace="tool-cache",
     )
-    recipe = Recipe("tool", Fragment("tool", items=(build,)), mkosi=Mkosi(dialect="nethermind-v1"))
+    recipe = Recipe("tool", items=(build,), mkosi=Mkosi(dialect="nethermind-v1"))
     tree = tmp_path / "mkosi"
     compile(recipe, lock=lock(recipe, resolver=_resolver)).write(tree)
     imported = import_tree(tree, name="tool", dialect="nethermind-v1")
     (found,) = _builds(imported.recipe).values()
     commit = _resolver(GitSource("https://example.com/acme/tool.git", "main"))
     assert found.source == Git("https://example.com/acme/tool.git", commit, subdir="cmd")
-    assert found.recipe is None and found.cache_key == "tool-cache"
+    assert found.using is None and found.cache_namespace == "tool-cache"
     assert found.script is not None and found.script.startswith("mkdir -p ./build && ")
     assert diff(compile(imported.recipe), tree) == ""
     lost = [n for n in imported.notes if n.startswith("build tool: ")]
@@ -198,7 +198,7 @@ def test_pinned_nethermind_v1_build_comes_back_at_its_commit(tmp_path: Path) -> 
 
 def test_service_template_imports_first_class_declarations(tmp_path: Path) -> None:
     imported = import_tree(_template_tree(tmp_path, "service"))
-    kinds = {type(item).__name__ for item in imported.recipe.common.items}
+    kinds = {type(item).__name__ for item in imported.recipe.items}
     assert {"Service", "Init", "User", "File", "Package"} <= kinds
     assert [v.name for v in imported.recipe.variants] == ["default", "dev"]
     assert "parent=None" not in imported.recipe_source
@@ -223,7 +223,7 @@ def test_surge_tree_round_trips_under_nethermind_v1() -> None:
     assert _errors(imported) == []
     builds = _builds(imported.recipe)
     assert sorted(builds) == sorted([*PROVER_BUILDS, "tdxs", "raiko", "taiko-client", "nethermind"])
-    assert builds["raiko"].cache_key == "raiko-feat_tdx"
+    assert builds["raiko"].cache_namespace == "raiko-feat_tdx"
     assert imported.coverage["lost"] == len(builds)
 
 

@@ -27,10 +27,10 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "node",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
+    items=(Package("curl"), Package("linux-image-amd64")),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("dev", parent="default", add=Fragment("dev", items=(Package("strace"),)),
+        Variant("default", outputs=("qemu",)),
+        Variant("dev", inherits="default", add=Fragment("dev", items=(Package("strace"),)),
                 release=False),
     ),
 )

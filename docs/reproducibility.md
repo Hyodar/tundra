@@ -32,7 +32,7 @@ SNAPSHOT = "20251113T083151Z"
 recipe = Recipe(
     name="node",
     snapshot=SNAPSHOT,
-    common=Fragment("node", items=(EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1"),)),
+    items=(EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1"),),
 )
 ```
 
@@ -156,7 +156,7 @@ Three caveats follow from the cache being filled by the host's toolchain and rea
 
 ## Frozen bakes
 
-`tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The check follows the subset rule above, so `bake --variant NAME` works against the lock of every variant. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from, and `bake-result.json` its sha256: `measure` and `deploy` (and `verify_artifact`, `status --verify`) hash the file first and refuse one that changed since the bake with `E_ARTIFACT_CHANGED`.
+`tundravm bake` is frozen whenever `build/tundravm.lock` exists (or `--lockfile` is given): a recipe that drifted from the lock fails at the `verify lockfile` step with `E_LOCKFILE` and the list of drifted sections. The check follows the subset rule above, so `bake --variant NAME` works against the lock of every variant. The Python `bake()` always takes a `Lock`. Each `Artifact` records the recipe digest, the lockfile digest and the tree digest it was built from, and `bake-result.json` its sha256 (and, for a disk, the path and sha256 of the UKI it boots, which `measure` hashes too before measuring through it): `measure` and `deploy` (and `verify_artifact`, `status --verify`) hash the file first and refuse one that changed since the bake with `E_ARTIFACT_CHANGED`.
 
 ## Proving and recording a bake
 

@@ -143,7 +143,7 @@ def _from_payload(payload: Mapping[str, Any]) -> Build:
     fields: dict[str, Any] = {
         k: tuple(v) if isinstance(v, list) else v for k, v in recipe_payload.items()
     }
-    common: dict[str, Any] = {"cache_key": payload.get("cache_key")}
+    common: dict[str, Any] = {"cache_namespace": payload.get("cache_key")}
     if kind == "script":
         install = tuple(_install(step, None) for step in payload["install"])
         return Build(
@@ -152,12 +152,12 @@ def _from_payload(payload: Mapping[str, Any]) -> Build:
             script=fields["script"],
             install=install,
             packages=fields.get("packages", ()),
-            env=tuple(fields.get("env", {}).items()),
+            env=dict(fields.get("env", {})),
             **common,
         )
     recipe = _RECIPES[kind](**fields)
     install = tuple(_install(step, recipe.artifact) for step in payload["install"])
-    return Build(payload["name"], source, recipe=recipe, install=install, **common)
+    return Build(payload["name"], source, using=recipe, install=install, **common)
 
 
 def _install(step: Mapping[str, Any], artifact: str | None) -> Install:
@@ -178,10 +178,10 @@ def _env_in_order(build: Build, hook: str) -> Build:
         found = hook.find(f"{key}=")
         return len(hook) if found < 0 else found
 
-    if build.recipe is not None:
-        env = dict(sorted(build.recipe.env.items(), key=lambda kv: position(kv[0])))
-        return replace(build, recipe=replace(build.recipe, env=env))
-    return replace(build, env=tuple(sorted(build.env, key=lambda kv: position(kv[0]))))
+    if build.using is not None:
+        env = dict(sorted(build.using.env.items(), key=lambda kv: position(kv[0])))
+        return replace(build, using=replace(build.using, env=env))
+    return replace(build, env=dict(sorted(build.env.items(), key=lambda kv: position(kv[0]))))
 
 
 # ── nethermind-v1: the hook itself ───────────────────────────────────────
@@ -215,11 +215,12 @@ def _parse_historical(line: str, match: re.Match[str]) -> Build | None:
         return None
     inner = match["inner"].replace("'\\''", "'")
     env_match = re.match(r"export (.*?) && (?=cd /build/)", inner)
-    env: tuple[tuple[str, str], ...] = ()
+    env: dict[str, str] = {}
     if env_match:
-        env = tuple(
-            (k, v) for k, _, v in (word.partition("=") for word in shlex.split(env_match[1]))
-        )
+        pairs = [word.partition("=") for word in shlex.split(env_match[1])]
+        env = {k: v for k, _, v in pairs}
+        if len(env) != len(pairs):
+            return None
         inner = inner[env_match.end() :]
     cd = re.match(rf"cd /build/{re.escape(name)}(/[^ ]+)? && ", inner)
     if cd is None:
@@ -244,7 +245,7 @@ def _parse_historical(line: str, match: re.Match[str]) -> Build | None:
     pin = spec.source.inline_pin
     if key != spec._historical_key(pin):
         cache_key = key.removesuffix(f"-{pin[:12]}") if pin and key.endswith(pin[:12]) else key
-        build = replace(build, cache_key=cache_key)
+        build = replace(build, cache_namespace=cache_key)
     return build
 
 

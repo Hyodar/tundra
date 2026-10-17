@@ -11,10 +11,10 @@ from tundravm.check import check
 from tundravm.declarative import (
     Build,
     Debloat,
-    Directory,
     Disk,
     ExternalDelivery,
     File,
+    FileTree,
     Fragment,
     Git,
     Group,
@@ -83,7 +83,7 @@ def declarative_recipe() -> Recipe:
             Unit("app.service", UNIT, enabled=True, after_init=True),
             Unit("ssh.service", enabled=False, masked=True),
             Hook("second", "postinst", "echo second", after=("first",)),
-            Hook("first", "postinst", "echo first", env=(("STAGE", "1"),)),
+            Hook("first", "postinst", "echo first", env={"STAGE": "1"}),
             Init("announce", "echo up\n", priority=25, after=("mount-check",)),
             Init("mount-check", "test -d /persistent\n", priority=25, after=("disks",)),
             RuntimeTools(Git(TOOLS, "v1")),
@@ -108,7 +108,7 @@ def declarative_recipe() -> Recipe:
                     Install("share", "/usr/share/app-data", mode=None, directory=True),
                 ),
                 packages=("make",),
-                env=(("CFLAGS", "-O2"),),
+                env={"CFLAGS": "-O2"},
             ),
             Debloat(extra_remove=("/usr/share/foo",)),
         ),
@@ -116,13 +116,13 @@ def declarative_recipe() -> Recipe:
     return Recipe(
         name="equivalence",
         base="debian/bookworm",
-        common=common,
+        items=(common,),
         variants=(
-            Variant("default", target="qemu"),
+            Variant("default", outputs=("qemu",)),
             Variant(
                 "azure",
-                parent="default",
-                target="azure",
+                inherits="default",
+                outputs=("azure",),
                 add=Fragment("azure-extras", items=(Package("waagent"),)),
                 replace=(File("/etc/motd", "azure\n"),),
             ),
@@ -167,12 +167,9 @@ def test_runtime_init_order_between_equal_priorities_enters_the_recipe_digest(
         steps = {"a": "echo a\n", "b": "echo b\n"}
         return Recipe(
             "inits",
-            Fragment(
-                "c",
-                items=(
-                    Init(first, steps[first], priority=50),
-                    Init(second, steps[second], priority=50, after=(first,)),
-                ),
+            items=(
+                Init(first, steps[first], priority=50),
+                Init(second, steps[second], priority=50, after=(first,)),
             ),
         )
 
@@ -195,17 +192,14 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
     config.write_text("CONFIG_X=y\n")
     recipe = Recipe(
         "wide",
-        Fragment(
-            "c",
-            items=(
-                Kernel("6.1.2", Git("https://example.com/linux", "v6.1.2"), config=config),
-                Setting("Output", "Seed", ("seed-1",)),
-                Setting("Output", "OutputDirectory", ("build",)),
-                Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
-                Setting("Build", "Environment", ("KERNEL_IMAGE", "FOO=bar")),
-                Setting("Build", "WithNetwork", ("no",)),
-                Setting("Build", "SandboxTrees", ("a:/b", "c:/d")),
-            ),
+        items=(
+            Kernel("6.1.2", Git("https://example.com/linux", "v6.1.2"), config=config),
+            Setting("Output", "Seed", ("seed-1",)),
+            Setting("Output", "OutputDirectory", ("build",)),
+            Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
+            Setting("Build", "Environment", ("KERNEL_IMAGE", "FOO=bar")),
+            Setting("Build", "WithNetwork", ("no",)),
+            Setting("Build", "SandboxTrees", ("a:/b", "c:/d")),
         ),
         mirror="https://mirror/",
         tools_mirror="https://tools/",
@@ -233,7 +227,7 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
         dialect="nethermind-v1",
     )
     assert img.reproducible
-    assert not lower(Recipe("r", Fragment("c"), epoch=None)).reproducible
+    assert not lower(Recipe("r", epoch=None)).reproducible
 
 
 @pytest.mark.parametrize(
@@ -247,16 +241,16 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
 )
 def test_lowering_rejects_inexpressible_settings_and_kernels(item: Setting | Kernel) -> None:
     with pytest.raises(ValidationError):
-        lower(Recipe("r", Fragment("c", items=(item,))))
+        lower(Recipe("r", items=(item,)))
 
 
 def test_standalone_variant_gets_only_its_own_declarations() -> None:
     recipe = Recipe(
         "r",
-        Fragment("c", items=(Package("curl"), Debloat(enabled=False))),
+        items=(Package("curl"), Debloat(enabled=False)),
         variants=(
             Variant("default"),
-            Variant("rescue", parent=None, add=Fragment("r", items=(Package("busybox"),))),
+            Variant("rescue", inherits=None, add=Fragment("r", items=(Package("busybox"),))),
         ),
     )
     img = lower(recipe)
@@ -269,7 +263,7 @@ def test_standalone_variant_gets_only_its_own_declarations() -> None:
 @pytest.mark.parametrize(
     "variants",
     [
-        (Variant("default"), Variant("a", target="azure"), Variant("b", parent="a")),
+        (Variant("default"), Variant("a", outputs=("azure",)), Variant("b", inherits="a")),
         (Variant("default", add=Fragment("d", items=(Package("d"),))), Variant("sibling")),
         (Variant("default"), Variant("slim", remove=(Package("curl"),))),
         (Variant("default"), Variant("v", replace=(Hook("h", "build", "other"),))),
@@ -281,7 +275,7 @@ def test_shapes_the_profile_merge_cannot_express_lower_standalone(
     variants: tuple[Variant, ...],
 ) -> None:
     common = Fragment("c", items=(Package("curl"), Hook("h", "build", "make"), Key("k1")))
-    recipe = Recipe("r", common, variants=variants)
+    recipe = Recipe("r", items=(common,), variants=variants)
     name = variants[-1].name
     img = lower(recipe)
     assert img.state.profiles[name].extends is None
@@ -295,8 +289,8 @@ def test_shapes_the_profile_merge_cannot_express_lower_standalone(
 def test_chained_variant_inherits_its_parents_target() -> None:
     recipe = Recipe(
         "r",
-        Fragment("c", items=(Package("curl"),)),
-        variants=(Variant("default"), Variant("a", target="azure"), Variant("b", parent="a")),
+        items=(Package("curl"),),
+        variants=(Variant("default"), Variant("a", outputs=("azure",)), Variant("b", inherits="a")),
     )
     img = lower(recipe)
     assert img.state.effective_profile("b").output_targets == ("azure",)
@@ -308,7 +302,7 @@ def test_variant_with_its_own_settings_lowers_standalone() -> None:
         Variant("default"),
         Variant("v", add=Fragment("s", items=(Setting("Output", "Seed", ("x",)),))),
     )
-    img = lower(Recipe("r", common, variants=variants))
+    img = lower(Recipe("r", items=(common,), variants=variants))
     assert img.state.profiles["v"].extends is None
     assert img.mkosi_for("v").seed == "x" and img.mkosi.seed is None
 
@@ -316,7 +310,7 @@ def test_variant_with_its_own_settings_lowers_standalone() -> None:
 def test_lowering_selected_variants_keeps_the_default() -> None:
     recipe = Recipe(
         "r",
-        Fragment("c", items=(Package("curl"),)),
+        items=(Package("curl"),),
         variants=(Variant("default"), Variant("a"), Variant("b")),
     )
     assert lower(recipe, variants=("b",)).profile_names == ("b", "default")
@@ -332,13 +326,10 @@ def test_directories_units_from_paths_and_reemitted_units(tmp_path: Path) -> Non
     unit_file.write_text("[Unit]\nDescription=Worker\n\n[Service]\nExecStart=/bin/true\n")
     recipe = Recipe(
         "r",
-        Fragment(
-            "c",
-            items=(
-                Directory("/opt/tree", tree, exclude=("*.txt",)),
-                Directory("/etc/skel", tree, stage="skeleton", mode=0o600),
-                Unit("worker.service", unit_file, enabled=True, after_init=True),
-            ),
+        items=(
+            FileTree("/opt/tree", tree, exclude=("*.txt",)),
+            FileTree("/etc/skel", tree, stage="skeleton", mode=0o600),
+            Unit("worker.service", unit_file, enabled=True, after_init=True),
         ),
         variants=(
             Variant("default"),
@@ -399,7 +390,7 @@ def test_inject_after_init(text: str, expected: str) -> None:
 
 def test_runtime_tools_default_and_key_handoff() -> None:
     key = Key("k")  # no output: the disk tool reads it from the environment
-    recipe = Recipe("r", Fragment("c", items=(key, Disk("d", "/data", key=key, device="/dev/vdb"))))
+    recipe = Recipe("r", items=(key, Disk("d", "/data", key=key, device="/dev/vdb")))
     img = lower(recipe)
     files = img.state.profiles["default"].files
     config = next(f.content for f in files if f.path == "/etc/tdx/disk-setup.yaml")
@@ -412,7 +403,7 @@ def test_runtime_tools_default_and_key_handoff() -> None:
 
 
 def _one(*items: object, **recipe: object) -> Recipe:
-    return Recipe("r", Fragment("c", items=items), **recipe)  # type: ignore[arg-type]
+    return Recipe("r", items=items, **recipe)  # type: ignore[arg-type]
 
 
 def test_service_lowers_to_the_generated_unit() -> None:
@@ -422,8 +413,8 @@ def test_service_lowers_to_the_generated_unit() -> None:
         "app",
         "/usr/bin/app --serve",
         user="app",
-        env=(("MODE", "prod"),),
-        limits=(("NOFILE", 1048576),),
+        env={"MODE": "prod"},
+        limits={"NOFILE": 1048576},
         restart="always",
         security="strict",
     )
@@ -455,7 +446,9 @@ def test_service_rejects_bad_fields() -> None:
     with pytest.raises(ValidationError, match="restart"):
         Service("x", "/bin/x", restart="sometimes")  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="limit"):
-        Service("x", "/bin/x", limits=(("NOFILE", 1), ("NOFILE", 2)))
+        Service("x", "/bin/x", limits={"NOFILE": True})
+    with pytest.raises(ValidationError, match="limits= must be a mapping"):
+        Service("x", "/bin/x", limits=(("NOFILE", 1),))  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match=".service"):
         Service("x.socket", "/bin/x")
 
@@ -465,8 +458,8 @@ def test_template_renders_in_extra_and_skeleton() -> None:
 
     img = lower(
         _one(
-            Template("/etc/app.conf", "port={port}\n", variables=(("port", 8080),)),
-            Template("/etc/boot.conf", "id={id}\n", variables=(("id", "x"),), stage="skeleton"),
+            Template("/etc/app.conf", "port={port}\n", variables={"port": 8080}),
+            Template("/etc/boot.conf", "id={id}\n", variables={"id": "x"}, stage="skeleton"),
         )
     )
     profile = img.state.effective_profile("default")
@@ -486,14 +479,14 @@ def test_template_missing_variable_raises() -> None:
 def test_build_sources_setting_mounts_per_variant() -> None:
     recipe = Recipe(
         "r",
-        Fragment("c", items=(Setting("Build", "BuildSources", ("../src:app", "../lib")),)),
+        items=(Setting("Build", "BuildSources", ("../src:app", "../lib")),),
     )
     profile = lower(recipe).state.effective_profile("default")
     assert profile.build_sources == [("../src", "app"), ("../lib", "")]
 
 
 def test_debloat_extra_units_and_per_variant_paths() -> None:
-    debloat = Debloat(keep_units_extra=("app.service",), keep_paths_by_variant=(("x", ("/opt",)),))
+    debloat = Debloat(keep_units_extra=("app.service",), keep_paths_by_variant={"x": ("/opt",)})
     config = lower(_one(debloat)).state.effective_profile("default").debloat
     assert config.extra_keep_units == ("app.service",)
     assert config.paths_skip_for_profiles == (("x", ("/opt",)),)
@@ -531,14 +524,14 @@ def test_strip_os_release_overrides_the_epoch_default() -> None:
 def test_variant_with_several_targets() -> None:
     recipe = Recipe(
         "r",
-        Fragment("c", items=(Package("curl"),)),
-        variants=(Variant("default"), Variant("cloud", targets=("azure", "gcp"))),
+        items=(Package("curl"),),
+        variants=(Variant("default"), Variant("cloud", outputs=("azure", "gcp"))),
     )
-    assert resolve(recipe, variant="cloud").targets == ("azure", "gcp")
+    assert resolve(recipe, variant="cloud").outputs == ("azure", "gcp")
     img = lower(recipe)
     assert img.state.effective_profile("cloud").output_targets == ("azure", "gcp")
-    with pytest.raises(ValidationError, match="both target= and targets="):
-        Variant("x", target="qemu", targets=("azure",))
+    with pytest.raises(ValidationError, match="must be a sequence of targets"):
+        Variant("x", outputs="qemu")  # type: ignore[arg-type]
 
 
 def _chained(layout: str) -> Recipe:
@@ -546,13 +539,13 @@ def _chained(layout: str) -> Recipe:
 
     return Recipe(
         "r",
-        Fragment("c", items=(Package("curl"), File("/etc/motd", "base\n"))),
+        items=(Package("curl"), File("/etc/motd", "base\n")),
         variants=(
             Variant("default"),
-            Variant("cloud", target="azure", add=Fragment("a", items=(Package("waagent"),))),
+            Variant("cloud", outputs=("azure",), add=Fragment("a", items=(Package("waagent"),))),
             Variant(
                 "slim",
-                parent="cloud",
+                inherits="cloud",
                 remove=(Package("curl"),),
                 replace=(File("/etc/motd", "slim\n"),),
             ),

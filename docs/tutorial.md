@@ -90,28 +90,25 @@ backend = InProcessBackend()
 recipe = Recipe(
     name="node",
     base="debian/trixie",
-    common=Fragment(
-        "base",
-        items=(
-            # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-            Package("linux-image-amd64"),
-            Package("systemd"),
-            Package("systemd-sysv"),
-            Package("udev"),
-            Package("kmod"),
-            Package("systemd-boot-efi"),
-            Package("ca-certificates"),
-            App(version=APP_VERSION, port=APP_PORT),
-        ),
+    items=(
+        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
+        Package("linux-image-amd64"),
+        Package("systemd"),
+        Package("systemd-sysv"),
+        Package("udev"),
+        Package("kmod"),
+        Package("systemd-boot-efi"),
+        Package("ca-certificates"),
+        App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("dev", parent="default", add=DevTools(), release=False),  # never ship it
+        Variant("default", outputs=("qemu",)),
+        Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
     ),
 )
 ```
 
-- `common` holds what every variant shares: the packages that make the image bootable and the `App` fragment.
+- `items` holds what every variant shares: the packages that make the image bootable and the `App` fragment.
 - `App` is a `Composite`, a `Fragment` whose configuration is its own dataclass fields. `compose()` returns its contents: an account, a config file, a first-boot `Init` step and a generated systemd `Service`. Its `checks` run during `lint`: `App(port=80)` reports `app-privileged-port`.
 - The service runs `/usr/bin/app`, which the recipe does not ship yet. Add a `Build(...)` or a `Package(...)` for it before you bake a real image.
 - `dev` inherits `default` and adds `DevTools()`: a serial console, root login and debugging tools. Never ship it: `release=False` keeps it out of every release ([step 19](#19-cut-a-release)).
@@ -163,8 +160,8 @@ locked build/tundravm.lock
 $ tundravm inspect node.py --variant dev
 Image: debian/trixie (x86_64)  variant=dev  reproducible=yes
 Policy: mutable_ref_policy=warn network_mode=online require_frozen_lock=no storage_safety=warn
-Parent: default
-Fragments (3): base app devtools
+Inherits: default
+Fragments (2): app devtools
 Packages (20): apt bash-completion ca-certificates curl dnsutils iputils-ping kmod linux-image-amd64 net-tools netcat-openbsd openssh-server socat strace systemd systemd-boot-efi systemd-sysv tcpdump tcpflow udev vim
 Files (2):
   /etc/app/app.conf                               0644  34B  sha256:681b227aa566
@@ -185,7 +182,7 @@ Targets: qemu
 [exit 0]
 ```
 
-`Parent:` is the variant `dev` builds on and `Fragments:` the fragments it includes: `base` (the `common` fragment), `app` from `App`, and `devtools` from its own `add`. `Hooks:` shows each script's first line, cut at 80 characters: the second `postinst` hook derives a fixed salt from the variant name before hashing the root password, so a second build of `dev` gives the same image (step 9). Without `--variant` every variant is shown. `--format json` adds the recipe digest the lockfile records; `--format markdown` renders tables for a CI job summary.
+`Inherits:` is the variant `dev` builds on and `Fragments:` the fragments it includes: `app` from `App` in `Recipe.items`, and `devtools` from its own `add`. `Hooks:` shows each script's first line, cut at 80 characters: the second `postinst` hook derives a fixed salt from the variant name before hashing the root password, so a second build of `dev` gives the same image (step 9). Without `--variant` every variant is shown. `--format json` adds the recipe digest the lockfile records; `--format markdown` renders tables for a CI job summary.
 
 To ask where one object comes from, name it with `--why`: an image path, or `unit:`, `package:`, `hook:` or `init:` and a name.
 
@@ -193,7 +190,7 @@ To ask where one object comes from, name it with `--why`: an image path, or `uni
 $ tundravm inspect node.py --variant dev --why unit:app
 why unit:app (variant dev)
   Service(app.service)
-    declared in common via base > app (App)
+    declared in common via app (App)
 files (in dev/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
@@ -204,7 +201,7 @@ generated:
 [exit 0]
 ```
 
-The service is declared in `common`, inside the `app` fragment that the `App` composite returns, nested in `base`. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `Init`) and the enablement into `minimal.target`. A declaration a variant adds, replaces or removes lists that step too. `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
+The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `Init`) and the enablement into `minimal.target`. A declaration a variant adds, replaces or removes lists that step too. `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
 
 ## 3. Lint
 
@@ -214,7 +211,7 @@ no findings
 [exit 0]
 ```
 
-Every variant here bakes a bootable UKI, and a UKI needs a kernel. Comment out `Package("linux-image-amd64")` in `common` and lint again:
+Every variant here bakes a bootable UKI, and a UKI needs a kernel. Comment out `Package("linux-image-amd64")` in `items` and lint again:
 
 ```console
 $ tundravm lint node.py
@@ -247,7 +244,7 @@ no findings
 
 Warnings do not fail `lint` unless you pass `--strict`.
 
-A credential baked into the image is refused the same way, since every copy of the disk would carry it. Generate a key with `ssh-keygen -t ed25519 -N "" -f deploy.key`, ship it with `File("/etc/app/deploy.key", Path("deploy.key").read_text())` in `common` (and `from pathlib import Path`), and lint:
+A credential baked into the image is refused the same way, since every copy of the disk would carry it. Generate a key with `ssh-keygen -t ed25519 -N "" -f deploy.key`, ship it with `File("/etc/app/deploy.key", Path("deploy.key").read_text())` in `items` (and `from pathlib import Path`), and lint:
 
 ```console
 $ tundravm lint node.py
@@ -266,7 +263,7 @@ The message names the kind of credential and its line, never the value. A real k
 `dev` adds root login, which you never ship. For a variant that is the shipped image plus `strace`, add a third entry to `variants`:
 
 ```python
-        Variant("debug", parent="default", add=Fragment("debug", items=(Package("strace"),))),
+        Variant("debug", inherits="default", add=Fragment("debug", items=(Package("strace"),))),
 ```
 
 ```console
@@ -500,7 +497,7 @@ Hint: Export the policy from a real measurement, or pass allow_placeholder=True 
   policy: peer.json
 ```
 
-A policy exported from a real measurement needs no `allow_placeholder`. MRTD is not in the policy: RTMR tools do not report it, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", parent="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, anchor it to the recipe file with `Path(__file__).resolve().parent / "peer.json"` (see [Concepts: Lowering and compiling](concepts.md#lowering-and-compiling)).
+A policy exported from a real measurement needs no `allow_placeholder`. MRTD is not in the policy: RTMR tools do not report it, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", inherits="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, anchor it to the recipe file with `Path(__file__).resolve().parent / "peer.json"` (see [Concepts: Lowering and compiling](concepts.md#lowering-and-compiling)).
 
 Once the image runs, `tundravm attest` checks it against the policy: it asks the image's `tdxs` issuer for a quote bound to a fresh nonce and compares the quote's registers with the policy's. It refuses a placeholder policy before contacting anything:
 
@@ -703,12 +700,12 @@ class HealthCheck(Composite):
         return (Diagnostic("healthcheck-port", "error", message, variant=resolved.variant),)
 ```
 
-- `HealthCheck(port=9090)` is itself a `Fragment`: it goes in `common`, a variant's `add`, or another fragment's `items`. `compose()` runs once, at construction.
+- `HealthCheck(port=9090)` is itself a `Fragment`: it goes in `Recipe.items`, a variant's `add`, or another fragment's `items`. `compose()` runs once, at construction.
 - `requires` names fragments that must be in the same variant; without `App`, lint reports `fragment-requires-missing`.
 - `checks` are functions from the resolved variant to diagnostics; they run during `lint` (and `resolve`, which fails on errors). `check_port` reads the config file `App` declared, so the probe and the service cannot disagree on the port.
 - A generated `Service` is enabled into `minimal.target` unless `wanted_by` names another target, so the probe also runs once at boot; the timer repeats it every minute.
 
-Use it in `node.py`: add `from fragments import HealthCheck` after the tundravm imports and `HealthCheck(port=APP_PORT),` after `App(...)` in `common`. A wrong port is a lint error:
+Use it in `node.py`: add `from fragments import HealthCheck` after the tundravm imports and `HealthCheck(port=APP_PORT),` after `App(...)` in `items`. A wrong port is a lint error:
 
 ```console
 $ tundravm lint node.py --variant default
@@ -728,7 +725,7 @@ error lock-changed [common] variants.default.services: variants.default.services
 [exit 1]
 
 $ tundravm inspect node.py --variant default | grep -E "Fragments|Units|app-healthcheck "
-Fragments (3): base app healthcheck
+Fragments (2): app healthcheck
 Units: enable app-healthcheck.timer
   app-healthcheck  /usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/  restart=no  type=oneshot
 
@@ -762,7 +759,7 @@ compiled mkosi
 
 `tests/test_node.py`, which `init` wrote, has three tests:
 
-- `test_lints_clean`: `assert_clean(RECIPE, strict=True)`, so a warning fails it too;
+- `test_lints_clean`: `assert_clean(RECIPE)`, so a warning fails it too;
 - `test_compiles_every_variant`: every variant compiles, and the variants are the ones it names (step 4);
 - `test_matches_committed_tree`: `mkosi/` is what the recipe compiles to with `build/tundravm.lock`. After an intended change, `tundravm compile node.py --tree mkosi` (or `TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests`) rewrites it.
 
@@ -779,7 +776,7 @@ from tundravm.testing import assert_clean, assert_diagnostic
 
 
 def image(*items: Fragment) -> Recipe:
-    return Recipe(name="t", common=Fragment("base", items=(Package("linux-image-amd64"), *items)))
+    return Recipe(name="t", items=(Package("linux-image-amd64"), *items))
 
 
 def test_probes_the_app_port() -> None:

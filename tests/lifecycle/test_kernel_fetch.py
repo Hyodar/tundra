@@ -120,7 +120,7 @@ def _recipe(
 ) -> Recipe:
     return Recipe(
         "k",
-        Fragment("k", items=(kernel, *builds)),
+        items=(kernel, *builds),
         variants=variants,
         mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
     )

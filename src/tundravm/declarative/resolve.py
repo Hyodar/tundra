@@ -2,7 +2,7 @@
 
 ``resolve()`` raises ``ValidationError`` on the first error-level problem;
 ``lint()`` reports every problem as a :class:`Diagnostic` instead and raises
-only for malformed input (unknown variants, parent cycles).
+only for malformed input (unknown variants, ``inherits`` cycles).
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from tundravm.errors import ValidationError
 from tundravm.models import unit_name
 
 from .model import (
-    BASE_PARENT,
+    BASE_VARIANT,
     BUILTIN_INITS,
     EMPTY_FRAGMENT,
     PHASES,
@@ -25,9 +25,9 @@ from .model import (
     Debloat,
     Declaration,
     Diagnostic,
-    Directory,
     Disk,
     File,
+    FileTree,
     Fragment,
     Group,
     Hook,
@@ -59,16 +59,17 @@ Action = Literal["declared", "added", "replaced", "removed"]
 """How one level touched an item: ``common`` declares, a variant adds, replaces or removes."""
 
 COMMON_LEVEL = "common"
-"""The :attr:`Origin.variant` of declarations that come from ``Recipe.common``."""
+"""The :attr:`Origin.variant` of declarations that come from ``Recipe.items``."""
 
 
 @dataclass(frozen=True, slots=True)
 class Origin:
     """One step of an item's resolution: who touched it, how, and through which fragments.
 
-    ``variant`` is ``"common"`` for ``Recipe.common``; ``fragments`` runs from the
+    ``variant`` is ``"common"`` for ``Recipe.items``; ``fragments`` runs from the
     level's own fragment down to the one holding the declaration (empty for
-    ``replace=``/``remove=``, which name declarations directly).
+    ``replace=``/``remove=``, which name declarations directly, and for direct
+    ``Recipe.items``).
     """
 
     action: Action
@@ -86,7 +87,7 @@ def identity(item: Declaration) -> Identity:
     match item:
         case Package():
             return (kind, item.name, item.role)
-        case File() | Directory() | Template():
+        case File() | FileTree() | Template():
             return (kind, item.stage, posixpath.normpath(item.path))
         case Unit() | Service():
             return (kind, unit_name(item.name))
@@ -148,6 +149,18 @@ class _Resolution:
         """
         out: list[tuple[Declaration, tuple[FragmentRef, ...]]] = []
         self._expand(fragment, out, ())
+        return out
+
+    def expand_items(
+        self, items: Iterable[Declaration | Fragment]
+    ) -> list[tuple[Declaration, tuple[FragmentRef, ...]]]:
+        """``Recipe.items`` in order with their fragment paths (direct items have none)."""
+        out: list[tuple[Declaration, tuple[FragmentRef, ...]]] = []
+        for item in items:
+            if isinstance(item, Fragment):
+                self._expand(item, out, ())
+            else:
+                out.append((item, ()))
         return out
 
     def _expand(
@@ -224,26 +237,26 @@ class _Resolution:
 
 
 def ancestry(recipe: Recipe, name: str) -> tuple[Variant, ...]:
-    """The variants from the root down to *name*; raises on unknown parents and cycles."""
+    """The variants from the root down to *name*; raises on unknown ``inherits`` and cycles."""
     chain: list[Variant] = []
     current: Variant | None = recipe.variant(name)
     while current is not None:
         if any(v.name == current.name for v in chain):
             names = " -> ".join(v.name for v in (*reversed(chain), current))
             raise ValidationError(
-                f"Variant parents form a cycle: {names}.",
-                hint="Point one variant's parent= at a variant outside the loop, or drop it.",
+                f"Variant inherits= form a cycle: {names}.",
+                hint="Point one variant's inherits= at a variant outside the loop, or drop it.",
             )
         chain.append(current)
-        parent = current.parent
-        if parent is None or parent == BASE_PARENT:
+        inherits = current.inherits
+        if inherits is None or inherits == BASE_VARIANT:
             break
         try:
-            current = recipe.variant(parent)
+            current = recipe.variant(inherits)
         except ValidationError as exc:
             raise ValidationError(
-                f"Variant {chain[-1].name!r} has unknown parent {parent!r}.",
-                hint=f"Use {BASE_PARENT!r}, None, or a declared variant.",
+                f"Variant {chain[-1].name!r} inherits unknown variant {inherits!r}.",
+                hint=f"Use {BASE_VARIANT!r}, None, or a declared variant.",
             ) from exc
     return tuple(reversed(chain))
 
@@ -265,7 +278,7 @@ def _check_targets(state: _Resolution, chain: Sequence[Variant]) -> None:
             state.report(
                 "target-inconsistent",
                 f"variant {variant.name!r} targets {', '.join(own)} but inherits the "
-                f"{', '.join(clouds)} platform integration of its parent",
+                f"{', '.join(clouds)} platform integration of the variant it inherits",
                 subject=variant.name,
             )
         if own:
@@ -466,8 +479,8 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     chain = ancestry(recipe, name)
     # Problems inside ``common`` belong to no single variant: lint() reports them once.
     state = _Resolution(variant="")
-    if chain[0].parent == BASE_PARENT:
-        state.add_level(state.expand(recipe.common), where="common", level=COMMON_LEVEL)
+    if chain[0].inherits == BASE_VARIANT:
+        state.add_level(state.expand_items(recipe.items), where="common", level=COMMON_LEVEL)
     state.variant = name
     for variant in chain:
         state.apply_changes(variant)
@@ -478,13 +491,11 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     _check_targets(state, chain)
     items = tuple(state.items.values())
     _check_references(state, items)
-    targets = _targets(chain)
     resolved = Resolved(
         variant=name,
-        target=targets[0],
+        outputs=_targets(chain),
         items=items,
         fragments=tuple(state.fragments),
-        targets=targets,
     )
     for fragment in state.fragments.values():
         for required in fragment.requires:

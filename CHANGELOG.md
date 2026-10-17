@@ -141,6 +141,14 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - **Breaking:** `assert_clean` fails on warnings for every input (Recipe, Image, lint findings); `warnings="allow"` fails on errors only.
 - **Breaking:** `CompiledTree` speaks variants: `variants`, `variant(name)`, `default_variant` and `variant=` on every reader (were `profiles`, `profile()`, `default_profile`, `profile=`).
 
+- **Breaking:** `Variant(target=, targets=)` is `outputs=` (a sequence of targets) and `parent=` is `inherits=` (`None` = standalone); `Resolved.target`/`.targets` are `Resolved.outputs`.
+- **Breaking:** `Recipe(common=Fragment(...))` is `Recipe(items=...)`; direct items have no fragment path (provenance level `common`) and `Resolved.fragments` no longer lists a root fragment.
+- **Breaking:** `Build(recipe=, cache_key=)` is `using=` and `cache_namespace=` (a namespace; the cache key is fingerprinted). `Directory` is `FileTree`.
+- **Breaking:** `Service.env`/`limits`, `Template.variables`, `Hook.env`, `Build.env`, `Debloat.keep_paths_by_variant` and `Tdxs.expected_measurements` take a Mapping only, frozen into an immutable copy; tuple-of-pairs input is refused. `assert_clean` drops `strict=` (use `warnings="allow"`).
+- **Breaking:** `inspect --format json` is `tundravm.inspect/2` (`inherits`, diff `outputs`), `explore` is `tundravm.explore/3`, and inspect text prints `Inherits:`.
+- `packages(*names, role="runtime")`: a frozen fragment of `Package`s, usable in `items=` and `Variant(add=)`. `Backports(include_sid=True)`: `False` drops the sid source and its pin.
+- `bake-result.json` records the UKI each disk artifact boots (`boot_payloads`: path and sha256, found beside the disk in mkosi's output; the in-process backend simulates `disk.efi`). `measure` measures a disk no tool reads through its recorded UKI and policies record it as `boot_payload`; `evidence` counts a disk booting the measured UKI as `measured (via boot payload <sha12>)`, so one UKI measurement covers its disks under `--require measured`, and `verify` re-derives the relation from the bundled bake record.
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

@@ -22,15 +22,13 @@ def test_plugin_is_registered_by_entry_point(request: pytest.FixtureRequest) -> 
 def test_recipe_fixture_is_minimal_and_clean(recipe: Recipe) -> None:
     assert isinstance(recipe, Recipe)
     assert recipe.name == "test"
-    assert recipe.common == Fragment("test", (Package("linux-image-amd64"),))
+    assert recipe.items == (Package("linux-image-amd64"),)
     assert [(v.name, v.outputs) for v in recipe.variants] == [("default", ("qemu",))]
     assert lint(recipe) == ()
 
 
 def test_recipe_fixture_bakes_in_process(recipe: Recipe, tmp_path: Path) -> None:
-    curl = dataclasses.replace(
-        recipe, common=Fragment("test", (Package("curl"), Package("linux-image-amd64")))
-    )
+    curl = dataclasses.replace(recipe, items=(Package("curl"), Package("linux-image-amd64")))
     assert_clean(curl)
 
     (artifact,) = bake_in_process(curl, build=tmp_path / "build")
@@ -44,10 +42,10 @@ def test_compiled_factory_uses_fresh_dirs(
     recipe: Recipe, compiled: CompileFactory, tmp_path: Path
 ) -> None:
     demo = fake_fragment("demo", packages=("curl",), init="echo demo")
-    azure = Variant("azure", target="azure", add=Fragment("azure", (Package("jq"),)))
+    azure = Variant("azure", outputs=("azure",), add=Fragment("azure", (Package("jq"),)))
     extended = dataclasses.replace(
         recipe,
-        common=Fragment("test", (demo,)),
+        items=(demo,),
         variants=(*recipe.variants, azure),
     )
 
@@ -64,9 +62,7 @@ def test_compiled_factory_uses_fresh_dirs(
 
 
 def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:
-    source = (
-        'from tundravm import Fragment, Recipe\nrecipe = Recipe(name="t", common=Fragment("t"))\n'
-    )
+    source = 'from tundravm import Fragment, Recipe\nrecipe = Recipe(name="t")\n'
     path = recipe_file(tmp_path, source)
     code, out, err = run_cli("inspect", path, "--format", "json")
     assert code == 0

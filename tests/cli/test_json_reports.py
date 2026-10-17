@@ -29,7 +29,7 @@ REPORTS: dict[str, tuple[str, ...]] = {
 }
 """One JSON run per verb, from inside a scaffolded, compiled, locked and baked project."""
 
-SCHEMA_VERSIONS = {"evidence": 3, "changes": 2, "lint": 2, "explore": 2, "config": 2}
+SCHEMA_VERSIONS = {"evidence": 3, "changes": 2, "lint": 2, "explore": 3, "config": 2, "inspect": 2}
 """Verbs whose report schema moved past version 1."""
 
 COVERED_ELSEWHERE = {
@@ -155,11 +155,11 @@ from tundravm import File, Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "leaky",
-    Fragment("common", items=(
+    items=(
         Package("linux-image-amd64"),
         File("/etc/app.conf", content="api_token = s3cR3tV4lu3Xq9Zp2Lm7\\n"),
-    )),
-    variants=(Variant("default", target="qemu"),),
+    ),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 """
 

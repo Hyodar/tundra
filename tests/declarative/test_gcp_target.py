@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
-from tundravm.declarative import Fragment, Recipe, Variant, compile, resolve
+from tundravm.declarative import Recipe, Variant, compile, resolve
 from tundravm.platforms.gcp import (
     GCE_DISK_NAMING_RULES,
     GCP_HOSTS,
@@ -20,8 +20,7 @@ UDEV_RULES = "mkosi.extra/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
 NVME_ID = "mkosi.extra/usr/lib/udev/google_nvme_id"
 RECIPE = Recipe(
     "cloud",
-    Fragment("common"),
-    variants=(Variant("default", target="qemu"), Variant("gcp", target="gcp")),
+    variants=(Variant("default", outputs=("qemu",)), Variant("gcp", outputs=("gcp",))),
 )
 
 
@@ -91,7 +90,7 @@ def test_google_nvme_id_content() -> None:
 
 
 def test_gcp_variant_sets_output_target(tree: CompiledTree) -> None:
-    assert resolve(RECIPE, variant="gcp").target == "gcp"
+    assert resolve(RECIPE, variant="gcp").outputs == ("gcp",)
     assert "PostOutputScripts=scripts/gcp-postoutput.sh" in tree.conf(variant="gcp").splitlines()
     assert tree.exists("scripts/gcp-postoutput.sh", variant="gcp")
 

@@ -23,7 +23,6 @@ from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
     Disk,
     ExternalDelivery,
-    Fragment,
     Key,
     Package,
     Partition,
@@ -74,25 +73,22 @@ secrets = Secrets(
 recipe = Recipe(
     name="storage-and-secrets",
     base="debian/bookworm",
-    common=Fragment(
-        "base",
-        items=(
-            *(Package(name) for name in (*BOOT, "cryptsetup", "ca-certificates")),
-            Partition("logs", size="4G", mount="/var/log/app"),
-            key,
-            disk,
-            secrets,
-            RuntimeTools(TUNDRA_TOOLS),
-            # Ship /usr/bin/app with a Build(...) (see 05_source_builds.py) or a Package(...).
-            User("app", home="/persistent/data"),
-            Service(
-                "app",
-                "/usr/bin/app --token-file /run/secrets/api-token",
-                user="app",
-                working_dir="/persistent/data",
-                restart="on-failure",
-                wanted_by="minimal.target",
-            ),
+    items=(
+        *(Package(name) for name in (*BOOT, "cryptsetup", "ca-certificates")),
+        Partition("logs", size="4G", mount="/var/log/app"),
+        key,
+        disk,
+        secrets,
+        RuntimeTools(TUNDRA_TOOLS),
+        # Ship /usr/bin/app with a Build(...) (see 05_source_builds.py) or a Package(...).
+        User("app", home="/persistent/data"),
+        Service(
+            "app",
+            "/usr/bin/app --token-file /run/secrets/api-token",
+            user="app",
+            working_dir="/persistent/data",
+            restart="on-failure",
+            wanted_by="minimal.target",
         ),
     ),
 )

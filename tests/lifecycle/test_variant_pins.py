@@ -13,7 +13,6 @@ from tests.helpers import run_main, source_dir, write_recipe_file
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative import (
     Build,
-    Fragment,
     Git,
     Install,
     Package,
@@ -38,9 +37,9 @@ def _recipe(dev_ref: str = "dev", url: str = URL) -> Recipe:
     stable = replace(STABLE, source=Git(url, "stable"))
     return Recipe(
         "pins",
-        Fragment("common", items=(Package("linux-image-amd64"), stable)),
+        items=(Package("linux-image-amd64"), stable),
         variants=(
-            Variant("default", target="qemu"),
+            Variant("default", outputs=("qemu",)),
             Variant("dev", replace=(replace(stable, source=Git(url, dev_ref)),)),
             Variant("prod"),
         ),
@@ -165,9 +164,9 @@ INSTALL = (Install("app", "/usr/bin/app"),)
 STABLE = Build("app", Git({url!r}, "stable"), script="make", install=INSTALL)
 recipe = Recipe(
     "pins",
-    Fragment("common", items=(Package("linux-image-amd64"), STABLE)),
+    items=(Package("linux-image-amd64"), STABLE),
     variants=(
-        Variant("default", target="qemu"),
+        Variant("default", outputs=("qemu",)),
         Variant("dev", replace=(replace(STABLE, source=Git({url!r}, "dev")),)),
     ),
 )

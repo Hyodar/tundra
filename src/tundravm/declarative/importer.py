@@ -8,7 +8,7 @@ glue, backports sources and EFI stub become ``Init``, ``Kernel``, variant
 targets, ``Backports`` and ``EfiStub``. What has no first-class declaration is
 kept verbatim (``File``, ``Unit``, ``Hook``, ``Setting``); what cannot be kept
 at all is reported in :attr:`Imported.notes`. The first variant directory is
-``Recipe.common``; every other one is a :class:`Variant` holding what differs
+``Recipe.items``; every other one is a :class:`Variant` holding what differs
 from it.
 """
 
@@ -69,6 +69,7 @@ from .model import (
     Recipe,
     Service,
     Setting,
+    Target,
     Unit,
     User,
     Variant,
@@ -178,7 +179,7 @@ def import_tree(
 
     *tree* is one variant directory (it holds ``mkosi.conf``) or a directory of
     them as ``compile`` writes them; *variants* picks some of those (the first
-    becomes ``Recipe.common``, default: ``default`` first, then by name). *name*
+    becomes ``Recipe.items``, default: ``default`` first, then by name). *name*
     is the recipe name (default: the directory name). *dialect* is the emission
     dialect the tree was written with (default: guessed). *output* is where the
     module will be written: ruff formats it with that file's configuration.
@@ -400,7 +401,7 @@ class _Found:
 
     name: str
     items: list[Item]
-    targets: tuple[str, ...]
+    targets: tuple[Target, ...]
     wide: dict[str, Any]
     mkosi: dict[str, Any]
     notes: list[str]
@@ -700,12 +701,13 @@ class _VariantReader:
 
     def _targets(
         self, extra: dict[str, str | bytes | None], scripts: dict[Phase, list[str]]
-    ) -> tuple[str, ...]:
-        targets: list[str] = []
-        for target, files, base in (
+    ) -> tuple[Target, ...]:
+        targets: list[Target] = []
+        cloud: tuple[tuple[Target, Mapping[str, tuple[str, ...]], str], ...] = (
             ("azure", _AZURE_FILES, AZURE_POSTOUTPUT_SCRIPT),
             ("gcp", _GCP_FILES, GCP_POSTOUTPUT_SCRIPT),
-        ):
+        )
+        for target, files, base in cloud:
             if not all(extra.get(path) in texts for path, texts in files.items()):
                 continue
             targets.append(target)
@@ -1279,15 +1281,16 @@ def _backports_candidates(text: str) -> list[Backports]:
         [None, first(r"^Suites: (\S+)-backports$"), first(r'^RELEASE="([^"]*)"$')]
     )
     found: list[Backports] = []
-    for archive in archives:
-        for release in releases:
-            if archive is not None and "$" in archive:
-                continue
-            if release is not None and "$" in release:
-                continue
-            candidate = Backports(archive_url=archive, release=release)
-            if candidate not in found:
-                found.append(candidate)
+    for include_sid in (True, False):
+        for archive in archives:
+            for release in releases:
+                if archive is not None and "$" in archive:
+                    continue
+                if release is not None and "$" in release:
+                    continue
+                candidate = Backports(archive_url=archive, release=release, include_sid=include_sid)
+                if candidate not in found:
+                    found.append(candidate)
     return found
 
 
@@ -1385,7 +1388,7 @@ def _service_of(unit: str, content: str, *, init: bool) -> Service | None:
                 kwargs["wanted_by"] = None if value == "minimal.target" else value
             case _:
                 return None
-    if exec_start is None:
+    if exec_start is None or len(dict(env)) != len(env) or len(dict(limits)) != len(limits):
         return None
     after, requires = kwargs.get("after", ()), kwargs.get("requires", ())
     injected = init and after[:1] == (INIT_SERVICE,) and requires[:1] == (INIT_SERVICE,)
@@ -1397,8 +1400,8 @@ def _service_of(unit: str, content: str, *, init: bool) -> Service | None:
         service = Service(
             name,
             exec_start,
-            env=tuple(env),
-            limits=tuple(limits),
+            env=dict(env),
+            limits=dict(limits),
             exec_start_pre=tuple(pre),
             **kwargs,
         )
@@ -1449,9 +1452,9 @@ def _debloat_from(
     kwargs: dict[str, Any] = {
         "extra_remove": tuple(sorted((set(removed) | kept_by_variant) - default_paths)),
         "keep_paths": tuple(sorted(default_paths - set(removed) - kept_by_variant)),
-        "keep_paths_by_variant": tuple(
-            (name, tuple(paths)) for name, paths in sorted(conditional.items())
-        ),
+        "keep_paths_by_variant": {
+            name: tuple(paths) for name, paths in sorted(conditional.items())
+        },
         "minimize_systemd": minimize is not None,
     }
     if minimize is not None:
@@ -1511,14 +1514,14 @@ def _assemble(
             if first.mkosi.get(key) != other.mkosi.get(key):
                 notes.append(f"{other.name}: Mkosi.{key} differs from {first.name}'s")
     common = _without_target_packages(first.items, first.targets, ())
-    variants = [Variant(first.name, **_target_args(first.targets))]
+    variants = [Variant(first.name, outputs=first.targets)]
     for other in found[1:]:
         items = _without_target_packages(other.items, other.targets, common)
         variants.append(_overlay_variant(other, items, common))
     wide = first.wide
     recipe = Recipe(
         name=name,
-        common=Fragment("common", items=tuple(common)),
+        items=tuple(common),
         variants=tuple(variants),
         base=wide["base"],
         arch=wide.get("arch", "x86_64"),
@@ -1531,12 +1534,8 @@ def _assemble(
     return recipe, notes
 
 
-def _target_args(targets: tuple[str, ...]) -> dict[str, Any]:
-    return {"target": targets[0]} if len(targets) == 1 else {"targets": targets}
-
-
 def _without_target_packages(
-    items: list[Item], targets: tuple[str, ...], common: Sequence[Item]
+    items: list[Item], targets: tuple[Target, ...], common: Sequence[Item]
 ) -> list[Item]:
     implicit = {Package(_TARGET_PACKAGES[t]) for t in targets if t in _TARGET_PACKAGES}
     return [i for i in items if not (i in implicit and i not in common)]
@@ -1564,21 +1563,23 @@ def _overlay_variant(found: _Found, items: list[Item], common: list[Item]) -> Va
         key: item for key, item in own.items() if key in inherited and inherited[key] != item
     }
     removed = [item for key, item in inherited.items() if key not in own]
-    targets = _target_args(found.targets)
     fragments = [i for i in (*replaced.values(), *removed) if isinstance(i, Fragment)]
     resolved = [replaced.get(k, i) for k, i in inherited.items() if k in own] + add
     if fragments or [_key(i) for i in resolved if _ordered(i)] != [
         _key(i) for i in split if _ordered(i)
     ]:
         return Variant(
-            found.name, parent=None, add=Fragment(found.name, items=tuple(split)), **targets
+            found.name,
+            inherits=None,
+            add=Fragment(found.name, items=tuple(split)),
+            outputs=found.targets,
         )
     return Variant(
         found.name,
         add=Fragment(found.name, items=tuple(add)) if add else EMPTY_FRAGMENT,
         replace=tuple(i for i in replaced.values() if not isinstance(i, Fragment)),
         remove=tuple(i for i in removed if not isinstance(i, Fragment)),
-        **targets,
+        outputs=found.targets,
     )
 
 
@@ -1596,7 +1597,7 @@ def _coverage(recipe: Recipe) -> dict[str, int]:
             else:
                 counts["declared"] += 1
 
-    count(recipe.common.items)
+    count(recipe.items)
     for variant in recipe.variants:
         count(variant.add.items)
         count(variant.replace)

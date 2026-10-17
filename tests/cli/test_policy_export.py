@@ -20,7 +20,7 @@ from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
 BOOT = (Package("systemd"), Package("linux-image-amd64"))
-recipe = Recipe("peer", Fragment("common", items=BOOT))
+recipe = Recipe("peer", items=BOOT)
 """
 
 R0, R1, R2, R3, MRTD = ("a" * 96, "b" * 96, "c" * 96, "d" * 96, "e" * 96)
@@ -53,6 +53,7 @@ def test_export_writes_a_marked_placeholder_policy(manifest: Path, tmp_path: Pat
     policy = json.loads(target.read_text(encoding="utf-8"))
     assert sorted(policy) == [
         "artifact",
+        "boot_payload",
         "note",
         "registers",
         "schema_version",
@@ -69,6 +70,7 @@ def test_export_writes_a_marked_placeholder_policy(manifest: Path, tmp_path: Pat
     assert policy["note"] == PLACEHOLDER_NOTE and policy["note"].startswith("PLACEHOLDER")
     assert policy["artifact"]["path"] == str(manifest / "default" / "disk.qcow2")
     assert len(policy["artifact"]["sha256"]) == 64
+    assert policy["boot_payload"]["path"] == str(manifest / "default" / "disk.efi")
     assert sorted(policy["registers"]) == ["RTMR0", "RTMR1", "RTMR2"]
     assert read_policy(target)["registers"] == policy["registers"]
 
@@ -119,13 +121,13 @@ def test_export_rejects_missing_registers_and_other_schemes() -> None:
 def test_from_policy_normalises_registers_for_the_validator() -> None:
     tdxs = Tdxs.from_policy(_policy(RTMR0=R0, RTMR1=R1, RTMR2=R2, RTMR3=R3), mrtd=MRTD.upper())
     assert tdxs.validator == "tdx"
-    assert tdxs.expected_measurements == (
-        ("mrtd", MRTD),
-        ("rtmr0", R0),
-        ("rtmr1", R1),
-        ("rtmr2", R2),
-        ("rtmr3", R3),
-    )
+    assert tdxs.expected_measurements == {
+        "mrtd": MRTD,
+        "rtmr0": R0,
+        "rtmr1": R1,
+        "rtmr2": R2,
+        "rtmr3": R3,
+    }
     (config,) = [item for item in tdxs.items if isinstance(item, File)]
     assert config.content == (
         "transport:\n  type: socket\n  config:\n    systemd: true\n"
@@ -164,9 +166,8 @@ def test_from_policy_rejects_bad_policies(tmp_path: Path) -> None:
     placeholder = {**_policy(RTMR0="1" * 64, RTMR1="2" * 64, RTMR2="3" * 64), "tool": "placeholder"}
     with pytest.raises(MeasurementError, match="placeholder policy"):
         Tdxs.from_policy(placeholder)
-    assert Tdxs.from_policy(placeholder, allow_placeholder=True).expected_measurements[0] == (
-        "rtmr0",
-        "1" * 64,
+    assert Tdxs.from_policy(placeholder, allow_placeholder=True).expected_measurements["rtmr0"] == (
+        "1" * 64
     )
 
 

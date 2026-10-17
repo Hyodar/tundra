@@ -4,7 +4,6 @@ import pytest
 
 from tundravm.declarative import (
     Backend,
-    Fragment,
     Hook,
     Package,
     Recipe,
@@ -23,11 +22,8 @@ from tundravm.declarative import (
 def _recipe(*packages: str, targets: tuple[Target, ...] = ("qemu", "azure")) -> Recipe:
     return Recipe(
         "effects",
-        Fragment(
-            "common",
-            items=(*(Package(p) for p in packages), Hook("ready", "prepare", "echo ready")),
-        ),
-        variants=(Variant("default", targets=targets),),
+        items=(*(Package(p) for p in packages), Hook("ready", "prepare", "echo ready")),
+        variants=(Variant("default", outputs=targets),),
     )
 
 

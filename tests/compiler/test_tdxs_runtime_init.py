@@ -29,7 +29,7 @@ TDXS_CONFIG = "mkosi.extra/etc/tdxs/config.yaml"
 
 
 def _recipe(*items: Declaration | Fragment) -> Recipe:
-    return Recipe("tdxs", Fragment("attestation", items=items))
+    return Recipe("tdxs", items=items)
 
 
 def _compile(tmp_path: Path, *items: Declaration | Fragment) -> CompiledTree:
@@ -152,7 +152,7 @@ def test_tdxs_validator_config_supports_expected_measurements(tmp_path: Path) ->
     fragment = Tdxs(
         issuer=None,
         validator="tdx",
-        expected_measurements=(("mrtd", "abc123"), ("rtmr0", "def456")),
+        expected_measurements={"mrtd": "abc123", "rtmr0": "def456"},
         check_revocations=True,
         get_collateral=True,
     )

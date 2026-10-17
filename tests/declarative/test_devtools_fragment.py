@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
-from tundravm.declarative import Debloat, Fragment, Package, Recipe, Unit, Variant
+from tundravm.declarative import Debloat, Package, Recipe, Unit, Variant
 from tundravm.declarative.utils import DevTools
 from tundravm.testing import CompiledTree, compile_tree
 
@@ -31,7 +31,7 @@ EXPECTED_PACKAGES = {
 def _recipe(*common: Debloat) -> Recipe:
     return Recipe(
         "debug",
-        Fragment("common", items=common),
+        items=common,
         variants=(Variant("default"), Variant("devtools", add=DevTools())),
     )
 
@@ -114,7 +114,7 @@ def test_devtools_variant_does_not_affect_default_variant(tree: CompiledTree) ->
 
 def test_devtools_variant_bash_completion_in_debloat_skip(tmp_path: Path) -> None:
     """A path kept only for the devtools variant survives debloat there alone."""
-    debloat = Debloat(keep_paths_by_variant=(("devtools", (BASH_COMPLETION,)),))
+    debloat = Debloat(keep_paths_by_variant={"devtools": (BASH_COMPLETION,)})
     tree = compile_tree(_recipe(debloat), path=tmp_path / "tree")
 
     assert "bash-completion" in conf_list(tree.conf(variant="devtools"), "Packages")

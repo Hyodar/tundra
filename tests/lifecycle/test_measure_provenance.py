@@ -19,7 +19,6 @@ from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, PLACEHOLDER_BANNER, doctor
 from tundravm.declarative import (
     Artifact,
     Backend,
-    Fragment,
     Package,
     Recipe,
     Variant,
@@ -88,8 +87,8 @@ def _baked(tmp_path: Path, *, simulated: bool = False) -> tuple[Artifact, ...]:
     """
     recipe = Recipe(
         "measured",
-        Fragment("measured", items=(Package("curl"), Package("linux-image-amd64"))),
-        variants=(Variant("default", target="qemu"), Variant("gcp", target="gcp")),
+        items=(Package("curl"), Package("linux-image-amd64")),
+        variants=(Variant("default", outputs=("qemu",)), Variant("gcp", outputs=("gcp",))),
     )
     artifacts = bake(
         recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build"
@@ -312,8 +311,8 @@ from tundravm.declarative import Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "measured",
-    Fragment("measured", items=(Package("curl"), Package("linux-image-amd64"))),
-    variants=(Variant("default", target="qemu"),),
+    items=(Package("curl"), Package("linux-image-amd64")),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 backend = InProcessBackend()
 """
@@ -396,7 +395,7 @@ def test_cli_allow_placeholder_json_carries_source(
     recipe: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = recipe.read_text(encoding="utf-8")
-    recipe.write_text(source.replace('target="qemu"', 'target="gcp"'), "utf-8")
+    recipe.write_text(source.replace('outputs=("qemu",)', 'outputs=("gcp",)'), "utf-8")
     assert _bake(recipe) == EXIT_OK
     capsys.readouterr()
 

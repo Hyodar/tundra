@@ -17,7 +17,6 @@ from tundravm import (
     Build,
     ChangeReport,
     File,
-    Fragment,
     Git,
     Install,
     Lock,
@@ -45,22 +44,19 @@ KERNEL = "linux-image-amd64"
 def _recipe(*, extra: str = "jq", motd: str = "hi\n") -> Recipe:
     return Recipe(
         "node",
-        Fragment(
-            "common",
-            items=(
-                Package("curl"),
-                Package("linux-image-amd64"),
-                Package(extra),
-                File("/etc/motd", motd),
-                Build(
-                    "app",
-                    Git(REPO, "main"),
-                    script="make",
-                    install=(Install("app", "/usr/bin/app"),),
-                ),
+        items=(
+            Package("curl"),
+            Package("linux-image-amd64"),
+            Package(extra),
+            File("/etc/motd", motd),
+            Build(
+                "app",
+                Git(REPO, "main"),
+                script="make",
+                install=(Install("app", "/usr/bin/app"),),
             ),
         ),
-        variants=(Variant("default", target="qemu"),),
+        variants=(Variant("default", outputs=("qemu",)),),
     )
 
 
@@ -256,8 +252,8 @@ def test_the_previous_release_directory_is_taken_for_its_bundle(
 def test_lowered_recipe_and_a_new_variant(tmp_path: Path, released: Path) -> None:
     recipe = Recipe(
         "node",
-        _recipe().common,
-        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+        items=_recipe().items,
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     report = changes(lower(recipe), since=released, lock=_locked(recipe, FIRST))
     assert ("added", "azure", "variant azure") in _subjects(report, "recipe")
@@ -270,8 +266,8 @@ def test_a_variant_that_was_not_baked_is_noted_not_added(
     monkeypatch.chdir(tmp_path)
     recipe = Recipe(
         "node",
-        _recipe().common,
-        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+        items=_recipe().items,
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     locked = _locked(recipe, FIRST)
     build = tmp_path / "v1"
@@ -291,8 +287,8 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "node",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"), Package("{extra}"))),
-    variants=(Variant("default", target="qemu"),),
+    items=(Package("curl"), Package("linux-image-amd64"), Package("{extra}")),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 """
 

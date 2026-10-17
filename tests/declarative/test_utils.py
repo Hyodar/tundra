@@ -42,7 +42,7 @@ HISTORICAL = Mkosi(dialect="nethermind-v1")
 
 def _recipe(*items: Fragment, variants: tuple[Variant, ...] = (Variant("default"),)) -> Recipe:
     common = Fragment("module", items=items)
-    return Recipe(name="module", common=common, variants=variants, mkosi=HISTORICAL)
+    return Recipe(name="module", items=(common,), variants=variants, mkosi=HISTORICAL)
 
 
 def _text(tree: Tree, path: str) -> str:
@@ -104,7 +104,7 @@ def test_tdxs_issuer_and_validator_render_the_config() -> None:
     tdxs = Tdxs(
         issuer="azure",
         validator="azure",
-        expected_measurements=(("rtmr0", "ab"),),
+        expected_measurements={"rtmr0": "ab"},
         check_revocations=True,
         verify_imds=True,
     )
@@ -180,7 +180,10 @@ def test_utils_are_fragments_configured_by_their_fields() -> None:
     assert repr(efi) == f"EfiStub(snapshot={SNAPSHOT!r}, version='255.4-1')"
     assert str(inspect.signature(EfiStub)) == "(*, snapshot: 'str', version: 'str') -> None"
     assert repr(DevTools()) == "DevTools(root_password='tdx', salt=None, reproducible=True)"
-    assert repr(Backports(release="trixie")) == "Backports(archive_url=None, release='trixie')"
+    assert (
+        repr(Backports(release="trixie"))
+        == "Backports(archive_url=None, release='trixie', include_sid=True)"
+    )
     assert Tdxs().source == TUNDRA_TOOLS
     assert Tdxs().name == "tdxs" and Tdxs(after_init=True) != Tdxs()
     assert Tdxs() == Tdxs() and hash(Tdxs()) == hash(Tdxs())
@@ -188,8 +191,14 @@ def test_utils_are_fragments_configured_by_their_fields() -> None:
 
 
 def test_utils_freeze_lists_and_reject_bad_values() -> None:
-    tdxs = Tdxs(expected_measurements=[("rtmr0", "ab")])  # type: ignore[arg-type]
-    assert tdxs.expected_measurements == (("rtmr0", "ab"),)
+    measurements = {"rtmr0": "ab"}
+    tdxs = Tdxs(expected_measurements=measurements)
+    measurements["rtmr0"] = "cd"
+    assert tdxs.expected_measurements == {"rtmr0": "ab"} and hash(tdxs) == hash(
+        Tdxs(expected_measurements={"rtmr0": "ab"})
+    )
+    with pytest.raises(ValidationError, match="must be a mapping"):
+        Tdxs(expected_measurements=(("rtmr0", "ab"),))  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="EfiStub"):
         EfiStub(snapshot="", version="1")
     with pytest.raises(TypeError):
@@ -206,10 +215,10 @@ def test_composite_subclass_works_as_a_fragment() -> None:
 
     tools = Tools(packages=("strace", "gdb"))
     assert repr(tools).endswith(".Tools(packages=('strace', 'gdb'))")
-    recipe = Recipe(name="m", common=Fragment("m", items=(tools, tools)))
+    recipe = Recipe(name="m", items=(tools, tools))
     conf = _text(compile(recipe), "default/mkosi.conf").splitlines()
     assert {"    strace", "    gdb"} <= set(conf)
-    variant = Recipe(name="m", common=Fragment("m"), variants=(Variant("v", add=Tools()),))
+    variant = Recipe(name="m", variants=(Variant("v", add=Tools()),))
     assert "    strace" in _text(compile(variant), "v/mkosi.conf").splitlines()
 
 
@@ -234,7 +243,7 @@ def test_historical_dialect_spells_accounts_as_postinst_lines() -> None:
 
 
 def test_current_dialect_uses_the_account_prelude() -> None:
-    recipe = Recipe(name="m", common=Fragment("m", items=(Tdxs(),)))
+    recipe = Recipe(name="m", items=(Tdxs(),))
     lines = _text(compile(recipe), "default/scripts/06-postinst.sh").splitlines()
     assert lines[3] == "mkosi-chroot groupadd --system tdx"
     assert lines[4].startswith("mkosi-chroot useradd --system --home-dir /home/tdxs --create-home")
@@ -245,7 +254,7 @@ def test_historical_dialect_lowers_account_replacement_standalone() -> None:
         Fragment("users", items=(User("svc"),)),
         variants=(
             Variant("default"),
-            Variant("other", parent="default", replace=(User("svc", uid=5),)),
+            Variant("other", inherits="default", replace=(User("svc", uid=5),)),
         ),
     )
     tree = compile(recipe)
@@ -258,20 +267,33 @@ def test_historical_dialect_lowers_account_replacement_standalone() -> None:
     assert "--uid" not in _text(tree, "default/scripts/06-postinst.sh")
 
 
-def test_build_cache_key_and_unpinned_marker() -> None:
+def test_build_cache_namespace_and_unpinned_marker() -> None:
     build = Build(
         "tool",
         Git("https://example.com/tool.git", "feat/x"),
         script="make",
         install=(Install("tool", "/usr/bin/tool"),),
-        cache_key="tool-feat/x",
+        cache_namespace="tool-feat/x",
     )
     historical = _text(
         compile(_recipe(Fragment("b", items=(build,)))), "default/scripts/04-build.sh"
     )
     assert "# unpinned" not in historical
     assert '"$BUILDDIR/tool-feat_x"' in historical
-    current = Recipe(name="m", common=Fragment("b", items=(build,)))
+    current = Recipe(name="m", items=(build,))
     assert "\n# unpinned: feat/x\n" in _text(compile(current), "default/scripts/04-build.sh")
-    with pytest.raises(ValidationError, match="cache_key"):
-        Build("t", build.source, script="make", install=build.install, cache_key="a b")
+    with pytest.raises(ValidationError, match="cache_namespace"):
+        Build("t", build.source, script="make", install=build.install, cache_namespace="a b")
+
+
+def test_backports_include_sid_false_drops_the_sid_source_and_pin() -> None:
+    with_sid, without = Backports(), Backports(include_sid=False)
+    assert with_sid.include_sid is True
+    sources = without.render_sources(mirror=None, release="trixie")
+    assert "Suites: trixie-backports" in sources and "sid" not in sources
+    assert "sid" in with_sid.render_sources(mirror=None, release="trixie")
+    assert "sid" not in without.render_preferences(release="trixie")
+    (hook,) = [item for item in without.items if isinstance(item, Hook)]
+    assert "Suites: sid" not in hook.script and "Suites: ${RELEASE}-backports" in hook.script
+    with pytest.raises(ValidationError, match="include_sid"):
+        Backports(include_sid="no")  # type: ignore[arg-type]

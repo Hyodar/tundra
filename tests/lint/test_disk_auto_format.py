@@ -7,7 +7,6 @@ import pytest
 from tundravm.check import check
 from tundravm.declarative import (
     Disk,
-    Fragment,
     Git,
     Key,
     Package,
@@ -25,7 +24,7 @@ KEY = Key("key_persistent", output="/run/keys/persistent")
 def _findings(disk: Disk, policy: Policy | None = None) -> list[tuple[str, str | None]]:
     recipe = Recipe(
         "disk",
-        Fragment("disk", items=(Package("linux-image-amd64"), TOOLS, KEY, disk)),
+        items=(Package("linux-image-amd64"), TOOLS, KEY, disk),
         policy=policy,
     )
     return [(d.severity, d.subject) for d in lint(recipe) if d.code == "disk-auto-format"]
@@ -40,7 +39,7 @@ def test_automatic_device_with_formatting_warns(format: str) -> None:
 def test_the_warning_names_the_boot_disk_risk_and_the_fix() -> None:
     recipe = Recipe(
         "disk",
-        Fragment("disk", items=(Package("linux-image-amd64"), TOOLS, Disk("data", mount="/data"))),
+        items=(Package("linux-image-amd64"), TOOLS, Disk("data", mount="/data")),
     )
     (found,) = (d for d in check(lower(recipe)) if d.code == "disk-auto-format")
     assert "automatic device selection can pick the boot disk and format it" in found.message

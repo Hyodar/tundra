@@ -200,7 +200,7 @@ def _rule_service_user_missing(
             hint = (
                 f"{user!r} is declared in variant {default.name!r}, but {profile_name!r} "
                 "is lowered standalone and does not inherit it; declare it in "
-                f"{profile_name!r} too, or derive the variant from its parent."
+                f"{profile_name!r} too, or have the variant inherit {default.name!r}."
             )
         yield Diagnostic(
             severity="error",
@@ -355,7 +355,7 @@ def _rule_variant_empty(
     if state.extends is None:
         message = "variant declares nothing of its own and builds a bare base image"
         hint = (
-            f"Standalone variants (parent=None) do not inherit from "
+            f"Standalone variants (inherits=None) do not inherit from "
             f"{image.default_profile!r}. Declare its contents in its add= fragment, "
             "or remove the variant."
         )

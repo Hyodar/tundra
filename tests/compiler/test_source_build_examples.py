@@ -16,7 +16,6 @@ from tundravm.declarative import (
     Build,
     Disk,
     Dotnet,
-    Fragment,
     Git,
     Go,
     Install,
@@ -106,10 +105,7 @@ def _surge_stack(dialect: Literal["current", "nethermind-v1"] = "nethermind-v1")
     return Recipe(
         name="stack",
         mkosi=Mkosi(dialect=dialect),
-        common=Fragment(
-            "stack",
-            items=(Tdxs(), Package("git", role="build"), Raiko(), TaikoClient(), Nethermind()),
-        ),
+        items=(Tdxs(), Package("git", role="build"), Raiko(), TaikoClient(), Nethermind()),
     )
 
 
@@ -137,7 +133,7 @@ def test_current_dialect_builds_copy_the_fetched_checkouts() -> None:
     assert re.search(
         rf'"\$SRCDIR/tundravm-sources/taiko-client-{SHA_A[:12]}-[0-9a-f]{{8}}"/. ', hook
     )
-    # cache_key="taiko-client-feat/tdx-proving" is the namespace of the fingerprinted key
+    # cache_namespace="taiko-client-feat/tdx-proving" is the namespace of the fingerprinted key
     assert re.search(r'build\}/taiko-client-feat_tdx-proving-[0-9a-f]{16}"', hook)
 
 
@@ -168,7 +164,7 @@ def test_surge_stack_builds_pin_through_the_lockfile(name: str, url: str, cache_
 def test_every_declaration_that_builds_from_source_is_a_source_build() -> None:
     key = Key("key_persistent", output="/tmp/key_persistent")
     disk = Disk("disk_persistent", "/persistent", key=key)
-    recipe = Recipe("tools", Fragment("tools", items=(Tdxs(), key, disk, Secrets(store=disk))))
+    recipe = Recipe("tools", items=(Tdxs(), key, disk, Secrets(store=disk)))
     assert sorted(_source_builds(recipe)) == [
         "disk-encryption",
         "key-generation",
@@ -203,7 +199,7 @@ def test_go_build_output_dir_and_mkdir() -> None:
     build = Build(
         "tool",
         Git(REPO, "main"),
-        recipe=custom,
+        using=custom,
         install=(Install(custom.artifact, "/usr/bin/tool"),),
     )
     assert '"$BUILDROOT/build/tool/bin/tool"' in _hook(build)
@@ -231,7 +227,7 @@ def test_new_recipe_fields_stay_out_of_the_payload_at_their_defaults() -> None:
         Build(
             "tool",
             Git(REPO, "main"),
-            recipe=go_recipe,
+            using=go_recipe,
             install=(Install("build/tool", "/usr/bin/tool"),),
         )
     )
@@ -247,7 +243,7 @@ def test_new_recipe_fields_stay_out_of_the_payload_at_their_defaults() -> None:
         Build(
             "app",
             Git(REPO, "main"),
-            recipe=dotnet,
+            using=dotnet,
             install=(Install(dotnet.artifact, "/usr/bin/o"),),
         )
     )["build"]
@@ -266,7 +262,7 @@ def _one() -> tuple[Install, ...]:
 
 
 def _single(build: Build) -> Recipe:
-    return Recipe("app", Fragment("app", items=(build,)), mkosi=Mkosi(dialect="nethermind-v1"))
+    return Recipe("app", items=(build,), mkosi=Mkosi(dialect="nethermind-v1"))
 
 
 def _hook(build: Build) -> str:

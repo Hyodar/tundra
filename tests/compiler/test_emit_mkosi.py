@@ -49,8 +49,8 @@ def _recipe(
 ) -> Recipe:
     return Recipe(
         "test",
-        Fragment("common", items=items),
-        variants=tuple(variants or (Variant("default", target="qemu"),)),
+        items=items,
+        variants=tuple(variants or (Variant("default", outputs=("qemu",)),)),
         base="debian/bookworm",
         arch=arch,
         epoch=epoch,
@@ -84,7 +84,7 @@ def test_compile_golden_output(tmp_path: Path) -> None:
     recipe = _recipe(
         Package("jq"),
         Package("curl"),
-        Hook("prep", "prepare", "echo prep", env=(("B", "2"), ("A", "1")), cwd="/work"),
+        Hook("prep", "prepare", "echo prep", env={"B": "2", "A": "1"}, cwd="/work"),
         Hook("build", "build", "echo build"),
     )
 
@@ -155,7 +155,7 @@ def test_compile_generates_extra_tree(tmp_path: Path) -> None:
         Template(
             "/etc/app/config.toml",
             "network={network}\n",
-            variables=(("network", "mainnet"),),
+            variables={"network": "mainnet"},
         ),
     )
 
@@ -202,7 +202,7 @@ def test_compile_generates_service_unit_all_sections(tmp_path: Path) -> None:
             user="app",
             group="app",
             working_dir="/var/lib/app",
-            env=(("B", "two words"), ("A", "1")),
+            env={"B": "two words", "A": "1"},
             env_file="/etc/app.env",
             exec_start_pre=("/usr/bin/app --check",),
             after=("network-online.target",),
@@ -211,7 +211,7 @@ def test_compile_generates_service_unit_all_sections(tmp_path: Path) -> None:
             wanted_by="multi-user.target",
             type="notify",
             restart="on-failure",
-            limits=(("NOFILE", 1048576), ("CORE", "infinity")),
+            limits={"NOFILE": 1048576, "CORE": "infinity"},
             kill_mode="mixed",
             timeout_stop="30s",
         )
@@ -397,7 +397,7 @@ def test_compile_version_script(tmp_path: Path) -> None:
 
 def test_compile_gcp_postoutput(tmp_path: Path) -> None:
     """GCP postoutput script is emitted when the variant targets gcp."""
-    recipe = _recipe(Package("curl"), variants=(Variant("default", target="gcp"),))
+    recipe = _recipe(Package("curl"), variants=(Variant("default", outputs=("gcp",)),))
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
     gcp_script = _script(output_dir, "gcp-postoutput.sh")
@@ -410,7 +410,7 @@ def test_compile_gcp_postoutput(tmp_path: Path) -> None:
 
 def test_compile_azure_postoutput(tmp_path: Path) -> None:
     """Azure postoutput script is emitted when the variant targets azure."""
-    recipe = _recipe(Package("curl"), variants=(Variant("default", target="azure"),))
+    recipe = _recipe(Package("curl"), variants=(Variant("default", outputs=("azure",)),))
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
     azure_script = _script(output_dir, "azure-postoutput.sh")
@@ -425,7 +425,7 @@ def test_compile_native_profiles_mode(tmp_path: Path) -> None:
     recipe = _recipe(
         Package("curl"),
         variants=(
-            Variant("default", target="qemu"),
+            Variant("default", outputs=("qemu",)),
             Variant("prod", add=Fragment("prod", items=(Package("nginx"),))),
         ),
         mkosi=Mkosi(layout="native"),
@@ -959,8 +959,8 @@ def test_compile_backports_only_in_the_variant_that_adds_it(tmp_path: Path) -> N
     recipe = _recipe(
         Package("systemd"),
         variants=(
-            Variant("default", target="qemu"),
-            Variant("bp", parent="default", add=Backports()),
+            Variant("default", outputs=("qemu",)),
+            Variant("bp", inherits="default", add=Backports()),
         ),
         epoch=None,
     )
@@ -974,9 +974,9 @@ def _devtools_debloat_recipe() -> Recipe:
     return _recipe(
         Debloat(
             enabled=True,
-            keep_paths_by_variant=(("devtools", ("/usr/share/bash-completion",)),),
+            keep_paths_by_variant={"devtools": ("/usr/share/bash-completion",)},
         ),
-        variants=(Variant("default", target="qemu"), Variant("devtools")),
+        variants=(Variant("default", outputs=("qemu",)), Variant("devtools")),
         epoch=None,
     )
 
@@ -1028,7 +1028,10 @@ def test_cloud_postoutput_reads_the_output_with_or_without_a_version(
     tmp_path: Path, target: Literal["azure", "gcp"], script: str
 ) -> None:
     """current: ${IMAGE_ID}.efi without ImageVersion=; nethermind-v1 keeps ${IMAGE_ID}_${...}."""
-    variants = (Variant("default", target="qemu"), Variant(target, parent="default", target=target))
+    variants = (
+        Variant("default", outputs=("qemu",)),
+        Variant(target, inherits="default", outputs=(target,)),
+    )
     current = _compile(_recipe(variants=variants), tmp_path / "current")
     text = _script(current, f"{script}-postoutput.sh", target).read_text()
     assert '"${OUTPUTDIR}/${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}.efi"' in text
@@ -1091,10 +1094,10 @@ def test_runtime_init_follows_a_variants_own_network_setup(tmp_path: Path) -> No
     recipe = _recipe(
         Init("hello", "echo hi"),
         variants=(
-            Variant("default", target="qemu"),
+            Variant("default", outputs=("qemu",)),
             Variant(
                 "net",
-                parent="default",
+                inherits="default",
                 add=Fragment("net", items=(Unit("network-setup.service", enabled=True),)),
             ),
         ),

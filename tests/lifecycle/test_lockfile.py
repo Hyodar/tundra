@@ -26,7 +26,7 @@ from tundravm.backends.inprocess import InProcessBackend
 from tundravm.declarative import Fragment, Package, Recipe
 
 recipe = Recipe(
-    "lockfile", Fragment("lockfile", items=(Package("curl"), Package("linux-image-amd64")))
+    "lockfile", items=(Package("curl"), Package("linux-image-amd64"))
 )
 backend = InProcessBackend()
 """
@@ -35,9 +35,7 @@ backend = InProcessBackend()
 def _recipe(*packages: str) -> Recipe:
     return Recipe(
         "lockfile",
-        Fragment(
-            "lockfile", items=(Package("linux-image-amd64"), *(Package(name) for name in packages))
-        ),
+        items=(Package("linux-image-amd64"), *(Package(name) for name in packages)),
         base="debian/bookworm",
     )
 
@@ -59,10 +57,10 @@ def test_lockfile_roundtrip_parser_serializer() -> None:
 def test_lock_records_dependency_and_recipe_metadata() -> None:
     recipe = Recipe(
         "lockfile",
-        Fragment("lockfile", items=(Package("curl"),)),
+        items=(Package("curl"),),
         base="debian/bookworm",
         variants=(
-            Variant("default", target="qemu"),
+            Variant("default", outputs=("qemu",)),
             Variant("dev", add=Fragment("dev", items=(Package("jq"),))),
         ),
     )

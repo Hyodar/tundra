@@ -11,7 +11,6 @@ from tundravm._source import GitSource
 from tundravm.declarative import (
     Declaration,
     Disk,
-    Fragment,
     Git,
     Init,
     Key,
@@ -40,7 +39,7 @@ PERSISTENT_KEY = Path("/persistent/key")
 
 
 def _recipe(*items: Declaration) -> Recipe:
-    return Recipe("runtime", Fragment("runtime", items=items))
+    return Recipe("runtime", items=items)
 
 
 def _compile(tmp_path: Path, *items: Declaration) -> CompiledTree:

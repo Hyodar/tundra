@@ -111,7 +111,7 @@ def _origin(
         if key in trace:
             return trace[key]
     for key, origins in trace.items():
-        if key[:2] == ("Directory", stage) and path.startswith(key[2].rstrip("/") + "/"):
+        if key[:2] == ("FileTree", stage) and path.startswith(key[2].rstrip("/") + "/"):
             return origins
     return ()
 
@@ -281,19 +281,19 @@ def fragment_plan(
     *include* adds what the items need but are not under test (a storage
     fragment their ``requires`` names). *base* is the platform: a fragment
     (default :data:`TEST_PLATFORM`, the kernel package) under one ``qemu``
-    variant called *variant*, or a whole recipe whose ``common`` gains the items.
+    variant called *variant*, or a whole recipe whose ``items`` gain them.
     """
     if len(items) == 1 and isinstance(items[0], Fragment):
         under_test = items[0]
     else:
         under_test = Fragment("under-test", tuple(items))
     if isinstance(base, Recipe):
-        common = Fragment("fragment-plan", (base.common, *include, under_test))
-        return Image(replace(base, common=common), variant, lock=lock)
+        items = (*base.items, *include, under_test)
+        return Image(replace(base, items=items), variant, lock=lock)
     platform = TEST_PLATFORM if base is None else base
     recipe = Recipe(
         name="fragment-plan",
-        common=Fragment("fragment-plan", (platform, *include, under_test)),
-        variants=(Variant(variant, target="qemu"),),
+        items=(platform, *include, under_test),
+        variants=(Variant(variant, outputs=("qemu",)),),
     )
     return Image(recipe, variant, lock=lock)

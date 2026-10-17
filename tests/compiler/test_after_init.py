@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-from tundravm.declarative import Declaration, Fragment, Key, Recipe, Unit
+from tundravm.declarative import Declaration, Key, Recipe, Unit
 from tundravm.testing import compile_tree
 
 
 def _unit_text(tmp_path: Path, content: str, *extra: Declaration) -> str:
     unit = Unit("app.service", content, enabled=True, after_init=True)
-    recipe = Recipe("app", Fragment("app", items=(unit, *extra)))
+    recipe = Recipe("app", items=(unit, *extra))
     return compile_tree(recipe, path=tmp_path / "tree").unit("app.service")
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Fragment, Package, Recipe
+from tundravm import Package, Recipe
 from tundravm.backends.base import collect_artifacts, is_mkosi_state, mkosi_setting
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.declarative import lower
@@ -122,7 +122,7 @@ class _LeavesRootState(InProcessBackend):
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root reads everything")
 def test_bake_warns_about_unreadable_leftovers_instead_of_crashing(tmp_path: Path) -> None:
-    recipe = Recipe("node", Fragment("base", items=(Package("curl"), Package("linux-image-amd64"))))
+    recipe = Recipe("node", items=(Package("curl"), Package("linux-image-amd64")))
     reporter = _Collect()
     project = tmp_path / "build" / "mkosi" / "default"
     try:

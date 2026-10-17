@@ -14,7 +14,6 @@ from tundravm.declarative import (
     Backend,
     Diagnostic,
     File,
-    Fragment,
     Package,
     Recipe,
     bake,
@@ -42,14 +41,11 @@ from tundravm.declarative import File, Fragment, Package, Recipe
 
 recipe = Recipe(
     "drift",
-    Fragment(
-        "drift",
-        items=(
-            Package("curl"),
-            Package("linux-image-amd64"),
-            Package("jq"),
-            File("/etc/motd", "hello\\n"),
-        ),
+    items=(
+        Package("curl"),
+        Package("linux-image-amd64"),
+        Package("jq"),
+        File("/etc/motd", "hello\\n"),
     ),
 )
 backend = InProcessBackend()
@@ -66,7 +62,7 @@ def _recipe(*extra: Package | File) -> Recipe:
         File("/etc/motd", "hello\n"),
         *extra,
     )
-    return Recipe("drift", Fragment("drift", items=items))
+    return Recipe("drift", items=items)
 
 
 def _payload(recipe: Recipe) -> dict[str, object]:
@@ -389,9 +385,9 @@ from tundravm.declarative import Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "drift",
-    Fragment("drift", items=(Package("curl"), Package("linux-image-amd64"))),
+    items=(Package("curl"), Package("linux-image-amd64")),
     variants=(
-        Variant("default", target="qemu"),
+        Variant("default", outputs=("qemu",)),
         Variant("dev", add=Fragment("dev", items=(Package("vim"),))),
     ),
 )

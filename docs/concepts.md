@@ -6,10 +6,10 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 
 | Concept | Type | Role |
 |---|---|---|
-| Recipe | `Recipe` | The whole image: recipe-wide settings, the `common` fragment and the variants |
+| Recipe | `Recipe` | The whole image: recipe-wide settings, its own `items` and the variants |
 | Declaration | `Package`, `File`, `Service`, `Unit`, `Key`, `Disk`, `Build`, ... | One typed fact about the image, identified by type plus natural key |
 | Fragment | `Fragment` | A named group of declarations and nested fragments, with `requires` and `checks`; a `Composite` subclass computes one from its fields |
-| Variant | `Variant` | An overlay on a parent (`add`, `replace`, `remove`, `target`); one mkosi directory and artifact each |
+| Variant | `Variant` | An overlay on the variant it `inherits` (`add`, `replace`, `remove`, `outputs`); one mkosi directory and artifact each |
 | Lock | `Lock` | Section digests of the resolved recipe plus one pin per source build |
 | Tree | `Tree` | The compiled mkosi project, in memory until written; has a digest |
 | Artifact | `Artifact` | A baked disk image of one variant and target, with the digests it came from |
@@ -17,16 +17,16 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 Every one of them is a frozen dataclass. Nothing in a recipe is mutated after construction: a `Composite` fragment computes its contents once, from its fields, a variant describes a change instead of applying it, and the lifecycle functions take values and return values.
 
 ```python
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm import Package, Recipe, Variant
 
 recipe = Recipe(
     name="node",
-    common=Fragment("node", items=(Package("curl"),)),
-    variants=(Variant("default", target="qemu"),),
+    items=(Package("curl"),),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 ```
 
-`Recipe` fields: `name`, `common`, `variants` (default: one `Variant("default", target="qemu")`), `base` (`debian/trixie`), `arch` (`x86_64` or `aarch64`), `mirror`, `tools_mirror`, `snapshot`, `epoch` (`0`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults).
+`Recipe` fields: `name`, `items` (its own declarations and fragments; `packages("curl", "jq")` bundles packages without a fragment name), `variants` (default: one `Variant("default", outputs=("qemu",))`), `base` (`debian/trixie`), `arch` (`x86_64` or `aarch64`), `mirror`, `tools_mirror`, `snapshot`, `epoch` (`0`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults).
 
 ### Mirrors and snapshots
 
@@ -36,12 +36,12 @@ Declarations validate themselves at construction: relative paths, empty names, u
 
 ## Resolution
 
-`resolve(recipe, variant=NAME)` turns one variant into a `Resolved`: a flat, ordered tuple of declarations, the variant's target, and the names of the fragments it included. Resolution runs in this order:
+`resolve(recipe, variant=NAME)` turns one variant into a `Resolved`: a flat, ordered tuple of declarations, the variant's outputs, and the names of the fragments it included. Resolution runs in this order:
 
-1. **Ancestry.** The variant's parent chain is walked to the root. `parent="base"` (the default) means `Recipe.common`; `parent=None` means nothing is inherited; any other value names a declared variant. Unknown parents and cycles raise.
+1. **Ancestry.** The variant's `inherits` chain is walked to the root. `inherits="base"` (the default) means `Recipe.items`; `inherits=None` means nothing is inherited; any other value names a declared variant. Unknown names and cycles raise.
 2. **Expansion.** Fragments are flattened depth-first. A fragment name seen twice expands once when both are equal; two different fragments with the same name are `fragment-conflict`.
 3. **Overlay.** For each variant from the root down: its `replace` declarations swap inherited ones, its `remove` declarations drop them, then its `add` fragment is expanded and added.
-4. **References.** Disk keys, secret stores, init and hook `after=` names, ordering contradictions and the variant's target are checked.
+4. **References.** Disk keys, secret stores, init and hook `after=` names, ordering contradictions and the variant's outputs are checked.
 5. **Fragment rules.** Every included fragment's `requires` must name another included fragment, and its `checks` run against the `Resolved` value.
 
 ### Identity
@@ -51,7 +51,7 @@ Two declarations are "the same" when they have the same identity, the type plus 
 | Declaration | Identity |
 |---|---|
 | `Package` | name, role (`runtime`/`build`) |
-| `File`, `Directory`, `Template` | stage (`skeleton`/`extra`), normalized path |
+| `File`, `FileTree`, `Template` | stage (`skeleton`/`extra`), normalized path |
 | `Unit`, `Service` | unit name (`app` and `app.service` are the same) |
 | `Setting` | section, key |
 | `Debloat`, `RuntimeTools`, `Kernel` | the type alone (one per variant) |
@@ -67,7 +67,7 @@ Equal repeats deduplicate silently. Two different declarations with the same ide
 
 ### Provenance
 
-`tundravm.declarative.resolve.provenance(recipe, variant=NAME)` records how resolution reached its result: for every identity the variant touched, the steps that touched it, in order, each an `Origin(action, variant, fragments)`. The action is `declared` (in `common`), `added` (by a variant's `add`), `replaced` (by a variant's `replace`) or `removed` (by a variant's `remove`); `fragments` is the chain of fragments the declaration came through, empty for `replace` and `remove`, which name declarations directly. A removed identity stays in the result with `removed` as its last step, and resolution errors are not raised here (`resolve` and `lint` report them).
+`tundravm.declarative.resolve.provenance(recipe, variant=NAME)` records how resolution reached its result: for every identity the variant touched, the steps that touched it, in order, each an `Origin(action, variant, fragments)`. The action is `declared` (in `Recipe.items`, the level `common`), `added` (by a variant's `add`), `replaced` (by a variant's `replace`) or `removed` (by a variant's `remove`); `fragments` is the chain of fragments the declaration came through, empty for `replace` and `remove`, which name declarations directly, and for a declaration placed directly in `Recipe.items`. A removed identity stays in the result with `removed` as its last step, and resolution errors are not raised here (`resolve` and `lint` report them).
 
 `tundravm inspect --variant NAME --why SUBJECT` and `explain_why(recipe, variant, subject)` build on it: for one emitted object (an image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME`) they print the declarations behind it with these steps, the compiled files that hold it and the lines the compiler generated for it (see [CLI: Explaining one object](cli.md#explaining-one-object)). `tundravm explore` (`explore(recipe)`) puts these steps for every declaration and every emitted file on one page, cross-linked, so a reviewer can follow a file back to its fragment and overlay without reading the recipe (see [CLI: Explore](cli.md#explore)).
 
@@ -83,7 +83,7 @@ mkosi/
   default/
     mkosi.conf
     mkosi.skeleton/...        # File(stage="skeleton"), minimal.target
-    mkosi.extra/...           # File, Directory, Unit content, runtime-init
+    mkosi.extra/...           # File, FileTree, Unit content, runtime-init
     scripts/04-build.sh       # Build declarations, build-phase hooks
     scripts/06-postinst.sh    # accounts, unit enablement, postinst hooks
     scripts/07-finalize.sh    # debloat, IMAGE_VERSION strip, finalize hooks
@@ -93,9 +93,9 @@ mkosi/
 
 Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. Inside a phase, hooks keep their declaration order except where `after=` moves one behind another hook of the same phase. A hook that runs `after` a hook of a later phase is `hook-order`.
 
-Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, templates, `Directory` sources, kernel configs) are read at lowering time. A `Directory` keeps what it reads: without `mode` each file's and empty directory's permission bits, symlinks as links (`symlinks="follow"` ships what they point to instead) and empty directories; the lockfile records each entry's `kind` (`file`, `symlink`, `directory`). The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
+Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, templates, `FileTree` sources, kernel configs) are read at lowering time. A `FileTree` keeps what it reads: without `mode` each file's and empty directory's permission bits, symlinks as links (`symlinks="follow"` ships what they point to instead) and empty directories; the lockfile records each entry's `kind` (`file`, `symlink`, `directory`). The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
 
-A relative `Path` in a declaration (`File(path, Path(...))`, `Unit(name, Path(...))`, `Template(path, Path(...))`, `Directory(path, source)`, `Kernel(config=...)`) resolves against the working directory of the process that compiles, not against the recipe file. `tundravm compile image.py` inside the project works and `tundravm compile proj/image.py` from its parent fails with `E_VALIDATION` (`cannot read motd.txt`). The same holds for a policy file passed to `Tdxs.from_policy()`, which is read when the recipe loads. Anchor every input to the recipe file instead, as the surge example's base layer (`examples/nethermind_base.py`) does:
+A relative `Path` in a declaration (`File(path, Path(...))`, `Unit(name, Path(...))`, `Template(path, Path(...))`, `FileTree(path, source)`, `Kernel(config=...)`) resolves against the working directory of the process that compiles, not against the recipe file. `tundravm compile image.py` inside the project works and `tundravm compile proj/image.py` from its parent fails with `E_VALIDATION` (`cannot read motd.txt`). The same holds for a policy file passed to `Tdxs.from_policy()`, which is read when the recipe loads. Anchor every input to the recipe file instead, as the surge example's base layer (`examples/nethermind_base.py`) does:
 
 ```python
 from pathlib import Path
@@ -103,7 +103,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 File("/etc/app/app.conf", ROOT / "files" / "app.conf")
-Directory("/opt/app", ROOT / "app")
+FileTree("/opt/app", ROOT / "app")
 Kernel(KERNEL_VERSION, KERNEL_SOURCE, config=ROOT / "kernel" / "kernel.config")
 ```
 
@@ -141,7 +141,7 @@ Two declarations put systemd units in the image:
 
 `Unit(..., after_init=True)` adds `After=runtime-init.service` and `Requires=runtime-init.service` to the shipped text's `[Unit]` section. If the variant has no runtime-init step, `lint` warns with `unit-after-init-without-init`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (the shipped `Tdxs()` and `DevTools()` fragments use `Unit`).
 
-`Template(path, template, variables=())` is a file rendered with `str.format_map(variables)` at lowering time, for config files that differ only in a few values.
+`Template(path, template, variables={})` is a file rendered with `str.format_map(variables)` at lowering time, for config files that differ only in a few values.
 
 ## Keys, disks and secrets
 
@@ -212,7 +212,7 @@ What the binary does not do yet:
 
 ### Secrets never belong in the image
 
-An image is copied to every host, registry and bucket that holds it, and its measurements are public, so a credential baked into it is a credential published. Two lint errors catch the common cases. `secret-in-file` scans every file a `File`, `Template` or `Directory` ships for a PEM private key (header and body), an AWS access key id, a GitHub token, a `token`/`secret`/`password`/`api_key = value` assignment with a token-like value in a config-like file (under `/etc`, or a `.conf`, `.env`, `.yaml`, `.json`, ... file), and a literal value in a `secrets.yaml`. `secret-in-env` scans every unit file the image ships, a verbatim `Unit`'s and the one a `Service` renders alike (`Environment=` lines, or a key or token anywhere in the unit, `exec_start` and `exec_start_pre` included), for the same keys and tokens and for a token-like literal under a `*TOKEN`, `*SECRET`, `*PASSWORD`, `*API_KEY` or `*ACCESS_KEY` variable. The guards keep them quiet on what is not a credential: public keys, certificates and a PEM header without a key body do not match; documentation values (`EXAMPLE`, `changeme`, `xxxx`, a string of few distinct characters), paths, `$VAR` and `{{ template }}` references and commented-out assignments are skipped; a SOPS-encrypted `secrets.yaml` is left alone. A finding names the kind of credential and its line (for a `Service`, the field it is in), never the value. For a value that only looks like a credential, `allow_secret=True` on the `File`, `Template`, `Directory`, `Unit` or `Service` exempts that declaration; it changes neither the recipe digest nor the tree. A real credential goes in `Secrets` instead, delivered at boot to a `SecretFile` or a `SecretEnv` target by an `ExternalDelivery` that writes it, so the image carries only where it goes (see [Secret delivery at boot](#secret-delivery-at-boot): the built-in delivery writes only the SSH key). The hint names the target kinds the variant's `ExternalDelivery` writes, or `ExternalDelivery` itself when the variant declares none.
+An image is copied to every host, registry and bucket that holds it, and its measurements are public, so a credential baked into it is a credential published. Two lint errors catch the common cases. `secret-in-file` scans every file a `File`, `Template` or `FileTree` ships for a PEM private key (header and body), an AWS access key id, a GitHub token, a `token`/`secret`/`password`/`api_key = value` assignment with a token-like value in a config-like file (under `/etc`, or a `.conf`, `.env`, `.yaml`, `.json`, ... file), and a literal value in a `secrets.yaml`. `secret-in-env` scans every unit file the image ships, a verbatim `Unit`'s and the one a `Service` renders alike (`Environment=` lines, or a key or token anywhere in the unit, `exec_start` and `exec_start_pre` included), for the same keys and tokens and for a token-like literal under a `*TOKEN`, `*SECRET`, `*PASSWORD`, `*API_KEY` or `*ACCESS_KEY` variable. The guards keep them quiet on what is not a credential: public keys, certificates and a PEM header without a key body do not match; documentation values (`EXAMPLE`, `changeme`, `xxxx`, a string of few distinct characters), paths, `$VAR` and `{{ template }}` references and commented-out assignments are skipped; a SOPS-encrypted `secrets.yaml` is left alone. A finding names the kind of credential and its line (for a `Service`, the field it is in), never the value. For a value that only looks like a credential, `allow_secret=True` on the `File`, `Template`, `FileTree`, `Unit` or `Service` exempts that declaration; it changes neither the recipe digest nor the tree. A real credential goes in `Secrets` instead, delivered at boot to a `SecretFile` or a `SecretEnv` target by an `ExternalDelivery` that writes it, so the image carries only where it goes (see [Secret delivery at boot](#secret-delivery-at-boot): the built-in delivery writes only the SSH key). The hint names the target kinds the variant's `ExternalDelivery` writes, or `ExternalDelivery` itself when the variant declares none.
 
 ### Runtime tools
 
@@ -231,7 +231,7 @@ Build(
 )
 ```
 
-The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in a copy of the source checkout with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. Built outputs are cached in the build directory under `<namespace>-<fingerprint16>`: `cache_key` (default: the build's name) is the namespace, and the fingerprint hashes the source pin, the build script or recipe, the install steps, the architecture and the toolchain, so changing any of them rebuilds. `nethermind-v1` keeps its historical keys.
+The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in a copy of the source checkout with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. With `using=Go(...)`, `Cargo(...)` or `Dotnet(...)` in place of `script` the toolchain renders the build command. Built outputs are cached in the build directory under `<namespace>-<fingerprint16>`: `cache_namespace` (default: the build's name) is the namespace, and the fingerprint hashes the source pin, the build script or toolchain, the install steps, the architecture and the toolchain, so changing any of them rebuilds. `nethermind-v1` keeps its historical keys.
 
 The recipe records the symbolic source (`master`), never a commit. `tundravm lock` resolves each `Git` ref to a commit and each `Http` without `sha256` to a hash and stores the pins in the lockfile; compile and bake then build exactly those. A build without a pin is the `source-unpinned` warning.
 
@@ -261,36 +261,36 @@ See [reproducibility](reproducibility.md#hermetic-builds).
 
 ## Variants and targets
 
-A variant produces one mkosi directory and, when baked, one artifact. Its `target` (`qemu`, `azure` or `gcp`, inherited from the parent, `qemu` at the root) decides the disk format and adds the platform integration: an `azure` variant gets the Azure provisioning service and `dmidecode` and converts its disk to a fixed VHD (`parted`, `qemu-img`) in a postoutput script; a `gcp` variant gets the GCP equivalents and a `tar.gz` disk (`sgdisk`). Those scripts run wherever mkosi runs its tools: on the host, or inside mkosi's tools tree when the build uses one, in which case the local backend installs `qemu-utils`, `gdisk` and `parted` into it.
+A variant produces one mkosi directory and, when baked, one artifact. Its `outputs` (`qemu`, `azure` or `gcp`, inherited from the variant it inherits, `qemu` at the root) decides the disk format and adds the platform integration: an `azure` variant gets the Azure provisioning service and `dmidecode` and converts its disk to a fixed VHD (`parted`, `qemu-img`) in a postoutput script; a `gcp` variant gets the GCP equivalents and a `tar.gz` disk (`sgdisk`). Those scripts run wherever mkosi runs its tools: on the host, or inside mkosi's tools tree when the build uses one, in which case the local backend installs `qemu-utils`, `gdisk` and `parted` into it.
 
 ```python
 variants=(
-    Variant("default", target="qemu"),
-    Variant("azure", parent="default", target="azure"),
-    Variant("gcp", parent="default", target="gcp"),
-    Variant("devtools", parent="default", add=DevTools()),
+    Variant("default", outputs=("qemu",)),
+    Variant("azure", inherits="default", outputs=("azure",)),
+    Variant("gcp", inherits="default", outputs=("gcp",)),
+    Variant("devtools", inherits="default", add=DevTools()),
 )
 ```
 
-`targets=("azure", "gcp")` gives one variant several outputs (one disk image each); `target=X` is shorthand for `targets=(X,)`, and passing both is an error. A child cannot drop a cloud target it inherits (`target-inconsistent`): give it `parent=None` or a qemu parent instead.
+`outputs=("azure", "gcp")` gives one variant several outputs (one disk image each); an empty `outputs` inherits them (`qemu` at the root). A child cannot drop a cloud output it inherits (`target-inconsistent`): give it `inherits=None` or have it inherit a qemu variant instead.
 
 How a variant lowers depends on what it does:
 
-- A variant whose parent is `base` or the default variant, and which only adds declarations or replaces `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant's directory. This keeps committed trees such as surge's byte-identical.
-- Every other variant (chained onto another variant, parentless, removing anything, replacing other kinds, changing keys, disks or secrets, mounting its own `BuildSources`, having its own settings or kernel, or leaving a cloud-targeted default variant's targets) is lowered standalone from its own resolved declarations, with its own `mkosi.conf` lines and kernel.
+- A variant that inherits `base` or the default variant, and which only adds declarations or replaces `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant's directory. This keeps committed trees such as surge's byte-identical.
+- Every other variant (inheriting another variant, standalone, removing anything, replacing other kinds, changing keys, disks or secrets, mounting its own `BuildSources`, having its own settings or kernel, or leaving a cloud-targeted default variant's targets) is lowered standalone from its own resolved declarations, with its own `mkosi.conf` lines and kernel.
 
-The default variant (the one named `default`, else the first root variant) may itself have a parent; that parent then lowers like any other variant.
+The default variant (the one named `default`, else the first root variant) may itself inherit another variant; that variant then lowers like any other.
 
 These still raise `ValidationError` when you compile, lint or bake:
 
 - a standalone-lowered variant under `Mkosi(layout="native")`, because mkosi applies the root configuration to every profile; the error lists each such variant with its reason;
 - in the current dialect, a variant under `Mkosi(layout="native")` whose build distribution (repositories, build packages, Build settings) differs from the default variant's while the root builds a kernel or source builds, because an overlay cannot suppress the root hook; match the default's distribution or use the per-directory layout;
-- unreadable files, `Unit` or `Template` sources that are not UTF-8, and missing or empty `Directory` sources;
+- unreadable files, `Unit` or `Template` sources that are not UTF-8, and missing or empty `FileTree` sources;
 - a `Template` placeholder without a value, and a malformed `Setting` value (a non-boolean `Build.WithNetwork`, several values for a single-valued key);
 - a `Setting` for a key the compiler writes itself (`Packages`, `Mirror`, `Format`, ...), naming the declaration to use instead;
 - a `Kernel` from `Http` without `sha256`;
 - two `Secrets` whose config, manifest or delivered file paths overlap;
-- variant parent cycles and `Init`/`Hook` ordering cycles.
+- variant `inherits` cycles and `Init`/`Hook` ordering cycles.
 
 ## Lifecycle
 

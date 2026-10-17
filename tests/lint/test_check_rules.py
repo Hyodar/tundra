@@ -47,7 +47,7 @@ from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import check_report
 from tundravm.declarative.utils import EfiStub
 
-DEFAULT = Variant("default", target="qemu")
+DEFAULT = Variant("default", outputs=("qemu",))
 KERNEL = Package("linux-image-amd64")
 NOT_BOOTABLE = Setting("Content", "Bootable", ("no",))
 """Quiets kernel-missing in the ``clean=False`` recipes, which test package-less variants."""
@@ -64,7 +64,7 @@ def recipe(
     *items: Declaration, variants: tuple[Variant, ...] = (DEFAULT,), clean: bool = True
 ) -> Recipe:
     common = (*CLEAN, *items) if clean else (NOT_BOOTABLE, *items)
-    return Recipe("check", Fragment("common", items=common), variants=variants)
+    return Recipe("check", items=common, variants=variants)
 
 
 def report(subject: Recipe, *variants: str) -> list[Diagnostic]:
@@ -98,7 +98,7 @@ def test_service_user_inherited_from_default() -> None:
 
 def test_service_user_not_inherited_by_standalone_variant() -> None:
     items = (KERNEL, Package("curl"), Service("app", "/usr/bin/app", user="app"))
-    dev = Variant("dev", parent=None, add=Fragment("dev", items=items))
+    dev = Variant("dev", inherits=None, add=Fragment("dev", items=items))
     [diag] = report(recipe(variants=(DEFAULT, dev)), "dev")
     assert diag.code == "service-user-missing"
     assert "does not inherit" in (diag.hint or "")
@@ -118,7 +118,7 @@ def test_service_user_root_base_or_hook_created_is_fine() -> None:
 
 
 def test_file_path_duplicate_with_different_content() -> None:
-    [diag] = report(recipe(Template("/etc/motd", "bye {x}\n", variables=(("x", 1),))))
+    [diag] = report(recipe(Template("/etc/motd", "bye {x}\n", variables={"x": 1})))
     assert (diag.severity, diag.code, diag.subject) == ("error", "file-path-duplicate", "/etc/motd")
     assert "file, template" in diag.message
 
@@ -181,19 +181,19 @@ def test_service_command_shipped_by_file_hook_package_or_essential() -> None:
 
 
 def cloud_recipe() -> Recipe:
-    variants = (DEFAULT, Variant("azure", target="azure"), Variant("gcp", target="gcp"))
+    variants = (DEFAULT, Variant("azure", outputs=("azure",)), Variant("gcp", outputs=("gcp",)))
     return recipe(variants=variants)
 
 
 def test_cloud_variants_lint_clean() -> None:
-    agent = Variant("agent", target="azure", add=Fragment("agent", items=(Package("waagent"),)))
-    both = Variant("both", targets=("azure", "gcp"))
+    agent = Variant("agent", outputs=("azure",), add=Fragment("agent", items=(Package("waagent"),)))
+    both = Variant("both", outputs=("azure", "gcp"))
     subject = recipe(variants=(*cloud_recipe().variants, agent, both))
     assert report(subject, "azure", "gcp", "agent", "both") == []
 
 
 def test_variant_cannot_drop_an_inherited_cloud_target() -> None:
-    child = Variant("plain", parent="gcp", target="qemu")
+    child = Variant("plain", inherits="gcp", outputs=("qemu",))
     subject = recipe(variants=(*cloud_recipe().variants, child))
     assert [(d.code, d.subject) for d in lint(subject, variants=["plain"])] == [
         ("target-inconsistent", "plain")
@@ -323,7 +323,7 @@ def test_secret_target_unsupported_by_an_external_provider() -> None:
 
 
 def test_kernel_missing() -> None:
-    subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT,))
+    subject = Recipe("check", items=CLEAN[1:], variants=(DEFAULT,))
     [diag] = report(subject)
     assert (diag.severity, diag.code, diag.variant) == ("error", "kernel-missing", "default")
     assert "A kernel must be installed" in diag.message
@@ -345,13 +345,13 @@ def test_kernel_missing() -> None:
     ids=lambda item: getattr(item, "name", None) or type(item).__name__,
 )
 def test_kernel_package_kernel_or_not_bootable_is_fine(boot: Declaration) -> None:
-    subject = Recipe("check", Fragment("common", items=(*CLEAN[1:], boot)), variants=(DEFAULT,))
+    subject = Recipe("check", items=(*CLEAN[1:], boot), variants=(DEFAULT,))
     assert "kernel-missing" not in codes(subject)
 
 
 def test_kernel_missing_is_per_variant() -> None:
-    booted = Variant("booted", parent=None, add=Fragment("booted", items=(KERNEL,)))
-    subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT, booted))
+    booted = Variant("booted", inherits=None, add=Fragment("booted", items=(KERNEL,)))
+    subject = Recipe("check", items=CLEAN[1:], variants=(DEFAULT, booted))
     assert [(d.variant, d.code) for d in report(subject, "default", "booted")] == [
         ("default", "kernel-missing")
     ]
@@ -361,9 +361,9 @@ def test_kernel_missing_is_per_variant() -> None:
 
 
 def _arm(*items: Declaration | Fragment, target: str = "azure") -> Recipe:
-    variant = Variant("default", target=target)  # type: ignore[arg-type]
+    variant = Variant("default", outputs=(target,))  # type: ignore[arg-type]
     common = Fragment("common", items=(*CLEAN, *items))
-    return Recipe("check", common, variants=(variant,), arch="aarch64")
+    return Recipe("check", items=(common,), variants=(variant,), arch="aarch64")
 
 
 def test_aarch64_with_efi_stub_is_unsupported() -> None:
@@ -384,7 +384,7 @@ def test_aarch64_qemu_target_is_unsupported() -> None:
 
 def test_x86_64_and_plain_aarch64_are_fine() -> None:
     efi = EfiStub(snapshot="20251113T083151Z", version="257")
-    x86 = Recipe("check", Fragment("common", items=(*CLEAN, efi)), variants=(DEFAULT,))
+    x86 = Recipe("check", items=(*CLEAN, efi), variants=(DEFAULT,))
     assert "recipe-arch-unsupported" not in codes(x86)
     assert "recipe-arch-unsupported" not in codes(_arm())
 
@@ -489,11 +489,11 @@ items = [
     User("app", system=True),
     Service("app", "/usr/bin/app", user="app"),
 ]
-variants = [Variant("default", target="qemu")]
+variants = [Variant("default", outputs=("qemu",))]
 """
 
 BIND = """
-recipe = Recipe("cli", Fragment("common", items=tuple(items)), variants=tuple(variants))
+recipe = Recipe("cli", items=tuple(items), variants=tuple(variants))
 """
 
 

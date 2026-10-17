@@ -1,4 +1,4 @@
-"""``Directory``: import a host directory tree into mkosi.extra."""
+"""``FileTree``: import a host directory tree into mkosi.extra."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main
-from tundravm.declarative import Directory, Fragment, Recipe, Variant, compile, lower
+from tundravm.declarative import FileTree, Fragment, Recipe, Variant, compile, lower
 from tundravm.errors import ValidationError
 from tundravm.models import FileEntry
 
@@ -27,8 +27,8 @@ def _tree(root: Path) -> Path:
     return root
 
 
-def _recipe(*directories: Directory, epoch: int | None = 0) -> Recipe:
-    return Recipe("tree", Fragment("common", items=directories), epoch=epoch)
+def _recipe(*directories: FileTree, epoch: int | None = 0) -> Recipe:
+    return Recipe("tree", items=directories, epoch=epoch)
 
 
 def _files(recipe: Recipe, variant: str = "default") -> list[FileEntry]:
@@ -37,7 +37,7 @@ def _files(recipe: Recipe, variant: str = "default") -> list[FileEntry]:
 
 def test_imports_nested_tree_under_dest(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    files = {f.path: f for f in _files(_recipe(Directory("/etc/app/", src)))}
+    files = {f.path: f for f in _files(_recipe(FileTree("/etc/app/", src)))}
 
     assert sorted(files) == [
         "/etc/app/bin/start.sh",
@@ -51,25 +51,25 @@ def test_imports_nested_tree_under_dest(tmp_path: Path) -> None:
 
 def test_preserves_modes_unless_mode_given(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    modes = {f.path: f.mode for f in _files(_recipe(Directory("/opt", src)))}
+    modes = {f.path: f.mode for f in _files(_recipe(FileTree("/opt", src)))}
     assert modes["/opt/bin/start.sh"] == "0755"
     assert modes["/opt/motd"] == "0644"
 
-    forced = _files(_recipe(Directory("/opt", src, mode=0o600)))
+    forced = _files(_recipe(FileTree("/opt", src, mode=0o600)))
     assert {f.mode for f in forced} == {"0600"}
 
 
 def test_exclude_globs_match_relative_paths_and_prune_dirs(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    recipe = _recipe(Directory("/etc", src, exclude=("cache", "*.swp", "systemd/*/*.network")))
+    recipe = _recipe(FileTree("/etc", src, exclude=("cache", "*.swp", "systemd/*/*.network")))
 
     assert [f.path for f in _files(recipe)] == ["/etc/bin/start.sh", "/etc/motd"]
 
 
 def test_order_is_deterministic(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
-    first = [f.path for f in _files(_recipe(Directory("/x", src)))]
-    second = [f.path for f in _files(_recipe(Directory("/x", src)))]
+    first = [f.path for f in _files(_recipe(FileTree("/x", src)))]
+    second = [f.path for f in _files(_recipe(FileTree("/x", src)))]
     assert first == second == sorted(first)
 
 
@@ -78,7 +78,7 @@ def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
     src.mkdir()
     blob = bytes(range(256))
     (src / "firmware.bin").write_bytes(blob)
-    recipe = _recipe(Directory("/lib/firmware", src), epoch=None)
+    recipe = _recipe(FileTree("/lib/firmware", src), epoch=None)
 
     image = lower(recipe)
     assert image.state.profiles["default"].files[0].content == blob
@@ -91,12 +91,11 @@ def test_scoped_to_variant(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
     recipe = Recipe(
         "tree",
-        Fragment("common"),
         variants=(
-            Variant("default", target="qemu"),
+            Variant("default", outputs=("qemu",)),
             Variant(
                 "dev",
-                add=Fragment("dev", items=(Directory("/etc/dev", src, exclude=("cache",)),)),
+                add=Fragment("dev", items=(FileTree("/etc/dev", src, exclude=("cache",)),)),
             ),
         ),
     )
@@ -107,10 +106,10 @@ def test_scoped_to_variant(tmp_path: Path) -> None:
 
 def test_rejects_missing_or_empty_src(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="existing directory"):
-        lower(_recipe(Directory("/etc", tmp_path / "missing")))
+        lower(_recipe(FileTree("/etc", tmp_path / "missing")))
     (tmp_path / "empty").mkdir()
     with pytest.raises(ValidationError, match="no files"):
-        lower(_recipe(Directory("/etc", tmp_path / "empty")))
+        lower(_recipe(FileTree("/etc", tmp_path / "empty")))
 
 
 def _private_tree(root: Path) -> Path:
@@ -127,7 +126,7 @@ def _private_tree(root: Path) -> Path:
 
 def test_keeps_modes_symlinks_and_empty_directories(tmp_path: Path) -> None:
     src = _private_tree(tmp_path / "app")
-    entries = {f.path: f for f in _files(_recipe(Directory("/etc/app", src)))}
+    entries = {f.path: f for f in _files(_recipe(FileTree("/etc/app", src)))}
 
     assert entries["/etc/app/token"] == FileEntry("/etc/app/token", "secret\n", "0600")
     assert entries["/etc/app/current"] == FileEntry("/etc/app/current", "token", "0777", "symlink")
@@ -136,7 +135,7 @@ def test_keeps_modes_symlinks_and_empty_directories(tmp_path: Path) -> None:
 
     tree = {
         e.path.removeprefix("default/mkosi.extra"): e
-        for e in compile(_recipe(Directory("/etc/app", src))).entries
+        for e in compile(_recipe(FileTree("/etc/app", src))).entries
     }
     assert tree["/etc/app/token"].mode == 0o600
     assert tree["/etc/app/current"].symlink == "token"
@@ -146,7 +145,7 @@ def test_keeps_modes_symlinks_and_empty_directories(tmp_path: Path) -> None:
 
 def test_mode_normalises_files_and_empty_directories(tmp_path: Path) -> None:
     src = _private_tree(tmp_path / "app")
-    entries = {f.path: f for f in _files(_recipe(Directory("/etc/app", src, mode=0o640)))}
+    entries = {f.path: f for f in _files(_recipe(FileTree("/etc/app", src, mode=0o640)))}
     assert entries["/etc/app/token"].mode == "0640"
     assert entries["/etc/app/spool"].mode == "0755"
     assert entries["/etc/app/current"].kind == "symlink"
@@ -155,17 +154,17 @@ def test_mode_normalises_files_and_empty_directories(tmp_path: Path) -> None:
 def test_follow_reads_through_links(tmp_path: Path) -> None:
     src = _private_tree(tmp_path / "app")
     (src / "gone").unlink()
-    entries = {f.path: f for f in _files(_recipe(Directory("/etc/app", src, symlinks="follow")))}
+    entries = {f.path: f for f in _files(_recipe(FileTree("/etc/app", src, symlinks="follow")))}
     assert entries["/etc/app/current"] == FileEntry("/etc/app/current", "secret\n", "0600")
 
     (src / "gone").symlink_to("/nowhere")
     with pytest.raises(ValidationError, match="points to nothing"):
-        lower(_recipe(Directory("/etc/app", src, symlinks="follow")))
+        lower(_recipe(FileTree("/etc/app", src, symlinks="follow")))
 
 
 def test_rejects_unknown_symlink_policy(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="symlinks"):
-        Directory("/etc", tmp_path, symlinks="copy")  # type: ignore[arg-type]
+        FileTree("/etc", tmp_path, symlinks="copy")  # type: ignore[arg-type]
 
 
 def test_inspect_lists_modes_links_and_directories(tmp_path: Path) -> None:
@@ -173,9 +172,9 @@ def test_inspect_lists_modes_links_and_directories(tmp_path: Path) -> None:
     recipe = tmp_path / "image.py"
     recipe.write_text(
         "from pathlib import Path\n"
-        "from tundravm import Directory, Fragment, Package, Recipe\n"
-        "recipe = Recipe('t', Fragment('c', items=(Package('linux-image-amd64'), "
-        "Directory('/etc/app', Path(__file__).parent / 'app'))))\n",
+        "from tundravm import FileTree, Fragment, Package, Recipe\n"
+        "recipe = Recipe('t', items=(Package('linux-image-amd64'), "
+        "FileTree('/etc/app', Path(__file__).parent / 'app')))\n",
         encoding="utf-8",
     )
     code, out = run_main("inspect", str(recipe))

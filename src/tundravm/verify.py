@@ -45,9 +45,10 @@ from .evidence import (
     bake_simulated,
     coverage,
     lint_entry,
+    policy_facts,
     tree_rows_digest,
 )
-from .measure.policy import is_placeholder, read_policy
+from .measure.policy import read_policy
 from .models import BAKE_RESULT_FILENAME
 
 VERIFY_SCHEMA = "tundravm.verify/1"
@@ -617,6 +618,7 @@ def _variant_facts(
     out.update(facts)
     rows = [(n, row) for n, row in enumerate(record.get("artifacts", [])) if isinstance(row, dict)]
     digests = _mapping(entry.get("artifact_digests"))
+    payloads = _mapping(entry.get("boot_payloads"))
     targets = sorted(str(target) for target in _mapping(entry.get("artifacts")))
     listed = sorted(str(row.get("target")) for _, row in rows)
     if listed != targets:
@@ -627,10 +629,23 @@ def _variant_facts(
         checks.append(_inconsistent(f"{subject}.artifacts", message))
     for n, row in rows:
         target = str(row.get("target"))
-        actual = {"sha256": digests.get(target), "simulated": simulated}
+        actual = {
+            "sha256": digests.get(target),
+            "simulated": simulated,
+            "boot_payload": _boot_payload(payloads.get(target), row.get("boot_payload")),
+        }
         checks.extend(_facts(f"{subject}.artifacts.{target}", row, actual, BAKE_RESULT_FILENAME))
         out["artifacts"][n] = {**row, **actual}
     return checks
+
+
+def _boot_payload(recorded: object, listed: object) -> dict[str, str] | None:
+    """The boot payload ``bake-result.json`` records for an artifact, its path as the index
+    shows it (the bundle leaves the path relative to another machine's build directory)."""
+    if not isinstance(recorded, dict) or not recorded.get("sha256"):
+        return None
+    shown = _mapping(listed).get("path") or recorded.get("path")
+    return {"path": str(shown), "sha256": str(recorded["sha256"])}
 
 
 def _lock_facts(
@@ -749,17 +764,7 @@ def _policy_check(
     except TdxError:
         facts: dict[str, Any] = {"valid": False}
     else:
-        measured = payload.get("artifact")
-        sha = measured.get("sha256") if isinstance(measured, dict) else None
-        shas = {row.get("sha256") for row in rows.values()}
-        target = next((t for t, row in rows.items() if sha and row.get("sha256") == sha), None)
-        facts = {
-            "valid": True,
-            "placeholder": is_placeholder(payload),
-            "registers": sorted(dict(payload.get("registers") or {})),  # type: ignore[call-overload]
-            "artifact_matches": (sha in shas) if sha else None,
-            "measures": {"target": target, "sha256": sha},
-        }
+        facts = {"valid": True, **policy_facts(payload, list(rows.values()))}
     derived["variants"][name]["policy"] = {**policy, **facts}
     return _facts(subject, policy, facts, member)
 

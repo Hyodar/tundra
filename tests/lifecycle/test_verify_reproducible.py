@@ -13,7 +13,7 @@ from tundravm import Backend, ReproducibilityError, bake, lock
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
-from tundravm.declarative import Fragment, Package, Recipe, Variant, lower
+from tundravm.declarative import Package, Recipe, Variant, lower
 from tundravm.declarative.lifecycle import bake_image, read_artifacts
 from tundravm.errors import BackendExecutionError
 from tundravm.models import REPRODUCE_DIRNAME, BakeRequest, BakeResult
@@ -25,8 +25,8 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "repro",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
-    variants=(Variant("default", targets=("qemu", "azure")),),
+    items=(Package("curl"), Package("linux-image-amd64")),
+    variants=(Variant("default", outputs=("qemu", "azure")),),
 )
 """
 
@@ -34,8 +34,8 @@ recipe = Recipe(
 def _recipe() -> Recipe:
     return Recipe(
         "repro",
-        Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
-        variants=(Variant("default", targets=("qemu", "azure")),),
+        items=(Package("curl"), Package("linux-image-amd64")),
+        variants=(Variant("default", outputs=("qemu", "azure")),),
     )
 
 

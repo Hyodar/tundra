@@ -5,7 +5,9 @@ reads it into the ``expected_measurements`` of a ``tdxs`` validator. The file
 is JSON with ``schema_version``, ``scheme``, ``tool``, ``tool_version``,
 ``artifact`` (``path``, ``sha256``), ``registers`` (``RTMR0``..``RTMR2``
 required, ``RTMR3`` and ``MRTD`` optional) and, for placeholder values, a
-``note`` saying so.
+``note`` saying so. ``boot_payload`` (``path``, ``sha256``), when present, is the
+UKI the registers are a measurement of: the artifact itself for a UKI, else the
+UKI the bake recorded the disk artifact booting.
 """
 
 from __future__ import annotations
@@ -39,11 +41,13 @@ def policy_payload(
     values: Mapping[str, str],
     artifact_path: str,
     artifact_sha256: str,
+    boot_payload: Mapping[str, str] | None = None,
     allow_placeholder: bool = False,
 ) -> dict[str, object]:
     """The normalised policy for one measured artifact; raises on placeholders or gaps.
 
     *tool* is ``Measurements.tool`` (``"measured-boot 1.2"``: name, then version).
+    *boot_payload* (``path``, ``sha256``) is the UKI measured, recorded when known.
     """
     if scheme != "rtmr":
         raise ValidationError(
@@ -67,6 +71,8 @@ def policy_payload(
         "artifact": {"path": artifact_path, "sha256": artifact_sha256},
         "registers": registers,
     }
+    if boot_payload is not None:
+        payload["boot_payload"] = {"path": boot_payload["path"], "sha256": boot_payload["sha256"]}
     if placeholder:
         payload["note"] = PLACEHOLDER_NOTE
     return payload

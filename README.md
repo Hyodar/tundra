@@ -30,20 +30,23 @@ git add uv.lock      # committed, the generated workflow installs exactly it (`u
 
 ```python
 # node.py
-from tundravm import File, Fragment, Package, Recipe, Service, Unit, User, Variant
+from tundravm import File, Package, Recipe, Service, Unit, User, Variant
 from tundravm.backends import LimaMkosiBackend
 
 recipe = Recipe(
     name="node",
-    common=Fragment("node", items=(
+    items=(
         Package("linux-image-amd64"),  # a bootable variant needs a kernel (lint: kernel-missing)
         Package("curl"),
         File("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
         User("app", shell="/bin/false"),
         Service("app", "/usr/bin/app", user="app", restart="on-failure"),
         Unit("ssh.socket", enabled=False, masked=True),
-    )),
-    variants=(Variant("default", target="qemu"), Variant("azure", parent="default", target="azure")),
+    ),
+    variants=(
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
+    ),
 )
 backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 ```
@@ -80,7 +83,7 @@ Moving from the simulator to a TDX host takes `--param tdx=true` (TDVF firmware 
 Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and are painful to keep reproducible across cloud targets. A recipe gives you:
 
 - **Deterministic output.** The same recipe always compiles to the same mkosi tree, byte for byte. `compile --check` fails CI when the committed tree is stale.
-- **One definition, several targets.** A variant with `target="azure"` or `target="gcp"` gets the platform integration; QEMU qcow2, Azure VHD and GCP tar.gz come from one recipe.
+- **One definition, several targets.** A variant with `outputs=("azure",)` or `outputs=("gcp",)` gets the platform integration; QEMU qcow2, Azure VHD and GCP tar.gz come from one recipe.
 - **Composition without mutation.** Fragments are values: a plain `Fragment(...)`, or a `Composite` subclass configured by its fields. Keys, disks and secrets reference each other as objects, and the runtime-init sequence they need is derived, not hand-ordered.
 - **Locked inputs.** The lockfile records a digest per recipe section and a commit or hash per source build. Bakes are frozen against it, and `lock --check` names what drifted.
 - **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the measurements policy, SBOMs, lint) into an `evidence.json` index with a pass, fail or incomplete verdict and stable reason codes (`--require` makes missing checks count), a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
@@ -92,7 +95,7 @@ The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full
 
 | Concept | What it is |
 |---|---|
-| **Recipe** | The whole image: name, base, arch, mirrors, epoch, the `common` fragment and the variants. An immutable value bound to `recipe` in a Python file. |
+| **Recipe** | The whole image: name, base, arch, mirrors, epoch, its own `items` and the variants. An immutable value bound to `recipe` in a Python file. |
 | **Declaration** | One typed fact about the image: `Package`, `File`, `Template`, `User`, `Group`, `Service`, `Unit`, `Hook`, `Init`, `Key`, `Disk`, `Secrets`, `Build`, `Kernel`, `Setting`, ... Identified by type plus natural key (package name, file path, unit name). |
 | **Fragment** | A named group of declarations and nested fragments, with `requires` (fragments that must also be present) and `checks` (lint functions). A reusable "module" is a `Composite`: a `Fragment` subclass whose fields are its configuration. |
 | **Variant** | An overlay on its parent: `add` a fragment, `replace` or `remove` inherited declarations, set the `target`. One mkosi directory per variant and one artifact per target. |
@@ -149,21 +152,21 @@ storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
 ```python
 variants=(
-    Variant("default", target="qemu"),
-    Variant("azure", parent="default", target="azure"),
-    Variant("azure-debug", parent="azure", add=DevTools()),       # chained: azure plus debugging, never ship it
+    Variant("default", outputs=("qemu",)),
+    Variant("azure", inherits="default", outputs=("azure",)),
+    Variant("azure-debug", inherits="azure", add=DevTools()),       # chained: azure plus debugging, never ship it
     Variant("prod", replace=(File("/etc/motd", "prod\n"),)),
     Variant("slim", remove=(Package("jq"),)),
-    Variant("clouds", parent="default", targets=("azure", "gcp")),  # one variant, two disk images
-    Variant("bare", parent=None, add=Fragment("bare", items=(Package("curl"),))),
+    Variant("clouds", inherits="default", outputs=("azure", "gcp")),  # one variant, two disk images
+    Variant("bare", inherits=None, add=packages("curl")),
 )
 ```
 
-- `parent` is `"base"` (the default, meaning `Recipe.common`), another variant's name, or `None` for a standalone variant that inherits nothing.
-- `add` is a fragment. Adding a declaration whose identity the variant already inherits with a different value is an `identity-collision` error; use `replace`, which swaps an inherited declaration of the same identity (`replace-missing` if there is none). `remove` drops one (`remove-missing` if there is none).
-- `target` (or `targets` for several outputs) is `qemu`, `azure` or `gcp`, inherited from the parent; cloud targets add their platform integration. A child cannot drop a cloud target it inherits (`target-inconsistent`).
+- `inherits` is `"base"` (the default, meaning `Recipe.items`), another variant's name, or `None` for a standalone variant that inherits nothing.
+- `add` is a fragment; `packages("strace", "gdb")` bundles packages without inventing a fragment name. Adding a declaration whose identity the variant already inherits with a different value is an `identity-collision` error; use `replace`, which swaps an inherited declaration of the same identity (`replace-missing` if there is none). `remove` drops one (`remove-missing` if there is none).
+- `outputs` names the targets the variant builds (`qemu`, `azure`, `gcp`; one disk image each), inherited from the variant it inherits when empty; cloud targets add their platform integration. A child cannot drop a cloud target it inherits (`target-inconsistent`).
 
-`Setting`s and the `Kernel` belong to the variant that declares them; declare them in `common` to share them. A variant with its own settings or kernel lowers standalone. See [Variants and targets](docs/concepts.md#variants-and-targets).
+`Setting`s and the `Kernel` belong to the variant that declares them; declare them in `Recipe.items` to share them. A variant with its own settings or kernel lowers standalone. See [Variants and targets](docs/concepts.md#variants-and-targets).
 
 ## Reproducibility
 
@@ -224,11 +227,11 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 
 | Example | What it teaches |
 |---|---|
-| [`01_minimal.py`](examples/01_minimal.py) | The smallest recipe: a base, packages and a file in one `common` fragment; no variants means one QEMU `default` |
-| [`02_variants.py`](examples/02_variants.py) | `Variant` overlays: `add`, `replace`/`remove` by identity, `parent` chains, a standalone `parent=None` variant, `targets=("azure", "gcp")` |
+| [`01_minimal.py`](examples/01_minimal.py) | The smallest recipe: a base, packages and a file as the recipe's `items`; no variants means one QEMU `default` |
+| [`02_variants.py`](examples/02_variants.py) | `Variant` overlays: `add`, `replace`/`remove` by identity, `inherits` chains, a standalone `inherits=None` variant, `outputs=("azure", "gcp")`, `packages()` |
 | [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment` and a `Composite` with fields, `requires=` and a lint `checks=` rule |
 | [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | TPM-sealed `Key`, encrypted `Disk`, `Secrets` with `Schema`s and file/env targets an `ExternalDelivery` writes, `RuntimeTools`, `Partition` |
-| [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball with the `Go` recipe and from a `Git` tag with a script; file and directory installs; `cache_key` |
+| [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball `using` the `Go` toolchain and from a `Git` tag with a script; file and directory installs; `cache_namespace` |
 | [`06_attestation.py`](examples/06_attestation.py) | `Tdxs()` as attester and as verifier built with `Tdxs.from_policy()` from `peer.policy.json` (a placeholder export of `measure --export-policy`), plus `Policy(require_frozen_lock=True)` |
 | [`nethermind_base.py`](examples/nethermind_base.py) | The nethermind-tdx base layer as one `Composite`: TDX kernel, EFI stub, backports, debloat, `Tdxs()` |
 | [`fragments/`](examples/fragments/) | `Raiko()`, `TaikoClient()`, `Nethermind()`: each with a `Build`, a user, a unit and an env file |
@@ -267,7 +270,7 @@ Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and contex
 |---|---|
 | `E_VALIDATION` | A declaration is malformed, or the recipe has error diagnostics. `tundravm lint RECIPE` lists them all. Also raised for an unknown `--variant` |
 | `E_LINT` | `bake` refused a recipe with error-level compiler findings. Run `tundravm lint RECIPE` |
-| `secret-in-file` (lint) | A `File`, `Template` or `Directory` ships what looks like a private key, token or password, which every copy of the image would carry. Deliver it at boot with `Secrets` and a `SecretFile` (or `SecretEnv`; `secret-in-env` is the same for `Service(env=...)` and unit files) under `delivery=ExternalDelivery(...)` naming what writes it (the built-in `tundra-tools` delivery writes only the SSH key: `secret-target-unsupported`), or pass `allow_secret=True` to the declaration when the value only looks like a credential |
+| `secret-in-file` (lint) | A `File`, `Template` or `FileTree` ships what looks like a private key, token or password, which every copy of the image would carry. Deliver it at boot with `Secrets` and a `SecretFile` (or `SecretEnv`; `secret-in-env` is the same for `Service(env=...)` and unit files) under `delivery=ExternalDelivery(...)` naming what writes it (the built-in `tundra-tools` delivery writes only the SSH key: `secret-target-unsupported`), or pass `allow_secret=True` to the declaration when the value only looks like a credential |
 | `E_LOCKFILE` | The recipe drifted from the lockfile, or `bake` found that the lockfile `[tool.tundravm]` configures does not exist. `tundravm lock RECIPE --check` shows the drift; `tundravm lock RECIPE` accepts it or writes the missing lockfile |
 | `E_STATE` | No `bake-result.json` where `measure`/`deploy`/`sbom`/`evidence` looked, or no artifact for that variant/target: bake first, and pass the bake's `--build` directory. Or `bake --no-fetch` found a source checkout missing, or `bake --offline` a dependency cache missing or incomplete (the error names the entry): run `tundravm fetch RECIPE` |
 | `E_MEASUREMENT` | No `measured-boot`/`dstack-mr` on `PATH`, or a simulated artifact. Install a tool, or pass `--allow-placeholder` for test values |

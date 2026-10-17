@@ -74,9 +74,9 @@ from .model import (
     Build,
     Debloat,
     Declaration,
-    Directory,
     Disk,
     File,
+    FileTree,
     Git,
     Group,
     Hook,
@@ -239,7 +239,7 @@ class StateBuilder:
                     profile.build_packages.add(item.name)
                 case File():
                     _file(profile, item)
-                case Directory():
+                case FileTree():
                     _directory(profile, item)
                 case Group() if self.historical:
                     _shell(profile, groupadd_line(item), phase="postinst")
@@ -480,7 +480,7 @@ def _debloat(item: Debloat) -> DebloatConfig:
         paths_remove=item.remove,
         paths_skip=item.keep_paths,
         extra_remove_paths=item.extra_remove,
-        paths_skip_for_profiles=dict(item.keep_paths_by_variant),
+        paths_skip_for_profiles={k: tuple(v) for k, v in item.keep_paths_by_variant.items()},
         systemd_minimize=item.minimize_systemd,
         systemd_units_keep=item.keep_units,
         extra_keep_units=item.keep_units_extra,
@@ -621,7 +621,7 @@ def _file(profile: ProfileState, item: File) -> None:
 def walk_directory(
     root: Path, exclude: Sequence[str], *, follow: bool
 ) -> list[tuple[str, Path, FileKind]]:
-    """``(relative posix path, host path, kind)`` of what ``Directory`` imports from *root*.
+    """``(relative posix path, host path, kind)`` of what ``FileTree`` imports from *root*.
 
     Files, directories empty on the host, and (unless *follow*) symlinks, which
     are not descended into. *follow* reads through symlinks and descends into
@@ -660,29 +660,29 @@ def walk_directory(
                 found.append((rel, path, "file"))
             elif path.is_symlink():
                 raise ValidationError(
-                    f"Directory: symlink {path} points to nothing to follow.",
+                    f"FileTree: symlink {path} points to nothing to follow.",
                     hint="Fix the link, exclude it, or pass symlinks='preserve' to ship it as is.",
                     context={"path": str(path)},
                 )
     return sorted(found)
 
 
-def _directory(profile: ProfileState, item: Directory) -> None:
-    """What lies under ``item.source``, at ``item.path`` (see :class:`Directory`).
+def _directory(profile: ProfileState, item: FileTree) -> None:
+    """What lies under ``item.source``, at ``item.path`` (see :class:`FileTree`).
 
     Without *mode* each file and empty directory keeps its permission bits;
     with it every file gets *mode* and every empty directory 0755.
     """
     if not item.source.is_dir():
         raise ValidationError(
-            f"Directory {item.path}: source {item.source} is not an existing directory.",
+            f"FileTree {item.path}: source {item.source} is not an existing directory.",
             hint="Relative paths resolve against the working directory; check source= exists.",
             context={"path": item.path, "source": str(item.source)},
         )
     found = walk_directory(item.source, item.exclude, follow=item.symlinks == "follow")
     if not found:
         raise ValidationError(
-            f"Directory {item.path}: no files to copy from {item.source}.",
+            f"FileTree {item.path}: no files to copy from {item.source}.",
             hint="Check source= and exclude=.",
         )
     entries = profile.skeleton_files if item.stage == "skeleton" else profile.files
@@ -698,7 +698,7 @@ def _directory(profile: ProfileState, item: Directory) -> None:
             entries.append(FileEntry(path, b"", mode, kind="directory"))
             continue
         mode = kept if item.mode is None else _mode(item.mode)
-        entries.append(FileEntry(path, _read(host, owner="Directory"), mode))
+        entries.append(FileEntry(path, _read(host, owner="FileTree"), mode))
 
 
 def _template(profile: ProfileState, item: Template) -> None:
@@ -709,7 +709,7 @@ def _template(profile: ProfileState, item: Template) -> None:
             owner=f"Template {item.path}",
             hint="Save the template as UTF-8, or ship binary content with File().",
         )
-    variables = {k: str(v) for k, v in sorted(item.variables)}
+    variables = {k: str(v) for k, v in sorted(item.variables.items())}
     try:
         rendered = source.format_map(variables)
     except KeyError as exc:
@@ -765,7 +765,7 @@ def _unit_state(profile: ProfileState, action: UnitAction, unit: str) -> None:
 def _service(profile: ProfileState, service: Service) -> None:
     name = service.name
     limits = _limits(name, service.limits)
-    for key, value in service.env:
+    for key, value in service.env.items():
         if not _ENV_KEY.fullmatch(key):
             raise ValidationError(
                 f"Invalid environment variable name {key!r} for service '{name}'.",
@@ -811,10 +811,10 @@ def _service(profile: ProfileState, service: Service) -> None:
     )
 
 
-def _limits(service: str, limits: Sequence[tuple[str, str | int]]) -> dict[str, str]:
-    """``(("NOFILE", 1048576),)`` (or ``LimitNOFILE``) as ``{"NOFILE": "1048576"}``, sorted."""
+def _limits(service: str, limits: Mapping[str, str | int]) -> dict[str, str]:
+    """``{"NOFILE": 1048576}`` (or ``LimitNOFILE``) as ``{"NOFILE": "1048576"}``, sorted."""
     normalized: dict[str, str] = {}
-    for key, value in limits:
+    for key, value in limits.items():
         resource = key.removeprefix("Limit").upper()
         if resource not in _LIMIT_RESOURCES:
             raise ValidationError(
@@ -898,10 +898,10 @@ def source_build(build: Build, *, mark_unpinned: bool = True) -> SourceBuild:
         for step in build.install
     )
     recipe: BuildRecipe
-    if build.recipe is not None:
-        recipe = build.recipe
+    if build.using is not None:
+        recipe = build.using
     else:
-        assert build.script is not None  # Build allows exactly one of script and recipe
+        assert build.script is not None  # Build allows exactly one of script and using
         recipe = ScriptBuild(
             script=build.script,
             output=build.install[0].source,
@@ -913,7 +913,7 @@ def source_build(build: Build, *, mark_unpinned: bool = True) -> SourceBuild:
         source=source,
         build=recipe,
         install=steps,
-        cache_key=build.cache_key,
+        cache_key=build.cache_namespace,
         mark_unpinned=mark_unpinned,
     )
 

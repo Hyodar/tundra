@@ -19,8 +19,8 @@ from tundravm.models import BakeResult, DebloatConfig
 def _recipe(*variants: Variant) -> Recipe:
     return Recipe(
         "debloat",
-        Fragment("common", items=(Package("linux-image-amd64"), Package("curl"))),
-        variants=(Variant("default", target="qemu"), *variants),
+        items=(Package("linux-image-amd64"), Package("curl")),
+        variants=(Variant("default", outputs=("qemu",)), *variants),
     )
 
 
@@ -28,7 +28,7 @@ def _prod(*, target: bool = False) -> Variant:
     return Variant(
         "prod",
         add=Fragment("prod", items=(Debloat(enabled=False),)),
-        target="qemu" if target else None,
+        outputs=("qemu",) if target else (),
     )
 
 
@@ -79,13 +79,8 @@ def test_debloat_keep_paths_by_variant_lowers_to_profile_conditional_paths() -> 
     """Debloat(keep_paths_by_variant=...) keeps the path out of the unconditional removal."""
     recipe = Recipe(
         "debloat",
-        Fragment(
-            "common",
-            items=(
-                Debloat(keep_paths_by_variant=(("devtools", ("/usr/share/bash-completion",)),)),
-            ),
-        ),
-        variants=(Variant("default", target="qemu"), Variant("devtools")),
+        items=(Debloat(keep_paths_by_variant={"devtools": ("/usr/share/bash-completion",)}),),
+        variants=(Variant("default", outputs=("qemu",)), Variant("devtools")),
     )
     config = lower(recipe, variants=("default",)).state.ensure_profile("default").debloat
     assert "/usr/share/bash-completion" not in config.effective_paths_remove

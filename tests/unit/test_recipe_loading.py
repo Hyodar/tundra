@@ -25,11 +25,11 @@ def test_loads_module_level_recipe(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "recipe = Recipe('r', Fragment('common', items=(Package('curl'),)))\n",
+        HEADER + "recipe = Recipe('r', items=(Package('curl'),))\n",
     )
     loaded = load_recipe(recipe)
     assert isinstance(loaded, Recipe)
-    assert Package("curl") in loaded.common.items
+    assert Package("curl") in loaded.items
     assert "curl" in load_image(recipe).state.profiles["default"].packages
 
 
@@ -37,8 +37,7 @@ def test_loads_build_factory(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "def build() -> Recipe:\n"
-        "    return Recipe('r', Fragment('common'), base='debian/trixie')\n",
+        HEADER + "def build() -> Recipe:\n    return Recipe('r', base='debian/trixie')\n",
     )
     assert load_recipe(recipe).base == "debian/trixie"
 
@@ -48,7 +47,7 @@ def test_discovers_single_build_prefixed_factory(tmp_path: Path) -> None:
         tmp_path,
         "recipe.py",
         HEADER + "def helper():\n    return 1\n"
-        "def build_surge_prover():\n    return Recipe('r', Fragment('c'), base='debian/sid')\n",
+        "def build_surge_prover():\n    return Recipe('r', base='debian/sid')\n",
     )
     assert load_recipe(recipe).base == "debian/sid"
 
@@ -57,14 +56,13 @@ def test_discovers_factory_by_return_annotation(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "def make_the_thing() -> Recipe:\n"
-        "    return Recipe('r', Fragment('c'), base='debian/sid')\n",
+        HEADER + "def make_the_thing() -> Recipe:\n    return Recipe('r', base='debian/sid')\n",
     )
     assert load_recipe(recipe).base == "debian/sid"
 
 
 def test_discovers_single_anonymous_instance(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", HEADER + "my_vm = Recipe('vm', Fragment('c'))\n")
+    recipe = _write(tmp_path, "recipe.py", HEADER + "my_vm = Recipe('vm')\n")
     assert load_recipe(recipe).name == "vm"
 
 
@@ -72,9 +70,9 @@ def test_attr_override_selects_instance_or_factory(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "recipe = Recipe('r', Fragment('c'), base='debian/bookworm')\n"
-        "other = Recipe('r', Fragment('c'), base='debian/trixie')\n"
-        "def third() -> Recipe:\n    return Recipe('r', Fragment('c'), base='debian/sid')\n",
+        HEADER + "recipe = Recipe('r', base='debian/bookworm')\n"
+        "other = Recipe('r', base='debian/trixie')\n"
+        "def third() -> Recipe:\n    return Recipe('r', base='debian/sid')\n",
     )
     assert load_recipe(recipe).base == "debian/bookworm"
     assert load_recipe(recipe, attribute="other").base == "debian/trixie"
@@ -83,7 +81,7 @@ def test_attr_override_selects_instance_or_factory(tmp_path: Path) -> None:
 
 
 def test_attr_missing_lists_candidates(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r', Fragment('c'))\n")
+    recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r')\n")
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe, attribute="nope")
     assert "recipe" in str(excinfo.value)
@@ -93,7 +91,7 @@ def test_ambiguous_instances_error(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "a = Recipe('a', Fragment('c'))\nb = Recipe('b', Fragment('c'))\n",
+        HEADER + "a = Recipe('a')\nb = Recipe('b')\n",
     )
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
@@ -113,7 +111,7 @@ def test_factory_returning_none_is_explained(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "def build():\n    Recipe('r', Fragment('c'))\n",
+        HEADER + "def build():\n    Recipe('r')\n",
     )
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
@@ -129,7 +127,7 @@ def test_factory_with_required_args_is_rejected(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "def build(size):\n    return Recipe('r', Fragment('c'))\n",
+        HEADER + "def build(size):\n    return Recipe('r')\n",
     )
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
@@ -140,7 +138,7 @@ def test_main_guard_does_not_run(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "recipe = Recipe('r', Fragment('c'))\n"
+        HEADER + "recipe = Recipe('r')\n"
         "if __name__ == '__main__':\n    raise SystemExit('should not run')\n",
     )
     assert isinstance(load_recipe(recipe), Recipe)
@@ -151,10 +149,11 @@ def test_sibling_imports_resolve(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        "from helper_pkgs import PACKAGES\n" + HEADER + "recipe = Recipe('r', "
-        "Fragment('common', items=tuple(Package(name) for name in PACKAGES)))\n",
+        "from helper_pkgs import PACKAGES\n"
+        + HEADER
+        + "recipe = Recipe('r', items=tuple(Package(name) for name in PACKAGES))\n",
     )
-    assert load_recipe(recipe).common.items == (Package("curl"), Package("jq"))
+    assert load_recipe(recipe).items == (Package("curl"), Package("jq"))
     assert {"curl", "jq"} <= load_image(recipe).state.profiles["default"].packages
 
 
@@ -220,22 +219,20 @@ def test_errors_in_a_helper_module_point_at_the_helper(tmp_path: Path) -> None:
 
 
 def test_sdk_errors_raised_by_the_recipe_pass_through(tmp_path: Path) -> None:
-    recipe = _write(
-        tmp_path, "recipe.py", HEADER + "recipe = Recipe('r', Fragment('common'), base=1)\n"
-    )
+    recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r', base=1)\n")
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
     assert "location" not in excinfo.value.context
 
 
 def test_recipe_edits_are_never_hidden_by_stale_bytecode(tmp_path: Path) -> None:
-    body = HEADER + "recipe = Recipe('r', Fragment('common', items=(Package('{}'),)))\n"
+    body = HEADER + "recipe = Recipe('r', items=(Package('{}'),))\n"
     recipe = _write(tmp_path, "recipe.py", body.format("aaaa"))
     stamp = recipe.stat().st_mtime_ns
-    assert Package("aaaa") in load_recipe(recipe).common.items
+    assert Package("aaaa") in load_recipe(recipe).items
 
     recipe.write_text(body.format("bbbb"), encoding="utf-8")  # same size
     os.utime(recipe, ns=(stamp, stamp))  # and the same mtime
 
-    assert Package("bbbb") in load_recipe(recipe).common.items
+    assert Package("bbbb") in load_recipe(recipe).items
     assert not (tmp_path / "__pycache__").exists()

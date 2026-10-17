@@ -80,10 +80,10 @@ def _recipe(*, motd: str = "hi\n", build: bool = False) -> Recipe:
         )
     return Recipe(
         "demo",
-        Fragment("common", items=tuple(items)),  # type: ignore[arg-type]
+        items=tuple(items),  # type: ignore[arg-type]
         variants=(
-            Variant("default", target="qemu"),
-            Variant("azure", parent="default", target="azure"),
+            Variant("default", outputs=("qemu",)),
+            Variant("azure", inherits="default", outputs=("azure",)),
         ),
     )
 
@@ -143,13 +143,10 @@ def test_lint_merges_declarative_and_compiler_diagnostics() -> None:
 
     recipe = Recipe(
         "demo",
-        Fragment(
-            "common",
-            items=(
-                Fragment("tool", items=(Package("curl"),), checks=(needs_jq,)),
-                File("/etc/motd", "hi\n"),
-                Debloat(extra_remove=("/etc/motd",)),  # deletes a declared file
-            ),
+        items=(
+            Fragment("tool", items=(Package("curl"),), checks=(needs_jq,)),
+            File("/etc/motd", "hi\n"),
+            Debloat(extra_remove=("/etc/motd",)),  # deletes a declared file
         ),
     )
     found = lint(recipe)
@@ -167,7 +164,7 @@ def test_lint_merges_declarative_and_compiler_diagnostics() -> None:
 def test_lint_returns_resolution_errors_without_lowering() -> None:
     recipe = Recipe(
         "demo",
-        Fragment("common", items=(File("/etc/motd", "a\n"), File("/etc//motd", "b\n"))),
+        items=(File("/etc/motd", "a\n"), File("/etc//motd", "b\n")),
     )
     assert [d.code for d in lint(recipe)] == ["identity-collision"]
 
@@ -287,6 +284,7 @@ def test_measurements_to_dict_and_verify() -> None:
     assert found.to_dict() == {
         "artifact": "x.efi",
         "artifact_digest": "d1",
+        "boot_payload": None,
         "scheme": "rtmr",
         "tool": "dstack-mr 1.0",
         "values": {"rtmr0": "aa", "rtmr1": "bb"},
@@ -313,7 +311,7 @@ def test_measurements_policy_round_trips_into_a_tdxs_verifier(tmp_path: Path) ->
     write_policy(policy, path)
     assert read_policy(path) == policy
     verifier = Tdxs.from_policy(path)
-    expected = tuple(sorted((name.lower(), value) for name, value in registers.items()))
+    expected = {name.lower(): value for name, value in registers.items()}
     assert verifier.expected_measurements == expected
     assert Tdxs.from_measurements(found).expected_measurements == expected
     placeholder = Measurements("rtmr", tuple(sorted(registers.items())), "placeholder", "d1")

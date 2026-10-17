@@ -187,18 +187,14 @@ def assert_clean(
     warnings: Literal["fail", "allow"] = "fail",
     allow: Sequence[str] = (),
     variants: Variants = None,
-    strict: bool | None = None,
 ) -> Sequence[Diagnostic]:
     """Fail on every error and warning finding whose code is not in *allow*.
 
     *subject* is a ``Recipe`` (linted for *variants*, default: all), an
     :class:`Image` (linted for its variant) or the diagnostics ``lint()``
-    returned. ``warnings="allow"`` fails on errors only. *strict* is the old
-    spelling (``strict=False`` is ``warnings="allow"``). Returns every
+    returned. ``warnings="allow"`` fails on errors only. Returns every
     diagnostic, allowed or not: *subject* itself for diagnostics.
     """
-    if strict is not None:
-        warnings = "fail" if strict else "allow"
     diagnostics = _findings(subject, variants)
     severities = {"error", "warning"} if warnings == "fail" else {"error"}
     failing = [d for d in diagnostics if d.code not in allow and d.severity in severities]
@@ -421,7 +417,7 @@ def fake_fragment(
 
         a = fake_fragment("a")
         b = fake_fragment("b", requires=(a,))
-        Recipe(name="t", common=Fragment("app", (b,)))  # lint: fragment-requires-missing
+        Recipe(name="t", items=(b,))  # lint: fragment-requires-missing
     """
     items: list[Declaration] = [Package(package) for package in packages]
     items.extend(File(path, content) for path, content in (files or {}).items())

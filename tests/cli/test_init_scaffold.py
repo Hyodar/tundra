@@ -102,8 +102,8 @@ def test_every_template_installs_the_distribution_kernel(tmp_path: Path, templat
     for variant in recipe.variants:
         assert kernel in tundravm.resolve(recipe, variant=variant.name).items, variant.name
 
-    items = tuple(item for item in recipe.common.items if item != kernel)
-    stripped = dataclasses.replace(recipe, common=dataclasses.replace(recipe.common, items=items))
+    items = tuple(item for item in recipe.items if item != kernel)
+    stripped = dataclasses.replace(recipe, items=items)
     assert "kernel-missing" in {d.code for d in tundravm.lint(stripped)}
 
 
@@ -118,13 +118,13 @@ def test_render_is_a_pure_function_of_its_arguments(template: str) -> None:
 def test_service_app_fragment_carries_its_lint_rule(tmp_path: Path) -> None:
     scaffold(tmp_path)
     recipe = tundravm.load_recipe(tmp_path / f"{NAME}.py")
-    app: Any = recipe.common.items[-1]  # the template's App(...)
+    app: Any = recipe.items[-1]  # the template's App(...)
     assert type(app).__name__ == "App"
     config = {f.name: getattr(app, f.name) for f in dataclasses.fields(app) if f.init}
     assert config == {"version": "0.1.0", "port": 8080}
     privileged = dataclasses.replace(app, port=80)
-    common = dataclasses.replace(recipe.common, items=(*recipe.common.items[:-1], privileged))
-    found = tundravm.lint(dataclasses.replace(recipe, common=common))
+    items = (*recipe.items[:-1], privileged)
+    found = tundravm.lint(dataclasses.replace(recipe, items=items))
     assert {d.code for d in found} == {"app-privileged-port"}
 
 

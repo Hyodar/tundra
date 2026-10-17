@@ -15,7 +15,7 @@ from typing import Protocol
 
 import pytest
 
-from tundravm.declarative.model import Fragment, Package, Recipe
+from tundravm.declarative.model import Package, Recipe
 from tundravm.testing import CompiledTree, Variants, compile_tree
 from tundravm.testing import run_cli as _run_cli
 
@@ -31,9 +31,9 @@ CliRunner = Callable[..., tuple[int, str, str]]
 def recipe() -> Recipe:
     """A minimal lint-clean ``Recipe`` named ``test``: one ``default`` variant, the kernel package.
 
-    Its ``common`` is ``Fragment("test", (Package("linux-image-amd64"),))``.
+    Its ``items`` are ``(Package("linux-image-amd64"),)``.
     """
-    return Recipe(name="test", common=Fragment("test", (Package("linux-image-amd64"),)))
+    return Recipe(name="test", items=(Package("linux-image-amd64"),))
 
 
 @pytest.fixture

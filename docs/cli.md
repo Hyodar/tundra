@@ -72,7 +72,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | Command | Does | Exit 1 when |
 |---|---|---|
 | `init` | Scaffolds a project from a starter template, lints it, prints the next steps and probes the chosen backend (see [Init](#init)). | |
-| `inspect` | Dry run per variant: parent, fragments, packages, files with digests, users, units, hooks, runtime-init steps, sources, targets (see [Inspect](#inspect)). `--format json` adds the recipe `digest` the lockfile records. `--diff-variants A B` lists what differs between two variants instead. `--variant NAME --why SUBJECT` explains one emitted object (see [Explaining one object](#explaining-one-object)). | |
+| `inspect` | Dry run per variant: what it inherits, fragments, packages, files with digests, users, units, hooks, runtime-init steps, sources, targets (see [Inspect](#inspect)). `--format json` adds the recipe `digest` the lockfile records. `--diff-variants A B` lists what differs between two variants instead. `--variant NAME --why SUBJECT` explains one emitted object (see [Explaining one object](#explaining-one-object)). | |
 | `lint` | Every diagnostic: resolution, fragment checks, compiler rules. The compiler rules see the source pins of `--lockfile` (default `build/tundravm.lock` when it exists), so a pinned source never reports `source-unpinned`. A selected lockfile, `--lockfile` or the table's `lockfile`, also adds its drift diagnostics (`lock-*`), as `lint(recipe, lock=...)` does. | an error (with `--strict`, a warning) |
 | `compile` | Writes the mkosi tree to `--tree` (default: the table's `tree`, else `build/mkosi`), one directory per variant, then prints `variants:`, `recipe_digest:` (the digest `lock` records) and `tree_digest:` (`Tree.digest`). `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
 | `diff` | Unified diff from the tree at `--tree` (default: the table's `tree`, else `build/mkosi`; `--tree BUILD/.reproduce/mkosi` is the second build of `bake --verify-reproducible`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
@@ -234,7 +234,7 @@ On a fresh machine or a CI runner, `uv sync` installs the pinned tundravm and `p
 
 ## Import
 
-`tundravm import TREE` reads an mkosi tree and writes a recipe module that compiles back to it. `TREE` is one variant directory (it holds `mkosi.conf`) or a directory of them as `compile` writes them. The first directory (`default` when there is one) becomes `Fragment("common", ...)` and its `Variant`; every other directory becomes a `Variant` that adds, replaces or removes only what differs (a whole `Fragment` with `parent=None` when an overlay cannot reproduce its order).
+`tundravm import TREE` reads an mkosi tree and writes a recipe module that compiles back to it. `TREE` is one variant directory (it holds `mkosi.conf`) or a directory of them as `compile` writes them. The first directory (`default` when there is one) becomes `Recipe.items` and its `Variant`; every other directory becomes a `Variant` that adds, replaces or removes only what differs (a whole `Fragment` with `inherits=None` when an overlay cannot reproduce its order).
 
 | Flag | Effect |
 |---|---|
@@ -254,7 +254,7 @@ What maps back:
 
 Source builds, per dialect:
 
-- `current`: every source build hook starts with `# tundravm build: <json>`, its declaration without a pin (`name`, `source`, `build`, `install`, `cache_key`). The import reads the `Build` back exactly as declared: `Git`/`Http` source, `recipe=Go(...)`/`Cargo(...)`/`Dotnet(...)` or `script=` with its `packages` and `env`, `install=`, `cache_key=`. The builds `Key`, `Disk` and `Secrets` generate (`key-generation`, `disk-encryption`, `secret-delivery`) come back as `Build(..., recipe=Go(...), install=(Install("build/key-gen", "/usr/bin/key-gen", artifact=True),))`, not as the declarations that generated them (their configs and `runtime-init` steps come back as `File` and `Init`). Unlocked, the import compiles back to the tree. Locked (the hooks copy pinned checkouts), the module carries the refs, not the pins: `tundravm lock` pins it again (the same pins when the refs still resolve to them) and it then compiles back to the tree; the round-trip note compares with the pinned hooks swapped for their unpinned form and names the pins (`round trip: the recipe compiles back to this tree once locked to the same pins (key-generation@a91272e9ebde, ...)`).
+- `current`: every source build hook starts with `# tundravm build: <json>`, its declaration without a pin (`name`, `source`, `build`, `install`, and `cache_key` holding the `cache_namespace`). The import reads the `Build` back exactly as declared: `Git`/`Http` source, `using=Go(...)`/`Cargo(...)`/`Dotnet(...)` or `script=` with its `packages` and `env`, `install=`, `cache_namespace=`. The builds `Key`, `Disk` and `Secrets` generate (`key-generation`, `disk-encryption`, `secret-delivery`) come back as `Build(..., using=Go(...), install=(Install("build/key-gen", "/usr/bin/key-gen", artifact=True),))`, not as the declarations that generated them (their configs and `runtime-init` steps come back as `File` and `Init`). Unlocked, the import compiles back to the tree. Locked (the hooks copy pinned checkouts), the module carries the refs, not the pins: `tundravm lock` pins it again (the same pins when the refs still resolve to them) and it then compiles back to the tree; the round-trip note compares with the pinned hooks swapped for their unpinned form and names the pins (`round trip: the recipe compiles back to this tree once locked to the same pins (key-generation@a91272e9ebde, ...)`).
 - `nethermind-v1`: hooks carry no marker. A hook whose URL, ref (or full commit when it was locked), cache key, install steps and build command parse into a `Build(..., script=...)` that renders the same line comes back as that `Build`; anything else stays in a `Hook`. A `lost declaration` note per build says what it cannot carry: the recipe kind (a `Go`, `Cargo` or `Dotnet` recipe comes back as its command, `script=`) and, for a locked hook, the ref it was pinned from (`Git(url, <commit>)` compiles to the same line).
 
 `coverage` counts `declared` declarations, `verbatim` ones (`File`, `Unit` with content, `Hook`, `Setting`) and `lost`, the `lost declaration` notes.
@@ -279,26 +279,23 @@ The generated `node_imported.py` binds `recipe`:
 ```python
 recipe = Recipe(
     "node",
-    Fragment(
-        "common",
-        items=(
-            Package("ca-certificates"),
-            ...
-            User("app", home="/var/lib/app"),
-            File("/etc/app/app.conf", APP_CONF),
-            Service(
-                "app",
-                "/usr/bin/app --config /etc/app/app.conf",
-                description="app 0.1.0",
-                user="app",
-                working_dir="/var/lib/app",
-                restart="on-failure",
-            ),
-            Init("runtime-init", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
+    items=(
+        Package("ca-certificates"),
+        ...
+        User("app", home="/var/lib/app"),
+        File("/etc/app/app.conf", APP_CONF),
+        Service(
+            "app",
+            "/usr/bin/app --config /etc/app/app.conf",
+            description="app 0.1.0",
+            user="app",
+            working_dir="/var/lib/app",
+            restart="on-failure",
         ),
+        Init("runtime-init", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
     ),
     variants=(
-        Variant("default", target="qemu"),
+        Variant("default", outputs=("qemu",)),
         Variant(
             "dev",
             add=Fragment(
@@ -310,7 +307,7 @@ recipe = Recipe(
                     Hook("postinst", "postinst", POSTINST_SCRIPT),
                 ),
             ),
-            target="qemu",
+            outputs=("qemu",),
         ),
     ),
 )
@@ -361,7 +358,7 @@ A module-level `backend` holding a backend instance (`LimaMkosiBackend(...)`, `N
 | Format | Shape |
 |---|---|
 | `text` | One line per finding (`error disk-key-undefined [default] data: ...`; `[common]` for an empty variant, as in `github`; an `at: file:line` line under a finding that has a source location) and a summary line |
-| `json` | `{"schema": "tundravm.lint/2", "diagnostics": [...], "summary": {...}}` (`lint`; each diagnostic has `code`, `severity`, `message`, `subject`, `variant`, `location`, `hint` and `context`: `variant` is the variant, `""` for the recipe as a whole, `location` the source position (`file:line`; `""` for every built-in check), `hint` is `null` when there is none, `context` an object of strings); `{"schema": "tundravm.inspect/1", "digest": ..., "variants": {NAME: {...}}}` (`inspect`) |
+| `json` | `{"schema": "tundravm.lint/2", "diagnostics": [...], "summary": {...}}` (`lint`; each diagnostic has `code`, `severity`, `message`, `subject`, `variant`, `location`, `hint` and `context`: `variant` is the variant, `""` for the recipe as a whole, `location` the source position (`file:line`; `""` for every built-in check), `hint` is `null` when there is none, `context` an object of strings); `{"schema": "tundravm.inspect/2", "digest": ..., "variants": {NAME: {...}}}` (`inspect`) |
 | `github` | `::error file=...,title=...::message` workflow commands that annotate the pull request |
 | `markdown` | Tables, ready for `$GITHUB_STEP_SUMMARY` or a PR comment (`lint`: `\| Severity \| Code \| Location \| Subject \| Message \| Hint \|`) |
 | `stat` | Changed files only (`diff`) |
@@ -385,30 +382,30 @@ The text form prints one block per variant:
 ```
 Image: debian/trixie (x86_64)  variant=dev  reproducible=yes
 Policy: mutable_ref_policy=warn network_mode=online require_frozen_lock=no storage_safety=warn
-Parent: default
-Fragments (2): node dev
+Inherits: default
+Fragments (1): dev
 Packages (4): curl jq strace systemd
 ...
 Targets: qemu
 ```
 
-`Parent:` is the variant's parent (`base` for `Recipe.common`, or another variant's name; a standalone variant has no `Parent:` line) and `Fragments:` the fragments it includes, in resolution order. In `--format json` each entry under `variants` carries the same facts as keys, among them `variant`, `parent` (`null` when standalone), `fragments`, `packages`, `files`, `users`, `units`, `hooks`, `runtime_init`, `sources` and `targets`. `--format markdown` renders a `## Variant` section per variant, with a **Parent** / **Fragments** line and a table per category.
+`Inherits:` is what the variant inherits (`base` for `Recipe.items`, or another variant's name; a standalone variant has no `Inherits:` line) and `Fragments:` the fragments it includes, in resolution order. In `--format json` each entry under `variants` carries the same facts as keys, among them `variant`, `inherits` (`null` when standalone), `fragments`, `packages`, `files`, `users`, `units`, `hooks`, `runtime_init`, `sources` and `targets`. `--format markdown` renders a `## Variant` section per variant, with an **Inherits** / **Fragments** line and a table per category.
 
 ### Comparing two variants
 
-`inspect RECIPE --diff-variants A B` resolves both variants and lists the declarations `B` adds, removes or changes relative to `A`, matched by identity, plus the target when it differs. It takes `--format text|json|markdown` and cannot be combined with `--variant` (`E_VALIDATION`). For a recipe whose `azure` variant extends `default` with `add=Fragment("azure", items=(Package("walinuxagent"),))`, `replace=(File("/etc/motd", "node on azure\n"),)`, `remove=(Package("curl"),)` and `target="azure"`:
+`inspect RECIPE --diff-variants A B` resolves both variants and lists the declarations `B` adds, removes or changes relative to `A`, matched by identity, plus the outputs when they differ. It takes `--format text|json|markdown` and cannot be combined with `--variant` (`E_VALIDATION`). For a recipe whose `azure` variant extends `default` with `add=packages("walinuxagent")`, `replace=(File("/etc/motd", "node on azure\n"),)`, `remove=(Package("curl"),)` and `outputs=("azure",)`:
 
 ```console
 $ tundravm inspect node.py --diff-variants default azure
 variants default -> azure: 1 added, 1 removed, 1 changed
-  target: qemu -> azure
+  outputs: qemu -> azure
   + Package(walinuxagent, runtime)
   - Package(curl, runtime)
   ~ File(extra, /etc/motd): content
 $ tundravm inspect node.py --diff-variants default azure --format markdown
 # tundravm: `node.py` variants `default` → `azure`
 
-Target: `qemu` → `azure`
+Outputs: `qemu` → `azure`
 
 | Change | Declaration | Fields |
 |---|---|---|
@@ -417,7 +414,7 @@ Target: `qemu` → `azure`
 | changed | `File(extra, /etc/motd)` | content |
 ```
 
-`--format json` prints `{"schema": "tundravm.inspect/1", "a", "b", "targets": {A: [...], B: [...]}, "added": [...], "removed": [...], "changed": [{"declaration", "fields"}]}`. A `~` line names the fields that differ.
+`--format json` prints `{"schema": "tundravm.inspect/2", "a", "b", "outputs": {A: [...], B: [...]}, "added": [...], "removed": [...], "changed": [{"declaration", "fields"}]}`. A `~` line names the fields that differ.
 
 ### Explaining one object
 
@@ -427,7 +424,7 @@ Target: `qemu` → `azure`
 $ tundravm inspect two.py --variant prod --why /usr/lib/systemd/system/app.service
 why /usr/lib/systemd/system/app.service (variant prod)
   Service(app.service)
-    declared in common via base > app
+    declared in common via app
 files (in prod/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
@@ -438,13 +435,13 @@ generated:
 $ tundravm inspect two.py --variant prod --why /etc/app.conf
 why /etc/app.conf (variant prod)
   File(extra, /etc/app.conf)
-    declared in common via base > app
+    declared in common via app
     replaced in variant prod
 files (in prod/):
   mkosi.extra/etc/app.conf
 ```
 
-`--format json` prints `{"schema": "tundravm.inspect/1", "variant", "subject", "declarations": [{"declaration", "type", "key", "present", "origins": [{"action", "variant", "fragments": [{"name", "class"}]}]}], "fragments", "files", "generated"}`; `--format markdown` a table of declarations and steps. A removed declaration is listed with `present: false` and no files. The Python form is `tundravm.explain_why(recipe, variant, subject)`.
+`--format json` prints `{"schema": "tundravm.inspect/2", "variant", "subject", "declarations": [{"declaration", "type", "key", "present", "origins": [{"action", "variant", "fragments": [{"name", "class"}]}]}], "fragments", "files", "generated"}`; `--format markdown` a table of declarations and steps. A removed declaration is listed with `present: false` and no files. The Python form is `tundravm.explain_why(recipe, variant, subject)`.
 
 ## Lint
 
@@ -645,7 +642,7 @@ next: tundravm deploy qemu --build build --variant default
 - The lockfile is copied to `BUILD/tundravm.lock` when that file is absent or identical. A different `BUILD/tundravm.lock` is never overwritten: `bake --build BUILD --lockfile PATH` bakes against `PATH` and leaves it alone.
 - The frozen check compares like `lock --check` with the same `--variant` selection: a lockfile of every variant covers `bake --variant default`, while a lockfile written for fewer variants than the bake selects fails at `verify lockfile`.
 - A recipe with error-level lint findings fails at `lint` with `E_LINT`.
-- `BUILD/bake-result.json` records, per variant and target, the artifact path and sha256 and the sha256 of mkosi's package manifest beside it (`manifest_digests`, `null` when there is none), plus the lockfile digest, `lock_sha256` (the sha256 of the lockfile the bake read, `null` when it read none; `sbom` and `evidence` refuse another) and a `declarative` block with the recipe digest, `simulated` (true for the in-process backend) and, for a frozen bake, `lockfile`: the path of the lockfile it baked against, as given (`--lockfile PATH` or the table's `lockfile`, else `build/tundravm.lock`). `schema_version` is 3. A bake of some variants keeps the entries of the others already there: `variants_baked` lists the ones this bake built, and every variant entry carries its own `declarative` record of the bake that built it (`recipe_digest`, `simulated`, `lockfile`, `baked_at`, `backend`, `lock_digest`, `lock_sha256`, `ports`, `reproducibility` and `tree_digest`, the digest of that variant's directory of the tree alone), so `status` still lists a variant an earlier bake built (stale once its recipe or tree moved) and `evidence`, `verify`, `sbom` and `measure` read each variant's own record. A `bake-result.json` of an older schema is refused (`Unreadable bake result`); bake again.
+- `BUILD/bake-result.json` records, per variant and target, the artifact path and sha256, the sha256 of mkosi's package manifest beside it (`manifest_digests`, `null` when there is none) and, for a disk artifact (`.raw`, `.qcow2`, `.vhd`, `.tar.gz`), the UKI it boots (`boot_payloads`: `{TARGET: {"path", "sha256"}}`, only the targets where it is known): the `.efi` mkosi wrote beside the disk whose name minus `.efi` begins the disk's name (the compiled postoutput scripts wrap `<image>.efi` into `<image>.vhd` and `<image>.tar.gz`), else the only `.efi` there; nothing is mounted, and a disk with no such `.efi` beside it records none. The in-process backend records the simulated UKI `disk.efi` for each disk. Plus the lockfile digest, `lock_sha256` (the sha256 of the lockfile the bake read, `null` when it read none; `sbom` and `evidence` refuse another) and a `declarative` block with the recipe digest, `simulated` (true for the in-process backend) and, for a frozen bake, `lockfile`: the path of the lockfile it baked against, as given (`--lockfile PATH` or the table's `lockfile`, else `build/tundravm.lock`). `schema_version` is 3. A bake of some variants keeps the entries of the others already there: `variants_baked` lists the ones this bake built, and every variant entry carries its own `declarative` record of the bake that built it (`recipe_digest`, `simulated`, `lockfile`, `baked_at`, `backend`, `lock_digest`, `lock_sha256`, `ports`, `reproducibility` and `tree_digest`, the digest of that variant's directory of the tree alone), so `status` still lists a variant an earlier bake built (stale once its recipe or tree moved) and `evidence`, `verify`, `sbom` and `measure` read each variant's own record. A `bake-result.json` of an older schema is refused (`Unreadable bake result`); bake again.
 - `--verify-reproducible` bakes the same selection a second time into `BUILD/.reproduce`, against the same lockfile and the same `BUILD/.sources` checkouts (hard-linked there, so nothing is fetched again; mkosi's state is not shared, so the second build compiles and builds everything, tools tree included), then compares every artifact's sha256. The first build's `bake-result.json` is complete (artifacts, digests, the `declarative` blocks) before the second build starts, so a failed or interrupted second build never loses it. Its `declarative.reproducibility` (absent when the check did not run) and that of each variant it baked (`null` when the check did not run; its `differ` lists that variant's artifacts) are rewritten atomically at each step as `{"state", "second_build", "differ", "error"}`: `running` while the second build runs, then `matched` (`second_build` is `null`: it was removed), `different` (`differ` lists the `variant/target` artifacts that differ, `second_build` is `.reproduce`, relative to `BUILD`), `error` (the second build failed; `error` holds the exception's first line) or `interrupted` (Ctrl-C). `status` shows it on each artifact line and `evidence` checks it. When all match the summary is followed by `reproducible: yes (N artifacts match a second build)`. A mismatch keeps the second build and fails with `E_REPRODUCIBILITY` and exit 1 (a completed comparison with a negative result; a second build that fails to run exits 2 with its own error), a table per artifact and a hint naming `tundravm diff` and the usual causes:
 
   ```console
@@ -740,8 +737,8 @@ Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to re
 [exit 2]
 ```
 
-- `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. `--format json` prints `{"schema": "tundravm.measure/1", "artifact", "artifact_digest", "scheme", "tool", "values", "variant"}`; `--format markdown` a heading, a `Source:` line and a `Register`/`Value` table.
-- `measure --export-policy FILE` (rtmr only) also writes a verifier policy: `{"schema_version": 1, "scheme": "rtmr", "tool", "tool_version", "artifact": {"path", "sha256"}, "registers": {"RTMR0", "RTMR1", "RTMR2"}}` (`RTMR3` when measured). Missing `RTMR0`..`RTMR2` is `E_VALIDATION`; placeholder values are refused unless `--allow-placeholder`, and then carry a `"note"` that says they are placeholders. It is the dict `Measurements.to_policy()` returns, and `Tdxs.from_policy(FILE)` turns it into a validator's `expected_measurements`.
+- `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. A disk artifact no tool reads (`.qcow2`, `.vhd`, `.tar.gz`) whose bake recorded the UKI it boots is measured through that UKI, after hashing it against its recorded sha256 (`E_ARTIFACT_CHANGED` otherwise). `--format json` prints `{"schema": "tundravm.measure/1", "artifact", "artifact_digest", "boot_payload", "scheme", "tool", "values", "variant"}`, `boot_payload` being the UKI the values are a measurement of (`{"path", "sha256"}`: the artifact itself for a UKI, the recorded boot payload for a disk, `null` when unknown); `--format markdown` a heading, a `Source:` line and a `Register`/`Value` table.
+- `measure --export-policy FILE` (rtmr only) also writes a verifier policy: `{"schema_version": 1, "scheme": "rtmr", "tool", "tool_version", "artifact": {"path", "sha256"}, "boot_payload": {"path", "sha256"}, "registers": {"RTMR0", "RTMR1", "RTMR2"}}` (`RTMR3` when measured; `boot_payload`, the UKI measured, when known). The policy binds to that UKI: `evidence` counts every disk of the variant whose recorded boot payload is it as measured. Missing `RTMR0`..`RTMR2` is `E_VALIDATION`; placeholder values are refused unless `--allow-placeholder`, and then carry a `"note"` that says they are placeholders. It is the dict `Measurements.to_policy()` returns, and `Tdxs.from_policy(FILE)` turns it into a validator's `expected_measurements`.
 - `deploy TARGET` (`qemu`, `azure` or `gcp`) picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward` (`HOST:GUEST[,HOST:GUEST...]`), `firmware` (a TDVF or OVMF image path); azure `storage_account` (required), `resource_group`, `location`, `vm_size`, `gallery`, `secure_boot`, `signed`; gcp `project` and `bucket` (required), `zone`, `machine_type`. `--attach` (qemu only, the same as `--param daemonize=false`) runs QEMU in the foreground with the serial console on the terminal: Ctrl-A X quits QEMU, Ctrl-A C toggles its monitor, and `deploy` prints its result once QEMU exits. Simulated artifacts are refused unless `--allow-simulated-artifact`.
 
 ### Attest
@@ -990,7 +987,7 @@ wrote spdx-json build/default.spdx.json
 
 | Member | Holds |
 |---|---|
-| `evidence.json` | The index: `schema` (`tundravm.evidence/3`, the one identifier of its structure: there is no `schema_version`), `created` (ISO 8601 UTC; `SOURCE_DATE_EPOCH` when set), `recipe` (`name`, `path`, `file_sha256`, `digest` now, `baked_digest` the bake recorded, `matches_bake`), `bake` (`path`, `backend`, `simulated`, `reproducibility`: the recorded state object or `null`), `lockfile` (`source`, `version`, `compiler_version`, `recipe_digest`, `sha256`, `recorded_sha256` (the `lock_sha256` the bake recorded), `bound`, `drift`, `verdict`: `current` or `drifted`; `null` without one), `lint` (`errors`, `warnings`, `infos`, `codes`), `tools` (`tundravm`, `python`, `mkosi` as `mkosi --version` prints it on this host, `null` when absent), per variant its `artifacts` (`target`, `path`, `size`, `sha256`, `integrity`: `verified`, `mismatch` or `missing`, `simulated`), `tree_digest`, `tree_matches`, `tree` (its `tree.json` member, `null` when left out), `reproducibility` (the state `bake --verify-reproducible` recorded for the variant: `matched`, `different`, `running`, `error`, `interrupted`, or `null` when not checked), `policy` (`member`, `valid`, `placeholder`, `registers`, `artifact_matches` and `measures`: the `target` and `sha256` of the artifact it measures), `coverage` (per artifact: `target`, `sha256`, `state` `measured` or `unmeasured`, and the `reason` it is not: a format no measurement tool reads, no usable policy, or the policy measures another artifact), `declared_packages` (the packages the recipe declares for the variant, which `changes` compares), `secrets` (what the image expects at boot, per target: `secret` (`null` for the SSH key), `kind` (`ssh-key`, `file`, `env`), `location` (a path, or the variable name), `provider` (`tundra-tools`, or the `ExternalDelivery` name), `supported` (whether that provider writes it; `false` is the `secret-target-unsupported` lint error) and `required`), `sbom` (per artifact: `target`, `member`, `manifest_member` (the bundled package manifest, `null` when there is none), `packages`, `sources`, `complete` (the installed inventory is there), `missing` (`["manifest"]` when the manifest the bake recorded is gone), `bound`; an artifact that changed or is gone gets no SBOM, and a note) `attestations` (per bundled record: `member`, `source`, and as re-derived from it against the variant's policy, `verdict`, `observed_at`, `policy_sha256`, `artifact_sha256`, `policy_matches` and `inconsistencies`) and `provenance` (declarations per fragment and resolution actions: `declared`, `added`, `replaced`, `removed`), `attestation` (`max_age_seconds`: the freshness window `attested` judges by), the `verdict`, the `notes` and `members` (`sha256` and `size` of every other file) |
+| `evidence.json` | The index: `schema` (`tundravm.evidence/3`, the one identifier of its structure: there is no `schema_version`), `created` (ISO 8601 UTC; `SOURCE_DATE_EPOCH` when set), `recipe` (`name`, `path`, `file_sha256`, `digest` now, `baked_digest` the bake recorded, `matches_bake`), `bake` (`path`, `backend`, `simulated`, `reproducibility`: the recorded state object or `null`), `lockfile` (`source`, `version`, `compiler_version`, `recipe_digest`, `sha256`, `recorded_sha256` (the `lock_sha256` the bake recorded), `bound`, `drift`, `verdict`: `current` or `drifted`; `null` without one), `lint` (`errors`, `warnings`, `infos`, `codes`), `tools` (`tundravm`, `python`, `mkosi` as `mkosi --version` prints it on this host, `null` when absent), per variant its `artifacts` (`target`, `path`, `size`, `sha256`, `integrity`: `verified`, `mismatch` or `missing`, `simulated`, `boot_payload`: the UKI the bake recorded the disk booting, `{"path", "sha256"}` or `null`), `tree_digest`, `tree_matches`, `tree` (its `tree.json` member, `null` when left out), `reproducibility` (the state `bake --verify-reproducible` recorded for the variant: `matched`, `different`, `running`, `error`, `interrupted`, or `null` when not checked), `policy` (`member`, `valid`, `placeholder`, `registers`, `artifact_matches` (its artifact is one of the variant's, or the UKI one of them boots) and `measures`: the `target` and `sha256` of the artifact it measures and, when the policy records one, `boot_payload`: the sha256 of the UKI it measured), `coverage` (per artifact: `target`, `sha256`, `state` `measured` or `unmeasured`, `via` (`boot payload <sha12>`, only on a disk measured through the UKI it boots: its recorded boot payload is the policy's `boot_payload`, or the policy's artifact, a UKI measured directly), and the `reason` it is not: it boots another UKI than the one the policy measured, a format no measurement tool reads, no usable policy, or the policy measures another artifact), `declared_packages` (the packages the recipe declares for the variant, which `changes` compares), `secrets` (what the image expects at boot, per target: `secret` (`null` for the SSH key), `kind` (`ssh-key`, `file`, `env`), `location` (a path, or the variable name), `provider` (`tundra-tools`, or the `ExternalDelivery` name), `supported` (whether that provider writes it; `false` is the `secret-target-unsupported` lint error) and `required`), `sbom` (per artifact: `target`, `member`, `manifest_member` (the bundled package manifest, `null` when there is none), `packages`, `sources`, `complete` (the installed inventory is there), `missing` (`["manifest"]` when the manifest the bake recorded is gone), `bound`; an artifact that changed or is gone gets no SBOM, and a note) `attestations` (per bundled record: `member`, `source`, and as re-derived from it against the variant's policy, `verdict`, `observed_at`, `policy_sha256`, `artifact_sha256`, `policy_matches` and `inconsistencies`) and `provenance` (declarations per fragment and resolution actions: `declared`, `added`, `replaced`, `removed`), `attestation` (`max_age_seconds`: the freshness window `attested` judges by), the `verdict`, the `notes` and `members` (`sha256` and `size` of every other file) |
 | `bake-result.json` | The bake manifest, verbatim |
 | `tundravm.lock` | The lockfile, verbatim: `--lockfile FILE`, else the one the bake recorded, else `BUILD/tundravm.lock` |
 | `lint.json` | Every lint diagnostic of the selected variants, with the lockfile's pins applied |
@@ -1019,7 +1016,7 @@ The `verdict` holds each check's state: `integrity` (`verified` when every artif
 | `reproducibility-unchecked` | incomplete with `--require reproducible` | The bake did not run `--verify-reproducible` |
 | `reproducibility-incomplete` | incomplete with `--require reproducible` | The second build is `running`, ended in `error` or was `interrupted` |
 | `policy-missing`, `policy-unbound` | incomplete with `--require measured` | No policy for the variant, or one naming no artifact sha256 |
-| `artifact-unmeasured` | incomplete with `--require measured` | The variant's policy is valid, but measures another of its artifacts (each artifact counts as measured only when the policy names its own sha256; the bake does not record which UKI a disk image holds) |
+| `artifact-unmeasured` | incomplete with `--require measured` | The variant's policy is valid, but measures another of its artifacts. An artifact counts as measured when the policy names its own sha256, or when it is a disk whose recorded boot payload is the UKI the policy measured (`measured (via boot payload <sha12>)` in the text output and the HTML page); a disk booting another UKI, or one the bake recorded no boot payload for, is not |
 | `sbom-incomplete` | incomplete with `--require installed` | The SBOM lists the declared packages: no mkosi manifest beside the artifact |
 | `simulated-artifact` | incomplete with `--require real` | The artifacts are simulated (in-process backend) |
 | `attestation-inconsistent` | fail | A bundled attestation record disagrees with its own document: a stored register, nonce, signature status or verdict is not what re-parsing the quote against the variant's policy gives, or its document does not decode |
@@ -1041,7 +1038,7 @@ A check not required (`--require ''`, or one the requirement set leaves out), wh
 | `--html FILE` | Also write one self-contained HTML page (inline CSS, no scripts or external assets, every value escaped): a verdict banner (integrity, lock, reproducible, lint, recipe, tree, policy, measured, sbom, attested) listing every reason, the recipe, lockfile, lint and tools tables, a section per variant (artifacts, policy, measurement coverage, SBOM, provenance), the notes and the members with their sha256 |
 | `--format text\|json` | How the index is printed: a summary with every member's sha256 (default), or `evidence.json` itself, verbatim (it carries `"schema": "tundravm.evidence/3"`) |
 | `--allow-unbound` | Record a lockfile that does not hash to the `lock_sha256` the bake recorded, and SBOMs over an unbound lockfile or manifest, instead of failing with `E_ARTIFACT_CHANGED`; adds the `incomplete` reasons `lock-unbound` and `sbom-unbound` |
-| `--require LIST` | Comma-separated checks that must be present (default: the `[tool.tundravm]` table's `require`, else `reproducible,lock`; `''` requires none): `reproducible` (a recorded `matched` second build), `measured` (a valid, non-placeholder policy bound to each variant, measuring every artifact of it), `real` (no simulated artifact), `lock` (a lockfile), `installed` (each SBOM holds mkosi's installed inventory), `attested` (each artifact a valid policy measures has a bundled record whose re-derived verdict is `trusted`, checked against that policy, its `observed_at` within `--max-age` of `created`). A missing one is an `incomplete` reason (exit 1) instead of a note |
+| `--require LIST` | Comma-separated checks that must be present (default: the `[tool.tundravm]` table's `require`, else `reproducible,lock`; `''` requires none): `reproducible` (a recorded `matched` second build), `measured` (a valid, non-placeholder policy bound to each variant, measuring every artifact of it, a disk through the UKI it boots), `real` (no simulated artifact), `lock` (a lockfile), `installed` (each SBOM holds mkosi's installed inventory), `attested` (each artifact a valid policy measures has a bundled record whose re-derived verdict is `trusted`, checked against that policy, its `observed_at` within `--max-age` of `created`). A missing one is an `incomplete` reason (exit 1) instead of a note |
 | `--attestation FILE` | Bundle this `tundravm.attestation/1` record (`attest --record FILE`); repeatable. Each is re-derived against its variant's policy (`read_attestation`): a record that disagrees with its own document fails the evidence (`attestation-inconsistent`), whatever is required |
 | `--max-age DURATION` | The freshness window of `attested`: `45s`, `30m`, `24h` (default), `7d` or plain seconds, either side of the evidence's `created`. `SOURCE_DATE_EPOCH` pins `created`, so pin it near the attestations or widen the window; `observed_at` itself is never pinned. Recorded as `attestation.max_age_seconds` |
 | `--sign KEY` | Sign `evidence.json` with the SSH private key `KEY` (`ssh-keygen -Y sign -f KEY -n tundravm-evidence`; a key without a passphrase, or a `.pub` whose private key is in `ssh-agent`) and write `evidence.json.sig` beside it and into `--bundle`. Without `ssh-keygen` on `PATH` it fails with `E_STATE` and a hint; a key it cannot use fails with `E_VALIDATION` |
@@ -1126,11 +1123,11 @@ What `verify` derives from the members, and so does not take from the index:
 | Index field | Derived from |
 |---|---|
 | `bake.backend`, `bake.simulated`, `bake.reproducibility`, `recipe.baked_digest` | `bake-result.json` |
-| per variant `reproducibility`, `tree_digest`, the artifact targets, each artifact's `sha256` and `simulated` | `bake-result.json` |
+| per variant `reproducibility`, `tree_digest`, the artifact targets, each artifact's `sha256`, `simulated` and `boot_payload` sha256 | `bake-result.json` (`boot_payloads`) |
 | `lint.errors`, `warnings`, `infos`, `codes` | `lint.json` |
 | `lockfile.sha256`, `recorded_sha256`, `bound` | the lockfile member and `bake-result.json`'s `lock_sha256` |
 | each SBOM's `complete`, `missing`, `bound`, its described artifact sha256 and its packages (name and version) | the SBOM, its bundled `manifest-<target>.json` and the `manifest_digests` `bake-result.json` records |
-| `policy.valid`, `placeholder`, `registers`, `artifact_matches`, `measures`, and each artifact's `coverage` | the policy member and the artifact sha256s above |
+| `policy.valid`, `placeholder`, `registers`, `artifact_matches`, `measures`, and each artifact's `coverage` (with its `via`) | the policy member and the artifact and boot payload sha256s above, so an edited boot payload in the bundled `bake-result.json` is `index-inconsistent` |
 | `tree_matches`, and each `tree.json`'s `variant_digest` and `tree_digest` | the `tree.json` rows and the variant's tree digest in `bake-result.json` |
 | each attestation's `verdict`, `observed_at`, `policy_sha256`, `artifact_sha256`, `policy_matches`, `inconsistencies` (subject `variants.<variant>.attestations.<n>`), and that it attests an artifact the variant holds | the record re-derived offline against the variant's policy member: its quote parsed again, the nonce binding and each register recomputed, the signature status read from the recorded validator reply |
 
@@ -1236,13 +1233,13 @@ unknown: default measurements: the evidence holds no valid measurements policy
 | Tab | Shows |
 |---|---|
 | Overview | The recipe's name, base, arch, snapshot, mirror, dialect, layout and recipe digest; the lint summary with every finding (severity, code, variant, location, subject, message, hint), as `lint` reports them with the lockfile's pins applied; the lockfile's state (`current`, `drifted` with one line per drifted section, or `missing`), its recipe digest, compiler version, section digests and source pins (`--lockfile`, default `build/tundravm.lock` when it exists); and, when `--build` holds a bake, its backend, the simulated flag, the reproducibility state `bake --verify-reproducible` recorded and every artifact with its sha256 |
-| Variants | Each variant's parent, targets, declaration count and resolved fragments, then a matrix with one row per declaration and one column per variant: `●` present (from `common`), `+` added by a variant overlay (its own or an ancestor's), `~` replaced (with the fields that differ from the first variant that has it), `−` removed, `·` absent. Expanding a declaration shows its key fields, and per variant the resolution steps (`declared in common via base > app`, `replaced in variant prod`), the tree files it produced and the lines the compiler generated for it (enablement links, runtime-init ordering) |
+| Variants | What each variant inherits, its outputs, declaration count and resolved fragments, then a matrix with one row per declaration and one column per variant: `●` present (from `common`), `+` added by a variant overlay (its own or an ancestor's), `~` replaced (with the fields that differ from the first variant that has it), `−` removed, `·` absent. Expanding a declaration shows its key fields, and per variant the resolution steps (`declared in common via app`, `replaced in variant prod`), the tree files it produced and the lines the compiler generated for it (enablement links, runtime-init ordering) |
 | Emitted tree | Per variant, every path of its compiled tree grouped by directory, with its mode, size and sha256 prefix and the declarations that produced it (`declared by File(extra, /etc/app.conf)`, as `inspect --why` finds them; a compiler-generated file says so). Each file expands to its content: text up to 64 KiB (a longer file is truncated with a note; the page shows at most 4 MiB of content in all), a binary file is noted, not shown |
 | Hooks & builds | Per variant, the build hooks in stage order (`sync` to `boot`) with their scripts, each named after its `Hook` declaration or marked as generated; the runtime-init steps in the order they run, by priority (the built-in `keys`, `disks` and `secrets` steps run at 10, 20 and 30), each named after its `Init`; the source builds with their URL, ref, pin (`unpinned` without one) and install destinations; the kernel and its source |
 
 A declaration's name links to the files it produced and each file's "declared by" links back to the declaration; following a link switches to its tab, opens the collapsed entry and highlights it. The Variants tab has a filter box and an "only declarations that differ" switch; the Emitted tree tab has a path filter. Without JavaScript the tabs read as one long page, entries expand as native `<details>` and the links still jump.
 
-`--format json` prints the model the page renders from instead (to `FILE` with `--output`): `{"schema": "tundravm.explore/2", "recipe", "lint", "lock", "bake", "variants", "declarations": [{"declaration", "type", "key", "fields", "variants": {NAME: {"state", "origins", "changed", "files", "generated"}}}], "trees": {NAME: {"files": [{"path", "image_path", "type", "mode", "size", "sha256", "binary", "truncated", "text", "declarations"}]}}, "scripts": {NAME: {"hooks", "init", "sources", "kernel"}}, "notes"}`. `Exploration.from_dict(data).html()` renders it again.
+`--format json` prints the model the page renders from instead (to `FILE` with `--output`): `{"schema": "tundravm.explore/3", "recipe", "lint", "lock", "bake", "variants": [{"name", "inherits", "outputs", "fragments", "declarations"}], "declarations": [{"declaration", "type", "key", "fields", "variants": {NAME: {"state", "origins", "changed", "files", "generated"}}}], "trees": {NAME: {"files": [{"path", "image_path", "type", "mode", "size", "sha256", "binary", "truncated", "text", "declarations"}]}}, "scripts": {NAME: {"hooks", "init", "sources", "kernel"}}, "notes"}`. `Exploration.from_dict(data).html()` renders it again.
 
 ## Release
 
@@ -1456,7 +1453,7 @@ A matched witness proves that another builder, with its own backend and toolchai
 `tundravm watch RECIPE` keeps the edit loop short. Every `--interval SECONDS` (default `1`) it polls the mtime and size of everything the verdict depends on:
 
 - the recipe file and every `.py` under its directory (hidden directories, `__pycache__`, installed packages and the build output are left out);
-- every host path the recipe's declarations read ([`recipe_inputs`](api.md#recipe-inputs)): `File`, `Unit` and `Template` sources given as a `Path`, `Kernel.config`, the policy file of a `Tdxs.from_policy`, and each `Directory` source tree, entry by entry, so adding, removing or editing a member counts;
+- every host path the recipe's declarations read ([`recipe_inputs`](api.md#recipe-inputs)): `File`, `Unit` and `Template` sources given as a `Path`, `Kernel.config`, the policy file of a `Tdxs.from_policy`, and each `FileTree` source tree, entry by entry, so adding, removing or editing a member counts;
 - the selected lockfile (so `tundravm lock` in another terminal refreshes the drift counts);
 - `pyproject.toml`, whose `[tool.tundravm]` table is read again on every check (flags still win), so changing `tree`, `build` or `lockfile` there retargets the watch;
 - the checked tree, entry by entry, so an external `tundravm compile` refreshes the verdict. What `--write` itself writes does not count as a change.

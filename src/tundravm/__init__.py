@@ -1,6 +1,6 @@
 """tundravm: declarative TDX VM images.
 
-A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
+A :class:`Recipe` (recipe-wide settings, its own ``items`` and its
 :class:`Variant` overlays) is the whole public model; ``resolve``/``lint``/
 ``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``fetch``, ``bake``,
 ``read_artifacts``, ``verify_artifact``, ``doctor``) take one; ``attest`` checks a
@@ -30,13 +30,13 @@ from .declarative import (
     Declaration,
     Deployment,
     Diagnostic,
-    Directory,
     Disk,
     Dotnet,
     Entry,
     ExternalDelivery,
     FetchedSource,
     File,
+    FileTree,
     Fragment,
     Gcp,
     Git,
@@ -84,6 +84,7 @@ from .declarative import (
     lock,
     lock_status,
     lower,
+    packages,
     read_artifacts,
     read_lock,
     resolve,
@@ -131,7 +132,6 @@ __all__ = [
     "Deployment",
     "DeploymentError",
     "Diagnostic",
-    "Directory",
     "Disk",
     "Dotnet",
     "Entry",
@@ -141,6 +141,7 @@ __all__ = [
     "ExternalDelivery",
     "FetchedSource",
     "File",
+    "FileTree",
     "Fragment",
     "Gcp",
     "Git",
@@ -208,6 +209,7 @@ __all__ = [
     "lock",
     "lock_status",
     "lower",
+    "packages",
     "read_artifacts",
     "read_attestation",
     "read_lock",

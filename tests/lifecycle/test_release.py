@@ -15,7 +15,6 @@ import pytest
 from tests.helpers import run_main, write_recipe_file
 from tundravm import (
     File,
-    Fragment,
     Lock,
     Package,
     Recipe,
@@ -50,21 +49,18 @@ class Counting(InProcessBackend):
 
 def _recipe(*, extra: str = "jq", dev: bool = False) -> Recipe:
     variants: tuple[Variant, ...] = (
-        Variant("default", target="qemu"),
-        Variant("azure", target="azure"),
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", outputs=("azure",)),
     )
     if dev:
-        variants += (Variant("dev", parent="default", add=DevTools(), release=False),)
+        variants += (Variant("dev", inherits="default", add=DevTools(), release=False),)
     return Recipe(
         "node",
-        Fragment(
-            "common",
-            items=(
-                Package("curl"),
-                Package("linux-image-amd64"),
-                Package(extra),
-                File("/etc/motd", "hi\n"),
-            ),
+        items=(
+            Package("curl"),
+            Package("linux-image-amd64"),
+            Package(extra),
+            File("/etc/motd", "hi\n"),
         ),
         variants=variants,
     )
@@ -327,18 +323,18 @@ def test_release_false_is_in_the_digest_and_true_is_not() -> None:
     plain = _recipe()
     marked = Recipe(
         "node",
-        plain.common,
+        items=plain.items,
         variants=(
-            Variant("default", target="qemu"),
-            Variant("azure", target="azure", release=True),
+            Variant("default", outputs=("qemu",)),
+            Variant("azure", outputs=("azure",), release=True),
         ),
     )
     unreleased = Recipe(
         "node",
-        plain.common,
+        items=plain.items,
         variants=(
-            Variant("default", target="qemu"),
-            Variant("azure", target="azure", release=False),
+            Variant("default", outputs=("qemu",)),
+            Variant("azure", outputs=("azure",), release=False),
         ),
     )
 
@@ -426,11 +422,8 @@ from tundravm.backends import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "node",
-    Fragment(
-        "common",
-        items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\\n")),
-    ),
-    variants=(Variant("default", target="qemu"),),
+    items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\\n")),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 """
 

@@ -5,7 +5,6 @@ from pathlib import Path
 from tundravm.declarative import (
     Artifact,
     Backend,
-    Fragment,
     Hook,
     Package,
     Recipe,
@@ -18,15 +17,12 @@ from tundravm.declarative import (
 def _recipe() -> Recipe:
     return Recipe(
         "repro",
-        Fragment(
-            "common",
-            items=(
-                Package("curl"),
-                Package("linux-image-amd64"),
-                Hook("hello", "prepare", "echo hello"),
-            ),
+        items=(
+            Package("curl"),
+            Package("linux-image-amd64"),
+            Hook("hello", "prepare", "echo hello"),
         ),
-        variants=(Variant("default", targets=("qemu", "azure")),),
+        variants=(Variant("default", outputs=("qemu", "azure")),),
     )
 
 

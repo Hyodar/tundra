@@ -130,24 +130,21 @@ recipe = Recipe(
     tools_mirror=PINNED_MIRROR,
     epoch=0,
     mkosi=NETHERMIND_V1,
-    common=Fragment(
-        "surge",
-        items=(
-            NethermindBase(),
-            *(Package(name) for name in RUNTIME_PACKAGES),
-            *(Package(name, role="build") for name in BUILD_PACKAGES),
-            key,
-            disk,
-            Secrets(store=disk),
-            prover_stack,
-            system,
-        ),
+    items=(
+        NethermindBase(),
+        *(Package(name) for name in RUNTIME_PACKAGES),
+        *(Package(name, role="build") for name in BUILD_PACKAGES),
+        key,
+        disk,
+        Secrets(store=disk),
+        prover_stack,
+        system,
     ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("azure", parent="default", target="azure"),
-        Variant("gcp", parent="default", target="gcp"),
-        Variant("devtools", parent="default", add=DevTools(reproducible=False)),  # never ship it
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
+        Variant("gcp", inherits="default", outputs=("gcp",)),
+        Variant("devtools", inherits="default", add=DevTools(reproducible=False)),  # never ship it
     ),
 )
 

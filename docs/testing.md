@@ -13,7 +13,7 @@ fragment_plan(*items, include=(), base=None, variant="default", lock=None) -> Im
 plan(recipe, variant=None, *, lock=None) -> Image
 ```
 
-`fragment_plan` puts a fragment (or bare declarations) on `TEST_PLATFORM`, a minimal bootable platform holding the kernel package, so `kernel-missing` stays quiet and only the fragment's own findings remain. `include=` adds what the fragment needs without being under test, such as the fragment its `requires` names. `base=` replaces the platform: another fragment, or a whole `Recipe` whose `common` gains the items (then `variant=` picks one of its variants). `plan` takes a whole recipe and one of its variants (default: the first).
+`fragment_plan` puts a fragment (or bare declarations) on `TEST_PLATFORM`, a minimal bootable platform holding the kernel package, so `kernel-missing` stays quiet and only the fragment's own findings remain. `include=` adds what the fragment needs without being under test, such as the fragment its `requires` names. `base=` replaces the platform: another fragment, or a whole `Recipe` whose `items` gain them (then `variant=` picks one of its variants). `plan` takes a whole recipe and one of its variants (default: the first).
 
 An `Image` is one variant. It compiles in memory, with no temporary directory to manage, the first time a query reads the tree, so `image.lint()` still works on a recipe that does not compile. Shipped things come from the compiled tree, declared things from the resolved variant:
 
@@ -40,7 +40,7 @@ APP = Fragment(
         File("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
         User("app"),
         Init("app-state", "install -d -o app /var/lib/app", priority=40),
-        Service("app", "/usr/bin/app", user="app", env=(("PORT", "8080"),)),
+        Service("app", "/usr/bin/app", user="app", env={"PORT": "8080"}),
     ),
 )
 
@@ -68,10 +68,10 @@ from tundravm.testing import plan
 
 RECIPE = Recipe(
     name="web",
-    common=Fragment("web", (Package("linux-image-amd64"),)),
+    items=(Package("linux-image-amd64"),),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("azure", target="azure", add=Fragment("azure-tools", (Package("jq"),))),
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", outputs=("azure",), add=Fragment("azure-tools", (Package("jq"),))),
     ),
 )
 
@@ -90,7 +90,7 @@ assert_diagnostic(subject, code, /, *, severity=None, variant=None, subject=None
 
 Both take an `Image`, a `Recipe` (linted for `variants=`, default: all) or the diagnostics `lint()` returned.
 
-- `assert_clean(image)` fails listing every error and warning whose code is not in `allow`, for every kind of input. `warnings="allow"` fails on errors only. `strict=` is the old spelling (`strict=False` is `warnings="allow"`).
+- `assert_clean(image)` fails listing every error and warning whose code is not in `allow`, for every kind of input. `warnings="allow"` fails on errors only.
 - `assert_diagnostic(image, "disk-key-undefined", variant="default")` returns the first diagnostic matching every field you give, or fails naming the fields it wanted (`no diagnostic with code='disk-key-undefined', variant='default'; found:`) and listing what was found. `variant` is the variant, `""` for the recipe as a whole (the common fragment, the lockfile, the host); `location` matches a finding's source position (`file:line`).
 
 ```python
@@ -210,7 +210,7 @@ KEY = (
 
 
 def image(*items):
-    return Recipe(name="t", common=Fragment("t", items=(Package("linux-image-amd64"), *items)))
+    return Recipe(name="t", items=(Package("linux-image-amd64"), *items))
 
 
 def test_the_bake_passes_review(tmp_path):
@@ -264,7 +264,7 @@ from tundravm.testing import recipe_file, run_cli
 def test_lint_fails_on_a_dangling_key(tmp_path):
     path = recipe_file(tmp_path, """
         from tundravm import Disk, Fragment, Key, Recipe
-        recipe = Recipe(name="t", common=Fragment("t", items=(Disk("data", mount="/data", key=Key("data")),)))
+        recipe = Recipe(name="t", items=(Disk("data", mount="/data", key=Key("data")),))
     """)
     code, out, err = run_cli("lint", path)
     assert code == 1
@@ -284,7 +284,7 @@ def test_watch_reports_a_stale_tree(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     path = recipe_file(tmp_path, """
         from tundravm import File, Fragment, Package, Recipe
-        recipe = Recipe(name="t", common=Fragment("t", items=(Package("linux-image-amd64"), File("/etc/motd", "hi\\n"))))
+        recipe = Recipe(name="t", items=(Package("linux-image-amd64"), File("/etc/motd", "hi\\n")))
     """)
     assert main(["compile", str(path)], stdout=io.StringIO()) == 0
 
@@ -308,7 +308,7 @@ The `tundravm` pytest plugin is registered through an entry point, so installing
 
 | Fixture | Gives |
 |---|---|
-| `recipe` | A minimal lint-clean `Recipe(name="test", common=Fragment("test", (Package("linux-image-amd64"),)))` with one `default` variant; the kernel package keeps `kernel-missing` quiet |
+| `recipe` | A minimal lint-clean `Recipe(name="test", items=(Package("linux-image-amd64"),))` with one `default` variant; the kernel package keeps `kernel-missing` quiet |
 | `compiled` | `compiled(recipe, variants=None) -> CompiledTree`, compiled into a fresh directory under `tmp_path` |
 | `run_cli` | The `run_cli` helper |
 

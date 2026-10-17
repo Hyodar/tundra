@@ -165,4 +165,4 @@ class NethermindBase(Composite):
         )
 
 
-recipe = Recipe(name="nethermind-tdx", common=NethermindBase(), mkosi=NETHERMIND_V1)
+recipe = Recipe(name="nethermind-tdx", items=(NethermindBase(),), mkosi=NETHERMIND_V1)

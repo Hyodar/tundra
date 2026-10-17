@@ -7,7 +7,7 @@ from tundravm import Fragment, Package, Policy, Recipe
 
 recipe = Recipe(
     name="node",
-    common=Fragment("node", items=(Package("curl"),)),
+    items=(Package("curl"),),
     policy=Policy(require_frozen_lock=True, mutable_ref_policy="error"),
 )
 ```

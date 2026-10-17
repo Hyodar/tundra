@@ -75,10 +75,7 @@ from tundravm.declarative import File, Fragment, Package, Recipe
 recipe = Recipe(
     name="qemu-basic",
     base="debian/bookworm",
-    common=Fragment(
-        "qemu-basic",
-        items=(Package("curl"), Package("jq"), File("/etc/motd", "QEMU profile\\n")),
-    ),
+    items=(Package("curl"), Package("jq"), File("/etc/motd", "QEMU profile\\n")),
 )
 
 backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
@@ -113,15 +110,12 @@ from tundravm.declarative import Build, Fragment, Git, Install, Recipe
 
 recipe = Recipe(
     "tool",
-    Fragment(
-        "tool",
-        items=(
-            Build(
-                "tool",
-                Git({repo!r}, "main"),
-                script="make",
-                install=(Install("tool", "/usr/bin/tool"),),
-            ),
+    items=(
+        Build(
+            "tool",
+            Git({repo!r}, "main"),
+            script="make",
+            install=(Install("tool", "/usr/bin/tool"),),
         ),
     ),
 )
@@ -165,12 +159,12 @@ def _spec() -> SourceBuild:
 def _recipe(
     *items: Declaration | Fragment,
     policy: Policy | None = None,
-    variants: tuple[Variant, ...] = (Variant("default", target="qemu"),),
+    variants: tuple[Variant, ...] = (Variant("default", outputs=("qemu",)),),
     dialect: Literal["current", "nethermind-v1"] = "current",
 ) -> Recipe:
     return Recipe(
         "tool",
-        Fragment("tool", items=items),
+        items=items,
         variants=variants,
         mkosi=Mkosi(dialect=dialect),
         policy=policy,
@@ -245,7 +239,7 @@ def test_duplicate_source_build_name_is_rejected() -> None:
 
 
 def test_variant_inherits_common_source_builds() -> None:
-    variants = (Variant("default", target="qemu"), Variant("azure", target="azure"))
+    variants = (Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",)))
     recipe = _recipe(_build(), variants=variants)
     assert "tool" in lower(recipe).source_builds(profile="azure")
     assert _hooks(compile(recipe), "azure") == _spec().render(mounted=True)
@@ -312,7 +306,7 @@ def test_subdir_submodules_env_and_quoting() -> None:
         Git(REPO, "main", subdir="pkg/tool", submodules=True),
         script="mkdir -p ./build && go build -o ./build/tool './cmd/tool'",
         install=(Install("build/tool", "/usr/local/bin/tool"),),
-        env=(("CGO_CFLAGS", "-O -D__X__"), ("GO111MODULE", "on")),
+        env={"CGO_CFLAGS": "-O -D__X__", "GO111MODULE": "on"},
     )
     recipe = _recipe(build)
     spec = lower(recipe).source_builds()["tool"]

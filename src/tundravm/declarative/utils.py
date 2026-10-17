@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from tundravm._modules import devtools as _devtools
 from tundravm._modules import tdxs as _tdxs
+from tundravm._source import FrozenMap
 from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import (
     is_placeholder,
@@ -38,7 +39,6 @@ from .model import (
     Hook,
     Install,
     Package,
-    Pairs,
     Setting,
     Unit,
     User,
@@ -85,7 +85,7 @@ class Composite(Fragment):
     the configuration as fields and return the contents from :meth:`compose`. The
     instance takes that fragment's ``name``, ``items``, ``requires`` and ``checks``;
     its ``repr`` and equality are its configuration fields. Lists passed for
-    fields are frozen into tuples.
+    fields are frozen into tuples, mappings into immutable ``FrozenMap`` copies.
     """
 
     name: str = field(init=False, repr=False, compare=False)
@@ -95,8 +95,12 @@ class Composite(Fragment):
 
     def __post_init__(self) -> None:
         for item in fields(self):
-            if item.init and isinstance(value := getattr(self, item.name), list):
+            if not item.init:
+                continue
+            if isinstance(value := getattr(self, item.name), list):
                 object.__setattr__(self, item.name, tuple(value))
+            elif isinstance(value, Mapping):
+                object.__setattr__(self, item.name, FrozenMap(value))
         composed = self.compose()
         if not isinstance(composed, Fragment):
             raise ValidationError(
@@ -113,13 +117,16 @@ class Composite(Fragment):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Backports(Composite):
-    """Debian backports and sid sources for apt during the build (not in the image).
+    """Debian backports (and, with *include_sid*, sid) sources for apt during the build.
 
-    The ``current`` dialect writes them at compile time to the variant's
-    ``mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources`` (see
-    :meth:`render_sources`), with ``preferences.d/debian-backports.pref`` pinning
+    Neither lands in the image. The ``current`` dialect writes them at compile time
+    to the variant's ``mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources``
+    (see :meth:`render_sources`), with ``preferences.d/debian-backports.pref`` pinning
     backports to 200 and sid to 100 (see :meth:`render_preferences`): packages
-    come from the release unless it lacks them. *archive_url* is the apt URI used
+    come from the release unless it lacks them, then from backports, then from
+    sid. ``include_sid=False`` drops the sid source and its pin, so a package
+    missing from the release and backports fails the build instead of coming from
+    unstable. *archive_url* is the apt URI used
     verbatim; without it the sources follow ``Recipe.mirror`` (a mirror root) and
     ``Recipe.snapshot`` the way mkosi does, else ``deb.debian.org``. Without
     *release*, the release of ``Recipe.base``. Under ``nethermind-v1`` a sync hook
@@ -129,8 +136,14 @@ class Backports(Composite):
 
     archive_url: str | None = None
     release: str | None = None
+    include_sid: bool = True
 
     def compose(self) -> Fragment:
+        if not isinstance(self.include_sid, bool):
+            raise ValidationError(
+                f"Backports: include_sid must be True or False, got {self.include_sid!r}.",
+                hint="Pass include_sid=False to leave sid out of the build's apt sources.",
+            )
         lines: list[str] = []
         if self.archive_url is not None:
             lines.append(f'MIRROR="{self.archive_url}"')
@@ -148,8 +161,11 @@ class Backports(Composite):
         lines.append(
             'cat > "$BUILDDIR/debian-backports.sources" <<EOF\n'
             + _SOURCES_STANZA.format(mirror="$MIRROR", suite="${RELEASE}-backports")
-            + "\n"
-            + _SOURCES_STANZA.format(mirror="$MIRROR", suite="sid")
+            + (
+                "\n" + _SOURCES_STANZA.format(mirror="$MIRROR", suite="sid")
+                if self.include_sid
+                else ""
+            )
             + "EOF"
         )
         return Fragment(
@@ -182,11 +198,10 @@ class Backports(Composite):
                 "Backports needs a Debian release: Recipe.base names none.",
                 hint="Set Recipe.base to e.g. 'debian/trixie', or pass Backports(release=...).",
             )
-        return (
-            _SOURCES_STANZA.format(mirror=uri, suite=f"{suite}-backports")
-            + "\n"
-            + _SOURCES_STANZA.format(mirror=uri, suite="sid")
-        )
+        backports = _SOURCES_STANZA.format(mirror=uri, suite=f"{suite}-backports")
+        if not self.include_sid:
+            return backports
+        return backports + "\n" + _SOURCES_STANZA.format(mirror=uri, suite="sid")
 
     def render_preferences(self, *, release: str) -> str:
         """The apt pins the ``current`` dialect writes next to :meth:`render_sources`' file.
@@ -195,10 +210,12 @@ class Backports(Composite):
         wherever its versions are newer.
         """
         suite = self.release or release
-        return (
+        pins = (
             f"Package: *\nPin: release n={suite}-backports\nPin-Priority: {_BACKPORTS_PRIORITY}\n"
-            f"\nPackage: *\nPin: release n=sid\nPin-Priority: {_SID_PRIORITY}\n"
         )
+        if not self.include_sid:
+            return pins
+        return pins + f"\nPackage: *\nPin: release n=sid\nPin-Priority: {_SID_PRIORITY}\n"
 
 
 def _join(root: str, path: str) -> str:
@@ -301,7 +318,7 @@ class Tdxs(Composite):
     source: Git = TUNDRA_TOOLS
     issuer: TdxsType | None = "tdx"
     validator: TdxsType | None = None
-    expected_measurements: Pairs = ()
+    expected_measurements: Mapping[str, str] = field(default_factory=FrozenMap)
     check_revocations: bool = False
     get_collateral: bool = False
     verify_imds: bool = False
@@ -343,7 +360,7 @@ class Tdxs(Composite):
         registers = data["registers"]
         assert isinstance(registers, dict)
         expected = validator_measurements(registers, mrtd=mrtd)
-        verifier = cls(validator=validator, expected_measurements=expected, **kwargs)
+        verifier = cls(validator=validator, expected_measurements=dict(expected), **kwargs)
         if not isinstance(policy, Mapping):
             object.__setattr__(verifier, "policy_file", Path(policy))
         return verifier
@@ -368,6 +385,12 @@ class Tdxs(Composite):
         )
 
     def compose(self) -> Fragment:
+        if not isinstance(self.expected_measurements, Mapping):
+            raise ValidationError(
+                f"Tdxs: expected_measurements= must be a mapping, "
+                f"got {self.expected_measurements!r}.",
+                hint="Pass a dict: expected_measurements={'rtmr0': '<hex>'}.",
+            )
         spec = _tdxs.Tdxs(
             issuer_type=self.issuer,
             validator_type=self.validator,

@@ -50,17 +50,14 @@ recipe = Recipe(
     name="attestation",
     base="debian/bookworm",
     policy=Policy(require_frozen_lock=True),
-    common=Fragment(
-        "base",
-        items=(*(Package(name) for name in (*BOOT, "ca-certificates")), app),
-    ),
+    items=(*(Package(name) for name in (*BOOT, "ca-certificates")), app),
     variants=(
         # Proves what it runs: issues TDX quotes, checks nothing.
-        Variant("attester", target="qemu", add=Tdxs(issuer="tdx")),
+        Variant("attester", outputs=("qemu",), add=Tdxs(issuer="tdx")),
         # Also checks peers: their quotes must match PEER_POLICY and not be revoked.
         Variant(
             "verifier",
-            target="qemu",
+            outputs=("qemu",),
             add=Tdxs.from_policy(
                 PEER_POLICY,
                 issuer="tdx",
@@ -72,7 +69,7 @@ recipe = Recipe(
         # Azure attests through its own quote path; the validator also checks the IMDS token.
         Variant(
             "azure-verifier",
-            target="azure",
+            outputs=("azure",),
             add=Tdxs.from_policy(
                 PEER_POLICY,
                 issuer="azure",

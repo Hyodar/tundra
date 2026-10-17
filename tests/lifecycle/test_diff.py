@@ -21,17 +21,14 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "diff",
-    Fragment(
-        "common",
-        items=(
-            Package("curl"),
-            Package("jq"),
-            File("/etc/motd", "hello\\n"),
-            User("app", system=True),
-            Service("app", "/usr/bin/app"),
-        ),
+    items=(
+        Package("curl"),
+        Package("jq"),
+        File("/etc/motd", "hello\\n"),
+        User("app", system=True),
+        Service("app", "/usr/bin/app"),
     ),
-    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
 )
 """
 
@@ -142,8 +139,8 @@ def make_recipe(*extra: Package, variants: tuple[Variant, ...] = ()) -> Recipe:
     items: tuple[Declaration, ...] = (Package("curl"), File("/etc/motd", "hello\n"), *extra)
     return Recipe(
         "diff",
-        Fragment("common", items=items),
-        variants=(Variant("default", target="qemu"), *variants),
+        items=items,
+        variants=(Variant("default", outputs=("qemu",)), *variants),
     )
 
 

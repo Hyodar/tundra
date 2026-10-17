@@ -658,6 +658,7 @@ def _variant(
                 "sha256": artifact.sha256,
                 "integrity": integrity,
                 "simulated": artifact.simulated,
+                "boot_payload": _boot_payload(artifact),
             }
         )
         if integrity != "verified":
@@ -684,7 +685,7 @@ def _variant(
             }
         )
     recorded_tree = next((a.tree_digest for a in artifacts if a.tree_digest), "")
-    measurements = _policy(name, artifacts, base, policy, members, notes)
+    measurements = _policy(name, rows, base, policy, members, notes)
     return {
         "artifacts": rows,
         "tree_digest": recorded_tree or None,
@@ -698,9 +699,16 @@ def _variant(
     }
 
 
+def _boot_payload(artifact: Artifact) -> dict[str, str] | None:
+    """The UKI the bake recorded *artifact* booting (``path``, ``sha256``), ``None`` if none."""
+    if artifact.boot_payload is None or not artifact.boot_payload_sha256:
+        return None
+    return {"path": str(artifact.boot_payload), "sha256": artifact.boot_payload_sha256}
+
+
 def _policy(
     name: str,
-    artifacts: Sequence[Artifact],
+    rows: Sequence[Mapping[str, Any]],
     base: Path,
     given: Path | None,
     members: dict[str, bytes],
@@ -721,20 +729,37 @@ def _policy(
     except TdxError as exc:
         notes.append(f"measurements policy {source} is not a valid policy: {exc}")
         return {"member": member, "source": str(source), "valid": False}
-    measured = payload.get("artifact")
-    sha = measured.get("sha256") if isinstance(measured, dict) else None
     return {
         "member": member,
         "source": str(source),
         "valid": True,
-        "placeholder": is_placeholder(payload),
         "tool": payload.get("tool"),
-        "registers": sorted(dict(payload.get("registers") or {})),  # type: ignore[call-overload]
-        "artifact_matches": sha in {a.sha256 for a in artifacts} if sha else None,
-        "measures": {
-            "target": next((a.target for a in artifacts if sha and a.sha256 == sha), None),
-            "sha256": sha,
-        },
+        **policy_facts(payload, rows),
+    }
+
+
+def policy_facts(payload: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What a valid policy *payload* says about a variant's artifact *rows*: ``placeholder``,
+    ``registers``, ``artifact_matches`` (its artifact is one of them or the UKI one boots;
+    ``None`` when it names no sha256) and ``measures``: the ``target`` whose artifact it
+    names, that ``sha256`` and, when the policy records it, the sha256 of the UKI it
+    measured (``boot_payload``)."""
+    measured = payload.get("artifact")
+    sha = measured.get("sha256") if isinstance(measured, dict) else None
+    shas = {row.get("sha256") for row in rows}
+    shas |= {(row.get("boot_payload") or {}).get("sha256") for row in rows}
+    measures = {
+        "target": next((row["target"] for row in rows if sha and row["sha256"] == sha), None),
+        "sha256": sha,
+    }
+    boot = payload.get("boot_payload")
+    if isinstance(boot, dict) and boot.get("sha256"):
+        measures["boot_payload"] = boot["sha256"]
+    return {
+        "placeholder": is_placeholder(payload),
+        "registers": sorted(dict(payload.get("registers") or {})),
+        "artifact_matches": (sha in shas) if sha else None,
+        "measures": measures,
     }
 
 
@@ -742,23 +767,33 @@ def coverage(
     rows: Sequence[Mapping[str, Any]], policy: Mapping[str, Any] | None
 ) -> list[dict[str, Any]]:
     """Per artifact row of a variant, whether its measurements *policy* measures it: ``target``,
-    ``sha256``, ``state`` (``measured`` or ``unmeasured``) and the ``reason`` it is not (a
-    format no tool reads, no usable policy, or the policy measures another artifact).
+    ``sha256``, ``state`` (``measured`` or ``unmeasured``), ``via`` (``boot payload <sha12>``,
+    only on an artifact measured through the UKI it boots) and the ``reason`` it is not (it
+    boots another UKI, a format no tool reads, no usable policy, or the policy measures
+    another artifact).
 
-    An artifact counts as measured only when the policy names its own sha256: the bake
-    does not record which UKI a disk image holds, so a disk is not covered by the
-    measurement of the UKI inside it.
+    An artifact counts as measured when the policy names its own sha256, or when the bake
+    recorded it booting the very UKI the policy measured: its ``boot_payload`` sha256 is the
+    policy's ``boot_payload``, or the policy's artifact (a UKI measured directly).
     """
     usable = policy is not None and policy.get("valid") and not policy.get("placeholder")
     measures: Mapping[str, Any] = (policy or {}).get("measures") or {}
+    ukis = {measures.get("boot_payload"), measures.get("sha256")} - {None}
     found: list[dict[str, Any]] = []
     for row in rows:
         entry = {"target": row["target"], "sha256": row["sha256"]}
         if usable and measures.get("sha256") == row["sha256"]:
             found.append({**entry, "state": "measured", "reason": None})
             continue
+        boots = (row.get("boot_payload") or {}).get("sha256")
+        if usable and boots and boots in ukis:
+            via = f"boot payload {boots[:12]}"
+            found.append({**entry, "state": "measured", "reason": None, "via": via})
+            continue
         suffix = Path(str(row["path"])).suffix
-        if not measurable(str(row["path"])):
+        if usable and boots:
+            reason = f"it boots UKI {boots[:12]}, not the one the policy measured"
+        elif not measurable(str(row["path"])):
             readable = ", ".join(sorted(MEASURABLE_SUFFIXES))
             reason = (
                 f"its format ({suffix or 'no suffix'}) is not measurable: tools read {readable}"
@@ -1179,6 +1214,12 @@ def _secrets(img: Lowered, name: str) -> list[dict[str, object]]:
     ]
 
 
+def _coverage_state(entry: Mapping[str, Any]) -> str:
+    """``measured``, ``unmeasured`` or ``measured (via boot payload <sha12>)``."""
+    via = entry.get("via")
+    return f"{entry['state']} (via {via})" if via else str(entry["state"])
+
+
 def _text(index: Mapping[str, Any]) -> str:
     verdict = index["verdict"]
     recipe = index["recipe"]
@@ -1205,6 +1246,11 @@ def _text(index: Mapping[str, Any]) -> str:
                 f"  {name}/{row['target']}  {row['path']}  sha256 {row['sha256'][:12]}  "
                 f"{row['integrity']}"
             )
+        lines.extend(
+            f"  {name}/{c['target']}  {_coverage_state(c)}"
+            for c in record["coverage"]
+            if c.get("via")
+        )
         for row in record.get("secrets") or ():
             state = "delivered" if row["supported"] else "not delivered"
             lines.append(
@@ -1309,7 +1355,10 @@ def _variant_html(name: str, record: Mapping[str, Any]) -> str:
     parts.append(
         _table(
             ("target", "sha256", "measured", "why not"),
-            [(c["target"], c["sha256"], c["state"], c["reason"]) for c in record["coverage"]],
+            [
+                (c["target"], c["sha256"], _coverage_state(c), c["reason"])
+                for c in record["coverage"]
+            ],
         )
     )
     parts.append("<h3>Attestations</h3>")

@@ -239,9 +239,10 @@ def main(
         return 130
 
 
-REPORT_VERSIONS = {"lint": 2, "config": 2}
+REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 2}
 """Verbs whose ``--format json`` report moved past version 1: lint's diagnostics carry
-``variant`` beside ``location``; config's ``values`` hold ``require``, a list."""
+``variant`` beside ``location``; config's ``values`` hold ``require``, a list; inspect
+names what a variant ``inherits`` and a variant diff's ``outputs``."""
 
 
 def schema(verb: str) -> str:
@@ -870,7 +871,7 @@ def _add_import(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         description=(
             help_text + " TREE is one variant directory (it holds mkosi.conf) or a "
             "directory of them as `compile` writes them; the first (default first) becomes "
-            "the common fragment and every other one a Variant holding what differs. "
+            "Recipe.items and every other one a Variant holding what differs. "
             "mkosi.conf, mkosi.extra, mkosi.skeleton, the phase scripts and the lines the "
             "compiler generates map back to declarations; what has none is kept verbatim "
             "(File, Unit, Hook, Setting); what cannot be kept is listed as a note."
@@ -930,7 +931,7 @@ def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         + (
             "Polls the mtimes of RECIPE, every .py under its directory (hidden "
             "directories, __pycache__ and the build output left out), every host file "
-            "and Directory tree its declarations read (File, Unit and Template sources, "
+            "and FileTree tree its declarations read (File, Unit and Template sources, "
             "Kernel configs, Tdxs.from_policy policies), the selected lockfile, "
             "pyproject.toml (its [tool.tundravm] table is read again) and the checked "
             "tree, so an external compile refreshes the verdict. Checks once at "
@@ -2150,10 +2151,10 @@ def _inspect_why(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: Te
 
 
 def _describe(loaded: RecipeFile, img: Lowered, name: str) -> dict[str, object]:
-    """*name*'s dry-run description with the recipe's parent and resolved fragment names."""
+    """*name*'s dry-run description with what it inherits and its resolved fragment names."""
     fragments = resolve(loaded.recipe, variant=name).fragments
-    parent = loaded.recipe.variant(name).parent
-    return describe(img, profile=name, parent=parent, fragments=fragments)
+    inherits = loaded.recipe.variant(name).inherits
+    return describe(img, profile=name, inherits=inherits, fragments=fragments)
 
 
 def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
@@ -2638,7 +2639,7 @@ def _probe_cloud_tools(
     """Print the optional host tools the recipe's azure/gcp variants bake with locally."""
     if not isinstance(backend, LocalLinuxBackend):
         return
-    targets = {t for v in loaded.recipe.variants for t in (*v.targets, v.target) if t}
+    targets = {t for v in loaded.recipe.variants for t in v.outputs}
     requirements = cloud_tools(targets)
     if not requirements:
         return
@@ -2895,7 +2896,7 @@ def _add_explore(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         default="html",
         help=(
             "html (default) writes the page and prints its path; json prints the same "
-            "model (to FILE with --output) with schema tundravm.explore/2."
+            "model (to FILE with --output) with schema tundravm.explore/3."
         ),
     )
 

@@ -160,9 +160,7 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             in_image=False,
         ),
     )
-    recipe = replace(
-        recipe, common=replace(recipe.common, items=(*recipe.common.items, *repositories))
-    )
+    recipe = replace(recipe, items=(*recipe.items, *repositories))
     backend = _Capturing(LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"]))
     out = tmp_path / "build"
     try:

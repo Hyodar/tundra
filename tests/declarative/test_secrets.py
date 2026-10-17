@@ -7,7 +7,6 @@ import pytest
 
 from tundravm.declarative import (
     ExternalDelivery,
-    Fragment,
     Recipe,
     Schema,
     Secret,
@@ -23,7 +22,7 @@ from tundravm.testing import compile_tree
 
 
 def _recipe(*secrets: Secret) -> Recipe:
-    return Recipe("secrets", Fragment("secrets", items=(Secrets(entries=secrets),)))
+    return Recipe("secrets", items=(Secrets(entries=secrets),))
 
 
 def test_secret_targets_support_file_and_global_env(tmp_path: Path) -> None:
@@ -100,7 +99,7 @@ def test_external_delivery_changes_neither_tree_nor_digest() -> None:
     token = Secret("token", (SecretFile("/run/token"),))
 
     def recipe(secrets: Secrets) -> Recipe:
-        return Recipe("r", Fragment("common", items=(secrets,)))
+        return Recipe("r", items=(secrets,))
 
     builtin = recipe(Secrets(entries=(token,)))
     external = recipe(Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent")))

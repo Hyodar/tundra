@@ -7,7 +7,6 @@ from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.declarative import (
     Backend,
     Build,
-    Fragment,
     Git,
     Install,
     Policy,
@@ -24,7 +23,7 @@ from tundravm.declarative import Fragment, Package, Policy, Recipe
 
 recipe = Recipe(
     "frozen",
-    Fragment("frozen", items=(Package("curl"), Package("linux-image-amd64"))),
+    items=(Package("curl"), Package("linux-image-amd64")),
     policy=Policy(require_frozen_lock=True),
 )
 backend = InProcessBackend()
@@ -65,7 +64,7 @@ def test_policy_network_offline_locks_without_the_network() -> None:
     )
     recipe = Recipe(
         "offline",
-        Fragment("tool", items=(build,)),
+        items=(build,),
         policy=Policy(network_mode="offline"),
     )
 

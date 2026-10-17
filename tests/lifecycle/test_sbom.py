@@ -13,7 +13,6 @@ from tundravm import Artifact, Backend, Sbom, bake, sbom
 from tundravm._source import Source
 from tundravm.declarative import (
     Build,
-    Fragment,
     Git,
     Install,
     Lock,
@@ -65,22 +64,19 @@ MANIFEST: dict[str, object] = {
 def _recipe() -> Recipe:
     return Recipe(
         "node",
-        Fragment(
-            "common",
-            items=(
-                Package("systemd"),
-                Package("ca-certificates"),
-                Build(
-                    "app",
-                    Git(REPO, "main"),
-                    script="make",
-                    install=(Install("app", "/usr/bin/app"), Install("app.conf", "/etc/app.conf")),
-                ),
-                EfiStub(snapshot=SNAPSHOT, version=EFI_VERSION),
+        items=(
+            Package("systemd"),
+            Package("ca-certificates"),
+            Build(
+                "app",
+                Git(REPO, "main"),
+                script="make",
+                install=(Install("app", "/usr/bin/app"), Install("app.conf", "/etc/app.conf")),
             ),
+            EfiStub(snapshot=SNAPSHOT, version=EFI_VERSION),
         ),
         snapshot=SNAPSHOT,
-        variants=(Variant("default", target="qemu"),),
+        variants=(Variant("default", outputs=("qemu",)),),
     )
 
 
@@ -358,9 +354,7 @@ def test_moving_the_bake_directory_changes_no_document(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "0")
-    recipe = Recipe(
-        "node", Fragment("common", items=(Package("curl"), Package("linux-image-amd64")))
-    )
+    recipe = Recipe("node", items=(Package("curl"), Package("linux-image-amd64")))
     bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "one")
     shutil.copytree(tmp_path / "one", tmp_path / "elsewhere" / "two")
     documents = [

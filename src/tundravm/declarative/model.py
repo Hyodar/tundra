@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
+from tundravm._source import FrozenMap
 from tundravm._source import GoBuild as Go
 from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
@@ -42,8 +43,8 @@ type Check = Callable[[Resolved], tuple[Diagnostic, ...]]
 
 TARGETS: tuple[str, ...] = get_args(Target)
 PHASES: tuple[str, ...] = get_args(Phase)
-BASE_PARENT = "base"
-"""The reserved parent name that stands for ``Recipe.common``."""
+BASE_VARIANT = "base"
+"""The reserved ``Variant.inherits`` name that stands for ``Recipe.items``."""
 BUILTIN_INITS: dict[str, int] = {"keys": 10, "disks": 20, "secrets": 30}
 """Runtime-init fragments the compiler emits for keys, disks and secrets, by priority."""
 
@@ -52,7 +53,7 @@ _UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+")
 _GROUP_NAME = re.compile(r"[a-z_][a-z0-9_-]*\$?")
 _ENTRY_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 _BUILD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-_CACHE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@/-]*")
+_CACHE_NAMESPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@/-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -60,9 +61,9 @@ def _fail(owner: object, message: str, *, hint: str | None = None) -> Validation
     return ValidationError(f"{type(owner).__name__}: {message}", hint=hint)
 
 
-def _recipe_name(recipe: Go | Cargo | Dotnet) -> str:
-    """The public alias of a build recipe (its class is the internal ``GoBuild``, ...)."""
-    return "Go" if isinstance(recipe, Go) else "Cargo" if isinstance(recipe, Cargo) else "Dotnet"
+def _toolchain_name(using: Go | Cargo | Dotnet) -> str:
+    """The public alias of a build toolchain (its class is the internal ``GoBuild``, ...)."""
+    return "Go" if isinstance(using, Go) else "Cargo" if isinstance(using, Cargo) else "Dotnet"
 
 
 def _freeze(owner: object, *names: str) -> None:
@@ -106,24 +107,45 @@ def _require_choice(owner: object, value: object, choices: tuple[str, ...], what
         raise _fail(owner, f"invalid {what} {value!r}.", hint=f"Expected one of: {choices}.")
 
 
-def _require_pairs(owner: object, pairs: Pairs) -> None:
-    seen: set[str] = set()
-    for pair in pairs:
-        if not isinstance(pair, tuple) or len(pair) != 2:
-            raise _fail(owner, f"env entries must be (name, value) pairs, got {pair!r}.")
-        key, value = pair
-        if not isinstance(key, str) or not _ENV_KEY.fullmatch(key):
+def _freeze_map(owner: object, name: str) -> FrozenMap[object]:
+    """Copy the mapping field *name* into a :class:`FrozenMap`; anything else is refused."""
+    value = getattr(owner, name)
+    if not isinstance(value, Mapping):
+        raise _fail(
+            owner,
+            f"{name}= must be a mapping, got {value!r}.",
+            hint=f"Pass a dict: {name}={{'KEY': 'value'}}.",
+        )
+    for key in value:
+        _require_name(owner, key, f"{name} key")
+    frozen: FrozenMap[object] = FrozenMap(value)
+    object.__setattr__(owner, name, frozen)
+    return frozen
+
+
+def _require_env(owner: object, name: str = "env") -> None:
+    for key, value in _freeze_map(owner, name).items():
+        if not _ENV_KEY.fullmatch(key):
             raise _fail(owner, f"invalid environment variable name {key!r}.")
         if not isinstance(value, str) or "\n" in value:
             raise _fail(owner, f"environment value for {key!r} must be one line of text.")
-        if key in seen:
-            raise _fail(owner, f"environment variable {key!r} is set twice.")
-        seen.add(key)
 
 
 def _require_names(owner: object, values: tuple[str, ...], what: str) -> None:
     for value in values:
         _require_name(owner, value, what)
+
+
+def _require_items(owner: Fragment | Recipe, items: tuple[object, ...]) -> None:
+    if not isinstance(items, tuple):
+        raise _fail(owner, f"{owner.name!r} items must be a list or tuple, got {items!r}.")
+    for item in items:
+        if not isinstance(item, (Fragment, *DECLARATION_TYPES)):
+            raise _fail(
+                owner,
+                f"{owner.name!r} item {item!r} is not a declaration or fragment.",
+                hint="Unpack generators with *(...) and nest fragments directly.",
+            )
 
 
 # ── Root and composition ────────────────────────────────────────────────
@@ -141,13 +163,7 @@ class Fragment:
     def __post_init__(self) -> None:
         _freeze(self, "items", "requires", "checks")
         _require_name(self, self.name)
-        for item in self.items:
-            if not isinstance(item, (Fragment, *DECLARATION_TYPES)):
-                raise _fail(
-                    self,
-                    f"{self.name!r} item {item!r} is not a declaration or fragment.",
-                    hint="Unpack generators with *(...) and nest fragments directly.",
-                )
+        _require_items(self, self.items)
         _require_names(self, self.requires, "required fragment name")
         for check in self.checks:
             if not callable(check):
@@ -159,32 +175,38 @@ EMPTY_FRAGMENT = Fragment("empty")
 
 @dataclass(frozen=True, slots=True)
 class Variant:
-    """An overlay on its parent: ``base`` is ``Recipe.common``, ``None`` is standalone."""
+    """An overlay on the variant it ``inherits``: ``"base"`` is ``Recipe.items``, ``None`` is
+    standalone. ``outputs`` names the targets it builds (empty: inherited, ``qemu`` at the root).
+    """
 
     name: str
-    parent: str | None = BASE_PARENT
+    inherits: str | None = BASE_VARIANT
     add: Fragment = EMPTY_FRAGMENT
     replace: tuple[Declaration, ...] = ()
     remove: tuple[Declaration, ...] = ()
-    target: Target | None = None
-    targets: tuple[Target, ...] = ()
-    """Several outputs from one variant; ``target`` is the one-output shorthand."""
+    outputs: tuple[Target, ...] = ()
     release: bool = True
     """Whether ``tundravm release`` ships it by default; ``False`` for a development variant
     (``DevTools``), which ``release`` then skips unless named with ``--allow-ineligible``.
     Only ``False`` is part of the recipe digest."""
 
     def __post_init__(self) -> None:
-        _freeze(self, "replace", "remove", "targets")
+        if isinstance(self.outputs, str):
+            raise _fail(
+                self,
+                f"outputs= of {self.name!r} must be a sequence of targets, got {self.outputs!r}.",
+                hint=f"Pass outputs=({self.outputs!r},).",
+            )
+        _freeze(self, "replace", "remove", "outputs")
         _require_name(self, self.name)
         if not isinstance(self.release, bool):
             raise _fail(self, f"release= of {self.name!r} must be True or False.")
-        if self.name == BASE_PARENT:
-            raise _fail(self, f"{BASE_PARENT!r} is reserved for Recipe.common.")
-        if self.parent is not None:
-            _require_name(self, self.parent, "parent")
-            if self.parent == self.name:
-                raise _fail(self, f"variant {self.name!r} cannot be its own parent.")
+        if self.name == BASE_VARIANT:
+            raise _fail(self, f"{BASE_VARIANT!r} is reserved for Recipe.items.")
+        if self.inherits is not None:
+            _require_name(self, self.inherits, "inherits")
+            if self.inherits == self.name:
+                raise _fail(self, f"variant {self.name!r} cannot inherit itself.")
         if not isinstance(self.add, Fragment):
             raise _fail(self, f"add= of {self.name!r} must be a Fragment.")
         for what, items in (("replace", self.replace), ("remove", self.remove)):
@@ -193,23 +215,10 @@ class Variant:
                     raise _fail(
                         self, f"{what}= of {self.name!r} holds {item!r}, not a declaration."
                     )
-        if self.target is not None:
-            _require_choice(self, self.target, TARGETS, "target")
-        if self.target is not None and self.targets:
-            raise _fail(
-                self,
-                f"variant {self.name!r} sets both target= and targets=.",
-                hint="target=X is the shorthand for targets=(X,); pass one of them.",
-            )
-        for target in self.targets:
-            _require_choice(self, target, TARGETS, "target")
-        if len(set(self.targets)) != len(self.targets):
-            raise _fail(self, f"variant {self.name!r} lists a target twice.")
-
-    @property
-    def outputs(self) -> tuple[Target, ...]:
-        """The targets this variant sets itself (empty: inherited)."""
-        return self.targets or (() if self.target is None else (self.target,))
+        for target in self.outputs:
+            _require_choice(self, target, TARGETS, "output")
+        if len(set(self.outputs)) != len(self.outputs):
+            raise _fail(self, f"variant {self.name!r} lists an output twice.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,11 +247,15 @@ class Mkosi:
 
 @dataclass(frozen=True, slots=True)
 class Recipe:
-    """The whole image: recipe-wide settings, the common fragment and the variants."""
+    """The whole image: recipe-wide settings, its own items and the variants.
+
+    ``items`` are the declarations and fragments every variant that inherits
+    ``"base"`` (the default) starts from; their provenance level is ``common``.
+    """
 
     name: str
-    common: Fragment
-    variants: tuple[Variant, ...] = (Variant("default", target="qemu"),)
+    items: tuple[Declaration | Fragment, ...] = ()
+    variants: tuple[Variant, ...] = (Variant("default", outputs=("qemu",)),)
     base: str = "debian/trixie"
     arch: Literal["x86_64", "aarch64"] = "x86_64"
     mirror: str | None = None
@@ -259,10 +272,9 @@ class Recipe:
     """
 
     def __post_init__(self) -> None:
-        _freeze(self, "variants")
+        _freeze(self, "items", "variants")
         _require_name(self, self.name)
-        if not isinstance(self.common, Fragment):
-            raise _fail(self, "common= must be a Fragment.")
+        _require_items(self, self.items)
         if not self.variants:
             raise _fail(self, "a recipe needs at least one variant.")
         names: set[str] = set()
@@ -317,6 +329,26 @@ class Package:
         _require_choice(self, self.role, ("runtime", "build"), "role")
 
 
+def packages(*names: str, role: Literal["runtime", "build"] = "runtime") -> Fragment:
+    """``Package(name, role)`` for each of *names*, as one immutable fragment.
+
+    It goes wherever a ``Fragment`` does (``Recipe.items``, a ``Fragment``'s items,
+    ``Variant.add``) and is named after the call, ``packages(curl, jq)`` (with
+    ``, role=build`` for build packages), so provenance shows where the packages
+    came from without an invented fragment name.
+    """
+    if not names:
+        raise ValidationError(
+            "packages() needs at least one package name.",
+            hint="Pass the names: packages('curl', 'jq').",
+        )
+    suffix = "" if role == "runtime" else f", role={role}"
+    return Fragment(
+        f"packages({', '.join(names)}{suffix})",
+        items=tuple(Package(name, role) for name in names),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class File:
     """*content* at *path*; ``allow_secret`` silences ``secret-in-file`` for it."""
@@ -337,7 +369,7 @@ class File:
 
 
 @dataclass(frozen=True, slots=True)
-class Directory:
+class FileTree:
     """The host tree *source* at *path*.
 
     ``mode=None`` keeps each file's and empty directory's permission bits;
@@ -456,7 +488,7 @@ class Service:
     user: str | None = None
     group: str | None = None
     working_dir: str | None = None
-    env: Pairs = ()
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
     env_file: str | None = None
     exec_start_pre: tuple[str, ...] = ()
     after: tuple[str, ...] = ()
@@ -465,7 +497,7 @@ class Service:
     wanted_by: str | None = None
     type: Literal["simple", "exec", "oneshot", "notify", "forking"] | None = None
     restart: Literal["always", "on-failure", "no"] = "no"
-    limits: tuple[tuple[str, str | int], ...] = ()
+    limits: Mapping[str, str | int] = field(default_factory=FrozenMap)
     kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
     timeout_stop: str | None = None
     security: Literal["strict", "default", "none"] = "default"
@@ -473,9 +505,8 @@ class Service:
     allow_secret: bool = False
 
     def __post_init__(self) -> None:
-        _freeze(self, "exec_start", "env", "exec_start_pre", "after", "requires", "wants")
+        _freeze(self, "exec_start", "exec_start_pre", "after", "requires", "wants")
         _require_bool(self, self.allow_secret, "allow_secret")
-        _freeze(self, "limits")
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid service name {self.name!r}.")
         if self.name.endswith(".target") or (
@@ -496,7 +527,7 @@ class Service:
             value = getattr(self, what)
             if value is not None:
                 _require_absolute(self, value, what)
-        _require_pairs(self, self.env)
+        _require_env(self)
         for what in ("exec_start_pre", "after", "requires", "wants"):
             _require_names(self, getattr(self, what), what)
         if self.type is not None:
@@ -509,17 +540,9 @@ class Service:
                 self, self.kill_mode, ("control-group", "mixed", "process", "none"), "kill_mode"
             )
         _require_choice(self, self.security, ("strict", "default", "none"), "security")
-        seen: set[str] = set()
-        for pair in self.limits:
-            if not isinstance(pair, tuple) or len(pair) != 2:
-                raise _fail(self, f"limits entries must be (resource, value) pairs, got {pair!r}.")
-            resource, value = pair
-            _require_name(self, resource, "limit resource")
+        for resource, value in _freeze_map(self, "limits").items():
             if isinstance(value, bool) or not isinstance(value, (str, int)):
                 raise _fail(self, f"limit {resource!r} must be a str or int, got {value!r}.")
-            if resource in seen:
-                raise _fail(self, f"limit {resource!r} is set twice.")
-            seen.add(resource)
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,28 +554,19 @@ class Template:
 
     path: str
     template: str | Path
-    variables: tuple[tuple[str, str | int | float], ...] = ()
+    variables: Mapping[str, str | int | float] = field(default_factory=FrozenMap)
     mode: int = 0o644
     stage: Literal["skeleton", "extra"] = "extra"
     allow_secret: bool = False
 
     def __post_init__(self) -> None:
-        _freeze(self, "variables")
         _require_absolute(self, self.path)
         _require_bool(self, self.allow_secret, "allow_secret")
         if not isinstance(self.template, (str, Path)):
             raise _fail(self, f"template of {self.path!r} must be str or Path.")
-        seen: set[str] = set()
-        for pair in self.variables:
-            if not isinstance(pair, tuple) or len(pair) != 2:
-                raise _fail(self, f"variables must be (name, value) pairs, got {pair!r}.")
-            key, value = pair
-            _require_name(self, key, "variable name")
+        for key, value in _freeze_map(self, "variables").items():
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
                 raise _fail(self, f"variable {key!r} must be str, int or float, got {value!r}.")
-            if key in seen:
-                raise _fail(self, f"variable {key!r} is set twice.")
-            seen.add(key)
         _require_mode(self, self.mode)
         _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
 
@@ -562,16 +576,16 @@ class Hook:
     name: str
     phase: Phase
     script: str
-    env: Pairs = ()
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
     cwd: str | None = None
     after: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _freeze(self, "env", "after")
+        _freeze(self, "after")
         _require_name(self, self.name)
         _require_choice(self, self.phase, PHASES, "phase")
         _require_name(self, self.script, "script")
-        _require_pairs(self, self.env)
+        _require_env(self)
         if self.cwd is not None:
             _require_name(self, self.cwd, "cwd")
         _require_names(self, self.after, "after")
@@ -653,8 +667,8 @@ class Debloat:
     keep_binaries: tuple[str, ...] | None = None
     keep_units_extra: tuple[str, ...] = ()
     """Units kept on top of ``keep_units`` (or its default list)."""
-    keep_paths_by_variant: tuple[tuple[str, tuple[str, ...]], ...] = ()
-    """``(variant, paths)``: paths kept only when building that variant."""
+    keep_paths_by_variant: Mapping[str, Sequence[str]] = field(default_factory=FrozenMap)
+    """``{variant: paths}``: paths kept only when building that variant."""
 
     def __post_init__(self) -> None:
         _freeze(
@@ -665,24 +679,20 @@ class Debloat:
             "keep_units",
             "keep_binaries",
             "keep_units_extra",
-            "keep_paths_by_variant",
         )
         for what in ("remove", "extra_remove", "keep_paths"):
             for path in getattr(self, what) or ():
                 _require_absolute(self, path, what)
         for what in ("keep_units", "keep_binaries", "keep_units_extra"):
             _require_names(self, getattr(self, what) or (), what)
-        frozen: list[tuple[str, tuple[str, ...]]] = []
-        for pair in self.keep_paths_by_variant:
-            if not isinstance(pair, tuple) or len(pair) != 2:
-                raise _fail(self, f"keep_paths_by_variant holds {pair!r}, not (variant, paths).")
-            variant, paths = pair
-            _require_name(self, variant, "variant")
-            paths = tuple(paths)
+        frozen: dict[str, tuple[str, ...]] = {}
+        for variant, paths in _freeze_map(self, "keep_paths_by_variant").items():
+            if isinstance(paths, str) or not isinstance(paths, Sequence):
+                raise _fail(self, f"keep_paths_by_variant[{variant!r}] must be a list of paths.")
             for path in paths:
                 _require_absolute(self, path, "keep_paths_by_variant path")
-            frozen.append((variant, paths))
-        object.__setattr__(self, "keep_paths_by_variant", tuple(frozen))
+            frozen[variant] = tuple(paths)
+        object.__setattr__(self, "keep_paths_by_variant", FrozenMap(frozen))
 
 
 @dataclass(frozen=True, slots=True)
@@ -976,8 +986,9 @@ class Http:
 class Install:
     """Install *source* (relative to the build directory) at *destination*.
 
-    ``artifact=True`` installs a recipe's own output: *source* is its ``artifact``
-    path (``build/<output>`` for ``Go``), and the build caches it as the artifact
+    ``artifact=True`` installs the output of the toolchain the build is ``using``:
+    *source* is its ``artifact`` path (``build/<output>`` for ``Go``), and the
+    build caches it as the artifact
     the way the generated ``Key``/``Disk``/``Secrets`` builds do.
     """
 
@@ -1010,18 +1021,19 @@ class Install:
 
 @dataclass(frozen=True, slots=True)
 class Build:
-    """Build the fetched source with *script* or a *recipe* and install its results.
+    """Build the fetched source with *script* or the toolchain it is ``using`` and install it.
 
     Set exactly one of ``script`` (a shell script run in the source tree, with
-    ``env`` exported and ``packages`` installed for it) and ``recipe`` (:class:`Go`,
+    ``env`` exported and ``packages`` installed for it) and ``using`` (:class:`Go`,
     :class:`Cargo` or :class:`Dotnet`, which carry their own ``env`` and
-    ``packages``). ``install`` paths are relative to the source tree; a recipe's
+    ``packages``). ``install`` paths are relative to the source tree; a toolchain's
     output is at its ``artifact`` path, e.g. ``build/<output>`` for ``Go``.
-    ``cache_key`` is the build cache namespace (default: ``name``): the
-    ``current`` dialect caches under ``<namespace>-<fingerprint>``, a digest of
-    the source pin, the build and install specs, the architecture and the
-    toolchain, so changing any of them rebuilds. ``nethermind-v1`` keeps its
-    ``<cache_key>-<pin>`` (default ``<name>-<url digest>-<ref>``) keys.
+    ``cache_namespace`` names the build cache entry (default: ``name``); the key
+    itself is fingerprinted: the ``current`` dialect caches under
+    ``<namespace>-<fingerprint>``, a digest of the source pin, the build and
+    install specs, the architecture and the toolchain, so changing any of them
+    rebuilds. ``nethermind-v1`` keeps its ``<namespace>-<pin>`` (default
+    ``<name>-<url digest>-<ref>``) keys.
     """
 
     name: str
@@ -1029,36 +1041,37 @@ class Build:
     script: str | None = None
     install: tuple[Install, ...] = ()
     packages: tuple[str, ...] = ()
-    env: Pairs = ()
-    cache_key: str | None = None
-    recipe: Go | Cargo | Dotnet | None = field(default=None, hash=False)
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
+    cache_namespace: str | None = None
+    using: Go | Cargo | Dotnet | None = field(default=None, hash=False)
 
     def __post_init__(self) -> None:
-        _freeze(self, "install", "packages", "env")
+        _freeze(self, "install", "packages")
         if not isinstance(self.name, str) or not _BUILD_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid build name {self.name!r}.")
-        if (self.script is None) == (self.recipe is None):
+        if (self.script is None) == (self.using is None):
             raise _fail(
                 self,
-                f"build {self.name!r} needs exactly one of script= and recipe=.",
-                hint="script='make' runs a shell script; recipe=Go(...), Cargo(...) or "
+                f"build {self.name!r} needs exactly one of script= and using=.",
+                hint="script='make' runs a shell script; using=Go(...), Cargo(...) or "
                 "Dotnet(...) renders the toolchain's build command.",
             )
-        if self.recipe is not None:
-            if not isinstance(self.recipe, (Go, Cargo, Dotnet)):
-                raise _fail(self, f"build {self.name!r} recipe must be Go, Cargo or Dotnet.")
+        if self.using is not None:
+            if not isinstance(self.using, (Go, Cargo, Dotnet)):
+                raise _fail(self, f"build {self.name!r} using= must be Go, Cargo or Dotnet.")
             if self.packages or self.env:
                 raise _fail(
                     self,
-                    f"build {self.name!r} takes packages and env on its recipe.",
-                    hint=f"Pass them to {_recipe_name(self.recipe)}(packages=..., env=...).",
+                    f"build {self.name!r} takes packages and env on its toolchain.",
+                    hint=f"Pass them to {_toolchain_name(self.using)}(packages=..., env=...).",
                 )
-        if self.cache_key is not None and (
-            not isinstance(self.cache_key, str) or not _CACHE_KEY.fullmatch(self.cache_key)
+        if self.cache_namespace is not None and (
+            not isinstance(self.cache_namespace, str)
+            or not _CACHE_NAMESPACE.fullmatch(self.cache_namespace)
         ):
             raise _fail(
                 self,
-                f"invalid cache_key {self.cache_key!r} for build {self.name!r}.",
+                f"invalid cache_namespace {self.cache_namespace!r} for build {self.name!r}.",
                 hint="Use letters, digits and '._+@/-' ('/' is cached as '_').",
             )
         if not isinstance(self.source, (Git, Http)):
@@ -1073,14 +1086,14 @@ class Build:
                 raise _fail(self, f"build {self.name!r} install step {step!r} is not Install.")
             names.append(posixpath.basename(step.destination.rstrip("/")))
             if step.artifact and (
-                self.recipe is None or posixpath.normpath(step.source) != self.recipe.artifact
+                self.using is None or posixpath.normpath(step.source) != self.using.artifact
             ):
-                expected = "a recipe=" if self.recipe is None else repr(self.recipe.artifact)
+                expected = "a using=" if self.using is None else repr(self.using.artifact)
                 raise _fail(
                     self,
                     f"build {self.name!r} installs {step.source!r} as its artifact, "
                     f"not {expected}.",
-                    hint="artifact=True names the recipe's output path; "
+                    hint="artifact=True names the toolchain's output path; "
                     "install other files without it.",
                 )
         duplicates = sorted({name for name in names if names.count(name) > 1})
@@ -1092,7 +1105,7 @@ class Build:
                 hint="Each artifact is cached under its destination's file name.",
             )
         _require_names(self, self.packages, "package")
-        _require_pairs(self, self.env)
+        _require_env(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1114,7 +1127,7 @@ class Kernel:
 type Declaration = (
     Package
     | File
-    | Directory
+    | FileTree
     | Group
     | User
     | Unit
@@ -1137,7 +1150,7 @@ type Declaration = (
 DECLARATION_TYPES: tuple[type, ...] = (
     Package,
     File,
-    Directory,
+    FileTree,
     Group,
     User,
     Unit,
@@ -1166,20 +1179,19 @@ class Resolved:
     """One variant after expansion, overlays and reference checks."""
 
     variant: str
-    target: Target
+    outputs: tuple[Target, ...]
+    """Every output of the variant, own or inherited (never empty)."""
     items: tuple[Declaration, ...]
     fragments: tuple[str, ...]
-    targets: tuple[Target, ...] = ()
-    """Every output of the variant (``target`` is the first)."""
 
     def __post_init__(self) -> None:
-        _freeze(self, "targets")
-        if not self.targets:
-            object.__setattr__(self, "targets", (self.target,))
+        _freeze(self, "outputs")
+        if not self.outputs:
+            raise _fail(self, f"variant {self.variant!r} resolved to no outputs.")
 
 
 __all__ = [
-    "BASE_PARENT",
+    "BASE_VARIANT",
     "BUILTIN_INITS",
     "DECLARATION_TYPES",
     "PHASES",
@@ -1190,12 +1202,12 @@ __all__ = [
     "Debloat",
     "Declaration",
     "Diagnostic",
-    "Directory",
     "Disk",
     "Dotnet",
     "EMPTY_FRAGMENT",
     "ExternalDelivery",
     "File",
+    "FileTree",
     "Fragment",
     "Git",
     "Go",
@@ -1227,4 +1239,5 @@ __all__ = [
     "Unit",
     "User",
     "Variant",
+    "packages",
 ]

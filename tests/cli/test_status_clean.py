@@ -26,8 +26,8 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "status",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
-    variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+    items=(Package("curl"), Package("linux-image-amd64")),
+    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
 )
 """
 
@@ -36,12 +36,9 @@ from tundravm.declarative import Build, Fragment, Git, Install, Package, Recipe
 
 recipe = Recipe(
     "tool",
-    Fragment(
-        "tool",
-        items=(
-            Package("linux-image-amd64"),
-            Build("tool", Git({url!r}, "main"), script="make", install=(Install("t", "/bin/t"),)),
-        ),
+    items=(
+        Package("linux-image-amd64"),
+        Build("tool", Git({url!r}, "main"), script="make", install=(Install("t", "/bin/t"),)),
     ),
 )
 """
@@ -51,7 +48,7 @@ from tundravm import Fragment, Package, Recipe
 from tundravm.backends import NixMkosiBackend
 
 backend = NixMkosiBackend()
-recipe = Recipe("nix", Fragment("common", items=(Package("curl"),)))
+recipe = Recipe("nix", items=(Package("curl"),))
 """
 
 BUILD = Path("build")

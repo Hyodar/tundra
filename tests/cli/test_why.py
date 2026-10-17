@@ -10,7 +10,7 @@ import pytest
 from tests.helpers import run_main, write_recipe_file
 from tundravm import ValidationError, explain_why
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
-from tundravm.declarative import Directory, Fragment, Recipe, Variant
+from tundravm.declarative import FileTree, Recipe, Variant
 from tundravm.declarative.resolve import Origin, provenance
 from tundravm.recipe import load_recipe
 
@@ -29,12 +29,12 @@ app = Fragment(
 )
 recipe = Recipe(
     "two",
-    Fragment("base", items=(Package("systemd"), app)),
+    items=(Package("systemd"), app),
     variants=(
-        Variant("dev", target="qemu"),
+        Variant("dev", outputs=("qemu",)),
         Variant(
             "prod",
-            parent="dev",
+            inherits="dev",
             add=Tdxs(issuer="tdx"),
             replace=(File("/etc/app.conf", "mode=prod\\n"),),
             remove=(Package("curl"),),
@@ -55,7 +55,7 @@ def test_why_a_replaced_file_shows_both_steps_and_its_destination(recipe: Path) 
     assert out.splitlines() == [
         "why /etc/app.conf (variant prod)",
         "  File(extra, /etc/app.conf)",
-        "    declared in common via base > app",
+        "    declared in common via app",
         "    replaced in variant prod",
         "files (in prod/):",
         "  mkosi.extra/etc/app.conf",
@@ -68,7 +68,7 @@ def test_why_a_service_lists_the_generated_dependencies(recipe: Path) -> None:
     subject = "/usr/lib/systemd/system/app.service"
     code, out = run_main("inspect", str(recipe), "--variant", "prod", "--why", subject)
     assert code == EXIT_OK
-    assert "  Service(app.service)\n    declared in common via base > app\n" in out
+    assert "  Service(app.service)\n    declared in common via app\n" in out
     assert "  mkosi.extra/usr/lib/systemd/system/app.service\n" in out
     generated = out.split("generated:\n", 1)[1].splitlines()
     assert "  After=runtime-init.service (after_init=True)" in generated
@@ -96,7 +96,6 @@ def test_why_json_reports_a_removed_package_without_files(recipe: Path) -> None:
     assert entry["present"] is False
     assert [o["action"] for o in entry["origins"]] == ["declared", "removed"]
     assert entry["origins"][0]["fragments"] == [
-        {"name": "base", "class": "Fragment"},
         {"name": "app", "class": "Fragment"},
     ]
     assert payload["files"] == []
@@ -106,7 +105,7 @@ def test_why_json_reports_a_removed_package_without_files(recipe: Path) -> None:
         )[1]
     )
     assert dev["files"] == ["mkosi.conf (Packages=)"]
-    assert dev["fragments"] == ["base", "app"]
+    assert dev["fragments"] == ["app"]
 
 
 def test_why_markdown_is_a_table_of_steps(recipe: Path) -> None:
@@ -156,7 +155,7 @@ def test_explain_why_is_the_python_form(recipe: Path) -> None:
     assert why.files == ("mkosi.extra/etc/app.conf",)
     (entry,) = why.declarations
     assert entry.origins == (
-        Origin("declared", "common", (("base", "Fragment"), ("app", "Fragment"))),
+        Origin("declared", "common", (("app", "Fragment"),)),
         Origin("replaced", "prod"),
     )
     with pytest.raises(ValidationError, match="Nothing in the variant matches"):
@@ -166,9 +165,7 @@ def test_explain_why_is_the_python_form(recipe: Path) -> None:
 def test_provenance_records_every_step(recipe: Path) -> None:
     trace = provenance(load_recipe(recipe), variant="prod")
     assert trace[("Package", "curl", "runtime")][-1] == Origin("removed", "prod")
-    assert trace[("Package", "systemd", "runtime")] == (
-        Origin("declared", "common", (("base", "Fragment"),)),
-    )
+    assert trace[("Package", "systemd", "runtime")] == (Origin("declared", "common", ()),)
     assert trace[("Unit", "tdxs.service")][0].fragments == (("tdxs", "Tdxs"),)
 
 
@@ -182,11 +179,11 @@ def test_why_under_a_directory_needs_an_emitted_path(
     (source / "empty").mkdir()
     recipe = Recipe(
         "dir",
-        Fragment("base", items=(Directory("/etc/app", source),)),
-        variants=(Variant("dev", target="qemu"),),
+        items=(FileTree("/etc/app", source),),
+        variants=(Variant("dev", outputs=("qemu",)),),
     )
     why = explain_why(recipe, "dev", "/etc/app/app.conf")
-    assert [entry.declaration for entry in why.declarations] == ["Directory(extra, /etc/app)"]
+    assert [entry.declaration for entry in why.declarations] == ["FileTree(extra, /etc/app)"]
     assert why.files == ("mkosi.extra/etc/app/app.conf",)
     nested = explain_why(recipe, "dev", "/etc/app/conf.d")
     assert nested.files == ("mkosi.extra/etc/app/conf.d/10-net.conf",)

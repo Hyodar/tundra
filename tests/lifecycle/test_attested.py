@@ -20,7 +20,6 @@ from tundravm import (
     Backend,
     Evidence,
     File,
-    Fragment,
     Package,
     Recipe,
     ValidationError,
@@ -44,11 +43,8 @@ CREATED = datetime.fromtimestamp(EPOCH, UTC)
 def _recipe() -> Recipe:
     return Recipe(
         "node",
-        Fragment(
-            "common",
-            items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\n")),
-        ),
-        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+        items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\n")),
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
 
 
@@ -276,10 +272,10 @@ def test_cli_evidence_bundles_records_and_verify_requires_attested(
     project.mkdir()
     (project / "node.py").write_text(
         "from tundravm import File, Fragment, Package, Recipe, Variant\n"
-        "recipe = Recipe('node', Fragment('common', items=(Package('curl'), "
-        "Package('linux-image-amd64'), File('/etc/motd', 'hi\\n'))), "
-        "variants=(Variant('default', target='qemu'), "
-        "Variant('azure', target='azure')))\n",
+        "recipe = Recipe('node', items=(Package('curl'), "
+        "Package('linux-image-amd64'), File('/etc/motd', 'hi\\n')), "
+        "variants=(Variant('default', outputs=('qemu',)), "
+        "Variant('azure', outputs=('azure',))))\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(project)

@@ -25,9 +25,9 @@ VARIANTS = ("default", "dev")
 def _recipe(*items: Declaration) -> Recipe:
     return Recipe(
         "reset",
-        Fragment("common", items=(Package("linux-image-amd64"), Package("curl"), *items)),
+        items=(Package("linux-image-amd64"), Package("curl"), *items),
         variants=(
-            Variant("default", target="qemu"),
+            Variant("default", outputs=("qemu",)),
             Variant("dev", add=Fragment("dev", items=(Package("vim"),))),
         ),
     )
@@ -67,15 +67,12 @@ def test_compile_of_one_variant_leaves_other_variants_alone(tmp_path: Path) -> N
 def _init_recipe(extra: Variant) -> Recipe:
     return Recipe(
         "init",
-        Fragment(
-            "common",
-            items=(
-                Init("hello", "echo hi", priority=10),
-                Package("linux-image-amd64"),
-                Package("curl"),
-            ),
+        items=(
+            Init("hello", "echo hi", priority=10),
+            Package("linux-image-amd64"),
+            Package("curl"),
         ),
-        variants=(Variant("default", target="qemu"), extra),
+        variants=(Variant("default", outputs=("qemu",)), extra),
     )
 
 
@@ -104,7 +101,7 @@ def test_recompile_with_more_variants_does_not_duplicate_runtime_init(tmp_path: 
 def test_bake_after_compile_across_variants(
     tmp_path: Path, inprocess_backend: InProcessBackend
 ) -> None:
-    img = lower(_init_recipe(Variant("azure", target="azure")))
+    img = lower(_init_recipe(Variant("azure", outputs=("azure",))))
 
     emit(img, tmp_path / "preview")
     result, artifacts = bake_image(

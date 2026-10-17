@@ -1,4 +1,4 @@
-"""``Build(recipe=Go/Cargo/Dotnet(...))`` renders through the toolchain build renderers."""
+"""``Build(using=Go/Cargo/Dotnet(...))`` renders through the toolchain build renderers."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ SHA_A = "a" * 40
 
 
 def _recipe(build: Build) -> Recipe:
-    return Recipe("tool", Fragment("tool", items=(build,)))
+    return Recipe("tool", items=(build,))
 
 
 def _pinned(recipe: Recipe) -> Tree:
@@ -63,7 +63,7 @@ def test_declarative_names_are_the_compiler_recipes() -> None:
 def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
     go = Go(package="./cmd/tool", output="tool")
     build = Build(
-        "tool", Git(REPO, "main"), recipe=go, install=(Install("build/tool", "/usr/bin/tool"),)
+        "tool", Git(REPO, "main"), using=go, install=(Install("build/tool", "/usr/bin/tool"),)
     )
     lowered = lower(_recipe(build))
     spec = lowered.source_builds()["tool"]
@@ -100,7 +100,7 @@ def test_go_recipe_renders_like_the_equivalent_script() -> None:
         "-o ./build/tool ./cmd/tool"
     )
     by_recipe = Build(
-        "tool", Git(REPO, "main"), recipe=Go(package="./cmd/tool", output="tool"), install=install
+        "tool", Git(REPO, "main"), using=Go(package="./cmd/tool", output="tool"), install=install
     )
     by_script = Build("tool", Git(REPO, "main"), script=script, install=install)
     recipe_hook, script_hook = (_hooks(_pinned(_recipe(b))) for b in (by_recipe, by_script))
@@ -121,7 +121,7 @@ def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
     build = Build(
         "tool",
         Git(REPO, "main"),
-        recipe=cargo,
+        using=cargo,
         install=(Install(cargo.artifact, "/usr/bin/tool"),),
     )
     tree = _pinned(_recipe(build))
@@ -142,7 +142,7 @@ def test_dotnet_recipe_renders_dotnet_publish() -> None:
     build = Build(
         "app",
         Git(REPO, "v1"),
-        recipe=dotnet,
+        using=dotnet,
         install=(Install("publish", "/usr/lib/app/", mode=None, directory=True),),
     )
     hooks = _hooks(_pinned(_recipe(build)))
@@ -176,7 +176,7 @@ def test_lock_payload_records_the_recipe() -> None:
     build = Build(
         "tool",
         Git(REPO, "main"),
-        recipe=Cargo(output="tool"),
+        using=Cargo(output="tool"),
         install=(Install("target/release/tool", "/usr/bin/tool"),),
     )
     payload = lower(_recipe(build)).source_builds()["tool"].to_payload()
@@ -202,8 +202,8 @@ def test_script_builds_still_lower_to_script_build() -> None:
 
 def test_recipe_builds_are_hashable() -> None:
     install = (Install("build/tool", "/usr/bin/tool"),)
-    first = Build("tool", Git(REPO, "main"), recipe=Go(output="tool"), install=install)
-    second = Build("tool", Git(REPO, "main"), recipe=Go(output="tool"), install=install)
+    first = Build("tool", Git(REPO, "main"), using=Go(output="tool"), install=install)
+    second = Build("tool", Git(REPO, "main"), using=Go(output="tool"), install=install)
     assert first == second
     assert hash(Fragment("f", items=(first,))) == hash(Fragment("f", items=(second,)))
 
@@ -214,16 +214,14 @@ INSTALL = (Install("build/tool", "/usr/bin/tool"),)
 @pytest.mark.parametrize(
     ("label", "kwargs"),
     [
-        ("neither script nor recipe", {}),
-        ("script and recipe", {"script": "make", "recipe": Go(output="tool")}),
-        ("script build as recipe", {"recipe": ScriptBuild(script="make", output="tool")}),
-        ("packages beside a recipe", {"recipe": Go(output="tool"), "packages": ("gcc",)}),
-        ("env beside a recipe", {"recipe": Go(output="tool"), "env": (("CGO", "0"),)}),
+        ("neither script nor toolchain", {}),
+        ("script and toolchain", {"script": "make", "using": Go(output="tool")}),
+        ("script build as toolchain", {"using": ScriptBuild(script="make", output="tool")}),
+        ("packages beside a toolchain", {"using": Go(output="tool"), "packages": ("gcc",)}),
+        ("env beside a toolchain", {"using": Go(output="tool"), "env": {"CGO": "0"}}),
     ],
 )
-def test_build_needs_exactly_one_of_script_and_recipe(
-    label: str, kwargs: dict[str, object]
-) -> None:
+def test_build_needs_exactly_one_of_script_and_using(label: str, kwargs: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         Build("tool", Git(REPO, "main"), install=INSTALL, **kwargs)  # type: ignore[arg-type]
 
@@ -242,7 +240,7 @@ def test_recipes_copy_the_callers_mappings_and_sequences() -> None:
         restore_args=restore,  # type: ignore[arg-type]
     )
     script = ScriptBuild(script="make", output="tool", env=env, packages=packages)  # type: ignore[arg-type]
-    recipe = _recipe(Build("tool", Git(REPO, "main"), recipe=go, install=INSTALL))
+    recipe = _recipe(Build("tool", Git(REPO, "main"), using=go, install=INSTALL))
     commands = [build.command("/build/tool") for build in (go, cargo, dotnet, script)]
     tree = _pinned(recipe)
 
@@ -270,7 +268,7 @@ def _cache_key(recipe: Recipe) -> str:
 
 
 def _keyed(**changes: object) -> Build:
-    fields: dict[str, object] = {"recipe": Go(output="tool"), "install": INSTALL}
+    fields: dict[str, object] = {"using": Go(output="tool"), "install": INSTALL}
     fields.update(changes)
     return Build("tool", Git(REPO, "main"), **fields)  # type: ignore[arg-type]
 
@@ -280,23 +278,23 @@ def test_mounted_cache_key_fingerprints_what_the_build_produces() -> None:
     namespace, _, fingerprint = key.rpartition("-")
     assert namespace == "tool" and re.fullmatch("[0-9a-f]{16}", fingerprint)
     changed = [
-        _keyed(recipe=Go(output="tool", tags=("netgo",))),
-        _keyed(recipe=Go(output="tool", env={"CGO_ENABLED": "0"})),
-        _keyed(recipe=Go(output="tool", packages=("golang-1.22",))),
-        _keyed(recipe=None, script="make", install=(Install("tool", "/usr/bin/tool"),)),
+        _keyed(using=Go(output="tool", tags=("netgo",))),
+        _keyed(using=Go(output="tool", env={"CGO_ENABLED": "0"})),
+        _keyed(using=Go(output="tool", packages=("golang-1.22",))),
+        _keyed(using=None, script="make", install=(Install("tool", "/usr/bin/tool"),)),
         _keyed(install=(Install("build/tool", "/usr/local/bin/tool"),)),
     ]
     keys = [_cache_key(_recipe(build)) for build in changed]
-    arm = Recipe("tool", Fragment("tool", items=(_keyed(),)), arch="aarch64")
+    arm = Recipe("tool", items=(_keyed(),), arch="aarch64")
     keys.append(_cache_key(arm))
     assert key not in keys and len(set(keys)) == len(keys)
-    assert _cache_key(_recipe(_keyed(cache_key="team/tool"))) == f"team_tool-{fingerprint}"
+    assert _cache_key(_recipe(_keyed(cache_namespace="team/tool"))) == f"team_tool-{fingerprint}"
 
 
 def test_mounted_cache_key_fingerprints_the_distribution() -> None:
     def with_(*items: object, **recipe: object) -> str:
         fragment = Fragment("tool", items=(_keyed(), *items))  # type: ignore[arg-type]
-        return _cache_key(Recipe("tool", fragment, **recipe))  # type: ignore[arg-type]
+        return _cache_key(Recipe("tool", items=(fragment,), **recipe))  # type: ignore[arg-type]
 
     key = with_()
     assert with_(Package("htop")) == key  # image packages are not the toolchain

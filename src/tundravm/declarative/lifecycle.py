@@ -238,6 +238,10 @@ class Artifact:
     when there was none."""
     build: Path | None = None
     """The build directory holding ``bake-result.json``."""
+    boot_payload: Path | None = None
+    """The UKI this disk artifact boots, as the bake recorded it; ``None`` when unknown."""
+    boot_payload_sha256: str | None = None
+    """The sha256 of ``boot_payload`` at bake time."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +249,9 @@ class Measurements:
     """Expected measurement *values*; ``tool`` names what measured them.
 
     ``artifact_path`` is the measured file (:func:`measure` sets it), which the
-    verifier policy records next to ``artifact_digest``.
+    verifier policy records next to ``artifact_digest``. ``boot_payload_path`` and
+    ``boot_payload_digest`` name the UKI the measurement is of (the artifact itself
+    for a UKI, the recorded boot payload for a disk), empty when unknown.
     """
 
     scheme: Scheme
@@ -253,12 +259,16 @@ class Measurements:
     tool: str
     artifact_digest: str
     artifact_path: str = ""
+    boot_payload_path: str = ""
+    boot_payload_digest: str = ""
 
     def to_dict(self) -> dict[str, object]:
-        """The measurements as JSON values: artifact, artifact_digest, scheme, tool, values."""
+        """The measurements as JSON values: artifact, artifact_digest, boot_payload, scheme,
+        tool, values."""
         return {
             "artifact": self.artifact_path,
             "artifact_digest": self.artifact_digest,
+            "boot_payload": self._boot_payload(),
             "scheme": self.scheme,
             "tool": self.tool,
             "values": dict(self.values),
@@ -276,8 +286,14 @@ class Measurements:
             values=dict(self.values),
             artifact_path=self.artifact_path,
             artifact_sha256=self.artifact_digest,
+            boot_payload=self._boot_payload(),
             allow_placeholder=allow_placeholder,
         )
+
+    def _boot_payload(self) -> dict[str, str] | None:
+        if not self.boot_payload_digest:
+            return None
+        return {"path": self.boot_payload_path, "sha256": self.boot_payload_digest}
 
     def verify(self, expected: Mapping[str, str]) -> tuple[str, ...]:
         """The registers whose value differs from *expected*, sorted; empty when all match.
@@ -1470,6 +1486,8 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
                     lock_sha256=None if lock_sha256 is None else str(lock_sha256),
                     manifest_sha256=ref.manifest_digest,
                     build=base,
+                    boot_payload=ref.boot_payload,
+                    boot_payload_sha256=ref.boot_payload_digest,
                 )
             )
     return tuple(artifacts)
@@ -1532,9 +1550,13 @@ def measure(
     (``verify_artifact``). Without a tool this raises ``MeasurementError``;
     *allow_placeholder* returns digest-derived values instead
     (``tool="placeholder"``). Simulated artifacts are refused unless
-    *allow_placeholder*.
+    *allow_placeholder*. A disk artifact whose bake recorded the UKI it boots is
+    measured through that UKI when no tool reads the disk's format (the UKI's bytes
+    are checked against their recorded sha256 too); the result names the UKI as
+    its boot payload, so the policy covers every disk that boots it.
     """
     verify_artifact(artifact)
+    uki = _measured_uki(artifact)
     if artifact.simulated and not allow_placeholder:
         raise MeasurementError(
             "Refusing to measure a simulated artifact.",
@@ -1544,7 +1566,14 @@ def measure(
     target = artifact.target
     profile = ProfileBuildResult(
         profile=artifact.variant,
-        artifacts={target: ArtifactRef(target=target, path=artifact.path, digest=artifact.sha256)},
+        artifacts={
+            target: ArtifactRef(
+                target=target,
+                path=artifact.path,
+                digest=artifact.sha256,
+                boot_payload=None if uki is None or uki[0] == artifact.path else uki[0],
+            )
+        },
     )
     found = derive_measurements(
         backend=scheme,
@@ -1561,7 +1590,23 @@ def measure(
         tool=tool,
         artifact_digest=artifact.sha256,
         artifact_path=str(artifact.path),
+        boot_payload_path="" if uki is None else str(uki[0]),
+        boot_payload_digest="" if uki is None else uki[1],
     )
+
+
+def _measured_uki(artifact: Artifact) -> tuple[Path, str] | None:
+    """The UKI a measurement of *artifact* is of, with its sha256: the artifact itself when it
+    is one (``.efi``), else the boot payload the bake recorded, checked against its sha256."""
+    if artifact.path.suffix == ".efi":
+        return artifact.path, artifact.sha256
+    if artifact.boot_payload is None or not artifact.boot_payload_sha256:
+        return None
+    payload = Path(artifact.boot_payload)
+    verify_artifact(
+        replace(artifact, path=payload, sha256=artifact.boot_payload_sha256, boot_payload=None)
+    )
+    return payload, artifact.boot_payload_sha256
 
 
 def deploy_parameters(using: DeployTarget) -> dict[str, str]:

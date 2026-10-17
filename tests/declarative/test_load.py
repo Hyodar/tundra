@@ -22,17 +22,14 @@ backend = InProcessBackend()
 recipe = Recipe(
     name="loaded",
     base="debian/bookworm",
-    common=Fragment(
-        "loaded",
-        items=(
-            Package("curl"),
-            File("/etc/motd", "hello\\n"),
-            Unit("dropbear.service", enabled=True),
-        ),
+    items=(
+        Package("curl"),
+        File("/etc/motd", "hello\\n"),
+        Unit("dropbear.service", enabled=True),
     ),
     variants=(
-        Variant("default", target="qemu"),
-        Variant("azure", parent="default", target="azure"),
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
     ),
 )
 """
@@ -59,9 +56,7 @@ def test_load_is_load_recipe() -> None:
 def test_load_discovers_like_the_cli_and_rejects_other_values(tmp_path: Path) -> None:
     factory = tmp_path / "factory.py"
     factory.write_text(
-        "from tundravm import Fragment, Recipe\n"
-        "def build() -> Recipe:\n"
-        "    return Recipe('f', Fragment('c'))\n",
+        "from tundravm import Fragment, Recipe\ndef build() -> Recipe:\n    return Recipe('f')\n",
         encoding="utf-8",
     )
     assert load(factory).name == "f"
@@ -70,7 +65,7 @@ def test_load_discovers_like_the_cli_and_rejects_other_values(tmp_path: Path) ->
         load(factory, attribute="recipe")
     upper = tmp_path / "upper.py"
     upper.write_text(
-        "from tundravm import Fragment, Recipe\nRECIPE = Recipe('u', Fragment('c'))\n",
+        "from tundravm import Fragment, Recipe\nRECIPE = Recipe('u')\n",
         encoding="utf-8",
     )
     assert load(upper).name == "u"
@@ -107,7 +102,7 @@ def test_cli_reports_resolution_errors(tmp_path: Path, capsys: pytest.CaptureFix
     broken = tmp_path / "broken.py"
     broken.write_text(
         "from tundravm import Disk, Fragment, Key, Recipe\n"
-        "recipe = Recipe('b', Fragment('c', items=(Disk('d', '/data', key=Key('k')),)))\n",
+        "recipe = Recipe('b', items=(Disk('d', '/data', key=Key('k')),))\n",
         encoding="utf-8",
     )
     code, _ = run_main("inspect", str(broken))

@@ -37,7 +37,7 @@ def _recipe() -> Recipe:
                 "debian-security", "https://deb.example/security", "trixie-security", priority=10
             ),
             File("/etc/motd", "hello world\n", mode=0o644),
-            Template("/etc/app/env", "A={a}\nB={b}\n", variables=(("b", "2"), ("a", "1"))),
+            Template("/etc/app/env", "A={a}\nB={b}\n", variables={"b": "2", "a": "1"}),
             User(
                 "app",
                 system=False,
@@ -60,11 +60,13 @@ def _recipe() -> Recipe:
     )
     return Recipe(
         "explain",
-        common,
+        items=(common,),
         variants=(
-            Variant("default", target="qemu"),
-            Variant("azure", target="azure", add=Fragment("azure", items=(Package("waagent"),))),
-            Variant("cloud", targets=("qemu", "gcp")),
+            Variant("default", outputs=("qemu",)),
+            Variant(
+                "azure", outputs=("azure",), add=Fragment("azure", items=(Package("waagent"),))
+            ),
+            Variant("cloud", outputs=("qemu", "gcp")),
         ),
         base="debian/trixie",
         mirror="https://deb.example",
@@ -78,7 +80,7 @@ def test_explain_structure() -> None:
     assert info["base"] == "debian/trixie"
     assert info["arch"] == "x86_64"
     assert info["variant"] == "default"
-    assert info["parent"] is None and info["fragments"] == []
+    assert info["inherits"] is None and info["fragments"] == []
     assert info["reproducible"] is True
     assert info["mirror"] == "https://deb.example"
     assert info["kernel"] is None
@@ -163,11 +165,11 @@ def test_explain_per_variant() -> None:
     azure = describe(image, profile="azure")
 
     assert azure["variant"] == "azure"
-    assert azure["parent"] == "default"
+    assert azure["inherits"] == "default"
     assert azure["packages"] == ["curl", "dmidecode", "jq", "systemd", "waagent"]
     assert "modules" not in azure and "profile" not in azure
-    lineage = describe(image, profile="azure", parent="base", fragments=("common", "azure"))
-    assert (lineage["parent"], lineage["fragments"]) == ("base", ["common", "azure"])
+    lineage = describe(image, profile="azure", inherits="base", fragments=("common", "azure"))
+    assert (lineage["inherits"], lineage["fragments"]) == ("base", ["common", "azure"])
     assert azure["targets"] == ["azure"]
     assert azure["users"] == describe(image, profile="default")["users"]
     assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]
@@ -179,7 +181,7 @@ def test_explain_per_variant() -> None:
 
 def test_explain_includes_kernel() -> None:
     kernel = Kernel("6.12.1", Git("https://github.com/gregkh/linux", "v6.12.1"), cmdline="quiet")
-    image = lower(Recipe("kernel", Fragment("common", items=(kernel,))))
+    image = lower(Recipe("kernel", items=(kernel,)))
     info = describe(image, profile="default")
     assert info["kernel"] == {
         "cmdline": "quiet",
@@ -220,9 +222,9 @@ def test_summary_contains_key_strings() -> None:
 
     azure_text = render(describe(image, profile="azure"))
     assert "variant=azure" in azure_text
-    assert "Parent: default\n" in azure_text
+    assert "Inherits: default\n" in azure_text
     assert "Packages (5): curl dmidecode jq systemd waagent" in azure_text
-    assert "Parent" not in text
+    assert "Inherits" not in text
     assert azure_text.endswith("Targets: azure\n")
     assert render(describe(image, profile="cloud")).endswith("Targets: qemu gcp\n")
 
@@ -230,7 +232,9 @@ def test_summary_contains_key_strings() -> None:
 def test_summary_omits_empty_sections() -> None:
     bare = Variant("bare", add=Fragment("bare", items=(Debloat(enabled=False),)))
     recipe = Recipe(
-        "bare", Fragment("common"), variants=(Variant("default", target="qemu"), bare), epoch=None
+        "bare",
+        variants=(Variant("default", outputs=("qemu",)), bare),
+        epoch=None,
     )
     text = render(describe(lower(recipe), profile="bare"))
 

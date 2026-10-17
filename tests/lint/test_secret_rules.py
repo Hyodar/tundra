@@ -10,9 +10,9 @@ import pytest
 
 from tests.lint.test_check_rules import recipe, report
 from tundravm import (
-    Directory,
     ExternalDelivery,
     File,
+    FileTree,
     Fragment,
     Secrets,
     Service,
@@ -99,8 +99,8 @@ def test_secret_in_file_ignores_lookalikes(path: str, content: str) -> None:
 def test_secret_in_file_covers_templates_and_directories(tmp_path: Path) -> None:
     (tmp_path / "conf").mkdir()
     (tmp_path / "conf" / "id_ed25519").write_text(PEM, encoding="utf-8")
-    template = Template("/etc/app/env.conf", "token={value}\n", variables=(("value", TOKEN),))
-    found = _secret_codes(template, Directory("/etc/keys", tmp_path / "conf"))
+    template = Template("/etc/app/env.conf", "token={value}\n", variables={"value": TOKEN})
+    found = _secret_codes(template, FileTree("/etc/keys", tmp_path / "conf"))
     assert found == [
         ("secret-in-file", "/etc/app/env.conf"),
         ("secret-in-file", "/etc/keys/id_ed25519"),
@@ -111,14 +111,14 @@ def test_allow_secret_silences_each_declaration(tmp_path: Path) -> None:
     (tmp_path / "conf").mkdir()
     (tmp_path / "conf" / "id_ed25519").write_text(PEM, encoding="utf-8")
     template = Template(
-        "/etc/app/env.conf", "token={v}\n", variables=(("v", TOKEN),), allow_secret=True
+        "/etc/app/env.conf", "token={v}\n", variables={"v": TOKEN}, allow_secret=True
     )
     assert (
         _secret_codes(
             File("/root/.ssh/id_rsa", PEM, allow_secret=True),
             template,
-            Directory("/etc/keys", tmp_path / "conf", allow_secret=True),
-            Service("api", "/usr/bin/api", env=(("API_TOKEN", TOKEN),), allow_secret=True),
+            FileTree("/etc/keys", tmp_path / "conf", allow_secret=True),
+            Service("api", "/usr/bin/api", env={"API_TOKEN": TOKEN}, allow_secret=True),
             Unit("w.service", f"[Service]\nEnvironment=GH={GITHUB}\n", allow_secret=True),
         )
         == []
@@ -131,7 +131,7 @@ def test_allow_secret_is_per_variant() -> None:
         "prod",
         add=Fragment("prod", items=(File("/etc/dev.conf", f"token={TOKEN}\n", allow_secret=True),)),
     )
-    subject = recipe(variants=(Variant("default", target="qemu"), dev, prod))
+    subject = recipe(variants=(Variant("default", outputs=("qemu",)), dev, prod))
     found = [(d.code, d.variant) for d in report(subject) if d.code.startswith("secret-")]
     assert found == [("secret-in-file", "dev")]
 
@@ -145,8 +145,8 @@ def test_allow_secret_leaves_the_digest_alone() -> None:
 
 def test_secret_in_env_for_services_and_units() -> None:
     found = _secret_codes(
-        Service("api", "/usr/bin/api", env=(("API_TOKEN", TOKEN), ("PORT", "8080"))),
-        Service("aws", "/usr/bin/aws", env=(("KEY", AWS),)),
+        Service("api", "/usr/bin/api", env={"API_TOKEN": TOKEN, "PORT": "8080"}),
+        Service("aws", "/usr/bin/aws", env={"KEY": AWS}),
         Unit("w.service", f'[Service]\nEnvironment="DB_PASSWORD={TOKEN}" "MODE=prod"\n'),
         Unit("x.service", f"[Service]\nExecStart=/usr/bin/x --token {GITHUB}\n"),
     )
@@ -163,11 +163,11 @@ def test_secret_in_env_ignores_references_and_plain_settings() -> None:
         Service(
             "api",
             "/usr/bin/api",
-            env=(
-                ("API_TOKEN_FILE", "/run/secrets/api-token"),
-                ("DB_PASSWORD", "changeme"),
-                ("LOG_LEVEL", "debug-verbose-mode-on"),
-            ),
+            env={
+                "API_TOKEN_FILE": "/run/secrets/api-token",
+                "DB_PASSWORD": "changeme",
+                "LOG_LEVEL": "debug-verbose-mode-on",
+            },
         ),
         Unit(
             "w.service",
@@ -192,7 +192,7 @@ PAIRED = [
         id="github-token-in-exec-start",
     ),
     pytest.param(
-        Service("api", "/usr/bin/api", env=(("DB_PASSWORD", TOKEN), ("PORT", "8080"))),
+        Service("api", "/usr/bin/api", env={"DB_PASSWORD": TOKEN, "PORT": "8080"}),
         Unit(
             "raw.service",
             f"[Service]\nExecStart=/usr/bin/api\nEnvironment=DB_PASSWORD={TOKEN} PORT=8080\n",

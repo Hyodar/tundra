@@ -20,7 +20,6 @@ from tundravm import (
     Evidence,
     EvidenceVerification,
     File,
-    Fragment,
     Package,
     Recipe,
     Variant,
@@ -31,6 +30,7 @@ from tundravm import (
     verify_evidence,
 )
 from tundravm import _ssh_sig as ssh_sig
+from tundravm.backends import inprocess
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative import read_artifacts, write_lock
 from tundravm.declarative.bom import manifest_path
@@ -44,11 +44,8 @@ NEEDS_SSH = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="needs
 def _recipe() -> Recipe:
     return Recipe(
         "node",
-        Fragment(
-            "common",
-            items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\n")),
-        ),
-        variants=(Variant("default", target="qemu"), Variant("azure", target="azure")),
+        items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\n")),
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
 
 
@@ -293,7 +290,7 @@ def test_only_the_current_evidence_schema_is_read(tmp_path: Path) -> None:
 def test_a_lockfile_swapped_with_its_index_entry_is_caught(tmp_path: Path) -> None:
     build, found = _baked(tmp_path)
     directory = found.write(build / "evidence")
-    other = lock(Recipe("node", Fragment("common", items=(Package("curl"),))))
+    other = lock(Recipe("node", items=(Package("curl"),)))
     (directory / "tundravm.lock").write_text(other.text(), encoding="utf-8")
     index_path = directory / "evidence.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
@@ -428,8 +425,8 @@ from tundravm.backends.inprocess import InProcessBackend
 backend = InProcessBackend()
 recipe = Recipe(
     "node",
-    Fragment("common", items=(Package("curl"), Package("linux-image-amd64"))),
-    variants=(Variant("default", target="qemu"),),
+    items=(Package("curl"), Package("linux-image-amd64")),
+    variants=(Variant("default", outputs=("qemu",)),),
 )
 """
 
@@ -537,3 +534,42 @@ def test_measurement_coverage_is_derived_from_the_policy(tmp_path: Path) -> None
     assert _problems(verify_evidence(directory)) == [
         ("fail", "index-inconsistent", "variants.default.policy.measures"),
     ]
+
+
+def test_measurement_through_a_boot_payload_is_rederived_from_the_bake_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(inprocess.TARGET_FILENAMES, "qemu", "disk.efi")
+    recipe = Recipe(
+        "node",
+        items=(Package("curl"), Package("linux-image-amd64")),
+        variants=(Variant("default", outputs=("qemu", "azure")),),
+    )
+    build = tmp_path / "build"
+    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=build)
+    uki = next(a for a in read_artifacts(build) if a.target == "qemu")
+    policy = {
+        "schema_version": 1,
+        "scheme": "rtmr",
+        "tool": "measured-boot",
+        "tool_version": "1.0",
+        "artifact": {"path": str(uki.path), "sha256": uki.sha256},
+        "registers": {f"RTMR{i}": "ab" * 48 for i in range(3)},
+    }
+    (build / "default" / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
+    found = evidence(recipe, build=build, runner=_mkosi, require=("measured",))
+    assert found.index["verdict"]["measured"] == "full"
+    directory = found.write(build / "evidence")
+    assert verify_evidence(directory, require=("measured",)).passed
+
+    member = directory / "bake-result.json"
+    payload = json.loads(member.read_text(encoding="utf-8"))
+    payload["variants"]["default"]["boot_payloads"]["azure"]["sha256"] = "9" * 64
+    member.write_text(json.dumps(payload), encoding="utf-8")
+    _relist(directory, "bake-result.json")
+    problems = _problems(verify_evidence(directory, require=("measured",)))
+    assert {
+        ("fail", "index-inconsistent", "variants.default.artifacts.azure.boot_payload"),
+        ("fail", "index-inconsistent", "variants.default.coverage"),
+        ("missing", "artifact-unmeasured", "default/azure"),
+    } <= set(problems)
