@@ -82,7 +82,7 @@ class App(Composite):
         if self.port >= 1024:
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
-        return (Diagnostic("app-privileged-port", "error", message, location=resolved.variant),)
+        return (Diagnostic("app-privileged-port", "error", message, variant=resolved.variant),)
 
 
 backend = InProcessBackend()
@@ -694,7 +694,7 @@ class HealthCheck(Composite):
             if isinstance(item, File) and item.path == "/etc/app/app.conf" and listen in item.content:
                 return ()
         message = f"the app does not listen on port {self.port}"
-        return (Diagnostic("healthcheck-port", "error", message, location=resolved.variant),)
+        return (Diagnostic("healthcheck-port", "error", message, variant=resolved.variant),)
 ```
 
 - `HealthCheck(port=9090)` is itself a `Fragment`: it goes in `common`, a variant's `add`, or another fragment's `items`. `compose()` runs once, at construction.
@@ -786,7 +786,7 @@ def test_needs_the_app() -> None:
 
 def test_probes_the_wrong_port() -> None:
     found = lint(image(App(version="1", port=8080), HealthCheck(port=9090)))
-    assert_diagnostic(found, "healthcheck-port", location="default")
+    assert_diagnostic(found, "healthcheck-port", variant="default")
 ```
 
 - `image()` builds a one-variant recipe (`default`, for qemu) around the fragments under test, with the kernel package so `kernel-missing` stays quiet.

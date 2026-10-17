@@ -107,7 +107,7 @@ def test_allow_secret_is_per_variant() -> None:
         add=Fragment("prod", items=(File("/etc/dev.conf", f"token={TOKEN}\n", allow_secret=True),)),
     )
     subject = recipe(variants=(Variant("default", target="qemu"), dev, prod))
-    found = [(d.code, d.location) for d in report(subject) if d.code.startswith("secret-")]
+    found = [(d.code, d.variant) for d in report(subject) if d.code.startswith("secret-")]
     assert found == [("secret-in-file", "dev")]
 
 
@@ -195,11 +195,11 @@ def test_service_and_unit_get_the_same_secret_findings(
     verbatim = found.pop("/usr/lib/systemd/system/raw.service")
 
     assert found == {}
-    assert (declared.code, declared.severity, declared.hint, declared.location) == (
+    assert (declared.code, declared.severity, declared.hint, declared.variant) == (
         verbatim.code,
         verbatim.severity,
         verbatim.hint,
-        verbatim.location,
+        verbatim.variant,
     )
     field, directive = fields
     assert declared.message == (

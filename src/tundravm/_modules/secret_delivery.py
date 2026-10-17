@@ -134,7 +134,7 @@ class SecretDelivery(Module):
                 f"Declared disks: {declared}. Declare Disk({store!r}, ...) in this variant, "
                 "pass Secrets(store=) one of the declared disks, or store=None."
             ),
-            location=profile,
+            variant=profile,
             subject=store,
         )
 
@@ -156,7 +156,7 @@ class SecretDelivery(Module):
                     f"Unit({service!r}, ...) in this variant, Unit({service!r}, "
                     "enabled=True) for a packaged unit, or fix the SecretEnv's service=."
                 ),
-                location=profile,
+                variant=profile,
                 subject=service,
             )
 

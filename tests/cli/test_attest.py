@@ -11,6 +11,7 @@ import struct
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,16 @@ from tundravm import (
     ValidationError,
     attest,
 )
-from tundravm.attestation import CHECKS_NOTE, VERDICTS, parse_quote, report_data_for
+from tundravm.attestation import (
+    ATTESTATION_SCHEMA,
+    CHECKS_NOTE,
+    TRUST_NOTE,
+    VERDICTS,
+    AttestationRecord,
+    parse_quote,
+    read_attestation,
+    report_data_for,
+)
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 
 MRTD, R0, R1, R2, R3 = (bytes([n]) * 48 for n in (0x11, 0x20, 0x21, 0x22, 0x23))
@@ -567,3 +577,139 @@ def test_cli_attest_help_says_only_a_validator_makes_it_trusted(
     text = " ".join(capsys.readouterr().out.split())
     assert "With --validator a tdxs validator checks the quote's signature" in text
     assert "--endpoint" not in text and "--insecure" not in text
+
+
+# ── retained records ─────────────────────────────────────────────────────
+
+OBSERVED = datetime(2026, 10, 17, 9, 30, 5, tzinfo=UTC)
+
+
+def _trusted(rtmrs: tuple[bytes, ...] = (R0, R1, R2, R3)) -> Attestation:
+    return attest(
+        "unix:/var/tdxs.sock",
+        PEER,
+        validator="tcp://verifier:7001",
+        nonce=NONCE,
+        transport=FakeIssuer(rtmrs=rtmrs),
+        validator_transport=FakeValidator(),
+        clock=lambda: OBSERVED,
+    )
+
+
+def test_a_record_keeps_the_document_the_policy_and_the_validator_reply(tmp_path: Path) -> None:
+    result = _trusted()
+    path = result.save(tmp_path / "records" / "att.json")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["schema"] == ATTESTATION_SCHEMA and record["trust"] == TRUST_NOTE
+    assert record["observed_at"] == "2026-10-17T09:30:05Z"
+    assert record["document"] == result.document and bytes.fromhex(record["document"])
+    assert record["nonce"] == NONCE.hex() and record["user_data"] == ""
+    assert record["report_data"] == {
+        "expected": report_data_for(b"", NONCE).hex(),
+        "actual": report_data_for(b"", NONCE).hex(),
+        "verdict": "match",
+    }
+    canonical = (json.dumps(PEER, indent=2, sort_keys=True) + "\n").encode()
+    assert record["policy"] == {
+        "path": None,
+        "sha256": hashlib.sha256(canonical).hexdigest(),
+        "artifact": PEER["artifact"],
+    }
+    assert record["validator"] == {
+        "endpoint": "tcp://verifier:7001",
+        "reply": {"data": {"userData": "", "valid": True}, "error": None},
+    }
+    assert (record["verdict"], record["signature_status"], record["reasons"]) == (
+        "trusted",
+        "valid",
+        [],
+    )
+    assert record["registers"]["RTMR1"] == {
+        "actual": R1.hex(),
+        "expected": R1.hex(),
+        "verdict": "match",
+    }
+
+
+def test_a_record_round_trips_and_re_derives_offline(tmp_path: Path) -> None:
+    result = _trusted()
+    path = result.save(tmp_path / "att.json")
+    found = read_attestation(path)
+    assert isinstance(found, AttestationRecord)
+    assert found.consistent and found.inconsistencies == ()
+    assert found.verdict == "trusted" and found.observed_at == "2026-10-17T09:30:05Z"
+    assert found.artifact_sha256 == "f" * 64 and found.policy_matches is None
+    assert found.attestation.record() == result.record()
+    assert found.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert read_attestation(path.read_bytes()).consistent
+    assert read_attestation(result.record(), policy=PEER).policy_matches is True
+
+
+def test_an_edited_register_makes_the_record_inconsistent(tmp_path: Path) -> None:
+    record = _trusted(rtmrs=(R0, bytes(48), R2, R3)).record()  # the quote's RTMR1 is wrong
+    assert record["verdict"] == "untrusted"
+    record["registers"]["RTMR1"]["actual"] = R1.hex()  # type: ignore[index]
+    record["registers"]["RTMR1"]["verdict"] = "match"  # type: ignore[index]
+    record["verdict"], record["reasons"] = "trusted", []
+    found = read_attestation(record)
+    assert not found.consistent and found.verdict == "untrusted"
+    assert any(p.startswith("registers.RTMR1.actual:") for p in found.inconsistencies)
+    assert any(p.startswith("verdict: the record says") for p in found.inconsistencies)
+
+
+def test_an_edited_expectation_is_caught_against_the_policy(tmp_path: Path) -> None:
+    record = _trusted(rtmrs=(R0, bytes(48), R2, R3)).record()
+    for register in ("RTMR1",):
+        record["registers"][register] = {  # type: ignore[index]
+            "actual": bytes(48).hex(),
+            "expected": bytes(48).hex(),
+            "verdict": "match",
+        }
+    record["verdict"], record["reasons"] = "trusted", []
+    assert read_attestation(record).consistent  # nothing to contradict it without the policy
+    found = read_attestation(record, policy=PEER)
+    assert found.policy_matches is True and not found.consistent
+    assert any(p.startswith("registers.RTMR1.expected:") for p in found.inconsistencies)
+    other = read_attestation(record, policy=policy(RTMR0=R0, RTMR1=R1, RTMR2=R3))
+    assert other.policy_matches is False
+
+
+def test_a_forged_validator_reply_is_trusted_only_as_recorded(tmp_path: Path) -> None:
+    record = _trusted().record()
+    record["validator"] = {"endpoint": "tcp://verifier:7001", "reply": {"data": None, "error": "x"}}
+    found = read_attestation(record)
+    assert found.verdict == "untrusted"
+    assert 'signature_status: the record says "valid", re-derived "invalid"' in (
+        found.inconsistencies
+    )
+
+
+def test_records_that_are_not_records_are_refused(tmp_path: Path) -> None:
+    path = tmp_path / "x.json"
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValidationError, match="not a JSON object") as caught:
+        read_attestation(path)
+    assert caught.value.hint
+    with pytest.raises(ValidationError, match="schema"):
+        read_attestation({"schema": "tundravm.attestation/0"})
+    record = _trusted().record()
+    record["document"] = "zz"
+    with pytest.raises(ValidationError, match="not an attestation document"):
+        read_attestation(record)
+
+
+def test_cli_attest_record_writes_the_record(
+    peer_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "att.json"
+    with _tcp(FakeIssuer()) as url:
+        code, _ = run_main(
+            "attest", "--issuer", url, "--policy", str(peer_file), "--record", str(target)
+        )
+    assert code == EXIT_OK
+    assert f"wrote {target}" in capsys.readouterr().err
+    found = read_attestation(target, policy=peer_file)
+    assert found.consistent and found.policy_matches is True
+    assert found.verdict == "measurements-match" and found.record["validator"] is None
+    assert found.record["policy"]["path"] == str(peer_file)
+    assert found.record["policy"]["sha256"] == hashlib.sha256(peer_file.read_bytes()).hexdigest()

@@ -379,7 +379,7 @@ def test_lint_markdown_table(recipe: Path) -> None:
     recipe.write_text(recipe.read_text() + GHOST)
     code, out = run_main("lint", str(recipe), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
-    assert out.startswith("| Severity | Code | Location | Subject | Message | Hint |\n|---|")
+    assert out.startswith("| Severity | Code | Variant | Subject | Message | Hint |\n|---|")
     assert "| error | `service-user-missing` | `default` | `w` |" in out
     assert "**1 error, 0 warnings, 0 infos**" in out
 

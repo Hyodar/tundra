@@ -63,7 +63,7 @@ Equal repeats deduplicate silently. Two different declarations with the same ide
 
 ### Diagnostics
 
-`resolve()` raises `ValidationError` on the first error. `lint(recipe)` returns every problem as a `Diagnostic(code, severity, message, subject, location, hint, context)` instead: resolution problems, fragment checks, and (when nothing is an error so far) the compiler's own rules on the lowered image, with their hints. `location` is the variant a finding is in, or `""` for the recipe as a whole (the common fragment, the lockfile, the host). The [API reference](api.md#lint-rules) lists every code.
+`resolve()` raises `ValidationError` on the first error. `lint(recipe)` returns every problem as a `Diagnostic(code, severity, message, subject, variant, location, hint, context)` instead: resolution problems, fragment checks, and (when nothing is an error so far) the compiler's own rules on the lowered image, with their hints. `variant` is the variant a finding is in, or `""` for the recipe as a whole (the common fragment, the lockfile, the host). The [API reference](api.md#lint-rules) lists every code.
 
 ### Provenance
 

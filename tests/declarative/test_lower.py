@@ -140,7 +140,7 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
 
     assert lowered.select(PROFILES).digest() == EQUIVALENCE_RECIPE
     assert compile(declarative_recipe()).digest == EQUIVALENCE_TREE
-    assert [(d.severity, d.code, d.location, d.subject) for d in check(lowered)] == [
+    assert [(d.severity, d.code, d.variant, d.subject) for d in check(lowered)] == [
         ("error", "kernel-missing", "default", ""),
         ("warning", "disk-auto-format", "default", "disk_persistent"),
         ("warning", "init-priority-collision", "default", "priority 25"),

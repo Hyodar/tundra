@@ -200,22 +200,22 @@ def test_assert_clean_takes_lint_diagnostics_strictly() -> None:
 
 def test_assert_diagnostic_returns_the_match() -> None:
     found = assert_diagnostic(_ghost(), "service-user-missing", severity="error", subject="app")
-    assert found.location == "default"
+    assert found.variant == "default"
     assert "ghost" in found.message
     assert found.hint is not None
 
 
 def test_assert_diagnostic_filters_by_variant() -> None:
     recipe = _ghost(where="azure")
-    found = assert_diagnostic(recipe, "service-user-missing", location="azure")
-    assert found.location == "azure"
-    assert assert_diagnostic(recipe, "service-user-missing", location="azure") == found
+    found = assert_diagnostic(recipe, "service-user-missing", variant="azure")
+    assert found.variant == "azure"
+    assert assert_diagnostic(recipe, "service-user-missing", variant="azure") == found
     with pytest.raises(AssertionError, match="no findings"):
         assert_diagnostic(recipe, "service-user-missing", variants="default")
 
 
 def test_assert_diagnostic_takes_lint_diagnostics() -> None:
-    found = assert_diagnostic(lint(_ghost()), "service-user-missing", location="default")
+    found = assert_diagnostic(lint(_ghost()), "service-user-missing", variant="default")
     assert isinstance(found, Diagnostic)
     assert (found.severity, found.subject) == ("error", "app")
 
@@ -428,8 +428,8 @@ def test_fake_fragment_checks_run_per_variant() -> None:
     )
     found = lint(recipe)
     assert set(seen) == {"azure", "default"}
-    assert assert_diagnostic(found, "fake-check", location="azure").subject == ""
-    assert assert_diagnostic(found, "fake-check", location="default").severity == "warning"
+    assert assert_diagnostic(found, "fake-check", variant="azure").subject == ""
+    assert assert_diagnostic(found, "fake-check", variant="default").severity == "warning"
 
 
 # ── recipe_file / run_cli ────────────────────────────────────────────

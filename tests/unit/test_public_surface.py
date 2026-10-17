@@ -102,6 +102,7 @@ EXPECTED_TOP_LEVEL = [
     "lock_status",
     "lower",
     "read_artifacts",
+    "read_attestation",
     "read_lock",
     "release",
     "resolve",

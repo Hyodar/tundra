@@ -187,7 +187,7 @@ def _lint(lowered: Lowered, progress: Progress) -> None:
         if diagnostic.severity in ("warning", "error"):
             progress.emit(
                 "warning",
-                diagnostic.location or None,
+                diagnostic.variant or None,
                 f"{diagnostic.code}: {diagnostic.message}",
                 level=diagnostic.severity,
                 code=diagnostic.code,

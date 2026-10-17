@@ -39,7 +39,7 @@ from tundravm import (
     lint,
     lock,
 )
-from tundravm.check import Diagnostic, check, render
+from tundravm.check import Diagnostic, check, render, render_github, render_markdown
 from tundravm.cli import main
 from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import check_report
@@ -203,7 +203,7 @@ def test_variant_cannot_drop_an_inherited_cloud_target() -> None:
 
 def test_variant_empty() -> None:
     [diag] = report(recipe(variants=(DEFAULT, Variant("bare"))), "bare")
-    assert (diag.severity, diag.code, diag.location) == ("info", "variant-empty", "bare")
+    assert (diag.severity, diag.code, diag.variant) == ("info", "variant-empty", "bare")
 
 
 def test_variant_with_content_or_default_is_not_empty() -> None:
@@ -289,7 +289,7 @@ def test_secret_delivery_applied_is_fine() -> None:
 def test_kernel_missing() -> None:
     subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT,))
     [diag] = report(subject)
-    assert (diag.severity, diag.code, diag.location) == ("error", "kernel-missing", "default")
+    assert (diag.severity, diag.code, diag.variant) == ("error", "kernel-missing", "default")
     assert "A kernel must be installed" in diag.message
     for fix in ("linux-image-amd64", "Kernel(...)", '"Bootable", ("no",)'):
         assert fix in (diag.hint or "")
@@ -316,7 +316,7 @@ def test_kernel_package_kernel_or_not_bootable_is_fine(boot: Declaration) -> Non
 def test_kernel_missing_is_per_variant() -> None:
     booted = Variant("booted", parent=None, add=Fragment("booted", items=(KERNEL,)))
     subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT, booted))
-    assert [(d.location, d.code) for d in report(subject, "default", "booted")] == [
+    assert [(d.variant, d.code) for d in report(subject, "default", "booted")] == [
         ("default", "kernel-missing")
     ]
 
@@ -376,7 +376,7 @@ def test_ordering_is_deterministic() -> None:
     )
     img = lower(subject)
     diags = check(img, profiles=["b", "a", "default"])
-    keys = [(d.location, d.severity, d.code) for d in diags]
+    keys = [(d.variant, d.severity, d.code) for d in diags]
     assert keys == [
         ("a", "warning", "init-priority-collision"),
         ("a", "info", "variant-empty"),
@@ -385,7 +385,7 @@ def test_ordering_is_deterministic() -> None:
         ("default", "warning", "init-priority-collision"),
     ]
     assert diags == check(img, profiles=["default", "a", "b"])
-    assert [(d.location, d.code) for d in lint(subject)] == [
+    assert [(d.variant, d.code) for d in lint(subject)] == [
         (profile, code) for profile, _, code in keys
     ]
 
@@ -397,11 +397,11 @@ def test_render_text_and_dict() -> None:
         "error",
         "boom",
         subject="app",
-        location="default",
+        variant="default",
         hint="fix it",
         context=(("user", "app"), ("group", "app")),
     )
-    info = Diagnostic("variant-empty", "info", "m", location="x")
+    info = Diagnostic("variant-empty", "info", "m", variant="x")
     whole = Diagnostic("lock-stale", "warning", "w")
     text = render([diag, info, whole])
     assert text.splitlines() == [
@@ -417,10 +417,27 @@ def test_render_text_and_dict() -> None:
         "severity": "error",
         "message": "boom",
         "subject": "app",
-        "location": "default",
+        "variant": "default",
+        "location": "",
         "hint": "fix it",
         "context": {"group": "app", "user": "app"},
     }
+
+
+def test_a_source_location_is_rendered_where_it_is_known() -> None:
+    placed = Diagnostic("app-port", "warning", "port 80", variant="default", location="node.py:27")
+    plain = Diagnostic("lock-stale", "warning", "w")
+    assert render([placed]).splitlines()[:2] == [
+        "warning app-port [default]: port 80",
+        "    at: node.py:27",
+    ]
+    table = render_markdown([placed, plain])
+    assert table.startswith("| Severity | Code | Variant | Location | Subject | Message | Hint |")
+    assert "| `default` | `node.py:27` |" in table
+    assert "| Variant | Subject |" in render_markdown([plain])
+    lines = render_github([placed, plain], "recipe.py").splitlines()
+    assert lines[0].startswith("::warning file=node.py,line=27,title=app-port::[default]")
+    assert lines[1].startswith("::warning file=recipe.py,title=lock-stale::[common]")
 
 
 # CLI

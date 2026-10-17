@@ -203,26 +203,28 @@ def assert_diagnostic(
     *,
     variants: Variants = None,
     severity: Severity | None = None,
-    location: str | None = None,
+    variant: str | None = None,
     subject: str | None = None,
+    location: str | None = None,
 ) -> Diagnostic:
     """Return the first diagnostic matching every given field, else fail listing them all.
 
     *diagnostics* is a sequence of diagnostics (what ``tundravm.lint()``
-    returned), or a ``Recipe`` to lint for *variants* (default: *location*
-    alone when given, else all). *location* is the variant, ``""`` for the
-    recipe as a whole.
+    returned), or a ``Recipe`` to lint for *variants* (default: *variant*
+    alone when given, else all). *variant* is the variant, ``""`` for the
+    recipe as a whole; *location* the source position (``file:line``).
     """
     wanted_subject = subject
-    if variants is None and location and isinstance(diagnostics, Recipe):
-        variants = [location]
+    if variants is None and variant and isinstance(diagnostics, Recipe):
+        variants = [variant]
     found = _findings(diagnostics, variants)
     for d in found:
         if (
             d.code == code
             and (severity is None or d.severity == severity)
-            and (location is None or d.location == location)
+            and (variant is None or d.variant == variant)
             and (wanted_subject is None or d.subject == wanted_subject)
+            and (location is None or d.location == location)
         ):
             return d
     wanted = ", ".join(
@@ -230,8 +232,9 @@ def assert_diagnostic(
         for key, value in (
             ("code", code),
             ("severity", severity),
-            ("location", location),
+            ("variant", variant),
             ("subject", wanted_subject),
+            ("location", location),
         )
         if value is not None
     )

@@ -203,7 +203,7 @@ class App(Composite):
         if self.port >= 1024:
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
-        return (Diagnostic("app-privileged-port", "error", message, location=resolved.variant),)
+        return (Diagnostic("app-privileged-port", "error", message, variant=resolved.variant),)
 
 
 backend = $backend_expr

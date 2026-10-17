@@ -186,7 +186,7 @@ Resolving the default variant shows what the fragment contributed:
 
 A check receives the `Resolved` variant: `variant`, `target`, every declaration in `items` (after inheritance, `replace` and `remove`) and the included fragment names in `fragments`. It returns diagnostics; an empty tuple means fine.
 
-- `Diagnostic(code, severity, message, subject="", location="", hint=None, context=())`, the same `tundravm.Diagnostic` that `lint()` returns. `severity` is `"error"`, `"warning"` or `"info"`. Leave `location` empty: resolution fills in the variant the check ran for. A `hint` is printed under the finding and carried by `lint --format json`; `context` takes a dict or (key, value) string pairs.
+- `Diagnostic(code, severity, message, subject="", variant="", location="", hint=None, context=())`, the same `tundravm.Diagnostic` that `lint()` returns. `severity` is `"error"`, `"warning"` or `"info"`. Leave `variant` empty: resolution fills in the variant the check ran for. `location` is for a source position (`file:line`) when the check knows one; `lint --format github` annotates that line. A `hint` is printed under the finding and carried by `lint --format json`; `context` takes a dict or (key, value) string pairs.
 - Use your own code prefix (`exporter-...`), so tests and `lint --format github` annotations identify the fragment.
 - Use `"warning"` for advice. Error-severity results make `resolve`, `compile` and `bake` refuse the recipe.
 - Checks must be pure: they run once per variant per lint, in any order.
@@ -287,7 +287,7 @@ def test_exporter_is_clean():
 def test_exporter_needs_persistent_storage():
     elsewhere = Disk("disk_data", mount="/data", key=key)
     storage = Fragment("secure-storage", items=(key, elsewhere, Secrets(store=elsewhere)))
-    assert_diagnostic(lint(recipe_with(storage)), "exporter-storage-missing", location="default")
+    assert_diagnostic(lint(recipe_with(storage)), "exporter-storage-missing", variant="default")
 
 
 def test_unit_waits_for_runtime_init():

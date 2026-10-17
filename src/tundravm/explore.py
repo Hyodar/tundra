@@ -7,7 +7,7 @@ there is one), every declaration across the variants with its provenance, the
 compiled tree of each variant with each file's content and the declarations
 that produced it, and the hooks, runtime-init steps and source builds in the
 order they run. :meth:`Exploration.to_dict` is that model as JSON
-(``"schema": "tundravm.explore/1"``) and :meth:`Exploration.html` one
+(``"schema": "tundravm.explore/2"``) and :meth:`Exploration.html` one
 self-contained page: inline CSS and a small inline script (tabs, filters,
 cross-link jumps) that reads as a static page without it.
 """
@@ -50,7 +50,7 @@ from .errors import TdxError, ValidationError
 from .explain import _changed_fields, _emitted_for, _fragment_chain
 from .models import BAKE_RESULT_FILENAME
 
-EXPLORE_SCHEMA = "tundravm.explore/1"
+EXPLORE_SCHEMA = "tundravm.explore/2"
 EXPLORE_FORMATS = ("html", "json")
 PAGE_NAME = "explore.html"
 """``tundravm explore`` writes ``BUILD/explore.html`` unless ``--output`` says otherwise."""
@@ -260,6 +260,7 @@ def _finding(diagnostic: Any) -> dict[str, Any]:
     return {
         "code": diagnostic.code,
         "severity": diagnostic.severity,
+        "variant": diagnostic.variant,
         "location": diagnostic.location,
         "subject": diagnostic.subject,
         "message": diagnostic.message,
@@ -839,12 +840,13 @@ def _overview_html(data: Mapping[str, Any]) -> str:
     if lint["findings"]:
         parts.append(
             _table(
-                ("severity", "code", "location", "subject", "message", "hint"),
+                ("severity", "code", "variant", "location", "subject", "message", "hint"),
                 [
                     (
                         _badge(d["severity"]),
                         _c(d["code"]),
-                        _c(d["location"] or "common"),
+                        _c(d["variant"] or "common"),
+                        _c(d["location"] or None),
                         _c(d["subject"] or None),
                         _e(d["message"]),
                         _e(d["hint"]),

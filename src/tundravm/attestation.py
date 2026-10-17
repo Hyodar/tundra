@@ -16,6 +16,14 @@ HEX, "nonce": HEX}}`` answers ``{"data": {"userData": HEX, "valid": true},
 "error": null}`` for a document it accepts and an ``error`` for one it
 rejects. Without a validator the verdict says only whether the measurements
 match; it is never ``trusted``.
+
+:meth:`Attestation.save` keeps what was observed as a ``tundravm.attestation/1``
+record: the document as received, the nonce, the policy's sha256 and artifact, the
+validator's whole reply and the verdict. :func:`read_attestation` re-derives the
+quote's registers, the nonce binding and the verdict from that record offline. The
+quote's signature, certificate chain and collateral cannot be re-checked offline:
+they are only as trusted as the recorded validator reply, which the record's
+producer asserts.
 """
 
 from __future__ import annotations
@@ -28,9 +36,10 @@ import secrets
 import socket
 import struct
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from .errors import AttestationError, MeasurementError, ValidationError
 from .formats import md_cell, md_table
@@ -61,6 +70,15 @@ CHECKS_NOTE = (
 )
 TIMEOUT_S = 30.0
 SIMULATOR = "simulator"
+ATTESTATION_SCHEMA = "tundravm.attestation/1"
+"""The ``schema`` of the record :meth:`Attestation.save` (``attest --record``) writes."""
+TRUST_NOTE = (
+    "offline re-checking covers the quote's measurements and its nonce binding; the "
+    "quote's signature, certificate chain and collateral are only as trusted as the "
+    "recorded validator reply, which the record's producer asserts"
+)
+"""What re-reading a record (:func:`read_attestation`) proves, and what it takes on trust."""
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 TDX_TEE_TYPE = 0x81
 QUOTE_HEADER_SIZE = 48
@@ -198,6 +216,20 @@ class Attestation:
     validator_error: str | None = None
     policy: str | None = None
     allow_simulated: bool = False
+    document: str = field(default="", repr=False)
+    """The tdxs attestation document exactly as the issuer sent it: the hex of its JSON."""
+    user_data: str = ""
+    """The ``userData`` (hex) the issue request carried; ``report_data`` binds it."""
+    metadata: Mapping[str, object] | None = field(default=None, repr=False, hash=False)
+    """A simulator issuer's ``metadata`` reply, whose measurements are its registers."""
+    validator_reply: Mapping[str, object] | None = field(default=None, repr=False, hash=False)
+    """The validator's whole reply envelope; ``None`` without a validator."""
+    policy_sha256: str | None = None
+    """The sha256 of the policy file (of its sorted JSON for a dict policy)."""
+    policy_artifact: Mapping[str, object] | None = field(default=None, hash=False)
+    """The policy's ``artifact`` (``path``, ``sha256``): what it measured."""
+    observed_at: str = ""
+    """When the quote was requested: ISO 8601 UTC, to the second."""
 
     @property
     def nonce_matches(self) -> bool:
@@ -273,6 +305,61 @@ class Attestation:
             "verdict": self.verdict,
         }
 
+    def record(self) -> dict[str, object]:
+        """The ``tundravm.attestation/1`` record :meth:`save` writes (``attest --record``).
+
+        It keeps what a later offline check needs: the ``document`` as received,
+        ``user_data`` and ``nonce``, ``report_data`` (``expected``, ``actual``,
+        ``verdict``), ``platform``, ``source``, ``quote_version``, the simulator's
+        ``metadata`` reply, ``registers``, the ``policy`` (``path``, ``sha256``,
+        ``artifact``), the ``validator`` (``endpoint`` and its whole ``reply``, or
+        ``null``), ``signature_status``, ``verdict``, ``reasons``, ``observed_at``,
+        the ``tundravm`` version and the ``trust`` note.
+        """
+        from tundravm import __version__
+
+        return {
+            "schema": ATTESTATION_SCHEMA,
+            "tundravm": __version__,
+            "observed_at": self.observed_at,
+            "trust": TRUST_NOTE,
+            "issuer": self.issuer,
+            "document": self.document,
+            "user_data": self.user_data,
+            "nonce": self.nonce,
+            "report_data": {
+                "expected": self.expected_report_data,
+                "actual": self.report_data,
+                "verdict": "match" if self.nonce_matches else "mismatch",
+            },
+            "platform": self.platform,
+            "source": self.source,
+            "quote_version": self.quote_version,
+            "metadata": None if self.metadata is None else dict(self.metadata),
+            "registers": {r.name: r.to_dict() for r in self.registers},
+            "policy": {
+                "path": self.policy,
+                "sha256": self.policy_sha256,
+                "artifact": None if self.policy_artifact is None else dict(self.policy_artifact),
+            },
+            "validator": None
+            if self.validator is None
+            else {
+                "endpoint": self.validator,
+                "reply": None if self.validator_reply is None else dict(self.validator_reply),
+            },
+            "signature_status": self.signature_status,
+            "verdict": self.verdict,
+            "reasons": list(self.reasons),
+        }
+
+    def save(self, path: str | Path) -> Path:
+        """Write :meth:`record` to *path* as sorted, indented JSON (parents created)."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(self.record(), indent=2, sort_keys=True) + "\n", "utf-8")
+        return target
+
 
 def attest(
     issuer: str,
@@ -283,6 +370,7 @@ def attest(
     allow_simulated: bool = False,
     transport: Transport | None = None,
     validator_transport: Transport | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> Attestation:
     """Request a quote from the tdxs issuer at *issuer*, check it against *policy*.
 
@@ -295,11 +383,14 @@ def attest(
     (``trusted``/``untrusted``); without it the verdict is
     ``measurements-match`` or ``measurements-mismatch``. A simulator issuer's
     verdict is ``simulated`` at best; *allow_simulated* lets it pass.
-    *transport* and *validator_transport* replace the network (tests). Raises
+    *transport* and *validator_transport* replace the network and *clock* the wall
+    clock ``observed_at`` reads (tests; ``SOURCE_DATE_EPOCH`` is not honoured, since a
+    pinned clock would make every record look fresh). Raises
     ``AttestationError`` when the issuer or validator cannot be reached or
     fails, ``MeasurementError`` for a reply that is not a TDX attestation.
     """
     data = read_policy(policy)
+    policy_bytes = _canonical(policy) if isinstance(policy, Mapping) else Path(policy).read_bytes()
     if is_placeholder(data):
         raise MeasurementError(
             "Refusing to attest against a placeholder policy.",
@@ -310,6 +401,7 @@ def attest(
     expected = data["registers"]
     assert isinstance(expected, dict)
     challenge = _nonce_bytes(nonce)
+    observed = (clock or _now)().astimezone(UTC).strftime(TIME_FORMAT)
     send = transport if transport is not None else connect(issuer)
     reply = _call(send, issuer, "issue", {"userData": "", "nonce": challenge.hex()})
     encoded = str(reply.get("document") or "")
@@ -317,24 +409,18 @@ def attest(
     platform = str(document.get("platform") or "")
     raw = _b64(document.get("raw_quote"), "raw_quote")
     wanted = report_data_for(b"", challenge)
+    meta: Mapping[str, object] | None = None
     if platform == SIMULATOR:
         meta = _call(send, issuer, "metadata", {})
-        actual = _metadata_registers(meta, issuer)
-        # The simulator binds only the 32-byte hash; its padding is implicit.
-        bound = raw[:32] + bytes(32)
-        source: Literal["quote", "metadata"] = "metadata"
-        version = None
-    else:
-        quote = parse_quote(raw)
-        actual = quote.registers()
-        bound = quote.report_data
-        source, version = "quote", quote.version
+    source, version, actual, bound = _measured(platform, raw, meta, issuer)
     status: SignatureStatus = "unchecked"
     rejection = None
+    answer: Mapping[str, object] | None = None
     if validator is not None:
         judge = validator_transport if validator_transport is not None else connect(validator)
-        status, rejection = _validate(judge, validator, encoded, challenge)
+        status, rejection, answer = _validate(judge, validator, encoded, challenge)
     checks = tuple(_check(name, actual.get(name), expected.get(name)) for name in REGISTERS)
+    artifact = data.get("artifact")
     return Attestation(
         issuer=issuer,
         platform=platform or "unknown",
@@ -349,7 +435,35 @@ def attest(
         validator_error=rejection,
         policy=None if isinstance(policy, Mapping) else str(policy),
         allow_simulated=allow_simulated,
+        document=encoded,
+        user_data="",
+        metadata=None if meta is None else dict(meta),
+        validator_reply=answer,
+        policy_sha256=hashlib.sha256(policy_bytes).hexdigest(),
+        policy_artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
+        observed_at=observed,
     )
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _canonical(policy: Mapping[str, object]) -> bytes:
+    """A dict policy as ``measure --export-policy`` writes it: sorted, indented JSON."""
+    return (json.dumps(dict(policy), indent=2, sort_keys=True) + "\n").encode()
+
+
+def _measured(
+    platform: str, raw: bytes, meta: Mapping[str, object] | None, endpoint: str
+) -> tuple[Literal["quote", "metadata"], int | None, dict[str, str], bytes]:
+    """Where the registers come from, the quote version, the registers and the bound
+    ``report_data``: the TDX quote's, or a simulator's ``metadata`` and first 32 bytes."""
+    if platform == SIMULATOR:
+        # The simulator binds only the 32-byte hash; its padding is implicit.
+        return "metadata", None, _metadata_registers(meta or {}, endpoint), raw[:32] + bytes(32)
+    quote = parse_quote(raw)
+    return "quote", quote.version, quote.registers(), quote.report_data
 
 
 _VALIDATOR_BROKEN = ("transport error", "not configured", "not initialized")
@@ -358,30 +472,39 @@ _VALIDATOR_BROKEN = ("transport error", "not configured", "not initialized")
 
 def _validate(
     send: Transport, endpoint: str, document: str, nonce: bytes
-) -> tuple[SignatureStatus, str | None]:
-    """``("valid", None)`` or ``("invalid", why)``; ``AttestationError`` when it cannot judge."""
+) -> tuple[SignatureStatus, str | None, dict[str, object]]:
+    """``("valid", None, reply)`` or ``("invalid", why, reply)``; ``AttestationError`` when it
+    cannot judge."""
     hint = (
         "Point --validator at a tdxs validator socket (tdxs with a validator configured), "
         "e.g. tcp://127.0.0.1:7001 on the verifying host."
     )
-    reply = send({"method": "validate", "data": {"document": document, "nonce": nonce.hex()}})
+    reply = dict(send({"method": "validate", "data": {"document": document, "nonce": nonce.hex()}}))
     error = reply.get("error")
-    if error:
-        text = str(error)
-        if any(marker in text for marker in _VALIDATOR_BROKEN):
-            raise AttestationError(
-                f"The tdxs validator at {endpoint} could not judge the document: {text}",
-                hint=hint,
-                context={"validator": endpoint},
-            )
-        return "invalid", text
-    payload = reply.get("data")
-    if not isinstance(payload, Mapping) or not isinstance(payload.get("valid"), bool):
+    if error and any(marker in str(error) for marker in _VALIDATOR_BROKEN):
+        raise AttestationError(
+            f"The tdxs validator at {endpoint} could not judge the document: {error}",
+            hint=hint,
+            context={"validator": endpoint},
+        )
+    judged = _judgement(reply)
+    if judged is None:
         raise AttestationError(
             f"The validate reply from {endpoint} has no data.valid flag.",
             hint=hint,
             context={"validator": endpoint},
         )
+    return judged[0], judged[1], reply
+
+
+def _judgement(reply: Mapping[str, object]) -> tuple[SignatureStatus, str | None] | None:
+    """What a validate *reply* says: ``valid``, ``invalid`` and why, or ``None`` (no verdict)."""
+    error = reply.get("error")
+    if error:
+        return "invalid", str(error)
+    payload = reply.get("data")
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("valid"), bool):
+        return None
     if payload["valid"]:
         return "valid", None
     return "invalid", "the validator answered valid=false"
@@ -477,6 +600,277 @@ def _metadata_registers(meta: Mapping[str, object], endpoint: str) -> dict[str, 
         for name in REGISTERS
         if measurements.get(name.lower())
     }
+
+
+# ── records ──────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class AttestationRecord:
+    """A ``tundravm.attestation/1`` record, re-derived offline by :func:`read_attestation`.
+
+    ``attestation`` is rebuilt from the record's ``document`` (the quote parsed again),
+    its nonce and user data, the registers it was checked against (the given policy's
+    when that policy is the one the record names) and the recorded validator reply.
+    ``inconsistencies`` lists each stored field that disagrees with what those give;
+    ``policy_matches`` says whether a given policy's sha256 is the record's (``None``:
+    no policy given). ``sha256`` is the record's own.
+    """
+
+    record: Mapping[str, Any] = field(repr=False)
+    attestation: Attestation
+    inconsistencies: tuple[str, ...] = ()
+    policy_matches: bool | None = None
+    sha256: str = ""
+
+    @property
+    def consistent(self) -> bool:
+        """No stored field disagrees with what the document re-derives."""
+        return not self.inconsistencies
+
+    @property
+    def verdict(self) -> Verdict:
+        """The verdict re-derived from the document (not the one the record states)."""
+        return self.attestation.verdict
+
+    @property
+    def observed_at(self) -> str:
+        return self.attestation.observed_at
+
+    @property
+    def policy_sha256(self) -> str | None:
+        return self.attestation.policy_sha256
+
+    @property
+    def artifact_sha256(self) -> str | None:
+        """The sha256 of the artifact the record's policy measured: what it attests."""
+        sha = (self.attestation.policy_artifact or {}).get("sha256")
+        return sha if isinstance(sha, str) and sha else None
+
+
+_RECORD_HINT = "Write the record with `tundravm attest --record FILE` (Attestation.save)."
+
+
+def read_attestation(
+    source: str | Path | bytes | Mapping[str, Any],
+    *,
+    policy: str | Path | bytes | Mapping[str, object] | None = None,
+) -> AttestationRecord:
+    """Read the ``tundravm.attestation/1`` record *source* (a path, its bytes or its dict)
+    and re-derive it offline.
+
+    The document is decoded and its quote parsed again (:func:`parse_quote`; a
+    simulator's registers come from the recorded ``metadata`` reply), the nonce binding
+    is recomputed from the recorded nonce and user data, every register is compared
+    again with the expected value and the signature status is read from the recorded
+    validator reply; the verdict follows from those. With *policy* (a policy file, its
+    bytes or its dict) whose sha256 is the one the record names, its registers and
+    ``artifact`` replace the stored ones, so a stored expectation edited to match is
+    caught. Each stored field that disagrees is an inconsistency
+    (:attr:`AttestationRecord.inconsistencies`).
+
+    This proves what the quote measured and that it binds the nonce. It cannot prove
+    the quote genuine: the signature, certificate chain and collateral are only as
+    trusted as the recorded validator reply, which the record's producer asserts.
+    ``ValidationError`` when *source* is not a readable record or its document is not
+    an attestation document.
+    """
+    where, data, raw_bytes = _load_record(source)
+    if data.get("schema") != ATTESTATION_SCHEMA:
+        raise ValidationError(
+            f"{where} has schema {data.get('schema')!r}, not {ATTESTATION_SCHEMA}.",
+            hint=_RECORD_HINT,
+        )
+    encoded = str(data.get("document") or "")
+    meta = data.get("metadata")
+    try:
+        document = _document(encoded, where)
+        raw = _b64(document.get("raw_quote"), "raw_quote")
+        platform = str(document.get("platform") or "")
+        meta_map = meta if isinstance(meta, Mapping) else None
+        source_kind, version, actual, bound = _measured(platform, raw, meta_map, where)
+    except MeasurementError as exc:
+        raise ValidationError(
+            f"{where}: its document is not an attestation document: "
+            f"{exc.args[0] if exc.args else exc}",
+            hint=_RECORD_HINT,
+        ) from exc
+    nonce = _record_hex(data, "nonce", where)
+    user_data = _record_hex(data, "user_data", where)
+    stored_policy = data.get("policy") if isinstance(data.get("policy"), Mapping) else {}
+    assert isinstance(stored_policy, Mapping)
+    stored_registers = data.get("registers") if isinstance(data.get("registers"), Mapping) else {}
+    assert isinstance(stored_registers, Mapping)
+    expected: dict[str, object] = {
+        name: (stored_registers.get(name) or {}).get("expected")
+        for name in REGISTERS
+        if isinstance(stored_registers.get(name), Mapping)
+    }
+    artifact = stored_policy.get("artifact")
+    matches: bool | None = None
+    if policy is not None:
+        given, given_bytes = _given_policy(policy)
+        matches = hashlib.sha256(given_bytes).hexdigest() == stored_policy.get("sha256")
+        if matches:
+            expected = dict(given["registers"])  # type: ignore[call-overload]
+            artifact = given.get("artifact")
+    status, why, endpoint, reply, problems = _recorded_judgement(data.get("validator"))
+    checks = tuple(_check(name, actual.get(name), expected.get(name)) for name in REGISTERS)
+    derived = Attestation(
+        issuer=str(data.get("issuer") or ""),
+        platform=platform or "unknown",
+        source=source_kind,
+        quote_version=version,
+        nonce=nonce,
+        report_data=bound.hex(),
+        expected_report_data=report_data_for(bytes.fromhex(user_data), bytes.fromhex(nonce)).hex(),
+        registers=checks,
+        validator=endpoint,
+        signature_status=status,
+        validator_error=why,
+        policy=None if stored_policy.get("path") is None else str(stored_policy.get("path")),
+        document=encoded,
+        user_data=user_data,
+        metadata=dict(meta) if isinstance(meta, Mapping) else None,
+        validator_reply=reply,
+        policy_sha256=None
+        if stored_policy.get("sha256") is None
+        else str(stored_policy.get("sha256")),
+        policy_artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
+        observed_at=str(data.get("observed_at") or ""),
+    )
+    problems.extend(_disagreements(data, derived.record()))
+    if parse_time(derived.observed_at) is None:
+        problems.append(f"observed_at: {derived.observed_at!r} is not an ISO 8601 UTC time")
+    return AttestationRecord(
+        record=data,
+        attestation=derived,
+        inconsistencies=tuple(problems),
+        policy_matches=matches,
+        sha256=hashlib.sha256(raw_bytes).hexdigest(),
+    )
+
+
+def parse_time(text: str) -> datetime | None:
+    """*text* (``observed_at``, ``created``: ``YYYY-MM-DDTHH:MM:SSZ``) as a UTC time, or
+    ``None`` when it is not one."""
+    try:
+        return datetime.strptime(text, TIME_FORMAT).replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_record(
+    source: str | Path | bytes | Mapping[str, Any],
+) -> tuple[str, dict[str, Any], bytes]:
+    """Where the record came from, its parsed JSON and its bytes."""
+    where = "the attestation record"
+    if isinstance(source, Mapping):
+        return where, dict(source), _canonical(source)
+    if isinstance(source, bytes):
+        raw = source
+    else:
+        where = str(source)
+        try:
+            raw = Path(source).read_bytes()
+        except OSError as exc:
+            raise ValidationError(
+                f"Cannot read attestation record {source}: {exc.strerror or exc}.",
+                hint=_RECORD_HINT,
+            ) from exc
+    try:
+        data: object = json.loads(raw)
+    except ValueError as exc:
+        raise ValidationError(f"{where} is not JSON.", hint=_RECORD_HINT) from exc
+    if not isinstance(data, dict):
+        raise ValidationError(f"{where} is not a JSON object.", hint=_RECORD_HINT)
+    return where, data, raw
+
+
+def _record_hex(data: Mapping[str, Any], key: str, where: str) -> str:
+    text = str(data.get(key) if data.get(key) is not None else "").lower()
+    try:
+        bytes.fromhex(text)
+    except ValueError as exc:
+        raise ValidationError(f"{where}: {key} is not hex.", hint=_RECORD_HINT) from exc
+    return text
+
+
+def _given_policy(
+    policy: str | Path | bytes | Mapping[str, object],
+) -> tuple[dict[str, object], bytes]:
+    """The policy to re-check against, read and checked, and the bytes its sha256 covers."""
+    if isinstance(policy, Mapping):
+        return read_policy(policy), _canonical(policy)
+    raw = policy if isinstance(policy, bytes) else Path(policy).read_bytes()
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ValidationError(
+            "The policy to re-check the attestation against is not JSON.",
+            hint="Pass the file `tundravm measure --export-policy` wrote.",
+        ) from exc
+    return read_policy(parsed if isinstance(parsed, dict) else {}), raw
+
+
+def _recorded_judgement(
+    validator: object,
+) -> tuple[SignatureStatus, str | None, str | None, dict[str, object] | None, list[str]]:
+    """The signature status the recorded *validator* entry gives, why it is invalid, the
+    endpoint, the reply and what is wrong with the entry."""
+    if validator is None:
+        return "unchecked", None, None, None, []
+    if not isinstance(validator, Mapping):
+        return "unchecked", None, None, None, ["validator: not an object"]
+    endpoint = validator.get("endpoint")
+    reply = validator.get("reply")
+    shown = None if endpoint is None else str(endpoint)
+    if not isinstance(reply, Mapping):
+        return "unchecked", None, shown, None, ["validator.reply: the validator's reply is missing"]
+    judged = _judgement(reply)
+    if judged is None:
+        return "unchecked", None, shown, dict(reply), ["validator.reply: it holds no verdict"]
+    return judged[0], judged[1], shown, dict(reply), []
+
+
+_COMPARED = ("platform", "source", "quote_version", "signature_status", "verdict", "reasons")
+
+
+def _disagreements(stored: Mapping[str, Any], derived: Mapping[str, Any]) -> list[str]:
+    """``field: the record says X, re-derived Y`` for each stored field that disagrees."""
+    found: list[str] = []
+
+    def compare(name: str, said: object, got: object) -> None:
+        if said != got:
+            found.append(f"{name}: the record says {_brief(said)}, re-derived {_brief(got)}")
+
+    said_bound = stored.get("report_data") if isinstance(stored.get("report_data"), Mapping) else {}
+    assert isinstance(said_bound, Mapping)
+    for key in ("expected", "actual", "verdict"):
+        got = derived["report_data"][key]
+        compare(f"report_data.{key}", said_bound.get(key), got)
+    for key in _COMPARED:
+        compare(key, stored.get(key), derived[key])
+    said_registers = stored.get("registers") if isinstance(stored.get("registers"), Mapping) else {}
+    assert isinstance(said_registers, Mapping)
+    got_registers = derived["registers"]
+    assert isinstance(got_registers, Mapping)
+    for name in REGISTERS:
+        said = said_registers.get(name) if isinstance(said_registers.get(name), Mapping) else {}
+        assert isinstance(said, Mapping)
+        for key in ("actual", "expected", "verdict"):
+            compare(f"registers.{name}.{key}", said.get(key), got_registers[name][key])
+    said_policy = stored.get("policy") if isinstance(stored.get("policy"), Mapping) else {}
+    assert isinstance(said_policy, Mapping)
+    got_policy = derived["policy"]
+    assert isinstance(got_policy, Mapping)
+    compare("policy.artifact", said_policy.get("artifact"), got_policy["artifact"])
+    return found
+
+
+def _brief(value: object) -> str:
+    text = json.dumps(value, sort_keys=True)
+    return text if len(text) <= 40 else f"{text[:37]}..."
 
 
 # ── transports ───────────────────────────────────────────────────────────
@@ -627,10 +1021,13 @@ def render_attestation(result: Attestation, fmt: str) -> str:
 
 
 __all__ = [
+    "ATTESTATION_SCHEMA",
     "CHECKS_NOTE",
     "REGISTERS",
+    "TRUST_NOTE",
     "VERDICTS",
     "Attestation",
+    "AttestationRecord",
     "Quote",
     "RegisterCheck",
     "SignatureStatus",
@@ -639,6 +1036,8 @@ __all__ = [
     "attest",
     "connect",
     "parse_quote",
+    "parse_time",
+    "read_attestation",
     "render_attestation",
     "report_data_for",
 ]

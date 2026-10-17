@@ -24,16 +24,20 @@ class Diagnostic:
     """One finding: a lint *code*, its *severity* and a one-line *message*.
 
     *subject* names what it is about (a path, unit, user, lockfile section;
-    ``""`` for none). *location* is the variant it is in, ``""`` for the recipe
-    as a whole (the common fragment, the lockfile, the host). *hint* says what
-    to do about it. *context* holds extra ``(key, value)`` facts, sorted by key
-    (a mapping is converted).
+    ``""`` for none). *variant* is the variant it is in, ``""`` for the recipe as a
+    whole (the common fragment, the lockfile, the host). *location* is reserved for
+    the source position it points at, ``file:line`` (``""`` when unknown, which it is
+    for every built-in check: a declaration does not record where it was written);
+    ``lint --format github`` annotates that line. *hint* says what to do about it.
+    *context* holds extra ``(key, value)`` facts, sorted by key (a mapping is
+    converted).
     """
 
     code: str
     severity: Severity
     message: str
     subject: str = ""
+    variant: str = ""
     location: str = ""
     hint: str | None = None
     context: Context = ()
@@ -60,6 +64,7 @@ class Diagnostic:
             "severity": self.severity,
             "message": self.message,
             "subject": self.subject,
+            "variant": self.variant,
             "location": self.location,
             "hint": self.hint,
             "context": dict(self.context),

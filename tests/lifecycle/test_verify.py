@@ -281,8 +281,8 @@ def test_only_the_current_evidence_schema_is_read(tmp_path: Path) -> None:
     directory = found.write(build / "evidence")
     index_path = directory / "evidence.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
-    assert index["schema"] == "tundravm.evidence/2" and "schema_version" not in index
-    index_path.write_text(json.dumps({**index, "schema": "tundravm.evidence/1"}))
+    assert index["schema"] == "tundravm.evidence/3" and "schema_version" not in index
+    index_path.write_text(json.dumps({**index, "schema": "tundravm.evidence/2"}))
     assert _problems(verify_evidence(directory)) == [("fail", "schema-unsupported", "schema")]
     index_path.write_text(json.dumps({**index, "schema_version": 1}))
     assert _problems(verify_evidence(directory)) == [

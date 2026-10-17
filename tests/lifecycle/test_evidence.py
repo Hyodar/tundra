@@ -78,6 +78,7 @@ def test_index_records_every_member_with_its_sha256(tmp_path: Path, epoch: None)
     assert index["created"] == "2023-11-14T22:13:20Z"
     assert index["verdict"] == {
         "artifacts": "simulated",
+        "attested": "none",
         "integrity": "verified",
         "lint": "clean",
         "lock": "current",
@@ -91,6 +92,8 @@ def test_index_records_every_member_with_its_sha256(tmp_path: Path, epoch: None)
         "sbom": "declared",
         "tree": "matches",
     }
+    assert index["attestation"] == {"max_age_seconds": 86400}
+    assert index["variants"]["default"]["attestations"] == []
     assert any("reproducibility of default was not checked" in n for n in found.notes)
     assert any("artifacts are simulated" in n for n in found.notes)
     assert index["tools"]["mkosi"] == "mkosi 26"

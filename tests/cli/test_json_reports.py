@@ -29,7 +29,7 @@ REPORTS: dict[str, tuple[str, ...]] = {
 }
 """One JSON run per verb, from inside a scaffolded, compiled, locked and baked project."""
 
-SCHEMA_VERSIONS = {"evidence": 2, "changes": 2}
+SCHEMA_VERSIONS = {"evidence": 3, "changes": 2, "lint": 2, "explore": 2}
 """Verbs whose report schema moved past version 1."""
 
 COVERED_ELSEWHERE = {"attest": "tests/cli/test_attest.py::test_cli_attest_json_and_markdown"}
@@ -96,6 +96,10 @@ def _error_line(err: str) -> dict[str, object]:
         ("measure", "--build", "nowhere", "--format", "json"),  # an artifact verb
         ("status", "--variant", "nope", "--format", "json"),  # a report verb
         ("evidence", "--build", "nowhere", "--format", "json"),  # an evidence verb
+        ("verify", "nowhere", "--format", "json"),
+        ("explore", "--variant", "nope", "--format", "json"),
+        ("sbom", "--build", "nowhere"),  # spdx-json, the default, is machine-readable
+        ("sbom", "--build", "nowhere", "--format", "cyclonedx-json"),
     ],
 )
 def test_an_sdk_error_under_json_is_one_json_line(
@@ -138,6 +142,8 @@ def test_without_json_the_error_stays_a_text_block(
     capsys.readouterr()
     assert run_main("lint", "--variant", "nope")[0] == EXIT_SDK_ERROR
     assert capsys.readouterr().err.startswith("error [E_VALIDATION]: Unknown variant(s): nope.")
+    assert run_main("sbom", "--build", "nowhere", "--format", "text")[0] == EXIT_SDK_ERROR
+    assert capsys.readouterr().err.startswith("error [E_")
 
 
 SECRET_RECIPE = """\
@@ -162,12 +168,12 @@ def test_a_compiler_rule_hint_reaches_lint_and_its_json(
     (tmp_path / "leaky.py").write_text(SECRET_RECIPE, encoding="utf-8")
     recipe = load_file(tmp_path / "leaky.py").recipe
     (found,) = [d for d in lint(recipe) if d.code == "secret-in-file"]
-    assert (found.severity, found.location, found.subject) == ("error", "default", "/etc/app.conf")
+    assert (found.severity, found.variant, found.subject) == ("error", "default", "/etc/app.conf")
     assert found.hint == SECRET_HINT
     code, out = run_main("lint", "leaky.py", "--format", "json")
     assert code == 1
     payload = json.loads(out)
-    assert payload["schema"] == "tundravm.lint/1"
+    assert payload["schema"] == "tundravm.lint/2"
     (entry,) = [d for d in payload["diagnostics"] if d["code"] == "secret-in-file"]
     assert entry == found.to_dict()
     assert entry["hint"] == SECRET_HINT

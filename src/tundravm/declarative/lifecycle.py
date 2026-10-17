@@ -539,7 +539,7 @@ def check_report(
         elif lock is not None:
             img = replace(img, lock_file=Path(lock))
         checked = _check.check(img, profiles=profiles)
-    checked = sorted(checked, key=lambda d: (d.location, _SEVERITY[d.severity], d.code, d.subject))
+    checked = sorted(checked, key=lambda d: (d.variant, _SEVERITY[d.severity], d.code, d.subject))
     found.extend(d for d in checked if d not in found)
     return found
 

@@ -17,7 +17,7 @@ in :mod:`tundravm.declarative.utils`.
 
 __version__ = "0.1.0"
 
-from .attestation import Attestation, attest
+from .attestation import Attestation, attest, read_attestation
 from .changes import ChangeReport, changes
 from .declarative import (
     Artifact,
@@ -203,6 +203,7 @@ __all__ = [
     "lock_status",
     "lower",
     "read_artifacts",
+    "read_attestation",
     "read_lock",
     "release",
     "resolve",

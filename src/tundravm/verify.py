@@ -22,6 +22,7 @@ import posixpath
 import tarfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from string import Template
 from typing import Any, Literal
@@ -40,6 +41,7 @@ from .evidence import (
     _requirements,
     _table,
     _verdict,
+    attestation_entry,
     bake_simulated,
     coverage,
     lint_entry,
@@ -258,6 +260,7 @@ def verify_evidence(
     require: Sequence[str] = (),
     allowed_signers: Path | None = None,
     signer: str | None = None,
+    max_age: float | timedelta | None = None,
 ) -> EvidenceVerification:
     """Check the evidence at *path* (a bundle, the directory, or its ``evidence.json``).
 
@@ -275,6 +278,13 @@ def verify_evidence(
     (``<variant>/<file>``) or by target or file name, re-hashed against the index.
     *require* names checks from :data:`~tundravm.evidence.EVIDENCE_REQUIREMENTS`, as
     ``evidence --require``.
+    Each bundled attestation record is re-derived offline
+    (:func:`~tundravm.read_attestation`) against its variant's bundled policy: the
+    quote parsed again, the nonce binding and register verdicts recomputed, the
+    signature status read from the recorded validator reply (which is trusted as
+    recorded: the quote's signature and collateral cannot be checked offline).
+    ``attested`` judges freshness against the evidence's ``created`` with the
+    ``max_age`` the evidence recorded, or *max_age* (seconds or a ``timedelta``).
     *allowed_signers* (an OpenSSH allowed-signers file) checks ``evidence.json.sig``
     with ``ssh-keygen -Y verify``; *signer* is the principal, else the file's
     principals for the signing key are tried. Raises ``ValidationError`` for a path
@@ -333,7 +343,7 @@ def verify_evidence(
     else:
         message = "artifacts were not re-hashed: pass --build DIR"
         notes.append({"code": "artifacts-unchecked", "message": message})
-    checks.extend(_verdict_checks(index, derived, required))
+    checks.extend(_verdict_checks(index, derived, required, max_age))
     order = {kind: n for n, kind in enumerate(CHECK_KINDS)}
     ordered = sorted(checks, key=lambda c: order[c.kind])
     return EvidenceVerification(
@@ -444,6 +454,8 @@ def core_members(index: Mapping[str, Any]) -> dict[str, str]:
         policy = record.get("policy")
         if policy is not None:
             found[str(policy["member"])] = f"variants.{name}.policy.member"
+        for n, entry in enumerate(record.get("attestations") or []):
+            found[str(entry["member"])] = f"variants.{name}.attestations.{n}.member"
         if record.get("tree"):
             found[str(record["tree"])] = f"variants.{name}.tree"
     return found
@@ -573,6 +585,7 @@ def _index_checks(
             if isinstance(row, dict)
         }
         checks.extend(_policy_check(name, record, measured, present, derived))
+        checks.extend(_attestation_checks(name, record, present, derived))
         covered = coverage(list(measured.values()), derived["variants"][name].get("policy"))
         source = "the policy and bake-result.json"
         checks.extend(_facts(f"variants.{name}", record, {"coverage": covered}, source))
@@ -748,6 +761,40 @@ def _policy_check(
     return _facts(subject, policy, facts, member)
 
 
+def _attestation_checks(
+    name: str, record: Mapping[str, Any], present: Mapping[str, bytes], derived: dict[str, Any]
+) -> list[VerifyCheck]:
+    """Each bundled attestation record re-derived offline against the variant's bundled
+    policy, and bound to an artifact the variant holds; a member that failed is not read."""
+    entries = record.get("attestations")
+    if not isinstance(entries, list):
+        return []
+    policy = derived["variants"][name].get("policy")
+    valid = isinstance(policy, dict) and policy.get("valid")
+    bundled = present.get(str(policy.get("member"))) if valid and policy else None
+    held = {
+        row.get("sha256")
+        for row in derived["variants"][name].get("artifacts", [])
+        if isinstance(row, dict)
+    }
+    checks: list[VerifyCheck] = []
+    for n, entry in enumerate(entries):
+        member = str(entry.get("member"))
+        data = present.get(member)
+        if data is None:
+            continue
+        facts = {k: v for k, v in attestation_entry(member, data, bundled).items() if k != "member"}
+        checks.extend(_facts(f"variants.{name}.attestations.{n}", entry, facts, member))
+        derived["variants"][name]["attestations"][n] = {**entry, **facts}
+        if facts["artifact_sha256"] not in held:
+            message = (
+                f"attests artifact sha256 {_shown(facts['artifact_sha256'])}, which variant "
+                f"{name} does not hold"
+            )
+            checks.append(_inconsistent(member, message))
+    return checks
+
+
 def _tree_check(
     name: str,
     record: Mapping[str, Any],
@@ -880,17 +927,24 @@ def _file_sha256(path: Path) -> str:
 
 
 def _verdict_checks(
-    index: Mapping[str, Any], derived: Mapping[str, Any], required: Sequence[str]
+    index: Mapping[str, Any],
+    derived: Mapping[str, Any],
+    required: Sequence[str],
+    max_age: float | timedelta | None = None,
 ) -> list[VerifyCheck]:
     """The stored verdict against one recomputed from the facts *derived* from the members
     (the index's own where no member records them), then the verdict those facts give
-    under the recorded and the given requirements."""
+    under the recorded and the given requirements (and *max_age*, when given)."""
     stored = index.get("verdict")
     recorded_required = stored.get("required", []) if isinstance(stored, dict) else []
+    judged = derived
+    if max_age is not None:
+        seconds = max_age.total_seconds() if isinstance(max_age, timedelta) else max_age
+        judged = {**derived, "attestation": {"max_age_seconds": int(seconds)}}
     try:
         recomputed = _verdict(derived, tuple(recorded_required), [])
         wanted = _requirements(tuple(dict.fromkeys([*recorded_required, *required])))
-        demanded = _verdict(derived, wanted, [])
+        demanded = _verdict(judged, wanted, [])
     except (KeyError, TypeError, AttributeError, ValidationError) as exc:
         message = f"the recorded facts do not give a verdict: {exc!r}"
         return [_check("verdict", None, "fail", message, "index-inconsistent")]

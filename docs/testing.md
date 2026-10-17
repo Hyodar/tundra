@@ -11,11 +11,11 @@ from tundravm.testing import assert_clean, assert_diagnostic, assert_tree, compi
 
 ```python
 assert_clean(diagnostics, /, *, variants=None, allow=(), strict=None) -> diagnostics
-assert_diagnostic(diagnostics, code, /, *, severity=None, location=None, subject=None, variants=None) -> Diagnostic
+assert_diagnostic(diagnostics, code, /, *, severity=None, variant=None, subject=None, location=None, variants=None) -> Diagnostic
 ```
 
 - `assert_clean(lint(recipe))` fails listing every error and warning whose code is not in `allow`. For a list of diagnostics `strict` defaults to true (warnings fail); pass `strict=False` to fail on errors only.
-- `assert_diagnostic(lint(recipe), "disk-key-undefined", location="default")` returns the first diagnostic matching every field you give, or fails naming the fields it wanted (`no diagnostic with code='disk-key-undefined', severity='error', location='default'; found:`) and listing what was found. `severity` and `location` replace the old `level=`, `variant=` and `profile=` keywords. `location` is the variant, `""` for the recipe as a whole (the common fragment, the lockfile, the host).
+- `assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default")` returns the first diagnostic matching every field you give, or fails naming the fields it wanted (`no diagnostic with code='disk-key-undefined', severity='error', variant='default'; found:`) and listing what was found. `severity` replaces the old `level=` keyword. `variant` is the variant, `""` for the recipe as a whole (the common fragment, the lockfile, the host); `location` matches a finding's source position (`file:line`).
 - Both also accept a `Recipe` and lint it for you (then `strict` defaults to false, and `variants=` limits the variants linted).
 
 ```python
@@ -26,7 +26,7 @@ from tundravm.testing import assert_diagnostic
 def test_disk_without_its_key():
     disk = Disk("data", mount="/data", key=Key("data"))
     recipe = Recipe(name="t", common=Fragment("t", items=(disk,)))
-    found = assert_diagnostic(lint(recipe), "disk-key-undefined", location="default", subject="data")
+    found = assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default", subject="data")
     assert found.severity == "error"
 ```
 
@@ -174,7 +174,7 @@ def test_a_changed_artifact_fails_review(tmp_path):
 
 def test_a_baked_key_is_refused():
     found = lint(image(File("/etc/app/deploy.key", KEY)))
-    assert_diagnostic(found, "secret-in-file", location="default", subject="/etc/app/deploy.key")
+    assert_diagnostic(found, "secret-in-file", variant="default", subject="/etc/app/deploy.key")
 
 
 def test_allow_secret_exempts_a_lookalike():

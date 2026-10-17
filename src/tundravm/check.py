@@ -206,7 +206,7 @@ def _rule_service_user_missing(
             code="service-user-missing",
             message=f"service {svc.name!r} runs as user {user!r}, which is never created",
             hint=hint,
-            location=profile_name,
+            variant=profile_name,
             subject=svc.name,
         )
 
@@ -233,7 +233,7 @@ def _rule_user_group_undefined(
                     f"{profile_name!r}, or drop it from groups=; useradd fails on an "
                     "unknown group."
                 ),
-                location=profile_name,
+                variant=profile_name,
                 subject=user.name,
             )
 
@@ -265,7 +265,7 @@ def _rule_file_path_duplicate(
                     "Keep a single declaration. If two fragments write this path, drop "
                     "one of them or merge the content into one File."
                 ),
-                location=profile_name,
+                variant=profile_name,
                 subject=path,
             )
 
@@ -285,7 +285,7 @@ def _rule_file_path_relative(
                 code="file-path-relative",
                 message=f"{kind} path contains '..' and may escape the image root",
                 hint=f"Write the normalized absolute path instead, e.g. {_norm(path)!r}.",
-                location=profile_name,
+                variant=profile_name,
                 subject=path,
             )
 
@@ -320,7 +320,7 @@ def _rule_service_command_not_shipped(
                 f"fires when the variant installs no packages and no file or hook mentions "
                 f"{name!r}; ignore it if the base image already has the binary."
             ),
-            location=profile_name,
+            variant=profile_name,
             subject=svc.name,
         )
 
@@ -369,7 +369,7 @@ def _rule_variant_empty(
         code="variant-empty",
         message=message,
         hint=hint,
-        location=profile_name,
+        variant=profile_name,
     )
 
 
@@ -394,7 +394,7 @@ def _rule_init_priority_collision(
                 "Give each step its own priority with Init(name, script, priority=N) "
                 "(lower runs first) so boot order does not depend on declaration order."
             ),
-            location=profile_name,
+            variant=profile_name,
             subject=f"priority {priority}",
         )
 
@@ -425,7 +425,7 @@ def _rule_debloat_removes_needed_unit(
                     f"Add it to Debloat(keep_units_extra=({unit!r},)) so the "
                     "systemd minimization keeps it."
                 ),
-                location=profile_name,
+                variant=profile_name,
                 subject=svc.name,
             )
         for dep in (*svc.requires, *svc.wants):
@@ -439,7 +439,7 @@ def _rule_debloat_removes_needed_unit(
                     f"Add it to Debloat(keep_units_extra=({dep!r},)), or drop "
                     "the dependency; a Requires= on a masked unit stops the service."
                 ),
-                location=profile_name,
+                variant=profile_name,
                 subject=svc.name,
             )
 
@@ -462,7 +462,7 @@ def _rule_debloat_removes_declared_file(
                         f"Add {pattern!r} to Debloat(keep_paths=(...)) or move the file "
                         "outside the removed path."
                     ),
-                    location=profile_name,
+                    variant=profile_name,
                     subject=path,
                 )
                 break
@@ -486,7 +486,7 @@ def _rule_source_unpinned(
             code="source-unpinned",
             message=message,
             hint=hint,
-            location=profile_name,
+            variant=profile_name,
             subject=spec.name,
         )
 
@@ -552,7 +552,7 @@ def _rule_kernel_missing(
             'Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a '
             "non-bootable image."
         ),
-        location=profile_name,
+        variant=profile_name,
     )
 
 
@@ -576,7 +576,7 @@ def _rule_recipe_arch_unsupported(
                 "EfiStub downloads systemd-boot-efi_<version>_amd64.deb only: drop EfiStub "
                 "from aarch64 recipes, or build for x86_64."
             ),
-            location=profile_name,
+            variant=profile_name,
             subject="EfiStub",
         )
     if "qemu" in state.output_targets:
@@ -591,7 +591,7 @@ def _rule_recipe_arch_unsupported(
                 "The qemu adapter runs qemu-system-x86_64 only, and TDX guests are x86-64: "
                 "set Recipe(arch='x86_64')."
             ),
-            location=profile_name,
+            variant=profile_name,
             subject="qemu",
         )
 
@@ -638,7 +638,7 @@ def _rule_secret_in_file(
                 code="secret-in-file",
                 message=_secret_message("the file", findings),
                 hint=SECRET_HINT,
-                location=profile_name,
+                variant=profile_name,
                 subject=path,
             )
 
@@ -698,7 +698,7 @@ def _rule_secret_in_env(
                 code="secret-in-env",
                 message=_secret_message(f"service {name!r}", found),
                 hint=SECRET_HINT,
-                location=profile_name,
+                variant=profile_name,
                 subject=name,
             )
     for path, content in _shipped_files(state):
@@ -711,7 +711,7 @@ def _rule_secret_in_env(
                 code="secret-in-env",
                 message=_secret_message("the unit file", findings),
                 hint=SECRET_HINT,
-                location=profile_name,
+                variant=profile_name,
                 subject=path,
             )
 
@@ -743,7 +743,7 @@ RULES: list[Rule] = [
 
 
 def _sort_key(d: Diagnostic) -> tuple[str, int, str, str, str]:
-    return (d.location, _SEVERITY[d.severity], d.code, d.subject or "", d.message)
+    return (d.variant, _SEVERITY[d.severity], d.code, d.subject or "", d.message)
 
 
 def check(image: Lowered, *, profiles: Sequence[str] | None = None) -> list[Diagnostic]:
@@ -769,9 +769,13 @@ def _plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
+_SOURCE_LINE = re.compile(r"(?P<file>.+):(?P<line>[0-9]+)")
+"""A ``Diagnostic.location`` naming a source line: ``file:line``."""
+
+
 def _where(d: Diagnostic) -> str:
-    """*d*'s location as the reports show it: the variant, ``common`` for the whole recipe."""
-    return d.location or "common"
+    """*d*'s variant as the reports show it: ``common`` for the whole recipe."""
+    return d.variant or "common"
 
 
 def render(diagnostics: Sequence[Diagnostic]) -> str:
@@ -782,6 +786,8 @@ def render(diagnostics: Sequence[Diagnostic]) -> str:
     for d in diagnostics:
         subject = f" {d.subject}" if d.subject else ""
         lines.append(f"{d.severity} {d.code} [{_where(d)}]{subject}: {d.message}")
+        if d.location:
+            lines.append(f"    at: {d.location}")
         if d.hint:
             lines.append(f"    hint: {d.hint}")
     lines.append(render_summary(diagnostics))
@@ -808,8 +814,9 @@ def render_github(
     """GitHub workflow commands, one ``::error``/``::warning``/``::notice`` per finding.
 
     Each line is ``::error file=RECIPE,title=<code>::[variant] subject: message (hint)``,
-    so findings show inline on the pull request. With *strict*, warnings (which fail
-    the run) are reported as errors. A plain summary line follows.
+    so findings show inline on the pull request; a finding whose ``location`` is
+    ``file:line`` is annotated at that file and line instead. With *strict*, warnings
+    (which fail the run) are reported as errors. A plain summary line follows.
     """
     if not diagnostics:
         return "no findings"
@@ -822,7 +829,13 @@ def render_github(
         subject = f" {d.subject}" if d.subject else ""
         hint = f" ({d.hint})" if d.hint else ""
         message = f"[{_where(d)}]{subject}: {d.message}{hint}"
-        lines.append(workflow_command(command, message, file=path, title=d.code))
+        where = _SOURCE_LINE.fullmatch(d.location)
+        if where is None:
+            lines.append(workflow_command(command, message, file=path, title=d.code))
+        else:
+            source = annotation_path(where["file"])
+            line = where["line"]
+            lines.append(workflow_command(command, message, file=source, line=line, title=d.code))
     lines.append(render_summary(diagnostics))
     return "\n".join(lines)
 
@@ -831,18 +844,21 @@ def render_markdown(diagnostics: Sequence[Diagnostic]) -> str:
     """A Markdown table of findings followed by the summary line in bold."""
     if not diagnostics:
         return "**No findings.**"
+    located = any(d.location for d in diagnostics)
     rows = [
         (
             md_cell(d.severity),
             md_cell(d.code, code=True),
             md_cell(_where(d), code=True),
+            *((md_cell(d.location, code=True),) if located else ()),
             md_cell(d.subject, code=True),
             md_cell(d.message),
             md_cell(d.hint),
         )
         for d in diagnostics
     ]
-    table = md_table(("Severity", "Code", "Location", "Subject", "Message", "Hint"), rows)
+    header = ("Severity", "Code", "Variant", *(("Location",) if located else ()), "Subject")
+    table = md_table((*header, "Message", "Hint"), rows)
     return f"{table}\n\n**{render_summary(diagnostics)}**"
 
 

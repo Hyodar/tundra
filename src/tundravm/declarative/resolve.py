@@ -138,7 +138,7 @@ class _Resolution:
         severity: Severity = "error",
     ) -> None:
         self.diagnostics.append(
-            Diagnostic(code, severity, message, subject=subject, location=self.variant)
+            Diagnostic(code, severity, message, subject=subject, variant=self.variant)
         )
 
     def expand(self, fragment: Fragment) -> list[tuple[Declaration, tuple[FragmentRef, ...]]]:
@@ -497,7 +497,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 )
         for check in fragment.checks:
             for diagnostic in check(resolved):
-                found = diagnostic if diagnostic.location else replace(diagnostic, location=name)
+                found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
                 state.diagnostics.append(found)
     return resolved, state
 

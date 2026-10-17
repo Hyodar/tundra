@@ -209,7 +209,7 @@ def test_cli_writes_the_page_into_the_build_directory(
     code, out = run_main("explore", str(path), "--variant", "dev", "--format", "json")
     assert code == EXIT_OK
     data = json.loads(out)
-    assert data["schema"] == "tundravm.explore/1"
+    assert data["schema"] == "tundravm.explore/2"
     assert [v["name"] for v in data["variants"]] == ["dev"]
     assert data["bake"]["artifacts"][0]["sha256"] == digest
 

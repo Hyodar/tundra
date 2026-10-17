@@ -12,9 +12,10 @@ runs lint, compile and lock checks in one go; ``watch`` re-runs lint and the
 tree check whenever the recipe changes; ``status`` reports where the project
 stands and ``clean`` removes build output; ``completion`` prints a shell
 completion script. With no arguments the help and a quickstart are printed.
-Every ``--format json`` report carries ``"schema": "tundravm.<verb>/1"``.
-Exit codes: 0 success, 2 SDK error (``E_*`` codes; under ``--format json``
-one ``tundravm.error/1`` JSON line on stderr) or a usage error (unknown verbs
+Every ``--format json`` report carries ``"schema": "tundravm.<verb>/N"``.
+Exit codes: 0 success, 2 SDK error (``E_*`` codes; under every machine-readable
+format, ``--format json`` and sbom's ``spdx-json``/``cyclonedx-json``, one
+``tundravm.error/1`` JSON line on stderr) or a usage error (unknown verbs
 and flags get a "did you mean"), 1 for a failed check (``lint``, ``compile
 --check``, ``lock --check``, ``diff``, ``ci``, ``doctor``, an untrusted
 ``attest``, a failing ``evidence``, a failing ``verify``) or an unexpected
@@ -101,11 +102,13 @@ from .diagnostics import Diagnostic
 from .diff import _wants_color, cmd_diff, diff_against
 from .errors import LockfileError, ReproducibilityError, StateError, TdxError, ValidationError
 from .evidence import (
+    DEFAULT_MAX_AGE,
     EVIDENCE_FORMATS,
     EVIDENCE_REQUIREMENTS,
     INDEX_NAME,
     SIGNATURE_NAME,
     evidence,
+    parse_duration,
 )
 from .explain import (
     describe,
@@ -227,9 +230,15 @@ def main(
         return 130
 
 
+REPORT_VERSIONS = {"lint": 2}
+"""Verbs whose ``--format json`` report moved past version 1: lint's diagnostics carry
+``variant`` beside ``location``."""
+
+
 def schema(verb: str) -> str:
-    """The ``schema`` key of *verb*'s ``--format json`` report: ``tundravm.<verb>/1``."""
-    return f"tundravm.{verb}/1"
+    """The ``schema`` key of *verb*'s ``--format json`` report: ``tundravm.<verb>/1`` (or the
+    version :data:`REPORT_VERSIONS` names)."""
+    return f"tundravm.{verb}/{REPORT_VERSIONS.get(verb, 1)}"
 
 
 ERROR_SCHEMA = schema("error")
@@ -253,8 +262,11 @@ def json_report(verb: str, payload: Mapping[str, object] | str) -> str:
 
 
 def _wants_json(args: argparse.Namespace) -> bool:
-    """Whether the command was asked for JSON (``--format json``)."""
-    return getattr(args, "format", None) == "json"
+    """Whether the command prints a machine-readable format (``--format json``, and sbom's
+    ``spdx-json`` and ``cyclonedx-json``): its SDK errors are then one ``tundravm.error/1``
+    JSON line on stderr."""
+    fmt = getattr(args, "format", None)
+    return isinstance(fmt, str) and (fmt == "json" or fmt.endswith("-json"))
 
 
 def _parse(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse.Namespace:
@@ -1140,6 +1152,18 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         help="Exit 0 for a simulator issuer whose measurements match (verdict: simulated).",
     )
     attest_cmd.add_argument(
+        "--record",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Also keep the attestation as a tundravm.attestation/1 record in FILE: the "
+            "document as received, nonce, report_data, registers, the policy's sha256 and "
+            "artifact, the validator's whole reply, the verdict and observed_at. "
+            "`evidence --attestation FILE` bundles it and `verify` re-derives it offline."
+        ),
+    )
+    attest_cmd.add_argument(
         "--format",
         choices=("text", "json", "markdown"),
         default="text",
@@ -1292,6 +1316,7 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
             "instead of failing with E_ARTIFACT_CHANGED; the verdict is incomplete."
         ),
     )
+    _add_attestation_options(cmd)
     cmd.add_argument(
         "--sign",
         type=Path,
@@ -1302,6 +1327,39 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
             "tundravm-evidence) and write evidence.json.sig beside it and into --bundle."
         ),
     )
+
+
+def _add_attestation_options(cmd: argparse.ArgumentParser) -> None:
+    """``--attestation FILE`` (repeatable) and ``--max-age DURATION``, for evidence and release."""
+    cmd.add_argument(
+        "--attestation",
+        type=Path,
+        action="append",
+        default=None,
+        metavar="FILE",
+        help=(
+            "Bundle this record from `attest --record FILE` (repeatable) as "
+            "variants/<variant>/attestation-<n>.json of the variant holding the artifact its "
+            "policy measured; it is re-derived against that variant's policy."
+        ),
+    )
+    cmd.add_argument(
+        "--max-age",
+        type=_duration,
+        default=None,
+        metavar="DURATION",
+        help=(
+            "For --require attested: how far a record's observed_at may be from the "
+            "evidence's creation (45s, 30m, 24h, 7d; default 24h)."
+        ),
+    )
+
+
+def _duration(value: str) -> int:
+    try:
+        return parse_duration(value)
+    except ValidationError as exc:
+        raise argparse.ArgumentTypeError(f"{exc.args[0]} {exc.hint}") from exc
 
 
 def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1442,7 +1500,8 @@ def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         + (
             f"Until the release passes, its directory holds {STATE_NAME}: the release's "
             "specification (variants, --require, the signing key, --since, the backend's "
-            "settings, the build directory) and each completed stage with the sha256 of its "
+            "settings, the build directory, --attestation records and --max-age) and each "
+            "completed stage with the sha256 of its "
             "inputs and outputs. Running it again resumes and inherits every option it "
             "omits; a different one fails with E_STATE unless --change-spec is given. "
             "Stages whose inputs and outputs are unchanged are kept, the first stage whose "
@@ -1492,7 +1551,8 @@ def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         help=(
             f"Let a resumed release change what it started with ({STATE_NAME}'s spec: "
             "--variant, --require, --sign/--no-sign, --since, --allow-ineligible, the "
-            "backend's settings, --build); recorded in release.json's spec_history."
+            "backend's settings, --build, --attestation, --max-age); recorded in "
+            "release.json's spec_history."
         ),
     )
     cmd.add_argument(
@@ -1510,6 +1570,7 @@ def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
             "since (default: the newest finished release of the recipe in RELEASES)."
         ),
     )
+    _add_attestation_options(cmd)
     cmd.add_argument(
         "--releases",
         type=Path,
@@ -2471,6 +2532,8 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
     )
     report = render_attestation(result, args.format)
     print(json_report("attest", report) if args.format == "json" else report, file=out)
+    if args.record is not None:
+        print(f"wrote {result.save(args.record)}", file=sys.stderr)
     return EXIT_OK if result.passed else EXIT_FAILURE
 
 
@@ -2531,6 +2594,8 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
         runner=args.runner,
         require=args.require,
         allow_unbound=args.allow_unbound,
+        attestations=args.attestation or (),
+        max_age=DEFAULT_MAX_AGE if args.max_age is None else args.max_age,
     )
     if args.sign is not None:
         found = found.sign(args.sign)
@@ -2640,7 +2705,7 @@ def _add_explore(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         default="html",
         help=(
             "html (default) writes the page and prints its path; json prints the same "
-            "model (to FILE with --output) with schema tundravm.explore/1."
+            "model (to FILE with --output) with schema tundravm.explore/2."
         ),
     )
 
@@ -2704,6 +2769,8 @@ def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
             allow_ineligible=args.allow_ineligible,
             recipe_path=args.recipe,
             progress=lambda line: print(line, file=stages, flush=True),
+            attestations=args.attestation,
+            max_age=args.max_age,
         )
     except TdxError as exc:
         if blocked or "changed" in exc.context:  # finished, not a release, or a refused spec
@@ -2737,6 +2804,10 @@ def _release_command(args: argparse.Namespace) -> str:
     ):
         if value is not None:
             words += [flag, str(value)]
+    for path in args.attestation or ():
+        words += ["--attestation", str(path)]
+    if args.max_age is not None:
+        words += ["--max-age", f"{args.max_age}s"]
     for flag, given in (("--no-sign", args.no_sign), ("--allow-ineligible", args.allow_ineligible)):
         if given:
             words.append(flag)

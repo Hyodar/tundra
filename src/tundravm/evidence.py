@@ -23,14 +23,15 @@ import os
 import platform
 import tarfile
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from string import Template
 from typing import Any, Literal
 
 from . import _ssh_sig
+from .attestation import parse_time, read_attestation
 from .backends.base import Requirement
 from .declarative._lowered import Lowered
 from .declarative.bom import manifest_path, sbom
@@ -67,7 +68,7 @@ from .models import BAKE_RESULT_FILENAME
 INDEX_NAME = "evidence.json"
 SIGNATURE_NAME = "evidence.json.sig"
 """The SSH signature of ``evidence.json`` (``ssh-keygen -Y sign -n tundravm-evidence``)."""
-EVIDENCE_SCHEMA = "tundravm.evidence/2"
+EVIDENCE_SCHEMA = "tundravm.evidence/3"
 """The ``schema`` of ``evidence.json``, which ``evidence --format json`` prints verbatim: the one
 identifier of the index's structure, which ``verify`` reads and refuses any other of."""
 TREE_SCHEMA = "tundravm.tree/1"
@@ -76,18 +77,23 @@ BUNDLE_ROOT = "evidence"
 """The top-level directory every member of a bundle sits under."""
 EvidenceFormat = Literal["text", "json"]
 EVIDENCE_FORMATS: tuple[EvidenceFormat, ...] = ("text", "json")
-EvidenceRequirement = Literal["reproducible", "measured", "real", "lock", "installed"]
+EvidenceRequirement = Literal["reproducible", "measured", "real", "lock", "installed", "attested"]
 EVIDENCE_REQUIREMENTS: tuple[EvidenceRequirement, ...] = (
     "reproducible",
     "measured",
     "real",
     "lock",
     "installed",
+    "attested",
 )
 """What ``require=`` (``evidence --require``) can demand; a missing one makes the verdict
 ``incomplete`` instead of a note: a recorded ``matched`` second build, a valid measurements
-policy bound to each artifact, real (not simulated) artifacts, a lockfile, and an SBOM with
-the installed inventory (mkosi's manifest) for each artifact."""
+policy bound to each artifact, real (not simulated) artifacts, a lockfile, an SBOM with
+the installed inventory (mkosi's manifest) for each artifact, and for each artifact a
+policy measures a ``trusted``, fresh attestation record checked against that policy."""
+DEFAULT_MAX_AGE = 24 * 3600
+"""How far (seconds) an attestation record's ``observed_at`` may be from the evidence's
+``created`` for ``attested``: a day."""
 _MKOSI = Requirement(
     tool="mkosi",
     probe=("mkosi", "--version"),
@@ -210,6 +216,8 @@ def evidence(
     runner: ProbeRunner | None = None,
     require: Sequence[str] = (),
     allow_unbound: bool = False,
+    attestations: Sequence[str | Path] = (),
+    max_age: float | timedelta = DEFAULT_MAX_AGE,
 ) -> Evidence:
     """The evidence of the bake in the build directory *build* for *variants* (default: all baked).
 
@@ -230,8 +238,25 @@ def evidence(
     SBOM is bound the same way (:func:`~tundravm.declarative.bom.sbom`), else
     ``ArtifactError``; *allow_unbound* includes them with a note and makes the
     verdict ``incomplete``.
+
+    *attestations* are ``tundravm.attestation/1`` records (``attest --record``), each
+    bundled verbatim as ``variants/<variant>/attestation-<n>.json`` of the variant
+    holding the artifact its policy measured (``ValidationError`` when no selected
+    variant holds it) and re-derived against that variant's policy
+    (:func:`~tundravm.read_attestation`). ``attested`` is satisfied when every artifact a
+    valid policy measures has a record whose re-derived verdict is ``trusted``, whose
+    policy is that policy (its sha256) and whose ``observed_at`` is within *max_age*
+    (seconds, or a ``timedelta``; default a day) of the evidence's ``created``. A
+    record that disagrees with its own document fails the evidence
+    (``attestation-inconsistent``).
     """
     required = _requirements(require)
+    window = int(max_age.total_seconds() if isinstance(max_age, timedelta) else max_age)
+    if window <= 0:
+        raise ValidationError(
+            f"max_age must be a positive duration, got {max_age!r}.",
+            hint="Pass --max-age as a duration such as 24h, 30m or 7d.",
+        )
     recipe = lowered_or_recipe if isinstance(lowered_or_recipe, Recipe) else None
     img = lower(recipe) if recipe is not None else lowered_or_recipe
     assert isinstance(img, Lowered)
@@ -310,6 +335,7 @@ def evidence(
             notes.append(
                 f"{name} tree.json: left out, the recipe does not compile the bake's variants"
             )
+    _bundle_attestations(attestations, records, members)
     if recipe is None:
         notes.append("no recipe given (a lowered recipe): the provenance summary is left out")
     index: dict[str, Any] = {
@@ -325,6 +351,7 @@ def evidence(
         "lockfile": lock_entry,
         "lint": lint_entry(lint_rows),
         "tools": _tools(runner, notes),
+        "attestation": {"max_age_seconds": window},
         "variants": records,
     }
     index["verdict"] = _verdict(index, required, notes)
@@ -742,6 +769,72 @@ def coverage(
     return found
 
 
+def _bundle_attestations(
+    paths: Sequence[str | Path], records: dict[str, dict[str, Any]], members: dict[str, bytes]
+) -> None:
+    """Bundle each record of *paths* into the variant holding the artifact it attests."""
+    counts: Counter[str] = Counter()
+    for record in records.values():
+        record["attestations"] = []
+    for path in paths:
+        source = Path(path)
+        found = read_attestation(source)
+        sha = found.artifact_sha256
+        name = next(
+            (
+                variant
+                for variant, record in records.items()
+                if sha and sha in {row["sha256"] for row in record["artifacts"]}
+            ),
+            None,
+        )
+        if name is None:
+            raise ValidationError(
+                f"Attestation record {source} attests artifact sha256 {str(sha)[:12]}, which no "
+                "selected variant of this bake holds.",
+                hint="Attest the image this bake built, with its policy (`tundravm attest "
+                "--policy BUILD/<variant>/policy.json --record FILE`), or select the variant "
+                "it belongs to (--variant).",
+                context={"attestation": str(source)},
+            )
+        counts[name] += 1
+        member = f"variants/{name}/attestation-{counts[name]}.json"
+        members[member] = source.read_bytes()
+        policy = records[name]["policy"]
+        bundled = members.get(str(policy["member"])) if policy and policy["valid"] else None
+        entry = attestation_entry(member, members[member], bundled)
+        records[name]["attestations"].append({**entry, "source": str(source)})
+
+
+def attestation_entry(member: str, data: bytes, policy: bytes | None) -> dict[str, Any]:
+    """The index's entry for the bundled attestation record *data*, re-derived offline
+    (:func:`~tundravm.read_attestation`) against *policy*, the bytes of the variant's
+    bundled policy (``None`` without a valid one): ``member``, the re-derived ``verdict``,
+    ``observed_at``, ``policy_sha256``, ``artifact_sha256``, ``policy_matches`` and the
+    ``inconsistencies`` (a record that cannot be read has one, and ``null`` facts)."""
+    try:
+        found = read_attestation(data, policy=policy)
+    except TdxError as exc:
+        return {
+            "member": member,
+            "verdict": None,
+            "observed_at": None,
+            "policy_sha256": None,
+            "artifact_sha256": None,
+            "policy_matches": None,
+            "inconsistencies": [str(exc.args[0]) if exc.args else str(exc)],
+        }
+    return {
+        "member": member,
+        "verdict": found.verdict,
+        "observed_at": found.observed_at,
+        "policy_sha256": found.policy_sha256,
+        "artifact_sha256": found.artifact_sha256,
+        "policy_matches": found.policy_matches,
+        "inconsistencies": list(found.inconsistencies),
+    }
+
+
 def _provenance(recipe: Recipe, variant: str) -> dict[str, dict[str, int]]:
     """How many declarations each fragment holds and each resolution action touched."""
     fragments: Counter[str] = Counter()
@@ -893,6 +986,7 @@ def _verdict(
                 subject = f"{name}/{entry['target']}"
                 message = f"{subject} is not measured: {entry['reason']}"
                 absent("measured", "artifact-unmeasured", subject, message)
+    attested = _attested_reasons(index, policies, required, add, absent)
     covered = [entry["state"] for r in variants.values() for entry in r["coverage"]]
     simulated = [f"{name}/{row['target']}" for name, row in rows if row["simulated"]]
     if simulated:
@@ -930,6 +1024,7 @@ def _verdict(
             (_sbom_state(entry) for record in variants.values() for entry in record["sbom"]),
             _SBOM_ORDER,
         ),
+        "attested": attested,
         "artifacts": "simulated" if simulated else "real",
         "required": list(required),
         "reasons": reasons,
@@ -937,6 +1032,99 @@ def _verdict(
     }
 
 
+def _attested_reasons(
+    index: Mapping[str, Any],
+    policies: Mapping[str, str],
+    required: Sequence[EvidenceRequirement],
+    add: Callable[[str, str, str | None, str], None],
+    absent: Callable[[EvidenceRequirement, str, str | None, str], None],
+) -> str:
+    """The ``attested`` reasons; returns the summary state (``none`` when no artifact has a
+    valid policy and no record is bundled)."""
+    variants: Mapping[str, Any] = index["variants"]
+    window = int((index.get("attestation") or {}).get("max_age_seconds") or DEFAULT_MAX_AGE)
+    created = parse_time(str(index.get("created")))
+    states: list[str] = []
+    for name, record in variants.items():
+        entries = record.get("attestations") or []
+        for entry in entries:
+            if entry["inconsistencies"]:
+                states.append("inconsistent")
+                message = (
+                    f"{entry['member']} disagrees with its own document: "
+                    f"{entry['inconsistencies'][0]}"
+                )
+                add("fail", "attestation-inconsistent", name, message)
+        if policies[name] != "verified" or (not entries and "attested" not in required):
+            continue
+        measures = record["policy"].get("measures") or {}
+        subject = f"{name}/{measures['target']}" if measures.get("target") else name
+        found = [_attestation_state(e, measures.get("sha256"), created, window) for e in entries]
+        best = next((s for s in _ATTESTED_BEST if s in found), "missing")
+        states.append(best)
+        if best in ("trusted", "inconsistent"):
+            continue
+        verdicts = ", ".join(sorted({str(e["verdict"]) for e in entries}))
+        message = {
+            "missing": f"{subject} has no attestation record (evidence --attestation FILE, "
+            "from `tundravm attest --record FILE`)",
+            "policy-mismatch": f"no attestation record of {subject} was checked against its "
+            "bundled policy (another policy sha256 or artifact)",
+            "untrusted": f"no attestation record of {subject} is trusted (verdicts: {verdicts}); "
+            "a trusted one needs `attest --validator`",
+            "stale": f"no trusted attestation record of {subject} was observed within "
+            f"{_duration(window)} of the evidence's creation ({index.get('created')})",
+        }[best]
+        absent("attested", f"attestation-{best}", subject, message)
+    if "attested" in required and "verified" not in policies.values():
+        message = "no artifact has a valid measurements policy an attestation could check"
+        absent("attested", "attestation-missing", None, message)
+        states.append("missing")
+    return _worst(states, _ATTESTED_ORDER) if states else "none"
+
+
+def _attestation_state(
+    entry: Mapping[str, Any], measured: object, created: datetime | None, window: int
+) -> str:
+    """One record: ``inconsistent``, ``policy-mismatch``, ``untrusted``, ``stale`` or
+    ``trusted``, the first that applies."""
+    if entry["inconsistencies"]:
+        return "inconsistent"
+    if entry["artifact_sha256"] != measured or entry["policy_matches"] is not True:
+        return "policy-mismatch"
+    if entry["verdict"] != "trusted":
+        return "untrusted"
+    observed = parse_time(str(entry["observed_at"]))
+    if created is None or observed is None:
+        return "stale"
+    return "stale" if abs((created - observed).total_seconds()) > window else "trusted"
+
+
+def _duration(seconds: int) -> str:
+    """*seconds* as ``--max-age`` would spell it: ``24h``, ``90m``, ``45s``, ``7d``."""
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds % size == 0:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def parse_duration(text: str) -> int:
+    """``--max-age`` *text* (``45s``, ``30m``, ``24h``, ``7d``, or plain seconds) in seconds;
+    ``ValidationError`` unless it is a positive duration."""
+    value = text.strip().lower()
+    size = {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(value[-1:], 1)
+    digits = value[:-1] if value[-1:] in ("s", "m", "h", "d") else value
+    if not digits.isdigit() or int(digits) == 0:
+        raise ValidationError(
+            f"{text!r} is not a positive duration.",
+            hint="Spell it as a number with s, m, h or d: 45s, 30m, 24h, 7d.",
+        )
+    return int(digits) * size
+
+
+_ATTESTED_BEST = ("trusted", "stale", "untrusted", "policy-mismatch", "inconsistent")
+"""A variant's attestation state is that of its best record, in this order."""
+_ATTESTED_ORDER = ("inconsistent", "policy-mismatch", "untrusted", "stale", "missing", "trusted")
 _REPRODUCED_ORDER = ("different", "error", "interrupted", "running", "not checked", "matched")
 _POLICY_ORDER = ("invalid", "placeholder", "mismatch", "unbound", "missing", "verified")
 _SBOM_ORDER = ("material-missing", "unbound", "declared", "installed")
@@ -989,6 +1177,7 @@ def _text(index: Mapping[str, Any]) -> str:
         f"  policy     {verdict['policy']}",
         f"  measured   {verdict['measured']}",
         f"  sbom       {verdict['sbom']}",
+        f"  attested   {verdict['attested']}",
         f"  artifacts  {verdict['artifacts']}",
         f"  lint       {verdict['lint']}",
     ]
@@ -1102,6 +1291,22 @@ def _variant_html(name: str, record: Mapping[str, Any]) -> str:
             [(c["target"], c["sha256"], c["state"], c["reason"]) for c in record["coverage"]],
         )
     )
+    parts.append("<h3>Attestations</h3>")
+    parts.append(
+        _table(
+            ("member", "verdict", "observed at", "policy matches", "inconsistencies"),
+            [
+                (
+                    a["member"],
+                    a["verdict"],
+                    a["observed_at"],
+                    a["policy_matches"],
+                    "; ".join(a["inconsistencies"]) or None,
+                )
+                for a in record.get("attestations") or ()
+            ],
+        )
+    )
     parts.append("<h3>SBOM</h3>")
     parts.append(
         _table(
@@ -1139,6 +1344,7 @@ def render_html(index: Mapping[str, Any]) -> str:
             "policy",
             "measured",
             "sbom",
+            "attested",
         )
     )
     reasons = "".join(
@@ -1172,11 +1378,14 @@ def render_html(index: Mapping[str, Any]) -> str:
 
 
 __all__ = [
+    "DEFAULT_MAX_AGE",
     "EVIDENCE_FORMATS",
     "EVIDENCE_REQUIREMENTS",
     "Evidence",
     "EvidenceFormat",
     "EvidenceRequirement",
+    "attestation_entry",
     "evidence",
+    "parse_duration",
     "render_html",
 ]

@@ -97,7 +97,7 @@ class Metrics(Composite):
         if self.listen.startswith("127.") or not {"azure", "gcp"} & set(resolved.targets):
             return ()
         message = f"prometheus listens on {self.listen} in a cloud image"
-        return (Diagnostic("metrics-exposed", "warning", message, location=resolved.variant),)
+        return (Diagnostic("metrics-exposed", "warning", message, variant=resolved.variant),)
 
 
 recipe = Recipe(

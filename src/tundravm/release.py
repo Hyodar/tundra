@@ -11,7 +11,8 @@ size; signed as ``release-manifest.json.sig`` with the release's key).
 :func:`verify_release` checks such a directory on its own.
 
 Until it is finished the directory holds ``release.state.json``: the release's
-specification (variants, requirements, signing key, since, backend, build directory)
+specification (variants, requirements, signing key, since, backend, build directory,
+attestation records and their maximum age)
 and each stage with the sha256 of its inputs and of its outputs. Running the release
 again inherits every option it omits from that specification, refuses a changed one
 unless ``change_spec`` says so (recorded in ``release.json``), keeps every stage whose
@@ -32,7 +33,7 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -69,7 +70,7 @@ from .errors import (
     TdxError,
     ValidationError,
 )
-from .evidence import _requirements, evidence
+from .evidence import DEFAULT_MAX_AGE, _requirements, evidence
 from .formats import md_cell, md_table
 from .measure.policy import write_policy
 from .models import BAKE_RESULT_FILENAME
@@ -113,6 +114,8 @@ SPEC_KEYS: tuple[str, ...] = (
     "backend",
     "build",
     "allow_ineligible",
+    "attestations",
+    "max_age",
 )
 """What a release's specification holds; a resumed run inherits each key it omits."""
 ReleaseFormat = Literal["text", "json"]
@@ -282,6 +285,8 @@ class _Run:
     since: Path | None
     since_label: str | None
     recipe_path: Path | None
+    attestations: tuple[Path, ...] = ()
+    max_age: int = DEFAULT_MAX_AGE
     spec: dict[str, Any] = field(default_factory=dict)
     history: list[dict[str, Any]] = field(default_factory=list)
     skipped: list[dict[str, str]] = field(default_factory=list)
@@ -320,6 +325,8 @@ def release(
     allow_ineligible: bool = False,
     recipe_path: Path | None = None,
     progress: Callable[[str], None] | None = None,
+    attestations: Sequence[Path] | None = None,
+    max_age: float | timedelta | None = None,
 ) -> Release:
     """Release *variants* of *recipe* as ``releases/<recipe.name>-<version>``.
 
@@ -333,12 +340,19 @@ def release(
     is the previous release (its directory, or an evidence bundle) the changes are
     against; default: the newest finished release of the recipe in *releases*.
     *recipe_path* is recorded in the evidence. *progress* receives one line per stage.
+    *attestations* are ``tundravm.attestation/1`` records (``attest --record``) the
+    evidence bundles, and *max_age* (seconds or a ``timedelta``; default a day) how far
+    their ``observed_at`` may be from the evidence's creation for ``attested``: an image
+    is attested after it is baked, so a release that requires ``attested`` fails until a
+    resumed run gives the records of its artifacts.
 
     The release directory keeps ``release.state.json`` until the release passes, so a
     run that failed or was interrupted resumes. The state holds the specification the
     release started with (:data:`SPEC_KEYS`): a resumed run inherits *variants*,
-    *require*, *sign*, *since* and *allow_ineligible* when they are omitted (``None``,
-    ``False``), and a value that differs from the recorded one, the *backend*'s
+    *require*, *sign*, *since*, *allow_ineligible*, *attestations* and *max_age* when
+    they are omitted (``None``, ``False``; the attestation records must still hash as
+    recorded), the first run that gives *attestations* or *max_age* records them, and
+    a value that differs from the recorded one, the *backend*'s
     settings and the *build* directory included, raises ``StateError`` unless
     *change_spec* is true; *unsigned* drops the signing key (a change too). The change
     is recorded in ``release.json``'s ``spec_history``. Stages whose inputs are
@@ -366,6 +380,8 @@ def release(
         allow_ineligible=allow_ineligible,
         recipe_path=recipe_path,
         progress=progress,
+        attestations=attestations,
+        max_age=max_age,
     )
 
 
@@ -387,6 +403,8 @@ def release_image(
     allow_ineligible: bool = False,
     recipe_path: Path | None = None,
     progress: Callable[[str], None] | None = None,
+    attestations: Sequence[Path] | None = None,
+    max_age: float | timedelta | None = None,
 ) -> Release:
     """:func:`release` for a recipe already lowered as *img*, which carries the backend."""
     if img.backend is None:
@@ -421,6 +439,11 @@ def release_image(
         given["allow_ineligible"] = True
     if since is not None:
         given["since"] = _since(Path(since))
+    if attestations is not None:
+        given["attestations"] = [_attestation(Path(path)) for path in attestations]
+    if max_age is not None:
+        seconds = max_age.total_seconds() if isinstance(max_age, timedelta) else max_age
+        given["max_age"] = int(seconds)
     locked, lock_path, lock_bytes = _lock(img, lock)
     spec, changed = _merge_spec(
         recorded if isinstance(recorded, dict) else None, given, change_spec, name
@@ -430,6 +453,8 @@ def release_image(
     signing = spec["signing"]
     if signing is not None and "signing" not in given:
         _check_inherited_key(signing, name)
+    if "attestations" not in given:
+        _check_inherited_attestations(spec.get("attestations") or (), name)
     _prepare(root, restart=restart)
     state = previous if previous is not None else _fresh_state(name)
     state["spec"] = spec
@@ -458,6 +483,8 @@ def release_image(
         since=None if since_spec is None else Path(since_spec["path"]),
         since_label=None if since_spec is None else str(since_spec["label"]),
         recipe_path=recipe_path,
+        attestations=tuple(Path(row["path"]) for row in spec.get("attestations") or ()),
+        max_age=int(spec.get("max_age") or DEFAULT_MAX_AGE),
         spec=spec,
         history=history,
         skipped=skipped,
@@ -513,6 +540,31 @@ def _since(given: Path) -> dict[str, str]:
     if given.is_dir() and (given / BUNDLE_NAME).is_file():
         return {"path": str(given / BUNDLE_NAME), "label": given.name}
     return {"path": str(given), "label": given.name}
+
+
+def _attestation(path: Path) -> dict[str, str]:
+    """The spec's entry for an attestation record: its absolute path and sha256."""
+    if not path.is_file():
+        raise ValidationError(
+            f"Attestation record {path} does not exist.",
+            hint="Write one with `tundravm attest --policy POLICY --record FILE`.",
+            context={"attestation": str(path)},
+        )
+    return {"path": str(path.resolve()), "sha256": _file_sha256(path)}
+
+
+def _check_inherited_attestations(rows: Sequence[Mapping[str, Any]], name: str) -> None:
+    """Each attestation record the release inherits must still be there, unchanged."""
+    for row in rows:
+        path = Path(str(row.get("path")))
+        if not path.is_file() or _file_sha256(path) != row.get("sha256"):
+            state = "is gone" if not path.is_file() else "has changed"
+            raise StateError(
+                f"Release {name} bundles the attestation record {path}, which {state}.",
+                hint="Restore the record, or pass --change-spec with --attestation FILE "
+                "for each record the release should bundle now.",
+                context={"release": name, "attestation": str(path)},
+            )
 
 
 def _comparable(key: str, value: Any) -> Any:
@@ -889,7 +941,13 @@ def _params(run: _Run, name: str) -> dict[str, Any]:
         file_sha = (
             _file_sha256(recipe_file) if recipe_file is not None and recipe_file.is_file() else None
         )
-        return {"require": list(run.require), "signer": run.public_key, "recipe_file": file_sha}
+        return {
+            "require": list(run.require),
+            "signer": run.public_key,
+            "recipe_file": file_sha,
+            "attestations": [_file_sha256(path) for path in run.attestations],
+            "max_age": run.max_age,
+        }
     if name == "changes":
         since = run.since
         digest = _file_sha256(since) if since is not None and since.is_file() else None
@@ -1048,6 +1106,8 @@ def _stage_evidence(run: _Run) -> _Outcome:
         lock=run.lock_path if run.lock_path is not None else run.locked,
         recipe_path=run.recipe_path,
         require=run.require,
+        attestations=run.attestations,
+        max_age=run.max_age,
     )
     if run.sign is not None:
         found = found.sign(run.sign)
@@ -1056,10 +1116,11 @@ def _stage_evidence(run: _Run) -> _Outcome:
     outputs = {name: _file_sha256(run.root / name) for name in (BUNDLE_NAME, HTML_NAME)}
     reasons = [dict(reason) for reason in found.reasons]
     signed = ", signed" if run.sign is not None else ""
+    attested = f", {len(run.attestations)} attestations" if run.attestations else ""
     facts = {"verdict": found.verdict, "reasons": reasons, "verdicts": _verdicts(found.index)}
     return _Outcome(
         "completed",
-        f"verdict {found.verdict}{signed}",
+        f"verdict {found.verdict}{signed}{attested}",
         outputs=outputs,
         facts=facts,
         verdict=found.verdict,
@@ -1068,7 +1129,8 @@ def _stage_evidence(run: _Run) -> _Outcome:
 
 def _verdicts(index: Mapping[str, Any]) -> dict[str, Any]:
     verdict = index.get("verdict") or {}
-    return {key: verdict.get(key) for key in ("integrity", "lock", "reproducible", "policy")}
+    keys = ("integrity", "lock", "reproducible", "policy", "attested")
+    return {key: verdict.get(key) for key in keys}
 
 
 def _stage_verify(run: _Run) -> _Outcome:

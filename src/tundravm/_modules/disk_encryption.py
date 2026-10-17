@@ -184,7 +184,7 @@ class DiskEncryption(Module):
                         f"Declared keys: {declared}. Declare Key({key_ref!r}, ...) "
                         "in this variant, or fix the Disk's key."
                     ),
-                    location=profile,
+                    variant=profile,
                     subject=disk.name,
                 )
             elif disk.key_path is not None and key.output != disk.key_path:
@@ -200,7 +200,7 @@ class DiskEncryption(Module):
                         f"Set Key({key.name!r}, output={disk.key_path!r}) or point the Disk "
                         "at the key's output."
                     ),
-                    location=profile,
+                    variant=profile,
                     subject=disk.name,
                 )
 
@@ -223,7 +223,7 @@ class DiskEncryption(Module):
                     "format='never' for a disk prepared beforehand; "
                     "Policy(storage_safety='error') makes this an error."
                 ),
-                location=profile,
+                variant=profile,
                 subject=disk.name,
             )
 
