@@ -1,11 +1,11 @@
-"""Helpers for testing recipes and fragments: compile, lint, golden trees, CLI runs.
+"""Helpers for testing recipes and fragments: plans, lint assertions, golden trees, CLI runs.
 
-Every helper takes declarative values: a :class:`~tundravm.Recipe`, the
-:class:`~tundravm.Tree` :func:`tundravm.compile` returns, or the diagnostics
-:func:`tundravm.lint` returns. :func:`compile_tree` writes a recipe's tree to
-disk with readers for the files tests inspect, :func:`assert_clean` and
-:func:`assert_diagnostic` check lint results, :func:`assert_tree` and
-:func:`assert_tree_matches` compare against a golden directory,
+:func:`fragment_plan` puts a fragment on a minimal bootable platform and
+:func:`plan` takes a whole recipe; both return an :class:`Image`, one variant
+compiled in memory and read as values (packages, files, units, users, init
+steps, hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint
+findings, :func:`assert_tree` and :func:`assert_tree_matches` compare against
+a golden directory, :func:`compile_tree` writes a tree to disk,
 :func:`fake_bake` and :func:`bake_in_process` produce simulated artifacts, and
 :func:`fake_fragment` builds a small :class:`~tundravm.Fragment` to compose with.
 
@@ -27,6 +27,7 @@ import textwrap
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path
+from typing import Literal
 
 from tundravm.check import render
 from tundravm.declarative import lifecycle
@@ -56,6 +57,15 @@ from tundravm.declarative.model import (
 from tundravm.diagnostics import Diagnostic, Severity
 from tundravm.diff import TreeDiff, _foreign_profile_globs, diff_trees
 from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
+from tundravm.testing._image import (
+    TEST_PLATFORM,
+    Image,
+    ImageFile,
+    InitStep,
+    fragment_plan,
+    plan,
+)
+from tundravm.testing._units import UnitView
 
 UPDATE_GOLDEN_ENV = "TUNDRAVM_UPDATE_GOLDEN"
 _UNIFIED_LINES = 200
@@ -68,75 +78,70 @@ Variants = str | Sequence[str] | None
 class CompiledTree:
     """A compiled mkosi tree on disk, with readers for the files tests inspect.
 
-    ``profiles`` (alias ``variants``) are the compiled variant directories.
-    Every ``profile`` argument names one of them and defaults to the first.
+    ``variants`` are the compiled variant directories. Every ``variant``
+    argument names one of them and defaults to the first.
     """
 
-    __slots__ = ("default_profile", "profiles", "root")
+    __slots__ = ("default_variant", "root", "variants")
 
-    def __init__(self, root: Path, profiles: Sequence[str], default_profile: str = "default"):
+    def __init__(self, root: Path, variants: Sequence[str], default_variant: str = "default"):
         self.root = Path(root)
-        self.profiles = tuple(profiles)
-        if default_profile not in self.profiles and self.profiles:
-            default_profile = self.profiles[0]
-        self.default_profile = default_profile
+        self.variants = tuple(variants)
+        if default_variant not in self.variants and self.variants:
+            default_variant = self.variants[0]
+        self.default_variant = default_variant
 
     def __fspath__(self) -> str:
         return os.fspath(self.root)
 
     def __repr__(self) -> str:
-        return f"CompiledTree({str(self.root)!r}, profiles={self.profiles!r})"
+        return f"CompiledTree({str(self.root)!r}, variants={self.variants!r})"
 
-    @property
-    def variants(self) -> tuple[str, ...]:
-        """The compiled variants (same as ``profiles``)."""
-        return self.profiles
-
-    def profile(self, name: str | None = None) -> Path:
+    def variant(self, name: str | None = None) -> Path:
         """Directory holding variant *name*'s mkosi.conf, extra, skeleton and scripts."""
-        name = name or self.default_profile
-        if name not in self.profiles:
-            raise KeyError(f"variant {name!r} was not compiled; compiled: {list(self.profiles)}")
+        name = name or self.default_variant
+        if name not in self.variants:
+            raise KeyError(f"variant {name!r} was not compiled; compiled: {list(self.variants)}")
         native = self.root / "mkosi.profiles" / name
         return native if native.is_dir() and not (self.root / name).is_dir() else self.root / name
 
-    def path(self, relpath: str, profile: str | None = None) -> Path:
-        return self.profile(profile) / relpath.lstrip("/")
+    def path(self, relpath: str, variant: str | None = None) -> Path:
+        return self.variant(variant) / relpath.lstrip("/")
 
-    def read(self, relpath: str, profile: str | None = None) -> str:
-        return self.path(relpath, profile).read_text(encoding="utf-8")
+    def read(self, relpath: str, variant: str | None = None) -> str:
+        return self.path(relpath, variant).read_text(encoding="utf-8")
 
-    def exists(self, relpath: str, profile: str | None = None) -> bool:
-        return self.path(relpath, profile).exists()
+    def exists(self, relpath: str, variant: str | None = None) -> bool:
+        return self.path(relpath, variant).exists()
 
-    def files(self, profile: str | None = None) -> list[str]:
+    def files(self, variant: str | None = None) -> list[str]:
         """Sorted POSIX paths of every file in the variant, relative to its directory."""
-        base = self.profile(profile)
+        base = self.variant(variant)
         return sorted(p.relative_to(base).as_posix() for p in base.rglob("*") if not p.is_dir())
 
-    def unit(self, name: str, profile: str | None = None) -> str:
+    def unit(self, name: str, variant: str | None = None) -> str:
         """Systemd unit text; a bare name such as ``"app"`` means ``app.service``."""
         unit = name if "." in name else f"{name}.service"
-        path = self.path(f"{_UNIT_DIR}/{unit}", profile)
+        path = self.path(f"{_UNIT_DIR}/{unit}", variant)
         if not path.is_file():
             found = sorted(p.name for p in path.parent.glob("*")) if path.parent.is_dir() else []
             raise FileNotFoundError(f"no unit {unit!r} in {path.parent}; found: {found}")
         return path.read_text(encoding="utf-8")
 
-    def script(self, phase: str, profile: str | None = None) -> str:
+    def script(self, phase: str, variant: str | None = None) -> str:
         """Text of ``scripts/NN-<phase>.sh``."""
-        scripts = self.profile(profile) / "scripts"
+        scripts = self.variant(variant) / "scripts"
         matches = sorted(scripts.glob(f"[0-9][0-9]-{phase}.sh"))
         if not matches:
             found = sorted(p.name for p in scripts.glob("*.sh")) if scripts.is_dir() else []
             raise FileNotFoundError(f"no {phase!r} script in {scripts}; found: {found}")
         return matches[0].read_text(encoding="utf-8")
 
-    def runtime_init(self, profile: str | None = None) -> str:
-        return self.read("mkosi.extra/usr/bin/runtime-init", profile)
+    def runtime_init(self, variant: str | None = None) -> str:
+        return self.read("mkosi.extra/usr/bin/runtime-init", variant)
 
-    def conf(self, profile: str | None = None) -> str:
-        return self.read("mkosi.conf", profile)
+    def conf(self, variant: str | None = None) -> str:
+        return self.read("mkosi.conf", variant)
 
 
 def _names(variants: Variants) -> list[str] | None:
@@ -156,15 +161,19 @@ def compile_tree(
     root = Path(path) if path is not None else Path(tempfile.mkdtemp(prefix="tundravm-tree-"))
     tree = lifecycle.compile(recipe, variants=_names(variants))
     tree.write(root)
-    return CompiledTree(root, tree.variants, default_profile=tree.variants[0])
+    return CompiledTree(root, tree.variants, default_variant=tree.variants[0])
 
 
-def _findings(subject: Recipe | Sequence[Diagnostic], variants: Variants) -> Sequence[Diagnostic]:
+Lintable = Recipe | Image | Sequence[Diagnostic]
+"""What the assertions check: a recipe or an :class:`Image` to lint, or ``lint()``'s findings."""
+
+
+def _findings(subject: Lintable, variants: Variants) -> Sequence[Diagnostic]:
     if isinstance(subject, Recipe):
         return check_report(subject, None, variants=_names(variants))
     if variants is not None:
-        raise TypeError("variants= selects what a Recipe is linted for; lint() already chose")
-    return subject
+        raise TypeError("variants= selects what a Recipe is linted for; this input already chose")
+    return subject.lint() if isinstance(subject, Image) else subject
 
 
 def _render(diagnostics: Sequence[Diagnostic]) -> str:
@@ -172,34 +181,36 @@ def _render(diagnostics: Sequence[Diagnostic]) -> str:
 
 
 def assert_clean(
-    subject: Recipe | Sequence[Diagnostic],
+    subject: Lintable,
     /,
     *,
-    variants: Variants = None,
+    warnings: Literal["fail", "allow"] = "fail",
     allow: Sequence[str] = (),
+    variants: Variants = None,
     strict: bool | None = None,
 ) -> Sequence[Diagnostic]:
-    """Fail on error findings (warnings too with *strict*) whose code is not in *allow*.
+    """Fail on every error and warning finding whose code is not in *allow*.
 
-    *subject* is a sequence of diagnostics, such as what ``tundravm.lint()``
-    returned (*strict* defaults to true), or a ``Recipe`` to lint for
-    *variants* (default: all; *strict* defaults to false). Returns every
-    diagnostic, allowed or not: *subject* itself, or a list for a recipe.
+    *subject* is a ``Recipe`` (linted for *variants*, default: all), an
+    :class:`Image` (linted for its variant) or the diagnostics ``lint()``
+    returned. ``warnings="allow"`` fails on errors only. *strict* is the old
+    spelling (``strict=False`` is ``warnings="allow"``). Returns every
+    diagnostic, allowed or not: *subject* itself for diagnostics.
     """
-    given = not isinstance(subject, Recipe)
-    strict = given if strict is None else strict
+    if strict is not None:
+        warnings = "fail" if strict else "allow"
     diagnostics = _findings(subject, variants)
-    severities = {"error", "warning"} if strict else {"error"}
+    severities = {"error", "warning"} if warnings == "fail" else {"error"}
     failing = [d for d in diagnostics if d.code not in allow and d.severity in severities]
     if failing:
         raise AssertionError(
             f"recipe has {len(failing)} unexpected finding(s):\n{_render(failing)}"
         )
-    return diagnostics if given else list(diagnostics)
+    return diagnostics
 
 
 def assert_diagnostic(
-    diagnostics: Recipe | Sequence[Diagnostic],
+    diagnostics: Lintable,
     code: str,
     /,
     *,
@@ -212,9 +223,10 @@ def assert_diagnostic(
     """Return the first diagnostic matching every given field, else fail listing them all.
 
     *diagnostics* is a sequence of diagnostics (what ``tundravm.lint()``
-    returned), or a ``Recipe`` to lint for *variants* (default: *variant*
-    alone when given, else all). *variant* is the variant, ``""`` for the
-    recipe as a whole; *location* the source position (``file:line``).
+    returned), an :class:`Image` to lint, or a ``Recipe`` to lint for
+    *variants* (default: *variant* alone when given, else all). *variant* is
+    the variant, ``""`` for the recipe as a whole; *location* the source
+    position (``file:line``).
     """
     wanted_subject = subject
     if variants is None and variant and isinstance(diagnostics, Recipe):
@@ -297,7 +309,7 @@ def assert_tree_matches(
         update = os.environ.get(UPDATE_GOLDEN_ENV) == "1"
     with tempfile.TemporaryDirectory(prefix="tundravm-golden-") as tmp:
         tree = compile_tree(recipe, variants=variants, path=Path(tmp))
-        ignore = _foreign_profile_globs(golden, tree.profiles)
+        ignore = _foreign_profile_globs(golden, tree.variants)
         diff = diff_trees(golden, tree.root, ignore=ignore)
         if update:
             if not diff.is_clean:
@@ -449,8 +461,14 @@ def run_cli(*argv: str | os.PathLike[str]) -> tuple[int, str, str]:
 
 
 __all__ = [
+    "TEST_PLATFORM",
     "UPDATE_GOLDEN_ENV",
     "CompiledTree",
+    "Image",
+    "ImageFile",
+    "InitStep",
+    "Lintable",
+    "UnitView",
     "Variants",
     "assert_clean",
     "assert_diagnostic",
@@ -460,6 +478,8 @@ __all__ = [
     "compile_tree",
     "fake_bake",
     "fake_fragment",
+    "fragment_plan",
+    "plan",
     "recipe_file",
     "run_cli",
 ]

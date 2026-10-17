@@ -258,57 +258,53 @@ class StatusPage(Composite):
 
 ## Testing a fragment
 
-Build a small recipe around the fragment and assert on its diagnostics and its compiled output:
+Plan the fragment with `fragment_plan` and ask the result what it holds:
 
 ```python
 from exporter import PrometheusExporter
 
-from tundravm import Disk, Fragment, Key, Package, Recipe, Secrets, Variant, compile, lint
-from tundravm.testing import assert_clean, assert_diagnostic, compile_tree
-
-
-def recipe_with(storage: Fragment) -> Recipe:
-    return Recipe(
-        name="t",
-        common=Fragment("t", items=(Package("linux-image-amd64"), PrometheusExporter(storage=storage))),
-        variants=(Variant("default", target="qemu"),),
-    )
-
+from tundravm import Disk, Fragment, Key, Secrets
+from tundravm.testing import assert_clean, assert_diagnostic, fragment_plan
 
 key = Key("key_persistent")
 disk = Disk("disk_persistent", mount="/persistent", key=key, device="/dev/sdb")
 STORAGE = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
+EXPORTER = PrometheusExporter(storage=STORAGE)
 
 
 def test_exporter_is_clean():
-    assert_clean(lint(recipe_with(STORAGE)), allow=("source-unpinned",))
+    assert_clean(fragment_plan(EXPORTER), allow=("source-unpinned",))
 
 
 def test_exporter_needs_persistent_storage():
     elsewhere = Disk("disk_data", mount="/data", key=key)
     storage = Fragment("secure-storage", items=(key, elsewhere, Secrets(store=elsewhere)))
-    assert_diagnostic(lint(recipe_with(storage)), "exporter-storage-missing", variant="default")
+    image = fragment_plan(PrometheusExporter(storage=storage))
+    assert_diagnostic(image, "exporter-storage-missing", variant="default")
 
 
 def test_unit_waits_for_runtime_init():
-    tree = compile_tree(recipe_with(STORAGE))
-    unit = tree.unit("prometheus-node-exporter.service")
-    assert "After=runtime-init.service" in unit
-    assert "Requires=runtime-init.service" in unit
-    assert "boot.prom" in tree.runtime_init()
+    unit = fragment_plan(EXPORTER).unit("prometheus-node-exporter.service")
+    assert unit.enabled
+    assert unit.requires("runtime-init.service") and unit.after("runtime-init.service")
 
 
-def test_tree_digest_is_stable():
-    assert compile(recipe_with(STORAGE)).digest == compile(recipe_with(STORAGE)).digest
+def test_boot_steps_run_in_order():
+    steps = [step.name for step in fragment_plan(EXPORTER).init_steps]
+    assert steps == ["keys", "disks", "exporter-directory", "secrets", "exporter-ready"]
+
+
+def test_exporter_ships_its_package():
+    assert fragment_plan(EXPORTER).packages["prometheus-node-exporter"] == "runtime"
 ```
 
 ```console
 $ uv run pytest -q test_exporter.py
-....                                                                     [100%]
-4 passed in 0.03s
+.....                                                                    [100%]
+5 passed in 0.05s
 ```
 
-The kernel package keeps `kernel-missing` quiet: every bootable variant needs one. `allow=("source-unpinned",)` accepts the warning for the unlocked `tundra-tools` builds the key, disk and secrets need. To pin a fragment's whole output, compare it with a committed tree: `assert_tree(compile(recipe), "tests/golden/exporter")`, regenerated with `TUNDRAVM_UPDATE_GOLDEN=1`. See [testing](testing.md).
+`fragment_plan` boots the fragment on a minimal platform that holds the kernel package, so `kernel-missing` stays quiet and the findings are the fragment's own. `assert_clean` fails on warnings too; `allow=("source-unpinned",)` accepts the one for the unlocked `tundra-tools` builds the key, disk and secrets need. A fragment that `requires` one it does not contain gets it through `include=`: `fragment_plan(EXPORTER, include=(STORAGE,))`. To pin a fragment's whole output, compare it with a committed tree: `assert_tree(fragment_plan(EXPORTER).tree, "tests/golden/exporter")`, regenerated with `TUNDRAVM_UPDATE_GOLDEN=1`. See [testing](testing.md).
 
 ## Guidelines
 

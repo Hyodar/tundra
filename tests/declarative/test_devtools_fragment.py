@@ -42,7 +42,7 @@ def tree(tmp_path: Path) -> CompiledTree:
 
 
 def test_devtools_variant_adds_debug_packages(tree: CompiledTree) -> None:
-    packages = conf_list(tree.conf(profile="devtools"), "Packages")
+    packages = conf_list(tree.conf(variant="devtools"), "Packages")
     for pkg in EXPECTED_PACKAGES:
         assert pkg in packages, f"Missing package: {pkg}"
 
@@ -57,12 +57,12 @@ def test_devtools_variant_emits_serial_console_service(tree: CompiledTree) -> No
     (unit,) = [item for item in DevTools().items if isinstance(item, Unit)]
 
     assert unit.name == SERIAL_UNIT
-    assert tree.unit(SERIAL_UNIT, profile="devtools") == unit.content
+    assert tree.unit(SERIAL_UNIT, variant="devtools") == unit.content
 
 
 def test_serial_console_service_content(tree: CompiledTree) -> None:
     """Verify the serial console service enables serial-getty@ttyS0."""
-    service = tree.unit(SERIAL_UNIT, profile="devtools")
+    service = tree.unit(SERIAL_UNIT, variant="devtools")
     assert "serial-getty@ttyS0.service" in service
     assert "Type=oneshot" in service
     assert "RemainAfterExit=yes" in service
@@ -70,7 +70,7 @@ def test_serial_console_service_content(tree: CompiledTree) -> None:
 
 
 def test_devtools_variant_enables_serial_console_in_postinst(tree: CompiledTree) -> None:
-    postinst = tree.script("postinst", profile="devtools").splitlines()
+    postinst = tree.script("postinst", variant="devtools").splitlines()
 
     enable_cmds = [line for line in postinst if "systemctl" in line and "enable" in line]
     assert any(SERIAL_UNIT in line for line in enable_cmds)
@@ -78,7 +78,7 @@ def test_devtools_variant_enables_serial_console_in_postinst(tree: CompiledTree)
 
 def test_devtools_postinst_sets_root_password(tree: CompiledTree) -> None:
     """Verify the postinst script sets root password via openssl passwd."""
-    postinst = tree.script("postinst", profile="devtools")
+    postinst = tree.script("postinst", variant="devtools")
     assert 'openssl passwd -6 -salt "$SALT" "tdx"' in postinst
     assert "usermod -p" in postinst
     assert "passwd -u root" in postinst
@@ -86,20 +86,20 @@ def test_devtools_postinst_sets_root_password(tree: CompiledTree) -> None:
 
 def test_devtools_postinst_configures_dropbear(tree: CompiledTree) -> None:
     """Verify the postinst script removes restrictive dropbear flags."""
-    postinst = tree.script("postinst", profile="devtools")
+    postinst = tree.script("postinst", variant="devtools")
     assert "/etc/default/dropbear" in postinst
     assert "sed -i 's/ -s//g; s/ -w//g; s/ -g//g' /etc/default/dropbear" in postinst
 
 
 def test_devtools_postinst_configures_openssh(tree: CompiledTree) -> None:
     """Verify the postinst script enables password auth for openssh."""
-    postinst = tree.script("postinst", profile="devtools")
+    postinst = tree.script("postinst", variant="devtools")
     assert "PermitRootLogin yes" in postinst
     assert "PasswordAuthentication yes" in postinst
 
 
 def test_devtools_variant_registers_postinst_password_hook(tree: CompiledTree) -> None:
-    postinst = tree.script("postinst", profile="devtools")
+    postinst = tree.script("postinst", variant="devtools")
 
     # The serial console enable line runs before the password/auth setup
     enable = postinst.index(f"mkosi-chroot systemctl enable {SERIAL_UNIT}")
@@ -107,9 +107,9 @@ def test_devtools_variant_registers_postinst_password_hook(tree: CompiledTree) -
 
 
 def test_devtools_variant_does_not_affect_default_variant(tree: CompiledTree) -> None:
-    assert "vim" not in conf_list(tree.conf(profile="default"), "Packages")
-    assert f"mkosi.extra/usr/lib/systemd/system/{SERIAL_UNIT}" not in tree.files(profile="default")
-    assert "openssl passwd" not in tree.script("postinst", profile="default")
+    assert "vim" not in conf_list(tree.conf(variant="default"), "Packages")
+    assert f"mkosi.extra/usr/lib/systemd/system/{SERIAL_UNIT}" not in tree.files(variant="default")
+    assert "openssl passwd" not in tree.script("postinst", variant="default")
 
 
 def test_devtools_variant_bash_completion_in_debloat_skip(tmp_path: Path) -> None:
@@ -117,9 +117,9 @@ def test_devtools_variant_bash_completion_in_debloat_skip(tmp_path: Path) -> Non
     debloat = Debloat(keep_paths_by_variant=(("devtools", (BASH_COMPLETION,)),))
     tree = compile_tree(_recipe(debloat), path=tmp_path / "tree")
 
-    assert "bash-completion" in conf_list(tree.conf(profile="devtools"), "Packages")
+    assert "bash-completion" in conf_list(tree.conf(variant="devtools"), "Packages")
 
-    finalize = tree.script("finalize", profile="default")
+    finalize = tree.script("finalize", variant="default")
     assert finalize.count(f'rm -rf "$BUILDROOT{BASH_COMPLETION}"') == 1
     conditional = finalize[finalize.index("# Debloat: profile-conditional path removal") :]
     assert conditional.splitlines()[1:4] == [

@@ -31,7 +31,7 @@ def test_recipe_fixture_bakes_in_process(recipe: Recipe, tmp_path: Path) -> None
     curl = dataclasses.replace(
         recipe, common=Fragment("test", (Package("curl"), Package("linux-image-amd64")))
     )
-    assert_clean(curl, strict=True)
+    assert_clean(curl)
 
     (artifact,) = bake_in_process(curl, build=tmp_path / "build")
     assert (artifact.variant, artifact.target) == ("default", "qemu")
@@ -55,12 +55,12 @@ def test_compiled_factory_uses_fresh_dirs(
     both = compiled(extended)
     assert first.root != both.root
     assert first.root.is_relative_to(tmp_path)
-    assert first.profiles == ("default",)
-    assert both.profiles == ("default", "azure")
+    assert first.variants == ("default",)
+    assert both.variants == ("default", "azure")
     assert "curl" in first.conf()
     assert "echo demo" in first.runtime_init()
-    assert "jq" in both.conf(profile="azure")
-    assert compiled(extended, variants=["azure"]).profiles == ("azure",)
+    assert "jq" in both.conf(variant="azure")
+    assert compiled(extended, variants=["azure"]).variants == ("azure",)
 
 
 def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:

@@ -1,0 +1,117 @@
+"""Parsed systemd units and mkosi.conf sections, for :class:`tundravm.testing.Image`."""
+
+from __future__ import annotations
+
+import shlex
+from collections.abc import Mapping
+
+Sections = Mapping[str, Mapping[str, tuple[str, ...]]]
+"""``{section: {key: values}}``: every assignment of a key, in file order."""
+
+
+def parse_unit(text: str) -> Sections:
+    """A systemd unit's sections; an empty assignment (``After=``) resets the key's list."""
+    sections: dict[str, dict[str, list[str]]] = {}
+    current: dict[str, list[str]] | None = None
+    pending = ""
+    for raw in text.splitlines():
+        line = pending + raw.strip()
+        pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1].rstrip() + " "
+            continue
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = sections.setdefault(line[1:-1], {})
+        elif current is not None and "=" in line:
+            key, _, value = line.partition("=")
+            values = current.setdefault(key.strip(), [])
+            if value.strip():
+                values.append(value.strip())
+            else:
+                values.clear()
+    return {name: {k: tuple(v) for k, v in keys.items()} for name, keys in sections.items()}
+
+
+def parse_conf(text: str) -> Sections:
+    """mkosi.conf sections: indented lines continue the key above, repeated keys accumulate."""
+    sections: dict[str, dict[str, list[str]]] = {}
+    current: dict[str, list[str]] | None = None
+    key: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if raw[:1].isspace() and current is not None and key is not None:
+            current[key].append(line)
+        elif line.startswith("[") and line.endswith("]"):
+            current, key = sections.setdefault(line[1:-1], {}), None
+        elif current is not None and "=" in line:
+            name, _, value = line.partition("=")
+            key = name.strip()
+            values = current.setdefault(key, [])
+            if value.strip():
+                values.append(value.strip())
+    return {name: {k: tuple(v) for k, v in keys.items()} for name, keys in sections.items()}
+
+
+class UnitView:
+    """One compiled systemd unit: its text, parsed sections and whether the image enables it."""
+
+    __slots__ = ("enabled", "name", "path", "sections", "text")
+
+    def __init__(self, name: str, path: str, text: str, *, enabled: bool) -> None:
+        self.name = name
+        self.path = path
+        self.text = text
+        self.enabled = enabled
+        self.sections = parse_unit(text)
+
+    def __repr__(self) -> str:
+        return f"UnitView({self.name!r}, enabled={self.enabled})"
+
+    def values(self, section: str, key: str) -> tuple[str, ...]:
+        """Every value of *key* in *section*, in order (empty when unset)."""
+        return self.sections.get(section, {}).get(key, ())
+
+    def get(self, section: str, key: str) -> str | None:
+        """The last value of *key* in *section*, the one systemd uses; ``None`` when unset."""
+        found = self.values(section, key)
+        return found[-1] if found else None
+
+    def _names(self, section: str, key: str) -> tuple[str, ...]:
+        return tuple(name for value in self.values(section, key) for name in value.split())
+
+    def requires(self, unit: str) -> bool:
+        """Whether ``Requires=`` names *unit* (a unit or a target)."""
+        return unit in self._names("Unit", "Requires")
+
+    def wants(self, unit: str) -> bool:
+        """Whether ``Wants=`` names *unit*."""
+        return unit in self._names("Unit", "Wants")
+
+    def after(self, unit: str) -> bool:
+        """Whether ``After=`` names *unit*."""
+        return unit in self._names("Unit", "After")
+
+    @property
+    def wanted_by(self) -> tuple[str, ...]:
+        """The ``[Install] WantedBy=`` targets."""
+        return self._names("Install", "WantedBy")
+
+    @property
+    def exec_start(self) -> str | None:
+        """The ``[Service] ExecStart=`` command (the last one), ``None`` for a non-service."""
+        return self.get("Service", "ExecStart")
+
+    @property
+    def user(self) -> str | None:
+        """The ``[Service] User=``."""
+        return self.get("Service", "User")
+
+    @property
+    def environment(self) -> dict[str, str]:
+        """Every ``[Service] Environment=`` assignment, later ones winning."""
+        words = (w for value in self.values("Service", "Environment") for w in shlex.split(value))
+        return {key: value for key, _, value in (word.partition("=") for word in words)}

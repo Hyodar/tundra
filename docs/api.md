@@ -481,9 +481,11 @@ Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`,
 `tundravm.testing` (see [testing](testing.md)); `variants` is a name, a sequence of names, or `None` for every variant:
 
 ```python
+fragment_plan(*items, include=(), base=None, variant="default", lock=None) -> Image
+plan(recipe, variant=None, *, lock=None) -> Image
 compile_tree(recipe, *, variants=None, path=None) -> CompiledTree
-assert_clean(diagnostics_or_recipe, /, *, variants=None, allow=(), strict=None) -> diagnostics
-assert_diagnostic(diagnostics_or_recipe, code, /, *, severity=None, variant=None, subject=None, location=None, variants=None) -> Diagnostic
+assert_clean(image_recipe_or_diagnostics, /, *, warnings="fail", allow=(), variants=None) -> diagnostics
+assert_diagnostic(image_recipe_or_diagnostics, code, /, *, severity=None, variant=None, subject=None, location=None, variants=None) -> Diagnostic
 assert_tree(tree: Tree, golden: str | Path, *, update=None) -> None
 assert_tree_matches(recipe, golden_dir, *, variants=None, update=None) -> TreeDiff
 fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) -> Artifact
@@ -494,3 +496,5 @@ run_cli(*argv) -> tuple[int, str, str]
 ```
 
 Pytest fixtures (plugin `tundravm`, loaded automatically): `recipe`, `compiled`, `run_cli`.
+
+`Image` (one planned variant): `packages` (`{name: role}`), `file(path)` and `files` (`ImageFile`: `content`, `text`, `mode`, `stage`, `owner`, `origin`, `fragment`), `unit(name)` and `service(name)` (`UnitView`: `get`, `values`, `requires`, `wants`, `after`, `wanted_by`, `exec_start`, `user`, `environment`, `enabled`), `users`, `groups`, `builds`, `init_steps` (`InitStep`: `name`, `priority`, `after`, `script`, `builtin`), `hooks(stage)`, `settings(section)`, `lint()`, `tree`, `resolved`. `TEST_PLATFORM` is the fragment `fragment_plan` boots on; `Lintable` is what the assertions accept. `CompiledTree` has `root`, `variants`, `default_variant` and `variant(name)`; its readers take `variant=`.

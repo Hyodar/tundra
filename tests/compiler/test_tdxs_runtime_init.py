@@ -41,7 +41,7 @@ def _pinned(tmp_path: Path, *items: Declaration | Fragment) -> CompiledTree:
     recipe = _recipe(*items)
     tree = compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40))
     tree.write(tmp_path / "tree")
-    return CompiledTree(tmp_path / "tree", tree.variants, default_profile=tree.variants[0])
+    return CompiledTree(tmp_path / "tree", tree.variants, default_variant=tree.variants[0])
 
 
 def test_tdxs_declares_build_packages(tmp_path: Path) -> None:

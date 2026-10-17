@@ -137,6 +137,10 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `ExternalDelivery(name, supports=("file", "env"))` and `Secrets(delivery=)` declare who delivers a `Secrets` block's targets, without changing the tree or recipe digest. `secret-in-file`/`secret-in-env` hints name only the target kinds the variant's provider writes. The evidence index records each variant's `secrets` (kind, location, provider, supported, required).
 - **Breaking:** the `prover` init template provisions the SSH key only; it no longer declares an `app_token` `SecretFile` nothing would write.
 
+- `tundravm.testing.fragment_plan(*items, include=, base=, variant=)` and `plan(recipe, variant)` return an `Image`: one variant compiled in memory with typed queries (`packages`, `file()`/`files` returning `ImageFile`, `unit()`/`service()` returning `UnitView` with `requires`/`after`/`wanted_by`/`exec_start`/`environment`/`enabled`, `users`, `groups`, `init_steps`, `hooks(stage)`, `builds`, `settings(section)`, `lint()`, `tree`), so a fragment test needs no hand-made bootable recipe or temp directory.
+- **Breaking:** `assert_clean` fails on warnings for every input (Recipe, Image, lint findings); `warnings="allow"` fails on errors only.
+- **Breaking:** `CompiledTree` speaks variants: `variants`, `variant(name)`, `default_variant` and `variant=` on every reader (were `profiles`, `profile()`, `default_profile`, `profile=`).
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

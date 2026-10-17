@@ -37,6 +37,8 @@ from tundravm.testing import (
     compile_tree,
     fake_bake,
     fake_fragment,
+    fragment_plan,
+    plan,
     recipe_file,
     run_cli,
 )
@@ -93,12 +95,12 @@ def test_compile_tree_reads_compiled_files(tmp_path: Path) -> None:
     tree = compile_tree(_recipe(), path=tmp_path / "out")
 
     assert isinstance(tree, CompiledTree)
-    assert tree.profiles == ("default", "azure")
-    assert tree.default_profile == "default"
+    assert tree.variants == ("default", "azure")
+    assert tree.default_variant == "default"
     assert os.fspath(tree) == str(tmp_path / "out")
     assert "curl" in tree.conf()
     assert tree.read("mkosi.extra/etc/motd") == "hello\n"
-    assert tree.read("/mkosi.extra/etc/motd", profile="default") == "hello\n"
+    assert tree.read("/mkosi.extra/etc/motd", variant="default") == "hello\n"
     assert tree.exists("mkosi.extra/etc/motd")
     assert not tree.exists("mkosi.extra/etc/nope")
     assert "User=app" in tree.unit("app")
@@ -120,14 +122,14 @@ def test_compile_tree_defaults_to_a_fresh_temp_dir() -> None:
 def test_compile_tree_selects_variants(tmp_path: Path) -> None:
     recipe = _recipe()
     tree = compile_tree(recipe, variants=["default", "azure"], path=tmp_path / "all")
-    assert tree.profiles == tree.variants == ("default", "azure")
-    assert tree.profile("azure") == tmp_path / "all" / "azure"
-    assert "jq" in tree.conf(profile="azure")
+    assert tree.variants == ("default", "azure")
+    assert tree.variant("azure") == tmp_path / "all" / "azure"
+    assert "jq" in tree.conf(variant="azure")
     assert "jq" not in tree.conf()
 
     only = compile_tree(recipe, variants="azure", path=tmp_path / "azure-only")
-    assert only.profiles == ("azure",)
-    assert only.default_profile == "azure"
+    assert only.variants == ("azure",)
+    assert only.default_variant == "azure"
     assert "jq" in only.conf()
 
 
@@ -137,7 +139,7 @@ def test_compile_tree_rejects_unknown_and_uncompiled_variants(tmp_path: Path) ->
         compile_tree(recipe, variants=["gpc"], path=tmp_path / "x")
     tree = compile_tree(recipe, variants="default", path=tmp_path / "y")
     with pytest.raises(KeyError, match="was not compiled"):
-        tree.profile("azure")
+        tree.variant("azure")
 
 
 def test_compile_tree_missing_unit_or_script_lists_what_exists(tmp_path: Path) -> None:
@@ -157,24 +159,32 @@ def test_compile_tree_writes_the_tree_compile_returns(tmp_path: Path) -> None:
 # ── assert_clean / assert_diagnostic ─────────────────────────────────
 
 
-def test_assert_clean_passes_warnings_unless_strict() -> None:
+def test_assert_clean_fails_on_warnings_for_every_input() -> None:
     recipe = _warning_only()
-    diagnostics = assert_clean(recipe)
-    assert [d.code for d in diagnostics] == ["service-command-not-shipped"]
+    for subject in (recipe, lint(recipe), plan(recipe)):
+        with pytest.raises(AssertionError, match="warning service-command-not-shipped"):
+            assert_clean(subject)
+        found = assert_clean(subject, warnings="allow")
+        assert [d.code for d in found] == ["service-command-not-shipped"]
+        assert_clean(subject, allow=("service-command-not-shipped",))
+    assert assert_clean(_recipe()) == []
+
+
+def test_assert_clean_keeps_strict_as_the_old_spelling() -> None:
+    recipe = _warning_only()
+    assert_clean(recipe, strict=False)
     with pytest.raises(AssertionError, match="warning service-command-not-shipped"):
-        assert_clean(recipe, strict=True)
-    assert_clean(recipe, strict=True, allow=("service-command-not-shipped",))
-    assert assert_clean(_recipe(), strict=True) == []
+        assert_clean(lint(recipe), strict=True)
 
 
 def test_assert_clean_fails_on_errors_with_rendered_report() -> None:
     recipe = _ghost()
     with pytest.raises(AssertionError) as excinfo:
-        assert_clean(recipe)
+        assert_clean(recipe, warnings="allow")
     message = str(excinfo.value)
     assert "error service-user-missing [default] app" in message
     assert "hint:" in message
-    assert_clean(recipe, allow=["service-user-missing"])
+    assert_clean(recipe, allow=["service-user-missing", "service-command-not-shipped"])
 
 
 def test_assert_clean_checks_selected_variants() -> None:
@@ -186,16 +196,14 @@ def test_assert_clean_checks_selected_variants() -> None:
         assert_clean(recipe, variants=["azure"])
 
 
-def test_assert_clean_takes_lint_diagnostics_strictly() -> None:
+def test_assert_clean_returns_lint_diagnostics_as_given() -> None:
     found = lint(_warning_only())
-    with pytest.raises(
-        AssertionError, match=r"warning service-command-not-shipped \[default\] app"
-    ):
-        assert_clean(found)
-    assert assert_clean(found, strict=False) is found
+    assert assert_clean(found, warnings="allow") is found
     assert assert_clean(lint(_recipe())) == ()
     with pytest.raises(TypeError, match="variants="):
         assert_clean(found, variants="default")
+    with pytest.raises(TypeError, match="variants="):
+        assert_clean(plan(_recipe()), variants="default")
 
 
 def test_assert_diagnostic_returns_the_match() -> None:
@@ -345,18 +353,19 @@ def test_bake_in_process_defaults_to_temp_dir_and_takes_a_lock() -> None:
 # ── fake_fragment ────────────────────────────────────────────────────
 
 
-def test_fake_fragment_declares_packages_and_files(tmp_path: Path) -> None:
+def test_fake_fragment_declares_packages_and_files() -> None:
     fake = fake_fragment("x", packages=("pkg",), files={"/etc/x": "content"})
     assert fake.name == "x"
     assert fake.items == (Package("pkg"), File("/etc/x", "content"))
     assert (fake.requires, fake.checks) == ((), ())
 
-    tree = compile_tree(Recipe(name="demo", common=fake), path=tmp_path / "out")
-    assert "pkg" in tree.conf()
-    assert tree.read("mkosi.extra/etc/x") == "content"
+    image = fragment_plan(fake)
+    assert image.packages["pkg"] == "runtime"
+    assert image.file("/etc/x").text == "content"
+    assert image.file("/etc/x").fragment == "x"
 
 
-def test_fake_fragment_lands_only_in_its_variant(tmp_path: Path) -> None:
+def test_fake_fragment_lands_only_in_its_variant() -> None:
     fake = fake_fragment(packages=("pkg",))
     assert fake.name == "fake"
     recipe = Recipe(
@@ -367,43 +376,40 @@ def test_fake_fragment_lands_only_in_its_variant(tmp_path: Path) -> None:
             Variant("azure", target="azure", add=Fragment("azure", (fake,))),
         ),
     )
-    tree = compile_tree(recipe, path=tmp_path / "out")
-    assert "pkg" in tree.conf(profile="azure")
-    assert "pkg" not in tree.conf()
+    assert "pkg" in plan(recipe, "azure").packages
+    assert "pkg" not in plan(recipe).packages
 
 
 def test_fake_fragment_requires_other_fragments() -> None:
     a = fake_fragment("a")
     b = fake_fragment("b", requires=(a,))
     assert b.requires == ("a",)
-    alone = Recipe(name="demo", common=Fragment("app", (b,)))
-    found = assert_diagnostic(lint(alone), "fragment-requires-missing", subject="b")
+    found = assert_diagnostic(fragment_plan(b), "fragment-requires-missing", subject="b")
     assert "'a'" in found.message
-    assert_clean(lint(Recipe(name="demo", common=Fragment("app", (KERNEL, a, b)))))
+    assert_clean(fragment_plan(b, include=(a,)))
 
 
 def test_fake_fragment_requires_a_fragment_by_name() -> None:
     dep = fake_fragment("dep", requires=("base-tools",))
     with pytest.raises(AssertionError, match="fragment-requires-missing"):
-        assert_clean(Recipe(name="demo", common=Fragment("app", (dep,))))
-    tools = Fragment("base-tools", (Package("curl"), KERNEL))
-    assert_clean(Recipe(name="demo", common=Fragment("app", (tools, dep))), strict=True)
+        assert_clean(fragment_plan(dep))
+    assert_clean(fragment_plan(dep, include=(Fragment("base-tools", (Package("curl"),)),)))
 
 
-def test_fake_fragment_init_scripts_compose_by_priority(tmp_path: Path) -> None:
+def test_fake_fragment_init_scripts_compose_by_priority() -> None:
     silent = fake_fragment("silent", packages=("pkg",))
     assert not any(isinstance(item, Init) for item in silent.items)
-    common = Fragment(
-        "app",
-        (
-            fake_fragment("late", init="echo late", priority=40),
-            fake_fragment("early", init="echo early", priority=10),
-            silent,
-        ),
+    image = fragment_plan(
+        fake_fragment("late", init="echo late", priority=40),
+        fake_fragment("early", init="echo early", priority=10),
+        silent,
     )
-    init = compile_tree(Recipe(name="demo", common=common), path=tmp_path / "out").runtime_init()
+    assert [(step.name, step.priority) for step in image.init_steps] == [
+        ("early", 10),
+        ("late", 40),
+    ]
+    init = image.file("/usr/bin/runtime-init").text
     assert init.index("echo early") < init.index("echo late")
-    assert init.count("echo ") == 2
 
 
 def test_fake_fragment_collision_is_diagnosed() -> None:

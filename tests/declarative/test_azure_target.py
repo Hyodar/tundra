@@ -28,14 +28,14 @@ def tree(tmp_path: Path) -> CompiledTree:
 
 
 def test_azure_variant_adds_dmidecode_package(tree: CompiledTree) -> None:
-    assert "dmidecode" in conf_list(tree.conf(profile="azure"), "Packages")
+    assert "dmidecode" in conf_list(tree.conf(variant="azure"), "Packages")
 
 
 def test_azure_variant_emits_provisioning_script(tree: CompiledTree) -> None:
-    assert SCRIPT in tree.files(profile="azure")
+    assert SCRIPT in tree.files(variant="azure")
     modes = {entry.path: entry.mode for entry in compile(RECIPE, variants=["azure"]).entries}
     assert modes[f"azure/{SCRIPT}"] == 0o755
-    assert tree.read(SCRIPT, profile="azure") == AZURE_PROVISIONING_SCRIPT
+    assert tree.read(SCRIPT, variant="azure") == AZURE_PROVISIONING_SCRIPT
 
 
 def test_azure_provisioning_script_content() -> None:
@@ -51,7 +51,7 @@ def test_azure_provisioning_script_content() -> None:
 
 def test_azure_variant_emits_service_unit(tree: CompiledTree) -> None:
     """Without network-setup.service the unit waits for network-online.target."""
-    unit = tree.unit(SERVICE, profile="azure")
+    unit = tree.unit(SERVICE, variant="azure")
     assert unit == AZURE_PROVISIONING_SERVICE_ONLINE
     assert "After=network-online.target\nWants=network-online.target\n" in unit
     assert "network-setup" not in unit
@@ -63,7 +63,7 @@ def test_azure_unit_requires_network_setup_when_the_variant_ships_it(tmp_path: P
         "cloud", net, variants=(Variant("default", target="qemu"), Variant("azure", target="azure"))
     )
     tree = compile_tree(recipe, path=tmp_path / "tree")
-    assert tree.unit(SERVICE, profile="azure") == AZURE_PROVISIONING_SERVICE
+    assert tree.unit(SERVICE, variant="azure") == AZURE_PROVISIONING_SERVICE
 
 
 def test_azure_unit_is_historical_under_nethermind_v1(tmp_path: Path) -> None:
@@ -74,7 +74,7 @@ def test_azure_unit_is_historical_under_nethermind_v1(tmp_path: Path) -> None:
         mkosi=Mkosi(dialect="nethermind-v1"),
     )
     tree = compile_tree(recipe, path=tmp_path / "tree")
-    assert tree.unit(SERVICE, profile="azure") == AZURE_PROVISIONING_SERVICE
+    assert tree.unit(SERVICE, variant="azure") == AZURE_PROVISIONING_SERVICE
 
 
 def test_azure_service_unit_content() -> None:
@@ -87,14 +87,14 @@ def test_azure_service_unit_content() -> None:
 
 
 def test_azure_variant_enables_service_in_postinst(tree: CompiledTree) -> None:
-    postinst = tree.script("postinst", profile="azure").splitlines()
+    postinst = tree.script("postinst", variant="azure").splitlines()
 
     enable_cmds = [line for line in postinst if "systemctl" in line and "enable" in line]
     assert any(SERVICE in line for line in enable_cmds)
 
 
 def test_azure_variant_symlinks_to_minimal_target(tree: CompiledTree) -> None:
-    postinst = tree.script("postinst", profile="azure").splitlines()
+    postinst = tree.script("postinst", variant="azure").splitlines()
 
     link_cmds = [line for line in postinst if line.startswith("mkosi-chroot ln ")]
     assert len(link_cmds) == 1
@@ -103,12 +103,12 @@ def test_azure_variant_symlinks_to_minimal_target(tree: CompiledTree) -> None:
 
 def test_azure_variant_sets_output_target(tree: CompiledTree) -> None:
     assert resolve(RECIPE, variant="azure").target == "azure"
-    conf = tree.conf(profile="azure").splitlines()
+    conf = tree.conf(variant="azure").splitlines()
     assert "PostOutputScripts=scripts/azure-postoutput.sh" in conf
-    assert tree.exists("scripts/azure-postoutput.sh", profile="azure")
+    assert tree.exists("scripts/azure-postoutput.sh", variant="azure")
 
 
 def test_azure_variant_does_not_affect_default_variant(tree: CompiledTree) -> None:
-    assert "dmidecode" not in conf_list(tree.conf(profile="default"), "Packages")
-    assert SCRIPT not in tree.files(profile="default")
-    assert not tree.exists("scripts/azure-postoutput.sh", profile="default")
+    assert "dmidecode" not in conf_list(tree.conf(variant="default"), "Packages")
+    assert SCRIPT not in tree.files(variant="default")
+    assert not tree.exists("scripts/azure-postoutput.sh", variant="default")

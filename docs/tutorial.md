@@ -796,7 +796,7 @@ def test_probes_the_wrong_port() -> None:
 ```
 
 - `image()` builds a one-variant recipe (`default`, for qemu) around the fragments under test, with the kernel package so `kernel-missing` stays quiet.
-- `assert_clean(lint(recipe))` fails on errors and, for a list of diagnostics, on warnings too (`allow=("code",)` to accept some).
+- `assert_clean(lint(recipe))` fails on errors and warnings, whatever it is given (a recipe, `lint()` findings or a `fragment_plan(...)` image); `warnings="allow"` fails on errors only and `allow=("code",)` accepts some.
 - `assert_diagnostic` returns the first diagnostic matching every field you give, or fails listing what was found.
 
 The tests import `fragments` and `node` from the project directory, which the generated `pyproject.toml` puts on pytest's path:

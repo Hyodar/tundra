@@ -31,12 +31,12 @@ def tree(tmp_path: Path) -> CompiledTree:
 
 
 def test_gcp_variant_adds_udev_package(tree: CompiledTree) -> None:
-    assert "udev" in conf_list(tree.conf(profile="gcp"), "Packages")
+    assert "udev" in conf_list(tree.conf(variant="gcp"), "Packages")
 
 
 def test_gcp_variant_emits_hosts_file(tree: CompiledTree) -> None:
-    assert HOSTS in tree.files(profile="gcp")
-    assert tree.read(HOSTS, profile="gcp") == GCP_HOSTS
+    assert HOSTS in tree.files(variant="gcp")
+    assert tree.read(HOSTS, variant="gcp") == GCP_HOSTS
 
 
 def test_gcp_hosts_content() -> None:
@@ -46,8 +46,8 @@ def test_gcp_hosts_content() -> None:
 
 
 def test_gcp_variant_emits_resolv_conf(tree: CompiledTree) -> None:
-    assert RESOLV_CONF in tree.files(profile="gcp")
-    assert tree.read(RESOLV_CONF, profile="gcp") == GCP_RESOLV_CONF
+    assert RESOLV_CONF in tree.files(variant="gcp")
+    assert tree.read(RESOLV_CONF, variant="gcp") == GCP_RESOLV_CONF
 
 
 def test_gcp_resolv_conf_content() -> None:
@@ -57,8 +57,8 @@ def test_gcp_resolv_conf_content() -> None:
 
 
 def test_gcp_variant_emits_udev_rules(tree: CompiledTree) -> None:
-    assert UDEV_RULES in tree.files(profile="gcp")
-    assert tree.read(UDEV_RULES, profile="gcp") == GCE_DISK_NAMING_RULES
+    assert UDEV_RULES in tree.files(variant="gcp")
+    assert tree.read(UDEV_RULES, variant="gcp") == GCE_DISK_NAMING_RULES
 
 
 def test_gce_disk_naming_rules_content() -> None:
@@ -77,10 +77,10 @@ def test_gce_disk_naming_rules_content() -> None:
 
 
 def test_gcp_variant_emits_nvme_id_script(tree: CompiledTree) -> None:
-    assert NVME_ID in tree.files(profile="gcp")
+    assert NVME_ID in tree.files(variant="gcp")
     modes = {entry.path: entry.mode for entry in compile(RECIPE, variants=["gcp"]).entries}
     assert modes[f"gcp/{NVME_ID}"] == 0o755
-    assert tree.read(NVME_ID, profile="gcp") == GOOGLE_NVME_ID
+    assert tree.read(NVME_ID, variant="gcp") == GOOGLE_NVME_ID
 
 
 def test_google_nvme_id_content() -> None:
@@ -92,12 +92,12 @@ def test_google_nvme_id_content() -> None:
 
 def test_gcp_variant_sets_output_target(tree: CompiledTree) -> None:
     assert resolve(RECIPE, variant="gcp").target == "gcp"
-    assert "PostOutputScripts=scripts/gcp-postoutput.sh" in tree.conf(profile="gcp").splitlines()
-    assert tree.exists("scripts/gcp-postoutput.sh", profile="gcp")
+    assert "PostOutputScripts=scripts/gcp-postoutput.sh" in tree.conf(variant="gcp").splitlines()
+    assert tree.exists("scripts/gcp-postoutput.sh", variant="gcp")
 
 
 def test_gcp_variant_does_not_affect_default_variant(tree: CompiledTree) -> None:
-    assert "udev" not in conf_list(tree.conf(profile="default"), "Packages")
-    default_files = tree.files(profile="default")
+    assert "udev" not in conf_list(tree.conf(variant="default"), "Packages")
+    default_files = tree.files(variant="default")
     assert HOSTS not in default_files
     assert RESOLV_CONF not in default_files

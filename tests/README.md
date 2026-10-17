@@ -7,7 +7,7 @@
 | `lifecycle/` | diff, lock/drift, bake (progress, reports, result io), measure, deploy, doctor, backends |
 | `cli/` | grammar, `--format`/CI kit, completions and UX, lifecycle verbs, an end-to-end recipe-file workflow |
 | `lint/` | check rules, example-module API checks, user-facing strings, error hints |
-| `testing_toolkit/` | `tundravm.testing` helpers and the pytest plugin |
+| `testing_toolkit/` | `tundravm.testing`: fragment plans and `Image` queries, helpers, the pytest plugin, the testing docs' examples |
 | `integration/` | real mkosi builds and the upstream nethermind-tdx comparison; marked `integration`, deselect with `-m "not integration"` |
 | `unit/` | models, errors, policy, explain, package layout, public surface, recipe loading |
 

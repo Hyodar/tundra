@@ -174,7 +174,7 @@ def test_lint_returns_resolution_errors_without_lowering() -> None:
 
 def test_lint_with_lock_reports_drift() -> None:
     locked = lock(_recipe())
-    assert_clean(lint(_recipe(), lock=locked), strict=False)
+    assert_clean(lint(_recipe(), lock=locked), warnings="allow")
     drifted = lint(_recipe(motd="bye\n"), lock=locked)
     assert_diagnostic(drifted, "lock-changed")
 

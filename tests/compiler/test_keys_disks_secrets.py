@@ -48,7 +48,7 @@ def _compile(tmp_path: Path, *items: Declaration) -> CompiledTree:
     recipe = _recipe(*items)
     tree = compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40))
     tree.write(tmp_path / "tree")
-    return CompiledTree(tmp_path / "tree", tree.variants, default_profile=tree.variants[0])
+    return CompiledTree(tmp_path / "tree", tree.variants, default_variant=tree.variants[0])
 
 
 def _builds(tree: CompiledTree) -> list[str]:

@@ -1,65 +1,121 @@
 # Testing recipes and fragments
 
-`tundravm.testing` checks recipes and fragments without a build backend. Its helpers take the values the lifecycle functions return (`lint()` diagnostics, a compiled `Tree`), so a test reads like the code it tests. Importing it does not import pytest.
+`tundravm.testing` checks recipes and fragments without a build backend. A test plans a fragment or a recipe in memory and asks the result typed questions (which packages, which files, how a unit is wired), so it reads like the code it tests. Importing it does not import pytest.
 
 ```python
-from tundravm import compile, lint
-from tundravm.testing import assert_clean, assert_diagnostic, assert_tree, compile_tree, fake_bake
+from tundravm.testing import assert_clean, assert_diagnostic, fragment_plan, plan
+```
+
+## Fragment plans
+
+```python
+fragment_plan(*items, include=(), base=None, variant="default", lock=None) -> Image
+plan(recipe, variant=None, *, lock=None) -> Image
+```
+
+`fragment_plan` puts a fragment (or bare declarations) on `TEST_PLATFORM`, a minimal bootable platform holding the kernel package, so `kernel-missing` stays quiet and only the fragment's own findings remain. `include=` adds what the fragment needs without being under test, such as the fragment its `requires` names. `base=` replaces the platform: another fragment, or a whole `Recipe` whose `common` gains the items (then `variant=` picks one of its variants). `plan` takes a whole recipe and one of its variants (default: the first).
+
+An `Image` is one variant. It compiles in memory, with no temporary directory to manage, the first time a query reads the tree, so `image.lint()` still works on a recipe that does not compile. Shipped things come from the compiled tree, declared things from the resolved variant:
+
+| Query | Returns |
+|---|---|
+| `image.packages` | `{name: "runtime" or "build"}`, from the compiled `mkosi.conf`, including packages the compiler adds (`passwd`, the runtime tools' packages) |
+| `image.file(path)`, `image.files` | `ImageFile`: `content` (bytes), `text`, `mode`, `stage` (`extra` or `skeleton`), `owner` (always `root`), `origin` (its provenance, empty for files the compiler writes) and `fragment` (the innermost fragment that declared it); `files` maps every absolute path to one |
+| `image.unit(name)`, `image.service(name)` | `UnitView` of a shipped unit (`.service` is optional): `get(section, key)`, `values(section, key)`, `requires(unit)`, `wants(unit)`, `after(unit)`, `wanted_by`, `exec_start`, `user`, `environment` (a dict), `enabled`, `text` |
+| `image.users`, `image.groups`, `image.builds` | The declared `User`, `Group` and `Build` values, by name |
+| `image.init_steps` | `InitStep(name, priority, after, script, builtin)` in the order runtime-init runs them; the built-in `keys`, `disks` and `secrets` steps have `builtin=True` and no script |
+| `image.hooks(stage)` | The `Hook`s of one stage (`postinst`, `finalize`...), in run order |
+| `image.settings(section)` | `{key: values}` of one `mkosi.conf` section |
+| `image.lint()` | The variant's findings, as `lint(recipe, variants=[variant])` reports them |
+| `image.tree`, `image.resolved`, `image.recipe` | The raw `Tree` (for golden comparisons), the `Resolved` variant, the planned recipe |
+
+```python
+from tundravm import File, Fragment, Init, Package, Service, User
+from tundravm.testing import assert_clean, fragment_plan
+
+APP = Fragment(
+    "app",
+    (
+        Package("curl"),
+        File("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
+        User("app"),
+        Init("app-state", "install -d -o app /var/lib/app", priority=40),
+        Service("app", "/usr/bin/app", user="app", env=(("PORT", "8080"),)),
+    ),
+)
+
+
+def test_app_is_clean():
+    assert_clean(fragment_plan(APP))
+
+
+def test_app_ships_and_wires_its_service():
+    image = fragment_plan(APP)
+    assert image.packages["curl"] == "runtime"
+    assert image.file("/usr/bin/app").mode & 0o111
+    unit = image.service("app")
+    assert unit.enabled and unit.user == "app"
+    assert unit.requires("runtime-init.service") and unit.after("runtime-init.service")
+    assert unit.environment == {"PORT": "8080"}
+    assert [step.name for step in image.init_steps] == ["app-state"]
+```
+
+A whole recipe works the same way, one variant at a time:
+
+```python
+from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.testing import plan
+
+RECIPE = Recipe(
+    name="web",
+    common=Fragment("web", (Package("linux-image-amd64"),)),
+    variants=(
+        Variant("default", target="qemu"),
+        Variant("azure", target="azure", add=Fragment("azure-tools", (Package("jq"),))),
+    ),
+)
+
+
+def test_only_azure_ships_jq():
+    assert plan(RECIPE, "azure").packages["jq"] == "runtime"
+    assert "jq" not in plan(RECIPE).packages
 ```
 
 ## Diagnostics
 
 ```python
-assert_clean(diagnostics, /, *, variants=None, allow=(), strict=None) -> diagnostics
-assert_diagnostic(diagnostics, code, /, *, severity=None, variant=None, subject=None, location=None, variants=None) -> Diagnostic
+assert_clean(subject, /, *, warnings="fail", allow=(), variants=None) -> diagnostics
+assert_diagnostic(subject, code, /, *, severity=None, variant=None, subject=None, location=None, variants=None) -> Diagnostic
 ```
 
-- `assert_clean(lint(recipe))` fails listing every error and warning whose code is not in `allow`. For a list of diagnostics `strict` defaults to true (warnings fail); pass `strict=False` to fail on errors only.
-- `assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default")` returns the first diagnostic matching every field you give, or fails naming the fields it wanted (`no diagnostic with code='disk-key-undefined', severity='error', variant='default'; found:`) and listing what was found. `severity` replaces the old `level=` keyword. `variant` is the variant, `""` for the recipe as a whole (the common fragment, the lockfile, the host); `location` matches a finding's source position (`file:line`).
-- Both also accept a `Recipe` and lint it for you (then `strict` defaults to false, and `variants=` limits the variants linted).
+Both take an `Image`, a `Recipe` (linted for `variants=`, default: all) or the diagnostics `lint()` returned.
+
+- `assert_clean(image)` fails listing every error and warning whose code is not in `allow`, for every kind of input. `warnings="allow"` fails on errors only. `strict=` is the old spelling (`strict=False` is `warnings="allow"`).
+- `assert_diagnostic(image, "disk-key-undefined", variant="default")` returns the first diagnostic matching every field you give, or fails naming the fields it wanted (`no diagnostic with code='disk-key-undefined', variant='default'; found:`) and listing what was found. `variant` is the variant, `""` for the recipe as a whole (the common fragment, the lockfile, the host); `location` matches a finding's source position (`file:line`).
 
 ```python
-from tundravm import Disk, Fragment, Key, Recipe, lint
-from tundravm.testing import assert_diagnostic
+from tundravm import Disk, Key, Service
+from tundravm.testing import assert_diagnostic, fragment_plan
 
 
 def test_disk_without_its_key():
-    disk = Disk("data", mount="/data", key=Key("data"))
-    recipe = Recipe(name="t", common=Fragment("t", items=(disk,)))
-    found = assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default", subject="data")
+    image = fragment_plan(Disk("data", mount="/data", key=Key("data")))
+    found = assert_diagnostic(image, "disk-key-undefined", variant="default", subject="data")
     assert found.severity == "error"
+
+
+def test_service_needs_its_user():
+    image = fragment_plan(Service("app", "/usr/bin/app", user="ghost"))
+    assert assert_diagnostic(image, "service-user-missing", subject="app").severity == "error"
 ```
 
-## Compiled trees
+## Trees on disk
 
 ```python
 compile_tree(recipe, *, variants=None, path=None) -> CompiledTree
 ```
 
-Compiles the recipe (every variant, or the names in `variants`) into `path` or a fresh temporary directory, without a lockfile. `CompiledTree` reads what tests usually inspect; every `profile` argument is a variant name and defaults to the first compiled variant:
-
-| Method | Returns |
-|---|---|
-| `tree.root`, `tree.variants` | The directory, the compiled variant names |
-| `tree.profile(name)` | The variant's directory |
-| `tree.files(name)` | Every file path under it, sorted |
-| `tree.read(relpath, name)`, `tree.exists(relpath, name)`, `tree.path(relpath, name)` | One file |
-| `tree.conf(name)` | `mkosi.conf` |
-| `tree.unit(unit_name, name)` | A shipped unit file (`.service` is optional) |
-| `tree.script(phase, name)` | The phase script, e.g. `tree.script("postinst")` |
-| `tree.runtime_init(name)` | `/usr/bin/runtime-init` |
-
-```python
-from tundravm import Fragment, Recipe, Service
-from tundravm.testing import compile_tree
-
-
-def test_app_unit_is_enabled():
-    recipe = Recipe(name="t", common=Fragment("t", items=(Service("app", "/usr/bin/app"),)))
-    tree = compile_tree(recipe)
-    assert "ExecStart=/usr/bin/app" in tree.unit("app.service")
-    assert "systemctl enable app.service" in tree.script("postinst")
-```
+For a test that needs real files (a CLI run, a tool reading the tree), `compile_tree` writes the recipe (every variant, or the names in `variants`) into `path` or a fresh temporary directory, without a lockfile. `CompiledTree` has `root`, `variants` and `default_variant`; `variant(name)` is a variant's directory, and `files`, `read`, `exists`, `path`, `conf`, `unit`, `script` and `runtime_init` take an optional `variant=` (default: the first compiled variant). Prefer `fragment_plan` and `plan` for assertions: they need no disk and answer typed questions.
 
 ## Golden trees
 
@@ -81,6 +137,8 @@ def test_committed_tree_is_current():
 ```
 
 `compile(recipe)` without `lock=` ignores any lockfile and builds sources from their refs, while `tundravm compile` applies `build/tundravm.lock` when it exists. Compare like with like: pass the lock when the committed tree was compiled with one.
+
+To pin one variant of a fragment's output, compare its plan's tree: `assert_tree(fragment_plan(APP).tree, Path("tests/golden/app"))` (the tree's top directory is the variant, `default`).
 
 ```bash
 TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_recipe.py   # accept the new tree, then review the git diff
