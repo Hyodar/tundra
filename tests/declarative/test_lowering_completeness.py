@@ -216,7 +216,7 @@ def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> N
         "secrets-ops.yaml",
     ]
     assert '"app_token"' in (extra / "secrets-app.json").read_text()
-    init = _read(out, "default/mkosi.extra/usr/bin/runtime-init")
+    init = _read(out, "default/mkosi.extra/usr/lib/runtime-init/secrets")
     assert "secret-delivery setup /etc/tdx/secrets-app.yaml" in init
     assert "secret-delivery setup /etc/tdx/secrets-ops.yaml" in init
     build = _read(out, "default/scripts/04-build.sh")

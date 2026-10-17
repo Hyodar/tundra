@@ -21,9 +21,11 @@ __version__ = "0.1.0"
 from .attestation import Attestation, attest, read_attestation
 from .changes import ChangeReport, changes
 from .declarative import (
+    RUNTIME_INIT,
     Artifact,
     Azure,
     Backend,
+    BootStep,
     Build,
     Cargo,
     Debian,
@@ -47,7 +49,6 @@ from .declarative import (
     Hook,
     Http,
     Imported,
-    Init,
     Install,
     Kernel,
     Key,
@@ -60,6 +61,7 @@ from .declarative import (
     Platform,
     Policy,
     Qemu,
+    Ready,
     Recipe,
     Ref,
     Remove,
@@ -159,7 +161,9 @@ __all__ = [
     "Hook",
     "Http",
     "Imported",
-    "Init",
+    "BootStep",
+    "Ready",
+    "RUNTIME_INIT",
     "Install",
     "Kernel",
     "Key",

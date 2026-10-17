@@ -27,7 +27,6 @@ SECRET_DELIVERY_BUILD_PACKAGES = (
 
 SECRET_DELIVERY_DEFAULT_CONFIG_PATH = "/etc/tdx/secrets.yaml"
 SECRET_DELIVERY_DEFAULT_MANIFEST_PATH = "/etc/tdx/secrets.json"
-SECRET_DELIVERY_INIT_PRIORITY = 30
 SECRET_ENV_DIRECTORY = "/run/secrets"
 """Where a service's ``SecretEnv`` values are delivered, one ``<service>.env`` file each."""
 _UNIT_DIRECTORY = "/usr/lib/systemd/system"
@@ -254,7 +253,7 @@ class SecretDelivery(Module):
             )
 
     def init_script(self) -> str:
-        """The runtime-init step: ``secret-delivery setup`` on the config (priority 30)."""
+        """The ``secrets`` runtime-init step: ``secret-delivery setup`` on the config."""
         return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
 
     def source_spec(self) -> SourceBuild:

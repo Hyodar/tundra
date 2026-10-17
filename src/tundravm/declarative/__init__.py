@@ -45,7 +45,9 @@ from .lifecycle import (
 )
 from .lower import lower
 from .model import (
+    RUNTIME_INIT,
     Boot,
+    BootStep,
     Build,
     Cargo,
     Check,
@@ -65,7 +67,6 @@ from .model import (
     Group,
     Hook,
     Http,
-    Init,
     Install,
     Kernel,
     Key,
@@ -75,6 +76,7 @@ from .model import (
     Partition,
     Phase,
     Platform,
+    Ready,
     Recipe,
     Ref,
     Remove,
@@ -127,7 +129,9 @@ __all__ = [
     "Hook",
     "Http",
     "Imported",
-    "Init",
+    "BootStep",
+    "Ready",
+    "RUNTIME_INIT",
     "Install",
     "Kernel",
     "Key",

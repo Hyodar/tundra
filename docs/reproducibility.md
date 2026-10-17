@@ -65,7 +65,7 @@ Version 4 covers every input that defines the image:
 |---|---|
 | `distribution` | `base`, `arch`, `mirror`, `tools_mirror`, `snapshot`, `epoch` |
 | `compiler` | the tundravm version, the mkosi dialect and the recipe's mkosi options (sandbox files by sha256) |
-| `default_profile`, `init_scripts` | the default variant's name; its `runtime-init` steps (priority and script sha256) in the order the script runs them: lowest priority first, equal priorities in the order `Init.after` resolves. A variant that adds steps of its own records its merged sequence as `variants.<name>.init_scripts`, so reordering steps drifts the lock |
+| `default_profile`, `init_scripts` | the default variant's name; its `runtime-init` steps (step name and script sha256) in run order: the topological order of their `after`/`before` edges, the built-ins first and declared steps in declaration order among the steps ready together. A variant that adds steps of its own records its merged sequence as `variants.<name>.init_scripts`, so reordering steps drifts the lock |
 | `variants.<name>.<section>` | `packages`, `build_packages`, `files`, `skeleton_files`, `users`, `services`, `hooks`, `phases`, `partitions`, `repositories`, `secrets`, `templates`, `build_sources`, `source_builds`, `output_targets`, and `extends` for a variant with a parent |
 | `variants.<name>.kernel` | the kernel's version, source identity, cmdline, `tdx` flag and the sha256 of its config bytes (`null` when the variant builds no kernel) |
 | `variants.<name>.mkosi` | the variant's mkosi options, only where they differ from the default variant's |

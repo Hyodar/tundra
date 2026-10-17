@@ -91,10 +91,10 @@ recipe = Recipe(
 _APP_IMPORTS = {
     "service": (
         "from tundravm import (\n"
+        "    BootStep,\n"
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
-        "    Init,\n"
         "    Package,\n"
         "    Recipe,\n"
         "    Resolved,\n"
@@ -108,10 +108,10 @@ _APP_IMPORTS = {
     ),
     "cloud": (
         "from tundravm import (\n"
+        "    BootStep,\n"
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
-        "    Init,\n"
         "    Package,\n"
         "    Recipe,\n"
         "    Resolved,\n"
@@ -131,11 +131,11 @@ _APP_IMPORTS = {
     ),
     "prover": (
         "from tundravm import (\n"
+        "    BootStep,\n"
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
         "    Disk,\n"
-        "    Init,\n"
         "    Key,\n"
         "    Package,\n"
         "    Recipe,\n"
@@ -184,8 +184,8 @@ class App(Composite):
         yield User("app", home="/var/lib/app")
         config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
         yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
-        # Runs in runtime-init before the service starts (after_init=True).
-        yield Init("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app")
+        # A boot step: Service waits for every runtime-init step unless given needs=.
+        yield BootStep("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app")
         yield Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",
@@ -284,7 +284,7 @@ recipe = Recipe(
         disk,
         secrets,
         RuntimeTools(TUNDRA_TOOLS),
-        Tdxs(source=TUNDRA_TOOLS, after_init=True),
+        Tdxs(source=TUNDRA_TOOLS, needs=[secrets.ready]),
         App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(

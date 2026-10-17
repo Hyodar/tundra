@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from tundravm._modules.init import Init
+from tundravm._modules.init import Init, wait_units
 from tundravm._options import MkosiOptions
 from tundravm.compiler import EmitConfig, MkosiEmission, emit_mkosi_tree
 from tundravm.errors import PolicyError, ValidationError
@@ -117,25 +117,27 @@ def _with_init(lowered: Lowered) -> Lowered:
         if not merged:
             continue
         network_setup = _needs_network_setup(copied, profile.name)
+        per_step = _per_step(copied, profile.name)
         if profile.extends is not None and not profile.init_scripts:
             # inherits the default profile's runtime-init files and enablement,
-            # unless its own network-setup.service changes the unit
+            # unless its own network-setup.service changes the units
             if network_setup != _needs_network_setup(copied, profile.extends):
-                init.apply(profile, scripts=merged, network_setup=network_setup)
+                init.apply(profile, scripts=merged, network_setup=network_setup, per_step=per_step)
             continue
-        init.apply(profile, scripts=merged, network_setup=network_setup)
+        init.apply(profile, scripts=merged, network_setup=network_setup, per_step=per_step)
         generators.append(profile)
     service = init.service_name
     for profile in targets:
-        if not copied.init_scripts(profile.name):
-            continue
+        steps = {entry.name for entry in copied.init_scripts(profile.name)}
+        per_step = _per_step(copied, profile.name)
         patched: list[ServiceSpec] = []
         for svc in profile.services:
-            if svc.name == service or svc.name.endswith(".target") or not svc.after_init:
+            waits = wait_units(svc.needs, steps=steps, per_step=per_step)
+            if svc.name == service or svc.name.endswith(".target") or not waits:
                 patched.append(svc)
                 continue
-            after = svc.after if service in svc.after else (service, *svc.after)
-            requires = svc.requires if service in svc.requires else (service, *svc.requires)
+            after = (*(unit for unit in waits if unit not in svc.after), *svc.after)
+            requires = (*(unit for unit in waits if unit not in svc.requires), *svc.requires)
             patched.append(replace(svc, after=after, requires=requires))
         profile.services = patched
     # Enable runtime-init (systemctl enable + minimal.target.wants) where it is generated.
@@ -143,6 +145,11 @@ def _with_init(lowered: Lowered) -> Lowered:
         if not any(s.name == service for s in profile.services):
             enable_unit(profile, service)
     return copied
+
+
+def _per_step(lowered: Lowered, profile: str) -> bool:
+    """Whether *profile* runs each runtime-init step as its own unit (all but ``nethermind-v1``)."""
+    return lowered.mkosi_for(profile).dialect != "nethermind-v1"
 
 
 def _needs_network_setup(lowered: Lowered, profile: str) -> bool:

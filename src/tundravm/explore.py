@@ -24,6 +24,7 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+from ._modules.init import runtime_init_order
 from .compiler import PHASE_ORDER
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
@@ -44,7 +45,7 @@ from .declarative.lifecycle import (
     variant_provenance,
 )
 from .declarative.lower import lower
-from .declarative.model import BUILTIN_INITS, Declaration, Hook, Init, Recipe
+from .declarative.model import BUILTIN_STEPS, BootStep, Declaration, Hook, Recipe
 from .declarative.resolve import Identity, Origin, _run, identity, level_name
 from .declarative.resolve import describe as describe_identity
 from .errors import TdxError, ValidationError
@@ -560,9 +561,8 @@ def _scripts(img: Lowered, name: str, resolutions: Mapping[str, _Resolution]) ->
     inits_by_script = {
         init.script.strip(): describe_identity(identity(init))
         for init in items
-        if isinstance(init, Init)
+        if isinstance(init, BootStep)
     }
-    builtins = {priority: step for step, priority in BUILTIN_INITS.items()}
     hooks: list[dict[str, Any]] = []
     for phase in PHASE_ORDER:
         for hook in profile.hooks:
@@ -579,14 +579,15 @@ def _scripts(img: Lowered, name: str, resolutions: Mapping[str, _Resolution]) ->
             )
     init = [
         {
-            "priority": entry.priority,
+            "step": entry.name,
+            "after": list(entry.after),
             "declaration": inits_by_script.get(entry.script.strip()),
-            "builtin": builtins.get(entry.priority)
-            if entry.script.strip() not in inits_by_script
+            "builtin": entry.name
+            if entry.name in BUILTIN_STEPS and entry.script.strip() not in inits_by_script
             else None,
             "script": _clip_script(entry.script)[0],
         }
-        for entry in profile.init_scripts
+        for entry in runtime_init_order(profile.init_scripts)
     ]
     sources = []
     for source_name, spec in sorted(profile.source_builds.items()):
@@ -1137,7 +1138,7 @@ def _scripts_html(data: Mapping[str, Any], anchors: _Anchors) -> str:
                 else _c(step["builtin"] or "generated")
             )
             parts.append(
-                f"<details><summary>{_badge('info', step['priority'])} {label}</summary>"
+                f"<details><summary>{_badge('info', step['step'])} {label}</summary>"
                 f"<pre>{_e(step['script'])}</pre></details>"
             )
         parts.append("<h4>Source builds</h4>")

@@ -371,7 +371,8 @@ def _assert_runtime_tool_hook(name: str, binary: str) -> None:
     recipe = _runtime_recipe()
     tree = compile(recipe)
     assert lower(recipe).source_builds()[name].render() == legacy
-    runtime_init = _read(tree, "default/mkosi.extra/usr/bin/runtime-init")
+    step = {"key-gen": "keys", "disk-setup": "disks", "secret-delivery": "secrets"}[binary]
+    runtime_init = _read(tree, f"default/mkosi.extra/usr/lib/runtime-init/{step}")
     assert runtime_init.count(f"/usr/bin/{binary} setup ") == 1
     assert not [d for d in lint(recipe) if d.severity == "error"]
 

@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Mapping
+import shlex
+from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -32,6 +33,7 @@ from tundravm.measure.policy import (
 from ._component import Composite, Export, HttpEndpoint, component
 from .config import ConfigFile
 from .model import (
+    BootStep,
     Build,
     Cargo,
     File,
@@ -43,6 +45,7 @@ from .model import (
     Http,
     Install,
     Package,
+    Ready,
     Setting,
     Unit,
     User,
@@ -275,7 +278,7 @@ class Tdxs(Composite):
     """The ``tdxs`` attestation service: source build, config, socket-activated units, account.
 
     Declares the ``tdx`` group (other services join it for ``/dev/tdx_guest``) and
-    the ``tdxs`` user. *after_init* orders both units after ``runtime-init.service``.
+    the ``tdxs`` user. *needs* lists the runtime-init steps both units wait for.
     Fragment name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
     (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
@@ -288,7 +291,7 @@ class Tdxs(Composite):
     get_collateral: bool = False
     verify_imds: bool = False
     verify_identity_token: bool = False
-    after_init: bool = False
+    needs: Sequence[Ready] = ()
     policy_file: Path | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
@@ -383,13 +386,13 @@ class Tdxs(Composite):
                     spec.service_name,
                     spec.render_service_unit(),
                     enabled=True,
-                    after_init=self.after_init,
+                    needs=self.needs,
                 ),
                 Unit(
                     spec.socket_name,
                     spec.render_socket_unit(),
                     enabled=True,
-                    after_init=self.after_init,
+                    needs=self.needs,
                 ),
                 Group(spec.group),
                 User(spec.user, home=f"/home/{spec.user}", primary_group=spec.group),
@@ -556,6 +559,86 @@ class CargoBinary(Composite):
         return Fragment(self.name, items=(build,))
 
 
+def RuntimeDirectory(  # noqa: N802 - a declaration factory, spelled like the declarations
+    path: str,
+    *,
+    owner: str | None = None,
+    group: str | None = None,
+    mode: int = 0o755,
+    after: Sequence[Ready] = (),
+    name: str | None = None,
+) -> BootStep:
+    """A :class:`BootStep` that creates directory *path* at boot (``install -d``).
+
+    *after* takes readiness handles (``after=[disk.ready]`` for a directory on a
+    ``Disk``); the step is named *name*, else ``dir`` plus *path* with ``/`` as
+    ``-`` (``dir-persistent-exporter``). Its ``.ready`` is what ``needs=`` takes.
+    """
+    target = _runtime_path("RuntimeDirectory", path)
+    command = ["install", "-d", "-m", _octal("RuntimeDirectory", mode)]
+    command += ["-o", owner] if owner else []
+    command += ["-g", group] if group else []
+    script = shlex.join([*command, target]) + "\n"
+    return BootStep(name or _step_name("dir", target), script, after=tuple(after))
+
+
+def RuntimeFile(  # noqa: N802 - a declaration factory, spelled like the declarations
+    path: str,
+    text: str,
+    *,
+    owner: str | None = None,
+    group: str | None = None,
+    mode: int = 0o644,
+    after: Sequence[Ready] = (),
+    name: str | None = None,
+) -> BootStep:
+    """A :class:`BootStep` that writes *text* to *path* at boot, then sets its mode and owner.
+
+    The parent directory must exist by then: order the step after the one that
+    creates it (``after=[directory.ready]``). The step is named *name*, else
+    ``file`` plus *path* with ``/`` as ``-``. Its ``.ready`` is what ``needs=`` takes.
+    """
+    target = _runtime_path("RuntimeFile", path)
+    if not isinstance(text, str):
+        raise ValidationError(
+            f"RuntimeFile({path!r}): text must be a str, got {text!r}.",
+            hint="Pass the file's content as a str.",
+        )
+    quoted = shlex.quote(target)
+    lines = [
+        f"printf '%s' {shlex.quote(text)} > {quoted}",
+        f"chmod {_octal('RuntimeFile', mode)} {quoted}",
+    ]
+    if owner or group:
+        spec = f"{owner or ''}:{group}" if group else str(owner)
+        lines.append(f"chown {shlex.quote(spec)} {quoted}")
+    script = "\n".join(lines) + "\n"
+    return BootStep(name or _step_name("file", target), script, after=tuple(after))
+
+
+def _runtime_path(owner: str, path: str) -> str:
+    if not isinstance(path, str) or not path.startswith("/") or path == "/":
+        raise ValidationError(
+            f"{owner}: path {path!r} must be an absolute path below /.",
+            hint="Write the path from / (e.g. /persistent/app).",
+        )
+    return posixpath.normpath(path)
+
+
+def _octal(owner: str, mode: int) -> str:
+    if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
+        raise ValidationError(
+            f"{owner}: mode {mode!r} must be an int such as 0o755.",
+            hint="Pass an octal int such as 0o644.",
+        )
+    return f"{mode:04o}"
+
+
+def _step_name(prefix: str, path: str) -> str:
+    """``prefix`` plus *path* as a step name: ``/`` becomes ``-``, other odd characters ``_``."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", f"{prefix}{path.replace('/', '-')}")
+
+
 __all__ = [
     "BACKPORTS_TREE",
     "TUNDRA_TOOLS",
@@ -568,6 +651,8 @@ __all__ = [
     "Export",
     "GoBinary",
     "HttpEndpoint",
+    "RuntimeDirectory",
+    "RuntimeFile",
     "Tdxs",
     "TdxsType",
 ]

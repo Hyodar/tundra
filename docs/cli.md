@@ -143,6 +143,14 @@ pyproject: /home/me/node/pyproject.toml
 |---|---|
 | `--template minimal\|service\|cloud\|prover` | Starter recipe (default `service`). `--list-templates` prints the four with a one-line description and exits. |
 | `--release RELEASE` | Debian release the recipe's `platform=Debian(...)` names (default `trixie`). |
+| `--app go` | Instead of a template, a recipe that builds one Go program and runs it as a service (see [A Go app](#a-go-app)); needs `--source` or `--path`. |
+| `--source URL@REF` | With `--app`: the git repository and ref to build (`https://github.com/acme/hello@v1.4.0`, `git@github.com:acme/hello.git@main`). |
+| `--path DIR` | With `--app`, instead of `--source`: a local git checkout; the recipe builds its current branch (its commit when detached). |
+| `--package PKG` | With `--app`: the Go package to build, relative to the source (default `.`). |
+| `--port N` | With `--app`: the port the service listens on, 1024-65535 (default `8080`). |
+| `--disk NAME` | With `--app`: keep the state directory on encrypted disk `NAME`, mounted at `/persistent`. |
+| `--secret NAME` | With `--app`: a secret delivered to the service as a file; needs `--delivery`. |
+| `--delivery external:NAME` | With `--secret`: what writes the secret at boot (an `ExternalDelivery`); the built-in runtime delivers only root's SSH key. |
 | `--backend KIND` | Backend the recipe binds to `backend` (default `lima`). |
 | `--ci github\|none` | `github` also writes `.github/workflows/tundravm.yml` (default `none`); on an existing project, only the workflow (see below). |
 | `--recipe RECIPE` | With `--ci github`: the existing project's recipe, relative to `DIR`; only the workflow is written. |
@@ -193,6 +201,36 @@ next (from svc):
   4. tundravm ci my-node.py --tree mkosi       the lint, tree and lockfile checks CI runs
   5. tundravm bake my-node.py --build build    build the image
 ```
+
+### A Go app
+
+`tundravm init --app go` writes a recipe for one Go program instead of a template: a `GoBinary` built from `--source` (or the `--path` checkout) at `/usr/bin/NAME`, a system user `NAME`, and a `Service` that runs `binary.executable --addr=:PORT` as that user, enabled under `minimal.target`. `NAME` is the recipe name, lowercased. Before it starts, the service creates its state directory (`/var/lib/NAME`, or `/persistent/NAME` with `--disk`) as root and passes it as `STATE_DIRECTORY`. The `--addr` flag is a guess the recipe marks: change it to the flags your program takes.
+
+- `--disk NAME` adds a TPM-kept `Key`, an encrypted `Disk` mounted at `/persistent` and `RuntimeTools(TUNDRA_TOOLS)`; the service starts once the disk is mounted (`needs=(disk.ready,)`). The disk's device is the top-level `DISK_DEVICE = "/dev/vdb"` (qemu's second virtio disk): set it to the device your platform attaches before you build for it.
+- `--secret NAME --delivery external:AGENT` adds a `Secrets` block whose one entry is a `SecretFile` at `/run/NAME/SECRET` owned by the app, delivered by `ExternalDelivery("AGENT", supports=("file",))`; the service reads the path from `SECRET_FILE` (the secret's name in capitals, `API_TOKEN_FILE` for `api-token`). `Secrets` also runs tundra-tools' SSH-key step, which waits each boot for root's key (see [Concepts: Secret delivery at boot](concepts.md#secret-delivery-at-boot)) on `8081` when the app has `8080`; the service does not wait for it.
+- With `--path`, the checkout's absolute path is part of the compiled tree: point `SOURCE` at the pushed repository before sharing the project.
+
+`tests/test_NAME.py` reads the planned default variant with `tundravm.testing.plan` and the service's fragment with `fragment_plan`: the build installs the executable, `ExecStart` runs it on the port, the service runs as its user and is enabled, plus the disk and secret wiring when asked for. It passes before `tundravm lock` (it allows only `source-unpinned`) and does not compare `mkosi/`:
+
+```console
+$ tundravm init hello --app go --source https://github.com/acme/hello@v1.4.0 --package ./cmd/hello --disk data --backend inprocess --no-doctor
+created hello/hello.py
+created hello/tests/test_hello.py
+created hello/pyproject.toml
+created hello/README.md
+created hello/.gitignore
+lint hello.py: 0 errors, 6 warnings, 0 infos (source-unpinned; `tundravm lint hello.py` lists them)
+  `tundravm lock hello.py` pins the source builds
+next (from hello):
+  1. tundravm lock hello.py                  record recipe sections and pin source repositories/downloads in build/tundravm.lock
+  2. tundravm compile hello.py --tree mkosi  write the mkosi tree; commit it
+  3. uv run pytest tests                     run test_hello.py on the planned image
+  4. tundravm ci hello.py --tree mkosi       the lint, tree and lockfile checks CI runs
+  5. tundravm bake hello.py --build build    build the image
+  `uv sync` installs the pinned dependency, tundravm at 1111444654a1
+```
+
+`--app` and `--template` are exclusive; an app option without `--app`, `--secret` without `--delivery external:NAME`, a port below 1024 (the service is not root) or a `--path` that is not a git checkout with a commit is `E_VALIDATION`, and nothing is written.
 
 To add CI to a project that already exists, run `tundravm init --ci github` in it. The project exists when `DIR/pyproject.toml` has a `[tool.tundravm]` table (its `recipe` names the recipe, its `tree` the `--tree` the workflow checks, default `mkosi`) or `--recipe RECIPE` names the recipe. Then `init` writes only `.github/workflows/tundravm.yml` and the `.gitignore` block when it is missing; the recipe, tests, `pyproject.toml` and `README.md` are never touched, and nothing is linted or probed. An existing workflow is refused with `E_VALIDATION`; `--force` overwrites the workflow only:
 
@@ -247,14 +285,14 @@ What maps back:
 
 - `mkosi.conf` and `mkosi.conf.d/*.conf`: `Distribution`/`Release`, `Architecture`, `Mirror`, `ToolsTreeMirror`, `Snapshot`, `SourceDateEpoch` become `platform=Debian(release, arch=, mirror=, tools_mirror=, snapshot=, epoch=, boot=None)` (the tree lists its packages itself, so the platform adds none); `Packages=` and `BuildPackages=` become `Package(...)` (`role="build"`); the kernel comment and build script a `Kernel`; every other key a `Setting(section, key, values)`. Keys the compiler writes itself (`ImageId`, `ExtraTrees`, `ManifestFormat=json`, the script keys, ...) are dropped.
 - `mkosi.extra/**` and `mkosi.skeleton/**`: a unit under `usr/lib/systemd/system` whose content is exactly what `Service(...)` renders becomes that `Service`, any other unit a `Unit(name, content)`; text files become `File(path, content, mode=)` (`stage="skeleton"` for the skeleton). Binary files and files over 64 KiB become `File(path, TREE / ...)`, read from the tree at compile time, with a note. Symlinks and empty directories are noted and not imported. The group write bit a `002` umask leaves is dropped from modes.
-- The compiler's own lines become declarations again: the synthetic postinst (`User`, `Group`, unit enablement, masking and disabling, `Debloat`'s systemd minimisation), the finalize debloat block, `runtime-init` (`Init`), the cloud glue (`target="azure"`/`"gcp"`), backports (`Backports`) and the EFI stub (`EfiStub`, unpinned or locked; a locked one is read with the recipe's `Snapshot=`).
+- The compiler's own lines become declarations again: the synthetic postinst (`User`, `Group`, unit enablement, masking and disabling, `Debloat`'s systemd minimisation), the finalize debloat block, a `nethermind-v1` `/usr/bin/runtime-init` (`BootStep("runtime-init", ...)`; the current dialect's per-step units and scripts come back verbatim as `Unit` and `File`), the cloud glue (`target="azure"`/`"gcp"`), backports (`Backports`) and the EFI stub (`EfiStub`, unpinned or locked; a locked one is read with the recipe's `Snapshot=`).
 - Source build hooks in the build script become `Build(...)` again (see the guarantees below); the generated lines after a recognized hook are not imported.
 - `scripts/*` and `mkosi.sync`, `mkosi.prepare`, `mkosi.build`, `mkosi.postinst`, `mkosi.finalize`, `mkosi.postoutput`, `mkosi.clean`: what is left becomes `Hook(name, phase, script)`, verbatim, without the `#!/usr/bin/env bash` / `set -euo pipefail` preamble the compiler adds (or the script's own shebang line), so importing tundravm's output does not nest preambles.
 - `mkosi.sandbox`, `mkosi.cache`, `mkosi.tools`, `mkosi.builddir`, `mkosi.output` and `.sources` files are skipped with a note; anything else unread is noted `not mapped`.
 
 Source builds, per dialect:
 
-- `current`: every source build hook starts with `# tundravm build: <json>`, its declaration without a pin (`name`, `source`, `build`, `install`, and `cache_key` holding the `cache_namespace`). The import reads the `Build` back exactly as declared: `Git`/`Http` source, `using=Go(...)`/`Cargo(...)`/`Dotnet(...)` or `script=` with its `packages` and `env`, `install=`, `cache_namespace=`. The builds `Key`, `Disk` and `Secrets` generate (`key-generation`, `disk-encryption`, `secret-delivery`) come back as `Build(..., using=Go(...), install=(Install("build/key-gen", "/usr/bin/key-gen", artifact=True),))`, not as the declarations that generated them (their configs and `runtime-init` steps come back as `File` and `Init`). Unlocked, the import compiles back to the tree. Locked (the hooks copy pinned checkouts), the module carries the refs, not the pins: `tundravm lock` pins it again (the same pins when the refs still resolve to them) and it then compiles back to the tree; the round-trip note compares with the pinned hooks swapped for their unpinned form and names the pins (`round trip: the recipe compiles back to this tree once locked to the same pins (key-generation@a91272e9ebde, ...)`).
+- `current`: every source build hook starts with `# tundravm build: <json>`, its declaration without a pin (`name`, `source`, `build`, `install`, and `cache_key` holding the `cache_namespace`). The import reads the `Build` back exactly as declared: `Git`/`Http` source, `using=Go(...)`/`Cargo(...)`/`Dotnet(...)` or `script=` with its `packages` and `env`, `install=`, `cache_namespace=`. The builds `Key`, `Disk` and `Secrets` generate (`key-generation`, `disk-encryption`, `secret-delivery`) come back as `Build(..., using=Go(...), install=(Install("build/key-gen", "/usr/bin/key-gen", artifact=True),))`, not as the declarations that generated them (their configs and runtime-init step scripts and units come back as `File` and `Unit`). Unlocked, the import compiles back to the tree. Locked (the hooks copy pinned checkouts), the module carries the refs, not the pins: `tundravm lock` pins it again (the same pins when the refs still resolve to them) and it then compiles back to the tree; the round-trip note compares with the pinned hooks swapped for their unpinned form and names the pins (`round trip: the recipe compiles back to this tree once locked to the same pins (key-generation@a91272e9ebde, ...)`).
 - `nethermind-v1`: hooks carry no marker. A hook whose URL, ref (or full commit when it was locked), cache key, install steps and build command parse into a `Build(..., script=...)` that renders the same line comes back as that `Build`; anything else stays in a `Hook`. A `lost declaration` note per build says what it cannot carry: the recipe kind (a `Go`, `Cargo` or `Dotnet` recipe comes back as its command, `script=`) and, for a locked hook, the ref it was pinned from (`Git(url, <commit>)` compiles to the same line).
 
 `coverage` counts `declared` declarations, `verbatim` ones (`File`, `Unit` with content, `Hook`, `Setting`) and `lost`, the `lost declaration` notes.
@@ -267,7 +305,7 @@ $ tundravm compile node.py --tree mkosi
 ...
 $ tundravm import mkosi --name node --output node_imported.py
 wrote node_imported.py
-coverage: 24 declared, 3 verbatim, 0 lost
+coverage: 23 declared, 6 verbatim, 0 lost
 other (1):
   note: round trip: the recipe compiles back to this tree
 $ tundravm diff node_imported.py --tree mkosi
@@ -284,15 +322,19 @@ recipe = Recipe(
         ...
         User("app", home="/var/lib/app"),
         File("/etc/app/app.conf", APP_CONF),
+        File("/usr/lib/runtime-init/app-state", APP_STATE, mode=0o755),
         Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",
             description="app 0.1.0",
             user="app",
             working_dir="/var/lib/app",
+            after=("runtime-init.service",),
+            requires=("runtime-init.service",),
             restart="on-failure",
         ),
-        Init("runtime-init", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
+        Unit("runtime-init.service", content=RUNTIME_INIT_SERVICE, enabled=True),
+        Unit("runtime-init-app-state.service", content=RUNTIME_INIT_APP_STATE_SERVICE),
     ),
     variants=(
         Variant("default", outputs=("qemu",)),
@@ -418,7 +460,7 @@ Outputs: `qemu` → `azure`
 
 ### Explaining one object
 
-`inspect RECIPE --variant NAME --why SUBJECT` explains one object of one variant. `SUBJECT` is an absolute image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME` (a bare name is tried as each). It prints the declarations that produce it (type and natural key), each with its resolution steps: `declared in common`, `added in variant X`, `size edited in variant Y` (an edit names the fields it set), `removed in variant Z`, with the fragment chain it came through (a Composite shows its class, `tdxs (Tdxs)`). Then the compiled-tree files that hold it, relative to the variant's directory, and the lines the compiler generated for it: `After=`/`Requires=runtime-init.service` for `after_init`, `systemctl enable` and `minimal.target.wants` links, drop-ins. The variant is compiled into a scratch directory; only temporary compilation files are written (under the system temp dir). An unknown subject is `E_VALIDATION` with close matches. For a recipe whose `prod` variant extends `dev` and edits `/etc/app.conf`'s content:
+`inspect RECIPE --variant NAME --why SUBJECT` explains one object of one variant. `SUBJECT` is an absolute image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME` (a bare name is tried as each). It prints the declarations that produce it (type and natural key), each with its resolution steps: `declared in common`, `added in variant X`, `size edited in variant Y` (an edit names the fields it set), `removed in variant Z`, with the fragment chain it came through (a Composite shows its class, `tdxs (Tdxs)`). Then the compiled-tree files that hold it, relative to the variant's directory, and the lines the compiler generated for it: `After=`/`Requires=` on the runtime-init units its `needs=` names, `systemctl enable` and `minimal.target.wants` links, drop-ins. The variant is compiled into a scratch directory; only temporary compilation files are written (under the system temp dir). An unknown subject is `E_VALIDATION` with close matches. For a recipe whose `prod` variant extends `dev` and edits `/etc/app.conf`'s content:
 
 ```console
 $ tundravm inspect two.py --variant prod --why /usr/lib/systemd/system/app.service
@@ -428,8 +470,8 @@ why /usr/lib/systemd/system/app.service (variant prod)
 files (in prod/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
-  After=runtime-init.service (after_init=True)
-  Requires=runtime-init.service (after_init=True)
+  After=runtime-init.service (needs RUNTIME_INIT)
+  Requires=runtime-init.service (needs RUNTIME_INIT)
   scripts/06-postinst.sh: mkosi-chroot systemctl enable app.service
   scripts/06-postinst.sh: minimal.target.wants/app.service link
 $ tundravm inspect two.py --variant prod --why /etc/app.conf
@@ -1235,7 +1277,7 @@ unknown: default measurements: the evidence holds no valid measurements policy
 | Overview | The recipe's name, base, arch, snapshot, mirror, dialect, layout and recipe digest; the lint summary with every finding (severity, code, variant, location, subject, message, hint), as `lint` reports them with the lockfile's pins applied; the lockfile's state (`current`, `drifted` with one line per drifted section, or `missing`), its recipe digest, compiler version, section digests and source pins (`--lockfile`, default `build/tundravm.lock` when it exists); and, when `--build` holds a bake, its backend, the simulated flag, the reproducibility state `bake --verify-reproducible` recorded and every artifact with its sha256 |
 | Variants | What each variant inherits, its outputs, declaration count and resolved fragments, then a matrix with one row per declaration and one column per variant: `●` present (from `common`), `+` added by a variant overlay (its own or an ancestor's), `~` edited (with the fields that differ from the first variant that has it), `−` removed, `·` absent. Expanding a declaration shows its key fields, and per variant the resolution steps (`declared in common via app`, `content edited in variant prod`), the tree files it produced and the lines the compiler generated for it (enablement links, runtime-init ordering) |
 | Emitted tree | Per variant, every path of its compiled tree grouped by directory, with its mode, size and sha256 prefix and the declarations that produced it (`declared by File(extra, /etc/app.conf)`, as `inspect --why` finds them; a compiler-generated file says so). Each file expands to its content: text up to 64 KiB (a longer file is truncated with a note; the page shows at most 4 MiB of content in all), a binary file is noted, not shown |
-| Hooks & builds | Per variant, the build hooks in stage order (`sync` to `boot`) with their scripts, each named after its `Hook` declaration or marked as generated; the runtime-init steps in the order they run, by priority (the built-in `keys`, `disks` and `secrets` steps run at 10, 20 and 30), each named after its `Init`; the source builds with their URL, ref, pin (`unpinned` without one) and install destinations; the kernel and its source |
+| Hooks & builds | Per variant, the build hooks in stage order (`sync` to `boot`) with their scripts, each named after its `Hook` declaration or marked as generated; the runtime-init steps in the order they run (the topological order of their `after`/`before` edges), each badged with its step name and named after its `BootStep` or marked as the built-in `keys`, `disks` or `secrets`; the source builds with their URL, ref, pin (`unpinned` without one) and install destinations; the kernel and its source |
 
 A declaration's name links to the files it produced and each file's "declared by" links back to the declaration; following a link switches to its tab, opens the collapsed entry and highlights it. The Variants tab has a filter box and an "only declarations that differ" switch; the Emitted tree tab has a path filter. Without JavaScript the tabs read as one long page, entries expand as native `<details>` and the links still jump.
 
@@ -1605,6 +1647,6 @@ ok lock: build/tundravm.lock is up to date
 
 A failing step prints its report, then `FAIL step: ...` and `skip` for the remaining steps, and exits 1. Under GitHub Actions the reports are workflow annotations. With `--variant`, every step checks only those variants, the lock step as `lock --check --variant` does.
 
-The steps share one loaded recipe and one lockfile (`--lockfile`, default `build/tundravm.lock`, read once): `lint --strict` and `compile --check` apply its pins, so a pinned source never reports `source-unpinned`, and the lock step compares against it. The compile step works on a copy of the recipe, so a recipe with runtime-init steps (keys, disks, secrets, `Init`) passes the lock step whenever `tundravm lock --check` passes on its own.
+The steps share one loaded recipe and one lockfile (`--lockfile`, default `build/tundravm.lock`, read once): `lint --strict` and `compile --check` apply its pins, so a pinned source never reports `source-unpinned`, and the lock step compares against it. The compile step works on a copy of the recipe, so a recipe with runtime-init steps (keys, disks, secrets, `BootStep`) passes the lock step whenever `tundravm lock --check` passes on its own.
 
 `tundravm init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and pull request: `uv sync` (`uv sync --frozen` once `uv.lock` is committed; see [Installing tundravm in the project](#installing-tundravm-in-the-project)), `tundravm inspect RECIPE --format markdown` appended to `$GITHUB_STEP_SUMMARY`, then `tundravm ci RECIPE --tree mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the job checks both. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` is set (`if: vars.TUNDRAVM_BAKE_BACKEND != ''`) to the backend kind to bake with: `local` or `inprocess`. `lima` and `nix` need `limactl` or Nix, which `ubuntu-latest` lacks; add a step that installs one before using it. It installs `bubblewrap`, `debian-archive-keyring` and `python3-pefile` from apt and mkosi `v26` from git with `pipx` (a pinned tag, so the bake's toolchain does not move between runs; edit the tag to move it), syncs the same way, runs `tundravm fetch RECIPE --build build`, `tundravm bake RECIPE --backend $TUNDRAVM_BAKE_BACKEND --build build --verify-reproducible` and `tundravm evidence RECIPE --build build --require LIST --bundle evidence.tar.gz --html evidence.html`, then uploads `evidence.tar.gz`, `evidence.html`, `build/bake-result.json`, the second build's `build/.reproduce/**/bake-result.json` (kept when it differs or fails; `include-hidden-files: true`), mkosi's artifacts (`build/*/output/*`) and the in-process backend's (`build/*/*.qcow2`, `build/*/*.vhd`, `build/*/*.tar.gz`) as the `tundravm-bake` workflow artifact. The evidence and upload steps run with `if: ${{ !cancelled() && hashFiles('build/bake-result.json') != '' }}`, so a bake that fails after writing its record (a second build that differs or fails) still leaves its evidence; the job fails on the bake's exit status, or on the evidence verdict. `--require` is `reproducible,lock,real` on `local`: the bake ran `--verify-reproducible`, `check` already requires the committed lockfile, and `local` builds real artifacts. On `inprocess` it drops `real` (`reproducible,lock`), since the in-process backend only simulates. `measured` is not required: no step exports a measurements policy; add `tundravm measure --build build --variant <variant> --export-policy build/<variant>/policy.json` per variant and `measured` to require one.

@@ -50,12 +50,12 @@
     }
   },
   "04_storage_and_secrets": {
-    "recipe": "2f51ad258bc955833805134c5c1492137eca6a6e7946e347a5cec2274c2a39b2",
-    "tree": "1154522a20c2ff1631a765aad40f670c79917642a12bab1d5de6730748c4320e",
+    "recipe": "b59d6284f61dc90b89dae6acc4dd1e720dd9a98aa75f3b8b72c4330de78d58fb",
+    "tree": "67b852c4a1b401d5258e9f28460f576312e97e57b091c9e0ce64c2891cc4ad10",
     "variants": {
       "default": {
-        "recipe": "2f51ad258bc955833805134c5c1492137eca6a6e7946e347a5cec2274c2a39b2",
-        "tree": "1154522a20c2ff1631a765aad40f670c79917642a12bab1d5de6730748c4320e"
+        "recipe": "b59d6284f61dc90b89dae6acc4dd1e720dd9a98aa75f3b8b72c4330de78d58fb",
+        "tree": "67b852c4a1b401d5258e9f28460f576312e97e57b091c9e0ce64c2891cc4ad10"
       }
     }
   },
@@ -88,24 +88,24 @@
     }
   },
   "init-cloud": {
-    "recipe": "7b0e4bc04321b54bb3c3e7679dae02191fc5f3aaf78af29eb67b4a207d7e4825",
-    "tree": "a5f37641ccc79aa0834ee9e9b8cee9a9ca80b35b60e12eb70718237e1406ecbc",
+    "recipe": "275535fe1fa7f52238a5a1e453d47b0f1c7ba81d7e1c312bbce6173d72c9790f",
+    "tree": "0b55470ede9c3039b1930b93b891b89df5e189a617d948da235d6f165ce657bc",
     "variants": {
       "azure": {
-        "recipe": "504abcef1a51c20942c02976575fb15b063daba81bf271b7cdabc3d0c5612297",
-        "tree": "48fb0e828d09eec535f5c6e4aa71f844c25d4495bdfab3631df0de849edeb57b"
+        "recipe": "e4fda98a8c4d5feae2640bf59ece224611957235b7e9a1f284d53f7948bdae9e",
+        "tree": "e8c3d9c24c94f6c45b5b9ef716060c28a65774e79a2e784c3c92c30b538aec17"
       },
       "default": {
-        "recipe": "769cd4206f897dec3dd2bc9aff66564e65d85552e7c83f85ea1bffbf8376df18",
-        "tree": "91b8a6a6cffb1166cd640341c2e1d9e2b6bd0ba4c6e17ed6d8e5472dd63234e4"
+        "recipe": "d66a23e7a1bedc2b3272e81520b4799f489e7ef3a710ab99f37d34f27fa7ed73",
+        "tree": "375002b528ab50d7bb20435238c28ceae900aa9c92f00dcc6f487cd7a119aa22"
       },
       "dev": {
-        "recipe": "29ff3c22a8e6db086ef09ee66e1d1f5c728539cea16101cff7046ee8529f4014",
-        "tree": "64d904641fd2bc9ca7927c54fd47d4e3d64088b5a67c6e1b37998ba66643cb0b"
+        "recipe": "f3aec404b7a83ddc21f4f38a6f07a636c004f7ed7dca1d56967ac3cb35aea8ce",
+        "tree": "d66e2ba41e7097ef162e648a8e52470bf6ed8d6ce678519bf64d71d486a50d42"
       },
       "gcp": {
-        "recipe": "cf4c59dfb4b3442d3549ce78266a6e36285623710ad7b198dbe4c79a4c791261",
-        "tree": "0f68f2ad4c7617ce2a380d5900e9a2e5dc57898fc167c971885b0ea57d62938e"
+        "recipe": "de34b57017d93136df0801a9ebbac74803f6ad9b0ce7f8d34cbe24a33579b2de",
+        "tree": "c42d9b535f325a9e687335748bd2e9853cd09e060038ccc347c67dec9a6aea33"
       }
     }
   },
@@ -120,38 +120,38 @@
     }
   },
   "init-prover": {
-    "recipe": "900f3d981e199bda77deb52c7e09baecc47f85e3367ed111a00f08541da4ff48",
-    "tree": "9b1cadb22389324ba90b8e465522f07464bf21076132688b9b1513b723bc86ae",
+    "recipe": "8329fb55ac6ef39828a58c596d34f77ff6b5f7aec9138636ac1677b2258ae38c",
+    "tree": "d654e07181700c2f4cc6a52e04d2d299192f67cf3692d62fe82c55008fd729fb",
     "variants": {
       "azure": {
-        "recipe": "8e3c39b0de87dc192795cb58ddeb4b9cc52f3b3bb5043955a08b6b8ee942e3c7",
-        "tree": "5dcd13e662d60ac1561f9dab6843579189d45018a4252336bd59e276d674b245"
+        "recipe": "0fe1c3f8c3e59cea48705b2df123c58aaf1ab2529d4be060fa0aea62d9193a3f",
+        "tree": "b0b4afb46bb57fb56ee26058f3946c97a0ed8d4fb47ccb1f29bbc36793ad1734"
       },
       "default": {
-        "recipe": "8605c37244e59e6d45d967c61958f68a540aba1a17c33f05528e082dfe730661",
-        "tree": "a64d7688011bd8ac83d7739a4016c1906535d828feb81dde130f99041cd6ac5f"
+        "recipe": "14a5da6e488abd7d743f5b8de8091300db86253a78635714f49e48f1458d75f4",
+        "tree": "3d27023ee0f40c7659d72ce221daecaab5d5f8395e9bb86d8c6d566b565412cf"
       },
       "dev": {
-        "recipe": "b22f134eda98e60acbc9b6bf66aee60eb8c55457bfdfd801b6d0bb04af00eeac",
-        "tree": "e65bab1d67a1ac2ca5494524c4700cc52ec281a40a0ceda8ef4f38c09dc1675b"
+        "recipe": "f75ffc820804d1e3d69527d17ddb30646e71808faa1c8fef6f3b678205440be4",
+        "tree": "d3a59a696a44e69d2caab0b19b65cd9d17922b0e03ed0c9e6bdef6ca3e5444d7"
       },
       "gcp": {
-        "recipe": "463f67b5f8dbb25ef1990caa047edcffdacbe99fe1664b9bdeb559b7fe0bdfd2",
-        "tree": "de06b00c951a74441f64291903490cf206b740f6034ce9011caa0d8d35ab42c9"
+        "recipe": "e596792b066e35716f6b3adfa94a7e6b947ee9f73df76c4a7886f7e7c8f88972",
+        "tree": "2e38dbf6a2ac80b1afe64a8420727799084072725e176742124e7342f75ef4ef"
       }
     }
   },
   "init-service": {
-    "recipe": "be02c65178ec00d972f41c1721a845ad6787d7ab882ad8396a48d357555e09ac",
-    "tree": "6accd4edb0115613a31124a70825a93c5f221c912866a87c36400b00f148375e",
+    "recipe": "8ee58fb4b0947e811fa7301934cee86de55258efcda7bd4e871f57adba598b4d",
+    "tree": "04ed4142d81cee47a5b52d93e55d490fa2fae1fa3d23d7847f833be97554eb95",
     "variants": {
       "default": {
-        "recipe": "230c2adf5ff93b170c0b6b531b81c1df22f64d38e54d2226bad35e7ca2ac0da1",
-        "tree": "dc8359a01bc084b909568890d50c70771aa460b8a2c648c2c9fb60924aef0365"
+        "recipe": "815cc2bbe10bfcfaa034bdd030196f844504ed5e7b9a7b02a7b26d85d6929627",
+        "tree": "5459eef56bd24ef6a4e47abe764f3922c6b5c1b9988a918d913c87dd1f718bfa"
       },
       "dev": {
-        "recipe": "019db0c6c3efdbd851bec615d82e77b34cdd867981d7b1ced2bee3015e53923e",
-        "tree": "efa005f09c2592617ff19d5774db8b86f3c6a791cc1f3b6c37677ede5fc5816c"
+        "recipe": "8da8d853bb63f00cca846ab1ef1e2d832aa2350d6cae69dd05bc42c05a364793",
+        "tree": "476684f71f058655b80346794d7413776920b835c04bf3e30e22c4be79670542"
       }
     }
   },
@@ -166,23 +166,23 @@
     }
   },
   "surge": {
-    "recipe": "d1d7d6051746a28875708bb584169d103fdc113f611bc281d0ef6c966250b791",
+    "recipe": "fe513e13dcb0904d3be910cee824d708c424413f5f94f47d012e504178d2cfe7",
     "tree": "44f620111ade20ee1356076b4ff5ea674a8f4a1a688487180dc37c3ebd433304",
     "variants": {
       "azure": {
-        "recipe": "b58071574cffbc929506d3140376e2e0f95a4165b585415e7dfea0b19a3f6760",
+        "recipe": "8009c3530b2e81681970e58d751617e3696970b94fd7e075dd7840f982f3195d",
         "tree": "7fc9b21379b270379fc8ab43582ceb03aaf45844b2d3a5f5113d0b1aeaf0b635"
       },
       "default": {
-        "recipe": "7549c7cb8752378923d37f92ddc806a4345c36dec74e6844f2ff71af780a466a",
+        "recipe": "4481b0ad3c739cc499ffc8d032ac93259920a46b46309464ac3bbefb39202385",
         "tree": "c953b8462401878d13bb042a82779cffd104d6a5da0359f860d99a049c82932d"
       },
       "devtools": {
-        "recipe": "8134fa2c08cab9eab5c372c04a05aa9b8514d5503413befa8b4bcc2c87040b08",
+        "recipe": "fd107668197879873d06f266fcc798a105fdb28ba6de6d174be191e2b1ba9c91",
         "tree": "6e4840284eda451d96ce6cec616a73a0aad41b2fea69ce43c2ef55f1088b33d5"
       },
       "gcp": {
-        "recipe": "a38356ce187f8ce8c386159c55e216ca0ae6e499ba1e560f7a751f96033d1afb",
+        "recipe": "4be70ecba353786cbe5b4f150f71ddcff3040af1584f4ef1cd9d8b01ffb3aa3e",
         "tree": "140258bbf35be882a5197f927b53176f80c2513e227a2102fb2bdb06c2e0131b"
       }
     }

@@ -10,7 +10,9 @@ from examples.nethermind_base import EFI_STUB_VERSION, PINNED_MIRROR
 
 from tests.helpers import SURGE_EXAMPLE
 from tundravm.declarative import (
+    BootStep,
     Build,
+    Disk,
     Fragment,
     Git,
     Group,
@@ -19,6 +21,7 @@ from tundravm.declarative import (
     Key,
     Mkosi,
     Package,
+    Ready,
     Recipe,
     Tree,
     User,
@@ -31,6 +34,8 @@ from tundravm.declarative.utils import (
     Composite,
     DevTools,
     EfiStub,
+    RuntimeDirectory,
+    RuntimeFile,
     Tdxs,
 )
 from tundravm.errors import ValidationError
@@ -138,15 +143,57 @@ def test_backports_pins_mirror_and_release() -> None:
     assert pinned.split("cat > ", 1)[1] == default.split("cat > ", 1)[1]
 
 
-def test_tdxs_after_init_orders_after_runtime_init() -> None:
-    tree = compile(_recipe(Tdxs(after_init=True), Fragment("keys", items=(Key("k"),))))
+def test_tdxs_needs_orders_its_units_after_those_steps() -> None:
+    key = Key("k")
+    tree = compile(_recipe(Tdxs(needs=(key.ready,)), Fragment("keys", items=(key,))))
     units = "default/mkosi.extra/usr/lib/systemd/system"
     service = _text(tree, f"{units}/tdxs.service")
     socket = _text(tree, f"{units}/tdxs.socket")
     assert "After=runtime-init.service\nRequires=runtime-init.service tdxs.socket\n" in service
     assert "After=runtime-init.service\nRequires=runtime-init.service\n" in socket
-    plain = compile(_recipe(Tdxs(), Fragment("keys", items=(Key("k"),))))
+    plain = compile(_recipe(Tdxs(), Fragment("keys", items=(key,))))
     assert "runtime-init" not in _text(plain, f"{units}/tdxs.service")
+    current = Recipe("module", items=(key, Tdxs(needs=(key.ready,))))
+    socket = _text(compile(current), f"{units}/tdxs.socket")
+    assert "After=runtime-init-keys.service\nRequires=runtime-init-keys.service\n" in socket
+
+
+def test_runtime_directory_is_a_boot_step_that_installs_the_directory() -> None:
+    disk = Disk("d", "/persistent")
+    step = RuntimeDirectory("/persistent/exporter/", owner="app", group="eth", after=[disk.ready])
+    assert isinstance(step, BootStep) and step.name == "dir-persistent-exporter"
+    assert step.script == "install -d -m 0755 -o app -g eth /persistent/exporter\n"
+    assert step.after == (disk.ready,) and step.ready == Ready("dir-persistent-exporter")
+    named = RuntimeDirectory("/var/lib/my app", mode=0o700, name="state")
+    assert (named.name, named.script) == ("state", "install -d -m 0700 '/var/lib/my app'\n")
+    assert RuntimeDirectory("/var/lib/my app").name == "dir-var-lib-my_app"
+    for bad in ("relative", "/", 7):
+        with pytest.raises(ValidationError, match="absolute path"):
+            RuntimeDirectory(bad)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="mode"):
+        RuntimeDirectory("/x", mode=0o10000)
+
+
+def test_runtime_file_is_a_boot_step_that_writes_the_file() -> None:
+    directory = RuntimeDirectory("/persistent/exporter")
+    step = RuntimeFile(
+        "/persistent/exporter/boot.prom",
+        "up 1\nit's\n",
+        owner="app",
+        mode=0o640,
+        after=[directory.ready, Ready("secrets")],
+    )
+    assert step.name == "file-persistent-exporter-boot.prom"
+    assert step.after == (Ready("dir-persistent-exporter"), Ready("secrets"))
+    assert step.script == (
+        "printf '%s' 'up 1\nit'\"'\"'s\n' > /persistent/exporter/boot.prom\n"
+        "chmod 0640 /persistent/exporter/boot.prom\n"
+        "chown app /persistent/exporter/boot.prom\n"
+    )
+    assert RuntimeFile("/etc/x", "x", group="eth").script.endswith("chown :eth /etc/x\n")
+    assert "chown" not in RuntimeFile("/etc/x", "x").script
+    with pytest.raises(ValidationError, match="text must be a str"):
+        RuntimeFile("/etc/x", b"x")  # type: ignore[arg-type]
 
 
 def test_devtools_root_password() -> None:
@@ -185,7 +232,7 @@ def test_utils_are_fragments_configured_by_their_fields() -> None:
         == "Backports(archive_url=None, release='trixie', include_sid=True)"
     )
     assert Tdxs().source == TUNDRA_TOOLS
-    assert Tdxs().name == "tdxs" and Tdxs(after_init=True) != Tdxs()
+    assert Tdxs().name == "tdxs" and Tdxs(needs=(Key("k").ready,)) != Tdxs()
     assert Tdxs() == Tdxs() and hash(Tdxs()) == hash(Tdxs())
     assert {DevTools().name, Backports().name} == {"devtools", "backports"}
 

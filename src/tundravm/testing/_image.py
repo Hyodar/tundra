@@ -13,12 +13,12 @@ from tundravm.declarative import lifecycle
 from tundravm.declarative.lifecycle import Entry, Lock, Tree
 from tundravm.declarative.model import (
     PHASES,
+    BootStep,
     Build,
     Declaration,
     Fragment,
     Group,
     Hook,
-    Init,
     Package,
     Recipe,
     Resolved,
@@ -28,11 +28,11 @@ from tundravm.declarative.model import (
 from tundravm.declarative.resolve import (
     Identity,
     Origin,
-    _builtin_inits,
+    order_boot_steps,
     order_hooks,
-    order_inits,
     provenance,
     resolve,
+    step_nodes,
 )
 from tundravm.diagnostics import Diagnostic
 from tundravm.models import unit_name
@@ -83,13 +83,15 @@ class ImageFile:
 
 @dataclass(frozen=True, slots=True)
 class InitStep:
-    """One runtime-init step: a declared ``Init`` or a built-in (``keys``, ``disks``, ``secrets``).
+    """One runtime-init step: a declared ``BootStep`` or a built-in (``keys``, ``disks``,
+    ``secrets``).
 
-    Built-in steps have no ``script``: the runtime tools they configure run them.
+    ``after`` is every step it runs after (its own ``after`` plus the steps naming
+    it in ``before``). Built-in steps have no ``script``: the runtime tools they
+    configure run them.
     """
 
     name: str
-    priority: int
     after: tuple[str, ...] = ()
     script: str = ""
     builtin: bool = False
@@ -246,12 +248,25 @@ class Image:
 
     @property
     def init_steps(self) -> tuple[InitStep, ...]:
-        """The runtime-init steps in the order they run: by priority, then ``after``."""
-        builtins = _builtin_inits(self.resolved.items)
-        steps = [InitStep(name, priority, builtin=True) for name, priority in builtins.items()]
-        inits = order_inits(self._declared(Init), builtins=builtins)
-        steps += [InitStep(i.name, i.priority, i.after, i.script) for i in inits]
-        return tuple(sorted(steps, key=lambda step: step.priority))
+        """The runtime-init steps in the order they run (the graph's topological order)."""
+        items = self.resolved.items
+        nodes = step_nodes(items)
+        names = {name for name, _, _ in nodes}
+        after: dict[str, list[str]] = {name: [] for name in names}
+        for name, deps, before in nodes:
+            after[name].extend(dep for dep in deps if dep in names)
+            for later in (step for step in before if step in names):
+                after[later].append(name)
+        scripts = {step.name: step.script for step in self._declared(BootStep)}
+        return tuple(
+            InitStep(
+                name,
+                tuple(dict.fromkeys(after[name])),
+                scripts.get(name, ""),
+                builtin=name not in scripts,
+            )
+            for name in order_boot_steps(items)
+        )
 
     def hooks(self, stage: str) -> tuple[Hook, ...]:
         """The build hooks of *stage* (``prepare``, ``postinst``, ``finalize``...) in run order."""

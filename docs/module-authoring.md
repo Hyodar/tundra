@@ -44,7 +44,7 @@ What every image of a family builds on (its kernel, EFI stub, backports and `Set
 
 ## Writing a component
 
-- `@component` makes the class a frozen, slotted dataclass with keyword-only fields (`Tdxs(after_init=True)`), so a required field may follow ones with defaults. A `str`, `int`, `float` or `bool` field (or one of those `| None`) refuses a value of another type where the recipe constructs it; list and dict values and defaults are frozen into tuples and `FrozenMap`s.
+- `@component` makes the class a frozen, slotted dataclass with keyword-only fields (`Tdxs(issuer="tdx")`), so a required field may follow ones with defaults. A `str`, `int`, `float` or `bool` field (or one of those `| None`) refuses a value of another type where the recipe constructs it; list and dict values and defaults are frozen into tuples and `FrozenMap`s.
 - Subclass `Composite` (from `tundravm.declarative.utils`) so a type checker sees instances as fragments; `@component` on a plain class makes it a `Composite` at runtime too.
 - Construction calls `compose()` once. It returns or yields the fragment's declarations and nested fragments; it may instead return a whole `Fragment(...)` when the name, `requires` or `checks` depend on the fields.
 - The fragment is named after the class (`PrometheusExporter` is `prometheus-exporter`), after an `id` (or `name`) field when there is one, or after `@component(name="...")`.
@@ -98,7 +98,7 @@ Everything a fragment declares is ordinary: a recipe can edit or remove any of i
 
 ## A complete example
 
-A Prometheus node exporter that keeps its textfile collector directory on the encrypted `/persistent` disk. It takes the storage fragment as a field, so the caller decides which key and disk to use, and it checks that a disk is mounted where it writes.
+A Prometheus node exporter that keeps its textfile collector directory on the encrypted `/persistent` disk. It takes the caller's `Disk` and `Secrets` as fields, so the caller decides which key and disk to use, and their `.ready` handles order its boot steps; it checks that a disk is mounted where it writes.
 
 ```python
 # exporter.py
@@ -108,14 +108,13 @@ from tundravm import (
     Declaration,
     Diagnostic,
     Disk,
-    Fragment,
-    Init,
     Package,
     Resolved,
+    Secrets,
     Unit,
     component,
 )
-from tundravm.declarative.utils import Composite
+from tundravm.declarative.utils import Composite, RuntimeDirectory, RuntimeFile
 
 EXPORTER_UNIT = """\
 [Unit]
@@ -147,26 +146,27 @@ def exporter_check(image: Resolved) -> tuple[Diagnostic, ...]:
 
 @component
 class PrometheusExporter(Composite):
-    """The node exporter, writing its textfile collector under /persistent on *storage*."""
+    """The node exporter, writing its textfile collector under /persistent on *disk*."""
 
-    storage: Fragment
+    disk: Disk
+    secrets: Secrets
 
-    def compose(self) -> Iterator[Declaration | Fragment]:
-        yield self.storage
+    def compose(self) -> Iterator[Declaration]:
         yield Package("prometheus-node-exporter")
-        yield Init(
-            "exporter-directory",
-            "install -d -m 0755 /persistent/exporter\n",
-            priority=25,
-            after=("disks",),
+        directory = RuntimeDirectory(
+            "/persistent/exporter", after=[self.disk.ready], name="exporter-directory"
         )
-        yield Init(
-            "exporter-ready",
-            "printf 'tundra_boot_ready 1\\n' > /persistent/exporter/boot.prom\n",
-            priority=40,
-            after=("exporter-directory", "secrets"),
+        marker = RuntimeFile(
+            "/persistent/exporter/boot.prom",
+            "tundra_boot_ready 1\n",
+            after=[directory.ready, self.secrets.ready],
+            name="exporter-ready",
         )
-        yield Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True)
+        yield directory
+        yield marker
+        yield Unit(
+            "prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, needs=[marker.ready]
+        )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         return exporter_check(resolved)
@@ -180,39 +180,39 @@ from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant
 
 key = Key("key_persistent")
 disk = Disk("disk_persistent", mount="/persistent", key=key, device="/dev/sdb")
-storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
+secrets = Secrets(store=disk)
+storage = Fragment("secure-storage", items=(key, disk, secrets))
 
 recipe = Recipe(
     name="monitored",
-    items=(PrometheusExporter(storage=storage),),
+    items=(storage, PrometheusExporter(disk=disk, secrets=secrets)),
     variants=(Variant("default", outputs=("qemu",)),),
 )
 ```
 
-The compiled `/usr/bin/runtime-init` runs the built-in steps and the fragment's steps by priority:
+The steps form a graph: `keys`, then `disks` (after `keys`), then `secrets` (after `disks`, since `store=disk`), `exporter-directory` after `disks` and `exporter-ready` after both `exporter-directory` and `secrets`. Each step compiles to its own oneshot unit that requires the steps it runs after:
 
-```bash
-#!/bin/bash
-set -euo pipefail
+```ini
+# /usr/lib/systemd/system/runtime-init-exporter-ready.service
+[Unit]
+Description=Runtime Init: exporter-ready
+After=network-online.target runtime-init-secrets.service runtime-init-exporter-directory.service
+Wants=network-online.target
+Requires=runtime-init-secrets.service runtime-init-exporter-directory.service
 
-/usr/bin/key-gen setup /etc/tdx/key-gen.yaml
-
-/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml
-
-install -d -m 0755 /persistent/exporter
-
-/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml
-
-printf 'tundra_boot_ready 1\n' > /persistent/exporter/boot.prom
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/runtime-init/exporter-ready
+RemainAfterExit=yes
 ```
 
-and the unit waits for it:
+and the exporter waits for exactly the step it needs, not for every step:
 
 ```ini
 [Unit]
 Description=Prometheus node exporter
-After=runtime-init.service
-Requires=runtime-init.service
+After=runtime-init-exporter-ready.service
+Requires=runtime-init-exporter-ready.service
 ...
 ```
 
@@ -220,9 +220,9 @@ Resolving the default variant shows what the fragment contributed:
 
 ```python
 >>> resolve(recipe, variant="default").fragments
-('monitored', 'prometheus-exporter', 'secure-storage')
+('secure-storage', 'prometheus-exporter')
 >>> [type(item).__name__ for item in resolve(recipe, variant="default").items]
-['Key', 'Disk', 'Secrets', 'Package', 'Init', 'Init', 'Unit']
+['Key', 'Disk', 'Secrets', 'Package', 'BootStep', 'BootStep', 'Unit']
 ```
 
 ## Checks
@@ -236,9 +236,11 @@ A check receives the `Resolved` variant: `variant`, `outputs` (never empty), eve
 
 ## Ordering
 
-**Runtime init.** `Init(name, script, priority=100, after=())` adds a step to `/usr/bin/runtime-init`. Steps run by ascending priority. The built-in steps are `keys` (10), `disks` (20) and `secrets` (30), present when the variant declares a `Key`, `Disk` or `Secrets`. `after` names steps that must run first, built-in or yours; it orders steps of equal priority and must agree with the priorities (`init-order` otherwise). Pick a priority between the built-in steps you depend on and those that depend on you: 25 is "after disks are mounted, before secrets arrive"; 40 is "after secrets".
+**Runtime init.** `BootStep(name, script, after=[...], before=[...])` adds a step that runs at boot. There are no priorities: steps form a graph, and `after`/`before` take readiness handles. `key.ready`, `disk.ready` and `secrets.ready` are the built-in steps `keys`, `disks` and `secrets`, present when the variant declares a `Key`, `Disk` or `Secrets`. `disks` runs after `keys`, and `secrets` runs after `disks` when a `Secrets` has `store=`. A step's own `.ready` is its handle. A step name string works too, for a step declared in another fragment. The steps run in a deterministic topological order: when several are ready, the built-ins go first, then yours in declaration order. A cycle (`step-cycle`) or a reference to a step the variant does not declare (`step-undefined`) is an error that names the steps. `RuntimeDirectory(path, owner=, group=, mode=, after=)` and `RuntimeFile(path, text, owner=, group=, mode=, after=)` from `tundravm.declarative.utils` are `BootStep`s that create a directory or write a file.
 
-**Units.** `Unit(..., after_init=True)` makes a shipped unit start after `runtime-init.service` (`After=` and `Requires=`). Use it for anything that reads keys, disks or secrets.
+In the current dialect each step is its own oneshot unit, `runtime-init-<step>.service`, running `/usr/lib/runtime-init/<step>`, with `After=`/`Requires=` on the steps it runs after. `runtime-init.service` requires all of them. Steps that do not depend on each other can run in parallel. Under `nethermind-v1`, one `/usr/bin/runtime-init` runs every step in the topological order.
+
+**Units.** `Unit(..., needs=[disk.ready, step.ready])` and `Service(..., needs=[...])` make a unit wait for exactly those steps (`After=` and `Requires=` on their units). `needs=[RUNTIME_INIT]` waits for every step (`runtime-init.service`). A `Service` waits for every step by default, and `needs=()` starts it without waiting. A `needs` naming a step the variant does not declare is an error (`needs-undefined`).
 
 **Build hooks.** `Hook(name, phase, script, after=())` runs a script in an mkosi phase (`build`, `postinst`, `finalize`, ...). Hooks keep declaration order inside a phase; `after` names hooks of the same phase that must run first.
 
@@ -318,34 +320,41 @@ from tundravm.testing import assert_clean, assert_diagnostic, fragment_plan
 
 key = Key("key_persistent")
 disk = Disk("disk_persistent", mount="/persistent", key=key, device="/dev/sdb")
-STORAGE = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
-EXPORTER = PrometheusExporter(storage=STORAGE)
+secrets = Secrets(store=disk)
+STORAGE = Fragment("secure-storage", items=(key, disk, secrets))
+EXPORTER = PrometheusExporter(disk=disk, secrets=secrets)
 
 
 def test_exporter_is_clean():
-    assert_clean(fragment_plan(EXPORTER), allow=("source-unpinned",))
+    assert_clean(fragment_plan(EXPORTER, include=(STORAGE,)), allow=("source-unpinned",))
 
 
 def test_exporter_needs_persistent_storage():
     elsewhere = Disk("disk_data", mount="/data", key=key)
-    storage = Fragment("secure-storage", items=(key, elsewhere, Secrets(store=elsewhere)))
-    image = fragment_plan(PrometheusExporter(storage=storage))
+    stored = Secrets(store=elsewhere)
+    storage = Fragment("secure-storage", items=(key, elsewhere, stored))
+    image = fragment_plan(PrometheusExporter(disk=elsewhere, secrets=stored), include=(storage,))
     assert_diagnostic(image, "exporter-storage-missing", variant="default")
 
 
-def test_unit_waits_for_runtime_init():
-    unit = fragment_plan(EXPORTER).unit("prometheus-node-exporter.service")
+def test_unit_waits_for_its_boot_step():
+    unit = fragment_plan(EXPORTER, include=(STORAGE,)).unit("prometheus-node-exporter.service")
     assert unit.enabled
-    assert unit.requires("runtime-init.service") and unit.after("runtime-init.service")
+    assert unit.requires("runtime-init-exporter-ready.service")
+    assert unit.after("runtime-init-exporter-ready.service")
 
 
 def test_boot_steps_run_in_order():
-    steps = [step.name for step in fragment_plan(EXPORTER).init_steps]
-    assert steps == ["keys", "disks", "exporter-directory", "secrets", "exporter-ready"]
+    steps = fragment_plan(EXPORTER, include=(STORAGE,)).init_steps
+    assert [step.name for step in steps] == [
+        "keys", "disks", "secrets", "exporter-directory", "exporter-ready"
+    ]
+    assert steps[-1].after == ("exporter-directory", "secrets")
 
 
 def test_exporter_ships_its_package():
-    assert fragment_plan(EXPORTER).packages["prometheus-node-exporter"] == "runtime"
+    image = fragment_plan(EXPORTER, include=(STORAGE,))
+    assert image.packages["prometheus-node-exporter"] == "runtime"
 ```
 
 ```console
@@ -361,5 +370,5 @@ $ uv run pytest -q test_exporter.py
 - Keep `compose()` a pure function of the fields; never keep module-level mutable state.
 - Take dependencies as fields (the storage fragment, a source, a port) rather than constructing another fragment inside `compose()` with hidden defaults.
 - Declare everything the fragment needs (packages, users, groups, files) so it works in a standalone variant, and use `requires` for what must come from elsewhere.
-- Use `Service` for an ordinary service (it renders the unit and waits for runtime-init by default) and `Unit(name, content)` when you need exact bytes; tundravm does not edit `Unit` text beyond `after_init`.
+- Use `Service` for an ordinary service (it renders the unit and waits for runtime-init by default) and `Unit(name, content)` when you need exact bytes; tundravm does not edit `Unit` text beyond the `After=`/`Requires=` lines `needs=` adds.
 - Keep hook and init names unique to the fragment (`exporter-...`): they are identities.

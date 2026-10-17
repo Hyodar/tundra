@@ -15,7 +15,7 @@ from tundravm.declarative.resolve import Origin, provenance
 from tundravm.recipe import load_recipe
 
 RECIPE = """
-from tundravm.declarative import File, Fragment, Init, Package, Recipe, Service, Variant
+from tundravm.declarative import BootStep, File, Fragment, Package, Recipe, Service, Variant
 from tundravm.declarative.utils import Tdxs
 
 app = Fragment(
@@ -24,7 +24,7 @@ app = Fragment(
         Package("curl"),
         File("/etc/app.conf", "mode=dev\\n"),
         Service("app", "/usr/bin/app", wanted_by="minimal.target"),
-        Init("prepare", "echo prepare"),
+        BootStep("prepare", "echo prepare"),
     ),
 )
 recipe = Recipe(
@@ -73,8 +73,8 @@ def test_why_a_service_lists_the_generated_dependencies(recipe: Path) -> None:
     assert "  Service(app.service)\n    declared in common via app\n" in out
     assert "  mkosi.extra/usr/lib/systemd/system/app.service\n" in out
     generated = out.split("generated:\n", 1)[1].splitlines()
-    assert "  After=runtime-init.service (after_init=True)" in generated
-    assert "  Requires=runtime-init.service (after_init=True)" in generated
+    assert "  After=runtime-init.service (needs RUNTIME_INIT)" in generated
+    assert "  Requires=runtime-init.service (needs RUNTIME_INIT)" in generated
     assert "  scripts/06-postinst.sh: mkosi-chroot systemctl enable app.service" in generated
     assert "  scripts/06-postinst.sh: minimal.target.wants/app.service link" in generated
     by_unit = run_main("inspect", str(recipe), "--variant", "prod", "--why", "unit:app")[1]
@@ -126,10 +126,10 @@ def test_why_markdown_is_a_table_of_steps(recipe: Path) -> None:
     assert "| `File(extra, /etc/app.conf)` | content edited | prod | — |" in out
 
 
-def test_why_an_init_points_at_runtime_init(recipe: Path) -> None:
+def test_why_a_boot_step_points_at_its_script(recipe: Path) -> None:
     out = run_main("inspect", str(recipe), "--variant", "dev", "--why", "init:prepare")[1]
-    assert "  Init(prepare)\n" in out
-    assert "  mkosi.extra/usr/bin/runtime-init\n" in out
+    assert "  BootStep(prepare)\n" in out
+    assert "  mkosi.extra/usr/lib/runtime-init/prepare\n" in out
 
 
 def test_why_unknown_subject_suggests_close_matches(

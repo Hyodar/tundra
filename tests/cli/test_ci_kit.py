@@ -359,12 +359,11 @@ def test_lint_github_lines_parse(recipe: Path) -> None:
 def test_lint_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
     recipe = tmp_path / "warn.py"
     recipe.write_text(
-        "from tundravm import Fragment, Init, Package, Recipe\n"
+        "from tundravm import RUNTIME_INIT, Package, Recipe, Unit\n"
         "recipe = Recipe('warn', items=(\n"
         "    Package('curl'),\n"
         "    Package('linux-image-amd64'),\n"
-        "    Init('one', 'echo 1\\n', priority=5),\n"
-        "    Init('two', 'echo 2\\n', priority=5),\n"
+        "    Unit('app.service', '[Unit]\\n', enabled=True, needs=[RUNTIME_INIT]),\n"
         "))\n"
     )
     code, out = run_main("lint", str(recipe), "--format", "github")
@@ -524,7 +523,8 @@ def test_ci_after_compile_and_lock_is_clean_with_runtime_init(
     code, out = run_main("ci", str(recipe), "--tree", str(tree))
 
     assert (code, out.splitlines()[-1]) == (EXIT_OK, f"ok lock: {LOCKFILE} is up to date")
-    assert (tree / "default" / "mkosi.extra" / "usr" / "bin" / "runtime-init").is_file()
+    units = tree / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
+    assert (units / "runtime-init.service").is_file()
 
 
 def test_ci_stops_at_first_failing_step(recipe: Path, tmp_path: Path) -> None:

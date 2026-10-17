@@ -11,14 +11,16 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
+from tundravm._modules.init import order_steps
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
 
 from .model import (
+    ALL_STEPS,
     BASE_VARIANT,
-    BUILTIN_INITS,
     EMPTY_FRAGMENT,
     PHASES,
+    BootStep,
     Declaration,
     Declared,
     Diagnostic,
@@ -26,12 +28,12 @@ from .model import (
     Edit,
     Fragment,
     Hook,
-    Init,
     Key,
     Recipe,
     Ref,
     Resolved,
     Secrets,
+    Service,
     Target,
     Unit,
     Variant,
@@ -279,18 +281,44 @@ def _check_targets(state: _Resolution, chain: Sequence[Variant]) -> None:
             inherited = own
 
 
-def _builtin_inits(items: Iterable[Declaration]) -> dict[str, int]:
-    present = {
-        "keys": any(isinstance(item, Key) for item in items),
-        "disks": any(isinstance(item, Disk) for item in items),
-        "secrets": any(isinstance(item, Secrets) for item in items),
-    }
-    return {name: BUILTIN_INITS[name] for name, here in present.items() if here}
+type StepNode = tuple[str, tuple[str, ...], tuple[str, ...]]
+"""A runtime-init step as ``(name, after, before)`` step names."""
+
+
+def builtin_steps(items: Iterable[Declaration]) -> list[tuple[str, tuple[str, ...]]]:
+    """The built-in steps *items* produce, in rank order, each with the steps it runs after.
+
+    ``disks`` runs after ``keys``; ``secrets`` after ``disks`` when a ``Secrets``
+    stores them on a disk.
+    """
+    items = list(items)
+    keys = any(isinstance(item, Key) for item in items)
+    disks = any(isinstance(item, Disk) for item in items)
+    secrets = [item for item in items if isinstance(item, Secrets)]
+    steps: list[tuple[str, tuple[str, ...]]] = []
+    if keys:
+        steps.append(("keys", ()))
+    if disks:
+        steps.append(("disks", ("keys",) if keys else ()))
+    if secrets:
+        stored = disks and any(entry.store is not None for entry in secrets)
+        steps.append(("secrets", ("disks",) if stored else ()))
+    return steps
+
+
+def step_nodes(items: Sequence[Declaration]) -> list[StepNode]:
+    """Every runtime-init step of *items*: the built-ins, then each ``BootStep``."""
+    nodes: list[StepNode] = [(name, after, ()) for name, after in builtin_steps(items)]
+    for step in (item for item in items if isinstance(item, BootStep)):
+        nodes.append(
+            (step.name, tuple(r.step for r in step.after), tuple(r.step for r in step.before))
+        )
+    return nodes
 
 
 def has_init(items: Sequence[Declaration]) -> bool:
-    """Whether *items* produce any runtime-init fragment (an ``Init`` or the built-ins)."""
-    return any(isinstance(item, Init) for item in items) or bool(_builtin_inits(items))
+    """Whether *items* produce any runtime-init step (a ``BootStep`` or the built-ins)."""
+    return bool(step_nodes(items))
 
 
 def _stable_topological[T](
@@ -326,29 +354,9 @@ def _stable_topological[T](
     return ordered
 
 
-def order_inits(inits: Sequence[Init], *, builtins: dict[str, int]) -> list[Init]:
-    """*inits* by priority, ``after`` ordering equal priorities; raises on contradictions.
-
-    *builtins* maps the built-in steps present (``keys``/``disks``/``secrets``) to
-    their priority; an ``after`` naming neither an init nor a built-in is ignored
-    here (``lint`` reports it).
-    """
-    priorities = {init.name: init.priority for init in inits} | builtins
-    for init in inits:
-        for dep in init.after:
-            if dep in priorities and priorities[dep] > init.priority:
-                raise ValidationError(
-                    f"init {init.name!r} (priority {init.priority}) runs after {dep!r} "
-                    f"(priority {priorities[dep]}), which runs later.",
-                    hint=f"Give {init.name!r} a priority of at least {priorities[dep]}.",
-                )
-    groups: dict[int, list[Init]] = {}
-    for init in inits:
-        groups.setdefault(init.priority, []).append(init)
-    ordered: list[Init] = []
-    for priority in sorted(groups):
-        ordered.extend(_stable_topological(groups[priority], lambda i: i.name, lambda i: i.after))
-    return ordered
+def order_boot_steps(items: Sequence[Declaration]) -> list[str]:
+    """The runtime-init step names of *items* in run order; raises on a cycle."""
+    return order_steps(step_nodes(items))
 
 
 def order_hooks(hooks: Sequence[Hook]) -> list[Hook]:
@@ -403,21 +411,31 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                     subject=item.ref.identity[-1],
                 )
 
-    inits = [item for item in items if isinstance(item, Init)]
-    builtins = _builtin_inits(items)
-    init_names = {init.name for init in inits} | set(builtins)
-    for init in inits:
-        for dep in init.after:
-            if dep not in init_names:
-                state.report(
-                    "init-after-undefined",
-                    f"init {init.name!r} runs after {dep!r}, which this variant does not declare",
-                    subject=init.name,
-                )
+    nodes = step_nodes(items)
+    step_names = {name for name, _, _ in nodes}
+    for step in (item for item in items if isinstance(item, BootStep)):
+        for edge, refs in (("after", step.after), ("before", step.before)):
+            for handle in refs:
+                if handle.step not in step_names:
+                    state.report(
+                        "step-undefined",
+                        f"boot step {step.name!r} runs {edge} {handle.step!r}, which this variant "
+                        "does not declare",
+                        subject=step.name,
+                    )
     try:
-        order_inits(inits, builtins=builtins)
+        order_steps(nodes)
     except ValidationError as exc:
-        state.report("init-order", str(exc))
+        state.report("step-cycle", str(exc))
+    for unit in (item for item in items if isinstance(item, (Unit, Service))):
+        for handle in unit.needs:
+            if handle.step != ALL_STEPS and handle.step not in step_names:
+                state.report(
+                    "needs-undefined",
+                    f"{type(unit).__name__.lower()} {unit.name!r} needs step {handle.step!r}, "
+                    "which this variant does not declare",
+                    subject=unit.name,
+                )
 
     hooks = [item for item in items if isinstance(item, Hook)]
     hook_names = {hook.name for hook in hooks}
@@ -434,12 +452,12 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
     except ValidationError as exc:
         state.report("hook-order", str(exc))
 
-    if not has_init(items):
-        for unit in (i for i in items if isinstance(i, Unit) and i.after_init):
+    if not nodes:
+        for unit in (i for i in items if isinstance(i, Unit) and i.needs):
             state.report(
-                "unit-after-init-without-init",
-                f"unit {unit.name!r} waits for runtime-init, but this variant declares no init "
-                "step",
+                "needs-without-init",
+                f"unit {unit.name!r} waits for runtime-init, but this variant declares no "
+                "runtime-init step",
                 subject=unit.name,
                 severity="warning",
             )
@@ -546,7 +564,9 @@ __all__ = [
     "level_name",
     "lint",
     "order_hooks",
-    "order_inits",
+    "order_boot_steps",
+    "builtin_steps",
+    "step_nodes",
     "provenance",
     "ref_identity",
     "resolve",

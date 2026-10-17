@@ -184,7 +184,7 @@ class Lowered:
         Registration order, the default profile's first for a profile that extends it.
         """
         entries = self.state.effective_profile(self.profile(profile)).init_scripts
-        return tuple({(e.priority, e.script): e for e in entries}.values())
+        return tuple({(e.name, e.script): e for e in entries}.values())
 
     def explain_debloat(self, *, profile: str | None = None) -> dict[str, object]:
         selected = self.profile(profile)
@@ -589,9 +589,9 @@ def _file_payload(entry: FileEntry) -> dict[str, object]:
 
 
 def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, object]]:
-    """The runtime-init fragments in the order the emitted script runs them."""
+    """The runtime-init fragments in step order (the graph's topological order), by step."""
     return [
-        {"priority": entry.priority, "sha256": hashlib.sha256(entry.script.encode()).hexdigest()}
+        {"step": entry.name, "sha256": hashlib.sha256(entry.script.encode()).hexdigest()}
         for entry in runtime_init_order(entries)
     ]
 

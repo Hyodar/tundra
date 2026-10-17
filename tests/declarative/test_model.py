@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from tundravm.declarative import (
+    RUNTIME_INIT,
+    BootStep,
     Build,
     Debian,
     Debloat,
@@ -21,13 +23,13 @@ from tundravm.declarative import (
     Group,
     Hook,
     Http,
-    Init,
     Install,
     Kernel,
     Key,
     Mkosi,
     Package,
     Partition,
+    Ready,
     Recipe,
     Repository,
     RuntimeTools,
@@ -36,6 +38,7 @@ from tundravm.declarative import (
     SecretEnv,
     SecretFile,
     Secrets,
+    Service,
     Setting,
     Unit,
     User,
@@ -102,8 +105,18 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("hook env name", lambda: Hook("h", "build", "echo", env={"1A": "x"})),
     ("hook env not a mapping", lambda: Hook("h", "build", "echo", env=(("A", "1"),))),  # type: ignore[arg-type]
     ("hook after itself", lambda: Hook("h", "build", "echo", after=("h",))),
-    ("reserved init name", lambda: Init("disks", "echo")),
-    ("init after itself", lambda: Init("i", "echo", after=("i",))),
+    ("reserved boot step name", lambda: BootStep("disks", "echo")),
+    ("boot step name", lambda: BootStep("bad step", "echo")),
+    ("boot step empty script", lambda: BootStep("s", "")),
+    ("boot step after itself", lambda: BootStep("s", "echo", after=(Ready("s"),))),
+    ("boot step before itself", lambda: BootStep("s", "echo", before=("s",))),  # type: ignore[arg-type]
+    ("boot step after one handle", lambda: BootStep("s", "echo", after=Ready("x"))),  # type: ignore[arg-type]
+    ("boot step after a key", lambda: BootStep("s", "echo", after=(Key("k"),))),  # type: ignore[arg-type]
+    ("boot step after everything", lambda: BootStep("s", "echo", after=(RUNTIME_INIT,))),
+    ("ready step name", lambda: Ready("bad step")),
+    ("ready non-str", lambda: Ready(1)),  # type: ignore[arg-type]
+    ("unit needs a key", lambda: Unit("a.service", "[Unit]\n", needs=(Key("k"),))),  # type: ignore[arg-type]
+    ("service needs a str", lambda: Service("a", "/usr/bin/a", needs="disks")),  # type: ignore[arg-type]
     ("repository suite", lambda: Repository("r", "https://x", "")),
     ("partition mount", lambda: Partition("p", "1G", "data")),
     ("debloat relative path", lambda: Debloat(extra_remove=("usr/share",))),
@@ -224,3 +237,32 @@ def test_mapping_fields_take_only_mappings_and_freeze_them() -> None:
     ):
         with pytest.raises(ValidationError, match="must be a mapping"):
             bad()
+
+
+def test_readiness_handles_name_their_runtime_init_step() -> None:
+    key = Key("k")
+    disk = Disk("d", "/data", key=key)
+    step = BootStep("warm", "echo warm\n", after=(disk.ready,))
+    assert (key.ready, disk.ready, Secrets().ready) == (
+        Ready("keys"),
+        Ready("disks"),
+        Ready("secrets"),
+    )
+    assert step.ready == Ready("warm") and str(step.ready) == "warm"
+    assert RUNTIME_INIT == Ready("*")
+
+
+def test_step_references_normalize_to_handles() -> None:
+    first = BootStep("first", "echo 1\n")
+    after: list[object] = [first, "third"]
+    second = BootStep("second", "echo 2\n", after=after, before=[Ready("fourth")])  # type: ignore[arg-type]
+    assert second.after == (Ready("first"), Ready("third"))
+    assert second.before == (Ready("fourth"),)
+    assert BootStep("x", "y\n", after=(first.ready, first.ready)).after == (Ready("first"),)
+
+
+def test_needs_defaults_and_takes_the_runtime_init_sentinel() -> None:
+    assert Service("a", "/usr/bin/a").needs == (RUNTIME_INIT,)
+    assert Unit("a.service", "[Unit]\n").needs == ()
+    assert Unit("a.service", "[Unit]\n", needs=[RUNTIME_INIT]).needs == (RUNTIME_INIT,)
+    assert Service("a", "/usr/bin/a", needs=(Key("k").ready,)).needs == (Ready("keys"),)

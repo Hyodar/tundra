@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tundravm.declarative import Build, File, Fragment, Git, Install, Package, Unit, User
+from tundravm.declarative import (
+    RUNTIME_INIT,
+    Build,
+    File,
+    Fragment,
+    Git,
+    Install,
+    Package,
+    Unit,
+    User,
+)
 from tundravm.declarative.utils import Composite
 
 RAIKO_SOURCE = Git("https://github.com/NethermindEth/raiko.git", "feat/tdx")
@@ -77,7 +87,7 @@ class Raiko(Composite):
                     cache_namespace=f"raiko-{self.source.ref}",
                 ),
                 User("raiko", home="/home/raiko", primary_group="tdx"),
-                Unit("raiko.service", RAIKO_UNIT, enabled=True, after_init=True),
+                Unit("raiko.service", RAIKO_UNIT, enabled=True, needs=[RUNTIME_INIT]),
                 File("/etc/raiko/env", RAIKO_ENV),
             ),
         )

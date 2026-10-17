@@ -4,7 +4,7 @@ The importer reverse-maps what the compiler writes: ``mkosi.conf`` becomes the
 recipe-wide fields, ``Package`` and ``Setting`` declarations; the synthetic
 postinst and finalize lines become ``User``, ``Group``, ``Service``/``Unit``
 enablement and ``Debloat``; the generated runtime-init, kernel build, cloud
-glue, backports sources and EFI stub become ``Init``, ``Kernel``, variant
+glue, backports sources and EFI stub become ``BootStep``, ``Kernel``, variant
 targets, ``Backports`` and ``EfiStub``. What has no first-class declaration is
 kept verbatim (``File``, ``Unit``, ``Hook``, ``Setting``); what cannot be kept
 at all is reported in :attr:`Imported.notes`. The first variant directory is
@@ -26,7 +26,7 @@ from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from tundravm._modules.init import Init as InitGenerator
+from tundravm._modules.init import render_service_unit
 from tundravm._source import DebFile, HttpSource
 from tundravm.backends.base import is_mkosi_state
 from tundravm.compiler.emit_mkosi import (
@@ -54,6 +54,7 @@ from .lower import _kernel
 from .model import (
     DECLARATION_TYPES,
     EMPTY_FRAGMENT,
+    BootStep,
     Debian,
     Debloat,
     Declaration,
@@ -65,7 +66,6 @@ from .model import (
     Group,
     Hook,
     Http,
-    Init,
     Kernel,
     Mkosi,
     Package,
@@ -135,7 +135,7 @@ _SKIPPED = ("mkosi.sandbox", "mkosi.cache", "mkosi.tools", "mkosi.builddir", "mk
 _VERBATIM = (File, Hook, Setting)
 _PUBLIC_NAMES = {"GoBuild": "Go", "CargoBuild": "Cargo", "DotnetBuild": "Dotnet"}
 """The ``tundravm`` names of the build recipes (their classes are the compiler's)."""
-_ORDERED = (Hook, Service, User, Group, Init, Fragment)
+_ORDERED = (Hook, Service, User, Group, BootStep, Fragment)
 
 
 @dataclass(frozen=True, slots=True)
@@ -828,7 +828,7 @@ class _VariantReader:
 
     def _units(
         self, extra: dict[str, str | bytes | None], postinst: _Postinst
-    ) -> tuple[Init | None, list[Unit | Service]]:
+    ) -> tuple[BootStep | None, list[Unit | Service]]:
         shipped: dict[str, str] = {}
         for path in sorted(extra):
             content = extra[path]
@@ -878,7 +878,7 @@ class _VariantReader:
 
     def _init(
         self, extra: dict[str, str | bytes | None], shipped: dict[str, str], enabled: list[str]
-    ) -> Init | None:
+    ) -> BootStep | None:
         script = extra.get("usr/bin/runtime-init")
         unit = shipped.get(INIT_SERVICE)
         header = "#!/bin/bash\nset -euo pipefail\n\n"
@@ -890,7 +890,7 @@ class _VariantReader:
             path.rpartition("/")[2] == "network-setup.service"
             for path in (*shipped, *self.skeleton_paths)
         )
-        if unit != InitGenerator()._render_service_unit(network_setup=network):
+        if unit != render_service_unit(network_setup=network):
             return None
         if not self._mode("mkosi.extra/usr/bin/runtime-init") & 0o111:
             return None
@@ -900,7 +900,7 @@ class _VariantReader:
         del extra["usr/bin/runtime-init"]
         del shipped[INIT_SERVICE]
         enabled.remove(INIT_SERVICE)
-        return Init("runtime-init", body)
+        return BootStep("runtime-init", body)
 
     # ── files ──
 
@@ -1403,7 +1403,7 @@ def _service_of(unit: str, content: str, *, init: bool) -> Service | None:
     if injected:
         kwargs["after"], kwargs["requires"] = after[1:], requires[1:]
     elif init:
-        kwargs["after_init"] = False
+        kwargs["needs"] = ()
     try:
         service = Service(
             name,
@@ -1418,7 +1418,7 @@ def _service_of(unit: str, content: str, *, init: bool) -> Service | None:
     except (ValidationError, TypeError):
         return None
     spec = profile.services[0]
-    if init and spec.after_init:
+    if init and spec.needs:
         spec = _with_init_service(spec)
     return service if _systemd_unit_content(spec) == content else None
 
@@ -1754,7 +1754,7 @@ def _hint(obj: object) -> str:
             return name
         case Hook(name=name):
             return f"{name}_script"
-        case Init(name=name):
+        case BootStep(name=name):
             return name
         case Mkosi():
             return "init_script"

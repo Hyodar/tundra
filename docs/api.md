@@ -111,7 +111,7 @@ recipe = Recipe(
 
 ## Declarations
 
-`Declaration` is the union of the types `Fragment.items` holds: `Package`, `File`, `Template`, `FileTree`, `Group`, `User`, `Unit`, `Service`, `Hook`, `Init`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Key`, `Disk`, `Secrets`, `RuntimeTools` and `Build`.
+`Declaration` is the union of the types `Fragment.items` holds: `Package`, `File`, `Template`, `FileTree`, `Group`, `User`, `Unit`, `Service`, `Hook`, `BootStep`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Key`, `Disk`, `Secrets`, `RuntimeTools` and `Build`.
 
 Mapping fields (`env`, `limits`, `variables`, `keep_paths_by_variant`, `Tdxs.expected_measurements`) take a `Mapping` and nothing else, and keep an immutable copy in the caller's order (equal to any mapping with the same items; payloads and digests sort it). Lists passed for tuple fields are frozen into tuples.
 
@@ -130,19 +130,19 @@ Mapping fields (`env`, `limits`, `variables`, `keep_paths_by_variant`, `Tdxs.exp
 | `FileTree` | `path` (absolute), `source: Path`, `exclude=()`, `mode=None` (keep each file's and empty directory's permission bits; a mode sets every file to it and empty directories to `0755`), `stage="extra"`, `symlinks="preserve"` (ship links as links; `"follow"` ships what they point to), `allow_secret=False` | stage, path |
 | `Group` | `name`, `system=True`, `gid=None` | name |
 | `User` | `name`, `system=True`, `home=None`, `shell="/usr/sbin/nologin"`, `uid=None`, `primary_group=None`, `groups=()` | name |
-| `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `after_init=False`, `allow_secret=False`. `Unit.from_file(name, source: Path, *, enabled=None, masked=None, after_init=False, allow_secret=False)` ships the unit file *source* (UTF-8) | unit name |
-| `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only: `description=None`, `user=None`, `group=None`, `working_dir=None`, `env: Mapping[str, str] = {}`, `env_file=None`, `exec_start_pre=()`, `after=()`, `requires=()`, `wants=()`, `wanted_by=None` (`minimal.target`), `type=None` (`"simple"`, `"exec"`, `"oneshot"`, `"notify"`, `"forking"`), `restart="no"` (`"always"`, `"on-failure"`, `"no"`), `limits: Mapping[str, str \| int] = {}` (`{"NOFILE": 1048576}`), `kill_mode=None`, `timeout_stop=None`, `security="default"` (`"strict"`, `"default"`, `"none"`), `after_init=True`, `allow_secret=False` | unit name |
+| `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `needs: Sequence[Ready] = ()`, `allow_secret=False`. `Unit.from_file(name, source: Path, *, enabled=None, masked=None, needs=(), allow_secret=False)` ships the unit file *source* (UTF-8) | unit name |
+| `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only: `description=None`, `user=None`, `group=None`, `working_dir=None`, `env: Mapping[str, str] = {}`, `env_file=None`, `exec_start_pre=()`, `after=()`, `requires=()`, `wants=()`, `wanted_by=None` (`minimal.target`), `type=None` (`"simple"`, `"exec"`, `"oneshot"`, `"notify"`, `"forking"`), `restart="no"` (`"always"`, `"on-failure"`, `"no"`), `limits: Mapping[str, str \| int] = {}` (`{"NOFILE": 1048576}`), `kill_mode=None`, `timeout_stop=None`, `security="default"` (`"strict"`, `"default"`, `"none"`), `needs: Sequence[Ready] = (RUNTIME_INIT,)`, `allow_secret=False` | unit name |
 
-`Template` renders `template` with `str.format_map(variables)` at lowering time; a placeholder without a value fails to lower. `Service` renders and enables a `.service` unit; `after_init=True` makes it wait for `runtime-init.service` when the variant has a runtime-init step. `allow_secret=True` exempts a declaration from the `secret-in-file` (`File`, `Template`, every file a `FileTree` imports) or `secret-in-env` (the unit a `Service` renders, a `Unit`'s shipped file) lint, for a value that only looks like a credential; it changes neither the recipe digest nor the tree. `Unit` with `content` ships that text verbatim and needs a type suffix (`app.service`). Without `content` it controls a packaged unit and must set `enabled` or `masked`. `after_init=True` adds `After=`/`Requires=runtime-init.service`.
+`Template` renders `template` with `str.format_map(variables)` at lowering time; a placeholder without a value fails to lower. `Service` renders and enables a `.service` unit. `needs` lists the runtime-init steps it waits for (`After=`/`Requires=` on `runtime-init-<step>.service`; `runtime-init.service` for `RUNTIME_INIT` or under `nethermind-v1`). The default waits for every step when the variant has one, and `needs=()` waits for none. `allow_secret=True` exempts a declaration from the `secret-in-file` (`File`, `Template`, every file a `FileTree` imports) or `secret-in-env` (the unit a `Service` renders, a `Unit`'s shipped file) lint, for a value that only looks like a credential; it changes neither the recipe digest nor the tree. `Unit` with `content` ships that text verbatim and needs a type suffix (`app.service`). Without `content` it controls a packaged unit and must set `enabled` or `masked`. `needs=[...]` adds the same `After=`/`Requires=` lines to its shipped text.
 
 ### Scripts and ordering
 
 | Type | Fields (defaults) | Identity |
 |---|---|---|
 | `Hook` | `name`, `phase: Phase`, `script`, `env: Mapping[str, str] = {}`, `cwd=None`, `after=()` | name |
-| `Init` | `name`, `script`, `priority=100`, `after=()` | name |
+| `BootStep` | `name`, `script`, `after: Sequence[Ready] = ()`, `before: Sequence[Ready] = ()`; `.ready` is its handle | name |
 
-`Phase` is one of `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. `Hook.after` names hooks of the same or an earlier phase. `Init` steps run in `/usr/bin/runtime-init` by ascending priority; `after` orders equal priorities and may name the built-in `keys` (10), `disks` (20) and `secrets` (30), which are reserved names. `Pairs` (`tuple[tuple[str, str], ...]`) types result fields such as `Lock.sections`; declarations take mappings.
+`Phase` is one of `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. `Hook.after` names hooks of the same or an earlier phase. `BootStep`s run at boot in a deterministic topological order of their `after`/`before` edges. When several steps are ready, the built-ins go first, then the declared steps in declaration order. `after`/`before` take readiness handles (a `Ready`, a `BootStep`, or a step name). `Key.ready`, `Disk.ready` and `Secrets.ready` are the built-in steps `keys`, `disks` (after `keys`) and `secrets` (after `disks` when stored on one), which are reserved names. `RUNTIME_INIT` (only in `needs=`) stands for every step. `RuntimeDirectory(path, *, owner=None, group=None, mode=0o755, after=(), name=None)` and `RuntimeFile(path, text, *, owner=None, group=None, mode=0o644, after=(), name=None)` in `tundravm.declarative.utils` return `BootStep`s that create a directory or write a file at boot (default names `dir-<path>`/`file-<path>`). `Pairs` (`tuple[tuple[str, str], ...]`) types result fields such as `Lock.sections`; declarations take mappings.
 
 ### System configuration
 
@@ -428,7 +428,7 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 
 | Class | Fragment name | Declares |
 |---|---|---|
-| `Tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements={}, check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, after_init=False)` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
+| `Tdxs(*, source=TUNDRA_TOOLS, issuer="tdx", validator=None, expected_measurements={}, check_revocations=False, get_collateral=False, verify_imds=False, verify_identity_token=False, needs=())` | `tdxs` | Go build packages, `Build("tdxs")`, `/etc/tdxs/config.yaml`, the socket-activated `tdxs.service`/`tdxs.socket`, `Group("tdx")`, `User("tdxs")` |
 | `DevTools(*, root_password="tdx", salt=None, reproducible=True)` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it: mark its variant `release=False`. The password is hashed with a fixed salt so a second build matches: `salt` (1 to 16 of `[A-Za-z0-9./]`), else the first 16 hex digits of `sha256("tundravm-devtools:<variant name>")`, which the postinst computes from mkosi's `$IMAGE_ID`. `reproducible=False` keeps the historical random salt (the surge `nethermind-v1` tree). |
 | `GoBinary(name, source, *, package, install=None, env={}, tags=(), ldflags="-s -w -buildid=", cache_namespace=None)` | *name* | `Build(name, source, using=Go(output=<install file name>, package=..., ...), install=(Install("build/<install file name>", install),))`, equal to that hand-written `Build`. `install` defaults to `/usr/bin/<name>`; `executable` is it, for `Service(name, f"{binary.executable} --flag")` |
 | `CargoBinary(name, source, *, bin=None, package=None, install=None, features=(), profile="release", env={}, cache_namespace=None)` | *name* | `Build(name, source, using=Cargo(output=<install file name>, ...), install=(Install("target/<profile>/<bin, package or install file name>", install),))`; `install` and `executable` as for `GoBinary` |
@@ -514,11 +514,12 @@ Resolution and references (from `resolve`):
 | `target-inconsistent` | error | A variant leaves a cloud output of the variant it inherits |
 | `disk-key-undefined` | error | A disk's key ref names no key the variant declares |
 | `secret-store-undefined` | error | The secrets' store ref names no disk the variant declares |
-| `init-after-undefined` | error | An `Init.after` names no init step |
-| `init-order` | error | An `Init` runs after a step with a higher priority |
+| `step-undefined` | error | A `BootStep.after`/`before` names a step the variant does not declare |
+| `step-cycle` | error | The runtime-init steps' `after`/`before` edges form a cycle (named in the message) |
+| `needs-undefined` | error | A `Unit`/`Service` `needs` a step the variant does not declare |
 | `hook-after-undefined` | error | A `Hook.after` names no hook |
 | `hook-order` | error | A `Hook` runs after a hook of a later phase |
-| `unit-after-init-without-init` | warning | `Unit(after_init=True)` in a variant with no runtime-init step |
+| `needs-without-init` | warning | A `Unit` with `needs` in a variant with no runtime-init step |
 | `fragment-requires-missing` | error | A fragment's `requires` names a fragment the variant does not include |
 
 Compiler rules (on the lowered recipe, when resolution found no error):
@@ -530,7 +531,6 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `file-path-duplicate` | error | One path declared several times with different content |
 | `file-path-relative` | error | A path is relative or contains `..` |
 | `service-command-not-shipped` | warning | A generated service runs a binary nothing ships |
-| `init-priority-collision` | warning | Several runtime-init steps share a priority |
 | `debloat-removes-needed-unit` | warning | Debloat masks a unit a service needs |
 | `debloat-removes-declared-file` | warning | Debloat deletes a declared file at finalize |
 | `source-unpinned` | warning (error / info by policy) | A source build, or in the current dialect a built kernel's source or an `EfiStub` package (`efi-stub`), has no pin in `build/tundravm.lock` |
@@ -565,11 +565,11 @@ assert_tree(tree: Tree, golden: str | Path, *, update=None) -> None
 assert_tree_matches(recipe, golden_dir, *, variants=None, update=None) -> TreeDiff
 fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) -> Artifact
 bake_in_process(recipe, *, build=None, variants=None, lock=None) -> tuple[Artifact, ...]
-fake_fragment(name="fake", *, packages=(), files=None, init=None, priority=50, requires=(), checks=()) -> Fragment
+fake_fragment(name="fake", *, packages=(), files=None, init=None, after=(), requires=(), checks=()) -> Fragment
 recipe_file(tmp_path: Path, source: str, name="recipe.py") -> Path
 run_cli(*argv) -> tuple[int, str, str]
 ```
 
 Pytest fixtures (plugin `tundravm`, loaded automatically): `recipe`, `compiled`, `run_cli`.
 
-`Image` (one planned variant): `packages` (`{name: role}`), `file(path)` and `files` (`ImageFile`: `content`, `text`, `mode`, `stage`, `owner`, `origin`, `fragment`), `unit(name)` and `service(name)` (`UnitView`: `get`, `values`, `requires`, `wants`, `after`, `wanted_by`, `exec_start`, `user`, `environment`, `enabled`), `users`, `groups`, `builds`, `init_steps` (`InitStep`: `name`, `priority`, `after`, `script`, `builtin`), `hooks(stage)`, `settings(section)`, `lint()`, `tree`, `resolved`. `TEST_PLATFORM` is the fragment `fragment_plan` boots on; `Lintable` is what the assertions accept. `CompiledTree` has `root`, `variants`, `default_variant` and `variant(name)`; its readers take `variant=`.
+`Image` (one planned variant): `packages` (`{name: role}`), `file(path)` and `files` (`ImageFile`: `content`, `text`, `mode`, `stage`, `owner`, `origin`, `fragment`), `unit(name)` and `service(name)` (`UnitView`: `get`, `values`, `requires`, `wants`, `after`, `wanted_by`, `exec_start`, `user`, `environment`, `enabled`), `users`, `groups`, `builds`, `init_steps` (`InitStep`: `name`, `after`, `script`, `builtin`, in topological run order), `hooks(stage)`, `settings(section)`, `lint()`, `tree`, `resolved`. `TEST_PLATFORM` is the fragment `fragment_plan` boots on; `Lintable` is what the assertions accept. `CompiledTree` has `root`, `variants`, `default_variant` and `variant(name)`; its readers take `variant=`.

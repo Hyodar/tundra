@@ -5,17 +5,19 @@ from __future__ import annotations
 import pytest
 
 from tundravm import (
+    BootStep,
     Build,
+    Disk,
     File,
     Fragment,
     Git,
     Group,
     Hook,
-    Init,
     Install,
     Key,
     Package,
     Recipe,
+    Secrets,
     Service,
     Setting,
     Unit,
@@ -34,6 +36,7 @@ from tundravm.testing import (
     plan,
 )
 
+APP_KEY = Key("app_key")
 APP = Fragment(
     "app",
     (
@@ -45,8 +48,8 @@ APP = Fragment(
         Service("app", "/usr/bin/app --port 80", user="app", env={"MODE": "a b"}),
         Hook("configured", "postinst", "echo configured"),
         Hook("seeded", "postinst", "echo seeded", after=("configured",)),
-        Init("app-state", "install -d /var/lib/app", priority=40, after=("keys",)),
-        Key("app_key"),
+        BootStep("app-state", "install -d /var/lib/app", after=(APP_KEY.ready,)),
+        APP_KEY,
     ),
 )
 
@@ -80,7 +83,7 @@ def test_files_carry_mode_stage_and_origin() -> None:
     )
     assert app.fragment == "app"
     assert app.origin[-1].action == "declared"
-    assert image.file("/usr/bin/runtime-init").origin == ()
+    assert image.file("/usr/lib/runtime-init/app-state").origin == ()
     assert "/usr/lib/systemd/system/app.service" in image.files
     with pytest.raises(KeyError, match="/usr/bin/app"):
         image.file("/usr/bin/nope")
@@ -129,8 +132,26 @@ def test_declared_users_groups_hooks_and_builds() -> None:
 def test_init_steps_run_in_order_with_builtins() -> None:
     steps = fragment_plan(APP).init_steps
     assert steps == (
-        InitStep("keys", 10, builtin=True),
-        InitStep("app-state", 40, ("keys",), "install -d /var/lib/app"),
+        InitStep("keys", builtin=True),
+        InitStep("app-state", ("keys",), "install -d /var/lib/app"),
+    )
+
+
+def test_init_steps_follow_the_graph_with_before_edges() -> None:
+    key = Key("k")
+    disk = Disk("d", mount="/persistent", key=key, device="/dev/sdb")
+    secrets = Secrets(store=disk)
+    report = BootStep("report", "echo report\n", after=(secrets.ready,))
+    mark = BootStep(
+        "mark", "touch /persistent/mark\n", after=(disk.ready,), before=(secrets.ready,)
+    )
+    steps = fragment_plan(key, disk, secrets, report, mark).init_steps
+    assert steps == (
+        InitStep("keys", builtin=True),
+        InitStep("disks", ("keys",), builtin=True),
+        InitStep("mark", ("disks",), "touch /persistent/mark\n"),
+        InitStep("secrets", ("disks", "mark"), builtin=True),
+        InitStep("report", ("secrets",), "echo report\n"),
     )
 
 

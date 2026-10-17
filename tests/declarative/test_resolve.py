@@ -5,17 +5,20 @@ from __future__ import annotations
 import pytest
 
 from tundravm.declarative import (
+    RUNTIME_INIT,
+    BootStep,
     Diagnostic,
     Disk,
     File,
     Fragment,
     Hook,
-    Init,
     Key,
     Package,
+    Ready,
     Recipe,
     Resolved,
     Secrets,
+    Service,
     Unit,
     Variant,
     identity,
@@ -23,7 +26,7 @@ from tundravm.declarative import (
     resolve,
     resolve_all,
 )
-from tundravm.declarative.resolve import order_hooks, order_inits
+from tundravm.declarative.resolve import builtin_steps, order_boot_steps, order_hooks
 from tundravm.errors import ValidationError
 
 
@@ -250,27 +253,70 @@ def test_editing_an_inherited_key_needs_no_rebuilt_disk() -> None:
     assert disk in small.items
 
 
-def test_init_references_and_ordering() -> None:
+def test_boot_step_references_and_cycles() -> None:
     recipe = Recipe(
         "r",
         items=(
-            Init("a", "echo a\n", priority=10, after=("disks", "ghost")),
-            Init("b", "echo b\n", priority=5, after=("a",)),
+            BootStep("a", "echo a\n", after=(Ready("ghost"),), before=("b",)),  # type: ignore[arg-type]
+            BootStep("b", "echo b\n", before=(Ready("a"), Ready("phantom"))),
         ),
     )
     found = lint(recipe)
-    assert codes(found) == ["init-after-undefined", "init-after-undefined", "init-order"]
-    assert "runs later" in found[2].message
+    assert codes(found) == ["step-undefined", "step-undefined", "step-cycle"]
+    assert "runs after 'ghost'" in found[0].message
+    assert "runs before 'phantom'" in found[1].message
+    assert "'a' -> 'b' -> 'a'" in found[2].message
 
 
-def test_order_inits_by_priority_then_after() -> None:
-    late = Init("late", "echo late\n", priority=30, after=("secrets",))
-    second = Init("second", "echo 2\n", priority=20, after=("first",))
-    first = Init("first", "echo 1\n", priority=20, after=("disks",))
-    ordered = order_inits((late, second, first), builtins={"disks": 20, "secrets": 30})
-    assert [i.name for i in ordered] == ["first", "second", "late"]
-    with pytest.raises(ValidationError, match="cycle"):
-        order_inits((Init("x", "x\n", after=("y",)), Init("y", "y\n", after=("x",))), builtins={})
+def test_order_boot_steps_follows_after_and_before() -> None:
+    key, disk = Key("k"), Disk("d", "/data")
+    late = BootStep("late", "echo late\n", after=(Ready("secrets"),))
+    second = BootStep("second", "echo 2\n", after=(Ready("first"),))
+    first = BootStep("first", "echo 1\n", after=(disk.ready,), before=(Ready("secrets"),))
+    items = (late, second, key, disk, Secrets(), first)
+    assert order_boot_steps(items) == ["keys", "disks", "first", "secrets", "late", "second"]
+    with pytest.raises(ValidationError, match="'x' -> 'y' -> 'x'"):
+        order_boot_steps(
+            (BootStep("x", "x\n", after=(Ready("y"),)), BootStep("y", "y\n", after=(Ready("x"),)))
+        )
+
+
+def test_unconstrained_steps_keep_builtins_first_then_declaration_order() -> None:
+    items = (BootStep("zeta", "z\n"), BootStep("alpha", "a\n"), Secrets(), Key("k"))
+    assert order_boot_steps(items) == ["keys", "secrets", "zeta", "alpha"]
+
+
+def test_builtin_steps_carry_their_dependencies() -> None:
+    key = Key("k")
+    disk = Disk("d", "/data", key=key)
+    assert builtin_steps((key, disk, Secrets(store=disk))) == [
+        ("keys", ()),
+        ("disks", ("keys",)),
+        ("secrets", ("disks",)),
+    ]
+    assert builtin_steps((key, disk, Secrets())) == [
+        ("keys", ()),
+        ("disks", ("keys",)),
+        ("secrets", ()),
+    ]
+    assert builtin_steps((Disk("d", "/data"), Secrets())) == [("disks", ()), ("secrets", ())]
+
+
+def test_needs_names_declared_steps() -> None:
+    disk = Disk("d", "/data")
+    recipe = Recipe(
+        "r",
+        items=(
+            disk,
+            Service("app", "/usr/bin/app", needs=(disk.ready, Ready("ghost"))),
+            Unit("w.service", "[Unit]\n", needs=(Key("k").ready,)),
+            Service("all", "/usr/bin/all", needs=(RUNTIME_INIT,)),
+        ),
+    )
+    found = lint(recipe)
+    assert codes(found) == ["needs-undefined", "needs-undefined"]
+    assert [d.subject for d in found] == ["app", "w.service"]
+    assert "needs step 'ghost'" in found[0].message
 
 
 def test_order_hooks_within_phase_keeps_slots() -> None:
@@ -290,7 +336,7 @@ def test_hook_unit_and_target_checks() -> None:
         "r",
         items=(
             Hook("h", "build", "make", after=("ghost",)),
-            Unit("app.service", "[Unit]\n", enabled=True, after_init=True),
+            Unit("app.service", "[Unit]\n", enabled=True, needs=(RUNTIME_INIT,)),
         ),
         variants=(
             Variant("default", outputs=("azure",)),
@@ -301,7 +347,7 @@ def test_hook_unit_and_target_checks() -> None:
     assert codes(found) == [
         "target-inconsistent",
         "hook-after-undefined",
-        "unit-after-init-without-init",
+        "needs-without-init",
     ]
     assert {d.variant for d in found} == {"local"}
 

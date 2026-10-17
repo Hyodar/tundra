@@ -1,10 +1,13 @@
 """Storage and secrets: a TPM-sealed key, an encrypted disk and secrets checked at boot.
 
-Teaches the runtime-init chain the compiler emits, in order: ``keys`` creates the
-``Key`` and seals it to the TPM, ``disks`` opens (or formats) the ``Disk`` with it and
-mounts it, ``secrets`` runs ``secret-delivery``, which waits for an SSH key POSTed over
-HTTP and writes it to the SSH directory (``store`` is recorded in its config, but the
-binary does not keep the key on the disk yet). That SSH key is all the built-in
+Teaches the runtime-init steps the compiler emits, a dependency graph: ``keys``
+creates the ``Key`` and seals it to the TPM, ``disks`` (after ``keys``) opens (or
+formats) the ``Disk`` with it and mounts it, ``secrets`` (after ``disks``, since
+``store=disk``) runs ``secret-delivery``, which waits for an SSH key POSTed over HTTP
+and writes it to the SSH directory (``store`` is recorded in its config, but the
+binary does not keep the key on the disk yet). ``key.ready``, ``disk.ready`` and
+``secrets.ready`` name those steps: the app ``needs`` the disk and the secrets, so its
+unit waits for exactly those step units. That SSH key is all the built-in
 ``tundra-tools`` provider delivers: the ``Secret`` entries (``Schema``,
 ``SecretFile``/``SecretEnv`` targets) are recorded in the image's secrets manifest, and
 ``ExternalDelivery`` declares what writes them at boot (lint
@@ -89,6 +92,7 @@ recipe = Recipe(
             working_dir="/persistent/data",
             restart="on-failure",
             wanted_by="minimal.target",
+            needs=[disk.ready, secrets.ready],
         ),
     ),
 )

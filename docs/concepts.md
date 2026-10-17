@@ -2,7 +2,37 @@
 
 tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi project tree, then into bootable TDX disk images, their expected measurements, and deployments. This page explains the model. The [API reference](api.md) lists every field; the [design record](design/declarative-api.md) explains why it is shaped this way.
 
-## The seven concepts
+## The model in one recipe
+
+A recipe says three things. Its **platform** is what every variant builds on: `Debian("trixie", snapshot=..., boot="systemd", efi_stub=...)` is the distribution release and archive, plus the packages a bootable image needs (the kernel and the systemd boot set, `recipe.platform.packages`). Its **items** are the declarations every variant starts from: typed facts (`Package`, `File`, `User`, `Service`, `Build`, `Disk`, ...) and fragments that group them. A reusable fragment is a **component**: a `@component` class whose fields are its configuration and whose `compose()` yields its contents (`GoBinary`, `DevTools` and `Tdxs` in `tundravm.declarative.utils` are components too). Its **variants** each describe one image as a change to the variant it `inherits`: `add` a fragment, `changes` that edit or remove inherited declarations through their refs (`motd.ref.edit(content=...)`, `Unit.ref("ssh.service").remove()`), and the `outputs` it builds (`qemu`, `azure`, `gcp`).
+
+```python
+from tundravm import Debian, File, Package, Recipe, Service, User, Variant
+from tundravm.declarative.utils import DevTools
+
+motd = File.text("/etc/motd", "node\n")
+
+recipe = Recipe(
+    name="node",
+    platform=Debian("trixie"),  # the kernel and systemd boot set every variant boots with
+    items=(
+        Package("curl"),
+        motd,
+        User("app"),
+        Service("app", "/usr/bin/sleep infinity", user="app", wanted_by="minimal.target"),
+    ),
+    variants=(
+        Variant("default", outputs=("qemu",)),
+        Variant("azure", inherits="default", outputs=("azure",)),
+        Variant("dev", inherits="default", add=DevTools(), release=False),
+        Variant("prod", changes=(motd.ref.edit(content="production\n"),)),
+    ),
+)
+```
+
+Resolving a variant flattens platform, items and the variant chain into one ordered tuple of declarations; lowering and compiling turn that into one mkosi directory; baking turns the directory into one disk image per output. Everything on the way is a value with a digest, which the lockfile, the evidence and a release record.
+
+## The concepts
 
 | Concept | Type | Role |
 |---|---|---|
@@ -17,21 +47,11 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 
 Every one of them is a frozen dataclass. Nothing in a recipe is mutated after construction: a component computes its contents once, from its fields, a variant describes a change instead of applying it, and the lifecycle functions take values and return values.
 
-```python
-from tundravm import Package, Recipe, Variant
-
-recipe = Recipe(
-    name="node",
-    items=(Package("curl"),),
-    variants=(Variant("default", outputs=("qemu",)),),
-)
-```
-
-`Recipe` fields: `name`, `items` (its own declarations and fragments; `packages("curl", "jq")` bundles packages without a fragment name), `variants` (default: one `Variant("default", outputs=("qemu",))`), `base` (`debian/trixie`), `arch` (`x86_64` or `aarch64`), `mirror`, `tools_mirror`, `snapshot`, `epoch` (`0`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults).
+`Recipe` fields: `name`, `platform` (default `Debian("trixie", boot=None)`: no kernel, so pass `Debian(release)` for a bootable image), `items` (its own declarations and fragments; `packages("curl", "jq")` bundles packages without a fragment name), `variants` (default: one `Variant("default", outputs=("qemu",))`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults). The archive and build settings are the platform's: `Debian(release, arch=, snapshot=, mirror=, tools_mirror=, epoch=0, boot="systemd", kernel_package="linux-image-amd64", efi_stub=None, items=())`.
 
 ### Mirrors and snapshots
 
-`mirror` and `tools_mirror` are mirror roots, written as mkosi's `Mirror=` and `ToolsTreeMirror=`: mkosi appends `debian` (or `archive/debian/<snapshot>`) itself, so a full archive URL there is wrong. `snapshot` is a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=`; with no `mirror`, mkosi reads it from `https://snapshot.debian.org`, so every package comes from that point in time. A URL in `snapshot` is a `ValidationError` that says to put the root in `mirror`. The `cloud` and `prover` templates set `snapshot="20251113T083151Z"` and pin `EfiStub(snapshot=..., version="257.8-1~deb13u1")`, a `systemd-boot-efi` version that snapshot carries; `Backports` derives its sources from the same mirror and snapshot.
+`Debian(mirror=, tools_mirror=)` are mirror roots, written as mkosi's `Mirror=` and `ToolsTreeMirror=`: mkosi appends `debian` (or `archive/debian/<snapshot>`) itself, so a full archive URL there is wrong. `snapshot` is a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=`; with no `mirror`, mkosi reads it from `https://snapshot.debian.org`, so every package comes from that point in time. A URL in `snapshot` is a `ValidationError` that says to put the root in `mirror`. The `cloud` and `prover` templates set `Debian(release, snapshot="20251113T083151Z", efi_stub="257.8-1~deb13u1")`: the platform pins `EfiStub` to a `systemd-boot-efi` version that snapshot carries; `Backports` derives its sources from the same mirror and snapshot.
 
 Declarations validate themselves at construction: relative paths, empty names, unknown phases, out-of-range modes, a `Disk` whose `key` is a string, or a `Unit` that ships a file without a type suffix raise `ValidationError` right where the value is built.
 
@@ -93,7 +113,7 @@ recipe = Recipe(
 
 `compile(recipe)` resolves each variant and lowers it onto the internal compiler, which emits one mkosi directory per variant:
 
-Lowering writes each variant's compiler state directly from its resolved declarations, in declaration order (hooks per phase, `Init` steps by priority, runtime tools after the declarations they belong to), and the compiler emits that state.
+Lowering writes each variant's compiler state directly from its resolved declarations, in declaration order (hooks per phase, `BootStep`s in graph order, runtime tools after the declarations they belong to), and the compiler emits that state.
 Internally `lower()` returns a frozen `Lowered` value (`declarative/_lowered.py`); `declarative/_compile.py` emits it and `declarative/_bake.py` builds it.
 
 ```
@@ -139,31 +159,33 @@ By default every variant compiles to `Format=uki`, a bootable unified kernel ima
 
 ## Runtime init
 
-Some declarations need work at boot, before services start: generating keys, opening and mounting encrypted disks, receiving secrets. tundravm collects that work into one script, `/usr/bin/runtime-init`, run by `runtime-init.service`. The unit requires and orders after `network-setup.service` only when the variant ships that unit; otherwise it orders after `network-online.target` (`Wants=`), and so does an `azure` variant's provisioning unit.
+Some declarations need work at boot, before services start: generating keys, opening and mounting encrypted disks, receiving secrets. tundravm collects that work into runtime-init *steps*. The steps form a graph, not a priority list:
 
-The script is a sequence of steps sorted by priority, lowest first:
+| Step | Handle | Runs after | Present when the variant declares |
+|---|---|---|---|
+| `keys` | `key.ready` | nothing | a `Key` |
+| `disks` | `disk.ready` | `keys` | a `Disk` |
+| `secrets` | `secrets.ready` | `disks`, when a `Secrets` has `store=` | a `Secrets` |
+| yours | `step.ready` | its `after=`, and before its `before=` | that `BootStep` |
 
-| Step | Priority | Present when the variant declares |
-|---|---|---|
-| `keys` | 10 | a `Key` |
-| `disks` | 20 | a `Disk` |
-| `secrets` | 30 | a `Secrets` |
-| your `Init` | `priority=` (default 100) | that `Init` |
-
-`Init(name, script, priority=100, after=())` adds a step. `after` names other steps, including the built-in `keys`, `disks` and `secrets`, and only orders steps of equal priority; an `after` that points to a step with a higher priority is `init-order`, and one that names a missing step is `init-after-undefined`. The names `keys`, `disks` and `secrets` are reserved. The lockfile records the order `runtime-init` runs the steps in (each step's priority and script digest), so reordering steps of equal priority drifts the lock (see [Reproducibility](reproducibility.md)).
+`BootStep(name, script, after=[...], before=[...])` adds a step. `after` and `before` take readiness handles: `key.ready`, `disk.ready`, `secrets.ready`, another step's `.ready`, or a step name. The steps run in a deterministic topological order. When several steps are ready, the built-ins go first (`keys`, `disks`, `secrets`), then yours in declaration order, so existing recipes keep their order. A cycle is `step-cycle` and names the steps in it. A reference to a step the variant does not declare is `step-undefined`. Both are errors. The names `keys`, `disks` and `secrets` are reserved. `RuntimeDirectory(path, owner=, group=, mode=, after=)` and `RuntimeFile(path, text, owner=, group=, mode=, after=)` in `tundravm.declarative.utils` are `BootStep`s that create a directory or write a file:
 
 ```python
-Init("exporter-directory", "install -d -m 0755 /persistent/exporter\n", priority=25, after=("disks",))
+directory = RuntimeDirectory("/persistent/exporter", after=[disk.ready])
+marker = RuntimeFile("/persistent/exporter/boot.prom", "up 1\n", after=[directory.ready, secrets.ready])
+Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, needs=[marker.ready])
 ```
+
+In the current dialect each step is a oneshot unit, `runtime-init-<step>.service`, running `/usr/lib/runtime-init/<step>`. Its `After=`/`Requires=` name the steps it runs after. `runtime-init.service` requires every step and is enabled in `minimal.target`. Steps that do not depend on each other can run in parallel. Under `nethermind-v1`, one script, `/usr/bin/runtime-init`, runs every step in the topological order from `runtime-init.service`. Every step unit, like that script's unit, requires and orders after `network-setup.service` only when the variant ships that unit. Otherwise it orders after `network-online.target` (`Wants=`), and so does an `azure` variant's provisioning unit. The lockfile records the steps in run order (each step's name and script digest), so reordering steps drifts the lock (see [Reproducibility](reproducibility.md)).
 
 ## Services and units
 
 Two declarations put systemd units in the image:
 
-- **`Service`: a generated service.** `Service("app", "/usr/bin/app", user="app", restart="on-failure")` renders `/usr/lib/systemd/system/app.service` from typed fields (`exec_start`, `user`, `group`, `env`, `env_file`, `working_dir`, `exec_start_pre`, `after`/`requires`/`wants`, `wanted_by`, `type`, `restart`, `limits`, `kill_mode`, `timeout_stop`, `security`) and enables it. With `after_init=True`, the default, it also waits for `runtime-init.service` whenever the variant has a runtime-init step.
+- **`Service`: a generated service.** `Service("app", "/usr/bin/app", user="app", restart="on-failure")` renders `/usr/lib/systemd/system/app.service` from typed fields (`exec_start`, `user`, `group`, `env`, `env_file`, `working_dir`, `exec_start_pre`, `after`/`requires`/`wants`, `wanted_by`, `type`, `restart`, `limits`, `kill_mode`, `timeout_stop`, `security`) and enables it. `needs=[...]` lists the runtime-init steps it waits for. The default, `needs=[RUNTIME_INIT]`, waits for every step (`runtime-init.service`) whenever the variant has one. `needs=()` starts it without waiting.
 - **`Unit`: verbatim text, or a packaged unit's state.** `Unit("app.service", content, enabled=True)` ships `content` (a string or a `Path` to read) exactly as written; the name needs its type suffix. `Unit("openntpd.service", enabled=True)` or `Unit("ssh.socket", enabled=False, masked=True)` only changes the state of a unit a package ships; it must enable, disable or mask something.
 
-`Unit(..., after_init=True)` adds `After=runtime-init.service` and `Requires=runtime-init.service` to the shipped text's `[Unit]` section. If the variant has no runtime-init step, `lint` warns with `unit-after-init-without-init`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (the shipped `Tdxs()` and `DevTools()` fragments use `Unit`).
+`Unit(..., needs=[disk.ready])` adds `After=runtime-init-disks.service` and `Requires=runtime-init-disks.service` to the shipped text's `[Unit]` section, one unit per needed step. `needs=[RUNTIME_INIT]` adds `runtime-init.service`, and so does any `needs` under `nethermind-v1`. A `needs` naming a step the variant does not declare is `needs-undefined`, an error. A `Unit` with `needs` in a variant with no runtime-init step gets a `needs-without-init` warning from `lint`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (the shipped `Tdxs()` and `DevTools()` fragments use `Unit`).
 
 `Template(path, template, variables={})` is a file rendered with `str.format_map(variables)` at lowering time, for config files that differ only in a few values.
 
@@ -201,7 +223,7 @@ Then `format` decides whether the device is formatted before it is opened and mo
 | `"always"` | formatted on every boot: nothing on it survives a reboot | formatted on every boot |
 | `"never"` | never formatted: a device that is not LUKS fails the step | never formatted: a device without a filesystem fails to mount |
 
-After formatting, `disk-setup` creates `directories` under the mount point. A failing step stops `runtime-init` (`set -euo pipefail`), so `runtime-init.service` fails and every unit that requires it (`Service(after_init=True)`, `Unit(after_init=True)`) stays down. The defaults suit a throwaway VM; a production recipe names the device it means (`device="/dev/disk/by-id/..."` or the platform's data-disk path) and picks `format` for the data it must keep. Because the defaults can format the boot disk, lint reports every `Disk(device=None)` whose `format` is not `"never"` as `disk-auto-format`, a warning that `Policy(storage_safety="error")` makes an error (`storage_safety="warn"` is the default).
+After formatting, `disk-setup` creates `directories` under the mount point. A failing step fails its unit (`set -euo pipefail`), so every step after it, `runtime-init.service` and every unit that needs it (`Service(needs=[disk.ready])`, the default `needs=[RUNTIME_INIT]`) stay down. The defaults suit a throwaway VM; a production recipe names the device it means (`device="/dev/disk/by-id/..."` or the platform's data-disk path) and picks `format` for the data it must keep. Because the defaults can format the boot disk, lint reports every `Disk(device=None)` whose `format` is not `"never"` as `disk-auto-format`, a warning that `Policy(storage_safety="error")` makes an error (`storage_safety="warn"` is the default).
 
 ### Secret delivery at boot
 
@@ -314,7 +336,7 @@ These still raise `ValidationError` when you compile, lint or bake:
 - a `Setting` for a key the compiler writes itself (`Packages`, `Mirror`, `Format`, ...), naming the declaration to use instead;
 - a `Kernel` from `Http` without `sha256`;
 - two `Secrets` whose config, manifest or delivered file paths overlap;
-- variant `inherits` cycles and `Init`/`Hook` ordering cycles.
+- variant `inherits` cycles and `BootStep`/`Hook` ordering cycles.
 
 ## Lifecycle
 

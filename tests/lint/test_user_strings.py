@@ -58,6 +58,11 @@ RENAMED = {
         r"\bRecipe\.(?:base|arch|mirror|tools_mirror|snapshot|epoch)\b"
     ),
     "BOOT package tuple (Debian(boot=...))": re.compile(r"\bBOOT\s*=\s*\(|\*BOOT\b"),
+    "Init (BootStep)": re.compile(r"(?<![\w.])Init\("),
+    "after_init (needs=)": re.compile(r"\bafter_init\b"),
+    "BUILTIN_INITS priorities (BUILTIN_STEPS, readiness handles)": re.compile(
+        r"\bBUILTIN_INITS\b|\binit-priority-collision\b"
+    ),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {
@@ -69,6 +74,8 @@ RENAMED_KEYWORDS = {
         "remove": "changes=(value.ref.remove(),)",
     },
     "Build": {"recipe": "using=", "cache_key": "cache_namespace="},
+    "BootStep": {"priority": "after=/before= readiness handles"},
+    "fake_fragment": {"priority": "after="},
     "Recipe": {
         "common": "items=",
         **{
@@ -202,6 +209,11 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         "pin it with Recipe.snapshot",
         'BOOT = ("linux-image-amd64", "systemd")',
         "packages(*BOOT, 'curl')",
+        'Init("state", "install -d /var/lib/app\\n", priority=25, after=("disks",))',
+        'Unit("app.service", UNIT, enabled=True, after_init=True)',
+        'BootStep("state", "true", priority=25)',
+        'fake_fragment("late", init="echo late", priority=40)',
+        "the init-priority-collision warning",
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:
@@ -218,5 +230,7 @@ def test_renamed_guard_passes_the_current_spellings() -> None:
         'Variant("d", add=Fragment("f", (Debloat(remove=("/x",)),)))\n'
         'Recipe("r", platform=Debian("trixie", snapshot=SNAPSHOT, arch="x86_64", epoch=0))\n'
         'EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1")\nmcopy ::EFI/BOOT/BOOTX64.EFI\n'
+        'BootStep("s", "true", after=[disk.ready])\nUnit("a.service", U, needs=[s.ready])\n'
+        'Repository("r", URL, "s", priority=10)\nRuntimeInit("x")\n'
     )
     assert _renamed(source) == []

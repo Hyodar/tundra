@@ -8,12 +8,13 @@ from pathlib import Path
 import pytest
 
 from tundravm import (
+    BootStep,
     Diagnostic,
     File,
     Fragment,
     Hook,
-    Init,
     Package,
+    Ready,
     Recipe,
     Resolved,
     Service,
@@ -59,7 +60,7 @@ def _recipe(*extra: Package | File) -> Recipe:
             User("app", system=True),
             Service("app", "/usr/bin/app", user="app"),
             Hook("configured", "postinst", "echo configured"),
-            Init("boot", "echo booted", priority=50),
+            BootStep("boot", "echo booted"),
             *extra,
         ),
     )
@@ -399,28 +400,30 @@ def test_fake_fragment_requires_a_fragment_by_name() -> None:
     assert_clean(fragment_plan(dep, include=(Fragment("base-tools", (Package("curl"),)),)))
 
 
-def test_fake_fragment_init_scripts_compose_by_priority() -> None:
+def test_fake_fragment_init_scripts_compose_by_after() -> None:
     silent = fake_fragment("silent", packages=("pkg",))
-    assert not any(isinstance(item, Init) for item in silent.items)
+    assert not any(isinstance(item, BootStep) for item in silent.items)
     image = fragment_plan(
-        fake_fragment("late", init="echo late", priority=40),
-        fake_fragment("early", init="echo early", priority=10),
+        fake_fragment("late", init="echo late", after=[Ready("early")]),
+        fake_fragment("early", init="echo early"),
         silent,
     )
-    assert [(step.name, step.priority) for step in image.init_steps] == [
-        ("early", 10),
-        ("late", 40),
+    assert [(step.name, step.after) for step in image.init_steps] == [
+        ("early", ()),
+        ("late", ("early",)),
     ]
-    init = image.file("/usr/bin/runtime-init").text
-    assert init.index("echo early") < init.index("echo late")
+    unit = image.file("/usr/lib/systemd/system/runtime-init-late.service").text
+    assert "Requires=runtime-init-early.service" in unit
+    assert image.file("/usr/lib/runtime-init/late").text.endswith("echo late")
 
 
-def test_fake_fragment_collision_is_diagnosed() -> None:
-    common = Fragment("app", (fake_fragment("a", init="echo a"), fake_fragment("b", init="echo b")))
-    found = assert_diagnostic(
-        Recipe(name="demo", items=(common,)), "init-priority-collision", subject="priority 50"
-    )
-    assert found.severity == "warning"
+def test_fake_fragment_cycle_is_diagnosed() -> None:
+    a = fake_fragment("a", init="echo a", after=[Ready("b")])
+    b = fake_fragment("b", init="echo b", after=[Ready("a")])
+    common = Fragment("app", (a, b))
+    found = assert_diagnostic(Recipe(name="demo", items=(common,)), "step-cycle")
+    assert found.severity == "error"
+    assert "'a' -> 'b' -> 'a'" in found.message
 
 
 def test_fake_fragment_checks_run_per_variant() -> None:

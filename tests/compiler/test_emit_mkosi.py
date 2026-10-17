@@ -8,6 +8,7 @@ from tests.helpers import on_platform
 from tundravm.compiler import DEFAULT_TDX_INIT_SCRIPT
 from tundravm.compiler.emit_mkosi import ARCH_TO_MKOSI
 from tundravm.declarative import (
+    BootStep,
     Debian,
     Debloat,
     Declaration,
@@ -15,7 +16,6 @@ from tundravm.declarative import (
     Fragment,
     Git,
     Hook,
-    Init,
     Kernel,
     Mkosi,
     Package,
@@ -1061,13 +1061,19 @@ def test_current_postoutput_output_name_runs_under_set_u(version: str | None) ->
     assert result.stdout.strip() == ("node.efi" if version is None else "node_1.2.efi")
 
 
-def _runtime_init_unit(out: Path, variant: str = "default") -> str:
-    path = out / variant / "mkosi.extra/usr/lib/systemd/system/runtime-init.service"
+def _runtime_init_unit(
+    out: Path, variant: str = "default", unit: str = "runtime-init-hello"
+) -> str:
+    """The unit that orders runtime-init after the network: the ``hello`` step's by default."""
+    path = out / variant / f"mkosi.extra/usr/lib/systemd/system/{unit}.service"
     return path.read_text(encoding="utf-8")
 
 
+HELLO = BootStep("hello", "echo hi")
+
+
 def test_runtime_init_waits_for_network_online_without_network_setup(tmp_path: Path) -> None:
-    out = _compile(_recipe(Init("hello", "echo hi")), tmp_path / "mkosi")
+    out = _compile(_recipe(HELLO), tmp_path / "mkosi")
     unit = _runtime_init_unit(out)
     assert "After=network-online.target\nWants=network-online.target\n" in unit
     assert "network-setup" not in unit
@@ -1085,7 +1091,7 @@ def test_runtime_init_waits_for_network_online_without_network_setup(tmp_path: P
 def test_runtime_init_requires_a_declared_network_setup(
     tmp_path: Path, declared: Declaration
 ) -> None:
-    out = _compile(_recipe(Init("hello", "echo hi"), declared), tmp_path / "mkosi")
+    out = _compile(_recipe(HELLO, declared), tmp_path / "mkosi")
     unit = _runtime_init_unit(out)
     assert "After=network.target network-setup.service\nRequires=network-setup.service\n" in unit
     assert "network-online" not in unit
@@ -1093,7 +1099,7 @@ def test_runtime_init_requires_a_declared_network_setup(
 
 def test_runtime_init_follows_a_variants_own_network_setup(tmp_path: Path) -> None:
     recipe = _recipe(
-        Init("hello", "echo hi"),
+        HELLO,
         variants=(
             Variant("default", outputs=("qemu",)),
             Variant(
@@ -1109,6 +1115,6 @@ def test_runtime_init_follows_a_variants_own_network_setup(tmp_path: Path) -> No
 
 
 def test_runtime_init_keeps_network_setup_under_nethermind_v1(tmp_path: Path) -> None:
-    out = _compile(_recipe(Init("hello", "echo hi"), mkosi=HISTORICAL), tmp_path / "mkosi")
-    unit = _runtime_init_unit(out)
+    out = _compile(_recipe(HELLO, mkosi=HISTORICAL), tmp_path / "mkosi")
+    unit = _runtime_init_unit(out, unit="runtime-init")
     assert "After=network.target network-setup.service\nRequires=network-setup.service\n" in unit

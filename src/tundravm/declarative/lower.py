@@ -426,7 +426,7 @@ def _overlay(
             item
             for item in child.items
             if isinstance(item, Unit)
-            and item.after_init
+            and item.needs
             and item.content is not None
             and identity(item) in inherited
         ]

@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tundravm.declarative import Build, File, Fragment, Git, Install, Package, Unit, User
+from tundravm.declarative import (
+    RUNTIME_INIT,
+    Build,
+    File,
+    Fragment,
+    Git,
+    Install,
+    Package,
+    Unit,
+    User,
+)
 from tundravm.declarative.utils import Composite
 
 NETHERMIND_SOURCE = Git("https://github.com/NethermindEth/nethermind.git", "1.32.3")
@@ -102,7 +112,9 @@ class Nethermind(Composite):
                     cache_namespace=f"nethermind-{self.source.ref}-{NETHERMIND_RUNTIME}",
                 ),
                 User("nethermind-surge", home="/home/nethermind-surge", groups=("eth",)),
-                Unit("nethermind-surge.service", NETHERMIND_UNIT, enabled=True, after_init=True),
+                Unit(
+                    "nethermind-surge.service", NETHERMIND_UNIT, enabled=True, needs=[RUNTIME_INIT]
+                ),
                 File(f"{etc}/env", NETHERMIND_ENV),
             ),
         )

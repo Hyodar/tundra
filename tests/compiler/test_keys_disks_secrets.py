@@ -9,11 +9,12 @@ import pytest
 from tests.helpers import conf_list
 from tundravm._source import GitSource
 from tundravm.declarative import (
+    BootStep,
     Declaration,
     Disk,
     Git,
-    Init,
     Key,
+    Ready,
     Recipe,
     RuntimeTools,
     Schema,
@@ -59,16 +60,36 @@ def _source(*items: Declaration, name: str) -> object:
     return lower(_recipe(*items)).source_builds()[name].source
 
 
-def _probes(priority: int) -> tuple[Init, Init]:
-    """Inits that run just before and just after *priority*."""
+def _probes(step: Ready) -> tuple[BootStep, BootStep]:
+    """Boot steps that run just before and just after *step*."""
     return (
-        Init("probe-early", "echo probe-early", priority=priority - 1),
-        Init("probe-late", "echo probe-late", priority=priority + 1),
+        BootStep("probe-early", "echo probe-early", before=(step,)),
+        BootStep("probe-late", "echo probe-late", after=(step,)),
     )
 
 
-def _assert_runs_at_priority(script: str, marker: str) -> None:
-    assert script.index("probe-early") < script.index(marker) < script.index("probe-late")
+def _step(tree: CompiledTree, step: str) -> str:
+    """The script of runtime-init step *step* (the current dialect runs one per step)."""
+    return tree.read(f"mkosi.extra/usr/lib/runtime-init/{step}")
+
+
+def _deps(tree: CompiledTree, step: str, directive: str = "Requires") -> list[str]:
+    """The units in the *directive* lines of runtime-init step *step*'s unit."""
+    text = tree.unit(f"runtime-init-{step}.service")
+    prefix = f"{directive}="
+    return [
+        u
+        for line in text.splitlines()
+        if line.startswith(prefix)
+        for u in line[len(prefix) :].split()
+    ]
+
+
+def _assert_runs_between_probes(tree: CompiledTree, step: str) -> None:
+    """*step*'s unit follows ``probe-early`` and ``probe-late``'s unit follows *step*."""
+    for directive in ("After", "Requires"):
+        assert "runtime-init-probe-early.service" in _deps(tree, step, directive)
+        assert f"runtime-init-{step}.service" in _deps(tree, "probe-late", directive)
 
 
 # ── Keys ─────────────────────────────────────────────────────────────
@@ -89,11 +110,12 @@ def test_key_generation_adds_build_hook(tmp_path: Path) -> None:
 
 
 def test_key_generation_registers_init_script(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Key("key_persistent", output="/persistent/key"), *_probes(10))
+    key = Key("key_persistent", output="/persistent/key")
+    tree = _compile(tmp_path, key, *_probes(key.ready))
 
-    script = tree.runtime_init()
+    script = _step(tree, "keys")
     assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
-    _assert_runs_at_priority(script, "key-gen setup")
+    _assert_runs_between_probes(tree, "keys")
 
     # output_path is in the config file, not the init script
     config = tree.read(KEY_CONFIG)
@@ -154,7 +176,7 @@ def test_key_generation_supports_multiple_keys(tmp_path: Path) -> None:
     assert 'output_path: "/persistent/data.key"' in config
 
     assert len(_builds(tree)) == 1
-    script = tree.runtime_init()
+    script = _step(tree, "keys")
     assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
 
 
@@ -198,12 +220,12 @@ def test_disk_encryption_registers_init_script(tmp_path: Path) -> None:
     disk = Disk(
         "disk_persistent", "/data", device="/dev/vdb", key=PERSISTENT_KEY, mapper="cryptdata"
     )
-    tree = _compile(tmp_path, disk, *_probes(20))
+    tree = _compile(tmp_path, disk, *_probes(disk.ready))
 
-    script = tree.runtime_init()
+    script = _step(tree, "disks")
     assert script.count("/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml") == 1
     assert "cryptsetup rename crypt_disk_disk_persistent cryptdata" in script
-    _assert_runs_at_priority(script, "disk-setup setup")
+    _assert_runs_between_probes(tree, "disks")
 
     # key_path and mount_at are in the config file
     config = tree.read(DISK_CONFIG)
@@ -276,7 +298,7 @@ def test_disk_encryption_supports_multiple_disks(tmp_path: Path) -> None:
     assert 'dirs: ["logs", "archive"]' in config
     assert 'dirs: ["cache"]' in config
 
-    script = tree.runtime_init()
+    script = _step(tree, "disks")
     assert script.count("/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml") == 1
     assert "cryptsetup rename crypt_disk_logs cryptlogs" in script
 
@@ -316,12 +338,13 @@ def test_secret_delivery_adds_build_hook(tmp_path: Path) -> None:
 
 
 def test_secret_delivery_registers_init_script(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Secrets(port=9090), *_probes(30))
+    secrets = Secrets(port=9090)
+    tree = _compile(tmp_path, secrets, *_probes(secrets.ready))
 
-    script = tree.runtime_init()
+    script = _step(tree, "secrets")
     expected = "/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml"
     assert script.count(expected) == 1
-    _assert_runs_at_priority(script, "secret-delivery setup")
+    _assert_runs_between_probes(tree, "secrets")
     assert 'server_url: "0.0.0.0:9090"' in tree.read(SECRET_CONFIG)
 
 
@@ -467,20 +490,25 @@ def _runtime_items() -> tuple[Declaration, ...]:
     return (key, disk, Secrets(store=disk))
 
 
-def test_init_generates_runtime_init_from_init_scripts(tmp_path: Path) -> None:
+def test_init_generates_a_unit_per_runtime_init_step(tmp_path: Path) -> None:
     tree = _compile(tmp_path, *_runtime_items())
 
     assert len(_builds(tree)) == 3
 
-    script = tree.runtime_init()
-    assert "#!/bin/bash" in script
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in script
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in script
-    assert "/usr/bin/secret-delivery" in script
+    assert _step(tree, "keys").startswith("#!/bin/bash\nset -euo pipefail\n")
+    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in _step(tree, "keys")
+    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in _step(tree, "disks")
+    assert "/usr/bin/secret-delivery" in _step(tree, "secrets")
+    assert not tree.exists("mkosi.extra/usr/bin/runtime-init")
 
+    step = tree.unit("runtime-init-disks.service")
+    assert "Type=oneshot" in step
+    assert "ExecStart=/usr/lib/runtime-init/disks" in step
     svc = tree.unit("runtime-init.service")
     assert "Type=oneshot" in svc
-    assert "ExecStart=/usr/bin/runtime-init" in svc
+    assert "ExecStart=/bin/true" in svc
+    units = "runtime-init-keys.service runtime-init-disks.service runtime-init-secrets.service"
+    assert f"Requires={units}" in svc.splitlines()
 
     conf = tree.conf()
     packages = conf_list(conf, "Packages")
@@ -492,19 +520,25 @@ def test_init_generates_runtime_init_from_init_scripts(tmp_path: Path) -> None:
     assert "git" in build_packages
 
 
-def test_init_scripts_sorted_by_priority(tmp_path: Path) -> None:
+def test_builtin_steps_depend_on_each_other(tmp_path: Path) -> None:
     key, disk, secrets = _runtime_items()
     tree = _compile(tmp_path, secrets, disk, key)
 
-    script = tree.runtime_init()
-    key_pos = script.index("key-gen setup")
-    disk_pos = script.index("disk-setup setup")
-    secret_pos = script.index("secret-delivery")
-    assert key_pos < disk_pos < secret_pos
+    assert _deps(tree, "keys") == []
+    assert _deps(tree, "disks") == ["runtime-init-keys.service"]
+    assert _deps(tree, "secrets") == ["runtime-init-disks.service"]
+
+
+def test_secrets_not_stored_on_a_disk_do_not_wait_for_it(tmp_path: Path) -> None:
+    key, disk, _ = _runtime_items()
+    tree = _compile(tmp_path, key, disk, Secrets())
+
+    assert _deps(tree, "secrets") == []
 
 
 def test_init_without_init_scripts_does_not_generate_runtime_init(tmp_path: Path) -> None:
     tree = _compile(tmp_path)
 
     assert not tree.exists("mkosi.extra/usr/bin/runtime-init")
+    assert not tree.exists("mkosi.extra/usr/lib/runtime-init")
     assert not tree.exists("mkosi.extra/usr/lib/systemd/system/runtime-init.service")

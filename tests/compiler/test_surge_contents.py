@@ -72,8 +72,8 @@ def _const(name: str) -> str:
     return value
 
 
-def after_init(body: str) -> str:
-    """The ``after_init`` injection the committed units carry.
+def needs_runtime_init(body: str) -> str:
+    """The ``needs=[RUNTIME_INIT]`` injection the committed (``nethermind-v1``) units carry.
 
     ``runtime-init.service`` becomes the first value of the ``[Unit]`` section's
     ``After=`` and ``Requires=`` lines; a missing line is appended to the end of
@@ -96,10 +96,10 @@ def test_constant_matches_golden_file(name: str, path: str) -> None:
 
 
 @pytest.mark.parametrize(("name", "path"), UNITS)
-def test_unit_body_plus_after_init_matches_golden_file(name: str, path: str) -> None:
+def test_unit_body_plus_runtime_init_matches_golden_file(name: str, path: str) -> None:
     body = _const(name)
     assert INIT_SERVICE not in body
-    assert (GOLDEN / path).read_bytes() == after_init(body).encode()
+    assert (GOLDEN / path).read_bytes() == needs_runtime_init(body).encode()
 
 
 def test_every_shipped_literal_file_is_covered() -> None:

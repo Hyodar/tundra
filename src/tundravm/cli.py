@@ -40,7 +40,7 @@ from dataclasses import MISSING, dataclass, fields, replace
 from pathlib import Path
 from typing import TextIO, cast, get_args
 
-from . import __version__
+from . import __version__, app_template
 from . import templates as scaffold
 from ._source import SOURCES_DIRNAME
 from .attestation import attest, render_attestation
@@ -808,8 +808,8 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init.add_argument(
         "--template",
         choices=tuple(TEMPLATES),
-        default=DEFAULT_TEMPLATE,
-        help="Starter recipe (default: %(default)s); see --list-templates.",
+        default=None,
+        help=f"Starter recipe (default: {DEFAULT_TEMPLATE}); see --list-templates.",
     )
     init.add_argument(
         "--list-templates",
@@ -817,6 +817,34 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         help="Print the templates with a one-line description each, then exit.",
     )
     init.add_argument("--release", default="trixie", help="Debian release (default: %(default)s).")
+    app = init.add_argument_group(
+        "app",
+        "--app go writes a recipe that builds one Go program and runs it as a service, "
+        "and tests that check the planned image (instead of --template).",
+    )
+    app.add_argument("--app", choices=app_template.APP_LANGUAGES, default=None, help="Language.")
+    where = app.add_mutually_exclusive_group()
+    where.add_argument("--source", metavar="URL@REF", help="Git repository and ref to build.")
+    where.add_argument(
+        "--path", type=Path, metavar="DIR", help="Local git checkout to build (its HEAD branch)."
+    )
+    app.add_argument(
+        "--package", default=".", help="Go package to build, in the source (default: .)."
+    )
+    app.add_argument(
+        "--port",
+        type=int,
+        default=app_template.DEFAULT_PORT,
+        help="Port the service listens on (default: %(default)s).",
+    )
+    app.add_argument("--disk", metavar="NAME", help="Keep the state on encrypted disk NAME.")
+    app.add_argument("--secret", metavar="NAME", help="Deliver secret NAME to the service.")
+    app.add_argument(
+        "--delivery",
+        metavar="external:NAME",
+        help="With --secret: what writes it at boot (the built-in runtime delivers only "
+        "root's SSH key).",
+    )
     init.add_argument(
         "--backend",
         choices=sorted(BACKEND_SNIPPETS),
@@ -3420,17 +3448,32 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
     title = name.replace("_", "-")
     recipe = root / f"{name}.py"
     tests = root / "tests" / f"test_{re.sub(r'[^A-Za-z0-9_]', '_', name)}.py"
-    files = {
-        recipe: render_recipe_template(
-            title=title,
-            filename=recipe.name,
-            release=args.release,
-            backend=args.backend,
-            template=args.template,
-        )
-    }
-    if args.tests:
-        files[tests] = render_test_module(filename=recipe.name, template=args.template)
+    app = _init_app(args, title)
+    template = f"{args.app}-app" if app else args.template or DEFAULT_TEMPLATE
+    if app is not None:
+        files = {
+            recipe: app_template.render_app_recipe(
+                app,
+                title=title,
+                filename=recipe.name,
+                release=args.release,
+                backend=BACKEND_SNIPPETS[args.backend],
+            )
+        }
+        if args.tests:
+            files[tests] = app_template.render_app_tests(app, filename=recipe.name)
+    else:
+        files = {
+            recipe: render_recipe_template(
+                title=title,
+                filename=recipe.name,
+                release=args.release,
+                backend=args.backend,
+                template=template,
+            )
+        }
+        if args.tests:
+            files[tests] = render_test_module(filename=recipe.name, template=template)
     if args.ci == "github":
         files[root / WORKFLOW_PATH] = render_workflow(recipe=recipe.name)
     existing = [path for path in files if path.exists()]
@@ -3448,7 +3491,7 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
             name=_project_name(name), recipe=recipe.name, backend=args.backend, source=source
         ),
         root / "README.md": render_readme(
-            title=title, filename=recipe.name, template=args.template, tests=args.tests
+            title=title, filename=recipe.name, template=template, tests=args.tests
         ),
     }
     for path, text in files.items():
@@ -3475,10 +3518,58 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
         print(f"note: {source.note}", file=out)
     _init_lint(recipe, out)
     synced = None if had_pyproject else source
-    _init_next(root, recipe, tests if args.tests else None, args.ci == "github", synced, out)
+    tested = tests if args.tests else None
+    _init_next(root, recipe, tested, args.ci == "github", synced, out, golden=app is None)
     if not args.no_doctor:
         _init_doctor(args.backend, args.runner, out)
     return EXIT_OK
+
+
+def _init_app(args: argparse.Namespace, title: str) -> app_template.AppSpec | None:
+    """What ``--app`` asks for; ``None`` scaffolds a ``--template`` recipe."""
+    given = {
+        "--source": args.source,
+        "--path": args.path,
+        "--disk": args.disk,
+        "--secret": args.secret,
+        "--delivery": args.delivery,
+    }
+    if args.app is None:
+        flag = next((flag for flag, value in given.items() if value is not None), None)
+        if flag is not None:
+            raise ValidationError(
+                f"{flag} configures the app recipe and needs --app go.",
+                hint="Pass --app go, or drop the app options for a --template recipe.",
+            )
+        return None
+    if args.template is not None:
+        raise ValidationError(
+            "--app and --template choose different starter recipes.",
+            hint="Pass one of them.",
+        )
+    if args.source is not None:
+        url, ref = app_template.parse_source(args.source)
+    elif args.path is not None:
+        url, ref = app_template.local_source(args.path)
+    else:
+        raise ValidationError(
+            f"--app {args.app} needs the program's source.",
+            hint="Pass --source URL@REF (a git repository) or --path DIR (a local checkout).",
+        )
+    name = re.sub(r"[^a-z0-9_-]+", "-", title.lower()).strip("-_")
+    spec = app_template.AppSpec(
+        name if re.match(r"[a-z]", name) else f"app-{name}".rstrip("-"),
+        url,
+        ref,
+        package=args.package,
+        port=args.port,
+        disk=args.disk,
+        secret=args.secret,
+        delivery=args.delivery,
+        local=args.path is not None,
+    )
+    app_template.check_spec(spec)
+    return spec
 
 
 def _init_existing(args: argparse.Namespace, root: Path) -> tuple[str, str] | None:
@@ -3578,10 +3669,13 @@ def _init_next(
     github: bool,
     synced: TundravmSource | None,
     out: TextIO,
+    *,
+    golden: bool = True,
 ) -> None:
     """Print the numbered follow-up commands, run from *root*; *synced*: the tundravm
-    dependency the pyproject.toml ``init`` wrote holds."""
+    dependency the pyproject.toml ``init`` wrote holds; *golden*: the tests compare mkosi/."""
     name = recipe.name
+    against = " against mkosi/" if golden else " on the planned image"
     steps = [
         (
             f"tundravm lock {name}",
@@ -3589,7 +3683,7 @@ def _init_next(
         ),
         (f"tundravm compile {name} --tree mkosi", "write the mkosi tree; commit it"),
         *(
-            [(f"uv run pytest {tests.parent.name}", f"run {tests.name} against mkosi/")]
+            [(f"uv run pytest {tests.parent.name}", f"run {tests.name}{against}")]
             if tests is not None
             else []
         ),

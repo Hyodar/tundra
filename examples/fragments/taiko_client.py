@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tundravm.declarative import Build, File, Fragment, Git, Install, Package, Unit, User
+from tundravm.declarative import (
+    RUNTIME_INIT,
+    Build,
+    File,
+    Fragment,
+    Git,
+    Install,
+    Package,
+    Unit,
+    User,
+)
 from tundravm.declarative.utils import Composite
 
 TAIKO_CLIENT_SOURCE = Git(
@@ -63,7 +73,7 @@ class TaikoClient(Composite):
                     cache_namespace=f"taiko-client-{self.source.ref}",
                 ),
                 User("taiko-client", home="/home/taiko-client", groups=("eth",)),
-                Unit("taiko-client.service", TAIKO_CLIENT_UNIT, enabled=True, after_init=True),
+                Unit("taiko-client.service", TAIKO_CLIENT_UNIT, enabled=True, needs=[RUNTIME_INIT]),
                 File("/etc/taiko-client/env", TAIKO_CLIENT_ENV),
             ),
         )

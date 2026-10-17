@@ -24,7 +24,6 @@ DISK_ENCRYPTION_BUILD_PACKAGES = (
 )
 
 DISK_ENCRYPTION_DEFAULT_CONFIG_PATH = "/etc/tdx/disk-setup.yaml"
-DISK_ENCRYPTION_INIT_PRIORITY = 20
 DEFAULT_DISK_DIRS = ("ssh", "data", "logs")
 
 
@@ -270,7 +269,7 @@ class DiskEncryption(Module):
         return ('    strategy: "largest"',)
 
     def render_init_script(self) -> str:
-        """The runtime-init step (priority 20): ``disk-setup``, then any mapper renames."""
+        """The ``disks`` runtime-init step: ``disk-setup``, then any mapper renames."""
         lines = [f"/usr/bin/disk-setup setup {shlex.quote(self.config_path)}"]
         for spec in self.disks:
             if spec.encrypted and spec.mapper_name:

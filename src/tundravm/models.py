@@ -19,6 +19,8 @@ OutputTarget = Literal["qemu", "azure", "gcp"]
 FileKind = Literal["file", "symlink", "directory"]
 SecurityProfile = Literal["strict", "default", "none"]
 RestartPolicy = Literal["always", "on-failure", "no"]
+ALL_STEPS = "*"
+"""The ``ServiceSpec.needs`` entry for the whole runtime-init chain (``runtime-init.service``)."""
 ServiceType = Literal["simple", "exec", "oneshot", "notify", "forking"]
 KillMode = Literal["control-group", "mixed", "process", "none"]
 UnitAction = Literal["disable", "mask"]
@@ -188,7 +190,8 @@ class ServiceSpec:
     limits: Mapping[str, str] = field(default_factory=dict)
     kill_mode: KillMode | None = None
     timeout_stop: str | None = None
-    after_init: bool = True
+    needs: tuple[str, ...] = (ALL_STEPS,)
+    """The runtime-init steps the unit waits for; ``ALL_STEPS`` is the whole chain."""
 
     def extras(self) -> dict[str, object]:
         """Optional unit fields that are set, keyed by name (empty for a plain service)."""
@@ -204,7 +207,8 @@ class ServiceSpec:
             "type": self.type,
             "wanted_by": self.wanted_by,
             "working_dir": self.working_dir,
-            "runs_before_init": not self.after_init,
+            "runs_before_init": not self.needs,
+            "needs": list(self.needs) if self.needs != (ALL_STEPS,) else None,
         }
         return {key: value for key, value in optional.items() if value}
 
@@ -339,10 +343,12 @@ class Kernel:
 
 @dataclass(frozen=True, slots=True)
 class InitScriptEntry:
-    """A fragment of bash to include in the runtime-init script."""
+    """A runtime-init step's bash: *name* is its step, *after*/*before* its graph edges."""
 
     script: str
-    priority: int = 100
+    name: str
+    after: tuple[str, ...] = ()
+    before: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -486,7 +492,7 @@ def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
         source_builds={**base.source_builds, **own.source_builds},
         secrets=_override(base.secrets, own.secrets, lambda s: s.name),
         init_scripts=list(
-            {(e.priority, e.script): e for e in (*base.init_scripts, *own.init_scripts)}.values()
+            {(e.name, e.script): e for e in (*base.init_scripts, *own.init_scripts)}.values()
         ),
         debloat=_fallback_debloat(base, own),
         debloat_explicit=own.debloat_explicit,
@@ -757,6 +763,7 @@ class DeployResult:
 
 
 __all__ = [
+    "ALL_STEPS",
     "Arch",
     "ArtifactRef",
     "BakeRequest",

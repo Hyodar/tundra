@@ -45,12 +45,13 @@ from tundravm.declarative.lifecycle import (
     variant_tree_digest,
 )
 from tundravm.declarative.model import (
+    BootStep,
     Check,
     Declaration,
     File,
     Fragment,
-    Init,
     Package,
+    Ready,
     Recipe,
     Target,
 )
@@ -137,8 +138,24 @@ class CompiledTree:
             raise FileNotFoundError(f"no {phase!r} script in {scripts}; found: {found}")
         return matches[0].read_text(encoding="utf-8")
 
-    def runtime_init(self, variant: str | None = None) -> str:
-        return self.read("mkosi.extra/usr/bin/runtime-init", variant)
+    def runtime_init(self, variant: str | None = None, *, step: str | None = None) -> str:
+        """The runtime-init script text: one *step*'s script, or every step in run order.
+
+        Under ``nethermind-v1`` that is ``/usr/bin/runtime-init``; the current
+        dialect writes ``/usr/lib/runtime-init/<step>`` per step, joined here in
+        the order ``runtime-init.service`` lists them.
+        """
+        if step is not None:
+            return self.read(f"mkosi.extra/usr/lib/runtime-init/{step}", variant)
+        if self.exists("mkosi.extra/usr/bin/runtime-init", variant):
+            return self.read("mkosi.extra/usr/bin/runtime-init", variant)
+        aggregate = self.unit("runtime-init.service", variant)
+        after = next(line for line in aggregate.splitlines() if line.startswith("After="))
+        steps = [
+            unit.removeprefix("runtime-init-").removesuffix(".service")
+            for unit in after[6:].split()
+        ]
+        return "".join(self.runtime_init(variant, step=name) for name in steps)
 
     def conf(self, variant: str | None = None) -> str:
         return self.read("mkosi.conf", variant)
@@ -403,15 +420,15 @@ def fake_fragment(
     packages: Sequence[str] = (),
     files: Mapping[str, str | bytes] | None = None,
     init: str | None = None,
-    priority: int = 50,
+    after: Sequence[Ready] = (),
     requires: Sequence[str | Fragment] = (),
     checks: Sequence[Check] = (),
 ) -> Fragment:
     """A small :class:`~tundravm.Fragment` for testing how fragments compose.
 
     It declares a ``Package`` per name in *packages*, a ``File`` per
-    ``path: content`` in *files* and, when *init* is given, an ``Init`` called
-    *name* running *init* at *priority*. *requires* names the fragments
+    ``path: content`` in *files* and, when *init* is given, a ``BootStep`` called
+    *name* running *init* after the *after* readiness handles. *requires* names the fragments
     (or takes the fragments themselves) that must be in the same variant,
     and *checks* run on every variant that includes it::
 
@@ -422,7 +439,7 @@ def fake_fragment(
     items: list[Declaration] = [Package(package) for package in packages]
     items.extend(File(path, content) for path, content in (files or {}).items())
     if init is not None:
-        items.append(Init(name, init, priority=priority))
+        items.append(BootStep(name, init, after=tuple(after)))
     return Fragment(
         name,
         tuple(items),

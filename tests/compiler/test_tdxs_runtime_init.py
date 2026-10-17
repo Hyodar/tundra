@@ -9,6 +9,7 @@ import pytest
 from tests.helpers import conf_list
 from tundravm._source import GitSource
 from tundravm.declarative import (
+    RUNTIME_INIT,
     Declaration,
     Fragment,
     Git,
@@ -116,26 +117,34 @@ def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
     assert "mkosi-chroot systemctl enable tdxs.socket" in postinst
 
 
-def test_tdxs_resolves_init_dependency_when_init_scripts_present(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Key("key_persistent"), Tdxs(after_init=True))
+def test_tdxs_waits_for_the_steps_it_needs(tmp_path: Path) -> None:
+    key = Key("key_persistent")
+    tree = _compile(tmp_path, key, Tdxs(needs=(key.ready,)))
 
     svc_content = tree.unit("tdxs.service")
-    assert "After=runtime-init.service" in svc_content
-    assert "Requires=runtime-init.service tdxs.socket" in svc_content
+    assert "After=runtime-init-keys.service" in svc_content
+    assert "Requires=runtime-init-keys.service tdxs.socket" in svc_content
 
     sock_content = tree.unit("tdxs.socket")
-    assert "After=runtime-init.service" in sock_content
-    assert "Requires=runtime-init.service" in sock_content
+    assert "After=runtime-init-keys.service" in sock_content
+    assert "Requires=runtime-init-keys.service" in sock_content
+
+
+def test_tdxs_needing_all_of_runtime_init_waits_for_runtime_init(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Key("key_persistent"), Tdxs(needs=(RUNTIME_INIT,)))
+
+    assert "Requires=runtime-init.service tdxs.socket" in tree.unit("tdxs.service")
+    assert "Requires=runtime-init.service" in tree.unit("tdxs.socket")
 
 
 def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
-    recipe = _recipe(Tdxs(after_init=True))
+    recipe = _recipe(Tdxs(needs=(RUNTIME_INIT,)))
     tree = compile_tree(recipe, path=tmp_path / "tree")
 
     assert "runtime-init" not in tree.unit("tdxs.service")
     assert "runtime-init" not in tree.unit("tdxs.socket")
     codes = {d.code for d in lint(recipe)}
-    assert "unit-after-init-without-init" in codes
+    assert "needs-without-init" in codes
 
 
 def test_tdxs_renders_issuer_and_validator_types(tmp_path: Path) -> None:

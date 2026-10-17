@@ -38,7 +38,7 @@ recipe = Recipe(
     platform=Debian("trixie"),  # the kernel and systemd boot set every variant needs
     items=(
         Package("curl"),
-        File("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
+        File.text("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
         User("app", shell="/bin/false"),
         Service("app", "/usr/bin/app", user="app", restart="on-failure"),
         Unit("ssh.socket", enabled=False, masked=True),
@@ -74,7 +74,7 @@ Run the commands with `uv run` in the project (or with its `.venv` activated); `
 
 Moving from the simulator to a TDX host takes `--param tdx=true` (TDVF firmware through `-bios`), a host kernel, KVM and QEMU with TDX support, a tdxs validator running on the verifying side, and a way to reach the image's `/var/tdxs.sock`: the key `Secrets` delivers is installed with `no-port-forwarding`, so `ssh -L` with it is refused. [CLI: Real TDX](docs/cli.md#real-tdx) has the sequence; it has not been run on TDX hardware.
 
-`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init` also writes a `[tool.tundravm]` table (`recipe`, `tree`, `build`, `lockfile`, `backend`) into `pyproject.toml` that every command reads, so in a scaffolded project `RECIPE` is optional (`tundravm status` with no arguments reports on `node.py`) and `measure`, `deploy` and `sbom` find the bake in the configured `build` directory. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init --app go --source URL@REF` (or `--path DIR`) instead writes a recipe that builds one Go program with `GoBinary` and runs it as a service under its own user, with optional `--port`, `--disk NAME` (an encrypted state disk) and `--secret NAME --delivery external:AGENT`, plus tests over the planned image ([CLI: A Go app](docs/cli.md#a-go-app)). `init` also writes a `[tool.tundravm]` table (`recipe`, `tree`, `build`, `lockfile`, `backend`) into `pyproject.toml` that every command reads, so in a scaffolded project `RECIPE` is optional (`tundravm status` with no arguments reports on `node.py`) and `measure`, `deploy` and `sbom` find the bake in the configured `build` directory. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
 
 `init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and every pull request: it posts `inspect --format markdown` to the job summary and runs `tundravm ci`, which fails on lint findings or a stale committed tree or lockfile. Both install the project with `uv sync`, `uv sync --frozen` once `uv.lock` is committed. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` names a backend (`local` or `inprocess`; `lima` and `nix` need tools `ubuntu-latest` lacks), then installs mkosi `v26`, fetches, bakes with `--verify-reproducible`, and uploads the `evidence --bundle --html` output with the built images as the `tundravm-bake` artifact.
 
@@ -95,10 +95,10 @@ The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full
 
 | Concept | What it is |
 |---|---|
-| **Recipe** | The whole image: name, base, arch, mirrors, epoch, its own `items` and the variants. An immutable value bound to `recipe` in a Python file. |
-| **Declaration** | One typed fact about the image: `Package`, `File`, `Template`, `User`, `Group`, `Service`, `Unit`, `Hook`, `Init`, `Key`, `Disk`, `Secrets`, `Build`, `Kernel`, `Setting`, ... Identified by type plus natural key (package name, file path, unit name). |
+| **Recipe** | The whole image: its `platform` (`Debian(release, snapshot=, boot=, efi_stub=)`: the distribution, archive, arch, epoch and the packages every variant boots with), its own `items` and the variants. An immutable value bound to `recipe` in a Python file. |
+| **Declaration** | One typed fact about the image: `Package`, `File`, `FileTree`, `Template`, `User`, `Group`, `Service`, `Unit`, `Hook`, `BootStep`, `Key`, `Disk`, `Secrets`, `Build`, `Kernel`, `Setting`, ... Identified by type plus natural key (package name, file path, unit name); `value.ref` (or `Type.ref(key)`) names it in a variant's `changes`. |
 | **Fragment** | A named group of declarations and nested fragments, with `requires` (fragments that must also be present) and `checks` (lint functions). A reusable "module" is a `@component` class: a `Fragment` whose fields are its configuration. |
-| **Variant** | An overlay on its parent: `add` a fragment, edit or remove inherited declarations by ref (`changes`), set the `target`. One mkosi directory per variant and one artifact per target. |
+| **Variant** | An overlay on its parent: `add` a fragment, edit or remove inherited declarations by ref (`changes`), name its `outputs` (`qemu`, `azure`, `gcp`). One mkosi directory per variant and one artifact per output. |
 | **Lock** | Section digests of the resolved recipe plus a pin per source build. `tundravm.lock`, committed next to the tree. |
 | **Tree** | The compiled mkosi project, held in memory until written. Its digest is what `compile --check` and golden tests compare. |
 | **Artifact** | A baked disk image of one variant and target, with the recipe, lock and tree digests it came from. Measurements and deployments take an artifact. |
@@ -112,18 +112,20 @@ A reusable piece of an image is a component: a class decorated with `@component`
 ```python
 from collections.abc import Iterator
 
-from tundravm import Declaration, Diagnostic, Disk, Fragment, Init, Package, Resolved, Unit, component
+from tundravm import BootStep, Declaration, Diagnostic, Disk, Fragment, Package, Resolved, Unit, component
 from tundravm.declarative.utils import Composite
 
 @component
 class PrometheusExporter(Composite):
     storage: Fragment
+    disk: Disk
 
     def compose(self) -> Iterator[Declaration | Fragment]:
         yield self.storage
         yield Package("prometheus-node-exporter")
-        yield Init("exporter-directory", "install -d -m 0755 /persistent/exporter\n", priority=25, after=("disks",))
-        yield Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True)
+        directory = BootStep("exporter-directory", "install -d -m 0755 /persistent/exporter\n", after=(self.disk.ready,))
+        yield directory
+        yield Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, needs=(directory.ready,))
 
     def check(self, image: Resolved) -> tuple[Diagnostic, ...]:
         if any(isinstance(item, Disk) and item.mount == "/persistent" for item in image.items):
@@ -131,7 +133,7 @@ class PrometheusExporter(Composite):
         return (Diagnostic("exporter-storage-missing", "error", "the exporter needs a disk mounted at /persistent"),)
 ```
 
-`PrometheusExporter(storage=storage)` is itself a `Fragment`. A one-off with nothing to configure can stay a plain `Fragment(...)` value. Identical fragments included twice expand once; two different fragments with the same name are an error. `tundravm.declarative.utils` ships `Tdxs()` (the attestation quote service), `DevTools()` (serial console and root login, never ship it), `EfiStub(snapshot=, version=)` and `Backports()`. A component can also export typed values, such as an `HttpEndpoint`, that another component takes as a field instead of parsing its files, and `ConfigFile.yaml`/`toml`/`json`/`ini`/`env` render config files from data as ordinary `File`s. The full example is in [`docs/module-authoring.md`](docs/module-authoring.md).
+`PrometheusExporter(storage=storage, disk=disk)` is itself a `Fragment`; its boot step runs once the disk is mounted, and the unit starts once the step has run (a service without `needs=` waits for every boot step; a unit waits only for its `needs=`). A one-off with nothing to configure can stay a plain `Fragment(...)` value. Identical fragments included twice expand once; two different fragments with the same name are an error. `tundravm.declarative.utils` ships `Tdxs()` (the attestation quote service), `DevTools()` (serial console and root login, never ship it), `GoBinary(name, source, package=)` and `CargoBinary` (a program built from source, installed at its `.executable`), `EfiStub(snapshot=, version=)` and `Backports()`. A component can also export typed values, such as an `HttpEndpoint`, that another component takes as a field instead of parsing its files, and `ConfigFile.yaml`/`toml`/`json`/`ini`/`env` render config files from data as ordinary `File`s. The full example is in [`docs/module-authoring.md`](docs/module-authoring.md).
 
 Keys, disks and secrets are declarations that reference each other by object, so a disk cannot name a key that does not exist:
 
@@ -147,8 +149,8 @@ storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 variants=(
     Variant("default", outputs=("qemu",)),
     Variant("azure", inherits="default", outputs=("azure",)),
-    Variant("azure-debug", inherits="azure", add=DevTools()),       # chained: azure plus debugging, never ship it
-    Variant("prod", changes=(motd.ref.edit(content="prod\n"),)),         # motd = File("/etc/motd", ...)
+    Variant("azure-debug", inherits="azure", add=DevTools(), release=False),  # chained; never released
+    Variant("prod", changes=(motd.ref.edit(content="prod\n"),)),  # motd = File.text("/etc/motd", ...)
     Variant("slim", changes=(Package.ref("jq").remove(),)),
     Variant("clouds", inherits="default", outputs=("azure", "gcp")),  # one variant, two disk images
     Variant("bare", inherits=None, add=packages("curl")),
@@ -164,12 +166,11 @@ variants=(
 
 ## Reproducibility
 
-- **Byte-stable trees.** `epoch=0` (the default) emits a fixed `SourceDateEpoch`/`SOURCE_DATE_EPOCH`, a stable `Seed` and strips `IMAGE_VERSION`. `tundravm compile --check` exits 1 when the committed tree differs from the recipe; `tundravm.testing.assert_tree` does the same in a test.
+- **Byte-stable trees.** `Debian(..., epoch=0)` (the default) emits a fixed `SourceDateEpoch`/`SOURCE_DATE_EPOCH`, a stable `Seed` and strips `IMAGE_VERSION`. `tundravm compile --check` exits 1 when the committed tree differs from the recipe; `tundravm.testing.assert_tree` does the same in a test.
 - **Lock sections.** `tundravm lock` writes a version 4 lockfile with one digest per section: `distribution`, `compiler`, and per variant `packages`, `files`, `kernel`, `debloat`, ... (`variants.<variant>.packages`). The recipe digest includes the tundravm version. `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
-- **Pinned archive.** `Debian("trixie", snapshot="20251113T083151Z")` builds from that Debian snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `Debian(..., efi_stub=version)` pins the EFI stub to a version that same snapshot carries.
+- **Pinned archive.** `Debian("trixie", snapshot="20251113T083151Z")` builds packages and the tools tree from that snapshot.debian.org snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `Debian(..., efi_stub=version)` pins the EFI stub to a version that same snapshot carries.
 - **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and an air-gapped bake needs `tundravm fetch` first (sources and, when the host has the toolchain, dependency caches), `bake --offline`, and a reachable local package mirror. Checkouts and dependency caches are verified before reuse, and `fetch --force` replaces a modified checkout and refills the caches. `lock --update NAME` re-resolves one source (`<variant>/<name>` for a build pinned per variant); `lock --offline` never touches the network. `fetch` also prefetches each Go, Cargo and .NET build's dependencies with the host toolchain into `build/.sources/deps/` and downloads the `EfiStub` package, so `bake --offline` (mkosi `--with-network=no`) builds with no network in the sandbox.
 - **Frozen bakes.** `bake` is frozen against `--lockfile`, the `lockfile` of `[tool.tundravm]` (which must exist), or `build/tundravm.lock` whenever it exists, and refuses a recipe that drifted (`E_LOCKFILE`).
-- **Snapshots.** `Debian(snapshot="20251113T083151Z")` pins the Debian archive at snapshot.debian.org for packages and the tools tree; `Debian(efi_stub=...)` pins the EFI stub to the same snapshot.
 
 See [`docs/reproducibility.md`](docs/reproducibility.md).
 
@@ -237,11 +238,11 @@ Every example loads, lints without errors and compiles deterministically; `tests
 
 | Doc | Contents |
 |---|---|
-| [`docs/concepts.md`](docs/concepts.md) | The seven concepts, resolution, lowering, runtime-init, keys/disks/secrets, variants, lifecycle |
+| [`docs/concepts.md`](docs/concepts.md) | The model in one recipe, the concepts, resolution, lowering, runtime-init, keys/disks/secrets, variants, lifecycle |
 | [`docs/tutorial.md`](docs/tutorial.md) | From `tundravm init` through `watch`, bake, measure, deploy, a fragment, a test and the CI workflow, with real output |
 | [`docs/cli.md`](docs/cli.md) | Every command and flag, recipe loading, output formats, exit codes, CI |
 | [`docs/api.md`](docs/api.md) | Every declaration, lifecycle function, result type, error and lint rule |
-| [`docs/module-authoring.md`](docs/module-authoring.md) | Writing fragments: `requires`, `checks`, `Init` ordering, builds, tests |
+| [`docs/module-authoring.md`](docs/module-authoring.md) | Writing fragments: `requires`, `checks`, boot-step ordering (`needs=`, `.ready`), builds, tests |
 | [`docs/testing.md`](docs/testing.md) | `tundravm.testing` helpers and pytest fixtures |
 | [`docs/reproducibility.md`](docs/reproducibility.md) | Reproducible output, lock sections, pinned sources, golden trees |
 | [`docs/policy.md`](docs/policy.md) | `Policy` options and CI settings |

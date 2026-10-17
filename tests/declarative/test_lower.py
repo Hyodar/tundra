@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from tundravm._modules.init import runtime_init_order
 from tundravm._options import MkosiOptions
 from tundravm.check import check
 from tundravm.declarative import (
+    RUNTIME_INIT,
+    BootStep,
     Build,
     Debian,
     Debloat,
@@ -21,12 +24,12 @@ from tundravm.declarative import (
     Group,
     Hook,
     Http,
-    Init,
     Install,
     Kernel,
     Key,
     Mkosi,
     Package,
+    Ready,
     Recipe,
     RuntimeTools,
     Secret,
@@ -81,12 +84,12 @@ def declarative_recipe() -> Recipe:
             File("/usr/bin/blob", b"\x00\xff\x01", mode=0o755),
             Group("eth"),
             User("app", home="/home/app", groups=("eth",)),
-            Unit("app.service", UNIT, enabled=True, after_init=True),
+            Unit("app.service", UNIT, enabled=True, needs=(RUNTIME_INIT,)),
             Unit("ssh.service", enabled=False, masked=True),
             Hook("second", "postinst", "echo second", after=("first",)),
             Hook("first", "postinst", "echo first", env={"STAGE": "1"}),
-            Init("announce", "echo up\n", priority=25, after=("mount-check",)),
-            Init("mount-check", "test -d /persistent\n", priority=25, after=("disks",)),
+            BootStep("announce", "echo up\n", after=(Ready("mount-check"),)),
+            BootStep("mount-check", "test -d /persistent\n", after=(disk.ready,)),
             RuntimeTools(Git(TOOLS, "v1")),
             key,
             disk,
@@ -131,11 +134,12 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "95caafea3144c6d2d482481d87bb830dc6d9b23fba4d6a42c39f783e1e04c4aa"
-EQUIVALENCE_RECIPE = "7b68c360794b2bdb977a8d24dcb3bfe5e5305590f94901ce200946d472b18ede"
+EQUIVALENCE_TREE = "9e23b9449d194c353ec7d3cd136f8f117073ef4e8f83a2214bbaac441b8807e4"
+EQUIVALENCE_RECIPE = "2973295ef7c7934adf423219f7059d4ae8192f74ff7e4cc4f5ebff4d369f3f26"
 """The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
 fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly
-(re-recorded when current-dialect build hooks gained their ``# tundravm build:`` line)."""
+(re-recorded when current-dialect build hooks gained their ``# tundravm build:`` line, and
+when runtime-init became a graph of boot steps, one unit per step, locked by step name)."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
@@ -146,7 +150,6 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     assert [(d.severity, d.code, d.variant, d.subject) for d in check(lowered)] == [
         ("error", "kernel-missing", "default", ""),
         ("warning", "disk-auto-format", "default", "disk_persistent"),
-        ("warning", "init-priority-collision", "default", "priority 25"),
         ("warning", "source-unpinned", "default", "app"),
         ("warning", "source-unpinned", "default", "disk-encryption"),
         ("warning", "source-unpinned", "default", "key-generation"),
@@ -154,24 +157,30 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     ]
 
     emit(lowered.select(PROFILES), tmp_path / "lowered")
-    runtime_init = (tmp_path / "lowered/default/mkosi.extra/usr/bin/runtime-init").read_text()
-    order = ["key-gen", "disk-setup", "test -d", "echo up", "secret-delivery"]
-    assert [runtime_init.index(marker) for marker in order] == sorted(
-        runtime_init.index(marker) for marker in order
-    )
+    extra = tmp_path / "lowered/default/mkosi.extra"
+    assert not (extra / "usr/bin/runtime-init").exists()
+    units = extra / "usr/lib/systemd/system"
+    check_unit = (units / "runtime-init-mount-check.service").read_text()
+    assert "After=network-online.target runtime-init-disks.service\n" in check_unit
+    assert "Requires=runtime-init-disks.service\n" in check_unit
+    assert "ExecStart=/usr/lib/runtime-init/mount-check\n" in check_unit
+    announce = (units / "runtime-init-announce.service").read_text()
+    assert "Requires=runtime-init-mount-check.service\n" in announce
+    assert (extra / "usr/lib/runtime-init/announce").read_text().endswith("echo up\n")
+    assert (units / "app.service").read_text() == UNIT_AFTER_INIT
+    order = [entry.name for entry in runtime_init_order(lowered.init_scripts("default"))]
+    assert order == ["keys", "disks", "secrets", "mount-check", "announce"]
 
 
-def test_runtime_init_order_between_equal_priorities_enters_the_recipe_digest(
-    tmp_path: Path,
-) -> None:
+def test_runtime_init_order_follows_after_and_enters_the_recipe_digest(tmp_path: Path) -> None:
     def ordered(first: str, second: str) -> Recipe:
-        steps = {"a": "echo a\n", "b": "echo b\n"}
         return Recipe(
             "inits",
             items=(
-                Init(first, steps[first], priority=50),
-                Init(second, steps[second], priority=50, after=(first,)),
+                BootStep(second, f"echo {second}\n", after=(Ready(first),)),
+                BootStep(first, f"echo {first}\n"),
             ),
+            mkosi=Mkosi(dialect="nethermind-v1"),
         )
 
     a_first, b_first = ordered("a", "b"), ordered("b", "a")
@@ -182,10 +191,29 @@ def test_runtime_init_order_between_equal_priorities_enters_the_recipe_digest(
     assert scripts[0].index("echo a") < scripts[0].index("echo b")
     assert scripts[1].index("echo b") < scripts[1].index("echo a")
     assert lower(a_first).digest() != lower(b_first).digest()
-    assert (
-        lock(a_first).lockfile.sections["init_scripts"]
-        != (lock(b_first).lockfile.sections["init_scripts"])
+    sections = [lock(r).lockfile.sections["init_scripts"] for r in (a_first, b_first)]
+    assert sections[0] != sections[1]
+
+
+def test_current_dialect_runs_each_step_as_its_own_unit(tmp_path: Path) -> None:
+    first = BootStep("first", "echo first\n")
+    recipe = Recipe(
+        "inits",
+        items=(BootStep("second", "echo second\n", after=(first.ready,)), first),
     )
+    emit(lower(recipe), tmp_path)
+    extra = tmp_path / "default/mkosi.extra"
+    units = extra / "usr/lib/systemd/system"
+    assert (extra / "usr/lib/runtime-init/first").read_text() == (
+        "#!/bin/bash\nset -euo pipefail\n\necho first\n"
+    )
+    assert (
+        "Requires=runtime-init-first.service\n"
+        in (units / "runtime-init-second.service").read_text()
+    )
+    aggregate = (units / "runtime-init.service").read_text()
+    assert "After=runtime-init-first.service runtime-init-second.service\n" in aggregate
+    assert "ExecStart=/bin/true\n" in aggregate and "WantedBy=minimal.target" in aggregate
 
 
 def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
@@ -330,11 +358,11 @@ def test_directories_units_from_paths_and_reemitted_units(tmp_path: Path) -> Non
         items=(
             FileTree("/opt/tree", tree, exclude=("*.txt",)),
             FileTree("/etc/skel", tree, stage="skeleton", mode=0o600),
-            Unit("worker.service", unit_file, enabled=True, after_init=True),
+            Unit("worker.service", unit_file, enabled=True, needs=(RUNTIME_INIT,)),
         ),
         variants=(
             Variant("default"),
-            Variant("boot", add=Fragment("i", items=(Init("hello", "echo hi\n"),))),
+            Variant("boot", add=Fragment("i", items=(BootStep("hello", "echo hi\n"),))),
         ),
     )
     img = lower(recipe)
@@ -389,6 +417,14 @@ def test_inject_after_init(text: str, expected: str) -> None:
     assert inject_after_init(text) == expected
 
 
+def test_inject_after_init_prepends_several_units_in_order() -> None:
+    text = "[Unit]\nAfter=a.service\n"
+    assert inject_after_init(text, ("runtime-init-x.service", "runtime-init-y.service")) == (
+        "[Unit]\nAfter=runtime-init-x.service runtime-init-y.service a.service\n"
+        "Requires=runtime-init-x.service runtime-init-y.service\n"
+    )
+
+
 def test_runtime_tools_default_and_key_handoff() -> None:
     key = Key("k")  # no output: the disk tool reads it from the environment
     recipe = Recipe("r", items=(key, Disk("d", "/data", key=key, device="/dev/vdb")))
@@ -409,7 +445,7 @@ def _one(*items: object, epoch: int | None = 0, **recipe: object) -> Recipe:
 
 
 def test_service_lowers_to_the_generated_unit() -> None:
-    from tundravm.declarative import Init, Service
+    from tundravm.declarative import Service
 
     service = Service(
         "app",
@@ -420,7 +456,7 @@ def test_service_lowers_to_the_generated_unit() -> None:
         restart="always",
         security="strict",
     )
-    img = lower(_one(service, Init("ready", "true")))
+    img = lower(_one(service, BootStep("ready", "true")))
     (spec,) = img.state.effective_profile("default").services[:1]
     assert spec.name == "app"
     assert spec.command == ("/usr/bin/app", "--serve")
@@ -428,18 +464,32 @@ def test_service_lowers_to_the_generated_unit() -> None:
     assert spec.security_profile == "strict" and spec.restart == "always"
 
 
-def test_service_after_init_false_skips_the_runtime_init_dependency(tmp_path: Path) -> None:
-    from tundravm.declarative import Init, Service
+def test_service_needs_picks_the_runtime_init_units_it_waits_for(tmp_path: Path) -> None:
+    from tundravm.declarative import Service
 
-    recipe = _one(
-        Service("early", "/usr/bin/early", after_init=False),
+    disk = Disk("d", "/data", device="/dev/vdb")
+    ready = BootStep("ready", "true", after=(disk.ready,))
+    services = (
+        Service("early", "/usr/bin/early", needs=()),
         Service("late", "/usr/bin/late"),
-        Init("ready", "true"),
+        Service("data", "/usr/bin/data", needs=(disk.ready, ready.ready)),
     )
-    emit(lower(recipe), tmp_path / "tree")
-    units = tmp_path / "tree" / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
-    assert "runtime-init.service" not in (units / "early.service").read_text()
-    assert "After=runtime-init.service" in (units / "late.service").read_text()
+    current, historical = (
+        _one(disk, ready, *services),
+        _one(disk, ready, *services, mkosi=Mkosi(dialect="nethermind-v1")),
+    )
+    for name, recipe in (("current", current), ("historical", historical)):
+        emit(lower(recipe), tmp_path / name)
+    units = Path("default/mkosi.extra/usr/lib/systemd/system")
+    tree = tmp_path / "current" / units
+    assert "runtime-init" not in (tree / "early.service").read_text()
+    assert "After=runtime-init.service\n" in (tree / "late.service").read_text()
+    data = (tree / "data.service").read_text()
+    assert "After=runtime-init-disks.service runtime-init-ready.service\n" in data
+    assert "Requires=runtime-init-disks.service runtime-init-ready.service\n" in data
+    old = tmp_path / "historical" / units
+    assert "Requires=runtime-init.service\n" in (old / "data.service").read_text()
+    assert "runtime-init" not in (old / "early.service").read_text()
 
 
 def test_service_rejects_bad_fields() -> None:

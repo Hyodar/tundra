@@ -48,8 +48,10 @@ TARGETS: tuple[str, ...] = get_args(Target)
 PHASES: tuple[str, ...] = get_args(Phase)
 BASE_VARIANT = "base"
 """The reserved ``Variant.inherits`` name that stands for ``Recipe.items``."""
-BUILTIN_INITS: dict[str, int] = {"keys": 10, "disks": 20, "secrets": 30}
-"""Runtime-init fragments the compiler emits for keys, disks and secrets, by priority."""
+BUILTIN_STEPS: tuple[str, ...] = ("keys", "disks", "secrets")
+"""The runtime-init steps the compiler emits for keys, disks and secrets, in their rank."""
+ALL_STEPS = "*"
+"""The step name of :data:`RUNTIME_INIT`: the whole runtime-init chain."""
 
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+")
@@ -639,6 +641,58 @@ class Declared:
     ref = _RefAccessor()
 
 
+@dataclass(frozen=True, slots=True)
+class Ready:
+    """A readiness handle: "runtime-init step *step* has run".
+
+    ``key.ready``, ``disk.ready``, ``secrets.ready`` and ``step.ready`` (a
+    :class:`BootStep`) are the handles ``BootStep(after=/before=)`` and
+    ``Unit``/``Service(needs=)`` take; :data:`RUNTIME_INIT` stands for every step.
+    """
+
+    step: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.step, str) or not (
+            self.step == ALL_STEPS or _ENTRY_NAME.fullmatch(self.step)
+        ):
+            raise _fail(self, f"invalid step name {self.step!r}.")
+
+    def __str__(self) -> str:
+        return self.step
+
+
+RUNTIME_INIT = Ready(ALL_STEPS)
+"""``needs=[RUNTIME_INIT]``: wait for the whole runtime-init chain (``runtime-init.service``)."""
+
+
+def _require_steps(owner: object, what: str, *, sentinel: bool = False) -> None:
+    """Normalize field *what* of *owner* to a tuple of :class:`Ready` handles.
+
+    Accepts ``Ready`` handles, :class:`BootStep` values and step names; only
+    *sentinel* fields (``needs``) take :data:`RUNTIME_INIT`.
+    """
+    values = getattr(owner, what)
+    if isinstance(values, (str, Ready, BootStep)) or not isinstance(values, (tuple, list)):
+        raise _fail(owner, f"{what} must be a list of readiness handles, got {values!r}.")
+    handles: list[Ready] = []
+    for value in values:
+        if isinstance(value, BootStep):
+            value = value.ready
+        elif isinstance(value, str):
+            value = Ready(value)
+        if not isinstance(value, Ready):
+            raise _fail(
+                owner,
+                f"{what} entry {value!r} is not a readiness handle.",
+                hint="Pass key.ready, disk.ready, secrets.ready or a BootStep's .ready.",
+            )
+        if value == RUNTIME_INIT and not sentinel:
+            raise _fail(owner, f"{what} cannot name RUNTIME_INIT.", hint="Name the steps.")
+        handles.append(value)
+    object.__setattr__(owner, what, tuple(dict.fromkeys(handles)))
+
+
 # ── Declarations ────────────────────────────────────────────────────────
 
 
@@ -817,17 +871,20 @@ class User(Declared):
 class Unit(Declared):
     """A systemd unit: ``content`` ships the unit file, ``None`` controls a packaged one.
 
-    ``allow_secret`` silences ``secret-in-env`` for the shipped unit file.
+    ``needs`` lists the runtime-init steps (readiness handles) the shipped unit
+    waits for: ``After=``/``Requires=`` their units. ``allow_secret`` silences
+    ``secret-in-env`` for the shipped unit file.
     """
 
     name: str
     content: str | Path | None = None
     enabled: bool | None = None
     masked: bool | None = None
-    after_init: bool = False
+    needs: Sequence[Ready] = ()
     allow_secret: bool = False
 
     def __post_init__(self) -> None:
+        _require_steps(self, "needs", sentinel=True)
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid unit name {self.name!r}.")
         _require_bool(self, self.allow_secret, "allow_secret")
@@ -854,7 +911,7 @@ class Unit(Declared):
         *,
         enabled: bool | None = None,
         masked: bool | None = None,
-        after_init: bool = False,
+        needs: Sequence[Ready] = (),
         allow_secret: bool = False,
     ) -> Unit:
         """The unit file *source* (UTF-8, read when the recipe lowers) shipped as *name*."""
@@ -863,7 +920,7 @@ class Unit(Declared):
                 f"Unit.from_file({name!r}) takes a pathlib.Path source, got {source!r}.",
                 hint="Pass Unit(name, text) for unit text, or Resources.file() for a path.",
             )
-        return cls(name, source, enabled, masked, after_init, allow_secret)
+        return cls(name, source, enabled, masked, needs, allow_secret)
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,8 +928,9 @@ class Service(Declared):
     """A generated systemd service: the compiler renders the unit from these fields.
 
     ``security`` selects the hardening profile (``strict``, ``default`` or
-    ``none``). With ``after_init`` the unit waits for ``runtime-init.service``
-    whenever the variant has a runtime-init step. ``Unit`` ships verbatim text.
+    ``none``). ``needs`` lists the runtime-init steps the unit waits for (the
+    default, :data:`RUNTIME_INIT`, is the whole chain when the variant has one;
+    ``needs=()`` starts it without waiting). ``Unit`` ships verbatim text.
     ``allow_secret`` silences ``secret-in-env`` for the rendered unit, every field.
     """
 
@@ -896,11 +954,12 @@ class Service(Declared):
     kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
     timeout_stop: str | None = None
     security: Literal["strict", "default", "none"] = "default"
-    after_init: bool = True
+    needs: Sequence[Ready] = (RUNTIME_INIT,)
     allow_secret: bool = False
 
     def __post_init__(self) -> None:
         _freeze(self, "exec_start", "exec_start_pre", "after", "requires", "wants")
+        _require_steps(self, "needs", sentinel=True)
         _require_bool(self, self.allow_secret, "allow_secret")
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid service name {self.name!r}.")
@@ -989,29 +1048,38 @@ class Hook(Declared):
 
 
 @dataclass(frozen=True, slots=True)
-class Init(Declared):
-    """A runtime-init fragment: lower priority runs first, ``after`` orders equal ones."""
+class BootStep(Declared):
+    """A runtime-init step: *script* runs at boot after its ``after`` steps, before ``before``.
+
+    ``after``/``before`` take readiness handles (``disk.ready``, ``secrets.ready``,
+    another step's ``.ready``); the steps run in a deterministic topological
+    order. ``.ready`` is this step's handle, for ``needs=`` and other steps.
+    """
 
     name: str
     script: str
-    priority: int = 100
-    after: tuple[str, ...] = ()
+    after: Sequence[Ready] = ()
+    before: Sequence[Ready] = ()
 
     def __post_init__(self) -> None:
-        _freeze(self, "after")
-        _require_name(self, self.name)
-        if self.name in BUILTIN_INITS:
+        if not isinstance(self.name, str) or not _ENTRY_NAME.fullmatch(self.name):
+            raise _fail(self, f"invalid step name {self.name!r}.", hint="Use [A-Za-z0-9_.-].")
+        if self.name in BUILTIN_STEPS:
             raise _fail(
                 self,
                 f"{self.name!r} is the runtime-init step of the built-in {self.name} declarations.",
-                hint="Pick another name; reference it through after=.",
+                hint="Pick another name; order against the built-in with its handle (disk.ready).",
             )
         _require_name(self, self.script, "script")
-        if isinstance(self.priority, bool) or not isinstance(self.priority, int):
-            raise _fail(self, f"priority {self.priority!r} must be an int.")
-        _require_names(self, self.after, "after")
-        if self.name in self.after:
-            raise _fail(self, f"init {self.name!r} cannot run after itself.")
+        _require_steps(self, "after")
+        _require_steps(self, "before")
+        if self.ready in self.after or self.ready in self.before:
+            raise _fail(self, f"step {self.name!r} cannot run after or before itself.")
+
+    @property
+    def ready(self) -> Ready:
+        """This step's readiness handle."""
+        return Ready(self.name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1136,6 +1204,11 @@ class Key(Declared):
         if isinstance(self.size, bool) or self.size <= 0:
             raise _fail(self, f"key {self.name!r}: size {self.size!r} must be positive.")
 
+    @property
+    def ready(self) -> Ready:
+        """The handle of the ``keys`` runtime-init step, which creates every key."""
+        return Ready("keys")
+
 
 @dataclass(frozen=True, slots=True)
 class Disk(Declared):
@@ -1174,6 +1247,11 @@ class Disk(Declared):
             self, self.format, ("always", "on_initialize", "on_fail", "never"), "format"
         )
         _require_names(self, self.directories, "directory")
+
+    @property
+    def ready(self) -> Ready:
+        """The handle of the ``disks`` runtime-init step, which opens and mounts every disk."""
+        return Ready("disks")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1342,6 +1420,11 @@ class Secrets(Declared):
         _require_absolute(self, self.ssh_directory, "ssh_directory")
         if self.ssh_key_path is not None:
             _require_absolute(self, self.ssh_key_path, "ssh_key_path")
+
+    @property
+    def ready(self) -> Ready:
+        """The handle of the ``secrets`` runtime-init step, which runs every secret delivery."""
+        return Ready("secrets")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1539,7 +1622,7 @@ type Declaration = (
     | Service
     | Template
     | Hook
-    | Init
+    | BootStep
     | Repository
     | Partition
     | Debloat
@@ -1562,7 +1645,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     Service,
     Template,
     Hook,
-    Init,
+    BootStep,
     Repository,
     Partition,
     Debloat,
@@ -1607,10 +1690,13 @@ class Resolved:
 
 __all__ = [
     "BASE_VARIANT",
-    "BUILTIN_INITS",
+    "ALL_STEPS",
+    "BUILTIN_STEPS",
+    "RUNTIME_INIT",
     "DECLARATION_TYPES",
     "PHASES",
     "TARGETS",
+    "BootStep",
     "Build",
     "Cargo",
     "VariantChange",
@@ -1632,7 +1718,6 @@ __all__ = [
     "Group",
     "Hook",
     "Http",
-    "Init",
     "Install",
     "Kernel",
     "Key",
@@ -1642,6 +1727,7 @@ __all__ = [
     "Partition",
     "Phase",
     "Recipe",
+    "Ready",
     "Ref",
     "Remove",
     "Repository",

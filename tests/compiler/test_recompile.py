@@ -6,10 +6,10 @@ from pathlib import Path
 
 from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
+    BootStep,
     Declaration,
     File,
     Fragment,
-    Init,
     Package,
     Recipe,
     Variant,
@@ -68,7 +68,7 @@ def _init_recipe(extra: Variant) -> Recipe:
     return Recipe(
         "init",
         items=(
-            Init("hello", "echo hi", priority=10),
+            BootStep("hello", "echo hi"),
             Package("linux-image-amd64"),
             Package("curl"),
         ),
@@ -94,8 +94,8 @@ def test_recompile_with_more_variants_does_not_duplicate_runtime_init(tmp_path: 
     assert _init_service_count(img.state, "dev") == 0
     assert img.select(VARIANTS).payload() == payload
     for tree in ("first", "second", "third"):
-        assert (tmp_path / tree / "default/mkosi.extra/usr/bin/runtime-init").is_file()
-    assert (tmp_path / "second/dev/mkosi.extra/usr/bin/runtime-init").is_file()
+        assert (tmp_path / tree / "default/mkosi.extra/usr/lib/runtime-init/hello").is_file()
+    assert (tmp_path / "second/dev/mkosi.extra/usr/lib/runtime-init/hello").is_file()
 
 
 def test_bake_after_compile_across_variants(

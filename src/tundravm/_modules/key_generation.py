@@ -23,7 +23,6 @@ KEY_GENERATION_BUILD_PACKAGES = (
 )
 
 KEY_GENERATION_DEFAULT_CONFIG_PATH = "/etc/tdx/key-gen.yaml"
-KEY_GENERATION_INIT_PRIORITY = 10
 ENTRY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -152,7 +151,7 @@ class KeyGeneration(Module):
         )
 
     def init_script(self) -> str:
-        """The runtime-init step: ``key-gen setup`` on the config (priority 10)."""
+        """The ``keys`` runtime-init step: ``key-gen setup`` on the config."""
         return f"/usr/bin/key-gen setup {shlex.quote(self.config_path)}\n"
 
     def render_config(self) -> str:

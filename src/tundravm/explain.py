@@ -19,14 +19,16 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, get_args
 
+from ._modules.init import runtime_init_order
 from ._options import MkosiOptions
 from .compiler import PHASE_ORDER
 from .declarative.model import (
+    ALL_STEPS,
+    BootStep,
     Declaration,
     File,
     FileTree,
     Hook,
-    Init,
     Package,
     Recipe,
     Resolved,
@@ -333,8 +335,8 @@ def render(description: dict[str, object]) -> str:
 
     runtime_init = _as_dict(description.get("runtime_init"))
     if runtime_init.get("count"):
-        priorities = ", ".join(str(p) for p in runtime_init["priorities"])
-        lines.append(f"Runtime init: {runtime_init['count']} (priorities: {priorities})")
+        steps = ", ".join(str(step) for step in runtime_init["steps"])
+        lines.append(f"Runtime init: {runtime_init['count']} (steps: {steps})")
 
     debloat = _as_dict(description.get("debloat"))
     if debloat:
@@ -455,16 +457,13 @@ def render_markdown(description: dict[str, object]) -> str:
         ],
     )
     runtime_init = _as_dict(description.get("runtime_init"))
-    priorities = _as_list(runtime_init.get("priorities"))
+    steps = _as_list(runtime_init.get("steps"))
     _append_section(
         blocks,
         "Runtime init",
-        ("Priority", "Scripts"),
-        [
-            (str(priority), str(priorities.count(priority)))
-            for priority in dict.fromkeys(priorities)
-        ],
-        count=len(priorities),
+        ("Step", "Scripts"),
+        [(str(step), str(steps.count(step))) for step in dict.fromkeys(steps)],
+        count=len(steps),
     )
     return "\n\n".join(blocks) + "\n"
 
@@ -565,11 +564,8 @@ def _first_command_line(script: str) -> str:
 
 
 def _describe_init_scripts(entries: Sequence[InitScriptEntry]) -> dict[str, object]:
-    unique = {(entry.priority, entry.script) for entry in entries}
-    return {
-        "count": len(unique),
-        "priorities": sorted(priority for priority, _script in unique),
-    }
+    ordered = runtime_init_order(entries)
+    return {"count": len(ordered), "steps": [entry.name for entry in ordered]}
 
 
 def _describe_build_options(options: MkosiOptions) -> dict[str, object]:
@@ -945,7 +941,7 @@ def _named_keys(kind: str, name: str, known: Sequence[Identity]) -> tuple[Identi
     if kind == "unit":
         unit = unit_name(name)
         return tuple(k for k in known if k[0] in ("Unit", "Service") and k[1] == unit)
-    wanted = {"package": "Package", "hook": "Hook", "init": "Init"}[kind]
+    wanted = {"package": "Package", "hook": "Hook", "init": "BootStep"}[kind]
     return tuple(k for k in known if k[0] == wanted and k[1] == name)
 
 
@@ -974,15 +970,22 @@ def _path_keys(
             ):
                 keys.append(key)
     if not keys and "runtime-init" in path:
-        keys.extend(k for k in known if k[0] in ("Init", "Key", "Disk", "Secrets"))
+        keys.extend(k for k in known if k[0] in ("BootStep", "Key", "Disk", "Secrets"))
     return tuple(keys)
+
+
+_SUBJECT_KIND = {"Package": "package", "Hook": "hook", "BootStep": "init"}
 
 
 def _close_hint(subject: str, known: Sequence[Identity], tree: Mapping[str, str]) -> str:
     names = [
         *sorted(_image_paths(tree)),
         *(f"unit:{k[1]}" for k in known if k[0] in ("Unit", "Service")),
-        *(f"{k[0].lower()}:{k[1]}" for k in known if k[0] in ("Package", "Hook", "Init")),
+        *(
+            f"{_SUBJECT_KIND.get(k[0], k[0].lower())}:{k[1]}"
+            for k in known
+            if k[0] in _SUBJECT_KIND
+        ),
     ]
     candidates = list(dict.fromkeys(names))
     close = difflib.get_close_matches(subject, candidates, n=5, cutoff=0.5)
@@ -1029,7 +1032,7 @@ def _emitted_for(
             generated.extend(_script_lines(tree, unit))
         case Package():
             files.extend(_conf_lines(tree, item.name))
-        case Hook() | Init():
+        case Hook() | BootStep():
             first = _first_command_line(item.script)
             name = item.name
             files.extend(
@@ -1046,12 +1049,13 @@ def _injected_lines(item: Unit | Service, text: str) -> list[str]:
     declared = item.content if isinstance(item, Unit) and isinstance(item.content, str) else ""
     if isinstance(item, Service):
         declared = " ".join((*item.after, *item.requires))
-    if "runtime-init.service" in declared or not item.after_init:
+    if "runtime-init" in declared or not item.needs:
         return []
+    needs = ", ".join("RUNTIME_INIT" if r.step == ALL_STEPS else r.step for r in item.needs)
     return [
-        f"{line.strip()} (after_init=True)"
+        f"{line.strip()} (needs {needs})"
         for line in text.splitlines()
-        if line.split("=", 1)[0] in ("After", "Requires") and "runtime-init.service" in line
+        if line.split("=", 1)[0] in ("After", "Requires") and "runtime-init" in line
     ]
 
 

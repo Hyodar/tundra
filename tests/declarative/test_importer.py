@@ -13,7 +13,7 @@ import pytest
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE, run_main
 from tundravm import Build, Git, Go, Imported, Install, Recipe, import_tree
 from tundravm._source import GitSource, Source
-from tundravm.declarative import Mkosi, compile, diff, lint, load, lock
+from tundravm.declarative import Mkosi, Unit, compile, diff, lint, load, lock
 from tundravm.declarative.lifecycle import read_tree
 from tundravm.errors import ValidationError
 from tundravm.templates import TEMPLATES, render_recipe_template
@@ -199,7 +199,10 @@ def test_pinned_nethermind_v1_build_comes_back_at_its_commit(tmp_path: Path) -> 
 def test_service_template_imports_first_class_declarations(tmp_path: Path) -> None:
     imported = import_tree(_template_tree(tmp_path, "service"))
     kinds = {type(item).__name__ for item in imported.recipe.items}
-    assert {"Service", "Init", "User", "File", "Package"} <= kinds
+    assert {"Service", "User", "File", "Package"} <= kinds
+    # Per-step runtime-init (current dialect) imports as its files and units, verbatim.
+    units = {item.name for item in imported.recipe.items if isinstance(item, Unit)}
+    assert {"runtime-init.service", "runtime-init-app-state.service"} <= units
     assert [v.name for v in imported.recipe.variants] == ["default", "dev"]
     assert "parent=None" not in imported.recipe_source
 

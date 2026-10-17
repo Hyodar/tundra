@@ -23,24 +23,25 @@ An `Image` is one variant. It compiles in memory, with no temporary directory to
 | `image.file(path)`, `image.files` | `ImageFile`: `content` (bytes), `text`, `mode`, `stage` (`extra` or `skeleton`), `owner` (always `root`), `origin` (its provenance, empty for files the compiler writes) and `fragment` (the innermost fragment that declared it); `files` maps every absolute path to one |
 | `image.unit(name)`, `image.service(name)` | `UnitView` of a shipped unit (`.service` is optional): `get(section, key)`, `values(section, key)`, `requires(unit)`, `wants(unit)`, `after(unit)`, `wanted_by`, `exec_start`, `user`, `environment` (a dict), `enabled`, `text` |
 | `image.users`, `image.groups`, `image.builds` | The declared `User`, `Group` and `Build` values, by name |
-| `image.init_steps` | `InitStep(name, priority, after, script, builtin)` in the order runtime-init runs them; the built-in `keys`, `disks` and `secrets` steps have `builtin=True` and no script |
+| `image.init_steps` | `InitStep(name, after, script, builtin)` in the order runtime-init runs them (the steps' topological order; `after` is every step it waits for, its `before=` edges included); the built-in `keys`, `disks` and `secrets` steps have `builtin=True` and no script |
 | `image.hooks(stage)` | The `Hook`s of one stage (`postinst`, `finalize`...), in run order |
 | `image.settings(section)` | `{key: values}` of one `mkosi.conf` section |
 | `image.lint()` | The variant's findings, as `lint(recipe, variants=[variant])` reports them |
 | `image.tree`, `image.resolved`, `image.recipe` | The raw `Tree` (for golden comparisons), the `Resolved` variant, the planned recipe |
 
 ```python
-from tundravm import File, Fragment, Init, Package, Service, User
+from tundravm import BootStep, File, Fragment, Package, Service, User
 from tundravm.testing import assert_clean, fragment_plan
 
+STATE = BootStep("app-state", "install -d -o app /var/lib/app")
 APP = Fragment(
     "app",
     (
         Package("curl"),
         File("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
         User("app"),
-        Init("app-state", "install -d -o app /var/lib/app", priority=40),
-        Service("app", "/usr/bin/app", user="app", env={"PORT": "8080"}),
+        STATE,
+        Service("app", "/usr/bin/app", user="app", env={"PORT": "8080"}, needs=[STATE.ready]),
     ),
 )
 
@@ -55,7 +56,8 @@ def test_app_ships_and_wires_its_service():
     assert image.file("/usr/bin/app").mode & 0o111
     unit = image.service("app")
     assert unit.enabled and unit.user == "app"
-    assert unit.requires("runtime-init.service") and unit.after("runtime-init.service")
+    assert unit.requires("runtime-init-app-state.service")
+    assert unit.after("runtime-init-app-state.service")
     assert unit.environment == {"PORT": "8080"}
     assert [step.name for step in image.init_steps] == ["app-state"]
 ```
@@ -243,10 +245,10 @@ def test_allow_secret_exempts_a_lookalike():
 ## Composition fakes
 
 ```python
-fake_fragment(name="fake", *, packages=(), files=None, init=None, priority=50, requires=(), checks=()) -> Fragment
+fake_fragment(name="fake", *, packages=(), files=None, init=None, after=(), requires=(), checks=()) -> Fragment
 ```
 
-A small fragment for testing how fragments compose: a `Package` per name, a `File` per `{path: content}`, an `Init` step when `init` is given, and the `requires`/`checks` you pass.
+A small fragment for testing how fragments compose: a `Package` per name, a `File` per `{path: content}`, a `BootStep` (running after the `after` handles) when `init` is given, and the `requires`/`checks` you pass.
 
 ## CLI tests
 

@@ -17,13 +17,14 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._modules.init import is_init_path
 from ._modules.secret_delivery import SecretDelivery
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
 from .formats import annotation_path, md_cell, md_table, workflow_command
-from .models import InitScriptEntry, ProfileState, ServiceSpec, unit_name
+from .models import ProfileState, ServiceSpec, unit_name
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -152,7 +153,7 @@ def _norm(path: str) -> str:
 
 
 def _is_init_file(path: str) -> bool:
-    return _norm(path) in _INIT_FILE_PATHS
+    return is_init_path(_norm(path))
 
 
 def _declared_paths(state: ProfileState) -> set[str]:
@@ -166,17 +167,6 @@ def _command_text(state: ProfileState) -> str:
     argvs = [cmd.argv for cmds in state.phases.values() for cmd in cmds]
     argvs.extend(hook.command.argv for hook in state.hooks)
     return "\n".join(" ".join(argv) for argv in argvs)
-
-
-def _init_entries(image: Lowered, state: ProfileState) -> list[InitScriptEntry]:
-    merged: list[InitScriptEntry] = []
-    seen: set[tuple[int, str]] = set()
-    for entry in state.init_scripts:
-        key = (entry.priority, entry.script)
-        if key not in seen:
-            seen.add(key)
-            merged.append(entry)
-    return merged
 
 
 def _rule_service_user_missing(
@@ -372,32 +362,6 @@ def _rule_variant_empty(
         hint=hint,
         variant=profile_name,
     )
-
-
-def _rule_init_priority_collision(
-    image: Lowered, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    by_priority: dict[int, list[InitScriptEntry]] = {}
-    for entry in _init_entries(image, state):
-        by_priority.setdefault(entry.priority, []).append(entry)
-    for priority, entries in sorted(by_priority.items()):
-        if len(entries) < 2:
-            continue
-        heads = "; ".join(repr(e.script.strip().splitlines()[0][:40]) for e in entries)
-        yield Diagnostic(
-            severity="warning",
-            code="init-priority-collision",
-            message=(
-                f"{len(entries)} init scripts share priority {priority} and run in "
-                f"registration order: {heads}"
-            ),
-            hint=(
-                "Give each step its own priority with Init(name, script, priority=N) "
-                "(lower runs first) so boot order does not depend on declaration order."
-            ),
-            variant=profile_name,
-            subject=f"priority {priority}",
-        )
 
 
 def _rule_debloat_removes_needed_unit(
@@ -754,7 +718,6 @@ RULES: list[Rule] = [
     _rule_file_path_relative,
     _rule_service_command_not_shipped,
     _rule_variant_empty,
-    _rule_init_priority_collision,
     _rule_debloat_removes_needed_unit,
     _rule_debloat_removes_declared_file,
     _rule_source_unpinned,

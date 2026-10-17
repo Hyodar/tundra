@@ -4,13 +4,13 @@ from copy import deepcopy
 import pytest
 
 from tundravm import (
+    BootStep,
     Debian,
     Debloat,
     File,
     Fragment,
     Git,
     Hook,
-    Init,
     Kernel,
     Package,
     Partition,
@@ -56,7 +56,7 @@ def _recipe() -> Recipe:
             Partition("data", "4G", "/data"),
             Hook("first", "postinst", "echo first\necho second"),
             Hook("long", "postinst", "x" * 200),
-            Init("init", "echo init", priority=10),
+            BootStep("init", "echo init"),
         ),
     )
     return Recipe(
@@ -133,7 +133,7 @@ def test_explain_structure() -> None:
     assert hooks["postinst"][1].endswith("...")
     assert len(hooks["postinst"][1]) == 80
 
-    assert info["runtime_init"] == {"count": 1, "priorities": [10]}
+    assert info["runtime_init"] == {"count": 1, "steps": ["init"]}
 
     debloat = info["debloat"]
     assert isinstance(debloat, dict)
@@ -215,7 +215,7 @@ def test_summary_contains_key_strings() -> None:
     assert "data  4G  /data  ext4" in text
     assert "Hooks:\n" in text
     assert "  postinst (2):\n    echo first\n" in text
-    assert "Runtime init: 1 (priorities: 10)" in text
+    assert "Runtime init: 1 (steps: init)" in text
     assert "Debloat: enabled," in text
     assert text.endswith("Targets: qemu\n")
     assert "hello world" not in text

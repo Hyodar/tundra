@@ -15,6 +15,7 @@ import pytest
 
 from tundravm import (
     Backend,
+    BootStep,
     Debian,
     Debloat,
     Declaration,
@@ -23,10 +24,10 @@ from tundravm import (
     Fragment,
     Git,
     Hook,
-    Init,
     Kernel,
     LintError,
     Package,
+    Ready,
     Recipe,
     Secret,
     SecretEnv,
@@ -35,6 +36,7 @@ from tundravm import (
     Service,
     Setting,
     Template,
+    Unit,
     User,
     ValidationError,
     Variant,
@@ -214,27 +216,25 @@ def test_variant_with_content_or_default_is_not_empty() -> None:
     assert codes(recipe(variants=(DEFAULT, dev), clean=False), "default", "dev") == []
 
 
-# g. init-priority-collision
+# g. runtime-init graph: cycles and unknown steps are errors naming the steps
 
 
-def test_init_priority_collision() -> None:
-    subject = recipe(
-        Init("one", "echo one\n", priority=20),
-        Init("two", "echo two\n", priority=20),
-        Init("three", "echo three\n", priority=30),
-    )
-    [diag] = report(subject)
-    assert (diag.code, diag.subject) == ("init-priority-collision", "priority 20")
-    assert "'echo one'" in diag.message
+def test_boot_step_cycle_names_the_steps() -> None:
+    first = BootStep("first", "echo 1\n", after=(Ready("second"),))
+    second = BootStep("second", "echo 2\n", after=(first.ready,))
+    [diag] = lint(recipe(first, second))
+    assert (diag.severity, diag.code) == ("error", "step-cycle")
+    assert "'first' -> 'second' -> 'first'" in diag.message
 
 
-def test_distinct_or_duplicate_init_scripts_are_fine() -> None:
-    subject = recipe(
-        Init("one", "echo one\n", priority=20),
-        Init("one-again", "echo one\n", priority=20),
-        Init("two", "echo two\n", priority=30),
-    )
-    assert report(subject) == []
+def test_unknown_step_references_are_errors() -> None:
+    step = BootStep("late", "echo late\n", before=(Ready("ghost"),))
+    unit = Unit("app-extra.service", "[Unit]\n", needs=(Ready("missing"),))
+    found = [(d.severity, d.code, d.subject) for d in lint(recipe(step, unit))]
+    assert found == [
+        ("error", "step-undefined", "late"),
+        ("error", "needs-undefined", "app-extra.service"),
+    ]
 
 
 # i. debloat-removes-needed-unit / debloat-removes-declared-file
@@ -411,8 +411,7 @@ def test_ordering_is_deterministic() -> None:
         Variant("a"),
     )
     subject = recipe(
-        Init("one", "echo 1\n", priority=1),
-        Init("two", "echo 2\n", priority=1),
+        Service("unshipped", "/usr/bin/unshipped"),
         variants=variants,
         clean=False,
     )
@@ -420,11 +419,11 @@ def test_ordering_is_deterministic() -> None:
     diags = check(img, profiles=["b", "a", "default"])
     keys = [(d.variant, d.severity, d.code) for d in diags]
     assert keys == [
-        ("a", "warning", "init-priority-collision"),
+        ("a", "warning", "service-command-not-shipped"),
         ("a", "info", "variant-empty"),
         ("b", "error", "file-path-relative"),
-        ("b", "warning", "init-priority-collision"),
-        ("default", "warning", "init-priority-collision"),
+        ("b", "warning", "service-command-not-shipped"),
+        ("default", "warning", "service-command-not-shipped"),
     ]
     assert diags == check(img, profiles=["default", "a", "b"])
     assert [(d.variant, d.code) for d in lint(subject)] == [
@@ -485,7 +484,7 @@ def test_a_source_location_is_rendered_where_it_is_known() -> None:
 # CLI
 
 RECIPE = """
-from tundravm import Fragment, Init, Package, Recipe, Service, User, Variant
+from tundravm import RUNTIME_INIT, Fragment, Package, Recipe, Service, Unit, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -535,10 +534,7 @@ def test_cli_error_exit_and_json(tmp_path: Path) -> None:
 
 
 def test_cli_strict_fails_on_warnings(tmp_path: Path) -> None:
-    extra = (
-        'items.append(Init("one", "echo 1\\n", priority=5))\n'
-        'items.append(Init("two", "echo 2\\n", priority=5))\n'
-    )
+    extra = 'items.append(Unit("x.service", "[Unit]\\n", enabled=True, needs=[RUNTIME_INIT]))\n'
     recipe_path = write_recipe(tmp_path, extra)
     assert run(str(recipe_path))[0] == 0
     assert run(str(recipe_path), "--strict")[0] == 1

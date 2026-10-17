@@ -26,16 +26,14 @@ from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, 
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.disk_encryption import (
     DISK_ENCRYPTION_BUILD_PACKAGES,
-    DISK_ENCRYPTION_INIT_PRIORITY,
 )
+from tundravm._modules.init import wait_units
 from tundravm._modules.key_generation import (
     KEY_GENERATION_BUILD_PACKAGES,
-    KEY_GENERATION_INIT_PRIORITY,
 )
 from tundravm._modules.secret_delivery import (
     BUILTIN_SECRET_PROVIDER,
     SECRET_DELIVERY_BUILD_PACKAGES,
-    SECRET_DELIVERY_INIT_PRIORITY,
 )
 from tundravm._source import BuildRecipe, GitSource, HttpSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as SourceInstall
@@ -71,6 +69,7 @@ from tundravm.models import (
 from tundravm.platforms import azure, gcp
 
 from .model import (
+    BootStep,
     Build,
     Debloat,
     Declaration,
@@ -81,7 +80,6 @@ from .model import (
     Group,
     Hook,
     Http,
-    Init,
     Kernel,
     Key,
     Package,
@@ -99,7 +97,7 @@ from .model import (
     Unit,
     User,
 )
-from .resolve import CLOUD_TARGETS, _builtin_inits, has_init, order_hooks, order_inits
+from .resolve import CLOUD_TARGETS, builtin_steps, order_hooks, step_nodes
 
 HISTORICAL = "nethermind-v1"
 """The dialect that reproduces the historical nethermind-tdx tree byte for byte."""
@@ -229,7 +227,7 @@ class StateBuilder:
         units are written again so they wait for runtime-init.
         """
         profile = self.state.ensure_profile(name)
-        after_init = has_init(full)
+        steps = {step for step, _, _ in step_nodes(full)}
         hooks = iter(order_hooks([item for item in items if isinstance(item, Hook)]))
         runtime_done = False
         for item in items:
@@ -251,7 +249,7 @@ class StateBuilder:
                 case User():
                     _user(profile, item)
                 case Unit():
-                    _unit(profile, item, after_init=after_init)
+                    _unit(profile, item, steps=steps, per_step=not self.historical)
                 case Service():
                     _service(profile, item)
                 case Template():
@@ -282,21 +280,26 @@ class StateBuilder:
                     _set_debloat(profile, _debloat(item))
                 case Key() | Disk() | Secrets():
                     if not runtime_done:
-                        self._runtime_tools(name, profile, items)
+                        self._runtime_tools(name, profile, items, dict(builtin_steps(full)))
                         runtime_done = True
                 case Build():
                     self._build_from(profile, source_build(item, mark_unpinned=not self.historical))
                 case Kernel(source=Http()) if self.historical:
                     profile.build_packages.add("curl")  # the build hook downloads the archive
-                case Init() | Setting() | Kernel() | RuntimeTools():
-                    pass  # inits register below; the rest is per-tree configuration
+                case BootStep() | Setting() | Kernel() | RuntimeTools():
+                    pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
-            _unit(profile, replace(unit, enabled=None, masked=None), after_init=True)
-        inits = order_inits(
-            [item for item in items if isinstance(item, Init)], builtins=_builtin_inits(full)
-        )
-        for init in inits:
-            profile.init_scripts.append(InitScriptEntry(script=init.script, priority=init.priority))
+            reemitted = replace(unit, enabled=None, masked=None)
+            _unit(profile, reemitted, steps=steps, per_step=not self.historical)
+        for step in (item for item in items if isinstance(item, BootStep)):
+            profile.init_scripts.append(
+                InitScriptEntry(
+                    script=step.script,
+                    name=step.name,
+                    after=tuple(ref.step for ref in step.after),
+                    before=tuple(ref.step for ref in step.before),
+                )
+            )
 
     # ── source builds and runtime tools ─────────────────────────────────
 
@@ -313,9 +316,16 @@ class StateBuilder:
         _shell(profile, spec.render(mounted=not self.historical), phase="build")
 
     def _runtime_tools(
-        self, name: str, profile: ProfileState, items: Sequence[Declaration]
+        self,
+        name: str,
+        profile: ProfileState,
+        items: Sequence[Declaration],
+        after: Mapping[str, tuple[str, ...]],
     ) -> None:
-        """Configure key generation, disk setup and secret delivery for *items*, in that order."""
+        """Configure key generation, disk setup and secret delivery for *items*, in that order.
+
+        *after* maps each built-in step to the steps it runs after.
+        """
         tools = next((item for item in items if isinstance(item, RuntimeTools)), None)
         source = TUNDRA_TOOLS if tools is None else _git(tools.source)
         paths = tools or RuntimeTools(Git(TUNDRA_TOOLS.url, TUNDRA_TOOLS.ref))
@@ -333,7 +343,7 @@ class StateBuilder:
             if any(spec.tpm_enabled() for spec in keygen.keys):
                 profile.packages.add("tpm2-tools")
             _add_file(profile, keygen.config_path, keygen.render_config())
-            _runtime_init(profile, keygen.init_script(), KEY_GENERATION_INIT_PRIORITY)
+            _runtime_init(profile, keygen.init_script(), "keys", after)
             applied.append(keygen)
         if disks:
             setup = DiskEncryption(
@@ -345,7 +355,7 @@ class StateBuilder:
             self._build_from(profile, setup.source_spec())
             profile.packages.add("cryptsetup")
             _add_file(profile, setup.config_path, setup.render_config())
-            _runtime_init(profile, setup.render_init_script(), DISK_ENCRYPTION_INIT_PRIORITY)
+            _runtime_init(profile, setup.render_init_script(), "disks", after)
             applied.append(setup)
         for entry, (config_path, manifest_path) in zip(secrets, secret_paths, strict=True):
             delivery = SecretDelivery(
@@ -371,7 +381,7 @@ class StateBuilder:
             _add_file(profile, delivery.manifest_path, delivery.render_manifest())
             for path, dropin in delivery.service_dropins().items():
                 _add_file(profile, path, dropin)
-            _runtime_init(profile, delivery.init_script(), SECRET_DELIVERY_INIT_PRIORITY)
+            _runtime_init(profile, delivery.init_script(), "secrets", after)
             applied.append(delivery)
 
     def _azure(self, profile: ProfileState) -> None:
@@ -430,8 +440,10 @@ def _shell(
     profile.hooks.append(HookSpec(phase=phase, command=spec))
 
 
-def _runtime_init(profile: ProfileState, script: str, priority: int) -> None:
-    profile.init_scripts.append(InitScriptEntry(script=script, priority=priority))
+def _runtime_init(
+    profile: ProfileState, script: str, step: str, after: Mapping[str, tuple[str, ...]]
+) -> None:
+    profile.init_scripts.append(InitScriptEntry(script=script, name=step, after=after[step]))
 
 
 def _add_file(profile: ProfileState, path: str, content: str | bytes, mode: str = "0644") -> None:
@@ -741,7 +753,8 @@ def _template(profile: ProfileState, item: Template) -> None:
 # ── units and services ───────────────────────────────────────────────────
 
 
-def _unit(profile: ProfileState, unit: Unit, *, after_init: bool) -> None:
+def _unit(profile: ProfileState, unit: Unit, *, steps: Collection[str], per_step: bool) -> None:
+    """Ship or control *unit*; a shipped one waits for the units of the steps it needs."""
     if unit.content is not None:
         content = unit.content
         if isinstance(content, Path):
@@ -750,8 +763,10 @@ def _unit(profile: ProfileState, unit: Unit, *, after_init: bool) -> None:
                 owner=f"Unit {unit.name}",
                 hint="Save the unit file as UTF-8; systemd units are text.",
             )
-        if unit.after_init and after_init:
-            content = inject_after_init(content)
+        needs = (ref.step for ref in unit.needs)
+        waits = wait_units(needs, steps=steps, per_step=per_step)
+        if waits:
+            content = inject_after_init(content, waits)
         _add_file(profile, f"{UNIT_DIRECTORY}/{unit.name}", content)
     if unit.enabled is True:
         enable_unit(profile, unit.name)
@@ -811,7 +826,7 @@ def _service(profile: ProfileState, service: Service) -> None:
             limits=limits,
             kill_mode=service.kill_mode,
             timeout_stop=service.timeout_stop or None,
-            after_init=service.after_init,
+            needs=tuple(ref.step for ref in service.needs),
         )
     )
 
@@ -836,7 +851,16 @@ def _limits(service: str, limits: Mapping[str, str | int]) -> dict[str, str]:
     return dict(sorted(normalized.items()))
 
 
-def inject_after_init(text: str, service: str = INIT_SERVICE) -> str:
+def inject_after_init(text: str, services: str | Sequence[str] = INIT_SERVICE) -> str:
+    """*text* with *services* first, in order, in its ``[Unit]`` ``After=`` and ``Requires=``."""
+    if not isinstance(services, str):
+        for service in reversed(services):
+            text = inject_after_init(text, service)
+        return text
+    return _inject_one(text, services)
+
+
+def _inject_one(text: str, service: str) -> str:
     """*text* with *service* first in its ``[Unit]`` ``After=`` and ``Requires=``.
 
     Existing directives get *service* prepended (what modules render through
