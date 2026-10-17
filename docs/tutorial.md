@@ -49,7 +49,7 @@ APP_PORT = 8080
 class App(Composite):
     """The app: its account, config file, a first-boot step, the service and a lint rule.
 
-    Ship ``/usr/bin/app`` with a ``Build(...)`` or a ``Package(...)``. Fragment name: ``app``.
+    Ship ``/usr/bin/app`` with a ``GoBinary``, a ``Build`` or a ``Package``. Fragment name: ``app``.
     """
 
     version: str
@@ -61,7 +61,7 @@ class App(Composite):
             "app",
             items=(
                 User("app", home="/var/lib/app"),
-                File("/etc/app/app.conf", config),
+                File.text("/etc/app/app.conf", config),
                 # Runs in runtime-init before the service starts (after_init=True).
                 Init("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
                 Service(
@@ -201,7 +201,7 @@ generated:
 [exit 0]
 ```
 
-The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `Init`) and the enablement into `minimal.target`. A declaration a variant adds, replaces or removes lists that step too. `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
+The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `Init`) and the enablement into `minimal.target`. A declaration a variant adds, edits or removes lists that step too (`content edited in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
 
 ## 3. Lint
 
@@ -497,7 +497,7 @@ Hint: Export the policy from a real measurement, or pass allow_placeholder=True 
   policy: peer.json
 ```
 
-A policy exported from a real measurement needs no `allow_placeholder`. MRTD is not in the policy: RTMR tools do not report it, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", inherits="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, anchor it to the recipe file with `Path(__file__).resolve().parent / "peer.json"` (see [Concepts: Lowering and compiling](concepts.md#lowering-and-compiling)).
+A policy exported from a real measurement needs no `allow_placeholder`. MRTD is not in the policy: RTMR tools do not report it, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", inherits="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, name it next to the recipe file with `Resources.from_module(__name__).file("peer.json")` (see [Concepts: Paths and assets](concepts.md#paths-and-assets)).
 
 Once the image runs, `tundravm attest` checks it against the policy: it asks the image's `tdxs` issuer for a quote bound to a fresh nonce and compares the quote's registers with the policy's. It refuses a placeholder policy before contacting anything:
 

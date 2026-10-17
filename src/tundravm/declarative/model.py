@@ -3,18 +3,20 @@
 Every record is a frozen, slotted dataclass. ``__post_init__`` rejects malformed
 values at declaration time (empty names, relative paths, unknown phases,
 out-of-range modes) plus the structural rules of the design
-(a ``Disk`` references a ``Key`` object, ``Secrets.store`` is a ``Disk``).
+(``Disk.key`` holds a ``Key`` ref, ``Secrets.store`` a ``Disk`` ref).
 Lists passed for tuple fields are frozen into tuples.
 """
 
 from __future__ import annotations
 
+import functools
 import posixpath
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import KW_ONLY, dataclass, field
+from dataclasses import KW_ONLY, MISSING, dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Literal, get_args, overload
 
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
@@ -22,6 +24,7 @@ from tundravm._source import FrozenMap
 from tundravm._source import GoBuild as Go
 from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
+from tundravm.models import unit_name
 from tundravm.policy import Policy
 
 Target = Literal["qemu", "azure", "gcp"]
@@ -177,13 +180,15 @@ EMPTY_FRAGMENT = Fragment("empty")
 class Variant:
     """An overlay on the variant it ``inherits``: ``"base"`` is ``Recipe.items``, ``None`` is
     standalone. ``outputs`` names the targets it builds (empty: inherited, ``qemu`` at the root).
+
+    ``changes`` edit or remove inherited declarations by identity (``key.ref.edit(size=32)``,
+    ``Unit.ref("ssh.service").remove()``) before ``add`` adds its own.
     """
 
     name: str
     inherits: str | None = BASE_VARIANT
     add: Fragment = EMPTY_FRAGMENT
-    replace: tuple[Declaration, ...] = ()
-    remove: tuple[Declaration, ...] = ()
+    changes: tuple[VariantChange, ...] = ()
     outputs: tuple[Target, ...] = ()
     release: bool = True
     """Whether ``tundravm release`` ships it by default; ``False`` for a development variant
@@ -197,7 +202,7 @@ class Variant:
                 f"outputs= of {self.name!r} must be a sequence of targets, got {self.outputs!r}.",
                 hint=f"Pass outputs=({self.outputs!r},).",
             )
-        _freeze(self, "replace", "remove", "outputs")
+        _freeze(self, "changes", "outputs")
         _require_name(self, self.name)
         if not isinstance(self.release, bool):
             raise _fail(self, f"release= of {self.name!r} must be True or False.")
@@ -209,16 +214,37 @@ class Variant:
                 raise _fail(self, f"variant {self.name!r} cannot inherit itself.")
         if not isinstance(self.add, Fragment):
             raise _fail(self, f"add= of {self.name!r} must be a Fragment.")
-        for what, items in (("replace", self.replace), ("remove", self.remove)):
-            for item in items:
-                if not isinstance(item, DECLARATION_TYPES):
-                    raise _fail(
-                        self, f"{what}= of {self.name!r} holds {item!r}, not a declaration."
-                    )
+        _check_changes(self)
         for target in self.outputs:
             _require_choice(self, target, TARGETS, "output")
         if len(set(self.outputs)) != len(self.outputs):
             raise _fail(self, f"variant {self.name!r} lists an output twice.")
+
+
+def _check_changes(variant: Variant) -> None:
+    """Each change is an ``Edit`` or ``Remove``, and none touches what another already does."""
+    touched: dict[Ref, set[str] | None] = {}
+    for change in variant.changes:
+        if not isinstance(change, (Edit, Remove)):
+            raise _fail(
+                variant,
+                f"changes= of {variant.name!r} holds {change!r}, not an edit or a removal.",
+                hint="Use value.ref.edit(FIELD=...) or value.ref.remove() "
+                '(Unit.ref("ssh.service").remove() without the value).',
+            )
+        target = change.target
+        seen = touched.get(target, set())
+        if target in touched and (seen is None or isinstance(change, Remove)):
+            raise _fail(variant, f"variant {variant.name!r} changes {target} twice.")
+        if isinstance(change, Remove):
+            touched[target] = None
+            continue
+        assert seen is not None
+        for name in change.fields:
+            if name in seen:
+                raise _fail(variant, f"variant {variant.name!r} edits {target}.{name} twice.")
+            seen.add(name)
+        touched[target] = seen
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,11 +340,183 @@ class Recipe:
         raise ValidationError(f"Unknown variant {name!r}.", hint=f"Declared variants: {known}.")
 
 
+# ── References and changes ──────────────────────────────────────────────
+
+_KEY_FIELDS: dict[str, tuple[str, ...]] = {
+    "Package": ("name", "role"),
+    "File": ("stage", "path"),
+    "FileTree": ("stage", "path"),
+    "Template": ("stage", "path"),
+    "Setting": ("section", "key"),
+    "Debloat": (),
+    "RuntimeTools": (),
+    "Kernel": (),
+}
+"""Identity fields of the declaration types that are not identified by ``name`` alone."""
+
+
+def key_fields(kind: str) -> tuple[str, ...]:
+    """The fields that identify a *kind* declaration, in identity order."""
+    return _KEY_FIELDS.get(kind, ("name",))
+
+
+def _key_part(kind: str, name: str, value: object) -> str:
+    if name == "path":
+        return posixpath.normpath(str(value))
+    if kind in ("Unit", "Service"):
+        return unit_name(str(value))
+    return str(value)
+
+
+def _declaration_type(owner: object, kind: str) -> type:
+    for cls in DECLARATION_TYPES:
+        if cls.__name__ == kind:
+            return cls
+    raise _fail(owner, f"{kind!r} is not a declaration type.")
+
+
+@dataclass(frozen=True, slots=True)
+class Ref:
+    """A declaration named by its identity: ``kind`` plus the natural key ``identity``.
+
+    ``value.ref`` is a value's ref, ``Unit.ref("ssh.service")`` one built from the
+    key. ``Disk.key`` and ``Secrets.store`` hold refs; resolution binds each to the
+    variant's final value (:meth:`Resolved.bind`). ``edit`` and ``remove`` make the
+    :class:`Variant` ``changes`` that target it.
+    """
+
+    kind: str
+    identity: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _freeze(self, "identity")
+        _declaration_type(self, self.kind)
+        keys = key_fields(self.kind)
+        if len(self.identity) != len(keys) or not all(isinstance(p, str) for p in self.identity):
+            raise _fail(
+                self,
+                f"a {self.kind} ref holds {', '.join(keys) or 'nothing'}, got {self.identity!r}.",
+                hint=f"Use {self.kind}.ref(...) or value.ref.",
+            )
+
+    def __str__(self) -> str:
+        return f"{self.kind}({', '.join(self.identity)})" if self.identity else self.kind
+
+    def edit(self, **fields: object) -> Edit:
+        """A change that sets *fields* of the inherited declaration this ref names."""
+        return Edit(self, fields)
+
+    def remove(self) -> Remove:
+        """A change that drops the inherited declaration this ref names."""
+        return Remove(self)
+
+
+@dataclass(frozen=True, slots=True)
+class Edit:
+    """Set ``fields`` of the inherited declaration ``target``: ``key.ref.edit(size=32)``.
+
+    Fields must exist on the target's type and may not be identity fields.
+    """
+
+    target: Ref
+    fields: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target, Ref):
+            raise _fail(self, f"target must be a Ref, got {self.target!r}.")
+        frozen = _freeze_map(self, "fields")
+        if not frozen:
+            raise _fail(self, f"the edit of {self.target} sets no field.")
+        values = {k: tuple(v) if isinstance(v, list) else v for k, v in frozen.items()}
+        object.__setattr__(self, "fields", FrozenMap(values))
+        cls = _declaration_type(self, self.target.kind)
+        known = [f.name for f in dataclass_fields(cls) if f.init]
+        for name in values:
+            if name in key_fields(self.target.kind):
+                raise _fail(
+                    self,
+                    f"{name!r} identifies {self.target}; an edit cannot change it.",
+                    hint=f"Remove {self.target} and add the new declaration instead.",
+                )
+            if name not in known:
+                raise _fail(
+                    self,
+                    f"{self.target.kind} has no field {name!r}.",
+                    hint=f"{self.target.kind} fields: {', '.join(known)}.",
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class Remove:
+    """Drop the inherited declaration ``target``: ``Unit.ref("ssh.service").remove()``."""
+
+    target: Ref
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target, Ref):
+            raise _fail(self, f"target must be a Ref, got {self.target!r}.")
+
+
+type VariantChange = Edit | Remove
+"""What :attr:`Variant.changes` holds."""
+
+
+def _type_ref(cls: type, *args: object, **kwargs: object) -> Ref:
+    """``cls.ref(*args, **kwargs)``: the key fields bound like ``cls``'s constructor."""
+    kind = cls.__name__
+    keys = key_fields(kind)
+    params = [f for f in dataclass_fields(cls) if f.name in keys]
+    if len(args) > len(params):
+        raise ValidationError(
+            f"{kind}.ref() takes {len(params)} key argument(s), got {len(args)}.",
+            hint=f"{kind} is identified by {', '.join(keys) or 'its type alone'}.",
+        )
+    values: dict[str, object] = dict(zip((f.name for f in params), args, strict=False))
+    for name, value in kwargs.items():
+        if name not in keys or name in values:
+            raise ValidationError(
+                f"{kind}.ref() got an unexpected or repeated argument {name!r}.",
+                hint=f"{kind} is identified by {', '.join(keys) or 'its type alone'}.",
+            )
+        values[name] = value
+    for param in params:
+        if param.name not in values:
+            if param.default is MISSING:
+                raise ValidationError(
+                    f"{kind}.ref() needs {param.name}.",
+                    hint=f"{kind} is identified by {', '.join(keys)}.",
+                )
+            values[param.name] = param.default
+    return Ref(kind, tuple(_key_part(kind, name, values[name]) for name in keys))
+
+
+class _RefAccessor:
+    """``value.ref`` is the value's :class:`Ref`; ``Type.ref(*key)`` builds one from the key."""
+
+    @overload
+    def __get__(self, obj: None, owner: type) -> Callable[..., Ref]: ...
+    @overload
+    def __get__(self, obj: object, owner: type | None = None) -> Ref: ...
+    def __get__(self, obj: object, owner: type | None = None) -> Ref | Callable[..., Ref]:
+        if obj is None:
+            assert owner is not None
+            return functools.partial(_type_ref, owner)
+        kind = type(obj).__name__
+        return Ref(kind, tuple(_key_part(kind, k, getattr(obj, k)) for k in key_fields(kind)))
+
+
+class Declared:
+    """Base of the declaration types: each value has a :class:`Ref` (``value.ref``)."""
+
+    __slots__ = ()
+    ref = _RefAccessor()
+
+
 # ── Declarations ────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True, slots=True)
-class Package:
+class Package(Declared):
     name: str
     role: Literal["runtime", "build"] = "runtime"
 
@@ -350,12 +548,18 @@ def packages(*names: str, role: Literal["runtime", "build"] = "runtime") -> Frag
 
 
 @dataclass(frozen=True, slots=True)
-class File:
-    """*content* at *path*; ``allow_secret`` silences ``secret-in-file`` for it."""
+class File(Declared):
+    """*content* at *path*; ``allow_secret`` silences ``secret-in-file`` for it.
+
+    Spell it :meth:`File.text` for text and :meth:`File.copy` for a host file; the
+    constructor takes either (a ``Path`` *content* is read when the recipe lowers)
+    and ``bytes``. ``mode=None`` is for a copied file only: ``0755`` when the
+    source has an execute bit, else ``0644`` (the bits git records).
+    """
 
     path: str
     content: str | bytes | Path
-    mode: int = 0o644
+    mode: int | None = 0o644
     stage: Literal["skeleton", "extra"] = "extra"
     allow_secret: bool = False
 
@@ -364,12 +568,57 @@ class File:
         if not isinstance(self.content, (str, bytes, Path)):
             raise _fail(self, f"content of {self.path!r} must be str, bytes or Path.")
         _require_mode(self, self.mode)
+        if self.mode is None and not isinstance(self.content, Path):
+            raise _fail(
+                self,
+                f"mode=None keeps a copied file's execute bit; {self.path!r} is not copied.",
+                hint="Pass a mode such as mode=0o644.",
+            )
         _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
         _require_bool(self, self.allow_secret, "allow_secret")
 
+    @classmethod
+    def text(
+        cls,
+        path: str,
+        text: str,
+        *,
+        mode: int = 0o644,
+        stage: Literal["skeleton", "extra"] = "extra",
+        allow_secret: bool = False,
+    ) -> File:
+        """The text *text* at *path*, written as UTF-8."""
+        if not isinstance(text, str):
+            raise ValidationError(
+                f"File.text({path!r}) takes str text, got {type(text).__name__}.",
+                hint="Use File.copy(path, source) for a host file, File(path, data) for bytes.",
+            )
+        return cls(path, text, mode, stage, allow_secret)
+
+    @classmethod
+    def copy(
+        cls,
+        path: str,
+        source: Path,
+        *,
+        mode: int | None = None,
+        stage: Literal["skeleton", "extra"] = "extra",
+        allow_secret: bool = False,
+    ) -> File:
+        """The host file *source*, read when the recipe lowers, at *path*.
+
+        ``mode=None`` ships ``0755`` if *source* has an execute bit, else ``0644``.
+        """
+        if not isinstance(source, Path):
+            raise ValidationError(
+                f"File.copy({path!r}) takes a pathlib.Path source, got {source!r}.",
+                hint="Use File.text(path, text) for text, or Resources.file() for a path.",
+            )
+        return cls(path, source, mode, stage, allow_secret)
+
 
 @dataclass(frozen=True, slots=True)
-class FileTree:
+class FileTree(Declared):
     """The host tree *source* at *path*.
 
     ``mode=None`` keeps each file's and empty directory's permission bits;
@@ -399,7 +648,7 @@ class FileTree:
 
 
 @dataclass(frozen=True, slots=True)
-class Group:
+class Group(Declared):
     name: str
     system: bool = True
     gid: int | None = None
@@ -412,7 +661,7 @@ class Group:
 
 
 @dataclass(frozen=True, slots=True)
-class User:
+class User(Declared):
     name: str
     system: bool = True
     home: str | None = None
@@ -438,7 +687,7 @@ class User:
 
 
 @dataclass(frozen=True, slots=True)
-class Unit:
+class Unit(Declared):
     """A systemd unit: ``content`` ships the unit file, ``None`` controls a packaged one.
 
     ``allow_secret`` silences ``secret-in-env`` for the shipped unit file.
@@ -470,9 +719,28 @@ class Unit:
                 f"unit {self.name!r} has no content and neither enables, disables nor masks it.",
             )
 
+    @classmethod
+    def from_file(
+        cls,
+        name: str,
+        source: Path,
+        *,
+        enabled: bool | None = None,
+        masked: bool | None = None,
+        after_init: bool = False,
+        allow_secret: bool = False,
+    ) -> Unit:
+        """The unit file *source* (UTF-8, read when the recipe lowers) shipped as *name*."""
+        if not isinstance(source, Path):
+            raise ValidationError(
+                f"Unit.from_file({name!r}) takes a pathlib.Path source, got {source!r}.",
+                hint="Pass Unit(name, text) for unit text, or Resources.file() for a path.",
+            )
+        return cls(name, source, enabled, masked, after_init, allow_secret)
+
 
 @dataclass(frozen=True, slots=True)
-class Service:
+class Service(Declared):
     """A generated systemd service: the compiler renders the unit from these fields.
 
     ``security`` selects the hardening profile (``strict``, ``default`` or
@@ -546,7 +814,7 @@ class Service:
 
 
 @dataclass(frozen=True, slots=True)
-class Template:
+class Template(Declared):
     """A file rendered from *template* with ``str.format_map(variables)`` at lowering time.
 
     ``allow_secret`` silences ``secret-in-file`` for the rendered file.
@@ -572,7 +840,7 @@ class Template:
 
 
 @dataclass(frozen=True, slots=True)
-class Hook:
+class Hook(Declared):
     name: str
     phase: Phase
     script: str
@@ -594,7 +862,7 @@ class Hook:
 
 
 @dataclass(frozen=True, slots=True)
-class Init:
+class Init(Declared):
     """A runtime-init fragment: lower priority runs first, ``after`` orders equal ones."""
 
     name: str
@@ -620,7 +888,7 @@ class Init:
 
 
 @dataclass(frozen=True, slots=True)
-class Repository:
+class Repository(Declared):
     name: str
     url: str
     suite: str
@@ -643,7 +911,7 @@ class Repository:
 
 
 @dataclass(frozen=True, slots=True)
-class Partition:
+class Partition(Declared):
     name: str
     size: str
     mount: str
@@ -657,7 +925,7 @@ class Partition:
 
 
 @dataclass(frozen=True, slots=True)
-class Debloat:
+class Debloat(Declared):
     enabled: bool = True
     remove: tuple[str, ...] | None = None
     extra_remove: tuple[str, ...] = ()
@@ -696,7 +964,7 @@ class Debloat:
 
 
 @dataclass(frozen=True, slots=True)
-class Setting:
+class Setting(Declared):
     """An mkosi ``[section] key=value...`` escape hatch."""
 
     section: str
@@ -718,7 +986,7 @@ class Setting:
 
 
 @dataclass(frozen=True, slots=True)
-class Key:
+class Key(Declared):
     name: str
     output: str | None = None
     strategy: Literal["random", "pipe"] = "random"
@@ -743,11 +1011,12 @@ class Key:
 
 
 @dataclass(frozen=True, slots=True)
-class Disk:
+class Disk(Declared):
     name: str
     mount: str
     device: str | None = None
-    key: Key | Path | None = None
+    key: Key | Ref | Path | None = None
+    """The disk's key: a ``Key`` (stored as its ref, bound to the variant's key), or a key file."""
     mapper: str | None = None
     format: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail"
     directories: tuple[str, ...] = ("ssh", "data", "logs")
@@ -759,12 +1028,16 @@ class Disk:
         _require_absolute(self, self.mount, "mount")
         if self.device is not None:
             _require_absolute(self, self.device, "device")
-        if self.key is not None and not isinstance(self.key, (Key, Path)):
+        if isinstance(self.key, Key):
+            object.__setattr__(self, "key", self.key.ref)
+        if self.key is not None and not (
+            isinstance(self.key, Path) or (isinstance(self.key, Ref) and self.key.kind == "Key")
+        ):
             raise _fail(
                 self,
-                f"disk {self.name!r}: key must be a Key declaration or a key file Path, "
+                f"disk {self.name!r}: key must be a Key, a Key ref or a key file Path, "
                 f"got {self.key!r}.",
-                hint="Pass the Key object itself (key=my_key), not its name.",
+                hint="Pass the Key (key=my_key) or Key.ref(NAME), not its name.",
             )
         if self.mapper is not None:
             _require_name(self, self.mapper, "mapper")
@@ -891,7 +1164,7 @@ class ExternalDelivery:
 
 
 @dataclass(frozen=True, slots=True)
-class Secrets:
+class Secrets(Declared):
     """The secrets a variant expects at boot; *delivery* is who writes their targets.
 
     ``delivery=None`` is the built-in tundra-tools provider, which provisions only
@@ -902,7 +1175,8 @@ class Secrets:
 
     name: str = "secrets"
     entries: tuple[Secret, ...] = ()
-    store: Disk | None = None
+    store: Disk | Ref | None = None
+    """The disk holding the secrets: a ``Disk`` (stored as its ref) or a Disk ref."""
     host: str = "0.0.0.0"
     port: int = 8080
     ssh_directory: str = "/root/.ssh"
@@ -925,11 +1199,15 @@ class Secrets:
             if entry.name in names:
                 raise _fail(self, f"secret {entry.name!r} is declared twice.")
             names.add(entry.name)
-        if self.store is not None and not isinstance(self.store, Disk):
+        if isinstance(self.store, Disk):
+            object.__setattr__(self, "store", self.store.ref)
+        if self.store is not None and not (
+            isinstance(self.store, Ref) and self.store.kind == "Disk"
+        ):
             raise _fail(
                 self,
-                f"store must be a Disk declaration, got {self.store!r}.",
-                hint="Pass the Disk object itself (store=my_disk), not its name.",
+                f"store must be a Disk or a Disk ref, got {self.store!r}.",
+                hint="Pass the Disk (store=my_disk) or Disk.ref(NAME), not its name.",
             )
         _require_name(self, self.host, "host")
         if isinstance(self.port, bool) or not 0 < self.port < 65536:
@@ -940,7 +1218,7 @@ class Secrets:
 
 
 @dataclass(frozen=True, slots=True)
-class RuntimeTools:
+class RuntimeTools(Declared):
     source: Git
     key_config: str = "/etc/tdx/key-gen.yaml"
     disk_config: str = "/etc/tdx/disk-setup.yaml"
@@ -1020,7 +1298,7 @@ class Install:
 
 
 @dataclass(frozen=True, slots=True)
-class Build:
+class Build(Declared):
     """Build the fetched source with *script* or the toolchain it is ``using`` and install it.
 
     Set exactly one of ``script`` (a shell script run in the source tree, with
@@ -1109,7 +1387,7 @@ class Build:
 
 
 @dataclass(frozen=True, slots=True)
-class Kernel:
+class Kernel(Declared):
     version: str
     source: Git | Http
     config: Path | None = None
@@ -1189,6 +1467,16 @@ class Resolved:
         if not self.outputs:
             raise _fail(self, f"variant {self.variant!r} resolved to no outputs.")
 
+    def bind(self, ref: Ref) -> Declaration:
+        """The variant's final declaration *ref* names; ``ValidationError`` when absent."""
+        for item in self.items:
+            if item.ref == ref:
+                return item
+        raise ValidationError(
+            f"variant {self.variant!r} does not declare {ref}.",
+            hint=f"Declare {ref} in the variant, or reference one it declares.",
+        )
+
 
 __all__ = [
     "BASE_VARIANT",
@@ -1198,13 +1486,16 @@ __all__ = [
     "TARGETS",
     "Build",
     "Cargo",
+    "VariantChange",
     "Check",
     "Debloat",
     "Declaration",
+    "Declared",
     "Diagnostic",
     "Disk",
     "Dotnet",
     "EMPTY_FRAGMENT",
+    "Edit",
     "ExternalDelivery",
     "File",
     "FileTree",
@@ -1224,6 +1515,8 @@ __all__ = [
     "Partition",
     "Phase",
     "Recipe",
+    "Ref",
+    "Remove",
     "Repository",
     "Resolved",
     "RuntimeTools",
@@ -1239,5 +1532,6 @@ __all__ = [
     "Unit",
     "User",
     "Variant",
+    "key_fields",
     "packages",
 ]

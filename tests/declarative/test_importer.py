@@ -204,6 +204,18 @@ def test_service_template_imports_first_class_declarations(tmp_path: Path) -> No
     assert "parent=None" not in imported.recipe_source
 
 
+def test_overlay_variants_import_as_edits_and_removals(tmp_path: Path) -> None:
+    tree = tmp_path / "mkosi"
+    compile(load(REPO_ROOT / "examples" / "02_variants.py")).write(tree)
+    out = tmp_path / "variants.py"
+    imported = import_tree(tree, output=out)
+    source = imported.recipe_source
+    assert 'Variant("slim", changes=(Package.ref("jq").remove(),), outputs=("qemu",))' in source
+    assert 'File.ref("/etc/motd").edit(content="development build\\n")' in source
+    out.write_text(source, encoding="utf-8")
+    assert diff(compile(load(out)), tree) == ""
+
+
 def test_the_written_module_loads_and_compiles_back(tmp_path: Path) -> None:
     tree = _template_tree(tmp_path, "minimal")
     out = tmp_path / "recipes" / "imported.py"

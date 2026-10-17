@@ -231,8 +231,10 @@ recipe = Recipe(
             inherits="default",
             outputs=("azure",),
             add=Fragment("dev", items=(Package("strace"),)),
-            replace=(File("/etc/motd", "dev\\n"),),
-            remove=(Package("jq"),),
+            changes=(
+                File.ref("/etc/motd").edit(content="dev\\n"),
+                Package.ref("jq").remove(),
+            ),
         ),
     ),
 )

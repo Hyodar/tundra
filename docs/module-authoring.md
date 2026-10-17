@@ -55,7 +55,7 @@ The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarat
 - **`requires`** names fragments that must also be in every variant that includes this one. It does not include them for you; a missing one is `fragment-requires-missing`.
 - **`checks`** are functions `Resolved -> tuple[Diagnostic, ...]` that run against each variant after resolution, during `lint` (and `resolve`, which raises on error-level results).
 
-Everything a fragment declares is ordinary: a recipe can `replace` or `remove` any of it in a variant, and identity collisions with other fragments are reported, not silently merged.
+Everything a fragment declares is ordinary: a recipe can edit or remove any of it in a variant's `changes` (`Unit.ref("tdxs.service").edit(enabled=False)`), and identity collisions with other fragments are reported, not silently merged.
 
 ## A complete example
 
@@ -201,26 +201,15 @@ A check receives the `Resolved` variant: `variant`, `outputs` (never empty), eve
 
 ## Building from source
 
-A `Build` fetches a source, builds it during the mkosi build phase, and installs results into the image. The source is pinned by `tundravm lock`.
+A `Build` fetches a source, builds it during the mkosi build phase, and installs results into the image. The source is pinned by `tundravm lock`. For one Go or Rust program, `GoBinary` and `CargoBinary` write that `Build` for you and give you the installed path as `executable`, so the build output, the install path and the service command cannot disagree:
 
 ```python
 from dataclasses import dataclass
 
-from tundravm import Build, File, Fragment, Git, Go, Install, Unit, User
-from tundravm.declarative.utils import Composite
+from tundravm import File, Fragment, Git, Resources, Service, User
+from tundravm.declarative.utils import Composite, GoBinary
 
-STATUS_UNIT = """\
-[Unit]
-Description=Status page
-
-[Service]
-User=status
-ExecStart=/usr/bin/status-page --config /etc/status-page.toml
-Restart=on-failure
-
-[Install]
-WantedBy=minimal.target
-"""
+ASSETS = Resources.from_module(__name__)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -229,25 +218,28 @@ class StatusPage(Composite):
     port: int = 9100
 
     def compose(self) -> Fragment:
+        binary = GoBinary(
+            "status-page", self.source, package="./cmd/status-page", env={"CGO_ENABLED": "0"}
+        )
         return Fragment(
             "status-page",
             items=(
-                Build(
-                    "status-page",
-                    self.source,
-                    using=Go(
-                        output="status-page",
-                        package="./cmd/status-page",
-                        env={"CGO_ENABLED": "0"},
-                    ),
-                    install=(Install("build/status-page", "/usr/bin/status-page"),),
-                ),
-                File("/etc/status-page.toml", f"port = {self.port}\n"),
+                binary,  # Build("status-page", using=Go(...)), installed at /usr/bin/status-page
+                File.text("/etc/status-page.toml", f"port = {self.port}\n"),
+                File.copy("/usr/share/status-page/index.html", ASSETS.file("assets/index.html")),
                 User("status", shell="/bin/false"),
-                Unit("status-page.service", STATUS_UNIT, enabled=True),
+                Service(
+                    "status-page",
+                    f"{binary.executable} --config /etc/status-page.toml",
+                    user="status",
+                    restart="on-failure",
+                    wanted_by="minimal.target",
+                ),
             ),
         )
 ```
+
+`GoBinary("status-page", source, package=...)` is `Build("status-page", source, using=Go(output="status-page", package=...), install=(Install("build/status-page", "/usr/bin/status-page"),))`; pass `install=` for another path. Write the `Build` yourself for anything more:
 
 - Take the source as a field (`source: Git`) so a recipe can pin a fork or a tag; give it a default if there is a canonical repository, as `Tdxs.source` does.
 - `using=Go(...)`, `Cargo(...)` or `Dotnet(...)` renders the toolchain's build command and installs its build packages (`golang`, `cargo`, `dotnet-sdk-8.0` by default; `packages=` and `env=` go on the toolchain). The output lands at `build/<output>` (`Go`), `target/<profile>/<bin>` (`Cargo`) or `publish/<output>` (`Dotnet`) in the source tree. See [API: sources and builds](api.md#sources-and-builds).
@@ -255,6 +247,21 @@ class StatusPage(Composite):
 - `Install(source, destination, mode=0o755)` copies one built file; `Install("out/", "/opt/app", mode=None, directory=True)` copies a directory.
 - The built output is cached in the build directory under `<namespace>-<fingerprint16>`, the namespace being `cache_namespace` (default: the build's name) and the fingerprint a hash of the source pin, build, install steps, architecture and toolchain, so rebuilding an unchanged build is a copy and changing any of them rebuilds (`nethermind-v1` keeps its historical `<name>-<url digest>-<pin>` keys).
 - Until the recipe is locked, `lint` warns `source-unpinned` for each build.
+
+## Publishing a fragment with assets
+
+A fragment that ships host files (unit files, configs, a kernel config) keeps them next to its module and names them through `Resources.from_module(__name__)`, never through the working directory or `Path(__file__)` arithmetic. The paths then resolve the same from the fragment's checkout, from a recipe in another directory, and from the installed package:
+
+```
+status_page/
+  __init__.py          # from .fragment import StatusPage
+  fragment.py          # ASSETS = Resources.from_module(__name__)
+  assets/index.html    # ASSETS.file("assets/index.html")
+```
+
+- Ship the assets as package data. Hatchling puts every file inside the package directory in the wheel; with setuptools, list them under `[tool.setuptools.package-data]`. Check with `unzip -l dist/*.whl`. Zip imports are not supported: `Resources` needs the files on disk.
+- `ASSETS.file(...)` and `ASSETS.directory(...)` fail when the module is imported if a file is missing, naming the module and the relative path, so a packaging mistake shows up at once rather than at lowering.
+- Prefer `File.copy(path, ASSETS.file(...))` (read when the recipe lowers) to `File.text(path, ASSETS.text(...))` (read at import); both lower to the same bytes, and `tundravm watch` notices edits to either.
 
 ## Testing a fragment
 

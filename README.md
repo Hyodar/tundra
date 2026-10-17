@@ -98,7 +98,7 @@ The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full
 | **Recipe** | The whole image: name, base, arch, mirrors, epoch, its own `items` and the variants. An immutable value bound to `recipe` in a Python file. |
 | **Declaration** | One typed fact about the image: `Package`, `File`, `Template`, `User`, `Group`, `Service`, `Unit`, `Hook`, `Init`, `Key`, `Disk`, `Secrets`, `Build`, `Kernel`, `Setting`, ... Identified by type plus natural key (package name, file path, unit name). |
 | **Fragment** | A named group of declarations and nested fragments, with `requires` (fragments that must also be present) and `checks` (lint functions). A reusable "module" is a `Composite`: a `Fragment` subclass whose fields are its configuration. |
-| **Variant** | An overlay on its parent: `add` a fragment, `replace` or `remove` inherited declarations, set the `target`. One mkosi directory per variant and one artifact per target. |
+| **Variant** | An overlay on its parent: `add` a fragment, edit or remove inherited declarations by ref (`changes`), set the `target`. One mkosi directory per variant and one artifact per target. |
 | **Lock** | Section digests of the resolved recipe plus a pin per source build. `tundravm.lock`, committed next to the tree. |
 | **Tree** | The compiled mkosi project, held in memory until written. Its digest is what `compile --check` and golden tests compare. |
 | **Artifact** | A baked disk image of one variant and target, with the recipe, lock and tree digests it came from. Measurements and deployments take an artifact. |
@@ -155,15 +155,16 @@ variants=(
     Variant("default", outputs=("qemu",)),
     Variant("azure", inherits="default", outputs=("azure",)),
     Variant("azure-debug", inherits="azure", add=DevTools()),       # chained: azure plus debugging, never ship it
-    Variant("prod", replace=(File("/etc/motd", "prod\n"),)),
-    Variant("slim", remove=(Package("jq"),)),
+    Variant("prod", changes=(motd.ref.edit(content="prod\n"),)),         # motd = File("/etc/motd", ...)
+    Variant("slim", changes=(Package.ref("jq").remove(),)),
     Variant("clouds", inherits="default", outputs=("azure", "gcp")),  # one variant, two disk images
     Variant("bare", inherits=None, add=packages("curl")),
 )
 ```
 
 - `inherits` is `"base"` (the default, meaning `Recipe.items`), another variant's name, or `None` for a standalone variant that inherits nothing.
-- `add` is a fragment; `packages("strace", "gdb")` bundles packages without inventing a fragment name. Adding a declaration whose identity the variant already inherits with a different value is an `identity-collision` error; use `replace`, which swaps an inherited declaration of the same identity (`replace-missing` if there is none). `remove` drops one (`remove-missing` if there is none).
+- `add` is a fragment; `packages("strace", "gdb")` bundles packages without inventing a fragment name. Adding a declaration whose identity the variant already inherits with a different value is an `identity-collision` error.
+- `changes` edits or drops inherited declarations by identity: `value.ref.edit(field=...)` sets fields (`edit-missing` if the variant inherits no such identity), `value.ref.remove()` drops one (`remove-missing`), and `Type.ref(key)` (`Unit.ref("ssh.service")`) names one you hold no value for. `Disk(key=key)` and `Secrets(store=disk)` hold refs too, so `key.ref.edit(size=32)` is the whole change for a smaller key.
 - `outputs` names the targets the variant builds (`qemu`, `azure`, `gcp`; one disk image each), inherited from the variant it inherits when empty; cloud targets add their platform integration. A child cannot drop a cloud target it inherits (`target-inconsistent`).
 
 `Setting`s and the `Kernel` belong to the variant that declares them; declare them in `Recipe.items` to share them. A variant with its own settings or kernel lowers standalone. See [Variants and targets](docs/concepts.md#variants-and-targets).
@@ -228,7 +229,7 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 | Example | What it teaches |
 |---|---|
 | [`01_minimal.py`](examples/01_minimal.py) | The smallest recipe: a base, packages and a file as the recipe's `items`; no variants means one QEMU `default` |
-| [`02_variants.py`](examples/02_variants.py) | `Variant` overlays: `add`, `replace`/`remove` by identity, `inherits` chains, a standalone `inherits=None` variant, `outputs=("azure", "gcp")`, `packages()` |
+| [`02_variants.py`](examples/02_variants.py) | `Variant` overlays: `add`, `changes` that edit/remove by identity (refs), `inherits` chains, a standalone `inherits=None` variant, `outputs=("azure", "gcp")`, `packages()` |
 | [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment` and a `Composite` with fields, `requires=` and a lint `checks=` rule |
 | [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | TPM-sealed `Key`, encrypted `Disk`, `Secrets` with `Schema`s and file/env targets an `ExternalDelivery` writes, `RuntimeTools`, `Partition` |
 | [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball `using` the `Go` toolchain and from a `Git` tag with a script; file and directory installs; `cache_namespace` |

@@ -172,8 +172,8 @@ def test_a_variant_whose_kernel_source_differs_gets_its_own_pin(config: Path) ->
     )
     variants = (
         Variant("default"),
-        Variant("azure", replace=(other,)),
-        Variant("gcp", replace=(same_source,)),
+        Variant("azure", changes=(shared.ref.edit(version=other.version, source=other.source),)),
+        Variant("gcp", changes=(shared.ref.edit(cmdline=same_source.cmdline),)),
     )
     recipe = _recipe(shared, variants=variants)
     locked = lock(recipe, resolver=lambda s: "c" * 40)

@@ -52,9 +52,12 @@ from tundravm.platforms import azure, gcp
 from ._import_builds import Recovered, build_items
 from .lower import _kernel
 from .model import (
+    DECLARATION_TYPES,
     EMPTY_FRAGMENT,
     Debloat,
     Declaration,
+    Declared,
+    Edit,
     File,
     Fragment,
     Git,
@@ -67,12 +70,16 @@ from .model import (
     Package,
     Phase,
     Recipe,
+    Ref,
+    Remove,
     Service,
     Setting,
     Target,
     Unit,
     User,
     Variant,
+    VariantChange,
+    key_fields,
 )
 from .resolve import identity
 from .state import HISTORICAL, INIT_SERVICE, STRIP_IMAGE_VERSION, groupadd_line, useradd_line
@@ -1574,13 +1581,28 @@ def _overlay_variant(found: _Found, items: list[Item], common: list[Item]) -> Va
             add=Fragment(found.name, items=tuple(split)),
             outputs=found.targets,
         )
+    changes: list[VariantChange] = []
+    for key, item in replaced.items():
+        previous = inherited[key]
+        if isinstance(previous, Declared) and (edited := _edited_fields(previous, item)):
+            changes.append(previous.ref.edit(**edited))
+    changes.extend(i.ref.remove() for i in removed if isinstance(i, Declared))
     return Variant(
         found.name,
         add=Fragment(found.name, items=tuple(add)) if add else EMPTY_FRAGMENT,
-        replace=tuple(i for i in replaced.values() if not isinstance(i, Fragment)),
-        remove=tuple(i for i in removed if not isinstance(i, Fragment)),
+        changes=tuple(changes),
         outputs=found.targets,
     )
+
+
+def _edited_fields(old: Item, new: Item) -> dict[str, object]:
+    """The non-identity fields where *new* differs from *old* (same identity)."""
+    keys = key_fields(type(new).__name__)
+    return {
+        f.name: getattr(new, f.name)
+        for f in fields(new)
+        if f.init and f.name not in keys and getattr(old, f.name) != getattr(new, f.name)
+    }
 
 
 def _coverage(recipe: Recipe) -> dict[str, int]:
@@ -1600,7 +1622,9 @@ def _coverage(recipe: Recipe) -> dict[str, int]:
     count(recipe.items)
     for variant in recipe.variants:
         count(variant.add.items)
-        count(variant.replace)
+        for change in variant.changes:
+            if isinstance(change, Edit):
+                counts["declared"] += 1
     return counts
 
 
@@ -1656,9 +1680,35 @@ class _Writer:
         if isinstance(value, Mapping):
             items = (f"{self.value(k)}: {self.value(v, hint=hint)}" for k, v in value.items())
             return "{" + ", ".join(items) + "}"
+        if isinstance(value, (Edit, Remove)):
+            return self.change(value)
         if is_dataclass(value) and not isinstance(value, type):
             return self.call(value)
         raise TypeError(f"cannot render {value!r}")
+
+    def ref(self, ref: Ref) -> str:
+        """``Unit.ref('ssh.service')``: the key fields as the constructor takes them."""
+        self.imports.add(ref.kind)
+        cls = next(t for t in DECLARATION_TYPES if t.__name__ == ref.kind)
+        key = dict(zip(key_fields(ref.kind), ref.identity, strict=True))
+        args = [
+            repr(key[f.name]) if f.default is MISSING else f"{f.name}={key[f.name]!r}"
+            for f in fields(cls)
+            if f.name in key and (f.default is MISSING or f.default != key[f.name])
+        ]
+        return f"{ref.kind}.ref({', '.join(args)})"
+
+    def change(self, change: Edit | Remove) -> str:
+        """``File.ref('/etc/motd').edit(content=...)`` or ``Unit.ref(...).remove()``."""
+        head = self.ref(change.target)
+        if isinstance(change, Remove):
+            return f"{head}.remove()"
+        hint = (change.target.identity or (change.target.kind,))[-1].rpartition("/")[2]
+        values = (
+            f"{name}={self.value(value, hint=hint, field_name=name)}"
+            for name, value in change.fields.items()
+        )
+        return f"{head}.edit({', '.join(values)})"
 
     def call(self, obj: Any) -> str:
         cls = type(obj)

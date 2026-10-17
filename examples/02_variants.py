@@ -1,10 +1,11 @@
 """Variants: one recipe, several images, each an overlay on the variant it inherits.
 
-Teaches ``Variant``: ``add`` a fragment; ``replace`` or ``remove`` a declaration by its
-identity (its type plus natural key: ``Package("jq")``, ``File("/etc/motd", ...)``, the
-one ``Debloat``); ``inherits`` chains (the default ``"base"`` is ``Recipe.items``,
-``None`` starts from nothing); ``outputs`` for the targets it builds. ``packages()``
-bundles ``Package`` declarations without inventing a fragment name.
+Teaches ``Variant``: ``add`` a fragment; ``changes`` that edit or remove an inherited
+declaration by its identity (its type plus natural key), through its ref: ``motd.ref`` for
+a value you hold, ``Package.ref("jq")`` for one you do not; ``inherits`` chains (the
+default ``"base"`` is ``Recipe.items``, ``None`` starts from nothing); ``outputs`` for the
+targets it builds. ``packages()`` bundles ``Package`` declarations without inventing a
+fragment name.
 
     tundravm inspect examples/02_variants.py --diff-variants default dev
     tundravm compile examples/02_variants.py --tree build/variants/mkosi
@@ -16,28 +17,34 @@ from tundravm.declarative import Debloat, File, Package, Recipe, Variant, packag
 
 BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
 
+motd = File("/etc/motd", "production\n")
+debloat = Debloat()
+
 recipe = Recipe(
     name="variants",
     base="debian/bookworm",
     items=(
         packages(*BOOT, "ca-certificates", "curl", "jq"),
-        File("/etc/motd", "production\n"),
-        Debloat(),
+        motd,
+        debloat,
     ),
     variants=(
         # Recipe.items as is, built for QEMU.
         Variant("default", outputs=("qemu",)),
         # The same tree twice: an Azure VHD and a GCP image from one variant.
         Variant("cloud", inherits="default", outputs=("azure", "gcp")),
-        # Inherits default's outputs; adds tools, swaps the motd and keeps systemd whole.
+        # Inherits default's outputs; adds tools, edits the motd and keeps systemd whole.
         Variant(
             "dev",
             inherits="default",
             add=packages("strace", "gdb"),
-            replace=(File("/etc/motd", "development build\n"), Debloat(enabled=False)),
+            changes=(
+                motd.ref.edit(content="development build\n"),
+                debloat.ref.edit(enabled=False),
+            ),
         ),
-        # default minus jq.
-        Variant("slim", inherits="default", remove=(Package("jq"),)),
+        # default minus jq: a ref names a declaration you hold no value for.
+        Variant("slim", inherits="default", changes=(Package.ref("jq").remove(),)),
         # Standalone: none of Recipe.items, e.g. a rescue image.
         Variant(
             "rescue",

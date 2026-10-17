@@ -1,11 +1,14 @@
 """Source builds: compile software from Git or an HTTP tarball and install the results.
 
-Teaches ``Build``: a ``Git`` or ``Http`` source; either the toolchain it is ``using``
-(``Go``, ``Cargo``, ``Dotnet``: the deterministic build command and its packages) or a
-shell ``script``; ``Install`` steps for files and, with ``directory=True``, whole
-trees; ``cache_namespace`` naming the build-cache entry (its key is fingerprinted from
-the build) so a rebuild reuses it. Refs and
-tarballs are unpinned until ``tundravm lock`` records their commit and sha256.
+Teaches ``GoBinary``: one Go program built from source and installed at its
+``executable`` path, which the ``Service`` command names, so the build output, the
+install path and the command cannot drift apart (``CargoBinary`` is the Rust one).
+Teaches ``Build`` for everything else: a ``Git`` or ``Http`` source; either the
+toolchain it is ``using`` (``Go``, ``Cargo``, ``Dotnet``) or a shell ``script``;
+``Install`` steps for files and, with ``directory=True``, whole trees;
+``cache_namespace`` naming the build-cache entry (its key is fingerprinted from the
+build) so a rebuild reuses it. Refs and tarballs are unpinned until ``tundravm lock``
+records their commit and sha256.
 
     tundravm inspect examples/05_source_builds.py
     tundravm lock examples/05_source_builds.py        # pin both sources (network)
@@ -16,7 +19,6 @@ from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
     Build,
     Git,
-    Go,
     Http,
     Install,
     Package,
@@ -24,18 +26,21 @@ from tundravm.declarative import (
     Service,
     User,
 )
+from tundravm.declarative.utils import GoBinary
 
 BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
 
 NODE_EXPORTER = "1.8.2"
 PROMETHEUS = "v2.53.0"
 
-# A release tarball built with the Go recipe: `go build -trimpath` into build/.
-node_exporter = Build(
+# A release tarball: `go build -trimpath` of the root package, installed at
+# node_exporter.executable (/usr/bin/node_exporter).
+node_exporter = GoBinary(
     "node-exporter",
     Http(f"https://github.com/prometheus/node_exporter/archive/refs/tags/v{NODE_EXPORTER}.tar.gz"),
-    using=Go(output="node_exporter", package=".", env={"CGO_ENABLED": "0"}),
-    install=(Install("build/node_exporter", "/usr/bin/node_exporter"),),
+    package=".",
+    install="/usr/bin/node_exporter",
+    env={"CGO_ENABLED": "0"},
     cache_namespace=f"node-exporter-{NODE_EXPORTER}",
 )
 
@@ -69,7 +74,7 @@ recipe = Recipe(
         User("prometheus", home="/var/lib/prometheus"),
         Service(
             "node-exporter",
-            "/usr/bin/node_exporter --web.listen-address=127.0.0.1:9100",
+            f"{node_exporter.executable} --web.listen-address=127.0.0.1:9100",
             user="prometheus",
             restart="on-failure",
             wanted_by="minimal.target",

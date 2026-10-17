@@ -51,7 +51,7 @@ def test_recipe_inputs_names_every_path_in_every_variant(
     variant = Variant(
         "custom",
         add=Fragment("extra", items=(kernel,)),
-        replace=(File("/etc/motd", tmp_path / "other.txt"),),
+        changes=(File.ref("/etc/motd").edit(content=tmp_path / "other.txt"),),
     )
     recipe = Recipe("inputs", items=(common,), variants=(Variant("default"), variant))
 

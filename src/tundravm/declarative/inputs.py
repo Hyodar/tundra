@@ -11,8 +11,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .model import File, FileTree, Fragment, Kernel, Recipe, Template, Unit
+from .model import Edit, File, FileTree, Fragment, Kernel, Recipe, Template, Unit
 from .utils import Tdxs
+
+_READ_FIELDS = frozenset(
+    {
+        ("File", "content"),
+        ("Unit", "content"),
+        ("Template", "template"),
+        ("Kernel", "config"),
+        ("FileTree", "source"),
+    }
+)
+"""The ``(type, field)`` pairs whose ``Path`` value lowering reads from the host."""
 
 
 def recipe_inputs(recipe: Recipe) -> frozenset[Path]:
@@ -28,8 +39,13 @@ def recipe_inputs(recipe: Recipe) -> frozenset[Path]:
         _visit(item, found)
     for variant in recipe.variants:
         _visit(variant.add, found)
-        for item in variant.replace:
-            _visit(item, found)
+        for change in variant.changes:
+            if isinstance(change, Edit):
+                found.update(
+                    value
+                    for name, value in change.fields.items()
+                    if isinstance(value, Path) and (change.target.kind, name) in _READ_FIELDS
+                )
     return frozenset(path.absolute() for path in found)
 
 

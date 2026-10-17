@@ -52,6 +52,7 @@ from .model import (
     Diagnostic,
     Disk,
     Dotnet,
+    Edit,
     ExternalDelivery,
     File,
     FileTree,
@@ -71,6 +72,8 @@ from .model import (
     Partition,
     Phase,
     Recipe,
+    Ref,
+    Remove,
     Repository,
     Resolved,
     RuntimeTools,
@@ -89,6 +92,7 @@ from .model import (
     packages,
 )
 from .resolve import identity, resolve, resolve_all
+from .resources import Resources
 
 __all__ = [
     "Artifact",
@@ -103,6 +107,7 @@ __all__ = [
     "Diagnostic",
     "Disk",
     "Dotnet",
+    "Edit",
     "Entry",
     "ExternalDelivery",
     "FetchedSource",
@@ -131,8 +136,11 @@ __all__ = [
     "Policy",
     "Qemu",
     "Recipe",
+    "Ref",
+    "Remove",
     "Repository",
     "Resolved",
+    "Resources",
     "RuntimeTools",
     "Sbom",
     "Schema",

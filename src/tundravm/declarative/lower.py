@@ -222,7 +222,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             "profile, so a native profile can only add to it.",
             hint=f"Use Mkosi(layout='directories'), or make each a pure addition to "
             f"{default.name!r}: inherits {BASE_VARIANT!r} or {default.name!r}, nothing removed, "
-            f"{default.name!r}'s settings and kernel, and replace= limited to File, User, "
+            f"{default.name!r}'s settings and kernel, and edits limited to File, User, "
             "Group, Partition, Repository and Debloat.",
             context={"variants": ", ".join(name for name, _ in rejected)},
         )

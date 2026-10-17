@@ -115,15 +115,19 @@ def test_unknown_inherits_and_cycles_are_malformed() -> None:
         resolve(cycle, variant="nope")
 
 
-def test_replace_and_remove_match_identity_not_object() -> None:
+def test_changes_edit_and_remove_by_identity() -> None:
+    motd = File("/etc/motd", "hi\n")
     recipe = Recipe(
         "r",
-        items=(Package("curl"), File("/etc/motd", "hi\n"), Unit("ssh", enabled=False)),
+        items=(Package("curl"), motd, Unit("ssh", enabled=False)),
         variants=(
             Variant(
                 "default",
-                replace=(File("/etc/motd", "changed\n", mode=0o600),),
-                remove=(Package("curl"), Unit("ssh.service", masked=True)),
+                changes=(
+                    motd.ref.edit(content="changed\n", mode=0o600),
+                    Package.ref("curl").remove(),
+                    Unit.ref("ssh").remove(),  # identity: ssh.service
+                ),
             ),
         ),
     )
@@ -131,15 +135,55 @@ def test_replace_and_remove_match_identity_not_object() -> None:
     assert resolved.items == (File("/etc/motd", "changed\n", mode=0o600),)
 
 
-def test_replace_and_remove_need_an_inherited_identity() -> None:
+def test_changes_need_an_inherited_identity_and_valid_values() -> None:
     recipe = Recipe(
         "r",
-        items=(Package("curl"),),
+        items=(Package("curl"), Key("k")),
         variants=(
-            Variant("default", replace=(Package("jq"),), remove=(Package("curl", role="build"),)),
+            Variant(
+                "default",
+                changes=(
+                    Unit.ref("jq").edit(enabled=True),
+                    Package.ref("curl", role="build").remove(),
+                    Key.ref("k").edit(size=0),
+                ),
+            ),
         ),
     )
-    assert codes(lint(recipe)) == ["replace-missing", "remove-missing"]
+    found = lint(recipe)
+    assert codes(found) == ["edit-missing", "remove-missing", "edit-invalid"]
+    assert found[0].message == (
+        "variant 'default' edits Unit(jq.service), which it does not inherit"
+    )
+    assert "size 0 must be positive" in found[2].message
+
+
+def test_edits_reject_unknown_identity_and_repeated_fields() -> None:
+    key = Key("k")
+    with pytest.raises(ValidationError, match="Key has no field 'bits'"):
+        key.ref.edit(bits=32)
+    with pytest.raises(ValidationError, match="'name' identifies Key\\(k\\)"):
+        key.ref.edit(name="other")
+    with pytest.raises(ValidationError, match="sets no field"):
+        key.ref.edit()
+    with pytest.raises(ValidationError, match="edits Key\\(k\\).size twice"):
+        Variant("v", changes=(key.ref.edit(size=32), key.ref.edit(size=16)))
+    with pytest.raises(ValidationError, match="changes Key\\(k\\) twice"):
+        Variant("v", changes=(key.ref.edit(size=32), key.ref.remove()))
+    with pytest.raises(ValidationError, match="not an edit or a removal"):
+        Variant("v", changes=(key,))  # type: ignore[arg-type]
+    Variant("v", changes=(key.ref.edit(size=32), key.ref.edit(output="/run/k")))
+
+
+def test_refs_from_values_and_types_agree() -> None:
+    assert Unit("ssh", enabled=False).ref == Unit.ref("ssh.service")
+    assert File("/etc//motd", "x", stage="skeleton").ref == File.ref("/etc/motd", stage="skeleton")
+    assert str(Package.ref("jq")) == "Package(jq, runtime)"
+    assert identity(Key("k")) == ("Key", "k")
+    with pytest.raises(ValidationError, match="unexpected or repeated argument 'mode'"):
+        File.ref("/etc/motd", mode=0o600)
+    with pytest.raises(ValidationError, match=r"Key.ref\(\) needs name"):
+        Key.ref()
 
 
 def test_identity_collisions_fail_and_equal_repeats_dedupe() -> None:
@@ -172,16 +216,38 @@ def test_identity_collisions_fail_and_equal_repeats_dedupe() -> None:
 def test_disk_and_secret_store_references() -> None:
     key = Key("k", output="/run/k")
     disk = Disk("d", "/data", key=key)
+    assert disk.key == key.ref == Disk("d", "/data", key=Key.ref("k")).key
     recipe = Recipe(
         "r",
         items=(disk, Secrets(store=Disk("other", "/other"))),
     )
-    assert codes(lint(recipe)) == ["disk-key-undefined", "secret-store-undefined"]
-    mismatched = Recipe(
+    found = lint(recipe)
+    assert codes(found) == ["disk-key-undefined", "secret-store-undefined"]
+    assert found[0].message == "Disk(d) references Key(k), which variant 'default' does not declare"
+    # A ref names the identity: another Key("k") value is the one the disk uses.
+    other = Recipe("r", items=(Key("k", output="/run/other"), disk, Secrets(store=disk)))
+    resolved = resolve(other, variant="default")
+    assert resolved.bind(disk.key) == Key("k", output="/run/other")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="does not declare Disk\\(nope\\)"):
+        resolved.bind(Disk.ref("nope"))
+    with pytest.raises(ValidationError, match="key must be a Key, a Key ref"):
+        Disk("d", "/data", key=Unit.ref("x.service"))
+
+
+def test_editing_an_inherited_key_needs_no_rebuilt_disk() -> None:
+    key = Key("k", output="/run/k")
+    disk = Disk("d", "/data", key=key)
+    recipe = Recipe(
         "r",
-        items=(Key("k", output="/run/other"), disk, Secrets(store=disk)),
+        items=(key, disk, Secrets(store=disk)),
+        variants=(
+            Variant("default"),
+            Variant("small-key", inherits="default", changes=(key.ref.edit(size=32),)),
+        ),
     )
-    assert codes(lint(mismatched)) == ["disk-key-mismatch"]
+    small = resolve(recipe, variant="small-key")
+    assert small.bind(key.ref) == Key("k", output="/run/k", size=32)
+    assert disk in small.items
 
 
 def test_init_references_and_ordering() -> None:
@@ -250,14 +316,14 @@ def test_service_and_template_identities() -> None:
         items=(Service("app", "/bin/app"),),
         variants=(
             Variant("default"),
-            Variant("v", replace=(Service("app", "/bin/app --verbose"),)),
+            Variant("v", changes=(Service.ref("app").edit(exec_start="/bin/app --verbose"),)),
         ),
     )
     (service,) = resolve(recipe, variant="v").items
     assert isinstance(service, Service) and service.exec_start == "/bin/app --verbose"
 
 
-def test_chained_variants_remove_and_replace_any_kind() -> None:
+def test_chained_variants_remove_and_edit_any_kind() -> None:
     from tundravm.declarative import Key, Service
 
     key = Key("k")
@@ -270,8 +336,11 @@ def test_chained_variants_remove_and_replace_any_kind() -> None:
             Variant(
                 "slim",
                 inherits="cloud",
-                remove=(Package("curl"), key),
-                replace=(Service("app", "/bin/app --slim"),),
+                changes=(
+                    Package.ref("curl").remove(),
+                    key.ref.remove(),
+                    Service.ref("app").edit(exec_start="/bin/app --slim"),
+                ),
             ),
         ),
     )

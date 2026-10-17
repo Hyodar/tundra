@@ -124,7 +124,7 @@ def declarative_recipe() -> Recipe:
                 inherits="default",
                 outputs=("azure",),
                 add=Fragment("azure-extras", items=(Package("waagent"),)),
-                replace=(File("/etc/motd", "azure\n"),),
+                changes=(File.ref("/etc/motd").edit(content="azure\n"),),
             ),
         ),
     )
@@ -265,11 +265,11 @@ def test_standalone_variant_gets_only_its_own_declarations() -> None:
     [
         (Variant("default"), Variant("a", outputs=("azure",)), Variant("b", inherits="a")),
         (Variant("default", add=Fragment("d", items=(Package("d"),))), Variant("sibling")),
-        (Variant("default"), Variant("slim", remove=(Package("curl"),))),
-        (Variant("default"), Variant("v", replace=(Hook("h", "build", "other"),))),
+        (Variant("default"), Variant("slim", changes=(Package.ref("curl").remove(),))),
+        (Variant("default"), Variant("v", changes=(Hook.ref("h").edit(script="other"),))),
         (Variant("default"), Variant("v", add=Fragment("k", items=(Key("k2"),)))),
     ],
-    ids=["chain", "sibling-of-base", "remove", "replace-hook", "child-keys"],
+    ids=["chain", "sibling-of-base", "remove", "edit-hook", "child-keys"],
 )
 def test_shapes_the_profile_merge_cannot_express_lower_standalone(
     variants: tuple[Variant, ...],
@@ -546,8 +546,10 @@ def _chained(layout: str) -> Recipe:
             Variant(
                 "slim",
                 inherits="cloud",
-                remove=(Package("curl"),),
-                replace=(File("/etc/motd", "slim\n"),),
+                changes=(
+                    Package.ref("curl").remove(),
+                    File.ref("/etc/motd").edit(content="slim\n"),
+                ),
             ),
         ),
         mkosi=Mkosi(layout=layout),  # type: ignore[arg-type]

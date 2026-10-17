@@ -40,7 +40,7 @@ def _recipe(dev_ref: str = "dev", url: str = URL) -> Recipe:
         items=(Package("linux-image-amd64"), stable),
         variants=(
             Variant("default", outputs=("qemu",)),
-            Variant("dev", replace=(replace(stable, source=Git(url, dev_ref)),)),
+            Variant("dev", changes=(stable.ref.edit(source=Git(url, dev_ref)),)),
             Variant("prod"),
         ),
     )
@@ -156,8 +156,6 @@ def test_fetch_checks_out_each_pin_once(tmp_path: Path, repo: tuple[str, dict[st
 
 
 RECIPE = """
-from dataclasses import replace
-
 from tundravm import Build, Fragment, Git, Install, Package, Recipe, Variant
 
 INSTALL = (Install("app", "/usr/bin/app"),)
@@ -167,7 +165,7 @@ recipe = Recipe(
     items=(Package("linux-image-amd64"), STABLE),
     variants=(
         Variant("default", outputs=("qemu",)),
-        Variant("dev", replace=(replace(STABLE, source=Git({url!r}, "dev")),)),
+        Variant("dev", changes=(STABLE.ref.edit(source=Git({url!r}, "dev")),)),
     ),
 )
 """

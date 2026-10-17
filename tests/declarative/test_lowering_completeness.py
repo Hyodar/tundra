@@ -146,7 +146,7 @@ def test_variant_settings_lower_into_its_own_conf(tmp_path: Path) -> None:
     variants = (
         Variant("default"),
         Variant("small", add=Fragment("s", items=(zstd,))),
-        Variant("unseeded", remove=(seed,)),
+        Variant("unseeded", changes=(seed.ref.remove(),)),
         Variant("dev", add=Fragment("d", items=(Package("vim"),))),
     )
     out = _tree(_recipe(Package("curl"), seed, variants=variants), tmp_path / "v")
@@ -166,8 +166,11 @@ def test_variant_kernels(tmp_path: Path, config: Path) -> None:
     main = Kernel("6.13.12", Git(LINUX, "v6.13.12"), config=config)
     variants = (
         Variant("default"),
-        Variant("lts", replace=(lts,)),
-        Variant("bare", remove=(main,)),
+        Variant(
+            "lts",
+            changes=(main.ref.edit(version=lts.version, source=lts.source, cmdline=lts.cmdline),),
+        ),
+        Variant("bare", changes=(main.ref.remove(),)),
     )
     recipe = _recipe(Package("curl"), main, variants=variants)
     out = _tree(recipe, tmp_path / "k")
@@ -271,7 +274,7 @@ def test_native_layout_lists_every_variant_it_cannot_emit() -> None:
     seed = Setting("Output", "Seed", ("x",))
     variants = (
         Variant("default"),
-        Variant("slim", remove=(Package("curl"),)),
+        Variant("slim", changes=(Package.ref("curl").remove(),)),
         Variant("seeded", add=Fragment("s", items=(seed,))),
         Variant("rescue", inherits=None),
         Variant("ok", add=Fragment("o", items=(Package("vim"),))),

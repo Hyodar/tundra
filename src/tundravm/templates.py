@@ -87,7 +87,7 @@ recipe = Recipe(
         Package("kmod"),
         Package("systemd-boot-efi"),
         Package("ca-certificates"),
-        File("/etc/motd", "$title\n"),
+        File.text("/etc/motd", "$title\n"),
         Unit("hello.service", HELLO_UNIT, enabled=True),
     ),
     variants=(Variant("default", outputs=("qemu",)),),
@@ -165,7 +165,7 @@ $constants
 class App(Composite):
     """The app: its account, config file, a first-boot step, the service and a lint rule.
 
-    Ship ``/usr/bin/app`` with a ``Build(...)`` or a ``Package(...)``. Fragment name: ``app``.
+    Ship ``/usr/bin/app`` with a ``GoBinary``, a ``Build`` or a ``Package``. Fragment name: ``app``.
     """
 
     version: str
@@ -177,7 +177,7 @@ class App(Composite):
             "app",
             items=(
                 User("app", home="/var/lib/app"),
-                File("/etc/app/app.conf", config),
+                File.text("/etc/app/app.conf", config),
                 # Runs in runtime-init before the service starts (after_init=True).
                 Init("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
                 Service(

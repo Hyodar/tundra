@@ -36,8 +36,10 @@ recipe = Recipe(
             "prod",
             inherits="dev",
             add=Tdxs(issuer="tdx"),
-            replace=(File("/etc/app.conf", "mode=prod\\n"),),
-            remove=(Package("curl"),),
+            changes=(
+                File.ref("/etc/app.conf").edit(content="mode=prod\\n"),
+                Package.ref("curl").remove(),
+            ),
         ),
     ),
 )
@@ -49,19 +51,19 @@ def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return write_recipe_file(tmp_path, RECIPE, monkeypatch)
 
 
-def test_why_a_replaced_file_shows_both_steps_and_its_destination(recipe: Path) -> None:
+def test_why_an_edited_file_shows_both_steps_and_its_destination(recipe: Path) -> None:
     code, out = run_main("inspect", str(recipe), "--variant", "prod", "--why", "/etc/app.conf")
     assert code == EXIT_OK
     assert out.splitlines() == [
         "why /etc/app.conf (variant prod)",
         "  File(extra, /etc/app.conf)",
         "    declared in common via app",
-        "    replaced in variant prod",
+        "    content edited in variant prod",
         "files (in prod/):",
         "  mkosi.extra/etc/app.conf",
     ]
     dev = run_main("inspect", str(recipe), "--variant", "dev", "--why", "/etc/app.conf")[1]
-    assert "replaced" not in dev
+    assert "edited" not in dev
 
 
 def test_why_a_service_lists_the_generated_dependencies(recipe: Path) -> None:
@@ -121,7 +123,7 @@ def test_why_markdown_is_a_table_of_steps(recipe: Path) -> None:
     )
     assert code == EXIT_OK
     assert out.startswith("# tundravm: why `/etc/app.conf` in `prod`\n")
-    assert "| `File(extra, /etc/app.conf)` | replaced | prod | — |" in out
+    assert "| `File(extra, /etc/app.conf)` | content edited | prod | — |" in out
 
 
 def test_why_an_init_points_at_runtime_init(recipe: Path) -> None:
@@ -156,7 +158,7 @@ def test_explain_why_is_the_python_form(recipe: Path) -> None:
     (entry,) = why.declarations
     assert entry.origins == (
         Origin("declared", "common", (("app", "Fragment"),)),
-        Origin("replaced", "prod"),
+        Origin("edited", "prod", fields=("content",)),
     )
     with pytest.raises(ValidationError, match="Nothing in the variant matches"):
         explain_why(loaded, "prod", "hook:missing")

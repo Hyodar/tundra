@@ -12,9 +12,10 @@ declarations through the compiler's account prelude instead.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import KW_ONLY, dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -30,13 +31,16 @@ from tundravm.measure.policy import (
 
 from .model import (
     Build,
+    Cargo,
     Check,
     Declaration,
     File,
     Fragment,
     Git,
+    Go,
     Group,
     Hook,
+    Http,
     Install,
     Package,
     Setting,
@@ -487,13 +491,119 @@ class DevTools(Composite):
         )
 
 
+_GO_LDFLAGS = "-s -w -buildid="
+
+
+def _install_path(kind: str, name: str, install: str | None) -> str:
+    path = f"/usr/bin/{name}" if install is None else install
+    if not isinstance(path, str) or not path.startswith("/") or path.endswith("/"):
+        raise ValidationError(
+            f"{kind} {name!r} install {path!r} must be an absolute file path.",
+            hint=f"Pass install='/usr/bin/{name}' or another absolute path.",
+        )
+    return path
+
+
+@dataclass(frozen=True, slots=True)
+class GoBinary(Composite):
+    """A Go program built from *source* and installed at :attr:`executable`.
+
+    The ``Build`` named *name* runs ``go build -trimpath`` of *package* (``Go``)
+    into ``build/<file name of install>`` and installs it at *install*
+    (``/usr/bin/<name>`` by default). ``executable`` is that path, for a
+    ``Service`` command: ``Service(name, f"{binary.executable} --flag")``.
+    Fragment name: *name*.
+    """
+
+    name: str
+    source: Git | Http
+    _: KW_ONLY
+    package: str
+    install: str | None = None
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
+    tags: tuple[str, ...] = ()
+    ldflags: str = _GO_LDFLAGS
+    cache_namespace: str | None = None
+
+    @property
+    def executable(self) -> str:
+        """The absolute path the binary is installed at."""
+        return _install_path("GoBinary", self.name, self.install)
+
+    def compose(self) -> Fragment:
+        destination = self.executable
+        go = Go(
+            output=posixpath.basename(destination),
+            package=self.package,
+            ldflags=self.ldflags,
+            tags=self.tags,
+            env=self.env,
+        )
+        build = Build(
+            self.name,
+            self.source,
+            using=go,
+            install=(Install(go.artifact, destination),),
+            cache_namespace=self.cache_namespace,
+        )
+        return Fragment(self.name, items=(build,))
+
+
+@dataclass(frozen=True, slots=True)
+class CargoBinary(Composite):
+    """A Rust program built from *source* and installed at :attr:`executable`.
+
+    The ``Build`` named *name* runs ``cargo build --frozen`` (``Cargo``; *bin* or
+    *package* selects the target, *profile* its directory) and installs
+    ``target/<profile>/<bin, package or install file name>`` at *install*
+    (``/usr/bin/<name>`` by default). Fragment name: *name*.
+    """
+
+    name: str
+    source: Git | Http
+    _: KW_ONLY
+    bin: str | None = None
+    package: str | None = None
+    install: str | None = None
+    features: tuple[str, ...] = ()
+    profile: str = "release"
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
+    cache_namespace: str | None = None
+
+    @property
+    def executable(self) -> str:
+        """The absolute path the binary is installed at."""
+        return _install_path("CargoBinary", self.name, self.install)
+
+    def compose(self) -> Fragment:
+        destination = self.executable
+        cargo = Cargo(
+            output=posixpath.basename(destination),
+            bin=self.bin,
+            package=self.package,
+            features=self.features,
+            profile=self.profile,
+            env=self.env,
+        )
+        build = Build(
+            self.name,
+            self.source,
+            using=cargo,
+            install=(Install(cargo.artifact, destination),),
+            cache_namespace=self.cache_namespace,
+        )
+        return Fragment(self.name, items=(build,))
+
+
 __all__ = [
     "BACKPORTS_TREE",
     "TUNDRA_TOOLS",
     "Backports",
+    "CargoBinary",
     "Composite",
     "DevTools",
     "EfiStub",
+    "GoBinary",
     "Tdxs",
     "TdxsType",
 ]

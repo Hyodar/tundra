@@ -78,7 +78,8 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("variant named base", lambda: Variant("base")),
     ("variant own parent", lambda: Variant("v", inherits="v")),
     ("unknown target", lambda: Variant("v", outputs=("aws",))),  # type: ignore[arg-type]
-    ("fragment in replace", lambda: Variant("v", replace=(Fragment("f"),))),  # type: ignore[arg-type]
+    ("fragment in changes", lambda: Variant("v", changes=(Fragment("f"),))),  # type: ignore[arg-type]
+    ("declaration in changes", lambda: Variant("v", changes=(Package("a"),))),  # type: ignore[arg-type]
     ("no variants", lambda: Recipe("r", variants=())),
     ("duplicate variants", lambda: Recipe("r", variants=(Variant("a"),) * 2)),
     ("negative epoch", lambda: Recipe("r", epoch=-1)),

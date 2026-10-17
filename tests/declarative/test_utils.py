@@ -254,7 +254,7 @@ def test_historical_dialect_lowers_account_replacement_standalone() -> None:
         Fragment("users", items=(User("svc"),)),
         variants=(
             Variant("default"),
-            Variant("other", inherits="default", replace=(User("svc", uid=5),)),
+            Variant("other", inherits="default", changes=(User.ref("svc").edit(uid=5),)),
         ),
     )
     tree = compile(recipe)

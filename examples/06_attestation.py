@@ -18,16 +18,23 @@ The committed ``peer.policy.json`` came from a simulated (in-process) bake with
 below accept it only because they pass ``allow_placeholder=True``.
 """
 
-from pathlib import Path
-
 from tundravm.backends import InProcessBackend
-from tundravm.declarative import Fragment, Package, Policy, Recipe, Service, User, Variant
+from tundravm.declarative import (
+    Fragment,
+    Package,
+    Policy,
+    Recipe,
+    Resources,
+    Service,
+    User,
+    Variant,
+)
 from tundravm.declarative.utils import Tdxs
 
 BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
 
 # What a trusted attester measures to: `tundravm measure --export-policy` output.
-PEER_POLICY = Path(__file__).with_name("peer.policy.json")
+PEER_POLICY = Resources.from_module(__name__).file("peer.policy.json")
 
 # The app asks tdxs for quotes over the socket, so it joins the tdx group Tdxs declares.
 app = Fragment(

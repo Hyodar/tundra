@@ -86,6 +86,7 @@ from .model import (
     Key,
     Package,
     Partition,
+    Ref,
     Repository,
     RuntimeTools,
     Secret,
@@ -336,7 +337,7 @@ class StateBuilder:
             applied.append(keygen)
         if disks:
             setup = DiskEncryption(
-                disks=tuple(_disk_spec(d) for d in disks),
+                disks=tuple(_disk_spec(d, keys) for d in disks),
                 config_path=paths.disk_config,
                 source=source,
             )
@@ -353,7 +354,7 @@ class StateBuilder:
                 port=entry.port,
                 ssh_dir=entry.ssh_directory,
                 key_path=entry.ssh_key_path,
-                store_at=None if entry.store is None else entry.store.name,
+                store_at=_store_name(entry),
                 config_path=config_path,
                 manifest_path=manifest_path,
                 source=source,
@@ -614,8 +615,12 @@ def walk_tree(root: Path, exclude: Sequence[str]) -> list[tuple[str, Path]]:
 def _file(profile: ProfileState, item: File) -> None:
     content = item.content
     data = _read(content, owner=f"File {item.path}") if isinstance(content, Path) else content
+    mode = item.mode
+    if mode is None:  # File.copy: the execute bit git records, nothing else
+        executable = isinstance(content, Path) and content.stat().st_mode & 0o111
+        mode = 0o755 if executable else 0o644
     entries = profile.skeleton_files if item.stage == "skeleton" else profile.files
-    entries.append(FileEntry(path=item.path, content=data, mode=_mode(item.mode)))
+    entries.append(FileEntry(path=item.path, content=data, mode=_mode(mode)))
 
 
 def walk_directory(
@@ -929,8 +934,19 @@ def _key_spec(key: Key) -> KeySpec:
     )
 
 
-def _disk_spec(disk: Disk) -> DiskSpec:
-    key = disk.key
+def _store_name(secrets: Secrets) -> str | None:
+    """The name of the disk *secrets* are stored on (``store`` holds its ref)."""
+    store = secrets.store
+    if store is None:
+        return None
+    return (store if isinstance(store, Ref) else store.ref).identity[0]
+
+
+def _disk_spec(disk: Disk, keys: Sequence[Key]) -> DiskSpec:
+    """*disk*'s spec, its key ref bound to the variant's key among *keys*."""
+    key: Key | Path | None = disk.key if isinstance(disk.key, Path) else None
+    if isinstance(disk.key, Ref):
+        key = next(k for k in keys if k.ref == disk.key)
     common = {
         "device": disk.device,
         "mapper_name": disk.mapper,

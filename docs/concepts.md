@@ -9,7 +9,7 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 | Recipe | `Recipe` | The whole image: recipe-wide settings, its own `items` and the variants |
 | Declaration | `Package`, `File`, `Service`, `Unit`, `Key`, `Disk`, `Build`, ... | One typed fact about the image, identified by type plus natural key |
 | Fragment | `Fragment` | A named group of declarations and nested fragments, with `requires` and `checks`; a `Composite` subclass computes one from its fields |
-| Variant | `Variant` | An overlay on the variant it `inherits` (`add`, `replace`, `remove`, `outputs`); one mkosi directory and artifact each |
+| Variant | `Variant` | An overlay on the variant it `inherits` (`add`, `changes`, `outputs`); one mkosi directory and artifact each |
 | Lock | `Lock` | Section digests of the resolved recipe plus one pin per source build |
 | Tree | `Tree` | The compiled mkosi project, in memory until written; has a digest |
 | Artifact | `Artifact` | A baked disk image of one variant and target, with the digests it came from |
@@ -40,7 +40,7 @@ Declarations validate themselves at construction: relative paths, empty names, u
 
 1. **Ancestry.** The variant's `inherits` chain is walked to the root. `inherits="base"` (the default) means `Recipe.items`; `inherits=None` means nothing is inherited; any other value names a declared variant. Unknown names and cycles raise.
 2. **Expansion.** Fragments are flattened depth-first. A fragment name seen twice expands once when both are equal; two different fragments with the same name are `fragment-conflict`.
-3. **Overlay.** For each variant from the root down: its `replace` declarations swap inherited ones, its `remove` declarations drop them, then its `add` fragment is expanded and added.
+3. **Overlay.** For each variant from the root down: its `changes` edit or drop inherited declarations, in order, then its `add` fragment is expanded and added.
 4. **References.** Disk keys, secret stores, init and hook `after=` names, ordering contradictions and the variant's outputs are checked.
 5. **Fragment rules.** Every included fragment's `requires` must name another included fragment, and its `checks` run against the `Resolved` value.
 
@@ -57,9 +57,26 @@ Two declarations are "the same" when they have the same identity, the type plus 
 | `Debloat`, `RuntimeTools`, `Kernel` | the type alone (one per variant) |
 | everything else | name |
 
-Equal repeats deduplicate silently. Two different declarations with the same identity are `identity-collision`, whether they meet inside one level or between a variant's `add` and what it inherits. There is no "last one wins": a variant that wants to change an inherited declaration says so with `replace`.
+Equal repeats deduplicate silently. Two different declarations with the same identity are `identity-collision`, whether they meet inside one level or between a variant's `add` and what it inherits. There is no "last one wins": a variant that wants to change an inherited declaration says so in `changes`.
 
-`replace` and `remove` match by identity, not by object, so `remove=(Package("jq"),)` removes the inherited `jq` package. Each must match something inherited (`replace-missing`, `remove-missing`).
+A change targets an identity through a ref: `value.ref` for a value you hold, `Type.ref(*key)` for one you do not (`Unit.ref("ssh.service")`, `Package.ref("jq")`). `ref.edit(**fields)` sets fields of the inherited declaration and `ref.remove()` drops it:
+
+```python
+key = Key("data", output="/run/key")
+disk = Disk("data", mount="/data", key=key)     # the disk holds key.ref, not the value
+secrets = Secrets(store=disk)                   # likewise disk.ref
+recipe = Recipe(
+    "r",
+    items=(key, disk, secrets, Unit("ssh.service", enabled=True)),
+    variants=(
+        Variant("default"),
+        Variant("small-key", inherits="default", changes=(key.ref.edit(size=32),)),
+        Variant("no-ssh", inherits="default", changes=(Unit.ref("ssh.service").remove(),)),
+    ),
+)
+```
+
+`small-key` edits one field: the disk and the secrets still name the key and the disk by identity, so they need no new values, and lowering binds the disk to the 32-byte key. Each change must match something inherited (`edit-missing`, `remove-missing`); an edit names fields of its type, never an identity field, and an edited value is checked like a declared one (`edit-invalid`). Editing one field twice in a variant, or editing and removing the same identity, is refused when the `Variant` is built. A variant that wants a different identity removes the old declaration and adds the new one.
 
 ### Diagnostics
 
@@ -67,7 +84,7 @@ Equal repeats deduplicate silently. Two different declarations with the same ide
 
 ### Provenance
 
-`tundravm.declarative.resolve.provenance(recipe, variant=NAME)` records how resolution reached its result: for every identity the variant touched, the steps that touched it, in order, each an `Origin(action, variant, fragments)`. The action is `declared` (in `Recipe.items`, the level `common`), `added` (by a variant's `add`), `replaced` (by a variant's `replace`) or `removed` (by a variant's `remove`); `fragments` is the chain of fragments the declaration came through, empty for `replace` and `remove`, which name declarations directly, and for a declaration placed directly in `Recipe.items`. A removed identity stays in the result with `removed` as its last step, and resolution errors are not raised here (`resolve` and `lint` report them).
+`tundravm.declarative.resolve.provenance(recipe, variant=NAME)` records how resolution reached its result: for every identity the variant touched, the steps that touched it, in order, each an `Origin(action, variant, fragments, fields)`. The action is `declared` (in `Recipe.items`, the level `common`), `added` (by a variant's `add`), `edited` (by an edit in a variant's `changes`; `fields` names the fields it set) or `removed` (by a removal); `fragments` is the chain of fragments the declaration came through, empty for changes, which name declarations by ref, and for a declaration placed directly in `Recipe.items`. `inspect --why` and `explore` print an edit as `size edited in variant small-key`. A removed identity stays in the result with `removed` as its last step, and resolution errors are not raised here (`resolve` and `lint` report them).
 
 `tundravm inspect --variant NAME --why SUBJECT` and `explain_why(recipe, variant, subject)` build on it: for one emitted object (an image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME`) they print the declarations behind it with these steps, the compiled files that hold it and the lines the compiler generated for it (see [CLI: Explaining one object](cli.md#explaining-one-object)). `tundravm explore` (`explore(recipe)`) puts these steps for every declaration and every emitted file on one page, cross-linked, so a reviewer can follow a file back to its fragment and overlay without reading the recipe (see [CLI: Explore](cli.md#explore)).
 
@@ -95,19 +112,25 @@ Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `p
 
 Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, templates, `FileTree` sources, kernel configs) are read at lowering time. A `FileTree` keeps what it reads: without `mode` each file's and empty directory's permission bits, symlinks as links (`symlinks="follow"` ships what they point to instead) and empty directories; the lockfile records each entry's `kind` (`file`, `symlink`, `directory`). The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
 
-A relative `Path` in a declaration (`File(path, Path(...))`, `Unit(name, Path(...))`, `Template(path, Path(...))`, `FileTree(path, source)`, `Kernel(config=...)`) resolves against the working directory of the process that compiles, not against the recipe file. `tundravm compile image.py` inside the project works and `tundravm compile proj/image.py` from its parent fails with `E_VALIDATION` (`cannot read motd.txt`). The same holds for a policy file passed to `Tdxs.from_policy()`, which is read when the recipe loads. Anchor every input to the recipe file instead, as the surge example's base layer (`examples/nethermind_base.py`) does:
+The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. The current dialect targets mkosi 26: apt sources that the build needs (`Repository`, `Backports`) are written at compile time under `mkosi.sandbox/`, where mkosi's apt reads them, and postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so a recipe without a version works under `set -u`. `dialect="nethermind-v1"` spells user and group creation as postinst lines, leaves build hooks unmarked and clones sources inside the build, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
+
+### Paths and assets
+
+A relative `Path` in a declaration (`File.copy(path, Path(...))`, `Unit.from_file(name, Path(...))`, `Template(path, Path(...))`, `FileTree(path, source)`, `Kernel(config=...)`) resolves against the working directory of the process that compiles, not against the recipe file. `tundravm compile image.py` inside the project works and `tundravm compile proj/image.py` from its parent fails with `E_VALIDATION` (`cannot read motd.txt`). The same holds for a policy file passed to `Tdxs.from_policy()`, which is read when the recipe loads. Name host files through `Resources.from_module(__name__)` instead: it resolves paths against the directory of the module that declares them, so they work from any working directory, after the recipe moves, and from an installed package (`importlib.resources`). The surge example's base layer (`examples/nethermind_base.py`) and image read their kernel config and system files this way:
 
 ```python
-from pathlib import Path
+from tundravm import File, FileTree, Kernel, Resources, Unit
 
-ROOT = Path(__file__).resolve().parent
+assets = Resources.from_module(__name__)
 
-File("/etc/app/app.conf", ROOT / "files" / "app.conf")
-FileTree("/opt/app", ROOT / "app")
-Kernel(KERNEL_VERSION, KERNEL_SOURCE, config=ROOT / "kernel" / "kernel.config")
+File.copy("/etc/app/app.conf", assets.file("files/app.conf"))   # read when the recipe lowers
+File.text("/etc/motd", assets.text("motd.txt"))                  # read now, shipped as text
+Unit.from_file("app.service", assets.file("units/app.service"))
+FileTree("/opt/app", assets.directory("app"))
+Kernel(KERNEL_VERSION, KERNEL_SOURCE, config=assets.file("kernel/kernel.config"))
 ```
 
-The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. The current dialect targets mkosi 26: apt sources that the build needs (`Repository`, `Backports`) are written at compile time under `mkosi.sandbox/`, where mkosi's apt reads them, and postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so a recipe without a version works under `set -u`. `dialect="nethermind-v1"` spells user and group creation as postinst lines, leaves build hooks unmarked and clones sources inside the build, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
+`file()` and `directory()` return absolute paths and fail at once, naming the module and the relative path, when the file is missing. `File.text` and `File.copy` say which kind of content a `File` holds; both build the same `File` the constructor does, so the digests do not change. `File.copy(..., mode=None)`, its default, ships `0755` when the source has an execute bit and `0644` otherwise: the bits git records, whatever the checkout's umask. `tundravm watch` notices edits to every file these return or read.
 
 ### Bootable images
 
@@ -159,7 +182,7 @@ secrets = Secrets(store=disk, entries=(
 - `Disk(name, mount, device=None, key=None, mapper=None, format="on_fail", directories=("ssh", "data", "logs"))`. `key=None` is a plain disk; `key` may also be a `Path` to a key file. See [Disk selection and formatting](#disk-selection-and-formatting) for what `device=None` and `format` do at boot.
 - `Secrets(name="secrets", entries=(), store=None, host="0.0.0.0", port=8080, ssh_directory="/root/.ssh", ssh_key_path="/etc/root_key", delivery=None)` declares the secrets a variant expects, where each goes and who writes them (`delivery`: `None` for the built-in `tundra-tools` provider, or an `ExternalDelivery`; see [Secret delivery at boot](#secret-delivery-at-boot)). Lowering writes the `secret-delivery` config (`/etc/tdx/secrets.yaml`: listen address, SSH directory, key path, store disk), the secrets manifest (`/etc/tdx/secrets.json`: each `Secret` with `required`, its `Schema` and its targets) and the `secrets` runtime-init step, `secret-delivery setup /etc/tdx/secrets.yaml`. What the binary does with them today is narrower than the declaration: see [Secret delivery at boot](#secret-delivery-at-boot). `SecretEnv(name)` targets the global environment; `SecretEnv(name, service="app")` targets one service: its values go to `/run/secrets/app.env`, and a generated drop-in, `/usr/lib/systemd/system/app.service.d/tundravm-secrets.conf`, makes the unit read that file with `EnvironmentFile=` (a hard requirement when the secret is required, `-` optional otherwise). The secrets manifest (`/etc/tdx/secrets.json`) records `service` and `env_file` on that env target. A service the variant neither generates (`Service`), ships (`Unit` with content) nor enables, disables or masks is the `secret-env-service-unknown` lint error.
 
-The variant must declare the very key a disk uses and the very disk secrets are stored on: `disk-key-undefined` / `disk-key-mismatch` and `secret-store-undefined` / `secret-store-mismatch` report the gaps.
+`Disk.key` and `Secrets.store` hold refs (a `Key` or `Disk` passed in is stored as its ref): the variant must declare a key and a disk with those identities, whatever their values (`disk-key-undefined` and `secret-store-undefined` name the ref and the variant), and lowering uses the variant's final values.
 
 ### Disk selection and formatting
 
@@ -231,7 +254,7 @@ Build(
 )
 ```
 
-The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in a copy of the source checkout with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. With `using=Go(...)`, `Cargo(...)` or `Dotnet(...)` in place of `script` the toolchain renders the build command. Built outputs are cached in the build directory under `<namespace>-<fingerprint16>`: `cache_namespace` (default: the build's name) is the namespace, and the fingerprint hashes the source pin, the build script or toolchain, the install steps, the architecture and the toolchain, so changing any of them rebuilds. `nethermind-v1` keeps its historical keys.
+The source is `Git(url, ref, subdir=None, submodules=False)` or `Http(url, sha256=None)`. `script` runs in a copy of the source checkout with `env` exported; `install` copies results into the image (`Install(source, destination, mode=0o755, directory=False)`). `packages` names build-time packages. With `using=Go(...)`, `Cargo(...)` or `Dotnet(...)` in place of `script` the toolchain renders the build command. For one Go or Rust program, `GoBinary(name, source, package=...)` and `CargoBinary(name, source, bin=...)` (in `tundravm.declarative.utils`) are that `Build` with its `Install` at `/usr/bin/<name>` (or `install=`), and their `executable` is the installed path, for `Service(name, f"{binary.executable} --flag")`. Built outputs are cached in the build directory under `<namespace>-<fingerprint16>`: `cache_namespace` (default: the build's name) is the namespace, and the fingerprint hashes the source pin, the build script or toolchain, the install steps, the architecture and the toolchain, so changing any of them rebuilds. `nethermind-v1` keeps its historical keys.
 
 The recipe records the symbolic source (`master`), never a commit. `tundravm lock` resolves each `Git` ref to a commit and each `Http` without `sha256` to a hash and stores the pins in the lockfile; compile and bake then build exactly those. A build without a pin is the `source-unpinned` warning.
 
@@ -276,7 +299,7 @@ variants=(
 
 How a variant lowers depends on what it does:
 
-- A variant that inherits `base` or the default variant, and which only adds declarations or replaces `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant's directory. This keeps committed trees such as surge's byte-identical.
+- A variant that inherits `base` or the default variant, and which only adds declarations or edits `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant's directory. This keeps committed trees such as surge's byte-identical.
 - Every other variant (inheriting another variant, standalone, removing anything, replacing other kinds, changing keys, disks or secrets, mounting its own `BuildSources`, having its own settings or kernel, or leaving a cloud-targeted default variant's targets) is lowered standalone from its own resolved declarations, with its own `mkosi.conf` lines and kernel.
 
 The default variant (the one named `default`, else the first root variant) may itself inherit another variant; that variant then lowers like any other.

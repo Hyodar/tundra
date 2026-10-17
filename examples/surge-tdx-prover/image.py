@@ -9,14 +9,6 @@ See the result with ``tundravm inspect examples/surge-tdx-prover/image.py --vari
 
 from __future__ import annotations
 
-from contents import (
-    DROPBEAR_CONFIG,
-    OPENNTPD_CONF,
-    PROMETHEUS_DEFAULTS,
-    SYSCTL_CONF,
-    TDX_GUEST_PERMISSIONS,
-    TDX_GUEST_SYMLINK,
-)
 from examples.fragments import Nethermind, Raiko, TaikoClient
 from examples.nethermind_base import NETHERMIND_V1, PINNED_MIRROR, NethermindBase
 
@@ -29,6 +21,7 @@ from tundravm.declarative import (
     Key,
     Package,
     Recipe,
+    Resources,
     Secrets,
     Unit,
     Variant,
@@ -81,6 +74,17 @@ BUILD_PACKAGES = (
     "gcc",
 )
 
+# Host files under files/, copied to the same path in the image (mode 0644).
+ASSETS = Resources.from_module(__name__)
+SYSTEM_FILES = (
+    "/etc/default/dropbear",
+    "/etc/sysctl.d/99-surge.conf",
+    "/etc/udev/rules.d/65-tdx-guest.rules",
+    "/etc/udev/rules.d/99-tdx-symlink.rules",
+    "/etc/openntpd/ntpd.conf",
+    "/etc/default/prometheus",
+)
+
 # Boot-time init: TPM-sealed key -> encrypted /persistent -> secrets over HTTP.
 key = Key("key_persistent", output="/tmp/key_persistent")
 disk = Disk(
@@ -107,12 +111,7 @@ prover_stack = Fragment(
 system = Fragment(
     "system",
     items=(
-        File("/etc/default/dropbear", DROPBEAR_CONFIG),
-        File("/etc/sysctl.d/99-surge.conf", SYSCTL_CONF),
-        File("/etc/udev/rules.d/65-tdx-guest.rules", TDX_GUEST_PERMISSIONS),
-        File("/etc/udev/rules.d/99-tdx-symlink.rules", TDX_GUEST_SYMLINK),
-        File("/etc/openntpd/ntpd.conf", OPENNTPD_CONF),
-        File("/etc/default/prometheus", PROMETHEUS_DEFAULTS),
+        *(File.copy(path, ASSETS.file(f"files{path}")) for path in SYSTEM_FILES),
         Unit("network-setup.service", enabled=True),
         Unit("openntpd.service", enabled=True),
         Unit("logrotate.service", enabled=True),

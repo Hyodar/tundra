@@ -107,8 +107,10 @@ def test_matrix_states_follow_the_overlays() -> None:
                 "prod",
                 inherits="dev",
                 add=Fragment("extras", items=(Package("jq"),)),
-                replace=(File("/etc/app.conf", "mode=prod\n"),),
-                remove=(Package("curl"),),
+                changes=(
+                    File.ref("/etc/app.conf").edit(content="mode=prod\n"),
+                    Package.ref("curl").remove(),
+                ),
             ),
         ),
     )
@@ -117,10 +119,11 @@ def test_matrix_states_follow_the_overlays() -> None:
     assert rows["Package(curl, runtime)"]["prod"]["state"] == "removed"
     assert rows["Package(jq, runtime)"]["dev"]["state"] == "absent"
     assert rows["Package(jq, runtime)"]["prod"]["state"] == "added"
-    replaced = rows["File(extra, /etc/app.conf)"]["prod"]
-    assert replaced["state"] == "replaced"
-    assert replaced["changed"] == ["content"]
-    assert [o["action"] for o in replaced["origins"]] == ["declared", "replaced"]
+    edited = rows["File(extra, /etc/app.conf)"]["prod"]
+    assert edited["state"] == "edited"
+    assert edited["changed"] == ["content"]
+    assert [o["action"] for o in edited["origins"]] == ["declared", "edited"]
+    assert edited["origins"][1]["fields"] == "content"
 
 
 def test_markup_in_names_and_contents_is_escaped() -> None:
@@ -209,7 +212,7 @@ def test_cli_writes_the_page_into_the_build_directory(
     code, out = run_main("explore", str(path), "--variant", "dev", "--format", "json")
     assert code == EXIT_OK
     data = json.loads(out)
-    assert data["schema"] == "tundravm.explore/3"
+    assert data["schema"] == "tundravm.explore/4"
     assert [v["name"] for v in data["variants"]] == ["dev"]
     assert data["bake"]["artifacts"][0]["sha256"] == digest
 

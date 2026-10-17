@@ -47,10 +47,22 @@ RENAMED = {
     "Build cache_key= (cache_namespace=)": re.compile(r"\bcache_key="),
     "Directory (FileTree)": re.compile(r"\bDirectory\("),
     "assert_clean strict= (warnings=)": re.compile(r"\bassert_clean\([^)]*\bstrict="),
+    "Variant.replace/Variant.remove (Variant.changes)": re.compile(
+        r"\bVariant\.(?:replace|remove)\b"
+    ),
+    "replace-missing/-mismatch lint codes (edit-missing; refs)": re.compile(
+        r"\b(?:replace-missing|disk-key-mismatch|secret-store-mismatch)\b"
+    ),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {
-    "Variant": {"target": "outputs=", "targets": "outputs=", "parent": "inherits="},
+    "Variant": {
+        "target": "outputs=",
+        "targets": "outputs=",
+        "parent": "inherits=",
+        "replace": "changes=(value.ref.edit(...),)",
+        "remove": "changes=(value.ref.remove(),)",
+    },
     "Build": {"recipe": "using=", "cache_key": "cache_namespace="},
     "Recipe": {"common": "items="},
 }
@@ -167,6 +179,10 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         'Build("b", GIT, script="make", cache_key="b")',
         'Directory("/opt", Path("src"))',
         "assert_clean(RECIPE, strict=True)",
+        'Variant("dev", replace=(File("/etc/motd", "dev\\n"),))',
+        'Variant("slim", inherits="default", remove=(Package("jq"),))',
+        "for item in variant.replace: ...  # Variant.replace",
+        "`replace-missing` and `disk-key-mismatch`",
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:
@@ -179,5 +195,7 @@ def test_renamed_guard_passes_the_current_spellings() -> None:
         'Build("b", GIT, using=Go(output="b"), cache_namespace="b", install=(Install("b", "/"),))\n'
         'Secret("s", targets=(SecretFile("/s"),))\nFileTree("/opt", Path("src"))\n'
         "ArtifactRef(target='qemu', path=p)\nassert_clean(RECIPE, warnings='allow')\n"
+        'Variant("slim", changes=(Package.ref("jq").remove(), motd.ref.edit(mode=0o600)))\n'
+        'Variant("d", add=Fragment("f", (Debloat(remove=("/x",)),)))\n'
     )
     assert _renamed(source) == []

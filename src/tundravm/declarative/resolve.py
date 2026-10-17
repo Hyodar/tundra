@@ -7,46 +7,33 @@ only for malformed input (unknown variants, ``inherits`` cycles).
 
 from __future__ import annotations
 
-import posixpath
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Any, Literal, cast
 
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
-from tundravm.models import unit_name
 
 from .model import (
     BASE_VARIANT,
     BUILTIN_INITS,
     EMPTY_FRAGMENT,
     PHASES,
-    Build,
-    Debloat,
     Declaration,
+    Declared,
     Diagnostic,
     Disk,
-    File,
-    FileTree,
+    Edit,
     Fragment,
-    Group,
     Hook,
     Init,
-    Kernel,
     Key,
-    Package,
-    Partition,
     Recipe,
-    Repository,
+    Ref,
     Resolved,
-    RuntimeTools,
     Secrets,
-    Service,
-    Setting,
     Target,
-    Template,
     Unit,
-    User,
     Variant,
 )
 
@@ -55,8 +42,8 @@ Identity = tuple[str, ...]
 FragmentRef = tuple[str, str]
 """One fragment on an item's path: its name and its class (``Fragment`` or a Composite)."""
 
-Action = Literal["declared", "added", "replaced", "removed"]
-"""How one level touched an item: ``common`` declares, a variant adds, replaces or removes."""
+Action = Literal["declared", "added", "edited", "removed"]
+"""How one level touched an item: ``common`` declares, a variant adds, edits or removes."""
 
 COMMON_LEVEL = "common"
 """The :attr:`Origin.variant` of declarations that come from ``Recipe.items``."""
@@ -68,13 +55,24 @@ class Origin:
 
     ``variant`` is ``"common"`` for ``Recipe.items``; ``fragments`` runs from the
     level's own fragment down to the one holding the declaration (empty for
-    ``replace=``/``remove=``, which name declarations directly, and for direct
-    ``Recipe.items``).
+    ``changes``, which name declarations by ref, and for direct ``Recipe.items``);
+    ``fields`` are the fields an ``edited`` step set.
     """
 
     action: Action
     variant: str
     fragments: tuple[FragmentRef, ...] = ()
+    fields: tuple[str, ...] = ()
+
+    def describe(self) -> str:
+        """``size edited in variant small-key``, ``added in common via base``."""
+        where = "in common" if self.variant == COMMON_LEVEL else f"in variant {self.variant}"
+        chain = " > ".join(
+            name if kind in ("Fragment", "") else f"{name} ({kind})"
+            for name, kind in self.fragments
+        )
+        edited = f"{', '.join(self.fields)} " if self.fields else ""
+        return f"{edited}{self.action} {where}" + (f" via {chain}" if chain else "")
 
 
 CLOUD_TARGETS: frozenset[str] = frozenset({"azure", "gcp"})
@@ -82,36 +80,18 @@ DEFAULT_TARGET: Target = "qemu"
 
 
 def identity(item: Declaration) -> Identity:
-    """Type plus natural key: what ``replace``/``remove`` match and collisions compare."""
-    kind = type(item).__name__
-    match item:
-        case Package():
-            return (kind, item.name, item.role)
-        case File() | FileTree() | Template():
-            return (kind, item.stage, posixpath.normpath(item.path))
-        case Unit() | Service():
-            return (kind, unit_name(item.name))
-        case Setting():
-            return (kind, item.section, item.key)
-        case Debloat() | RuntimeTools() | Kernel():
-            return (kind,)
-        case (
-            Group()
-            | User()
-            | Hook()
-            | Init()
-            | Repository()
-            | Partition()
-            | Key()
-            | Disk()
-            | Secrets()
-            | Build()
-        ):
-            return (kind, item.name)
-    raise ValidationError(
-        f"{item!r} is not a declaration.",
-        hint="Fragment items must be declarations such as Package(), File() or Unit().",
-    )
+    """Type plus natural key: what changes target and collisions compare (``item.ref``)."""
+    if not isinstance(item, Declared):
+        raise ValidationError(
+            f"{item!r} is not a declaration.",
+            hint="Fragment items must be declarations such as Package(), File() or Unit().",
+        )
+    return ref_identity(item.ref)
+
+
+def ref_identity(ref: Ref) -> Identity:
+    """The identity a :class:`Ref` names."""
+    return (ref.kind, *ref.identity)
 
 
 def describe(ident: Identity) -> str:
@@ -213,27 +193,31 @@ class _Resolution:
                 )
 
     def apply_changes(self, variant: Variant) -> None:
-        for item in variant.replace:
-            key = identity(item)
-            if key in self.items:
-                self.items[key] = item
-                self.record(key, Origin("replaced", variant.name))
-            else:
+        """Apply *variant*'s edits and removals to what it inherits."""
+        for change in variant.changes:
+            key = ref_identity(change.target)
+            current = self.items.get(key)
+            verb = "edits" if isinstance(change, Edit) else "removes"
+            if current is None:
                 self.report(
-                    "replace-missing",
-                    f"variant {variant.name!r} replaces {describe(key)}, which it does not inherit",
-                    subject=describe(key),
+                    "edit-missing" if isinstance(change, Edit) else "remove-missing",
+                    f"variant {variant.name!r} {verb} {change.target}, which it does not inherit",
+                    subject=str(change.target),
                 )
-        for item in variant.remove:
-            key = identity(item)
-            if self.items.pop(key, None) is not None:
+            elif isinstance(change, Edit):
+                try:
+                    self.items[key] = replace(cast(Any, current), **change.fields)
+                except ValidationError as exc:
+                    self.report(
+                        "edit-invalid",
+                        f"variant {variant.name!r} edits {change.target}: {exc.args[0]}",
+                        subject=str(change.target),
+                    )
+                    continue
+                self.record(key, Origin("edited", variant.name, fields=tuple(change.fields)))
+            else:
+                del self.items[key]
                 self.record(key, Origin("removed", variant.name))
-            else:
-                self.report(
-                    "remove-missing",
-                    f"variant {variant.name!r} removes {describe(key)}, which it does not inherit",
-                    subject=describe(key),
-                )
 
 
 def ancestry(recipe: Recipe, name: str) -> tuple[Variant, ...]:
@@ -388,45 +372,26 @@ def order_hooks(hooks: Sequence[Hook]) -> list[Hook]:
     return result
 
 
+def _references(item: Declaration) -> Iterable[tuple[str, Ref]]:
+    """The refs *item* holds, each with the diagnostic code of a dangling one."""
+    match item:
+        case Disk(key=Ref() as ref):
+            yield "disk-key-undefined", ref
+        case Secrets(store=Ref() as ref):
+            yield "secret-store-undefined", ref
+
+
 def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
-    keys = {item.name: item for item in items if isinstance(item, Key)}
-    disks = {item.name: item for item in items if isinstance(item, Disk)}
-    for disk in disks.values():
-        if not isinstance(disk.key, Key):
-            continue
-        declared = keys.get(disk.key.name)
-        if declared is None:
-            state.report(
-                "disk-key-undefined",
-                f"disk {disk.name!r} uses key {disk.key.name!r}, which this variant does not "
-                "declare",
-                subject=disk.name,
-            )
-        elif declared != disk.key:
-            state.report(
-                "disk-key-mismatch",
-                f"disk {disk.name!r} references a key {disk.key.name!r} that differs from the "
-                "declared one",
-                subject=disk.name,
-            )
-    for secrets in (item for item in items if isinstance(item, Secrets)):
-        if secrets.store is None:
-            continue
-        declared_disk = disks.get(secrets.store.name)
-        if declared_disk is None:
-            state.report(
-                "secret-store-undefined",
-                f"secrets {secrets.name!r} are stored on disk {secrets.store.name!r}, which this "
-                "variant does not declare",
-                subject=secrets.name,
-            )
-        elif declared_disk != secrets.store:
-            state.report(
-                "secret-store-mismatch",
-                f"secrets {secrets.name!r} reference a disk {secrets.store.name!r} that differs "
-                "from the declared one",
-                subject=secrets.name,
-            )
+    present = {identity(item) for item in items}
+    for item in items:
+        for code, ref in _references(item):
+            if ref_identity(ref) not in present:
+                state.report(
+                    code,
+                    f"{describe(identity(item))} references {ref}, which variant "
+                    f"{state.variant!r} does not declare",
+                    subject=item.ref.identity[-1],
+                )
 
     inits = [item for item in items if isinstance(item, Init)]
     builtins = _builtin_inits(items)
@@ -568,6 +533,7 @@ __all__ = [
     "order_hooks",
     "order_inits",
     "provenance",
+    "ref_identity",
     "resolve",
     "resolve_all",
 ]

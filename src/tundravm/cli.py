@@ -99,6 +99,7 @@ from .declarative.lifecycle import (
 )
 from .declarative.model import Target
 from .declarative.resolve import resolve
+from .declarative.resources import resource_reads
 from .diagnostics import Diagnostic
 from .diff import _wants_color, cmd_diff, diff_against
 from .errors import LockfileError, ReproducibilityError, StateError, TdxError, ValidationError
@@ -239,10 +240,11 @@ def main(
         return 130
 
 
-REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 2}
+REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 3}
 """Verbs whose ``--format json`` report moved past version 1: lint's diagnostics carry
 ``variant`` beside ``location``; config's ``values`` hold ``require``, a list; inspect
-names what a variant ``inherits`` and a variant diff's ``outputs``."""
+names what a variant ``inherits`` and a variant diff's ``outputs``, and its origins carry
+``fields`` with the action ``edited`` (no longer ``replaced``)."""
 
 
 def schema(verb: str) -> str:
@@ -348,7 +350,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Explain one emitted object of one --variant instead: an absolute image path, "
             "unit:NAME, package:NAME, hook:NAME or init:NAME. Prints the declarations that "
             "produce it with the fragment chain and overlay steps (declared, added, "
-            "replaced, removed), the compiled-tree files that hold it and the lines the "
+            "edited, removed), the compiled-tree files that hold it and the lines the "
             "compiler generated for it (runtime-init ordering, enablement links, drop-ins)."
         ),
     )
@@ -2896,7 +2898,7 @@ def _add_explore(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         default="html",
         help=(
             "html (default) writes the page and prints its path; json prints the same "
-            "model (to FILE with --output) with schema tundravm.explore/3."
+            "model (to FILE with --output) with schema tundravm.explore/4."
         ),
     )
 
@@ -3216,7 +3218,7 @@ def _watch_check(args: argparse.Namespace, sources: Sources, flags: dict[str, Pa
         _watch_project(args, flags)
         sources.recipe = args.recipe.resolve()
         loaded = _load(args)
-        sources.track({*_watch_inputs(args), *recipe_inputs(loaded.recipe)})
+        sources.track({*_watch_inputs(args), *recipe_inputs(loaded.recipe), *resource_reads()})
         names = _variants(loaded, args)
         diagnostics = _lint_findings(loaded, names, args, missing=_configured_lock_missing(args))
     except TdxError as exc:

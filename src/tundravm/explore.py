@@ -7,7 +7,7 @@ there is one), every declaration across the variants with its provenance, the
 compiled tree of each variant with each file's content and the declarations
 that produced it, and the hooks, runtime-init steps and source builds in the
 order they run. :meth:`Exploration.to_dict` is that model as JSON
-(``"schema": "tundravm.explore/3"``) and :meth:`Exploration.html` one
+(``"schema": "tundravm.explore/4"``) and :meth:`Exploration.html` one
 self-contained page: inline CSS and a small inline script (tabs, filters,
 cross-link jumps) that reads as a static page without it.
 """
@@ -51,7 +51,7 @@ from .errors import TdxError, ValidationError
 from .explain import _changed_fields, _emitted_for, _fragment_chain
 from .models import BAKE_RESULT_FILENAME
 
-EXPLORE_SCHEMA = "tundravm.explore/3"
+EXPLORE_SCHEMA = "tundravm.explore/4"
 EXPLORE_FORMATS = ("html", "json")
 PAGE_NAME = "explore.html"
 """``tundravm explore`` writes ``BUILD/explore.html`` unless ``--output`` says otherwise."""
@@ -61,7 +61,7 @@ TEXT_BUDGET = 4 * 1024 * 1024
 """Content shown on one page in all; past it a file's content is left out, with a note."""
 SHARED = "(shared)"
 """The tree group of paths outside every variant directory (``Mkosi(layout="native")``)."""
-STATES = ("present", "added", "replaced", "removed", "absent")
+STATES = ("present", "added", "edited", "removed", "absent")
 """A declaration's state in one variant, as the matrix shows it."""
 _SHORT = 120
 
@@ -413,13 +413,18 @@ def _state(origins: Sequence[Origin]) -> str:
     actions = [origin.action for origin in origins]
     if actions[-1] == "removed":
         return "removed"
-    if "replaced" in actions:
-        return "replaced"
+    if "edited" in actions:
+        return "edited"
     return "added" if actions[-1] == "added" else "present"
 
 
 def _origin(origin: Origin) -> dict[str, str]:
-    return {"action": origin.action, "level": origin.variant, "via": _fragment_chain(origin)}
+    return {
+        "action": origin.action,
+        "level": origin.variant,
+        "via": _fragment_chain(origin),
+        "fields": ", ".join(origin.fields),
+    }
 
 
 def _declarations(
@@ -650,7 +655,7 @@ nav a.on { background: #f6f8fa; border: 1px solid #d0d7de; border-bottom: none; 
 .badge { display: inline-block; padding: 0 .4rem; border-radius: 4px; font-size: 12px; }
 .present, .current, .matched, .verified { background: #dafbe1; }
 .added { background: #ddf4ff; }
-.replaced, .warning, .drifted, .different { background: #fff8c5; }
+.edited, .warning, .drifted, .different { background: #fff8c5; }
 .removed, .error, .missing { background: #ffebe9; }
 .absent { color: #8c959f; }
 .info { background: #eaeef2; }
@@ -786,7 +791,8 @@ def _origin_text(origin: Mapping[str, Any]) -> str:
     level = str(origin["level"])
     where = "in common" if level == COMMON_LEVEL else f"in variant {level}"
     via = f" via {origin['via']}" if origin["via"] else ""
-    return f"{origin['action']} {where}{via}"
+    edited = f"{origin['fields']} " if origin.get("fields") else ""
+    return f"{edited}{origin['action']} {where}{via}"
 
 
 class _Anchors:
@@ -933,7 +939,7 @@ def _overview_html(data: Mapping[str, Any]) -> str:
     return "\n".join(parts)
 
 
-_MARKS = {"present": "●", "added": "+", "replaced": "~", "removed": "−", "absent": "·"}
+_MARKS = {"present": "●", "added": "+", "edited": "~", "removed": "−", "absent": "·"}
 
 
 def _variants_html(data: Mapping[str, Any], anchors: _Anchors) -> str:

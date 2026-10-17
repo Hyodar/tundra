@@ -34,7 +34,7 @@ from .declarative.model import (
     Template,
     Unit,
 )
-from .declarative.resolve import COMMON_LEVEL, Identity, Origin, identity
+from .declarative.resolve import Identity, Origin, identity
 from .declarative.resolve import describe as describe_identity
 from .errors import ValidationError
 from .formats import md_cell, md_table
@@ -775,6 +775,7 @@ class WhyDeclaration:
                     "action": origin.action,
                     "variant": origin.variant,
                     "fragments": [{"name": name, "class": kind} for name, kind in origin.fragments],
+                    "fields": list(origin.fields),
                 }
                 for origin in self.origins
             ],
@@ -1096,12 +1097,6 @@ def _fragment_chain(origin: Origin) -> str:
     )
 
 
-def _origin_text(origin: Origin) -> str:
-    where = "in common" if origin.variant == COMMON_LEVEL else f"in variant {origin.variant}"
-    chain = _fragment_chain(origin)
-    return f"{origin.action} {where}" + (f" via {chain}" if chain else "")
-
-
 def render_why(why: Why) -> str:
     """Plain text: declarations with their history, destination files, generated lines."""
     lines = [f"why {why.subject} (variant {why.variant})"]
@@ -1110,7 +1105,7 @@ def render_why(why: Why) -> str:
     for entry in why.declarations:
         state = "" if entry.present else " (removed: not emitted)"
         lines.append(f"  {entry.declaration}{state}")
-        lines.extend(f"    {_origin_text(origin)}" for origin in entry.origins)
+        lines.extend(f"    {origin.describe()}" for origin in entry.origins)
     lines.append(f"files (in {why.variant}/):")
     lines.extend(f"  {path}" for path in why.files)
     if not why.files:
@@ -1127,7 +1122,7 @@ def render_why_markdown(why: Why) -> str:
     rows = [
         (
             md_cell(entry.declaration, code=True),
-            md_cell(origin.action),
+            md_cell(f"{', '.join(origin.fields)} {origin.action}".lstrip()),
             md_cell(origin.variant),
             md_cell(_fragment_chain(origin)),
         )
