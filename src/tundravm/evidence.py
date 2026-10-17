@@ -23,7 +23,7 @@ import os
 import platform
 import tarfile
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,13 +47,15 @@ from .declarative.lifecycle import (
     probe,
     read_artifacts,
     read_lock,
+    recorded_reproducibility,
+    reproducibility_of,
     run_probe,
     verify_artifact,
 )
 from .declarative.lower import lower
 from .declarative.model import Recipe
 from .declarative.resolve import provenance
-from .errors import ArtifactError, StateError, TdxError
+from .errors import ArtifactError, StateError, TdxError, ValidationError
 from .lockfile import lock_variants
 from .measure.policy import is_placeholder, read_policy
 from .models import BAKE_RESULT_FILENAME
@@ -64,6 +66,16 @@ BUNDLE_ROOT = "evidence"
 """The top-level directory every member of a bundle sits under."""
 EvidenceFormat = Literal["text", "json"]
 EVIDENCE_FORMATS: tuple[EvidenceFormat, ...] = ("text", "json")
+EvidenceRequirement = Literal["reproducible", "measured", "real", "lock"]
+EVIDENCE_REQUIREMENTS: tuple[EvidenceRequirement, ...] = (
+    "reproducible",
+    "measured",
+    "real",
+    "lock",
+)
+"""What ``require=`` (``evidence --require``) can demand; a missing one makes the verdict
+``incomplete`` instead of a note: a recorded ``matched`` second build, a valid measurements
+policy bound to each artifact, real (not simulated) artifacts, a lockfile."""
 _MKOSI = Requirement(
     tool="mkosi",
     probe=("mkosi", "--version"),
@@ -85,8 +97,14 @@ class Evidence:
 
     @property
     def verdict(self) -> str:
-        """``pass`` when integrity, lock, reproducibility and lint all hold, else ``fail``."""
+        """``pass``, ``fail`` (a recorded contradiction) or ``incomplete`` (a required check
+        is missing); ``index["verdict"]["reasons"]`` says why."""
         return str(self.index["verdict"]["overall"])
+
+    @property
+    def reasons(self) -> tuple[Mapping[str, Any], ...]:
+        """Why the verdict is not ``pass``: ``{"severity", "code", "subject", "message"}`` each."""
+        return tuple(self.index["verdict"]["reasons"])
 
     @property
     def passed(self) -> bool:
@@ -154,6 +172,8 @@ def evidence(
     policy: Path | None = None,
     recipe_path: Path | None = None,
     runner: ProbeRunner | None = None,
+    require: Sequence[str] = (),
+    allow_unbound: bool = False,
 ) -> Evidence:
     """The evidence of the bake in *out* for *variants* (default: every baked variant).
 
@@ -162,7 +182,20 @@ def evidence(
     file used for every selected variant instead of ``out/<variant>/policy.json``.
     *recipe_path* records the recipe file and its sha256. *runner* replaces the
     ``mkosi --version`` probe (tests). Nothing is written; see :meth:`Evidence.write`.
+
+    The verdict is ``fail`` when something recorded contradicts the bake (an
+    artifact changed or is gone, the recipe or tree changed, the lockfile
+    drifted, lint errors, a ``different`` second build, a placeholder or
+    mismatched policy). *require* names checks from :data:`EVIDENCE_REQUIREMENTS`
+    whose absence makes it ``incomplete``; checks not required that are missing
+    are notes.
+
+    The lockfile read must hash to the sha256 ``bake-result.json`` records, and each
+    SBOM is bound the same way (:func:`~tundravm.declarative.bom.sbom`), else
+    ``ArtifactError``; *allow_unbound* includes them with a note and makes the
+    verdict ``incomplete``.
     """
+    required = _requirements(require)
     recipe = lowered_or_recipe if isinstance(lowered_or_recipe, Recipe) else None
     img = lower(recipe) if recipe is not None else lowered_or_recipe
     assert isinstance(img, Lowered)
@@ -175,7 +208,31 @@ def evidence(
     members: dict[str, bytes] = {"bake-result.json": manifest.read_bytes()}
 
     locked, lock_bytes, lock_from = _lock(lock, extra, base)
+    recorded_lock = _manifest_field(manifest, "lock_sha256")
     lock_entry = _lock_entry(recipe, img, locked, lock_bytes, lock_from, names, notes)
+    if lock_entry is not None:
+        lock_entry["recorded_sha256"] = recorded_lock
+        lock_entry["bound"] = lock_entry["sha256"] == recorded_lock
+        if not lock_entry["bound"]:
+            problem = (
+                f"the lockfile {lock_from or '(given)'} hashes to {lock_entry['sha256'][:12]}, "
+                + (
+                    "but the bake read no lockfile"
+                    if recorded_lock is None
+                    else f"the bake recorded {str(recorded_lock)[:12]}"
+                )
+            )
+            if not allow_unbound:
+                raise ArtifactError(
+                    f"Evidence would not describe the bake: {problem}.",
+                    hint=(
+                        "Pass the lockfile the bake used (--lockfile), or bake again. "
+                        "--allow-unbound (allow_unbound=True) records it anyway and makes "
+                        "the verdict incomplete."
+                    ),
+                    context={"out": str(base)},
+                )
+            notes.append(f"unbound: {problem}")
     if lock_bytes is not None:
         members["tundravm.lock"] = lock_bytes
 
@@ -188,7 +245,7 @@ def evidence(
     members["lint.json"] = _json_bytes([d.to_dict() for d in diagnostics])
     tree = _current_tree(img, artifacts, locked)
     digests = _recipe_digests(img, names, locked)
-    reproducible = extra.get("reproducible")
+    reproduced = recorded_reproducibility(extra)
     records = {
         name: _variant(
             name,
@@ -198,9 +255,10 @@ def evidence(
             locked=locked,
             policy=policy,
             tree=tree,
-            reproducible=reproducible if isinstance(reproducible, bool) else None,
+            reproducibility=reproducibility_of(reproduced, name),
             members=members,
             notes=notes,
+            allow_unbound=allow_unbound,
         )
         for name in names
     }
@@ -214,13 +272,14 @@ def evidence(
             "path": str(manifest),
             "backend": _manifest_field(manifest, "backend"),
             "simulated": bool(extra.get("simulated", False)),
+            "reproducibility": reproduced,
         },
         "lockfile": lock_entry,
         "lint": _lint_entry(diagnostics),
         "tools": _tools(runner, notes),
         "variants": records,
     }
-    index["verdict"] = _verdict(index)
+    index["verdict"] = _verdict(index, required, notes)
     index["notes"] = list(dict.fromkeys(notes))
     index["members"] = {
         name: {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
@@ -230,6 +289,16 @@ def evidence(
 
 
 # ── gathering ────────────────────────────────────────────────────────────
+
+
+def _requirements(names: Sequence[str]) -> tuple[EvidenceRequirement, ...]:
+    unknown = [name for name in names if name not in EVIDENCE_REQUIREMENTS]
+    if unknown:
+        raise ValidationError(
+            f"Unknown evidence requirement(s): {', '.join(unknown)}.",
+            hint=f"Require any of: {', '.join(EVIDENCE_REQUIREMENTS)}.",
+        )
+    return tuple(name for name in EVIDENCE_REQUIREMENTS if name in names)
 
 
 def _epoch() -> int | None:
@@ -395,25 +464,30 @@ def _variant(
     locked: Lock | None,
     policy: Path | None,
     tree: str | None,
-    reproducible: bool | None,
+    reproducibility: str | None,
     members: dict[str, bytes],
     notes: list[str],
+    allow_unbound: bool,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     sboms: list[dict[str, Any]] = []
     for artifact in artifacts:
         size = artifact.path.stat().st_size if artifact.path.is_file() else None
+        integrity = _integrity(artifact)
         rows.append(
             {
                 "target": artifact.target,
                 "path": str(artifact.path),
                 "size": size,
                 "sha256": artifact.sha256,
-                "integrity": _integrity(artifact),
+                "integrity": integrity,
                 "simulated": artifact.simulated,
             }
         )
-        document = sbom(artifact, lock=locked)
+        if integrity != "verified":
+            notes.append(f"{name}/{artifact.target} sbom: left out, the artifact is {integrity}")
+            continue
+        document = sbom(artifact, lock=locked, allow_unbound=allow_unbound)
         member = f"variants/{name}/sbom-{artifact.target}.spdx.json"
         members[member] = document.render("spdx-json").encode()
         notes.extend(f"{name}/{artifact.target} sbom: {note}" for note in document.notes)
@@ -424,6 +498,7 @@ def _variant(
                 "packages": len(document.packages),
                 "sources": len(document.sources),
                 "manifest_found": document.manifest_found,
+                "bound": document.bound,
             }
         )
     recorded_tree = next((a.tree_digest for a in artifacts if a.tree_digest), "")
@@ -431,7 +506,7 @@ def _variant(
         "artifacts": rows,
         "tree_digest": recorded_tree or None,
         "tree_matches": None if not recorded_tree or tree is None else recorded_tree == tree,
-        "reproducible": reproducible,
+        "reproducibility": reproducibility,
         "policy": _policy(name, artifacts, base, policy, members, notes),
         "sbom": sboms,
         "provenance": None if recipe is None else _provenance(recipe, name),
@@ -503,39 +578,155 @@ def _tools(runner: ProbeRunner | None, notes: list[str]) -> dict[str, str | None
     return {"tundravm": __version__, "python": platform.python_version(), "mkosi": mkosi}
 
 
-def _verdict(index: Mapping[str, Any]) -> dict[str, str]:
-    rows = [row for record in index["variants"].values() for row in record["artifacts"]]
-    states = {row["integrity"] for row in rows}
-    integrity = (
-        "verified"
-        if states == {"verified"}
-        else ("mismatch" if "mismatch" in states else "missing")
-    )
+def _verdict(
+    index: Mapping[str, Any], required: Sequence[EvidenceRequirement], notes: list[str]
+) -> dict[str, Any]:
+    """Each check's state, the ``reasons`` the verdict is not ``pass``, and ``overall``.
+
+    A contradiction is a ``fail`` reason. A missing check is an ``incomplete`` reason
+    when *required* names it, else a note.
+    """
+    reasons: list[dict[str, Any]] = []
+    variants: Mapping[str, Any] = index["variants"]
+
+    def add(severity: str, code: str, subject: str | None, message: str) -> None:
+        reasons.append({"severity": severity, "code": code, "subject": subject, "message": message})
+
+    def absent(
+        need: EvidenceRequirement,
+        code: str,
+        subject: str | None,
+        message: str,
+        *,
+        noted: bool = False,
+    ) -> None:
+        """*noted*: gathering already said so in a note."""
+        if need in required:
+            add("incomplete", code, subject, f"{message} (required: {need})")
+        elif not noted:
+            notes.append(message)
+
+    if index["recipe"]["matches_bake"] is False:
+        add("fail", "recipe-mismatch", None, "the recipe changed since the bake")
+    rows = [(n, row) for n, record in variants.items() for row in record["artifacts"]]
+    for name, row in rows:
+        subject = f"{name}/{row['target']}"
+        if row["integrity"] == "mismatch":
+            add("fail", "integrity-mismatch", subject, f"{row['path']} changed since the bake")
+        elif row["integrity"] == "missing":
+            add("fail", "artifact-missing", subject, f"{row['path']} is gone or unreadable")
+    for name, record in variants.items():
+        if record["tree_matches"] is False:
+            add("fail", "tree-mismatch", name, "the compiled tree changed since the bake")
     lockfile = index["lockfile"]
-    lock = "missing" if lockfile is None else str(lockfile["verdict"])
-    flags = {record["reproducible"] for record in index["variants"].values()}
-    reproducible = (
-        "not reproducible"
-        if False in flags
-        else "reproducible"
-        if flags == {True}
-        else "not checked"
-    )
+    if lockfile is None:
+        message = "no lockfile: the bake was not frozen, or it is gone"
+        absent("lock", "lock-missing", None, message, noted=True)
+    elif lockfile["verdict"] == "drifted":
+        drifted = ", ".join(str(d["subject"] or d["code"]) for d in lockfile["drift"])
+        add("fail", "lock-drifted", None, f"the recipe drifted from the lockfile: {drifted}")
+    if lockfile is not None and not lockfile["bound"]:
+        add("incomplete", "lock-unbound", None, "the lockfile is not the one the bake used")
+    for name, record in variants.items():
+        for entry in record["sbom"]:
+            if not entry["bound"]:
+                subject = f"{name}/{entry['target']}"
+                add("incomplete", "sbom-unbound", subject, "the SBOM is not bound to the bake")
     lint = index["lint"]
-    linted = "errors" if lint["errors"] else ("warnings" if lint["warnings"] else "clean")
-    passed = (
-        integrity == "verified"
-        and lock == "current"
-        and reproducible != "not reproducible"
-        and linted != "errors"
-    )
+    if lint["errors"]:
+        add("fail", "lint-errors", None, f"lint reports {lint['errors']} error(s)")
+    reproduced = {name: _reproduced(record) for name, record in variants.items()}
+    for name, state in reproduced.items():
+        if state == "different":
+            add("fail", "not-reproducible", name, "a second build gave different artifacts")
+        elif state == "not checked":
+            absent(
+                "reproducible",
+                "reproducibility-unchecked",
+                name,
+                f"reproducibility of {name} was not checked (bake --verify-reproducible)",
+            )
+        elif state != "matched":
+            absent(
+                "reproducible",
+                "reproducibility-incomplete",
+                name,
+                f"the second build of {name} did not complete: it is {state}",
+            )
+    policies = {name: _policy_state(record["policy"]) for name, record in variants.items()}
+    for name, state in policies.items():
+        source = (variants[name]["policy"] or {}).get("source")
+        if state == "invalid":
+            add("fail", "policy-invalid", name, f"{source} is not a valid policy")
+        elif state == "placeholder":
+            add("fail", "policy-placeholder", name, f"{source} holds placeholder registers")
+        elif state == "mismatch":
+            add("fail", "policy-artifact-mismatch", name, f"{source} measured another artifact")
+        elif state == "unbound":
+            absent("measured", "policy-unbound", name, f"{source} names no artifact sha256")
+        elif state == "missing":
+            message = f"no measurements policy for {name}"
+            absent("measured", "policy-missing", name, message, noted=True)
+    simulated = [f"{name}/{row['target']}" for name, row in rows if row["simulated"]]
+    if simulated:
+        absent(
+            "real",
+            "simulated-artifact",
+            ", ".join(simulated),
+            "the artifacts are simulated (in-process backend): nothing was built",
+        )
+    severities = {reason["severity"] for reason in reasons}
+    overall = "fail" if "fail" in severities else "incomplete" if severities else "pass"
+    states = {row["integrity"] for _, row in rows}
     return {
-        "integrity": integrity,
-        "lock": lock,
-        "reproducible": reproducible,
-        "lint": linted,
-        "overall": "pass" if passed else "fail",
+        "integrity": "verified"
+        if states == {"verified"}
+        else ("mismatch" if "mismatch" in states else "missing"),
+        "lock": "missing" if lockfile is None else str(lockfile["verdict"]),
+        "reproducible": _worst(reproduced.values(), _REPRODUCED_ORDER),
+        "lint": "errors" if lint["errors"] else ("warnings" if lint["warnings"] else "clean"),
+        "recipe": {True: "matches", False: "changed", None: "unknown"}[
+            index["recipe"]["matches_bake"]
+        ],
+        "tree": _worst(
+            (
+                {True: "matches", False: "changed", None: "unknown"}[r["tree_matches"]]
+                for r in variants.values()
+            ),
+            ("changed", "unknown", "matches"),
+        ),
+        "policy": _worst(policies.values(), _POLICY_ORDER),
+        "artifacts": "simulated" if simulated else "real",
+        "required": list(required),
+        "reasons": reasons,
+        "overall": overall,
     }
+
+
+_REPRODUCED_ORDER = ("different", "error", "interrupted", "running", "not checked", "matched")
+_POLICY_ORDER = ("invalid", "placeholder", "mismatch", "unbound", "missing", "verified")
+
+
+def _worst(states: Iterable[str], order: Sequence[str]) -> str:
+    """The first of *order* among *states*; the last of *order* when there is none."""
+    found = set(states)
+    return next((state for state in order if state in found), order[-1])
+
+
+def _reproduced(record: Mapping[str, Any]) -> str:
+    """What ``bake --verify-reproducible`` recorded for a variant, or ``not checked``."""
+    return str(record["reproducibility"] or "not checked")
+
+
+def _policy_state(policy: Mapping[str, Any] | None) -> str:
+    if policy is None:
+        return "missing"
+    if not policy["valid"]:
+        return "invalid"
+    if policy["placeholder"]:
+        return "placeholder"
+    matches = policy["artifact_matches"]
+    return "unbound" if matches is None else ("verified" if matches else "mismatch")
 
 
 # ── rendering ────────────────────────────────────────────────────────────
@@ -546,18 +737,30 @@ def _text(index: Mapping[str, Any]) -> str:
     recipe = index["recipe"]
     lines = [
         f"evidence {index['created']}  verdict {verdict['overall']}",
-        f"  recipe     {recipe['path'] or recipe['name'] or '-'}  digest {recipe['digest'][:12]}",
+        f"  recipe     {recipe['path'] or recipe['name'] or '-'}  digest {recipe['digest'][:12]}"
+        f"  {verdict['recipe']}",
+        f"  tree       {verdict['tree']}",
         f"  integrity  {verdict['integrity']}",
         f"  lock       {verdict['lock']}",
         f"  reproduce  {verdict['reproducible']}",
+        f"  policy     {verdict['policy']}",
+        f"  artifacts  {verdict['artifacts']}",
         f"  lint       {verdict['lint']}",
     ]
+    if verdict["required"]:
+        lines.append(f"  required   {', '.join(verdict['required'])}")
     for name, record in index["variants"].items():
         for row in record["artifacts"]:
             lines.append(
                 f"  {name}/{row['target']}  {row['path']}  sha256 {row['sha256'][:12]}  "
                 f"{row['integrity']}"
             )
+    if verdict["reasons"]:
+        lines.append("reasons:")
+        lines.extend(
+            f"  {r['severity']:<10}  {r['code']}  {r['subject'] or '-'}: {r['message']}"
+            for r in verdict["reasons"]
+        )
     lines.append("members:")
     lines.extend(f"  {entry['sha256']}  {name}" for name, entry in sorted(index["members"].items()))
     lines.extend(f"note: {note}" for note in index["notes"])
@@ -582,13 +785,15 @@ th { background: #f6f8fa; }
 code { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
 .banner { display: flex; flex-wrap: wrap; gap: .5rem; padding: .75rem; border-radius: 6px; }
 .banner span { padding: .2rem .6rem; border-radius: 4px; background: #fff; }
+.banner ul { flex-basis: 100%; margin: 0; padding-left: 1.25rem; }
 .pass { background: #dafbe1; border: 1px solid #1a7f37; }
 .fail { background: #ffebe9; border: 1px solid #cf222e; }
+.incomplete { background: #fff8c5; border: 1px solid #9a6700; }
 </style>
 </head>
 <body>
 <h1>Evidence: $title</h1>
-<div class="banner $overall" id="verdict"><strong>verdict: $overall</strong>$checks</div>
+<div class="banner $overall" id="verdict"><strong>verdict: $overall</strong>$checks$reasons</div>
 <h2>Recipe</h2>
 $recipe
 <h2>Lockfile</h2>
@@ -639,7 +844,7 @@ def _variant_html(name: str, record: Mapping[str, Any]) -> str:
             {
                 "tree digest": record["tree_digest"],
                 "tree matches the recipe": record["tree_matches"],
-                "reproducible": record["reproducible"],
+                "reproducibility": record["reproducibility"],
             }
         )
     )
@@ -673,7 +878,12 @@ def render_html(index: Mapping[str, Any]) -> str:
     title = str(recipe["name"] or recipe["path"] or "bake")
     checks = "".join(
         f"<span>{html.escape(key)}: {html.escape(str(verdict[key]))}</span>"
-        for key in ("integrity", "lock", "reproducible", "lint")
+        for key in ("integrity", "lock", "reproducible", "lint", "recipe", "tree", "policy")
+    )
+    reasons = "".join(
+        f"<li><code>{html.escape(r['severity'])} {html.escape(r['code'])}</code> "
+        f"{html.escape(r['subject'] or '-')}: {html.escape(r['message'])}</li>"
+        for r in verdict["reasons"]
     )
     lock_html = "<p>none</p>"
     if lockfile is not None:
@@ -685,6 +895,7 @@ def render_html(index: Mapping[str, Any]) -> str:
         title=html.escape(title),
         overall=html.escape(str(verdict["overall"])),
         checks=checks,
+        reasons=f'<ul id="reasons">{reasons}</ul>' if reasons else "",
         recipe=_pairs(recipe),
         lockfile=lock_html,
         lint=_pairs({k: v for k, v in lint.items() if k != "codes"})
@@ -699,4 +910,12 @@ def render_html(index: Mapping[str, Any]) -> str:
     )
 
 
-__all__ = ["EVIDENCE_FORMATS", "Evidence", "EvidenceFormat", "evidence", "render_html"]
+__all__ = [
+    "EVIDENCE_FORMATS",
+    "EVIDENCE_REQUIREMENTS",
+    "Evidence",
+    "EvidenceFormat",
+    "EvidenceRequirement",
+    "evidence",
+    "render_html",
+]

@@ -27,7 +27,12 @@ def _result(build_dir: Path, outside: Path) -> BakeResult:
         profile="default",
         artifacts={
             "qemu": ArtifactRef(target="qemu", path=build_dir / "default" / "disk.qcow2"),
-            "azure": ArtifactRef(target="azure", path=outside / "disk.vhd", digest="ab" * 32),
+            "azure": ArtifactRef(
+                target="azure",
+                path=outside / "disk.vhd",
+                digest="ab" * 32,
+                manifest_digest="ef" * 32,
+            ),
         },
         report_path=build_dir / "default" / "report.json",
     )
@@ -36,6 +41,7 @@ def _result(build_dir: Path, outside: Path) -> BakeResult:
         lock_digest="cd" * 32,
         backend="inprocess",
         created_at="2026-10-04T12:00:00+00:00",
+        lock_sha256="cd" * 32,
     )
 
 
@@ -48,7 +54,10 @@ def test_round_trip_stores_relative_paths_inside_build_dir(tmp_path: Path) -> No
 
     assert path == build_dir / BAKE_RESULT_FILENAME
     payload = json.loads(path.read_text(encoding="utf-8"))
-    entry = payload["profiles"]["default"]
+    assert payload["schema_version"] == 2 and "profiles" not in payload
+    assert payload["lock_sha256"] == "cd" * 32
+    entry = payload["variants"]["default"]
+    assert entry["manifest_digests"] == {"azure": "ef" * 32, "qemu": None}
     assert entry["artifacts"]["qemu"] == "default/disk.qcow2"
     assert entry["report_path"] == "default/report.json"
     assert entry["artifacts"]["azure"] == str(outside.resolve() / "disk.vhd")

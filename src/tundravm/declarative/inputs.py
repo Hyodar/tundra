@@ -1,0 +1,53 @@
+"""The host files a recipe reads: :func:`recipe_inputs`.
+
+Every ``Path`` a declaration names is read when the recipe lowers (``File`` and
+``Unit`` contents, ``Template`` sources, ``Directory`` trees, ``Kernel``
+configs), and ``Tdxs.from_policy`` reads its policy file when the recipe module
+runs. Tools that must notice a change to what a recipe compiles to (``tundravm
+watch``) poll these paths besides the recipe's own modules.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from .model import Directory, File, Fragment, Kernel, Recipe, Template, Unit
+from .utils import Tdxs
+
+
+def recipe_inputs(recipe: Recipe) -> frozenset[Path]:
+    """The absolute host paths *recipe*'s declarations read, in every variant.
+
+    A ``Directory`` contributes its source directory (its members are inputs
+    too: a caller stamping it walks it); relative paths are taken from the
+    working directory, as lowering reads them. Paths that do not exist are kept:
+    creating one changes what the recipe lowers to.
+    """
+    found: set[Path] = set()
+    _visit(recipe.common, found)
+    for variant in recipe.variants:
+        _visit(variant.add, found)
+        for item in variant.replace:
+            _visit(item, found)
+    return frozenset(path.absolute() for path in found)
+
+
+def _visit(item: object, found: set[Path]) -> None:
+    match item:
+        case Tdxs(policy_file=Path() as path):
+            found.add(path)
+    match item:
+        case Fragment(items=items):
+            for child in items:
+                _visit(child, found)
+        case (
+            File(content=Path() as path)
+            | Unit(content=Path() as path)
+            | Template(template=Path() as path)
+            | Kernel(config=Path() as path)
+            | Directory(source=path)
+        ):
+            found.add(path)
+
+
+__all__ = ["recipe_inputs"]

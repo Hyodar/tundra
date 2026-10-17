@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
-from tundravm import Artifact, Sbom, sbom
+from tundravm import Artifact, Backend, Sbom, bake, sbom
 from tundravm._source import Source
 from tundravm.declarative import (
     Build,
@@ -20,6 +22,8 @@ from tundravm.declarative import (
     Variant,
     lock,
     lower,
+    read_artifacts,
+    read_lock,
 )
 from tundravm.declarative.bom import SBOM_FORMATS, manifest_path, purl, read_manifest
 from tundravm.declarative.utils import EfiStub
@@ -30,6 +34,7 @@ COMMIT = "c" * 40
 DEB_SHA = "d" * 64
 SNAPSHOT = "20251113T083151Z"
 EFI_VERSION = "257.8-1~deb13u1"
+UKI_SHA = hashlib.sha256(b"uki").hexdigest()
 
 # The exact shape mkosi 26 writes for ManifestFormat=json: Manifest.as_dict() in the
 # installed mkosi/manifest.py (manifest_version, config, packages[type, name, version,
@@ -88,21 +93,28 @@ def locked() -> Lock:
     return lock(_recipe(), resolver=_resolve)
 
 
-def _artifact(tmp_path: Path, *, manifest: bool = True) -> Artifact:
+def _artifact(tmp_path: Path, *, manifest: bool = True, lock: Lock | None = None) -> Artifact:
+    """An artifact as a bake records it: bound to its manifest and to *lock*."""
     output = tmp_path / "default" / "output"
     output.mkdir(parents=True)
     path = output / "default.efi"
     path.write_bytes(b"uki")
+    recorded = None
     if manifest:
-        (output / "default.manifest").write_text(json.dumps(MANIFEST, indent=2), encoding="utf-8")
+        text = json.dumps(MANIFEST, indent=2)
+        (output / "default.manifest").write_text(text, encoding="utf-8")
+        recorded = hashlib.sha256(text.encode()).hexdigest()
     return Artifact(
         path=path,
         variant="default",
         target="qemu",
-        sha256="a" * 64,
+        sha256=UKI_SHA,
         recipe_digest="r" * 64,
         lock_digest="l" * 64,
         tree_digest="t" * 64,
+        lock_sha256=None if lock is None else hashlib.sha256(lock.text().encode()).hexdigest(),
+        manifest_sha256=recorded,
+        out=tmp_path,
     )
 
 
@@ -150,7 +162,7 @@ def test_manifest_path_is_the_variant_manifest_beside_the_artifact(tmp_path: Pat
 
 
 def test_artifact_sbom_merges_manifest_lock_and_metadata(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path), lock=locked)
+    document = sbom(_artifact(tmp_path, lock=locked), lock=locked)
     assert isinstance(document, Sbom)
     assert document.manifest_found and document.notes == ()
     assert [p.name for p in document.packages] == sorted(p["name"] for p in PACKAGES)
@@ -159,7 +171,8 @@ def test_artifact_sbom_merges_manifest_lock_and_metadata(tmp_path: Path, locked:
         "x86_64",
         SNAPSHOT,
     )
-    assert (document.variant, document.artifact_sha256) == ("default", "a" * 64)
+    assert (document.variant, document.artifact_sha256) == ("default", UKI_SHA)
+    assert document.artifact == Path("default/output/default.efi") and document.bound
     assert (document.recipe_digest, document.tree_digest) == ("r" * 64, "t" * 64)
     build, stub = document.sources
     assert (build.kind, build.name, build.commit, build.ref, build.url) == (
@@ -175,9 +188,9 @@ def test_artifact_sbom_merges_manifest_lock_and_metadata(tmp_path: Path, locked:
 
 
 def test_missing_manifest_lists_declared_packages_and_says_so(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path, manifest=False), lock=locked)
+    document = sbom(_artifact(tmp_path, manifest=False, lock=locked), lock=locked)
     assert not document.manifest_found
-    assert document.manifest == tmp_path / "default" / "output" / "default.manifest"
+    assert document.manifest == Path("default/output/default.manifest")
     assert any("no mkosi package manifest" in note for note in document.notes)
     names = {p.name for p in document.packages}
     assert {"systemd", "ca-certificates"} <= names
@@ -211,7 +224,7 @@ def test_lowered_sbom_lists_declared_sources_pinned_by_the_lock(
 
 
 def test_purls_follow_the_package_url_spec(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path), lock=locked)
+    document = sbom(_artifact(tmp_path, lock=locked), lock=locked)
     by_name = {c.name: c for c in document.components}
     assert purl(by_name["bsdutils"], distro="debian-trixie") == (
         "pkg:deb/debian/bsdutils@1:2.41.5-0%2Bdeb13u1?arch=amd64&distro=debian-trixie"
@@ -223,7 +236,7 @@ def test_purls_follow_the_package_url_spec(tmp_path: Path, locked: Lock) -> None
 
 
 def test_spdx_document_structure(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path), lock=locked).to_spdx()
+    document = sbom(_artifact(tmp_path, lock=locked), lock=locked).to_spdx()
     for key in ("spdxVersion", "dataLicense", "SPDXID", "name", "documentNamespace"):
         assert document[key]
     assert document["spdxVersion"] == "SPDX-2.3" and document["SPDXID"] == "SPDXRef-DOCUMENT"
@@ -236,7 +249,7 @@ def test_spdx_document_structure(tmp_path: Path, locked: Lock) -> None:
         assert package["SPDXID"].startswith("SPDXRef-")
         assert {"name", "versionInfo", "downloadLocation", "filesAnalyzed"} <= set(package)
     image = packages[0]
-    assert image["checksums"] == [{"algorithm": "SHA256", "checksumValue": "a" * 64}]
+    assert image["checksums"] == [{"algorithm": "SHA256", "checksumValue": UKI_SHA}]
     app = next(p for p in packages if p["name"] == "app")
     assert app["downloadLocation"] == f"git+{REPO}@{COMMIT}"
     assert app["externalRefs"][0]["referenceType"] == "purl"
@@ -249,7 +262,7 @@ def test_spdx_document_structure(tmp_path: Path, locked: Lock) -> None:
 
 
 def test_cyclonedx_document_structure(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path), lock=locked).to_cyclonedx()
+    document = sbom(_artifact(tmp_path, lock=locked), lock=locked).to_cyclonedx()
     assert (document["bomFormat"], document["specVersion"], document["version"]) == (
         "CycloneDX",
         "1.5",
@@ -270,7 +283,7 @@ def test_documents_are_deterministic(
     tmp_path: Path, locked: Lock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "0")
-    artifact = _artifact(tmp_path)
+    artifact = _artifact(tmp_path, lock=locked)
     first, second = sbom(artifact, lock=locked), sbom(artifact, lock=locked)
     for format in SBOM_FORMATS:
         assert first.render(format) == second.render(format)
@@ -278,7 +291,7 @@ def test_documents_are_deterministic(
 
 
 def test_text_and_markdown_tables(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path), lock=locked)
+    document = sbom(_artifact(tmp_path, lock=locked), lock=locked)
     text = document.render("text")
     assert text.startswith("sbom default\n")
     assert "packages (5)" in text and "sources (2)" in text
@@ -288,3 +301,55 @@ def test_text_and_markdown_tables(tmp_path: Path, locked: Lock) -> None:
     assert f"| app | build | {COMMIT} | main | {REPO} | /usr/bin/app, /etc/app.conf |" in markdown
     with pytest.raises(ValidationError):
         document.render("xml")  # type: ignore[arg-type]
+
+
+# ── binding to the bake ──────────────────────────────────────────────────
+
+
+def test_a_changed_artifact_is_refused(tmp_path: Path, locked: Lock) -> None:
+    artifact = _artifact(tmp_path, lock=locked)
+    artifact.path.write_bytes(b"tampered")
+    with pytest.raises(ArtifactError, match="changed since the bake"):
+        sbom(artifact, lock=locked)
+
+
+def test_a_lockfile_the_bake_did_not_read_is_refused_unless_allowed(
+    tmp_path: Path, locked: Lock
+) -> None:
+    artifact = _artifact(tmp_path)
+    with pytest.raises(ArtifactError) as raised:
+        sbom(artifact, lock=locked)
+    assert raised.value.code == "E_ARTIFACT_CHANGED"
+    assert "the bake read no lockfile" in str(raised.value)
+    assert raised.value.hint is not None and "--allow-unbound" in raised.value.hint
+    document = sbom(artifact, lock=locked, allow_unbound=True)
+    assert not document.bound
+    assert document.notes[0].startswith("unbound, the document is incomplete: the bake read")
+    assert ("bound", "no (incomplete)") in document.metadata()
+
+
+def test_a_manifest_changed_after_the_bake_is_refused(tmp_path: Path, locked: Lock) -> None:
+    artifact = _artifact(tmp_path, lock=locked)
+    manifest = manifest_path(artifact)
+    manifest.write_text(json.dumps({**MANIFEST, "packages": PACKAGES[:1]}), encoding="utf-8")
+    with pytest.raises(ArtifactError, match="default/output/default.manifest hashes to"):
+        sbom(artifact, lock=locked)
+    assert len(sbom(artifact, lock=locked, allow_unbound=True).packages) == 1
+
+
+def test_moving_the_bake_directory_changes_no_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "0")
+    recipe = Recipe(
+        "node", Fragment("common", items=(Package("curl"), Package("linux-image-amd64")))
+    )
+    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "one")
+    shutil.copytree(tmp_path / "one", tmp_path / "elsewhere" / "two")
+    documents = [
+        sbom(read_artifacts(out)[0], lock=read_lock(out / "tundravm.lock"))
+        for out in (tmp_path / "one", tmp_path / "elsewhere" / "two")
+    ]
+    assert documents[0].artifact == Path("default/disk.qcow2")
+    for format in SBOM_FORMATS:
+        assert documents[0].render(format) == documents[1].render(format)

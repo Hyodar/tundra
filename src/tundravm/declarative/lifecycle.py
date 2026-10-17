@@ -228,6 +228,13 @@ class Artifact:
     simulated: bool = False
     ports: tuple[int, ...] = ()
     """Guest ports the variant's ``Secrets`` deliveries listen on; ``deploy`` forwards them."""
+    lock_sha256: str | None = None
+    """The sha256 of the lockfile the bake read; ``None`` when it read none."""
+    manifest_sha256: str | None = None
+    """The sha256 of mkosi's package manifest beside the artifact at bake time; ``None``
+    when there was none."""
+    out: Path | None = None
+    """The bake output directory holding ``bake-result.json``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1032,9 +1039,12 @@ def bake_image(
     *verify_reproducible* bakes the same selection a second time into
     ``out/.reproduce`` (same lockfile, the same ``out/.sources`` checkouts
     hard-linked, everything compiled and built again) and compares every
-    artifact's sha256: ``bake-result.json`` records ``declarative.reproducible``,
-    and a mismatch raises ``ReproducibilityError`` with a per-artifact table,
-    keeping the second build for comparison (it is removed when all match).
+    artifact's sha256. The first build's ``bake-result.json`` is complete before
+    the second build starts; its ``declarative.reproducibility`` is rewritten
+    atomically at each step: ``running``, then ``matched``, ``different``,
+    ``error`` (the second build failed) or ``interrupted``. A mismatch raises
+    ``ReproducibilityError`` with a per-artifact table, keeping the second build
+    for comparison (it is removed when all match).
     """
     if offline and img.policy.network_mode != "offline":
         img = replace(img, policy=replace(img.policy, network_mode="offline"))
@@ -1057,39 +1067,128 @@ def bake_image(
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
         result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
-        rows: list[tuple[str, str, str, str, str]] = []
-        if verify_reproducible:
-            scratch = destination / REPRODUCE_DIRNAME
-            again = _rebake(baking, scratch, used, frozen=locked is not None, reporter=reporter)
-            rows = _compare_digests(result, again)
-    tree = read_tree(destination / "mkosi", warn=_tree_warning(reporter))
-    recipe_digest = (
-        locked.recipe_digest
-        if locked is not None
-        else (read_lock(lock_path).recipe_digest if lock_path.is_file() else "")
-    )
-    manifest = destination / BAKE_RESULT_FILENAME
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload[MANIFEST_KEY] = {
-        "recipe_digest": recipe_digest,
-        "simulated": simulated,
-        "tree_digest": tree.digest,
-    }
-    ports = {name: secret_ports(baking, name) for name in sorted(result.profiles)}
-    if any(ports.values()):
-        payload[MANIFEST_KEY]["ports"] = {name: list(p) for name, p in ports.items() if p}
-    if locked is not None:
-        source = lock_source if lock_source is not None else lock_path
-        # None: an in-memory Lock read through a scratch copy
-        payload[MANIFEST_KEY]["lockfile"] = (
-            str(source) if lock_source is not None or used == lock_path else None
+        tree = read_tree(destination / "mkosi", warn=_tree_warning(reporter))
+        recipe_digest = (
+            locked.recipe_digest
+            if locked is not None
+            else (read_lock(lock_path).recipe_digest if lock_path.is_file() else "")
         )
-    if verify_reproducible:
-        payload[MANIFEST_KEY]["reproducible"] = all(row[4] == "match" for row in rows)
-    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    if verify_reproducible:
-        _report_reproducibility(rows, destination / REPRODUCE_DIRNAME, reporter)
+        manifest = destination / BAKE_RESULT_FILENAME
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload[MANIFEST_KEY] = {
+            "recipe_digest": recipe_digest,
+            "simulated": simulated,
+            "tree_digest": tree.digest,
+        }
+        ports = {name: secret_ports(baking, name) for name in sorted(result.profiles)}
+        if any(ports.values()):
+            payload[MANIFEST_KEY]["ports"] = {name: list(p) for name, p in ports.items() if p}
+        if locked is not None:
+            source = lock_source if lock_source is not None else lock_path
+            # None: an in-memory Lock read through a scratch copy
+            payload[MANIFEST_KEY]["lockfile"] = (
+                str(source) if lock_source is not None or used == lock_path else None
+            )
+        _write_json(manifest, payload)
+        if verify_reproducible:
+            _verify_reproducible(
+                baking, result, used, manifest, frozen=locked is not None, reporter=reporter
+            )
     return result, read_artifacts(manifest)
+
+
+ReproducibilityState = Literal["running", "matched", "different", "error", "interrupted"]
+
+
+REPRODUCIBILITY_STATES: tuple[ReproducibilityState, ...] = get_args(ReproducibilityState)
+
+
+def recorded_reproducibility(extra: Mapping[str, object]) -> dict[str, object] | None:
+    """``declarative.reproducibility`` of a ``bake-result.json``, ``None`` when not checked."""
+    found = extra.get("reproducibility")
+    if not isinstance(found, dict) or found.get("state") not in REPRODUCIBILITY_STATES:
+        return None
+    return found
+
+
+def reproducibility_of(recorded: Mapping[str, object] | None, subject: str) -> str | None:
+    """The recorded state for *subject* (``variant`` or ``variant/target``): a ``different``
+    comparison is ``matched`` for a subject none of whose artifacts differ."""
+    if recorded is None:
+        return None
+    state = str(recorded["state"])
+    if state != "different":
+        return state
+    differ = recorded.get("differ")
+    names = [str(item) for item in differ] if isinstance(differ, list) else []
+    hit = any(name == subject or name.startswith(f"{subject}/") for name in names)
+    return "different" if hit else "matched"
+
+
+def _write_json(path: Path, payload: object) -> None:
+    """Write *payload* to *path* atomically: a sibling temporary file renamed over it."""
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    handle, scratch = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        os.chmod(scratch, mode)
+        os.replace(scratch, path)
+    except BaseException:
+        Path(scratch).unlink(missing_ok=True)
+        raise
+
+
+def _record_reproducibility(
+    manifest: Path,
+    state: ReproducibilityState,
+    *,
+    second_build: str | None,
+    differ: Sequence[str] = (),
+    error: str | None = None,
+) -> None:
+    """Set ``declarative.reproducibility`` of *manifest* to *state*, atomically."""
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload[MANIFEST_KEY]["reproducibility"] = {
+        "state": state,
+        "second_build": second_build,
+        "differ": list(differ),
+        "error": error,
+    }
+    _write_json(manifest, payload)
+
+
+def _verify_reproducible(
+    baking: Lowered,
+    result: BakeResult,
+    used: Path,
+    manifest: Path,
+    *,
+    frozen: bool,
+    reporter: Reporter | None,
+) -> None:
+    """Bake again into ``OUT/.reproduce``, record each state of the comparison, compare."""
+    scratch = manifest.parent / REPRODUCE_DIRNAME
+    _record_reproducibility(manifest, "running", second_build=REPRODUCE_DIRNAME)
+    try:
+        again = _rebake(baking, scratch, used, frozen=frozen, reporter=reporter)
+    except KeyboardInterrupt:
+        _record_reproducibility(manifest, "interrupted", second_build=REPRODUCE_DIRNAME)
+        raise
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}".splitlines()[0]
+        _record_reproducibility(manifest, "error", second_build=REPRODUCE_DIRNAME, error=message)
+        raise
+    rows = _compare_digests(result, again)
+    differ = [f"{variant}/{target}" for variant, target, *_, verdict in rows if verdict != "match"]
+    if differ:
+        _record_reproducibility(
+            manifest, "different", second_build=REPRODUCE_DIRNAME, differ=differ
+        )
+    else:
+        _record_reproducibility(manifest, "matched", second_build=None)
+    _report_reproducibility(rows, scratch, reporter)
 
 
 def _rebake(
@@ -1299,6 +1398,9 @@ def read_artifacts(manifest: Path) -> tuple[Artifact, ...]:
                     tree_digest=str(extra.get("tree_digest", "")),
                     simulated=simulated,
                     ports=tuple(int(port) for port in ports.get(variant, ())),
+                    lock_sha256=result.lock_sha256,
+                    manifest_sha256=ref.manifest_digest,
+                    out=base,
                 )
             )
     return tuple(artifacts)

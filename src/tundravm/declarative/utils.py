@@ -294,7 +294,8 @@ class Tdxs(Composite):
 
     Declares the ``tdx`` group (other services join it for ``/dev/tdx_guest``) and
     the ``tdxs`` user. *after_init* orders both units after ``runtime-init.service``.
-    Fragment name: ``tdxs``.
+    Fragment name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
+    (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
 
     source: Git = TUNDRA_TOOLS
@@ -306,6 +307,7 @@ class Tdxs(Composite):
     verify_imds: bool = False
     verify_identity_token: bool = False
     after_init: bool = False
+    policy_file: Path | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
     def from_policy(
@@ -341,7 +343,10 @@ class Tdxs(Composite):
         registers = data["registers"]
         assert isinstance(registers, dict)
         expected = validator_measurements(registers, mrtd=mrtd)
-        return cls(validator=validator, expected_measurements=expected, **kwargs)
+        verifier = cls(validator=validator, expected_measurements=expected, **kwargs)
+        if not isinstance(policy, Mapping):
+            object.__setattr__(verifier, "policy_file", Path(policy))
+        return verifier
 
     @classmethod
     def from_measurements(

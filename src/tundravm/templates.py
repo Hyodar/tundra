@@ -418,8 +418,12 @@ WORKFLOW_TEMPLATE = """\
 # names a backend: local or inprocess. (lima and nix need limactl or Nix, which
 # ubuntu-latest does not have; install them in a step of your own first.) It
 # bakes the image twice to prove it reproducible, then uploads the evidence
-# bundle, its HTML report, bake-result.json and the built artifacts: mkosi's
-# under build/<variant>/output/, the in-process backend's disk.* beside them.
+# bundle, its HTML report, bake-result.json (the second build's too) and the
+# built artifacts: mkosi's under build/<variant>/output/, the in-process
+# backend's disk.* beside them. Evidence requires a matched second build and the
+# lockfile, and real artifacts unless the backend is inprocess. When the bake
+# fails after writing build/bake-result.json, evidence is still collected and
+# uploaded, and the job fails on the bake's (or evidence's) exit status.
 name: tundravm
 
 on:
@@ -480,18 +484,24 @@ jobs:
           --out build --verify-reproducible
 
       - name: Collect evidence
+        if: ${{{{ !cancelled() && hashFiles('build/bake-result.json') != '' }}}}
         run: >-
           uv run tundravm evidence {recipe} --out build
+          --require ${{{{ vars.TUNDRAVM_BAKE_BACKEND == 'inprocess'
+          && 'reproducible,lock' || 'reproducible,lock,real' }}}}
           --bundle evidence.tar.gz --html evidence.html
 
       - name: Upload evidence and artifacts
+        if: ${{{{ !cancelled() && hashFiles('build/bake-result.json') != '' }}}}
         uses: actions/upload-artifact@v4
         with:
           name: tundravm-bake
+          include-hidden-files: true
           path: |
             evidence.tar.gz
             evidence.html
             build/bake-result.json
+            build/.reproduce/**/bake-result.json
             build/*/output/*
             build/*/*.qcow2
             build/*/*.vhd

@@ -13,6 +13,7 @@ from tests.helpers import run_main, write_recipe_file
 from tundravm.backends.inprocess import TARGET_FILENAMES
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.diff import TreeDiff
+from tundravm.evidence import EVIDENCE_REQUIREMENTS
 from tundravm.formats import md_cell, resolve_format, workflow_command
 from tundravm.templates import render_workflow
 
@@ -145,15 +146,30 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
         "uv run tundravm fetch node.py",
         "uv run tundravm bake node.py --backend ${{ vars.TUNDRAVM_BAKE_BACKEND }} "
         "--out build --verify-reproducible",
-        "uv run tundravm evidence node.py --out build "
-        "--bundle evidence.tar.gz --html evidence.html",
+        "uv run tundravm evidence node.py --out build --require ",
         "uses: actions/upload-artifact@v4",
     )
-    uploads = bake[-1].split("path: | ")[1].split()
+    baking, collect, upload = bake[-3:]
+    assert "if:" not in baking and "continue-on-error" not in baking
+    # evidence and the upload still run after a failed bake that wrote its record; the
+    # failed bake step alone fails the job
+    after_failure = "if: ${{ !cancelled() && hashFiles('build/bake-result.json') != '' }}"
+    assert after_failure in collect and after_failure in upload
+    assert collect.endswith("--bundle evidence.tar.gz --html evidence.html")
+    expression = collect.split("--require ${{ ")[1].split(" }}")[0]
+    assert expression == (
+        "vars.TUNDRAVM_BAKE_BACKEND == 'inprocess' "
+        "&& 'reproducible,lock' || 'reproducible,lock,real'"
+    )
+    for listed in re.findall(r"'([a-z,]+)'", expression.split("&&", 1)[1]):
+        assert set(listed.split(",")) <= set(EVIDENCE_REQUIREMENTS)
+    assert "include-hidden-files: true" in upload
+    uploads = upload.split("path: | ")[1].split()
     assert uploads == [
         "evidence.tar.gz",
         "evidence.html",
         "build/bake-result.json",
+        "build/.reproduce/**/bake-result.json",
         "build/*/output/*",
         "build/*/*.qcow2",
         "build/*/*.vhd",

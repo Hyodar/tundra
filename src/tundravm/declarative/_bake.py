@@ -84,6 +84,7 @@ def bake(
                 _assert_frozen_lock(lowered)
         destination.mkdir(parents=True, exist_ok=True)
         lock_digest = _lock_digest(lowered)
+        lock_sha256 = _lock_sha256(lowered)
         emission_root = destination / "mkosi"
         with progress.phase("compile", "compile", profile=scope):
             _, emission = emit(lowered, emission_root)
@@ -126,6 +127,7 @@ def bake(
             )
             result = _build(backend, request, progress)
             digests = _hash_artifacts(result, request, progress)
+            _hash_manifests(result)
             report = {
                 "profile": name,
                 "lock_digest": lock_digest,
@@ -161,6 +163,7 @@ def bake(
         baked = BakeResult(
             profiles=profiles,
             lock_digest=lock_digest,
+            lock_sha256=lock_sha256,
             backend=backend.name,
             created_at=datetime.now(UTC).isoformat(timespec="seconds"),
             duration_s=total,
@@ -243,6 +246,29 @@ def _hash_artifacts(
     return digests
 
 
+def package_manifest(artifact: Path, variant: str) -> Path:
+    """Where mkosi wrote the package manifest of *variant*'s *artifact*: ``<variant>.manifest``.
+
+    ``<variant>.manifest.json`` and ``<artifact stem>.manifest`` beside it are taken
+    too when they exist; the first candidate is returned when none does.
+    """
+    directory = artifact.parent
+    stem = artifact.name.split(".", 1)[0]
+    names = dict.fromkeys(
+        f"{name}{suffix}" for name in (variant, stem) for suffix in (".manifest", ".manifest.json")
+    )
+    candidates = [directory / name for name in names]
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
+def _hash_manifests(result: ProfileBuildResult) -> None:
+    """Record on *result* the sha256 of each artifact's package manifest, ``None`` if absent."""
+    for target, artifact in sorted(result.artifacts.items()):
+        manifest = package_manifest(Path(artifact.path), result.profile)
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.is_file() else None
+        result.artifacts[target] = replace(artifact, manifest_digest=digest)
+
+
 def _script_checksums(emission: MkosiEmission, profile: str) -> dict[str, str]:
     scripts: dict[Phase, Path] = emission.script_paths.get(profile, {})
     return {
@@ -257,6 +283,12 @@ def _lock_digest(lowered: Lowered) -> str:
     if not path.exists():
         return lowered.digest()
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _lock_sha256(lowered: Lowered) -> str | None:
+    """The sha256 of the lockfile the bake reads, ``None`` when there is none."""
+    path = lowered.lock_path
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
 def _fetched_sources(
@@ -390,4 +422,4 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
     )
 
 
-__all__ = ["bake"]
+__all__ = ["bake", "package_manifest"]

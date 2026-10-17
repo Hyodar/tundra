@@ -32,8 +32,9 @@ from tundravm._source import GitSource, NamedSource
 from tundravm.errors import ArtifactError, ValidationError
 from tundravm.lockfile import LockedFetch
 
+from ._bake import package_manifest
 from ._lowered import Lowered
-from .lifecycle import Artifact, Lock
+from .lifecycle import Artifact, Lock, verify_artifact
 
 ComponentKind = Literal["package", "build", "kernel", "efi-stub"]
 SbomFormat = Literal["spdx-json", "cyclonedx-json", "text", "markdown"]
@@ -100,11 +101,16 @@ class Sbom:
     recipe_digest: str = ""
     tree_digest: str = ""
     artifact: Path | None = None
+    """The artifact's path relative to the bake output directory (absolute when outside it)."""
     artifact_sha256: str = ""
     tundravm_version: str = ""
     manifest: Path | None = None
-    """The mkosi manifest read, or where it was looked for when ``manifest_found`` is false."""
+    """The mkosi manifest read, or where it was looked for when ``manifest_found`` is false
+    (relative to the bake output directory for an artifact)."""
     manifest_found: bool = False
+    bound: bool = True
+    """``False`` when ``allow_unbound`` accepted a lockfile or manifest other than the bake's:
+    the document is incomplete, and a note says what is unbound."""
     created: str = ""
     """ISO 8601 UTC creation time: ``SOURCE_DATE_EPOCH`` when set, else when built."""
     notes: tuple[str, ...] = ()
@@ -235,6 +241,7 @@ class Sbom:
             ("artifact", "" if self.artifact is None else str(self.artifact)),
             ("artifact sha256", self.artifact_sha256),
             ("manifest", _manifest_cell(self)),
+            ("bound", "yes" if self.bound else "no (incomplete)"),
             ("tundravm", self.tundravm_version),
         )
         return tuple((key, value or "-") for key, value in rows)
@@ -260,6 +267,7 @@ def sbom(
     *,
     lock: Lock | None = None,
     manifest: Path | None = None,
+    allow_unbound: bool = False,
 ) -> Sbom:
     """The bill of materials of a baked *subject* (an :class:`Artifact`) or a lowered recipe.
 
@@ -269,9 +277,16 @@ def sbom(
     source pins (each build's commit or sha256, the kernel's, the ``efi-stub``'s)
     and, for an artifact, the base, arch, snapshot and mirror it was locked with.
     A lowered recipe must have one active variant (``lower(recipe, variants=[...])``).
+
+    An artifact is checked first (:func:`verify_artifact`). Its document is bound to
+    the bake: *lock* must hash to the lockfile sha256 ``bake-result.json`` records
+    and the manifest to the one recorded beside the artifact, else ``ArtifactError``
+    (``E_ARTIFACT_CHANGED``). *allow_unbound* accepts them instead, with a note,
+    and marks the document incomplete (``bound`` is false). Paths in the document
+    are relative to the bake output directory, so moving it changes nothing.
     """
     if isinstance(subject, Artifact):
-        return _of_artifact(subject, lock, manifest)
+        return _of_artifact(subject, lock, manifest, allow_unbound=allow_unbound)
     return _of_lowered(subject, lock, manifest)
 
 
@@ -281,15 +296,7 @@ def manifest_path(artifact: Artifact) -> Path:
     ``<variant>.manifest.json`` and ``<artifact stem>.manifest`` are taken too when
     they exist; the first candidate is returned when none does.
     """
-    directory = artifact.path.parent
-    stem = artifact.path.name.split(".", 1)[0]
-    names = dict.fromkeys(
-        f"{name}{suffix}"
-        for name in (artifact.variant, stem)
-        for suffix in (".manifest", ".manifest.json")
-    )
-    candidates = [directory / name for name in names]
-    return next((path for path in candidates if path.is_file()), candidates[0])
+    return package_manifest(artifact.path, artifact.variant)
 
 
 def read_manifest(path: Path) -> tuple[dict[str, str], tuple[Component, ...]]:
@@ -305,7 +312,7 @@ def read_manifest(path: Path) -> tuple[dict[str, str], tuple[Component, ...]]:
     except (OSError, ValueError) as exc:
         raise ArtifactError(
             f"Unreadable mkosi manifest {path}: {exc}.",
-            hint="Bake the variant again to rewrite it, or pass another --manifest path.",
+            hint="Bake the variant again to rewrite it.",
             context=context,
         ) from exc
     if not isinstance(payload, dict) or payload.get("manifest_version") != MANIFEST_VERSION:
@@ -333,8 +340,24 @@ def read_manifest(path: Path) -> tuple[dict[str, str], tuple[Component, ...]]:
     return {str(k): str(v) for k, v in config.items()}, tuple(found)
 
 
-def _of_artifact(artifact: Artifact, lock: Lock | None, manifest: Path | None) -> Sbom:
+def _of_artifact(
+    artifact: Artifact, lock: Lock | None, manifest: Path | None, *, allow_unbound: bool
+) -> Sbom:
+    verify_artifact(artifact)
     path = manifest_path(artifact) if manifest is None else Path(manifest)
+    unbound = _unbound(artifact, lock, path)
+    if unbound and not allow_unbound:
+        raise ArtifactError(
+            f"The SBOM of {artifact.variant}/{artifact.target} would not describe the bake: "
+            + "; ".join(unbound)
+            + ".",
+            hint=(
+                "Pass the lockfile the bake recorded (--lockfile) and keep mkosi's manifest "
+                "beside the artifact, or bake again. --allow-unbound (allow_unbound=True) "
+                "writes the document anyway, marked incomplete."
+            ),
+            context={"variant": artifact.variant, "target": artifact.target},
+        )
     payload = lock.lockfile.recipe if lock is not None else {}
     profiles = payload.get("profiles") or {}
     profile: Mapping[str, Any] = profiles.get(artifact.variant) or {}
@@ -342,10 +365,13 @@ def _of_artifact(artifact: Artifact, lock: Lock | None, manifest: Path | None) -
     declared: Iterable[str] = ()
     if lock is not None:
         declared = lock.lockfile.dependencies.get(artifact.variant) or profile.get("packages", ())
-    notes: list[str] = []
+    notes = [f"unbound, the document is incomplete: {problem}" for problem in unbound]
     if artifact.simulated:
         notes.append("the artifact is simulated (in-process backend): nothing was installed")
-    packages, config, found = _packages(path, declared, distribution.get("arch"), notes)
+    shown = _relative(path, artifact.out)
+    if artifact.manifest_sha256 is not None and not path.is_file():
+        notes.append(f"the manifest the bake recorded at {shown} is gone")
+    packages, config, found = _packages(path, declared, distribution.get("arch"), notes, shown)
     if lock is None:
         notes.append("no lockfile: source pins are not listed")
     base = str(distribution.get("base") or _base_of(config))
@@ -360,14 +386,54 @@ def _of_artifact(artifact: Artifact, lock: Lock | None, manifest: Path | None) -
         mirror=_opt(distribution.get("mirror")),
         recipe_digest=artifact.recipe_digest,
         tree_digest=artifact.tree_digest,
-        artifact=artifact.path,
+        artifact=_relative(artifact.path, artifact.out),
         artifact_sha256=artifact.sha256,
         tundravm_version=_version(),
-        manifest=path,
+        manifest=shown,
         manifest_found=found,
+        bound=not unbound,
         created=_created(),
         notes=tuple(notes),
     )
+
+
+def _relative(path: Path, out: Path | None) -> Path:
+    """*path* relative to the bake output directory *out*, when it is under it."""
+    if out is None:
+        return path
+    try:
+        return path.resolve().relative_to(out.resolve())
+    except ValueError:
+        return path
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _unbound(artifact: Artifact, lock: Lock | None, manifest: Path) -> list[str]:
+    """Why *lock* and *manifest* are not what the bake of *artifact* recorded; empty if they are."""
+    problems: list[str] = []
+    if lock is not None:
+        actual = _sha256(lock.text().encode())
+        if artifact.lock_sha256 is None:
+            problems.append(f"the bake read no lockfile, but one is given (sha256 {actual[:12]})")
+        elif actual != artifact.lock_sha256:
+            problems.append(
+                f"the lockfile hashes to {actual[:12]}, the bake recorded "
+                f"{artifact.lock_sha256[:12]}"
+            )
+    if manifest.is_file():
+        actual = _sha256(manifest.read_bytes())
+        shown = _relative(manifest, artifact.out)
+        if artifact.manifest_sha256 is None:
+            problems.append(f"the bake recorded no manifest, but {shown} exists")
+        elif actual != artifact.manifest_sha256:
+            problems.append(
+                f"{shown} hashes to {actual[:12]}, the bake recorded "
+                f"{artifact.manifest_sha256[:12]}"
+            )
+    return problems
 
 
 def _of_lowered(img: Lowered, lock: Lock | None, manifest: Path | None) -> Sbom:
@@ -379,7 +445,7 @@ def _of_lowered(img: Lowered, lock: Lock | None, manifest: Path | None) -> Sbom:
     )
     notes: list[str] = []
     declared = sorted(img.state.effective_profile(variant).packages)
-    packages, _, found = _packages(path, declared, img.arch, notes)
+    packages, _, found = _packages(path, declared, img.arch, notes, path)
     pins = {} if lock is None else {f.name: f for f in lock.lockfile.fetches if f.name}
     if lock is None:
         notes.append("no lockfile: sources are listed with their refs, unpinned")
@@ -410,14 +476,14 @@ def _of_lowered(img: Lowered, lock: Lock | None, manifest: Path | None) -> Sbom:
 
 
 def _packages(
-    path: Path, declared: Iterable[str], arch: object, notes: list[str]
+    path: Path, declared: Iterable[str], arch: object, notes: list[str], shown: Path
 ) -> tuple[tuple[Component, ...], dict[str, str], bool]:
     """The manifest's packages, or the *declared* ones (with a note) when it is missing."""
     if path.is_file():
         config, packages = read_manifest(path)
         return packages, config, True
     notes.append(
-        f"no mkosi package manifest at {path}: listing the packages the recipe declares, "
+        f"no mkosi package manifest at {shown}: listing the packages the recipe declares, "
         "without versions"
     )
     deb_arch = _DEB_ARCH.get(str(arch or ""), "")

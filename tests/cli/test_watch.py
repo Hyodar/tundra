@@ -1,11 +1,11 @@
-"""`tundravm watch`: one line per change to the recipe or a module beside it."""
+"""`tundravm watch`: one line per change to the recipe, its modules or its other inputs."""
 
 from __future__ import annotations
 
 import io
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -242,3 +242,111 @@ def test_sources_skip_hidden_cache_and_build_directories(tmp_path: Path) -> None
         "lib/mod.py",
     ]
     assert len(list(python_files(tmp_path.resolve()))) == 3  # build/ is walked without skip
+
+
+INPUTS_RECIPE = """
+from pathlib import Path
+
+from tundravm import Directory, File, Fragment, Package, Recipe, Variant
+from tundravm.backends.inprocess import InProcessBackend
+
+backend = InProcessBackend()
+
+
+def build() -> Recipe:
+    items = (
+        Package("linux-image-amd64"),
+        File("/etc/motd", Path("motd.txt")),
+        Directory("/opt/app", Path("app")),
+    )
+    return Recipe("inputs", Fragment("common", items=items), variants=(Variant("default"),))
+"""
+
+
+@pytest.fixture
+def inputs_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A recipe reading ``motd.txt`` and the ``app/`` tree beside it, compiled to build/mkosi."""
+    (tmp_path / "motd.txt").write_text("hi\n", encoding="utf-8")
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    recipe = write_recipe_file(tmp_path, INPUTS_RECIPE, monkeypatch)
+    assert run_main("compile", str(recipe))[0] == EXIT_OK
+    return recipe
+
+
+def _then_idle(change: Callable[[], object], idle: int = 2) -> Iterator[object]:
+    """Poll once unchanged, make *change*, then poll *idle* + 1 more times."""
+    yield "unchanged"
+    change()
+    for _ in range(idle + 1):
+        yield "after"
+
+
+def test_watch_rechecks_when_a_file_source_changes(inputs_recipe: Path) -> None:
+    motd = inputs_recipe.parent / "motd.txt"
+
+    _, lines = _watch(str(inputs_recipe), ticks=_then_idle(lambda: motd.write_text("hello\n")))
+
+    assert [line.split("; ")[1] for line in lines] == ["tree up to date", "tree stale (1 file)"]
+
+
+def test_watch_rechecks_when_a_file_joins_a_directory_import(inputs_recipe: Path) -> None:
+    added = inputs_recipe.parent / "app" / "lib" / "util.sh"
+
+    def add() -> None:
+        added.parent.mkdir()
+        added.write_text("echo\n", encoding="utf-8")
+
+    _, lines = _watch(str(inputs_recipe), ticks=_then_idle(add))
+
+    assert len(lines) == 2
+    assert lines[1].startswith("lint 0 errors") and "tree stale" in lines[1]
+
+
+def test_watch_rechecks_when_lock_rewrites_the_lockfile(project: Path) -> None:
+    text = project.read_text(encoding="utf-8")
+    project.write_text(text.replace('APP_VERSION = "0.1.0"', 'APP_VERSION = "0.2.0"'))
+
+    _, lines = _watch(ticks=_then_idle(lambda: run_main("lock")))
+
+    assert lines == [
+        "lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (4 files)",
+        "lint 0 errors 0 warnings; tree stale (4 files)",
+    ]
+
+
+def test_watch_rechecks_when_the_tree_is_compiled_elsewhere(inputs_recipe: Path) -> None:
+    motd = inputs_recipe.parent / "motd.txt"
+    motd.write_text("hello\n", encoding="utf-8")
+
+    _, lines = _watch(
+        str(inputs_recipe), ticks=_then_idle(lambda: run_main("compile", str(inputs_recipe)))
+    )
+
+    assert [line.split("; ")[1] for line in lines] == ["tree stale (1 file)", "tree up to date"]
+
+
+def test_watch_write_does_not_wake_the_loop(inputs_recipe: Path) -> None:
+    motd = inputs_recipe.parent / "motd.txt"
+
+    _, lines = _watch(
+        str(inputs_recipe),
+        "--write",
+        ticks=_then_idle(lambda: motd.write_text("hello\n"), idle=3),
+    )
+
+    assert [line.split("; ")[1] for line in lines] == ["tree up to date", "wrote build/mkosi"]
+
+
+def test_watch_reads_pyproject_again_when_it_changes(project: Path) -> None:
+    pyproject = project.parent / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+
+    def retarget() -> None:
+        pyproject.write_text(text.replace('tree = "mkosi"', 'tree = "elsewhere"'))
+
+    _, lines = _watch(ticks=_then_idle(retarget))
+
+    assert len(lines) == 2
+    assert lines[0].endswith("; tree up to date")
+    assert re.search(r"; tree missing \(\d+ files to write\)$", lines[1])

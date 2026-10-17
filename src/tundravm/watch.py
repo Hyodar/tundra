@@ -1,10 +1,14 @@
 """``tundravm watch``: re-check a recipe whenever its sources change.
 
-The sources are the recipe file and every ``.py`` under its directory, minus
-hidden directories, ``__pycache__``, installed packages and the build output.
-They are polled by mtime and size; on a change the modules the recipe imported
-from that directory are dropped from ``sys.modules`` so the next load imports
-them from their current source, then the check runs again and prints one line.
+The sources are the recipe file, every ``.py`` under its directory (minus
+hidden directories, ``__pycache__``, installed packages and the build output)
+and the inputs the last check tracked (:meth:`Sources.track`): the host files
+the recipe's declarations read, the lockfile, ``pyproject.toml`` and the checked
+tree. Files are polled by mtime and size, directories by every entry under
+them; on a change the modules the recipe imported from its directory are
+dropped from ``sys.modules`` so the next load imports them from their current
+source, then the check runs again and prints one line. What the check writes
+itself (:meth:`Sources.wrote`) does not wake the loop.
 """
 
 from __future__ import annotations
@@ -20,8 +24,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
-Stamp = tuple[int, int] | None
-"""A file's ``(st_mtime_ns, st_size)``, or ``None`` when it does not exist."""
+Stamp = tuple[int, int] | tuple[tuple[str, int, int], ...] | None
+"""A file's ``(st_mtime_ns, st_size)``; a directory's ``(relative path, st_mtime_ns,
+st_size)`` per entry under it, symlinks not followed; ``None`` when it does not exist."""
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _ENVIRONMENT_DIRS = frozenset({"site-packages", "dist-packages"})
@@ -32,7 +37,23 @@ def stamp(path: Path) -> Stamp:
         info = path.stat()
     except OSError:
         return None
+    if path.is_dir():
+        return _tree_stamp(path)
     return info.st_mtime_ns, info.st_size
+
+
+def _tree_stamp(root: Path) -> tuple[tuple[str, int, int], ...]:
+    entries: list[tuple[str, int, int]] = []
+    for parent, dirs, names in os.walk(root):
+        here = Path(parent)
+        for name in (*dirs, *names):
+            try:
+                info = (here / name).lstat()
+            except OSError:
+                continue
+            rel = (here / name).relative_to(root).as_posix()
+            entries.append((rel, info.st_mtime_ns, info.st_size))
+    return tuple(sorted(entries))
 
 
 def _pruned(name: str) -> bool:
@@ -74,15 +95,19 @@ def imported_under(root: Path) -> dict[str, Path]:
 
 @dataclass(slots=True)
 class Sources:
-    """The recipe file and the ``.py`` files under its directory.
+    """The recipe file, the ``.py`` files under its directory and the tracked inputs.
 
-    *skip* holds directories left out of the walk (the build output, so ``--write``
-    does not wake the loop); *modules* the ones the recipe imported from there.
+    *skip* holds directories left out of the ``.py`` walk (the build output);
+    *modules* the modules the recipe imported from there; *inputs* the other files
+    and directories the last check depends on; *written* the inputs the running
+    check wrote, re-stamped after it so its own writes do not count as changes.
     """
 
     recipe: Path
     skip: set[Path] = field(default_factory=set)
     modules: dict[str, Path] = field(default_factory=dict)
+    inputs: frozenset[Path] = frozenset()
+    written: set[Path] = field(default_factory=set)
 
     @classmethod
     def of(cls, recipe: Path) -> Sources:
@@ -91,8 +116,17 @@ class Sources:
     def ignore(self, *dirs: Path) -> None:
         self.skip.update(path.resolve() for path in dirs)
 
+    def track(self, paths: Iterable[Path]) -> None:
+        """Watch *paths* (files or directories) instead of the inputs tracked before."""
+        self.inputs = frozenset(path.resolve() for path in paths)
+
+    def wrote(self, path: Path) -> None:
+        """The running check wrote *path*: take its stamp after the check, not before."""
+        self.written.add(path.resolve())
+
     def files(self) -> tuple[Path, ...]:
-        return tuple(dict.fromkeys((self.recipe, *python_files(self.recipe.parent, self.skip))))
+        walked = python_files(self.recipe.parent, self.skip)
+        return tuple(dict.fromkeys((self.recipe, *sorted(self.inputs), *walked)))
 
     def stamps(self) -> dict[Path, Stamp]:
         return {path: stamp(path) for path in self.files()}
@@ -170,10 +204,13 @@ class Watch:
     def cycle(self) -> None:
         before = self.sources.stamps()
         self.sources.forget()
+        self.sources.written.clear()
         line = self.check()
         self.sources.refresh()
+        fresh = self.sources.written
         self.seen = {
-            path: before[path] if path in before else stamp(path) for path in self.sources.files()
+            path: before[path] if path in before and path not in fresh else stamp(path)
+            for path in self.sources.files()
         }
         print(f"{self.clock():%H:%M:%S} {line}", file=self.out, flush=True)
 

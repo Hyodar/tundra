@@ -45,7 +45,7 @@ tundravm watch node.py                          # one lint + tree-check line per
 tundravm bake node.py                           # build every variant, frozen against the lock
 tundravm status node.py                         # where the project stands, and the next command to run
 tundravm sbom build --variant default     # SPDX/CycloneDX bill of materials
-tundravm evidence --bundle evidence.tar.gz      # auditor record of the bake, with a pass/fail verdict
+tundravm evidence --require reproducible,lock --bundle evidence.tar.gz  # auditor record: pass/fail/incomplete with reasons
 tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json   # validator + policy verdict
 tundravm measure build --variant default        # expected RTMRs of the baked artifact
 tundravm deploy build --variant default --target qemu
@@ -63,7 +63,7 @@ Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and
 - **One definition, several targets.** A variant with `target="azure"` or `target="gcp"` gets the platform integration; QEMU qcow2, Azure VHD and GCP tar.gz come from one recipe.
 - **Composition without mutation.** Fragments are values: a plain `Fragment(...)`, or a `Composite` subclass configured by its fields. Keys, disks and secrets reference each other as objects, and the runtime-init sequence they need is derived, not hand-ordered.
 - **Locked inputs.** The lockfile records a digest per recipe section and a commit or hash per source build. Bakes are frozen against it, and `lock --check` names what drifted.
-- **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the measurements policy, SBOMs, lint) into an `evidence.json` index with a pass/fail verdict, a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
+- **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the measurements policy, SBOMs, lint) into an `evidence.json` index with a pass, fail or incomplete verdict and stable reason codes (`--require` makes missing checks count), a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
 - **Secrets lint.** `secret-in-file` and `secret-in-env` refuse private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments, naming the kind and line but never the value; credentials go in `Secrets` and arrive at boot.
 
 The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image as one declarative recipe. It compiles byte-for-byte to the committed upstream tree, all four variants (`default`, `azure`, `gcp`, `devtools`).
@@ -171,8 +171,8 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `measure MANIFEST` | Expected measurements of a baked variant (`--scheme rtmr\|azure\|gcp`); `--export-policy FILE` writes the verifier policy `Tdxs.from_policy()` reads |
 | `deploy MANIFEST` | Deploy a baked variant (`--target qemu\|azure\|gcp`, `--param KEY=VALUE`; `--attach` keeps QEMU in the foreground) |
 | `attest` | Ask a running image's `tdxs` issuer (`--issuer`) for a nonce-bound quote, have a `tdxs` validator (`--validator`) judge its signature and collateral, and check MRTD and RTMR0..RTMR3 against a policy (`--policy FILE`). `trusted` needs the validator; without one the verdict is `measurements-match`/`measurements-mismatch`; a simulator is `simulated` (exit 1 unless `--allow-simulated`) |
-| `sbom [MANIFEST]` | Bill of materials of a baked variant: mkosi's package manifest, the lockfile's source pins and the recipe metadata (`--format spdx-json\|cyclonedx-json\|text\|markdown`, `--output FILE`) |
-| `evidence [RECIPE]` | An auditor's record of a bake in `OUT/evidence/`: recipe and tree digests, the lockfile with its drift, each artifact re-hashed, the reproducibility outcome, the measurements policy, SPDX SBOMs, lint and provenance summaries, tool versions, indexed by `evidence.json`; `--bundle FILE.tar.gz` (deterministic under `SOURCE_DATE_EPOCH`), `--html FILE`; exit 1 when the verdict is `fail` |
+| `sbom [MANIFEST]` | Bill of materials of a baked variant: mkosi's package manifest, the lockfile's source pins and the recipe metadata (`--format spdx-json\|cyclonedx-json\|text\|markdown`, `--output FILE`); bound to the bake's lockfile and manifest (`--allow-unbound`) |
+| `evidence [RECIPE]` | An auditor's record of a bake in `OUT/evidence/`: recipe and tree digests, the lockfile with its drift, each artifact re-hashed, the reproducibility outcome, the measurements policy, SPDX SBOMs, lint and provenance summaries, tool versions, indexed by `evidence.json`; `--bundle FILE.tar.gz` (deterministic under `SOURCE_DATE_EPOCH`), `--html FILE`; a pass, fail or incomplete verdict with stable reason codes, `--require reproducible,measured,real,lock` makes missing checks count; exit 1 unless the verdict is `pass` |
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
 | `watch [RECIPE]` | Lint the recipe and compare it with its committed tree (`[tool.tundravm]` `tree`, or `OUT/mkosi`) at start and whenever the recipe or a `.py` beside it changes, one line per check; never writes unless `--write`; `--interval SECONDS`; Ctrl-C exits 0 |

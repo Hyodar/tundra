@@ -577,6 +577,9 @@ class ArtifactRef:
     target: OutputTarget
     path: Path
     digest: str | None = None
+    manifest_digest: str | None = None
+    """The sha256 of mkosi's package manifest beside the artifact at bake time; ``None``
+    when there was none."""
 
 
 @dataclass(slots=True)
@@ -605,7 +608,7 @@ class CompileResult:
 BAKE_RESULT_FILENAME = "bake-result.json"
 REPRODUCE_DIRNAME = ".reproduce"
 """Where ``bake --verify-reproducible`` builds the second time (``OUT/.reproduce``)."""
-BAKE_RESULT_SCHEMA_VERSION = 1
+BAKE_RESULT_SCHEMA_VERSION = 2
 
 
 @dataclass(slots=True)
@@ -615,6 +618,8 @@ class BakeResult:
     backend: str | None = None
     created_at: str | None = None
     duration_s: float | None = field(default=None, compare=False)
+    lock_sha256: str | None = None
+    """The sha256 of the lockfile bytes the bake read; ``None`` when it read none."""
 
     def save(self, build_dir: str | Path) -> Path:
         """Write ``<build_dir>/bake-result.json``; paths inside build_dir are stored relative."""
@@ -632,13 +637,15 @@ class BakeResult:
             digests = {target: ref.digest for target, ref in artifacts if ref.digest is not None}
             if digests:
                 entry["artifact_digests"] = digests
+            entry["manifest_digests"] = {target: ref.manifest_digest for target, ref in artifacts}
             profiles[name] = entry
         payload = {
             "schema_version": BAKE_RESULT_SCHEMA_VERSION,
             "created_at": self.created_at,
             "backend": self.backend,
             "lock_digest": self.lock_digest,
-            "profiles": profiles,
+            "lock_sha256": self.lock_sha256,
+            "variants": profiles,
         }
         path = base / BAKE_RESULT_FILENAME
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -671,8 +678,9 @@ class BakeResult:
         if payload.get("schema_version") != BAKE_RESULT_SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version {payload.get('schema_version')!r}")
         profiles: dict[str, ProfileBuildResult] = {}
-        for name, entry in payload["profiles"].items():
+        for name, entry in payload["variants"].items():
             digests: dict[str, str] = entry.get("artifact_digests", {})
+            manifests: dict[str, str | None] = entry.get("manifest_digests", {})
             artifacts: dict[OutputTarget, ArtifactRef] = {}
             for target, raw_path in entry["artifacts"].items():
                 if target not in get_args(OutputTarget):
@@ -682,6 +690,7 @@ class BakeResult:
                     target=typed,
                     path=_resolve_path(raw_path, base),
                     digest=digests.get(target),
+                    manifest_digest=manifests.get(target),
                 )
             report = entry.get("report_path")
             profiles[str(name)] = ProfileBuildResult(
@@ -694,6 +703,7 @@ class BakeResult:
             lock_digest=payload.get("lock_digest"),
             backend=payload.get("backend"),
             created_at=payload.get("created_at"),
+            lock_sha256=payload.get("lock_sha256"),
         )
 
 

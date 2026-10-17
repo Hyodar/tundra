@@ -45,8 +45,8 @@ def baked_variants(out: Path) -> tuple[str, ...]:
         payload = json.loads((out / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ()
-    profiles = payload.get("profiles") if isinstance(payload, dict) else None
-    return tuple(sorted(str(name) for name in profiles)) if isinstance(profiles, dict) else ()
+    variants = payload.get("variants") if isinstance(payload, dict) else None
+    return tuple(sorted(str(name) for name in variants)) if isinstance(variants, dict) else ()
 
 
 def clean_paths(out: Path, parts: Collection[str], *, variants: Iterable[str] = ()) -> list[Path]:

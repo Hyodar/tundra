@@ -311,7 +311,7 @@ def test_bake_without_reporter_records_digests_and_durations(tmp_path: Path) -> 
     assert result.duration_s >= profile.duration_s
     saved = json.loads((tmp_path / "build" / "bake-result.json").read_text())
     assert (
-        saved["profiles"]["default"]["artifact_digests"]["qemu"] == profile.artifacts["qemu"].digest
+        saved["variants"]["default"]["artifact_digests"]["qemu"] == profile.artifacts["qemu"].digest
     )
 
 
@@ -328,7 +328,7 @@ def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
     assert any(line.startswith("[default] build via inprocess ... ok") for line in progress)
     assert (artifact.variant, artifact.target, artifact.simulated) == ("default", "qemu", True)
     saved = json.loads((tmp_path / "out" / "bake-result.json").read_text())
-    assert saved["profiles"]["default"]["artifact_digests"]["qemu"] == artifact.sha256
+    assert saved["variants"]["default"]["artifact_digests"]["qemu"] == artifact.sha256
 
 
 def test_bake_lint_failure_emits_failed_phase_and_done(tmp_path: Path) -> None:

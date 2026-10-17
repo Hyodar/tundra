@@ -18,10 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from ._secret_scan import Finding, is_unit_path, scan_env, scan_file, scan_unit
+from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelSource, NamedSource
+from .compiler.emit_mkosi import _systemd_unit_content
 from .formats import annotation_path, md_cell, md_table, workflow_command
-from .models import InitScriptEntry, ProfileState, unit_name
+from .models import InitScriptEntry, ProfileState, ServiceSpec, unit_name
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -667,23 +668,60 @@ def _rule_secret_in_file(
             )
 
 
+_SERVICE_FIELDS = {
+    "Description=": "description",
+    "After=": "after",
+    "Requires=": "requires",
+    "Wants=": "wants",
+    "ExecStartPre=": "exec_start_pre",
+    "ExecStart=": "exec_start",
+    "User=": "user",
+    "Group=": "group",
+    "WorkingDirectory=": "working_dir",
+    "EnvironmentFile=": "env_file",
+    "Environment=": "env",
+    "KillMode=": "kill_mode",
+    "TimeoutStopSec=": "timeout_stop",
+    "WantedBy=": "wanted_by",
+}
+"""The ``Service`` field each directive of its rendered unit comes from."""
+
+
+def _service_field(directive: str) -> str:
+    """The ``Service`` field a rendered unit's *directive* (``ExecStart=``) comes from."""
+    if directive.startswith("Limit"):
+        return "limits"
+    return _SERVICE_FIELDS.get(directive, "")
+
+
+def _service_findings(svc: ServiceSpec) -> tuple[Finding, ...]:
+    """:func:`scan_unit` on the unit *svc* renders to, each finding naming its field.
+
+    The line is left out: it is the generated unit's, which the declaration does not show.
+    """
+    return tuple(
+        Finding(found.kind, field=_service_field(found.field))
+        for found in scan_unit(_systemd_unit_content(svc))
+    )
+
+
 def _rule_secret_in_env(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     for svc in state.services:
         name = unit_name(svc.name)
-        if _secret_allowed(image, profile_name, name):
+        if (
+            not svc.command
+            or svc.name.endswith(".target")
+            or _secret_allowed(image, profile_name, name)
+        ):
             continue
-        found = [
-            finding
-            for key, value in sorted(svc.env.items())
-            if (finding := scan_env(key, value)) is not None
-        ]
+        found = _service_findings(svc)
         if found:
             yield Diagnostic(
                 level="error",
                 code="secret-in-env",
-                message=_secret_message(f"the environment of service {name!r}", found),
+                message=_secret_message(f"service {name!r}", found),
                 hint=SECRET_HINT,
                 profile=profile_name,
                 subject=name,

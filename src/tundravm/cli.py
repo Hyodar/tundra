@@ -48,6 +48,7 @@ from .declarative._compile import emit
 from .declarative._lowered import Lowered
 from .declarative.bom import SBOM_FORMATS, sbom
 from .declarative.importer import import_tree
+from .declarative.inputs import recipe_inputs
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
     NO_LOCK,
@@ -82,8 +83,8 @@ from .declarative.lifecycle import (
 from .declarative.model import Target
 from .declarative.resolve import resolve
 from .diff import _wants_color, cmd_diff, diff_against
-from .errors import LockfileError, TdxError, ValidationError
-from .evidence import EVIDENCE_FORMATS, evidence
+from .errors import LockfileError, ReproducibilityError, TdxError, ValidationError
+from .evidence import EVIDENCE_FORMATS, EVIDENCE_REQUIREMENTS, evidence
 from .explain import (
     describe,
     diff_variants,
@@ -104,6 +105,7 @@ from .observability import Event, JsonReporter, TextReporter, render_bake_summar
 from .project import (
     DEFAULTS,
     PATH_KEYS,
+    PYPROJECT,
     RESOLUTION_HELP,
     TABLE,
     ConfigKey,
@@ -499,8 +501,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Bake the same variants a second time into OUT/.reproduce (same lockfile, same "
             "fetched sources, compiled and built again) and compare every artifact's sha256; "
-            "a mismatch prints a table per artifact and fails with E_REPRODUCIBILITY, keeping "
-            "the second build. bake-result.json records declarative.reproducible."
+            "a mismatch prints a table per artifact and fails with E_REPRODUCIBILITY (exit 1), "
+            "keeping the second build. bake-result.json, complete before the second build "
+            "starts, records declarative.reproducibility: running, then matched, different, "
+            "error or interrupted."
         ),
     )
     bake.epilog = (
@@ -825,8 +829,12 @@ def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         RESOLUTION_HELP
         + " "
         + (
-            "Polls the mtimes of RECIPE and every .py under its directory (hidden "
-            "directories, __pycache__ and the build output left out). Checks once at "
+            "Polls the mtimes of RECIPE, every .py under its directory (hidden "
+            "directories, __pycache__ and the build output left out), every host file "
+            "and Directory tree its declarations read (File, Unit and Template sources, "
+            "Kernel configs, Tdxs.from_policy policies), the selected lockfile, "
+            "pyproject.toml (its [tool.tundravm] table is read again) and the checked "
+            "tree, so an external compile refreshes the verdict. Checks once at "
             "start, then once per change, printing `HH:MM:SS lint N errors N warnings; "
             "tree up to date` (or `tree stale (N files)`, `tree missing (N files to "
             "write)`, or with --write `wrote OUT/mkosi`). The counts are `tundravm "
@@ -1096,8 +1104,11 @@ def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
             "recipe, tree and artifact digests, tundravm version)."
         ),
         epilog=(
-            "Without a manifest (a simulated bake) the document says so and lists the "
-            "packages the recipe declares, unversioned. Lists are sorted; set "
+            "The artifact is hashed first (E_ARTIFACT_CHANGED when it changed). The lockfile "
+            "and the manifest must be the ones the bake recorded in bake-result.json, else "
+            "E_ARTIFACT_CHANGED unless --allow-unbound. Without a manifest (a simulated bake) "
+            "the document says so and lists the packages the recipe declares, unversioned. "
+            "Paths are relative to the bake directory and lists are sorted; set "
             "SOURCE_DATE_EPOCH to fix the creation time."
         ),
     )
@@ -1140,6 +1151,14 @@ def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         metavar="FILE",
         help="Write the document to FILE instead of stdout.",
     )
+    sbom_cmd.add_argument(
+        "--allow-unbound",
+        action="store_true",
+        help=(
+            "Write the document even when the lockfile or manifest is not the one the bake "
+            "recorded; it is marked incomplete with a note."
+        ),
+    )
 
 
 def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1159,8 +1178,10 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
         + " "
         + (
             "Prints the index; exits 1 when the verdict is fail (an artifact changed or "
-            "is gone, the lockfile drifted or is missing, lint errors, or a recorded "
-            "non-reproducible bake). Set SOURCE_DATE_EPOCH to fix the timestamps."
+            "is gone, the recipe or tree changed, the lockfile drifted, lint errors, a "
+            "second build that differed, a placeholder or mismatched policy) or incomplete "
+            "(a --require check is missing); the reasons say which. Set SOURCE_DATE_EPOCH "
+            "to fix the timestamps."
         )
     )
     cmd.add_argument(
@@ -1208,6 +1229,35 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
         default="text",
         help="Index format (default: %(default)s); json is evidence.json.",
     )
+    cmd.add_argument(
+        "--require",
+        type=_evidence_requirements,
+        default=(),
+        metavar="LIST",
+        help=(
+            f"Comma-separated checks that must be present ({', '.join(EVIDENCE_REQUIREMENTS)}): "
+            "a missing one makes the verdict incomplete (exit 1) instead of a note."
+        ),
+    )
+    cmd.add_argument(
+        "--allow-unbound",
+        action="store_true",
+        help=(
+            "Record a lockfile or mkosi manifest that is not the one the bake recorded "
+            "instead of failing with E_ARTIFACT_CHANGED; the verdict is incomplete."
+        ),
+    )
+
+
+def _evidence_requirements(value: str) -> tuple[str, ...]:
+    names = tuple(name.strip() for name in value.split(",") if name.strip())
+    unknown = [name for name in names if name not in EVIDENCE_REQUIREMENTS]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown requirement(s) {', '.join(unknown)}; "
+            f"choose from {', '.join(EVIDENCE_REQUIREMENTS)}"
+        )
+    return names
 
 
 def _add_import_options(parser: argparse.ArgumentParser) -> None:
@@ -1770,6 +1820,7 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
             err, verbose=args.verbose, quiet=args.quiet, color=_wants_color(args.color, err)
         )
     )
+    differed: ReproducibilityError | None = None
     try:
         if locked is not None and args.json_logs:
             extra = {"source": "cli", "path": str(lock_path)}
@@ -1786,8 +1837,16 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
             offline=args.offline,
             verify_reproducible=args.verify_reproducible,
         )
+    except ReproducibilityError as exc:
+        differed = exc
     finally:
         reporter.close()
+    if differed is not None:
+        # a completed comparison that differs is a failed check (1), not an SDK error (2)
+        if getattr(args, "traceback", False):
+            raise differed
+        print(f"error [{differed.code}]: {differed}", file=sys.stderr)
+        return EXIT_FAILURE
     if args.json_logs:
         return EXIT_OK
     if not args.quiet:
@@ -2087,7 +2146,11 @@ def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
         )
     args.manifest = args.manifest or args.out or Path("build")
     artifact = _artifact(args, None)
-    document = sbom(artifact, lock=_sbom_lock(args.manifest, args.lockfile))
+    document = sbom(
+        artifact,
+        lock=_sbom_lock(args.manifest, args.lockfile),
+        allow_unbound=args.allow_unbound,
+    )
     text = document.render(args.format)
     if args.output is not None or args.format.endswith("-json"):
         for note in document.notes:
@@ -2131,6 +2194,8 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
         policy=args.policy,
         recipe_path=args.recipe,
         runner=args.runner,
+        require=args.require,
+        allow_unbound=args.allow_unbound,
     )
     directory = found.write(base / "evidence")
     print(found.render(args.format), file=out, end="")
@@ -2277,24 +2342,58 @@ def _cmd_watch(args: argparse.Namespace, out: TextIO) -> int:
     recipe: Path = args.recipe
     print(f"watching {recipe} every {args.interval:g}s (Ctrl-C stops)", file=out, flush=True)
     sources = Sources.of(recipe)
-    loop = Watch(sources, lambda: _watch_check(args, sources), out, interval=args.interval)
+    origins: dict[str, str] = args.origins
+    flags = {"recipe": args.recipe if origins.get("recipe") == "flag" else None}
+    for attr, key in _PROJECT_FLAGS["watch"]:
+        flags[attr] = getattr(args, attr, None) if origins.get(key) == "flag" else None
+    loop = Watch(sources, lambda: _watch_check(args, sources, flags), out, interval=args.interval)
     return loop.run(args.ticks)
+
+
+def _watch_project(args: argparse.Namespace, flags: dict[str, Path | None]) -> None:
+    """Resolve the ``[tool.tundravm]`` values again over the command line's *flags*.
+
+    A table that lost its ``recipe`` keeps the recipe being watched.
+    """
+    watched: Path = args.recipe
+    for attr, value in flags.items():
+        setattr(args, attr, value)
+    if args.recipe is None:
+        project = find_project()
+        if project is None or project.get("recipe") is None:
+            args.recipe = watched
+    _apply_project(build_parser(), args)
+
+
+def _watch_inputs(args: argparse.Namespace) -> set[Path]:
+    """The project files every check depends on: ``pyproject.toml`` and ``--lockfile``."""
+    project: ProjectConfig | None = args.project
+    inputs = {project.path if project is not None else Path.cwd() / PYPROJECT}
+    if args.lockfile is not None:
+        inputs.add(args.lockfile)
+    return inputs
 
 
 _DRIFT_CODES = frozenset({"lock-changed", "lock-added", "lock-removed", "lock-stale"})
 
 
-def _watch_check(args: argparse.Namespace, sources: Sources) -> str:
+def _watch_check(args: argparse.Namespace, sources: Sources, flags: dict[str, Path | None]) -> str:
     """One ``watch`` verdict: ``tundravm lint``'s counts and the tree against the recipe.
 
     A recipe that does not load is ``error [E_CODE] message``; lint errors that keep
     it from lowering (an error-level fragment check) are ``lint N errors (code: message)``.
+    Tracks what the verdict depends on in *sources*; a recipe that does not load keeps
+    the inputs of the last one that did.
     """
     try:
+        _watch_project(args, flags)
+        sources.recipe = args.recipe.resolve()
         loaded = _load(args)
+        sources.track({*_watch_inputs(args), *recipe_inputs(loaded.recipe)})
         names = _variants(loaded, args)
         diagnostics = _lint_findings(loaded, names, args, missing=_configured_lock_missing(args))
     except TdxError as exc:
+        sources.track({*sources.inputs, *_watch_inputs(args)})
         return _watch_error(args, exc)
     errors = [d for d in diagnostics if d.level == "error"]
     warnings_ = sum(d.level == "warning" for d in diagnostics)
@@ -2311,9 +2410,11 @@ def _watch_check(args: argparse.Namespace, sources: Sources) -> str:
     explicit = args.origins.get("out") == "flag"
     tree = configured if configured is not None and not explicit else build / TREE_DIRNAME
     sources.ignore(build, tree)
+    lock_path = _lock_path(img, args.lockfile)
+    sources.track({*sources.inputs, lock_path, tree})
     try:
-        locked = _lock_at(_lock_path(img, args.lockfile))
-        line = _watch_tree(args, img, names, locked, tree)
+        locked = _lock_at(lock_path)
+        line = _watch_tree(args, img, names, locked, tree, sources)
     except TdxError as exc:
         line = f"tree not checked ([{exc.code}] {exc.args[0]})"
     return verdict(errors=len(errors), warnings=warnings_, tree=line, drifted=drifted)
@@ -2325,11 +2426,13 @@ def _watch_tree(
     names: tuple[str, ...],
     locked: Lock | None,
     destination: Path,
+    sources: Sources,
 ) -> str:
     exists = destination.is_dir()
     with using_lock(img, locked) as pinned:
         result = diff_against(pinned, destination, profiles=names)
         if args.write and not result.is_clean:
+            sources.wrote(destination)
             emit(pinned.select(names), destination)
             return tree_verdict(changed=len(result.changes), exists=exists, wrote=destination)
     return tree_verdict(changed=len(result.changes), exists=exists)

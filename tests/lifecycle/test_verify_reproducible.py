@@ -12,9 +12,10 @@ from tests.helpers import run_main, write_recipe_file
 from tundravm import Backend, ReproducibilityError, bake, lock
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative import Fragment, Package, Recipe, Variant, lower
-from tundravm.declarative.lifecycle import bake_image
+from tundravm.declarative.lifecycle import bake_image, read_artifacts
+from tundravm.errors import BackendExecutionError
 from tundravm.models import REPRODUCE_DIRNAME, BakeRequest, BakeResult
 
 RECIPE = """
@@ -69,6 +70,22 @@ class FlippingBackend:
         del request
 
 
+@dataclass
+class FailingSecondBuild(FlippingBackend):
+    """The second build reads the first build's record, then fails with *error*."""
+
+    error: BaseException = field(
+        default_factory=lambda: BackendExecutionError("mkosi exited 1", hint="Read its log.")
+    )
+    seen: list[dict[str, object]] = field(default_factory=list)
+
+    def execute(self, request: BakeRequest) -> BakeResult:
+        if request.build_dir.name == REPRODUCE_DIRNAME:
+            self.seen.append(_declarative(request.build_dir.parent))
+            raise self.error
+        return self.inner.execute(request)
+
+
 def _declarative(out: Path) -> dict[str, object]:
     payload = json.loads((out / "bake-result.json").read_text(encoding="utf-8"))
     block = payload["declarative"]
@@ -87,14 +104,19 @@ def test_inprocess_bake_is_reproducible_and_records_it(tmp_path: Path) -> None:
         verify_reproducible=True,
     )
     assert {a.target for a in artifacts} == {"qemu", "azure"}
-    assert _declarative(out)["reproducible"] is True
+    assert _declarative(out)["reproducibility"] == {
+        "state": "matched",
+        "second_build": None,
+        "differ": [],
+        "error": None,
+    }
     assert not (out / REPRODUCE_DIRNAME).exists()
 
 
 def test_a_bake_without_the_check_records_nothing(tmp_path: Path) -> None:
     recipe = _recipe()
     bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build")
-    assert "reproducible" not in _declarative(tmp_path / "build")
+    assert "reproducibility" not in _declarative(tmp_path / "build")
 
 
 def test_a_differing_second_build_fails_with_a_table_and_keeps_it(tmp_path: Path) -> None:
@@ -130,11 +152,52 @@ def test_a_differing_second_build_fails_with_a_table_and_keeps_it(tmp_path: Path
     assert f"tundravm diff RECIPE --against {scratch / 'mkosi'}" in error.hint
     assert "SOURCE_DATE_EPOCH" in error.hint and "snapshot" in error.hint
     assert error.context == {"second_build": str(scratch), "differ": "default/qemu"}
-    assert _declarative(out)["reproducible"] is False
+    assert _declarative(out)["reproducibility"] == {
+        "state": "different",
+        "second_build": ".reproduce",
+        "differ": ["default/qemu"],
+        "error": None,
+    }
     copied = scratch / ".sources" / sources.name / "main.go"
     assert copied.read_text(encoding="utf-8") == "package main\n"
     assert copied.stat().st_ino == (sources / "main.go").stat().st_ino
     assert (scratch / "mkosi").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("error", "state", "message"),
+    [
+        (BackendExecutionError("mkosi exited 1", hint="x"), "error", "BackendExecutionError: "),
+        (KeyboardInterrupt(), "interrupted", None),
+    ],
+)
+def test_a_failed_second_build_keeps_the_first_builds_record(
+    tmp_path: Path, error: BaseException, state: str, message: str | None
+) -> None:
+    recipe = _recipe()
+    out = tmp_path / "build"
+    backend = FailingSecondBuild(error=error)
+    with pytest.raises(type(error)):
+        bake_image(
+            lower(recipe), None, locked=lock(recipe), backend=backend, out=out,
+            verify_reproducible=True,
+        )  # fmt: skip
+    (running,) = backend.seen
+    assert running["reproducibility"] == {
+        "state": "running",
+        "second_build": ".reproduce",
+        "differ": [],
+        "error": None,
+    }
+    assert running["tree_digest"] and running["recipe_digest"]
+    recorded = _declarative(out)
+    assert recorded["reproducibility"]["state"] == state  # type: ignore[index]
+    error_text = recorded["reproducibility"]["error"]  # type: ignore[index]
+    assert error_text is None if message is None else str(error_text).startswith(message)
+    assert {k: v for k, v in recorded.items() if k != "reproducibility"} == {
+        k: v for k, v in running.items() if k != "reproducibility"
+    }
+    assert [a.target for a in read_artifacts(out)] == ["azure", "qemu"]
 
 
 def test_cli_bake_verify_reproducible_and_status(
@@ -148,13 +211,13 @@ def test_cli_bake_verify_reproducible_and_status(
     assert code == EXIT_OK
     artifact_lines = [line for line in out.splitlines() if line.startswith("artifact")]
     assert len(artifact_lines) == 2
-    assert all("  reproducible  " in line for line in artifact_lines)
+    assert all("  reproducibility matched  " in line for line in artifact_lines)
     code, out = run_main("status", str(recipe), "--format", "json")
     items = json.loads(out)["artifacts"]["items"]
-    assert [item["reproducible"] for item in items] == [True, True]
+    assert [item["reproducibility"] for item in items] == ["matched", "matched"]
     assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
     code, out = run_main("status", str(recipe), "--format", "json")
-    assert [item["reproducible"] for item in json.loads(out)["artifacts"]["items"]] == [
+    assert [item["reproducibility"] for item in json.loads(out)["artifacts"]["items"]] == [
         None,
         None,
     ]
@@ -171,9 +234,12 @@ def test_cli_reports_e_reproducibility(
     recipe = write_recipe_file(tmp_path, source, monkeypatch)
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
     code, _ = run_main("bake", str(recipe), "-q", "--verify-reproducible")
-    assert code == EXIT_SDK_ERROR
+    assert code == EXIT_FAILURE  # a completed comparison that differs: a failed check
     err = capsys.readouterr().err
     assert "error [E_REPRODUCIBILITY]: The bake is not reproducible" in err
     assert "default  qemu" in err and "mismatch" in err
     code, out = run_main("status", str(recipe))
-    assert "not reproducible" in out
+    lines = [line for line in out.splitlines() if line.startswith("artifact")]
+    qemu = next(line for line in lines if "default/qemu" in line)
+    azure = next(line for line in lines if "default/azure" in line)
+    assert "reproducibility different" in qemu and "reproducibility matched" in azure

@@ -439,7 +439,7 @@ class Service:
     ``security`` selects the hardening profile (``strict``, ``default`` or
     ``none``). With ``after_init`` the unit waits for ``runtime-init.service``
     whenever the variant has a runtime-init step. ``Unit`` ships verbatim text.
-    ``allow_secret`` silences ``secret-in-env`` for ``env``.
+    ``allow_secret`` silences ``secret-in-env`` for the rendered unit, every field.
     """
 
     name: str

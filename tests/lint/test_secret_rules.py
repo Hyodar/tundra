@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -153,3 +155,75 @@ def test_secret_in_env_ignores_references_and_plain_settings() -> None:
 def test_bool_flag_is_validated() -> None:
     with pytest.raises(Exception, match="allow_secret must be True or False"):
         File("/etc/x", "x", allow_secret="yes")  # type: ignore[arg-type]
+
+
+PRE = f"/bin/sh -c 'printf %s \"{PEM}\" > /run/api.key'"
+PAIRED = [
+    pytest.param(
+        Service("api", f"/usr/bin/sync --token {GITHUB}"),
+        Unit("raw.service", f"[Service]\nExecStart=/usr/bin/sync --token {GITHUB}\n"),
+        "a GitHub token",
+        ("exec_start", "ExecStart="),
+        id="github-token-in-exec-start",
+    ),
+    pytest.param(
+        Service("api", "/usr/bin/api", env=(("DB_PASSWORD", TOKEN), ("PORT", "8080"))),
+        Unit(
+            "raw.service",
+            f"[Service]\nExecStart=/usr/bin/api\nEnvironment=DB_PASSWORD={TOKEN} PORT=8080\n",
+        ),
+        "a literal value for 'DB_PASSWORD'",
+        ("env", "Environment="),
+        id="password-in-env",
+    ),
+    pytest.param(
+        Service("api", "/usr/bin/api", exec_start_pre=(PRE,)),
+        Unit("raw.service", f"[Service]\nExecStartPre={PRE}\nExecStart=/usr/bin/api\n"),
+        "a private key",
+        ("exec_start_pre", "ExecStartPre="),
+        id="pem-key-in-exec-start-pre",
+    ),
+]
+
+
+@pytest.mark.parametrize(("service", "unit", "kind", "fields"), PAIRED)
+def test_service_and_unit_get_the_same_secret_findings(
+    service: Service, unit: Unit, kind: str, fields: tuple[str, str]
+) -> None:
+    found = {d.subject: d for d in report(recipe(service, unit)) if d.code.startswith("secret-")}
+    declared = found.pop("api.service")
+    verbatim = found.pop("/usr/lib/systemd/system/raw.service")
+
+    assert found == {}
+    assert (declared.code, declared.level, declared.hint, declared.profile) == (
+        verbatim.code,
+        verbatim.level,
+        verbatim.hint,
+        verbatim.profile,
+    )
+    field, directive = fields
+    assert declared.message == (
+        f"service 'api.service' holds {kind} in {field}; it is baked into the image"
+    )
+    assert re.fullmatch(
+        rf"the unit file holds {re.escape(kind)} in {directive} \(line \d\); "
+        "it is baked into the image",
+        verbatim.message,
+    )
+    for value in (GITHUB, TOKEN, "MIIEowIBAAKCAQEA"):
+        assert value not in declared.message + verbatim.message
+
+
+@pytest.mark.parametrize(("service", "unit", "kind", "fields"), PAIRED)
+def test_allow_secret_exempts_service_and_unit_alike(
+    service: Service, unit: Unit, kind: str, fields: tuple[str, str]
+) -> None:
+    assert _secret_codes(replace(service, allow_secret=True), unit) == [
+        ("secret-in-env", "/usr/lib/systemd/system/raw.service")
+    ]
+    assert _secret_codes(service, replace(unit, allow_secret=True)) == [
+        ("secret-in-env", "api.service")
+    ]
+    assert (
+        _secret_codes(replace(service, allow_secret=True), replace(unit, allow_secret=True)) == []
+    )

@@ -1,15 +1,15 @@
 """Heuristics for credentials baked into image files and service environments.
 
 The ``secret-in-file`` and ``secret-in-env`` lint rules (:mod:`tundravm.check`)
-call :func:`scan_file` and :func:`scan_env`. A :class:`Finding` names what was
-found and where, never the value. The guards against false positives: public
-keys, certificates and a bare PEM header without a key body do not match;
-documentation values (``EXAMPLE``, ``changeme``, ``xxxx``, low-variety strings)
-are skipped; a ``secrets.yaml`` entry counts only under a sensitive key or a
-``value``/``default``/``data`` key; the generic ``token|secret|password = value``
-assignment is only
-looked for in config-like files, outside comments, and needs a token-like value
-(16+ characters mixing letter cases, digits or base64 symbols; not a path, not a
+call :func:`scan_file` and :func:`scan_unit` (on a ``Service``'s rendered unit
+too). A :class:`Finding` names what was found and where, never the value. The
+guards against false positives: public keys, certificates and a bare PEM header
+without a key body do not match; documentation values (``EXAMPLE``,
+``changeme``, ``xxxx``, low-variety strings) are skipped; a ``secrets.yaml``
+entry counts only under a sensitive key or a ``value``/``default``/``data`` key;
+the generic ``token|secret|password = value`` assignment is only looked for in
+config-like files, outside comments, and needs a token-like value (16+
+characters mixing letter cases, digits or base64 symbols; not a path, not a
 ``$VAR`` or ``{{ template }}`` reference).
 """
 
@@ -77,13 +77,19 @@ _COMMENT = ("#", ";", "//")
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    """What looks like a credential (``kind``), on which 1-based ``line`` (0: unknown)."""
+    """What looks like a credential (``kind``), on which 1-based ``line`` (0: unknown).
+
+    *field* names where on that line: a unit file's directive (``ExecStart=``), or
+    the ``Service`` field it renders from (``exec_start``); empty when not derived.
+    """
 
     kind: str
     line: int = 0
+    field: str = ""
 
     def where(self) -> str:
-        return f"{self.kind} (line {self.line})" if self.line else self.kind
+        found = f"{self.kind} in {self.field}" if self.field else self.kind
+        return f"{found} (line {self.line})" if self.line else found
 
 
 def is_unit_path(path: str) -> bool:
@@ -196,10 +202,17 @@ def scan_env(key: str, value: str) -> Finding | None:
 
 
 def scan_unit(content: str | bytes) -> tuple[Finding, ...]:
-    """Credentials in a unit file: anywhere for the strong patterns, else in ``Environment=``."""
+    """Credentials in a unit file: anywhere for the strong patterns, else in ``Environment=``.
+
+    Each finding's *field* is the directive of its line (``ExecStart=``), when it has one.
+    """
     text, _ = _text(content)
-    found = list(_strong(text))
-    for number, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    found = [
+        Finding(f.kind, f.line, _directive(lines[f.line - 1] if f.line <= len(lines) else ""))
+        for f in _strong(text)
+    ]
+    for number, line in enumerate(lines, 1):
         key, _, assignments = line.strip().partition("=")
         if key.strip() != "Environment":
             continue
@@ -211,6 +224,15 @@ def scan_unit(content: str | bytes) -> tuple[Finding, ...]:
             name, sep, value = word.partition("=")
             finding = scan_env(name, value) if sep else None
             if finding is not None:
-                found.append(Finding(finding.kind, number))
+                found.append(Finding(finding.kind, number, "Environment="))
                 break
     return tuple(sorted(dict.fromkeys(found), key=lambda f: f.line))
+
+
+_DIRECTIVE = re.compile(r"\s*([A-Za-z][A-Za-z0-9]*)\s*=")
+
+
+def _directive(line: str) -> str:
+    """``ExecStart=`` for a unit file *line* setting that directive, else ``""``."""
+    match = _DIRECTIVE.match(line)
+    return f"{match.group(1)}=" if match else ""
