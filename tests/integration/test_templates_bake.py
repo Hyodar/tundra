@@ -80,7 +80,7 @@ def test_service_template_bakes_with_its_app(tmp_path: Path) -> None:
     backend = LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"])
     out = tmp_path / "build"
     try:
-        bake_image(loaded.lowered(), ("default",), locked=None, backend=backend, out=out)
+        bake_image(loaded.lowered(), ("default",), locked=None, backend=backend, build=out)
 
         root = out / "default" / "output" / "default"
         unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
@@ -167,7 +167,7 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
     out = tmp_path / "build"
     try:
         try:
-            bake_image(lower(recipe), ("default",), locked=None, backend=backend, out=out)
+            bake_image(lower(recipe), ("default",), locked=None, backend=backend, build=out)
         except BackendExecutionError:
             print("\n".join(backend.lines[-80:]))  # pytest shows it with the failure
             raise

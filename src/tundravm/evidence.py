@@ -24,12 +24,13 @@ import platform
 import tarfile
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
 from typing import Any, Literal
 
+from . import _ssh_sig
 from . import check as _check
 from .backends.base import Requirement
 from .declarative._lowered import Lowered
@@ -40,6 +41,8 @@ from .declarative.lifecycle import (
     Artifact,
     Lock,
     ProbeRunner,
+    Tree,
+    _digest_mode,
     check_report,
     compile_image,
     image_lock_status,
@@ -62,6 +65,12 @@ from .models import BAKE_RESULT_FILENAME
 
 EVIDENCE_SCHEMA_VERSION = 1
 INDEX_NAME = "evidence.json"
+SIGNATURE_NAME = "evidence.json.sig"
+"""The SSH signature of ``evidence.json`` (``ssh-keygen -Y sign -n tundravm-evidence``)."""
+EVIDENCE_SCHEMA = "tundravm.evidence/1"
+"""The ``schema`` of ``evidence.json``, which ``evidence --format json`` prints verbatim."""
+TREE_SCHEMA = "tundravm.tree/1"
+"""The ``schema`` of each ``variants/<variant>/tree.json`` member."""
 BUNDLE_ROOT = "evidence"
 """The top-level directory every member of a bundle sits under."""
 EvidenceFormat = Literal["text", "json"]
@@ -94,6 +103,8 @@ class Evidence:
     index: Mapping[str, Any]
     members: Mapping[str, bytes] = field(repr=False)
     notes: tuple[str, ...] = ()
+    signature: bytes | None = field(default=None, repr=False)
+    """``evidence.json.sig``, set by :meth:`sign`; ``None`` when unsigned."""
 
     @property
     def verdict(self) -> str:
@@ -117,15 +128,31 @@ class Evidence:
     def files(self) -> dict[str, bytes]:
         """Every file of the evidence, ``evidence.json`` included, by sorted relative path."""
         found = {**self.members, INDEX_NAME: self.index_json().encode()}
+        if self.signature is not None:
+            found[SIGNATURE_NAME] = self.signature
         return dict(sorted(found.items()))
 
+    def sign(self, key: Path) -> Evidence:
+        """This evidence with ``evidence.json.sig``: *key*, an SSH private key, signs the exact
+        bytes of ``evidence.json`` with ``ssh-keygen -Y sign -n tundravm-evidence``.
+
+        The index holds every member's sha256, so the signature covers them all;
+        :meth:`write` and :meth:`bundle` include it. ``StateError`` when ``ssh-keygen``
+        is not on PATH, ``ValidationError`` when it cannot sign with *key*.
+        """
+        signature = _ssh_sig.sign(self.index_json().encode(), Path(key))
+        return replace(self, signature=signature)
+
     def write(self, directory: Path) -> Path:
-        """Write every file under *directory* (created; files of a previous run replaced)."""
+        """Write every file under *directory* (created; files of a previous run replaced, and
+        a previous run's ``evidence.json.sig`` removed when this evidence is unsigned)."""
         root = Path(directory)
         for name, data in self.files().items():
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+        if self.signature is None:
+            (root / SIGNATURE_NAME).unlink(missing_ok=True)
         return root
 
     def bundle(self, path: Path) -> Path:
@@ -166,7 +193,7 @@ class Evidence:
 def evidence(
     lowered_or_recipe: Recipe | Lowered,
     *,
-    out: Path,
+    build: Path,
     variants: Sequence[str] | None = None,
     lock: Lock | Path | None = None,
     policy: Path | None = None,
@@ -175,11 +202,11 @@ def evidence(
     require: Sequence[str] = (),
     allow_unbound: bool = False,
 ) -> Evidence:
-    """The evidence of the bake in *out* for *variants* (default: every baked variant).
+    """The evidence of the bake in the build directory *build* for *variants* (default: all baked).
 
     *lock* (a :class:`Lock` or a lockfile path) defaults to the lockfile the bake
-    recorded, else ``out/tundravm.lock``. *policy* is a ``measure --export-policy``
-    file used for every selected variant instead of ``out/<variant>/policy.json``.
+    recorded, else ``build/tundravm.lock``. *policy* is a ``measure --export-policy``
+    file used for every selected variant instead of ``build/<variant>/policy.json``.
     *recipe_path* records the recipe file and its sha256. *runner* replaces the
     ``mkosi --version`` probe (tests). Nothing is written; see :meth:`Evidence.write`.
 
@@ -199,7 +226,7 @@ def evidence(
     recipe = lowered_or_recipe if isinstance(lowered_or_recipe, Recipe) else None
     img = lower(recipe) if recipe is not None else lowered_or_recipe
     assert isinstance(img, Lowered)
-    base = Path(out)
+    base = Path(build)
     manifest = base / BAKE_RESULT_FILENAME
     artifacts = read_artifacts(base)
     extra = _manifest_extra(manifest)
@@ -243,7 +270,8 @@ def evidence(
         lock=NO_LOCK if locked is None else locked,
     )
     members["lint.json"] = _json_bytes([d.to_dict() for d in diagnostics])
-    tree = _current_tree(img, artifacts, locked)
+    compiled = _compiled_tree(img, artifacts, locked)
+    tree = None if compiled is None else compiled.digest
     digests = _recipe_digests(img, names, locked)
     reproduced = recorded_reproducibility(extra)
     records = {
@@ -262,9 +290,17 @@ def evidence(
         )
         for name in names
     }
+    for name in names:
+        if compiled is not None and name in compiled.variants:
+            members[f"variants/{name}/tree.json"] = _tree_manifest(name, compiled)
+        else:
+            notes.append(
+                f"{name} tree.json: left out, the recipe does not compile the bake's variants"
+            )
     if recipe is None:
         notes.append("no recipe given (a lowered recipe): the provenance summary is left out")
     index: dict[str, Any] = {
+        "schema": EVIDENCE_SCHEMA,
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "created": _created(),
         "recipe": _recipe_entry(recipe, img, recipe_path, digests, artifacts, names),
@@ -407,14 +443,80 @@ def _lock_entry(
     }
 
 
-def _current_tree(img: Lowered, artifacts: Sequence[Artifact], locked: Lock | None) -> str | None:
+def _compiled_tree(img: Lowered, artifacts: Sequence[Artifact], locked: Lock | None) -> Tree | None:
+    """The tree of every baked variant as the recipe compiles now, or ``None`` when it cannot."""
     baked = tuple(sorted({artifact.variant for artifact in artifacts}))
     if not baked or not set(baked) <= set(img.state.profiles):
         return None
     try:
-        return compile_image(img, baked, locked=locked).digest
+        return compile_image(img, baked, locked=locked)
     except TdxError:
         return None
+
+
+def tree_rows(tree: Tree, variant: str) -> list[dict[str, Any]]:
+    """*variant*'s entries of *tree*, relative to its directory: ``path``, ``type`` (``file``,
+    ``symlink``, ``directory``), ``mode`` (as the tree digest sees it, octal) and ``sha256``
+    and ``size`` for a file, ``target`` for a symlink."""
+    prefix = f"{variant}/"
+    rows: list[dict[str, Any]] = []
+    for entry in tree.entries:
+        if not entry.path.startswith(prefix):
+            continue
+        row: dict[str, Any] = {
+            "path": entry.path[len(prefix) :],
+            "mode": f"{_digest_mode(entry):04o}",
+        }
+        if entry.symlink is not None:
+            row.update(type="symlink", target=entry.symlink)
+        elif entry.content is None:
+            row.update(type="directory")
+        else:
+            row.update(
+                type="file",
+                size=len(entry.content),
+                sha256=hashlib.sha256(entry.content).hexdigest(),
+            )
+        rows.append(row)
+    return rows
+
+
+def tree_rows_digest(rows: Iterable[tuple[str, Mapping[str, Any]]]) -> str:
+    """The :attr:`Tree.digest <tundravm.Tree>` of ``(variant, row)`` pairs from :func:`tree_rows`.
+
+    Rows must come in tree order (sorted by ``variant/path``), as ``tree.json`` holds them.
+    """
+    digest = hashlib.sha256()
+    for variant, row in rows:
+        mode = int(str(row["mode"]), 8)
+        digest.update(f"{variant}/{row['path']}".encode() + b"\0" + f"{mode:o}".encode() + b"\0")
+        if row["type"] == "symlink":
+            digest.update(b"L" + str(row["target"]).encode())
+        elif row["type"] == "file":
+            digest.update(b"F" + bytes.fromhex(str(row["sha256"])))
+        else:
+            digest.update(b"D")
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _tree_manifest(variant: str, tree: Tree) -> bytes:
+    """``variants/<variant>/tree.json``: every file the variant's compiled tree emits.
+
+    ``tree_digest`` is the digest of the whole tree compiled for ``compiled_variants``
+    (what a bake of them records); ``variant_digest`` covers this variant's rows alone.
+    """
+    rows = tree_rows(tree, variant)
+    return _json_bytes(
+        {
+            "schema": TREE_SCHEMA,
+            "variant": variant,
+            "compiled_variants": list(tree.variants),
+            "tree_digest": tree.digest,
+            "variant_digest": tree_rows_digest((variant, row) for row in rows),
+            "files": rows,
+        }
+    )
 
 
 def _recipe_digests(img: Lowered, names: Sequence[str], locked: Lock | None) -> set[str]:

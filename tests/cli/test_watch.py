@@ -92,15 +92,15 @@ def test_watch_write_recompiles_into_out_mkosi(recipe: Path) -> None:
     edited = recipe.read_text(encoding="utf-8").replace('"hi', '"hello')
 
     code, lines = _watch(
-        str(recipe), "--out", "out", "--write", ticks=_edit_then_tick(recipe, edited)
+        str(recipe), "--build", "out", "--write", ticks=_edit_then_tick(recipe, edited)
     )
 
     assert code == EXIT_OK
     assert [line.split("; ")[1] for line in lines] == ["wrote out/mkosi", "wrote out/mkosi"]
-    assert run_main("compile", str(recipe), "--out", "out/mkosi", "--check")[0] == EXIT_OK
+    assert run_main("compile", str(recipe), "--tree", "out/mkosi", "--check")[0] == EXIT_OK
 
 
-def test_watch_checks_the_configured_tree_unless_out_is_given(
+def test_watch_checks_the_configured_tree_unless_tree_is_given(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -111,7 +111,8 @@ def test_watch_checks_the_configured_tree_unless_out_is_given(
     assert run_main("compile")[0] == EXIT_OK  # the table's tree: mkosi/
 
     assert _watch(ticks=iter(()))[1][0].endswith("; tree up to date")
-    assert _watch("--out", "out", "--write", ticks=iter(()))[1][0].endswith("; wrote out/mkosi")
+    line = _watch("--tree", "out/mkosi", "--write", ticks=iter(()))[1][0]
+    assert line.endswith("; wrote out/mkosi")
     assert (tmp_path / "out" / "mkosi").is_dir()
 
 

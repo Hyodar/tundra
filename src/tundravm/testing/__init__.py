@@ -27,9 +27,8 @@ import textwrap
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import cast, overload
 
-from tundravm.check import Diagnostic, Level, render
+from tundravm.check import render
 from tundravm.declarative import lifecycle
 from tundravm.declarative.lifecycle import (
     INPROCESS,
@@ -52,7 +51,7 @@ from tundravm.declarative.model import (
     Recipe,
     Target,
 )
-from tundravm.declarative.model import Diagnostic as Finding
+from tundravm.diagnostics import Diagnostic, Severity
 from tundravm.diff import TreeDiff, _foreign_profile_globs, diff_trees
 from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
 
@@ -158,11 +157,7 @@ def compile_tree(
     return CompiledTree(root, tree.variants, default_profile=tree.variants[0])
 
 
-AnyDiagnostic = Diagnostic | Finding
-Diagnostics = Sequence[Finding] | Sequence[Diagnostic]
-
-
-def _findings(subject: Recipe | Diagnostics, variants: Variants) -> Sequence[AnyDiagnostic]:
+def _findings(subject: Recipe | Sequence[Diagnostic], variants: Variants) -> Sequence[Diagnostic]:
     if isinstance(subject, Recipe):
         return check_report(subject, None, variants=_names(variants))
     if variants is not None:
@@ -170,31 +165,10 @@ def _findings(subject: Recipe | Diagnostics, variants: Variants) -> Sequence[Any
     return subject
 
 
-def _variant(d: AnyDiagnostic) -> str:
-    return d.variant if isinstance(d, Finding) else d.profile
+def _render(diagnostics: Sequence[Diagnostic]) -> str:
+    return render(diagnostics) if diagnostics else "no findings"
 
 
-def _render(diagnostics: Sequence[AnyDiagnostic]) -> str:
-    if not diagnostics:
-        return "no findings"
-    if all(isinstance(d, Diagnostic) for d in diagnostics):
-        return render(cast("Sequence[Diagnostic]", diagnostics))
-    return "\n".join(
-        f"{d.level} {d.code} [{_variant(d)}]{f' {d.subject}' if d.subject else ''}: {d.message}"
-        for d in diagnostics
-    )
-
-
-@overload
-def assert_clean(
-    subject: Sequence[Finding],
-    /,
-    *,
-    variants: Variants = None,
-    allow: Sequence[str] = (),
-    strict: bool | None = None,
-) -> Sequence[Finding]: ...
-@overload
 def assert_clean(
     subject: Recipe | Sequence[Diagnostic],
     /,
@@ -202,28 +176,19 @@ def assert_clean(
     variants: Variants = None,
     allow: Sequence[str] = (),
     strict: bool | None = None,
-) -> list[Diagnostic]: ...
-def assert_clean(
-    subject: Recipe | Diagnostics,
-    /,
-    *,
-    variants: Variants = None,
-    allow: Sequence[str] = (),
-    strict: bool | None = None,
-) -> Sequence[AnyDiagnostic]:
-    """Fail on error-level findings (warnings too with *strict*) whose code is not in *allow*.
+) -> Sequence[Diagnostic]:
+    """Fail on error findings (warnings too with *strict*) whose code is not in *allow*.
 
     *subject* is a sequence of diagnostics, such as what ``tundravm.lint()``
     returned (*strict* defaults to true), or a ``Recipe`` to lint for
-    *variants* (default: all; *strict* defaults to false). A recipe's findings
-    are the compiler's report form, with hints. Returns every diagnostic,
-    allowed or not.
+    *variants* (default: all; *strict* defaults to false). Returns every
+    diagnostic, allowed or not: *subject* itself, or a list for a recipe.
     """
     given = not isinstance(subject, Recipe)
     strict = given if strict is None else strict
     diagnostics = _findings(subject, variants)
-    levels = {"error", "warning"} if strict else {"error"}
-    failing = [d for d in diagnostics if d.code not in allow and d.level in levels]
+    severities = {"error", "warning"} if strict else {"error"}
+    failing = [d for d in diagnostics if d.code not in allow and d.severity in severities]
     if failing:
         raise AssertionError(
             f"recipe has {len(failing)} unexpected finding(s):\n{_render(failing)}"
@@ -231,66 +196,41 @@ def assert_clean(
     return diagnostics if given else list(diagnostics)
 
 
-@overload
-def assert_diagnostic(
-    diagnostics: Sequence[Finding],
-    code: str,
-    /,
-    *,
-    variants: Variants = None,
-    level: Level | None = None,
-    profile: str | None = None,
-    variant: str | None = None,
-    subject: str | None = None,
-) -> Finding: ...
-@overload
 def assert_diagnostic(
     diagnostics: Recipe | Sequence[Diagnostic],
     code: str,
     /,
     *,
     variants: Variants = None,
-    level: Level | None = None,
-    profile: str | None = None,
-    variant: str | None = None,
+    severity: Severity | None = None,
+    location: str | None = None,
     subject: str | None = None,
-) -> Diagnostic: ...
-def assert_diagnostic(
-    diagnostics: Recipe | Diagnostics,
-    code: str,
-    /,
-    *,
-    variants: Variants = None,
-    level: Level | None = None,
-    profile: str | None = None,
-    variant: str | None = None,
-    subject: str | None = None,
-) -> AnyDiagnostic:
+) -> Diagnostic:
     """Return the first diagnostic matching every given field, else fail listing them all.
 
     *diagnostics* is a sequence of diagnostics (what ``tundravm.lint()``
-    returned), or a ``Recipe`` to lint for *variants* (default: *variant*
-    alone when given, else all). ``profile`` is an alias of ``variant``.
+    returned), or a ``Recipe`` to lint for *variants* (default: *location*
+    alone when given, else all). *location* is the variant, ``""`` for the
+    recipe as a whole.
     """
     wanted_subject = subject
-    variant = profile if profile is not None else variant
-    if variants is None and variant is not None and isinstance(diagnostics, Recipe):
-        variants = [variant]
+    if variants is None and location and isinstance(diagnostics, Recipe):
+        variants = [location]
     found = _findings(diagnostics, variants)
     for d in found:
         if (
             d.code == code
-            and (level is None or d.level == level)
-            and (variant is None or _variant(d) == variant)
-            and (wanted_subject is None or (d.subject or None) == wanted_subject)
+            and (severity is None or d.severity == severity)
+            and (location is None or d.location == location)
+            and (wanted_subject is None or d.subject == wanted_subject)
         ):
             return d
     wanted = ", ".join(
         f"{key}={value!r}"
         for key, value in (
             ("code", code),
-            ("level", level),
-            ("variant", variant),
+            ("severity", severity),
+            ("location", location),
             ("subject", wanted_subject),
         )
         if value is not None
@@ -389,14 +329,14 @@ _FAKE_FILENAMES: dict[str, str] = {
 }
 
 
-def fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact:
-    """A simulated artifact for *variant* derived from *tree*, recorded in ``out``'s manifest.
+def fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) -> Artifact:
+    """A simulated artifact for *variant* derived from *tree*, recorded in *build*'s manifest.
 
-    Writes ``out/<variant>/<disk file>`` and ``out/bake-result.json`` (merging with
+    Writes ``build/<variant>/<disk file>`` and ``build/bake-result.json`` (merging with
     one already there), so :func:`tundravm.read_artifacts` reads it back.
     ``measure`` refuses it without ``allow_placeholder``, ``deploy`` without ``allow_simulated``.
     """
-    base = Path(out)
+    base = Path(build)
     path = base / variant / _FAKE_FILENAMES[target]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"simulated: variant={variant} target={target} tree={tree.digest}\n")
@@ -409,28 +349,30 @@ def fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> A
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload[MANIFEST_KEY] = {"recipe_digest": "", "simulated": True, "tree_digest": tree.digest}
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return next(a for a in read_artifacts(manifest) if a.variant == variant and a.target == target)
+    return next(a for a in read_artifacts(base) if a.variant == variant and a.target == target)
 
 
 def bake_in_process(
     recipe: Recipe,
     *,
-    out: str | Path | None = None,
+    build: str | Path | None = None,
     variants: Variants = None,
     lock: Lock | None = None,
 ) -> tuple[Artifact, ...]:
-    """Bake *variants* (default: all) with the in-process backend into *out* or a temp dir.
+    """Bake *variants* (default: all) with the in-process backend into *build* or a temp dir.
 
     The artifacts are simulated placeholders. Without *lock*, the recipe is
     locked offline first, which fails for a source build: pass a lock built
     with a ``resolver=`` for those.
     """
     names = _names(variants)
-    destination = Path(out) if out is not None else Path(tempfile.mkdtemp(prefix="tundravm-bake-"))
+    destination = (
+        Path(build) if build is not None else Path(tempfile.mkdtemp(prefix="tundravm-bake-"))
+    )
     if lock is None:
         lock = lifecycle.lock(recipe, offline=True, variants=names)
     return lifecycle.bake(
-        recipe, lock=lock, backend=Backend("inprocess"), out=destination, variants=names
+        recipe, lock=lock, backend=Backend("inprocess"), build=destination, variants=names
     )
 
 

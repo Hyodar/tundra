@@ -61,7 +61,7 @@ def _write_manifest(build: Path) -> None:
 
 def test_sbom_defaults_to_spdx_json(baked: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_manifest(baked)
-    code, out = run_main("sbom", str(baked / "bake-result.json"), "--variant", "default")
+    code, out = run_main("sbom", "--build", str(baked), "--variant", "default")
     assert code == EXIT_OK
     document = json.loads(out)
     assert document["spdxVersion"] == "SPDX-2.3"
@@ -80,7 +80,7 @@ def test_sbom_defaults_to_spdx_json(baked: Path, capsys: pytest.CaptureFixture[s
 )
 def test_sbom_formats(baked: Path, format: str, marker: str) -> None:
     _write_manifest(baked)
-    code, out = run_main("sbom", "--out", str(baked), "--variant", "default", "--format", format)
+    code, out = run_main("sbom", "--build", str(baked), "--variant", "default", "--format", format)
     assert code == EXIT_OK
     assert marker in out
 
@@ -102,14 +102,14 @@ def test_sbom_without_manifest_notes_it_and_lists_declared_packages(
     baked: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     capsys.readouterr()
-    code, out = run_main("sbom", str(baked), "--variant", "azure", "--format", "text")
+    code, out = run_main("sbom", "--build", str(baked), "--variant", "azure", "--format", "text")
     assert code == EXIT_OK
     assert "packages (3)" in out
     assert "  dmidecode          -        amd64  declared" in out
     assert "base             debian/trixie" in out
     assert "note: no mkosi package manifest at azure/azure.manifest:" in out
     assert capsys.readouterr().err == ""
-    code, out = run_main("sbom", str(baked), "--variant", "azure")
+    code, out = run_main("sbom", "--build", str(baked), "--variant", "azure")
     assert code == EXIT_OK
     assert "no mkosi package manifest" in json.loads(out)["creationInfo"]["comment"]
     assert "note: no mkosi package manifest at" in capsys.readouterr().err
@@ -136,9 +136,9 @@ def test_sbom_lockfile_flag_adds_source_pins(
     path = tmp_path / "pins.lock"
     write_lock(lock(recipe, resolver=lambda _source: COMMIT), path)
     flags = ("--variant", "default", "--lockfile", str(path), "--format", "text")
-    assert run_main("sbom", str(baked), *flags)[0] == EXIT_SDK_ERROR
+    assert run_main("sbom", "--build", str(baked), *flags)[0] == EXIT_SDK_ERROR
     assert "error [E_ARTIFACT_CHANGED]: The SBOM of default/qemu" in capsys.readouterr().err
-    code, out = run_main("sbom", str(baked), *flags, "--allow-unbound")
+    code, out = run_main("sbom", "--build", str(baked), *flags, "--allow-unbound")
     assert code == EXIT_OK
     assert f"app   build  {COMMIT}  v1   https://example.com/app.git  /usr/bin/app" in out
     assert "  bound            no (incomplete)" in out
@@ -150,15 +150,10 @@ def test_sbom_of_a_manifest_the_bake_did_not_record_is_refused(
 ) -> None:
     (artifact,) = read_artifacts(baked)[1:]
     (artifact.path.parent / "default.manifest").write_text(json.dumps(MANIFEST), encoding="utf-8")
-    assert run_main("sbom", str(baked), "--variant", "default")[0] == EXIT_SDK_ERROR
+    assert run_main("sbom", "--build", str(baked), "--variant", "default")[0] == EXIT_SDK_ERROR
     err = capsys.readouterr().err
     assert "the bake recorded no manifest, but default/default.manifest exists" in err
 
 
 def test_sbom_needs_a_variant_when_several_were_baked(baked: Path) -> None:
-    assert run_main("sbom", str(baked))[0] == EXIT_SDK_ERROR
-
-
-def test_sbom_rejects_manifest_and_out_together(baked: Path) -> None:
-    code, _ = run_main("sbom", str(baked), "--out", str(baked), "--variant", "default")
-    assert code == EXIT_SDK_ERROR
+    assert run_main("sbom", "--build", str(baked))[0] == EXIT_SDK_ERROR

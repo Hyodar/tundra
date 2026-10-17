@@ -183,7 +183,7 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     recipe = _recipe(_build(url, kind))
     out = tmp_path / "out"
 
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=out)
 
     cache = (out / ".sources" / "deps" / CACHES[kind]).resolve()
     assert fetched.deps == f"{CACHES[kind]}: prefetched"
@@ -212,7 +212,7 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     recorded = json.loads(marker.read_text(encoding="utf-8"))
     assert recorded["build"] == "tool" and recorded["spec"]["toolchain"] == kind
 
-    (again,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (again,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert again.cached and again.deps == f"{CACHES[kind]}: kept"
     assert len(tools.calls) == 1
 
@@ -223,7 +223,7 @@ def test_fetch_without_the_host_toolchain_skips_the_deps_and_succeeds(
     url, first = repo
     tools = _Toolchain(monkeypatch, [])
     recipe = _recipe(_build(url, "go"))
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=tmp_path)
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
     assert fetched.deps == "skipped (no host go)"
     assert tools.calls == []
     assert not (tmp_path / ".sources" / "deps").exists()
@@ -235,7 +235,7 @@ def test_a_failing_prefetch_is_recorded_and_the_build_downloads_online(
     url, first = repo
     _Toolchain(monkeypatch, ["go"], code=1)
     recipe = _recipe(_build(url, "go"))
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=tmp_path)
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
     assert fetched.deps == "failed (go mod: boom)"
     assert list((tmp_path / ".sources" / "deps").glob("*.json")) == []
 
@@ -247,7 +247,7 @@ def test_script_builds_and_kernels_have_no_dependency_cache(
     tools = _Toolchain(monkeypatch, ["go"])
     build = Build("tool", Git(url, "main"), script="make", install=(Install("tool", "/t"),))
     recipe = _recipe(build)
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=tmp_path)
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
     assert fetched.deps is None and tools.calls == []
 
 
@@ -266,7 +266,7 @@ def test_cli_fetch_lists_the_dependency_outcome(
         f"Build('tool', Git({url!r}, {first!r}), recipe=Go(output='tool'), "
         "install=(Install('tool', '/t'),)))))\n",
     )
-    assert main(["fetch", str(path), "--out", str(tmp_path / "out")]) == EXIT_OK
+    assert main(["fetch", str(path), "--build", str(tmp_path / "out")]) == EXIT_OK
     captured = capsys.readouterr()
     assert "deps: skipped (no host go)" in captured.out
     assert "tool: deps: skipped (no host go)" in captured.err
@@ -316,7 +316,7 @@ def test_fetch_keeps_the_deps_only_while_their_manifest_is_complete(
     tools = _GoModules(monkeypatch, ["go"])
     recipe = _recipe(_build(url, "go"))
     out = tmp_path / "out"
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert fetched.deps == "go: prefetched"
     deps = out / ".sources" / "deps"
     (marker,) = deps.glob("*.go.json")
@@ -324,11 +324,11 @@ def test_fetch_keeps_the_deps_only_while_their_manifest_is_complete(
     assert sorted(contents) == ["cache/download/example.com/!dep/@v/v1.2.0.mod", MODULE_DIR]
     assert contents[MODULE_DIR] == "dir"
 
-    (kept,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (kept,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert kept.deps == "go: kept" and len(tools.calls) == 1
 
     shutil.rmtree(deps / "go" / MODULE_DIR)
-    (repaired,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (repaired,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert repaired.deps == (
         f"go: prefetched (was incomplete: deps/go/{MODULE_DIR} is missing or changed)"
     )
@@ -336,7 +336,7 @@ def test_fetch_keeps_the_deps_only_while_their_manifest_is_complete(
 
     shutil.rmtree(deps / "go" / MODULE_DIR)
     _GoModules(monkeypatch, [])
-    (unrepaired,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (unrepaired,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert unrepaired.deps == f"go: incomplete (deps/go/{MODULE_DIR} is missing or changed)"
 
 
@@ -347,10 +347,10 @@ def test_fetch_force_refills_the_dependency_caches(
     tools = _GoModules(monkeypatch, ["go"])
     recipe = _recipe(_build(url, "go"))
     out = tmp_path / "out"
-    fetch(recipe, lock=_locked(recipe, first), out=out)
+    fetch(recipe, lock=_locked(recipe, first), build=out)
     stale = out / ".sources" / "deps" / "go" / "stale"
     stale.write_text("left over\n", encoding="utf-8")
-    (forced,) = fetch(recipe, lock=_locked(recipe, first), out=out, force=True)
+    (forced,) = fetch(recipe, lock=_locked(recipe, first), build=out, force=True)
     assert forced.deps == "go: prefetched" and len(tools.calls) == 2
     assert not stale.exists()
     assert (out / ".sources" / "deps" / "go" / MODULE_DIR / "dep.go").is_file()
@@ -363,12 +363,12 @@ def test_a_marker_without_a_manifest_is_prefetched_again(
     tools = _GoModules(monkeypatch, ["go"])
     recipe = _recipe(_build(url, "go"))
     out = tmp_path / "out"
-    fetch(recipe, lock=_locked(recipe, first), out=out)
+    fetch(recipe, lock=_locked(recipe, first), build=out)
     (marker,) = (out / ".sources" / "deps").glob("*.go.json")
     record = json.loads(marker.read_text(encoding="utf-8"))
     del record["contents"]
     marker.write_text(json.dumps(record), encoding="utf-8")
-    (again,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (again,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert again.deps == "go: prefetched (was incomplete: the marker has no content manifest)"
     assert len(tools.calls) == 2
 
@@ -416,7 +416,7 @@ def test_cargo_and_nuget_manifests_come_from_the_lock_and_the_restore(
     monkeypatch.setattr(_source, "run_tool", run)
     recipe = _recipe(_build(url, kind))
     out = tmp_path / "out"
-    fetch(recipe, lock=_locked(recipe, first), out=out)
+    fetch(recipe, lock=_locked(recipe, first), build=out)
     (marker,) = (out / ".sources" / "deps").glob(f"*.{CACHES[kind]}.json")
     contents = json.loads(marker.read_text(encoding="utf-8"))["contents"]
     if kind == "cargo":
@@ -426,7 +426,7 @@ def test_cargo_and_nuget_manifests_come_from_the_lock_and_the_restore(
         assert contents == {"newtonsoft.json/13.0.1": "dir"}
         shutil.rmtree(out / ".sources" / "deps" / "nuget" / "newtonsoft.json")
     _Toolchain(monkeypatch, [])
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=out)
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert fetched.deps is not None and fetched.deps.startswith(f"{CACHES[kind]}: incomplete (")
 
 
@@ -440,7 +440,7 @@ def test_offline_bake_refuses_a_build_without_prefetched_deps(
     _Toolchain(monkeypatch, [])
     recipe = _recipe(_build(url, "go"))
     out = tmp_path / "out"
-    fetch(recipe, lock=_locked(recipe, first), out=out)
+    fetch(recipe, lock=_locked(recipe, first), build=out)
     backend = _Recording()
     with pytest.raises(StateError, match="'tool' has no prefetched go dependencies") as missing:
         bake_image(
@@ -448,7 +448,7 @@ def test_offline_bake_refuses_a_build_without_prefetched_deps(
             None,
             locked=_locked(recipe, first),
             backend=backend,
-            out=out,
+            build=out,
             offline=True,
         )
     assert missing.value.code == ErrorCode.STATE
@@ -463,7 +463,7 @@ def test_offline_bake_names_the_missing_cache_entry(
     _GoModules(monkeypatch, ["go"])
     recipe = _recipe(_build(url, "go"))
     out = tmp_path / "out"
-    fetch(recipe, lock=_locked(recipe, first), out=out)
+    fetch(recipe, lock=_locked(recipe, first), build=out)
     shutil.rmtree(out / ".sources" / "deps" / "go" / MODULE_DIR)
     backend = _Recording()
     with pytest.raises(StateError, match="incomplete go dependency cache") as incomplete:
@@ -472,12 +472,12 @@ def test_offline_bake_names_the_missing_cache_entry(
             None,
             locked=_locked(recipe, first),
             backend=backend,
-            out=out,
+            build=out,
             offline=True,
             fetch=False,
         )
     assert f"deps/go/{MODULE_DIR} is missing or changed" in str(incomplete.value)
-    assert f"tundravm fetch RECIPE --out {out}" in str(incomplete.value.hint)
+    assert f"tundravm fetch RECIPE --build {out}" in str(incomplete.value.hint)
     assert backend.requests == []
 
 
@@ -490,14 +490,14 @@ def test_offline_bake_after_fetch_builds_without_network(
     policy = Policy(network_mode="offline") if how == "policy" else None
     recipe = _recipe(_build(url, "go"))
     out = tmp_path / "out"
-    fetch(recipe, lock=_locked(recipe, first), out=out)
+    fetch(recipe, lock=_locked(recipe, first), build=out)
     backend = _Recording()
     bake_image(
         lower(_recipe(_build(url, "go"), policy=policy)),
         None,
         locked=_locked(recipe, first),
         backend=backend,
-        out=out,
+        build=out,
         offline=how == "flag",
     )
     (request,) = backend.requests
@@ -512,7 +512,7 @@ def test_online_bake_keeps_the_network(tmp_path: Path, repo: tuple[str, str]) ->
     url, first = repo
     recipe = _recipe(_build(url, "go"))
     backend = _Recording()
-    bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, out=tmp_path)
+    bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, build=tmp_path)
     assert backend.requests[0].network is True
 
 
@@ -528,7 +528,7 @@ def test_offline_bake_refuses_nethermind_v1_source_builds(
             None,
             locked=_locked(recipe, first),
             backend=backend,
-            out=tmp_path,
+            build=tmp_path,
             offline=True,
         )
     assert backend.requests == []
@@ -576,7 +576,7 @@ def test_efi_stub_package_is_locked_fetched_and_installed_from_the_mount(
         digest,
     )
 
-    (fetched,) = fetch(recipe, lock=locked, out=tmp_path)
+    (fetched,) = fetch(recipe, lock=locked, build=tmp_path)
     directory = source_dir("efi-stub", digest, deb_url, http=True)
     deb = tmp_path / ".sources" / directory / f"systemd-boot-efi_{EFI_VERSION}_amd64.deb"
     assert fetched.name == "efi-stub" and fetched.deps is None
@@ -592,7 +592,7 @@ def test_efi_stub_package_is_locked_fetched_and_installed_from_the_mount(
     assert f'mkosi-chroot dpkg -i "$CHROOT_SRCDIR/{mounted}"' in script
 
     backend = _Recording()
-    bake_image(lower(recipe), None, locked=locked, backend=backend, out=tmp_path)
+    bake_image(lower(recipe), None, locked=locked, backend=backend, build=tmp_path)
     assert backend.requests[0].sources_dir == tmp_path / ".sources"
 
 
@@ -622,10 +622,10 @@ def test_efi_stub_drifts_until_locked_and_stays_out_of_nethermind_v1(
 def test_unpinned_efi_stub_is_reported_until_locked() -> None:
     recipe = _recipe(_stub("20251113T083151Z"))
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]
-    assert [(d.level, d.subject) for d in found] == [("warning", "efi-stub")]
+    assert [(d.severity, d.subject) for d in found] == [("warning", "efi-stub")]
     assert "systemd-boot-efi_257.8-1~deb13u1_amd64.deb" in found[0].message
     strict = _recipe(_stub("20251113T083151Z"), policy=Policy(mutable_ref_policy="error"))
-    assert [d.level for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
+    assert [d.severity for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
     locked = lock(recipe, resolver=lambda source: "b" * 64)
     assert not [d for d in lint(recipe, lock=locked) if d.code == "source-unpinned"]
     report = check_report(recipe, None, variants=None)

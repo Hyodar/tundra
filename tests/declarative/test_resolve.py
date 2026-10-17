@@ -66,7 +66,7 @@ def test_fragment_requires_and_checks() -> None:
     def needs_curl(image: Resolved) -> tuple[Diagnostic, ...]:
         if Package("curl") in image.items:
             return ()
-        return (Diagnostic("curl-missing", "needs curl", level="warning", subject="tool"),)
+        return (Diagnostic("curl-missing", "warning", "needs curl", subject="tool"),)
 
     tool = Fragment("tool", items=(Package("jq"),), requires=("storage",), checks=(needs_curl,))
     recipe = Recipe(
@@ -78,7 +78,7 @@ def test_fragment_requires_and_checks() -> None:
         ),
     )
     found = lint(recipe)
-    assert {(d.code, d.variant, d.level) for d in found} == {
+    assert {(d.code, d.location, d.severity) for d in found} == {
         ("fragment-requires-missing", "default", "error"),
         ("curl-missing", "default", "warning"),
     }
@@ -170,7 +170,7 @@ def test_identity_collisions_fail_and_equal_repeats_dedupe() -> None:
     )
     found = lint(recipe)
     # The common-level collision is reported once, for no particular variant.
-    assert [(d.code, d.variant) for d in found] == [
+    assert [(d.code, d.location) for d in found] == [
         ("identity-collision", ""),
         ("identity-collision", "other"),
     ]
@@ -254,7 +254,7 @@ def test_hook_unit_and_target_checks() -> None:
         "hook-after-undefined",
         "unit-after-init-without-init",
     ]
-    assert {d.variant for d in found} == {"local"}
+    assert {d.location for d in found} == {"local"}
 
 
 def test_service_and_template_identities() -> None:
@@ -310,5 +310,5 @@ def test_several_targets_inherit_and_stay_consistent() -> None:
         ),
     )
     assert resolve(recipe, variant="child").targets == ("azure", "gcp")
-    codes = {(d.variant, d.code) for d in lint(recipe)}
+    codes = {(d.location, d.code) for d in lint(recipe)}
     assert ("narrow", "target-inconsistent") in codes

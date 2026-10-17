@@ -13,7 +13,7 @@ is a plain partition baked into the image instead. ``Disk`` without ``device=`` 
 
     tundravm inspect examples/04_storage_and_secrets.py
     tundravm lint examples/04_storage_and_secrets.py   # disk-auto-format, source-unpinned
-    tundravm compile examples/04_storage_and_secrets.py --out build/storage/mkosi
+    tundravm compile examples/04_storage_and_secrets.py --tree build/storage/mkosi
 """
 
 from tundravm.backends import InProcessBackend

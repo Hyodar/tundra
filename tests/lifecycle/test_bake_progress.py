@@ -241,7 +241,7 @@ def _bake(tmp_path: Path, recipe: Recipe, reporter: Capture | None) -> BakeResul
         ("default",),
         locked=None,
         backend=InProcessBackend(),
-        out=tmp_path / "build",
+        build=tmp_path / "build",
         reporter=reporter,
     )
     return result
@@ -295,7 +295,7 @@ def test_bake_forwards_logger_records_only_while_attached(tmp_path: Path) -> Non
         ("default",),
         locked=None,
         backend=InProcessBackend(),
-        out=tmp_path / "build",
+        build=tmp_path / "build",
         reporter=capture,
     )
     logged = [e for e in capture.events if e.extra.get("source") == "logger"]
@@ -322,7 +322,7 @@ def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
         recipe,
         lock=lock(recipe),
         backend=Backend("inprocess"),
-        out=tmp_path / "out",
+        build=tmp_path / "out",
         progress=progress.append,
     )
     assert any(line.startswith("[default] build via inprocess ... ok") for line in progress)
@@ -465,8 +465,7 @@ def test_cli_bake_default_prints_progress_and_summary(
     assert re.match(
         r"default\s+qemu\s+\S+disk\.qcow2\s+\d+ B\s+[0-9a-f]{12}\s+\d+\.\ds$", lines[header + 1]
     )
-    manifest = Path("build") / "bake-result.json"
-    assert lines[-1] == f"next: tundravm deploy {manifest} --variant default --target qemu"
+    assert lines[-1] == "next: tundravm deploy qemu --build build --variant default"
 
 
 @pytest.mark.usefixtures("in_tmp_path")

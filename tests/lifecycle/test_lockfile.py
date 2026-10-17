@@ -85,7 +85,7 @@ def test_bake_frozen_fails_when_lock_missing(
     missing = tmp_path / "missing.lock"
 
     code = main(
-        ["bake", str(recipe), "--lockfile", str(missing), "--out", str(tmp_path / "out")],
+        ["bake", str(recipe), "--lockfile", str(missing), "--build", str(tmp_path / "out")],
         stdout=io.StringIO(),
     )
 
@@ -98,7 +98,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
     locked = lock(_recipe("curl"))
 
     with pytest.raises(LockfileError) as excinfo:
-        bake(_recipe("curl", "jq"), lock=locked, backend=Backend("inprocess"), out=tmp_path)
+        bake(_recipe("curl", "jq"), lock=locked, backend=Backend("inprocess"), build=tmp_path)
 
     assert "stale" in str(excinfo.value).lower()
 
@@ -106,7 +106,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
 def test_bake_frozen_succeeds_with_current_lock(tmp_path: Path) -> None:
     recipe = _recipe("curl")
 
-    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path)
+    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path)
 
     assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
     assert artifacts[0].path.is_file()

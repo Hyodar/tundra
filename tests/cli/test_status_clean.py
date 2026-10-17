@@ -13,7 +13,7 @@ import pytest
 
 from tests.helpers import run_main, source_dir, write_recipe_file
 from tundravm import clean as clean_module
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, main
 from tundravm.declarative import lock, write_lock
 from tundravm.recipe import load_recipe
 from tundravm.status import UP_TO_DATE
@@ -104,7 +104,7 @@ def test_status_verdicts_and_next_follow_lock_compile_bake(recipe: Path) -> None
     assert run_main("lock", str(recipe))[0] == EXIT_OK
     locked = _status(str(recipe))
     assert _verdict(locked, "lock") == "ok"
-    assert locked["next"] == f"tundravm compile {recipe} --out {BUILD / 'mkosi'}"
+    assert locked["next"] == f"tundravm compile {recipe} --tree {BUILD / 'mkosi'}"
 
     assert run_main("compile", str(recipe))[0] == EXIT_OK
     compiled = _status(str(recipe))
@@ -147,9 +147,11 @@ def test_status_json_shape(recipe: Path) -> None:
         "manifests",
         "next",
         "recipe",
+        "schema",
         "sources",
         "tree",
     ]
+    assert payload["schema"] == "tundravm.status/1"
     recipe_entry = payload["recipe"]
     assert isinstance(recipe_entry, dict)
     assert recipe_entry["variants"] == ["default", "azure"]
@@ -203,7 +205,7 @@ def test_status_variant_selects_items_and_next(recipe: Path) -> None:
     whole = _status(str(recipe))
     assert [item["verdict"] for item in _items(whole, "artifacts")] == ["ok", "missing"]
     assert _verdict(whole, "tree") == "stale"  # the bake wrote only default's tree
-    assert whole["next"] == f"tundravm compile {recipe} --out {BUILD / 'mkosi'}"
+    assert whole["next"] == f"tundravm compile {recipe} --tree {BUILD / 'mkosi'}"
 
     one = _status(str(recipe), "--variant", "default")
     recipe_entry = one["recipe"]
@@ -213,7 +215,7 @@ def test_status_variant_selects_items_and_next(recipe: Path) -> None:
     assert one["next"] == UP_TO_DATE
 
     azure = _status(str(recipe), "--variant", "azure")
-    assert azure["next"] == f"tundravm compile {recipe} --variant azure --out {BUILD / 'mkosi'}"
+    assert azure["next"] == f"tundravm compile {recipe} --variant azure --tree {BUILD / 'mkosi'}"
 
 
 def test_status_flags_artifacts_stale_after_editing_the_recipe(recipe: Path) -> None:
@@ -233,7 +235,7 @@ def test_status_flags_artifacts_stale_after_editing_the_recipe(recipe: Path) -> 
     assert edited["next"] == f"tundravm lock {recipe}"
 
     assert run_main("lock", str(recipe))[0] == EXIT_OK
-    assert _status(str(recipe))["next"] == f"tundravm compile {recipe} --out {BUILD / 'mkosi'}"
+    assert _status(str(recipe))["next"] == f"tundravm compile {recipe} --tree {BUILD / 'mkosi'}"
     assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
     assert _status(str(recipe))["next"] == UP_TO_DATE
 
@@ -265,9 +267,9 @@ def test_status_out_and_lockfile_are_repeated_in_next(recipe: Path, tmp_path: Pa
     out = tmp_path / "elsewhere"
     lockfile = tmp_path / "pins.lock"
     assert run_main("lock", str(recipe), "--lockfile", str(lockfile))[0] == EXIT_OK
-    payload = _status(str(recipe), "--out", str(out), "--lockfile", str(lockfile))
+    payload = _status(str(recipe), "--build", str(out), "--lockfile", str(lockfile))
     assert payload["next"] == (
-        f"tundravm compile {recipe} --out {out / 'mkosi'} --lockfile {lockfile}"
+        f"tundravm compile {recipe} --tree {out / 'mkosi'} --lockfile {lockfile}"
     )
     tree = payload["tree"]
     assert isinstance(tree, dict)
@@ -311,7 +313,7 @@ def test_status_reports_source_checkouts(tmp_path: Path, monkeypatch: pytest.Mon
     fetched = _status(str(path))
     (source,) = _items(fetched, "sources")
     assert (source["verdict"], source["fetched"]) == ("ok", True)
-    assert fetched["next"] == f"tundravm compile {path} --out {BUILD / 'mkosi'}"
+    assert fetched["next"] == f"tundravm compile {path} --tree {BUILD / 'mkosi'}"
 
     checkout = BUILD / ".sources" / source_dir("tool", pin, upstream.as_uri())
     (checkout / "main.go").write_text("package changed\n", encoding="utf-8")
@@ -376,13 +378,13 @@ def test_clean_without_flags_lists_everything_and_removes_nothing(baked: Path) -
 
 
 def test_clean_dry_run_then_real(baked: Path) -> None:
-    code, out = run_main("clean", "--out", "build", "--artifacts", "--state", "--dry-run")
+    code, out = run_main("clean", "--build", "build", "--artifacts", "--state", "--dry-run")
     assert code == EXIT_OK
     assert "would remove build/default" in out.splitlines()
     assert f"would remove {BUILD / 'mkosi' / 'default' / 'mkosi.cache'}" in out.splitlines()
     assert (BUILD / "default").is_dir()
 
-    code, out = run_main("clean", "--out", "build", "--artifacts", "--state")
+    code, out = run_main("clean", "--build", "build", "--artifacts", "--state")
     assert code == EXIT_OK
     assert out.splitlines() == [
         f"removed {BUILD / 'azure'}",
@@ -399,7 +401,7 @@ def test_clean_all_keeps_the_lockfile_unless_named(baked: Path) -> None:
     code, _ = run_main("clean", str(baked), "--all")
     assert code == EXIT_OK
     assert _listing(BUILD) == ["tundravm.lock"]
-    assert _status(str(baked))["next"] == f"tundravm compile {baked} --out {BUILD / 'mkosi'}"
+    assert _status(str(baked))["next"] == f"tundravm compile {baked} --tree {BUILD / 'mkosi'}"
 
     code, out = run_main("clean", str(baked), "--all", "--lockfile", "build/tundravm.lock")
     assert (code, out) == (EXIT_OK, "removed build/tundravm.lock\n")
@@ -446,9 +448,11 @@ def test_clean_falls_back_to_sudo(baked: Path, monkeypatch: pytest.MonkeyPatch) 
     assert not locked_dir.exists()
 
 
-def test_clean_needs_a_recipe_or_out(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_clean_without_a_recipe_cleans_build_here(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert run_main("clean", "--all")[0] == EXIT_SDK_ERROR
-    assert "clean needs RECIPE or --out DIR." in capsys.readouterr().err
+    (tmp_path / "build" / ".sources").mkdir(parents=True)
+    code, out = run_main("clean")
+    assert code == EXIT_OK
+    assert f"would remove {Path('build') / '.sources'}" in out.splitlines()

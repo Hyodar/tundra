@@ -112,7 +112,7 @@ def test_bake_after_compile_across_variants(
         ("default", "azure"),
         locked=None,
         backend=inprocess_backend,
-        out=tmp_path / "build",
+        build=tmp_path / "build",
     )
     assert set(result.profiles) == {"azure", "default"}
     assert {a.variant for a in artifacts} == {"azure", "default"}

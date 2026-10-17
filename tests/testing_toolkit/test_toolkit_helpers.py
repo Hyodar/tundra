@@ -199,25 +199,25 @@ def test_assert_clean_takes_lint_diagnostics_strictly() -> None:
 
 
 def test_assert_diagnostic_returns_the_match() -> None:
-    found = assert_diagnostic(_ghost(), "service-user-missing", level="error", subject="app")
-    assert found.profile == "default"
+    found = assert_diagnostic(_ghost(), "service-user-missing", severity="error", subject="app")
+    assert found.location == "default"
     assert "ghost" in found.message
     assert found.hint is not None
 
 
 def test_assert_diagnostic_filters_by_variant() -> None:
     recipe = _ghost(where="azure")
-    found = assert_diagnostic(recipe, "service-user-missing", profile="azure")
-    assert found.profile == "azure"
-    assert assert_diagnostic(recipe, "service-user-missing", variant="azure") == found
+    found = assert_diagnostic(recipe, "service-user-missing", location="azure")
+    assert found.location == "azure"
+    assert assert_diagnostic(recipe, "service-user-missing", location="azure") == found
     with pytest.raises(AssertionError, match="no findings"):
         assert_diagnostic(recipe, "service-user-missing", variants="default")
 
 
 def test_assert_diagnostic_takes_lint_diagnostics() -> None:
-    found = assert_diagnostic(lint(_ghost()), "service-user-missing", variant="default")
+    found = assert_diagnostic(lint(_ghost()), "service-user-missing", location="default")
     assert isinstance(found, Diagnostic)
-    assert (found.level, found.subject) == ("error", "app")
+    assert (found.severity, found.subject) == ("error", "app")
 
 
 def test_assert_diagnostic_failure_lists_every_finding() -> None:
@@ -227,8 +227,8 @@ def test_assert_diagnostic_failure_lists_every_finding() -> None:
     message = str(excinfo.value)
     assert "code='service-user-missing', subject='app'" in message
     assert "warning service-command-not-shipped [default]" in message
-    with pytest.raises(AssertionError, match="level='error'"):
-        assert_diagnostic(recipe, "service-command-not-shipped", level="error")
+    with pytest.raises(AssertionError, match="severity='error'"):
+        assert_diagnostic(recipe, "service-command-not-shipped", severity="error")
     with pytest.raises(AssertionError, match="no findings"):
         assert_diagnostic(lint(_recipe()), "service-command-not-shipped")
 
@@ -313,8 +313,8 @@ def test_golden_truncates_long_diffs(tmp_path: Path) -> None:
 def test_fake_bake_merges_into_one_manifest(tmp_path: Path) -> None:
     recipe = _recipe()
     tree = compile(recipe)
-    qemu = fake_bake(tree, variant="default", target="qemu", out=tmp_path)
-    azure = fake_bake(tree, variant="azure", target="azure", out=tmp_path)
+    qemu = fake_bake(tree, variant="default", target="qemu", build=tmp_path)
+    azure = fake_bake(tree, variant="azure", target="azure", build=tmp_path)
     assert qemu.path == tmp_path / "default" / "disk.qcow2"
     assert azure.path == tmp_path / "azure" / "disk.vhd"
     assert qemu.simulated and azure.simulated
@@ -324,7 +324,7 @@ def test_fake_bake_merges_into_one_manifest(tmp_path: Path) -> None:
 
 def test_bake_in_process_writes_simulated_artifacts(tmp_path: Path) -> None:
     out = tmp_path / "build"
-    artifacts = bake_in_process(_recipe(), out=out)
+    artifacts = bake_in_process(_recipe(), build=out)
     assert {(a.variant, a.target) for a in artifacts} == {("default", "qemu"), ("azure", "azure")}
     for artifact in artifacts:
         assert artifact.simulated
@@ -411,7 +411,7 @@ def test_fake_fragment_collision_is_diagnosed() -> None:
     found = assert_diagnostic(
         Recipe(name="demo", common=common), "init-priority-collision", subject="priority 50"
     )
-    assert found.level == "warning"
+    assert found.severity == "warning"
 
 
 def test_fake_fragment_checks_run_per_variant() -> None:
@@ -419,7 +419,7 @@ def test_fake_fragment_checks_run_per_variant() -> None:
 
     def check(resolved: Resolved) -> tuple[Diagnostic, ...]:
         seen.append(resolved.variant)
-        return (Diagnostic(code="fake-check", message="checked", level="warning"),)
+        return (Diagnostic("fake-check", "warning", "checked"),)
 
     recipe = Recipe(
         name="demo",
@@ -428,8 +428,8 @@ def test_fake_fragment_checks_run_per_variant() -> None:
     )
     found = lint(recipe)
     assert set(seen) == {"azure", "default"}
-    assert assert_diagnostic(found, "fake-check", variant="azure").subject == ""
-    assert assert_diagnostic(found, "fake-check", variant="default").level == "warning"
+    assert assert_diagnostic(found, "fake-check", location="azure").subject == ""
+    assert assert_diagnostic(found, "fake-check", location="default").severity == "warning"
 
 
 # ── recipe_file / run_cli ────────────────────────────────────────────
@@ -455,7 +455,7 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
     assert "no findings" in out
     assert err == ""
 
-    code, out, _ = run_cli("compile", path, "--out", tmp_path / "tree")
+    code, out, _ = run_cli("compile", path, "--tree", tmp_path / "tree")
     assert code == 0, out
     assert (tmp_path / "tree" / "default" / "mkosi.conf").is_file()
 

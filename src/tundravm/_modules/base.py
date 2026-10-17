@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 from tundravm._source import GitSource
 
 if TYPE_CHECKING:
-    from tundravm.check import Diagnostic
     from tundravm.declarative._lowered import Lowered
+    from tundravm.diagnostics import Diagnostic
 
 TUNDRA_TOOLS = GitSource("https://github.com/Hyodar/tundra-tools.git", "master")
 """The ``tundra-tools`` repository Tdxs, KeyGeneration, DiskEncryption and

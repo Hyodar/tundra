@@ -20,7 +20,7 @@ from tundravm.models import BakeResult
 
 def _bake(recipe: Recipe, backend: LocalLinuxBackend, output_dir: Path) -> BakeResult:
     result, _ = bake_image(
-        lower(recipe), ("default",), locked=None, backend=backend, out=output_dir
+        lower(recipe), ("default",), locked=None, backend=backend, build=output_dir
     )
     return result
 

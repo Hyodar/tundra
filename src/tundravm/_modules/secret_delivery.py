@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.disk_encryption import DiskEncryption, DiskSpec
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
-from tundravm.check import Diagnostic
+from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.models import SecretSpec, ships_unit
 
@@ -125,7 +125,7 @@ class SecretDelivery(Module):
             return
         declared = ", ".join(sorted(disks)) or "none"
         yield Diagnostic(
-            level="warning",
+            severity="warning",
             code="secret-store-undefined",
             message=(
                 f"secrets are stored on disk {store!r}, which no Disk in this variant declares"
@@ -134,7 +134,7 @@ class SecretDelivery(Module):
                 f"Declared disks: {declared}. Declare Disk({store!r}, ...) in this variant, "
                 "pass Secrets(store=) one of the declared disks, or store=None."
             ),
-            profile=profile,
+            location=profile,
             subject=store,
         )
 
@@ -145,7 +145,7 @@ class SecretDelivery(Module):
             if service in controlled or ships_unit(state, service):
                 continue
             yield Diagnostic(
-                level="error",
+                severity="error",
                 code="secret-env-service-unknown",
                 message=(
                     f"a SecretEnv delivers to service {service!r}, which this variant "
@@ -156,7 +156,7 @@ class SecretDelivery(Module):
                     f"Unit({service!r}, ...) in this variant, Unit({service!r}, "
                     "enabled=True) for a packaged unit, or fix the SecretEnv's service=."
                 ),
-                profile=profile,
+                location=profile,
                 subject=service,
             )
 

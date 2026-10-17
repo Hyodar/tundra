@@ -79,9 +79,9 @@ def test_init_writes_recipe_and_gitignore_without_ci(tmp_path: Path) -> None:
     gitignore = (project / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "/build/*" in gitignore and "!/build/tundravm.lock" in gitignore
     assert not (project / ".github").exists()
-    assert "tundravm compile my-node.py --out mkosi" in out
+    assert "tundravm compile my-node.py --tree mkosi" in out
     assert "tundravm lock my-node.py" in out
-    assert "tundravm ci my-node.py --out mkosi" in out
+    assert "tundravm ci my-node.py --tree mkosi" in out
 
     code, payload = run_main("inspect", str(recipe), "--json")
     assert code == EXIT_OK and set(json.loads(payload)["variants"]) == {"default", "dev"}
@@ -131,7 +131,7 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
         "uses: actions/checkout@v4",
         "run: uv sync",
         'uv run tundravm inspect node.py --format markdown >> "$GITHUB_STEP_SUMMARY"',
-        "run: uv run tundravm ci node.py --out mkosi",
+        "run: uv run tundravm ci node.py --tree mkosi",
     )
 
     bake_keys, bake = jobs["bake"]
@@ -145,8 +145,8 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
         "run: uv sync",
         "uv run tundravm fetch node.py",
         "uv run tundravm bake node.py --backend ${{ vars.TUNDRAVM_BAKE_BACKEND }} "
-        "--out build --verify-reproducible",
-        "uv run tundravm evidence node.py --out build --require ",
+        "--build build --verify-reproducible",
+        "uv run tundravm evidence node.py --build build --require ",
         "uses: actions/upload-artifact@v4",
     )
     baking, collect, upload = bake[-3:]
@@ -219,7 +219,7 @@ def test_init_ci_on_an_existing_project_writes_only_the_workflow(
         f"adding CI for node.py to the existing project in {tmp_path}",
         f"created {workflow}",
         f"kept {tmp_path / '.gitignore'} (already ignores build output)",
-        "next: `tundravm ci node.py --out mkosi` runs the workflow's checks; "
+        "next: `tundravm ci node.py --tree mkosi` runs the workflow's checks; "
         "commit mkosi/ and the lockfile they compare against",
     ]
     after = _files(tmp_path)
@@ -253,7 +253,7 @@ def test_init_ci_with_recipe_adds_the_workflow_and_gitignore_block(tmp_path: Pat
     files = [".github/workflows/tundravm.yml", ".gitignore", "images/edge.py"]
     assert list(_files(tmp_path)) == files
     workflow = (tmp_path / ".github" / "workflows" / "tundravm.yml").read_text()
-    assert "run: uv run tundravm ci images/edge.py --out mkosi" in workflow
+    assert "run: uv run tundravm ci images/edge.py --tree mkosi" in workflow
     assert (tmp_path / ".gitignore").read_text().startswith("*.pyc\n\n# tundravm")
     assert recipe.read_text(encoding="utf-8") == "x = 1\n"
 
@@ -295,9 +295,9 @@ def test_init_project_passes_ci_once_compiled_and_locked(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     assert run_main("init", "--name", "node", "--backend", "inprocess")[0] == EXIT_OK
-    assert run_main("compile", "node.py", "--out", "mkosi")[0] == EXIT_OK
+    assert run_main("compile", "node.py", "--tree", "mkosi")[0] == EXIT_OK
     assert run_main("lock", "node.py")[0] == EXIT_OK
-    code, out = run_main("ci", "node.py", "--out", "mkosi")
+    code, out = run_main("ci", "node.py", "--tree", "mkosi")
     assert code == EXIT_OK, out
 
 
@@ -378,7 +378,7 @@ def test_lint_markdown_table(recipe: Path) -> None:
     recipe.write_text(recipe.read_text() + GHOST)
     code, out = run_main("lint", str(recipe), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
-    assert out.startswith("| Level | Code | Variant | Subject | Message | Hint |\n|---|")
+    assert out.startswith("| Severity | Code | Location | Subject | Message | Hint |\n|---|")
     assert "| error | `service-user-missing` | `default` | `w` |" in out
     assert "**1 error, 0 warnings, 0 infos**" in out
 
@@ -388,12 +388,10 @@ def test_lint_markdown_table(recipe: Path) -> None:
 
 def test_diff_github_and_markdown_on_mutated_recipe(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    assert run_main("compile", str(recipe), "--out", str(tree), *DEFAULT)[0] == EXIT_OK
+    assert run_main("compile", str(recipe), "--tree", str(tree), *DEFAULT)[0] == EXIT_OK
     mutate(recipe)
 
-    code, out = run_main(
-        "diff", str(recipe), "--against", str(tree), "--format", "github", *DEFAULT
-    )
+    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--format", "github", *DEFAULT)
     assert code == EXIT_FAILURE
     [(level, props, message)] = parse_annotations(out)
     assert level == "warning"
@@ -402,9 +400,7 @@ def test_diff_github_and_markdown_on_mutated_recipe(recipe: Path, tmp_path: Path
     assert "::group::unified diff\n::stop-commands::tundravm-" in out
     assert "+    htop\n" in out and out.endswith("::endgroup::\n")
 
-    code, out = run_main(
-        "diff", str(recipe), "--against", str(tree), "--format", "markdown", *DEFAULT
-    )
+    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
     assert "| Status | File |\n|---|---|\n| modified | `default/mkosi.conf` |" in out
     assert "**1 file changed**" in out
@@ -415,7 +411,7 @@ def test_tree_diff_markdown_truncates_long_diffs(recipe: Path, tmp_path: Path) -
     lines = "".join(f"line {index}\\n" for index in range(500))
     recipe.write_text(recipe.read_text() + f'ITEMS.append(File("/etc/big", "{lines}"))\n')
     code, out = run_main(
-        "diff", str(recipe), "--against", str(tmp_path / "empty"), "--format", "markdown"
+        "diff", str(recipe), "--tree", str(tmp_path / "empty"), "--format", "markdown"
     )
     assert code == EXIT_FAILURE
     fenced = out.split("```diff\n", 1)[1].split("\n```", 1)[0]
@@ -425,10 +421,10 @@ def test_tree_diff_markdown_truncates_long_diffs(recipe: Path, tmp_path: Path) -
 
 def test_compile_check_github_annotates_stale_files(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    run_main("compile", str(recipe), "--out", str(tree))
+    run_main("compile", str(recipe), "--tree", str(tree))
     mutate(recipe)
     code, out = run_main(
-        "compile", str(recipe), "--out", str(tree), "--check", "--format", "github"
+        "compile", str(recipe), "--tree", str(tree), "--check", "--format", "github"
     )
     assert code == EXIT_FAILURE
     assert [props["file"] for _, props, _ in parse_annotations(out)] == [
@@ -473,9 +469,9 @@ def test_lock_check_github_and_markdown(recipe: Path, tmp_path: Path) -> None:
 
 def test_ci_pass_prints_three_ok_lines(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "mkosi"
-    run_main("compile", str(recipe), "--out", str(tree))
+    run_main("compile", str(recipe), "--tree", str(tree))
     run_main("lock", str(recipe))
-    code, out = run_main("ci", str(recipe), "--out", str(tree))
+    code, out = run_main("ci", str(recipe), "--tree", str(tree))
     assert code == EXIT_OK
     assert out.splitlines() == [
         "ok lint: no findings",
@@ -517,11 +513,11 @@ def test_ci_after_compile_and_lock_is_clean_with_runtime_init(
     recipe = tmp_path / "runtime.py"
     recipe.write_text(RUNTIME_RECIPE, encoding="utf-8")
     tree = tmp_path / "mkosi"
-    assert run_main("compile", str(recipe), "--out", str(tree))[0] == EXIT_OK
+    assert run_main("compile", str(recipe), "--tree", str(tree))[0] == EXIT_OK
     assert run_main("lock", str(recipe))[0] == EXIT_OK
     assert run_main("lock", str(recipe), "--check") == (EXIT_OK, "lock is up to date\n")
 
-    code, out = run_main("ci", str(recipe), "--out", str(tree))
+    code, out = run_main("ci", str(recipe), "--tree", str(tree))
 
     assert (code, out.splitlines()[-1]) == (EXIT_OK, f"ok lock: {LOCKFILE} is up to date")
     assert (tree / "default" / "mkosi.extra" / "usr" / "bin" / "runtime-init").is_file()
@@ -529,10 +525,10 @@ def test_ci_after_compile_and_lock_is_clean_with_runtime_init(
 
 def test_ci_stops_at_first_failing_step(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "mkosi"
-    run_main("compile", str(recipe), "--out", str(tree))
+    run_main("compile", str(recipe), "--tree", str(tree))
     run_main("lock", str(recipe))
     mutate(recipe)
-    code, out = run_main("ci", str(recipe), "--out", str(tree))
+    code, out = run_main("ci", str(recipe), "--tree", str(tree))
     assert code == EXIT_FAILURE
     lines = out.splitlines()
     assert lines[0] == "ok lint: no findings"
@@ -556,8 +552,8 @@ def test_ci_lint_failure_skips_the_rest(recipe: Path) -> None:
 
 def test_ci_missing_lockfile_fails_lock_step(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "mkosi"
-    run_main("compile", str(recipe), "--out", str(tree))
-    code, out = run_main("ci", str(recipe), "--out", str(tree), "--format", "github")
+    run_main("compile", str(recipe), "--tree", str(tree))
+    code, out = run_main("ci", str(recipe), "--tree", str(tree), "--format", "github")
     assert code == EXIT_FAILURE
     assert "::error title=tundravm ci%3A lock::[E_LOCKFILE]" in out
     assert out.splitlines()[-1].startswith("FAIL lock: [E_LOCKFILE]")
@@ -585,6 +581,6 @@ def test_auto_resolves_to_github_under_github_actions(
         "~ variants.azure.packages: +htop",
         "~ variants.default.packages: +htop",
     ]
-    code, out = run_main("diff", str(recipe), "--against", str(tmp_path / "none"), "--stat")
+    code, out = run_main("diff", str(recipe), "--tree", str(tmp_path / "none"), "--stat")
     assert out.startswith("A  azure/mkosi.conf")
     assert "\nA  default/mkosi.conf\n" in out

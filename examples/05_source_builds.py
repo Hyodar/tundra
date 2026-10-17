@@ -8,7 +8,7 @@ tarballs are unpinned until ``tundravm lock`` records their commit and sha256.
 
     tundravm inspect examples/05_source_builds.py
     tundravm lock examples/05_source_builds.py        # pin both sources (network)
-    tundravm compile examples/05_source_builds.py --out build/source-builds/mkosi
+    tundravm compile examples/05_source_builds.py --tree build/source-builds/mkosi
 """
 
 from tundravm.backends import InProcessBackend

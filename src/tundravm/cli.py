@@ -3,16 +3,21 @@
 Every recipe command loads the ``Recipe`` a Python file binds (see
 :func:`tundravm.recipe.load_file`) and runs one lifecycle step from
 :mod:`tundravm.declarative.lifecycle` on the selected variants: repeat
-``--variant NAME``, or omit it for every declared variant. ``measure`` and
-``deploy`` read the ``bake-result.json`` manifest a ``bake`` wrote. ``init``
-bootstraps a recipe project and ``ci`` runs lint, compile and lock checks in
-one go; ``watch`` re-runs lint and the tree check whenever the recipe changes;
-``status`` reports where the project stands and ``clean`` removes build output;
-``completion`` prints a shell completion script. With no arguments the help
-and a quickstart are printed. Exit codes: 0 success, 2 SDK error (``E_*``
-codes) or a usage error (unknown verbs and flags get a "did you mean"), 1 for a
-failed check (``lint``, ``compile --check``, ``lock --check``, ``diff``, ``ci``,
-``doctor``, an untrusted ``attest``, a failing ``evidence``) or an unexpected
+``--variant NAME``, or omit it for every declared variant. Destinations follow
+one convention: ``--tree DIR`` is the compiled mkosi tree, ``--build DIR`` the
+build directory holding ``bake-result.json`` (``measure``, ``deploy``, ``sbom``
+and ``evidence`` read the artifacts a ``bake`` recorded there) and ``--output
+FILE`` a document written. ``init`` bootstraps a recipe project and ``ci``
+runs lint, compile and lock checks in one go; ``watch`` re-runs lint and the
+tree check whenever the recipe changes; ``status`` reports where the project
+stands and ``clean`` removes build output; ``completion`` prints a shell
+completion script. With no arguments the help and a quickstart are printed.
+Every ``--format json`` report carries ``"schema": "tundravm.<verb>/1"``.
+Exit codes: 0 success, 2 SDK error (``E_*`` codes; under ``--format json``
+one ``tundravm.error/1`` JSON line on stderr) or a usage error (unknown verbs
+and flags get a "did you mean"), 1 for a failed check (``lint``, ``compile
+--check``, ``lock --check``, ``diff``, ``ci``, ``doctor``, an untrusted
+``attest``, a failing ``evidence``, a failing ``verify``) or an unexpected
 failure. A recipe file that fails to import (syntax error, missing module, an
 exception while it runs) is an ``E_VALIDATION`` error naming ``file:line``;
 ``--traceback`` raises SDK errors with the Python traceback.
@@ -29,7 +34,7 @@ import re
 import sys
 import traceback
 import warnings
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, replace
 from pathlib import Path
 from typing import TextIO, cast, get_args
@@ -40,7 +45,7 @@ from .attestation import attest, render_attestation
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
-from .check import Diagnostic as CheckDiagnostic
+from .changes import CHANGES_FORMATS, changes
 from .check import failing, render_as, render_summary
 from .clean import PARTS, TREE_DIRNAME, clean_paths, owner_hint, remove, sudo_runner
 from .completion import SHELLS, Shell, render_completion
@@ -82,9 +87,16 @@ from .declarative.lifecycle import (
 )
 from .declarative.model import Target
 from .declarative.resolve import resolve
+from .diagnostics import Diagnostic
 from .diff import _wants_color, cmd_diff, diff_against
 from .errors import LockfileError, ReproducibilityError, TdxError, ValidationError
-from .evidence import EVIDENCE_FORMATS, EVIDENCE_REQUIREMENTS, evidence
+from .evidence import (
+    EVIDENCE_FORMATS,
+    EVIDENCE_REQUIREMENTS,
+    INDEX_NAME,
+    SIGNATURE_NAME,
+    evidence,
+)
 from .explain import (
     describe,
     diff_variants,
@@ -96,11 +108,19 @@ from .explain import (
     render_why,
     render_why_markdown,
 )
-from .formats import annotation_path, format_help, resolve_format, workflow_command
+from .formats import (
+    annotation_path,
+    format_help,
+    md_cell,
+    md_table,
+    resolve_format,
+    workflow_command,
+)
 from .lockfile import LockDrift
 from .measure import PlaceholderMeasurementWarning
 from .measure import rtmr as rtmr_measure
-from .measure.policy import policy_payload, write_policy
+from .measure.policy import write_policy
+from .models import BAKE_RESULT_FILENAME
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
 from .project import (
     DEFAULTS,
@@ -129,6 +149,7 @@ from .templates import (
     render_test_module,
     render_workflow,
 )
+from .verify import VERIFY_FORMATS, verify_evidence
 from .watch import Sources, Watch, lint_failure, tree_verdict, verdict
 
 EXIT_OK = 0
@@ -176,11 +197,44 @@ def main(
     except TdxError as exc:
         if getattr(args, "traceback", False):
             raise
-        print(f"error [{exc.code}]: {exc}", file=sys.stderr)
+        if _wants_json(args):
+            print(json.dumps(error_payload(exc), separators=(",", ":")), file=sys.stderr)
+        else:
+            print(f"error [{exc.code}]: {exc}", file=sys.stderr)
         return EXIT_SDK_ERROR
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return 130
+
+
+def schema(verb: str) -> str:
+    """The ``schema`` key of *verb*'s ``--format json`` report: ``tundravm.<verb>/1``."""
+    return f"tundravm.{verb}/1"
+
+
+ERROR_SCHEMA = schema("error")
+
+
+def error_payload(exc: TdxError) -> dict[str, object]:
+    """The JSON line an SDK error prints to stderr under ``--format json``."""
+    return {
+        "schema": ERROR_SCHEMA,
+        "code": exc.code,
+        "message": str(exc.args[0]) if exc.args else "",
+        "hint": exc.hint,
+        "context": dict(exc.context),
+    }
+
+
+def json_report(verb: str, payload: Mapping[str, object] | str) -> str:
+    """*payload* (or the JSON text of one) as *verb*'s report, with its ``schema`` key."""
+    data = json.loads(payload) if isinstance(payload, str) else dict(payload)
+    return json.dumps({"schema": schema(verb), **data}, indent=2, sort_keys=True)
+
+
+def _wants_json(args: argparse.Namespace) -> bool:
+    """Whether the command was asked for JSON (``--format json``, or ``--json``)."""
+    return getattr(args, "format", None) == "json" or getattr(args, "json", False) is True
 
 
 def _parse(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse.Namespace:
@@ -304,14 +358,12 @@ def build_parser() -> argparse.ArgumentParser:
     compile_cmd = _add_command(
         sub, "compile", _cmd_compile, help="Emit the mkosi project tree for the recipe."
     )
-    compile_cmd.add_argument(
-        "--out", type=Path, default=None, help="Destination directory (default: build/mkosi)."
-    )
+    _add_tree(compile_cmd, "Compiled mkosi tree to write (default: build/mkosi).")
     _add_lockfile(compile_cmd)
     compile_cmd.add_argument(
         "--check",
         action="store_true",
-        help="Do not write; exit 1 if the tree at --out is stale relative to the recipe.",
+        help="Do not write; exit 1 if the tree at --tree is stale relative to the recipe.",
     )
     compile_cmd.add_argument(
         "--format",
@@ -326,12 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff = _add_command(
         sub, "diff", _cmd_diff, help="Show how the recipe differs from a compiled tree."
     )
-    diff.add_argument(
-        "--against",
-        type=Path,
-        default=None,
-        help="Compiled mkosi tree to compare with (default: build/mkosi).",
-    )
+    _add_tree(diff, "Compiled mkosi tree to compare with (default: build/mkosi).")
     _add_lockfile(diff)
     diff_format = diff.add_mutually_exclusive_group()
     diff_format.add_argument(
@@ -430,14 +477,14 @@ def build_parser() -> argparse.ArgumentParser:
         + (
             "A built kernel's source (Kernel with config=) is fetched too, as `kernel` "
             "(`kernel-<variant>` where a variant's kernel source differs). "
-            "Each source lands in OUT/.sources/<name>-<pin12>-<id8>, fetched as the invoking "
+            "Each source lands in BUILD/.sources/<name>-<pin12>-<id8>, fetched as the invoking "
             "user (git credentials and SSH agent apply); a complete checkout is verified and "
             "kept (git: HEAD is the pin and the tree is clean, submodules initialised when "
             "asked for; http: the files match the manifest written at fetch time), and one "
             "that changed fails until --force checks it out again. Sources the "
             "lockfile does not pin are resolved first, as `lock` would, unless the recipe's "
             "policy forbids unpinned sources. `bake` fetches the same way before it builds "
-            "and mounts OUT/.sources into the build."
+            "and mounts BUILD/.sources into the build."
         )
     )
     fetch_cmd.add_argument(
@@ -446,9 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Fetch this lockfile's pins (default: build/tundravm.lock when it exists).",
     )
-    fetch_cmd.add_argument(
-        "--out", type=Path, default=None, help="Build output directory (default: build)."
-    )
+    _add_build(fetch_cmd, "Build directory whose .sources holds the checkouts (default: build).")
     fetch_cmd.add_argument(
         "--force",
         action="store_true",
@@ -459,8 +504,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     bake = _add_command(sub, "bake", _cmd_bake, help="Compile and build the image.")
-    bake.add_argument(
-        "--out", type=Path, default=None, help="Build output directory (default: build)."
+    _add_build(
+        bake, "Build directory the tree, artifacts and bake-result.json go to (default: build)."
     )
     bake.add_argument(
         "--lockfile",
@@ -483,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Do not fetch the source builds first; build from the checkouts already in "
-            "OUT/.sources (e.g. copied to an air-gapped host) and fail if one is missing."
+            "BUILD/.sources (e.g. copied to an air-gapped host) and fail if one is missing."
         ),
     )
     bake.add_argument(
@@ -491,7 +536,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Give the build sandbox no network (mkosi --with-network=no): build only from "
-            "what `tundravm fetch` put in OUT/.sources, including the Go/Cargo/.NET "
+            "what `tundravm fetch` put in BUILD/.sources, including the Go/Cargo/.NET "
             "dependency caches, and fail before mkosi when one is missing."
         ),
     )
@@ -499,7 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--verify-reproducible",
         action="store_true",
         help=(
-            "Bake the same variants a second time into OUT/.reproduce (same lockfile, same "
+            "Bake the same variants a second time into BUILD/.reproduce (same lockfile, same "
             "fetched sources, compiled and built again) and compare every artifact's sha256; "
             "a mismatch prints a table per artifact and fails with E_REPRODUCIBILITY (exit 1), "
             "keeping the second build. bake-result.json, complete before the second build "
@@ -514,7 +559,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a "
             "terminal); the summary table goes to stdout. Backend output is hidden unless "
             "--verbose, but its last lines are shown when the build fails. The artifact "
-            "manifest is OUT/bake-result.json, which `measure` and `deploy` read."
+            "manifest is BUILD/bake-result.json, which `measure`, `deploy`, `sbom` and "
+            "`evidence` read (their --build)."
         )
     )
     output = bake.add_mutually_exclusive_group()
@@ -536,13 +582,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Colorize progress output (default: %(default)s).",
     )
 
-    measure_cmd = _add_manifest_command(
+    measure_cmd = _add_artifact_command(
         sub, "measure", _cmd_measure, help="Derive expected TDX measurements of a baked variant."
     )
     measure_cmd.add_argument(
         "--scheme", default="rtmr", choices=MEASUREMENT_SCHEMES, help="Measurement scheme."
     )
-    measure_cmd.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    measure_cmd.add_argument(
+        "--format",
+        choices=("text", "json", "markdown"),
+        default="text",
+        help=(
+            "Output format (default: %(default)s). json holds artifact, artifact_digest, "
+            "scheme, tool, values and variant; markdown is a table of the registers."
+        ),
+    )
     measure_cmd.add_argument(
         "--export-policy",
         type=Path,
@@ -565,11 +619,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    deploy_cmd = _add_manifest_command(
+    deploy_cmd = _add_artifact_command(
         sub, "deploy", _cmd_deploy, help="Deploy the baked artifact of one variant."
     )
     deploy_cmd.add_argument(
-        "--target", required=True, choices=tuple(DEPLOY_TARGETS), help="Deploy target."
+        "target",
+        metavar="TARGET",
+        choices=tuple(DEPLOY_TARGETS),
+        help=f"Deploy target: {', '.join(DEPLOY_TARGETS)} (the variant's artifact for it).",
     )
     deploy_cmd.add_argument(
         "--param",
@@ -604,6 +661,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_evidence(sub)
 
+    _add_verify(sub)
+
+    _add_changes(sub)
+
     doctor_cmd = sub.add_parser(
         "doctor",
         help="Check the host tools the build backends need.",
@@ -636,12 +697,7 @@ def build_parser() -> argparse.ArgumentParser:
             "failure) and exits 1 on the first failure, including a missing lockfile."
         )
     )
-    ci.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Committed mkosi tree to check (default: build/mkosi).",
-    )
+    _add_tree(ci, "Committed mkosi tree to check (default: build/mkosi).")
     ci.add_argument(
         "--lockfile",
         type=Path,
@@ -777,14 +833,14 @@ def _add_import(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "(File, Unit, Hook, Setting); what cannot be kept is listed as a note."
         ),
         epilog=(
-            "Without --out the module goes to stdout and the report to stderr. The report "
+            "Without --output the module goes to stdout and the report to stderr. The report "
             "ends with a round-trip line: whether the recipe compiles back to TREE."
         ),
     )
     cmd.set_defaults(handler=_cmd_import)
     cmd.add_argument("tree", type=Path, help="The mkosi tree to read.")
     cmd.add_argument(
-        "--out",
+        "--output",
         type=Path,
         default=None,
         metavar="FILE",
@@ -805,7 +861,7 @@ def _add_import(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         default="text",
         help="Report format (default: %(default)s); json prints the Imported fields.",
     )
-    cmd.add_argument("--force", action="store_true", help="Overwrite --out FILE if it exists.")
+    cmd.add_argument("--force", action="store_true", help="Overwrite --output FILE if it exists.")
 
 
 def _interval(raw: str) -> float:
@@ -837,7 +893,7 @@ def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "tree, so an external compile refreshes the verdict. Checks once at "
             "start, then once per change, printing `HH:MM:SS lint N errors N warnings; "
             "tree up to date` (or `tree stale (N files)`, `tree missing (N files to "
-            "write)`, or with --write `wrote OUT/mkosi`). The counts are `tundravm "
+            "write)`, or with --write `wrote TREE`). The counts are `tundravm "
             "lint`'s, drift against the selected lockfile included; when drift is every "
             "error, `; lock drifted (N sections)` precedes the tree. Lint errors that keep "
             "the recipe from lowering (an error-level fragment check) print `HH:MM:SS lint "
@@ -846,12 +902,8 @@ def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "Never writes unless --write. Ctrl-C stops it with exit 0."
         )
     )
-    watch.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Build output directory whose mkosi/ tree is checked (default: build).",
-    )
+    _add_tree(watch, "Compiled mkosi tree to check (default: BUILD/mkosi).")
+    _add_build(watch, "Build directory left out of the polling (default: build).")
     watch.add_argument(
         "--lockfile",
         type=Path,
@@ -871,7 +923,7 @@ def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     watch.add_argument(
         "--write",
         action="store_true",
-        help="Recompile into OUT/mkosi when it is stale instead of only comparing.",
+        help="Recompile into the --tree when it is stale instead of only comparing.",
     )
 
 
@@ -894,9 +946,8 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "sha256 the bake recorded."
         )
     )
-    status.add_argument(
-        "--out", type=Path, default=None, help="Build output directory (default: build)."
-    )
+    _add_build(status, "Build directory holding the sources and artifacts (default: build).")
+    _add_tree(status, "Compiled mkosi tree to report on (default: BUILD/mkosi).")
     status.add_argument(
         "--lockfile",
         type=Path,
@@ -927,7 +978,7 @@ def _add_config(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         "config",
         help="Print the project configuration the commands resolve and where each value came from.",
         description=(
-            "Print recipe, out, tree, lockfile and backend as every command would use "
+            "Print recipe, tree, build, lockfile and backend as every command would use "
             "them here, each with its origin: flag (given on this command line), "
             f"pyproject (the [{TABLE}] table), default (built in) or, for backend, recipe "
             "(the kind of the `backend` the recipe file binds, loaded to find it). A "
@@ -939,8 +990,8 @@ def _add_config(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
     config.add_argument(
         "recipe", type=Path, nargs="?", default=None, help="Recipe .py file (overrides the table)."
     )
-    config.add_argument("--out", type=Path, default=None, help="Build output directory.")
-    config.add_argument("--tree", type=Path, default=None, help="Compiled mkosi tree.")
+    _add_tree(config, "Compiled mkosi tree.")
+    _add_build(config, "Build directory holding bake-result.json.")
     config.add_argument("--lockfile", type=Path, default=None, help="Lockfile.")
     config.add_argument("--backend", choices=BACKEND_KINDS, default=None, help="Build backend.")
     config.add_argument(
@@ -960,9 +1011,11 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         "clean",
         help="Remove build output: source checkouts, the tree, artifacts, mkosi state.",
         description=(
-            "Remove the chosen parts of the build output directory (--out, default: the "
-            "recipe's build). With no part flag, list what --all would remove and exit 0. "
-            "The lockfile is removed only when --lockfile names it."
+            "Remove the chosen parts of the build directory (--build, default: the "
+            "[tool.tundravm] build, else the recipe's build directory, else build). The "
+            "part flags name parts of it (--tree is BUILD/mkosi, never the committed tree). "
+            "With no part flag, list what --all would remove and exit 0. The lockfile is "
+            "removed only when --lockfile names it."
         ),
         epilog=(
             "A path this user cannot delete (root-owned mkosi output) is removed with "
@@ -976,27 +1029,25 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         type=Path,
         nargs="?",
         default=None,
-        help="Recipe .py file (optional with --out).",
+        help="Recipe .py file (optional; names the variants whose artifact directories go).",
     )
     _add_import_options(clean)
+    _add_build(clean, "Build directory to clean.")
     clean.add_argument(
-        "--out", type=Path, default=None, help="Build output directory (default: build)."
+        "--sources", action="store_true", help="Remove BUILD/.sources (the fetched checkouts)."
     )
-    clean.add_argument(
-        "--sources", action="store_true", help="Remove OUT/.sources (the fetched checkouts)."
-    )
-    clean.add_argument("--tree", action="store_true", help="Remove OUT/mkosi.")
+    clean.add_argument("--tree", action="store_true", help="Remove BUILD/mkosi.")
     clean.add_argument(
         "--artifacts",
         action="store_true",
-        help="Remove each OUT/<variant>/ artifact directory and OUT/bake-result.json.",
+        help="Remove each BUILD/<variant>/ artifact directory and BUILD/bake-result.json.",
     )
     clean.add_argument(
         "--state",
         action="store_true",
         help=(
-            "Remove OUT/.mkosi (incl. the cached tools tree), mkosi state in OUT/mkosi and "
-            "OUT/.reproduce (the second build of bake --verify-reproducible)."
+            "Remove BUILD/.mkosi (incl. the cached tools tree), mkosi state in BUILD/mkosi and "
+            "BUILD/.reproduce (the second build of bake --verify-reproducible)."
         ),
     )
     clean.add_argument("--all", action="store_true", help="All of the parts above.")
@@ -1093,41 +1144,25 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
 
 def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     help_text = "Write the software bill of materials of a baked variant."
-    sbom_cmd = sub.add_parser(
-        "sbom",
-        help=help_text,
-        description=(
-            help_text + " It merges mkosi's package manifest next to the artifact (every "
-            "installed distribution package and version), the lockfile's source pins (each "
-            "source build, kernel and efi-stub with URL, ref, commit or sha256, and the "
-            "paths a build installs) and the recipe metadata (base, arch, snapshot, mirror, "
-            "recipe, tree and artifact digests, tundravm version)."
-        ),
-        epilog=(
+    sbom_cmd = _add_artifact_command(sub, "sbom", _cmd_sbom, help=help_text)
+    sbom_cmd.description = (
+        help_text + " It merges mkosi's package manifest next to the artifact (every "
+        "installed distribution package and version), the lockfile's source pins (each "
+        "source build, kernel and efi-stub with URL, ref, commit or sha256, and the "
+        "paths a build installs) and the recipe metadata (base, arch, snapshot, mirror, "
+        "recipe, tree and artifact digests, tundravm version)."
+    )
+    sbom_cmd.epilog = (
+        RESOLUTION_HELP
+        + " "
+        + (
             "The artifact is hashed first (E_ARTIFACT_CHANGED when it changed). The lockfile "
             "and the manifest must be the ones the bake recorded in bake-result.json, else "
-            "E_ARTIFACT_CHANGED unless --allow-unbound. Without a manifest (a simulated bake) "
-            "the document says so and lists the packages the recipe declares, unversioned. "
-            "Paths are relative to the bake directory and lists are sorted; set "
-            "SOURCE_DATE_EPOCH to fix the creation time."
-        ),
-    )
-    sbom_cmd.set_defaults(handler=_cmd_sbom)
-    sbom_cmd.add_argument(
-        "manifest",
-        type=Path,
-        nargs="?",
-        default=None,
-        help="bake-result.json written by `tundravm bake` (or the bake --out directory).",
-    )
-    sbom_cmd.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Bake output directory holding bake-result.json, for MANIFEST (default: build).",
-    )
-    sbom_cmd.add_argument(
-        "--variant", default=None, metavar="NAME", help="Baked variant (default: the only one)."
+            "E_ARTIFACT_CHANGED unless --allow-unbound. Without a manifest (a simulated "
+            "bake) the document says so and lists the packages the recipe declares, "
+            "unversioned. Paths are relative to the build directory and lists are sorted; "
+            "set SOURCE_DATE_EPOCH to fix the creation time."
+        )
     )
     sbom_cmd.add_argument(
         "--lockfile",
@@ -1135,7 +1170,7 @@ def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         default=None,
         help=(
             "Lockfile with the source pins (default: the one the bake recorded, else "
-            "tundravm.lock in the bake directory; without one sources are not listed)."
+            "BUILD/tundravm.lock; without one sources are not listed)."
         ),
     )
     sbom_cmd.add_argument(
@@ -1166,11 +1201,11 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
     cmd = _add_command(sub, "evidence", _cmd_evidence, help=help_text)
     cmd.description = (
         help_text + " For each baked variant (--variant, default: every one in "
-        "OUT/bake-result.json) it records the recipe and tree digests, the lockfile "
+        "BUILD/bake-result.json) it records the recipe and tree digests, the lockfile "
         "(verbatim, with its version and drift), each artifact with a fresh sha256 "
         "check, the recorded reproducibility verdict, the measurements policy "
-        "(OUT/<variant>/policy.json or --policy), an SPDX SBOM, the lint summary, a "
-        "provenance summary and the tool versions, and writes them to OUT/evidence "
+        "(BUILD/<variant>/policy.json or --policy), an SPDX SBOM, the lint summary, a "
+        "provenance summary and the tool versions, and writes them to BUILD/evidence "
         "with an evidence.json index holding every member's sha256."
     )
     cmd.epilog = (
@@ -1184,19 +1219,14 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
             "to fix the timestamps."
         )
     )
-    cmd.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Bake output directory holding bake-result.json (default: build).",
-    )
+    _add_build(cmd, "Build directory holding bake-result.json (default: build).")
     cmd.add_argument(
         "--lockfile",
         type=Path,
         default=None,
         help=(
             "Lockfile to record and check for drift (default: the one the bake recorded, "
-            "else OUT/tundravm.lock)."
+            "else BUILD/tundravm.lock)."
         ),
     )
     cmd.add_argument(
@@ -1206,7 +1236,7 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
         metavar="FILE",
         help=(
             "Measurements policy from `measure --export-policy` for every selected variant "
-            "(default: OUT/<variant>/policy.json when it exists)."
+            "(default: BUILD/<variant>/policy.json when it exists)."
         ),
     )
     cmd.add_argument(
@@ -1246,6 +1276,130 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
             "Record a lockfile or mkosi manifest that is not the one the bake recorded "
             "instead of failing with E_ARTIFACT_CHANGED; the verdict is incomplete."
         ),
+    )
+    cmd.add_argument(
+        "--sign",
+        type=Path,
+        default=None,
+        metavar="KEY",
+        help=(
+            "Sign evidence.json with this SSH private key (ssh-keygen -Y sign -n "
+            "tundravm-evidence) and write evidence.json.sig beside it and into --bundle."
+        ),
+    )
+
+
+def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Check an evidence bundle or directory on its own, without the recipe."
+    cmd = sub.add_parser(
+        "verify",
+        help=help_text,
+        description=(
+            help_text + " Every member against the sha256 evidence.json lists; the index "
+            "against its members (the lockfile against the lock_sha256 bake-result.json "
+            "records, each SBOM, policy and tree.json against the artifact and digests the "
+            "index names, the recorded verdict recomputed from the recorded facts); "
+            "--artifacts re-hashed against the index; the signature against "
+            "--allowed-signers; the --require checks."
+        ),
+        epilog=(
+            "Prints one line per check kind, then every check that did not pass with its "
+            "reason code; exits 0 only when every check passes, 1 otherwise."
+        ),
+    )
+    cmd.set_defaults(handler=_cmd_verify)
+    cmd.add_argument(
+        "evidence",
+        type=Path,
+        help="The evidence: a bundle from `evidence --bundle`, its BUILD/evidence directory, "
+        "or that directory's evidence.json.",
+    )
+    cmd.add_argument(
+        "--artifacts",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Re-hash the artifacts found under DIR (as the bake laid them out, "
+            "<variant>/<file>, or by target or file name) against the index."
+        ),
+    )
+    cmd.add_argument(
+        "--require",
+        type=_evidence_requirements,
+        default=(),
+        metavar="LIST",
+        help=(
+            f"Comma-separated checks that must be present ({', '.join(EVIDENCE_REQUIREMENTS)}), "
+            "as for `evidence --require`."
+        ),
+    )
+    cmd.add_argument(
+        "--allowed-signers",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Check evidence.json.sig against this OpenSSH allowed-signers file.",
+    )
+    cmd.add_argument(
+        "--signer",
+        default=None,
+        metavar="PRINCIPAL",
+        help="The principal to check the signature for (default: the file's for the key).",
+    )
+    cmd.add_argument(
+        "--format",
+        choices=VERIFY_FORMATS,
+        default="text",
+        help="Report format (default: %(default)s).",
+    )
+    cmd.add_argument(
+        "--html",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Also write a self-contained HTML report.",
+    )
+    cmd.add_argument(
+        "--traceback",
+        action="store_true",
+        help="On an error, raise it with the full Python traceback instead of one message.",
+    )
+
+
+def _add_changes(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Show what changed since a previous evidence bundle, for a release review."
+    cmd = _add_command(sub, "changes", _cmd_changes, help=help_text)
+    cmd.description = (
+        help_text + " Compares the evidence (--since) with the recipe and lockfile as they "
+        "are now: the recipe and tree digests, the lockfile's sections, the source pins, "
+        "the packages, the emitted files of each variant's tree (each with the "
+        "declarations behind it) and the measured registers."
+    )
+    cmd.add_argument(
+        "--since",
+        type=Path,
+        required=True,
+        metavar="EVIDENCE",
+        help="The previous evidence: a bundle from `evidence --bundle` or its directory.",
+    )
+    _add_build(
+        cmd,
+        "Build directory of the current recipe: its SBOMs give the current package versions "
+        "and BUILD/<variant>/policy.json the current registers (default: none, the "
+        "declared packages unversioned).",
+    )
+    cmd.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="The current lockfile (default: build/tundravm.lock when it exists).",
+    )
+    cmd.add_argument(
+        "--format",
+        choices=CHANGES_FORMATS,
+        default="text",
+        help="Report format (default: %(default)s); markdown is meant for a pull request.",
     )
 
 
@@ -1307,20 +1461,17 @@ def _add_command(
     return parser
 
 
-def _add_manifest_command(
+def _add_artifact_command(
     sub: argparse._SubParsersAction[argparse.ArgumentParser],
     name: str,
     handler: Callable[[argparse.Namespace, TextIO], int],
     *,
     help: str,
 ) -> argparse.ArgumentParser:
-    parser = sub.add_parser(name, help=help, description=help)
+    """A verb that reads one baked artifact from ``BUILD/bake-result.json``; no RECIPE."""
+    parser = sub.add_parser(name, help=help, description=help, epilog=RESOLUTION_HELP)
     parser.set_defaults(handler=handler)
-    parser.add_argument(
-        "manifest",
-        type=Path,
-        help="bake-result.json written by `tundravm bake` (or the bake --out directory).",
-    )
+    _add_build(parser, "Build directory holding bake-result.json (default: build).")
     parser.add_argument(
         "--variant",
         default=None,
@@ -1328,6 +1479,16 @@ def _add_manifest_command(
         help="Baked variant (default: the only one baked).",
     )
     return parser
+
+
+def _add_tree(parser: argparse.ArgumentParser, help: str) -> None:
+    """``--tree DIR``: the compiled mkosi tree (``[tool.tundravm]`` ``tree``)."""
+    parser.add_argument("--tree", type=Path, default=None, metavar="DIR", help=help)
+
+
+def _add_build(parser: argparse.ArgumentParser, help: str) -> None:
+    """``--build DIR``: the build directory holding ``bake-result.json`` (``build``)."""
+    parser.add_argument("--build", type=Path, default=None, metavar="DIR", help=help)
 
 
 def _add_lockfile(parser: argparse.ArgumentParser) -> None:
@@ -1345,20 +1506,29 @@ def _add_lockfile(parser: argparse.ArgumentParser) -> None:
 _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
     "inspect": (("lockfile", "lockfile"),),
     "lint": (("lockfile", "lockfile"),),
-    "compile": (("out", "tree"), ("lockfile", "lockfile")),
-    "diff": (("against", "tree"), ("lockfile", "lockfile")),
+    "compile": (("tree", "tree"), ("lockfile", "lockfile")),
+    "diff": (("tree", "tree"), ("lockfile", "lockfile")),
     "lock": (("lockfile", "lockfile"),),
-    "fetch": (("out", "out"), ("lockfile", "lockfile")),
-    "bake": (("out", "out"), ("lockfile", "lockfile"), ("backend", "backend")),
-    "ci": (("out", "tree"), ("lockfile", "lockfile")),
-    "watch": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile")),
-    "status": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile")),
-    "evidence": (("out", "out"), ("lockfile", "lockfile")),
-    "clean": (("out", "out"),),
+    "fetch": (("build", "build"), ("lockfile", "lockfile")),
+    "bake": (("build", "build"), ("lockfile", "lockfile"), ("backend", "backend")),
+    "measure": (("build", "build"),),
+    "deploy": (("build", "build"),),
+    "sbom": (("build", "build"),),
+    "ci": (("tree", "tree"), ("lockfile", "lockfile")),
+    "watch": (("build", "build"), ("tree", "tree"), ("lockfile", "lockfile")),
+    "status": (("build", "build"), ("tree", "tree"), ("lockfile", "lockfile")),
+    "evidence": (("build", "build"), ("lockfile", "lockfile")),
+    "changes": (("lockfile", "lockfile"),),
+    "clean": (("build", "build"),),
     "doctor": (("backend", "backend"),),
-    "config": (("out", "out"), ("tree", "tree"), ("lockfile", "lockfile"), ("backend", "backend")),
+    "config": (
+        ("tree", "tree"),
+        ("build", "build"),
+        ("lockfile", "lockfile"),
+        ("backend", "backend"),
+    ),
 }
-"""Per verb: the argument each ``[tool.tundravm]`` key defaults (``tree`` is compile's --out)."""
+"""Per verb: the argument each ``[tool.tundravm]`` key defaults (``--tree``, ``--build``...)."""
 
 _RECIPE_OPTIONAL = frozenset({"doctor", "clean", "config"})
 
@@ -1370,31 +1540,34 @@ MISSING_RECIPE = (
 
 
 def _apply_project(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Fill RECIPE, --out, --lockfile and --backend from ``[tool.tundravm]`` when omitted.
+    """Fill RECIPE, --tree, --build, --lockfile and --backend from ``[tool.tundravm]``.
 
-    Records each value's origin (``flag``/``pyproject``) in ``args.origins``. The
-    table's paths apply only when RECIPE is omitted or names the table's recipe. A
-    configured lockfile stays selected when it does not exist: its readers say so
-    (:func:`_missing_lock`) and never fall back to ``build/tundravm.lock``.
+    Every verb with RECIPE or a configurable flag reads the table, whether or not
+    it takes RECIPE. Records each value's origin (``flag``/``pyproject``) in
+    ``args.origins``. For a verb with RECIPE the table's paths apply only when
+    RECIPE is omitted or names the table's recipe. A configured lockfile stays
+    selected when it does not exist: its readers say so (:func:`_missing_lock`)
+    and never fall back to ``build/tundravm.lock``.
     """
     verb: str = args.command
     args.origins = {}
     args.project = None
-    if not hasattr(args, "recipe") or verb == "completion":
+    if verb not in _PROJECT_FLAGS and not hasattr(args, "recipe"):
         return
     project = find_project()
     args.project = project
     origins: dict[str, str] = args.origins
-    configured = None if project is None else project.path_of("recipe")
-    if args.recipe is not None:
-        origins["recipe"] = "flag"
-        if configured is None or not _same_path(args.recipe, configured):
-            project = None
-    elif configured is not None:
-        args.recipe = configured
-        origins["recipe"] = "pyproject"
-    elif verb not in _RECIPE_OPTIONAL:
-        _subcommands(parser)[verb].error(MISSING_RECIPE)
+    if hasattr(args, "recipe"):
+        configured = None if project is None else project.path_of("recipe")
+        if args.recipe is not None:
+            origins["recipe"] = "flag"
+            if configured is None or not _same_path(args.recipe, configured):
+                project = None
+        elif configured is not None:
+            args.recipe = configured
+            origins["recipe"] = "pyproject"
+        elif verb not in _RECIPE_OPTIONAL:
+            _subcommands(parser)[verb].error(MISSING_RECIPE)
     for attr, key in _PROJECT_FLAGS.get(verb, ()):
         if getattr(args, attr, None) is not None:
             origins[key] = "flag"
@@ -1415,13 +1588,24 @@ def _same_path(a: Path, b: Path) -> bool:
     return a.resolve() == b.resolve()
 
 
+def _build_dir(args: argparse.Namespace) -> Path:
+    """``--build``, else the configured ``build``, else ``build`` beside the pyproject.toml.
+
+    Without a ``[tool.tundravm]`` table: ``build`` in the working directory.
+    """
+    given: Path | None = args.build
+    if given is not None:
+        return given
+    project: ProjectConfig | None = args.project
+    return Path(DEFAULTS["build"]) if project is None else project.default_path("build")
+
+
 def _cmd_config(args: argparse.Namespace, out: TextIO) -> int:
     project: ProjectConfig | None = args.project
     values = _config_values(args)
     source = None if project is None else str(project.path)
     if args.format == "json":
-        payload = {"pyproject": source, "values": values}
-        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
+        print(json_report("config", {"pyproject": source, "values": values}), file=out)
         return EXIT_OK
     print(f"pyproject: {source or f'none (no [{TABLE}] table here or above)'}", file=out)
     width = max(len(str(entry["value"] or "-")) for entry in values.values())
@@ -1447,7 +1631,7 @@ def _config_values(args: argparse.Namespace) -> dict[str, dict[str, object]]:
             "exists": recipe is not None and recipe.is_file(),
         }
     }
-    for key in ("out", "tree", "lockfile"):
+    for key in ("tree", "build", "lockfile"):
         value = getattr(args, key)
         values[key] = (
             {"value": str(value), "origin": origins.get(key, "flag")}
@@ -1532,7 +1716,7 @@ def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
     described = {name: _describe(loaded, img, name) for name in variants}
     if fmt == "json":
         payload = {"digest": img.select(variants).digest(), "variants": described}
-        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
+        print(json_report("inspect", payload), file=out)
         return EXIT_OK
     if fmt == "markdown":
         print(f"# tundravm: `{args.recipe.name}`\n", file=out)
@@ -1553,7 +1737,7 @@ def _inspect_diff(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: T
     _require_variants(loaded, (a, b), args.recipe)
     diff = diff_variants(resolve(loaded.recipe, variant=a), resolve(loaded.recipe, variant=b))
     if fmt == "json":
-        print(json.dumps(diff.to_dict(), indent=2, sort_keys=True), file=out)
+        print(json_report("inspect", diff.to_dict()), file=out)
     elif fmt == "markdown":
         print(render_variant_diff_markdown(diff, recipe=args.recipe.name), file=out)
     else:
@@ -1572,7 +1756,7 @@ def _inspect_why(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: Te
         loaded.recipe, names[0], args.why, lowered=_with_lockfile(loaded.lowered(), args)
     )
     if fmt == "json":
-        print(json.dumps(why.to_dict(), indent=2, sort_keys=True), file=out)
+        print(json_report("inspect", why.to_dict()), file=out)
     elif fmt == "markdown":
         print(render_why_markdown(why), file=out)
     else:
@@ -1592,13 +1776,14 @@ def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
     names = _variants(loaded, args)
     diagnostics = _lint_findings(loaded, names, args, missing=_missing_lock(args))
     fmt = resolve_format(args.format, alias="json" if args.json else None)
-    print(render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict), file=out)
+    report = render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict)
+    print(json_report("lint", report) if fmt == "json" else report, file=out)
     return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
 
 
 def _lint_findings(
     loaded: RecipeFile, names: tuple[str, ...], args: argparse.Namespace, *, missing: bool
-) -> list[CheckDiagnostic]:
+) -> list[Diagnostic]:
     """What ``tundravm lint`` reports for *names*, as ``lint`` and ``watch`` share it.
 
     The selected lockfile (``--lockfile`` or ``[tool.tundravm]``'s) pins the sources
@@ -1610,18 +1795,8 @@ def _lint_findings(
     if args.lockfile is not None:
         selected = NO_LOCK if missing else read_lock(args.lockfile)
     diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=selected)
-    if isinstance(selected, Lock) and not any(d.level == "error" for d in diagnostics):
-        diagnostics.extend(
-            CheckDiagnostic(
-                level=d.level,
-                code=d.code,
-                message=d.message,
-                hint=None,
-                profile=d.variant or "common",
-                subject=d.subject or None,
-            )
-            for d in lock_status(loaded.recipe, selected, variants=names)
-        )
+    if isinstance(selected, Lock) and not any(d.severity == "error" for d in diagnostics):
+        diagnostics.extend(lock_status(loaded.recipe, selected, variants=names))
     return diagnostics
 
 
@@ -1665,18 +1840,18 @@ def missing_lock_message(path: Path) -> str:
 def _cmd_diff(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     img = loaded.lowered()
-    if args.against is None:
-        args.against = Path(img.build_dir) / "mkosi"
+    if args.tree is None:
+        args.tree = Path(img.build_dir) / TREE_DIRNAME
     return _cmd_diff_loaded(args, out, img, _variants(loaded, args))
 
 
 def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     img = loaded.lowered()
-    destination = args.out if args.out is not None else Path(img.build_dir) / "mkosi"
+    destination = args.tree if args.tree is not None else Path(img.build_dir) / TREE_DIRNAME
     if args.check:
         fmt = resolve_format(args.format)
-        args.against = destination
+        args.tree = destination
         args.format = "stat" if fmt == "text" else fmt
         args.stat = False
         args.color = "never"
@@ -1754,7 +1929,7 @@ def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
     img = loaded.lowered()
-    destination: Path = args.out if args.out is not None else Path(img.build_dir)
+    destination: Path = args.build if args.build is not None else Path(img.build_dir)
     lock_path = _lock_path(img, args.lockfile)
     missing = _missing_lock(args, "; fetching the refs as they resolve now")
     present = args.lockfile is not None or lock_path.exists()
@@ -1763,7 +1938,7 @@ def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
     reporter = TextReporter(err, color=_wants_color("auto", err))
     try:
         fetched = fetch_image(
-            img, names, locked=locked, out=destination, reporter=reporter, force=args.force
+            img, names, locked=locked, build=destination, reporter=reporter, force=args.force
         )
     finally:
         reporter.close()
@@ -1785,7 +1960,7 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args)
     img = loaded.lowered()
-    destination: Path = args.out if args.out is not None else Path(img.build_dir)
+    destination: Path = args.build if args.build is not None else Path(img.build_dir)
     lock_path = _lock_path(img, args.lockfile)
     if args.origins.get("lockfile") == "pyproject" and not lock_path.is_file():
         # frozen against the configured lockfile, never another one or none
@@ -1830,7 +2005,7 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
             names,
             locked=locked,
             backend=backend,
-            out=destination,
+            build=destination,
             reporter=reporter,
             lock_source=None if locked is None else lock_path,
             fetch=not args.no_fetch,
@@ -1856,24 +2031,26 @@ def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
         print(f"reproducible: yes ({len(artifacts)} artifacts match a second build)", file=out)
     if artifacts:
         first = artifacts[0]
-        manifest = destination / "bake-result.json"
+        build = "" if args.origins.get("build") == "pyproject" else f" --build {destination}"
         print(
-            f"next: tundravm deploy {manifest} --variant {first.variant} --target {first.target}",
+            f"next: tundravm deploy {first.target}{build} --variant {first.variant}",
             file=out,
         )
     return EXIT_OK
 
 
 def _artifact(args: argparse.Namespace, target: Target | None) -> Artifact:
-    artifacts = read_artifacts(args.manifest)
+    """The artifact of ``--variant`` (else the only variant baked) in the build directory."""
+    build = _build_dir(args)
+    artifacts = read_artifacts(build)
     variant: str | None = args.variant
     if variant is None:
         baked = sorted({a.variant for a in artifacts})
         if len(baked) != 1:
             raise ValidationError(
-                f"The manifest holds {len(baked)} variants; pass --variant NAME.",
+                f"{build / BAKE_RESULT_FILENAME} holds {len(baked)} variants; pass --variant NAME.",
                 hint=f"Baked variants: {', '.join(baked) or '(none)'}",
-                context={"manifest": str(args.manifest)},
+                context={"build": str(build)},
             )
         variant = baked[0]
     return select_artifact(artifacts, variant=variant, target=target)
@@ -1888,26 +2065,15 @@ def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
     if measurements.tool == "placeholder":
         print(PLACEHOLDER_BANNER, file=sys.stderr)
     if args.export_policy is not None:
-        payload = policy_payload(
-            scheme=measurements.scheme,
-            tool=measurements.tool,
-            values=dict(measurements.values),
-            artifact_path=str(artifact.path),
-            artifact_sha256=artifact.sha256,
-            allow_placeholder=args.allow_placeholder,
-        )
-        write_policy(payload, args.export_policy)
+        policy = measurements.to_policy(allow_placeholder=args.allow_placeholder)
+        write_policy(policy, args.export_policy)
         print(f"wrote policy {args.export_policy}", file=sys.stderr)
-    if args.json:
-        payload = {
-            "artifact": str(artifact.path),
-            "artifact_digest": measurements.artifact_digest,
-            "scheme": measurements.scheme,
-            "tool": measurements.tool,
-            "values": dict(measurements.values),
-            "variant": artifact.variant,
-        }
-        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
+    if args.format == "json":
+        payload = {**measurements.to_dict(), "variant": artifact.variant}
+        print(json_report("measure", payload), file=out)
+        return EXIT_OK
+    if args.format == "markdown":
+        print(render_measurements_markdown(measurements, artifact=artifact), file=out)
         return EXIT_OK
     print(render_measurements(measurements, artifact=artifact), file=out)
     return EXIT_OK
@@ -1928,6 +2094,18 @@ def render_measurements(measurements: Measurements, *, artifact: Artifact) -> st
     width = max((len(key) for key, _ in measurements.values), default=0)
     lines.extend(f"  {key:<{width}}  {value}" for key, value in measurements.values)
     return "\n".join(lines)
+
+
+def render_measurements_markdown(measurements: Measurements, *, artifact: Artifact) -> str:
+    """``Measurements`` as Markdown: a heading, the provenance line and a register table."""
+    rows = [(md_cell(key), md_cell(value, code=True)) for key, value in measurements.values]
+    return "\n\n".join(
+        (
+            f"# tundravm measure: `{artifact.variant}` ({measurements.scheme})",
+            f"Source: {measurements.tool} (`{artifact.path}`).",
+            md_table(("Register", "Value"), rows),
+        )
+    )
 
 
 def _parse_params(raw: Sequence[str] | None) -> dict[str, str]:
@@ -2007,7 +2185,7 @@ def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
     if args.attach:
         if not isinstance(using, Qemu):
             raise ValidationError(
-                f"--attach applies to --target qemu, not {target}.",
+                f"--attach applies to the qemu target, not {target}.",
                 hint="Drop --attach; a cloud VM's console is read with the cloud's CLI.",
             )
         using = replace(using, daemonize=False)
@@ -2128,7 +2306,8 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
         nonce=args.nonce,
         allow_simulated=args.allow_simulated,
     )
-    print(render_attestation(result, args.format), file=out)
+    report = render_attestation(result, args.format)
+    print(json_report("attest", report) if args.format == "json" else report, file=out)
     return EXIT_OK if result.passed else EXIT_FAILURE
 
 
@@ -2139,16 +2318,10 @@ def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
-    if args.manifest is not None and args.out is not None:
-        raise ValidationError(
-            "Pass MANIFEST or --out, not both.",
-            hint="MANIFEST is the bake-result.json (or its directory) that --out names.",
-        )
-    args.manifest = args.manifest or args.out or Path("build")
     artifact = _artifact(args, None)
     document = sbom(
         artifact,
-        lock=_sbom_lock(args.manifest, args.lockfile),
+        lock=_sbom_lock(_build_dir(args), args.lockfile),
         allow_unbound=args.allow_unbound,
     )
     text = document.render(args.format)
@@ -2165,11 +2338,10 @@ def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
-def _sbom_lock(manifest: Path, flag: Path | None) -> Lock | None:
-    """``--lockfile``, else the lockfile the bake recorded or ``tundravm.lock`` beside it."""
+def _sbom_lock(base: Path, flag: Path | None) -> Lock | None:
+    """``--lockfile``, else the lockfile the bake in *base* recorded, else its tundravm.lock."""
     if flag is not None:
         return read_lock(flag)
-    base = manifest if manifest.is_dir() else manifest.parent
     try:
         payload = json.loads((base / "bake-result.json").read_text(encoding="utf-8"))
         recorded = (payload.get("declarative") or {}).get("lockfile")
@@ -2184,11 +2356,11 @@ def _sbom_lock(manifest: Path, flag: Path | None) -> Lock | None:
 def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args) if args.variant else None
-    base: Path = args.out if args.out is not None else Path(loaded.lowered().build_dir)
+    base: Path = args.build if args.build is not None else Path(loaded.lowered().build_dir)
     lockfile = None if _missing_lock(args) else args.lockfile
     found = evidence(
         loaded.recipe,
-        out=base,
+        build=base,
         variants=names,
         lock=lockfile,
         policy=args.policy,
@@ -2197,9 +2369,13 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
         require=args.require,
         allow_unbound=args.allow_unbound,
     )
+    if args.sign is not None:
+        found = found.sign(args.sign)
     directory = found.write(base / "evidence")
-    print(found.render(args.format), file=out, end="")
+    print(found.render(args.format), file=out, end="")  # json: evidence.json, schema included
     print(f"wrote {directory}", file=sys.stderr)
+    if args.sign is not None:
+        print(f"signed {INDEX_NAME} with {args.sign}: {SIGNATURE_NAME}", file=sys.stderr)
     if args.bundle is not None:
         print(f"wrote {found.bundle(args.bundle)}", file=sys.stderr)
     if args.html is not None:
@@ -2208,6 +2384,38 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
         target.write_text(found.html(), encoding="utf-8")
         print(f"wrote {target}", file=sys.stderr)
     return EXIT_OK if found.passed else EXIT_FAILURE
+
+
+def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
+    result = verify_evidence(
+        args.evidence,
+        artifacts=args.artifacts,
+        require=args.require,
+        allowed_signers=args.allowed_signers,
+        signer=args.signer,
+    )
+    print(result.render(args.format), file=out, end="")
+    if args.html is not None:
+        target: Path = args.html
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(result.html(), encoding="utf-8")
+        print(f"wrote {target}", file=sys.stderr)
+    return EXIT_OK if result.passed else EXIT_FAILURE
+
+
+def _cmd_changes(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args) if args.variant else None
+    lockfile = None if _missing_lock(args) else args.lockfile
+    report = changes(
+        loaded.recipe,
+        since=args.since,
+        lock=lockfile,
+        variants=names,
+        build=args.build,
+    )
+    print(report.render(args.format), file=out, end="")
+    return EXIT_OK
 
 
 def _cmd_completion(args: argparse.Namespace, out: TextIO) -> int:
@@ -2274,8 +2482,8 @@ def _ci_lint(run: _CiRun) -> tuple[bool, str, str]:
 def _ci_compile(run: _CiRun) -> tuple[bool, str, str]:
     locked = run.lock()
     img = run.loaded.lowered()
-    out: Path | None = run.args.out
-    destination = out if out is not None else Path(img.build_dir) / "mkosi"
+    tree: Path | None = run.args.tree
+    destination = tree if tree is not None else Path(img.build_dir) / TREE_DIRNAME
     with using_lock(img, locked) as pinned:
         result = diff_against(pinned, destination, profiles=run.variants())
     if result.is_clean:
@@ -2285,7 +2493,7 @@ def _ci_compile(run: _CiRun) -> tuple[bool, str, str]:
     count = len(result.changes)
     verdict = (
         f"{count} file{'' if count == 1 else 's'} stale in {destination}; "
-        f"run `tundravm compile {run.args.recipe} --out {destination}`"
+        f"run `tundravm compile {run.args.recipe} --tree {destination}`"
     )
     return False, report.rstrip(), verdict
 
@@ -2395,8 +2603,8 @@ def _watch_check(args: argparse.Namespace, sources: Sources, flags: dict[str, Pa
     except TdxError as exc:
         sources.track({*sources.inputs, *_watch_inputs(args)})
         return _watch_error(args, exc)
-    errors = [d for d in diagnostics if d.level == "error"]
-    warnings_ = sum(d.level == "warning" for d in diagnostics)
+    errors = [d for d in diagnostics if d.severity == "error"]
+    warnings_ = sum(d.severity == "warning" for d in diagnostics)
     try:
         img = loaded.lowered()
     except TdxError as exc:
@@ -2405,10 +2613,8 @@ def _watch_check(args: argparse.Namespace, sources: Sources, flags: dict[str, Pa
         first = errors[0]
         return lint_failure(errors=len(errors), code=first.code, message=first.message)
     drifted = len(errors) if all(d.code in _DRIFT_CODES for d in errors) else 0
-    build: Path = args.out if args.out is not None else Path(img.build_dir)
-    configured: Path | None = getattr(args, "tree", None)
-    explicit = args.origins.get("out") == "flag"
-    tree = configured if configured is not None and not explicit else build / TREE_DIRNAME
+    build: Path = args.build if args.build is not None else Path(img.build_dir)
+    tree: Path = args.tree if args.tree is not None else build / TREE_DIRNAME
     sources.ignore(build, tree)
     lock_path = _lock_path(img, args.lockfile)
     sources.track({*sources.inputs, lock_path, tree})
@@ -2451,7 +2657,7 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
     origins: dict[str, str] = args.origins
     call = Invocation(
         recipe="" if origins.get("recipe") == "pyproject" else str(args.recipe),
-        out=args.out if origins.get("out") == "flag" else None,
+        build=args.build if origins.get("build") == "flag" else None,
         lockfile=args.lockfile if origins.get("lockfile") == "flag" else None,
         lock_configured=origins.get("lockfile") == "pyproject",
         variants=names if args.variant else (),
@@ -2461,31 +2667,28 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
     status = project_status(
         loaded,
         names,
-        out=args.out if args.out is not None else Path(img.build_dir),
+        build=args.build if args.build is not None else Path(img.build_dir),
         lock_path=_lock_path(img, args.lockfile),
         runner=args.runner if args.runner is not None else run_probe,
         invocation=call,
         verify=args.verify,
-        tree=getattr(args, "tree", None),
+        tree=args.tree,
     )
-    print(render_status(status, args.format), file=out)
+    report = render_status(status, args.format)
+    print(json_report("status", report) if args.format == "json" else report, file=out)
     return EXIT_OK
 
 
 def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
-    if args.recipe is None and args.out is None:
-        raise ValidationError(
-            "clean needs RECIPE or --out DIR.",
-            hint="Pass the recipe file (its build directory is cleaned) or --out DIR.",
-        )
     variants: tuple[str, ...] = ()
-    destination: Path | None = args.out
+    destination: Path | None = args.build
     if args.recipe is not None:
         loaded = _load(args)
         variants = loaded.variants
         if destination is None:
             destination = Path(loaded.lowered().build_dir)
-    assert destination is not None
+    if destination is None:
+        destination = _build_dir(args)
     chosen = PARTS if args.all else tuple(part for part in PARTS if getattr(args, part))
     listing = not chosen and args.lockfile is None
     paths = clean_paths(destination, PARTS if listing else chosen, variants=variants)
@@ -2520,19 +2723,19 @@ def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _cmd_import(args: argparse.Namespace, out: TextIO) -> int:
-    target: Path | None = args.out
+    target: Path | None = args.output
     if target is not None and target.exists() and not args.force:
         raise ValidationError(
             f"{target} exists.",
-            hint="Pass --force to overwrite it, or another --out.",
-            context={"out": str(target)},
+            hint="Pass --force to overwrite it, or another --output.",
+            context={"output": str(target)},
         )
-    found = import_tree(args.tree, name=args.name, dialect=args.dialect, out=target)
+    found = import_tree(args.tree, name=args.name, dialect=args.dialect, output=target)
     if target is not None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(found.recipe_source, encoding="utf-8")
     if args.format == "json":
-        out.write(json.dumps(found.to_json(), indent=2) + "\n")
+        print(json_report("import", found.to_json()), file=out)
         if target is not None:
             print(f"wrote {target}", file=sys.stderr)
         return EXIT_OK
@@ -2683,10 +2886,10 @@ def _init_ci_only(args: argparse.Namespace, root: Path, recipe: str, tree: str, 
         )
     print(f"adding CI for {recipe} to the existing project in {root}", file=out)
     verb = "overwrote" if replaced else "created"
-    _init_write(workflow, render_workflow(recipe=recipe, out=tree), verb, out)
+    _init_write(workflow, render_workflow(recipe=recipe, tree=tree), verb, out)
     print(_init_gitignore(root / ".gitignore"), file=out)
     print(
-        f"next: `tundravm ci {recipe} --out {tree}` runs the workflow's checks; "
+        f"next: `tundravm ci {recipe} --tree {tree}` runs the workflow's checks; "
         f"commit {tree}/ and the lockfile they compare against",
         file=out,
     )
@@ -2722,14 +2925,14 @@ def _init_next(root: Path, recipe: Path, tests: Path | None, github: bool, out: 
             f"tundravm lock {name}",
             "record recipe sections and pin source repositories/downloads in build/tundravm.lock",
         ),
-        (f"tundravm compile {name} --out mkosi", "write the mkosi tree; commit it"),
+        (f"tundravm compile {name} --tree mkosi", "write the mkosi tree; commit it"),
         *(
             [(f"uv run pytest {tests.parent.name}", f"run {tests.name} against mkosi/")]
             if tests is not None
             else []
         ),
-        (f"tundravm ci {name} --out mkosi", "the lint, tree and lockfile checks CI runs"),
-        (f"tundravm bake {name} --out build", "build the image"),
+        (f"tundravm ci {name} --tree mkosi", "the lint, tree and lockfile checks CI runs"),
+        (f"tundravm bake {name} --build build", "build the image"),
     ]
     width = max(len(command) for command, _ in steps)
     where = "" if root.resolve() == Path.cwd().resolve() else f" (from {root})"
@@ -2797,6 +3000,7 @@ __all__ = [
     "BACKEND_SNIPPETS",
     "EXIT_FAILURE",
     "EXIT_OK",
+    "ERROR_SCHEMA",
     "EXIT_SDK_ERROR",
     "MEASUREMENT_SCHEMES",
     "PLACEHOLDER_BANNER",
@@ -2804,12 +3008,16 @@ __all__ = [
     "build_parser",
     "default_doctor_backends",
     "doctor",
+    "error_payload",
+    "json_report",
     "main",
     "parse_deploy_target",
     "probe_requirement",
     "render_deployment",
     "render_drift",
     "render_measurements",
+    "render_measurements_markdown",
     "render_recipe_template",
     "run_probe",
+    "schema",
 ]

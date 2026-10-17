@@ -10,7 +10,7 @@ Teaches:
 
     tundravm inspect examples/03_fragments.py
     tundravm lint examples/03_fragments.py
-    tundravm compile examples/03_fragments.py --out build/fragments/mkosi
+    tundravm compile examples/03_fragments.py --tree build/fragments/mkosi
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ class Metrics(Composite):
         if self.listen.startswith("127.") or not {"azure", "gcp"} & set(resolved.targets):
             return ()
         message = f"prometheus listens on {self.listen} in a cloud image"
-        return (Diagnostic("metrics-exposed", message, level="warning", variant=resolved.variant),)
+        return (Diagnostic("metrics-exposed", "warning", message, location=resolved.variant),)
 
 
 recipe = Recipe(

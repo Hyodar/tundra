@@ -74,7 +74,7 @@ def test_inspect_text_and_json(recipe: Path) -> None:
 
 def test_compile_writes_tree(recipe: Path, tmp_path: Path) -> None:
     out_dir = tmp_path / "mkosi-out"
-    code, out = run_main("compile", str(recipe), "--out", str(out_dir))
+    code, out = run_main("compile", str(recipe), "--tree", str(out_dir))
     assert code == EXIT_OK
     assert f"compiled {out_dir}" in out
     assert "  variants:      default, azure\n" in out
@@ -178,7 +178,7 @@ def test_init_writes_loadable_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert payload["default"]["base"] == "debian/sid"
 
     assert run_main("lock", str(target))[0] == EXIT_OK
-    code, out = run_main("bake", str(target), "--out", str(tmp_path / "out"))
+    code, out = run_main("bake", str(target), "--build", str(tmp_path / "out"))
     assert code == EXIT_OK
     assert re.search(r"^default\s+qemu\s", out, re.M)
 

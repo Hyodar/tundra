@@ -100,7 +100,7 @@ def test_inprocess_bake_is_reproducible_and_records_it(tmp_path: Path) -> None:
         recipe,
         lock=lock(recipe),
         backend=Backend("inprocess"),
-        out=out,
+        build=out,
         verify_reproducible=True,
     )
     assert {a.target for a in artifacts} == {"qemu", "azure"}
@@ -115,7 +115,7 @@ def test_inprocess_bake_is_reproducible_and_records_it(tmp_path: Path) -> None:
 
 def test_a_bake_without_the_check_records_nothing(tmp_path: Path) -> None:
     recipe = _recipe()
-    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build")
+    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build")
     assert "reproducibility" not in _declarative(tmp_path / "build")
 
 
@@ -132,7 +132,7 @@ def test_a_differing_second_build_fails_with_a_table_and_keeps_it(tmp_path: Path
             None,
             locked=lock(recipe),
             backend=backend,
-            out=out,
+            build=out,
             verify_reproducible=True,
         )
     error = caught.value
@@ -149,7 +149,7 @@ def test_a_differing_second_build_fails_with_a_table_and_keeps_it(tmp_path: Path
     assert qemu.split()[:2] == ["default", "qemu"] and qemu.split()[-1] == "mismatch"
     assert qemu.split()[2] != qemu.split()[3]
     assert error.hint is not None
-    assert f"tundravm diff RECIPE --against {scratch / 'mkosi'}" in error.hint
+    assert f"tundravm diff RECIPE --tree {scratch / 'mkosi'}" in error.hint
     assert "SOURCE_DATE_EPOCH" in error.hint and "snapshot" in error.hint
     assert error.context == {"second_build": str(scratch), "differ": "default/qemu"}
     assert _declarative(out)["reproducibility"] == {
@@ -179,7 +179,7 @@ def test_a_failed_second_build_keeps_the_first_builds_record(
     backend = FailingSecondBuild(error=error)
     with pytest.raises(type(error)):
         bake_image(
-            lower(recipe), None, locked=lock(recipe), backend=backend, out=out,
+            lower(recipe), None, locked=lock(recipe), backend=backend, build=out,
             verify_reproducible=True,
         )  # fmt: skip
     (running,) = backend.seen

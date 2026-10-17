@@ -1,6 +1,6 @@
 # CLI
 
-`tundravm` (also `python -m tundravm`) runs the lifecycle on a recipe file. Every recipe command loads the `Recipe` the file binds and runs one step on the selected variants; `measure` and `deploy` read the manifest a bake wrote.
+`tundravm` (also `python -m tundravm`) runs the lifecycle on a recipe file. Every recipe command loads the `Recipe` the file binds and runs one step on the selected variants; `measure`, `deploy` and `sbom` read the `bake-result.json` a bake wrote into the build directory.
 
 ```
 tundravm init [DIR] [--name NAME] [--template minimal|service|cloud|prover] [--base BASE] [--backend KIND]
@@ -9,26 +9,30 @@ tundravm init --list-templates
 tundravm inspect RECIPE [--variant NAME]... [--format text|json|markdown | --json] [--diff-variants A B] [--lockfile PATH]
 tundravm inspect RECIPE --variant NAME --why SUBJECT [--format text|json|markdown | --json] [--lockfile PATH]
 tundravm lint    RECIPE [--variant NAME]... [--format auto|text|json|github|markdown | --json] [--strict] [--lockfile PATH]
-tundravm compile RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--check] [--format auto|text|markdown|github]
-tundravm diff    RECIPE [--variant NAME]... [--against DIR] [--lockfile PATH] [--format auto|text|stat|markdown|github | --stat] [--color auto|always|never]
+tundravm compile RECIPE [--variant NAME]... [--tree DIR] [--lockfile PATH] [--check] [--format auto|text|markdown|github]
+tundravm diff    RECIPE [--variant NAME]... [--tree DIR] [--lockfile PATH] [--format auto|text|stat|markdown|github | --stat] [--color auto|always|never]
 tundravm lock    RECIPE [--variant NAME]... [--lockfile PATH] [--update SOURCE]... [--check | --offline] [--explain] [--format auto|text|github|markdown]
-tundravm fetch   RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--force]
-tundravm bake    RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--backend KIND] [--no-fetch] [--offline] [--verify-reproducible] [-v | -q | --json-logs] [--color auto|always|never]
-tundravm measure MANIFEST [--variant NAME] [--scheme rtmr|azure|gcp] [--json] [--allow-placeholder] [--export-policy FILE]
-tundravm deploy  MANIFEST [--variant NAME] --target qemu|azure|gcp [--param KEY=VALUE]... [--attach] [--allow-simulated-artifact]
+tundravm fetch   RECIPE [--variant NAME]... [--build DIR] [--lockfile PATH] [--force]
+tundravm bake    RECIPE [--variant NAME]... [--build DIR] [--lockfile PATH] [--backend KIND] [--no-fetch] [--offline] [--verify-reproducible] [-v | -q | --json-logs] [--color auto|always|never]
+tundravm measure [--build DIR] [--variant NAME] [--scheme rtmr|azure|gcp] [--format text|json|markdown] [--export-policy FILE] [--allow-placeholder]
+tundravm deploy  TARGET [--build DIR] [--variant NAME] [--param KEY=VALUE]... [--attach] [--allow-simulated-artifact]
 tundravm attest  --issuer ENDPOINT [--validator ENDPOINT] --policy FILE [--nonce HEX] [--allow-simulated] [--format text|json|markdown]
-tundravm sbom    [MANIFEST] [--out DIR] [--variant NAME] [--lockfile PATH] [--format spdx-json|cyclonedx-json|text|markdown] [--output FILE] [--allow-unbound]
-tundravm evidence [RECIPE] [--variant NAME]... [--out DIR] [--lockfile PATH] [--policy FILE] [--bundle FILE] [--html FILE] [--format text|json] [--require LIST] [--allow-unbound]
+tundravm sbom    [--build DIR] [--variant NAME] [--lockfile PATH] [--format spdx-json|cyclonedx-json|text|markdown] [--output FILE] [--allow-unbound]
+tundravm evidence [RECIPE] [--variant NAME]... [--build DIR] [--lockfile PATH] [--policy FILE] [--bundle FILE] [--html FILE] [--format text|json] [--require LIST] [--allow-unbound] [--sign KEY]
+tundravm verify  EVIDENCE [--artifacts DIR] [--require LIST] [--allowed-signers FILE] [--signer PRINCIPAL] [--format text|json] [--html FILE]
+tundravm changes [RECIPE] --since EVIDENCE [--variant NAME]... [--build DIR] [--lockfile PATH] [--format text|json|markdown]
 tundravm doctor  [RECIPE] [--backend KIND]
-tundravm ci      RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--format auto|text|github]
-tundravm watch   RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--interval SECONDS] [--write]
-tundravm status  RECIPE [--variant NAME]... [--out DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
-tundravm clean   [RECIPE] [--out DIR] [--sources] [--tree] [--artifacts] [--state] [--all] [--lockfile PATH] [--dry-run]
-tundravm config  [RECIPE] [--out DIR] [--tree DIR] [--lockfile PATH] [--backend KIND] [--format text|json]
+tundravm ci      RECIPE [--variant NAME]... [--tree DIR] [--lockfile PATH] [--format auto|text|github]
+tundravm watch   RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--interval SECONDS] [--write]
+tundravm status  RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
+tundravm clean   [RECIPE] [--build DIR] [--sources] [--tree] [--artifacts] [--state] [--all] [--lockfile PATH] [--dry-run]
+tundravm config  [RECIPE] [--build DIR] [--tree DIR] [--lockfile PATH] [--backend KIND] [--format text|json]
 tundravm completion bash|zsh|fish
 ```
 
-`RECIPE` may be omitted wherever it appears when a `pyproject.toml` with a `[tool.tundravm]` table is found (see [Project configuration](#project-configuration)).
+`RECIPE` may be omitted wherever it appears when a `pyproject.toml` with a `[tool.tundravm]` table is found (see [Project configuration](#project-configuration)). `TARGET` is `qemu`, `azure` or `gcp`.
+
+Destinations are named the same everywhere: `--tree DIR` is the compiled mkosi tree (default: the table's `tree`, else `build/mkosi`); `--build DIR` is the build directory, which holds `bake-result.json`, the sources in `BUILD/.sources`, the artifacts, the bake's own tree `BUILD/mkosi` and the second build `BUILD/.reproduce` (default: the table's `build`, else `build`); `--output FILE` is a document written. The named document flags stay as they are: `measure --export-policy FILE`, `evidence --bundle FILE` and `--html FILE`, and `attest --policy FILE`, which is read. In `clean`, `--tree` is a boolean that names the `BUILD/mkosi` part, never the committed tree.
 
 Every command that takes `RECIPE` (and `doctor`) also accepts `--attr NAME`, `--pythonpath DIR` (repeatable) and `--traceback`, which raises an SDK error with its Python traceback instead of printing `error [E_CODE]: message`. `KIND` is `lima`, `nix`, `local` or `inprocess`. `--version` prints the version.
 
@@ -65,23 +69,25 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `init` | Scaffolds a project from a starter template, lints it, prints the next steps and probes the chosen backend (see [Init](#init)). | |
 | `inspect` | Dry run per variant: parent, fragments, packages, files with digests, users, units, hooks, runtime-init steps, sources, targets (see [Inspect](#inspect)). `--format json` adds the recipe `digest` the lockfile records. `--diff-variants A B` lists what differs between two variants instead. `--variant NAME --why SUBJECT` explains one emitted object (see [Explaining one object](#explaining-one-object)). | |
 | `lint` | Every diagnostic: resolution, fragment checks, compiler rules. The compiler rules see the source pins of `--lockfile` (default `build/tundravm.lock` when it exists), so a pinned source never reports `source-unpinned`. A selected lockfile, `--lockfile` or the table's `lockfile`, also adds its drift diagnostics (`lock-*`), as `lint(recipe, lock=...)` does. | an error (with `--strict`, a warning) |
-| `compile` | Writes the mkosi tree to `--out` (default `build/mkosi`), one directory per variant, then prints `variants:`, `recipe_digest:` (the digest `lock` records) and `tree_digest:` (`Tree.digest`). `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
-| `diff` | Unified diff from the tree at `--against` (default `build/mkosi`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
+| `compile` | Writes the mkosi tree to `--tree` (default: the table's `tree`, else `build/mkosi`), one directory per variant, then prints `variants:`, `recipe_digest:` (the digest `lock` records) and `tree_digest:` (`Tree.digest`). `--check` writes nothing and reports the stale files. | `--check` and the tree is stale |
+| `diff` | Unified diff from the tree at `--tree` (default: the table's `tree`, else `build/mkosi`; `--tree BUILD/.reproduce/mkosi` is the second build of `bake --verify-reproducible`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
 | `lock` | Writes the lockfile to `--lockfile` (default `build/tundravm.lock`) for the selected variants: version 4, with the `distribution`, `compiler`, `variants.<name>.kernel` and `variants.<name>.debloat` sections. A build whose source differs between variants is pinned per variant as `<variant>/<name>` (drift line `sources.<variant>.<name>`); `--update <variant>/<name>` re-resolves one variant's pin, `--update <name>` every variant's. `--check` prints the drift instead (see [Lockfile drift](#lockfile-drift)); a version 3 lockfile drifts as `~ version: 3 -> 4` until locked again. | `--check` and the lock is stale |
-| `fetch` | Checks the source builds, built kernels' sources and `EfiStub` package (`efi-stub`) of the selected variants out on this host, as the invoking user, into `OUT/.sources/<name>-<pin12>-<id8>` (`--out`, default `build`; `id8` hashes the url, subdirectory and submodules) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are verified and kept: git `HEAD` is the pin, `git status` is empty (untracked and ignored files included) and requested submodules are initialised; an http checkout matches the sha256 manifest written at fetch time. A modified one fails with `E_SOURCE` (`source <name> checkout modified/incomplete: run tundravm fetch --force`); `--force` checks every source out again and refills the dependency caches. Outside `nethermind-v1`, `bake` runs it first and mounts `OUT/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing. It also prefetches each `Go`, `Cargo` and `Dotnet` build's dependencies with the host's toolchain into `OUT/.sources/deps/{go,cargo,nuget}` and lists the outcome in a `deps:` column: `go: prefetched`, `go: kept`, `go: prefetched (was incomplete: ...)`, `go: incomplete (...)`, `skipped (no host go)`, `skipped (offline)` or `failed (...)` (see [Fetch](#fetch)). | |
-| `bake` | Compiles and builds every selected variant into `--out` (default `build`), then writes `OUT/bake-result.json`. `--verify-reproducible` builds them a second time into `OUT/.reproduce` and fails with `E_REPRODUCIBILITY` (exit 1) unless every artifact's sha256 matches (see [Bake](#bake)). | |
-| `measure` | Expected measurements of one baked variant. `--export-policy FILE` also writes the verifier policy `Tdxs.from_policy` reads (see [Measure and deploy](#measure-and-deploy)). | |
-| `deploy` | Deploys one baked variant's artifact. | |
+| `fetch` | Checks the source builds, built kernels' sources and `EfiStub` package (`efi-stub`) of the selected variants out on this host, as the invoking user, into `BUILD/.sources/<name>-<pin12>-<id8>` (`--build`, default `build`; `id8` hashes the url, subdirectory and submodules) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are verified and kept: git `HEAD` is the pin, `git status` is empty (untracked and ignored files included) and requested submodules are initialised; an http checkout matches the sha256 manifest written at fetch time. A modified one fails with `E_SOURCE` (`source <name> checkout modified/incomplete: run tundravm fetch --force`); `--force` checks every source out again and refills the dependency caches. Outside `nethermind-v1`, `bake` runs it first and mounts `BUILD/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing. It also prefetches each `Go`, `Cargo` and `Dotnet` build's dependencies with the host's toolchain into `BUILD/.sources/deps/{go,cargo,nuget}` and lists the outcome in a `deps:` column: `go: prefetched`, `go: kept`, `go: prefetched (was incomplete: ...)`, `go: incomplete (...)`, `skipped (no host go)`, `skipped (offline)` or `failed (...)` (see [Fetch](#fetch)). | |
+| `bake` | Compiles and builds every selected variant into `--build` (default `build`), then writes `BUILD/bake-result.json`. `--verify-reproducible` builds them a second time into `BUILD/.reproduce` and fails with `E_REPRODUCIBILITY` (exit 1) unless every artifact's sha256 matches (see [Bake](#bake)). | |
+| `measure` | Expected measurements of one variant baked into `--build` (default `build`), as text, JSON or Markdown (`--format`). `--export-policy FILE` also writes the verifier policy `Tdxs.from_policy` reads (see [Measure and deploy](#measure-and-deploy)). | |
+| `deploy` | Deploys the artifact of one variant baked into `--build` (default `build`) to `TARGET`: `qemu`, `azure` or `gcp`. | |
 | `attest` | Asks a running image's `tdxs` issuer (`--issuer`) for a quote bound to a nonce, has a `tdxs` validator (`--validator`) judge its signature and collateral, and checks its MRTD and RTMR0..RTMR3 against a verifier policy (`--policy`, from `measure --export-policy`): the signature status, the nonce check, one `match`/`mismatch`/`unchecked` line per register, then the verdict. `trusted` needs the validator; without one the verdict is `measurements-match` or `measurements-mismatch` (see [Attest](#attest)). | the verdict is `untrusted`, `measurements-mismatch` or `simulated` (without `--allow-simulated`) |
-| `sbom` | The software bill of materials of one baked variant (`MANIFEST` or `--out DIR`, `--variant`): mkosi's package manifest beside the artifact, the lockfile's source pins and the recipe metadata, merged into SPDX 2.3 JSON (default), CycloneDX 1.5 JSON, text or Markdown (`--format`); `--output FILE` writes it to a file (see [SBOM](#sbom)). | |
-| `evidence` | An auditor's record of one bake (`--out DIR`, default `build`; `--variant`, default every baked variant): recipe and tree digests, the lockfile with its drift verdict, each artifact with a fresh sha256 check, the reproducibility verdict, the measurements policy, an SPDX SBOM, the lint summary, a provenance summary and the tool versions, written to `OUT/evidence/` with an `evidence.json` index; `--bundle FILE.tar.gz` and `--html FILE` package it; `--require LIST` makes missing checks count (see [Evidence](#evidence)). | the verdict is `fail` or `incomplete` |
+| `sbom` | The software bill of materials of one baked variant (`--build DIR`, default `build`; `--variant`): mkosi's package manifest beside the artifact, the lockfile's source pins and the recipe metadata, merged into SPDX 2.3 JSON (default), CycloneDX 1.5 JSON, text or Markdown (`--format`); `--output FILE` writes it to a file (see [SBOM](#sbom)). | |
+| `evidence` | An auditor's record of one bake (`--build DIR`, default `build`; `--variant`, default every baked variant): recipe and tree digests, the lockfile with its drift verdict, each artifact with a fresh sha256 check, the reproducibility verdict, the measurements policy, an SPDX SBOM, the lint summary, a provenance summary and the tool versions, written to `BUILD/evidence/` with an `evidence.json` index; `--bundle FILE.tar.gz` and `--html FILE` package it; `--require LIST` makes missing checks count (see [Evidence](#evidence)). | the verdict is `fail` or `incomplete` |
+| `verify` | Checks an evidence bundle or directory on its own, with no recipe, checkout or bake directory: every member against the sha256 `evidence.json` lists, the index against its members, `--artifacts DIR` re-hashed against the index, `evidence.json.sig` against `--allowed-signers FILE`, and the `--require` checks; one `pass`, `fail` or `missing` per check with a reason code (see [Verify](#verify)). | a check fails or is missing |
+| `changes` | What changed since a previous evidence bundle (`--since EVIDENCE`): the recipe and per-variant tree digests, the lockfile sections, the source pins, the packages, the emitted files (each with the declarations behind it) and the measured registers, grouped by section with counts; `--format markdown` is meant for a pull request (see [Changes](#changes)). | |
 | `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart`, `apt` and `pefile`, probed under the Python that runs mkosi, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk conversion needs on the host; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
-| `ci` | `lint --strict`, `compile --check`, `lock --check` in order; stops at the first failure. The one `--lockfile` (default `build/tundravm.lock`) is loaded once and shared: lint and the tree check apply its pins, the lock check compares against it. | any step fails, including a missing lockfile |
-| `watch` | Polls the recipe file and every `.py` under its directory; on each change re-runs lint and the tree check against `OUT/mkosi` (`--out`, default `build`), or recompiles it with `--write`, printing one line (see [Watch](#watch)). | never (Ctrl-C exits 0) |
+| `ci` | `lint --strict`, `compile --check` (against `--tree`) and `lock --check` in order; stops at the first failure. The one `--lockfile` (default `build/tundravm.lock`) is loaded once and shared: lint and the tree check apply its pins, the lock check compares against it. | any step fails, including a missing lockfile |
+| `watch` | Polls the recipe file and every `.py` under its directory; on each change re-runs lint and the tree check against `--tree` (default: the table's `tree`, else `BUILD/mkosi`, with `--build` default `build`), or recompiles it with `--write`, printing one line (see [Watch](#watch)). | never (Ctrl-C exits 0) |
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
-| `clean` | Removes the chosen parts of the build output directory: `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
-| `config` | Prints the `recipe`, `out`, `tree`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
-| `import` | Generates a recipe module from an existing mkosi tree (`TREE`: one variant directory or a directory of them): `--out FILE` writes it (`--force` overwrites), else it goes to stdout; `--name`, `--dialect`, `--format text\|json`. Reports the declared/verbatim coverage, notes for what it skipped or could not map, and whether the recipe compiles back to `TREE` (see [Import](#import)). | |
+| `clean` | Removes the chosen parts of the build directory (`--build`, default: the table's `build`, else `build`): `--sources`, `--tree`, `--artifacts`, `--state`, or `--all`; the lockfile only when `--lockfile` names it. With no part flag it lists what `--all` would remove (see [Project status](#project-status)). | a path could not be removed |
+| `config` | Prints the `recipe`, `tree`, `build`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
+| `import` | Generates a recipe module from an existing mkosi tree (`TREE`: one variant directory or a directory of them): `--output FILE` writes it (`--force` overwrites), else it goes to stdout; `--name`, `--dialect`, `--format text\|json`. Reports the declared/verbatim coverage, notes for what it skipped or could not map, and whether the recipe compiles back to `TREE` (see [Import](#import)). | |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
 `inspect`, `lint`, `compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH`, or the `lockfile` of a [`[tool.tundravm]` table](#project-configuration), names another one. `ci` needs the lockfile and loads it once for all three steps; `status` reports on it.
@@ -93,29 +99,29 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 ```toml
 [tool.tundravm]
 recipe = "node.py"
-out = "build"
 tree = "mkosi"
+build = "build"
 lockfile = "build/tundravm.lock"
 backend = "inprocess"
 ```
 
-Every command that takes `RECIPE` then runs without it: `tundravm status`, `tundravm lint`, `tundravm compile --check`. The rules:
+Every command reads the table, and every command that takes `RECIPE` then runs without it: `tundravm status`, `tundravm lint`, `tundravm compile --check`; `measure`, `deploy` and `sbom`, which take no `RECIPE`, find the bake in the configured `build`. In a project with `build = "dist"`, bare `tundravm sbom`, `measure`, `status`, `evidence` and `clean` all use `dist/`. The rules:
 
-- The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`.
-- Precedence per value: an explicit argument or flag, then the table, then the built-in default (`build`, `build/mkosi`, `build/tundravm.lock`, the recipe file's `backend`).
-- The table's paths apply when `RECIPE` is omitted or names the table's recipe; another explicit `RECIPE` uses the built-in defaults.
-- `out` is `--out` of `fetch`, `bake`, `status`, `watch` and `clean`; `tree` is `--out` of `compile` and `ci`, `--against` of `diff` and the tree `status` and `watch` check; `lockfile` is `--lockfile` everywhere except `clean`, drift diagnostics of `lint` included; `backend` is `bake --backend` and `doctor --backend`, and `bake` keeps the recipe file's own backend instance when it is of that kind.
+- The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`. The keys are `recipe`, `tree`, `build`, `lockfile` and `backend`; a table that still has `out`, the old name of `build`, fails with `E_VALIDATION` (`[tool.tundravm] key(s) out in PATH were renamed.`, hint `Rename out to build (e.g. build = "build").`).
+- Precedence per value: an explicit argument or flag, then the table, then the built-in default (`build/mkosi`, `build`, `build/tundravm.lock`, the recipe file's `backend`). For `measure`, `deploy` and `sbom` the default build directory is `build` beside the `pyproject.toml` when a table is found without a `build`, else `./build`.
+- For the commands that take `RECIPE`, the table's paths apply when `RECIPE` is omitted or names the table's recipe; another explicit `RECIPE` uses the built-in defaults.
+- `tree` is `--tree` of `compile`, `diff`, `ci`, `status` and `watch` (the tree they write, compare or check); `build` is `--build` of `fetch`, `bake`, `measure`, `deploy`, `sbom`, `evidence`, `status`, `watch` and `clean`; `lockfile` is `--lockfile` everywhere except `clean`, drift diagnostics of `lint` included; `backend` is `bake --backend` and `doctor --backend`, and `bake` keeps the recipe file's own backend instance when it is of that kind.
 - A configured `lockfile` stays selected before the file exists and is never replaced by `build/tundravm.lock`. Until `tundravm lock` writes it, `inspect`, `lint`, `compile`, `diff` and `fetch` print `` note: configured lockfile PATH does not exist; run `tundravm lock` to create it `` on stderr and run without pins, `status` reports `configured lockfile PATH does not exist; run tundravm lock` on its `lock` line, and `bake` fails with `E_LOCKFILE` instead of baking unfrozen.
 - Without `RECIPE` and without a table, a recipe command exits 2 with `the following arguments are required: recipe (no pyproject.toml with a [tool.tundravm] table ...)`; `doctor`, `clean` and `config` keep working without one.
 
-`tundravm config` prints each value as the commands resolve it: the recipe path, the `out`, `tree` and `lockfile` paths, whether the recipe and the lockfile exist and, without `--backend` or a table `backend`, the kind of the backend the recipe file binds (origin `recipe`; `config` imports the recipe file to find it, with `--attr` and `--pythonpath` as the other commands take them). `--format json` prints `{"pyproject", "values": {KEY: {"value", "origin"}}}`, plus `exists` for `recipe` and `lockfile`. Its `--out`, `--tree`, `--lockfile` and `--backend` show how flags override the table. In a project `init` just wrote:
+`tundravm config` prints each value as the commands resolve it: the recipe path, the `tree`, `build` and `lockfile` paths, whether the recipe and the lockfile exist and, without `--backend` or a table `backend`, the kind of the backend the recipe file binds (origin `recipe`; `config` imports the recipe file to find it, with `--attr` and `--pythonpath` as the other commands take them). `--format json` prints `{"schema": "tundravm.config/1", "pyproject", "values": {KEY: {"value", "origin"}}}`, plus `exists` for `recipe` and `lockfile`. Its `--tree`, `--build`, `--lockfile` and `--backend` show how flags override the table. In a project `init` just wrote:
 
 ```console
 $ tundravm config
 pyproject: /home/me/node/pyproject.toml
   recipe    node.py              pyproject
-  out       build                pyproject
   tree      mkosi                pyproject
+  build     build                pyproject
   lockfile  build/tundravm.lock  pyproject; does not exist; run `tundravm lock`
   backend   inprocess            pyproject
 ```
@@ -165,22 +171,22 @@ created svc/.gitignore
 note: svc/pyproject.toml already exists; add the dependencies with `uv add tundravm` and `uv add --dev pytest` (tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm`)
 lint my-node.py: no findings
 next (from svc):
-  1. tundravm lock my-node.py                 record recipe sections and pin source repositories/downloads in build/tundravm.lock
-  2. tundravm compile my-node.py --out mkosi  write the mkosi tree; commit it
-  3. uv run pytest tests                      run test_my_node.py against mkosi/
-  4. tundravm ci my-node.py --out mkosi       the lint, tree and lockfile checks CI runs
-  5. tundravm bake my-node.py --out build     build the image
+  1. tundravm lock my-node.py                  record recipe sections and pin source repositories/downloads in build/tundravm.lock
+  2. tundravm compile my-node.py --tree mkosi  write the mkosi tree; commit it
+  3. uv run pytest tests                       run test_my_node.py against mkosi/
+  4. tundravm ci my-node.py --tree mkosi       the lint, tree and lockfile checks CI runs
+  5. tundravm bake my-node.py --build build    build the image
   tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm` uses a local checkout
 ```
 
-To add CI to a project that already exists, run `tundravm init --ci github` in it. The project exists when `DIR/pyproject.toml` has a `[tool.tundravm]` table (its `recipe` names the recipe, its `tree` the `--out` the workflow checks, default `mkosi`) or `--recipe RECIPE` names the recipe. Then `init` writes only `.github/workflows/tundravm.yml` and the `.gitignore` block when it is missing; the recipe, tests, `pyproject.toml` and `README.md` are never touched, and nothing is linted or probed. An existing workflow is refused with `E_VALIDATION`; `--force` overwrites the workflow only:
+To add CI to a project that already exists, run `tundravm init --ci github` in it. The project exists when `DIR/pyproject.toml` has a `[tool.tundravm]` table (its `recipe` names the recipe, its `tree` the `--tree` the workflow checks, default `mkosi`) or `--recipe RECIPE` names the recipe. Then `init` writes only `.github/workflows/tundravm.yml` and the `.gitignore` block when it is missing; the recipe, tests, `pyproject.toml` and `README.md` are never touched, and nothing is linted or probed. An existing workflow is refused with `E_VALIDATION`; `--force` overwrites the workflow only:
 
 ```console
 $ tundravm init --ci github
 adding CI for node.py to the existing project in .
 created .github/workflows/tundravm.yml
 kept .gitignore (already ignores build output)
-next: `tundravm ci node.py --out mkosi` runs the workflow's checks; commit mkosi/ and the lockfile they compare against
+next: `tundravm ci node.py --tree mkosi` runs the workflow's checks; commit mkosi/ and the lockfile they compare against
 ```
 
 The `note:` line appears only when `pyproject.toml` already existed; add `[tool.pytest.ini_options] pythonpath = ["."]` to that file yourself if your tests import project modules. Until tundravm's first release, install it from a checkout: `uv add --editable PATH/TO/tundravm` in the project, with `PATH/TO/tundravm` the directory holding tundravm's `pyproject.toml`. A missing backend tool never fails `init`; the probe ends with a pointer to the in-process backend:
@@ -203,10 +209,10 @@ the nix backend is not ready: install the missing tools above, or bake with --ba
 
 | Flag | Effect |
 |---|---|
-| `--out FILE` | Write the module to `FILE` (ruff formats it with `FILE`'s configuration); without it the module goes to stdout and the report to stderr. An existing `FILE` is refused unless `--force`. |
+| `--output FILE` | Write the module to `FILE` (ruff formats it with `FILE`'s configuration); without it the module goes to stdout and the report to stderr. An existing `FILE` is refused unless `--force`. |
 | `--name NAME` | Recipe name (default: the tree's directory name, or its parent's for `mkosi/`). |
 | `--dialect current\|nethermind-v1` | Dialect `TREE` was written with (default: guessed; `nethermind-v1` when the tree spells something only that dialect writes, with a note). |
-| `--format text\|json` | `text` prints `coverage: N declared, M verbatim` and one `note:` per note; `json` prints the `Imported` fields (`recipe_source`, `recipe` name and variants, `notes`, `coverage`). |
+| `--format text\|json` | `text` prints `coverage: N declared, M verbatim` and one `note:` per note; `json` prints the `Imported` fields (`recipe_source`, `recipe` name and variants, `notes`, `coverage`) with `"schema": "tundravm.import/1"`. |
 
 What maps back:
 
@@ -220,13 +226,13 @@ The last note is the round trip: the module is executed and compiled, and either
 
 ```console
 $ tundravm init --name node --template service --backend local --no-doctor .
-$ tundravm compile node.py --out mkosi
+$ tundravm compile node.py --tree mkosi
 ...
-$ tundravm import mkosi --name node --out node_imported.py
+$ tundravm import mkosi --name node --output node_imported.py
 wrote node_imported.py
 coverage: 24 declared, 3 verbatim
 note: round trip: the recipe compiles back to this tree
-$ tundravm diff node_imported.py --against mkosi
+$ tundravm diff node_imported.py --tree mkosi
 tree is up to date with the recipe
 ```
 
@@ -316,13 +322,23 @@ A module-level `backend` holding a backend instance (`LimaMkosiBackend(...)`, `N
 
 | Format | Shape |
 |---|---|
-| `text` | One line per finding (`error disk-key-undefined [default] data: ...`) and a summary line |
-| `json` | `{"diagnostics": [...], "summary": {...}}` (`lint`; each diagnostic has `code`, `level`, `message`, `hint`, `subject`, `variant`); `{"digest": ..., "variants": {NAME: {...}}}` (`inspect`) |
+| `text` | One line per finding (`error disk-key-undefined [default] data: ...`; `[common]` for an empty location, as in `github`) and a summary line |
+| `json` | `{"schema": "tundravm.lint/1", "diagnostics": [...], "summary": {...}}` (`lint`; each diagnostic has `code`, `severity`, `message`, `subject`, `location`, `hint` and `context`: `location` is the variant, `""` for the recipe as a whole, `hint` is `null` when there is none, `context` an object of strings); `{"schema": "tundravm.inspect/1", "digest": ..., "variants": {NAME: {...}}}` (`inspect`) |
 | `github` | `::error file=...,title=...::message` workflow commands that annotate the pull request |
-| `markdown` | Tables, ready for `$GITHUB_STEP_SUMMARY` or a PR comment |
+| `markdown` | Tables, ready for `$GITHUB_STEP_SUMMARY` or a PR comment (`lint`: `\| Severity \| Code \| Location \| Subject \| Message \| Hint \|`) |
 | `stat` | Changed files only (`diff`) |
 
 `inspect` takes `text`, `json` or `markdown` (no `auto`).
+
+Every `--format json` report carries a top-level `"schema": "tundravm.<verb>/1"` key that names its shape and version: `inspect` (also `--why` and `--diff-variants`), `lint`, `status`, `config`, `attest`, `evidence` (`evidence.json` verbatim, which carries the key next to its `schema_version`), `import` and `measure`. `sbom` writes its native SPDX or CycloneDX document unchanged.
+
+When an SDK error (an `E_*` code) ends a command run with `--format json` (or `inspect`/`lint --json`), stderr gets exactly one JSON line instead of the `error [E_...]: ...` block, and the exit code is 2:
+
+```
+{"schema":"tundravm.error/1","code":"E_VALIDATION","message":"Unknown variant(s): nope.","hint":"Declared variants: default","context":{"recipe":"image.py"}}
+```
+
+`hint` is `null` when there is none.
 
 ## Inspect
 
@@ -363,7 +379,7 @@ Target: `qemu` → `azure`
 | changed | `File(extra, /etc/motd)` | content |
 ```
 
-`--format json` prints `{"a", "b", "targets": {A: [...], B: [...]}, "added": [...], "removed": [...], "changed": [{"declaration", "fields"}]}`. A `~` line names the fields that differ.
+`--format json` prints `{"schema": "tundravm.inspect/1", "a", "b", "targets": {A: [...], B: [...]}, "added": [...], "removed": [...], "changed": [{"declaration", "fields"}]}`. A `~` line names the fields that differ.
 
 ### Explaining one object
 
@@ -390,7 +406,7 @@ files (in prod/):
   mkosi.extra/etc/app.conf
 ```
 
-`--format json` prints `{"variant", "subject", "declarations": [{"declaration", "type", "key", "present", "origins": [{"action", "variant", "fragments": [{"name", "class"}]}]}], "fragments", "files", "generated"}`; `--format markdown` a table of declarations and steps. A removed declaration is listed with `present: false` and no files. The Python form is `tundravm.explain_why(recipe, variant, subject)`.
+`--format json` prints `{"schema": "tundravm.inspect/1", "variant", "subject", "declarations": [{"declaration", "type", "key", "present", "origins": [{"action", "variant", "fragments": [{"name", "class"}]}]}], "fragments", "files", "generated"}`; `--format markdown` a table of declarations and steps. A removed declaration is listed with `present: false` and no files. The Python form is `tundravm.explain_why(recipe, variant, subject)`.
 
 ## Lint
 
@@ -464,7 +480,7 @@ Each line is `<name>: git <url> @ <ref>: <reason>`. The reason is `ref '<ref>' n
 
 ## Fetch
 
-`tundravm fetch RECIPE` checks out, on this host and as you, every source the selected variants build from: each `Build` source and, outside `nethermind-v1`, each built kernel's source (a `Kernel` with `config`), named `kernel` or `kernel-<variant>` where a variant's kernel source differs, and the `.deb` an `EfiStub` installs, an http source named `efi-stub` (`efi-stub-<variant>` where a variant's package differs). A git source is checked out at its pinned commit, an http source is downloaded and checked against its sha256. Each lands in `OUT/.sources/<name>-<pin12>-<id8>/`, `id8` being the first 8 hex of a sha256 over the url, kind and, for git, subdirectory and submodules, with a JSON `.tundravm-complete` marker that records the pin and that identity (and, for http, a sha256 manifest of every file). There is one checkout per (source, pin). A complete checkout is verified and kept, so a second run touches nothing: git `HEAD` must be the pin, `git status` must list nothing (untracked and ignored files included) and requested submodules must be at their recorded commits; an http checkout must match its manifest. A modified checkout fails with `E_SOURCE` until `fetch --force` checks every source out again:
+`tundravm fetch RECIPE` checks out, on this host and as you, every source the selected variants build from: each `Build` source and, outside `nethermind-v1`, each built kernel's source (a `Kernel` with `config`), named `kernel` or `kernel-<variant>` where a variant's kernel source differs, and the `.deb` an `EfiStub` installs, an http source named `efi-stub` (`efi-stub-<variant>` where a variant's package differs). A git source is checked out at its pinned commit, an http source is downloaded and checked against its sha256. Each lands in `BUILD/.sources/<name>-<pin12>-<id8>/` (`--build DIR`, default `build`), `id8` being the first 8 hex of a sha256 over the url, kind and, for git, subdirectory and submodules, with a JSON `.tundravm-complete` marker that records the pin and that identity (and, for http, a sha256 manifest of every file). There is one checkout per (source, pin). A complete checkout is verified and kept, so a second run touches nothing: git `HEAD` must be the pin, `git status` must list nothing (untracked and ignored files included) and requested submodules must be at their recorded commits; an http checkout must match its manifest. A modified checkout fails with `E_SOURCE` until `fetch --force` checks every source out again:
 
 ```console
 $ tundravm fetch node.py
@@ -505,7 +521,7 @@ A build whose source differs between variants is pinned and fetched once per var
 
 ### Dependencies
 
-For each `Go`, `Cargo` and `Dotnet` build, `fetch` then prefetches the dependencies with the host's toolchain, as you, in a scratch copy of the checkout: `go mod download` into `OUT/.sources/deps/go`, `cargo fetch --locked` into `OUT/.sources/deps/cargo`, `dotnet restore --runtime RID --packages` into `OUT/.sources/deps/nuget`. A marker, `deps/<name>-<pin12>-<id8>.<cache>.json`, records the command and environment and a content list of what the build needs from the cache: each module directory and `.mod` file `go.sum` names, each `.crate` of `Cargo.lock` (size and sha256), each NuGet package directory of the restore's `project.assets.json`. The next fetch keeps the cache only while the content list matches; otherwise it prefetches again. `fetch --force` removes each dependency cache and its markers and prefetches it again. The result lists the outcome in a `deps:` column, and each build gets a `note` line (a `warning` for a failure). For a recipe with a `Go` build `app` and a `Cargo` build `app-rs` of the same repository, on a host with `cargo` but no `go`:
+For each `Go`, `Cargo` and `Dotnet` build, `fetch` then prefetches the dependencies with the host's toolchain, as you, in a scratch copy of the checkout: `go mod download` into `BUILD/.sources/deps/go`, `cargo fetch --locked` into `BUILD/.sources/deps/cargo`, `dotnet restore --runtime RID --packages` into `BUILD/.sources/deps/nuget`. A marker, `deps/<name>-<pin12>-<id8>.<cache>.json`, records the command and environment and a content list of what the build needs from the cache: each module directory and `.mod` file `go.sum` names, each `.crate` of `Cargo.lock` (size and sha256), each NuGet package directory of the restore's `project.assets.json`. The next fetch keeps the cache only while the content list matches; otherwise it prefetches again. `fetch --force` removes each dependency cache and its markers and prefetches it again. The result lists the outcome in a `deps:` column, and each build gets a `note` line (a `warning` for a failure). For a recipe with a `Go` build `app` and a `Cargo` build `app-rs` of the same repository, on a host with `cargo` but no `go`:
 
 ```console
 $ tundravm fetch node.py
@@ -553,26 +569,26 @@ Script builds, kernels and `efi-stub` have no dependency cache and no `deps:` co
 variant  target  artifact                  size   sha256        time
 default  qemu    build/default/disk.qcow2  114 B  1fa043adea90  0.0s
 dev      qemu    build/dev/disk.qcow2      110 B  9cfb8b5c2f31  0.0s
-next: tundravm deploy build/bake-result.json --variant default --target qemu
+next: tundravm deploy qemu --build build --variant default
 ```
 
-- Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a terminal), ending `baked N variants`; the summary table (one row per variant and target) and the `next:` line go to stdout.
+- Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a terminal), ending `baked N variants`; the summary table (one row per variant and target) and the `next:` line go to stdout. `next:` leaves out `--build DIR` when the build directory came from `[tool.tundravm]`.
 - `-v`/`--verbose` echoes every backend output line. `-q`/`--quiet` prints only the summary and errors. `--json-logs` writes progress events to stdout as JSON lines (`kind`, `message`, `variant`, `elapsed_s`, `extra`) and no summary.
 - Backend output is hidden by default, but its last lines are shown when the build fails.
-- Outside `nethermind-v1`, a bake with a real backend first runs `fetch` (a `fetch` progress step) at the pins it builds, then mounts `OUT/.sources` into the build: the mkosi command gets `--build-sources=OUT/.sources:tundravm-sources` (absolute paths) (so `$SRCDIR/tundravm-sources` in the scripts), the config directory again as the first `--build-sources` (unless the recipe sets `BuildSources`), and `--build-sources-ephemeral=yes` (unless the recipe sets `BuildSourcesEphemeral`), so nothing a script writes there reaches the host. The build sandbox never fetches a source. The in-process backend fetches nothing.
-- `--no-fetch` skips the fetch and builds from the checkouts already in `OUT/.sources`, for example ones copied to an air-gapped host. A missing or incomplete checkout fails after `compile`, before mkosi runs:
+- Outside `nethermind-v1`, a bake with a real backend first runs `fetch` (a `fetch` progress step) at the pins it builds, then mounts `BUILD/.sources` into the build: the mkosi command gets `--build-sources=BUILD/.sources:tundravm-sources` (absolute paths) (so `$SRCDIR/tundravm-sources` in the scripts), the config directory again as the first `--build-sources` (unless the recipe sets `BuildSources`), and `--build-sources-ephemeral=yes` (unless the recipe sets `BuildSourcesEphemeral`), so nothing a script writes there reaches the host. The build sandbox never fetches a source. The in-process backend fetches nothing.
+- `--no-fetch` skips the fetch and builds from the checkouts already in `BUILD/.sources`, for example ones copied to an air-gapped host. A missing or incomplete checkout fails after `compile`, before mkosi runs:
 
   ```console
   $ tundravm bake node.py --backend local --no-fetch
   ...
   [default] failed after 0.0s
   error [E_STATE]: Source build 'hello' is not fetched: build/.sources/hello-cdd0a5257ba9-2c640da8 is missing or incomplete.
-  Hint: Run `tundravm fetch RECIPE --out build` first, or bake without --no-fetch.
+  Hint: Run `tundravm fetch RECIPE --build build` first, or bake without --no-fetch.
     pin: cdd0a5257ba950088a826755fa832f40e87fc5c3
   [exit 2]
   ```
 
-- `--offline` (or `Policy(network_mode="offline")` in the recipe) gives the build sandbox no network: the mkosi command gets `--with-network=no`, so build and postinst scripts cannot download anything (mkosi still installs the distribution packages from the configured mirror). The fetch step only reuses complete checkouts (a missing one fails it with `E_POLICY`, `Cannot fetch 'NAME': policy network_mode is offline.`), and every `Go`, `Cargo` and `Dotnet` build must find the dependency cache `tundravm fetch` prefetched into `OUT/.sources/deps`; a missing one fails before mkosi runs with `E_STATE` naming the build and `tundravm fetch`, and an incomplete one with `E_STATE` naming the missing entry (`Source build 'app' has an incomplete go dependency cache: deps/go/<entry> is missing or changed, ...`; the hint adds that `--force` refills every cache). A `nethermind-v1` recipe with source builds fails with `E_POLICY`: its hooks fetch in the sandbox. For the `app`/`app-rs` recipe of [Dependencies](#dependencies), fetched on a host without `go`:
+- `--offline` (or `Policy(network_mode="offline")` in the recipe) gives the build sandbox no network: the mkosi command gets `--with-network=no`, so build and postinst scripts cannot download anything (mkosi still installs the distribution packages from the configured mirror). The fetch step only reuses complete checkouts (a missing one fails it with `E_POLICY`, `Cannot fetch 'NAME': policy network_mode is offline.`), and every `Go`, `Cargo` and `Dotnet` build must find the dependency cache `tundravm fetch` prefetched into `BUILD/.sources/deps`; a missing one fails before mkosi runs with `E_STATE` naming the build and `tundravm fetch`, and an incomplete one with `E_STATE` naming the missing entry (`Source build 'app' has an incomplete go dependency cache: deps/go/<entry> is missing or changed, ...`; the hint adds that `--force` refills every cache). A `nethermind-v1` recipe with source builds fails with `E_POLICY`: its hooks fetch in the sandbox. For the `app`/`app-rs` recipe of [Dependencies](#dependencies), fetched on a host without `go`:
 
   ```console
   $ tundravm bake node.py --backend local --offline
@@ -584,15 +600,15 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
   ...
   [default] failed after 0.0s
   error [E_STATE]: Source build 'app' has no prefetched go dependencies, and an offline bake gives the build no network to download them.
-  Hint: Run `tundravm fetch RECIPE --out build` on a host with `go` on PATH (it fills build/.sources/deps/go), or bake without --offline.
+  Hint: Run `tundravm fetch RECIPE --build build` on a host with `go` on PATH (it fills build/.sources/deps/go), or bake without --offline.
     marker: build/.sources/deps/app-cd6fb81f6fb2-902554f9.go.json
   ```
 - The bake is frozen when `--lockfile` is given, when the `[tool.tundravm]` table configures a `lockfile` (which must then exist: a missing one fails before `lint` with `E_LOCKFILE`, `Configured lockfile PATH does not exist.`, and a hint to run `tundravm lock`), or when `build/tundravm.lock` exists: a recipe that drifted from the lock fails at `verify lockfile` with `E_LOCKFILE`. Without a lockfile it bakes unpinned and prints a note.
-- The lockfile is copied to `OUT/tundravm.lock` when that file is absent or identical. A different `OUT/tundravm.lock` is never overwritten: `bake --out OUT --lockfile PATH` bakes against `PATH` and leaves it alone.
+- The lockfile is copied to `BUILD/tundravm.lock` when that file is absent or identical. A different `BUILD/tundravm.lock` is never overwritten: `bake --build BUILD --lockfile PATH` bakes against `PATH` and leaves it alone.
 - The frozen check compares like `lock --check` with the same `--variant` selection: a lockfile of every variant covers `bake --variant default`, while a lockfile written for fewer variants than the bake selects fails at `verify lockfile`.
 - A recipe with error-level lint findings fails at `lint` with `E_LINT`.
-- `OUT/bake-result.json` records, per variant and target, the artifact path and sha256 and the sha256 of mkosi's package manifest beside it (`manifest_digests`, `null` when there is none), plus the lockfile digest, `lock_sha256` (the sha256 of the lockfile the bake read, `null` when it read none; `sbom` and `evidence` refuse another) and a `declarative` block with the recipe digest, the tree digest, `simulated` (true for the in-process backend) and, for a frozen bake, `lockfile`: the path of the lockfile it baked against, as given (`--lockfile PATH` or the table's `lockfile`, else `build/tundravm.lock`).
-- `--verify-reproducible` bakes the same selection a second time into `OUT/.reproduce`, against the same lockfile and the same `OUT/.sources` checkouts (hard-linked there, so nothing is fetched again; mkosi's state is not shared, so the second build compiles and builds everything, tools tree included), then compares every artifact's sha256. The first build's `bake-result.json` is complete (artifacts, digests, the `declarative` block) before the second build starts, so a failed or interrupted second build never loses it. Its `declarative.reproducibility` (absent when the check did not run) is rewritten atomically at each step as `{"state", "second_build", "differ", "error"}`: `running` while the second build runs, then `matched` (`second_build` is `null`: it was removed), `different` (`differ` lists the `variant/target` artifacts that differ, `second_build` is `.reproduce`, relative to `OUT`), `error` (the second build failed; `error` holds the exception's first line) or `interrupted` (Ctrl-C). `status` shows it on each artifact line and `evidence` checks it. When all match the summary is followed by `reproducible: yes (N artifacts match a second build)`. A mismatch keeps the second build and fails with `E_REPRODUCIBILITY` and exit 1 (a completed comparison with a negative result; a second build that fails to run exits 2 with its own error), a table per artifact and a hint naming `tundravm diff` and the usual causes:
+- `BUILD/bake-result.json` records, per variant and target, the artifact path and sha256 and the sha256 of mkosi's package manifest beside it (`manifest_digests`, `null` when there is none), plus the lockfile digest, `lock_sha256` (the sha256 of the lockfile the bake read, `null` when it read none; `sbom` and `evidence` refuse another) and a `declarative` block with the recipe digest, the tree digest, `simulated` (true for the in-process backend) and, for a frozen bake, `lockfile`: the path of the lockfile it baked against, as given (`--lockfile PATH` or the table's `lockfile`, else `build/tundravm.lock`).
+- `--verify-reproducible` bakes the same selection a second time into `BUILD/.reproduce`, against the same lockfile and the same `BUILD/.sources` checkouts (hard-linked there, so nothing is fetched again; mkosi's state is not shared, so the second build compiles and builds everything, tools tree included), then compares every artifact's sha256. The first build's `bake-result.json` is complete (artifacts, digests, the `declarative` block) before the second build starts, so a failed or interrupted second build never loses it. Its `declarative.reproducibility` (absent when the check did not run) is rewritten atomically at each step as `{"state", "second_build", "differ", "error"}`: `running` while the second build runs, then `matched` (`second_build` is `null`: it was removed), `different` (`differ` lists the `variant/target` artifacts that differ, `second_build` is `.reproduce`, relative to `BUILD`), `error` (the second build failed; `error` holds the exception's first line) or `interrupted` (Ctrl-C). `status` shows it on each artifact line and `evidence` checks it. When all match the summary is followed by `reproducible: yes (N artifacts match a second build)`. A mismatch keeps the second build and fails with `E_REPRODUCIBILITY` and exit 1 (a completed comparison with a negative result; a second build that fails to run exits 2 with its own error), a table per artifact and a hint naming `tundravm diff` and the usual causes:
 
   ```console
   $ tundravm bake node.py --verify-reproducible -q
@@ -600,13 +616,13 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
     variant  target  first         second
     default  azure   0c5b4a2e9f13  0c5b4a2e9f13  match
     default  qemu    1fa043adea90  6d2e81c4b7a0  mismatch
-  Hint: The second build is kept in build/.reproduce. Compare the compiled trees with `tundravm diff RECIPE --against build/.reproduce/mkosi` and the images with diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and packages installed without a snapshot (Recipe(snapshot=...)).
+  Hint: The second build is kept in build/.reproduce. Compare the compiled trees with `tundravm diff RECIPE --tree build/.reproduce/mkosi` and the images with diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and packages installed without a snapshot (Recipe(snapshot=...)).
     second_build: build/.reproduce
     differ: default/qemu
   [exit 2]
   ```
 
-  With the Lima backend the second build runs in its own VM (the instance name hashes the tree path). `clean --state` removes a kept `OUT/.reproduce`.
+  With the Lima backend the second build runs in its own VM (the instance name hashes the tree path). `clean --state` removes a kept `BUILD/.reproduce`.
 - After the build, `bake` reads the compiled tree for its digest. A path it cannot read (a root-owned leftover, say) is skipped with a `warning` line instead of failing the bake, and mkosi's state next to its config (`mkosi.tools`, `mkosi.cache`, `mkosi.builddir`, ...) is never tree content; `diff` and `compile --check` ignore it too.
 
 ### Local backend
@@ -616,20 +632,20 @@ next: tundravm deploy build/bake-result.json --variant default --target qemu
 ```
 variant  target  artifact                          size      sha256        time
 default  qemu    build/default/output/default.efi  47.2 MiB  b0be0e718b25  1m24s
-next: tundravm deploy build/bake-result.json --variant default --target qemu
+next: tundravm deploy qemu --variant default
 ```
 
-- A bootable variant's artifact is the UKI `OUT/<variant>/output/<variant>.efi`, next to the other files mkosi writes there; `bake-result.json` records it with its sha256.
-- mkosi's workspace, package cache and tools tree live in `OUT/.mkosi/` (`workspace/`, `cache/`, `mkosi.tools`), never in the compiled tree. A recipe that sets `WorkspaceDirectory` or `CacheDirectory` keeps its own.
-- Under `sudo`, what mkosi wrote (`OUT/<variant>/output/`, `OUT/.mkosi/`) is chowned back to you, so the build directory holds no root-owned files. If that fails, a `warning` names the `sudo chown -R UID:GID OUT` to run.
+- A bootable variant's artifact is the UKI `BUILD/<variant>/output/<variant>.efi`, next to the other files mkosi writes there; `bake-result.json` records it with its sha256.
+- mkosi's workspace, package cache and tools tree live in `BUILD/.mkosi/` (`workspace/`, `cache/`, `mkosi.tools`), never in the compiled tree. A recipe that sets `WorkspaceDirectory` or `CacheDirectory` keeps its own.
+- Under `sudo`, what mkosi wrote (`BUILD/<variant>/output/`, `BUILD/.mkosi/`) is chowned back to you, so the build directory holds no root-owned files. If that fails, a `warning` names the `sudo chown -R UID:GID BUILD` to run.
 - mkosi builds a UKI with the host's `ukify`, and reads the installed kernel with Python's `pefile` in any build that is not `Bootable=no` (directory builds included), unless it uses a tools tree. When the host lacks one of them (`pefile` is probed under the Python that runs mkosi) and the recipe sets no `ToolsTree`, the backend adds `--tools-tree=default` for that variant to the mkosi command (the compiled tree is unchanged) and says so on a `note` line, which `-q` hides:
 
   ```
   [default] note ukify not found on the host; building with mkosi's default tools tree (--tools-tree=default). Install systemd-ukify to use the host tools.
   ```
 
-- The first bake builds the tools tree; a later bake into the same `OUT` passes `--tools-tree=OUT/.mkosi/mkosi.tools` (the note then says `reusing` and the path) instead of building it again. In the run above, a second bake took 32s against 1m24s for the first.
-- An `azure` variant's postoutput script lays out a disk with `parted` and converts it to a VHD with `qemu-img`; a `gcp` variant's partitions a raw disk with `sgdisk` and packs it as a `tar.gz`. In a build with mkosi's default tools tree those scripts run inside it: the backend adds `--tools-tree-package=qemu-utils,gdisk,parted` and reuses a cached `OUT/.mkosi/mkosi.tools` only when it already holds `qemu-img`, `sgdisk` and `parted`, so the host needs none of them. Only a build on host tools needs `qemu-img` or `sgdisk` on the host; `bake` checks for them before mkosi runs and fails with `E_BACKEND_EXECUTION` (`Variant 'azure' needs `qemu-img` on the host for its cloud disk image.`, hint `install qemu-utils, or bake --variant default`).
+- The first bake builds the tools tree; a later bake into the same `BUILD` passes `--tools-tree=BUILD/.mkosi/mkosi.tools` (the note then says `reusing` and the path) instead of building it again. In the run above, a second bake took 32s against 1m24s for the first.
+- An `azure` variant's postoutput script lays out a disk with `parted` and converts it to a VHD with `qemu-img`; a `gcp` variant's partitions a raw disk with `sgdisk` and packs it as a `tar.gz`. In a build with mkosi's default tools tree those scripts run inside it: the backend adds `--tools-tree-package=qemu-utils,gdisk,parted` and reuses a cached `BUILD/.mkosi/mkosi.tools` only when it already holds `qemu-img`, `sgdisk` and `parted`, so the host needs none of them. Only a build on host tools needs `qemu-img` or `sgdisk` on the host; `bake` checks for them before mkosi runs and fails with `E_BACKEND_EXECUTION` (`Variant 'azure' needs `qemu-img` on the host for its cloud disk image.`, hint `install qemu-utils, or bake --variant default`).
 - Source builds and built kernels are fetched on the host and mounted into the build (see [Fetch](#fetch) and [Bake](#bake)).
 
 Measured on this host (Ubuntu 24.04, mkosi 26, no `ukify`, so every build used the default tools tree) with the `init` templates as written:
@@ -672,10 +688,10 @@ A missing `ukify` or `pefile` needs no action, since the backend then adds the t
 
 ## Measure and deploy
 
-`measure MANIFEST` and `deploy MANIFEST` take `bake-result.json` or the directory holding it. Both hash the artifact first and fail with `E_ARTIFACT_CHANGED` when it is unreadable or no longer matches the sha256 the bake recorded:
+`measure` and `deploy` take no `RECIPE`: they read the `bake-result.json` in `--build DIR` (default: the `build` of `[tool.tundravm]`, else `build` beside its `pyproject.toml`, else `./build`) and pick the artifact of `--variant NAME`, which is required when the bake holds more than one variant. Both hash the artifact first and fail with `E_ARTIFACT_CHANGED` when it is unreadable or no longer matches the sha256 the bake recorded:
 
 ```console
-$ tundravm measure build --variant default --allow-placeholder
+$ tundravm measure --variant default --allow-placeholder
 error [E_ARTIFACT_CHANGED]: Artifact build/default/disk.qcow2 changed since the bake.
 Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to record the artifact it should be.
   variant: default
@@ -686,9 +702,9 @@ Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to re
 [exit 2]
 ```
 
-- `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. `--json` prints `artifact`, `artifact_digest`, `scheme`, `tool`, `values`, `variant`.
-- `measure --export-policy FILE` (rtmr only) also writes a verifier policy: `{"schema_version": 1, "scheme": "rtmr", "tool", "tool_version", "artifact": {"path", "sha256"}, "registers": {"RTMR0", "RTMR1", "RTMR2"}}` (`RTMR3` when measured). Missing `RTMR0`..`RTMR2` is `E_VALIDATION`; placeholder values are refused unless `--allow-placeholder`, and then carry a `"note"` that says they are placeholders. `Tdxs.from_policy(FILE)` turns it into a validator's `expected_measurements`.
-- `deploy --target` picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward` (`HOST:GUEST[,HOST:GUEST...]`); azure `storage_account` (required), `resource_group`, `location`, `vm_size`, `gallery`, `secure_boot`, `signed`; gcp `project` and `bucket` (required), `zone`, `machine_type`. `--attach` (qemu only, the same as `--param daemonize=false`) runs QEMU in the foreground with the serial console on the terminal: Ctrl-A X quits QEMU, Ctrl-A C toggles its monitor, and `deploy` prints its result once QEMU exits. Simulated artifacts are refused unless `--allow-simulated-artifact`.
+- `measure --scheme rtmr` (default) runs `measured-boot` or `dstack-mr`. Without one, or for `azure`/`gcp`, it fails unless `--allow-placeholder`, which prints digest-derived values under a `PLACEHOLDER` banner on stderr. Simulated artifacts always need `--allow-placeholder`. `--format json` prints `{"schema": "tundravm.measure/1", "artifact", "artifact_digest", "scheme", "tool", "values", "variant"}`; `--format markdown` a heading, a `Source:` line and a `Register`/`Value` table.
+- `measure --export-policy FILE` (rtmr only) also writes a verifier policy: `{"schema_version": 1, "scheme": "rtmr", "tool", "tool_version", "artifact": {"path", "sha256"}, "registers": {"RTMR0", "RTMR1", "RTMR2"}}` (`RTMR3` when measured). Missing `RTMR0`..`RTMR2` is `E_VALIDATION`; placeholder values are refused unless `--allow-placeholder`, and then carry a `"note"` that says they are placeholders. It is the dict `Measurements.to_policy()` returns, and `Tdxs.from_policy(FILE)` turns it into a validator's `expected_measurements`.
+- `deploy TARGET` (`qemu`, `azure` or `gcp`) picks the artifact of that target. `--param` keys are the target's settings: qemu `memory`, `cpus`, `ssh_port`, `tdx`, `daemonize`, `forward` (`HOST:GUEST[,HOST:GUEST...]`); azure `storage_account` (required), `resource_group`, `location`, `vm_size`, `gallery`, `secure_boot`, `signed`; gcp `project` and `bucket` (required), `zone`, `machine_type`. `--attach` (qemu only, the same as `--param daemonize=false`) runs QEMU in the foreground with the serial console on the terminal: Ctrl-A X quits QEMU, Ctrl-A C toggles its monitor, and `deploy` prints its result once QEMU exits. Simulated artifacts are refused unless `--allow-simulated-artifact`.
 
 ### Attest
 
@@ -727,18 +743,18 @@ verdict: untrusted
 - Without `--validator` the output says `signature unchecked (no --validator)` and ends with a `note:` line; the verdict is never `trusted`.
 - A `simulator` issuer's quote is not a TDX quote: its registers come from the issuer's `metadata` reply (`(simulator, issuer metadata)` in the header), and its nonce check reads the quote's first 32 bytes followed by 32 zero bytes. Its verdict is at best `simulated`, which exits 1 unless `--allow-simulated`.
 - An unreachable issuer or validator, an issuer that replies with an `error` (`issuer error: tdx: failed to get raw quote: ...`), or a validator that cannot judge (`validator not configured`, a reply without `data.valid`) is `E_ATTESTATION`; a reply that is not a TDX quote is `E_MEASUREMENT`; a placeholder policy is refused with `E_MEASUREMENT`; a bad `--nonce` or policy file is `E_VALIDATION`.
-- `--format json` prints `{"checks", "issuer", "validator", "signature_status": "valid"|"invalid"|"unchecked", "validator_error", "nonce": {"value", "report_data", "expected_report_data", "verdict"}, "platform", "policy", "quote_version", "registers": {NAME: {"actual", "expected", "verdict"}}, "source": "quote"|"metadata", "reasons", "verdict", "trusted", "passed"}` with sorted keys; `--format markdown` a table of the registers under the verdict.
+- `--format json` prints `{"schema": "tundravm.attest/1", "checks", "issuer", "validator", "signature_status": "valid"|"invalid"|"unchecked", "validator_error", "nonce": {"value", "report_data", "expected_report_data", "verdict"}, "platform", "policy", "quote_version", "registers": {NAME: {"actual", "expected", "verdict"}}, "source": "quote"|"metadata", "reasons", "verdict", "trusted", "passed"}` with sorted keys; `--format markdown` a table of the registers under the verdict.
 
 ### Deploying to each target
 
 A successful `deploy` means the target accepted the image: QEMU started, or the cloud created the VM. It does not mean the image booted, that its services run, or that it attests; each sequence below ends with those checks. These sequences have not been run end to end against QEMU, Azure or GCP: the command lines and the `deploy` output below are what the adapters in `src/tundravm/deploy/` run and print, captured with their tool calls stubbed out, and the checks after `deploy` are the platforms' own commands.
 
-**QEMU.** Needs `qemu-system-x86_64` on `PATH` and KVM (`/dev/kvm`: the adapter always passes `-machine q35,accel=kvm -cpu host`). A bootable variant bakes to a UKI (`.efi`), which boots with `-kernel` on OVMF firmware: `OVMF_CODE.fd` (or `OVMF_CODE_4M.fd`) under `/usr/share/OVMF`, `/usr/share/edk2/ovmf` or `/usr/share/qemu`, plus a copy of the matching `OVMF_VARS` file made once at `OUT/<variant>/qemu-ovmf-vars.fd`, since the guest writes its variables there. A `.qcow2`, `.vhd` or raw disk boots as a virtio drive instead.
+**QEMU.** Needs `qemu-system-x86_64` on `PATH` and KVM (`/dev/kvm`: the adapter always passes `-machine q35,accel=kvm -cpu host`). A bootable variant bakes to a UKI (`.efi`), which boots with `-kernel` on OVMF firmware: `OVMF_CODE.fd` (or `OVMF_CODE_4M.fd`) under `/usr/share/OVMF`, `/usr/share/edk2/ovmf` or `/usr/share/qemu`, plus a copy of the matching `OVMF_VARS` file made once at `BUILD/<variant>/qemu-ovmf-vars.fd`, since the guest writes its variables there. A `.qcow2`, `.vhd` or raw disk boots as a virtio drive instead.
 
 ```console
 $ tundravm bake image.py --variant default --backend local
-$ tundravm measure build --variant default --export-policy peer.json
-$ tundravm deploy build --variant default --target qemu --param memory=4G --param cpus=4 --param ssh_port=2222
+$ tundravm measure --variant default --export-policy peer.json
+$ tundravm deploy qemu --variant default --param memory=4G --param cpus=4 --param ssh_port=2222
 deployed default to qemu
   deployment     qemu-default-030a44c0
   endpoint       ssh://localhost:2222
@@ -768,7 +784,7 @@ qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -no-reboot
 ```
 
 - The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's port 22. Every port a `Secrets` of the variant listens on (recorded by the bake in `bake-result.json`) is forwarded from the same host port, so the host can deliver secrets to `localhost:8080`; `--param forward=HOST:GUEST,...` adds forwards, and one naming a `Secrets` port as its guest port replaces that default (`forward=18080:8080`). Two forwards on one host port are refused.
-- QEMU detaches by default (`daemonize=true`): the serial console goes to `serial_log` (`tail -f build/default/qemu-serial.log`), the monitor listens on the `monitor` socket (`socat - UNIX-CONNECT:build/default/qemu.monitor`, then `info status` or `quit`) and the pid to `pidfile` (`kill "$(cat build/default/qemu.pid)"`). The three live in `OUT/<variant>`, so a second `deploy` of a variant that is still running fails on its pid file. The socket path must fit a unix socket (107 bytes), or `deploy` fails before starting QEMU. `--attach` keeps QEMU in the foreground instead, with `-nographic -serial mon:stdio` and no log, socket or pid file.
+- QEMU detaches by default (`daemonize=true`): the serial console goes to `serial_log` (`tail -f build/default/qemu-serial.log`), the monitor listens on the `monitor` socket (`socat - UNIX-CONNECT:build/default/qemu.monitor`, then `info status` or `quit`) and the pid to `pidfile` (`kill "$(cat build/default/qemu.pid)"`). The three live in `BUILD/<variant>`, so a second `deploy` of a variant that is still running fails on its pid file. The socket path must fit a unix socket (107 bytes), or `deploy` fails before starting QEMU. `--attach` keeps QEMU in the foreground instead, with `-nographic -serial mon:stdio` and no log, socket or pid file.
 - `tdx=true` boots TDVF, OVMF built with TDX support, through `-bios` (a TDX guest cannot run firmware from pflash): `/usr/share/ovmf/OVMF.fd`, `/usr/share/edk2/ovmf/OVMF.inteltdx.fd`, `/usr/share/OVMF/OVMF.fd` or `/usr/share/qemu/OVMF.fd`, the first found. It replaces the two pflash drives above with `-bios /usr/share/ovmf/OVMF.fd` and passes `-machine q35,accel=kvm,kernel-irqchip=split,confidential-guest-support=tdx0 -object tdx-guest,id=tdx0`, which needs a TDX host (kernel, KVM and QEMU with TDX support).
 - Checks: `ssh -p 2222 root@localhost` once the image's `sshd` has a key for you (boot), `systemctl status` of your services there (application), and the quote checked against `peer.json` with `tundravm attest --issuer unix:./tdxs.sock --validator ENDPOINT --policy peer.json` after forwarding the image's `/var/tdxs.sock` (see [Attest](#attest)), or by a verifier built with `Tdxs.from_policy("peer.json")`, which also verifies the collateral (attestation; needs `tdx=true` on a TDX host).
 
@@ -776,7 +792,7 @@ qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -no-reboot
 
 ```console
 $ tundravm bake image.py --variant azure --backend local
-$ tundravm deploy build --variant azure --target azure --param storage_account=mystorage
+$ tundravm deploy azure --variant azure --param storage_account=mystorage
 deployed azure to azure
   deployment      azure-azure-336db4ce
   endpoint        azure://tdx-vms/tdx-azure-6fdd87
@@ -817,7 +833,7 @@ az vm create --resource-group tdx-vms --name tdx-azure-<6 hex> --location eastus
 
 ```console
 $ tundravm bake image.py --variant gcp --backend local
-$ tundravm deploy build --variant gcp --target gcp --param project=my-project --param bucket=my-bucket
+$ tundravm deploy gcp --variant gcp --param project=my-project --param bucket=my-bucket
 deployed gcp to gcp
   deployment     gcp-gcp-ef5e8a92
   endpoint       gcp://my-project/us-central1-a/tdx-gcp-c95cfe
@@ -845,9 +861,9 @@ A C3 instance has a gVNIC network interface and NVMe disks, so the image's kerne
 
 ## SBOM
 
-`tundravm sbom MANIFEST --variant NAME` (or `--out DIR` instead of `MANIFEST`; default `build`) says what one baked variant contains, merged from three sources into one document:
+`tundravm sbom --variant NAME` reads the bake in `--build DIR` (default: the `build` of `[tool.tundravm]`, else `build` beside its `pyproject.toml`, else `./build`) and says what one baked variant contains, merged from three sources into one document:
 
-- **Packages**: the JSON package manifest mkosi writes next to the artifact (`ManifestFormat=json` is emitted for every variant, so a real bake leaves `OUT/<variant>/output/<variant>.manifest`; `<variant>.manifest.json` is read too). Each distribution package with its version and architecture, plus its repository when the manifest records one (mkosi 26 does not). Without a manifest, as after an in-process bake, the document says so (a `note:` line, `creationInfo.comment`, CycloneDX `metadata.properties`) and lists the packages the recipe declares, unversioned.
+- **Packages**: the JSON package manifest mkosi writes next to the artifact (`ManifestFormat=json` is emitted for every variant, so a real bake leaves `BUILD/<variant>/output/<variant>.manifest`; `<variant>.manifest.json` is read too). Each distribution package with its version and architecture, plus its repository when the manifest records one (mkosi 26 does not). Without a manifest, as after an in-process bake, the document says so (a `note:` line, `creationInfo.comment`, CycloneDX `metadata.properties`) and lists the packages the recipe declares, unversioned.
 - **Sources**: the lockfile's pins for the variant: each source build (`<variant>/<name>` when pinned per variant) with its URL, ref, commit and the paths its `Install` steps write; the built kernel (`kernel`, `kernel-<variant>`); the `EfiStub` package (`efi-stub`) with its URL and sha256. `--lockfile FILE` names the lockfile; by default it is the one the bake recorded in `bake-result.json`, else `tundravm.lock` in the bake directory. Without one, sources are not listed.
 - **Metadata**: variant, base, arch, snapshot and mirror (from the lockfile's `distribution` section, else the manifest's `config`), the recipe, tree and artifact digests from `bake-result.json`, the artifact and manifest paths relative to the bake directory (moving `build/` elsewhere gives the same document), `bound` and the tundravm version.
 
@@ -863,7 +879,7 @@ The document is bound to the bake. `sbom` first hashes the artifact and fails wi
 Package URLs: `pkg:deb/debian/NAME@VERSION?arch=ARCH&distro=debian-trixie` for a package (the base with `/` as `-`; `rpm`/`alpm` for those manifests), `pkg:generic/NAME@COMMIT?vcs_url=git+URL@REF` for a git source and `pkg:generic/NAME@SHA256?checksum=sha256:SHA256&download_url=URL` for an http one, percent-encoded in the canonical form (`+` is `%2B`, `@` inside a qualifier `%40`). Every list is sorted and the document ids are derived from the content, so the same bake gives the same document; only the creation time changes, and `SOURCE_DATE_EPOCH` fixes it. Notes go to stderr as well for the JSON formats and with `--output FILE`, which writes the document instead of printing it. `--allow-unbound` accepts a lockfile or manifest the bake did not record (see above).
 
 ```console
-$ tundravm sbom build --variant default --format text
+$ tundravm sbom --variant default --format text
 sbom default
   variant          default
   base             debian/trixie
@@ -878,22 +894,24 @@ sources (5)
   NAME      KIND      PIN                                       REF     URL                                         INSTALLS
   tdxs      build     cbc33ec538aaa60e54e2e889eacebb9b0c5ab479  master  https://github.com/Hyodar/tundra-tools.git  /usr/bin/tdxs
   efi-stub  efi-stub  25b7576d142c...                           -       https://snapshot.debian.org/archive/...     -
-$ tundravm sbom build --variant default --output build/default.spdx.json
+$ tundravm sbom --variant default --output build/default.spdx.json
 wrote spdx-json build/default.spdx.json
 ```
 
 ## Evidence
 
-`tundravm evidence [RECIPE]` gathers what an auditor asks about a bake into `OUT/evidence/` (`--out DIR`, default `build`, the directory holding `bake-result.json`), for every baked variant or the `--variant` names (a variant that was not baked is an `E_STATE` error):
+`tundravm evidence [RECIPE]` gathers what an auditor asks about a bake into `BUILD/evidence/` (`--build DIR`, default `build`, the directory holding `bake-result.json`), for every baked variant or the `--variant` names (a variant that was not baked is an `E_STATE` error):
 
 | Member | Holds |
 |---|---|
-| `evidence.json` | The index: `schema_version`, `created` (ISO 8601 UTC; `SOURCE_DATE_EPOCH` when set), `recipe` (`name`, `path`, `file_sha256`, `digest` now, `baked_digest` the bake recorded, `matches_bake`), `bake` (`path`, `backend`, `simulated`, `reproducibility`: the recorded state object or `null`), `lockfile` (`source`, `version`, `compiler_version`, `recipe_digest`, `sha256`, `recorded_sha256` (the `lock_sha256` the bake recorded), `bound`, `drift`, `verdict`: `current` or `drifted`; `null` without one), `lint` (`errors`, `warnings`, `infos`, `codes`), `tools` (`tundravm`, `python`, `mkosi` as `mkosi --version` prints it on this host, `null` when absent), per variant its `artifacts` (`target`, `path`, `size`, `sha256`, `integrity`: `verified`, `mismatch` or `missing`, `simulated`), `tree_digest`, `tree_matches`, `reproducibility` (the state `bake --verify-reproducible` recorded for the variant: `matched`, `different`, `running`, `error`, `interrupted`, or `null` when not checked), `policy`, `sbom` (per artifact: `target`, `member`, `packages`, `sources`, `manifest_found`, `bound`; an artifact that changed or is gone gets no SBOM, and a note) and `provenance` (declarations per fragment and resolution actions: `declared`, `added`, `replaced`, `removed`), the `verdict`, the `notes` and `members` (`sha256` and `size` of every other file) |
+| `evidence.json` | The index: `schema` (`tundravm.evidence/1`), `schema_version`, `created` (ISO 8601 UTC; `SOURCE_DATE_EPOCH` when set), `recipe` (`name`, `path`, `file_sha256`, `digest` now, `baked_digest` the bake recorded, `matches_bake`), `bake` (`path`, `backend`, `simulated`, `reproducibility`: the recorded state object or `null`), `lockfile` (`source`, `version`, `compiler_version`, `recipe_digest`, `sha256`, `recorded_sha256` (the `lock_sha256` the bake recorded), `bound`, `drift`, `verdict`: `current` or `drifted`; `null` without one), `lint` (`errors`, `warnings`, `infos`, `codes`), `tools` (`tundravm`, `python`, `mkosi` as `mkosi --version` prints it on this host, `null` when absent), per variant its `artifacts` (`target`, `path`, `size`, `sha256`, `integrity`: `verified`, `mismatch` or `missing`, `simulated`), `tree_digest`, `tree_matches`, `reproducibility` (the state `bake --verify-reproducible` recorded for the variant: `matched`, `different`, `running`, `error`, `interrupted`, or `null` when not checked), `policy`, `sbom` (per artifact: `target`, `member`, `packages`, `sources`, `manifest_found`, `bound`; an artifact that changed or is gone gets no SBOM, and a note) and `provenance` (declarations per fragment and resolution actions: `declared`, `added`, `replaced`, `removed`), the `verdict`, the `notes` and `members` (`sha256` and `size` of every other file) |
 | `bake-result.json` | The bake manifest, verbatim |
-| `tundravm.lock` | The lockfile, verbatim: `--lockfile FILE`, else the one the bake recorded, else `OUT/tundravm.lock` |
+| `tundravm.lock` | The lockfile, verbatim: `--lockfile FILE`, else the one the bake recorded, else `BUILD/tundravm.lock` |
 | `lint.json` | Every lint diagnostic of the selected variants, with the lockfile's pins applied |
 | `variants/<variant>/sbom-<target>.spdx.json` | The SPDX 2.3 SBOM of each verified artifact, as `tundravm sbom` writes it |
-| `variants/<variant>/policy.json` | The measurements policy: `--policy FILE` for every selected variant, else `OUT/<variant>/policy.json` when it exists; the index says whether it is a placeholder and whether its `artifact.sha256` is the artifact's |
+| `variants/<variant>/policy.json` | The measurements policy: `--policy FILE` for every selected variant, else `BUILD/<variant>/policy.json` when it exists; the index says whether it is a placeholder and whether its `artifact.sha256` is the artifact's |
+| `variants/<variant>/tree.json` | Every entry of the variant's compiled tree as the recipe compiles now (`schema` `tundravm.tree/1`): `files`, each with `path` (relative to the variant's directory), `type` (`file`, `symlink`, `directory`), `mode` (octal, as the tree digest sees it: `0755` or `0644` by exec bit), `sha256` and `size` for a file, `target` for a symlink; `variant_digest` over those rows, `tree_digest` and `compiled_variants` of the whole tree compiled for the baked variants (what the bake records when `tree_matches`). `changes` compares it with the current tree |
+| `evidence.json.sig` | With `--sign KEY` only: the SSH signature of the exact bytes of `evidence.json` (`ssh-keygen -Y sign -n tundravm-evidence`); it covers every member through their sha256 in the index. It is not listed in `members`, and an unsigned run removes a previous run's |
 
 The `verdict` holds each check's state: `integrity` (`verified` when every artifact still hashes to the sha256 the bake recorded, else `mismatch` or `missing`), `lock` (`current`, `drifted` or `missing`), `reproducible` (`matched`, `different`, `running`, `error`, `interrupted` or `not checked`), `lint` (`clean`, `warnings` or `errors`), `recipe` and `tree` (`matches`, `changed` or `unknown`), `policy` (`verified`, `invalid`, `placeholder`, `mismatch`, `unbound` or `missing`), `artifacts` (`real` or `simulated`), `required` (the `--require` names), `reasons` and `overall`. Each reason is `{"severity", "code", "subject", "message"}`; `subject` is a variant, a `variant/target` or `null`. `overall` is `fail` when any reason is a contradiction, `incomplete` when the only reasons are required checks that are missing, else `pass`; `evidence` exits 1 unless it is `pass`.
 
@@ -920,14 +938,15 @@ Without `--require`, a missing check (no lockfile, no reproducibility check, no 
 
 | Flag | Effect |
 |---|---|
-| `--out DIR` | The bake output directory (default `build`, or `out` of `[tool.tundravm]`) |
+| `--build DIR` | The build directory (default: the `build` of `[tool.tundravm]`, else `build`) |
 | `--lockfile FILE` | The lockfile to record and check for drift |
 | `--policy FILE` | A `measure --export-policy` file for every selected variant |
 | `--bundle FILE` | Also write a deterministic `tar.gz`: members sorted under `evidence/`, owned by `0:0` with mode `0644`, every mtime (and the gzip header's) `SOURCE_DATE_EPOCH`, else 0, so two runs over the same bake with the same `SOURCE_DATE_EPOCH` give the same bytes |
 | `--html FILE` | Also write one self-contained HTML page (inline CSS, no scripts or external assets, every value escaped): a verdict banner (integrity, lock, reproducible, lint, recipe, tree, policy) listing every reason, the recipe, lockfile, lint and tools tables, a section per variant (artifacts, policy, SBOM, provenance), the notes and the members with their sha256 |
-| `--format text\|json` | How the index is printed: a summary with every member's sha256 (default), or `evidence.json` itself |
+| `--format text\|json` | How the index is printed: a summary with every member's sha256 (default), or `evidence.json` itself, verbatim (it carries `"schema": "tundravm.evidence/1"`) |
 | `--allow-unbound` | Record a lockfile that does not hash to the `lock_sha256` the bake recorded, and SBOMs over an unbound lockfile or manifest, instead of failing with `E_ARTIFACT_CHANGED`; adds the `incomplete` reasons `lock-unbound` and `sbom-unbound` |
 | `--require LIST` | Comma-separated checks that must be present: `reproducible` (a recorded `matched` second build), `measured` (a valid, non-placeholder policy bound to each artifact), `real` (no simulated artifact), `lock` (a lockfile). A missing one is an `incomplete` reason (exit 1) instead of a note |
+| `--sign KEY` | Sign `evidence.json` with the SSH private key `KEY` (`ssh-keygen -Y sign -f KEY -n tundravm-evidence`; a key without a passphrase, or a `.pub` whose private key is in `ssh-agent`) and write `evidence.json.sig` beside it and into `--bundle`. Without `ssh-keygen` on `PATH` it fails with `E_STATE` and a hint; a key it cannot use fails with `E_VALIDATION` |
 
 After the [tutorial](tutorial.md)'s bake and `bake --verify-reproducible` (three variants, no `policy.json` beside them):
 
@@ -986,6 +1005,105 @@ members:
 [exit 1]
 ```
 
+## Verify
+
+`tundravm verify EVIDENCE` checks what `evidence` wrote without the recipe, the checkout or the bake directory: `EVIDENCE` is the `--bundle` file, the `BUILD/evidence` directory or its `evidence.json`. A bundle is read in memory (nothing is extracted, a member outside `evidence/` or that is not a plain file fails the check) and a directory is walked without following links. Each check is `pass`, `fail` or `missing`; `verify` exits 0 only when every one passes.
+
+| Check | Passes when | Reason code otherwise |
+|---|---|---|
+| `member` | Every member hashes to the `sha256` (and has the `size`) the index lists | `member-hash-mismatch` (fail), `member-missing` (missing); a file the index does not list is `index-inconsistent` |
+| `index` | The index agrees with its members: the lockfile hashes to the index's `lockfile.sha256` and, as its `bound` says, to the `lock_sha256` `bake-result.json` records; each artifact sha256 is the one `bake-result.json` records; each SBOM describes (its image package's SHA256 checksum) the artifact sha256 the index lists; each policy's `artifact.sha256`, placeholder flag and registers are what the index says; each `tree.json`'s rows hash to its `variant_digest`, all variants' rows to its `tree_digest`, and that agrees with `tree_matches` | `index-inconsistent` |
+| `artifact` | With `--artifacts DIR`: each artifact found under `DIR` (at its path in `bake-result.json`, `<variant>/<target>/<file>`, `<variant>/<file>`, or `<file>` when no other artifact has that name) hashes to the index's sha256 | `artifact-hash-mismatch` (fail), `artifact-missing` (missing) |
+| `signature` | With `--allowed-signers FILE`: `evidence.json.sig` verifies over `evidence.json` with `ssh-keygen -Y verify -n tundravm-evidence` for `--signer PRINCIPAL`, else for the principals `FILE` lists for the signing key (`ssh-keygen -Y find-principals`) | `signature-invalid` (fail), `signature-missing` (missing: the evidence is unsigned) |
+| `verdict` | The stored verdict is the one the recorded facts give (recomputed as `evidence` computes it), and those facts give `pass` under the recorded and the `--require` requirements | `index-inconsistent` for a stored verdict the facts do not give; otherwise each reason with the [evidence code](#evidence) it has there (`fail` reasons fail, `incomplete` ones are missing) |
+
+Without `--allowed-signers` the signature is not checked and a note says so: `unsigned` (no `evidence.json.sig`) or `signature-unchecked`; without `--artifacts`, `artifacts-unchecked`. `--format json` prints `{"schema": "tundravm.verify/1", "evidence", "verdict", "passed", "counts", "required", "signer", "recorded": {"created", "recipe", "verdict"}, "checks": [{"kind", "subject", "state", "code", "message"}], "notes": [{"code", "message"}]}`; `verdict` is `fail` when a check failed, `incomplete` when one is missing, else `pass`. `--html FILE` also writes one self-contained page: the verdict banner with the counts, the problems, every check and the notes.
+
+Signing a release's evidence and checking it elsewhere, with a throwaway key:
+
+```console
+$ ssh-keygen -q -t ed25519 -N '' -C release -f release-key
+$ echo "release@example.com namespaces=\"tundravm-evidence\" $(cat release-key.pub)" > allowed_signers
+$ SOURCE_DATE_EPOCH=1700000000 tundravm evidence node.py --sign release-key --bundle v1.tar.gz
+wrote build/evidence
+signed evidence.json with release-key: evidence.json.sig
+wrote v1.tar.gz
+$ tundravm verify v1.tar.gz --allowed-signers allowed_signers --artifacts build
+verify v1.tar.gz  verdict pass  (13 pass, 0 fail, 0 missing)
+  evidence   2023-11-14T22:13:20Z  recipe node  recorded verdict pass
+  member     5/5 pass
+  index      4/4 pass
+  artifact   1/1 pass
+  signature  1/1 pass, signed by release@example.com
+  verdict    2/2 pass
+[exit 0]
+```
+
+The same evidence directory with a byte appended to `lint.json`, `tree.json` deleted, the stored `verdict.lint` edited, and an artifact copy with a byte appended:
+
+```console
+$ tundravm verify tampered --allowed-signers allowed_signers --artifacts artifacts --require reproducible
+verify tampered  verdict fail  (6 pass, 4 fail, 2 missing)
+  evidence   2023-11-14T22:13:20Z  recipe node  recorded verdict pass
+  member     3/5 pass
+  index      3/3 pass
+  artifact   0/1 pass
+  signature  0/1 pass
+  verdict    0/2 pass
+  required   reproducible
+problems:
+  fail     member-hash-mismatch  lint.json: sha256 b07781657559, the index lists 37517e5f3dc6
+  missing  member-missing  variants/default/tree.json: listed in the index, not in the evidence
+  fail     artifact-hash-mismatch  default/qemu: artifacts/default/disk.qcow2 hashes to 19480efbd829, the index lists 1fa043adea90
+  fail     signature-invalid  evidence.json.sig: does not verify against allowed_signers: Signature verification failed: incorrect signature
+  fail     index-inconsistent  recorded: the recorded verdict disagrees with the recorded facts: lint errors (facts: clean)
+  missing  reproducibility-unchecked  default: reproducibility of default was not checked (bake --verify-reproducible) (required: reproducible)
+[exit 1]
+```
+
+## Changes
+
+`tundravm changes [RECIPE] --since EVIDENCE` compares a previous release's evidence (a bundle or directory, as `verify` reads it) with the recipe and lockfile as they are now, for the evidence's variants the recipe still declares (`--variant` picks some; a variant on one side only is reported as added or removed). It compiles the current tree once, reads nothing from the network and exits 0.
+
+| Section | Compares |
+|---|---|
+| Recipe and tree | The recipe digest (`recipe.digest` of the index against the recipe now) and each variant's `variant_digest` (its `tree.json` against the current tree) |
+| Lockfile sections | The section digests of the evidence's `tundravm.lock` against the current lockfile's (`--lockfile`, default `build/tundravm.lock` when it exists; without one, against the recipe's sections now), named as [lock drift](#lockfile-drift) names them, with the same item detail (`+htop -jq`, `~/etc/motd`); other variants' sections are left out |
+| Source pins | Each pin by name (or URL): `ref`, then the old and new commit or sha256; pins only one side has are added or removed |
+| Packages | The packages each variant's SBOM in the evidence lists against the current ones: the SBOM of the bake in `--build DIR` (mkosi's manifest, with versions) when given, else the packages the recipe declares, unversioned (a note says so). Added and removed by name; a version change only when both sides have versions |
+| Emitted files | Each variant's `tree.json` rows against the current tree: added, removed and changed files (`content`, `mode 0644 -> 0755`, a type or symlink target), each added or changed file under `mkosi.extra` or `mkosi.skeleton` with the declarations that produce it, as `inspect --why` finds them (the first 25; a note says when more were left unexplained) |
+| Measurements | The registers of the evidence's `policy.json` against `BUILD/<variant>/policy.json` of `--build DIR`, when both exist |
+
+Text groups the changes by section with a count line per section, then `+`, `-` or `~` lines; `--format markdown` is a heading, a count table and one table per non-empty section, with the notes folded in a `<details>` block, ready to paste into a pull request; `--format json` prints `{"schema": "tundravm.changes/1", "since", "created", "recipe", "variants", "counts", "changes": [{"section", "change", "subject", "variant", "old", "new", "detail", "origins"}], "notes"}`. Evidence made before `tree.json` existed gives no file comparison, with a note.
+
+After the signed release above, swapping `jq` for `htop` and changing `/etc/motd`, then locking again:
+
+```console
+$ tundravm changes node.py --since v1.tar.gz
+changes since evidence 2023-11-14T22:13:20Z (v1.tar.gz)  recipe node  variants default
+  recipe        2
+  lockfile      2
+  pins          0
+  packages      2
+  files         2
+  measurements  0
+recipe (2):
+  ~ recipe digest  11901e376769 -> 1417b0ce38ee
+  ~ default tree  d2776de270d1 -> 1eeb3a76e374
+lockfile (2):
+  ~ variants.default.files  (~/etc/motd)
+  ~ variants.default.packages  (+htop -jq)
+packages (2):
+  + default  htop
+  - default  jq
+files (2):
+  ~ default  mkosi.conf  (content)
+  ~ default  mkosi.extra/etc/motd  (content)  from File(extra, /etc/motd) (declared in common)
+note: current packages are the recipe's declared ones, unversioned (pass --build DIR for the versions a bake installed)
+note: default: package versions are not compared where the evidence has none
+[exit 0]
+```
+
 ## Watch
 
 `tundravm watch RECIPE` keeps the edit loop short. Every `--interval SECONDS` (default `1`) it polls the mtime and size of everything the verdict depends on:
@@ -993,12 +1111,12 @@ members:
 - the recipe file and every `.py` under its directory (hidden directories, `__pycache__`, installed packages and the build output are left out);
 - every host path the recipe's declarations read ([`recipe_inputs`](api.md#recipe-inputs)): `File`, `Unit` and `Template` sources given as a `Path`, `Kernel.config`, the policy file of a `Tdxs.from_policy`, and each `Directory` source tree, entry by entry, so adding, removing or editing a member counts;
 - the selected lockfile (so `tundravm lock` in another terminal refreshes the drift counts);
-- `pyproject.toml`, whose `[tool.tundravm]` table is read again on every check (flags still win), so changing `tree`, `out` or `lockfile` there retargets the watch;
+- `pyproject.toml`, whose `[tool.tundravm]` table is read again on every check (flags still win), so changing `tree`, `build` or `lockfile` there retargets the watch;
 - the checked tree, entry by entry, so an external `tundravm compile` refreshes the verdict. What `--write` itself writes does not count as a change.
 
-A recipe that fails to load keeps the inputs of the last one that loaded. It checks once at start, then once per change: the recipe is loaded again (modules it imports from its directory are re-imported from their current source), linted as `tundravm lint` lints it, and compared with `OUT/mkosi` (`--out`, default `build`; without `--out`, a `[tool.tundravm]` `tree` replaces it) without writing, as `compile --check` does. The lockfile is chosen as `lint` chooses it: `--lockfile`, else a `[tool.tundravm]` `lockfile`, applies its pins and reports drift against it (`lock-changed` and the other [lock codes](#lockfile-drift)); with neither, `build/tundravm.lock` only pins the sources when it exists. So the counts are always `lint`'s.
+A recipe that fails to load keeps the inputs of the last one that loaded. It checks once at start, then once per change: the recipe is loaded again (modules it imports from its directory are re-imported from their current source), linted as `tundravm lint` lints it, and compared with the tree at `--tree DIR` (default: the `tree` of `[tool.tundravm]`, else `BUILD/mkosi`, where `--build DIR` defaults to `build`) without writing, as `compile --check` does. The build directory is left out of polling. The lockfile is chosen as `lint` chooses it: `--lockfile`, else a `[tool.tundravm]` `lockfile`, applies its pins and reports drift against it (`lock-changed` and the other [lock codes](#lockfile-drift)); with neither, `build/tundravm.lock` only pins the sources when it exists. So the counts are always `lint`'s.
 
-Each check prints one line, `HH:MM:SS lint N errors N warnings; TREE`, where `TREE` is `tree up to date`, `tree stale (N files)` or `tree missing (N files to write)`; with `--write` a stale tree is recompiled and the line ends `wrote OUT/mkosi`. When lockfile drift is every error, `; lock drifted (N sections)` comes before `TREE`. Two failures print a different single line, and `watch` keeps polling after both:
+Each check prints one line, `HH:MM:SS lint N errors N warnings; TREE`, where `TREE` is `tree up to date`, `tree stale (N files)` or `tree missing (N files to write)`; with `--write` a stale tree is recompiled into the `--tree` and the line ends `wrote TREE` (the tree's path). When lockfile drift is every error, `; lock drifted (N sections)` comes before `TREE`. Two failures print a different single line, and `watch` keeps polling after both:
 
 - Lint errors that keep the recipe from lowering, such as an error-level fragment check (`App`'s `app-privileged-port`), print `HH:MM:SS lint N errors (CODE: MESSAGE)` with the first error's code and message. No tree is checked.
 - A recipe that fails to load (a syntax or import error, an unknown `--variant`, an unreadable `--lockfile`) prints `HH:MM:SS error [E_CODE] message`.
@@ -1023,15 +1141,15 @@ watching node.py every 1s (Ctrl-C stops)
 | Line | Reports | Verdicts |
 |---|---|---|
 | `recipe` | path, recipe digest (as `inspect --format json`), variants, mkosi dialect, base and snapshot | `ok` |
-| `lint` | diagnostic counts by level, linted with the `lock` line's lockfile (no pins when it is missing or unreadable) | `ok`, `error` when there are errors |
+| `lint` | diagnostic counts by severity, linted with the `lock` line's lockfile (no pins when it is missing or unreadable) | `ok`, `error` when there are errors |
 | `lock` | `--lockfile` or the table's `lockfile` (default `build/tundravm.lock`; a configured one that does not exist reads `configured lockfile PATH does not exist; run tundravm lock`): present, version, drifted sections (as `lock --check`), unpinned sources and kernels | `ok`, `stale`, `missing` |
-| `source` | one per source build, built kernel and `EfiStub` package (`efi-stub`), by lock key: whether `OUT/.sources/<name>-<pin12>-<id8>` holds a complete, unmodified checkout of the locked pin (verified as `fetch` does) | `ok`, `stale` (another pin, an incomplete checkout, or one modified since the fetch: `checkout at PATH modified since the fetch (...); run tundravm fetch --force`), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
-| `tree` | `OUT/mkosi` (`--out`, default `build`) against what the recipe compiles to now, as `compile --check` | `ok`, `stale`, `missing` |
-| `artifact` | one per baked variant and target in `OUT/bake-result.json`: path, size, sha256 prefix, integrity (`unchecked`; with `--verify` the file is hashed: `verified` or `mismatch`), `reproducibility STATE` when `bake --verify-reproducible` recorded it (`"reproducibility": "matched"`, `"different"`, `"running"`, `"error"`, `"interrupted"` or `null` in JSON; `different` only for an artifact that differed), `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches, or on an integrity mismatch | `ok`, `stale`, `missing` |
+| `source` | one per source build, built kernel and `EfiStub` package (`efi-stub`), by lock key: whether `BUILD/.sources/<name>-<pin12>-<id8>` holds a complete, unmodified checkout of the locked pin (verified as `fetch` does) | `ok`, `stale` (another pin, an incomplete checkout, or one modified since the fetch: `checkout at PATH modified since the fetch (...); run tundravm fetch --force`), `missing`, `n/a` (unpinned; `nethermind-v1`; or the `inprocess` backend, which needs none) |
+| `tree` | the tree at `--tree` (default: the table's `tree`, else `BUILD/mkosi`) against what the recipe compiles to now, as `compile --check` | `ok`, `stale`, `missing` |
+| `artifact` | one per baked variant and target in `BUILD/bake-result.json` (`--build`, default `build`): path, size, sha256 prefix, integrity (`unchecked`; with `--verify` the file is hashed: `verified` or `mismatch`), `reproducibility STATE` when `bake --verify-reproducible` recorded it (`"reproducibility": "matched"`, `"different"`, `"running"`, `"error"`, `"interrupted"` or `null` in JSON; `different` only for an artifact that differed), `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches, or on an integrity mismatch | `ok`, `stale`, `missing` |
 | `manifest` | one per baked variant: mkosi's package manifest beside the artifact (`<variant>.manifest`), which `sbom` and `evidence` read | `ok`, `missing` (the SBOM lists the declared packages only), `n/a` (a simulated artifact: nothing was installed) |
 | `backend` | the recipe file's `backend` and how many of its host tools `doctor` finds | `ok`, `missing`, `n/a` (no backend) |
 
-`next` follows the lifecycle: `tundravm lint` when there are errors, else `tundravm lock`, `tundravm fetch`, `tundravm compile --out OUT/mkosi`, `tundravm bake` (or `tundravm doctor` when the backend lacks a tool), and `everything is up to date` once every line is `ok` or `n/a` (a `manifest` line does not change `next`). It repeats `--variant`, `--out` and `--lockfile` as given (values from `[tool.tundravm]` are left out, so a configured project gets `next: tundravm lock`); a checkout modified since the fetch makes it `tundravm fetch --force`. `status` always exits 0. `--format json` prints one object per section (`recipe`, `lint`, `lock`, `sources`, `tree`, `artifacts`, `backend`), each with a `verdict`, plus `manifests`, a list of `{"variant", "path", "present"}` per baked variant, and `next`; `sources` and `artifacts` hold `items`. `--format markdown` prints a table per section.
+`next` follows the lifecycle: `tundravm lint` when there are errors, else `tundravm lock`, `tundravm fetch --build DIR`, `tundravm compile --tree DIR`, `tundravm bake --build DIR` (or `tundravm doctor` when the backend lacks a tool), and `everything is up to date` once every line is `ok` or `n/a` (a `manifest` line does not change `next`). It repeats `--variant`, `--build` and `--lockfile` as given, and `--tree` unless the tree came from the table (values from `[tool.tundravm]` are left out, so a configured project gets `next: tundravm lock`); a checkout modified since the fetch makes it `tundravm fetch --force`. `status` always exits 0. `--format json` prints `"schema": "tundravm.status/1"` and one object per section (`recipe`, `lint`, `lock`, `sources`, `tree`, `artifacts`, `backend`), each with a `verdict`, plus `manifests`, a list of `{"variant", "path", "present"}` per baked variant, and `next`; `sources` and `artifacts` hold `items`. `--format markdown` prints a table per section.
 
 After `init --backend inprocess`, `lock` and `bake --backend inprocess`, adding a package to the recipe:
 
@@ -1061,7 +1179,7 @@ artifact  ok       dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  i
 next: tundravm bake node.py
 ```
 
-`tundravm clean RECIPE` (or `clean --out DIR` without a recipe) removes build output by part: `--sources` (`OUT/.sources`), `--tree` (`OUT/mkosi`), `--artifacts` (each `OUT/<variant>/` and `OUT/bake-result.json`), `--state` (`OUT/.mkosi`, which holds the cached tools tree, the mkosi state next to the tree's config, and `OUT/.reproduce`, the second build a failed `bake --verify-reproducible` keeps), or `--all`. The lockfile is never removed unless `--lockfile PATH` names it. It prints `removed PATH` per path, or `would remove PATH` with `--dry-run`; with no part flag it lists what `--all` would remove and removes nothing:
+`tundravm clean [RECIPE]` removes the output of the build directory `--build DIR` by part; with neither `RECIPE` nor `--build` it cleans the configured `build`, else `build`. The parts are `--sources` (`BUILD/.sources`), `--tree` (`BUILD/mkosi`, the bake's own tree, never the committed one), `--artifacts` (each `BUILD/<variant>/` and `BUILD/bake-result.json`), `--state` (`BUILD/.mkosi`, which holds the cached tools tree, the mkosi state next to the tree's config, and `BUILD/.reproduce`, the second build a failed `bake --verify-reproducible` keeps), or `--all`. The lockfile is never removed unless `--lockfile PATH` names it. It prints `removed PATH` per path, or `would remove PATH` with `--dry-run`; with no part flag it lists what `--all` would remove and removes nothing:
 
 ```console
 $ tundravm clean node.py
@@ -1076,7 +1194,7 @@ A path the user cannot delete (mkosi output a `local` bake left root-owned) is r
 
 ## Shell completion
 
-`tundravm completion bash|zsh|fish` prints a static script generated from this version's verbs, flags, flag choices (`--format`, `--backend`, `--scheme`, `--target`, ...) and file arguments. Its header repeats the install line; regenerate it after upgrading.
+`tundravm completion bash|zsh|fish` prints a static script generated from this version's verbs, flags, flag choices (`--format`, `--backend`, `--scheme`, ...), `deploy`'s `TARGET` and file arguments. Its header repeats the install line; regenerate it after upgrading.
 
 | Shell | Install |
 |---|---|
@@ -1089,16 +1207,16 @@ A path the user cannot delete (mkosi output a `local` bake left root-owned) is r
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, `doctor` missing a required tool, an `attest` verdict other than `trusted` or `measurements-match` (`simulated` passes with `--allow-simulated`), an `evidence` verdict of `fail` or `incomplete`, or a `bake --verify-reproducible` whose second build differs (`E_REPRODUCIBILITY`); or `clean` could not remove a path |
-| 2 | An SDK error, printed as `error [E_CODE]: message` with a `Hint:` and context lines; also a usage error (unknown verb or flag, with a did-you-mean suggestion) |
+| 1 | A check failed: `lint` findings, `compile --check`, `diff`, `lock --check`, `ci`, `doctor` missing a required tool, an `attest` verdict other than `trusted` or `measurements-match` (`simulated` passes with `--allow-simulated`), an `evidence` verdict of `fail` or `incomplete`, a `verify` check that fails or is missing, or a `bake --verify-reproducible` whose second build differs (`E_REPRODUCIBILITY`); or `clean` could not remove a path |
+| 2 | An SDK error, printed as `error [E_CODE]: message` with a `Hint:` and context lines (one `tundravm.error/1` JSON line on stderr under `--format json`, see [Output formats](#output-formats)); also a usage error (unknown verb or flag, with a did-you-mean suggestion) |
 | 130 | Interrupted |
 
 ## CI
 
-`tundravm ci RECIPE --out mkosi` is the whole gate:
+`tundravm ci RECIPE --tree mkosi` is the whole gate:
 
 ```console
-$ tundravm ci node.py --out mkosi
+$ tundravm ci node.py --tree mkosi
 ok lint: no findings
 ok compile: mkosi is up to date
 ok lock: build/tundravm.lock is up to date
@@ -1108,4 +1226,4 @@ A failing step prints its report, then `FAIL step: ...` and `skip` for the remai
 
 The steps share one loaded recipe and one lockfile (`--lockfile`, default `build/tundravm.lock`, read once): `lint --strict` and `compile --check` apply its pins, so a pinned source never reports `source-unpinned`, and the lock step compares against it. The compile step works on a copy of the recipe, so a recipe with runtime-init steps (keys, disks, secrets, `Init`) passes the lock step whenever `tundravm lock --check` passes on its own.
 
-`tundravm init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and pull request: `uv sync`, `tundravm inspect RECIPE --format markdown` appended to `$GITHUB_STEP_SUMMARY`, then `tundravm ci RECIPE --out mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the job checks both. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` is set (`if: vars.TUNDRAVM_BAKE_BACKEND != ''`) to the backend kind to bake with: `local` or `inprocess`. `lima` and `nix` need `limactl` or Nix, which `ubuntu-latest` lacks; add a step that installs one before using it. It installs mkosi as tundravm's own CI does (`bubblewrap`, `debian-archive-keyring` and `python3-pefile` from apt, mkosi from git with `pipx`), runs `tundravm fetch RECIPE --out build`, `tundravm bake RECIPE --backend $TUNDRAVM_BAKE_BACKEND --out build --verify-reproducible` and `tundravm evidence RECIPE --out build --require LIST --bundle evidence.tar.gz --html evidence.html`, then uploads `evidence.tar.gz`, `evidence.html`, `build/bake-result.json`, the second build's `build/.reproduce/**/bake-result.json` (kept when it differs or fails; `include-hidden-files: true`), mkosi's artifacts (`build/*/output/*`) and the in-process backend's (`build/*/*.qcow2`, `build/*/*.vhd`, `build/*/*.tar.gz`) as the `tundravm-bake` workflow artifact. The evidence and upload steps run with `if: ${{ !cancelled() && hashFiles('build/bake-result.json') != '' }}`, so a bake that fails after writing its record (a second build that differs or fails) still leaves its evidence; the job fails on the bake's exit status, or on the evidence verdict. `--require` is `reproducible,lock,real` on `local`: the bake ran `--verify-reproducible`, `check` already requires the committed lockfile, and `local` builds real artifacts. On `inprocess` it drops `real` (`reproducible,lock`), since the in-process backend only simulates. `measured` is not required: no step exports a measurements policy; add `tundravm measure ... --export-policy build/<variant>/policy.json` and `measured` to require one.
+`tundravm init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and pull request: `uv sync`, `tundravm inspect RECIPE --format markdown` appended to `$GITHUB_STEP_SUMMARY`, then `tundravm ci RECIPE --tree mkosi`. Commit `mkosi/` and `build/tundravm.lock`; the job checks both. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` is set (`if: vars.TUNDRAVM_BAKE_BACKEND != ''`) to the backend kind to bake with: `local` or `inprocess`. `lima` and `nix` need `limactl` or Nix, which `ubuntu-latest` lacks; add a step that installs one before using it. It installs mkosi as tundravm's own CI does (`bubblewrap`, `debian-archive-keyring` and `python3-pefile` from apt, mkosi from git with `pipx`), runs `tundravm fetch RECIPE --build build`, `tundravm bake RECIPE --backend $TUNDRAVM_BAKE_BACKEND --build build --verify-reproducible` and `tundravm evidence RECIPE --build build --require LIST --bundle evidence.tar.gz --html evidence.html`, then uploads `evidence.tar.gz`, `evidence.html`, `build/bake-result.json`, the second build's `build/.reproduce/**/bake-result.json` (kept when it differs or fails; `include-hidden-files: true`), mkosi's artifacts (`build/*/output/*`) and the in-process backend's (`build/*/*.qcow2`, `build/*/*.vhd`, `build/*/*.tar.gz`) as the `tundravm-bake` workflow artifact. The evidence and upload steps run with `if: ${{ !cancelled() && hashFiles('build/bake-result.json') != '' }}`, so a bake that fails after writing its record (a second build that differs or fails) still leaves its evidence; the job fails on the bake's exit status, or on the evidence verdict. `--require` is `reproducible,lock,real` on `local`: the bake ran `--verify-reproducible`, `check` already requires the committed lockfile, and `local` builds real artifacts. On `inprocess` it drops `real` (`reproducible,lock`), since the in-process backend only simulates. `measured` is not required: no step exports a measurements policy; add `tundravm measure ... --export-policy build/<variant>/policy.json` and `measured` to require one.

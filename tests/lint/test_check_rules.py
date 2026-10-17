@@ -83,7 +83,7 @@ def test_clean_recipe_has_no_findings() -> None:
 
 def test_service_user_missing() -> None:
     [diag] = report(recipe(Service("worker", "/usr/bin/worker", user="svc")))
-    assert (diag.level, diag.code, diag.subject) == ("error", "service-user-missing", "worker")
+    assert (diag.severity, diag.code, diag.subject) == ("error", "service-user-missing", "worker")
     assert "'svc'" in (diag.hint or "")
 
 
@@ -117,7 +117,7 @@ def test_service_user_root_base_or_hook_created_is_fine() -> None:
 
 def test_file_path_duplicate_with_different_content() -> None:
     [diag] = report(recipe(Template("/etc/motd", "bye {x}\n", variables=(("x", 1),))))
-    assert (diag.level, diag.code, diag.subject) == ("error", "file-path-duplicate", "/etc/motd")
+    assert (diag.severity, diag.code, diag.subject) == ("error", "file-path-duplicate", "/etc/motd")
     assert "file, template" in diag.message
 
 
@@ -142,7 +142,7 @@ def test_file_path_relative() -> None:
         ("file-path-relative", "/etc/../../escape"),
         ("file-path-relative", "/opt/../../up"),
     ]
-    assert all(d.level == "error" for d in diags)
+    assert all(d.severity == "error" for d in diags)
 
 
 # d. service-command-not-shipped
@@ -150,7 +150,7 @@ def test_file_path_relative() -> None:
 
 def test_service_command_not_shipped() -> None:
     [diag] = report(recipe(Service("tool", "/usr/local/bin/tool --serve"), clean=False))
-    assert (diag.level, diag.code, diag.subject) == (
+    assert (diag.severity, diag.code, diag.subject) == (
         "warning",
         "service-command-not-shipped",
         "tool",
@@ -203,7 +203,7 @@ def test_variant_cannot_drop_an_inherited_cloud_target() -> None:
 
 def test_variant_empty() -> None:
     [diag] = report(recipe(variants=(DEFAULT, Variant("bare"))), "bare")
-    assert (diag.level, diag.code, diag.profile) == ("info", "variant-empty", "bare")
+    assert (diag.severity, diag.code, diag.location) == ("info", "variant-empty", "bare")
 
 
 def test_variant_with_content_or_default_is_not_empty() -> None:
@@ -289,7 +289,7 @@ def test_secret_delivery_applied_is_fine() -> None:
 def test_kernel_missing() -> None:
     subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT,))
     [diag] = report(subject)
-    assert (diag.level, diag.code, diag.profile) == ("error", "kernel-missing", "default")
+    assert (diag.severity, diag.code, diag.location) == ("error", "kernel-missing", "default")
     assert "A kernel must be installed" in diag.message
     for fix in ("linux-image-amd64", "Kernel(...)", '"Bootable", ("no",)'):
         assert fix in (diag.hint or "")
@@ -316,7 +316,7 @@ def test_kernel_package_kernel_or_not_bootable_is_fine(boot: Declaration) -> Non
 def test_kernel_missing_is_per_variant() -> None:
     booted = Variant("booted", parent=None, add=Fragment("booted", items=(KERNEL,)))
     subject = Recipe("check", Fragment("common", items=CLEAN[1:]), variants=(DEFAULT, booted))
-    assert [(d.profile, d.code) for d in report(subject, "default", "booted")] == [
+    assert [(d.location, d.code) for d in report(subject, "default", "booted")] == [
         ("default", "kernel-missing")
     ]
 
@@ -336,13 +336,13 @@ def test_aarch64_with_efi_stub_is_unsupported() -> None:
         for d in report(_arm(EfiStub(snapshot="20251113T083151Z", version="257")))
         if d.code == "recipe-arch-unsupported"
     ]
-    assert (diag.level, diag.subject) == ("error", "EfiStub")
+    assert (diag.severity, diag.subject) == ("error", "EfiStub")
     assert "_amd64.deb" in (diag.hint or "")
 
 
 def test_aarch64_qemu_target_is_unsupported() -> None:
     [diag] = [d for d in report(_arm(target="qemu")) if d.code == "recipe-arch-unsupported"]
-    assert (diag.level, diag.subject) == ("error", "qemu")
+    assert (diag.severity, diag.subject) == ("error", "qemu")
     assert "qemu-system-x86_64" in (diag.hint or "")
 
 
@@ -376,7 +376,7 @@ def test_ordering_is_deterministic() -> None:
     )
     img = lower(subject)
     diags = check(img, profiles=["b", "a", "default"])
-    keys = [(d.profile, d.level, d.code) for d in diags]
+    keys = [(d.location, d.severity, d.code) for d in diags]
     assert keys == [
         ("a", "warning", "init-priority-collision"),
         ("a", "info", "variant-empty"),
@@ -385,7 +385,7 @@ def test_ordering_is_deterministic() -> None:
         ("default", "warning", "init-priority-collision"),
     ]
     assert diags == check(img, profiles=["default", "a", "b"])
-    assert [(d.variant, d.code) for d in lint(subject)] == [
+    assert [(d.location, d.code) for d in lint(subject)] == [
         (profile, code) for profile, _, code in keys
     ]
 
@@ -393,28 +393,33 @@ def test_ordering_is_deterministic() -> None:
 def test_render_text_and_dict() -> None:
     assert render([]) == "no findings"
     diag = Diagnostic(
-        level="error",
-        code="service-user-missing",
-        message="boom",
-        hint="fix it",
-        profile="default",
+        "service-user-missing",
+        "error",
+        "boom",
         subject="app",
+        location="default",
+        hint="fix it",
+        context=(("user", "app"), ("group", "app")),
     )
-    info = Diagnostic(level="info", code="variant-empty", message="m", hint=None, profile="x")
-    text = render([diag, info])
+    info = Diagnostic("variant-empty", "info", "m", location="x")
+    whole = Diagnostic("lock-stale", "warning", "w")
+    text = render([diag, info, whole])
     assert text.splitlines() == [
         "error service-user-missing [default] app: boom",
         "    hint: fix it",
         "info variant-empty [x]: m",
-        "1 error, 0 warnings, 1 info",
+        "warning lock-stale [common]: w",
+        "1 error, 1 warning, 1 info",
     ]
+    assert diag.context == (("group", "app"), ("user", "app"))
     assert diag.to_dict() == {
-        "level": "error",
         "code": "service-user-missing",
+        "severity": "error",
         "message": "boom",
-        "hint": "fix it",
-        "variant": "default",
         "subject": "app",
+        "location": "default",
+        "hint": "fix it",
+        "context": {"group": "app", "user": "app"},
     }
 
 
@@ -494,7 +499,7 @@ def test_cli_variant_selection(tmp_path: Path) -> None:
 def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
     subject = recipe(File("/etc/../../escape", "x"))
     with pytest.raises(LintError) as excinfo:
-        bake(subject, lock=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out")
+        bake(subject, lock=lock(subject), backend=Backend("inprocess"), build=tmp_path / "out")
     assert excinfo.value.code == "E_LINT"
     assert "1 error-level diagnostics" in str(excinfo.value)
     assert excinfo.value.context["codes"] == "file-path-relative"
@@ -503,6 +508,6 @@ def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
 def test_clean_recipe_bakes(tmp_path: Path) -> None:
     subject = recipe()
     artifacts = bake(
-        subject, lock=lock(subject), backend=Backend("inprocess"), out=tmp_path / "out"
+        subject, lock=lock(subject), backend=Backend("inprocess"), build=tmp_path / "out"
     )
     assert [a.variant for a in artifacts] == ["default"]

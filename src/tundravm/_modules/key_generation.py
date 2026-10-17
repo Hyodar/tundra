@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal
 
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
-from tundravm.check import Diagnostic
+from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -126,14 +126,14 @@ class KeyGeneration(Module):
             if spec.pipe_path is None or spec.pipe_path.startswith("/run/"):
                 continue
             yield Diagnostic(
-                level="info",
+                severity="info",
                 code="key-pipe-outside-run",
                 message=f"key {spec.name!r} reads its pipe from {spec.pipe_path}, outside /run",
                 hint=(
                     "Place pipes under /run (tmpfs): a FIFO on persistent storage "
                     "survives reboots and can be replaced by a regular file."
                 ),
-                profile=profile,
+                location=profile,
                 subject=spec.name,
             )
 

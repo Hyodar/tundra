@@ -92,7 +92,7 @@ def _baked(tmp_path: Path, *, simulated: bool = False) -> tuple[Artifact, ...]:
         variants=(Variant("default", target="qemu"), Variant("gcp", target="gcp")),
     )
     artifacts = bake(
-        recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
+        recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build"
     )
     return artifacts if simulated else tuple(replace(a, simulated=False) for a in artifacts)
 
@@ -330,16 +330,17 @@ def _bake(recipe: Path) -> int:
 
 
 def _manifest(recipe: Path) -> str:
-    return str(recipe.parent / "build" / "bake-result.json")
+    """The build directory holding ``bake-result.json``."""
+    return str(recipe.parent / "build")
 
 
 def _real_manifest(recipe: Path) -> str:
-    """The manifest with ``simulated`` cleared, as a real backend's bake records it."""
-    path = Path(_manifest(recipe))
+    """The build directory, its manifest's ``simulated`` cleared as a real backend's bake."""
+    path = Path(_manifest(recipe)) / "bake-result.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["declarative"]["simulated"] = False
     path.write_text(json.dumps(payload), encoding="utf-8")
-    return str(path)
+    return str(path.parent)
 
 
 @pytest.mark.usefixtures("no_tools_on_path")
@@ -349,11 +350,13 @@ def test_cli_measure_without_tool_fails_with_hint(
     assert _bake(recipe) == EXIT_OK
     capsys.readouterr()
 
-    code, out = run_main("measure", _manifest(recipe), "--scheme", "rtmr", "--allow-placeholder")
+    code, out = run_main(
+        "measure", "--build", _manifest(recipe), "--scheme", "rtmr", "--allow-placeholder"
+    )
     assert code == EXIT_OK
     capsys.readouterr()
 
-    code, out = run_main("measure", _real_manifest(recipe), "--scheme", "rtmr")
+    code, out = run_main("measure", "--build", _real_manifest(recipe), "--scheme", "rtmr")
 
     err = capsys.readouterr().err
     assert code == EXIT_SDK_ERROR
@@ -372,7 +375,7 @@ def test_cli_allow_placeholder_table_and_banner(
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         code, out = run_main(
-            "measure", _manifest(recipe), "--scheme", "rtmr", "--allow-placeholder"
+            "measure", "--build", _manifest(recipe), "--scheme", "rtmr", "--allow-placeholder"
         )
 
     lines = out.splitlines()
@@ -396,7 +399,14 @@ def test_cli_allow_placeholder_json_carries_source(
     capsys.readouterr()
 
     code, out = run_main(
-        "measure", _manifest(recipe), "--scheme", "gcp", "--json", "--allow-placeholder"
+        "measure",
+        "--build",
+        _manifest(recipe),
+        "--scheme",
+        "gcp",
+        "--format",
+        "json",
+        "--allow-placeholder",
     )
 
     payload = json.loads(out)
@@ -419,7 +429,7 @@ def test_cli_measure_with_tool_prints_source(
         _measured_boot_writing(json.dumps({"rtmr": {"0": {"expected": RTMR0}}})),
     )
 
-    code, out = run_main("measure", _real_manifest(recipe), "--scheme", "rtmr")
+    code, out = run_main("measure", "--build", _real_manifest(recipe), "--scheme", "rtmr")
 
     uki = recipe.parent / "build" / "default" / "linux.efi"
     assert code == EXIT_OK
@@ -430,7 +440,9 @@ def test_cli_measure_with_tool_prints_source(
     ]
     assert "PLACEHOLDER" not in capsys.readouterr().err
 
-    code, out = run_main("measure", _real_manifest(recipe), "--scheme", "rtmr", "--json")
+    code, out = run_main(
+        "measure", "--build", _real_manifest(recipe), "--scheme", "rtmr", "--format", "json"
+    )
     payload = json.loads(out)
     assert payload["tool"] == "measured-boot v1.3.0"
     assert payload["artifact"] == str(uki)

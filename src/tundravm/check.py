@@ -14,43 +14,20 @@ import json
 import posixpath
 import re
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
+from .diagnostics import Diagnostic, Severity
 from .formats import annotation_path, md_cell, md_table, workflow_command
 from .models import InitScriptEntry, ProfileState, ServiceSpec, unit_name
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
 
-Level = Literal["error", "warning", "info"]
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
-
-
-@dataclass(frozen=True, slots=True)
-class Diagnostic:
-    """One finding produced by a recipe rule."""
-
-    level: Level
-    code: str
-    message: str
-    hint: str | None
-    profile: str
-    subject: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "level": self.level,
-            "code": self.code,
-            "message": self.message,
-            "hint": self.hint,
-            "variant": self.profile,
-            "subject": self.subject,
-        }
 
 
 Rule = Callable[["Lowered", str, ProfileState], Iterator[Diagnostic]]
@@ -225,11 +202,11 @@ def _rule_service_user_missing(
                 f"{profile_name!r} too, or derive the variant from its parent."
             )
         yield Diagnostic(
-            level="error",
+            severity="error",
             code="service-user-missing",
             message=f"service {svc.name!r} runs as user {user!r}, which is never created",
             hint=hint,
-            profile=profile_name,
+            location=profile_name,
             subject=svc.name,
         )
 
@@ -248,7 +225,7 @@ def _rule_user_group_undefined(
             if re.search(rf"\b(groupadd|addgroup)\b[^\n;&|]*\b{re.escape(group)}\b", commands):
                 continue
             yield Diagnostic(
-                level="error",
+                severity="error",
                 code="user-group-undefined",
                 message=f"user {user.name!r} joins group {group!r}, which is never created",
                 hint=(
@@ -256,7 +233,7 @@ def _rule_user_group_undefined(
                     f"{profile_name!r}, or drop it from groups=; useradd fails on an "
                     "unknown group."
                 ),
-                profile=profile_name,
+                location=profile_name,
                 subject=user.name,
             )
 
@@ -278,7 +255,7 @@ def _rule_file_path_duplicate(
                 continue
             kinds = ", ".join(sorted({kind for kind, _, _ in entries}))
             yield Diagnostic(
-                level="error",
+                severity="error",
                 code="file-path-duplicate",
                 message=(
                     f"declared {len(entries)} times in {tree} with different content "
@@ -288,7 +265,7 @@ def _rule_file_path_duplicate(
                     "Keep a single declaration. If two fragments write this path, drop "
                     "one of them or merge the content into one File."
                 ),
-                profile=profile_name,
+                location=profile_name,
                 subject=path,
             )
 
@@ -304,11 +281,11 @@ def _rule_file_path_relative(
     for kind, path in entries:
         if ".." in path.split("/"):
             yield Diagnostic(
-                level="error",
+                severity="error",
                 code="file-path-relative",
                 message=f"{kind} path contains '..' and may escape the image root",
                 hint=f"Write the normalized absolute path instead, e.g. {_norm(path)!r}.",
-                profile=profile_name,
+                location=profile_name,
                 subject=path,
             )
 
@@ -334,7 +311,7 @@ def _rule_service_command_not_shipped(
         if name and name in mentions:
             continue
         yield Diagnostic(
-            level="warning",
+            severity="warning",
             code="service-command-not-shipped",
             message=f"service {svc.name!r} runs {binary}, which nothing in this variant ships",
             hint=(
@@ -343,7 +320,7 @@ def _rule_service_command_not_shipped(
                 f"fires when the variant installs no packages and no file or hook mentions "
                 f"{name!r}; ignore it if the base image already has the binary."
             ),
-            profile=profile_name,
+            location=profile_name,
             subject=svc.name,
         )
 
@@ -388,12 +365,11 @@ def _rule_variant_empty(
             "or remove the variant."
         )
     yield Diagnostic(
-        level="info",
+        severity="info",
         code="variant-empty",
         message=message,
         hint=hint,
-        profile=profile_name,
-        subject=None,
+        location=profile_name,
     )
 
 
@@ -408,7 +384,7 @@ def _rule_init_priority_collision(
             continue
         heads = "; ".join(repr(e.script.strip().splitlines()[0][:40]) for e in entries)
         yield Diagnostic(
-            level="warning",
+            severity="warning",
             code="init-priority-collision",
             message=(
                 f"{len(entries)} init scripts share priority {priority} and run in "
@@ -418,7 +394,7 @@ def _rule_init_priority_collision(
                 "Give each step its own priority with Init(name, script, priority=N) "
                 "(lower runs first) so boot order does not depend on declaration order."
             ),
-            profile=profile_name,
+            location=profile_name,
             subject=f"priority {priority}",
         )
 
@@ -442,28 +418,28 @@ def _rule_debloat_removes_needed_unit(
         unit = unit_name(svc.name)
         if unit.startswith("systemd-") and unit not in keep:
             yield Diagnostic(
-                level="warning",
+                severity="warning",
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} is a systemd unit that debloat masks",
                 hint=(
                     f"Add it to Debloat(keep_units_extra=({unit!r},)) so the "
                     "systemd minimization keeps it."
                 ),
-                profile=profile_name,
+                location=profile_name,
                 subject=svc.name,
             )
         for dep in (*svc.requires, *svc.wants):
             if not masked(dep):
                 continue
             yield Diagnostic(
-                level="warning",
+                severity="warning",
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} depends on {dep!r}, which debloat masks",
                 hint=(
                     f"Add it to Debloat(keep_units_extra=({dep!r},)), or drop "
                     "the dependency; a Requires= on a masked unit stops the service."
                 ),
-                profile=profile_name,
+                location=profile_name,
                 subject=svc.name,
             )
 
@@ -479,14 +455,14 @@ def _rule_debloat_removes_declared_file(
         for pattern in removed:
             if path == pattern or path.startswith(pattern + "/") or fnmatch.fnmatch(path, pattern):
                 yield Diagnostic(
-                    level="warning",
+                    severity="warning",
                     code="debloat-removes-declared-file",
                     message=f"debloat deletes {pattern} at finalize, after this file is placed",
                     hint=(
                         f"Add {pattern!r} to Debloat(keep_paths=(...)) or move the file "
                         "outside the removed path."
                     ),
-                    profile=profile_name,
+                    location=profile_name,
                     subject=path,
                 )
                 break
@@ -500,17 +476,17 @@ def _rule_source_unpinned(
         return
     pins = image.source_pins()
     policy = image.policy.mutable_ref_policy
-    level: Level = "error" if policy == "error" else "warning" if policy == "warn" else "info"
+    severity: Severity = "error" if policy == "error" else "warning" if policy == "warn" else "info"
     for spec in sources.values():
         if spec.pin_from(pins) is not None:
             continue
         message, hint = _unpinned_advice(spec, fetches=image.fetches_sources)
         yield Diagnostic(
-            level=level,
+            severity=severity,
             code="source-unpinned",
             message=message,
             hint=hint,
-            profile=profile_name,
+            location=profile_name,
             subject=spec.name,
         )
 
@@ -565,7 +541,7 @@ def _rule_kernel_missing(
     if _installs_kernel(state.packages):
         return
     yield Diagnostic(
-        level="error",
+        severity="error",
         code="kernel-missing",
         message=(
             "variant builds a bootable UKI but installs no kernel, so mkosi stops with "
@@ -576,8 +552,7 @@ def _rule_kernel_missing(
             'Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a '
             "non-bootable image."
         ),
-        profile=profile_name,
-        subject=None,
+        location=profile_name,
     )
 
 
@@ -591,7 +566,7 @@ def _rule_recipe_arch_unsupported(
         return
     if _EFI_STUB_DEB.search(_command_text(state)):
         yield Diagnostic(
-            level="error",
+            severity="error",
             code="recipe-arch-unsupported",
             message=(
                 "Recipe.arch is aarch64 but EfiStub installs the amd64 systemd-boot-efi "
@@ -601,12 +576,12 @@ def _rule_recipe_arch_unsupported(
                 "EfiStub downloads systemd-boot-efi_<version>_amd64.deb only: drop EfiStub "
                 "from aarch64 recipes, or build for x86_64."
             ),
-            profile=profile_name,
+            location=profile_name,
             subject="EfiStub",
         )
     if "qemu" in state.output_targets:
         yield Diagnostic(
-            level="error",
+            severity="error",
             code="recipe-arch-unsupported",
             message=(
                 "Recipe.arch is aarch64 but the variant targets qemu, whose deploy adapter "
@@ -616,7 +591,7 @@ def _rule_recipe_arch_unsupported(
                 "The qemu adapter runs qemu-system-x86_64 only, and TDX guests are x86-64: "
                 "set Recipe(arch='x86_64')."
             ),
-            profile=profile_name,
+            location=profile_name,
             subject="qemu",
         )
 
@@ -659,11 +634,11 @@ def _rule_secret_in_file(
         findings = scan_file(path, content)
         if findings:
             yield Diagnostic(
-                level="error",
+                severity="error",
                 code="secret-in-file",
                 message=_secret_message("the file", findings),
                 hint=SECRET_HINT,
-                profile=profile_name,
+                location=profile_name,
                 subject=path,
             )
 
@@ -719,11 +694,11 @@ def _rule_secret_in_env(
         found = _service_findings(svc)
         if found:
             yield Diagnostic(
-                level="error",
+                severity="error",
                 code="secret-in-env",
                 message=_secret_message(f"service {name!r}", found),
                 hint=SECRET_HINT,
-                profile=profile_name,
+                location=profile_name,
                 subject=name,
             )
     for path, content in _shipped_files(state):
@@ -732,11 +707,11 @@ def _rule_secret_in_env(
         findings = scan_unit(content)
         if findings:
             yield Diagnostic(
-                level="error",
+                severity="error",
                 code="secret-in-env",
                 message=_secret_message("the unit file", findings),
                 hint=SECRET_HINT,
-                profile=profile_name,
+                location=profile_name,
                 subject=path,
             )
 
@@ -768,7 +743,7 @@ RULES: list[Rule] = [
 
 
 def _sort_key(d: Diagnostic) -> tuple[str, int, str, str, str]:
-    return (d.profile, _SEVERITY[d.level], d.code, d.subject or "", d.message)
+    return (d.location, _SEVERITY[d.severity], d.code, d.subject or "", d.message)
 
 
 def check(image: Lowered, *, profiles: Sequence[str] | None = None) -> list[Diagnostic]:
@@ -784,14 +759,19 @@ def check(image: Lowered, *, profiles: Sequence[str] | None = None) -> list[Diag
 
 def summarize(diagnostics: Sequence[Diagnostic]) -> dict[str, int]:
     return {
-        "errors": sum(d.level == "error" for d in diagnostics),
-        "warnings": sum(d.level == "warning" for d in diagnostics),
-        "infos": sum(d.level == "info" for d in diagnostics),
+        "errors": sum(d.severity == "error" for d in diagnostics),
+        "warnings": sum(d.severity == "warning" for d in diagnostics),
+        "infos": sum(d.severity == "info" for d in diagnostics),
     }
 
 
 def _plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def _where(d: Diagnostic) -> str:
+    """*d*'s location as the reports show it: the variant, ``common`` for the whole recipe."""
+    return d.location or "common"
 
 
 def render(diagnostics: Sequence[Diagnostic]) -> str:
@@ -801,7 +781,7 @@ def render(diagnostics: Sequence[Diagnostic]) -> str:
     lines: list[str] = []
     for d in diagnostics:
         subject = f" {d.subject}" if d.subject else ""
-        lines.append(f"{d.level} {d.code} [{d.profile}]{subject}: {d.message}")
+        lines.append(f"{d.severity} {d.code} [{_where(d)}]{subject}: {d.message}")
         if d.hint:
             lines.append(f"    hint: {d.hint}")
     lines.append(render_summary(diagnostics))
@@ -836,12 +816,12 @@ def render_github(
     path = annotation_path(recipe_path)
     lines: list[str] = []
     for d in diagnostics:
-        command = _GITHUB_COMMANDS[d.level]
-        if strict and d.level == "warning":
+        command = _GITHUB_COMMANDS[d.severity]
+        if strict and d.severity == "warning":
             command = "error"
         subject = f" {d.subject}" if d.subject else ""
         hint = f" ({d.hint})" if d.hint else ""
-        message = f"[{d.profile}]{subject}: {d.message}{hint}"
+        message = f"[{_where(d)}]{subject}: {d.message}{hint}"
         lines.append(workflow_command(command, message, file=path, title=d.code))
     lines.append(render_summary(diagnostics))
     return "\n".join(lines)
@@ -853,16 +833,16 @@ def render_markdown(diagnostics: Sequence[Diagnostic]) -> str:
         return "**No findings.**"
     rows = [
         (
-            md_cell(d.level),
+            md_cell(d.severity),
             md_cell(d.code, code=True),
-            md_cell(d.profile, code=True),
+            md_cell(_where(d), code=True),
             md_cell(d.subject, code=True),
             md_cell(d.message),
             md_cell(d.hint),
         )
         for d in diagnostics
     ]
-    table = md_table(("Level", "Code", "Variant", "Subject", "Message", "Hint"), rows)
+    table = md_table(("Severity", "Code", "Location", "Subject", "Message", "Hint"), rows)
     return f"{table}\n\n**{render_summary(diagnostics)}**"
 
 
@@ -890,7 +870,7 @@ def render_as(
 def failing(diagnostics: Sequence[Diagnostic], *, strict: bool = False) -> bool:
     """True when a finding fails ``check``: an error, or with *strict* a warning."""
     levels = {"error", "warning"} if strict else {"error"}
-    return any(d.level in levels for d in diagnostics)
+    return any(d.severity in levels for d in diagnostics)
 
 
 _GITHUB_COMMANDS: dict[str, str] = {"error": "error", "warning": "warning", "info": "notice"}

@@ -20,16 +20,18 @@ from .errors import ValidationError
 PYPROJECT = "pyproject.toml"
 TABLE = "tool.tundravm"
 
-ConfigKey = Literal["recipe", "out", "tree", "lockfile", "backend"]
+ConfigKey = Literal["recipe", "tree", "build", "lockfile", "backend"]
 CONFIG_KEYS: tuple[ConfigKey, ...] = get_args(ConfigKey)
-PATH_KEYS: frozenset[str] = frozenset({"recipe", "out", "tree", "lockfile"})
+PATH_KEYS: frozenset[str] = frozenset({"recipe", "tree", "build", "lockfile"})
+RENAMED_KEYS: dict[str, ConfigKey] = {"out": "build"}
+"""Keys earlier versions read, with the key that replaced each."""
 
 Origin = Literal["flag", "pyproject", "default", "recipe"]
 """Where a value came from; ``recipe``: the kind of the recipe file's ``backend``."""
 
 DEFAULTS: dict[ConfigKey, str] = {
-    "out": "build",
     "tree": "build/mkosi",
+    "build": "build",
     "lockfile": "build/tundravm.lock",
 }
 """Built-in defaults, relative to the recipe's directory (``backend``: the recipe file's)."""
@@ -38,10 +40,11 @@ RESOLUTION_HELP = (
     "Project configuration: RECIPE may be omitted when a pyproject.toml with a "
     "[tool.tundravm] table is found in the working directory or a parent (the "
     "nearest one with the table wins; `tundravm init` writes it). Its keys: recipe, "
-    "out (build output, bake/fetch/status/clean --out), tree (the mkosi tree, compile "
-    "and ci --out, diff --against), lockfile (--lockfile; not clean's) and backend "
+    "tree (the compiled mkosi tree, every --tree), build (the build directory holding "
+    "bake-result.json, every --build), lockfile (--lockfile; not clean's) and backend "
     "(bake and doctor --backend), with paths relative to the pyproject.toml. They apply "
-    "when RECIPE is omitted or names the table's recipe. An explicit RECIPE or flag "
+    "to every command when RECIPE is omitted or names the table's recipe; commands "
+    "without RECIPE (measure, deploy, sbom) always apply them. An explicit RECIPE or flag "
     "always wins; then the table; then the built-in default. A configured lockfile is "
     "never replaced by build/tundravm.lock: until `tundravm lock` writes it, commands say "
     "it does not exist and bake refuses. `tundravm config` prints the values the "
@@ -70,6 +73,11 @@ class ProjectConfig:
         if value is None:
             return None
         return _shown(self.root / value)
+
+    def default_path(self, key: ConfigKey) -> Path:
+        """*key*'s path (:meth:`path_of`), else its built-in default beside the pyproject.toml."""
+        configured = self.path_of(key)
+        return configured if configured is not None else _shown(self.root / DEFAULTS[key])
 
 
 def _shown(path: Path) -> Path:
@@ -112,6 +120,15 @@ def _table(path: Path) -> dict[str, str] | None:
     table = tool.get("tundravm") if isinstance(tool, dict) else None
     if not isinstance(table, dict):
         return None
+    renamed = sorted(set(table) & set(RENAMED_KEYS))
+    if renamed:
+        raise ValidationError(
+            f"[{TABLE}] key(s) {', '.join(renamed)} in {path} were renamed.",
+            hint="Rename "
+            + ", ".join(f"{old} to {RENAMED_KEYS[old]}" for old in renamed)
+            + f' (e.g. {RENAMED_KEYS[renamed[0]]} = "build").',
+            context={"path": str(path)},
+        )
     unknown = sorted(set(table) - set(CONFIG_KEYS))
     if unknown:
         raise ValidationError(
@@ -136,8 +153,8 @@ def render_table(*, recipe: str, backend: str) -> str:
     return (
         f"[{TABLE}]\n"
         f'recipe = "{recipe}"\n'
-        f'out = "build"\n'
         f'tree = "mkosi"\n'
+        f'build = "build"\n'
         f'lockfile = "build/tundravm.lock"\n'
         f'backend = "{backend}"\n'
     )
@@ -148,6 +165,7 @@ __all__ = [
     "DEFAULTS",
     "PATH_KEYS",
     "PYPROJECT",
+    "RENAMED_KEYS",
     "RESOLUTION_HELP",
     "TABLE",
     "ConfigKey",

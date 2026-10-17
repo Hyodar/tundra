@@ -89,6 +89,7 @@ def exporter_check(image: Resolved) -> tuple[Diagnostic, ...]:
     return (
         Diagnostic(
             "exporter-storage-missing",
+            "error",
             "the exporter needs a disk mounted at /persistent",
             subject="prometheus-node-exporter",
         ),
@@ -185,9 +186,9 @@ Resolving the default variant shows what the fragment contributed:
 
 A check receives the `Resolved` variant: `variant`, `target`, every declaration in `items` (after inheritance, `replace` and `remove`) and the included fragment names in `fragments`. It returns diagnostics; an empty tuple means fine.
 
-- `Diagnostic(code, message, level="error", variant="", subject="")`. Leave `variant` empty: resolution fills in the variant the check ran for.
+- `Diagnostic(code, severity, message, subject="", location="", hint=None, context=())`, the same `tundravm.Diagnostic` that `lint()` returns. `severity` is `"error"`, `"warning"` or `"info"`. Leave `location` empty: resolution fills in the variant the check ran for. A `hint` is printed under the finding and carried by `lint --format json`; `context` takes a dict or (key, value) string pairs.
 - Use your own code prefix (`exporter-...`), so tests and `lint --format github` annotations identify the fragment.
-- Use `level="warning"` for advice. Error-level results make `resolve`, `compile` and `bake` refuse the recipe.
+- Use `"warning"` for advice. Error-severity results make `resolve`, `compile` and `bake` refuse the recipe.
 - Checks must be pure: they run once per variant per lint, in any order.
 
 ## Ordering
@@ -286,7 +287,7 @@ def test_exporter_is_clean():
 def test_exporter_needs_persistent_storage():
     elsewhere = Disk("disk_data", mount="/data", key=key)
     storage = Fragment("secure-storage", items=(key, elsewhere, Secrets(store=elsewhere)))
-    assert_diagnostic(lint(recipe_with(storage)), "exporter-storage-missing", variant="default")
+    assert_diagnostic(lint(recipe_with(storage)), "exporter-storage-missing", location="default")
 
 
 def test_unit_waits_for_runtime_init():

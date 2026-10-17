@@ -43,13 +43,13 @@ recipe = Recipe(
 Commit the compiled tree and check it in CI:
 
 ```bash
-tundravm compile node.py --out mkosi            # after every recipe change
-tundravm compile node.py --out mkosi --check    # in CI: exit 1 and list the stale files
+tundravm compile node.py --tree mkosi           # after every recipe change
+tundravm compile node.py --tree mkosi --check   # in CI: exit 1 and list the stale files
 ```
 
 In tests, `assert_tree(compile(recipe, lock=locked), "mkosi")` compares every path, byte, exec bit and symlink, and `TUNDRAVM_UPDATE_GOLDEN=1` rewrites the golden tree (see [testing](testing.md#golden-trees)).
 
-The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check`, and `tests/compiler/test_surge_golden.py`).
+The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this standard: it compiles byte-for-byte to the committed nethermind-tdx tree for all four variants (`tundravm compile examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi --check`, and `tests/compiler/test_surge_golden.py`).
 
 ## The lockfile
 
@@ -160,7 +160,7 @@ Three caveats follow from the cache being filled by the host's toolchain and rea
 
 ## Proving and recording a bake
 
-The checks above pin the inputs; `tundravm bake --verify-reproducible` checks the output. It bakes the same selection a second time into `OUT/.reproduce`, from the same lockfile and the same `OUT/.sources` checkouts, compares every artifact's sha256, and records the outcome as `declarative.reproducibility` in `bake-result.json` (a state: `running`, then `matched`, `different`, `error` or `interrupted`; `status` shows it per artifact): `reproducible: yes (N artifacts match a second build)`, or `E_REPRODUCIBILITY` with the second build kept for `tundravm diff` and diffoscope (see [CLI: Bake](cli.md#bake)). `tundravm sbom` is the record of what that bake contains: mkosi's package manifest (every installed package and version from the snapshot), the lockfile's source pins and the recipe metadata and digests, as SPDX 2.3 or CycloneDX 1.5 with a package URL per component (the purl rules are in [CLI: SBOM](cli.md#sbom)). Its lists are sorted and its ids derive from the content, so with `SOURCE_DATE_EPOCH` set a reproducible bake gives the same document too, ready to publish next to the measurements.
+The checks above pin the inputs; `tundravm bake --verify-reproducible` checks the output. It bakes the same selection a second time into `BUILD/.reproduce`, from the same lockfile and the same `BUILD/.sources` checkouts, compares every artifact's sha256, and records the outcome as `declarative.reproducibility` in `bake-result.json` (a state: `running`, then `matched`, `different`, `error` or `interrupted`; `status` shows it per artifact): `reproducible: yes (N artifacts match a second build)`, or `E_REPRODUCIBILITY` with the second build kept for `tundravm diff RECIPE --tree BUILD/.reproduce/mkosi` and diffoscope (see [CLI: Bake](cli.md#bake)). `tundravm sbom` is the record of what that bake contains: mkosi's package manifest (every installed package and version from the snapshot), the lockfile's source pins and the recipe metadata and digests, as SPDX 2.3 or CycloneDX 1.5 with a package URL per component (the purl rules are in [CLI: SBOM](cli.md#sbom)). Its lists are sorted and its ids derive from the content, so with `SOURCE_DATE_EPOCH` set a reproducible bake gives the same document too, ready to publish next to the measurements.
 
 ## mkosi
 
@@ -173,7 +173,7 @@ pip install 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
 ## CI
 
 ```bash
-tundravm ci node.py --out mkosi    # lint --strict, compile --check, lock --check
+tundravm ci node.py --tree mkosi    # lint --strict, compile --check, lock --check
 ```
 
 Add `Policy(require_frozen_lock=True, mutable_ref_policy="error")` to refuse unpinned bakes and unpinned sources outright (see [policy](policy.md)).

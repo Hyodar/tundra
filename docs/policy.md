@@ -26,7 +26,7 @@ recipe = Recipe(
 A pin in `build/tundravm.lock` satisfies `mutable_ref_policy` for that source, so the usual flow under `"error"` is `tundravm lock` first, then compile and bake.
 
 ```console
-$ tundravm compile m.py --out mk
+$ tundravm compile m.py --tree mk
 error [E_POLICY]: Unpinned source builds are not allowed by policy: tdxs@master.
 Hint: Run `tundravm lock RECIPE` to pin them, or relax mutable_ref_policy.
   operation: compile

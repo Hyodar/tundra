@@ -90,8 +90,8 @@ def test_example_binds_a_recipe(path: Path) -> None:
 @EXAMPLES
 def test_example_lints_without_errors(path: Path) -> None:
     found = lint(_recipe(path))
-    assert [d for d in found if d.level == "error"] == []
-    assert {d.code for d in found if d.level == "warning"} <= INHERENT_WARNINGS
+    assert [d for d in found if d.severity == "error"] == []
+    assert {d.code for d in found if d.severity == "warning"} <= INHERENT_WARNINGS
 
 
 @EXAMPLES
@@ -127,7 +127,7 @@ def test_teaching_example_bake_is_reproducible(
         return
     baked = []
     for out in ("a", "b"):
-        code, _ = run_main("bake", str(path), "--pythonpath", str(REPO_ROOT), "--out", out, "-q")
+        code, _ = run_main("bake", str(path), "--pythonpath", str(REPO_ROOT), "--build", out, "-q")
         assert code == 0
         baked.append(
             sorted(

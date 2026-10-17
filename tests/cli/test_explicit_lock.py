@@ -96,16 +96,16 @@ def test_lint_lockfile_applies_its_pins(custom_lock: tuple[Path, Path]) -> None:
 def test_ci_lockfile_pins_every_step(custom_lock: tuple[Path, Path], tmp_path: Path) -> None:
     recipe, custom = custom_lock
     tree = tmp_path / "mkosi"
-    assert run_main("compile", str(recipe), "--out", str(tree), "--lockfile", str(custom))[0] == 0
+    assert run_main("compile", str(recipe), "--tree", str(tree), "--lockfile", str(custom))[0] == 0
     assert not (tmp_path / "build" / "tundravm.lock").exists()
-    code, out = run_main("ci", str(recipe), "--out", str(tree), "--lockfile", str(custom))
+    code, out = run_main("ci", str(recipe), "--tree", str(tree), "--lockfile", str(custom))
     assert code == EXIT_OK, out
     assert out.splitlines()[-3:] == [
         "ok lint: no findings",
         f"ok compile: {tree} is up to date",
         f"ok lock: {custom} is up to date",
     ]
-    code, out = run_main("ci", str(recipe), "--out", str(tree))
+    code, out = run_main("ci", str(recipe), "--tree", str(tree))
     assert code == EXIT_FAILURE
     assert "FAIL lint" in out and "skip compile" in out
 
@@ -192,7 +192,7 @@ def test_a_missing_configured_lockfile_is_reported_never_replaced(
     code, out = run_main("lint", "--strict")
     assert code == EXIT_FAILURE and "source-unpinned" in out
     assert f"note: {MISSING}" in capsys.readouterr().err
-    assert run_main("compile", "--out", str(tmp_path / "mkosi"))[0] == EXIT_OK
+    assert run_main("compile", "--tree", str(tmp_path / "mkosi"))[0] == EXIT_OK
     assert f"note: {MISSING}" in capsys.readouterr().err
     status = json.loads(run_main("status", "--format", "json")[1])
     assert status["lock"]["path"] == "release.lock" and not status["lock"]["present"]

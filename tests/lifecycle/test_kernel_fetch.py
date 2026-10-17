@@ -231,12 +231,12 @@ def test_fetch_checks_out_a_tagged_kernel(
 ) -> None:
     url, commit, tag = linux
     recipe = _recipe(Kernel("6.1", Git(url, "v6.1"), config=config))
-    (fetched,) = fetch(recipe, lock=None, out=tmp_path / "out", resolver=lambda s: tag)
+    (fetched,) = fetch(recipe, lock=None, build=tmp_path / "out", resolver=lambda s: tag)
     checkout = tmp_path / "out" / ".sources" / source_dir("kernel", tag, url)
     assert fetched == FetchedSource("kernel", "git", url, tag, checkout, ref="v6.1")
     assert _git("rev-parse", "HEAD", cwd=checkout) == commit
     assert (checkout / "Makefile").is_file() and not (checkout / "later.c").exists()
-    (again,) = fetch(recipe, lock=lock(recipe, resolver=lambda s: tag), out=tmp_path / "out")
+    (again,) = fetch(recipe, lock=lock(recipe, resolver=lambda s: tag), build=tmp_path / "out")
     assert again.cached
 
 
@@ -245,7 +245,7 @@ def test_fetch_checks_out_a_kernel_commit_without_resolving(
 ) -> None:
     url, commit, _ = linux
     recipe = _recipe(Kernel("6.1", Git(url, commit), config=config))
-    (fetched,) = fetch(recipe, lock=None, out=tmp_path)  # an inline pin: no resolver runs
+    (fetched,) = fetch(recipe, lock=None, build=tmp_path)  # an inline pin: no resolver runs
     assert fetched.path == tmp_path / ".sources" / source_dir("kernel", commit, url)
     assert _git("rev-parse", "HEAD", cwd=fetched.path) == commit
 
@@ -255,7 +255,7 @@ def test_fetch_downloads_and_unpacks_a_kernel_tarball(
 ) -> None:
     url, digest = tarball
     recipe = _recipe(Kernel("6.1", Http(url, sha256=digest), config=config))
-    (fetched,) = fetch(recipe, lock=None, out=tmp_path)
+    (fetched,) = fetch(recipe, lock=None, build=tmp_path)
     assert (fetched.name, fetched.kind, fetched.pin) == ("kernel", "http", digest)
     assert (fetched.path / "Makefile").read_text(encoding="utf-8") == "all:\n"
     script = _script(recipe, tmp_path / "tree")
@@ -422,11 +422,11 @@ def test_bake_refuses_a_missing_kernel_checkout_then_builds_the_fetched_one(
     backend = _Recording()
     out = tmp_path / "out"
     with pytest.raises(StateError, match="Kernel source 'kernel' is not fetched") as missing:
-        bake_image(lower(recipe), None, locked=locked, backend=backend, out=out, fetch=False)
+        bake_image(lower(recipe), None, locked=locked, backend=backend, build=out, fetch=False)
     assert missing.value.code == ErrorCode.STATE
     assert "tundravm fetch" in str(missing.value.hint)
     assert backend.requests == []
-    bake_image(lower(recipe), None, locked=locked, backend=backend, out=out)
+    bake_image(lower(recipe), None, locked=locked, backend=backend, build=out)
     (request,) = backend.requests
     assert request.sources_dir == out / ".sources"
     assert (out / ".sources" / source_dir("kernel", tag, url) / "Makefile").is_file()

@@ -13,4 +13,4 @@
 
 Conventions: no network (the root `conftest.py` makes source resolution fail; pass `resolver=` to `lock()`).
 Shared fixtures live in `conftest.py` (`inprocess_backend`, `isolated_cwd`); shared helpers (repo paths, `run_main`, `write_recipe_file`, `conf_list`) in `helpers.py`.
-Golden trees are the oracle for compiler output: the surge tests pin `update=False` against `examples/surge-tdx-prover/mkosi/` (regenerate it with `tundravm compile ... --out`); other `assert_tree` goldens rewrite under `TUNDRAVM_UPDATE_GOLDEN=1`. Review the git diff either way.
+Golden trees are the oracle for compiler output: the surge tests pin `update=False` against `examples/surge-tdx-prover/mkosi/` (regenerate it with `tundravm compile ... --tree`); other `assert_tree` goldens rewrite under `TUNDRAVM_UPDATE_GOLDEN=1`. Review the git diff either way.

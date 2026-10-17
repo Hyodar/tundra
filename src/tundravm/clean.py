@@ -1,9 +1,9 @@
 """``tundravm clean``: remove the parts of a build output directory a bake leaves behind.
 
-The parts are ``sources`` (``OUT/.sources``), ``tree`` (``OUT/mkosi``),
-``artifacts`` (each ``OUT/<variant>/`` and ``OUT/bake-result.json``) and
-``state`` (``OUT/.mkosi``, which holds the cached tools tree, the mkosi state
-next to the tree's config, and ``OUT/.reproduce``, the second build a failed
+The parts are ``sources`` (``BUILD/.sources``), ``tree`` (``BUILD/mkosi``),
+``artifacts`` (each ``BUILD/<variant>/`` and ``BUILD/bake-result.json``) and
+``state`` (``BUILD/.mkosi``, which holds the cached tools tree, the mkosi state
+next to the tree's config, and ``BUILD/.reproduce``, the second build a failed
 ``bake --verify-reproducible`` keeps). The lockfile is never one of them.
 """
 
@@ -39,36 +39,36 @@ def sudo_runner() -> SudoRunner | None:
     return run_sudo if which("sudo") is not None else None
 
 
-def baked_variants(out: Path) -> tuple[str, ...]:
-    """The variants ``OUT/bake-result.json`` records; empty when it is missing or unreadable."""
+def baked_variants(build: Path) -> tuple[str, ...]:
+    """The variants ``BUILD/bake-result.json`` records; empty when it is missing or unreadable."""
     try:
-        payload = json.loads((out / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
+        payload = json.loads((build / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ()
     variants = payload.get("variants") if isinstance(payload, dict) else None
     return tuple(sorted(str(name) for name in variants)) if isinstance(variants, dict) else ()
 
 
-def clean_paths(out: Path, parts: Collection[str], *, variants: Iterable[str] = ()) -> list[Path]:
-    """The existing paths under *out* that removing *parts* deletes, in removal order.
+def clean_paths(build: Path, parts: Collection[str], *, variants: Iterable[str] = ()) -> list[Path]:
+    """The existing paths under *build* that removing *parts* deletes, in removal order.
 
     Artifact directories are those of *variants* and of the variants the
     manifest records.
     """
     paths: list[Path] = []
     if "sources" in parts:
-        paths.append(out / SOURCES_DIRNAME)
+        paths.append(build / SOURCES_DIRNAME)
     if "tree" in parts:
-        paths.append(out / TREE_DIRNAME)
+        paths.append(build / TREE_DIRNAME)
     if "artifacts" in parts:
-        names = sorted({*variants, *baked_variants(out)} - RESERVED)
-        paths.extend(out / name for name in names if (out / name).is_dir())
-        paths.append(out / BAKE_RESULT_FILENAME)
+        names = sorted({*variants, *baked_variants(build)} - RESERVED)
+        paths.extend(build / name for name in names if (build / name).is_dir())
+        paths.append(build / BAKE_RESULT_FILENAME)
     if "state" in parts:
-        paths.append(out / STATE_DIRNAME)
-        paths.append(out / REPRODUCE_DIRNAME)
+        paths.append(build / STATE_DIRNAME)
+        paths.append(build / REPRODUCE_DIRNAME)
         if "tree" not in parts:
-            paths.extend(_tree_state(out / TREE_DIRNAME))
+            paths.extend(_tree_state(build / TREE_DIRNAME))
     return [path for path in paths if path.exists() or path.is_symlink()]
 
 

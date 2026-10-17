@@ -367,7 +367,7 @@ def _assert_runtime_tool_hook(name: str, binary: str) -> None:
     assert lower(recipe).source_builds()[name].render() == legacy
     runtime_init = _read(tree, "default/mkosi.extra/usr/bin/runtime-init")
     assert runtime_init.count(f"/usr/bin/{binary} setup ") == 1
-    assert not [d for d in lint(recipe) if d.level == "error"]
+    assert not [d for d in lint(recipe) if d.severity == "error"]
 
 
 def test_key_generation_hook_is_byte_identical_to_legacy_bash() -> None:
@@ -459,7 +459,7 @@ def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
     pinned = lock(recipe, resolver=_Fixed(SHA_A))
     unpinned = Lock.of(build_lockfile(recipe=pinned.lockfile.recipe))
     with pytest.raises(LockfileError, match="unpinned: tool") as excinfo:
-        bake(recipe, lock=unpinned, backend=Backend("inprocess"), out=tmp_path / "out")
+        bake(recipe, lock=unpinned, backend=Backend("inprocess"), build=tmp_path / "out")
     assert excinfo.value.hint is not None
     assert "run tundravm lock" in excinfo.value.hint
 
@@ -484,7 +484,7 @@ def test_policy_warn_compiles_silently_and_error_refuses() -> None:
 
 def test_drift_reports_new_and_moved_sources() -> None:
     recipe = _recipe(Package("curl"), _build())
-    added = Diagnostic("lock-added", "source tool is not pinned", subject="sources.tool")
+    added = Diagnostic("lock-added", "error", "source tool is not pinned", subject="sources.tool")
     assert added in lock_status(recipe, lock(_recipe(Package("curl"))))
     locked = lock(recipe, resolver=_Fixed(SHA_A))
     assert lock_status(recipe, locked) == ()
@@ -494,12 +494,14 @@ def test_drift_reports_new_and_moved_sources() -> None:
     assert moved == ([], ["sources.tool"], [], {"sources.tool": f"{SHA_A[:7]} -> {SHA_B[:7]}"})
     retargeted = lock_status(_recipe(Package("curl"), _build("dev")), locked)
     changed = f"sources.tool changed since the lock: {SHA_A[:7]} -> dev"
-    assert Diagnostic("lock-changed", changed, subject="sources.tool") in retargeted
+    assert Diagnostic("lock-changed", "error", changed, subject="sources.tool") in retargeted
 
 
 def test_drift_reports_removed_sources() -> None:
     locked = lock(_recipe(Package("curl"), _build()), resolver=_Fixed(SHA_A))
-    removed = Diagnostic("lock-removed", "sources.tool is only in the lock", subject="sources.tool")
+    removed = Diagnostic(
+        "lock-removed", "error", "sources.tool is only in the lock", subject="sources.tool"
+    )
     assert removed in lock_status(_recipe(Package("curl")), locked)
 
 
@@ -556,9 +558,9 @@ def test_inspect_renders_hooks_at_the_pins_it_shows(tmp_path: Path) -> None:
 def test_check_rule_source_unpinned() -> None:
     recipe = _recipe(_build())
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]
-    assert [(d.level, d.subject) for d in found] == [("warning", "tool")]
+    assert [(d.severity, d.subject) for d in found] == [("warning", "tool")]
     strict = _recipe(_build(), policy=Policy(mutable_ref_policy="error"))
-    assert [d.level for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
+    assert [d.severity for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
     # lint reads the pins of ./build/tundravm.lock, as `tundravm lint` does.
     write_lock(lock(recipe, resolver=_Fixed(SHA_A)), Path("build") / "tundravm.lock")
     assert not [d for d in lint(recipe) if d.code == "source-unpinned"]

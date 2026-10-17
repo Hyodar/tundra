@@ -52,7 +52,7 @@ def _baked(tmp_path: Path, recipe: Recipe) -> Path:
     out = tmp_path / "build"
     locked = lock(recipe)
     write_lock(locked, out / "tundravm.lock")
-    bake(recipe, lock=locked, backend=Backend("inprocess"), out=out)
+    bake(recipe, lock=locked, backend=Backend("inprocess"), build=out)
     return out
 
 
@@ -62,7 +62,7 @@ def epoch(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _evidence(recipe: Recipe, out: Path, **kwargs: object) -> Evidence:
-    return evidence(recipe, out=out, runner=_mkosi, **kwargs)  # type: ignore[arg-type]
+    return evidence(recipe, build=out, runner=_mkosi, **kwargs)  # type: ignore[arg-type]
 
 
 def test_index_records_every_member_with_its_sha256(tmp_path: Path, epoch: None) -> None:
@@ -119,7 +119,9 @@ def test_bundle_is_deterministic(tmp_path: Path, epoch: None) -> None:
         "evidence/lint.json",
         "evidence/tundravm.lock",
         "evidence/variants/azure/sbom-azure.spdx.json",
+        "evidence/variants/azure/tree.json",
         "evidence/variants/default/sbom-qemu.spdx.json",
+        "evidence/variants/default/tree.json",
     ]
     assert {(m.mtime, m.uid, m.gid, m.mode) for m in members} == {(int(EPOCH), 0, 0, 0o644)}
 
@@ -247,7 +249,7 @@ def test_policy_is_copied_and_matched_to_the_artifact(tmp_path: Path) -> None:
 
 def test_lowered_recipe_leaves_out_provenance(tmp_path: Path) -> None:
     recipe = _recipe()
-    found = evidence(lower(recipe), out=_baked(tmp_path, recipe), runner=_mkosi)
+    found = evidence(lower(recipe), build=_baked(tmp_path, recipe), runner=_mkosi)
     assert found.index["variants"]["default"]["provenance"] is None
     assert found.index["verdict"]["lock"] == "current"
     assert any("provenance summary is left out" in note for note in found.notes)
@@ -311,7 +313,7 @@ def test_the_bake_records_what_binds_its_sbom(tmp_path: Path) -> None:
     assert payload["lock_sha256"] == lock_sha
     assert payload["variants"]["default"]["manifest_digests"] == {"qemu": None}
     assert {a.lock_sha256 for a in read_artifacts(out)} == {lock_sha}
-    assert {a.out for a in read_artifacts(out)} == {out}
+    assert {a.build for a in read_artifacts(out)} == {out}
 
 
 def test_a_lockfile_other_than_the_bakes_is_refused_unless_allowed(tmp_path: Path) -> None:

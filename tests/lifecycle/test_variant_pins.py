@@ -147,7 +147,7 @@ def test_fetch_checks_out_each_pin_once(tmp_path: Path, repo: tuple[str, dict[st
     url, commits = repo
     recipe = _recipe(url=url)
     locked = lock(recipe, resolver=lambda s: commits[s.ref])  # type: ignore[union-attr]
-    fetched = fetch(recipe, lock=locked, out=tmp_path / "out")
+    fetched = fetch(recipe, lock=locked, build=tmp_path / "out")
     assert [(f.name, f.pin) for f in fetched] == [
         ("default/app", commits["stable"]),
         ("dev/app", commits["dev"]),

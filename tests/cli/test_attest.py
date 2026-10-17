@@ -496,6 +496,7 @@ def test_cli_attest_json_and_markdown(
     code, out = run_main("attest", "--issuer", url, "--policy", str(peer_file), "--format", "json")
     assert code == EXIT_OK
     payload = json.loads(out)
+    assert payload["schema"] == "tundravm.attest/1"
     assert payload["verdict"] == "measurements-match" and payload["trusted"] is False
     assert payload["passed"] is True and payload["signature_status"] == "unchecked"
     assert payload["policy"] == str(peer_file) and payload["issuer"] == url

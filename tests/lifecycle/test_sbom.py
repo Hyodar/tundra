@@ -114,7 +114,7 @@ def _artifact(tmp_path: Path, *, manifest: bool = True, lock: Lock | None = None
         tree_digest="t" * 64,
         lock_sha256=None if lock is None else hashlib.sha256(lock.text().encode()).hexdigest(),
         manifest_sha256=recorded,
-        out=tmp_path,
+        build=tmp_path,
     )
 
 
@@ -344,7 +344,7 @@ def test_moving_the_bake_directory_changes_no_document(
     recipe = Recipe(
         "node", Fragment("common", items=(Package("curl"), Package("linux-image-amd64")))
     )
-    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "one")
+    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "one")
     shutil.copytree(tmp_path / "one", tmp_path / "elsewhere" / "two")
     documents = [
         sbom(read_artifacts(out)[0], lock=read_lock(out / "tundravm.lock"))

@@ -304,7 +304,7 @@ def attest(
         raise MeasurementError(
             "Refusing to attest against a placeholder policy.",
             hint="Export the policy from a real measurement: "
-            "`tundravm measure MANIFEST --export-policy FILE` with measured-boot or dstack-mr.",
+            "`tundravm measure --export-policy FILE` with measured-boot or dstack-mr.",
             context={"policy": "dict" if isinstance(policy, Mapping) else str(policy)},
         )
     expected = data["registers"]

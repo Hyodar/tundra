@@ -97,7 +97,7 @@ def test_cli_inspect_and_compile_a_declarative_recipe(recipe_file: Path, tmp_pat
     code, out = run_main("inspect", str(recipe_file), "--variant", "azure")
     assert code == EXIT_OK and "azure" in out
 
-    code, _ = run_main("compile", str(recipe_file), "--out", str(tmp_path / "tree"))
+    code, _ = run_main("compile", str(recipe_file), "--tree", str(tmp_path / "tree"))
     assert code == EXIT_OK
     motd = tmp_path / "tree" / "default" / "mkosi.extra" / "etc" / "motd"
     assert motd.read_text() == "hello\n"

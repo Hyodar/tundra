@@ -209,23 +209,23 @@ def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_compile_check_detects_stale_tree(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    code, out = run_main("compile", str(recipe), "--check", "--out", str(tree))
+    code, out = run_main("compile", str(recipe), "--check", "--tree", str(tree))
     assert code == EXIT_FAILURE and "A  default/mkosi.conf" in out
     assert not tree.exists()
 
-    assert run_main("compile", str(recipe), "--out", str(tree))[0] == EXIT_OK
-    code, out = run_main("compile", str(recipe), "--out", str(tree), "--check")
+    assert run_main("compile", str(recipe), "--tree", str(tree))[0] == EXIT_OK
+    code, out = run_main("compile", str(recipe), "--tree", str(tree), "--check")
     assert (code, out) == (EXIT_OK, "tree is up to date with the recipe\n")
 
     text = recipe.read_text()
     recipe.write_text(
         text.replace('Package("jq"),', 'Package("jq"),\n            Package("htop"),')
     )
-    code, out = run_main("compile", str(recipe), "--out", str(tree), "--check")
+    code, out = run_main("compile", str(recipe), "--tree", str(tree), "--check")
     assert code == EXIT_FAILURE
     assert out == "M  azure/mkosi.conf\nM  default/mkosi.conf\n2 files changed\n"
     code, out = run_main(
-        "compile", str(recipe), "--out", str(tree), "--check", "--variant", "default"
+        "compile", str(recipe), "--tree", str(tree), "--check", "--variant", "default"
     )
     assert out == "M  default/mkosi.conf\n1 file changed\n"
 
@@ -233,24 +233,24 @@ def test_compile_check_detects_stale_tree(recipe: Path, tmp_path: Path) -> None:
 def test_diff_command(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     both = ("--variant", "default", "--variant", "azure")
-    run_main("compile", str(recipe), "--out", str(tree), *both)
-    code, out = run_main("diff", str(recipe), "--against", str(tree), "--stat")
+    run_main("compile", str(recipe), "--tree", str(tree), *both)
+    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--stat")
     assert (code, out) == (EXIT_OK, "tree is up to date with the recipe\n")
-    code, out = run_main("diff", str(recipe), "--against", str(tree), *both)
+    code, out = run_main("diff", str(recipe), "--tree", str(tree), *both)
     assert code == EXIT_OK
 
     recipe.write_text(recipe.read_text().replace("hello", "goodbye"))
-    code, out = run_main("diff", str(recipe), "--against", str(tree), "--stat", *both)
+    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--stat", *both)
     assert (tree / "azure" / "mkosi.conf").is_file()
     assert (code, out) == (
         EXIT_FAILURE,
         "M  azure/mkosi.extra/etc/motd\nM  default/mkosi.extra/etc/motd\n2 files changed\n",
     )
 
-    code, out = run_main("diff", str(recipe), "--against", str(tree), "--color", "never")
+    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--color", "never")
     assert code == EXIT_FAILURE
     assert "-hello\n+goodbye\n" in out and "\x1b[" not in out
-    code, out = run_main("diff", str(recipe), "--against", str(tree), "--color", "always")
+    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--color", "always")
     assert "\x1b[31m-hello\x1b[0m" in out
 
 

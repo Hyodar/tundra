@@ -184,15 +184,15 @@ def _lint(lowered: Lowered, progress: Progress) -> None:
     """Report warnings to *progress*; raise ``LintError`` on error-level diagnostics."""
     diagnostics = check(lowered)
     for diagnostic in diagnostics:
-        if diagnostic.level in ("warning", "error"):
+        if diagnostic.severity in ("warning", "error"):
             progress.emit(
                 "warning",
-                diagnostic.profile,
+                diagnostic.location or None,
                 f"{diagnostic.code}: {diagnostic.message}",
-                level=diagnostic.level,
+                level=diagnostic.severity,
                 code=diagnostic.code,
             )
-    errors = [d for d in diagnostics if d.level == "error"]
+    errors = [d for d in diagnostics if d.severity == "error"]
     if errors:
         raise LintError(
             f"Recipe has {len(errors)} error-level diagnostics.",
@@ -343,7 +343,7 @@ def _fetched_sources(
             raise StateError(
                 f"{what} {name!r} is not fetched: {checkout} is missing or incomplete.",
                 hint=(
-                    f"Run `tundravm fetch RECIPE --out {destination}` first, or bake "
+                    f"Run `tundravm fetch RECIPE --build {destination}` first, or bake "
                     "without --no-fetch."
                 ),
                 context={"pin": pin},
@@ -360,7 +360,7 @@ def _fetched_sources(
                 f"Source build {name!r} has no prefetched {recipe.kind} dependencies, "
                 "and an offline bake gives the build no network to download them.",
                 hint=(
-                    f"Run `tundravm fetch RECIPE --out {destination}` on a host with "
+                    f"Run `tundravm fetch RECIPE --build {destination}` on a host with "
                     f"`{recipe.tool}` on PATH (it fills {root / DEPS_DIRNAME / recipe.deps}), "
                     "or bake without --offline."
                 ),
@@ -370,7 +370,7 @@ def _fetched_sources(
             f"Source build {name!r} has an incomplete {recipe.kind} dependency cache: "
             f"{problem}, and an offline bake gives the build no network to download it.",
             hint=(
-                f"Run `tundravm fetch RECIPE --out {destination}` on a host with "
+                f"Run `tundravm fetch RECIPE --build {destination}` on a host with "
                 f"`{recipe.tool}` on PATH: it prefetches the dependencies again "
                 "(`--force` refills every cache). Or bake without --offline."
             ),

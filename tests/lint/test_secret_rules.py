@@ -43,7 +43,7 @@ def _secret_codes(
 )
 def test_secret_in_file_finds_credentials(path: str, content: str, kind: str) -> None:
     [diag] = [d for d in report(recipe(File(path, content))) if d.code == "secret-in-file"]
-    assert (diag.level, diag.subject) == ("error", path)
+    assert (diag.severity, diag.subject) == ("error", path)
     assert kind in diag.message
     assert "Secrets(" in (diag.hint or "") and "allow_secret=True" in (diag.hint or "")
     for value in (AWS, GITHUB, TOKEN, "hunter2hunter2", "MIIEowIBAAKCAQEA"):
@@ -107,7 +107,7 @@ def test_allow_secret_is_per_variant() -> None:
         add=Fragment("prod", items=(File("/etc/dev.conf", f"token={TOKEN}\n", allow_secret=True),)),
     )
     subject = recipe(variants=(Variant("default", target="qemu"), dev, prod))
-    found = [(d.code, d.profile) for d in report(subject) if d.code.startswith("secret-")]
+    found = [(d.code, d.location) for d in report(subject) if d.code.startswith("secret-")]
     assert found == [("secret-in-file", "dev")]
 
 
@@ -195,11 +195,11 @@ def test_service_and_unit_get_the_same_secret_findings(
     verbatim = found.pop("/usr/lib/systemd/system/raw.service")
 
     assert found == {}
-    assert (declared.code, declared.level, declared.hint, declared.profile) == (
+    assert (declared.code, declared.severity, declared.hint, declared.location) == (
         verbatim.code,
-        verbatim.level,
+        verbatim.severity,
         verbatim.hint,
-        verbatim.profile,
+        verbatim.location,
     )
     field, directive = fields
     assert declared.message == (

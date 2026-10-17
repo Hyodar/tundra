@@ -1,10 +1,10 @@
 """Static shell completion scripts generated from the ``tundravm`` argparse parser.
 
 ``render_completion(parser, shell)`` walks the parser's verbs, their flags, flag
-choices (``--format``, ``--backend``, ``--scheme``, ``--target``, ...) and
+choices (``--format``, ``--backend``, ``--scheme``, deploy TARGET, ...) and
 positionals, and returns a bash, zsh or fish script that needs nothing at
 completion time: regenerate it with ``tundravm completion SHELL`` after an upgrade.
-Path-typed arguments (``RECIPE``, ``MANIFEST``, ``--out``, ``--lockfile``, ...)
+Path-typed arguments (``RECIPE``, ``--tree``, ``--build``, ``--lockfile``, ...)
 complete file names.
 """
 

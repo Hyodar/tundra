@@ -71,7 +71,7 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
     from tundravm import Debloat, Diagnostic, File, Fragment, Package, Recipe
 
     def warn(resolved):
-        return (Diagnostic("custom-warning", "from a fragment", level="warning"),)
+        return (Diagnostic("custom-warning", "warning", "from a fragment"),)
 
     recipe = Recipe("demo", Fragment("common", items=(
         Fragment("tool", items=(Package("curl"),), checks=(warn,)),
@@ -102,13 +102,13 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
 
 
 def test_cli_compile_diff_lock_ci(cli_recipe: Path, tmp_path: Path) -> None:
-    code, out, _ = run_cli("compile", cli_recipe, "--out", "mkosi")
+    code, out, _ = run_cli("compile", cli_recipe, "--tree", "mkosi")
     assert code == 0 and "variants:      default, azure\n" in out
     assert "  recipe_digest: " in out and "  tree_digest:   " in out
     assert (tmp_path / "mkosi" / "azure" / "mkosi.conf").is_file()
-    code, out, _ = run_cli("compile", cli_recipe, "--out", "mkosi", "--check")
+    code, out, _ = run_cli("compile", cli_recipe, "--tree", "mkosi", "--check")
     assert (code, out.strip()) == (0, "tree is up to date with the recipe")
-    code, out, _ = run_cli("diff", cli_recipe, "--against", "mkosi")
+    code, out, _ = run_cli("diff", cli_recipe, "--tree", "mkosi")
     assert code == 0
 
     code, out, _ = run_cli("lock", cli_recipe, "--lockfile", "app.lock")
@@ -118,9 +118,9 @@ def test_cli_compile_diff_lock_ci(cli_recipe: Path, tmp_path: Path) -> None:
     code, _, err = run_cli("lock", cli_recipe, "--offline", "--check")
     assert code == 2 and "not allowed with" in err
 
-    code, out, _ = run_cli("compile", cli_recipe, "--out", "mkosi2", "--lockfile", "app.lock")
+    code, out, _ = run_cli("compile", cli_recipe, "--tree", "mkosi2", "--lockfile", "app.lock")
     assert code == 0
-    code, out, _ = run_cli("ci", cli_recipe, "--out", "mkosi", "--lockfile", "app.lock")
+    code, out, _ = run_cli("ci", cli_recipe, "--tree", "mkosi", "--lockfile", "app.lock")
     assert code == 0, out
     assert [line.split(":")[0] for line in out.splitlines()] == ["ok lint", "ok compile", "ok lock"]
 
@@ -129,19 +129,26 @@ def test_cli_bake_measure_deploy_doctor(
     cli_recipe: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert run_cli("lock", cli_recipe)[0] == 0
-    code, out, err = run_cli("bake", cli_recipe, "--out", "out", "--backend", "inprocess", "-q")
+    code, out, err = run_cli("bake", cli_recipe, "--build", "out", "--backend", "inprocess", "-q")
     assert code == 0, err
-    manifest = tmp_path / "out" / "bake-result.json"
-    assert f"next: tundravm deploy {Path('out') / 'bake-result.json'}" in out
+    manifest = tmp_path / "out"
+    assert "next: tundravm deploy azure --build out --variant azure" in out
     assert {a.variant for a in read_artifacts(manifest)} == {"default", "azure"}
 
-    code, _, err = run_cli("measure", manifest, "--variant", "default")
+    code, _, err = run_cli("measure", "--build", manifest, "--variant", "default")
     assert code == 2 and "simulated" in err
     code, out, err = run_cli(
-        "measure", manifest, "--variant", "azure", "--scheme", "azure", "--allow-placeholder"
+        "measure",
+        "--build",
+        manifest,
+        "--variant",
+        "azure",
+        "--scheme",
+        "azure",
+        "--allow-placeholder",
     )
     assert code == 0 and out.startswith("measurements azure (azure)") and "PLACEHOLDER" in err
-    code, _, err = run_cli("measure", manifest, "--scheme", "rtmr")
+    code, _, err = run_cli("measure", "--build", manifest, "--scheme", "rtmr")
     assert code == 2 and "pass --variant" in err
 
     def fake_qemu(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -151,7 +158,7 @@ def test_cli_bake_measure_deploy_doctor(
         "tundravm.declarative.lifecycle.get_adapter",
         lambda target: QemuDeployAdapter(runner=fake_qemu),
     )
-    args = ("deploy", manifest, "--variant", "default", "--target", "qemu")
+    args = ("deploy", "qemu", "--build", manifest, "--variant", "default")
     code, _, err = run_cli(*args, "--param", "cpus=4")
     assert code == 2 and "simulated" in err
     code, out, err = run_cli(*args, "--param", "cpus=4", "--allow-simulated-artifact")
@@ -161,7 +168,7 @@ def test_cli_bake_measure_deploy_doctor(
     assert code == 2 and "Unknown qemu parameter" in err
     code, _, err = run_cli(*args, "--param", "cpus=many")
     assert code == 2 and "integer" in err
-    code, _, err = run_cli("deploy", manifest, "--variant", "azure", "--target", "azure")
+    code, _, err = run_cli("deploy", "azure", "--build", manifest, "--variant", "azure")
     assert code == 2 and "storage_account" in err
 
     code, out, _ = run_cli("doctor", "--backend", "inprocess")
@@ -172,10 +179,10 @@ def test_cli_bake_measure_deploy_doctor(
 
 def test_cli_bake_frozen_against_a_stale_lockfile(cli_recipe: Path, tmp_path: Path) -> None:
     assert run_cli("lock", cli_recipe, "--lockfile", "app.lock", "--variant", "default")[0] == 0
-    code, _, err = run_cli("bake", cli_recipe, "--lockfile", "app.lock", "--out", "out", "-q")
+    code, _, err = run_cli("bake", cli_recipe, "--lockfile", "app.lock", "--build", "out", "-q")
     assert code == 2 and "E_LOCKFILE" in err
     code, _, err = run_cli(
-        "bake", cli_recipe, "--lockfile", "app.lock", "--out", "out", "--variant", "default", "-q"
+        "bake", cli_recipe, "--lockfile", "app.lock", "--build", "out", "--variant", "default", "-q"
     )
     assert code == 0, err
 
@@ -184,7 +191,7 @@ def test_cli_bake_one_variant_against_a_lock_of_every_variant(cli_recipe: Path) 
     assert run_cli("lock", cli_recipe, "--lockfile", "app.lock")[0] == 0
     for variant in ("azure", "default"):
         code, _, err = run_cli(
-            "bake", cli_recipe, "--lockfile", "app.lock", "--out", variant, "--variant", variant
+            "bake", cli_recipe, "--lockfile", "app.lock", "--build", variant, "--variant", variant
         )
         assert code == 0, err
         assert "E_LOCKFILE" not in err
@@ -201,6 +208,6 @@ def test_cli_bake_keeps_a_different_lockfile_in_out(cli_recipe: Path, tmp_path: 
     payload = json.loads((tmp_path / "build" / "bake-result.json").read_text())
     assert payload["declarative"]["lockfile"] == "app.lock"
 
-    code, _, err = run_cli("bake", cli_recipe, "--out", "fresh", "--lockfile", "app.lock", "-q")
+    code, _, err = run_cli("bake", cli_recipe, "--build", "fresh", "--lockfile", "app.lock", "-q")
     assert code == 2 and "E_LOCKFILE" in err  # the subset lock is still what the bake reads
     assert (tmp_path / "fresh" / "tundravm.lock").read_text() == (tmp_path / "app.lock").read_text()

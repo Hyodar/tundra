@@ -443,7 +443,7 @@ def test_global_secret_env_writes_no_dropin(tmp_path: Path) -> None:
 def test_secret_env_rejects_an_unknown_service() -> None:
     recipe = _recipe(*_service_secrets(service="ap"))
     found = [d for d in lint(recipe) if d.code == "secret-env-service-unknown"]
-    assert [(d.level, d.subject) for d in found] == [("error", "ap.service")]
+    assert [(d.severity, d.subject) for d in found] == [("error", "ap.service")]
     assert "'ap.service'" in found[0].message
 
 

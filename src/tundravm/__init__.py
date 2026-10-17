@@ -5,7 +5,8 @@ A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
 ``lower``/``load`` and the lifecycle (``compile``, ``lock``, ``fetch``, ``bake``,
 ``read_artifacts``, ``verify_artifact``, ``doctor``) take one; ``attest`` checks a
 running image's quote against a verifier policy, ``sbom`` lists what a baked
-artifact contains and ``evidence`` gathers an auditor's record of a bake.
+artifact contains and ``evidence`` gathers an auditor's record of a bake, which
+``verify_evidence`` checks on its own and ``changes`` compares with the recipe now.
 ``diff``, ``measure`` and ``deploy`` are ``tundravm.declarative.diff``/``measure``/
 ``deploy`` (at the top level those names are modules). The shipped fragments are
 in :mod:`tundravm.declarative.utils`.
@@ -14,6 +15,7 @@ in :mod:`tundravm.declarative.utils`.
 __version__ = "0.1.0"
 
 from .attestation import Attestation, attest
+from .changes import ChangeReport, changes
 from .declarative import (
     Artifact,
     Azure,
@@ -103,6 +105,7 @@ from .errors import (
 from .evidence import Evidence, evidence
 from .explain import Why, explain_why
 from .recipe import load_recipe
+from .verify import EvidenceVerification, verify_evidence
 
 __all__ = [
     "Artifact",
@@ -114,6 +117,7 @@ __all__ = [
     "BackendExecutionError",
     "Build",
     "Cargo",
+    "ChangeReport",
     "Debloat",
     "Declaration",
     "Deployment",
@@ -124,6 +128,7 @@ __all__ = [
     "Dotnet",
     "Entry",
     "Evidence",
+    "EvidenceVerification",
     "FetchedSource",
     "File",
     "Fragment",
@@ -175,6 +180,7 @@ __all__ = [
     "Why",
     "attest",
     "bake",
+    "changes",
     "compile",
     "doctor",
     "evidence",
@@ -193,6 +199,7 @@ __all__ = [
     "resolve_all",
     "sbom",
     "verify_artifact",
+    "verify_evidence",
     "write_lock",
     "__version__",
 ]

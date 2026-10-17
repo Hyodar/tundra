@@ -84,7 +84,7 @@ def _ruff_formatted(source: str) -> bool:
 
 
 def _errors(imported: Imported) -> list[str]:
-    return [d.code for d in lint(imported.recipe) if d.level == "error"]
+    return [d.code for d in lint(imported.recipe) if d.severity == "error"]
 
 
 @pytest.mark.parametrize("template", sorted(TEMPLATES))
@@ -110,7 +110,7 @@ def test_service_template_imports_first_class_declarations(tmp_path: Path) -> No
 def test_the_written_module_loads_and_compiles_back(tmp_path: Path) -> None:
     tree = _template_tree(tmp_path, "minimal")
     out = tmp_path / "recipes" / "imported.py"
-    code, stdout = run_main("import", str(tree), "--out", str(out))
+    code, stdout = run_main("import", str(tree), "--output", str(out))
     assert code == 0
     assert stdout.startswith(f"wrote {out}\ncoverage: ")
     assert diff(compile(load(out)), tree) == ""
@@ -190,7 +190,7 @@ def test_large_and_binary_files_are_read_from_the_tree(tmp_path: Path) -> None:
     blob.parent.mkdir(parents=True)
     blob.write_bytes(bytes(range(256)) * 8)
     out = tmp_path / "recipe.py"
-    imported = import_tree(tree, out=out)
+    imported = import_tree(tree, output=out)
     assert "TREE = Path(__file__).resolve().parent / 'tree'" in imported.recipe_source.replace(
         '"', "'"
     )
@@ -238,15 +238,16 @@ def test_cli_prints_the_module_and_reports_on_stderr(
 def test_cli_json_and_overwrite(tmp_path: Path) -> None:
     tree = _template_tree(tmp_path, "minimal")
     out = tmp_path / "recipe.py"
-    code, stdout = run_main("import", str(tree), "--out", str(out), "--format", "json")
+    code, stdout = run_main("import", str(tree), "--output", str(out), "--format", "json")
     assert code == 0
     payload = json.loads(stdout)
-    assert set(payload) == {"recipe_source", "recipe", "notes", "coverage"}
+    assert set(payload) == {"schema", "recipe_source", "recipe", "notes", "coverage"}
+    assert payload["schema"] == "tundravm.import/1"
     assert payload["recipe_source"] == out.read_text(encoding="utf-8")
     assert set(payload["coverage"]) == {"declared", "verbatim"}
-    code, _ = run_main("import", str(tree), "--out", str(out))
+    code, _ = run_main("import", str(tree), "--output", str(out))
     assert code != 0
-    code, _ = run_main("import", str(tree), "--out", str(out), "--force")
+    code, _ = run_main("import", str(tree), "--output", str(out), "--force")
     assert code == 0
 
 

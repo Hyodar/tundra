@@ -78,13 +78,14 @@ class Invocation:
 
     recipe: str
     """RECIPE as ``next`` repeats it: empty when it came from ``[tool.tundravm]``."""
-    out: Path | None = None
+    build: Path | None = None
+    """``--build`` as ``next`` repeats it: ``None`` unless given on the command line."""
     lockfile: Path | None = None
     lock_configured: bool = False
     """Whether the lockfile is ``[tool.tundravm]``'s, reported as configured when missing."""
     variants: tuple[str, ...] = ()
     tree_flag: bool = True
-    """Whether a ``compile`` suggestion spells out ``--out TREE`` (not when configured)."""
+    """Whether a ``compile`` suggestion spells out ``--tree TREE`` (not when configured)."""
     recipe_path: str = ""
     """The path the ``recipe`` line shows; empty: ``recipe``."""
 
@@ -149,25 +150,25 @@ def project_status(
     loaded: RecipeFile,
     variants: Sequence[str],
     *,
-    out: Path,
+    build: Path,
     lock_path: Path,
     runner: ProbeRunner,
     invocation: Invocation,
     verify: bool = False,
     tree: Path | None = None,
 ) -> ProjectStatus:
-    """Report *variants* of *loaded* against the build output in *out*; never writes.
+    """Report *variants* of *loaded* against the build directory *build*; never writes.
 
-    *tree* is the compiled mkosi tree (default: ``OUT/mkosi``). With *verify*
+    *tree* is the compiled mkosi tree (default: ``BUILD/mkosi``). With *verify*
     each artifact's file is hashed against its recorded sha256.
     """
-    tree_path = tree if tree is not None else out / TREE_DIRNAME
+    tree_path = tree if tree is not None else build / TREE_DIRNAME
     img = loaded.lowered()
     names = tuple(variants)
     lock, lock_item = _lock(img, names, lock_path, configured=invocation.lock_configured)
-    sources = _sources(img, names, lock, out)
+    sources = _sources(img, names, lock, build)
     tree_item = _tree(img, names, lock, tree_path)
-    manifest = out / BAKE_RESULT_FILENAME
+    manifest = build / BAKE_RESULT_FILENAME
     artifacts, baked = _artifacts(img, names, lock, manifest, verify=verify)
     backend = _backend(loaded, runner)
     lint = _lint(loaded, names, lock)
@@ -255,15 +256,15 @@ def _lock(
 
 
 def _sources(
-    img: Lowered, names: tuple[str, ...], lock: Lock | None, out: Path
+    img: Lowered, names: tuple[str, ...], lock: Lock | None, build: Path
 ) -> tuple[StatusItem, ...]:
     builds = img.select(names).lock_sources()
     pins = {} if lock is None else {f.name: f for f in lock.lockfile.fetches if f.name is not None}
-    root = out / SOURCES_DIRNAME
+    root = build / SOURCES_DIRNAME
     simulated = img.backend is not None and img.backend.name == INPROCESS
     items: list[StatusItem] = []
-    for name, build in builds.items():
-        pin = build.pin_from(pins)
+    for name, spec in builds.items():
+        pin = spec.pin_from(pins)
         data: dict[str, object] = {"name": name, "pin": pin, "path": None, "fetched": False}
         if not img.fetches_sources:
             detail = f"{name}: fetched inside the build ({img.mkosi.dialect})"
@@ -273,11 +274,11 @@ def _sources(
             detail = f"{name}: not pinned, so no checkout to check"
             items.append(StatusItem("source", "n/a" if simulated else "missing", detail, data))
             continue
-        path = root / build.pin_dir(pin)
+        path = root / spec.pin_dir(pin)
         data["path"] = str(path)
         others = _other_checkouts(root, name, path)
         try:
-            fetched = is_fetched(path, pin, build.source, name=name)
+            fetched = is_fetched(path, pin, spec.source, name=name)
         except SourceError as exc:
             data["fetched"] = False
             data["modified"] = exc.reason
@@ -349,7 +350,7 @@ def _artifacts(
             for name in names
         ), ()
     try:
-        artifacts = read_artifacts(manifest)
+        artifacts = read_artifacts(manifest.parent)
         extra = json.loads(manifest.read_text(encoding="utf-8")).get(MANIFEST_KEY) or {}
     except (TdxError, OSError, ValueError) as exc:
         detail = f"{manifest} is unreadable: {exc}"
@@ -515,7 +516,7 @@ def _next(status: ProjectStatus, call: Invocation, tree: Path) -> str:
 
 def _next_command(status: ProjectStatus, call: Invocation, tree: Path) -> str:
     variants = "".join(f" --variant {name}" for name in call.variants)
-    out_flag = "" if call.out is None else f" --out {call.out}"
+    build_flag = "" if call.build is None else f" --build {call.build}"
     lock_flag = "" if call.lockfile is None else f" --lockfile {call.lockfile}"
     if status.lint.verdict == "error":
         return f"tundravm lint {call.recipe}{variants}"
@@ -525,14 +526,14 @@ def _next_command(status: ProjectStatus, call: Invocation, tree: Path) -> str:
     if overall(status.sources) in ("missing", "stale"):
         modified = any("modified" in item.data for item in status.sources)
         force = " --force" if modified else ""
-        return f"tundravm fetch {call.recipe}{variants}{out_flag}{lock_flag}{force}"
+        return f"tundravm fetch {call.recipe}{variants}{build_flag}{lock_flag}{force}"
     if status.tree.verdict in ("missing", "stale"):
-        tree_flag = f" --out {tree}" if call.tree_flag else ""
+        tree_flag = f" --tree {tree}" if call.tree_flag else ""
         return f"tundravm compile {call.recipe}{variants}{tree_flag}{lock_flag}"
     if overall(status.artifacts) in ("missing", "stale"):
         if status.backend.verdict == "missing":
             return f"tundravm doctor {call.recipe}"
-        return f"tundravm bake {call.recipe}{variants}{out_flag}{lock_flag}"
+        return f"tundravm bake {call.recipe}{variants}{build_flag}{lock_flag}"
     return UP_TO_DATE
 
 

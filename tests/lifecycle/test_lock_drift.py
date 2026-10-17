@@ -128,6 +128,7 @@ def test_drift_after_install_names_packages_with_detail() -> None:
     assert lock_status(recipe, locked) == (
         Diagnostic(
             "lock-changed",
+            "error",
             "variants.default.packages changed since the lock: +htop",
             subject="variants.default.packages",
         ),
@@ -153,7 +154,7 @@ def test_frozen_bake_error_carries_drift(tmp_path: Path) -> None:
     locked = lock(_recipe())
 
     with pytest.raises(LockfileError) as excinfo:
-        bake(_recipe(Package("htop")), lock=locked, backend=Backend("inprocess"), out=tmp_path)
+        bake(_recipe(Package("htop")), lock=locked, backend=Backend("inprocess"), build=tmp_path)
 
     error = excinfo.value
     assert "stale" in str(error)
@@ -188,7 +189,7 @@ def test_old_format_lockfile_reports_all_sections_added_and_refuses_frozen_bakes
     locked = read_lock(lock_path)
     assert locked.lockfile.sections == {}
     with pytest.raises(LockfileError, match="needs a version 4 lockfile") as raised:
-        bake(recipe, lock=locked, backend=Backend("inprocess"), out=tmp_path / "out")
+        bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path / "out")
     assert raised.value.hint is not None and "tundravm lock RECIPE" in raised.value.hint
 
     found = lock_status(recipe, locked)
@@ -294,7 +295,7 @@ def test_cli_bake_frozen_surfaces_drift(recipe: Path, capsys: pytest.CaptureFixt
     _add_htop(recipe)
 
     code, _ = run_main(
-        "bake", str(recipe), "--lockfile", lock_path, "--out", str(recipe.parent / "out")
+        "bake", str(recipe), "--lockfile", lock_path, "--build", str(recipe.parent / "out")
     )
 
     assert code == EXIT_SDK_ERROR

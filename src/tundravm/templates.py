@@ -45,8 +45,8 @@ _HEADER = r'''"""$title image recipe ($template template).
 Inspect:  tundravm inspect $filename
 Lint:     tundravm lint $filename
 Lock:     tundravm lock $filename
-Compile:  tundravm compile $filename --out mkosi
-Build:    tundravm bake $filename --out build
+Compile:  tundravm compile $filename --tree mkosi
+Build:    tundravm bake $filename --build build
 """
 
 '''
@@ -196,7 +196,7 @@ class App(Composite):
         if self.port >= 1024:
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
-        return (Diagnostic("app-privileged-port", message, variant=resolved.variant),)
+        return (Diagnostic("app-privileged-port", "error", message, location=resolved.variant),)
 
 
 backend = $backend_expr
@@ -367,10 +367,10 @@ def test_compiles_every_variant(tmp_path: Path) -> None:
 
 
 def test_matches_committed_tree() -> None:
-    # mkosi/ is the committed output of `tundravm compile $filename --out mkosi`. After an
+    # mkosi/ is the committed output of `tundravm compile $filename --tree mkosi`. After an
     # intended recipe change, rewrite it with: TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests
     if not GOLDEN.is_dir() and os.environ.get(UPDATE_GOLDEN_ENV) != "1":
-        raise AssertionError(f"{GOLDEN} is missing: run `tundravm compile $filename --out mkosi`")
+        raise AssertionError(f"{GOLDEN} is missing: run `tundravm compile $filename --tree mkosi`")
     lock = tundravm.read_lock(LOCKFILE) if LOCKFILE.exists() else None
     assert_tree(tundravm.compile(RECIPE, lock=lock), GOLDEN)
 '''
@@ -452,7 +452,7 @@ jobs:
           uv run tundravm inspect {recipe} --format markdown >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check recipe, compiled tree and lockfile
-        run: uv run tundravm ci {recipe} --out {out}
+        run: uv run tundravm ci {recipe} --tree {tree}
 
   bake:
     needs: check
@@ -476,17 +476,17 @@ jobs:
         run: uv sync
 
       - name: Fetch sources
-        run: uv run tundravm fetch {recipe} --out build
+        run: uv run tundravm fetch {recipe} --build build
 
       - name: Bake twice and compare
         run: >-
           uv run tundravm bake {recipe} --backend ${{{{ vars.TUNDRAVM_BAKE_BACKEND }}}}
-          --out build --verify-reproducible
+          --build build --verify-reproducible
 
       - name: Collect evidence
         if: ${{{{ !cancelled() && hashFiles('build/bake-result.json') != '' }}}}
         run: >-
-          uv run tundravm evidence {recipe} --out build
+          uv run tundravm evidence {recipe} --build build
           --require ${{{{ vars.TUNDRAVM_BAKE_BACKEND == 'inprocess'
           && 'reproducible,lock' || 'reproducible,lock,real' }}}}
           --bundle evidence.tar.gz --html evidence.html
@@ -587,11 +587,11 @@ def render_readme(*, title: str, filename: str, template: str, tests: bool) -> s
     """Return the five-line ``README.md`` ``init`` writes when the project has none."""
     commands = [
         (f"tundravm inspect {filename}", "show what the image contains"),
-        (f"tundravm compile {filename} --out mkosi", "write the mkosi tree; commit it"),
+        (f"tundravm compile {filename} --tree mkosi", "write the mkosi tree; commit it"),
         ("uv run pytest tests", "lint, compile and golden-tree tests")
         if tests
         else (f"tundravm lint {filename}", "report recipe problems"),
-        (f"tundravm bake {filename} --out build", "build the image"),
+        (f"tundravm bake {filename} --build build", "build the image"),
     ]
     width = max(len(command) for command, _ in commands)
     lines = "\n".join(f"    {command:<{width}}  {why}" for command, why in commands)
@@ -600,9 +600,9 @@ def render_readme(*, title: str, filename: str, template: str, tests: bool) -> s
     )
 
 
-def render_workflow(*, recipe: str, out: str = "mkosi") -> str:
+def render_workflow(*, recipe: str, tree: str = "mkosi") -> str:
     """Return the GitHub Actions workflow ``tundravm init --ci github`` writes."""
-    return WORKFLOW_TEMPLATE.format(recipe=recipe, out=out)
+    return WORKFLOW_TEMPLATE.format(recipe=recipe, tree=tree)
 
 
 __all__ = [

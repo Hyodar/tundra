@@ -26,6 +26,10 @@ DENYLIST = {
     "fluent Image constructor": re.compile(r"\bImage\("),
     "internal module spec": re.compile(r"\b(?:Key|Disk|Secret)Spec\("),
     "internal secret target": re.compile(r"\bSecretTarget\."),
+    "removed --out flag (--tree, --build, --output)": re.compile(r"--out\b"),
+    "removed --against flag (--tree)": re.compile(r"--against\b"),
+    "removed deploy --target flag (TARGET)": re.compile(r"\bdeploy\b[^\n]*--target\b"),
+    "removed MANIFEST positional (--build)": re.compile(r"\b(?:measure|deploy|sbom) MANIFEST\b"),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 

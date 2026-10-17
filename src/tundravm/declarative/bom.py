@@ -368,7 +368,7 @@ def _of_artifact(
     notes = [f"unbound, the document is incomplete: {problem}" for problem in unbound]
     if artifact.simulated:
         notes.append("the artifact is simulated (in-process backend): nothing was installed")
-    shown = _relative(path, artifact.out)
+    shown = _relative(path, artifact.build)
     if artifact.manifest_sha256 is not None and not path.is_file():
         notes.append(f"the manifest the bake recorded at {shown} is gone")
     packages, config, found = _packages(path, declared, distribution.get("arch"), notes, shown)
@@ -386,7 +386,7 @@ def _of_artifact(
         mirror=_opt(distribution.get("mirror")),
         recipe_digest=artifact.recipe_digest,
         tree_digest=artifact.tree_digest,
-        artifact=_relative(artifact.path, artifact.out),
+        artifact=_relative(artifact.path, artifact.build),
         artifact_sha256=artifact.sha256,
         tundravm_version=_version(),
         manifest=shown,
@@ -397,12 +397,12 @@ def _of_artifact(
     )
 
 
-def _relative(path: Path, out: Path | None) -> Path:
-    """*path* relative to the bake output directory *out*, when it is under it."""
-    if out is None:
+def _relative(path: Path, build: Path | None) -> Path:
+    """*path* relative to the build directory *build*, when it is under it."""
+    if build is None:
         return path
     try:
-        return path.resolve().relative_to(out.resolve())
+        return path.resolve().relative_to(build.resolve())
     except ValueError:
         return path
 
@@ -425,7 +425,7 @@ def _unbound(artifact: Artifact, lock: Lock | None, manifest: Path) -> list[str]
             )
     if manifest.is_file():
         actual = _sha256(manifest.read_bytes())
-        shown = _relative(manifest, artifact.out)
+        shown = _relative(manifest, artifact.build)
         if artifact.manifest_sha256 is None:
             problems.append(f"the bake recorded no manifest, but {shown} exists")
         elif actual != artifact.manifest_sha256:

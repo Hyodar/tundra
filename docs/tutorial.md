@@ -17,11 +17,11 @@ created README.md
 created .gitignore
 lint node.py: no findings
 next:
-  1. tundravm lock node.py                 record recipe sections and pin source repositories/downloads in build/tundravm.lock
-  2. tundravm compile node.py --out mkosi  write the mkosi tree; commit it
-  3. uv run pytest tests                   run test_node.py against mkosi/
-  4. tundravm ci node.py --out mkosi       the lint, tree and lockfile checks CI runs
-  5. tundravm bake node.py --out build     build the image
+  1. tundravm lock node.py                  record recipe sections and pin source repositories/downloads in build/tundravm.lock
+  2. tundravm compile node.py --tree mkosi  write the mkosi tree; commit it
+  3. uv run pytest tests                    run test_node.py against mkosi/
+  4. tundravm ci node.py --tree mkosi       the lint, tree and lockfile checks CI runs
+  5. tundravm bake node.py --build build    build the image
   tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm` uses a local checkout
 then commit mkosi/ and build/tundravm.lock; the workflow checks both
 
@@ -82,7 +82,7 @@ class App(Composite):
         if self.port >= 1024:
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
-        return (Diagnostic("app-privileged-port", message, variant=resolved.variant),)
+        return (Diagnostic("app-privileged-port", "error", message, location=resolved.variant),)
 
 
 backend = InProcessBackend()
@@ -123,20 +123,20 @@ The `.gitignore` block ignores `build/` but keeps `build/tundravm.lock`, which y
 ```toml
 [tool.tundravm]
 recipe = "node.py"
-out = "build"
 tree = "mkosi"
+build = "build"
 lockfile = "build/tundravm.lock"
 backend = "inprocess"
 ```
 
-Every command looks for it in the working directory and its parents, so in this project `node.py` may be left out: `tundravm lint` lints `node.py`, `tundravm compile` writes `mkosi/`, and `tundravm status` reports on the whole project. The steps below spell `node.py` and `--out mkosi` out so that each command reads on its own; a flag always wins over the table. `tundravm config` prints what applies:
+Every command looks for it in the working directory and its parents, so in this project `node.py` may be left out: `tundravm lint` lints `node.py`, `tundravm compile` writes `mkosi/`, `tundravm status` reports on the whole project, and `tundravm measure`, `deploy` and `sbom` read the bake in `build/`. The steps below spell `node.py` and `--tree mkosi` out so that each command reads on its own; a flag always wins over the table. `tundravm config` prints what applies:
 
 ```console
 $ tundravm config
 pyproject: /home/me/node/pyproject.toml
   recipe    node.py              pyproject
-  out       build                pyproject
   tree      mkosi                pyproject
+  build     build                pyproject
   lockfile  build/tundravm.lock  pyproject; does not exist; run `tundravm lock`
   backend   inprocess            pyproject
 [exit 0]
@@ -286,7 +286,7 @@ $ tundravm lock node.py
 locked build/tundravm.lock
 [exit 0]
 
-$ tundravm compile node.py --out mkosi
+$ tundravm compile node.py --tree mkosi
 compiled mkosi
   variants:      default, dev, debug
   recipe_digest: a6dc0dc1f656aa95bef9677463fd16e0a47e324acd21ae260aa0bdf441608ef2
@@ -322,7 +322,7 @@ watching node.py every 1s (Ctrl-C stops)
 Step 6 left `APP_PORT = 9090` in the recipe. Ask what changed:
 
 ```console
-$ tundravm diff node.py --against mkosi --variant default
+$ tundravm diff node.py --tree mkosi --variant default
 diff --git a/default/mkosi.extra/etc/app/app.conf b/default/mkosi.extra/etc/app/app.conf
 --- a/default/mkosi.extra/etc/app/app.conf
 +++ b/default/mkosi.extra/etc/app/app.conf
@@ -332,7 +332,7 @@ diff --git a/default/mkosi.extra/etc/app/app.conf b/default/mkosi.extra/etc/app/
 +listen=0.0.0.0:9090
 [exit 1]
 
-$ tundravm compile node.py --out mkosi --check
+$ tundravm compile node.py --tree mkosi --check
 M  debug/mkosi.extra/etc/app/app.conf
 M  default/mkosi.extra/etc/app/app.conf
 M  dev/mkosi.extra/etc/app/app.conf
@@ -361,7 +361,7 @@ $ tundravm lock node.py --check
 lock is up to date
 [exit 0]
 
-$ tundravm compile node.py --out mkosi
+$ tundravm compile node.py --tree mkosi
 compiled mkosi
   variants:      default, dev, debug
   recipe_digest: 2f0041479c07b652bd4fad98f7e86c1547d4078945ac68948f19d704f31e4cd3
@@ -405,11 +405,11 @@ variant  target  artifact                  size   sha256        time
 debug    qemu    build/debug/disk.qcow2    112 B  b50a5a5aeaac  0.0s
 default  qemu    build/default/disk.qcow2  114 B  1fa043adea90  0.0s
 dev      qemu    build/dev/disk.qcow2      110 B  9cfb8b5c2f31  0.0s
-next: tundravm deploy build/bake-result.json --variant debug --target qemu
+next: tundravm deploy qemu --variant debug
 [exit 0]
 ```
 
-Progress lines go to stderr and the summary to stdout. The bake was frozen against `build/tundravm.lock`: had the recipe drifted from it, the `verify lockfile` step would have failed with `E_LOCKFILE`, and without the file, which the table configures, `bake` would have refused before `lint`, with `E_LOCKFILE` too. The backend came from `node.py`; `--backend lima|nix|local|inprocess` overrides it. The manifest `build/bake-result.json` records every artifact with its digest, the recipe digest and the tree digest.
+Progress lines go to stderr and the summary to stdout. The bake was frozen against `build/tundravm.lock`: had the recipe drifted from it, the `verify lockfile` step would have failed with `E_LOCKFILE`, and without the file, which the table configures, `bake` would have refused before `lint`, with `E_LOCKFILE` too. The backend came from `node.py`; `--backend lima|nix|local|inprocess` overrides it. The manifest `build/bake-result.json` records every artifact with its digest, the recipe digest and the tree digest. The `next:` line leaves out `--build build`, since the build directory came from the table.
 
 ## 9. Prove it is reproducible
 
@@ -420,7 +420,7 @@ debug    qemu    build/debug/disk.qcow2    112 B  b50a5a5aeaac  0.0s
 default  qemu    build/default/disk.qcow2  114 B  1fa043adea90  0.0s
 dev      qemu    build/dev/disk.qcow2      110 B  9cfb8b5c2f31  0.0s
 reproducible: yes (3 artifacts match a second build)
-next: tundravm deploy build/bake-result.json --variant debug --target qemu
+next: tundravm deploy qemu --variant debug
 [exit 0]
 ```
 
@@ -429,14 +429,14 @@ next: tundravm deploy build/bake-result.json --variant debug --target qemu
 ## 10. Measure
 
 ```console
-$ tundravm measure build --variant default
+$ tundravm measure --variant default
 error [E_MEASUREMENT]: Refusing to measure a simulated artifact.
 Hint: Bake with a real backend, or pass allow_placeholder=True for test values.
   variant: default
   path: build/default/disk.qcow2
 [exit 2]
 
-$ tundravm measure build --variant default --allow-placeholder
+$ tundravm measure --variant default --allow-placeholder
 PLACEHOLDER: not real measurements. These values are derived from artifact digests; never put them in an attestation policy.
 measurements default (rtmr)
 source: placeholder (build/default/disk.qcow2)
@@ -446,12 +446,12 @@ source: placeholder (build/default/disk.qcow2)
 [exit 0]
 ```
 
-`measure` takes the manifest (or the directory holding it) and first checks the artifact against the sha256 the bake recorded: a disk file changed since the bake is `E_ARTIFACT_CHANGED`. With a real bake and `measured-boot` or `dstack-mr` on `PATH`, the `source:` line names that tool instead of `placeholder`.
+`measure` reads the bake in the build directory (`--build`, here the table's `build`) and first checks the artifact against the sha256 the bake recorded: a disk file changed since the bake is `E_ARTIFACT_CHANGED`. With a real bake and `measured-boot` or `dstack-mr` on `PATH`, the `source:` line names that tool instead of `placeholder`.
 
 A verifier, an image that checks its peers' quotes, needs these values as its expected measurements. `--export-policy` writes them to a policy file:
 
 ```console
-$ tundravm measure build --variant default --allow-placeholder --export-policy peer.json
+$ tundravm measure --variant default --allow-placeholder --export-policy peer.json
 PLACEHOLDER: not real measurements. These values are derived from artifact digests; never put them in an attestation policy.
 wrote policy peer.json
 measurements default (rtmr)
@@ -504,7 +504,7 @@ Once the image runs, `tundravm attest` checks it against the policy: it asks the
 ```console
 $ tundravm attest --issuer unix:./tdxs.sock --policy peer.json
 error [E_MEASUREMENT]: Refusing to attest against a placeholder policy.
-Hint: Export the policy from a real measurement: `tundravm measure MANIFEST --export-policy FILE` with measured-boot or dstack-mr.
+Hint: Export the policy from a real measurement: `tundravm measure --export-policy FILE` with measured-boot or dstack-mr.
   policy: peer.json
 [exit 2]
 ```
@@ -521,7 +521,7 @@ tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --pol
 ## 11. What is in the image
 
 ```console
-$ tundravm sbom build --variant default --format text
+$ tundravm sbom --variant default --format text
 sbom default
   variant          default
   base             debian/trixie
@@ -556,7 +556,7 @@ note: no mkosi package manifest at build/default/default.manifest: listing the p
 The default format is SPDX 2.3 JSON, and `--output` writes it to a file to publish next to `peer.json`:
 
 ```console
-$ tundravm sbom build --variant default --output build/default.spdx.json
+$ tundravm sbom --variant default --output build/default.spdx.json
 note: the artifact is simulated (in-process backend): nothing was installed
 note: no mkosi package manifest at build/default/default.manifest: listing the packages the recipe declares, without versions
 wrote spdx-json build/default.spdx.json
@@ -599,14 +599,14 @@ note: default/qemu sbom: no mkosi package manifest at build/default/default.mani
 ## 13. Deploy
 
 ```console
-$ tundravm deploy build --variant default --target qemu
+$ tundravm deploy qemu --variant default
 error [E_DEPLOYMENT]: Refusing to deploy a simulated artifact.
 Hint: Bake with a real backend first, or pass allow_simulated=True for a test run.
   variant: default
   path: build/default/disk.qcow2
 [exit 2]
 
-$ tundravm deploy build --variant default --target qemu --allow-simulated-artifact
+$ tundravm deploy qemu --variant default --allow-simulated-artifact
 error [E_DEPLOYMENT]: QEMU binary not found: qemu-system-x86_64
 Hint: Install QEMU and ensure it is in PATH.
   binary: qemu-system-x86_64
@@ -668,7 +668,7 @@ class HealthCheck(Composite):
             if isinstance(item, File) and item.path == "/etc/app/app.conf" and listen in item.content:
                 return ()
         message = f"the app does not listen on port {self.port}"
-        return (Diagnostic("healthcheck-port", message, variant=resolved.variant),)
+        return (Diagnostic("healthcheck-port", "error", message, location=resolved.variant),)
 ```
 
 - `HealthCheck(port=9090)` is itself a `Fragment`: it goes in `common`, a variant's `add`, or another fragment's `items`. `compose()` runs once, at construction.
@@ -700,7 +700,7 @@ Fragments (3): base app healthcheck
 Units: enable app-healthcheck.timer
   app-healthcheck  /usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/  restart=no  type=oneshot
 
-$ tundravm diff node.py --against mkosi --variant default --stat
+$ tundravm diff node.py --tree mkosi --variant default --stat
 M  default/mkosi.conf
 A  default/mkosi.extra/usr/lib/systemd/system/app-healthcheck.service
 A  default/mkosi.extra/usr/lib/systemd/system/app-healthcheck.timer
@@ -716,7 +716,7 @@ $ tundravm lint node.py
 no findings
 [exit 0]
 
-$ tundravm compile node.py --out mkosi
+$ tundravm compile node.py --tree mkosi
 compiled mkosi
   variants:      default, dev, debug
   recipe_digest: d08f2d6df99bcab4956c5e0e402d57ac15116fc642bde8c0e3f61dac95be4586
@@ -732,7 +732,7 @@ compiled mkosi
 
 - `test_lints_clean`: `assert_clean(RECIPE, strict=True)`, so a warning fails it too;
 - `test_compiles_every_variant`: every variant compiles, and the variants are the ones it names (step 4);
-- `test_matches_committed_tree`: `mkosi/` is what the recipe compiles to with `build/tundravm.lock`. After an intended change, `tundravm compile node.py --out mkosi` (or `TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests`) rewrites it.
+- `test_matches_committed_tree`: `mkosi/` is what the recipe compiles to with `build/tundravm.lock`. After an intended change, `tundravm compile node.py --tree mkosi` (or `TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests`) rewrites it.
 
 Add tests for the fragment in `tests/test_healthcheck.py`. `tundravm.testing` works on the same values the lifecycle returns:
 
@@ -760,7 +760,7 @@ def test_needs_the_app() -> None:
 
 def test_probes_the_wrong_port() -> None:
     found = lint(image(App(version="1", port=8080), HealthCheck(port=9090)))
-    assert_diagnostic(found, "healthcheck-port", variant="default")
+    assert_diagnostic(found, "healthcheck-port", location="default")
 ```
 
 - `image()` builds a one-variant recipe (`default`, for qemu) around the fragments under test, with the kernel package so `kernel-missing` stays quiet.
@@ -781,14 +781,14 @@ $ uv run pytest -q tests
 [exit 0]
 ```
 
-In a project of your own, the loop is: edit the recipe with `tundravm watch node.py` running, `tundravm compile node.py --out mkosi` once its line says `tree stale`, `uv run pytest tests`, `tundravm lock node.py`.
+In a project of your own, the loop is: edit the recipe with `tundravm watch node.py` running, `tundravm compile node.py --tree mkosi` once its line says `tree stale`, `uv run pytest tests`, `tundravm lock node.py`.
 
 ## 16. CI
 
 `tundravm ci` runs `lint --strict`, `compile --check` and `lock --check` and stops at the first failure:
 
 ```console
-$ tundravm ci node.py --out mkosi
+$ tundravm ci node.py --tree mkosi
 ok lint: no findings
 ok compile: mkosi is up to date
 ok lock: build/tundravm.lock is up to date
@@ -810,7 +810,7 @@ jobs:
           uv run tundravm inspect node.py --format markdown >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check recipe, compiled tree and lockfile
-        run: uv run tundravm ci node.py --out mkosi
+        run: uv run tundravm ci node.py --tree mkosi
 
   bake:
     needs: check
@@ -819,16 +819,16 @@ jobs:
     steps:
       # ...
       - name: Fetch sources
-        run: uv run tundravm fetch node.py --out build
+        run: uv run tundravm fetch node.py --build build
 
       - name: Bake twice and compare
         run: >-
           uv run tundravm bake node.py --backend ${{ vars.TUNDRAVM_BAKE_BACKEND }}
-          --out build --verify-reproducible
+          --build build --verify-reproducible
 
       - name: Collect evidence
         run: >-
-          uv run tundravm evidence node.py --out build
+          uv run tundravm evidence node.py --build build
           --bundle evidence.tar.gz --html evidence.html
 
       - name: Upload evidence and artifacts

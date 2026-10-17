@@ -33,7 +33,7 @@ def _bake(tmp_path: Path, *variants: Variant) -> tuple[Artifact, ...]:
         Fragment("deploy", items=(Package("curl"), Package("linux-image-amd64"))),
         variants=variants,
     )
-    return bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build")
+    return bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build")
 
 
 def _mock_qemu(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,8 +82,8 @@ def test_deploy_fails_when_target_artifact_not_baked(
     assert "cannot deploy a qemu artifact to azure" in str(excinfo.value).lower()
     assert excinfo.value.code == "E_DEPLOYMENT"
 
-    manifest = str(tmp_path / "build" / "bake-result.json")
-    argv = ["deploy", manifest, "--target", "azure", "--param", "storage_account=acct"]
+    manifest = str(tmp_path / "build")
+    argv = ["deploy", "azure", "--build", manifest, "--param", "storage_account=acct"]
     assert main(argv, stdout=io.StringIO()) == EXIT_SDK_ERROR
     assert "No baked artifact for default/azure." in capsys.readouterr().err
 
@@ -120,8 +120,8 @@ def test_deploy_cli_reports_a_changed_artifact(
 ) -> None:
     (artifact,) = _bake(tmp_path, Variant("default", target="qemu"))
     artifact.path.write_bytes(b"swapped\n")
-    manifest = str(tmp_path / "build" / "bake-result.json")
-    argv = ["deploy", manifest, "--target", "qemu", "--allow-simulated-artifact"]
+    manifest = str(tmp_path / "build")
+    argv = ["deploy", "qemu", "--build", manifest, "--allow-simulated-artifact"]
     assert main(argv, stdout=io.StringIO()) == EXIT_SDK_ERROR
     assert "E_ARTIFACT_CHANGED" in capsys.readouterr().err
 
@@ -151,8 +151,8 @@ def test_deploy_requires_explicit_variant_for_multi_variant_manifest(
 ) -> None:
     _bake(tmp_path, Variant("dev", target="qemu"), Variant("prod", target="qemu"))
     _mock_qemu(monkeypatch)
-    manifest = str(tmp_path / "build" / "bake-result.json")
-    argv = ["deploy", manifest, "--target", "qemu", "--allow-simulated-artifact"]
+    manifest = str(tmp_path / "build")
+    argv = ["deploy", "qemu", "--build", manifest, "--allow-simulated-artifact"]
 
     assert main(argv, stdout=io.StringIO()) == EXIT_SDK_ERROR
     assert "pass --variant NAME" in capsys.readouterr().err
@@ -175,7 +175,7 @@ def test_deploy_forwards_the_secrets_ports_the_bake_recorded(tmp_path: Path) -> 
         ),
     )
     locked = lock(recipe, resolver=lambda source: "a" * 40)
-    artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), out=tmp_path / "build")
+    artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path / "build")
     ports = {a.variant: a.ports for a in artifacts}
     assert ports == {"default": (8443,), "plain": ()}
     assert read_artifacts(tmp_path / "build") == artifacts
@@ -201,7 +201,7 @@ def test_deploy_cli_attach_and_forward_reach_the_qemu_settings(
     _bake(tmp_path, Variant("default", target="qemu"), Variant("azure", target="azure"))
     _mock_qemu(monkeypatch)
     manifest = str(tmp_path / "build")
-    argv = ["deploy", manifest, "--variant", "default", "--target", "qemu"]
+    argv = ["deploy", "qemu", "--build", manifest, "--variant", "default"]
     flags = ["--allow-simulated-artifact", "--attach", "--param", "forward=8443:443"]
 
     out = io.StringIO()
@@ -210,6 +210,6 @@ def test_deploy_cli_attach_and_forward_reach_the_qemu_settings(
     assert rows["daemonize"] == "false"
     assert rows["forward"] == "8443:443"
 
-    azure = ["deploy", manifest, "--variant", "azure", "--target", "azure", "--attach"]
+    azure = ["deploy", "azure", "--build", manifest, "--variant", "azure", "--attach"]
     assert main([*azure, "--param", "storage_account=a"], stdout=io.StringIO()) == EXIT_SDK_ERROR
     assert main([*argv, "--param", "forward=8443"], stdout=io.StringIO()) == EXIT_SDK_ERROR

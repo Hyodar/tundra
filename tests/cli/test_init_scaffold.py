@@ -74,11 +74,11 @@ def test_template_loads_lints_and_compiles_deterministically(
 
     monkeypatch.chdir(project)
     for tree in ("a", "b"):
-        code, compiled = run_main("compile", recipe_path.name, "--out", tree)
+        code, compiled = run_main("compile", recipe_path.name, "--tree", tree)
         assert code == EXIT_OK, compiled
     first, second = snapshot(project / "a"), snapshot(project / "b")
     assert first and first == second
-    assert run_main("compile", recipe_path.name, "--out", "a", "--check")[0] == EXIT_OK
+    assert run_main("compile", recipe_path.name, "--tree", "a", "--check")[0] == EXIT_OK
 
     again = tmp_path / "again"
     scaffold(again, "--template", template)
@@ -152,10 +152,10 @@ def test_scaffold_writes_the_project_files_and_lists_next_steps(tmp_path: Path) 
     ]
     assert "  1. tundravm lock my-node.py" in out
     assert "record recipe sections and pin source repositories/downloads" in out
-    assert "  2. tundravm compile my-node.py --out mkosi" in out
+    assert "  2. tundravm compile my-node.py --tree mkosi" in out
     assert "  3. uv run pytest tests" in out
-    assert "  4. tundravm ci my-node.py --out mkosi" in out
-    assert "  5. tundravm bake my-node.py --out build" in out
+    assert "  4. tundravm ci my-node.py --tree mkosi" in out
+    assert "  5. tundravm bake my-node.py --build build" in out
     assert "  tundravm is not on PyPI yet: `uv add --editable PATH/TO/tundravm`" in out
     assert "note:" not in out
 
@@ -226,7 +226,7 @@ def test_generated_tests_pass_in_the_scratch_project(
     assert "2 passed" in missing.stdout
 
     monkeypatch.chdir(project)
-    assert run_main("compile", f"{NAME}.py", "--out", "mkosi")[0] == EXIT_OK
+    assert run_main("compile", f"{NAME}.py", "--tree", "mkosi")[0] == EXIT_OK
     passed = pytest_in_project()
     assert passed.returncode == 0, passed.stdout
     assert "3 passed" in passed.stdout

@@ -166,7 +166,7 @@ class QemuDeployAdapter:
             if len(state["monitor"].encode()) > _UNIX_PATH_MAX:
                 raise DeploymentError(
                     "The QEMU monitor socket path is too long for a unix socket.",
-                    hint="Bake into a shorter --out directory, or attach instead.",
+                    hint="Bake into a shorter --build directory, or attach instead.",
                     context={"monitor": state["monitor"]},
                 )
             cmd.extend(
@@ -251,7 +251,7 @@ def format_forwards(pairs: tuple[tuple[int, int], ...]) -> str:
 
 
 def _run_dir(artifact_path: Path, variant: str) -> Path:
-    """``OUT/<variant>``: the artifact's nearest ancestor named *variant*, else its directory."""
+    """``BUILD/<variant>``: the artifact's nearest ancestor named *variant*, else its directory."""
     return next((p for p in artifact_path.parents if p.name == variant), artifact_path.parent)
 
 

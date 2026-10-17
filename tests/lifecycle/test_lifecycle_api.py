@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,9 +47,11 @@ from tundravm.declarative import (
     write_lock,
 )
 from tundravm.declarative._compile import emit
+from tundravm.declarative.utils import Tdxs
 from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.errors import DeploymentError, LockfileError, MeasurementError, ValidationError
 from tundravm.measure import PlaceholderMeasurementWarning
+from tundravm.measure.policy import read_policy, write_policy
 from tundravm.testing import (
     assert_clean,
     assert_diagnostic,
@@ -138,7 +139,7 @@ def test_compile_selected_variants_and_diff(tmp_path: Path) -> None:
 
 def test_lint_merges_declarative_and_compiler_diagnostics() -> None:
     def needs_jq(resolved: object) -> tuple[Diagnostic, ...]:
-        return (Diagnostic("jq-missing", "add jq", level="warning", subject="jq"),)
+        return (Diagnostic("jq-missing", "warning", "add jq", subject="jq"),)
 
     recipe = Recipe(
         "demo",
@@ -158,7 +159,7 @@ def test_lint_merges_declarative_and_compiler_diagnostics() -> None:
     assert "backend-missing" not in codes  # the backend is a bake() argument
     assert len(found) == len(set(found))
     assert_diagnostic(found, "jq-missing", subject="jq")
-    assert_diagnostic(found, "debloat-removes-declared-file", variant="default")
+    assert_diagnostic(found, "debloat-removes-declared-file", location="default")
     with pytest.raises(AssertionError, match="unexpected finding"):
         assert_clean(found)
 
@@ -196,7 +197,7 @@ def test_lock_status_read_and_write(tmp_path: Path) -> None:
     assert path.read_text() == locked.text()
 
     stale = lock_status(_recipe(build=True, motd="bye\n"), locked)
-    assert stale and all(d.level == "error" for d in stale)
+    assert stale and all(d.severity == "error" for d in stale)
     assert any(d.subject.endswith("files") for d in stale)
 
 
@@ -225,7 +226,7 @@ def _baked(tmp_path: Path, lines: list[str] | None = None) -> tuple[Artifact, ..
         recipe,
         lock=lock(recipe),
         backend=Backend("inprocess"),
-        out=tmp_path / "out",
+        build=tmp_path / "out",
         progress=None if lines is None else lines.append,
     )
 
@@ -238,7 +239,6 @@ def test_bake_in_process_writes_simulated_artifacts(tmp_path: Path) -> None:
     assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)
     assert all(a.tree_digest and a.lock_digest for a in artifacts)
     assert any("baked 2 variants" in line for line in lines)
-    assert read_artifacts(tmp_path / "out" / "bake-result.json") == artifacts
     assert read_artifacts(tmp_path / "out") == artifacts
 
 
@@ -248,7 +248,7 @@ def test_bake_refuses_a_stale_lock(tmp_path: Path) -> None:
             _recipe(motd="bye\n"),
             lock=lock(_recipe()),
             backend=Backend("inprocess"),
-            out=tmp_path / "out",
+            build=tmp_path / "out",
         )
 
 
@@ -257,7 +257,7 @@ def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> Non
     assert lock_status(_recipe(), locked, variants=("azure",)) == ()
 
     artifacts = bake(
-        _recipe(), lock=locked, backend=Backend("inprocess"), out=tmp_path, variants=("azure",)
+        _recipe(), lock=locked, backend=Backend("inprocess"), build=tmp_path, variants=("azure",)
     )
 
     assert {(a.variant, a.target) for a in artifacts} == {("azure", "azure")}
@@ -266,7 +266,7 @@ def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> Non
             _recipe(motd="bye\n"),
             lock=locked,
             backend=Backend("inprocess"),
-            out=tmp_path / "stale",
+            build=tmp_path / "stale",
             variants=("azure",),
         )
 
@@ -281,14 +281,11 @@ def test_lock_status_with_resolver_reports_moved_refs() -> None:
     assert moved[0].message.endswith(": aaaaaaa -> bbbbbbb")
 
 
-def test_measurements_to_json_and_verify(tmp_path: Path) -> None:
-    found = Measurements("rtmr", (("rtmr0", "aa"), ("rtmr1", "bb")), "dstack-mr 1.0", "d1")
-    path = tmp_path / "out" / "measurements.json"
+def test_measurements_to_dict_and_verify() -> None:
+    found = Measurements("rtmr", (("rtmr0", "aa"), ("rtmr1", "bb")), "dstack-mr 1.0", "d1", "x.efi")
 
-    text = found.to_json(path)
-
-    assert path.read_text() == text
-    assert json.loads(text) == {
+    assert found.to_dict() == {
+        "artifact": "x.efi",
         "artifact_digest": "d1",
         "scheme": "rtmr",
         "tool": "dstack-mr 1.0",
@@ -296,6 +293,33 @@ def test_measurements_to_json_and_verify(tmp_path: Path) -> None:
     }
     assert found.verify({"rtmr0": "aa", "rtmr1": "bb"}) == ()
     assert found.verify({"rtmr0": "aa", "rtmr1": "cc", "rtmr2": "dd"}) == ("rtmr1", "rtmr2")
+
+
+def test_measurements_policy_round_trips_into_a_tdxs_verifier(tmp_path: Path) -> None:
+    registers = {f"RTMR{i}": f"{i:x}" * 96 for i in range(4)}
+    found = Measurements(
+        "rtmr", tuple(sorted(registers.items())), "measured-boot 1.2", "d1", "build/x.efi"
+    )
+    policy = found.to_policy()
+    assert policy == {
+        "schema_version": 1,
+        "scheme": "rtmr",
+        "tool": "measured-boot",
+        "tool_version": "1.2",
+        "artifact": {"path": "build/x.efi", "sha256": "d1"},
+        "registers": registers,
+    }
+    path = tmp_path / "policy.json"
+    write_policy(policy, path)
+    assert read_policy(path) == policy
+    verifier = Tdxs.from_policy(path)
+    expected = tuple(sorted((name.lower(), value) for name, value in registers.items()))
+    assert verifier.expected_measurements == expected
+    assert Tdxs.from_measurements(found).expected_measurements == expected
+    placeholder = Measurements("rtmr", tuple(sorted(registers.items())), "placeholder", "d1")
+    with pytest.raises(MeasurementError, match="placeholder"):
+        placeholder.to_policy()
+    assert "note" in placeholder.to_policy(allow_placeholder=True)
 
 
 def test_measure_rejects_simulated_unless_allowed(tmp_path: Path) -> None:
@@ -339,7 +363,7 @@ def test_doctor_with_fake_probe_runner() -> None:
     assert doctor(Backend("inprocess"), runner=missing) == ()
     found = doctor(Backend("lima"), runner=missing)
     assert found and {d.code for d in found} == {"tool-missing"}
-    assert any(d.level == "error" for d in found)
+    assert any(d.severity == "error" for d in found)
     with pytest.raises(ValidationError, match="Unknown backend"):
         Backend("docker")  # type: ignore[arg-type]
     assert isinstance(Requirement, type)
@@ -347,7 +371,7 @@ def test_doctor_with_fake_probe_runner() -> None:
 
 def test_fake_bake_artifact_round_trips(tmp_path: Path) -> None:
     tree = compile(_recipe(), variants=("default",))
-    artifact = fake_bake(tree, variant="default", target="qemu", out=tmp_path)
+    artifact = fake_bake(tree, variant="default", target="qemu", build=tmp_path)
     assert artifact.simulated and artifact.tree_digest == tree.digest
     assert read_artifacts(tmp_path) == (artifact,)
     with pytest.raises(MeasurementError):

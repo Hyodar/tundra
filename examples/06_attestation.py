@@ -9,8 +9,9 @@ pass ``mrtd=`` to check MRTD too). Services that talk to the socket join the ``t
 group. ``Policy(require_frozen_lock=True)`` refuses to bake without a lockfile.
 
     tundravm lock examples/06_attestation.py      # pin tundra-tools (network)
-    tundravm bake examples/06_attestation.py --variant attester --out build/attestation
-    tundravm measure build/attestation --scheme rtmr --export-policy examples/peer.policy.json
+    tundravm bake examples/06_attestation.py --variant attester --build build/attestation
+    tundravm measure --build build/attestation --scheme rtmr \
+        --export-policy examples/peer.policy.json
 
 The committed ``peer.policy.json`` came from a simulated (in-process) bake with
 ``--allow-placeholder``: its ``note`` marks it as a placeholder, and the verifiers

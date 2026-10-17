@@ -135,7 +135,7 @@ def test_local_backend_mkosi_version_check_passes(
 def _relative_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str = "[Output]\nFormat=uki\n"
 ) -> BakeRequest:
-    """A request with *relative* build/emit dirs, as the CLI's ``--out build`` gives."""
+    """A request with *relative* build/emit dirs, as the CLI's ``--build build`` gives."""
     monkeypatch.chdir(tmp_path)
     project = tmp_path / "build" / "mkosi" / "default"
     project.mkdir(parents=True)

@@ -39,7 +39,7 @@ def _baked(tmp_path: Path) -> Artifact:
         "measured", Fragment("measured", items=(Package("curl"), Package("linux-image-amd64")))
     )
     (artifact,) = bake(
-        recipe, lock=lock(recipe), backend=Backend("inprocess"), out=tmp_path / "build"
+        recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build"
     )
     return artifact
 
@@ -83,9 +83,9 @@ def test_measure_export_is_stable(tmp_path: Path) -> None:
         first = measure(artifact, allow_placeholder=True)
         second = measure(artifact, allow_placeholder=True)
 
-    json_path = tmp_path / "measurements.json"
-    assert first.to_json(json_path) == second.to_json()
-    assert json_path.read_text(encoding="utf-8") == first.to_json()
+    assert first.to_dict() == second.to_dict()
+    assert first.to_dict()["artifact"] == str(artifact.path)
+    assert first.to_policy(allow_placeholder=True) == second.to_policy(allow_placeholder=True)
     with pytest.warns(PlaceholderMeasurementWarning):
         assert dict(first.values) == _derived(artifact, "rtmr").values
 

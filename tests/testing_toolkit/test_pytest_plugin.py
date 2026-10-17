@@ -33,7 +33,7 @@ def test_recipe_fixture_bakes_in_process(recipe: Recipe, tmp_path: Path) -> None
     )
     assert_clean(curl, strict=True)
 
-    (artifact,) = bake_in_process(curl, out=tmp_path / "build")
+    (artifact,) = bake_in_process(curl, build=tmp_path / "build")
     assert (artifact.variant, artifact.target) == ("default", "qemu")
     assert artifact.simulated
     assert artifact.path.is_file()

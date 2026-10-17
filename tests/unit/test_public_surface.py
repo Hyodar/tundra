@@ -20,6 +20,7 @@ EXPECTED_TOP_LEVEL = [
     "BackendExecutionError",
     "Build",
     "Cargo",
+    "ChangeReport",
     "Debloat",
     "Declaration",
     "Deployment",
@@ -30,6 +31,7 @@ EXPECTED_TOP_LEVEL = [
     "Dotnet",
     "Entry",
     "Evidence",
+    "EvidenceVerification",
     "FetchedSource",
     "File",
     "Fragment",
@@ -82,6 +84,7 @@ EXPECTED_TOP_LEVEL = [
     "__version__",
     "attest",
     "bake",
+    "changes",
     "compile",
     "doctor",
     "evidence",
@@ -100,6 +103,7 @@ EXPECTED_TOP_LEVEL = [
     "resolve_all",
     "sbom",
     "verify_artifact",
+    "verify_evidence",
     "write_lock",
 ]
 

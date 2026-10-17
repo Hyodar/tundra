@@ -48,7 +48,7 @@ def policy_payload(
     if scheme != "rtmr":
         raise ValidationError(
             f"A verifier policy needs rtmr measurements, not {scheme}.",
-            hint="Run `tundravm measure ... --scheme rtmr --export-policy FILE`.",
+            hint="Run `tundravm measure --scheme rtmr --export-policy FILE`.",
         )
     name, _, version = tool.partition(" ")
     placeholder = name == PLACEHOLDER_TOOL
@@ -91,12 +91,12 @@ def read_policy(source: str | Path | Mapping[str, object]) -> dict[str, object]:
         except OSError as exc:
             raise ValidationError(
                 f"Cannot read policy {source}: {exc.strerror or exc}.",
-                hint="Write one with `tundravm measure MANIFEST --export-policy FILE`.",
+                hint="Write one with `tundravm measure --export-policy FILE`.",
             ) from exc
         except json.JSONDecodeError as exc:
             raise ValidationError(
                 f"Policy {source} is not JSON ({exc.msg}).",
-                hint="Write one with `tundravm measure MANIFEST --export-policy FILE`.",
+                hint="Write one with `tundravm measure --export-policy FILE`.",
             ) from exc
     if not isinstance(data, dict):
         raise ValidationError(

@@ -15,7 +15,7 @@ the historical tree byte for byte. ``recipe`` below is the base layer on its own
 
     tundravm inspect examples/nethermind_base.py
     tundravm lint examples/nethermind_base.py   # source-unpinned until locked
-    tundravm compile examples/nethermind_base.py --out build/nethermind-base/mkosi
+    tundravm compile examples/nethermind_base.py --tree build/nethermind-base/mkosi
 """
 
 from __future__ import annotations

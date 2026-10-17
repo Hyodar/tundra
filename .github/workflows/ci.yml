@@ -44,4 +44,4 @@ jobs:
         run: uv run tundravm lint examples/surge-tdx-prover/image.py
 
       - name: Committed mkosi tree is up to date
-        run: uv run tundravm compile examples/surge-tdx-prover/image.py --out examples/surge-tdx-prover/mkosi --check
+        run: uv run tundravm compile examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi --check

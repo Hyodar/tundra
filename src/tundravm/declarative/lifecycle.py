@@ -66,6 +66,7 @@ from tundravm.lockfile import (
     serialize_lockfile,
 )
 from tundravm.measure import derive_measurements
+from tundravm.measure.policy import policy_payload
 from tundravm.models import (
     BAKE_RESULT_FILENAME,
     REPRODUCE_DIRNAME,
@@ -233,33 +234,48 @@ class Artifact:
     manifest_sha256: str | None = None
     """The sha256 of mkosi's package manifest beside the artifact at bake time; ``None``
     when there was none."""
-    out: Path | None = None
-    """The bake output directory holding ``bake-result.json``."""
+    build: Path | None = None
+    """The build directory holding ``bake-result.json``."""
 
 
 @dataclass(frozen=True, slots=True)
 class Measurements:
-    """Expected measurement *values*; ``tool`` names what measured them."""
+    """Expected measurement *values*; ``tool`` names what measured them.
+
+    ``artifact_path`` is the measured file (:func:`measure` sets it), which the
+    verifier policy records next to ``artifact_digest``.
+    """
 
     scheme: Scheme
     values: Pairs
     tool: str
     artifact_digest: str
+    artifact_path: str = ""
 
-    def to_json(self, path: Path | None = None) -> str:
-        """The measurements as JSON (sorted keys, trailing newline), also written to *path*."""
-        payload = {
+    def to_dict(self) -> dict[str, object]:
+        """The measurements as JSON values: artifact, artifact_digest, scheme, tool, values."""
+        return {
+            "artifact": self.artifact_path,
             "artifact_digest": self.artifact_digest,
             "scheme": self.scheme,
             "tool": self.tool,
             "values": dict(self.values),
         }
-        text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        if path is not None:
-            target = Path(path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding="utf-8")
-        return text
+
+    def to_policy(self, *, allow_placeholder: bool = False) -> dict[str, object]:
+        """The verifier policy ``measure --export-policy`` writes and ``Tdxs.from_policy`` reads.
+
+        rtmr measurements only; placeholder values are refused (``MeasurementError``)
+        unless *allow_placeholder*, and then carry a note saying so.
+        """
+        return policy_payload(
+            scheme=self.scheme,
+            tool=self.tool,
+            values=dict(self.values),
+            artifact_path=self.artifact_path,
+            artifact_sha256=self.artifact_digest,
+            allow_placeholder=allow_placeholder,
+        )
 
     def verify(self, expected: Mapping[str, str]) -> tuple[str, ...]:
         """The registers whose value differs from *expected*, sorted; empty when all match.
@@ -495,8 +511,8 @@ def check_report(
     *,
     variants: Sequence[str] | None,
     lock: Lock | Path | NoLock | None = None,
-) -> list[_check.Diagnostic]:
-    """Declarative and compiler diagnostics in the compiler's report form.
+) -> list[Diagnostic]:
+    """Declarative and compiler diagnostics, as ``tundravm lint`` reports them.
 
     The recipe's resolution diagnostics come first, in resolution order. When
     none is an error, the lowered image's ``check()`` findings follow, sorted.
@@ -504,22 +520,12 @@ def check_report(
     lockfile at a path, none when it is missing; :data:`NO_LOCK`: none at
     all); without it the image reads its own lockfile (``build/tundravm.lock``).
     """
-    found: list[_check.Diagnostic] = []
+    found: list[Diagnostic] = []
     names: tuple[str, ...] | None = None
     if recipe is not None:
         names = variant_names(recipe, variants)
-        for d in _resolution_lint(recipe, variants=names):
-            found.append(
-                _check.Diagnostic(
-                    level=d.level,
-                    code=d.code,
-                    message=d.message,
-                    hint=None,
-                    profile=d.variant or "common",
-                    subject=d.subject or None,
-                )
-            )
-        if any(d.level == "error" for d in found):
+        found.extend(_resolution_lint(recipe, variants=names))
+        if any(d.severity == "error" for d in found):
             return found
         img = lower(recipe, variants=names)
     assert img is not None
@@ -530,12 +536,12 @@ def check_report(
         elif lock is not None:
             img = replace(img, lock_file=Path(lock))
         checked = _check.check(img, profiles=profiles)
-    checked = sorted(checked, key=lambda d: (d.profile, _LEVELS[d.level], d.code, d.subject or ""))
+    checked = sorted(checked, key=lambda d: (d.location, _SEVERITY[d.severity], d.code, d.subject))
     found.extend(d for d in checked if d not in found)
     return found
 
 
-_LEVELS = {"error": 0, "warning": 1, "info": 2}
+_SEVERITY = {"error": 0, "warning": 1, "info": 2}
 
 
 def lint(
@@ -546,21 +552,13 @@ def lint(
 ) -> tuple[Diagnostic, ...]:
     """Every problem with *variants* (default: all): resolution, fragment checks, compiler rules.
 
+    The same :class:`Diagnostic` values ``tundravm lint`` reports, hints included.
     With *lock*, its source pins apply before the compiler rules run (a pinned
     source never reports ``source-unpinned``) and drift against it is reported
     too (:func:`lock_status`).
     """
-    found = [
-        Diagnostic(
-            code=d.code,
-            message=d.message,
-            level=d.level,
-            variant="" if d.profile == "common" else d.profile,
-            subject=d.subject or "",
-        )
-        for d in check_report(recipe, None, variants=variants, lock=lock)
-    ]
-    if lock is not None and not any(d.level == "error" for d in found):
+    found = check_report(recipe, None, variants=variants, lock=lock)
+    if lock is not None and not any(d.severity == "error" for d in found):
         found.extend(lock_status(recipe, lock, variants=variants))
     return tuple(dict.fromkeys(found))
 
@@ -655,7 +653,7 @@ def lock(
 
 def drift_diagnostics(drift_lines: Iterator[tuple[str, str, str]]) -> tuple[Diagnostic, ...]:
     return tuple(
-        Diagnostic(code, message, level="error", subject=section)
+        Diagnostic(code, "error", message, subject=section)
         for code, section, message in drift_lines
     )
 
@@ -694,7 +692,7 @@ def image_lock_status(
 
     found = drift_diagnostics(lines())
     if not found and not drift.digest_matches:
-        found = (Diagnostic("lock-stale", "the recipe digest differs from the lock"),)
+        found = (Diagnostic("lock-stale", "error", "the recipe digest differs from the lock"),)
     return found
 
 
@@ -737,7 +735,7 @@ def write_lock(locked: Lock, path: Path) -> None:
 
 @dataclass(frozen=True, slots=True)
 class FetchedSource:
-    """A source's checkout at *path* (``<out>/.sources/<name>-<pin[:12]>``).
+    """A source's checkout at *path* (``<build>/.sources/<name>-<pin[:12]>``).
 
     *name* is a source build's, ``kernel`` (``kernel-<variant>``) for a built
     kernel's source, or ``efi-stub`` for an ``EfiStub`` package. *pin* is the commit
@@ -754,7 +752,7 @@ class FetchedSource:
     ref: str | None = None
     """The git ref the pin was resolved from; ``None`` for http."""
     deps: str | None = None
-    """A Go, Cargo or .NET build's dependency prefetch into ``<out>/.sources/deps``:
+    """A Go, Cargo or .NET build's dependency prefetch into ``<build>/.sources/deps``:
     ``go: prefetched``, ``go: kept``, ``skipped (no host go)``, ``skipped (offline)`` or
     ``failed (<reason>)``; ``None`` for other sources."""
 
@@ -770,17 +768,17 @@ def fetch_image(
     profiles: Sequence[str] | None,
     *,
     locked: Lock | None,
-    out: Path,
+    build: Path,
     resolver: Resolver | None = None,
     reporter: Reporter | None = None,
     force: bool = False,
 ) -> tuple[FetchedSource, ...]:
-    """Check out every source of *img*'s *profiles* under ``<out>/.sources``.
+    """Check out every source of *img*'s *profiles* under ``<build>/.sources``.
 
     The sources are the source builds and, outside ``nethermind-v1``, the built
     kernels' sources and ``EfiStub`` packages (``Lowered.lock_sources``). Each Go,
     Cargo and .NET build's dependencies are then prefetched into
-    ``<out>/.sources/deps`` with the host's toolchain (``prefetch_deps``); without
+    ``<build>/.sources/deps`` with the host's toolchain (``prefetch_deps``); without
     it the build downloads them as before. *force* also refills the dependency
     caches.
 
@@ -797,16 +795,16 @@ def fetch_image(
     prior = {} if locked is None else _named_pins(locked)
     pins: dict[str, str] = {}
     pending: dict[str, NamedSource] = {}
-    for name, build in builds.items():
-        pin = build.pin_from(prior)
+    for name, source_build in builds.items():
+        pin = source_build.pin_from(prior)
         if pin is None:
-            pending[name] = build
+            pending[name] = source_build
         else:
             pins[name] = pin
     offline = img.policy.network_mode == "offline"
     if pending:
         pins.update(_resolve_for_fetch(img, pending, resolver=resolver, offline=offline))
-    root = Path(out) / SOURCES_DIRNAME
+    root = Path(build) / SOURCES_DIRNAME
     progress = Progress(reporter)
     fetched: list[FetchedSource] = []
     noun = "source" if len(builds) == 1 else "sources"
@@ -814,21 +812,27 @@ def fetch_image(
     done: set[Path] = set()
     cleared: set[str] = set()
     with progress.phase("fetch", f"fetch {len(builds)} {noun}", profile=None):
-        for name, build in builds.items():
+        for name, source_build in builds.items():
             source = _checkout(
-                build,
+                source_build,
                 pins[name],
                 root,
                 progress,
                 offline=offline,
                 copies=copies,
-                force=force and root / build.pin_dir(pins[name]) not in done,
+                force=force and root / source_build.pin_dir(pins[name]) not in done,
             )
-            copies.setdefault((build.source, source.pin), source.path)
+            copies.setdefault((source_build.source, source.pin), source.path)
             done.add(source.path)
-            if isinstance(build, SourceBuild):
+            if isinstance(source_build, SourceBuild):
                 deps = _prefetch(
-                    build, source, root, progress, offline=offline, force=force, cleared=cleared
+                    source_build,
+                    source,
+                    root,
+                    progress,
+                    offline=offline,
+                    force=force,
+                    cleared=cleared,
                 )
                 source = replace(source, deps=deps)
             fetched.append(source)
@@ -943,17 +947,17 @@ def fetch(
     recipe: Recipe,
     *,
     lock: Lock | None,
-    out: Path,
+    build: Path,
     variants: Sequence[str] | None = None,
     resolver: Resolver | None = None,
     force: bool = False,
 ) -> tuple[FetchedSource, ...]:
-    """Check out the sources of *variants* (default: all) under ``<out>/.sources``.
+    """Check out the sources of *variants* (default: all) under ``<build>/.sources``.
 
     The sources are the source builds and, outside ``nethermind-v1``, each built
     kernel's source (git ref or commit with its submodules, or the sha256-checked
     tarball), named ``kernel`` (``kernel-<variant>`` where a variant's kernel
-    source differs). Each lands in ``<out>/.sources/<name>-<pin[:12]>-<id[:8]>`` (*id*
+    source differs). Each lands in ``<build>/.sources/<name>-<pin[:12]>-<id[:8]>`` (*id*
     the source's url, subdirectory and submodules), fetched
     on this host as the invoking user (git credentials and SSH agent apply) at
     *lock*'s pin. Sources *lock* does not pin (or every source, without
@@ -963,11 +967,11 @@ def fetch(
     a clean tree (and initialised submodules when asked for), an http checkout
     must match the file manifest written when it was fetched. A checkout that
     changed raises ``SourceError``; *force* checks every source out again.
-    Outside ``nethermind-v1`` the bake mounts ``<out>/.sources`` into the build
+    Outside ``nethermind-v1`` the bake mounts ``<build>/.sources`` into the build
     and the build hooks and kernel build script copy their checkout from it;
     :func:`bake` fetches first. Each Go, Cargo and .NET build's dependencies are
     prefetched with the host's ``go``, ``cargo`` or ``dotnet`` into
-    ``<out>/.sources/deps/{go,cargo,nuget}``, which the build hooks copy and point
+    ``<build>/.sources/deps/{go,cargo,nuget}``, which the build hooks copy and point
     the toolchain at; a host without the toolchain skips it (``FetchedSource.deps``)
     and the build downloads them, unless it bakes offline. A cache is kept only
     while every entry of its content manifest (the modules ``go.sum`` names, the
@@ -976,7 +980,12 @@ def fetch(
     """
     names = variant_names(recipe, variants)
     return fetch_image(
-        lower(recipe, variants=names), names, locked=lock, out=out, resolver=resolver, force=force
+        lower(recipe, variants=names),
+        names,
+        locked=lock,
+        build=build,
+        resolver=resolver,
+        force=force,
     )
 
 
@@ -1009,7 +1018,7 @@ def bake_image(
     *,
     locked: Lock | None,
     backend: BuildBackend | None,
-    out: Path,
+    build: Path,
     reporter: Reporter | None = None,
     lock_source: Path | None = None,
     fetch: bool = True,
@@ -1017,16 +1026,16 @@ def bake_image(
     offline: bool = False,
     verify_reproducible: bool = False,
 ) -> tuple[BakeResult, tuple[Artifact, ...]]:
-    """Bake *img* into *out*, frozen against *locked*, and record the artifact manifest.
+    """Bake *img* into *build*, frozen against *locked*, and record the artifact manifest.
 
     *locked* (read from *lock_source*, when it came from a file) is written to
-    ``out/tundravm.lock`` when that file is absent or identical. A different
+    ``build/tundravm.lock`` when that file is absent or identical. A different
     lockfile already there is left alone: the bake reads *lock_source* (or a
     scratch copy of *locked*) instead, and ``bake-result.json`` records which
-    lockfile it used. ``None`` bakes unfrozen with whatever lockfile ``out`` holds.
+    lockfile it used. ``None`` bakes unfrozen with whatever lockfile ``build`` holds.
 
     Outside ``nethermind-v1``, *fetch* first checks the source builds out under
-    ``out/.sources`` (:func:`fetch_image`, at the pins the bake builds; an
+    ``build/.sources`` (:func:`fetch_image`, at the pins the bake builds; an
     unfrozen bake builds the pins it resolves). Without *fetch* the checkouts
     must already be there, or the bake fails with ``E_STATE``. The in-process
     backend builds nothing and fetches nothing.
@@ -1037,7 +1046,7 @@ def bake_image(
     mkosi runs the build scripts with ``--with-network=no``.
 
     *verify_reproducible* bakes the same selection a second time into
-    ``out/.reproduce`` (same lockfile, the same ``out/.sources`` checkouts
+    ``build/.reproduce`` (same lockfile, the same ``build/.sources`` checkouts
     hard-linked, everything compiled and built again) and compares every
     artifact's sha256. The first build's ``bake-result.json`` is complete before
     the second build starts; its ``declarative.reproducibility`` is rewritten
@@ -1048,7 +1057,7 @@ def bake_image(
     """
     if offline and img.policy.network_mode != "offline":
         img = replace(img, policy=replace(img.policy, network_mode="offline"))
-    destination = Path(out)
+    destination = Path(build)
     destination.mkdir(parents=True, exist_ok=True)
     lock_path = destination / LOCK_FILENAME
     with ExitStack() as stack:
@@ -1063,7 +1072,12 @@ def bake_image(
         if fetch and baking.fetches_sources and not simulated:
             pinned = locked if locked is not None else _lock_at(lock_path)
             fetched = fetch_image(
-                baking, None, locked=pinned, out=destination, resolver=resolver, reporter=reporter
+                baking,
+                None,
+                locked=pinned,
+                build=destination,
+                resolver=resolver,
+                reporter=reporter,
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
         result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
@@ -1094,7 +1108,7 @@ def bake_image(
             _verify_reproducible(
                 baking, result, used, manifest, frozen=locked is not None, reporter=reporter
             )
-    return result, read_artifacts(manifest)
+    return result, read_artifacts(destination)
 
 
 ReproducibilityState = Literal["running", "matched", "different", "error", "interrupted"]
@@ -1168,7 +1182,7 @@ def _verify_reproducible(
     frozen: bool,
     reporter: Reporter | None,
 ) -> None:
-    """Bake again into ``OUT/.reproduce``, record each state of the comparison, compare."""
+    """Bake again into ``BUILD/.reproduce``, record each state of the comparison, compare."""
     scratch = manifest.parent / REPRODUCE_DIRNAME
     _record_reproducibility(manifest, "running", second_build=REPRODUCE_DIRNAME)
     try:
@@ -1213,7 +1227,7 @@ def _rebake(
         except (OSError, shutil.Error) as exc:
             raise StateError(
                 f"Cannot link the fetched sources into {scratch} for the second build: {exc}",
-                hint="Make OUT/.sources readable by this user (`tundravm fetch RECIPE --force` "
+                hint="Make BUILD/.sources readable by this user (`tundravm fetch RECIPE --force` "
                 "checks it out again), then bake again.",
                 context={"sources": str(sources)},
             ) from exc
@@ -1271,7 +1285,7 @@ def _report_reproducibility(
         "between two builds.\n" + "\n".join(lines),
         hint=(
             f"The second build is kept in {scratch}. Compare the compiled trees with "
-            f"`tundravm diff RECIPE --against {scratch / 'mkosi'}` and the images with "
+            f"`tundravm diff RECIPE --tree {scratch / 'mkosi'}` and the images with "
             "diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and "
             "packages installed without a snapshot (Recipe(snapshot=...))."
         ),
@@ -1326,26 +1340,26 @@ def bake(
     *,
     lock: Lock,
     backend: Backend,
-    out: Path,
+    build: Path,
     variants: Sequence[str] | None = None,
     progress: Callable[[str], None] | None = None,
     fetch: bool = True,
     offline: bool = False,
     verify_reproducible: bool = False,
 ) -> tuple[Artifact, ...]:
-    """Build *variants* (default: all) with *backend* into *out*, frozen against *lock*.
+    """Build *variants* (default: all) with *backend* into *build*, frozen against *lock*.
 
     Fails before building when the recipe has error diagnostics or drifted
     from *lock*. Outside ``nethermind-v1`` the source builds are fetched
     first (:func:`fetch`); ``fetch=False`` builds from the checkouts already in
-    ``out/.sources`` and fails with ``E_STATE`` when one is missing.
+    ``build/.sources`` and fails with ``E_STATE`` when one is missing.
     ``offline=True`` (or ``Policy(network_mode="offline")``) gives the build
     sandbox no network: :func:`fetch` must have checked out every source and
     prefetched every Go, Cargo and .NET build's dependencies, else ``E_STATE``.
     *progress* receives the CLI's progress lines. Writes
-    ``out/bake-result.json``, which :func:`read_artifacts` reads back.
+    ``build/bake-result.json``, which :func:`read_artifacts` reads back.
     In-process artifacts are ``simulated``. *verify_reproducible* bakes a
-    second time into ``out/.reproduce`` and raises ``ReproducibilityError``
+    second time into ``build/.reproduce`` and raises ``ReproducibilityError``
     unless every artifact's sha256 matches (see :func:`bake_image`).
     """
     names = variant_names(recipe, variants)
@@ -1356,7 +1370,7 @@ def bake(
             names,
             locked=lock,
             backend=backend.build_backend(),
-            out=out,
+            build=build,
             reporter=reporter,
             fetch=fetch,
             offline=offline,
@@ -1368,10 +1382,9 @@ def bake(
     return artifacts
 
 
-def read_artifacts(manifest: Path) -> tuple[Artifact, ...]:
-    """The artifacts recorded in *manifest* (``bake-result.json`` or the directory holding it)."""
-    path = Path(manifest)
-    base = path if path.is_dir() else path.parent
+def read_artifacts(build: Path) -> tuple[Artifact, ...]:
+    """The artifacts the bake into the build directory *build* recorded in ``bake-result.json``."""
+    base = path = Path(build)
     result = BakeResult.load(base)
     try:
         payload = json.loads((base / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
@@ -1400,7 +1413,7 @@ def read_artifacts(manifest: Path) -> tuple[Artifact, ...]:
                     ports=tuple(int(port) for port in ports.get(variant, ())),
                     lock_sha256=result.lock_sha256,
                     manifest_sha256=ref.manifest_digest,
-                    out=base,
+                    build=base,
                 )
             )
     return tuple(artifacts)
@@ -1492,6 +1505,7 @@ def measure(
         values=tuple(sorted(found.values.items())),
         tool=tool,
         artifact_digest=artifact.sha256,
+        artifact_path=str(artifact.path),
     )
 
 
@@ -1603,8 +1617,8 @@ def doctor(backend: Backend, *, runner: ProbeRunner | None = None) -> tuple[Diag
             found.append(
                 Diagnostic(
                     "tool-missing",
+                    "warning" if requirement.optional else "error",
                     f"{requirement.tool} is missing: {requirement.hint}",
-                    level="warning" if requirement.optional else "error",
                     subject=requirement.tool,
                 )
             )

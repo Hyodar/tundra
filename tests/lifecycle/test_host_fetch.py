@@ -122,7 +122,7 @@ def test_fetch_checks_the_pinned_commit_out_under_sources(
 ) -> None:
     url, first = repo
     recipe = _recipe(_git_build(url))
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), out=tmp_path / "out")
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path / "out")
     checkout = tmp_path / "out" / ".sources" / source_dir("tool", first, url)
     assert fetched == FetchedSource("tool", "git", url, first, checkout, ref="main")
     assert (checkout / "main.go").is_file()
@@ -139,16 +139,16 @@ def test_fetch_is_idempotent_and_refetches_an_incomplete_checkout(
     url, first = repo
     recipe = _recipe(_git_build(url))
     locked = _locked(recipe, first)
-    fetch(recipe, lock=locked, out=tmp_path)
+    fetch(recipe, lock=locked, build=tmp_path)
     upstream = Path(url.removeprefix("file://"))
     upstream.rename(upstream.with_name("gone"))
-    (again,) = fetch(recipe, lock=locked, out=tmp_path)  # no network, nothing touched
+    (again,) = fetch(recipe, lock=locked, build=tmp_path)  # no network, nothing touched
     assert again.cached
     (again.path / ".tundravm-complete").unlink()
     with pytest.raises(SourceError, match=f"Cannot fetch git {url} @ main"):
-        fetch(recipe, lock=locked, out=tmp_path)
+        fetch(recipe, lock=locked, build=tmp_path)
     upstream.with_name("gone").rename(upstream)
-    (refetched,) = fetch(recipe, lock=locked, out=tmp_path)
+    (refetched,) = fetch(recipe, lock=locked, build=tmp_path)
     assert not refetched.cached
     assert (refetched.path / ".tundravm-complete").is_file()
 
@@ -167,7 +167,7 @@ def test_builds_of_one_source_and_pin_share_one_fetch(
         real(source, pin, dest)  # type: ignore[arg-type]
 
     monkeypatch.setattr(lifecycle, "fetch_source", counting)
-    fetched = fetch(recipe, lock=_locked(recipe, first), out=tmp_path)
+    fetched = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
     assert fetched_from == [first]
     assert sorted(p.path.name for p in fetched) == [
         source_dir("other", first, url),
@@ -182,12 +182,12 @@ def test_fetch_downloads_checks_and_unpacks_http_sources(
     url, digest = served
     build = Build("tool", Http(url), script="true", install=(Install("bin/tool", "/usr/bin/tool"),))
     recipe = _recipe(build)
-    (fetched,) = fetch(recipe, lock=_locked(recipe, digest), out=tmp_path)
+    (fetched,) = fetch(recipe, lock=_locked(recipe, digest), build=tmp_path)
     assert fetched.path == tmp_path / ".sources" / source_dir("tool", digest, url, http=True)
     assert (fetched.path / "bin" / "tool").read_bytes() == b"#!/bin/sh\necho tool\n"
     assert (fetched.path / "tool-1.0.tar.gz").is_file()
     with pytest.raises(SourceError, match="does not match the pin"):
-        fetch(recipe, lock=_locked(recipe, "0" * 64), out=tmp_path / "other")
+        fetch(recipe, lock=_locked(recipe, "0" * 64), build=tmp_path / "other")
     assert not (
         tmp_path / "other" / ".sources" / source_dir("tool", "0" * 12, url, http=True)
     ).exists()
@@ -203,12 +203,12 @@ def test_fetch_without_a_lock_resolves_the_refs_first(
         calls.append(source)
         return first
 
-    (fetched,) = fetch(_recipe(_git_build(url)), lock=None, out=tmp_path, resolver=resolver)
+    (fetched,) = fetch(_recipe(_git_build(url)), lock=None, build=tmp_path, resolver=resolver)
     assert calls == [GitSource(url, "main")]
     assert fetched.pin == first
     strict = _recipe(_git_build(url), policy=Policy(mutable_ref_policy="error"))
     with pytest.raises(PolicyError, match="not allowed by policy: tool@main"):
-        fetch(strict, lock=None, out=tmp_path / "strict", resolver=resolver)
+        fetch(strict, lock=None, build=tmp_path / "strict", resolver=resolver)
 
 
 # ── bake ─────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ def test_bake_fetches_then_hands_the_backend_the_sources(
     backend = _Recording()
     out = tmp_path / "out"
     img = lower(recipe)
-    bake_image(img, None, locked=_locked(recipe, first), backend=backend, out=out)
+    bake_image(img, None, locked=_locked(recipe, first), backend=backend, build=out)
     (request,) = backend.requests
     assert request.sources_dir == out / ".sources"
     assert (out / ".sources" / source_dir("tool", first, url) / "main.go").is_file()
@@ -262,7 +262,7 @@ def test_unlocked_bake_builds_the_pins_its_fetch_resolved(
     backend = _Recording()
     out = tmp_path / "out"
     img = lower(_recipe(_git_build(url)))
-    bake_image(img, None, locked=None, backend=backend, out=out, resolver=lambda source: first)
+    bake_image(img, None, locked=None, backend=backend, build=out, resolver=lambda source: first)
     hooks = (out / "mkosi" / "default" / "scripts" / "04-build.sh").read_text(encoding="utf-8")
     assert f"tool-{first[:12]}" in hooks and "unpinned" not in hooks
     assert img.fetched_pins == {}  # restored after the bake
@@ -280,19 +280,19 @@ def test_bake_without_fetch_fails_fast_naming_tundravm_fetch(
             None,
             locked=_locked(recipe, first),
             backend=backend,
-            out=tmp_path / "out",
+            build=tmp_path / "out",
             fetch=False,
         )
     assert missing.value.code == ErrorCode.STATE
     assert "tundravm fetch" in str(missing.value.hint)
     assert backend.requests == []
-    fetch(recipe, lock=_locked(recipe, first), out=tmp_path / "out")
+    fetch(recipe, lock=_locked(recipe, first), build=tmp_path / "out")
     bake_image(
         lower(recipe),
         None,
         locked=_locked(recipe, first),
         backend=backend,
-        out=tmp_path / "out",
+        build=tmp_path / "out",
         fetch=False,
     )
     assert [r.sources_dir for r in backend.requests] == [tmp_path / "out" / ".sources"]
@@ -302,7 +302,7 @@ def test_nethermind_v1_bakes_fetch_nothing(tmp_path: Path, repo: tuple[str, str]
     url, first = repo
     recipe = _recipe(_git_build(url), dialect="nethermind-v1")
     backend = _Recording()
-    bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, out=tmp_path)
+    bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, build=tmp_path)
     assert backend.requests[0].sources_dir is None
     assert not (tmp_path / ".sources").exists()
     hooks = (tmp_path / "mkosi" / "default" / "scripts" / "04-build.sh").read_text()
@@ -400,11 +400,11 @@ def test_cli_fetch_and_bake_no_fetch(
     out = io.StringIO()
     assert main(["fetch", str(path)], stdout=out) == EXIT_OK
     assert out.getvalue().splitlines()[1] == f"  tool  {first[:12]}  kept"
-    bake = ["bake", str(path), "--backend", "local", "--no-fetch", "--out", "elsewhere", "-q"]
+    bake = ["bake", str(path), "--backend", "local", "--no-fetch", "--build", "elsewhere", "-q"]
     assert main(bake, stdout=io.StringIO()) == EXIT_SDK_ERROR
     error = capsys.readouterr().err
     assert "error [E_STATE]: Source build 'tool' is not fetched" in error
-    assert "tundravm fetch RECIPE --out elsewhere" in error
+    assert "tundravm fetch RECIPE --build elsewhere" in error
 
 
 # ── checkout verification ────────────────────────────────────────────
@@ -416,10 +416,10 @@ def test_a_modified_git_checkout_fails_until_fetch_force_repairs_it(
     url, first = repo
     recipe = _recipe(_git_build(url))
     locked = _locked(recipe, first)
-    (fetched,) = fetch(recipe, lock=locked, out=tmp_path)
+    (fetched,) = fetch(recipe, lock=locked, build=tmp_path)
     (fetched.path / "main.go").write_text("package evil\n", encoding="utf-8")
     with pytest.raises(SourceError) as modified:
-        fetch(recipe, lock=locked, out=tmp_path)
+        fetch(recipe, lock=locked, build=tmp_path)
     assert str(modified.value.args[0]) == (
         "source tool checkout modified/incomplete: run tundravm fetch --force"
     )
@@ -427,12 +427,12 @@ def test_a_modified_git_checkout_fails_until_fetch_force_repairs_it(
     assert modified.value.reason == "1 file changed since the fetch: main.go"
     with pytest.raises(SourceError, match="modified/incomplete"):
         bake_image(
-            lower(recipe), None, locked=locked, backend=_Recording(), out=tmp_path, fetch=False
+            lower(recipe), None, locked=locked, backend=_Recording(), build=tmp_path, fetch=False
         )
-    (repaired,) = fetch(recipe, lock=locked, out=tmp_path, force=True)
+    (repaired,) = fetch(recipe, lock=locked, build=tmp_path, force=True)
     assert not repaired.cached
     assert (repaired.path / "main.go").read_text(encoding="utf-8") == "package main\n"
-    (again,) = fetch(recipe, lock=locked, out=tmp_path)
+    (again,) = fetch(recipe, lock=locked, build=tmp_path)
     assert again.cached
 
 
@@ -442,15 +442,15 @@ def test_untracked_files_and_a_moved_head_count_as_modified(
     url, first = repo
     recipe = _recipe(_git_build(url))
     locked = _locked(recipe, first)
-    (fetched,) = fetch(recipe, lock=locked, out=tmp_path)
+    (fetched,) = fetch(recipe, lock=locked, build=tmp_path)
     (fetched.path / "injected.bin").write_bytes(b"\0")
     with pytest.raises(SourceError, match="modified/incomplete") as untracked:
-        fetch(recipe, lock=locked, out=tmp_path)
+        fetch(recipe, lock=locked, build=tmp_path)
     assert untracked.value.reason == "1 file changed since the fetch: injected.bin"
     (fetched.path / "injected.bin").unlink()
     _git("commit", "-q", "--allow-empty", "-m", "local", cwd=fetched.path)
     with pytest.raises(SourceError, match="modified/incomplete") as moved:
-        fetch(recipe, lock=locked, out=tmp_path)
+        fetch(recipe, lock=locked, build=tmp_path)
     assert moved.value.reason.startswith("HEAD is ") and first[:12] in moved.value.reason
 
 
@@ -461,14 +461,14 @@ def test_a_modified_http_checkout_fails_against_its_manifest(
     build = Build("tool", Http(url), script="true", install=(Install("bin/tool", "/usr/bin/tool"),))
     recipe = _recipe(build)
     locked = _locked(recipe, digest)
-    (fetched,) = fetch(recipe, lock=locked, out=tmp_path)
+    (fetched,) = fetch(recipe, lock=locked, build=tmp_path)
     marker = json.loads((fetched.path / ".tundravm-complete").read_text(encoding="utf-8"))
     assert set(marker["files"]) == {"bin/tool", "tool-1.0.tar.gz"}
     (fetched.path / "bin" / "tool").write_bytes(b"#!/bin/sh\necho evil\n")
     with pytest.raises(SourceError, match="modified/incomplete") as modified:
-        fetch(recipe, lock=locked, out=tmp_path)
+        fetch(recipe, lock=locked, build=tmp_path)
     assert modified.value.reason == "1 file changed since the fetch: bin/tool"
-    (repaired,) = fetch(recipe, lock=locked, out=tmp_path, force=True)
+    (repaired,) = fetch(recipe, lock=locked, build=tmp_path, force=True)
     assert (repaired.path / "bin" / "tool").read_bytes() == b"#!/bin/sh\necho tool\n"
 
 
@@ -481,8 +481,8 @@ def test_checkouts_are_keyed_by_the_source_identity(tmp_path: Path, repo: tuple[
         script="make",
         install=(Install("tool", "/usr/bin/tool"),),
     )
-    (one,) = fetch(_recipe(plain), lock=_locked(_recipe(plain), first), out=tmp_path)
-    (two,) = fetch(_recipe(deep), lock=_locked(_recipe(deep), first), out=tmp_path)
+    (one,) = fetch(_recipe(plain), lock=_locked(_recipe(plain), first), build=tmp_path)
+    (two,) = fetch(_recipe(deep), lock=_locked(_recipe(deep), first), build=tmp_path)
     assert one.path != two.path
     assert two.path.name == source_dir("tool", first, url, submodules=True)
     assert not two.cached

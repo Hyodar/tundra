@@ -6,8 +6,8 @@ one ``Debloat``); ``parent`` chains (the default ``"base"`` is ``Recipe.common``
 ``None`` starts from nothing); ``target`` for one output, ``targets`` for several.
 
     tundravm inspect examples/02_variants.py --diff-variants default dev
-    tundravm compile examples/02_variants.py --out build/variants/mkosi
-    tundravm bake examples/02_variants.py --variant cloud --out build/variants
+    tundravm compile examples/02_variants.py --tree build/variants/mkosi
+    tundravm bake examples/02_variants.py --variant cloud --build build/variants
 """
 
 from tundravm.backends import InProcessBackend

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.key_generation import KeyGeneration, KeySpec, validate_entry_name
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
-from tundravm.check import Diagnostic, Level
+from tundravm.diagnostics import Diagnostic, Severity
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -174,7 +174,7 @@ class DiskEncryption(Module):
             if key is None:
                 declared = ", ".join(sorted(keys)) or "none"
                 yield Diagnostic(
-                    level="error",
+                    severity="error",
                     code="disk-key-undefined",
                     message=(
                         f"disk {disk.name!r} uses key {key_ref!r}, which no "
@@ -184,13 +184,13 @@ class DiskEncryption(Module):
                         f"Declared keys: {declared}. Declare Key({key_ref!r}, ...) "
                         "in this variant, or fix the Disk's key."
                     ),
-                    profile=profile,
+                    location=profile,
                     subject=disk.name,
                 )
             elif disk.key_path is not None and key.output != disk.key_path:
                 written = key.output or "no file (output is unset)"
                 yield Diagnostic(
-                    level="warning",
+                    severity="warning",
                     code="disk-key-path-mismatch",
                     message=(
                         f"disk {disk.name!r} reads its key from {disk.key_path}, but key "
@@ -200,18 +200,18 @@ class DiskEncryption(Module):
                         f"Set Key({key.name!r}, output={disk.key_path!r}) or point the Disk "
                         "at the key's output."
                     ),
-                    profile=profile,
+                    location=profile,
                     subject=disk.name,
                 )
 
     def _check_auto_format(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
         """``disk-auto-format`` for each disk that is both picked automatically and formatted."""
-        level: Level = "error" if image.policy.storage_safety == "error" else "warning"
+        level: Severity = "error" if image.policy.storage_safety == "error" else "warning"
         for disk in self.disks:
             if disk.device is not None or disk.format_policy == "never":
                 continue
             yield Diagnostic(
-                level=level,
+                severity=level,
                 code="disk-auto-format",
                 message=(
                     f"disk {disk.name!r} sets no device and format={disk.format_policy!r}: "
@@ -223,7 +223,7 @@ class DiskEncryption(Module):
                     "format='never' for a disk prepared beforehand; "
                     "Policy(storage_safety='error') makes this an error."
                 ),
-                profile=profile,
+                location=profile,
                 subject=disk.name,
             )
 

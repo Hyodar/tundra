@@ -4,8 +4,8 @@ Teaches: a ``Recipe`` is a name, a base distribution and a ``common`` fragment o
 declarations; with no ``variants`` it builds one ``default`` variant for QEMU.
 
     tundravm inspect examples/01_minimal.py
-    tundravm compile examples/01_minimal.py --out build/minimal/mkosi
-    tundravm bake examples/01_minimal.py --out build/minimal
+    tundravm compile examples/01_minimal.py --tree build/minimal/mkosi
+    tundravm bake examples/01_minimal.py --build build/minimal
 """
 
 from tundravm.backends import InProcessBackend

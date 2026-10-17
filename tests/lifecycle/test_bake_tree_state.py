@@ -131,7 +131,7 @@ def test_bake_warns_about_unreadable_leftovers_instead_of_crashing(tmp_path: Pat
             None,
             locked=None,
             backend=_LeavesRootState(),
-            out=tmp_path / "build",
+            build=tmp_path / "build",
             reporter=reporter,
         )
     finally:

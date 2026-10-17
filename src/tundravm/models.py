@@ -607,7 +607,7 @@ class CompileResult:
 
 BAKE_RESULT_FILENAME = "bake-result.json"
 REPRODUCE_DIRNAME = ".reproduce"
-"""Where ``bake --verify-reproducible`` builds the second time (``OUT/.reproduce``)."""
+"""Where ``bake --verify-reproducible`` builds the second time (``BUILD/.reproduce``)."""
 BAKE_RESULT_SCHEMA_VERSION = 2
 
 

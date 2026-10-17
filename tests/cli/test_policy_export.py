@@ -47,7 +47,7 @@ def manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_export_writes_a_marked_placeholder_policy(manifest: Path, tmp_path: Path) -> None:
     target = tmp_path / "peer.json"
     code, _ = run_main(
-        "measure", str(manifest), "--allow-placeholder", "--export-policy", str(target)
+        "measure", "--build", str(manifest), "--allow-placeholder", "--export-policy", str(target)
     )
     assert code == EXIT_OK
     policy = json.loads(target.read_text(encoding="utf-8"))
@@ -77,7 +77,7 @@ def test_export_refuses_placeholders_without_the_flag(
     manifest: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     target = tmp_path / "peer.json"
-    code, _ = run_main("measure", str(manifest), "--export-policy", str(target))
+    code, _ = run_main("measure", "--build", str(manifest), "--export-policy", str(target))
     assert code == EXIT_SDK_ERROR
     assert "E_MEASUREMENT" in capsys.readouterr().err
     assert not target.exists()

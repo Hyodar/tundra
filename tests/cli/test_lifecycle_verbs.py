@@ -59,24 +59,23 @@ DEFAULT = ("--variant", "default")
 def test_bake_prints_next_deploy_hint(recipe: Path, tmp_path: Path) -> None:
     code, out = run_main("bake", str(recipe), *DEFAULT)
     assert code == EXIT_OK
-    manifest = BUILD / "bake-result.json"
-    assert out.splitlines()[-1] == (
-        f"next: tundravm deploy {manifest} --variant default --target qemu"
-    )
+    assert out.splitlines()[-1] == f"next: tundravm deploy qemu --build {BUILD} --variant default"
 
 
 def test_measure_after_bake_in_separate_invocation(recipe: Path, tmp_path: Path) -> None:
     assert run_main("bake", str(recipe), *BOTH)[0] == EXIT_OK
-    manifest = str(tmp_path / "build" / "bake-result.json")
+    manifest = str(tmp_path / "build")
 
     code, out = run_main(
         "measure",
+        "--build",
         manifest,
         "--variant",
         "default",
         "--scheme",
         "rtmr",
-        "--json",
+        "--format",
+        "json",
         "--allow-placeholder",
     )
     assert code == EXIT_OK
@@ -86,7 +85,14 @@ def test_measure_after_bake_in_separate_invocation(recipe: Path, tmp_path: Path)
     assert payload["values"]
 
     code, out = run_main(
-        "measure", manifest, "--scheme", "azure", "--variant", "azure", "--allow-placeholder"
+        "measure",
+        "--build",
+        manifest,
+        "--scheme",
+        "azure",
+        "--variant",
+        "azure",
+        "--allow-placeholder",
     )
     assert code == EXIT_OK
     assert out.startswith("measurements azure (azure)\nsource: placeholder (")
@@ -97,7 +103,7 @@ def test_measure_refuses_simulated_artifact_without_allow_placeholder(
 ) -> None:
     assert run_main("bake", str(recipe), *DEFAULT)[0] == EXIT_OK
     capsys.readouterr()
-    code, _ = run_main("measure", str(tmp_path / "build"), "--scheme", "rtmr")
+    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr")
     assert code == EXIT_SDK_ERROR
     assert "simulated artifact" in capsys.readouterr().err
 
@@ -105,7 +111,7 @@ def test_measure_refuses_simulated_artifact_without_allow_placeholder(
 def test_measure_without_bake_reports_state_error(
     recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, _ = run_main("measure", str(tmp_path / "build"), "--scheme", "rtmr")
+    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr")
     assert code == EXIT_SDK_ERROR
     err = capsys.readouterr().err
     assert "E_STATE" in err
@@ -117,7 +123,7 @@ def test_measure_needs_a_variant_when_several_are_baked(
 ) -> None:
     run_main("bake", str(recipe), *BOTH)
     code, _ = run_main(
-        "measure", str(tmp_path / "build"), "--scheme", "rtmr", "--allow-placeholder"
+        "measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr", "--allow-placeholder"
     )
     assert code == EXIT_SDK_ERROR
     assert "pass --variant NAME" in capsys.readouterr().err
@@ -139,11 +145,11 @@ def test_deploy_qemu_after_bake_in_separate_invocation(
     )
     command = (
         "deploy",
-        str(tmp_path / "build" / "bake-result.json"),
+        "qemu",
+        "--build",
+        str(tmp_path / "build"),
         "--variant",
         "default",
-        "--target",
-        "qemu",
         "--param",
         "memory=4GiB",
         "--param",
@@ -174,10 +180,10 @@ def test_deploy_rejects_malformed_param(
 ) -> None:
     run_main("bake", str(recipe))
     manifest = str(tmp_path / "build")
-    code, _ = run_main("deploy", manifest, "--target", "qemu", "--param", "oops")
+    code, _ = run_main("deploy", "qemu", "--build", manifest, "--param", "oops")
     assert code == EXIT_SDK_ERROR
     assert "KEY=VALUE" in capsys.readouterr().err
-    code, _ = run_main("deploy", manifest, "--target", "qemu", "--param", "vcpus=3")
+    code, _ = run_main("deploy", "qemu", "--build", manifest, "--param", "vcpus=3")
     assert code == EXIT_SDK_ERROR
     assert "Unknown qemu parameter(s): vcpus" in capsys.readouterr().err
 
@@ -243,21 +249,27 @@ def test_doctor_without_recipe_probes_every_real_backend(
     assert "lint:" not in out
 
 
-def test_measure_reads_the_bake_out_dir_manifest(recipe: Path, tmp_path: Path) -> None:
+def test_measure_reads_the_build_dir_manifest(recipe: Path, tmp_path: Path) -> None:
     out_dir = tmp_path / "elsewhere"
-    code, _ = run_main("bake", str(recipe), "--out", str(out_dir), *DEFAULT)
+    code, _ = run_main("bake", str(recipe), "--build", str(out_dir), *DEFAULT)
     assert code == EXIT_OK
     assert (out_dir / "bake-result.json").exists()
 
-    code, _ = run_main("measure", str(tmp_path / "build"), "--scheme", "rtmr")
+    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr")
     assert code == EXIT_SDK_ERROR
 
-    for manifest in (out_dir, out_dir / "bake-result.json"):
-        code, out = run_main(
-            "measure", str(manifest), "--scheme", "rtmr", "--json", "--allow-placeholder"
-        )
-        assert code == EXIT_OK
-        assert json.loads(out)["scheme"] == "rtmr"
+    code, out = run_main(
+        "measure",
+        "--build",
+        str(out_dir),
+        "--scheme",
+        "rtmr",
+        "--format",
+        "json",
+        "--allow-placeholder",
+    )
+    assert code == EXIT_OK
+    assert json.loads(out)["scheme"] == "rtmr"
 
 
 def test_doctor_local_marks_tools_tree_tools_optional_with_the_fix(

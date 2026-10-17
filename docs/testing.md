@@ -11,11 +11,11 @@ from tundravm.testing import assert_clean, assert_diagnostic, assert_tree, compi
 
 ```python
 assert_clean(diagnostics, /, *, variants=None, allow=(), strict=None) -> diagnostics
-assert_diagnostic(diagnostics, code, /, *, level=None, variant=None, subject=None, variants=None) -> Diagnostic
+assert_diagnostic(diagnostics, code, /, *, severity=None, location=None, subject=None, variants=None) -> Diagnostic
 ```
 
 - `assert_clean(lint(recipe))` fails listing every error and warning whose code is not in `allow`. For a list of diagnostics `strict` defaults to true (warnings fail); pass `strict=False` to fail on errors only.
-- `assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default")` returns the first diagnostic matching every field you give, or fails listing what was found.
+- `assert_diagnostic(lint(recipe), "disk-key-undefined", location="default")` returns the first diagnostic matching every field you give, or fails naming the fields it wanted (`no diagnostic with code='disk-key-undefined', severity='error', location='default'; found:`) and listing what was found. `severity` and `location` replace the old `level=`, `variant=` and `profile=` keywords. `location` is the variant, `""` for the recipe as a whole (the common fragment, the lockfile, the host).
 - Both also accept a `Recipe` and lint it for you (then `strict` defaults to false, and `variants=` limits the variants linted).
 
 ```python
@@ -26,8 +26,8 @@ from tundravm.testing import assert_diagnostic
 def test_disk_without_its_key():
     disk = Disk("data", mount="/data", key=Key("data"))
     recipe = Recipe(name="t", common=Fragment("t", items=(disk,)))
-    found = assert_diagnostic(lint(recipe), "disk-key-undefined", variant="default", subject="data")
-    assert found.level == "error"
+    found = assert_diagnostic(lint(recipe), "disk-key-undefined", location="default", subject="data")
+    assert found.severity == "error"
 ```
 
 ## Compiled trees
@@ -89,10 +89,10 @@ TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_recipe.py   # accept the new t
 ## Simulated artifacts
 
 ```python
-fake_bake(tree: Tree, *, variant: str, target: Target, out: str | Path) -> Artifact
+fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) -> Artifact
 ```
 
-Writes a simulated disk file for one variant under `out` and records it in `out/bake-result.json` (merging with one already there), so `read_artifacts()`, `tundravm measure` and `tundravm deploy` find it. The artifact is `simulated`: `measure` refuses it unless `allow_placeholder=True`, and `deploy` unless `allow_simulated=True` (`tundravm deploy --allow-simulated-artifact`). Both first check the file against the sha256 recorded in `bake-result.json` (`verify_artifact`), so a test that rewrites the disk file gets `ArtifactError`.
+Writes a simulated disk file for one variant into the build directory `build` and records it in its `bake-result.json` (merging with one already there), so `read_artifacts()`, `tundravm measure` and `tundravm deploy` find it. The artifact is `simulated`: `measure` refuses it unless `allow_placeholder=True`, and `deploy` unless `allow_simulated=True` (`tundravm deploy --allow-simulated-artifact`). Both first check the file against the sha256 recorded in `bake-result.json` (`verify_artifact`), so a test that rewrites the disk file gets `ArtifactError`.
 
 ```python
 from tundravm import compile
@@ -101,11 +101,11 @@ from tundravm.testing import fake_bake
 
 
 def test_measure_placeholder(recipe, tmp_path):  # `recipe` is the plugin's minimal fixture
-    artifact = fake_bake(compile(recipe), variant="default", target="qemu", out=tmp_path)
+    artifact = fake_bake(compile(recipe), variant="default", target="qemu", build=tmp_path)
     assert measure(artifact, allow_placeholder=True).tool == "placeholder"
 ```
 
-For a full bake without tools, `bake_in_process(recipe, out=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `lock=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
+For a full bake without tools, `bake_in_process(recipe, build=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `lock=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
 
 ## Reproducibility, SBOM and evidence in tests
 
@@ -117,19 +117,19 @@ from tundravm.testing import bake_in_process
 
 
 def test_bakes_the_same_bytes_twice(recipe, tmp_path):
-    first = bake_in_process(recipe, out=tmp_path / "a")
-    second = bake_in_process(recipe, out=tmp_path / "b")
+    first = bake_in_process(recipe, build=tmp_path / "a")
+    second = bake_in_process(recipe, build=tmp_path / "b")
     assert [a.sha256 for a in first] == [a.sha256 for a in second]
 
 
 def test_bake_verifies_itself(recipe, tmp_path):
     locked = lock(recipe, offline=True)
-    bake(recipe, lock=locked, backend=Backend("inprocess"), out=tmp_path, verify_reproducible=True)
+    bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path, verify_reproducible=True)
 
 
 def test_sbom_lists_the_declared_kernel(recipe, tmp_path):
     locked = lock(recipe, offline=True)
-    (artifact,) = bake_in_process(recipe, out=tmp_path, lock=locked)
+    (artifact,) = bake_in_process(recipe, build=tmp_path, lock=locked)
     bom = sbom(artifact, lock=locked)
     assert {p.name for p in bom.packages} == {"linux-image-amd64"}
     assert all(p.declared and not p.version for p in bom.packages)  # simulated: no mkosi manifest
@@ -138,7 +138,7 @@ def test_sbom_lists_the_declared_kernel(recipe, tmp_path):
 
 An in-process bake leaves no mkosi manifest, so its packages are the ones the recipe declares, unversioned (`Component.declared`, `Sbom.manifest_found` false). For a recipe with source builds, lock with a `resolver=` and assert on the pins: `{s.name: s.commit for s in bom.sources}`. To test against versioned packages, pass `manifest=` a JSON file in mkosi's shape (`{"manifest_version": 1, "config": {...}, "packages": [{"type", "name", "version", "architecture"}]}`).
 
-`evidence(recipe, out=tmp_path, lock=locked)` reads a bake back and returns its verdict as a value, so a test can assert that the bake would pass review: `Evidence.passed`, or `Evidence.index["verdict"]` for each check (`integrity`, `lock`, `reproducible`, `lint`). A bake never run with `verify_reproducible=True` reads `not checked`, which still passes; an artifact changed after the bake reads `mismatch` and fails. The `secret-in-file` and `secret-in-env` rules are tested like any lint rule: plant a key or token in a `File`, `Template` or `Service` (`env`, `exec_start`...) and assert the diagnostic, then check that `allow_secret=True` exempts it. The planted key needs a body after its PEM header: a header alone does not trigger the rule.
+`evidence(recipe, build=tmp_path, lock=locked)` reads a bake back and returns its verdict as a value, so a test can assert that the bake would pass review: `Evidence.passed`, or `Evidence.index["verdict"]` for each check (`integrity`, `lock`, `reproducible`, `lint`). A bake never run with `verify_reproducible=True` reads `not checked`, which still passes; an artifact changed after the bake reads `mismatch` and fails. The `secret-in-file` and `secret-in-env` rules are tested like any lint rule: plant a key or token in a `File`, `Template` or `Service` (`env`, `exec_start`...) and assert the diagnostic, then check that `allow_secret=True` exempts it. The planted key needs a body after its PEM header: a header alone does not trigger the rule.
 
 ```python
 from tundravm import File, Fragment, Package, Recipe, evidence, lint, lock
@@ -158,8 +158,8 @@ def image(*items):
 def test_the_bake_passes_review(tmp_path):
     recipe = image()
     locked = lock(recipe, offline=True)
-    bake_in_process(recipe, out=tmp_path, lock=locked)
-    record = evidence(recipe, out=tmp_path, lock=locked)
+    bake_in_process(recipe, build=tmp_path, lock=locked)
+    record = evidence(recipe, build=tmp_path, lock=locked)
     assert record.passed, record.index["verdict"]
     assert record.index["verdict"]["reproducible"] == "not checked"
 
@@ -167,14 +167,14 @@ def test_the_bake_passes_review(tmp_path):
 def test_a_changed_artifact_fails_review(tmp_path):
     recipe = image()
     locked = lock(recipe, offline=True)
-    (artifact,) = bake_in_process(recipe, out=tmp_path, lock=locked)
+    (artifact,) = bake_in_process(recipe, build=tmp_path, lock=locked)
     artifact.path.write_bytes(artifact.path.read_bytes() + b"x")
-    assert evidence(recipe, out=tmp_path, lock=locked).index["verdict"]["integrity"] == "mismatch"
+    assert evidence(recipe, build=tmp_path, lock=locked).index["verdict"]["integrity"] == "mismatch"
 
 
 def test_a_baked_key_is_refused():
     found = lint(image(File("/etc/app/deploy.key", KEY)))
-    assert_diagnostic(found, "secret-in-file", variant="default", subject="/etc/app/deploy.key")
+    assert_diagnostic(found, "secret-in-file", location="default", subject="/etc/app/deploy.key")
 
 
 def test_allow_secret_exempts_a_lookalike():

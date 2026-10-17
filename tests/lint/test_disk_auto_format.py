@@ -28,7 +28,7 @@ def _findings(disk: Disk, policy: Policy | None = None) -> list[tuple[str, str |
         Fragment("disk", items=(Package("linux-image-amd64"), TOOLS, KEY, disk)),
         policy=policy,
     )
-    return [(d.level, d.subject) for d in lint(recipe) if d.code == "disk-auto-format"]
+    return [(d.severity, d.subject) for d in lint(recipe) if d.code == "disk-auto-format"]
 
 
 @pytest.mark.parametrize("format", ["on_fail", "always", "on_initialize"])

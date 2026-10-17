@@ -19,6 +19,7 @@ from typing import Literal, get_args
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
 from tundravm._source import GoBuild as Go
+from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.policy import Policy
 
@@ -1080,19 +1081,6 @@ DECLARATION_TYPES: tuple[type, ...] = (
 
 
 # ── Results ─────────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class Diagnostic:
-    code: str
-    message: str
-    level: Literal["error", "warning", "info"] = "error"
-    variant: str = ""
-    subject: str = ""
-
-    def __post_init__(self) -> None:
-        _require_name(self, self.code, "code")
-        _require_choice(self, self.level, ("error", "warning", "info"), "level")
 
 
 @dataclass(frozen=True, slots=True)

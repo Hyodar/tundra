@@ -160,7 +160,7 @@ def import_tree(
     name: str | None = None,
     variants: Sequence[str] | None = None,
     dialect: Dialect | None = None,
-    out: Path | None = None,
+    output: Path | None = None,
 ) -> Imported:
     """Read the mkosi tree at *tree* as a recipe module.
 
@@ -168,7 +168,7 @@ def import_tree(
     them as ``compile`` writes them; *variants* picks some of those (the first
     becomes ``Recipe.common``, default: ``default`` first, then by name). *name*
     is the recipe name (default: the directory name). *dialect* is the emission
-    dialect the tree was written with (default: guessed). *out* is where the
+    dialect the tree was written with (default: guessed). *output* is where the
     module will be written: ruff formats it with that file's configuration.
     """
     root = Path(tree)
@@ -213,14 +213,14 @@ def import_tree(
         notes.extend(f"{found.name}: {note}" for note in found.notes)
     recipe_value, merge_notes = _assemble(recipe_name, read, chosen, root)
     notes.extend(merge_notes)
-    source = _module_source(recipe_value, tree=root, out=out)
-    formatted, format_note = _ruff_format(source, out)
+    source = _module_source(recipe_value, tree=root, output=output)
+    formatted, format_note = _ruff_format(source, output)
     if format_note:
         notes.append(format_note)
     namespace: dict[str, Any] = {"__name__": "tundravm_imported"}
-    if out is not None:
-        namespace["__file__"] = str(Path(out).resolve())
-    exec(compile(formatted, str(out or "<imported recipe>"), "exec"), namespace)
+    if output is not None:
+        namespace["__file__"] = str(Path(output).resolve())
+    exec(compile(formatted, str(output or "<imported recipe>"), "exec"), namespace)
     recipe = namespace["recipe"]
     notes.extend(_round_trip_notes(recipe, root, [f.name for f in read], single=single))
     return Imported(
@@ -1576,15 +1576,15 @@ def _hint(obj: object) -> str:
     return type(obj).__name__
 
 
-def _module_source(recipe: Recipe, *, tree: Path, out: Path | None) -> str:
+def _module_source(recipe: Recipe, *, tree: Path, output: Path | None) -> str:
     writer = _Writer(tree=tree)
-    module = Path(out).name if out is not None else "RECIPE"
+    module = Path(output).name if output is not None else "RECIPE"
     body = "recipe = " + writer.value(recipe) + "\n"
     lines = [
         f'"""{recipe.name} image recipe, imported from an mkosi tree by `tundravm import`.',
         "",
         f"Lint:     tundravm lint {module}",
-        f"Compile:  tundravm compile {module} --out mkosi",
+        f"Compile:  tundravm compile {module} --tree mkosi",
         '"""',
         "",
     ]
@@ -1596,7 +1596,7 @@ def _module_source(recipe: Recipe, *, tree: Path, out: Path | None) -> str:
         lines.append(f"from tundravm.declarative.utils import {', '.join(sorted(writer.utils))}")
     lines.append("")
     if writer.tree_paths:
-        lines.append(_tree_binding(tree, out))
+        lines.append(_tree_binding(tree, output))
         lines.append('"""The imported tree: files the recipe reads by path live here."""')
         lines.append("")
     for text, name in writer.constants.items():
@@ -1606,11 +1606,11 @@ def _module_source(recipe: Recipe, *, tree: Path, out: Path | None) -> str:
     return "\n".join(lines)
 
 
-def _tree_binding(tree: Path, out: Path | None) -> str:
-    """``TREE = ...``: relative to the module when it is written to *out*, else absolute."""
-    if out is None:
+def _tree_binding(tree: Path, output: Path | None) -> str:
+    """``TREE = ...``: relative to the module when it is written to *output*, else absolute."""
+    if output is None:
         return f"TREE = Path({str(tree.resolve())!r})"
-    rel = Path(os.path.relpath(tree.resolve(), Path(out).resolve().parent)).as_posix()
+    rel = Path(os.path.relpath(tree.resolve(), Path(output).resolve().parent)).as_posix()
     if rel == ".":
         return "TREE = Path(__file__).resolve().parent"
     return f"TREE = Path(__file__).resolve().parent / {rel!r}"
@@ -1625,13 +1625,13 @@ def _block(text: str) -> str:
     return '"""\\\n' + body + '"""'
 
 
-def _ruff_format(source: str, out: Path | None) -> tuple[str, str | None]:
+def _ruff_format(source: str, output: Path | None) -> tuple[str, str | None]:
     """*source* formatted by ruff, or as is with a note when ruff is not available."""
     commands: list[list[str]] = [[sys.executable, "-m", "ruff"]]
     found = shutil.which("ruff")
     if found:
         commands.append([found])
-    filename = str(out) if out is not None else "recipe.py"
+    filename = str(output) if output is not None else "recipe.py"
     for command in commands:
         try:
             done = subprocess.run(

@@ -180,7 +180,7 @@ def diff_against(
 def cmd_diff(
     args: argparse.Namespace, out: TextIO, img: Lowered, *, profiles: Sequence[str] | None = None
 ) -> int:
-    against = args.against if args.against is not None else Path(img.build_dir) / "mkosi"
+    against = args.tree if args.tree is not None else Path(img.build_dir) / "mkosi"
     result = diff_against(img, against, profiles=profiles)
     if result.is_clean:
         print("tree is up to date with the recipe", file=out)

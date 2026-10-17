@@ -22,7 +22,6 @@ from tundravm._modules import tdxs as _tdxs
 from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import (
     is_placeholder,
-    policy_payload,
     read_policy,
     validator_measurements,
 )
@@ -359,16 +358,8 @@ class Tdxs(Composite):
         **kwargs: Any,
     ) -> Tdxs:
         """:meth:`from_policy` for a ``measure()`` result (rtmr scheme) in memory."""
-        payload = policy_payload(
-            scheme=measurements.scheme,
-            tool=measurements.tool,
-            values=dict(measurements.values),
-            artifact_path="",
-            artifact_sha256=measurements.artifact_digest,
-            allow_placeholder=allow_placeholder,
-        )
         return cls.from_policy(
-            payload,
+            measurements.to_policy(allow_placeholder=allow_placeholder),
             validator=validator,
             mrtd=mrtd,
             allow_placeholder=allow_placeholder,

@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
 from tundravm.models import unit_name
 
@@ -134,10 +135,10 @@ class _Resolution:
         message: str,
         *,
         subject: str = "",
-        level: Literal["error", "warning", "info"] = "error",
+        severity: Severity = "error",
     ) -> None:
         self.diagnostics.append(
-            Diagnostic(code, message, level=level, variant=self.variant, subject=subject)
+            Diagnostic(code, severity, message, subject=subject, location=self.variant)
         )
 
     def expand(self, fragment: Fragment) -> list[tuple[Declaration, tuple[FragmentRef, ...]]]:
@@ -452,7 +453,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                 f"unit {unit.name!r} waits for runtime-init, but this variant declares no init "
                 "step",
                 subject=unit.name,
-                level="warning",
+                severity="warning",
             )
 
 
@@ -496,7 +497,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 )
         for check in fragment.checks:
             for diagnostic in check(resolved):
-                found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
+                found = diagnostic if diagnostic.location else replace(diagnostic, location=name)
                 state.diagnostics.append(found)
     return resolved, state
 
@@ -514,7 +515,7 @@ def provenance(recipe: Recipe, *, variant: str) -> dict[Identity, tuple[Origin, 
 def resolve(recipe: Recipe, *, variant: str) -> Resolved:
     """Resolve *variant*; raises ``ValidationError`` on any error-level diagnostic."""
     resolved, diagnostics = _resolve(recipe, variant)
-    errors = [d for d in diagnostics if d.level == "error"]
+    errors = [d for d in diagnostics if d.severity == "error"]
     if errors:
         first = errors[0]
         more = f" (and {len(errors) - 1} more)" if len(errors) > 1 else ""
