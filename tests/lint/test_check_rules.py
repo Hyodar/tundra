@@ -17,6 +17,7 @@ from tundravm import (
     Backend,
     Debloat,
     Declaration,
+    ExternalDelivery,
     File,
     Fragment,
     Git,
@@ -27,6 +28,7 @@ from tundravm import (
     Package,
     Recipe,
     Secret,
+    SecretEnv,
     SecretFile,
     Secrets,
     Service,
@@ -267,8 +269,8 @@ def test_debloat_removes_declared_file() -> None:
 
 # j. secrets
 #
-# A Secret needs a delivery target and Secrets always lowers with the delivery
-# step that writes them at boot, so an undelivered secret cannot be declared.
+# A Secret needs a delivery target, and the target needs a provider that writes it:
+# the built-in tundra-tools one provisions only the SSH key (secret-target-unsupported).
 
 
 def test_secret_requires_a_delivery_target() -> None:
@@ -276,11 +278,45 @@ def test_secret_requires_a_delivery_target() -> None:
         Secret("token", targets=())
 
 
-def test_secret_delivery_applied_is_fine() -> None:
+@pytest.mark.parametrize(
+    "secrets",
+    [
+        Secrets(),
+        Secrets(
+            entries=(Secret("token", (SecretFile("/run/token"),)),),
+            delivery=ExternalDelivery("vault-agent", supports=("file",)),
+        ),
+    ],
+    ids=["ssh-key-only", "external"],
+)
+def test_secret_delivery_applied_is_fine(secrets: Secrets) -> None:
     # no Disk store: store=None, otherwise secret-store-undefined
-    secrets = Secrets(entries=(Secret("token", (SecretFile("/run/token"),)),))
     # The delivery tool builds from an unpinned branch; that is source-unpinned's concern.
     assert [d for d in report(recipe(secrets)) if d.code != "source-unpinned"] == []
+
+
+def test_secret_target_unsupported_by_the_builtin_provider() -> None:
+    token = Secret("token", (SecretFile("/run/token"), SecretEnv("TOKEN")))
+    found = [d for d in report(recipe(Secrets(entries=(token,)))) if d.code != "source-unpinned"]
+    assert [(d.severity, d.code, d.subject) for d in found] == [
+        ("error", "secret-target-unsupported", "token"),
+        ("error", "secret-target-unsupported", "token"),
+    ]
+    [file] = [d for d in found if "file /run/token" in d.message]
+    assert "provisions only the SSH key" in file.message
+    assert "ExternalDelivery('NAME', supports=('file',))" in (file.hint or "")
+    assert "reach the VM with the SSH key" in (file.hint or "")
+
+
+def test_secret_target_unsupported_by_an_external_provider() -> None:
+    token = Secret("token", (SecretFile("/run/token"), SecretEnv("TOKEN", "app")))
+    secrets = Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent", ("file",)))
+    [found] = [d for d in report(recipe(secrets)) if d.code == "secret-target-unsupported"]
+    assert "environment variable TOKEN" in found.message
+    assert found.hint == (
+        "Add 'env' to ExternalDelivery('vault-agent', supports=) if it writes the target, "
+        "or remove the target from the Secret."
+    )
 
 
 # k. kernel-missing

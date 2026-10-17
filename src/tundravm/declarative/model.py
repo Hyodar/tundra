@@ -847,8 +847,49 @@ class Secret:
                 raise _fail(self, f"secret {self.name!r} target {target!r} is not a target.")
 
 
+SecretTargetKind = Literal["file", "env"]
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalDelivery:
+    """Something other than tundra-tools writes a ``Secrets`` block's targets at boot.
+
+    *name* says what (``"gcp-secret-manager"``, ``"app-secrets.service"``); *supports*
+    the target kinds it writes: ``"file"`` (``SecretFile``), ``"env"`` (``SecretEnv``).
+    The SSH key flow still runs through tundra-tools.
+    """
+
+    name: str
+    supports: tuple[SecretTargetKind, ...] = ("file", "env")
+
+    def __post_init__(self) -> None:
+        from tundravm._modules.secret_delivery import BUILTIN_SECRET_PROVIDER
+
+        _freeze(self, "supports")
+        _require_name(self, self.name)
+        if self.name == BUILTIN_SECRET_PROVIDER:
+            raise _fail(
+                self,
+                f"{self.name!r} is the built-in provider's name.",
+                hint="Name what delivers the targets, e.g. ExternalDelivery('vault-agent').",
+            )
+        kinds = get_args(SecretTargetKind)
+        if not self.supports or any(kind not in kinds for kind in self.supports):
+            raise _fail(self, f"supports must name 'file' and/or 'env', got {self.supports!r}.")
+        if len(set(self.supports)) != len(self.supports):
+            raise _fail(self, f"supports {self.supports!r} names a kind twice.")
+
+
 @dataclass(frozen=True, slots=True)
 class Secrets:
+    """The secrets a variant expects at boot; *delivery* is who writes their targets.
+
+    ``delivery=None`` is the built-in tundra-tools provider, which provisions only
+    the SSH key (``BUILTIN_SECRET_CAPABILITIES``): a ``SecretFile`` or ``SecretEnv``
+    entry needs an :class:`ExternalDelivery` that writes it (lint:
+    ``secret-target-unsupported``).
+    """
+
     name: str = "secrets"
     entries: tuple[Secret, ...] = ()
     store: Disk | None = None
@@ -856,10 +897,17 @@ class Secrets:
     port: int = 8080
     ssh_directory: str = "/root/.ssh"
     ssh_key_path: str | None = "/etc/root_key"
+    delivery: ExternalDelivery | None = None
 
     def __post_init__(self) -> None:
         _freeze(self, "entries")
         _require_name(self, self.name)
+        if self.delivery is not None and not isinstance(self.delivery, ExternalDelivery):
+            raise _fail(
+                self,
+                f"delivery must be an ExternalDelivery or None, got {self.delivery!r}.",
+                hint="Pass delivery=ExternalDelivery('NAME', supports=('file',)).",
+            )
         names: set[str] = set()
         for entry in self.entries:
             if not isinstance(entry, Secret):
@@ -1146,6 +1194,7 @@ __all__ = [
     "Disk",
     "Dotnet",
     "EMPTY_FRAGMENT",
+    "ExternalDelivery",
     "File",
     "Fragment",
     "Git",

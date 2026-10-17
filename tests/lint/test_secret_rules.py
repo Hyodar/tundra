@@ -9,7 +9,19 @@ from pathlib import Path
 import pytest
 
 from tests.lint.test_check_rules import recipe, report
-from tundravm import Directory, File, Fragment, Service, Template, Unit, Variant, compile
+from tundravm import (
+    Directory,
+    ExternalDelivery,
+    File,
+    Fragment,
+    Secrets,
+    Service,
+    Template,
+    Unit,
+    Variant,
+    compile,
+)
+from tundravm.check import SECRET_HINT
 from tundravm.declarative import lock
 
 # Built at runtime so this file does not trip secret scanners itself.
@@ -48,6 +60,19 @@ def test_secret_in_file_finds_credentials(path: str, content: str, kind: str) ->
     assert "Secrets(" in (diag.hint or "") and "allow_secret=True" in (diag.hint or "")
     for value in (AWS, GITHUB, TOKEN, "hunter2hunter2", "MIIEowIBAAKCAQEA"):
         assert value not in diag.message
+
+
+def test_secret_hint_names_the_targets_the_variant_can_deliver() -> None:
+    leak = File("/etc/app/app.conf", f"api_token = {TOKEN}\n")
+    [builtin] = [d for d in report(recipe(leak, Secrets())) if d.code == "secret-in-file"]
+    assert builtin.hint == SECRET_HINT
+    assert "provisions only an SSH key" in SECRET_HINT and "ExternalDelivery(" in SECRET_HINT
+    external = Secrets(delivery=ExternalDelivery("vault-agent", supports=("file",)))
+    [found] = [d for d in report(recipe(leak, external)) if d.code == "secret-in-file"]
+    assert "a SecretFile target to the Secrets that ExternalDelivery('vault-agent')" in (
+        found.hint or ""
+    )
+    assert "SecretEnv" not in (found.hint or "")
 
 
 @pytest.mark.parametrize(

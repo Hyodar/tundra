@@ -3,9 +3,12 @@
 Teaches the runtime-init chain the compiler emits, in order: ``keys`` creates the
 ``Key`` and seals it to the TPM, ``disks`` opens (or formats) the ``Disk`` with it and
 mounts it, ``secrets`` runs ``secret-delivery``, which waits for an SSH key POSTed over
-HTTP, writes it to the SSH directory and keeps it in a LUKS token on the ``store`` disk.
-The ``Secret`` entries (``Schema``, ``SecretFile``/``SecretEnv`` targets) are recorded in
-the image's secrets manifest only: the runtime tool does not validate or deliver them yet.
+HTTP and writes it to the SSH directory (``store`` is recorded in its config, but the
+binary does not keep the key on the disk yet). That SSH key is all the built-in
+``tundra-tools`` provider delivers: the ``Secret`` entries (``Schema``,
+``SecretFile``/``SecretEnv`` targets) are recorded in the image's secrets manifest, and
+``ExternalDelivery`` declares what writes them at boot (lint
+``secret-target-unsupported`` without it).
 ``RuntimeTools`` names the source of the helper binaries those steps run; ``Partition``
 is a plain partition baked into the image instead. ``Disk`` without ``device=`` lets
 ``disk-setup`` pick the largest whole ``/dev/sd*`` disk, so lint warns
@@ -19,6 +22,7 @@ is a plain partition baked into the image instead. ``Disk`` without ``device=`` 
 from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
     Disk,
+    ExternalDelivery,
     Fragment,
     Key,
     Package,
@@ -42,6 +46,9 @@ disk = Disk("disk_persistent", mount="/persistent", key=key, mapper="cryptpersis
 
 secrets = Secrets(
     store=disk,
+    # tundra-tools delivers only the SSH key: a unit of yours, ordered before app.service,
+    # fetches these from your secret store and writes the files and /run/secrets/app.env.
+    delivery=ExternalDelivery("app-secret-fetch", supports=("file", "env")),
     entries=(
         # A file only the app reads, and the same value in the app's environment.
         Secret(

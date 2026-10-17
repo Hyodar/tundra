@@ -133,6 +133,10 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `deploy qemu --param firmware=PATH` (`Qemu(firmware=)`) boots that TDVF (with `tdx=true`) or OVMF image; a path that is not a file fails before QEMU starts. The `prover` template installs `openssh-server` and `socat`, which its SSH relay needs.
 - Docs: the tutorial is re-run end to end on the current CLI.
 
+- **Breaking:** lint error `secret-target-unsupported`: a `SecretFile` or `SecretEnv` whose provider does not write it at boot. The built-in `tundra-tools` delivery writes only the SSH key (`BUILTIN_SECRET_CAPABILITIES`), so file or env targets need `Secrets(delivery=ExternalDelivery(name, supports=...))` naming what writes them, or must go.
+- `ExternalDelivery(name, supports=("file", "env"))` and `Secrets(delivery=)` declare who delivers a `Secrets` block's targets, without changing the tree or recipe digest. `secret-in-file`/`secret-in-env` hints name only the target kinds the variant's provider writes. The evidence index records each variant's `secrets` (kind, location, provider, supported, required).
+- **Breaking:** the `prover` init template provisions the SSH key only; it no longer declares an `app_token` `SecretFile` nothing would write.
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

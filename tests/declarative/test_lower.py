@@ -13,6 +13,7 @@ from tundravm.declarative import (
     Debloat,
     Directory,
     Disk,
+    ExternalDelivery,
     File,
     Fragment,
     Git,
@@ -96,6 +97,7 @@ def declarative_recipe() -> Recipe:
                     ),
                 ),
                 store=disk,
+                delivery=ExternalDelivery("app-secrets"),
             ),
             Build(
                 "app",

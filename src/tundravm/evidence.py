@@ -31,6 +31,7 @@ from string import Template
 from typing import Any, Literal
 
 from . import _ssh_sig
+from ._modules.secret_delivery import SecretDelivery
 from .attestation import parse_time, read_attestation
 from .backends.base import Requirement
 from .declarative._lowered import Lowered
@@ -331,6 +332,7 @@ def evidence(
         for name in names
     }
     for name in names:
+        records[name]["secrets"] = _secrets(img, name)
         records[name]["tree"] = None
         if compiled is not None and name in compiled.variants:
             records[name]["tree"] = f"variants/{name}/tree.json"
@@ -1167,6 +1169,16 @@ def _policy_state(policy: Mapping[str, Any] | None) -> str:
 # ── rendering ────────────────────────────────────────────────────────────
 
 
+def _secrets(img: Lowered, name: str) -> list[dict[str, object]]:
+    """What variant *name* expects at boot: each ``Secrets`` target and who writes it."""
+    return [
+        row
+        for module in img.applied_modules(name, inherited=True)
+        if isinstance(module, SecretDelivery)
+        for row in module.boot_targets()
+    ]
+
+
 def _text(index: Mapping[str, Any]) -> str:
     verdict = index["verdict"]
     recipe = index["recipe"]
@@ -1192,6 +1204,11 @@ def _text(index: Mapping[str, Any]) -> str:
             lines.append(
                 f"  {name}/{row['target']}  {row['path']}  sha256 {row['sha256'][:12]}  "
                 f"{row['integrity']}"
+            )
+        for row in record.get("secrets") or ():
+            state = "delivered" if row["supported"] else "not delivered"
+            lines.append(
+                f"  {name} secret {row['kind']} {row['location']}  by {row['provider']}  {state}"
             )
     if verdict["reasons"]:
         lines.append("reasons:")
@@ -1310,6 +1327,11 @@ def _variant_html(name: str, record: Mapping[str, Any]) -> str:
                 for a in record.get("attestations") or ()
             ],
         )
+    )
+    columns = ("secret", "kind", "location", "provider", "supported", "required")
+    parts.append("<h3>Secrets at boot</h3>")
+    parts.append(
+        _table(columns, [tuple(r[c] for c in columns) for r in record.get("secrets") or ()])
     )
     parts.append("<h3>SBOM</h3>")
     parts.append(

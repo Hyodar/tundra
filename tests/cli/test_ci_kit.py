@@ -483,8 +483,8 @@ def test_ci_pass_prints_three_ok_lines(recipe: Path, tmp_path: Path) -> None:
 
 RUNTIME_RECIPE = """
 from tundravm import (
-    Disk, Fragment, Git, Key, Package, Recipe, RuntimeTools, Secret, SecretFile, Secrets,
-    Service, Variant,
+    Disk, ExternalDelivery, Fragment, Git, Key, Package, Recipe, RuntimeTools, Secret,
+    SecretFile, Secrets, Service, Variant,
 )
 from tundravm.backends.inprocess import InProcessBackend
 
@@ -496,7 +496,10 @@ ITEMS = (
     TOOLS,
     KEY,
     Disk("disk_persistent", "/persistent", device="/dev/sdb", key=KEY),
-    Secrets(entries=(Secret("token", (SecretFile("/run/app/token"),)),)),
+    Secrets(
+        entries=(Secret("token", (SecretFile("/run/app/token"),)),),
+        delivery=ExternalDelivery("app-secrets", supports=("file",)),
+    ),
     Service("app", "/usr/bin/app"),
 )
 recipe = Recipe(

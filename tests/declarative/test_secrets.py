@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tundravm.declarative import (
+    ExternalDelivery,
     Fragment,
     Recipe,
     Schema,
@@ -13,7 +14,9 @@ from tundravm.declarative import (
     SecretEnv,
     SecretFile,
     Secrets,
+    compile,
     lock,
+    lower,
 )
 from tundravm.errors import ValidationError
 from tundravm.testing import compile_tree
@@ -75,3 +78,31 @@ def test_secret_delivery_rejects_unnamed_or_targetless_secrets() -> None:
         Secret("", targets=target)
     with pytest.raises(ValidationError, match="secret 'x' requires at least one delivery target"):
         Secret("x", targets=())
+
+
+def test_external_delivery_validates_its_name_and_kinds() -> None:
+    assert ExternalDelivery("vault-agent").supports == ("file", "env")
+    listed = ExternalDelivery("vault-agent", ["file"])  # type: ignore[arg-type]
+    assert Secrets(delivery=listed).delivery == ExternalDelivery("vault-agent", ("file",))
+    with pytest.raises(ValidationError, match="built-in provider's name"):
+        ExternalDelivery("tundra-tools")
+    with pytest.raises(ValidationError, match="supports must name 'file' and/or 'env'"):
+        ExternalDelivery("vault-agent", ("ssh-key",))  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="supports must name"):
+        ExternalDelivery("vault-agent", ())
+    with pytest.raises(ValidationError, match="names a kind twice"):
+        ExternalDelivery("vault-agent", ("file", "file"))
+    with pytest.raises(ValidationError, match="delivery must be an ExternalDelivery"):
+        Secrets(delivery="vault-agent")  # type: ignore[arg-type]
+
+
+def test_external_delivery_changes_neither_tree_nor_digest() -> None:
+    token = Secret("token", (SecretFile("/run/token"),))
+
+    def recipe(secrets: Secrets) -> Recipe:
+        return Recipe("r", Fragment("common", items=(secrets,)))
+
+    builtin = recipe(Secrets(entries=(token,)))
+    external = recipe(Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent")))
+    assert lower(builtin).digest() == lower(external).digest()
+    assert compile(builtin).digest == compile(external).digest

@@ -40,7 +40,7 @@ TEMPLATES: dict[str, str] = {
     "plus a dev variant",
     "cloud": "service plus azure and gcp variants, backports and an EFI stub "
     "pinned to a Debian snapshot",
-    "prover": "cloud plus a TPM-sealed key, an encrypted disk, secrets and the tdxs "
+    "prover": "cloud plus a TPM-sealed key, an encrypted disk, SSH key delivery and the tdxs "
     "attestation service",
 }
 """Template name -> one-line description, in ``init --list-templates`` order."""
@@ -142,8 +142,6 @@ _APP_IMPORTS = {
         "    Recipe,\n"
         "    Resolved,\n"
         "    RuntimeTools,\n"
-        "    Secret,\n"
-        "    SecretFile,\n"
         "    Secrets,\n"
         "    Service,\n"
         "    User,\n"
@@ -273,7 +271,7 @@ recipe = Recipe(
 """
 
 _PROVER_RECIPE = r"""
-# Boot-time init: TPM-sealed key -> encrypted /persistent -> secrets over HTTP.
+# Boot-time init: TPM-sealed key -> encrypted /persistent -> root's SSH key over HTTP.
 key = Key("key_persistent", output="/tmp/key_persistent")
 # device=None picks the largest whole /dev/sd* disk, boot disk included: name the device and
 # pick format="never" or "on_initialize" for production (lint: disk-auto-format).
@@ -285,10 +283,9 @@ disk = Disk(
     key=key,
     mapper="cryptroot",
 )
-secrets = Secrets(
-    store=disk,
-    entries=(Secret("app_token", (SecretFile("/etc/app/token", owner="app"),)),),
-)
+# tundra-tools delivers root's SSH key only. Deliver an app secret to a SecretFile or
+# SecretEnv with Secrets(entries=..., delivery=ExternalDelivery(...)) naming what writes it.
+secrets = Secrets(store=disk)
 
 recipe = Recipe(
     name="$title",

@@ -16,10 +16,15 @@ from tests.helpers import run_main, write_recipe_file
 from tundravm import (
     Backend,
     Evidence,
+    ExternalDelivery,
     File,
     Fragment,
     Package,
     Recipe,
+    Secret,
+    SecretEnv,
+    SecretFile,
+    Secrets,
     Variant,
     bake,
     evidence,
@@ -32,6 +37,7 @@ from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative import lower, read_artifacts, write_lock
 from tundravm.declarative.bom import manifest_path
 from tundravm.errors import ArtifactError, ValidationError
+from tundravm.evidence import _secrets
 
 EPOCH = "1700000000"
 NAME = "<script>alert(1)</script>"
@@ -133,6 +139,25 @@ def test_bundle_is_deterministic(tmp_path: Path, epoch: None) -> None:
         "evidence/variants/default/tree.json",
     ]
     assert {(m.mtime, m.uid, m.gid, m.mode) for m in members} == {(int(EPOCH), 0, 0, 0o644)}
+
+
+def test_index_records_the_secret_targets_and_who_delivers_them(tmp_path: Path) -> None:
+    recipe = _recipe()
+    assert _evidence(recipe, _baked(tmp_path, recipe)).index["variants"]["default"]["secrets"] == []
+    token = Secret("token", (SecretFile("/run/token"), SecretEnv("TOKEN", "app")))
+    secrets = Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent", ("file",)))
+    common = Fragment("common", items=(Package("linux-image-amd64"), secrets))
+    rows = _secrets(lower(Recipe("node", common)), "default")
+    assert [(r["kind"], r["location"], r["provider"], r["supported"]) for r in rows] == [
+        ("ssh-key", "/root/.ssh/authorized_keys", "tundra-tools", True),
+        ("file", "/run/token", "vault-agent", True),
+        ("env", "TOKEN", "vault-agent", False),
+    ]
+    assert [(r["secret"], r["required"]) for r in rows] == [
+        (None, True),
+        ("token", True),
+        ("token", True),
+    ]
 
 
 def test_html_has_the_verdict_banner_and_escapes_values(tmp_path: Path, epoch: None) -> None:

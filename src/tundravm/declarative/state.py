@@ -33,6 +33,7 @@ from tundravm._modules.key_generation import (
     KEY_GENERATION_INIT_PRIORITY,
 )
 from tundravm._modules.secret_delivery import (
+    BUILTIN_SECRET_PROVIDER,
     SECRET_DELIVERY_BUILD_PACKAGES,
     SECRET_DELIVERY_INIT_PRIORITY,
 )
@@ -357,6 +358,8 @@ class StateBuilder:
                 manifest_path=manifest_path,
                 source=source,
                 env_suffix=None if len(secrets) == 1 else entry.name,
+                provider=BUILTIN_SECRET_PROVIDER if entry.delivery is None else entry.delivery.name,
+                provider_supports=() if entry.delivery is None else entry.delivery.supports,
             )
             spec = delivery.source_spec()
             if spec.name not in profile.source_builds:  # a second delivery reuses the binary

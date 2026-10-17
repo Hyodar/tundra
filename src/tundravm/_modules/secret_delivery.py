@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import shlex
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from tundravm._modules.base import TUNDRA_TOOLS, Module
@@ -31,6 +32,22 @@ SECRET_ENV_DIRECTORY = "/run/secrets"
 """Where a service's ``SecretEnv`` values are delivered, one ``<service>.env`` file each."""
 _UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
+BUILTIN_SECRET_PROVIDER = "tundra-tools"
+"""The provider of a ``Secrets`` without ``delivery=``: tundra-tools' ``secret-delivery``."""
+
+BUILTIN_SECRET_CAPABILITIES: Mapping[str, bool] = MappingProxyType(
+    {"ssh-key": True, "file": False, "env": False}
+)
+"""What the built-in provider writes at boot, by target kind.
+
+``ssh-key``: one ed25519 public key POSTed to ``host:port``, written to
+``<ssh_dir>/authorized_keys`` and ``key_path`` (tundra-tools ``pkg/secrets``
+``Manager.Setup``). The binary never reads the manifest, so ``file``
+(``SecretFile``) and ``env`` (``SecretEnv``) targets are not written.
+"""
+
+_TARGET_NOUNS = {"file": "file", "env": "environment variable"}
+
 
 @dataclass(slots=True)
 class SecretDelivery(Module):
@@ -46,6 +63,11 @@ class SecretDelivery(Module):
     (:meth:`service_dropins`); ``check()`` rejects a service the profile neither
     generates, ships nor enables (``secret-env-service-unknown``). *env_suffix*
     tells apart the files of several deliveries in one profile.
+
+    *provider* writes the targets: the built-in one (:data:`BUILTIN_SECRET_CAPABILITIES`)
+    or an external one writing the kinds in *provider_supports*; ``check()``
+    rejects a target it does not write (``secret-target-unsupported``). The SSH
+    key flow always runs through the built-in one.
     """
 
     secrets: tuple[SecretSpec, ...] = ()
@@ -59,6 +81,8 @@ class SecretDelivery(Module):
     manifest_path: str = SECRET_DELIVERY_DEFAULT_MANIFEST_PATH
     source: GitSource = TUNDRA_TOOLS
     env_suffix: str | None = None
+    provider: str = BUILTIN_SECRET_PROVIDER
+    provider_supports: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.secrets = tuple(self.secrets)
@@ -110,7 +134,45 @@ class SecretDelivery(Module):
             for service, required in self.env_services().items()
         }
 
+    @property
+    def external(self) -> bool:
+        """Whether something other than tundra-tools writes the targets."""
+        return self.provider != BUILTIN_SECRET_PROVIDER
+
+    def delivers(self, kind: str) -> bool:
+        """Whether *provider* writes a target of *kind* (``file``, ``env``) at boot."""
+        if self.external:
+            return kind in self.provider_supports
+        return BUILTIN_SECRET_CAPABILITIES.get(kind, False)
+
+    def boot_targets(self) -> list[dict[str, object]]:
+        """What the image expects at boot: the SSH key, then each secret's targets."""
+        rows: list[dict[str, object]] = [
+            {
+                "secret": None,
+                "kind": "ssh-key",
+                "location": f"{self.ssh_dir.rstrip('/')}/authorized_keys",
+                "provider": BUILTIN_SECRET_PROVIDER,
+                "supported": True,
+                "required": True,
+            }
+        ]
+        for spec in sorted(self.secrets, key=lambda s: s.name):
+            rows.extend(
+                {
+                    "secret": spec.name,
+                    "kind": target.kind,
+                    "location": target.location,
+                    "provider": self.provider,
+                    "supported": self.delivers(target.kind),
+                    "required": spec.required,
+                }
+                for target in spec.targets
+            )
+        return rows
+
     def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
+        yield from self._check_targets(profile)
         yield from self._check_services(image, profile)
         store = self.store_disk
         if store is None:
@@ -136,6 +198,37 @@ class SecretDelivery(Module):
             ),
             variant=profile,
             subject=store,
+        )
+
+    def _check_targets(self, profile: str) -> Iterator[Diagnostic]:
+        for spec in self.secrets:
+            for target in spec.targets:
+                if self.delivers(target.kind):
+                    continue
+                noun = _TARGET_NOUNS[target.kind]
+                only = "" if self.external else " (it provisions only the SSH key)"
+                yield Diagnostic(
+                    severity="error",
+                    code="secret-target-unsupported",
+                    message=(
+                        f"secret {spec.name!r} goes to {noun} {target.location}, which the "
+                        f"{self.provider!r} provider does not write at boot{only}"
+                    ),
+                    hint=self._unsupported_hint(target.kind),
+                    variant=profile,
+                    subject=spec.name,
+                )
+
+    def _unsupported_hint(self, kind: str) -> str:
+        if self.external:
+            return (
+                f"Add {kind!r} to ExternalDelivery({self.provider!r}, supports=) if it writes "
+                "the target, or remove the target from the Secret."
+            )
+        return (
+            f"Declare Secrets(delivery=ExternalDelivery('NAME', supports=({kind!r},))) naming "
+            "what writes it at boot (a cloud secret store, a custom unit), or remove the "
+            "target and reach the VM with the SSH key Secrets() delivers."
         )
 
     def _check_services(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:

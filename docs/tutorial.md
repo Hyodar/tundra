@@ -252,14 +252,14 @@ A credential baked into the image is refused the same way, since every copy of t
 ```console
 $ tundravm lint node.py
 error secret-in-file [default] /etc/app/deploy.key: the file holds a private key (line 1); it is baked into the image
-    hint: Deliver it at boot with Secrets(...) and a SecretFile or SecretEnv target instead of baking it into the image, where every copy and every registry holding it exposes it; if it is not a secret, pass allow_secret=True to the declaration.
+    hint: Deliver it at boot instead of baking it into the image, where every copy and every registry holding it exposes it. The built-in Secrets() delivery provisions only an SSH key: put the value in a Secret with a SecretFile or SecretEnv target under Secrets(delivery=ExternalDelivery(NAME)), naming what writes it at boot (a cloud secret store, a custom unit). If it is not a secret, pass allow_secret=True to the declaration.
 error secret-in-file [dev] /etc/app/deploy.key: the file holds a private key (line 1); it is baked into the image
-    hint: Deliver it at boot with Secrets(...) and a SecretFile or SecretEnv target instead of baking it into the image, where every copy and every registry holding it exposes it; if it is not a secret, pass allow_secret=True to the declaration.
+    hint: Deliver it at boot instead of baking it into the image, where every copy and every registry holding it exposes it. The built-in Secrets() delivery provisions only an SSH key: put the value in a Secret with a SecretFile or SecretEnv target under Secrets(delivery=ExternalDelivery(NAME)), naming what writes it at boot (a cloud secret store, a custom unit). If it is not a secret, pass allow_secret=True to the declaration.
 2 errors, 0 warnings, 0 infos
 [exit 1]
 ```
 
-The message names the kind of credential and its line, never the value. A real key goes in `Secrets` and reaches the VM at boot; `allow_secret=True` on the `File` is for a value that only looks like one (see [Concepts: Secrets never belong in the image](concepts.md#secrets-never-belong-in-the-image)). Remove the `File`, the import and `deploy.key` before going on.
+The message names the kind of credential and its line, never the value. A real key reaches the VM at boot instead, as a `SecretFile` of a `Secrets` whose `ExternalDelivery` writes it (the built-in delivery writes only the SSH key); `allow_secret=True` on the `File` is for a value that only looks like one (see [Concepts: Secrets never belong in the image](concepts.md#secrets-never-belong-in-the-image)). Remove the `File`, the import and `deploy.key` before going on.
 
 ## 4. Add a variant
 

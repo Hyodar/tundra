@@ -33,6 +33,7 @@ EXPECTED_TOP_LEVEL = [
     "Evidence",
     "EvidenceVerification",
     "Exploration",
+    "ExternalDelivery",
     "FetchedSource",
     "File",
     "Fragment",

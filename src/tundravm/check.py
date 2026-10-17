@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._modules.secret_delivery import SecretDelivery
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
@@ -597,10 +598,33 @@ def _rule_recipe_arch_unsupported(
 
 
 SECRET_HINT = (
-    "Deliver it at boot with Secrets(...) and a SecretFile or SecretEnv target instead "
-    "of baking it into the image, where every copy and every registry holding it "
-    "exposes it; if it is not a secret, pass allow_secret=True to the declaration."
+    "Deliver it at boot instead of baking it into the image, where every copy and every "
+    "registry holding it exposes it. The built-in Secrets() delivery provisions only an "
+    "SSH key: put the value in a Secret with a SecretFile or SecretEnv target under "
+    "Secrets(delivery=ExternalDelivery(NAME)), naming what writes it at boot (a cloud "
+    "secret store, a custom unit). If it is not a secret, pass allow_secret=True to the "
+    "declaration."
 )
+"""The secret lints' hint for a variant without an ``ExternalDelivery`` (:func:`secret_hint`)."""
+
+_TARGET_CLASSES = {"file": "SecretFile", "env": "SecretEnv"}
+
+
+def secret_hint(image: Lowered, profile_name: str) -> str:
+    """The secret lints' hint: the targets an ``ExternalDelivery`` of the variant writes.
+
+    :data:`SECRET_HINT` when the variant declares none.
+    """
+    for module in image.applied_modules(profile_name, inherited=True):
+        if isinstance(module, SecretDelivery) and module.external:
+            targets = " or ".join(_TARGET_CLASSES[kind] for kind in module.provider_supports)
+            return (
+                "Deliver it at boot instead of baking it into the image, where every copy "
+                "and every registry holding it exposes it: add a Secret with a "
+                f"{targets} target to the Secrets that ExternalDelivery({module.provider!r}) "
+                "delivers. If it is not a secret, pass allow_secret=True to the declaration."
+            )
+    return SECRET_HINT
 
 
 def _secret_allowed(image: Lowered, profile_name: str, subject: str) -> bool:
@@ -637,7 +661,7 @@ def _rule_secret_in_file(
                 severity="error",
                 code="secret-in-file",
                 message=_secret_message("the file", findings),
-                hint=SECRET_HINT,
+                hint=secret_hint(image, profile_name),
                 variant=profile_name,
                 subject=path,
             )
@@ -697,7 +721,7 @@ def _rule_secret_in_env(
                 severity="error",
                 code="secret-in-env",
                 message=_secret_message(f"service {name!r}", found),
-                hint=SECRET_HINT,
+                hint=secret_hint(image, profile_name),
                 variant=profile_name,
                 subject=name,
             )
@@ -710,7 +734,7 @@ def _rule_secret_in_env(
                 severity="error",
                 code="secret-in-env",
                 message=_secret_message("the unit file", findings),
-                hint=SECRET_HINT,
+                hint=secret_hint(image, profile_name),
                 variant=profile_name,
                 subject=path,
             )
