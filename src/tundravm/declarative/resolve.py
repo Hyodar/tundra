@@ -7,6 +7,7 @@ only for malformed input (unknown variants, ``inherits`` cycles).
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
@@ -16,17 +17,20 @@ from tundravm._modules.init import order_steps
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
 
+from ._component import exports
 from .model import (
     ALL_STEPS,
     BASE_VARIANT,
     EMPTY_FRAGMENT,
     PHASES,
     BootStep,
+    Build,
     Declaration,
     Declared,
     Diagnostic,
     Disk,
     Edit,
+    File,
     Fragment,
     Hook,
     Key,
@@ -125,6 +129,8 @@ class _Resolution:
     fragments: dict[str, Fragment] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     trace: dict[Identity, list[Origin]] = field(default_factory=dict)
+    declared: dict[Identity, Declaration] = field(default_factory=dict)
+    """Each declaration as a level first added it, before any edit."""
 
     def report(
         self,
@@ -207,6 +213,7 @@ class _Resolution:
                 self.record(key, Origin(action, level, path, location=item.declared_at))
             if existing is None:
                 self.items[key] = item
+                self.declared.setdefault(key, item)
             elif existing != item:
                 first = display_location(existing.declared_at)
                 self.report(
@@ -309,7 +316,8 @@ def builtin_steps(items: Iterable[Declaration]) -> list[tuple[str, tuple[str, ..
     """The built-in steps *items* produce, in rank order, each with the steps it runs after.
 
     ``disks`` runs after ``keys``; ``secrets`` after ``disks`` when a ``Secrets``
-    stores them on a disk.
+    stores them on a disk, and so does each ``delivery-<name>`` step waiting
+    for an :class:`~tundravm.declarative.model.ExternalDelivery`.
     """
     items = list(items)
     keys = any(isinstance(item, Key) for item in items)
@@ -323,6 +331,9 @@ def builtin_steps(items: Iterable[Declaration]) -> list[tuple[str, tuple[str, ..
     if secrets:
         stored = disks and any(entry.store is not None for entry in secrets)
         steps.append(("secrets", ("disks",) if stored else ()))
+        waited = (entry.delivery for entry in secrets if entry.delivery is not None)
+        for step in dict.fromkeys(delivery.step for delivery in waited if delivery.waits):
+            steps.append((step, ("disks",) if stored else ()))
     return steps
 
 
@@ -515,6 +526,9 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     _check_targets(state, chain)
     items = tuple(state.items.values())
     _check_references(state, items)
+    _check_exports(state)
+    _check_executables(state, items)
+    _check_deliveries(state, items)
     resolved = Resolved(
         variant=name,
         outputs=_targets(chain),
@@ -536,6 +550,110 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
                 state.diagnostics.append(found)
     return resolved, state
+
+
+def _check_exports(state: _Resolution) -> None:
+    """Report exports bound to a provider instance (``provider=self``) this variant changed.
+
+    Another configuration of the provider's fragment is an error: the consumer
+    holds the values the other one published. An edit or removal of something
+    the provider composed is a warning: exports are computed from the
+    provider's configuration and do not follow edits of its declarations.
+    """
+    for consumer in state.fragments.values():
+        for name, export in exports(consumer):
+            provider = export.provider
+            if export.origin is None or not isinstance(provider, str):
+                continue
+            actual = state.fragments.get(provider)
+            what = f"the {type(export).__name__} fragment {consumer.name!r} holds in {name}"
+            if actual is not None and actual != export.origin:
+                state.report(
+                    "export-stale",
+                    f"{what} comes from {export.origin!r}, but this variant includes "
+                    f"{actual!r} as fragment {provider!r}",
+                    subject=consumer.name,
+                    at=consumer,
+                )
+            elif actual is not None and (changed := _changed_inside(state, provider)):
+                state.report(
+                    "export-stale",
+                    f"{what} was computed from the configuration of {provider!r}, but this "
+                    f"variant changes {', '.join(changed)} inside it",
+                    subject=consumer.name,
+                    severity="warning",
+                    at=consumer,
+                )
+
+
+def _changed_inside(state: _Resolution, fragment: str) -> list[str]:
+    """The declarations *fragment* composed that a variant edited or removed."""
+    changed: list[str] = []
+    for key, origins in state.trace.items():
+        inside = any(name == fragment for o in origins for name, _ in o.fragments)
+        if inside and any(o.action in ("edited", "removed") for o in origins):
+            changed.append(describe(key))
+    return changed
+
+
+def _check_executables(state: _Resolution, items: Sequence[Declaration]) -> None:
+    """Report services whose command names a path a ``Build`` installed before a variant
+    edited or removed it (``GoBinary(...).executable`` is computed once, at construction)."""
+    before = {
+        install.destination: (key, item.name)
+        for key, item in state.declared.items()
+        if isinstance(item, Build)
+        for install in item.install
+    }
+    after = {install.destination for i in items if isinstance(i, Build) for install in i.install}
+    after.update(item.path for item in items if isinstance(item, File))
+    for service in (item for item in items if isinstance(item, Service)):
+        for word in _command_words(service):
+            if word not in before or word in after:
+                continue
+            key, build = before[word]
+            change = next(
+                (o for o in reversed(state.trace.get(key, [])) if o.action != "declared"), None
+            )
+            how = f"{change.action} in variant {change.variant!r}" if change else "changed"
+            state.report(
+                "executable-stale",
+                f"service {service.name!r} runs {word}, which Build {build!r} no longer installs "
+                f"(it was {how}); the command still names the old path",
+                subject=service.name,
+                at=service,
+            )
+            break
+
+
+def _check_deliveries(state: _Resolution, items: Sequence[Declaration]) -> None:
+    """Warn about an ``ExternalDelivery`` the image cannot wait for (no unit, no ready path)."""
+    for entry in (item for item in items if isinstance(item, Secrets)):
+        delivery = entry.delivery
+        if delivery is None or delivery.waits:
+            continue
+        state.report(
+            "external-delivery-unwired",
+            f"secrets {entry.name!r} are delivered by {delivery.name!r}, but nothing in the "
+            "image can wait for it: services start without their secrets",
+            subject=entry.name,
+            severity="warning",
+            at=entry,
+        )
+
+
+def _command_words(service: Service) -> list[str]:
+    words: list[str] = []
+    pre = service.exec_start_pre
+    for command in (service.exec_start, *((pre,) if isinstance(pre, str) else pre)):
+        if not isinstance(command, str):
+            words.extend(command)
+            continue
+        try:
+            words.extend(shlex.split(command))
+        except ValueError:
+            words.extend(command.split())
+    return words
 
 
 def _subjects(items: Iterable[Declaration]) -> dict[str, list[Declaration]]:

@@ -50,12 +50,12 @@
     }
   },
   "04_storage_and_secrets": {
-    "recipe": "b59d6284f61dc90b89dae6acc4dd1e720dd9a98aa75f3b8b72c4330de78d58fb",
-    "tree": "67b852c4a1b401d5258e9f28460f576312e97e57b091c9e0ce64c2891cc4ad10",
+    "recipe": "88a28ee71498fe34855688eceae2989cfb83361e5f05125078a0b359899c87a5",
+    "tree": "a4dc01e11b3332b376a58f33fb6d66552c7d89a7c9f73cb64ef28c0d0ab725ba",
     "variants": {
       "default": {
-        "recipe": "b59d6284f61dc90b89dae6acc4dd1e720dd9a98aa75f3b8b72c4330de78d58fb",
-        "tree": "67b852c4a1b401d5258e9f28460f576312e97e57b091c9e0ce64c2891cc4ad10"
+        "recipe": "88a28ee71498fe34855688eceae2989cfb83361e5f05125078a0b359899c87a5",
+        "tree": "a4dc01e11b3332b376a58f33fb6d66552c7d89a7c9f73cb64ef28c0d0ab725ba"
       }
     }
   },

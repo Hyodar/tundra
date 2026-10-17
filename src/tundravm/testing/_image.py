@@ -118,6 +118,29 @@ def _origin(
     return ()
 
 
+_LIST_SETTINGS = frozenset(
+    {
+        "Packages",
+        "BuildPackages",
+        "VolatilePackages",
+        "RemovePackages",
+        "RemoveFiles",
+        "Repositories",
+        "BuildSources",
+        "Environment",
+        "EnvironmentFiles",
+        "PassEnvironment",
+        "KernelCommandLine",
+        "KernelModulesInclude",
+        "KernelModulesExclude",
+        "Initrds",
+        "InitrdPackages",
+    }
+)
+"""mkosi settings whose values a later ``mkosi.conf`` adds to rather than replaces (with every
+``*Scripts`` and ``*Trees``)."""
+
+
 class Image:
     """One variant of a recipe, planned in memory: what its compiled tree holds, as values.
 
@@ -150,13 +173,17 @@ class Image:
         return lifecycle.lint(self.recipe, variants=[self.variant], lock=self.lock)
 
     @cached_property
+    def _layers(self) -> tuple[dict[str, Entry], ...]:
+        return lifecycle.variant_layers(self.tree, self.variant)
+
+    @cached_property
     def _entries(self) -> dict[str, Entry]:
-        prefix = f"{self.variant}/"
-        if not any(e.path.startswith(prefix) for e in self.tree.entries):
-            prefix = f"mkosi.profiles/{self.variant}/"
-        return {
-            e.path.removeprefix(prefix): e for e in self.tree.entries if e.path.startswith(prefix)
-        }
+        """The variant's effective files, by path relative to its layer: in the native
+        layout the root (the default variant) with ``mkosi.profiles/<variant>/`` over it."""
+        merged: dict[str, Entry] = {}
+        for layer in self._layers:
+            merged.update(layer)
+        return merged
 
     @cached_property
     def files(self) -> Mapping[str, ImageFile]:
@@ -215,10 +242,17 @@ class Image:
         return self.unit(name)
 
     def settings(self, section: str) -> Mapping[str, tuple[str, ...]]:
-        """The compiled ``mkosi.conf`` section, ``{key: values}`` (empty when absent)."""
-        conf = self._entries.get("mkosi.conf")
-        text = conf.content.decode("utf-8") if conf is not None and conf.content else ""
-        return parse_conf(text).get(section, {})
+        """The compiled ``mkosi.conf`` section, ``{key: values}`` (empty when absent). In the
+        native layout the overlay's ``mkosi.conf`` merges over the root's as mkosi reads
+        them: list settings (``Packages``, scripts, trees) accumulate, the others override."""
+        merged: dict[str, tuple[str, ...]] = {}
+        for layer in self._layers:
+            conf = layer.get("mkosi.conf")
+            text = conf.content.decode("utf-8") if conf is not None and conf.content else ""
+            for key, values in parse_conf(text).get(section, {}).items():
+                listed = key in _LIST_SETTINGS or key.endswith(("Scripts", "Trees"))
+                merged[key] = (*merged.get(key, ()), *values) if listed else values
+        return merged
 
     @property
     def packages(self) -> Mapping[str, Role]:

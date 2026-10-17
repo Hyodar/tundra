@@ -70,7 +70,7 @@ from .errors import (
     TdxError,
     ValidationError,
 )
-from .evidence import DEFAULT_MAX_AGE, _requirements, evidence
+from .evidence import DEFAULT_MAX_AGE, _requirements, demands, evidence
 from .formats import md_cell, md_table
 from .measure.policy import write_policy
 from .models import BAKE_RESULT_FILENAME
@@ -342,9 +342,11 @@ def release(
     *recipe_path* is recorded in the evidence. *progress* receives one line per stage.
     *attestations* are ``tundravm.attestation/1`` records (``attest --record``) the
     evidence bundles, and *max_age* (seconds or a ``timedelta``; default a day) how far
-    their ``observed_at`` may be from the evidence's creation for ``attested``: an image
-    is attested after it is baked, so a release that requires ``attested`` fails until a
-    resumed run gives the records of its artifacts.
+    their ``observed_at`` may be from the moment the evidence stage judges them (its wall
+    clock, never ``SOURCE_DATE_EPOCH``) for ``attested``, which also requires every
+    selected artifact ``measured``: an image is attested after it is baked, so a release
+    that requires ``attested`` fails until a resumed run gives the records of its
+    artifacts.
 
     The release directory keeps ``release.state.json`` until the release passes, so a
     run that failed or was interrupted resumes. The state holds the specification the
@@ -1006,7 +1008,7 @@ def _params(run: _Run, name: str) -> dict[str, Any]:
             "tundravm": __version__,
         }
     if name == "measure":
-        return {"measured": "measured" in run.require}
+        return {"measured": demands(run.require, "measured") is not None}
     if name in ("evidence", "verify"):
         recipe_file = run.recipe_path
         file_sha = (
@@ -1118,7 +1120,7 @@ def _artifacts(run: _Run) -> list[Artifact]:
 
 
 def _stage_measure(run: _Run) -> _Outcome:
-    required = "measured" in run.require
+    required = demands(run.require, "measured") is not None
     if run.facts["bake"].get("simulated"):
         tail = " (measured is required: the release fails)" if required else ""
         return _Outcome("skipped", f"simulated artifacts: nothing to measure{tail}")
@@ -1555,12 +1557,60 @@ def is_release(path: Path) -> bool:
     return Path(path).is_dir() and (Path(path) / INDEX_NAME).is_file()
 
 
+def signing_key(root: Path) -> str | None:
+    """The ``SHA256:...`` fingerprint of the key ``release-manifest.json.sig`` was made
+    with, read from the signature itself (``None`` for an unsigned release). Unlike the
+    ``signer`` metadata, it is what :func:`verify_release` authenticates."""
+    signature = Path(root) / MANIFEST_SIGNATURE_NAME
+    return _ssh_sig.signature_fingerprint(signature.read_bytes()) if signature.is_file() else None
+
+
+def recorded_keys(*records: object) -> frozenset[str]:
+    """The key fingerprints ``signer`` metadata *records* claim: each one's
+    ``public_key`` (fingerprinted) and ``fingerprint``."""
+    keys: set[str] = set()
+    for recorded in records:
+        if not isinstance(recorded, Mapping):
+            continue
+        public = recorded.get("public_key")
+        if isinstance(public, str):
+            try:
+                keys.add(_ssh_sig.fingerprint(public))
+            except ValidationError:
+                keys.add(public)
+        if isinstance(recorded.get("fingerprint"), str):
+            keys.add(str(recorded["fingerprint"]))
+    return frozenset(keys)
+
+
+def _signer_metadata(
+    root: Path, index: Mapping[str, Any] | None, manifest: Mapping[str, Any]
+) -> list[VerifyCheck]:
+    """``release-inconsistent`` when the ``signer`` that ``release.json`` or the manifest
+    names contradicts the key the manifest signature was made with, or each other."""
+    records = (None if index is None else index.get("signer"), manifest.get("signer"))
+    principals = {str(r.get("principal")) for r in records if isinstance(r, Mapping)}
+    key = signing_key(root)
+    claimed = recorded_keys(*records)
+    if len(principals) > 1:
+        message = f"{INDEX_NAME} and the manifest name different signers: {sorted(principals)}"
+        return [_fail("release", "signer", message, "release-inconsistent")]
+    if key is not None and claimed - {key}:
+        message = (
+            f"the signer metadata names key(s) {', '.join(sorted(claimed - {key}))}, "
+            f"{MANIFEST_SIGNATURE_NAME} was made with {key}"
+        )
+        return [_fail("release", "signer", message, "release-inconsistent")]
+    return []
+
+
 def verify_release(
     path: Path,
     *,
     allowed_signers: Path | None = None,
     signer: str | None = None,
     max_age: float | timedelta | None = None,
+    now: datetime | None = None,
 ) -> ReleaseVerification:
     """Check the release directory at *path* on its own, without the recipe or the build.
 
@@ -1572,12 +1622,14 @@ def verify_release(
     ``manifest-unsigned`` when there is none or ``release.json`` names a signer but the
     signature is gone); *signer* is the principal. ``release.json`` must agree with the
     manifest: name, recipe, version, recipe digest, lockfile sha256 and every artifact's
-    sha256 (``release-inconsistent``). Then the evidence bundle is checked with
+    sha256, and the ``signer`` both name must be the key the manifest signature was made
+    with (``release-inconsistent``). Then the evidence bundle is checked with
     :func:`~tundravm.verify_evidence`, the release's artifacts as the build, its
     ``required`` checks and the same signers. Raises ``ValidationError`` when *path* is
     not a release directory.
         *max_age* judges bundled attestation records with that freshness window instead of
-    the one the evidence recorded (``verify_evidence(max_age=)``).
+    the one the evidence recorded, and *now* at that moment instead of the one it was
+    evaluated at (``verify_evidence(max_age=, now=)``).
     """
     root = Path(path)
     if not is_release(root):
@@ -1607,6 +1659,7 @@ def verify_release(
     if note is not None:
         notes.append(note)
     checks.extend(_consistency(index, manifest, listed))
+    checks.extend(_signer_metadata(root, index, manifest))
     if (root / STATE_NAME).exists() or not (isinstance(index, Mapping) and index.get("finished")):
         message = f"the release is not finished (verdict {(index or {}).get('verdict')})"
         checks.append(_fail("release", INDEX_NAME, message, "release-inconsistent"))
@@ -1622,6 +1675,7 @@ def verify_release(
                 allowed_signers=allowed_signers,
                 signer=signer,
                 max_age=max_age,
+                now=now,
             )
         except ValidationError as exc:
             message = f"{BUNDLE_NAME} could not be checked: {exc.args[0] if exc.args else exc}"

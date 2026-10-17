@@ -165,7 +165,8 @@ Some declarations need work at boot, before services start: generating keys, ope
 |---|---|---|---|
 | `keys` | `key.ready` | nothing | a `Key` |
 | `disks` | `disk.ready` | `keys` | a `Disk` |
-| `secrets` | `secrets.ready` | `disks`, when a `Secrets` has `store=` | a `Secrets` |
+| `secrets` | `secrets.ready` | `disks`, when a `Secrets` has `store=` | a `Secrets` (tundra-tools' SSH-key setup) |
+| `delivery-<name>` | `delivery.ready` | as `secrets` | an `ExternalDelivery` with `unit=` or `ready_path=` |
 | yours | `step.ready` | its `after=`, and before its `before=` | that `BootStep` |
 
 `BootStep(name, script, after=[...], before=[...])` adds a step. `after` and `before` take readiness handles: `key.ready`, `disk.ready`, `secrets.ready`, another step's `.ready`, or a step name. The steps run in a deterministic topological order. When several steps are ready, the built-ins go first (`keys`, `disks`, `secrets`), then yours in declaration order, so existing recipes keep their order. A cycle is `step-cycle` and names the steps in it. A reference to a step the variant does not declare is `step-undefined`. Both are errors. The names `keys`, `disks` and `secrets` are reserved. `RuntimeDirectory(path, owner=, group=, mode=, after=)` and `RuntimeFile(path, text, owner=, group=, mode=, after=)` in `tundravm.declarative.utils` are `BootStep`s that create a directory or write a file:
@@ -198,7 +199,7 @@ key = Key("key_persistent")                                    # random 64 bytes
 disk = Disk("disk_persistent", mount="/persistent", key=key)   # LUKS2; formatted when the device is not LUKS yet
 secrets = Secrets(store=disk, entries=(
     Secret("api_token", targets=(SecretFile("/run/secrets/api-token"), SecretEnv("API_TOKEN"))),
-), delivery=ExternalDelivery("vault-agent"))                    # what writes the targets at boot
+), delivery=ExternalDelivery("vault-agent", unit="vault-agent.service"))  # what writes the targets at boot
 ```
 
 - `Key(name, output=None, strategy="random"|"pipe", persist_in_tpm=True, size=64, pipe=None)`.
@@ -249,11 +250,13 @@ What is delivered, and by whom: each `Secrets` names a provider for its targets 
 | `SecretFile(path)` | not written | written by `name` when `"file"` is in `supports` |
 | `SecretEnv(name, service=)` | not written | written by `name` when `"env"` is in `supports`, to `/run/secrets/<service>.env` for a service target |
 
-A target its provider does not write is the `secret-target-unsupported` lint error, so a recipe cannot lint clean and then boot without its secret. The two honest fixes: declare `ExternalDelivery("NAME", supports=(...))` for what really writes it (a cloud secret store agent, a unit of your own ordered before the services that read it), or drop the target and reach the VM through the SSH key. `ExternalDelivery` is a declaration of responsibility: the image, the tree and the recipe digest are the same with or without it. The evidence index records each variant's targets under `secrets` (kind, location, provider, `supported`), so a reviewer sees what the image expects at boot.
+A target its provider does not write is the `secret-target-unsupported` lint error. That lint checks the declared capabilities, not that a provider exists in the image or delivers successfully. The two honest fixes: declare `ExternalDelivery("NAME", supports=(...))` for what really writes it (a cloud secret store agent, a unit of your own), or drop the target and reach the VM through the SSH key. You provide the provider itself: ship or package it.
+
+Say how the image can tell it is done, and make consumers wait with `needs=[delivery.ready]`. `ExternalDelivery(name, unit="vault-agent.service")` adds the runtime-init step `delivery-<name>`, which runs `systemctl start vault-agent.service` and so finishes when the unit's start job does (a `Type=oneshot` unit when it exits, `Type=notify` when it reports ready; the unit must not order itself after runtime-init). `ExternalDelivery(name, ready_path="/run/secrets/.ready")` makes that step poll until the path exists (with no timeout of its own). `secrets.ready` still means the built-in SSH-key step, not the external provider. An `ExternalDelivery` with neither is the `external-delivery-unwired` warning: nothing waits for it, and services start without their secrets. Without `unit=`/`ready_path=` an `ExternalDelivery` is only a declaration of responsibility: the image, the tree and the recipe digest are the same with or without it. The evidence index records each variant's targets under `secrets` (kind, location, provider, `supported`), so a reviewer sees what the image expects at boot.
 
 What the binary does not do yet:
 
-- It never reads the manifest, so `Schema`s are not checked and `SecretFile` and `SecretEnv` targets, global or per service, are not written. The image carries the manifest, the `/run/secrets/<service>.env` paths and the `EnvironmentFile=` drop-ins; a drop-in for a required secret (no `-` prefix) keeps its service from starting until something else writes that file.
+- It never reads the manifest, so `Schema`s are not checked and `SecretFile` and `SecretEnv` targets, global or per service, are not written. The image carries the manifest, the `/run/secrets/<service>.env` paths and the `EnvironmentFile=` drop-ins; a drop-in for a required secret (no `-` prefix) makes its service fail to start while that file is missing; order it after the provider with `needs=[delivery.ready]`, since systemd does not retry on its own.
 - `store` is written to the config as `store_at`, but `secret-delivery setup` runs without a disk store, so the key is not kept on the disk: every boot waits for a key again.
 
 ### Secrets never belong in the image

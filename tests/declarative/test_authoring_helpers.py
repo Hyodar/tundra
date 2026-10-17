@@ -118,6 +118,33 @@ def test_go_binary_installs_at_usr_bin_name_by_default() -> None:
         GoBinary("tool", TARBALL, package=".", install="bin/tool")
 
 
+def test_editing_the_build_behind_an_executable_is_reported() -> None:
+    from tundravm.declarative import Variant
+    from tundravm.declarative.resolve import lint
+
+    binary = GoBinary("tool", TARBALL, package=".")
+    service = Service("tool", f"{binary.executable} --serve")
+    moved = Install("build/tool", "/opt/tool")
+    variants = (
+        Variant("default"),
+        Variant("moved", changes=(Build.ref("tool").edit(install=(moved,)),)),
+        Variant("gone", changes=(Build.ref("tool").remove(),)),
+        Variant(
+            "followed",
+            changes=(
+                Build.ref("tool").edit(install=(moved,)),
+                service.ref.edit(exec_start="/opt/tool --serve"),
+            ),
+        ),
+    )
+    recipe = Recipe("r", items=(binary, service), variants=variants)
+    stale = {d.variant: d.message for d in lint(recipe) if d.code == "executable-stale"}
+    assert set(stale) == {"moved", "gone"}
+    assert "runs /usr/bin/tool, which Build 'tool' no longer installs" in stale["moved"]
+    assert "edited in variant 'moved'" in stale["moved"]
+    assert "removed in variant 'gone'" in stale["gone"]
+
+
 def test_cargo_binary_lowers_like_the_hand_written_build() -> None:
     source = Git("https://github.com/taikoxyz/raiko", "v1.0.0")
     binary = CargoBinary("raiko", source, bin="raiko-host", install="/usr/bin/raiko")

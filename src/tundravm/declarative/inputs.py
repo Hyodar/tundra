@@ -29,13 +29,16 @@ _READ_FIELDS = frozenset(
 def recipe_inputs(recipe: Recipe) -> frozenset[Path]:
     """The absolute host paths *recipe*'s declarations read, in every variant.
 
+    The platform's contribution (its ``items``, a ``Kernel`` among them, and
+    what it adds itself) counts as resolution sees it, before the recipe's.
+
     A ``FileTree`` contributes its source directory (its members are inputs
     too: a caller stamping it walks it); relative paths are taken from the
     working directory, as lowering reads them. Paths that do not exist are kept:
     creating one changes what the recipe lowers to.
     """
     found: set[Path] = set()
-    for item in recipe.items:
+    for item in (*recipe.platform.contribution(), *recipe.items):
         _visit(item, found)
     for variant in recipe.variants:
         _visit(variant.add, found)

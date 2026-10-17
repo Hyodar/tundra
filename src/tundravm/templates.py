@@ -178,7 +178,7 @@ class App(Composite):
     @property
     def http(self) -> HttpEndpoint:
         """Where the app answers HTTP inside the image, for a component that probes it."""
-        return HttpEndpoint("127.0.0.1", self.port, provider=self.name)
+        return HttpEndpoint("127.0.0.1", self.port, provider=self)
 
     def compose(self) -> Iterator[Declaration]:
         yield User("app", home="/var/lib/app")

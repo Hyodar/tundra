@@ -29,7 +29,7 @@ REPORTS: dict[str, tuple[str, ...]] = {
 }
 """One JSON run per verb, from inside a scaffolded, compiled, locked and baked project."""
 
-SCHEMA_VERSIONS = {"evidence": 3, "changes": 2, "lint": 2, "explore": 5, "config": 2, "inspect": 4}
+SCHEMA_VERSIONS = {"evidence": 4, "changes": 2, "lint": 2, "explore": 5, "config": 2, "inspect": 4}
 """Verbs whose report schema moved past version 1."""
 
 COVERED_ELSEWHERE = {

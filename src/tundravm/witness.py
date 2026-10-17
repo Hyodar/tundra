@@ -22,8 +22,6 @@ signed, matched witness of this very manifest.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import getpass
 import hashlib
 import json
@@ -31,7 +29,6 @@ import os
 import re
 import shutil
 import socket
-import struct
 import tarfile
 import tempfile
 from collections.abc import Callable, Mapping
@@ -60,6 +57,8 @@ from .release import (
     SIGNER,
     STATE_NAME,
     is_release,
+    recorded_keys,
+    signing_key,
 )
 
 WITNESS_SCHEMA = "tundravm.witness/1"
@@ -700,8 +699,10 @@ def verify_witnesses(
     ``release-manifest.json``; else ``witness-wrong-release``), carries a ``.sig``
     (``witness-unsigned``) that verifies in the ``tundravm-witness`` namespace against
     *allowed_signers* for its builder as principal (``witness-signature-invalid``,
-    also when no *allowed_signers* is given), is not signed by the publisher (the
-    release's own signing key or principal: ``witness-self``), says ``matched`` with
+    also when no *allowed_signers* is given), is not signed by the publisher
+    (``witness-self``: the key ``release-manifest.json.sig`` was made with, read from
+    the signature rather than the ``signer`` metadata, a key that metadata names, or the
+    publisher's principal), says ``matched`` with
     every released artifact's sha256 (``witness-mismatch``) and was not built with the
     in-process backend unless *allow_simulated* (``witness-simulated``). Distinct
     principals count once, and so does a key listed under two. The policy passes when
@@ -724,7 +725,7 @@ def verify_witnesses(
     manifest_path = root / MANIFEST_NAME
     manifest_sha = _file_sha256(manifest_path) if manifest_path.is_file() else None
     index = _read_json(root / INDEX_NAME) or {}
-    publisher = _publisher(index, _read_json(manifest_path) or {})
+    publisher = _publisher(root, index, _read_json(manifest_path) or {})
     notes: list[dict[str, str]] = []
     files = sorted(directory.glob("*.json")) if directory.is_dir() else []
     if not directory.is_dir():
@@ -778,25 +779,23 @@ class _Policy:
 
 
 def _publisher(
-    index: Mapping[str, Any], manifest: Mapping[str, Any]
+    root: Path, index: Mapping[str, Any], manifest: Mapping[str, Any]
 ) -> tuple[str | None, frozenset[str]]:
-    """The release signer's principal and key fingerprints, from ``release.json`` and the
-    manifest (``None`` and none for an unsigned release)."""
+    """The release signer's principal and key fingerprints (``None`` and none for an
+    unsigned release). The key is the one ``release-manifest.json.sig`` was made with,
+    read from the signature ``verify_release`` authenticates, so false ``signer``
+    metadata cannot pass the publisher's own witness off as independent; keys the
+    metadata claims are excluded too (``verify_release`` rejects a contradiction)."""
+    records = (index.get("signer"), manifest.get("signer"))
     principal: str | None = None
-    keys: set[str] = set()
-    for recorded in (index.get("signer"), manifest.get("signer")):
-        if not isinstance(recorded, Mapping):
-            continue
-        principal = str(recorded.get("principal") or SIGNER)
-        public = recorded.get("public_key")
-        if isinstance(public, str):
-            try:
-                keys.add(_ssh_sig.fingerprint(public))
-            except ValidationError:
-                pass
-        if isinstance(recorded.get("fingerprint"), str):
-            keys.add(str(recorded["fingerprint"]))
-    return principal, frozenset(keys)
+    for recorded in records:
+        if isinstance(recorded, Mapping):
+            principal = str(recorded.get("principal") or SIGNER)
+    key = signing_key(root)
+    if key is not None and principal is None:
+        principal = SIGNER
+    claimed = recorded_keys(*records)
+    return principal, claimed if key is None else claimed | {key}
 
 
 def _judge(path: Path, policy: _Policy) -> tuple[WitnessCheck, str | None]:
@@ -830,7 +829,7 @@ def _judge(path: Path, policy: _Policy) -> tuple[WitnessCheck, str | None]:
         message = f"{who}: the signature is not checked: {why}"
         return _excluded(path, who, "witness-signature-invalid", message), None
     raw = signature.read_bytes()
-    key = _signature_key(raw)
+    key = _ssh_sig.signature_fingerprint(raw)
     principal, publisher_keys = policy.publisher
     if (principal is not None and who == principal) or (key is not None and key in publisher_keys):
         message = f"{who}: signed by the release's own signer: a publisher cannot witness itself"
@@ -891,27 +890,6 @@ def _mismatched(payload: Mapping[str, Any], index: Mapping[str, Any]) -> str:
     if payload.get("verdict") != "matched" and not off:
         return "not matched"
     return f"{len(off)} artifact(s) differ: {', '.join(off)}" if off else ""
-
-
-def _signature_key(signature: bytes) -> str | None:
-    """The ``SHA256:...`` fingerprint of the public key an armored SSH signature carries."""
-    body = "".join(
-        line.strip()
-        for line in signature.decode("ascii", errors="replace").splitlines()
-        if line.strip() and not line.startswith("-----")
-    )
-    try:
-        blob = base64.b64decode(body, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    if not blob.startswith(b"SSHSIG") or len(blob) < 14:
-        return None
-    (length,) = struct.unpack(">I", blob[10:14])
-    key = blob[14 : 14 + length]
-    if len(key) != length:
-        return None
-    digest = base64.b64encode(hashlib.sha256(key).digest()).decode().rstrip("=")
-    return f"SHA256:{digest}"
 
 
 # ── files ────────────────────────────────────────────────────────────────

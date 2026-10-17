@@ -19,6 +19,7 @@ from tundravm import (
     ExternalDelivery,
     File,
     Fragment,
+    Mkosi,
     Package,
     Recipe,
     Secret,
@@ -97,7 +98,7 @@ def test_index_records_every_member_with_its_sha256(tmp_path: Path, epoch: None)
         "sbom": "declared",
         "tree": "matches",
     }
-    assert index["attestation"] == {"max_age_seconds": 86400}
+    assert index["attestation"] == {"max_age_seconds": 86400, "evaluated_at": None}
     assert index["variants"]["default"]["attestations"] == []
     assert any("reproducibility of default was not checked" in n for n in found.notes)
     assert any("artifacts are simulated" in n for n in found.notes)
@@ -563,3 +564,48 @@ def test_a_disk_booting_another_uki_is_unmeasured(
         f"it boots UKI {'9' * 12}, not the one the policy measured",
     )
     assert _codes(found) == [("incomplete", "artifact-unmeasured", "default/azure")]
+
+
+def _layered(layout: str, motd: str = "hi\n") -> Recipe:
+    return Recipe(
+        "node",
+        items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", motd)),
+        variants=(
+            Variant("default", outputs=("qemu",)),
+            Variant(
+                "azure",
+                inherits="default",
+                add=Fragment("azure-bits", (Package("htop"), File("/etc/b", "b\n"))),
+            ),
+        ),
+        mkosi=Mkosi(layout=layout),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize("layout", ["directories", "native"])
+def test_tree_provenance_round_trips_in_both_layouts(
+    tmp_path: Path, epoch: None, layout: str
+) -> None:
+    recipe = _layered(layout)
+    out = _baked(tmp_path, recipe)
+    found = _evidence(recipe, out)
+    assert found.passed, found.reasons
+    assert found.index["verdict"]["tree"] == "matches"
+    rows = {
+        name: {
+            row["path"] for row in json.loads(found.members[f"variants/{name}/tree.json"])["files"]
+        }
+        for name in ("default", "azure")
+    }
+    inherited = "mkosi.extra/etc/motd" if layout == "native" else None
+    if inherited is not None:  # the root is the default variant, and the child inherits it
+        assert inherited in rows["default"] and inherited in rows["azure"]
+        assert "mkosi.profiles/azure/mkosi.extra/etc/b" in rows["azure"]
+        assert not any(path.startswith("mkosi.profiles/azure/") for path in rows["default"])
+    assert all(rows.values())
+    result = verify_evidence(found.write(tmp_path / "evidence"), build=out)
+    assert result.passed, result.problems
+    other = _evidence(_layered(layout, motd="changed\n"), out, allow_unbound=True)
+    changed = {r["code"]: r["subject"] for r in other.reasons}
+    assert changed.get("tree-mismatch") in ("default", "azure")
+    assert other.index["variants"]["azure"]["tree_matches"] is False  # it inherits /etc/motd

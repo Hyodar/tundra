@@ -178,6 +178,30 @@ def test_edits_reject_unknown_identity_and_repeated_fields() -> None:
     Variant("v", changes=(key.ref.edit(size=32), key.ref.edit(output="/run/k")))
 
 
+def test_edits_snapshot_what_the_caller_passed() -> None:
+    from tundravm.declarative import Template
+
+    service = Service("app", "/usr/bin/app", env={"MODE": "dev"})
+    page = Template("/etc/app.conf", "{name}", variables={"name": "a"})
+    settings, variables, nested = {"MODE": "prod"}, {"name": "b"}, {"MODE": ["x"]}
+    edits = (
+        service.ref.edit(env=settings),
+        page.ref.edit(variables=variables),
+        Service.ref("other").edit(limits=nested),
+    )
+    recipe = Recipe(
+        "r",
+        items=(service, page),
+        variants=(Variant("default"), Variant("prod", changes=edits[:2])),
+    )
+    settings["MODE"], variables["name"] = "mutated", "mutated"
+    nested["MODE"].append("y")
+    items = resolve(recipe, variant="prod").items
+    assert next(i for i in items if isinstance(i, Service)).env == {"MODE": "prod"}
+    assert next(i for i in items if isinstance(i, Template)).variables == {"name": "b"}
+    assert edits[2].fields["limits"] == {"MODE": ("x",)}
+
+
 def test_refs_from_values_and_types_agree() -> None:
     assert Unit("ssh", enabled=False).ref == Unit.ref("ssh.service")
     assert File("/etc//motd", "x", stage="skeleton").ref == File.ref("/etc/motd", stage="skeleton")

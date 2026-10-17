@@ -88,6 +88,9 @@ from .resolve import locate, resolve
 
 Scheme = Literal["rtmr", "azure", "gcp"]
 BackendKind = Literal["lima", "nix", "local", "inprocess"]
+TreeLayout = Literal["directories", "native"]
+"""How a :class:`Tree` lays its variants out: a directory each, or ``Mkosi(layout="native")``:
+the default variant at the root and every variant's additions in ``mkosi.profiles/<name>/``."""
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 INPROCESS = "inprocess"
@@ -166,6 +169,7 @@ class Tree:
     entries: tuple[Entry, ...]
     digest: str
     variants: tuple[str, ...] = ()
+    layout: TreeLayout = "directories"
 
     def write(self, path: Path) -> None:
         """Write the tree to *path*, replacing its variant directories and dropping stale ones."""
@@ -396,7 +400,12 @@ def compile_image(img: Lowered, profiles: Sequence[str] | None, *, locked: Lock 
         using_lock(img.select(profiles), locked) as pinned,
     ):
         _compile.emit(pinned, Path(tmp))
-        return read_tree(Path(tmp), variants=pinned.active)
+        return read_tree(Path(tmp), variants=pinned.active, layout=tree_layout(pinned))
+
+
+def tree_layout(img: Lowered) -> TreeLayout:
+    """The layout *img* compiles to: ``native`` for ``Mkosi(layout="native")``."""
+    return "native" if img.mkosi.emit_mode == "native_profiles" else "directories"
 
 
 def read_tree(
@@ -404,6 +413,7 @@ def read_tree(
     *,
     variants: Sequence[str] = (),
     warn: Callable[[str], None] | None = None,
+    layout: TreeLayout = "directories",
 ) -> Tree:
     """Load the tree at *root* into memory.
 
@@ -443,22 +453,64 @@ def read_tree(
                 if name in dirnames:
                     dirnames.remove(name)
     entries.sort(key=lambda e: e.path)
-    return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
+    return Tree(
+        entries=tuple(entries),
+        digest=_tree_digest(entries),
+        variants=tuple(variants),
+        layout=layout,
+    )
 
 
 def read_variant_tree(
-    root: Path, variants: Sequence[str], *, warn: Callable[[str], None] | None = None
+    root: Path,
+    variants: Sequence[str],
+    *,
+    warn: Callable[[str], None] | None = None,
+    layout: TreeLayout = "directories",
 ) -> Tree:
-    """The tree of *variants*' directories under *root*, as :func:`compile` returns it; another
-    variant's directory a previous bake left there is not part of it."""
-    whole = read_tree(root, variants=variants, warn=warn)
-    entries = [entry for entry in whole.entries if entry.path.split("/", 1)[0] in variants]
-    return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
+    """The tree of *variants* under *root*, as :func:`compile` returns it; another variant's
+    directory (or native overlay) a previous bake left there is not part of it."""
+    whole = read_tree(root, variants=variants, warn=warn, layout=layout)
+    owners = {"", *variants}
+    entries = [e for e in whole.entries if _layer_of(e.path, layout) in owners]
+    return replace(whole, entries=tuple(entries), digest=_tree_digest(entries))
+
+
+def _layer_of(path: str, layout: TreeLayout) -> str | None:
+    """The layer tree *path* belongs to: its variant's directory (``directories``); in the
+    native layout ``""`` for the root, which every variant inherits, the variant of
+    ``mkosi.profiles/<variant>/``, and ``None`` for ``mkosi.profiles`` itself."""
+    top, _, rest = path.partition("/")
+    if layout == "directories":
+        return top
+    if top != "mkosi.profiles":
+        return ""
+    return rest.partition("/")[0] or None
+
+
+def variant_layers(tree: Tree, variant: str) -> tuple[dict[str, Entry], ...]:
+    """*variant*'s effective contents of *tree* as layers, base first, each by path relative
+    to the layer: its directory (``directories``), or the root (the default variant) and
+    then ``mkosi.profiles/<variant>/`` over it (``native``), as mkosi merges them."""
+    own = f"mkosi.profiles/{variant}/" if tree.layout == "native" else f"{variant}/"
+    overlay = {e.path.removeprefix(own): e for e in tree.entries if e.path.startswith(own)}
+    if tree.layout != "native":
+        return (overlay,)
+    root = {e.path: e for e in tree.entries if _layer_of(e.path, "native") == ""}
+    return (root, overlay)
+
+
+def variant_entries(tree: Tree, variant: str) -> list[Entry]:
+    """The entries of *tree* that make up *variant*, by their tree path, in tree order: its
+    directory, or (``native``) the root it inherits and its ``mkosi.profiles/<variant>/``."""
+    owners = {variant, ""} if tree.layout == "native" else {variant}
+    return [e for e in tree.entries if _layer_of(e.path, tree.layout) in owners]
 
 
 def variant_tree_digest(tree: Tree, variant: str) -> str:
-    """The digest of *variant*'s directory of *tree* alone, as a bake records it per variant."""
-    return _tree_digest([entry for entry in tree.entries if entry.path.split("/", 1)[0] == variant])
+    """The digest of *variant*'s effective contents of *tree* alone (:func:`variant_entries`),
+    as a bake records it per variant."""
+    return _tree_digest(variant_entries(tree, variant))
 
 
 def _digest_mode(entry: Entry) -> int:
@@ -1143,7 +1195,9 @@ def bake_image(
             payload[MANIFEST_KEY]["lockfile"] = lockfile
         warn = _tree_warning(reporter)
         for name in sorted(result.profiles):
-            tree = read_variant_tree(destination / "mkosi", [name], warn=warn)
+            tree = read_variant_tree(
+                destination / "mkosi", [name], warn=warn, layout=tree_layout(baking)
+            )
             payload["variants"][name][MANIFEST_KEY] = {
                 **payload[MANIFEST_KEY],
                 "baked_at": payload.get("created_at"),

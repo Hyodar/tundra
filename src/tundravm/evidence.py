@@ -44,6 +44,7 @@ from .declarative.lifecycle import (
     Lock,
     ProbeRunner,
     Tree,
+    TreeLayout,
     _digest_mode,
     check_report,
     compile_image,
@@ -55,6 +56,7 @@ from .declarative.lifecycle import (
     recorded_reproducibility,
     reproducibility_of,
     run_probe,
+    variant_entries,
     variant_provenance,
     variant_tree_digest,
     verify_artifact,
@@ -71,7 +73,7 @@ from .models import BAKE_RESULT_FILENAME
 INDEX_NAME = "evidence.json"
 SIGNATURE_NAME = "evidence.json.sig"
 """The SSH signature of ``evidence.json`` (``ssh-keygen -Y sign -n tundravm-evidence``)."""
-EVIDENCE_SCHEMA = "tundravm.evidence/3"
+EVIDENCE_SCHEMA = "tundravm.evidence/4"
 """The ``schema`` of ``evidence.json``, which ``evidence --format json`` prints verbatim: the one
 identifier of the index's structure, which ``verify`` reads and refuses any other of."""
 TREE_SCHEMA = "tundravm.tree/1"
@@ -92,11 +94,17 @@ EVIDENCE_REQUIREMENTS: tuple[EvidenceRequirement, ...] = (
 """What ``require=`` (``evidence --require``) can demand; a missing one makes the verdict
 ``incomplete`` instead of a note: a recorded ``matched`` second build, a valid measurements
 policy bound to each artifact, real (not simulated) artifacts, a lockfile, an SBOM with
-the installed inventory (mkosi's manifest) for each artifact, and for each artifact a
-policy measures a ``trusted``, fresh attestation record checked against that policy."""
+the installed inventory (mkosi's manifest) for each artifact, and a ``trusted``, fresh
+attestation record checked against its policy for every measured subject, which implies
+``measured``: every selected artifact measured (see :data:`IMPLIED_REQUIREMENTS`)."""
+IMPLIED_REQUIREMENTS: Mapping[str, tuple[EvidenceRequirement, ...]] = {
+    "attested": ("measured",),
+}
+"""What requiring a check also demands: ``attested`` is only as wide as the measured
+artifacts, so it requires every selected artifact to be ``measured`` too."""
 DEFAULT_MAX_AGE = 24 * 3600
-"""How far (seconds) an attestation record's ``observed_at`` may be from the evidence's
-``created`` for ``attested``: a day."""
+"""How far (seconds) an attestation record's ``observed_at`` may be from the moment the
+evidence judged it (``attestation.evaluated_at``) for ``attested``: a day."""
 _MKOSI = Requirement(
     tool="mkosi",
     probe=("mkosi", "--version"),
@@ -221,6 +229,7 @@ def evidence(
     allow_unbound: bool = False,
     attestations: Sequence[str | Path] = (),
     max_age: float | timedelta = DEFAULT_MAX_AGE,
+    clock: Callable[[], datetime] | None = None,
 ) -> Evidence:
     """The evidence of the bake in the build directory *build* for *variants* (default: all baked).
 
@@ -249,9 +258,14 @@ def evidence(
     (:func:`~tundravm.read_attestation`). ``attested`` is satisfied when every artifact a
     valid policy measures has a record whose re-derived verdict is ``trusted``, whose
     policy is that policy (its sha256) and whose ``observed_at`` is within *max_age*
-    (seconds, or a ``timedelta``; default a day) of the evidence's ``created``. A
-    record that disagrees with its own document fails the evidence
-    (``attestation-inconsistent``).
+    (seconds, or a ``timedelta``; default a day) of ``attestation.evaluated_at``: the
+    wall clock (*clock*, tests) when records are bundled, ``null`` otherwise. It is not
+    ``created``, which honours ``SOURCE_DATE_EPOCH`` for a reproducible bundle: an old
+    commit time would make a new record look stale, or an old one fresh. Evidence with
+    records therefore differs per run unless *clock* is pinned; evidence without stays
+    byte-reproducible. ``attested`` implies ``measured``
+    (:data:`IMPLIED_REQUIREMENTS`). A record that disagrees with its own document fails
+    the evidence (``attestation-inconsistent``).
     """
     required = _requirements(require)
     window = int(max_age.total_seconds() if isinstance(max_age, timedelta) else max_age)
@@ -358,7 +372,10 @@ def evidence(
         "lockfile": lock_entry,
         "lint": lint_entry(lint_rows),
         "tools": _tools(runner, notes),
-        "attestation": {"max_age_seconds": window},
+        "attestation": {
+            "max_age_seconds": window,
+            "evaluated_at": _stamp((clock or _wall_clock)()) if attestations else None,
+        },
         "variants": records,
     }
     index["verdict"] = _verdict(index, required, notes)
@@ -371,6 +388,15 @@ def evidence(
 
 
 # ── gathering ────────────────────────────────────────────────────────────
+
+
+def demands(required: Iterable[str], need: str) -> str | None:
+    """The requirement of *required* that demands *need*: *need* itself, or one that
+    implies it (:data:`IMPLIED_REQUIREMENTS`); ``None`` when none does."""
+    return next(
+        (name for name in required if name == need or need in IMPLIED_REQUIREMENTS.get(name, ())),
+        None,
+    )
 
 
 def _requirements(names: Sequence[str]) -> tuple[EvidenceRequirement, ...]:
@@ -390,8 +416,16 @@ def _epoch() -> int | None:
 
 def _created() -> str:
     epoch = _epoch()
-    moment = datetime.fromtimestamp(epoch, UTC) if epoch is not None else datetime.now(UTC)
-    return moment.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _stamp(datetime.fromtimestamp(epoch, UTC) if epoch is not None else _wall_clock())
+
+
+def _wall_clock() -> datetime:
+    """Now: the moment attestation records are judged (never ``SOURCE_DATE_EPOCH``)."""
+    return datetime.now(UTC)
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _json_bytes(value: object) -> bytes:
@@ -501,16 +535,16 @@ def _compiled_tree(img: Lowered, artifacts: Sequence[Artifact], locked: Lock | N
 
 
 def tree_rows(tree: Tree, variant: str) -> list[dict[str, Any]]:
-    """*variant*'s entries of *tree*, relative to its directory: ``path``, ``type`` (``file``,
-    ``symlink``, ``directory``), ``mode`` (as the tree digest sees it, octal) and ``sha256``
-    and ``size`` for a file, ``target`` for a symlink."""
-    prefix = f"{variant}/"
+    """*variant*'s effective entries of *tree* (``variant_entries``): ``path`` (relative
+    to its directory; in the native layout the tree path, the root it
+    inherits and its ``mkosi.profiles/<variant>/``), ``type`` (``file``, ``symlink``,
+    ``directory``), ``mode`` (as the tree digest sees it, octal) and ``sha256`` and
+    ``size`` for a file, ``target`` for a symlink."""
+    prefix = _row_prefix(variant, tree.layout)
     rows: list[dict[str, Any]] = []
-    for entry in tree.entries:
-        if not entry.path.startswith(prefix):
-            continue
+    for entry in variant_entries(tree, variant):
         row: dict[str, Any] = {
-            "path": entry.path[len(prefix) :],
+            "path": entry.path.removeprefix(prefix),
             "mode": f"{_digest_mode(entry):04o}",
         }
         if entry.symlink is not None:
@@ -527,15 +561,25 @@ def tree_rows(tree: Tree, variant: str) -> list[dict[str, Any]]:
     return rows
 
 
-def tree_rows_digest(rows: Iterable[tuple[str, Mapping[str, Any]]]) -> str:
-    """The :attr:`Tree.digest <tundravm.Tree>` of ``(variant, row)`` pairs from :func:`tree_rows`.
+def _row_prefix(variant: str, layout: object) -> str:
+    """What :func:`tree_rows` strips from a tree path: the variant's directory, or nothing
+    in the native layout."""
+    return "" if layout == "native" else f"{variant}/"
 
-    Rows must come in tree order (sorted by ``variant/path``), as ``tree.json`` holds them.
+
+def tree_rows_digest(
+    rows: Iterable[tuple[str, Mapping[str, Any]]], layout: TreeLayout = "directories"
+) -> str:
+    """The :attr:`Tree.digest <tundravm.Tree>` of ``(variant, row)`` pairs from :func:`tree_rows`
+    of a tree in *layout*.
+
+    Rows must come in tree order (sorted by tree path), as ``tree.json`` holds them.
     """
     digest = hashlib.sha256()
     for variant, row in rows:
         mode = int(str(row["mode"]), 8)
-        digest.update(f"{variant}/{row['path']}".encode() + b"\0" + f"{mode:o}".encode() + b"\0")
+        path = _row_prefix(variant, layout) + str(row["path"])
+        digest.update(path.encode() + b"\0" + f"{mode:o}".encode() + b"\0")
         if row["type"] == "symlink":
             digest.update(b"L" + str(row["target"]).encode())
         elif row["type"] == "file":
@@ -550,16 +594,18 @@ def _tree_manifest(variant: str, tree: Tree) -> bytes:
     """``variants/<variant>/tree.json``: every file the variant's compiled tree emits.
 
     ``tree_digest`` is the digest of the whole tree compiled for ``compiled_variants``;
-    ``variant_digest`` covers this variant's rows alone, what a bake records for it.
+    ``variant_digest`` covers this variant's rows alone, what a bake records for it;
+    ``layout`` is the tree's (``native``: rows are tree paths, the root's shared).
     """
     rows = tree_rows(tree, variant)
     return _json_bytes(
         {
             "schema": TREE_SCHEMA,
             "variant": variant,
+            "layout": tree.layout,
             "compiled_variants": list(tree.variants),
             "tree_digest": tree.digest,
-            "variant_digest": tree_rows_digest((variant, row) for row in rows),
+            "variant_digest": tree_rows_digest(((variant, row) for row in rows), tree.layout),
             "files": rows,
         }
     )
@@ -944,8 +990,9 @@ def _verdict(
         noted: bool = False,
     ) -> None:
         """*noted*: gathering already said so in a note."""
-        if need in required:
-            add("incomplete", code, subject, f"{message} (required: {need})")
+        demanding = demands(required, need)
+        if demanding is not None:
+            add("incomplete", code, subject, f"{message} (required: {demanding})")
         elif not noted:
             notes.append(message)
 
@@ -1082,14 +1129,21 @@ def _attested_reasons(
     absent: Callable[[EvidenceRequirement, str, str | None, str], None],
 ) -> str:
     """The ``attested`` reasons; returns the summary state (``none`` when no artifact has a
-    valid policy and no record is bundled)."""
+    valid policy and no record is bundled).
+
+    Each distinct measured subject (the artifact a variant's verified policy names) is
+    judged once, on every record of it whichever variant bundled it; a selected variant
+    without a verified policy has no subject a record could cover, so ``attested`` is
+    ``attestation-missing`` for it. Freshness is judged at ``attestation.evaluated_at``."""
     variants: Mapping[str, Any] = index["variants"]
-    window = int((index.get("attestation") or {}).get("max_age_seconds") or DEFAULT_MAX_AGE)
-    created = parse_time(str(index.get("created")))
+    block = index.get("attestation") or {}
+    window = int(block.get("max_age_seconds") or DEFAULT_MAX_AGE)
+    evaluated = parse_time(str(block.get("evaluated_at")))
     states: list[str] = []
+    pooled: dict[str, list[Mapping[str, Any]]] = {}
     for name, record in variants.items():
-        entries = record.get("attestations") or []
-        for entry in entries:
+        for entry in record.get("attestations") or []:
+            pooled.setdefault(str(entry["artifact_sha256"]), []).append(entry)
             if entry["inconsistencies"]:
                 states.append("inconsistent")
                 message = (
@@ -1097,11 +1151,23 @@ def _attested_reasons(
                     f"{entry['inconsistencies'][0]}"
                 )
                 add("fail", "attestation-inconsistent", name, message)
-        if policies[name] != "verified" or (not entries and "attested" not in required):
+    judged: set[str] = set()
+    for name, record in variants.items():
+        if policies[name] != "verified":
+            if "attested" in required:
+                message = f"{name} has no valid measurements policy an attestation could check"
+                absent("attested", "attestation-missing", name, message)
+                states.append("missing")
             continue
         measures = record["policy"].get("measures") or {}
+        sha = str(measures.get("sha256"))
+        own = list(record.get("attestations") or [])
+        entries = own + [e for e in pooled.get(sha, []) if e not in own]
+        if sha in judged or (not entries and "attested" not in required):
+            continue
+        judged.add(sha)
         subject = f"{name}/{measures['target']}" if measures.get("target") else name
-        found = [_attestation_state(e, measures.get("sha256"), created, window) for e in entries]
+        found = [_attestation_state(e, measures.get("sha256"), evaluated, window) for e in entries]
         best = next((s for s in _ATTESTED_BEST if s in found), "missing")
         states.append(best)
         if best in ("trusted", "inconsistent"):
@@ -1115,18 +1181,14 @@ def _attested_reasons(
             "untrusted": f"no attestation record of {subject} is trusted (verdicts: {verdicts}); "
             "a trusted one needs `attest --validator`",
             "stale": f"no trusted attestation record of {subject} was observed within "
-            f"{_duration(window)} of the evidence's creation ({index.get('created')})",
+            f"{_duration(window)} of the evaluation ({block.get('evaluated_at')})",
         }[best]
         absent("attested", f"attestation-{best}", subject, message)
-    if "attested" in required and "verified" not in policies.values():
-        message = "no artifact has a valid measurements policy an attestation could check"
-        absent("attested", "attestation-missing", None, message)
-        states.append("missing")
     return _worst(states, _ATTESTED_ORDER) if states else "none"
 
 
 def _attestation_state(
-    entry: Mapping[str, Any], measured: object, created: datetime | None, window: int
+    entry: Mapping[str, Any], measured: object, evaluated: datetime | None, window: int
 ) -> str:
     """One record: ``inconsistent``, ``policy-mismatch``, ``untrusted``, ``stale`` or
     ``trusted``, the first that applies."""
@@ -1137,9 +1199,9 @@ def _attestation_state(
     if entry["verdict"] != "trusted":
         return "untrusted"
     observed = parse_time(str(entry["observed_at"]))
-    if created is None or observed is None:
+    if evaluated is None or observed is None:
         return "stale"
-    return "stale" if abs((created - observed).total_seconds()) > window else "trusted"
+    return "stale" if abs((evaluated - observed).total_seconds()) > window else "trusted"
 
 
 def _duration(seconds: int) -> str:

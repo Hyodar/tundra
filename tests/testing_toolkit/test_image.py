@@ -15,6 +15,7 @@ from tundravm import (
     Hook,
     Install,
     Key,
+    Mkosi,
     Package,
     Recipe,
     Secrets,
@@ -210,3 +211,41 @@ def test_plan_takes_a_variant_and_matches_compile() -> None:
     assert azure.tree.digest == compile(recipe, variants=["azure"]).digest
     with pytest.raises(ValidationError, match="Unknown variant"):
         plan(recipe, "gcp")
+
+
+def _layered(layout: str) -> Recipe:
+    """A default variant and an ``azure`` child that adds a package and a file and edits one."""
+    return Recipe(
+        name="demo",
+        items=(
+            Package("curl"),
+            Package("linux-image-amd64"),
+            File("/etc/motd", "hi\n"),
+            File("/etc/a", "base\n"),
+        ),
+        variants=(
+            Variant("default", outputs=("qemu",)),
+            Variant(
+                "azure",
+                inherits="default",
+                add=Fragment("azure-bits", (Package("htop"), File("/etc/b", "b\n"))),
+                changes=(File.ref("/etc/a").edit(content="azure\n"),),
+            ),
+        ),
+        mkosi=Mkosi(layout=layout),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize("layout", ["directories", "native"])
+def test_image_queries_see_inherited_and_overridden_contents_in_both_layouts(
+    layout: str,
+) -> None:
+    recipe = _layered(layout)
+    default, azure = plan(recipe), plan(recipe, "azure")
+    assert default.tree.layout == layout
+    assert default.file("/etc/motd").text == "hi\n" and default.file("/etc/a").text == "base\n"
+    assert "curl" in default.packages and "htop" not in default.packages
+    assert azure.file("/etc/motd").text == "hi\n"  # inherited from the root
+    assert azure.file("/etc/a").text == "azure\n"  # the child's edit wins
+    assert azure.file("/etc/b").text == "b\n"
+    assert {"curl", "linux-image-amd64", "htop"} <= set(azure.packages)

@@ -11,6 +11,7 @@ import base64
 import binascii
 import hashlib
 import shutil
+import struct
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
@@ -140,6 +141,28 @@ def fingerprint(public: str) -> str:
             hint="Pass the key as `ssh-keygen -y -f KEY` prints it: `TYPE BASE64`.",
         ) from exc
     digest = base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+    return f"SHA256:{digest}"
+
+
+def signature_fingerprint(signature: bytes) -> str | None:
+    """The ``SHA256:...`` fingerprint of the public key an armored SSH signature carries
+    (``None`` when *signature* is not one); the key a valid signature was made with."""
+    body = "".join(
+        line.strip()
+        for line in signature.decode("ascii", errors="replace").splitlines()
+        if line.strip() and not line.startswith("-----")
+    )
+    try:
+        blob = base64.b64decode(body, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not blob.startswith(b"SSHSIG") or len(blob) < 14:
+        return None
+    (length,) = struct.unpack(">I", blob[10:14])
+    key = blob[14 : 14 + length]
+    if len(key) != length:
+        return None
+    digest = base64.b64encode(hashlib.sha256(key).digest()).decode().rstrip("=")
     return f"SHA256:{digest}"
 
 

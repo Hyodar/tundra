@@ -19,7 +19,7 @@ import re
 import shlex
 import stat
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
@@ -74,6 +74,7 @@ from .model import (
     Debloat,
     Declaration,
     Disk,
+    ExternalDelivery,
     File,
     FileTree,
     Git,
@@ -103,6 +104,8 @@ HISTORICAL = "nethermind-v1"
 """The dialect that reproduces the historical nethermind-tdx tree byte for byte."""
 INIT_SERVICE = "runtime-init.service"
 UNIT_DIRECTORY = "/usr/lib/systemd/system"
+NEEDS_DROPIN = "10-tundravm-needs.conf"
+"""The drop-in a packaged :class:`Unit` waits for the steps it ``needs`` through."""
 BUILD_SOURCES = ("Build", "BuildSources")
 """Per-variant ``Setting``: ``src[:dest]`` host directories mounted into the build."""
 STRIP_IMAGE_VERSION = """sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release" """
@@ -213,7 +216,7 @@ class StateBuilder:
         items: Sequence[Declaration],
         *,
         full: Sequence[Declaration],
-        reemit: Sequence[Unit] = (),
+        reemit: Sequence[Unit | Service] = (),
         skip: Collection[Declaration] = (),
         scripts: Mapping[Declaration, str] | None = None,
     ) -> None:
@@ -289,8 +292,10 @@ class StateBuilder:
                 case BootStep() | Setting() | Kernel() | RuntimeTools():
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
-            reemitted = replace(unit, enabled=None, masked=None)
-            _unit(profile, reemitted, steps=steps, per_step=not self.historical)
+            if isinstance(unit, Service):
+                _service(profile, unit)
+                continue
+            _unit(profile, unit, steps=steps, per_step=not self.historical, states=False)
         for step in (item for item in items if isinstance(item, BootStep)):
             profile.init_scripts.append(
                 InitScriptEntry(
@@ -357,6 +362,7 @@ class StateBuilder:
             _add_file(profile, setup.config_path, setup.render_config())
             _runtime_init(profile, setup.render_init_script(), "disks", after)
             applied.append(setup)
+        waited: set[str] = set()
         for entry, (config_path, manifest_path) in zip(secrets, secret_paths, strict=True):
             delivery = SecretDelivery(
                 secrets=tuple(_secret_spec(s) for s in entry.entries),
@@ -383,6 +389,10 @@ class StateBuilder:
                 _add_file(profile, path, dropin)
             _runtime_init(profile, delivery.init_script(), "secrets", after)
             applied.append(delivery)
+            external = entry.delivery
+            if external is not None and external.waits and external.step not in waited:
+                waited.add(external.step)
+                _runtime_init(profile, _delivery_wait(external), external.step, after)
 
     def _azure(self, profile: ProfileState) -> None:
         """The Azure integration: dmidecode, the provisioning script, its enabled unit."""
@@ -438,6 +448,17 @@ def _shell(
     spec = CommandSpec(argv=(command,), env=dict(env or {}), cwd=cwd)
     profile.phases.setdefault(phase, []).append(spec)
     profile.hooks.append(HookSpec(phase=phase, command=spec))
+
+
+def _delivery_wait(delivery: ExternalDelivery) -> str:
+    """The ``delivery-<name>`` step's script: start *unit*, or poll for *ready_path*."""
+    if delivery.unit is not None:
+        return f"# {delivery.name}: start {delivery.unit} and wait for its start job\n" + (
+            f"systemctl start {shlex.quote(delivery.unit)}\n"
+        )
+    path = shlex.quote(str(delivery.ready_path))
+    wait = f"until [ -e {path} ]; do sleep 1; done\n"
+    return f"# {delivery.name}: wait for {delivery.ready_path}\n{wait}"
 
 
 def _runtime_init(
@@ -753,8 +774,21 @@ def _template(profile: ProfileState, item: Template) -> None:
 # ── units and services ───────────────────────────────────────────────────
 
 
-def _unit(profile: ProfileState, unit: Unit, *, steps: Collection[str], per_step: bool) -> None:
-    """Ship or control *unit*; a shipped one waits for the units of the steps it needs."""
+def _unit(
+    profile: ProfileState,
+    unit: Unit,
+    *,
+    steps: Collection[str],
+    per_step: bool,
+    states: bool = True,
+) -> None:
+    """Ship or control *unit*, waiting for the units of the steps it needs.
+
+    A shipped unit gets them in its own ``[Unit]`` section; a packaged one
+    through the :data:`NEEDS_DROPIN` drop-in. Without *states* its enable,
+    disable and mask lines are left to the profile it extends.
+    """
+    waits = wait_units((ref.step for ref in unit.needs), steps=steps, per_step=per_step)
     if unit.content is not None:
         content = unit.content
         if isinstance(content, Path):
@@ -763,11 +797,15 @@ def _unit(profile: ProfileState, unit: Unit, *, steps: Collection[str], per_step
                 owner=f"Unit {unit.name}",
                 hint="Save the unit file as UTF-8; systemd units are text.",
             )
-        needs = (ref.step for ref in unit.needs)
-        waits = wait_units(needs, steps=steps, per_step=per_step)
         if waits:
             content = inject_after_init(content, waits)
         _add_file(profile, f"{UNIT_DIRECTORY}/{unit.name}", content)
+    elif waits:
+        listed = " ".join(waits)
+        dropin = f"{UNIT_DIRECTORY}/{unit_name(unit.name)}.d/{NEEDS_DROPIN}"
+        _add_file(profile, dropin, f"[Unit]\nAfter={listed}\nRequires={listed}\n")
+    if not states:
+        return
     if unit.enabled is True:
         enable_unit(profile, unit.name)
     elif unit.enabled is False:

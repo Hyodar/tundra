@@ -22,14 +22,19 @@ import posixpath
 import tarfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from string import Template
 from typing import Any, Literal
 
 from . import _ssh_sig
 from .declarative.bom import parse_manifest, spdx_packages
-from .declarative.lifecycle import MANIFEST_KEY, recorded_reproducibility, reproducibility_of
+from .declarative.lifecycle import (
+    MANIFEST_KEY,
+    TreeLayout,
+    recorded_reproducibility,
+    reproducibility_of,
+)
 from .errors import TdxError, ValidationError
 from .evidence import (
     BUNDLE_ROOT,
@@ -262,6 +267,7 @@ def verify_evidence(
     allowed_signers: Path | None = None,
     signer: str | None = None,
     max_age: float | timedelta | None = None,
+    now: datetime | None = None,
 ) -> EvidenceVerification:
     """Check the evidence at *path* (a bundle, the directory, or its ``evidence.json``).
 
@@ -284,8 +290,11 @@ def verify_evidence(
     quote parsed again, the nonce binding and register verdicts recomputed, the
     signature status read from the recorded validator reply (which is trusted as
     recorded: the quote's signature and collateral cannot be checked offline).
-    ``attested`` judges freshness against the evidence's ``created`` with the
-    ``max_age`` the evidence recorded, or *max_age* (seconds or a ``timedelta``).
+    ``attested`` judges freshness as the evidence did: at the ``evaluated_at`` it
+    recorded (a historical judgement, independent of ``created``) with the ``max_age``
+    it recorded; *max_age* (seconds or a ``timedelta``) replaces the window and *now*
+    the moment (``verify --now``: "is it still fresh?"). ``attested`` implies
+    ``measured`` (:data:`~tundravm.evidence.IMPLIED_REQUIREMENTS`).
     *allowed_signers* (an OpenSSH allowed-signers file) checks ``evidence.json.sig``
     with ``ssh-keygen -Y verify``; *signer* is the principal, else the file's
     principals for the signing key are tried. Raises ``ValidationError`` for a path
@@ -344,7 +353,7 @@ def verify_evidence(
     else:
         message = "artifacts were not re-hashed: pass --build DIR"
         notes.append({"code": "artifacts-unchecked", "message": message})
-    checks.extend(_verdict_checks(index, derived, required, max_age))
+    checks.extend(_verdict_checks(index, derived, required, max_age, now))
     order = {kind: n for n, kind in enumerate(CHECK_KINDS)}
     ordered = sorted(checks, key=lambda c: order[c.kind])
     return EvidenceVerification(
@@ -825,8 +834,9 @@ def _tree_check(
     if not isinstance(manifest, dict) or manifest.get("schema") != TREE_SCHEMA:
         return []
     rows = manifest.get("files") or []
+    layout: TreeLayout = "native" if manifest.get("layout") == "native" else "directories"
     try:
-        own = tree_rows_digest((name, row) for row in rows)
+        own = tree_rows_digest(((name, row) for row in rows), layout)
     except (KeyError, TypeError, ValueError):
         own = None
     problems: list[str] = []
@@ -838,16 +848,8 @@ def _tree_check(
     compiled = [str(v) for v in manifest.get("compiled_variants") or []]
     together = [_json(present.get(f"variants/{v}/tree.json")) for v in compiled]
     if compiled and all(isinstance(m, dict) for m in together):
-        pairs = sorted(
-            (
-                (v, row)
-                for v, m in zip(compiled, together, strict=True)
-                for row in m.get("files") or []
-            ),
-            key=lambda pair: f"{pair[0]}/{pair[1].get('path')}",
-        )
         try:
-            union = tree_rows_digest(pairs)
+            union = tree_rows_digest(_union_rows(compiled, together, layout), layout)
         except (KeyError, TypeError, ValueError):
             union = None
         if union != whole:
@@ -864,6 +866,20 @@ def _tree_check(
         message = f"{len(rows)} entries hash to its variant digest {str(own)[:12]}"
         checks.append(_check("index", str(member), "pass", message))
     return checks
+
+
+def _union_rows(
+    compiled: Sequence[str], manifests: Sequence[Any], layout: TreeLayout
+) -> list[tuple[str, Mapping[str, Any]]]:
+    """Every compiled variant's ``tree.json`` rows as the whole tree, in tree order. Native
+    variants each list the root they share: a row they agree on counts once, so rows
+    that disagree on a path stay apart and fail the tree digest."""
+    pairs: dict[str, tuple[str, Mapping[str, Any]]] = {}
+    for variant, manifest in zip(compiled, manifests, strict=True):
+        for row in manifest.get("files") or []:
+            path = ("" if layout == "native" else f"{variant}/") + str(row.get("path"))
+            pairs.setdefault(f"{path}\0{json.dumps(row, sort_keys=True)}", (variant, row))
+    return [pairs[key] for key in sorted(pairs)]
 
 
 def _signature_check(
@@ -939,16 +955,22 @@ def _verdict_checks(
     derived: Mapping[str, Any],
     required: Sequence[str],
     max_age: float | timedelta | None = None,
+    now: datetime | None = None,
 ) -> list[VerifyCheck]:
     """The stored verdict against one recomputed from the facts *derived* from the members
     (the index's own where no member records them), then the verdict those facts give
-    under the recorded and the given requirements (and *max_age*, when given)."""
+    under the recorded and the given requirements (and *max_age* and *now*, when given)."""
     stored = index.get("verdict")
     recorded_required = stored.get("required", []) if isinstance(stored, dict) else []
     judged = derived
-    if max_age is not None:
-        seconds = max_age.total_seconds() if isinstance(max_age, timedelta) else max_age
-        judged = {**derived, "attestation": {"max_age_seconds": int(seconds)}}
+    if max_age is not None or now is not None:
+        block = dict(derived.get("attestation") or {})
+        if max_age is not None:
+            seconds = max_age.total_seconds() if isinstance(max_age, timedelta) else max_age
+            block["max_age_seconds"] = int(seconds)
+        if now is not None:
+            block["evaluated_at"] = now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        judged = {**derived, "attestation": block}
     try:
         recomputed = _verdict(derived, tuple(recorded_required), [])
         wanted = _requirements(tuple(dict.fromkeys([*recorded_required, *required])))

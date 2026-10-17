@@ -129,6 +129,20 @@ def _freeze_map(owner: object, name: str) -> FrozenMap[object]:
     return frozen
 
 
+def _snapshot(value: object) -> object:
+    """*value* with its mappings as :class:`FrozenMap` and its lists and sets frozen, nested too.
+
+    What an :class:`Edit` stores, so changing what the caller passed changes nothing.
+    """
+    if isinstance(value, Mapping):
+        return FrozenMap({key: _snapshot(item) for key, item in value.items()})
+    if type(value) in (list, tuple):
+        return tuple(_snapshot(item) for item in value)  # type: ignore[attr-defined]
+    if type(value) in (set, frozenset):
+        return frozenset(value)  # type: ignore[call-overload]
+    return value
+
+
 def _require_env(owner: object, name: str = "env") -> None:
     for key, value in _freeze_map(owner, name).items():
         if not _ENV_KEY.fullmatch(key):
@@ -562,7 +576,7 @@ class Edit(Located):
         frozen = _freeze_map(self, "fields")
         if not frozen:
             raise _fail(self, f"the edit of {self.target} sets no field.")
-        values = {k: tuple(v) if isinstance(v, list) else v for k, v in frozen.items()}
+        values = {k: _snapshot(v) for k, v in frozen.items()}
         object.__setattr__(self, "fields", FrozenMap(values))
         cls = _declaration_type(self, self.target.kind)
         known = [f.name for f in dataclass_fields(cls) if f.init]
@@ -877,9 +891,10 @@ class User(Declared):
 class Unit(Declared):
     """A systemd unit: ``content`` ships the unit file, ``None`` controls a packaged one.
 
-    ``needs`` lists the runtime-init steps (readiness handles) the shipped unit
-    waits for: ``After=``/``Requires=`` their units. ``allow_secret`` silences
-    ``secret-in-env`` for the shipped unit file.
+    ``needs`` lists the runtime-init steps (readiness handles) the unit waits
+    for: ``After=``/``Requires=`` their units, in a shipped unit's own file or
+    a packaged unit's ``<name>.d/10-tundravm-needs.conf`` drop-in.
+    ``allow_secret`` silences ``secret-in-env`` for the shipped unit file.
     """
 
     name: str
@@ -1350,11 +1365,20 @@ class ExternalDelivery:
 
     *name* says what (``"gcp-secret-manager"``, ``"app-secrets.service"``); *supports*
     the target kinds it writes: ``"file"`` (``SecretFile``), ``"env"`` (``SecretEnv``).
-    The SSH key flow still runs through tundra-tools.
+    The SSH key flow still runs through tundra-tools (``Secrets.ready``).
+
+    Say how to tell it is done with *unit* (a unit the image ships or packages,
+    which the ``delivery-<name>`` runtime-init step starts and waits for:
+    until a ``Type=oneshot`` unit exits, a ``Type=notify`` one reports ready)
+    or *ready_path* (a path the provider creates last, which the step polls
+    for). Then ``needs=[delivery.ready]`` starts a consumer only after it;
+    with neither, nothing waits and lint warns (``external-delivery-unwired``).
     """
 
     name: str
     supports: tuple[SecretTargetKind, ...] = ("file", "env")
+    unit: str | None = None
+    ready_path: str | None = None
 
     def __post_init__(self) -> None:
         from tundravm._modules.secret_delivery import BUILTIN_SECRET_PROVIDER
@@ -1372,6 +1396,33 @@ class ExternalDelivery:
             raise _fail(self, f"supports must name 'file' and/or 'env', got {self.supports!r}.")
         if len(set(self.supports)) != len(self.supports):
             raise _fail(self, f"supports {self.supports!r} names a kind twice.")
+        if self.unit is not None and self.ready_path is not None:
+            raise _fail(self, "takes unit= or ready_path=, not both.")
+        if self.unit is not None and (
+            not isinstance(self.unit, str) or not _UNIT_NAME.fullmatch(self.unit)
+        ):
+            raise _fail(self, f"invalid unit name {self.unit!r}.")
+        if self.ready_path is not None:
+            _require_absolute(self, self.ready_path, "ready_path")
+
+    @property
+    def step(self) -> str:
+        """The runtime-init step that waits for this delivery: ``delivery-<name>``."""
+        return "delivery-" + re.sub(r"[^A-Za-z0-9_.-]", "-", self.name)
+
+    @property
+    def ready(self) -> Ready:
+        """The handle of :attr:`step`, for ``needs=[delivery.ready]``.
+
+        The step exists only with *unit* or *ready_path*; otherwise a ``needs``
+        naming it is ``needs-undefined``.
+        """
+        return Ready(self.step)
+
+    @property
+    def waits(self) -> bool:
+        """Whether the image can tell the delivery is done (*unit* or *ready_path*)."""
+        return self.unit is not None or self.ready_path is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1429,7 +1480,12 @@ class Secrets(Declared):
 
     @property
     def ready(self) -> Ready:
-        """The handle of the ``secrets`` runtime-init step, which runs every secret delivery."""
+        """The handle of the ``secrets`` runtime-init step: tundra-tools' built-in setup.
+
+        It receives the SSH key (and writes the secret configuration); it does
+        not wait for an :class:`ExternalDelivery`, whose own ``delivery.ready``
+        does.
+        """
         return Ready("secrets")
 
 

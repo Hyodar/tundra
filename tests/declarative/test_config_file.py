@@ -104,6 +104,27 @@ def test_json_ini_and_env() -> None:
     )
 
 
+def test_component_mappings_render_like_dicts() -> None:
+    from types import MappingProxyType
+
+    from tundravm._source import FrozenMap
+
+    nested = FrozenMap({"b": MappingProxyType({"c": (1, 2)}), "a": FrozenMap({"d": True})})
+    expected = {"b": {"c": [1, 2]}, "a": {"d": True}}
+    assert json.loads(str(ConfigFile.json("/a.json", nested).content)) == expected
+    assert json.loads(str(ConfigFile.json("/a.json", ({"x": nested},)).content)) == [
+        {"x": expected}
+    ]
+    plain = {"b": {"c": [1, 2]}, "a": {"d": True}}
+    for render in (ConfigFile.yaml, ConfigFile.toml):
+        assert render("/a", nested).content == render("/a", plain).content
+    sections = FrozenMap({"Unit": FrozenMap({"After": ("a.service", "b.service")})})
+    assert (
+        ConfigFile.ini("/a.conf", sections).content
+        == ConfigFile.ini("/a.conf", {"Unit": {"After": ["a.service", "b.service"]}}).content
+    )
+
+
 @pytest.mark.parametrize(
     ("render", "message"),
     [

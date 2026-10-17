@@ -302,7 +302,8 @@ class ConfigFile:
 
         def render(value: object, at: str) -> list[str]:
             _validate(value, "json", at)
-            return [json.dumps(value, indent=2, sort_keys=sort_keys, ensure_ascii=False)]
+            plain = _plain(value)
+            return [json.dumps(plain, indent=2, sort_keys=sort_keys, ensure_ascii=False)]
 
         return cls._file("json", path, data, render, mode, stage, allow_secret)
 
@@ -383,6 +384,18 @@ def _validate(value: object, kind: str, path: str) -> None:
             _validate(child, kind, path)
     else:
         raise _unsupported(kind, path, value)
+
+
+def _plain(value: object) -> object:
+    """*value* (already validated) with every mapping a ``dict`` and every list a ``list``.
+
+    ``json.dumps`` only takes those, and components hand over ``FrozenMap``.
+    """
+    if isinstance(value, Mapping):
+        return {key: _plain(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(child) for child in value]
+    return value
 
 
 __all__ = ["ConfigFile"]

@@ -54,7 +54,7 @@ What every image of a family builds on (its kernel, EFI stub, backports and `Set
 
 ### Exports
 
-A component publishes what others need from it as a typed value, in a property: `HttpEndpoint(host, port, path="/")` (with `url` and `address`) is the shipped one, and other facts subclass `Export` as frozen dataclasses. Build it with `provider=self.name`; a component that holds the value in a field then requires the provider's fragment, so the consumer neither names that fragment nor parses its files:
+A component publishes what others need from it as a typed value, in a property: `HttpEndpoint(host, port, path="/")` (with `url` and `address`) is the shipped one, and other facts subclass `Export` as frozen dataclasses. Build it with `provider=self`; a component that holds the value in a field then requires the provider's fragment, so the consumer neither names that fragment nor parses its files. The value stays bound to that instance (`origin`): a variant holding another configuration of the provider's fragment is an `export-stale` error, and a variant editing or removing a declaration the provider composed is an `export-stale` warning, because the value was computed from the configuration and does not follow edits. (`provider=self.name` binds the name only.)
 
 ```python
 @component
@@ -63,7 +63,7 @@ class App(Composite):
 
     @property
     def http(self) -> HttpEndpoint:
-        return HttpEndpoint("127.0.0.1", self.port, provider=self.name)
+        return HttpEndpoint("127.0.0.1", self.port, provider=self)
     ...
 
 
@@ -246,7 +246,7 @@ In the current dialect each step is its own oneshot unit, `runtime-init-<step>.s
 
 ## Building from source
 
-A `Build` fetches a source, builds it during the mkosi build phase, and installs results into the image. The source is pinned by `tundravm lock`. For one Go or Rust program, `GoBinary` and `CargoBinary` write that `Build` for you and give you the installed path as `executable`, so the build output, the install path and the service command cannot disagree:
+A `Build` fetches a source, builds it during the mkosi build phase, and installs results into the image. The source is pinned by `tundravm lock`. For one Go or Rust program, `GoBinary` and `CargoBinary` write that `Build` for you and give you the installed path as `executable`, so the build output, the install path and the service command agree when the recipe is constructed. `executable` is a plain path computed then: if a variant edits that `Build`'s `install` or removes the `Build`, a `Service` whose command still names the old path is an `executable-stale` error (edit the service's command in the same variant):
 
 ```python
 from dataclasses import dataclass

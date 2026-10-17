@@ -165,14 +165,18 @@ disk = Disk(
 
 _SECRET = r"""
 # The secret reaches APP as a file only APP reads. tundra-tools delivers only root's
-# SSH key, so "$delivery_name" (what writes SECRET_FILE at boot) is named here: start
-# it before APP. Secrets also runs tundra-tools' SSH-key step, which waits each boot for
-# an ed25519 key POSTed to port $key_port (docs/concepts.md: Secret delivery at boot).
+# SSH key, so "$delivery_name" writes SECRET_FILE at boot. YOU PROVIDE IT: ship or
+# package what writes the file (its unit enabled), or this image waits at boot forever.
+# APP needs delivery.ready: a boot step waits until SECRET_FILE exists (ready_path=);
+# pass unit="NAME.service" instead to start that unit and wait for it. Secrets also
+# runs tundra-tools' SSH-key step (secrets.ready), which waits each boot for an
+# ed25519 key POSTed to port $key_port (docs/concepts.md: Secret delivery at boot).
 SECRET_FILE = f"/run/{APP}/$secret"
+delivery = ExternalDelivery("$delivery_name", supports=("file",), ready_path=SECRET_FILE)
 secrets = Secrets(
     entries=(Secret("$secret", targets=(SecretFile(SECRET_FILE, owner=APP),)),),$store
     port=$key_port,
-    delivery=ExternalDelivery("$delivery_name", supports=("file",)),
+    delivery=delivery,
 )
 """
 
@@ -245,10 +249,14 @@ _NEEDS = {
     (
         True,
         True,
-    ): "\n            # Starts once the disk is mounted, without waiting for the SSH key.\n"
-    "            needs=(disk.ready,),",
-    (False, True): "\n            # Starts at boot, without waiting for the SSH key.\n"
-    "            needs=(),",
+    ): "\n            # Starts once the disk is mounted and the secret delivered, without\n"
+    "            # waiting for the SSH key.\n"
+    "            needs=(disk.ready, delivery.ready),",
+    (
+        False,
+        True,
+    ): "\n            # Starts once the secret is delivered, not waiting for the SSH key.\n"
+    "            needs=(delivery.ready,),",
 }
 """The service's ``needs=``, by (disk, secret): what it waits for at boot."""
 
@@ -377,7 +385,10 @@ def render_app_tests(spec: AppSpec, *, filename: str) -> str:
         port=spec.port,
         disk_mount=DISK_MOUNT,
         include=f'ITEMS[APP], ITEMS["{spec.disk}_key"], ITEMS["{spec.disk}"]'
+        + (', ITEMS["secrets"]' if spec.secret else "")
         if spec.disk
+        else 'ITEMS[APP], ITEMS["secrets"]'
+        if spec.secret
         else "ITEMS[APP],",
         secret=spec.secret or "",
         secret_env=secret_env(spec.secret or "x"),

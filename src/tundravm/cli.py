@@ -40,13 +40,14 @@ import warnings
 import webbrowser
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO, cast, get_args
 
 from . import __version__, app_template
 from . import templates as scaffold
 from ._source import SOURCES_DIRNAME
-from .attestation import attest, render_attestation
+from .attestation import attest, parse_time, render_attestation
 from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
 from .backends.base import BuildBackend
 from .backends.local_linux import cloud_tools
@@ -96,6 +97,7 @@ from .declarative.lifecycle import (
     requirements_of,
     run_probe,
     select_artifact,
+    tree_layout,
     using_lock,
     variant_provenance,
     write_lock,
@@ -1412,10 +1414,20 @@ def _add_attestation_options(cmd: argparse.ArgumentParser) -> None:
         default=None,
         metavar="DURATION",
         help=(
-            "For --require attested: how far a record's observed_at may be from the "
-            "evidence's creation (45s, 30m, 24h, 7d; default 24h)."
+            "For --require attested: how far a record's observed_at may be from the moment "
+            "the evidence judges it, the wall clock (45s, 30m, 24h, 7d; default 24h)."
         ),
     )
+
+
+def _moment(value: str) -> datetime:
+    if value == "now":
+        return datetime.now(UTC)
+    moment = parse_time(value)
+    if moment is None:
+        message = f"{value!r} is not a time: pass `now` or UTC like 2026-10-17T12:00:00Z"
+        raise argparse.ArgumentTypeError(message)
+    return moment
 
 
 def _duration(value: str) -> int:
@@ -1488,6 +1500,14 @@ def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         metavar="DURATION",
         help="Judge bundled attestation records with this freshness window (e.g. 24h, 30m) "
         "instead of the one the evidence recorded.",
+    )
+    cmd.add_argument(
+        "--now",
+        type=_moment,
+        default=None,
+        metavar="TIME",
+        help="Judge attestation freshness at TIME (`now`, or UTC like 2026-10-17T12:00:00Z) "
+        "instead of the moment the evidence recorded evaluating it.",
     )
     cmd.add_argument(
         "--witnesses",
@@ -2280,7 +2300,7 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
     names = _variants(loaded, args)
     selected = _with_lockfile(img, args).select(names)
     result, _ = emit(selected, destination)
-    tree = read_variant_tree(destination, result.profiles)
+    tree = read_variant_tree(destination, result.profiles, layout=tree_layout(selected))
     print(f"compiled {result.path}", file=out)
     print(f"  variants:      {', '.join(result.profiles)}", file=out)
     print(f"  recipe_digest: {selected.digest()}", file=out)
@@ -2828,6 +2848,7 @@ def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
         allowed_signers=args.allowed_signers,
         signer=args.signer,
         max_age=args.max_age,
+        now=args.now,
     )
     print(result.render(args.format), file=out, end="")
     if args.html is not None:
@@ -2857,6 +2878,7 @@ def _verify_release(args: argparse.Namespace, out: TextIO) -> int:
         allowed_signers=args.allowed_signers,
         signer=args.signer,
         max_age=args.max_age,
+        now=args.now,
     )
     if args.witnesses is None and args.min_witnesses is None:
         print(found.render(args.format), file=out, end="")

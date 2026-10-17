@@ -80,7 +80,7 @@ class Metrics(Composite):
     @property
     def health(self) -> HttpEndpoint:
         """Prometheus's health endpoint, for a component that probes it."""
-        return HttpEndpoint(self.listen, self.port, "/-/healthy", provider=self.name)
+        return HttpEndpoint(self.listen, self.port, "/-/healthy", provider=self)
 
     def compose(self) -> Iterator[Declaration]:
         yield Package("prometheus")

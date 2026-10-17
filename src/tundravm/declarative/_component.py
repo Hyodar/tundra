@@ -193,14 +193,25 @@ def _primitive_fields(cls: type) -> dict[str, tuple[type, ...]]:
     return found
 
 
-def _providers(owner: Composite) -> Iterable[str]:
+def exports(owner: Fragment) -> Iterable[tuple[str, Export]]:
+    """The :class:`Export` values *owner*'s configuration fields hold, with the field names."""
+    if not isinstance(owner, Composite):
+        return
     for item in fields(owner):
         if not item.init:
             continue
         value = getattr(owner, item.name)
         for candidate in value if isinstance(value, tuple) else (value,):
-            if isinstance(candidate, Export) and candidate.provider is not None:
-                yield candidate.provider
+            if isinstance(candidate, Export):
+                yield item.name, candidate
+
+
+def _providers(owner: Composite) -> Iterable[str]:
+    for _, export in exports(owner):
+        provider = export.provider
+        name = provider.name if isinstance(provider, Fragment) else provider
+        if name is not None:
+            yield name
 
 
 def _collected(check: Callable[[Resolved], Iterable[Diagnostic]]) -> Check:
@@ -216,13 +227,25 @@ def _collected(check: Callable[[Resolved], Iterable[Diagnostic]]) -> Check:
 class Export:
     """A typed value a component publishes for other components to consume.
 
-    The publisher builds it in a property with ``provider=self.name``; a
-    component holding it in a field then requires the provider's fragment, so
-    neither side names the other's fragment or parses its files. Subclass it as
-    a frozen dataclass for other facts (a socket path, a database address).
+    The publisher builds it in a property with ``provider=self``; a component
+    holding it in a field then requires the provider's fragment, so neither
+    side names the other's fragment or parses its files. ``provider=self``
+    keeps the publishing instance in :attr:`origin` and stores its fragment
+    name in ``provider``: resolution reports ``export-stale`` when a variant
+    holds another configuration of that fragment, or edits what it composed.
+    A bare name (``provider=self.name``) binds the name only. Subclass it as a
+    frozen dataclass for other facts (a socket path, a database address),
+    calling ``Export.__post_init__(self)`` from your own ``__post_init__``.
     """
 
-    provider: str | None = None
+    provider: str | Fragment | None = None
+    origin: Fragment | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        provider: object = self.provider
+        if isinstance(provider, Fragment):
+            object.__setattr__(self, "origin", provider)
+            object.__setattr__(self, "provider", provider.name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +259,7 @@ class HttpEndpoint(Export):
     scheme: Literal["http", "https"] = "http"
 
     def __post_init__(self) -> None:
+        Export.__post_init__(self)
         problem = None
         if not isinstance(self.host, str) or not self.host or any(c in self.host for c in "/ "):
             problem = f"host must be a host name or address, got {self.host!r}"

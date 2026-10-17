@@ -492,6 +492,82 @@ def test_service_needs_picks_the_runtime_init_units_it_waits_for(tmp_path: Path)
     assert "runtime-init" not in (old / "early.service").read_text()
 
 
+def test_inherited_service_and_unit_wait_for_a_child_variants_first_step(
+    tmp_path: Path,
+) -> None:
+    from tundravm.declarative import Service
+
+    recipe = _one(
+        Service("app", "/usr/bin/app"),
+        Service("early", "/usr/bin/early", needs=()),
+        Unit("worker.service", UNIT, enabled=True, needs=(RUNTIME_INIT,)),
+        variants=(
+            Variant("default"),
+            Variant("boot", add=Fragment("i", items=(BootStep("hello", "echo hi\n"),))),
+        ),
+    )
+    emit(lower(recipe).select(("default", "boot")), tmp_path)
+    units = Path("mkosi.extra/usr/lib/systemd/system")
+    default, boot = tmp_path / "default" / units, tmp_path / "boot" / units
+    assert "runtime-init" not in (default / "app.service").read_text()
+    for unit in ("app.service", "worker.service"):
+        assert "After=runtime-init.service" in (boot / unit).read_text()
+        assert "Requires=runtime-init.service" in (boot / unit).read_text()
+    assert "runtime-init" not in (boot / "early.service").read_text()  # needs nothing
+    postinst = (tmp_path / "boot" / "scripts" / "06-postinst.sh").read_text()
+    assert postinst.count("systemctl enable app.service\n") == 1
+
+
+def test_packaged_unit_needs_become_an_ordering_dropin() -> None:
+    disk = Disk("d", "/data", device="/dev/vdb")
+    recipe = _one(
+        disk,
+        Unit("database.service", enabled=True, needs=[disk.ready]),
+        Unit("cron", enabled=True, needs=(RUNTIME_INIT,)),
+    )
+    files = {f.path: f.content for f in lower(recipe).state.effective_profile("default").files}
+    dropin = "/usr/lib/systemd/system/database.service.d/10-tundravm-needs.conf"
+    waits = "runtime-init-disks.service"
+    assert files[dropin] == f"[Unit]\nAfter={waits}\nRequires={waits}\n"
+    cron = files["/usr/lib/systemd/system/cron.service.d/10-tundravm-needs.conf"]
+    assert "After=runtime-init.service\n" in str(cron)
+    alone = _one(Unit("database.service", enabled=True, needs=(RUNTIME_INIT,)))
+    assert not lower(alone).state.effective_profile("default").files  # no steps, no wait
+
+
+def test_external_delivery_ready_waits_for_its_unit_or_path(tmp_path: Path) -> None:
+    from tundravm.declarative import Service
+    from tundravm.declarative.resolve import lint as resolution_lint
+
+    entry = SecretFile("/run/app/token")
+    agent = ExternalDelivery("vault agent", supports=("file",), unit="vault-agent.service")
+    marker = ExternalDelivery("writer", supports=("file",), ready_path="/run/app/.ready")
+    for delivery, script in (
+        (agent, "systemctl start vault-agent.service\n"),
+        (marker, "until [ -e /run/app/.ready ]; do sleep 1; done\n"),
+    ):
+        recipe = _one(
+            Secrets(entries=(Secret("token", (entry,)),), delivery=delivery),
+            Service("app", "/usr/bin/app", needs=(delivery.ready,)),
+            Service("ssh-user", "/usr/bin/u", needs=(Secrets().ready,)),
+        )
+        assert not resolution_lint(recipe)
+        out = tmp_path / delivery.step
+        emit(lower(recipe), out)
+        root = out / "default" / "mkosi.extra"
+        assert (root / f"usr/lib/runtime-init/{delivery.step}").read_text().endswith(script)
+        units = root / "usr/lib/systemd/system"
+        waits = f"runtime-init-{delivery.step}.service"
+        assert f"After={waits}\n" in (units / "app.service").read_text()
+        assert "After=runtime-init-secrets.service\n" in (units / "ssh-user.service").read_text()
+    assert agent.step == "delivery-vault-agent"
+    unwired = _one(Secrets(entries=(Secret("token", (entry,)),), delivery=ExternalDelivery("x")))
+    (finding,) = resolution_lint(unwired)
+    assert (finding.code, finding.severity) == ("external-delivery-unwired", "warning")
+    with pytest.raises(ValidationError, match="not both"):
+        ExternalDelivery("x", unit="a.service", ready_path="/run/x")
+
+
 def test_service_rejects_bad_fields() -> None:
     from tundravm.declarative import Service
 

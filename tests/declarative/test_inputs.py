@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tundravm.declarative import (
+    Debian,
     File,
     FileTree,
     Fragment,
@@ -67,6 +68,21 @@ def test_recipe_inputs_names_every_path_in_every_variant(
             "other.txt",
         )
     }
+
+
+def test_recipe_inputs_include_what_the_platform_declares(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    kernel = Kernel("6.12", Git("https://example.com/linux", "v6.12"), config=Path("k.config"))
+    platform = Debian(
+        "trixie",
+        kernel_package=None,
+        items=(File("/etc/asset", Path("asset.txt")), Fragment("k", items=(kernel,))),
+    )
+    recipe = Recipe("inputs", platform=platform, items=(Package("curl"),))
+
+    assert recipe_inputs(recipe) == {tmp_path / "asset.txt", tmp_path / "k.config"}
 
 
 def test_tdxs_policy_file_is_not_configuration(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import shutil
@@ -155,6 +156,49 @@ def test_the_publisher_unsigned_and_simulated_witnesses_do_not_count(
     code, witnesses = _verify(*policy)
     assert code == EXIT_FAILURE  # without --allow-simulated an in-process rebuild is excluded
     assert {"witness-simulated", "witness-insufficient"} <= _codes(witnesses)
+
+
+def _claim_signer(key: Path, publisher: Path) -> None:
+    """Rewrite the release's ``signer`` metadata to name *key*, then re-sign the manifest
+    with *publisher*: a publisher lying about which key signed its release."""
+    public = key.with_suffix(".key.pub").read_text().strip()
+    found = subprocess.run(["ssh-keygen", "-l", "-f", str(key)], capture_output=True, text=True)
+    false = {"principal": "release", "public_key": public, "fingerprint": found.stdout.split()[1]}
+    index_path, manifest_path = RELEASE / "release.json", RELEASE / "release-manifest.json"
+    index = json.loads(index_path.read_text())
+    index["signer"] = false
+    index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n")
+    manifest = json.loads(manifest_path.read_text())
+    manifest["signer"] = false
+    for row in manifest["files"]:
+        if row["path"] == "release.json":
+            row["sha256"] = hashlib.sha256(index_path.read_bytes()).hexdigest()
+            row["size"] = index_path.stat().st_size
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    (RELEASE / "release-manifest.json.sig").unlink()
+    sign = ["ssh-keygen", "-q", "-Y", "sign", "-f", str(publisher), "-n", "tundravm-release"]
+    subprocess.run([*sign, str(manifest_path)], check=True)
+
+
+@NEEDS_SSH
+def test_the_publisher_key_under_another_principal_is_still_the_publisher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    publisher = _key(tmp_path, "publisher")
+    _project(tmp_path, monkeypatch, "--sign", str(publisher))
+    alice = _key(tmp_path, "alice")
+    _claim_signer(alice, publisher)  # the metadata says alice's key signed the release
+    allowed = _allowed(tmp_path, release=publisher, alice=alice, bob=publisher)
+    argv = ("witness", str(RELEASE), "--builder", "bob", "--sign", str(publisher))
+    assert run_main(*argv)[0] == EXIT_OK
+    policy = ("--allowed-signers", str(allowed), "--allow-simulated", "--min-witnesses", "1")
+    code, out = run_main("verify", str(RELEASE), *policy, "--format", "json")
+    report = json.loads(out)
+    assert code == EXIT_FAILURE
+    assert report["witnesses"]["counted"] == []
+    assert _codes(report["witnesses"]) == {"witness-self", "witness-insufficient"}
+    failed = {(check["code"], check["subject"]) for check in report["checks"] if check["code"]}
+    assert ("release-inconsistent", "signer") in failed
 
 
 def test_witness_flags_need_a_release_directory(

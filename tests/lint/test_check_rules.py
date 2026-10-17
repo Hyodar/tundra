@@ -285,7 +285,7 @@ def test_secret_requires_a_delivery_target() -> None:
         Secrets(),
         Secrets(
             entries=(Secret("token", (SecretFile("/run/token"),)),),
-            delivery=ExternalDelivery("vault-agent", supports=("file",)),
+            delivery=ExternalDelivery("vault-agent", supports=("file",), unit="vault.service"),
         ),
     ],
     ids=["ssh-key-only", "external"],

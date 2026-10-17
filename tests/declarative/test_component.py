@@ -94,6 +94,43 @@ def test_exports_require_their_provider() -> None:
     assert_diagnostic(alone, "fragment-requires-missing", variant="default")
 
 
+def test_bound_exports_follow_the_provider_instance() -> None:
+    from tundravm.declarative import Recipe, Variant
+    from tundravm.declarative.resolve import lint
+
+    @component
+    class Bound(Composite):
+        port: int = 8080
+
+        @property
+        def http(self) -> HttpEndpoint:
+            return HttpEndpoint("127.0.0.1", self.port, provider=self)
+
+        def compose(self) -> tuple[File, ...]:
+            return (File("/etc/bound.port", f"{self.port}\n"),)
+
+    app = Bound()
+    probe = Probe(target=app.http)
+    assert probe.target.provider == "bound" and probe.target.origin is app
+    assert probe.requires == ("base-tools", "bound")
+    assert probe.target == HttpEndpoint("127.0.0.1", 8080, provider="bound")
+    edit = File.ref("/etc/bound.port").edit(content="9090\n")
+    recipe = Recipe(
+        "r",
+        items=(BASE_TOOLS, probe),
+        variants=(
+            Variant("same", add=app),
+            Variant("other", add=Bound(port=9090)),
+            Variant("edited", inherits="same", changes=(edit,)),
+        ),
+    )
+    stale = {d.variant: d for d in lint(recipe) if d.code == "export-stale"}
+    assert set(stale) == {"other", "edited"}
+    assert stale["other"].severity == "error" and "Bound(port=9090)" in stale["other"].message
+    assert stale["edited"].severity == "warning"
+    assert "changes File(extra, /etc/bound.port) inside it" in stale["edited"].message
+
+
 def test_check_method_is_the_fragments_lint_rule() -> None:
     assert_diagnostic(fragment_plan(WebApp(version="1", port=80)), "webapp-port", variant="default")
     assert_clean(fragment_plan(WebApp(version="1")))

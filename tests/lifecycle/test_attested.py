@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import shutil
 import subprocess
@@ -46,6 +47,10 @@ def _recipe() -> Recipe:
         items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\n")),
         variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
+
+
+def _at_created() -> datetime:
+    return CREATED
 
 
 def _mkosi(argv: Any) -> Any:
@@ -92,8 +97,10 @@ def _attested(
 
 @pytest.fixture
 def baked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """A baked build whose default variant has a real (not placeholder) policy."""
+    """A baked build whose default variant has a real (not placeholder) policy; records
+    are judged at ``CREATED`` (the evidence's wall clock pinned)."""
     monkeypatch.setenv("SOURCE_DATE_EPOCH", str(EPOCH))
+    monkeypatch.setattr(importlib.import_module("tundravm.evidence"), "_wall_clock", _at_created)
     recipe = _recipe()
     build = tmp_path / "build"
     locked = lock(recipe)
@@ -185,10 +192,60 @@ def test_max_age_widens_the_window_at_evidence_and_at_verify(
     build, policy = baked
     record = _attested(policy, tmp_path / "att.json", at=CREATED - timedelta(days=2))
     found = _evidence(build, record, require=("attested",), max_age=timedelta(days=3))
-    assert found.passed and found.index["attestation"] == {"max_age_seconds": 3 * 86400}
+    assert found.passed
+    assert found.index["attestation"] == {
+        "max_age_seconds": 3 * 86400,
+        "evaluated_at": "2023-11-14T22:13:20Z",
+    }
     narrow = _evidence(build, record).write(build / "narrow")
     assert not verify_evidence(narrow, require=("attested",)).passed
     assert verify_evidence(narrow, require=("attested",), max_age=timedelta(days=3)).passed
+
+
+def test_freshness_is_judged_by_the_wall_clock_not_source_date_epoch(
+    baked: tuple[Path, Path], tmp_path: Path
+) -> None:
+    build, policy = baked  # SOURCE_DATE_EPOCH is CREATED, over a year before the clock
+    today = CREATED + timedelta(days=400)
+    fresh = _attested(policy, tmp_path / "fresh.json", at=today - timedelta(hours=1))
+    found = _evidence(build, fresh, require=("attested",), clock=lambda: today)
+    assert found.passed, found.reasons
+    assert found.index["created"] == "2023-11-14T22:13:20Z"
+    assert found.index["attestation"]["evaluated_at"] == "2024-12-18T22:13:20Z"
+    old = _attested(policy, tmp_path / "old.json")  # observed at the old epoch
+    stale = _evidence(build, old, require=("attested",), clock=lambda: today)
+    assert _reasons(stale) == [("incomplete", "attestation-stale", "default/qemu")]
+    directory = found.write(build / "fresh")
+    assert verify_evidence(directory, require=("attested",)).passed  # judged as recorded
+    later = verify_evidence(directory, require=("attested",), now=today + timedelta(days=2))
+    assert ("missing", "attestation-stale", "default/qemu") in _problems(later)
+
+
+def test_attested_needs_every_selected_variant_measured_and_attested(
+    baked: tuple[Path, Path], tmp_path: Path
+) -> None:
+    build, policy = baked  # azure has no policy
+    record = _attested(policy, tmp_path / "att.json")
+    both = ["default", "azure"]
+    found = evidence(_recipe(), build=build, runner=_mkosi, variants=both, attestations=[record])
+    assert found.passed  # not required: notes
+    required = evidence(
+        _recipe(),
+        build=build,
+        runner=_mkosi,
+        variants=both,
+        attestations=[record],
+        require=("attested",),
+    )
+    assert required.verdict == "incomplete"
+    reasons = _reasons(required)
+    assert ("incomplete", "attestation-missing", "azure") in reasons
+    assert ("incomplete", "policy-missing", "azure") in reasons  # attested implies measured
+    assert not any(subject == "default/qemu" for _, _, subject in reasons)
+    plain = found.write(build / "both")
+    problems = _problems(verify_evidence(plain, require=("attested",)))
+    assert ("missing", "attestation-missing", "azure") in problems
+    assert ("missing", "policy-missing", "azure") in problems
 
 
 def test_a_record_against_another_policy_is_a_policy_mismatch(
@@ -283,6 +340,10 @@ def test_cli_evidence_bundles_records_and_verify_requires_attested(
     code, _ = run_main(*argv, "--attestation", str(record), "--require", "attested")
     assert code == 0
     assert run_main("verify", str(build / "evidence"), "--require", "attested")[0] == 0
+    later = ("verify", str(build / "evidence"), "--require", "attested", "--now")
+    assert run_main(*later, "2030-01-01T00:00:00Z")[0] == 1  # judged then: stale
+    with pytest.raises(SystemExit):
+        run_main(*later, "soon")
     code, _ = run_main(*argv, "--require", "attested")
     assert code == 1
     with pytest.raises(SystemExit):
@@ -293,6 +354,7 @@ def test_release_bundles_records_and_a_resume_inherits_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SOURCE_DATE_EPOCH", str(EPOCH))
+    monkeypatch.setattr(importlib.import_module("tundravm.evidence"), "_wall_clock", _at_created)
     recipe = _recipe()
     lockfile = tmp_path / "build" / "tundravm.lock"
     write_lock(lock(recipe), lockfile)
@@ -313,7 +375,8 @@ def test_release_bundles_records_and_a_resume_inherits_them(
     first = cut()
     root = first.path
     assert not first.passed  # simulated: no policy is measured, so nothing can be attested
-    assert ("attestation-missing", None) in {(r["code"], r["subject"]) for r in first.reasons}
+    codes = {(r["code"], r["subject"]) for r in first.reasons}
+    assert {("attestation-missing", "default"), ("policy-missing", "default")} <= codes
     (artifact,) = [a for a in read_artifacts(tmp_path / "build") if a.variant == "default"]
     policy = _write_policy(tmp_path / "build" / "default" / "policy.json", artifact.sha256)
     record = _attested(policy, tmp_path / "att.json", at=CREATED - timedelta(days=2))

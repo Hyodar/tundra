@@ -253,7 +253,11 @@ class SecretDelivery(Module):
             )
 
     def init_script(self) -> str:
-        """The ``secrets`` runtime-init step: ``secret-delivery setup`` on the config."""
+        """The ``secrets`` runtime-init step: ``secret-delivery setup`` on the config.
+
+        It receives the SSH key and writes the configuration; an external
+        provider's targets are waited for by its own ``delivery-<name>`` step.
+        """
         return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
 
     def source_spec(self) -> SourceBuild:

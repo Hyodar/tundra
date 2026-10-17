@@ -63,7 +63,11 @@ def test_disk_and_external_secret(tmp_path: Path) -> None:
     (disk,) = [item for item in image.resolved.items if isinstance(item, Disk)]
     assert (disk.name, disk.device, disk.mount) == ("data", "/dev/vdb", "/persistent")
     (secrets,) = [item for item in image.resolved.items if isinstance(item, Secrets)]
-    assert secrets.delivery == ExternalDelivery("vault-agent", supports=("file",))
+    token = "/run/hello/api-token"
+    assert secrets.delivery == ExternalDelivery("vault-agent", supports=("file",), ready_path=token)
+    after = " ".join(image.service("hello").values("Unit", "After"))
+    assert "runtime-init-delivery-vault-agent.service" in after
+    assert "runtime-init-secrets.service" not in after  # not the SSH-key step
     assert secrets.port == 8081  # the app has 8080
     environment = image.service("hello").environment
     assert environment == {
@@ -72,6 +76,17 @@ def test_disk_and_external_secret(tmp_path: Path) -> None:
     }
     assert "DISK_DEVICE = " in (tmp_path / "hello.py").read_text(encoding="utf-8")
     assert "8 passed" in generated_tests(tmp_path)
+    ruff_clean(tmp_path)
+
+
+def test_external_secret_without_a_disk_waits_for_its_delivery(tmp_path: Path) -> None:
+    recipe = scaffold(tmp_path, *SOURCE, "--secret", "token", "--delivery", "external:writer")
+    image = plan(recipe)
+    after = " ".join(image.service("hello").values("Unit", "After"))
+    assert after.startswith("runtime-init-delivery-writer.service")
+    text = (tmp_path / "hello.py").read_text(encoding="utf-8")
+    assert "YOU PROVIDE IT" in text and "needs=(delivery.ready,)" in text
+    assert "7 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
 
 

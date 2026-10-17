@@ -639,7 +639,7 @@ def _file_changes(
     new = {str(row["path"]): row for row in rows}
     found: list[Change] = []
     old_digest = manifest.get("variant_digest")
-    new_digest = tree_rows_digest((name, row) for row in rows)
+    new_digest = tree_rows_digest(((name, row) for row in rows), tree.layout)
     if old_digest != new_digest:
         found.append(
             Change(
