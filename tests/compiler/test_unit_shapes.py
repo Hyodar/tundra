@@ -89,7 +89,15 @@ def test_every_renders_monotonic_timers() -> None:
 
 
 def test_socket_activated_service() -> None:
-    service = Service("app", "/usr/bin/app", socket=Listen("/run/app.sock", group="app"))
+    service = Service(
+        "app",
+        "/usr/bin/app",
+        user="app",
+        socket=Listen("/run/app.sock", group="app"),
+        type=None,
+        restart="no",
+        hardening=Hardening.none(),
+    )
     tree = _tree(User("app"), service)
     assert tree.unit("app.socket") == (
         "[Unit]\nDescription=app\n\n"
@@ -98,7 +106,7 @@ def test_socket_activated_service() -> None:
     )
     assert tree.unit("app") == (
         "[Unit]\nDescription=app\nAfter=app.socket\nRequires=app.socket\n\n"
-        "[Service]\nType=simple\nExecStart=/usr/bin/app\n"
+        "[Service]\nType=simple\nExecStart=/usr/bin/app\nUser=app\n"
     )
     script = _postinst(tree)
     assert "systemctl enable app.socket" in script

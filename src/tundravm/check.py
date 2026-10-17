@@ -29,7 +29,7 @@ from .models import ProfileState, ServiceSpec, unit_name
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
-    from .declarative.model import Recipe
+    from .declarative.model import Recipe, Service, Task
 
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
 
@@ -183,7 +183,10 @@ def _rule_service_user_missing(
             continue
         if re.search(rf"\b(useradd|adduser)\b[^\n;&|]*\b{re.escape(user)}\b", commands):
             continue
-        hint = f"Declare User({user!r}) in variant {profile_name!r}, or drop user= to run as root."
+        hint = (
+            f"Declare User({user!r}) in variant {profile_name!r}, or drop user= to run as "
+            "a system user named after the service."
+        )
         if (
             default is not None
             and profile_name != default.name
@@ -755,12 +758,13 @@ def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> I
 def unit_declaration_check(
     recipe: Recipe, *, variants: Sequence[str] | None = None
 ) -> list[Diagnostic]:
-    """``unit-raw``, ``unit-as-file`` and ``unit-extra`` findings of *recipe*'s own declarations.
+    """``unit-raw``, ``unit-as-file``, ``unit-extra``, ``hardening-*`` and
+    ``service-runs-as-root`` findings of *recipe*'s own declarations.
 
     The first two are style codes, so a ``nethermind-v1`` recipe (historical unit bytes) has
-    none; ``unit-extra`` (the ``extra=`` escape hatch) is always reported.
+    none; the others describe typed units and are always reported.
     """
-    from .declarative.model import File, Service, Unit
+    from .declarative.model import File, Service, Task, Unit
 
     style = recipe.mkosi.dialect != "nethermind-v1"
     selected = set(variants) if variants is not None else {v.name for v in recipe.variants}
@@ -769,6 +773,8 @@ def unit_declaration_check(
     found: list[Diagnostic] = []
     for variant, items in groups:
         for item in _own_declarations(items):
+            if isinstance(item, (Service, Task)):
+                found += [_located(d, item) for d in _typed_unit_findings(item, variant)]
             if isinstance(item, Service) and item.extra:
                 found.append(_located(_unit_extra(unit_name(item.name), item.extra, variant), item))
             elif isinstance(item, Unit) and item.dropin is not None and item.dropin.extra:
@@ -782,6 +788,56 @@ def unit_declaration_check(
             elif isinstance(item, File) and is_unit_path(_norm(item.path)):
                 found.append(_located(_unit_as_file(item.path, variant), item))
     return found
+
+
+def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnostic]:
+    """``service-runs-as-root``, ``hardening-disabled`` and ``hardening-relaxed`` of a typed
+    ``Service``/``Task``."""
+    from ._units.render import STRICT_HARDENING
+    from .declarative.model import Service as TypedService
+    from .declarative.systemd import Hardening
+
+    name = unit_name(item.name)
+    if item.user == "root":
+        yield Diagnostic(
+            code="service-runs-as-root",
+            severity="info",
+            message=f"unit {name!r} runs as root (user='root')",
+            subject=name,
+            variant=variant,
+            hint="Drop user= to run as a system user named after the unit (declared for you); "
+            "grant one capability with Hardening.strict(capabilities=(...)) if it needs one.",
+        )
+    sandbox = item.sandbox if isinstance(item, TypedService) else item.hardening
+    entries = STRICT_HARDENING if sandbox is None else sandbox.entries()
+    if not entries:
+        yield Diagnostic(
+            code="hardening-disabled",
+            severity="warning",
+            message=f"unit {name!r} runs without a sandbox (Hardening.none())",
+            subject=name,
+            variant=variant,
+            hint="Use hardening=Hardening.relaxed() or relax one knob of Hardening.strict(...) "
+            "(jit=True, devices=(...), capabilities=(...)) instead of dropping them all.",
+        )
+        return
+    keys = {key for key, _ in entries}
+    if "DevicePolicy" in keys:
+        keys.add("PrivateDevices")
+    strict = dict(Hardening.strict().entries())
+    dropped = [k for k in strict if k not in keys or (k, strict[k]) not in entries]
+    dropped = [k for k in dropped if not (k == "PrivateDevices" and "DevicePolicy" in keys)]
+    if dropped:
+        legacy = " (security= is deprecated: use hardening=)" if sandbox is None else ""
+        yield Diagnostic(
+            code="hardening-relaxed",
+            severity="info",
+            message=f"unit {name!r} relaxes the strict sandbox: {', '.join(dropped)}{legacy}",
+            subject=name,
+            variant=variant,
+            hint="Each relaxed knob widens what a compromised process can do; keep the ones "
+            "the program does not need (docs/api.md: Hardening).",
+        )
 
 
 def _unit_extra(name: str, extra: Mapping[str, Mapping[str, object]], variant: str) -> Diagnostic:

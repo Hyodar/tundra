@@ -30,7 +30,7 @@ git add uv.lock      # committed, the generated workflow installs exactly it (`u
 
 ```python
 # node.py
-from tundravm import Debian, File, Package, Recipe, Service, Unit, User, Variant
+from tundravm import Debian, File, Package, Recipe, Service, Unit, Variant
 from tundravm.backends import LimaMkosiBackend
 
 recipe = Recipe(
@@ -39,8 +39,8 @@ recipe = Recipe(
     items=(
         Package("curl"),
         File.text("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
-        User("app", shell="/bin/false"),
-        Service("app", "/usr/bin/app", user="app", restart="on-failure"),
+        # Runs as system user "app", restarts on failure, sandboxed by Hardening.strict().
+        Service("app", "/usr/bin/app"),
         Unit("ssh.socket", enabled=False, masked=True),
     ),
     variants=(

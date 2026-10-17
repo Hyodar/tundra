@@ -27,6 +27,7 @@ from tundravm.declarative import (
     Recipe,
     Resources,
     Service,
+    Unit,
     User,
     Variant,
 )
@@ -40,14 +41,12 @@ app = Fragment(
     "app",
     items=(
         User("app", home="/var/lib/app", groups=("tdx",)),
+        # requires= also orders the app After= the socket; state= is /var/lib/app.
         Service(
             "app",
             "/usr/bin/app --tdxs-socket /var/tdxs.sock",
-            user="app",
-            after=("tdxs.socket",),
-            requires=("tdxs.socket",),
-            restart="on-failure",
-            wanted_by="minimal.target",
+            requires=(Unit.ref("tdxs.socket"),),
+            state="app",
         ),
     ),
 )

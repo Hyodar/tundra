@@ -80,7 +80,7 @@ recipe = Recipe(
 
 backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 '''
-QEMU_BASIC_DIGEST = "e5b76ccba49652aaa80470a44e57c8c9acb94562c8d96f3cc0513b17830f1e1a"
+QEMU_BASIC_DIGEST = "1f7045885417743551a5665de536fc4c8bbea5525cc98863994706f2550b95ab"
 GO_SCRIPT = (
     'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
 )

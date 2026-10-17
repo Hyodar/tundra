@@ -98,6 +98,8 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `clean` | Removes the parts `--what LIST` names of the build directory (`--build`, default: the table's `build`, else `build`): `sources`, `tree`, `artifacts`, `evidence`, `state`, `reproduce`, or `all`; the lockfile only when `--remove-lockfile` names it; never a release directory. Without `--what` it lists what `--what all` would remove (see [Project status](#project-status)). | a path could not be removed, or a part held a release |
 | `config` | Prints the `recipe`, `tree`, `build`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
 | `import` | Generates a recipe module from an existing mkosi tree (`TREE`: one variant directory or a directory of them): `--output FILE` writes it (`--force` overwrites), else it goes to stdout; `--name`, `--dialect`, `--format text\|json`. Reports the declared/verbatim coverage, notes for what it skipped or could not map, and whether the recipe compiles back to `TREE` (see [Import](#import)). | |
+| `units convert` | Prints the typed declarations (`Service`, `Task`, `Mount`, `Unit(dropin=...)`) unit `FILE`s convert to, pairing sockets and timers with their services: `--mode exact\|semantic`, `--name`, `--adopt-defaults` (see [Units](#units)). | |
+| `units render` | Prints the unit text (and drop-ins) one `--variant` of `RECIPE` generates for `--unit NAME` (see [Units](#units)). | |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
 
 `inspect`, `lint`, `compile`, `diff`, `fetch` and `bake` read `build/tundravm.lock` when it exists and apply its source pins; `--lockfile PATH`, or the `lockfile` of a [`[tool.tundravm]` table](#project-configuration), names another one. `ci` needs the lockfile and loads it once for all three steps; `status` reports on it.
@@ -359,6 +361,97 @@ recipe = Recipe(
 
 What the template expressed as an `App` composite and a `DevTools` fragment comes back as the declarations they expand to: the import recovers what the tree holds, not how the recipe was factored.
 
+## Units
+
+`tundravm units convert FILE...` prints the typed declaration each unit file converts to, so nobody translates unit text into fields by hand. `x.socket` + `x.service` become `Service(socket=Listen(...))`, `x.timer` + a oneshot `x.service` a scheduled `Task`, a `.mount` a `Mount`, and `DIR.d/NAME.conf` a `Unit(dropin=DropIn(...))`. Every field whose default would render differently is written out (`hardening=Hardening.none()`, `restart="no"`, `needs=()` for a unit that does not wait for runtime-init), so the declaration means what the text means. Each candidate is checked by rendering it through the same lowering a recipe uses:
+
+- `--mode exact` (default): typed only when the declaration renders the file byte for byte; otherwise the file stays `Unit(name, text)` and the header comment lists the directives that blocked it (a directive no field owns, a value the renderer spells differently, or the file's layout).
+- `--mode semantic`: typed when every section holds the same directives and values, order, comments and continuation lines aside; directives no field owns go into `extra=` and the header names them.
+
+```console
+$ tundravm units convert backup.service backup.timer web.service
+# backup.service + backup.timer: Task (exact)
+# web.service: Service (exact)
+from tundravm import Calendar, Hardening, Service, Task
+
+unit = Task(
+    "backup",
+    "/usr/bin/backup --all",
+    schedule=Calendar("daily"),
+    user="backup",
+    timeout=None,
+    needs=(),
+    hardening=Hardening.none(),
+)
+unit_2 = Service(
+    "web",
+    "/usr/bin/web --port 8080",
+    description="Web",
+    user="web",
+    wanted_by="multi-user.target",
+    type="simple",
+    restart="no",
+    needs=(),
+    hardening=Hardening.none(),
+)
+```
+
+`--name NAME` sets the unit file name of a single FILE. `--adopt-defaults` also prints each declaration without its opt-outs (the fields the text had no directive for) and the unit lines the defaults add, which is the review step for moving a hand-written unit onto the defaults:
+
+```console
+$ tundravm units convert web.service --adopt-defaults
+...
+# web.service with the defaults (hardening, needs, restart, restart_sec):
+from tundravm import Service
+
+adopted = Service(
+    "web",
+    "/usr/bin/web --port 8080",
+    description="Web",
+    user="web",
+    wanted_by="multi-user.target",
+    type="simple",
+)
+--- web.service (converted)
++++ web.service (defaults)
+@@ -1,10 +1,36 @@
+ [Unit]
+ Description=Web
++After=runtime-init.service
++Requires=runtime-init.service
+ ...
++Restart=on-failure
++RestartSec=5s
++ProtectSystem=strict
+ ...
+```
+
+`tundravm units render RECIPE [--variant NAME] --unit NAME` prints the unit text (and drop-ins) a variant generates, so authors can read the systemd syntax of a `Service` without compiling a tree:
+
+```console
+$ tundravm units render service.py --variant default --unit app.service
+# default/mkosi.extra/usr/lib/systemd/system/app.service
+[Unit]
+Description=app 0.1.0
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/app --config /etc/app/app.conf
+User=app
+WorkingDirectory=/var/lib/app
+StateDirectory=app
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+...
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
+```
+
+`tundravm import` uses the exact conversion for the units of an imported tree: a unit (or socket/timer pair) becomes a typed declaration only when it renders the same bytes and enables the same units, so the imported recipe still compiles back to the tree. `Unit.parse(text, name=..., mode=...)` is the same conversion for one unit in Python.
+
 ## Recipe files
 
 `RECIPE` is a Python file. The CLI imports it under a private module name (so an `if __name__ == "__main__":` block does not run) with the file's directory, the working directory and every `--pythonpath DIR` importable, so sibling helper modules resolve.
@@ -505,11 +598,11 @@ A finding about a declaration, fragment or variant change also names the recipe 
 $ tundravm lint app.py
 error service-user-missing [default] app: service 'app' runs as user 'ghost', which is never created
     at: app.py:3
-    hint: Declare User('ghost') in variant 'default', or drop user= to run as root.
+    hint: Declare User('ghost') in variant 'default', or drop user= to run as a system user named after the service.
 1 error, 0 warnings, 0 infos
 [exit 1]
 $ tundravm lint app.py --format github
-::error file=app.py,line=3,title=service-user-missing::[default] app: service 'app' runs as user 'ghost', which is never created (Declare User('ghost') in variant 'default', or drop user= to run as root.)
+::error file=app.py,line=3,title=service-user-missing::[default] app: service 'app' runs as user 'ghost', which is never created (Declare User('ghost') in variant 'default', or drop user= to run as a system user named after the service.)
 1 error, 0 warnings, 0 infos
 [exit 1]
 ```

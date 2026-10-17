@@ -58,20 +58,8 @@ Build:    tundravm bake $filename --build build
 
 '''
 
-_MINIMAL = r'''from tundravm import Debian, File, Package, Recipe, Unit, Variant
+_MINIMAL = r"""from tundravm import Debian, File, Package, Recipe, Task, Variant
 $backend_import
-
-HELLO_UNIT = """\
-[Unit]
-Description=Print the $title banner
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/cat /etc/motd
-
-[Install]
-WantedBy=minimal.target
-"""
 
 backend = $backend_expr
 
@@ -82,11 +70,12 @@ recipe = Recipe(
     items=(
         Package("ca-certificates"),
         File.text("/etc/motd", "$title\n"),
-        Unit("hello.service", HELLO_UNIT, enabled=True),
+        # A boot task: runs once per boot as its own system user, sandboxed.
+        Task("hello", "/usr/bin/cat /etc/motd", description="Print the $title banner"),
     ),
     variants=(Variant("default", outputs=("qemu",)),),
 )
-'''
+"""
 
 _APP_IMPORTS = {
     "service": (
@@ -98,7 +87,6 @@ _APP_IMPORTS = {
         "    Recipe,\n"
         "    Resolved,\n"
         "    Service,\n"
-        "    User,\n"
         "    Variant,\n"
         "    component,\n"
         ")\n"
@@ -108,7 +96,6 @@ _APP_IMPORTS = {
         "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
-        "    RuntimeDirectory,\n"
         ")\n"
     ),
     "cloud": (
@@ -120,7 +107,6 @@ _APP_IMPORTS = {
         "    Recipe,\n"
         "    Resolved,\n"
         "    Service,\n"
-        "    User,\n"
         "    Variant,\n"
         "    component,\n"
         ")\n"
@@ -131,7 +117,6 @@ _APP_IMPORTS = {
         "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
-        "    RuntimeDirectory,\n"
         ")\n"
     ),
     "prover": (
@@ -147,7 +132,6 @@ _APP_IMPORTS = {
         "    RuntimeTools,\n"
         "    Secrets,\n"
         "    Service,\n"
-        "    User,\n"
         "    Variant,\n"
         "    component,\n"
         ")\n"
@@ -159,7 +143,6 @@ _APP_IMPORTS = {
         "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
-        "    RuntimeDirectory,\n"
         "    Tdxs,\n"
         ")\n"
     ),
@@ -172,7 +155,7 @@ $constants
 
 @component
 class App(Composite):
-    """The app: its account, config file, a first-boot step, the service and a lint rule.
+    """The app: its config file, the service and a lint rule.
 
     Ship ``/usr/bin/app`` with a ``GoBinary``, a ``Build`` or a ``Package``. Fragment name: ``app``.
     """
@@ -186,19 +169,16 @@ class App(Composite):
         return HttpEndpoint("127.0.0.1", self.port, provider=self)
 
     def compose(self) -> Iterator[Declaration]:
-        yield User("app", home="/var/lib/app")
         config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
         yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
-        # A boot step: Service waits for every runtime-init step unless given needs=.
-        yield RuntimeDirectory("/var/lib/app", owner="app", group="app", name="app-state")
+        # Runs as system user "app" (declared for you), sandboxed by Hardening.strict(),
+        # restarted on failure; state="app" is /var/lib/app, made by systemd, owned by
+        # app and its working directory. It waits for every runtime-init step (needs=).
         yield Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",
             description=f"app {self.version}",
-            user="app",
-            working_dir="/var/lib/app",
-            restart="on-failure",
-            wanted_by="minimal.target",
+            state="app",
         )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:

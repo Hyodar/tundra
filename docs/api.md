@@ -144,31 +144,32 @@ Mapping fields (`env`, `limits`, `variables`, `keep_paths_by_variant`, `Tdxs.exp
 | `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `needs: Sequence[Ready] = ()`, `allow_secret=False`, `dropin: DropIn \| None = None`. `Unit.from_file(name, source: Path, *, enabled=None, masked=None, needs=(), allow_secret=False)` ships the unit file *source* (UTF-8) | unit name |
 | `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only fields (table below) | unit name |
 
-`Service` fields, each with its default and the directive it writes (a field at its default writes nothing unless the table says otherwise; these defaults are today's and render today's bytes):
+`Service` fields, each with its default and the directive it writes (a field at its default writes nothing unless the table says otherwise). The defaults are secure and opinionated: a bare `Service("app", "/usr/bin/app")` renders `Type=exec`, `User=app` (a system user declared for you), `Restart=on-failure`, `RestartSec=5s` and the `Hardening.strict()` block; `type=None`, `restart="no"`, `restart_sec=None`, `user="root"` and `hardening=Hardening.none()` opt out (the last two are linted):
 
 | Field | Default | Renders |
 |---|---|---|
 | `description` | `None` (the name) | `Description=` |
-| `type` | `None` (`Type=simple`) | `Type=`: `"simple"`, `"exec"`, `"notify"`, `"oneshot"`, `"forking"` |
+| `type` | `"exec"` | `Type=`: `"simple"`, `"exec"`, `"notify"`, `"oneshot"`, `"forking"`; `None` writes `Type=simple` |
+| `remain_after_exit` | `False` | `RemainAfterExit=yes` (for a oneshot; `Task` is the usual spelling) |
 | `exec_start_pre`, `exec_start_post` | `()` | one `ExecStartPre=`/`ExecStartPost=` per command line |
 | `exec_reload` | `None` | `ExecReload=` |
-| `user` | `None` | `User=`; `Dynamic()` renders `DynamicUser=yes` |
+| `user` | `None` (a system user named after the service) | `User=`; `None` declares `User(<name>)` (system, `/usr/sbin/nologin`, no home) unless the variant declares it; `Dynamic()` renders `DynamicUser=yes`; `"root"` is linted `service-runs-as-root` |
 | `group`, `groups` | `None`, `()` | `Group=`, `SupplementaryGroups=` |
-| `working_dir` | `None` | `WorkingDirectory=` |
+| `working_dir` | `None` (`/var/lib/<state>` when `state` is set) | `WorkingDirectory=` |
 | `env_file` | `None` | `EnvironmentFile=`, one line per path (a path or a list; a `-` prefix makes it optional) |
 | `env` | `{}` | one `Environment=` per key, sorted |
 | `credentials` | `{}` | `LoadCredential=<name>:<path>` per name, sorted; a value is a path or a `SecretFile` (its `path`); the program reads `$CREDENTIALS_DIRECTORY/<name>` |
 | `state`, `logs`, `runtime`, `cache` | `None` | `StateDirectory=` (`/var/lib/<state>`), `LogsDirectory=` (`/var/log/`), `RuntimeDirectory=` (`/run/`), `CacheDirectory=` (`/var/cache/`): systemd creates them owned by the service user, writable under any `ProtectSystem=` |
 | `write_paths` | `()` | `ReadWritePaths=` |
-| `restart` | `"no"` | `Restart=`: `"always"`, `"on-failure"`, `"on-abnormal"`, `"no"` |
-| `restart_sec` | `"5"` | `RestartSec=` when `restart` is set; `None` drops the line |
+| `restart` | `"on-failure"` | `Restart=`: `"always"`, `"on-failure"`, `"on-abnormal"`, `"no"` |
+| `restart_sec` | `"5s"` | `RestartSec=` when `restart` is set; `None` drops the line |
 | `limits` | `{}` | `Limit<NAME>=` per resource (`{"NOFILE": 1048576}`) |
 | `kill_mode` | `None` | `KillMode=` |
 | `timeout_start`, `timeout_stop` | `None` | `TimeoutStartSec=`, `TimeoutStopSec=` (systemd time spans) |
-| `hardening` | `None` (from `security`) | the `Hardening` profile's directives (below) |
-| `security` | `"default"` | `"strict"`: the nine historical sandbox lines; refused together with `hardening` |
-| `after`, `wants`, `before`, `part_of`, `conflicts` | `()` | `After=`, `Wants=`, `Before=`, `PartOf=`, `Conflicts=`; each entry a unit name or a ref (`Service.ref("db")`, `Unit.ref("tdxs.socket")`) |
-| `requires`, `binds_to` | `()` | `Requires=`/`BindsTo=` **and** `After=` the same units (ordering follows the dependency) |
+| `hardening` | `None` (`Hardening.strict()`, unless `security` is set) | the `Hardening` profile's directives (below); `Hardening.none()` is linted `hardening-disabled`, a relaxed profile `hardening-relaxed` |
+| `security` | `None` | deprecated, use `hardening`: `"strict"` writes the nine historical sandbox lines, `"default"`/`"none"` mean `Hardening.none()`; refused together with `hardening` |
+| `after`, `before`, `part_of`, `conflicts` | `()` | `After=`, `Before=`, `PartOf=`, `Conflicts=`; each entry a unit name or a ref (`Service.ref("db")`, `Unit.ref("tdxs.socket")`) |
+| `requires`, `wants`, `binds_to` | `()` | `Requires=`/`Wants=`/`BindsTo=` **and** `After=` the same units (ordering follows the dependency) |
 | `needs` | `(RUNTIME_INIT,)` | `After=`/`Requires=` the runtime-init units it waits for, first |
 | `enabled` | `True` | `[Install] WantedBy=` plus the build-time enable; `False` renders no `[Install]` |
 | `wanted_by` | `None` (`minimal.target`) | `WantedBy=` |
@@ -670,6 +671,9 @@ Unit text (every unit and drop-in a variant ships, parsed with systemd 257's dir
 | `unit-raw` | info | A `Unit` ships hand-written `.service` text that a `Service(...)` declaration renders (reported on the recipe's own declarations, like the raw spellings above) |
 | `unit-as-file` | info | A `File` ships a unit under a systemd directory; `Unit(name, text)` gives it `enabled=`, `needs=` and the unit lint by name |
 | `unit-extra` | info | A `Service` or `DropIn` uses the `extra=` escape hatch; the finding names the keys so the hatch stays visible in review (reported under `nethermind-v1` too) |
+| `hardening-disabled` | warning | A `Service` or `Task` runs with `hardening=Hardening.none()` (or the deprecated `security="none"`/`"default"`): no sandbox at all |
+| `hardening-relaxed` | info | A `Service` or `Task` drops knobs of `Hardening.strict()` (`Hardening.relaxed()`, an override such as `jit=True`, or the deprecated `security="strict"`); the finding lists them |
+| `service-runs-as-root` | info | A `Service` or `Task` sets `user="root"` instead of running as its own system user |
 
 Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`, `lock-removed` (each with the section as `subject`), and `lock-stale` when every section matches but the whole-recipe digest does not. Host tools (from `doctor`): `tool-missing`.
 

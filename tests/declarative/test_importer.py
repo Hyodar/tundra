@@ -197,14 +197,17 @@ def test_pinned_nethermind_v1_build_comes_back_at_its_commit(tmp_path: Path) -> 
 
 
 def test_service_template_imports_first_class_declarations(tmp_path: Path) -> None:
-    imported = import_tree(_template_tree(tmp_path, "service"))
+    tree = _template_tree(tmp_path, "service")
+    out = tmp_path / "imported.py"
+    imported = import_tree(tree, output=out)
     kinds = {type(item).__name__ for item in imported.recipe.items}
     assert {"Service", "User", "File", "Package"} <= kinds
-    # Per-step runtime-init (current dialect) imports as its files and units, verbatim.
-    units = {item.name for item in imported.recipe.items if isinstance(item, Unit)}
-    assert {"runtime-init.service", "runtime-init-app-state.service"} <= units
+    # The template's only unit is its typed app service: no unit text comes back verbatim.
+    assert not [item for item in imported.recipe.items if isinstance(item, Unit)]
     assert [v.name for v in imported.recipe.variants] == ["default", "dev"]
     assert "parent=None" not in imported.recipe_source
+    out.write_text(imported.recipe_source, encoding="utf-8")
+    assert diff(compile(load(out)), tree) == ""
 
 
 def test_overlay_variants_import_as_edits_and_removals(tmp_path: Path) -> None:

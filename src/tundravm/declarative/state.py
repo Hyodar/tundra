@@ -40,6 +40,7 @@ from tundravm._source import Install as SourceInstall
 from tundravm._units.render import activation_unit, dropin_unit, render
 from tundravm.errors import ValidationError
 from tundravm.models import (
+    LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP,
     NETWORK_SETUP_UNIT,
     VALID_PHASES,
     CommandSpec,
@@ -196,7 +197,8 @@ class StateBuilder:
 
     def default_debloat(self, name: str) -> None:
         """Give standalone profile *name* the default debloat configuration."""
-        _set_debloat(self.state.ensure_profile(name), _debloat_config())
+        keep = LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP if self.historical else None
+        _set_debloat(self.state.ensure_profile(name), _debloat_config(systemd_units_keep=keep))
 
     def targets(
         self, name: str, targets: Sequence[Target], *, inherited: Sequence[Target] | None
@@ -239,6 +241,9 @@ class StateBuilder:
         units are written again so they wait for runtime-init.
         """
         profile = self.state.ensure_profile(name)
+        if self.historical and not profile.debloat_explicit:  # the pinned nethermind-v1 list
+            keep = LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP
+            profile.debloat = replace(profile.debloat, systemd_units_keep=keep)
         steps = {step for step, _, _ in step_nodes(full)}
         hooks = iter(order_hooks([item for item in items if isinstance(item, Hook)]))
         units = declared_units(full)
@@ -265,7 +270,7 @@ class StateBuilder:
                 case Unit():
                     _unit(profile, item, steps=steps, per_step=not self.historical, units=units)
                 case Service():
-                    _service(profile, item, units)
+                    _service(profile, item, units, users=users, historical=self.historical)
                     _finish_service(profile, item)
                 case Task():
                     _task(profile, item, users=users, historical=self.historical, units=units)
@@ -296,7 +301,7 @@ class StateBuilder:
                         )
                     )
                 case Debloat():
-                    _set_debloat(profile, _debloat(item))
+                    _set_debloat(profile, _debloat(item, historical=self.historical))
                 case Key() | Disk() | Secrets():
                     if not runtime_done:
                         self._runtime_tools(name, profile, items, dict(builtin_steps(full)))
@@ -309,7 +314,7 @@ class StateBuilder:
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
             if isinstance(unit, Service):
-                _service(profile, unit, units)
+                _service(profile, unit, units, users={unit.default_user})
                 _finish_service(profile, unit)
                 continue
             if isinstance(unit, Task):
@@ -532,16 +537,18 @@ def _debloat_config(
     )
 
 
-def _debloat(item: Debloat) -> DebloatConfig:
+def _debloat(item: Debloat, *, historical: bool = False) -> DebloatConfig:
+    """*item*'s config; ``nethermind-v1`` keeps its pinned unit list by default."""
     if not item.enabled:
         return DebloatConfig(enabled=False)
+    legacy = LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP if historical else None
     return _debloat_config(
         paths_remove=item.remove,
         paths_skip=item.keep_paths,
         extra_remove_paths=item.extra_remove,
         paths_skip_for_profiles={k: tuple(v) for k, v in item.keep_paths_by_variant.items()},
         systemd_minimize=item.minimize_systemd,
-        systemd_units_keep=item.keep_units,
+        systemd_units_keep=item.keep_units or legacy,
         extra_keep_units=item.keep_units_extra,
         systemd_bins_keep=item.keep_binaries,
     )
@@ -860,7 +867,15 @@ def _unit_state(profile: ProfileState, action: UnitAction, unit: str) -> None:
         profile.unit_states.append(spec)
 
 
-def _service(profile: ProfileState, service: Service, units: Collection[str] | None = None) -> None:
+def _service(
+    profile: ProfileState,
+    service: Service,
+    units: Collection[str] | None = None,
+    *,
+    users: Collection[str] = (),
+    historical: bool = False,
+) -> None:
+    """Lower *service*; ``user=None`` declares its system user unless *users* has it."""
     name = service.name
     for key, value in service.env.items():
         if not _ENV_KEY.fullmatch(key):
@@ -881,6 +896,12 @@ def _service(profile: ProfileState, service: Service, units: Collection[str] | N
         )
     command = service.exec_start
     fields = _unit_fields(name, service, units)
+    if service.user is None:
+        fields["user"] = _system_user(profile, service.default_user, users, historical)
+    if service.state and not service.working_dir:
+        fields["working_dir"] = f"/var/lib/{service.state}"
+    sandbox = service.sandbox
+    fields["hardening"] = None if sandbox is None else sandbox.entries()
     restart_sec = service.restart_sec
     profile.services.append(
         ServiceSpec(
@@ -888,9 +909,10 @@ def _service(profile: ProfileState, service: Service, units: Collection[str] | N
             command=tuple(shlex.split(command)) if isinstance(command, str) else tuple(command),
             restart=service.restart,
             enabled=service.enabled,
-            security_profile=service.security,
+            security_profile="strict" if sandbox is None else "default",
             wanted_by=service.wanted_by or None,
             type=service.type,
+            remain_after_exit=service.remain_after_exit,
             restart_sec=None if restart_sec == "5" else restart_sec or "",
             **fields,  # type: ignore[arg-type]
         )
@@ -903,7 +925,7 @@ def _unit_fields(
     """The ``ServiceSpec`` fields ``Service`` and ``DropIn`` share, lowered.
 
     Relation refs become unit names (one no declaration in the variant renders is
-    ``unit-ref-undefined``); ``requires``/``binds_to`` also order ``After=``.
+    ``unit-ref-undefined``); ``requires``/``wants``/``binds_to`` also order ``After=``.
     """
     rel: dict[str, tuple[str, ...]] = {}
     for what in ("after", "requires", "wants", "before", "part_of", "binds_to", "conflicts"):
@@ -918,7 +940,9 @@ def _unit_fields(
                 )
             names.append(unit)
         rel[what] = tuple(dict.fromkeys(names))
-    rel["after"] = tuple(dict.fromkeys((*rel["after"], *rel["requires"], *rel["binds_to"])))
+    rel["after"] = tuple(
+        dict.fromkeys((*rel["after"], *rel["requires"], *rel["wants"], *rel["binds_to"]))
+    )
     files = (decl.env_file,) if isinstance(decl.env_file, str) else tuple(decl.env_file or ())
     pre = decl.exec_start_pre
     return {
@@ -1257,6 +1281,18 @@ def _finish_service(profile: ProfileState, service: Service) -> None:
     profile.services[profile.services.index(spec)] = replace(spec, **changes)  # type: ignore[arg-type]
 
 
+def _system_user(profile: ProfileState, name: str, users: Collection[str], historical: bool) -> str:
+    """*name*, declared as a system user (``User(name)``) unless *users* or the profile
+    already has it: what a ``Service``/``Task`` without ``user=`` runs as."""
+    if name not in users and not any(u.name == name for u in profile.users):
+        declared = User(name)
+        if historical:
+            _shell(profile, useradd_line(declared), phase="postinst")
+        else:
+            _user(profile, declared)
+    return name
+
+
 def _task(
     profile: ProfileState,
     task: Task,
@@ -1276,13 +1312,7 @@ def _task(
         )
     user = task.user
     if user is None:
-        user = stem
-        if stem not in users and not any(u.name == stem for u in profile.users):
-            declared = User(stem)
-            if historical:
-                _shell(profile, useradd_line(declared), phase="postinst")
-            else:
-                _user(profile, declared)
+        user = _system_user(profile, stem, users, historical)
     command = task.command
     boot = task.schedule is None
     wants = _targets(name, "wants", task.wants, units)

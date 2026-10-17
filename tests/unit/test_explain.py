@@ -211,7 +211,10 @@ def test_summary_contains_key_strings() -> None:
     assert "/etc/motd  0644  12B  sha256:a948904f2f0f" in text
     assert "/etc/app/env  0644  vars=a,b" in text
     assert "app  uid=1000  gid=1000  shell=/bin/bash  groups=video" in text
-    assert "app  /usr/bin/app --flag  restart=always  after=network-online.target" in text
+    assert (
+        "app  /usr/bin/app --flag  restart=always  type=exec  user=app  after=network-online.target"
+        in text
+    )
     assert "data  4G  /data  ext4" in text
     assert "Hooks:\n" in text
     assert "  postinst (2):\n    echo first\n" in text

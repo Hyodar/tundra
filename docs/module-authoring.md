@@ -111,23 +111,10 @@ from tundravm import (
     Package,
     Resolved,
     Secrets,
-    Unit,
+    Service,
     component,
 )
 from tundravm.declarative.utils import Composite, RuntimeDirectory, RuntimeFile
-
-EXPORTER_UNIT = """\
-[Unit]
-Description=Prometheus node exporter
-
-[Service]
-ExecStart=/usr/bin/prometheus-node-exporter --collector.textfile.directory=/persistent/exporter
-User=prometheus
-Restart=on-failure
-
-[Install]
-WantedBy=minimal.target
-"""
 
 
 def exporter_check(image: Resolved) -> tuple[Diagnostic, ...]:
@@ -164,8 +151,12 @@ class PrometheusExporter(Composite):
         )
         yield directory
         yield marker
-        yield Unit(
-            "prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, needs=[marker.ready]
+        # Replaces the package's unit; runs as its own system user, declared for you.
+        yield Service(
+            "prometheus-node-exporter",
+            "/usr/bin/prometheus-node-exporter --collector.textfile.directory=/persistent/exporter",
+            description="Prometheus node exporter",
+            needs=[marker.ready],
         )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
@@ -222,7 +213,7 @@ Resolving the default variant shows what the fragment contributed:
 >>> resolve(recipe, variant="default").fragments
 ('secure-storage', 'prometheus-exporter')
 >>> [type(item).__name__ for item in resolve(recipe, variant="default").items]
-['Key', 'Disk', 'Secrets', 'Package', 'BootStep', 'BootStep', 'Unit']
+['Key', 'Disk', 'Secrets', 'Package', 'BootStep', 'BootStep', 'Service']
 ```
 
 ## Checks
@@ -272,14 +263,12 @@ class StatusPage(Composite):
                 binary,  # Build("status-page", using=Go(...)), installed at /usr/bin/status-page
                 File.text("/etc/status-page.toml", f"port = {self.port}\n"),
                 File.copy("/usr/share/status-page/index.html", ASSETS.file("assets/index.html")),
-                User("status", shell="/bin/false"),
+                # Runs as system user "status-page" (declared for you), restarted on failure
+                # and sandboxed by Hardening.strict().
                 Service(
                     "status-page",
                     f"{binary.executable} --config /etc/status-page.toml",
-                    user="status",
                     state="status-page",  # /var/lib/status-page, created and owned for the user
-                    restart="on-failure",
-                    wanted_by="minimal.target",
                 ),
             ),
         )

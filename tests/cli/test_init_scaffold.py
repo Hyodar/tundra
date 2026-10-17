@@ -65,7 +65,7 @@ def test_list_templates_prints_each_name_with_a_description(
 
 
 TEMPLATE_INFOS: dict[str, set[str]] = {
-    "minimal": {"unit-raw"},
+    "minimal": set(),
     "service": set(),
     "cloud": set(),
     "prover": {"requires-without-after", "socket-service-started"},

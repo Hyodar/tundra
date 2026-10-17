@@ -16,15 +16,25 @@ BASE = "[Unit]\nDescription=app\n\n[Service]\nType=simple\nExecStart=/usr/bin/ap
 INSTALL = "\n[Install]\nWantedBy=minimal.target\n"
 
 
+LEGACY: dict[str, object] = {"type": None, "restart": "no", "hardening": Hardening.none()}
+"""The pre-step-7 defaults, pinned so each case shows only its own field's lines."""
+
+
 def rendered(**fields: object) -> str:
+    """The unit with *fields* over :data:`LEGACY`; the declared user's ``User=app`` line
+    is left out unless *fields* sets ``user`` (tests/compiler/test_service_defaults.py
+    covers it)."""
     profile = ProfileState(name="default")
-    _service(profile, Service("app", "/usr/bin/app", **fields))  # type: ignore[arg-type]
-    return service_unit(profile.services[0])
+    service = Service("app", "/usr/bin/app", **{**LEGACY, **fields})  # type: ignore[arg-type]
+    _service(profile, service)
+    text = service_unit(profile.services[0])
+    return text if "user" in fields else text.replace("User=app\n", "", 1)
 
 
 def test_historical_fields_render_the_historical_unit() -> None:
     assert rendered() == BASE + INSTALL
-    assert rendered(restart="on-failure") == BASE + "Restart=on-failure\nRestartSec=5\n" + INSTALL
+    expected = BASE + "Restart=on-failure\nRestartSec=5\n" + INSTALL
+    assert rendered(restart="on-failure", restart_sec="5") == expected
 
 
 @pytest.mark.parametrize(
@@ -34,7 +44,7 @@ def test_historical_fields_render_the_historical_unit() -> None:
         ({"groups": ["tdx", "eth"]}, "SupplementaryGroups=tdx eth\n"),
         ({"exec_start_post": ["/usr/bin/ready --ok"]}, "ExecStartPost=/usr/bin/ready --ok\n"),
         ({"exec_reload": "/bin/kill -HUP $MAINPID"}, "ExecReload=/bin/kill -HUP $MAINPID\n"),
-        ({"state": "app"}, "StateDirectory=app\n"),
+        ({"state": "app"}, "WorkingDirectory=/var/lib/app\nStateDirectory=app\n"),
         ({"logs": "app"}, "LogsDirectory=app\n"),
         ({"runtime": "app"}, "RuntimeDirectory=app\n"),
         ({"cache": "app"}, "CacheDirectory=app\n"),
@@ -65,7 +75,7 @@ def test_restart_sec_replaces_or_drops_the_historical_line() -> None:
     [
         ({"requires": ["db.service"]}, "After=db.service\nRequires=db.service\n"),
         ({"binds_to": ["dev.device"]}, "After=dev.device\nBindsTo=dev.device\n"),
-        ({"wants": ["x.service"]}, "Wants=x.service\n"),
+        ({"wants": ["x.service"]}, "After=x.service\nWants=x.service\n"),
         ({"before": ["y.service"]}, "Before=y.service\n"),
         ({"part_of": ["z.target"]}, "PartOf=z.target\n"),
         ({"conflicts": ["w.service"]}, "Conflicts=w.service\n"),
@@ -75,7 +85,9 @@ def test_restart_sec_replaces_or_drops_the_historical_line() -> None:
         ),
     ],
 )
-def test_relations_render_and_requires_orders_after(fields: dict[str, object], unit: str) -> None:
+def test_relations_render_and_dependencies_order_after(
+    fields: dict[str, object], unit: str
+) -> None:
     expected = BASE.replace("Description=app\n", "Description=app\n" + unit)
     assert rendered(**fields) == expected + INSTALL
 
@@ -96,7 +108,9 @@ def test_hardening_profiles_render_in_canonical_order() -> None:
     assert "ProtectSystem=full\nPrivateTmp=yes\nNoNewPrivileges=yes\n" in relaxed
     assert "SystemCallFilter" not in relaxed and "MemoryDenyWriteExecute" not in relaxed
     assert rendered(hardening=Hardening.none()) == BASE + INSTALL
-    assert "ProtectSystem=strict\n" in rendered(security="strict")
+    legacy = rendered(hardening=None, security="strict")
+    assert "ProtectSystem=strict\n" in legacy and "PrivateDevices" not in legacy
+    assert rendered(hardening=None, security="none") == BASE + INSTALL
 
 
 def test_hardening_overrides() -> None:
@@ -174,7 +188,8 @@ def test_hardening_validation(fields: dict[str, object], message: str) -> None:
 
 def test_unset_fields_stay_out_of_the_digest_payload() -> None:
     profile = ProfileState(name="default")
-    _service(profile, Service("app", "/usr/bin/app", restart="on-failure"))
-    assert profile.services[0].extras() == {}
-    _service(profile, Service("b", "/usr/bin/b", hardening=Hardening.none(), restart_sec=None))
-    assert profile.services[1].extras() == {"restart_sec": "", "hardening": []}
+    legacy = {**LEGACY, "user": "app", "restart": "on-failure", "restart_sec": "5"}
+    _service(profile, Service("app", "/usr/bin/app", **legacy))  # type: ignore[arg-type]
+    assert profile.services[0].extras() == {"hardening": []}
+    _service(profile, Service("b", "/usr/bin/b", security="strict", restart_sec=None))
+    assert profile.services[1].extras() == {"type": "exec", "restart_sec": ""}

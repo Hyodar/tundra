@@ -19,13 +19,13 @@ from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
     Build,
     Debian,
+    Dynamic,
     Git,
     Http,
     Install,
     Package,
     Recipe,
     Service,
-    User,
 )
 from tundravm.declarative.utils import GoBinary
 
@@ -70,13 +70,11 @@ recipe = Recipe(
         Package("ca-certificates"),
         node_exporter,
         prometheus,
-        User("prometheus", home="/var/lib/prometheus"),
+        # Stateless, so a transient user per run (DynamicUser=yes) instead of an account.
         Service(
             "node-exporter",
             f"{node_exporter.executable} --web.listen-address=127.0.0.1:9100",
-            user="prometheus",
-            restart="on-failure",
-            wanted_by="minimal.target",
+            user=Dynamic(),
         ),
     ),
 )

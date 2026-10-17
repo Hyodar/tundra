@@ -50,7 +50,10 @@ def test_app_recipe_builds_the_binary_and_runs_it_as_a_service(tmp_path: Path) -
     service = image.service("hello")
     assert service.exec_start == "/usr/bin/hello --addr=:9000"
     assert service.user == "hello" and service.enabled
-    assert service.environment["STATE_DIRECTORY"] == "/var/lib/hello"
+    # StateDirectory= (systemd sets $STATE_DIRECTORY) under the strict sandbox, not a mkdir.
+    assert service.values("Service", "StateDirectory") == ("hello",)
+    assert service.values("Service", "ExecStartPre") == ()
+    assert service.values("Service", "ProtectSystem") == ("strict",)
     assert {d.code for d in image.lint() if d.severity != "info"} == {"source-unpinned"}
     assert "6 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
@@ -71,9 +74,12 @@ def test_disk_and_external_secret(tmp_path: Path) -> None:
     assert secrets.port == 8081  # the app has 8080
     environment = image.service("hello").environment
     assert environment == {
-        "API_TOKEN_FILE": "/run/hello/api-token",
+        "API_TOKEN_FILE": "/run/credentials/hello.service/api-token",
         "STATE_DIRECTORY": "/persistent/hello",
     }
+    unit = image.service("hello")
+    assert unit.values("Service", "LoadCredential") == (f"api-token:{token}",)
+    assert unit.values("Service", "ReadWritePaths") == ("/persistent/hello",)
     assert "DISK_DEVICE = " in (tmp_path / "hello.py").read_text(encoding="utf-8")
     assert "8 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)

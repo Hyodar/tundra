@@ -15,6 +15,7 @@ from tundravm.declarative import (
     File,
     Fragment,
     Git,
+    Hardening,
     Hook,
     Kernel,
     Mkosi,
@@ -213,6 +214,8 @@ def test_compile_generates_service_unit_all_sections(tmp_path: Path) -> None:
             limits={"NOFILE": 1048576, "CORE": "infinity"},
             kill_mode="mixed",
             timeout_stop="30s",
+            restart_sec="5",
+            hardening=Hardening.none(),
         )
     )
 

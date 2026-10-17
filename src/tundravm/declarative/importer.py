@@ -28,6 +28,7 @@ from typing import Any, Literal
 
 from tundravm._modules.init import render_service_unit
 from tundravm._source import DebFile, HttpSource
+from tundravm._units.parse import Conversion, convert, enables
 from tundravm.backends.base import is_mkosi_state
 from tundravm.compiler.emit_mkosi import (
     ARCH_TO_MKOSI,
@@ -41,7 +42,6 @@ from tundravm.compiler.emit_mkosi import (
     DeterministicMkosiEmitter,
     _groupadd_command,
     _render_kernel_build_script,
-    _systemd_unit_content,
     _useradd_command,
     cloud_postoutput_script,
 )
@@ -88,8 +88,8 @@ from .resolve import identity
 from .state import HISTORICAL, INIT_SERVICE, STRIP_IMAGE_VERSION, groupadd_line, useradd_line
 from .state import _debloat as debloat_config
 from .state import _group as state_group
-from .state import _service as state_service
 from .state import _user as state_user
+from .systemd import Hardening
 from .utils import BACKPORTS_TREE, Backports, Composite, EfiStub
 
 Dialect = Literal["current", "nethermind-v1"]
@@ -830,7 +830,7 @@ class _VariantReader:
 
     def _units(
         self, extra: dict[str, str | bytes | None], postinst: _Postinst
-    ) -> tuple[BootStep | None, list[Unit | Service]]:
+    ) -> tuple[BootStep | None, list[Unit | Service | Task | Mount]]:
         shipped: dict[str, str] = {}
         for path in sorted(extra):
             content = extra[path]
@@ -845,14 +845,17 @@ class _VariantReader:
                 del extra[path]
         enabled = list(postinst.enabled)
         init = self._init(extra, shipped, enabled)
-        result: list[Unit | Service] = []
+        result: list[Unit | Service | Task | Mount] = []
         disabled, masked = postinst.disabled, postinst.masked
+        typed = _typed_units(shipped, enabled, {*disabled, *masked}, init=init is not None)
         for unit in enabled:
-            content = shipped.pop(unit, None)
-            service = _service_of(unit, content, init=init is not None) if content else None
-            if service is not None and unit not in masked:
-                result.append(service)
+            if unit in typed:
+                conversion = typed[unit]
+                for name in conversion.units:
+                    shipped.pop(name, None)
+                result.append(conversion.declaration)  # type: ignore[arg-type]
                 continue
+            content = shipped.pop(unit, None)
             result.append(
                 Unit(unit, content, enabled=True, masked=True if unit in masked else None)
             )
@@ -865,7 +868,7 @@ class _VariantReader:
                     masked=True if unit in masked else None,
                 )
             )
-        listed = {u.name for u in result}
+        listed = {u.unit if isinstance(u, Mount) else u.name for u in result}
         for unit in [*disabled, *masked]:
             if unit not in listed:
                 listed.add(unit)
@@ -1324,113 +1327,22 @@ def _segments(phase: Phase, lines: Sequence[str], part: int = 1) -> list[Hook]:
 # ── units ───────────────────────────────────────────────────────────────
 
 
-_STRICT = (
-    "ProtectSystem=strict",
-    "ProtectHome=yes",
-    "PrivateTmp=yes",
-    "NoNewPrivileges=yes",
-    "ProtectKernelModules=yes",
-    "ProtectKernelTunables=yes",
-    "ProtectControlGroups=yes",
-    "RestrictSUIDSGID=yes",
-    "MemoryDenyWriteExecute=yes",
-)
-
-
-def _service_of(unit: str, content: str, *, init: bool) -> Service | None:
-    """The :class:`Service` that renders exactly *content*, if there is one."""
-    if not unit.endswith(".service"):
-        return None
-    section = ""
-    entries: list[tuple[str, str, str]] = []
-    for line in content.split("\n"):
-        if line.startswith("[") and line.endswith("]"):
-            section = line[1:-1]
-        elif line:
-            key, sep, value = line.partition("=")
-            if not sep:
-                return None
-            entries.append((section, key, value))
-    lines = {f"{key}={value}" for _, key, value in entries}
-    strict = all(line in lines for line in _STRICT)
-    kwargs: dict[str, Any] = {"security": "strict"} if strict else {}
-    env: list[tuple[str, str]] = []
-    limits: list[tuple[str, str]] = []
-    pre: list[str] = []
-    exec_start: str | None = None
-    name = unit.removesuffix(".service")
-    for section, key, value in entries:
-        if strict and f"{key}={value}" in _STRICT:
+def _typed_units(
+    shipped: Mapping[str, str], enabled: Sequence[str], blocked: set[str], *, init: bool
+) -> dict[str, Conversion]:
+    """The exact typed declarations of the *shipped* units, keyed by the one enabled unit
+    each stands for (``x.socket`` for a socket-activated ``x.service``): a conversion is
+    kept only when it enables exactly the units the tree enables and none is disabled or
+    masked."""
+    found: dict[str, Conversion] = {}
+    for conversion in convert(dict(shipped), mode="exact", init=init):
+        covers = set(conversion.units)
+        on = [unit for unit in enabled if unit in covers]
+        if not conversion.typed or covers & blocked or len(on) != 1:
             continue
-        match section, key:
-            case "Unit", "Description":
-                kwargs["description"] = None if value == name else value
-            case "Unit", "After" | "Requires" | "Wants":
-                kwargs[key.lower()] = tuple(value.split())
-            case "Service", "Type":
-                kwargs["type"] = None if value == "simple" else value
-            case "Service", "ExecStartPre":
-                pre.append(value)
-            case "Service", "ExecStart":
-                exec_start = value
-            case "Service", "User" | "Group":
-                kwargs[key.lower()] = value
-            case "Service", "WorkingDirectory":
-                kwargs["working_dir"] = value
-            case "Service", "EnvironmentFile":
-                kwargs["env_file"] = value
-            case "Service", "Environment":
-                if value.startswith('"') and value.endswith('"') and len(value) > 1:
-                    value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
-                env_key, _, env_value = value.partition("=")
-                env.append((env_key, env_value))
-            case "Service", "Restart":
-                kwargs["restart"] = value
-            case "Service", "RestartSec":
-                pass
-            case "Service", "KillMode":
-                kwargs["kill_mode"] = value
-            case "Service", "TimeoutStopSec":
-                kwargs["timeout_stop"] = value
-            case "Service", _ if key.startswith("Limit"):
-                limits.append((key.removeprefix("Limit"), value))
-            case "Install", "WantedBy":
-                kwargs["wanted_by"] = None if value == "minimal.target" else value
-            case _:
-                return None
-    if exec_start is None or len(dict(env)) != len(env) or len(dict(limits)) != len(limits):
-        return None
-    after, requires = kwargs.get("after", ()), kwargs.get("requires", ())
-    injected = init and after[:1] == (INIT_SERVICE,) and requires[:1] == (INIT_SERVICE,)
-    if injected:
-        kwargs["after"], kwargs["requires"] = after[1:], requires[1:]
-    elif init:
-        kwargs["needs"] = ()
-    try:
-        service = Service(
-            name,
-            exec_start,
-            env=dict(env),
-            limits=dict(limits),
-            exec_start_pre=tuple(pre),
-            **kwargs,
-        )
-        profile = ProfileState(name="import")
-        state_service(profile, service)
-    except (ValidationError, TypeError):
-        return None
-    spec = profile.services[0]
-    if init and spec.needs:
-        spec = _with_init_service(spec)
-    return service if _systemd_unit_content(spec) == content else None
-
-
-def _with_init_service(spec: Any) -> Any:
-    from dataclasses import replace
-
-    after = spec.after if INIT_SERVICE in spec.after else (INIT_SERVICE, *spec.after)
-    requires = spec.requires if INIT_SERVICE in spec.requires else (INIT_SERVICE, *spec.requires)
-    return replace(spec, after=after, requires=requires)
+        if enables(conversion.declaration) == {on[0]}:
+            found[on[0]] = conversion
+    return found
 
 
 # ── debloat ─────────────────────────────────────────────────────────────
@@ -1724,6 +1636,13 @@ class _Writer:
 
     def call(self, obj: Any) -> str:
         cls = type(obj)
+        if isinstance(obj, Hardening):
+            preset = next(
+                (n for n in ("strict", "relaxed", "none") if getattr(cls, n)() == obj), ""
+            )
+            if preset:
+                self.imports.add("Hardening")
+                return f"Hardening.{preset}()"
         name = _PUBLIC_NAMES.get(cls.__name__, cls.__name__)
         if isinstance(obj, Composite):
             self.utils.add(name)
@@ -1780,7 +1699,12 @@ def _module_source(recipe: Recipe, *, tree: Path, output: Path | None) -> str:
     if writer.paths or writer.tree_paths:
         lines.append("from pathlib import Path")
         lines.append("")
-    lines.append(f"from tundravm import {', '.join(sorted(writer.imports))}")
+    import tundravm
+
+    top = sorted(n for n in writer.imports if hasattr(tundravm, n))
+    lines.append(f"from tundravm import {', '.join(top)}")
+    if rest := sorted(set(writer.imports) - set(top)):
+        lines.append(f"from tundravm.declarative import {', '.join(rest)}")
     if writer.utils:
         lines.append(f"from tundravm.declarative.utils import {', '.join(sorted(writer.utils))}")
     lines.append("")
@@ -1793,6 +1717,29 @@ def _module_source(recipe: Recipe, *, tree: Path, output: Path | None) -> str:
         lines.append("")
     lines.append(body)
     return "\n".join(lines)
+
+
+def declarations_source(decls: Sequence[object], *, names: Sequence[str] = ()) -> str:
+    """Python source binding each of *decls* (``tundravm units convert``), ruff-formatted;
+    *names* are the variable names (default: ``unit``, ``unit_2`` ...)."""
+    writer = _Writer(tree=Path.cwd())
+    body = [
+        f"{names[i] if i < len(names) else 'unit' + ('_' + str(i + 1) if i else '')} = "
+        + writer.value(decl)
+        for i, decl in enumerate(decls)
+    ]
+    import tundravm
+
+    top = sorted(n for n in writer.imports if hasattr(tundravm, n))
+    rest = sorted(n for n in writer.imports if not hasattr(tundravm, n))
+    lines = [f"from tundravm import {', '.join(top)}"] if top else []
+    if rest:
+        lines.append(f"from tundravm.declarative import {', '.join(rest)}")
+    lines.append("")
+    for text, name in writer.constants.items():
+        lines += [f"{name} = {_block(text)}", ""]
+    source, _ = _ruff_format("\n".join([*lines, *body]) + "\n", None)
+    return source
 
 
 def _tree_binding(tree: Path, output: Path | None) -> str:

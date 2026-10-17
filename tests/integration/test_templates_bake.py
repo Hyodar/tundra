@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -62,9 +63,12 @@ def _sudo_readlink(path: Path) -> str:
     ).stdout.strip()
 
 
-@requires_mkosi
-def test_service_template_bakes_with_its_app(tmp_path: Path) -> None:
-    """The service template builds; its unit, init step, config and user are in the tree."""
+@pytest.fixture(scope="module")
+def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """The ``service`` template's ``default`` variant baked once, in directory format."""
+    if shutil.which("mkosi") is None or not _sudo_works():
+        pytest.skip("needs mkosi and non-interactive sudo")
+    tmp_path = tmp_path_factory.mktemp("service")
     recipe_path = tmp_path / "node.py"
     recipe_path.write_text(
         render_recipe_template(
@@ -81,31 +85,60 @@ def test_service_template_bakes_with_its_app(tmp_path: Path) -> None:
     out = tmp_path / "build"
     try:
         bake_image(loaded.lowered(), ("default",), locked=None, backend=backend, build=out)
-
-        root = out / "default" / "output" / "default"
-        unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
-        assert "ExecStart=/usr/bin/app --config /etc/app/app.conf" in unit
-        assert "User=app" in unit
-        assert "Requires=runtime-init.service" in unit
-
-        wants = root / "etc/systemd/system/minimal.target.wants"
-        for name in ("app.service", "runtime-init.service"):
-            assert _sudo_test("-L", wants / name), f"{name} is not linked into {wants}"
-            assert _sudo_readlink(wants / name).endswith(f"/{name}")
-
-        step = root / "usr/lib/runtime-init/app-state"
-        assert _sudo_test("-x", step)
-        assert "install -d -m 0755 -o app -g app /var/lib/app" in _sudo_read(step)
-        step_unit = _sudo_read(root / "usr/lib/systemd/system/runtime-init-app-state.service")
-        assert "ExecStart=/usr/lib/runtime-init/app-state" in step_unit
-        aggregate = _sudo_read(root / "usr/lib/systemd/system/runtime-init.service")
-        assert "Requires=runtime-init-app-state.service" in aggregate
-
-        assert _sudo_read(root / "etc/app/app.conf") == "version=0.1.0\nlisten=0.0.0.0:8080\n"
-        passwd = _sudo_read(root / "etc/passwd").splitlines()
-        assert any(line.startswith("app:") for line in passwd)
+        yield out
     finally:
         subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)
+
+
+def test_service_template_bakes_with_its_app(service_build: Path) -> None:
+    """The service template builds; its unit, state directory, config and user are in the tree."""
+    root = service_build / "default" / "output" / "default"
+    unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
+    assert "ExecStart=/usr/bin/app --config /etc/app/app.conf" in unit
+    assert "User=app\n" in unit and "StateDirectory=app\n" in unit
+    assert "ProtectSystem=strict\n" in unit
+
+    wants = root / "etc/systemd/system/minimal.target.wants"
+    assert _sudo_test("-L", wants / "app.service"), f"app.service is not linked into {wants}"
+    assert _sudo_readlink(wants / "app.service").endswith("/app.service")
+    # Debloat masks the systemd package's units but keeps the activation targets.
+    for target in ("sockets.target", "timers.target"):
+        assert not _sudo_test("-L", root / "etc/systemd/system" / target), target
+
+    assert _sudo_read(root / "etc/app/app.conf") == "version=0.1.0\nlisten=0.0.0.0:8080\n"
+    passwd = _sudo_read(root / "etc/passwd").splitlines()
+    assert any(line.startswith("app:") and "/usr/sbin/nologin" in line for line in passwd)
+
+
+@pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
+def test_service_template_units_verify_and_are_sandboxed(service_build: Path) -> None:
+    """``systemd-analyze verify`` accepts every generated unit in the baked image, and the
+    strict sandbox keeps ``app.service`` at exposure level OK (1.4 with systemd 255; the
+    pre-step-7 unit scored 9.0 UNSAFE)."""
+    root = service_build / "default" / "output" / "default"
+    generated = service_build / "mkosi" / "default" / "mkosi.extra" / "usr/lib/systemd/system"
+    units = sorted(p.name for p in generated.iterdir() if p.is_file())
+    assert "app.service" in units
+    # The template leaves shipping /usr/bin/app to the user; verify checks the command exists.
+    subprocess.run(["sudo", "install", "-m", "0755", "/bin/true", str(root / "usr/bin/app")])
+    verify = subprocess.run(
+        ["sudo", "systemd-analyze", "verify", f"--root={root}", *units],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    security = subprocess.run(
+        ["sudo", "systemd-analyze", "security", "--offline=yes", f"--root={root}", "app.service"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    found = re.search(r"Overall exposure level for app\.service: ([0-9.]+) (\w+)", security.stdout)
+    assert found, security.stdout + security.stderr
+    print(f"app.service exposure: {found[1]} {found[2]}")  # recorded in the test log
+    assert found[2] in ("PERFECT", "SAFE", "OK"), security.stdout
+    assert float(found[1]) < 5.0
 
 
 class _Capturing:
@@ -209,14 +242,9 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         assert "trixie-updates" in _sudo_read(listed / "debian-updates.sources")
         assert not _sudo_test("-e", listed / "bookworm-security.sources")
         assert not _sudo_test("-e", listed / "debian-backports.sources")
-        # Each boot step waits for the network; the aggregate unit only requires the steps.
-        unit = _sudo_read(root / "usr/lib/systemd/system/runtime-init-app-state.service")
-        assert "After=network-online.target\nWants=network-online.target\n" in unit
-        assert "network-setup" not in unit
-        aggregate = _sudo_read(root / "usr/lib/systemd/system/runtime-init.service")
-        assert "Requires=runtime-init-app-state.service" in aggregate
-        assert "Requires=runtime-init.service" in _sudo_read(
-            root / "usr/lib/systemd/system/app.service"
-        )
+        # No boot steps: the app's state directory is its StateDirectory=.
+        unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
+        assert "StateDirectory=app\n" in unit and "runtime-init" not in unit
+        assert not _sudo_test("-e", root / "usr/lib/systemd/system/runtime-init.service")
     finally:
         subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)

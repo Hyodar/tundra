@@ -60,7 +60,7 @@ DEFAULT_DEBLOAT_PATHS_REMOVE = (
     "/etc/systemd/network",
 )
 
-DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP = (
+LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP = (
     "basic.target",
     "local-fs-pre.target",
     "local-fs.target",
@@ -75,6 +75,14 @@ DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP = (
     "systemd-remount-fs.service",
     "systemd-sysctl.service",
 )
+"""The ``nethermind-v1`` keep list (pinned: its trees spell it)."""
+
+DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP = tuple(
+    sorted((*LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP, "timers.target"))
+)
+"""Units of the ``systemd`` package debloat leaves unmasked. ``sockets.target`` and
+``timers.target`` stay so ``WantedBy=sockets.target``/``timers.target`` of a generated
+socket or timer works on its own, not only through the boot target's wants link."""
 
 DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP = (
     "journalctl",
@@ -829,6 +837,7 @@ __all__ = [
     "DEFAULT_DEBLOAT_PATHS_REMOVE",
     "DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP",
     "DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP",
+    "LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP",
     "DeployRequest",
     "DeployResult",
     "FileEntry",

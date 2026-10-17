@@ -47,7 +47,7 @@ APP_PORT = 8080
 
 @component
 class App(Composite):
-    """The app: its account, config file, a first-boot step, the service and a lint rule.
+    """The app: its config file, the service and a lint rule.
 
     Ship ``/usr/bin/app`` with a ``GoBinary``, a ``Build`` or a ``Package``. Fragment name: ``app``.
     """
@@ -61,19 +61,16 @@ class App(Composite):
         return HttpEndpoint("127.0.0.1", self.port, provider=self)
 
     def compose(self) -> Iterator[Declaration]:
-        yield User("app", home="/var/lib/app")
         config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
         yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
-        # A boot step: Service waits for every runtime-init step unless given needs=.
-        yield RuntimeDirectory("/var/lib/app", owner="app", group="app", name="app-state")
+        # Runs as system user "app" (declared for you), sandboxed by Hardening.strict(),
+        # restarted on failure; state="app" is /var/lib/app, made by systemd, owned by
+        # app and its working directory. It waits for every runtime-init step (needs=).
         yield Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",
             description=f"app {self.version}",
-            user="app",
-            working_dir="/var/lib/app",
-            restart="on-failure",
-            wanted_by="minimal.target",
+            state="app",
         )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
@@ -103,7 +100,7 @@ recipe = Recipe(
 
 - `platform` is what the image builds on: `Debian("trixie")` is the distribution plus its boot set (the kernel, systemd as init, udev and the UKI's EFI stub), declared in every variant with provenance `platform`. `tundravm inspect` lists them like any other package.
 - `items` holds what every variant shares: `ca-certificates` and the `App` fragment.
-- `App` is a component: `@component` makes the class a frozen dataclass whose fields (`version`, `port`) are its configuration, and each instance is a `Fragment` named after the class. `compose()` yields its contents: an account, a config file rendered by `ConfigFile.env`, a first-boot `BootStep` (`RuntimeDirectory` creates `/var/lib/app` for the account) and a generated systemd `Service` (which waits for every boot step by default). Its `check` method runs during `lint`: `App(port=80)` reports `app-privileged-port`. Its `http` property exports where it listens, for [step 14](#14-write-a-fragment).
+- `App` is a component: `@component` makes the class a frozen dataclass whose fields (`version`, `port`) are its configuration, and each instance is a `Fragment` named after the class. `compose()` yields its contents: a config file rendered by `ConfigFile.env` and a generated systemd `Service`, which runs as its own system user `app` (declared for you), restarts on failure, runs in the `Hardening.strict()` sandbox and keeps its state in `state="app"` (`StateDirectory=`, `/var/lib/app`), waiting for every boot step by default. Its `check` method runs during `lint`: `App(port=80)` reports `app-privileged-port`. Its `http` property exports where it listens, for [step 14](#14-write-a-fragment).
 - The service runs `/usr/bin/app`, which the recipe does not ship yet. Add a `Build(...)` or a `Package(...)` for it before you bake a real image.
 - `dev` inherits `default` and adds `DevTools()`: a serial console, root login and debugging tools. Never ship it: `release=False` keeps it out of every release ([step 19](#19-cut-a-release)).
 
@@ -161,16 +158,15 @@ Files (2):
   /etc/app/app.conf                               0644  34B  sha256:681b227aa566
   /usr/lib/systemd/system/serial-console.service  0644  263B  sha256:016dd361c717
 Users (1):
-  app  system  home=/var/lib/app  shell=/usr/sbin/nologin
+  app  system  shell=/usr/sbin/nologin
 Services (1):
-  app  /usr/bin/app --config /etc/app/app.conf  restart=on-failure  user=app  cwd=/var/lib/app  wanted_by=minimal.target
+  app  /usr/bin/app --config /etc/app/app.conf  restart=on-failure  type=exec  user=app  cwd=/var/lib/app
 Hooks:
   postinst (2):
     mkosi-chroot systemctl enable serial-console.service
     SALT=$(printf 'tundravm-devtools:%s' "${IMAGE_ID:-devtools}" | sha256sum | cu...
   finalize (1):
     sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release"
-Runtime init: 1 (steps: app-state)
 Debloat: enabled, 30 paths removed, systemd minimize=yes
 Targets: qemu
 [exit 0]
@@ -184,18 +180,16 @@ To ask where one object comes from, name it with `--why`: an image path, or `uni
 $ tundravm inspect node.py --variant dev --why unit:app
 why unit:app (variant dev)
   Service(app.service)
-    declared at node.py:53 in common via app (App)
+    declared at node.py:56 in common via app (App)
 files (in dev/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
-  After=runtime-init.service (needs RUNTIME_INIT)
-  Requires=runtime-init.service (needs RUNTIME_INIT)
   scripts/06-postinst.sh: mkosi-chroot systemctl enable app.service
   scripts/06-postinst.sh: minimal.target.wants/app.service link
 [exit 0]
 ```
 
-The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `BootStep`, and `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)) and the enablement into `minimal.target`. `node.py:53` is the line in `App.compose()` that constructs the `Service`: every declaration records where it was written, and `lint` points at the same lines. A declaration a variant adds, edits or removes lists that step too, with the line of the edit (`content edited at FILE:LINE in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
+The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added the enablement into `minimal.target` (a variant with runtime-init steps would also get the ordering after `runtime-init.service`: `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)). `node.py:56` is the line in `App.compose()` that constructs the `Service`: every declaration records where it was written, and `lint` points at the same lines. A declaration a variant adds, edits or removes lists that step too, with the line of the edit (`content edited at FILE:LINE in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
 
 ## 3. Lint
 
@@ -656,43 +650,30 @@ Say every image that runs the app should also probe it once a minute. Write that
 ```python
 from collections.abc import Iterator
 
-from tundravm import Declaration, Package, Service, Unit, component
+from tundravm import Declaration, Every, Package, Task, component
 from tundravm.declarative.utils import Composite, HttpEndpoint
-
-TIMER = """\
-[Unit]
-Description=Probe the app once a minute
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
-
-[Install]
-WantedBy=minimal.target
-"""
 
 
 @component(name="healthcheck")
 class HealthCheck(Composite):
-    """A timer that probes *target* once a minute. Fragment name: ``healthcheck``."""
+    """A scheduled task that probes *target* once a minute. Fragment name: ``healthcheck``."""
 
     target: HttpEndpoint
 
     def compose(self) -> Iterator[Declaration]:
         yield Package("curl")
-        yield Service(
+        yield Task(
             "app-healthcheck",
             f"/usr/bin/curl -fsS -o /dev/null {self.target.url}",
             description="Probe the app",
-            type="oneshot",
+            schedule=Every("1min", first="1min"),
         )
-        yield Unit("app-healthcheck.timer", TIMER, enabled=True)
 ```
 
 - `HealthCheck(target=app.http)` is itself a `Fragment`: it goes in `Recipe.items`, a variant's `add`, or another fragment's `items`. `compose()` runs once, at construction. `name=` names the fragment; without it, it would be `health-check`, after the class.
 - `target` is the `HttpEndpoint` `App` exports, so the probe reads the port from the app instead of parsing `/etc/app/app.conf`: the two cannot disagree. Subclassing `Composite` lets a type checker see `HealthCheck(...)` as a `Fragment`.
 - Holding an export makes the component require its provider: without `App` in the variant, lint reports `fragment-requires-missing`. `@component(requires=(...))` names other fragments a component needs, and a `check(self, resolved)` method, like `App.check`, is a lint rule.
-- A generated `Service` is enabled into `minimal.target` unless `wanted_by` names another target, so the probe also runs once at boot; the timer repeats it every minute.
+- `Task(..., schedule=Every("1min", first="1min"))` renders `app-healthcheck.service` (a oneshot, sandboxed, as its own system user, not enabled) and `app-healthcheck.timer` (`OnBootSec=1min`, `OnUnitActiveSec=1min`, enabled into `timers.target`), so the probe runs only on its schedule.
 
 Use it in `node.py`: add `from fragments import HealthCheck` after the tundravm imports, bind `app = App(version=APP_VERSION, port=APP_PORT)` above the recipe, and put `app,` and `HealthCheck(target=app.http),` in `items` in place of `App(...)`. Without `app` in `items`, lint names the missing provider:
 
@@ -716,7 +697,7 @@ error lock-changed [common] variants.default.services: variants.default.services
 $ tundravm inspect node.py --variant default | grep -E "Fragments|Units|app-healthcheck "
 Fragments (2): app healthcheck
 Units: enable app-healthcheck.timer
-  app-healthcheck  /usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/  restart=no  type=oneshot
+  app-healthcheck  /usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/  restart=no  type=oneshot  user=app-healthcheck  disabled
 
 $ tundravm diff node.py --tree mkosi --variant default --stat
 M  default/mkosi.conf

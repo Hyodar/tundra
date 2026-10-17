@@ -165,7 +165,6 @@ UNIT_CODES = frozenset(
 )
 EXPECTED_UNIT_FINDINGS = {
     "06_attestation": {"requires-without-after", "socket-service-started"},
-    "init-minimal": {"unit-raw"},
     "init-prover": {"requires-without-after", "socket-service-started"},
 }
 """What the repository's own recipes report until the typed units land; every other

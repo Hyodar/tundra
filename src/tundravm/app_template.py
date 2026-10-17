@@ -161,6 +161,8 @@ disk = Disk(
     mapper="$disk",
     directories=(),
 )
+# Runs before the service, as root (the `+`): creates STATE_DIR, owned by APP.
+MAKE_STATE_DIR = f"+/usr/bin/install -d -o {APP} -g {APP} -m 0750 {STATE_DIR}"
 """
 
 _SECRET = r"""
@@ -172,6 +174,8 @@ _SECRET = r"""
 # runs tundra-tools' SSH-key step (secrets.ready), which waits each boot for an
 # ed25519 key POSTed to port $key_port (docs/concepts.md: Secret delivery at boot).
 SECRET_FILE = f"/run/{APP}/$secret"
+# The service reads systemd's copy of it, in $$CREDENTIALS_DIRECTORY.
+CREDENTIAL_FILE = f"/run/credentials/{APP}.service/$secret"
 delivery = ExternalDelivery("$delivery_name", supports=("file",), ready_path=SECRET_FILE)
 secrets = Secrets(
     entries=(Secret("$secret", targets=(SecretFile(SECRET_FILE, owner=APP),)),),$store
@@ -182,24 +186,18 @@ secrets = Secrets(
 
 _APP = r"""
 binary = GoBinary(APP, SOURCE, package=PACKAGE)
-# Runs before the service, as root (the `+`): creates STATE_DIR, owned by APP.
-MAKE_STATE_DIR = f"+/usr/bin/install -d -o {APP} -g {APP} -m 0750 {STATE_DIR}"
 
 app = Fragment(
     f"{APP}-service",
     items=(
-        # The service's system account; its home is the state directory.
-        User(APP, home=STATE_DIR),
+        # Runs as system user APP (declared for you), restarts on failure, and is
+        # sandboxed by Hardening.strict(): it writes only to its state directory.
         Service(
             APP,
             # The flags are a guess: change them to the ones your program takes.
             f"{binary.executable} --addr=:{PORT}",
-            description=APP,
-            user=APP,
-            exec_start_pre=(MAKE_STATE_DIR,),
+            description=APP,$state
             env={$env},$needs
-            restart="on-failure",
-            wanted_by="minimal.target",
         ),
     ),
 )
@@ -222,7 +220,7 @@ $items    ),
 
 
 def _imports(spec: AppSpec, backend_import: str) -> str:
-    names = ["Debian", "Fragment", "Git", "Package", "Recipe", "Service", "User", "Variant"]
+    names = ["Debian", "Fragment", "Git", "Package", "Recipe", "Service", "Variant"]
     utils = ["DevTools", "GoBinary"]
     if spec.disk:
         names += ["Disk", "Key", "RuntimeTools"]
@@ -260,13 +258,28 @@ _NEEDS = {
 }
 """The service's ``needs=``, by (disk, secret): what it waits for at boot."""
 
+_CREDENTIAL = (
+    "\n            # LoadCredential=: systemd hands SECRET_FILE over as CREDENTIAL_FILE.\n"
+    "            credentials={$secret_name: SECRET_FILE},"
+)
+_STATE = {
+    False: "\n            # StateDirectory=: systemd creates STATE_DIR, owned by APP, sets\n"
+    "            # $STATE_DIRECTORY and makes it the working directory.\n"
+    "            state=APP,",
+    True: "\n            # STATE_DIR is on the disk, not under /var/lib: the sandbox may write it\n"
+    "            # (write_paths) and a pre-start step run as root (the `+`) creates it.\n"
+    "            write_paths=(STATE_DIR,),\n"
+    "            exec_start_pre=(MAKE_STATE_DIR,),",
+}
+"""The service's state directory fields, by disk: ``StateDirectory=`` or a disk path."""
+
 
 def render_app_recipe(
     spec: AppSpec, *, title: str, filename: str, release: str, backend: tuple[str, str]
 ) -> str:
     """The recipe source ``tundravm init --app go`` writes for *spec*."""
     backend_import, backend_expr = backend
-    env = ['"STATE_DIRECTORY": STATE_DIR']
+    env = ['"STATE_DIRECTORY": STATE_DIR'] if spec.disk else []
     items = ['Package("ca-certificates")']
     sections = _CONSTANTS
     if spec.disk:
@@ -274,7 +287,7 @@ def render_app_recipe(
         items += ['Package("cryptsetup")', "key", "disk"]
     if spec.secret:
         sections += _SECRET
-        env.append(f'"{secret_env(spec.secret)}": SECRET_FILE')
+        env.append(f'"{secret_env(spec.secret)}": CREDENTIAL_FILE')
         items.append("secrets")
     if spec.disk or spec.secret:
         items.append("# The key, disk and secrets steps run the tundra-tools binaries.")
@@ -302,6 +315,8 @@ def render_app_recipe(
         key_port=spec.key_port,
         store="\n    store=disk," if spec.disk else "",
         needs=_NEEDS[bool(spec.disk), bool(spec.secret)],
+        state=_STATE[bool(spec.disk)]
+        + (_CREDENTIAL.replace("$secret_name", f'"{spec.secret}"') if spec.secret else ""),
         env=", ".join(env),
         items="".join(
             f"        {item}\n" if item.startswith("#") else f"        {item},\n" for item in items
@@ -342,7 +357,7 @@ def test_service_runs_the_binary_on_the_port() -> None:
 
 
 def test_service_runs_as_its_own_user() -> None:
-    assert APP in IMAGE.users
+    # Service declares the system user for you when user= is left out.
     assert IMAGE.service(APP).user == APP
 
 
@@ -372,7 +387,7 @@ _SECRET_TEST = r"""
 
 def test_service_reads_the_secret_file() -> None:
     environment = IMAGE.service(APP).environment
-    assert environment["$secret_env"] == "/run/$app/$secret"
+    assert environment["$secret_env"] == "/run/credentials/$app.service/$secret"
 """
 
 

@@ -89,14 +89,17 @@ recipe = Recipe(
         secrets,
         RuntimeTools(TUNDRA_TOOLS),
         # Ship /usr/bin/app with a Build(...) (see 05_source_builds.py) or a Package(...).
+        # The service runs as "app" (its name; declared here for the home on the disk),
+        # sandboxed by Hardening.strict(): it writes only where write_paths/logs say, and
+        # reads the token systemd hands it as a credential, not from /run/secrets.
         User("app", home="/persistent/data"),
         Service(
             "app",
-            "/usr/bin/app --token-file /run/secrets/api-token",
-            user="app",
+            "/usr/bin/app --token-file ${CREDENTIALS_DIRECTORY}/api-token",
             working_dir="/persistent/data",
-            restart="on-failure",
-            wanted_by="minimal.target",
+            write_paths=("/persistent/data",),
+            logs="app",
+            credentials={"api-token": "/run/secrets/api-token"},
             needs=[disk.ready, delivery.ready],
         ),
     ),

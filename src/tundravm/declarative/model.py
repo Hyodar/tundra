@@ -1014,15 +1014,36 @@ class Unit(Declared):
             )
         return cls(name, source, enabled, masked, needs, allow_secret)
 
+    @classmethod
+    def parse(
+        cls, text: str, *, name: str, mode: Literal["exact", "semantic"] = "exact"
+    ) -> Declaration:
+        """The typed declaration unit *text* (file *name*: ``app.service``,
+        ``app.service.d/20-x.conf``) converts to: ``Service``, ``Task``, ``Mount`` or
+        ``Unit(dropin=DropIn(...))``. ``exact`` is typed only when it renders *text* byte
+        for byte, else ``Unit(name, text)``; ``semantic`` keeps the directives and values
+        (unowned ones in ``extra=``). ``tundravm units convert`` prints it, and pairs
+        sockets and timers with their services."""
+        from tundravm._units.parse import parse
+
+        return parse(text, name=name, mode=mode)
+
 
 @dataclass(frozen=True, slots=True)
 class Service(Declared):
     """A generated systemd service: the compiler renders the unit from these fields.
 
-    Every field maps to one directive (docs/api.md has the table); a field left at its
-    default writes nothing. ``hardening`` takes a :class:`Hardening` profile; without one,
-    ``security`` picks the historical profile (``strict``, ``default`` or ``none``).
-    ``requires``/``binds_to`` also order the unit ``After=`` them. ``needs`` lists the
+    Every field maps to one directive (docs/api.md has the table). The defaults are
+    opinionated: ``Type=exec``, ``Restart=on-failure`` with ``RestartSec=5s``, the
+    ``Hardening.strict()`` sandbox (``hardening=None``) and a dedicated system user named
+    after the service, declared for you unless the variant declares it (``user="root"``
+    opts out, linted ``service-runs-as-root``). ``type=None``/``restart_sec=None`` omit the
+    line; ``remain_after_exit`` renders ``RemainAfterExit=yes`` (a ``Task`` is the usual
+    spelling of a oneshot). ``security`` is
+    the deprecated spelling of ``hardening`` (``"strict"``: the historical nine lines;
+    ``"default"``/``"none"``: ``Hardening.none()``). ``state`` is also the default
+    ``WorkingDirectory=``.
+    ``requires``/``wants``/``binds_to`` also order the unit ``After=`` them. ``needs`` lists the
     runtime-init steps the unit waits for (the default, :data:`RUNTIME_INIT`, is the whole
     chain when the variant has one; ``needs=()`` starts it without waiting). ``enabled=False``
     renders no ``[Install]`` and enables nothing. ``extra`` is the escape hatch for
@@ -1044,12 +1065,12 @@ class Service(Declared):
     requires: tuple[UnitTarget, ...] = ()
     wants: tuple[UnitTarget, ...] = ()
     wanted_by: str | None = None
-    type: Literal["simple", "exec", "oneshot", "notify", "forking"] | None = None
-    restart: Literal["always", "on-failure", "on-abnormal", "no"] = "no"
+    type: Literal["simple", "exec", "oneshot", "notify", "forking"] | None = "exec"
+    restart: Literal["always", "on-failure", "on-abnormal", "no"] = "on-failure"
     limits: Mapping[str, str | int] = field(default_factory=FrozenMap)
     kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
     timeout_stop: str | None = None
-    security: Literal["strict", "default", "none"] = "default"
+    security: Literal["strict", "default", "none"] | None = None
     needs: Sequence[Ready] = (RUNTIME_INIT,)
     allow_secret: bool = False
     groups: tuple[str, ...] = ()
@@ -1061,7 +1082,7 @@ class Service(Declared):
     runtime: str | None = None
     cache: str | None = None
     write_paths: tuple[str, ...] = ()
-    restart_sec: str | None = "5"
+    restart_sec: str | None = "5s"
     timeout_start: str | None = None
     hardening: Hardening | None = None
     before: tuple[UnitTarget, ...] = ()
@@ -1071,12 +1092,14 @@ class Service(Declared):
     enabled: bool = True
     extra: Extra = field(default_factory=FrozenMap)
     socket: Listen | None = None
+    remain_after_exit: bool = False
 
     def __post_init__(self) -> None:
         _freeze(self, "exec_start", "exec_start_pre")
         _require_steps(self, "needs", sentinel=True)
         _require_bool(self, self.allow_secret, "allow_secret")
         _require_bool(self, self.enabled, "enabled")
+        _require_bool(self, self.remain_after_exit, "remain_after_exit")
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid service name {self.name!r}.")
         if self.name.endswith(".target") or (
@@ -1104,12 +1127,21 @@ class Service(Declared):
             _require_choice(
                 self, self.kill_mode, ("control-group", "mixed", "process", "none"), "kill_mode"
             )
-        _require_choice(self, self.security, ("strict", "default", "none"), "security")
-        if self.hardening is not None and self.security != "default":
+        if self.security is not None:
+            _require_choice(self, self.security, ("strict", "default", "none"), "security")
+        if self.hardening is not None and self.security is not None:
             raise _fail(
                 self,
                 f"service {self.name!r} sets both security= and hardening=.",
-                hint="Drop security=; hardening=Hardening.strict() replaces security='strict'.",
+                hint="Drop security= (deprecated): hardening= replaces it.",
+            )
+        stem = self.default_user
+        if self.user is None and not (_GROUP_NAME.fullmatch(stem) and len(stem) <= 32):
+            raise _fail(
+                self,
+                f"service {self.name!r} would run as user {stem!r}, which is not a valid "
+                "user name.",
+                hint="Pass user= (a user the variant declares) or user=Dynamic().",
             )
         if not self.enabled and self.wanted_by is not None:
             raise _fail(
@@ -1119,6 +1151,21 @@ class Service(Declared):
             )
         require_extra(self, ("Unit", "Service", "Install"), SERVICE_OWNED)
         _require_socket(self)
+
+    @property
+    def default_user(self) -> str:
+        """The system user ``user=None`` runs as: the unit name's stem (``app``)."""
+        return unit_name(self.name).removesuffix(".service").removesuffix("@")
+
+    @property
+    def sandbox(self) -> Hardening | None:
+        """The hardening this service renders; ``None`` is the historical
+        ``security="strict"`` block (nine lines)."""
+        if self.hardening is not None:
+            return self.hardening
+        if self.security == "strict":
+            return None
+        return Hardening.none() if self.security is not None else Hardening.strict()
 
 
 _RESTARTS = ("always", "on-failure", "on-abnormal", "no")

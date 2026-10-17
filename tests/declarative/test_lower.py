@@ -134,12 +134,13 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "9e23b9449d194c353ec7d3cd136f8f117073ef4e8f83a2214bbaac441b8807e4"
-EQUIVALENCE_RECIPE = "2973295ef7c7934adf423219f7059d4ae8192f74ff7e4cc4f5ebff4d369f3f26"
+EQUIVALENCE_TREE = "df87042527ee4b97dacb1a7248fda21f18b6e4df592a5fe8857f12626baf8b1a"
+EQUIVALENCE_RECIPE = "62aa45f84050b160fe3db881a8ef94e4fe0be6653c6b3ffded49e1753329f894"
 """The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
 fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly
 (re-recorded when current-dialect build hooks gained their ``# tundravm build:`` line, and
-when runtime-init became a graph of boot steps, one unit per step, locked by step name)."""
+when runtime-init became a graph of boot steps, one unit per step, locked by step name, and
+when debloat's default keep list gained ``timers.target``)."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:

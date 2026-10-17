@@ -42,7 +42,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TextIO, cast, get_args
+from typing import TYPE_CHECKING, TextIO, cast, get_args
 
 from . import __version__, app_template
 from . import templates as scaffold
@@ -190,6 +190,9 @@ from .templates import (
 from .verify import VERIFY_FORMATS, verify_evidence
 from .watch import Sources, Watch, lint_failure, tree_verdict, verdict
 from .witness import WITNESS_FORMATS, verify_witnesses, witness_image, witnesses_dir
+
+if TYPE_CHECKING:
+    from tundravm._units.parse import Conversion
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -770,6 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_clean(sub)
     _add_config(sub)
     _add_import(sub)
+    _add_units(sub)
 
     completion = sub.add_parser(
         "completion",
@@ -897,6 +901,52 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         action="store_true",
         help="Skip probing the chosen backend's host tools (`tundravm doctor --backend`).",
     )
+
+
+def _add_units(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Convert systemd unit text to typed declarations, or show a recipe's units."
+    units = sub.add_parser("units", help=help_text, description=help_text)
+    verbs = units.add_subparsers(dest="units_command", required=True, metavar="VERB")
+    convert_help = "Print the typed declarations (Service, Task, Mount, ...) unit FILEs convert to."
+    convert = verbs.add_parser(
+        "convert",
+        help=convert_help,
+        description=convert_help
+        + " x.socket + x.service become Service(socket=Listen(...)), x.timer + a oneshot "
+        "x.service a scheduled Task, DIR.d/NAME.conf a Unit(dropin=DropIn(...)). Every "
+        "field whose default would render differently is written out (hardening=, "
+        "restart=, needs=() ...); a unit no typed shape renders stays Unit(name, text) and "
+        "the directives that blocked it are listed.",
+    )
+    convert.set_defaults(handler=_cmd_units_convert)
+    convert.add_argument("files", nargs="+", type=Path, metavar="FILE", help="Unit files.")
+    convert.add_argument(
+        "--name",
+        default=None,
+        help="Unit file name of a single FILE (default: its file name; DIR.d/NAME.conf for a "
+        "drop-in).",
+    )
+    convert.add_argument(
+        "--mode",
+        choices=("exact", "semantic"),
+        default="exact",
+        help="exact: typed only when it renders FILE byte for byte (default); semantic: the "
+        "same directives and values, order and comments aside (unowned ones go to extra=).",
+    )
+    convert.add_argument(
+        "--adopt-defaults",
+        action="store_true",
+        help="Also print each declaration without its opt-outs and what the defaults add.",
+    )
+    render_help = "Print the unit text (and drop-ins) one variant of RECIPE generates for UNIT."
+    render = verbs.add_parser("render", help=render_help, description=render_help)
+    render.set_defaults(handler=_cmd_units_render)
+    render.add_argument("recipe", type=Path, help="Path to the recipe .py file.")
+    _add_import_options(render)
+    render.add_argument(
+        "--variant", default=None, metavar="NAME", help="Variant (default: the only one)."
+    )
+    render.add_argument("--unit", required=True, metavar="NAME", help="Unit name (app.service).")
 
 
 def _add_import(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -3538,6 +3588,103 @@ def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
         print(owner_hint(failed), file=out)
         return EXIT_FAILURE
     return EXIT_FAILURE if refused else EXIT_OK
+
+
+def _unit_file_name(path: Path) -> str:
+    """``x.service``, or ``x.service.d/NAME.conf`` for a drop-in."""
+    return f"{path.parent.name}/{path.name}" if path.parent.name.endswith(".d") else path.name
+
+
+def _cmd_units_convert(args: argparse.Namespace, out: TextIO) -> int:
+    from tundravm._units.parse import convert
+    from tundravm.declarative.importer import declarations_source
+
+    if args.name is not None and len(args.files) != 1:
+        raise ValidationError("--name names one FILE.", hint="Drop --name, or pass one FILE.")
+    texts: dict[str, str] = {}
+    for path in args.files:
+        name = args.name or _unit_file_name(path)
+        try:
+            texts[name] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise ValidationError(
+                f"cannot read {path}: {error}", hint="Pass a readable UTF-8 unit file."
+            ) from None
+    conversions = convert(texts, mode=args.mode, init=True)
+    for conversion in conversions:
+        units = " + ".join(conversion.units)
+        if conversion.typed:
+            kind = type(conversion.declaration).__name__
+            moved = f"; extra= holds {', '.join(conversion.extra)}" if conversion.extra else ""
+            print(f"# {units}: {kind} ({args.mode}){moved}", file=out)
+        else:
+            print(f"# {units}: kept as text, blocked by {'; '.join(conversion.blockers)}", file=out)
+    out.write(declarations_source([c.declaration for c in conversions]))
+    if args.adopt_defaults:
+        for conversion in conversions:
+            _adopt_defaults(conversion, out)
+    return EXIT_OK
+
+
+def _adopt_defaults(conversion: Conversion, out: TextIO) -> None:
+    """The declaration with its opt-outs reset to the defaults, and the unit lines that
+    changes (``tundravm units convert --adopt-defaults``)."""
+    import difflib
+
+    from tundravm._units.parse import rendered, with_defaults
+    from tundravm.declarative.importer import declarations_source
+
+    decl = conversion.declaration
+    if not conversion.typed or not conversion.absent:
+        return
+    units = " + ".join(conversion.units)
+    try:
+        adopted = with_defaults(decl, conversion.absent)
+        after = rendered(adopted, init=True)
+    except (ValidationError, ValueError, TypeError) as error:
+        print(f"\n# {units}: the defaults do not apply: {error}", file=out)
+        return
+    print(f"\n# {units} with the defaults ({', '.join(conversion.absent)}):", file=out)
+    out.write(declarations_source([adopted], names=["adopted"]))
+    before = rendered(decl, init=True)
+    if after.pop("!", None):
+        print("# also declares the service's system user", file=out)
+    for name in sorted(set(before) | set(after)):
+        old = before.get(name, "").splitlines(keepends=True)
+        new = after.get(name, "").splitlines(keepends=True)
+        out.writelines(difflib.unified_diff(old, new, f"{name} (converted)", f"{name} (defaults)"))
+
+
+def _cmd_units_render(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    variant = args.variant or (loaded.variants[0] if len(loaded.variants) == 1 else None)
+    if variant is None:
+        raise ValidationError(
+            f"{args.recipe} declares {len(loaded.variants)} variants.",
+            hint=f"Pass --variant NAME (declared: {', '.join(loaded.variants)}).",
+        )
+    _require_variants(loaded, [variant], args.recipe)
+    from tundravm.declarative import compile as compile_tree
+
+    tree = compile_tree(loaded.recipe, variants=[variant])
+    unit = args.unit
+    found = [
+        entry
+        for entry in tree.entries
+        if entry.content is not None
+        and entry.symlink is None
+        and (f"/systemd/system/{unit}" in f"/{entry.path}")
+        and (entry.path.endswith(f"/{unit}") or f"/{unit}.d/" in entry.path)
+    ]
+    if not found:
+        raise ValidationError(
+            f"variant {variant!r} of {args.recipe} generates no unit {unit!r}.",
+            hint="Name the unit file with its suffix (app.service, app.timer).",
+        )
+    for index, entry in enumerate(found):
+        print(("\n" if index else "") + f"# {entry.path}", file=out)
+        out.write(entry.content.decode("utf-8") if entry.content else "")
+    return EXIT_OK
 
 
 def _cmd_import(args: argparse.Namespace, out: TextIO) -> int:
