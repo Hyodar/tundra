@@ -277,12 +277,15 @@ class StatusPage(Composite):
                     "status-page",
                     f"{binary.executable} --config /etc/status-page.toml",
                     user="status",
+                    state="status-page",  # /var/lib/status-page, created and owned for the user
                     restart="on-failure",
                     wanted_by="minimal.target",
                 ),
             ),
         )
 ```
+
+`state="status-page"` renders `StateDirectory=status-page`: systemd creates `/var/lib/status-page` owned by the service user before it starts, so the module needs no `ExecStartPre=` `mkdir`/`install -d` line or boot step for it (`logs=`, `runtime=` and `cache=` do the same under `/var/log`, `/run` and `/var/cache`).
 
 `GoBinary("status-page", source, package=...)` is `Build("status-page", source, using=Go(output="status-page", package=...), install=(Install("build/status-page", "/usr/bin/status-page"),))`; pass `install=` for another path. Write the `Build` yourself for anything more:
 

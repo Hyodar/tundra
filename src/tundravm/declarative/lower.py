@@ -49,6 +49,7 @@ from .model import (
     Http,
     Kernel,
     Key,
+    Mount,
     Partition,
     Recipe,
     Repository,
@@ -57,6 +58,7 @@ from .model import (
     Secrets,
     Service,
     Setting,
+    Task,
     Template,
     Unit,
     User,
@@ -389,7 +391,7 @@ def _selected(recipe: Recipe, names: Sequence[str] | None, default: Variant) -> 
 
 def _overlay(
     base: Resolved, child: Resolved, *, dialect: str = "current"
-) -> tuple[list[Declaration], list[Unit | Service]]:
+) -> tuple[list[Declaration], list[Unit | Service | Task | Mount]]:
     """What *child* declares on top of *base* (its extended profile), plus units to re-emit.
 
     A profile that extends another only adds, or replaces the types its merge
@@ -420,13 +422,15 @@ def _overlay(
         raise _Standalone("has its own Build.BuildSources")  # mounts merge per profile
     if any(isinstance(item, Debloat) and item.keep_paths_by_variant for item in own):
         raise _Standalone("declares per-variant debloat paths")
-    reemit: list[Unit | Service] = []
+    reemit: list[Unit | Service | Task | Mount] = []
     if has_init(child.items) and not has_init(base.items):
         # inherited units and services written before any step existed wait for none
         reemit = [
             item
             for item in child.items
-            if isinstance(item, Unit | Service) and item.needs and identity(item) in inherited
+            if isinstance(item, Unit | Service | Task | Mount)
+            and item.needs
+            and identity(item) in inherited
         ]
     return own, reemit
 

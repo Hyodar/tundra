@@ -18,12 +18,14 @@ Arch = Literal["x86_64", "aarch64"]
 OutputTarget = Literal["qemu", "azure", "gcp"]
 FileKind = Literal["file", "symlink", "directory"]
 SecurityProfile = Literal["strict", "default", "none"]
-RestartPolicy = Literal["always", "on-failure", "no"]
+RestartPolicy = Literal["always", "on-failure", "on-abnormal", "no"]
 ALL_STEPS = "*"
 """The ``ServiceSpec.needs`` entry for the whole runtime-init chain (``runtime-init.service``)."""
 ServiceType = Literal["simple", "exec", "oneshot", "notify", "forking"]
 KillMode = Literal["control-group", "mixed", "process", "none"]
 UnitAction = Literal["disable", "mask"]
+UnitKind = Literal["service", "socket", "timer", "mount"]
+"""What a ``ServiceSpec`` renders: ``<name>.service`` (the default), a socket, timer or mount."""
 
 DEFAULT_DEBLOAT_PATHS_REMOVE = (
     "/etc/machine-id",
@@ -177,7 +179,7 @@ class ServiceSpec:
     wants: tuple[str, ...] = ()
     restart: RestartPolicy = "no"
     enabled: bool = True
-    extra_unit: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    extra_unit: Mapping[str, Mapping[str, str | tuple[str, ...]]] = field(default_factory=dict)
     security_profile: SecurityProfile = "default"
     description: str | None = None
     env: Mapping[str, str] = field(default_factory=dict)
@@ -192,6 +194,30 @@ class ServiceSpec:
     timeout_stop: str | None = None
     needs: tuple[str, ...] = (ALL_STEPS,)
     """The runtime-init steps the unit waits for; ``ALL_STEPS`` is the whole chain."""
+    kind: UnitKind = "service"
+    before: tuple[str, ...] = ()
+    part_of: tuple[str, ...] = ()
+    binds_to: tuple[str, ...] = ()
+    conflicts: tuple[str, ...] = ()
+    remain_after_exit: bool = False
+    exec_start_post: tuple[str, ...] = ()
+    exec_reload: str | None = None
+    dynamic_user: bool = False
+    groups: tuple[str, ...] = ()
+    env_files: tuple[str, ...] = ()
+    """``EnvironmentFile=`` lines after ``env_file``."""
+    credentials: Mapping[str, str] = field(default_factory=dict)
+    """``LoadCredential=<name>:<path>``, by name."""
+    state: str | None = None
+    logs: str | None = None
+    runtime: str | None = None
+    cache: str | None = None
+    write_paths: tuple[str, ...] = ()
+    restart_sec: str | None = None
+    """``None``: ``RestartSec=5`` when ``restart`` is set (the historical line); ``""``: none."""
+    timeout_start: str | None = None
+    hardening: tuple[tuple[str, str], ...] | None = None
+    """Rendered ``Hardening`` directives; ``None`` falls back to ``security_profile``."""
 
     def extras(self) -> dict[str, object]:
         """Optional unit fields that are set, keyed by name (empty for a plain service)."""
@@ -209,8 +235,35 @@ class ServiceSpec:
             "working_dir": self.working_dir,
             "runs_before_init": not self.needs,
             "needs": list(self.needs) if self.needs != (ALL_STEPS,) else None,
+            "kind": self.kind if self.kind != "service" else None,
+            "before": list(self.before),
+            "part_of": list(self.part_of),
+            "binds_to": list(self.binds_to),
+            "conflicts": list(self.conflicts),
+            "remain_after_exit": self.remain_after_exit,
+            "exec_start_post": list(self.exec_start_post),
+            "exec_reload": self.exec_reload,
+            "dynamic_user": self.dynamic_user,
+            "groups": list(self.groups),
+            "env_files": list(self.env_files),
+            "credentials": dict(sorted(self.credentials.items())),
+            "state": self.state,
+            "logs": self.logs,
+            "runtime": self.runtime,
+            "cache": self.cache,
+            "write_paths": list(self.write_paths),
+            "timeout_start": self.timeout_start,
+            "extra": {
+                section: {k: v if isinstance(v, str) else list(v) for k, v in sorted(keys.items())}
+                for section, keys in sorted(self.extra_unit.items())
+            },
         }
-        return {key: value for key, value in optional.items() if value}
+        kept = {key: value for key, value in optional.items() if value}
+        if self.restart_sec is not None:
+            kept["restart_sec"] = self.restart_sec
+        if self.hardening is not None:
+            kept["hardening"] = [list(entry) for entry in self.hardening]
+        return kept
 
 
 @dataclass(frozen=True, slots=True)

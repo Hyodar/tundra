@@ -18,9 +18,9 @@ INHERENT_WARNINGS = frozenset({"source-unpinned", "disk-auto-format"})
 """Warning codes an example may report: unpinned refs clear with ``tundravm lock``; a
 ``Disk`` that picks its device at boot stays a warning until the recipe names one."""
 
-KNOWN_WARNINGS = {"03_fragments.py": frozenset({"timer-service-enabled"})}
-"""Per-example warnings the typed API removes later: 03's timer-activated healthcheck is
-also enabled at boot until ``Task(schedule=...)`` exists (docs/design/systemd-units.md)."""
+KNOWN_WARNINGS: dict[str, frozenset[str]] = {}
+"""Per-example warnings the typed API removes later (none left: 03's health check became a
+``Task(schedule=...)``, so it is no longer also enabled at boot)."""
 
 COMMAND = re.compile(r"^\s+tundravm (\w+) (\S+)", re.MULTILINE)
 

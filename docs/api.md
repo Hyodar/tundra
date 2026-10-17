@@ -120,7 +120,7 @@ The last six are build mechanics: each sets one mkosi key for every variant, and
 
 ## Declarations
 
-`Declaration` is the union of the types `Fragment.items` holds: `Package`, `File`, `Template`, `FileTree`, `Group`, `User`, `Unit`, `Service`, `Hook`, `BootStep`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Key`, `Disk`, `Secrets`, `RuntimeTools` and `Build`.
+`Declaration` is the union of the types `Fragment.items` holds: `Package`, `File`, `Template`, `FileTree`, `Group`, `User`, `Unit`, `Service`, `Task`, `Mount`, `Hook`, `BootStep`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Key`, `Disk`, `Secrets`, `RuntimeTools` and `Build`.
 
 Every declaration, `Fragment` (components included), `Variant`, `Platform` and `Edit`/`Remove` has `declared_at: str`, the absolute `file:line` of the call that constructed it: the first frame outside tundravm, the standard library and installed packages (a module's or component's declarations point at the line that uses it; `""` when there is none). It is a slot, not a dataclass field: `==`, `hash`, `repr`, `dataclasses.fields`/`replace`, payloads, digests, lockfiles, evidence and `import` never see it, so moving a declaration to another line changes nothing but its location. Resolution keeps an edited declaration's line and records the edit's own in its `Origin.location`; diagnostics, `inspect --why` and `explore` show it relative to the working directory.
 
@@ -141,12 +141,92 @@ Mapping fields (`env`, `limits`, `variables`, `keep_paths_by_variant`, `Tdxs.exp
 | `FileTree` | `path` (absolute), `source: Path`, `exclude=()`, `mode=None` (keep each file's and empty directory's permission bits; a mode sets every file to it and empty directories to `0755`), `stage="extra"`, `symlinks="preserve"` (ship links as links; `"follow"` ships what they point to), `allow_secret=False` | stage, path |
 | `Group` | `name`, `system=True`, `gid=None` | name |
 | `User` | `name`, `system=True`, `home=None`, `shell="/usr/sbin/nologin"`, `uid=None`, `primary_group=None`, `groups=()` | name |
-| `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `needs: Sequence[Ready] = ()`, `allow_secret=False`. `Unit.from_file(name, source: Path, *, enabled=None, masked=None, needs=(), allow_secret=False)` ships the unit file *source* (UTF-8) | unit name |
-| `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only: `description=None`, `user=None`, `group=None`, `working_dir=None`, `env: Mapping[str, str] = {}`, `env_file=None`, `exec_start_pre=()`, `after=()`, `requires=()`, `wants=()`, `wanted_by=None` (`minimal.target`), `type=None` (`"simple"`, `"exec"`, `"oneshot"`, `"notify"`, `"forking"`), `restart="no"` (`"always"`, `"on-failure"`, `"no"`), `limits: Mapping[str, str \| int] = {}` (`{"NOFILE": 1048576}`), `kill_mode=None`, `timeout_stop=None`, `security="default"` (`"strict"`, `"default"`, `"none"`), `needs: Sequence[Ready] = (RUNTIME_INIT,)`, `allow_secret=False` | unit name |
+| `Unit` | `name`, `content: str \| Path \| None = None`, `enabled=None`, `masked=None`, `needs: Sequence[Ready] = ()`, `allow_secret=False`, `dropin: DropIn \| None = None`. `Unit.from_file(name, source: Path, *, enabled=None, masked=None, needs=(), allow_secret=False)` ships the unit file *source* (UTF-8) | unit name |
+| `Service` | `name`, `exec_start: str \| tuple[str, ...]`, then keyword-only fields (table below) | unit name |
+
+`Service` fields, each with its default and the directive it writes (a field at its default writes nothing unless the table says otherwise; these defaults are today's and render today's bytes):
+
+| Field | Default | Renders |
+|---|---|---|
+| `description` | `None` (the name) | `Description=` |
+| `type` | `None` (`Type=simple`) | `Type=`: `"simple"`, `"exec"`, `"notify"`, `"oneshot"`, `"forking"` |
+| `exec_start_pre`, `exec_start_post` | `()` | one `ExecStartPre=`/`ExecStartPost=` per command line |
+| `exec_reload` | `None` | `ExecReload=` |
+| `user` | `None` | `User=`; `Dynamic()` renders `DynamicUser=yes` |
+| `group`, `groups` | `None`, `()` | `Group=`, `SupplementaryGroups=` |
+| `working_dir` | `None` | `WorkingDirectory=` |
+| `env_file` | `None` | `EnvironmentFile=`, one line per path (a path or a list; a `-` prefix makes it optional) |
+| `env` | `{}` | one `Environment=` per key, sorted |
+| `credentials` | `{}` | `LoadCredential=<name>:<path>` per name, sorted; a value is a path or a `SecretFile` (its `path`); the program reads `$CREDENTIALS_DIRECTORY/<name>` |
+| `state`, `logs`, `runtime`, `cache` | `None` | `StateDirectory=` (`/var/lib/<state>`), `LogsDirectory=` (`/var/log/`), `RuntimeDirectory=` (`/run/`), `CacheDirectory=` (`/var/cache/`): systemd creates them owned by the service user, writable under any `ProtectSystem=` |
+| `write_paths` | `()` | `ReadWritePaths=` |
+| `restart` | `"no"` | `Restart=`: `"always"`, `"on-failure"`, `"on-abnormal"`, `"no"` |
+| `restart_sec` | `"5"` | `RestartSec=` when `restart` is set; `None` drops the line |
+| `limits` | `{}` | `Limit<NAME>=` per resource (`{"NOFILE": 1048576}`) |
+| `kill_mode` | `None` | `KillMode=` |
+| `timeout_start`, `timeout_stop` | `None` | `TimeoutStartSec=`, `TimeoutStopSec=` (systemd time spans) |
+| `hardening` | `None` (from `security`) | the `Hardening` profile's directives (below) |
+| `security` | `"default"` | `"strict"`: the nine historical sandbox lines; refused together with `hardening` |
+| `after`, `wants`, `before`, `part_of`, `conflicts` | `()` | `After=`, `Wants=`, `Before=`, `PartOf=`, `Conflicts=`; each entry a unit name or a ref (`Service.ref("db")`, `Unit.ref("tdxs.socket")`) |
+| `requires`, `binds_to` | `()` | `Requires=`/`BindsTo=` **and** `After=` the same units (ordering follows the dependency) |
+| `needs` | `(RUNTIME_INIT,)` | `After=`/`Requires=` the runtime-init units it waits for, first |
+| `enabled` | `True` | `[Install] WantedBy=` plus the build-time enable; `False` renders no `[Install]` |
+| `wanted_by` | `None` (`minimal.target`) | `WantedBy=` |
+| `extra` | `{}` | the escape hatch, `{"Service": {"OOMScoreAdjust": "-500"}}`: sections `Unit`, `Service`, `Install`; keys must be systemd 257 directives no field renders; a list renders one line per item; keys render sorted after the typed ones; linted `unit-extra` |
+| `allow_secret` | `False` | nothing (silences `secret-in-env`) |
+| `socket` | `None` | a `Listen(...)` renders and enables `<name>.socket`; the service is started by it (no `[Install]`, not enabled); see [Tasks, sockets and mounts](#tasks-sockets-and-mounts) |
+
+Directives render in one canonical order per section (`docs/design/systemd-units.md` 3.1), so equal declarations render equal bytes. A ref in a relation that no declaration of the variant renders fails to lower (`unit-ref-undefined`); name a packaged unit by its unit name.
+
+`Hardening` is the sandbox profile: `Hardening.strict(**overrides)` (the field defaults), `Hardening.relaxed(**overrides)` and `Hardening.none()`; `Hardening(...)` takes the fields directly. Overrides change one knob where the profile is chosen: `Hardening.strict(jit=True)`.
+
+| Field | `strict()` | `relaxed()` | `none()` | Renders |
+|---|---|---|---|---|
+| `protect_system` | `"strict"` | `"full"` | `"no"` | `ProtectSystem=` |
+| `protect_home` | `True` | `False` | `False` | `ProtectHome=yes` |
+| `private_tmp` | `True` | `True` | `False` | `PrivateTmp=yes` |
+| `no_new_privileges` | `True` | `True` | `False` | `NoNewPrivileges=yes`, `RestrictSUIDSGID=yes` |
+| `kernel` | `True` | `True` | `False` | `ProtectKernelModules=`, `ProtectKernelTunables=`, `ProtectControlGroups=`, `ProtectKernelLogs=`, `ProtectClock=` |
+| `jit` | `False` | `True` | `True` | `False` renders `MemoryDenyWriteExecute=yes` (kills .NET, JVM and V8 JITs) |
+| `private_devices` | `True` | `False` | `False` | `PrivateDevices=yes` |
+| `devices` | `()` | `()` | `()` | `DevicePolicy=closed` + `DeviceAllow=<dev> rw` each, in place of `PrivateDevices=` (`("/dev/tdx_guest",)`) |
+| `sandbox` | `True` | `False` | `False` | `ProtectHostname=`, `RestrictRealtime=`, `RestrictNamespaces=`, `LockPersonality=`, `SystemCallArchitectures=native` |
+| `network` | `"inet"` | `"any"` | `"any"` | `RestrictAddressFamilies=`: `AF_UNIX AF_INET AF_INET6`, `"unix"`, `"none"`; `"any"` writes nothing |
+| `syscalls`, `deny_syscalls` | `("@system-service",)`, `("@privileged", "@resources")` | `()` | `()` | `SystemCallFilter=` and `SystemCallFilter=~...` |
+| `capabilities` | `()` | `None` | `None` | `CapabilityBoundingSet=` (empty drops all); names also render `AmbientCapabilities=`; `None` writes nothing |
+| `umask` | `"0077"` | `None` | `None` | `UMask=` |
+
+`Unit(name, dropin=DropIn(...))` changes a packaged unit the Debian way: `DropIn(name="20-tundravm", **fields)` renders `/usr/lib/systemd/system/<unit>.d/<name>.conf` next to the `10-tundravm-needs.conf` that `needs` writes. Its fields are `Service`'s relation and `[Service]` fields (`exec_start`, which writes the `ExecStart=` reset line first, `env`, `env_file`, `credentials`, `user`, `group`, `groups`, the directory fields, `write_paths`, `restart`, `restart_sec`, the timeouts, `limits`, `hardening`, `extra`), each defaulting to "unchanged"; `hardening` is opt-in here because hardening a unit you did not write can break it. A drop-in on a unit that ships text is refused (edit the text), as is a `[Service]` field on a non-service unit.
 
 A `Service` command is an argv: a string `exec_start` is split like a shell line (`shlex`), a tuple is taken as is, and each `exec_start_pre` line is split the same way. The unit renders every argument so systemd hands the program exactly that word: an argument with whitespace, a quote or a backslash (or an empty one) is double-quoted, `%` is doubled, and `$` is doubled except in a `${NAME}` reference or a whole-word `$NAME`, which systemd fills from `env=`/`env_file=`. `("/bin/sh", "-c", "echo 100% $HOME")` renders `ExecStart=/bin/sh -c "echo 100%% $$HOME"`.
 
 `Template` renders `template` with `str.format_map(variables)` at lowering time; a placeholder without a value fails to lower. `Service` renders and enables a `.service` unit. `needs` lists the runtime-init steps it waits for (`After=`/`Requires=` on `runtime-init-<step>.service`; `runtime-init.service` for `RUNTIME_INIT` or under `nethermind-v1`). The default waits for every step when the variant has one, and `needs=()` waits for none. `allow_secret=True` exempts a declaration from the `secret-in-file` (`File`, `Template`, every file a `FileTree` imports) or `secret-in-env` (the unit a `Service` renders, a `Unit`'s shipped file) lint, for a value that only looks like a credential; it changes neither the recipe digest nor the tree. `Unit` with `content` ships that text verbatim and needs a type suffix (`app.service`). Without `content` it controls a packaged unit and must set `enabled` or `masked`. `needs=[...]` adds the same `After=`/`Requires=` lines to its shipped text, or, for a packaged unit, in the drop-in `/usr/lib/systemd/system/<unit>.d/10-tundravm-needs.conf`.
+
+### Tasks, sockets and mounts
+
+Three more shapes render units for you; each is a declaration with `.ref`, `.ref.edit()` and `.ref.remove()`, provenance, and a row in `inspect`, `inspect --why unit:<name>` and `explore`. Their units are enabled the way `Service` units are (postinst `systemctl enable` plus the `minimal.target.wants` link).
+
+| Type | Fields (defaults) | Identity |
+|---|---|---|
+| `Task` | `name`, `command: str \| tuple[str, ...]` (absolute program path), then keyword-only `schedule: Every \| Calendar \| None = None`, `description=None`, `user: str \| Dynamic \| None = None`, `group=None`, `state=None`, `timeout="5min"`, `after=()`, `requires=()`, `wants=()`, `needs=(RUNTIME_INIT,)`, `hardening=Hardening.strict()`, `wanted_by=None` | unit name |
+| `Mount` | `where` (absolute, normalized, not `/`), `what`, then keyword-only `type=None`, `options=()`, `description=None`, `after=()`, `requires=()`, `needs=()`, `enabled=True`, `wanted_by=None` | where |
+
+`Task("migrate", "/usr/bin/app migrate")` is a oneshot that runs once per boot: `Type=oneshot`, `RemainAfterExit=yes`, `TimeoutStartSec=5min` (so a hung task cannot hold boot; `timeout=None` drops it), the `Hardening.strict()` sandbox, `[Install] WantedBy=` the boot target, enabled. `user=None` runs it as a system user named after the task, declared for you unless the variant declares it (`useradd --system`, shell `/usr/sbin/nologin`); `user=Dynamic()` renders `DynamicUser=yes`. `state="app"` renders `StateDirectory=app` and makes `/var/lib/app` the working directory. `requires`/`wants` also order `After=` the same units. `task.ready` is a `needs=` handle meaning "this boot task has finished": `Service(..., needs=[migrate.ready])` (also on `Task`, `Unit` and `Mount`) renders `After=`/`Requires=migrate.service`; a `BootStep` cannot wait for one, and a scheduled task has no `.ready`.
+
+With `schedule=` the service renders without `[Install]` and is not enabled; `<name>.timer` is, with `[Install] WantedBy=timers.target`. `Every(interval, *, first=None, jitter=None)` renders `OnBootSec=<first or interval>` and `OnUnitActiveSec=<interval>`; `Calendar(spec, *, persistent=True, jitter=None)` renders `OnCalendar=<spec>` (a shorthand such as `daily`, or `*-*-* 03:00:00`) and `Persistent=yes`, which catches up on a run missed while the machine was off (systemd only honors `Persistent=` for calendar timers, so `Every` has no such field); `jitter` renders `RandomizedDelaySec=`. Spans are checked against systemd's time-span syntax and calendar expressions get a basic syntax check, both at construction.
+
+```python
+Task("healthcheck", "/usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/-/healthy",
+     schedule=Every("1min", first="1min"))
+```
+
+renders `healthcheck.service` (`Type=oneshot`, `User=healthcheck`, `TimeoutStartSec=5min`, the strict sandbox, no `[Install]`) and `healthcheck.timer` (`OnBootSec=1min`, `OnUnitActiveSec=1min`, `WantedBy=timers.target`).
+
+`Service(..., socket=Listen(address, *, kind="stream", accept=False, user=None, group=None, mode=None))` makes systemd listen and start the service on the first connection: it renders `<name>.socket` (`ListenStream=`/`ListenDatagram=`, `SocketMode=` (`0660` by default), `SocketUser=`, `SocketGroup=`, `Accept=`, `[Install] WantedBy=sockets.target`), enabled, and the service with `After=`/`Requires=<name>.socket`, no `[Install]`, not enabled. `address` is a port (`8080`), `"host:port"` or an absolute socket path; `user`, `group` and `mode` apply to a socket file only. `accept=True` starts one instance per connection, so the service must be a template: `Service("echo@", "/usr/bin/cat", socket=Listen(7777, accept=True))` renders `echo.socket` and `echo@.service`.
+
+`Mount("/var/lib/app/cache", "tmpfs", type="tmpfs", options=("size=256M", "mode=0750"))` renders `var-lib-app-cache.mount` (`What=`, `Where=`, `Type=`, `Options=` joined with commas; the name is `systemd-escape --path` of `where`, so `/var/lib/my-app` is `var-lib-my\x2dapp.mount`), wanted by `local-fs.target`. A mount that `needs` a runtime-init step or a boot task (a bind mount from an encrypted disk) waits for it, is wanted by the boot target instead and gains the `nofail` option, so it is not ordered before `local-fs.target`. `enabled=False` renders no `[Install]`. Encrypted and data disks stay `Disk`.
+
+A `Task` and a `Service` cannot share a name. The generated units pass the unit lint's activation rules (`socket-service-unpaired`, `timer-unit-missing`, `timer-service-enabled`).
 
 ### Scripts and ordering
 
@@ -589,6 +669,7 @@ Unit text (every unit and drop-in a variant ships, parsed with systemd 257's dir
 | `state-dir-mkdir` | info | An `ExecStartPre=` makes a directory under `/var/lib`, `/var/log`, `/run` or `/var/cache` (`mkdir`, `install -d`): `StateDirectory=` and its siblings do it |
 | `unit-raw` | info | A `Unit` ships hand-written `.service` text that a `Service(...)` declaration renders (reported on the recipe's own declarations, like the raw spellings above) |
 | `unit-as-file` | info | A `File` ships a unit under a systemd directory; `Unit(name, text)` gives it `enabled=`, `needs=` and the unit lint by name |
+| `unit-extra` | info | A `Service` or `DropIn` uses the `extra=` escape hatch; the finding names the keys so the hatch stays visible in review (reported under `nethermind-v1` too) |
 
 Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`, `lock-removed` (each with the section as `subject`), and `lock-stale` when every section matches but the whole-recipe digest does not. Host tools (from `doctor`): `tool-missing`.
 

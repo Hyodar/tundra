@@ -6,6 +6,7 @@ import shlex
 from collections.abc import Mapping
 
 from tundravm._units import UnitText
+from tundravm._units.render import HARDENING_KEYS
 
 Sections = Mapping[str, Mapping[str, tuple[str, ...]]]
 """``{section: {key: values}}``: every assignment of a key, in file order."""
@@ -48,6 +49,10 @@ def parse_conf(text: str) -> Sections:
             if value.strip():
                 values.append(value.strip())
     return {name: {k: tuple(v) for k, v in keys.items()} for name, keys in sections.items()}
+
+
+_DIRECTORY_KINDS = ("state", "logs", "runtime", "cache")
+_HARDENING_KEYS = frozenset(HARDENING_KEYS)
 
 
 class UnitView:
@@ -109,3 +114,46 @@ class UnitView:
         """Every ``[Service] Environment=`` assignment, later ones winning."""
         words = (w for value in self.values("Service", "Environment") for w in shlex.split(value))
         return {key: value for key, _, value in (word.partition("=") for word in words)}
+
+    def before(self, unit: str) -> bool:
+        """Whether ``Before=`` names *unit*."""
+        return unit in self._names("Unit", "Before")
+
+    def part_of(self, unit: str) -> bool:
+        """Whether ``PartOf=`` names *unit*."""
+        return unit in self._names("Unit", "PartOf")
+
+    def binds_to(self, unit: str) -> bool:
+        """Whether ``BindsTo=`` names *unit*."""
+        return unit in self._names("Unit", "BindsTo")
+
+    def conflicts(self, unit: str) -> bool:
+        """Whether ``Conflicts=`` names *unit*."""
+        return unit in self._names("Unit", "Conflicts")
+
+    @property
+    def dynamic_user(self) -> bool:
+        """Whether ``[Service] DynamicUser=yes``."""
+        return self.get("Service", "DynamicUser") in ("yes", "true", "1", "on")
+
+    @property
+    def directories(self) -> dict[str, str]:
+        """``{"state": ..., "logs": ..., "runtime": ..., "cache": ...}`` for the directory
+        directives the unit sets (``StateDirectory=`` ...)."""
+        found = {kind: self.get("Service", f"{kind.title()}Directory") for kind in _DIRECTORY_KINDS}
+        return {kind: value for kind, value in found.items() if value is not None}
+
+    @property
+    def credentials(self) -> dict[str, str]:
+        """``LoadCredential=`` as ``{name: path}``."""
+        pairs = (value.partition(":") for value in self.values("Service", "LoadCredential"))
+        return {name: path for name, _, path in pairs}
+
+    @property
+    def hardening(self) -> dict[str, tuple[str, ...]]:
+        """The sandbox directives the unit sets (``ProtectSystem=`` ...), every value in order."""
+        return {
+            key: values
+            for key, values in self.sections.get("Service", {}).items()
+            if key in _HARDENING_KEYS
+        }

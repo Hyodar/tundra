@@ -33,7 +33,7 @@ STRICT_HARDENING: tuple[tuple[str, str], ...] = (
 )
 """``security="strict"``: today's nine lines, in today's order (a reviewed contract)."""
 
-_HARDENING_KEYS = (
+HARDENING_KEYS = (
     *(key for key, _ in STRICT_HARDENING),
     *"PrivateDevices DevicePolicy DeviceAllow ProtectKernelLogs ProtectClock ProtectHostname"
     " RestrictRealtime RestrictNamespaces LockPersonality RestrictAddressFamilies"
@@ -52,7 +52,7 @@ CANONICAL: dict[str, tuple[str, ...]] = {
         " LoadCredential StateDirectory LogsDirectory RuntimeDirectory CacheDirectory"
         " ReadWritePaths Restart RestartSec Limit* KillMode TimeoutStartSec"
         " TimeoutStopSec".split(),
-        *_HARDENING_KEYS,
+        *HARDENING_KEYS,
     ),
     "Socket": tuple("ListenStream ListenDatagram SocketMode SocketUser SocketGroup Accept".split()),
     "Timer": tuple(
@@ -141,7 +141,7 @@ def command_line(argv: Sequence[str]) -> str:
     return " ".join(command_word(word) for word in argv)
 
 
-def _env_assignment(key: str, value: str) -> str:
+def env_assignment(key: str, value: str) -> str:
     """``KEY=value``, double-quoted per systemd rules when *value* needs it."""
     assignment = f"{key}={value}"
     if value and not any(ch.isspace() or ch in "\"'\\" for ch in value):
@@ -151,39 +151,157 @@ def _env_assignment(key: str, value: str) -> str:
 
 
 def service_unit(svc: ServiceSpec) -> str:
-    """The ``.service`` unit a generated ``Service`` (a ``ServiceSpec``) renders to."""
+    """The ``.service`` unit a generated ``Service`` (a ``ServiceSpec``) renders to.
+
+    Every field maps to its directive through the canonical key table; a field left at its
+    default writes nothing, so a ``Service`` using only the historical fields renders the
+    historical bytes.
+    """
     unit: list[tuple[str, str]] = [("Description", svc.description or svc.name)]
     unit += [(key, " ".join(names)) for key, names in _relations(svc) if names]
     service: list[tuple[str, str]] = [("Type", str(svc.type or "simple"))]
+    if svc.remain_after_exit:
+        service.append(("RemainAfterExit", "yes"))
     service += [("ExecStartPre", command_line(shlex.split(pre))) for pre in svc.exec_start_pre]
     if svc.command:
         service.append(("ExecStart", command_line(svc.command)))
+    service += [("ExecStartPost", command_line(shlex.split(cmd))) for cmd in svc.exec_start_post]
+    if svc.exec_reload:
+        service.append(("ExecReload", command_line(shlex.split(svc.exec_reload))))
+    service += _identity(svc)
+    service += [("EnvironmentFile", path) for path in svc.env_files]
+    service += [("Environment", env_assignment(k, v)) for k, v in sorted(svc.env.items())]
+    service += [("LoadCredential", f"{k}:{v}") for k, v in sorted(svc.credentials.items())]
     for key, value in (
-        ("User", svc.user),
-        ("Group", svc.group),
-        ("WorkingDirectory", svc.working_dir),
-        ("EnvironmentFile", svc.env_file),
+        ("StateDirectory", svc.state),
+        ("LogsDirectory", svc.logs),
+        ("RuntimeDirectory", svc.runtime),
+        ("CacheDirectory", svc.cache),
+        ("ReadWritePaths", " ".join(svc.write_paths)),
     ):
         if value:
             service.append((key, value))
-    service += [("Environment", _env_assignment(k, v)) for k, v in sorted(svc.env.items())]
     if svc.restart != "no":
-        service += [("Restart", svc.restart), ("RestartSec", "5")]
+        service.append(("Restart", svc.restart))
+        restart_sec = "5" if svc.restart_sec is None else svc.restart_sec
+        if restart_sec:
+            service.append(("RestartSec", restart_sec))
     service += [(f"Limit{resource}", value) for resource, value in sorted(svc.limits.items())]
-    if svc.kill_mode:
-        service.append(("KillMode", svc.kill_mode))
-    if svc.timeout_stop:
-        service.append(("TimeoutStopSec", svc.timeout_stop))
-    if svc.security_profile == "strict":
+    for key, value in (
+        ("KillMode", svc.kill_mode),
+        ("TimeoutStartSec", svc.timeout_start),
+        ("TimeoutStopSec", svc.timeout_stop),
+    ):
+        if value:
+            service.append((key, value))
+    if svc.hardening is not None:
+        service += svc.hardening
+    elif svc.security_profile == "strict":
         service += STRICT_HARDENING
-    install: list[tuple[str, str]] = [("WantedBy", svc.wanted_by or "minimal.target")]
+    install: list[tuple[str, str]] = []
+    if svc.enabled:
+        install.append(("WantedBy", svc.wanted_by or "minimal.target"))
     extra = svc.extra_unit or {}
     sections: list[tuple[str, Entries]] = []
     for name, own in (("Unit", unit), ("Service", service), ("Install", install)):
-        added = sorted(extra.get(name, {}).items())
+        added = [
+            (key, line)
+            for key, value in sorted(extra.get(name, {}).items())
+            for line in ((value,) if isinstance(value, str) else value)
+        ]
         sections.append((name, [*canonical(name, own), *added]))
     return render(sections)
 
 
+def _identity(svc: ServiceSpec) -> list[tuple[str, str]]:
+    """``User=`` through the first ``EnvironmentFile=``, in canonical order."""
+    entries: list[tuple[str, str]] = []
+    for key, value in (
+        ("User", svc.user),
+        ("Group", svc.group),
+        ("DynamicUser", "yes" if svc.dynamic_user else None),
+        ("SupplementaryGroups", " ".join(svc.groups)),
+        ("WorkingDirectory", svc.working_dir),
+        ("EnvironmentFile", svc.env_file),
+    ):
+        if value:
+            entries.append((key, value))
+    return entries
+
+
 def _relations(svc: ServiceSpec) -> list[tuple[str, Sequence[str]]]:
-    return [("After", svc.after), ("Requires", svc.requires), ("Wants", svc.wants)]
+    return [
+        ("After", svc.after),
+        ("Requires", svc.requires),
+        ("Wants", svc.wants),
+        ("Before", svc.before),
+        ("PartOf", svc.part_of),
+        ("BindsTo", svc.binds_to),
+        ("Conflicts", svc.conflicts),
+    ]
+
+
+def activation_unit(kind: str, unit: Entries, own: Entries, install: Entries = ()) -> str:
+    """A generated ``.socket``, ``.timer`` or ``.mount`` unit (*kind* names its section),
+    every section in canonical order; an empty ``[Install]`` is left out."""
+    return render(
+        [
+            ("Unit", canonical("Unit", unit)),
+            (kind, canonical(kind, own)),
+            ("Install", canonical("Install", install)),
+        ]
+    )
+
+
+def dropin_unit(
+    svc: ServiceSpec, *, restart: str | None = None, reset_exec_start: bool = False
+) -> str:
+    """A drop-in of the fields *svc* sets: no defaults (``Description``, ``Type``,
+    ``[Install]``) are written, ``Restart=`` only from *restart* and ``RestartSec=`` only
+    when given. With *reset_exec_start* the ``ExecStart=`` reset line precedes the command."""
+    unit = [("Description", svc.description)] if svc.description else []
+    unit += [(key, " ".join(names)) for key, names in _relations(svc) if names]
+    service: list[tuple[str, str]] = []
+    service += [("ExecStartPre", command_line(shlex.split(pre))) for pre in svc.exec_start_pre]
+    if svc.command:
+        service += [("ExecStart", "")] * reset_exec_start
+        service.append(("ExecStart", command_line(svc.command)))
+    service += [("ExecStartPost", command_line(shlex.split(cmd))) for cmd in svc.exec_start_post]
+    if svc.exec_reload:
+        service.append(("ExecReload", command_line(shlex.split(svc.exec_reload))))
+    service += _identity(svc)
+    service += [("EnvironmentFile", path) for path in svc.env_files]
+    service += [("Environment", env_assignment(k, v)) for k, v in sorted(svc.env.items())]
+    service += [("LoadCredential", f"{k}:{v}") for k, v in sorted(svc.credentials.items())]
+    for key, value in (
+        ("StateDirectory", svc.state),
+        ("LogsDirectory", svc.logs),
+        ("RuntimeDirectory", svc.runtime),
+        ("CacheDirectory", svc.cache),
+        ("ReadWritePaths", " ".join(svc.write_paths)),
+        ("Restart", restart),
+        ("RestartSec", svc.restart_sec),
+    ):
+        if value:
+            service.append((key, value))
+    service += [(f"Limit{resource}", value) for resource, value in sorted(svc.limits.items())]
+    for key, value in (
+        ("KillMode", svc.kill_mode),
+        ("TimeoutStartSec", svc.timeout_start),
+        ("TimeoutStopSec", svc.timeout_stop),
+    ):
+        if value:
+            service.append((key, value))
+    service += svc.hardening or ()
+    extra = svc.extra_unit or {}
+    names = ["Unit", "Service", *(name for name in extra if name not in ("Unit", "Service"))]
+    sections: list[tuple[str, Entries]] = []
+    for name in names:
+        own = {"Unit": unit, "Service": service}.get(name, [])
+        added = [
+            (key, line)
+            for key, value in sorted(extra.get(name, {}).items())
+            for line in ((value,) if isinstance(value, str) else value)
+        ]
+        sections.append((name, [*canonical(name, own), *added]))
+    return render(sections)

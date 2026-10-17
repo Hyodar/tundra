@@ -13,7 +13,7 @@ import fnmatch
 import json
 import posixpath
 import re
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -755,26 +755,48 @@ def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> I
 def unit_declaration_check(
     recipe: Recipe, *, variants: Sequence[str] | None = None
 ) -> list[Diagnostic]:
-    """``unit-raw`` and ``unit-as-file`` findings of *recipe*'s own declarations.
+    """``unit-raw``, ``unit-as-file`` and ``unit-extra`` findings of *recipe*'s own declarations.
 
-    Both are style codes, so a ``nethermind-v1`` recipe (historical unit bytes) has none.
+    The first two are style codes, so a ``nethermind-v1`` recipe (historical unit bytes) has
+    none; ``unit-extra`` (the ``extra=`` escape hatch) is always reported.
     """
-    from .declarative.model import File, Unit
+    from .declarative.model import File, Service, Unit
 
-    if recipe.mkosi.dialect == "nethermind-v1":
-        return []
+    style = recipe.mkosi.dialect != "nethermind-v1"
     selected = set(variants) if variants is not None else {v.name for v in recipe.variants}
     groups = [("", (*recipe.platform.contribution(), *recipe.items))]
     groups += [(v.name, (v.add,)) for v in recipe.variants if v.name in selected]
     found: list[Diagnostic] = []
     for variant, items in groups:
         for item in _own_declarations(items):
+            if isinstance(item, Service) and item.extra:
+                found.append(_located(_unit_extra(unit_name(item.name), item.extra, variant), item))
+            elif isinstance(item, Unit) and item.dropin is not None and item.dropin.extra:
+                extra = _unit_extra(unit_name(item.name), item.dropin.extra, variant)
+                found.append(_located(extra, item))
+            if not style:
+                continue
             if isinstance(item, Unit) and item.content is not None:
                 if unit_name(item.name).endswith(".service"):
                     found.append(_located(_unit_raw(item.name, variant), item))
             elif isinstance(item, File) and is_unit_path(_norm(item.path)):
                 found.append(_located(_unit_as_file(item.path, variant), item))
     return found
+
+
+def _unit_extra(name: str, extra: Mapping[str, Mapping[str, object]], variant: str) -> Diagnostic:
+    keys = ", ".join(f"{section}.{key}" for section, values in extra.items() for key in values)
+    return Diagnostic(
+        code="unit-extra",
+        severity="info",
+        message=f"unit {name!r} sets {keys} through the extra= escape hatch",
+        subject=name,
+        variant=variant,
+        hint=(
+            "extra= is for directives no typed field covers; prefer a field when one exists "
+            "(docs/api.md lists them), so the setting stays typed and validated."
+        ),
+    )
 
 
 def _unit_raw(name: str, variant: str) -> Diagnostic:

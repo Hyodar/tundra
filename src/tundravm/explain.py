@@ -30,15 +30,18 @@ from .declarative.model import (
     File,
     FileTree,
     Hook,
+    Mount,
     Package,
     Recipe,
     Resolved,
     Service,
+    Task,
     Template,
     Unit,
 )
 from .declarative.resolve import Identity, Origin, identity
 from .declarative.resolve import describe as describe_identity
+from .declarative.systemd import mount_unit, target_unit
 from .errors import ValidationError
 from .formats import md_cell, md_table
 from .lockfile import LockedFetch
@@ -939,10 +942,34 @@ def _match_subject(
     )
 
 
+def _key_units(key: Identity) -> tuple[str, ...]:
+    """The unit files a unit declaration may render: its own, a socket or a timer."""
+    if key[0] == "Mount":
+        return (mount_unit(key[1]),)
+    if key[0] not in ("Unit", "Service", "Task"):
+        return ()
+    stem = key[1].removesuffix(".service")
+    more = {"Service": (f"{stem.removesuffix('@')}.socket",), "Task": (f"{stem}.timer",)}
+    return (key[1], *more.get(key[0], ()))
+
+
+def _shape_units(item: Declaration) -> tuple[str, ...]:
+    """The units a ``Task``, ``Mount`` or socket-activated ``Service`` renders."""
+    match item:
+        case Task():
+            stem = item.unit.removesuffix(".service")
+            return (item.unit, *((f"{stem}.timer",) if item.schedule is not None else ()))
+        case Mount():
+            return (item.unit,)
+        case Service(socket=socket) if socket is not None:
+            return (unit_name(item.name).removesuffix(".service").removesuffix("@") + ".socket",)
+    return ()
+
+
 def _named_keys(kind: str, name: str, known: Sequence[Identity]) -> tuple[Identity, ...]:
     if kind == "unit":
         unit = unit_name(name)
-        return tuple(k for k in known if k[0] in ("Unit", "Service") and k[1] == unit)
+        return tuple(k for k in known if unit in _key_units(k))
     wanted = {"package": "Package", "hook": "Hook", "init": "BootStep"}[kind]
     return tuple(k for k in known if k[0] == wanted and k[1] == name)
 
@@ -964,11 +991,11 @@ def _path_keys(
             path == key[2] or (path.startswith(f"{key[2]}/") and path in emitted)
         ):
             keys.append(key)
-        elif kind in ("Unit", "Service"):
-            unit = key[1]
+        elif units := _key_units(key):
             if any(
                 path in (f"{d}{unit}", f"{d}{unit}.d") or path.startswith(f"{d}{unit}.d/")
                 for d in UNIT_DIRS
+                for unit in units
             ):
                 keys.append(key)
     if not keys and "runtime-init" in path:
@@ -982,7 +1009,7 @@ _SUBJECT_KIND = {"Package": "package", "Hook": "hook", "BootStep": "init"}
 def _close_hint(subject: str, known: Sequence[Identity], tree: Mapping[str, str]) -> str:
     names = [
         *sorted(_image_paths(tree)),
-        *(f"unit:{k[1]}" for k in known if k[0] in ("Unit", "Service")),
+        *(f"unit:{_key_units(k)[0]}" for k in known if _key_units(k)),
         *(
             f"{_SUBJECT_KIND.get(k[0], k[0].lower())}:{k[1]}"
             for k in known
@@ -1032,6 +1059,13 @@ def _emitted_for(
                     files.append(rel)
                     generated.append(f"drop-in {rel}")
             generated.extend(_script_lines(tree, unit))
+            for unit in _shape_units(item):
+                files.extend(rel for rel in tree if posixpath.basename(rel) == unit)
+                generated.extend(_script_lines(tree, unit))
+        case Task() | Mount():
+            for unit in _shape_units(item):
+                files.extend(rel for rel in tree if posixpath.basename(rel) == unit)
+                generated.extend(_script_lines(tree, unit))
         case Package():
             files.extend(_conf_lines(tree, item.name))
         case Hook() | BootStep():
@@ -1050,7 +1084,7 @@ def _injected_lines(item: Unit | Service, text: str) -> list[str]:
     """``After=``/``Requires=`` lines naming runtime-init that the declaration did not write."""
     declared = item.content if isinstance(item, Unit) and isinstance(item.content, str) else ""
     if isinstance(item, Service):
-        declared = " ".join((*item.after, *item.requires))
+        declared = " ".join(target_unit(t) for t in (*item.after, *item.requires))
     if "runtime-init" in declared or not item.needs:
         return []
     needs = ", ".join("RUNTIME_INIT" if r.step == ALL_STEPS else r.step for r in item.needs)

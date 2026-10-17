@@ -19,7 +19,7 @@ import re
 import shlex
 import stat
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
@@ -37,7 +37,7 @@ from tundravm._modules.secret_delivery import (
 )
 from tundravm._source import BuildRecipe, GitSource, HttpSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as SourceInstall
-from tundravm._units.render import render
+from tundravm._units.render import activation_unit, dropin_unit, render
 from tundravm.errors import ValidationError
 from tundravm.models import (
     NETWORK_SETUP_UNIT,
@@ -74,7 +74,9 @@ from .model import (
     Build,
     Debloat,
     Declaration,
+    Declared,
     Disk,
+    DropIn,
     ExternalDelivery,
     File,
     FileTree,
@@ -84,22 +86,28 @@ from .model import (
     Http,
     Kernel,
     Key,
+    Mount,
     Package,
     Partition,
+    Ready,
     Ref,
     Repository,
     RuntimeTools,
     Secret,
     SecretEnv,
+    SecretFile,
     Secrets,
     Service,
     Setting,
     Target,
+    Task,
     Template,
     Unit,
+    UnitReady,
     User,
 )
 from .resolve import CLOUD_TARGETS, builtin_steps, order_hooks, step_nodes
+from .systemd import UNIT_REF_KINDS, Dynamic, UnitTarget, target_unit
 
 HISTORICAL = "nethermind-v1"
 """The dialect that reproduces the historical nethermind-tdx tree byte for byte."""
@@ -217,7 +225,7 @@ class StateBuilder:
         items: Sequence[Declaration],
         *,
         full: Sequence[Declaration],
-        reemit: Sequence[Unit | Service] = (),
+        reemit: Sequence[Unit | Service | Task | Mount] = (),
         skip: Collection[Declaration] = (),
         scripts: Mapping[Declaration, str] | None = None,
     ) -> None:
@@ -233,6 +241,8 @@ class StateBuilder:
         profile = self.state.ensure_profile(name)
         steps = {step for step, _, _ in step_nodes(full)}
         hooks = iter(order_hooks([item for item in items if isinstance(item, Hook)]))
+        units = declared_units(full)
+        users = {item.name for item in full if isinstance(item, User)}
         runtime_done = False
         for item in items:
             match item:
@@ -253,9 +263,14 @@ class StateBuilder:
                 case User():
                     _user(profile, item)
                 case Unit():
-                    _unit(profile, item, steps=steps, per_step=not self.historical)
+                    _unit(profile, item, steps=steps, per_step=not self.historical, units=units)
                 case Service():
-                    _service(profile, item)
+                    _service(profile, item, units)
+                    _finish_service(profile, item)
+                case Task():
+                    _task(profile, item, users=users, historical=self.historical, units=units)
+                case Mount():
+                    _mount(profile, item, steps=steps, per_step=not self.historical, units=units)
                 case Template():
                     _template(profile, item)
                 case Setting() if (item.section, item.key) == BUILD_SOURCES:
@@ -294,9 +309,18 @@ class StateBuilder:
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
             if isinstance(unit, Service):
-                _service(profile, unit)
+                _service(profile, unit, units)
+                _finish_service(profile, unit)
                 continue
-            _unit(profile, unit, steps=steps, per_step=not self.historical, states=False)
+            if isinstance(unit, Task):
+                _task(profile, unit, users={unit.unit[: -len(".service")]}, historical=False)
+                continue
+            if isinstance(unit, Mount):
+                _mount(profile, unit, steps=steps, per_step=not self.historical, states=False)
+                continue
+            _unit(
+                profile, unit, steps=steps, per_step=not self.historical, states=False, units=units
+            )
         for step in (item for item in items if isinstance(item, BootStep)):
             profile.init_scripts.append(
                 InitScriptEntry(
@@ -782,6 +806,7 @@ def _unit(
     steps: Collection[str],
     per_step: bool,
     states: bool = True,
+    units: Collection[str] | None = None,
 ) -> None:
     """Ship or control *unit*, waiting for the units of the steps it needs.
 
@@ -789,7 +814,8 @@ def _unit(
     through the :data:`NEEDS_DROPIN` drop-in. Without *states* its enable,
     disable and mask lines are left to the profile it extends.
     """
-    waits = wait_units((ref.step for ref in unit.needs), steps=steps, per_step=per_step)
+    waits = wait_units(_steps(unit.needs), steps=steps, per_step=per_step)
+    waits = (*waits, *ready_units(unit.needs))
     if unit.content is not None:
         content = unit.content
         if isinstance(content, Path):
@@ -805,6 +831,9 @@ def _unit(
         listed = " ".join(waits)
         dropin = f"{UNIT_DIRECTORY}/{unit_name(unit.name)}.d/{NEEDS_DROPIN}"
         _add_file(profile, dropin, render([("Unit", [("After", listed), ("Requires", listed)])]))
+    if unit.dropin is not None:
+        path = f"{UNIT_DIRECTORY}/{unit_name(unit.name)}.d/{unit.dropin.name}.conf"
+        _add_file(profile, path, _dropin(unit, unit.dropin, units))
     if not states:
         return
     if unit.enabled is True:
@@ -815,15 +844,24 @@ def _unit(
         _unit_state(profile, "mask", unit.name)
 
 
+def declared_units(items: Sequence[Declaration]) -> frozenset[str]:
+    """The unit names the declarations in *items* render or control (relation refs resolve
+    against them)."""
+    return frozenset(
+        target_unit(item.ref)
+        for item in items
+        if isinstance(item, Declared) and item.ref.kind in UNIT_REF_KINDS
+    )
+
+
 def _unit_state(profile: ProfileState, action: UnitAction, unit: str) -> None:
     spec = UnitStateSpec(action=action, unit=unit_name(unit))
     if spec not in profile.unit_states:
         profile.unit_states.append(spec)
 
 
-def _service(profile: ProfileState, service: Service) -> None:
+def _service(profile: ProfileState, service: Service, units: Collection[str] | None = None) -> None:
     name = service.name
-    limits = _limits(name, service.limits)
     for key, value in service.env.items():
         if not _ENV_KEY.fullmatch(key):
             raise ValidationError(
@@ -841,33 +879,92 @@ def _service(profile: ProfileState, service: Service) -> None:
             hint="Service names must be unique within a profile.",
             context={"service": name, "profile": profile.name},
         )
-    command, pre = service.exec_start, service.exec_start_pre
+    command = service.exec_start
+    fields = _unit_fields(name, service, units)
+    restart_sec = service.restart_sec
     profile.services.append(
         ServiceSpec(
             name=name,
             command=tuple(shlex.split(command)) if isinstance(command, str) else tuple(command),
-            user=service.user,
-            after=tuple(service.after),
-            requires=tuple(service.requires),
-            wants=tuple(dict.fromkeys(service.wants)),
             restart=service.restart,
-            enabled=True,
-            extra_unit={},
+            enabled=service.enabled,
             security_profile=service.security,
-            description=service.description or None,
-            env=dict(service.env),
-            env_file=service.env_file or None,
-            working_dir=service.working_dir or None,
-            exec_start_pre=(pre,) if isinstance(pre, str) else tuple(pre),
-            group=service.group or None,
             wanted_by=service.wanted_by or None,
             type=service.type,
-            limits=limits,
-            kill_mode=service.kill_mode,
-            timeout_stop=service.timeout_stop or None,
-            needs=tuple(ref.step for ref in service.needs),
+            restart_sec=None if restart_sec == "5" else restart_sec or "",
+            **fields,  # type: ignore[arg-type]
         )
     )
+
+
+def _unit_fields(
+    name: str, decl: Service | DropIn, units: Collection[str] | None
+) -> dict[str, object]:
+    """The ``ServiceSpec`` fields ``Service`` and ``DropIn`` share, lowered.
+
+    Relation refs become unit names (one no declaration in the variant renders is
+    ``unit-ref-undefined``); ``requires``/``binds_to`` also order ``After=``.
+    """
+    rel: dict[str, tuple[str, ...]] = {}
+    for what in ("after", "requires", "wants", "before", "part_of", "binds_to", "conflicts"):
+        names: list[str] = []
+        for target in getattr(decl, what):
+            unit = target_unit(target)
+            if isinstance(target, Ref) and units is not None and unit not in units:
+                raise ValidationError(
+                    f"unit-ref-undefined: {name} {what}= names {target}, which the variant "
+                    "does not declare.",
+                    hint="Declare the unit, or name a packaged unit by its unit name.",
+                )
+            names.append(unit)
+        rel[what] = tuple(dict.fromkeys(names))
+    rel["after"] = tuple(dict.fromkeys((*rel["after"], *rel["requires"], *rel["binds_to"])))
+    files = (decl.env_file,) if isinstance(decl.env_file, str) else tuple(decl.env_file or ())
+    pre = decl.exec_start_pre
+    return {
+        **rel,
+        "description": decl.description or None,
+        "user": None if isinstance(decl.user, Dynamic) else decl.user,
+        "dynamic_user": isinstance(decl.user, Dynamic),
+        "group": decl.group or None,
+        "groups": tuple(decl.groups),
+        "working_dir": decl.working_dir or None,
+        "env": dict(decl.env),
+        "env_file": files[0] if files else None,
+        "env_files": files[1:],
+        "exec_start_pre": (pre,) if isinstance(pre, str) else tuple(pre),
+        "exec_start_post": tuple(decl.exec_start_post),
+        "exec_reload": decl.exec_reload,
+        "credentials": {
+            key: target.path if isinstance(target, SecretFile) else target
+            for key, target in sorted(decl.credentials.items())
+        },
+        "state": decl.state,
+        "logs": decl.logs,
+        "runtime": decl.runtime,
+        "cache": decl.cache,
+        "write_paths": tuple(decl.write_paths),
+        "limits": _limits(name, decl.limits),
+        "timeout_start": decl.timeout_start,
+        "timeout_stop": decl.timeout_stop or None,
+        "hardening": None if decl.hardening is None else decl.hardening.entries(),
+        "extra_unit": {section: dict(keys) for section, keys in decl.extra.items()},
+        "kill_mode": getattr(decl, "kill_mode", None),
+        "needs": tuple(ref.step for ref in getattr(decl, "needs", ())),
+    }
+
+
+def _dropin(unit: Unit, dropin: DropIn, units: Collection[str] | None) -> str:
+    """The text of *unit*'s typed drop-in."""
+    fields = _unit_fields(unit.name, dropin, units)
+    command = dropin.exec_start
+    spec = ServiceSpec(
+        name=unit_name(unit.name),
+        command=tuple(shlex.split(command)) if isinstance(command, str) else tuple(command or ()),
+        restart_sec=dropin.restart_sec,
+        **fields,  # type: ignore[arg-type]
+    )
+    return dropin_unit(spec, restart=dropin.restart, reset_exec_start=True)
 
 
 def _limits(service: str, limits: Mapping[str, str | int]) -> dict[str, str]:
@@ -1098,6 +1195,162 @@ def _suffixed(path: str, name: str) -> str:
     """*path* with ``-<name>`` appended to its stem."""
     pure = PurePosixPath(path)
     return str(pure.with_name(f"{pure.stem}-{name}{pure.suffix}"))
+
+
+# ── tasks, sockets and mounts (docs/design/systemd-units.md 2.4-2.6) ───────
+
+
+def ready_units(needs: Sequence[Ready]) -> tuple[str, ...]:
+    """The units of the ``task.ready`` handles in *needs* (``After=`` + ``Requires=``)."""
+    return tuple(ref.unit for ref in needs if isinstance(ref, UnitReady))
+
+
+def _steps(needs: Sequence[Ready]) -> tuple[str, ...]:
+    return tuple(ref.step for ref in needs if not isinstance(ref, UnitReady))
+
+
+def _merged(*groups: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name for group in groups for name in group))
+
+
+def _targets(
+    name: str, what: str, targets: Sequence[UnitTarget], units: Collection[str] | None
+) -> tuple[str, ...]:
+    """Relation *targets* as unit names; a ref no declaration renders is refused."""
+    out: list[str] = []
+    for target in targets:
+        unit = target_unit(target)
+        if isinstance(target, Ref) and units is not None and unit not in units:
+            raise ValidationError(
+                f"unit-ref-undefined: {name} {what}= names {target}, which the variant "
+                "does not declare.",
+                hint="Declare the unit, or name a packaged unit by its unit name.",
+            )
+        out.append(unit)
+    return tuple(dict.fromkeys(out))
+
+
+def _finish_service(profile: ProfileState, service: Service) -> None:
+    """Wire what :func:`_service` leaves to the shapes: ``needs=[task.ready]`` units and
+    socket activation (``<name>.socket`` enabled, the service left for it to start)."""
+    spec = profile.services[-1]
+    units = ready_units(service.needs)
+    if not units and service.socket is None:
+        return
+    first = list(units)
+    changes: dict[str, object] = {"needs": _steps(service.needs)}
+    if service.socket is not None:
+        stem = unit_name(service.name).removesuffix(".service").removesuffix("@")
+        socket = f"{stem}.socket"
+        first.append(socket)
+        text = activation_unit(
+            "Socket",
+            [("Description", service.description or stem)],
+            service.socket.entries(),
+            [("WantedBy", "sockets.target")],
+        )
+        _add_file(profile, f"{UNIT_DIRECTORY}/{socket}", text)
+        enable_unit(profile, socket)
+        changes["enabled"] = False
+    changes["after"] = _merged(first, spec.after)
+    changes["requires"] = _merged(first, spec.requires)
+    profile.services[profile.services.index(spec)] = replace(spec, **changes)  # type: ignore[arg-type]
+
+
+def _task(
+    profile: ProfileState,
+    task: Task,
+    *,
+    users: Collection[str],
+    historical: bool,
+    units: Collection[str] | None = None,
+) -> None:
+    """Lower *task*: a oneshot ``ServiceSpec``, plus an enabled ``.timer`` when scheduled."""
+    name = task.unit
+    stem = name.removesuffix(".service")
+    if any(unit_name(s.name) == name and s.command for s in profile.services):
+        raise ValidationError(
+            f"Duplicate unit '{name}' in variant '{profile.name}'.",
+            hint="A Task and a Service cannot share a name.",
+            context={"unit": name, "profile": profile.name},
+        )
+    user = task.user
+    if user is None:
+        user = stem
+        if stem not in users and not any(u.name == stem for u in profile.users):
+            declared = User(stem)
+            if historical:
+                _shell(profile, useradd_line(declared), phase="postinst")
+            else:
+                _user(profile, declared)
+    command = task.command
+    boot = task.schedule is None
+    wants = _targets(name, "wants", task.wants, units)
+    requires = _merged(ready_units(task.needs), _targets(name, "requires", task.requires, units))
+    profile.services.append(
+        ServiceSpec(
+            name=task.name,
+            command=tuple(shlex.split(command)) if isinstance(command, str) else command,
+            user=None if isinstance(user, Dynamic) else user,
+            dynamic_user=isinstance(user, Dynamic),
+            group=task.group,
+            after=_merged(requires, _targets(name, "after", task.after, units), wants),
+            requires=requires,
+            wants=wants,
+            restart="no",
+            enabled=boot,
+            type="oneshot",
+            remain_after_exit=boot,
+            description=task.description,
+            state=task.state,
+            working_dir=f"/var/lib/{task.state}" if task.state else None,
+            timeout_start=task.timeout,
+            hardening=task.hardening.entries(),
+            wanted_by=task.wanted_by,
+            needs=_steps(task.needs),
+        )
+    )
+    if task.schedule is not None:
+        timer = activation_unit(
+            "Timer",
+            [("Description", task.description or stem)],
+            task.schedule.entries(),
+            [("WantedBy", "timers.target")],
+        )
+        _add_file(profile, f"{UNIT_DIRECTORY}/{stem}.timer", timer)
+        enable_unit(profile, f"{stem}.timer")
+
+
+def _mount(
+    profile: ProfileState,
+    mount: Mount,
+    *,
+    steps: Collection[str],
+    per_step: bool,
+    states: bool = True,
+    units: Collection[str] | None = None,
+) -> None:
+    """Lower *mount* to ``<escaped where>.mount``, enabled through the usual mechanism."""
+    waits = _merged(
+        wait_units(_steps(mount.needs), steps=steps, per_step=per_step), ready_units(mount.needs)
+    )
+    requires = _merged(waits, _targets(mount.unit, "requires", mount.requires, units))
+    after = _merged(requires, _targets(mount.unit, "after", mount.after, units))
+    options = mount.options
+    if waits and "nofail" not in options:
+        options = (*options, "nofail")  # else ordered before local-fs.target: a cycle
+    unit = [("Description", mount.description or mount.where)]
+    unit += [(key, " ".join(names)) for key, names in (("After", after), ("Requires", requires))]
+    own = [("What", mount.what), ("Where", mount.where)]
+    own += [(k, v) for k, v in (("Type", mount.type), ("Options", ",".join(options))) if v]
+    install = []
+    if mount.enabled:
+        target = mount.wanted_by or ("minimal.target" if waits else "local-fs.target")
+        install.append(("WantedBy", target))
+    text = activation_unit("Mount", [e for e in unit if e[1]], own, install)
+    _add_file(profile, f"{UNIT_DIRECTORY}/{mount.unit}", text)
+    if mount.enabled and states:
+        enable_unit(profile, mount.unit)
 
 
 __all__ = [

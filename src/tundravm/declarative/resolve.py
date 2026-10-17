@@ -34,13 +34,16 @@ from .model import (
     Fragment,
     Hook,
     Key,
+    Mount,
     Recipe,
     Ref,
     Resolved,
     Secrets,
     Service,
     Target,
+    Task,
     Unit,
+    UnitReady,
     Variant,
 )
 
@@ -462,14 +465,25 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
         steps = (item for item in items if isinstance(item, BootStep))
         culprit = next((step for step in steps if repr(step.name) in str(exc)), None)
         state.report("step-cycle", str(exc), subject=culprit.name if culprit else "", at=culprit)
-    for unit in (item for item in items if isinstance(item, (Unit, Service))):
+    finished = {item.unit for item in items if isinstance(item, Task) and item.schedule is None}
+    for unit in (item for item in items if isinstance(item, (Unit, Service, Task, Mount))):
         for handle in unit.needs:
+            if isinstance(handle, UnitReady):
+                if handle.unit not in finished:
+                    state.report(
+                        "needs-undefined",
+                        f"{type(unit).__name__.lower()} {unit_label(unit)!r} needs boot task "
+                        f"{handle.unit!r}, which this variant does not declare",
+                        subject=unit_label(unit),
+                        at=unit,
+                    )
+                continue
             if handle.step != ALL_STEPS and handle.step not in step_names:
                 state.report(
                     "needs-undefined",
-                    f"{type(unit).__name__.lower()} {unit.name!r} needs step {handle.step!r}, "
-                    "which this variant does not declare",
-                    subject=unit.name,
+                    f"{type(unit).__name__.lower()} {unit_label(unit)!r} needs step "
+                    f"{handle.step!r}, which this variant does not declare",
+                    subject=unit_label(unit),
                     at=unit,
                 )
 
@@ -690,6 +704,11 @@ def locate(diagnostics: Iterable[Diagnostic], items: Sequence[Declaration]) -> l
                 diagnostic = replace(diagnostic, location=location)
         out.append(diagnostic)
     return out
+
+
+def unit_label(item: Unit | Service | Task | Mount) -> str:
+    """How diagnostics name a unit declaration: its name, a mount's point."""
+    return item.where if isinstance(item, Mount) else item.name
 
 
 def provenance(recipe: Recipe, *, variant: str) -> dict[Identity, tuple[Origin, ...]]:

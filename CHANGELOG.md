@@ -185,6 +185,11 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - Lint `setting-raw` and `hook-covered` (info, silent under `nethermind-v1`) point a raw `Setting` or hook at the declaration that covers it.
 - The service, cloud and prover `init` templates create `/var/lib/app` with `RuntimeDirectory` (tree digests move); `examples/nethermind_base.py` sets its seed and build directories on `NETHERMIND_V1` and drops a redundant `Build.Environment` (the surge tree is unchanged).
 
+- `Service` grows typed fields: `user=Dynamic()`, `groups`, `exec_start_post`, `exec_reload`, `credentials` (LoadCredential, also from `SecretFile`), `state`/`logs`/`runtime`/`cache` directories, `write_paths`, `restart_sec`, `timeout_start`/`timeout_stop`, `hardening=Hardening.strict()|.relaxed()|.none()` with per-field overrides, relations by name or ref (`after`, `requires`, `wants`, `before`, `part_of`, `binds_to`, `conflicts`; `requires`/`binds_to` also order `After=`), `enabled=False`, and `extra=` validated against systemd 257 (`unit-extra` info). Defaults are unchanged, so recipe and tree digests don't move; an unmatched ref fails with `unit-ref-undefined`.
+- `Unit(name, dropin=DropIn(...))` changes a packaged unit through a typed drop-in at `<unit>.d/20-tundravm.conf`.
+- `Task(name, command, schedule=None | Every(...) | Calendar(...))`: a hardened oneshot that runs at boot with its own user (`.ready` lets others wait for it), or with a schedule a `<name>.timer` that is the only thing enabled. `Service(socket=Listen(port | path, kind=, accept=, user=, group=, mode=))` renders and enables `<name>.socket` and leaves the service to it. `Mount(where, what, type=, options=)` computes the unit name with `systemd-escape --path` rules.
+- Example 03's health check is a scheduled `Task`, so it no longer also runs at boot.
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

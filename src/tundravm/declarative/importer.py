@@ -68,6 +68,7 @@ from .model import (
     Http,
     Kernel,
     Mkosi,
+    Mount,
     Package,
     Phase,
     Recipe,
@@ -76,6 +77,7 @@ from .model import (
     Service,
     Setting,
     Target,
+    Task,
     Unit,
     User,
     Variant,
@@ -1750,8 +1752,10 @@ def _hint(obj: object) -> str:
     match obj:
         case File(path=path):
             return path.rpartition("/")[2] or path
-        case Unit(name=name) | Service(name=name):
+        case Unit(name=name) | Service(name=name) | Task(name=name):
             return name
+        case Mount(where=where):
+            return where.rpartition("/")[2]
         case Hook(name=name):
             return f"{name}_script"
         case BootStep(name=name):

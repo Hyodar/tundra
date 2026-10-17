@@ -164,7 +164,6 @@ UNIT_CODES = frozenset(
     }
 )
 EXPECTED_UNIT_FINDINGS = {
-    "03_fragments": {"timer-service-enabled"},
     "06_attestation": {"requires-without-after", "socket-service-started"},
     "init-minimal": {"unit-raw"},
     "init-prover": {"requires-without-after", "socket-service-started"},

@@ -25,13 +25,14 @@ from tundravm.declarative import (
     Debian,
     Declaration,
     Diagnostic,
+    Every,
     File,
     Fragment,
     Package,
     Recipe,
     Repository,
     Resolved,
-    Service,
+    Task,
     Unit,
     Variant,
     component,
@@ -39,8 +40,6 @@ from tundravm.declarative import (
 from tundravm.declarative.utils import Composite, ConfigFile, HttpEndpoint, Run
 
 SYSCTL = "kernel.kptr_restrict=2\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1\n"
-
-TIMER = "[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\n\n[Install]\nWantedBy=timers.target\n"
 
 # A plain fragment: security updates and kernel hardening, shared by every variant.
 hardening = Fragment(
@@ -108,15 +107,19 @@ class Metrics(Composite):
 
 @component
 class HealthCheck(Composite):
-    """A timer probing *target* once a minute; requires the fragment that exports it."""
+    """A scheduled task probing *target* once a minute; requires the fragment that exports it."""
 
     target: HttpEndpoint
 
     def compose(self) -> Iterator[Declaration]:
         yield Package("curl")
         probe = f"/usr/bin/curl -fsS -o /dev/null {self.target.url}"
-        yield Service("healthcheck", probe, description="Probe the service", type="oneshot")
-        yield Unit("healthcheck.timer", TIMER, enabled=True)
+        yield Task(
+            "healthcheck",
+            probe,
+            description="Probe the service",
+            schedule=Every("1min", first="1min"),
+        )
 
 
 metrics = Metrics()  # Metrics(listen="0.0.0.0") makes lint warn for the gcp variant

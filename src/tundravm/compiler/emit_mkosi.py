@@ -1115,7 +1115,9 @@ class DeterministicMkosiEmitter:
         for svc in profile.services:
             if svc.enabled:
                 unit_name = svc.name if "." in svc.name else f"{svc.name}.service"
-                commands.append(CommandSpec(argv=(f"mkosi-chroot systemctl enable {unit_name}",)))
+                commands.append(
+                    CommandSpec(argv=(f"mkosi-chroot systemctl enable {shlex.quote(unit_name)}",))
+                )
                 enabled_units.append(unit_name)
 
         if enabled_units:

@@ -23,10 +23,22 @@ from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
 from tundravm._source import FrozenMap
 from tundravm._source import GoBuild as Go
+from tundravm._units.directives import UNIT_SUFFIXES, check_value
 from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.models import unit_name
 from tundravm.policy import Policy
+
+from .systemd import (
+    SERVICE_OWNED,
+    Dynamic,
+    Extra,
+    Hardening,
+    UnitTarget,
+    mount_unit,
+    require_extra,
+    require_targets,
+)
 
 Target = Literal["qemu", "azure", "gcp"]
 Phase = Literal[
@@ -532,6 +544,7 @@ _KEY_FIELDS: dict[str, tuple[str, ...]] = {
     "Debloat": (),
     "RuntimeTools": (),
     "Kernel": (),
+    "Mount": ("where",),
 }
 """Identity fields of the declaration types that are not identified by ``name`` alone."""
 
@@ -542,9 +555,9 @@ def key_fields(kind: str) -> tuple[str, ...]:
 
 
 def _key_part(kind: str, name: str, value: object) -> str:
-    if name == "path":
+    if name in ("path", "where"):
         return posixpath.normpath(str(value))
-    if kind in ("Unit", "Service"):
+    if kind in ("Unit", "Service", "Task"):
         return unit_name(str(value))
     return str(value)
 
@@ -739,6 +752,12 @@ def _require_steps(owner: object, what: str, *, sentinel: bool = False) -> None:
                 f"{what} entry {value!r} is not a readiness handle.",
                 hint="Pass key.ready, disk.ready, secrets.ready or a BootStep's .ready.",
             )
+        if isinstance(value, UnitReady) and not sentinel:
+            raise _fail(
+                owner,
+                f"{what} cannot wait for unit {value.unit}.",
+                hint="A BootStep waits for steps; order units with after=/requires=.",
+            )
         if value == RUNTIME_INIT and not sentinel:
             raise _fail(owner, f"{what} cannot name RUNTIME_INIT.", hint="Name the steps.")
         handles.append(value)
@@ -926,6 +945,8 @@ class Unit(Declared):
     ``needs`` lists the runtime-init steps (readiness handles) the unit waits
     for: ``After=``/``Requires=`` their units, in a shipped unit's own file or
     a packaged unit's ``<name>.d/10-tundravm-needs.conf`` drop-in.
+    ``dropin`` changes a packaged unit the Debian way, through a typed :class:`DropIn`
+    (``<name>.d/<dropin.name>.conf``); a unit that ships text is edited in its text.
     ``allow_secret`` silences ``secret-in-env`` for the shipped unit file.
     """
 
@@ -935,6 +956,7 @@ class Unit(Declared):
     masked: bool | None = None
     needs: Sequence[Ready] = ()
     allow_secret: bool = False
+    dropin: DropIn | None = None
 
     def __post_init__(self) -> None:
         _require_steps(self, "needs", sentinel=True)
@@ -950,11 +972,28 @@ class Unit(Declared):
                     f"unit {self.name!r} ships a file and needs its type suffix.",
                     hint=f"Use {self.name + '.service'!r}.",
                 )
-        elif self.enabled is None and self.masked is None:
+            if self.dropin is not None:
+                raise _fail(
+                    self,
+                    f"unit {self.name!r} ships its text; a drop-in only changes packaged units.",
+                    hint="Edit the unit text, or drop content= to change the packaged unit.",
+                )
+        elif self.enabled is None and self.masked is None and self.dropin is None:
             raise _fail(
                 self,
                 f"unit {self.name!r} has no content and neither enables, disables nor masks it.",
             )
+        if self.dropin is not None:
+            if not isinstance(self.dropin, DropIn):
+                raise _fail(self, f"dropin= must be a DropIn, got {self.dropin!r}.")
+            own = UNIT_SUFFIXES.get("." + unit_name(self.name).rpartition(".")[2], "")
+            for section in self.dropin.sections():
+                if section not in ("Unit", "Install", own):
+                    raise _fail(
+                        self,
+                        f"drop-in {self.dropin.name!r} writes [{section}], "
+                        f"which unit {self.name!r} does not have.",
+                    )
 
     @classmethod
     def from_file(
@@ -980,10 +1019,14 @@ class Unit(Declared):
 class Service(Declared):
     """A generated systemd service: the compiler renders the unit from these fields.
 
-    ``security`` selects the hardening profile (``strict``, ``default`` or
-    ``none``). ``needs`` lists the runtime-init steps the unit waits for (the
-    default, :data:`RUNTIME_INIT`, is the whole chain when the variant has one;
-    ``needs=()`` starts it without waiting). ``Unit`` ships verbatim text.
+    Every field maps to one directive (docs/api.md has the table); a field left at its
+    default writes nothing. ``hardening`` takes a :class:`Hardening` profile; without one,
+    ``security`` picks the historical profile (``strict``, ``default`` or ``none``).
+    ``requires``/``binds_to`` also order the unit ``After=`` them. ``needs`` lists the
+    runtime-init steps the unit waits for (the default, :data:`RUNTIME_INIT`, is the whole
+    chain when the variant has one; ``needs=()`` starts it without waiting). ``enabled=False``
+    renders no ``[Install]`` and enables nothing. ``extra`` is the escape hatch for
+    directives no field covers (linted ``unit-extra``). ``Unit`` ships verbatim text.
     ``allow_secret`` silences ``secret-in-env`` for the rendered unit, every field.
     """
 
@@ -991,29 +1034,49 @@ class Service(Declared):
     exec_start: str | tuple[str, ...]
     _: KW_ONLY
     description: str | None = None
-    user: str | None = None
+    user: str | Dynamic | None = None
     group: str | None = None
     working_dir: str | None = None
     env: Mapping[str, str] = field(default_factory=FrozenMap)
-    env_file: str | None = None
+    env_file: str | tuple[str, ...] | None = None
     exec_start_pre: tuple[str, ...] = ()
-    after: tuple[str, ...] = ()
-    requires: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
+    after: tuple[UnitTarget, ...] = ()
+    requires: tuple[UnitTarget, ...] = ()
+    wants: tuple[UnitTarget, ...] = ()
     wanted_by: str | None = None
     type: Literal["simple", "exec", "oneshot", "notify", "forking"] | None = None
-    restart: Literal["always", "on-failure", "no"] = "no"
+    restart: Literal["always", "on-failure", "on-abnormal", "no"] = "no"
     limits: Mapping[str, str | int] = field(default_factory=FrozenMap)
     kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
     timeout_stop: str | None = None
     security: Literal["strict", "default", "none"] = "default"
     needs: Sequence[Ready] = (RUNTIME_INIT,)
     allow_secret: bool = False
+    groups: tuple[str, ...] = ()
+    exec_start_post: tuple[str, ...] = ()
+    exec_reload: str | None = None
+    credentials: Mapping[str, str | SecretFile] = field(default_factory=FrozenMap)
+    state: str | None = None
+    logs: str | None = None
+    runtime: str | None = None
+    cache: str | None = None
+    write_paths: tuple[str, ...] = ()
+    restart_sec: str | None = "5"
+    timeout_start: str | None = None
+    hardening: Hardening | None = None
+    before: tuple[UnitTarget, ...] = ()
+    part_of: tuple[UnitTarget, ...] = ()
+    binds_to: tuple[UnitTarget, ...] = ()
+    conflicts: tuple[UnitTarget, ...] = ()
+    enabled: bool = True
+    extra: Extra = field(default_factory=FrozenMap)
+    socket: Listen | None = None
 
     def __post_init__(self) -> None:
-        _freeze(self, "exec_start", "exec_start_pre", "after", "requires", "wants")
+        _freeze(self, "exec_start", "exec_start_pre")
         _require_steps(self, "needs", sentinel=True)
         _require_bool(self, self.allow_secret, "allow_secret")
+        _require_bool(self, self.enabled, "enabled")
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid service name {self.name!r}.")
         if self.name.endswith(".target") or (
@@ -1026,30 +1089,172 @@ class Service(Declared):
             raise _fail(self, f"service {self.name!r} has an empty exec_start.")
         else:
             _require_names(self, self.exec_start, "exec_start argument")
-        for what in ("user", "group", "env_file", "wanted_by", "timeout_stop"):
+        for what in ("wanted_by", "timeout_stop"):
             value = getattr(self, what)
             if value is not None:
                 _require_name(self, value, what)
-        for what in ("working_dir", "env_file"):
-            value = getattr(self, what)
-            if value is not None:
-                _require_absolute(self, value, what)
-        _require_env(self)
-        for what in ("exec_start_pre", "after", "requires", "wants"):
-            _require_names(self, getattr(self, what), what)
+        _require_names(self, self.exec_start_pre, "exec_start_pre")
+        _require_unit_fields(self)
         if self.type is not None:
             _require_choice(
                 self, self.type, ("simple", "exec", "oneshot", "notify", "forking"), "type"
             )
-        _require_choice(self, self.restart, ("always", "on-failure", "no"), "restart")
+        _require_choice(self, self.restart, _RESTARTS, "restart")
         if self.kill_mode is not None:
             _require_choice(
                 self, self.kill_mode, ("control-group", "mixed", "process", "none"), "kill_mode"
             )
         _require_choice(self, self.security, ("strict", "default", "none"), "security")
-        for resource, value in _freeze_map(self, "limits").items():
-            if isinstance(value, bool) or not isinstance(value, (str, int)):
-                raise _fail(self, f"limit {resource!r} must be a str or int, got {value!r}.")
+        if self.hardening is not None and self.security != "default":
+            raise _fail(
+                self,
+                f"service {self.name!r} sets both security= and hardening=.",
+                hint="Drop security=; hardening=Hardening.strict() replaces security='strict'.",
+            )
+        if not self.enabled and self.wanted_by is not None:
+            raise _fail(
+                self,
+                f"service {self.name!r} is not enabled but names wanted_by={self.wanted_by!r}.",
+                hint="Drop wanted_by=, or keep enabled=True.",
+            )
+        require_extra(self, ("Unit", "Service", "Install"), SERVICE_OWNED)
+        _require_socket(self)
+
+
+_RESTARTS = ("always", "on-failure", "on-abnormal", "no")
+_RELATIONS = ("after", "requires", "wants", "before", "part_of", "binds_to", "conflicts")
+_DIRECTORIES = ("state", "logs", "runtime", "cache")
+
+
+def _require_unit_fields(owner: Service | DropIn) -> None:
+    """Validate the fields ``Service`` and :class:`DropIn` share; freeze lists and maps."""
+    _freeze(owner, "groups", "exec_start_post", "write_paths")
+    if isinstance(owner.env_file, list):
+        object.__setattr__(owner, "env_file", tuple(owner.env_file))
+    require_targets(owner, *_RELATIONS)
+    if owner.user is not None and not isinstance(owner.user, Dynamic):
+        _require_name(owner, owner.user, "user")
+    if owner.group is not None:
+        _require_name(owner, owner.group, "group")
+    for group in owner.groups:
+        if not isinstance(group, str) or not _GROUP_NAME.fullmatch(group):
+            raise _fail(owner, f"invalid group name {group!r} in groups=.")
+    if owner.working_dir is not None:
+        _require_absolute(owner, owner.working_dir, "working_dir")
+    _require_env(owner)
+    files = (owner.env_file,) if isinstance(owner.env_file, str) else owner.env_file or ()
+    if not isinstance(files, tuple):
+        raise _fail(owner, f"env_file= must be a path or a list of paths, got {files!r}.")
+    for path in files:
+        _require_absolute(owner, path.removeprefix("-") if isinstance(path, str) else path)
+    _require_names(owner, owner.exec_start_post, "exec_start_post")
+    if owner.exec_reload is not None:
+        _require_name(owner, owner.exec_reload, "exec_reload")
+    for name, target in _freeze_map(owner, "credentials").items():
+        if not _ENTRY_NAME.fullmatch(name):
+            raise _fail(owner, f"invalid credential name {name!r}.", hint="Use 'api-token'.")
+        if not isinstance(target, SecretFile):
+            _require_absolute(owner, target, f"credential {name!r}")  # type: ignore[arg-type]
+    for what in _DIRECTORIES:
+        value = getattr(owner, what)
+        if value is not None:
+            _require_name(owner, value, what)
+            _require_relative(owner, value, what)
+            if any(ch.isspace() for ch in value):
+                raise _fail(owner, f"{what} {value!r} must be one directory name.")
+    for path in owner.write_paths:
+        _require_absolute(owner, path, "write_paths entry")
+    for what, key in (("restart_sec", "RestartSec"), ("timeout_start", "TimeoutStartSec")):
+        value = getattr(owner, what)
+        if value is not None and (
+            not isinstance(value, str) or check_value("Service", key, value) is not None
+        ):
+            raise _fail(owner, f"{what} {value!r} is not a systemd time span.", hint="Use '5s'.")
+    for resource, value in _freeze_map(owner, "limits").items():
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise _fail(owner, f"limit {resource!r} must be a str or int, got {value!r}.")
+    if owner.hardening is not None and not isinstance(owner.hardening, Hardening):
+        raise _fail(
+            owner,
+            f"hardening= must be a Hardening, got {owner.hardening!r}.",
+            hint="Use Hardening.strict(), Hardening.relaxed() or Hardening.none().",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DropIn:
+    """A typed drop-in for a packaged unit: ``Unit("x.service", dropin=DropIn(...))``.
+
+    Renders ``/usr/lib/systemd/system/<unit>.d/<name>.conf`` with the fields that are set
+    (each defaults to "unchanged"); the field meanings are ``Service``'s. ``exec_start``
+    writes the ``ExecStart=`` reset line first. ``hardening`` is opt-in here: hardening a
+    unit someone else wrote can break it.
+    """
+
+    name: str = "20-tundravm"
+    _: KW_ONLY
+    description: str | None = None
+    exec_start: str | tuple[str, ...] | None = None
+    exec_start_pre: tuple[str, ...] = ()
+    exec_start_post: tuple[str, ...] = ()
+    exec_reload: str | None = None
+    user: str | Dynamic | None = None
+    group: str | None = None
+    groups: tuple[str, ...] = ()
+    working_dir: str | None = None
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
+    env_file: str | tuple[str, ...] | None = None
+    credentials: Mapping[str, str | SecretFile] = field(default_factory=FrozenMap)
+    state: str | None = None
+    logs: str | None = None
+    runtime: str | None = None
+    cache: str | None = None
+    write_paths: tuple[str, ...] = ()
+    restart: Literal["always", "on-failure", "on-abnormal", "no"] | None = None
+    restart_sec: str | None = None
+    timeout_start: str | None = None
+    timeout_stop: str | None = None
+    limits: Mapping[str, str | int] = field(default_factory=FrozenMap)
+    hardening: Hardening | None = None
+    after: tuple[UnitTarget, ...] = ()
+    requires: tuple[UnitTarget, ...] = ()
+    wants: tuple[UnitTarget, ...] = ()
+    before: tuple[UnitTarget, ...] = ()
+    part_of: tuple[UnitTarget, ...] = ()
+    binds_to: tuple[UnitTarget, ...] = ()
+    conflicts: tuple[UnitTarget, ...] = ()
+    extra: Extra = field(default_factory=FrozenMap)
+
+    def __post_init__(self) -> None:
+        _freeze(self, "exec_start", "exec_start_pre")
+        if not isinstance(self.name, str) or not _ENTRY_NAME.fullmatch(self.name):
+            raise _fail(self, f"invalid drop-in name {self.name!r}.", hint="Use '30-limits'.")
+        if self.name in ("10-tundravm-needs", "tundravm-secrets"):
+            raise _fail(self, f"drop-in name {self.name!r} is reserved for tundravm.")
+        if self.exec_start is not None and not self.exec_start:
+            raise _fail(self, "exec_start must not be empty.")
+        _require_names(self, self.exec_start_pre, "exec_start_pre")
+        if self.timeout_stop is not None:
+            _require_name(self, self.timeout_stop, "timeout_stop")
+        if self.restart is not None:
+            _require_choice(self, self.restart, _RESTARTS, "restart")
+        _require_unit_fields(self)
+        sections = ("Unit", "Service", "Socket", "Timer", "Mount", "Install")
+        require_extra(self, sections, SERVICE_OWNED)
+        if not self.sections():
+            raise _fail(self, f"drop-in {self.name!r} changes nothing.")
+
+    def sections(self) -> tuple[str, ...]:
+        """The sections this drop-in writes (``Unit``, ``Service`` and ``extra``'s)."""
+        unit = self.description is not None or any(getattr(self, r) for r in _RELATIONS)
+        unset = DropIn.__dataclass_fields__
+        service = any(
+            getattr(self, name) != (f.default if f.default is not MISSING else FrozenMap())
+            for name, f in unset.items()
+            if name not in ("name", "description", "extra", "_", *_RELATIONS)
+        )
+        found = ("Unit",) * unit + ("Service",) * service
+        return tuple(dict.fromkeys((*found, *self.extra)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1706,6 +1911,375 @@ class Kernel(Declared):
             raise _fail(self, "config must be a pathlib.Path.")
 
 
+# ── Tasks, schedules, sockets and mounts (docs/design/systemd-units.md 2.4-2.6) ──
+
+_CALENDAR_WORDS = frozenset(
+    "minutely hourly daily weekly monthly quarterly semiannually yearly annually".split()
+)
+_CALENDAR = re.compile(r"[A-Za-z0-9*:,./~+ -]+")
+_LISTEN_ADDRESS = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}")
+_FS_TYPE = re.compile(r"[a-z0-9][a-z0-9._+-]*")
+
+
+def _require_span(owner: object, value: object, what: str, key: str, section: str) -> None:
+    """*value* must be a systemd time span as ``[section] key=`` reads it."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or "%" in value
+        or "$" in value
+        or check_value(section, key, value) is not None
+    ):
+        raise _fail(
+            owner,
+            f"{what} {value!r} is not a systemd time span.",
+            hint="Use a span such as 30s, 5min, 1h or 1d.",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Every:
+    """``Task(schedule=Every("1h"))``: run *first* after boot (default: *interval*), then
+    *interval* after each start (``OnBootSec=`` + ``OnUnitActiveSec=``); *jitter* spreads
+    the start (``RandomizedDelaySec=``)."""
+
+    interval: str
+    _: KW_ONLY
+    first: str | None = None
+    jitter: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_span(self, self.interval, "interval", "OnUnitActiveSec", "Timer")
+        if self.first is not None:
+            _require_span(self, self.first, "first", "OnBootSec", "Timer")
+        if self.jitter is not None:
+            _require_span(self, self.jitter, "jitter", "RandomizedDelaySec", "Timer")
+
+    def entries(self) -> Pairs:
+        """The ``[Timer]`` directives."""
+        out = [("OnBootSec", self.first or self.interval), ("OnUnitActiveSec", self.interval)]
+        if self.jitter:
+            out.append(("RandomizedDelaySec", self.jitter))
+        return tuple(out)
+
+
+@dataclass(frozen=True, slots=True)
+class Calendar:
+    """``Task(schedule=Calendar("daily"))``: run at calendar times (``OnCalendar=``, a
+    shorthand such as ``daily`` or ``*-*-* 03:00:00``). *persistent* catches up on a run
+    missed while the machine was off (``Persistent=yes``); *jitter* spreads the start."""
+
+    spec: str
+    _: KW_ONLY
+    persistent: bool = True
+    jitter: str | None = None
+
+    def __post_init__(self) -> None:
+        spec = self.spec
+        valid = isinstance(spec, str) and (
+            spec in _CALENDAR_WORDS
+            or (
+                _CALENDAR.fullmatch(spec) is not None
+                and spec == spec.strip()
+                and any(ch.isdigit() or ch == "*" for ch in spec)
+                and any(ch in ":-" for ch in spec)
+            )
+        )
+        if not valid:
+            raise _fail(
+                self,
+                f"{spec!r} is not a systemd calendar expression.",
+                hint="Use a shorthand (hourly, daily, weekly, monthly) or "
+                "'[weekday] [year-month-day] [hour:minute[:second]]', e.g. '*-*-* 03:00:00'.",
+            )
+        _require_bool(self, self.persistent, "persistent")
+        if self.jitter is not None:
+            _require_span(self, self.jitter, "jitter", "RandomizedDelaySec", "Timer")
+
+    def entries(self) -> Pairs:
+        """The ``[Timer]`` directives."""
+        out = [("OnCalendar", self.spec)]
+        if self.persistent:
+            out.append(("Persistent", "yes"))
+        if self.jitter:
+            out.append(("RandomizedDelaySec", self.jitter))
+        return tuple(out)
+
+
+@dataclass(frozen=True, slots=True)
+class Listen:
+    """``Service(socket=Listen(...))``: systemd listens and starts the service on demand.
+
+    *address* is a TCP/UDP port (``8080``), ``"host:port"``, or an absolute socket path
+    (``"/run/app.sock"``). A socket file is created ``0660`` (*mode*) and owned by
+    *user*/*group* (systemd's root by default). ``accept=True`` starts one service instance
+    per connection, so the service must be a template (``Service("echo@", ...)``).
+    """
+
+    address: int | str
+    _: KW_ONLY
+    kind: Literal["stream", "datagram"] = "stream"
+    accept: bool = False
+    user: str | None = None
+    group: str | None = None
+    mode: int | None = None
+
+    def __post_init__(self) -> None:
+        address = self.address
+        if isinstance(address, bool) or not isinstance(address, (int, str)):
+            raise _fail(self, f"address must be a port or a path, got {address!r}.")
+        if isinstance(address, int):
+            if not 0 < address < 65536:
+                raise _fail(self, f"port {address} is out of range (1-65535).")
+        elif not (address.startswith("/") and "\n" not in address) and not (
+            _LISTEN_ADDRESS.fullmatch(address)
+        ):
+            raise _fail(
+                self,
+                f"invalid listen address {address!r}.",
+                hint="Use a port (8080), 'host:port', or an absolute path ('/run/app.sock').",
+            )
+        _require_choice(self, self.kind, ("stream", "datagram"), "kind")
+        _require_bool(self, self.accept, "accept")
+        if self.accept and self.kind != "stream":
+            raise _fail(self, "accept=True needs a stream socket.")
+        for what in ("user", "group"):
+            if (value := getattr(self, what)) is not None:
+                _require_name(self, value, what)
+        _require_mode(self, self.mode)
+        if not self.is_path and (self.user, self.group, self.mode) != (None, None, None):
+            raise _fail(
+                self,
+                f"user, group and mode apply to a socket file, not to {address!r}.",
+                hint="Listen on an absolute path to set the socket file's owner and mode.",
+            )
+
+    @property
+    def is_path(self) -> bool:
+        """Whether the socket is a file in the filesystem."""
+        return isinstance(self.address, str) and self.address.startswith("/")
+
+    def entries(self) -> Pairs:
+        """The ``[Socket]`` directives."""
+        key = "ListenStream" if self.kind == "stream" else "ListenDatagram"
+        out = [(key, str(self.address))]
+        if self.is_path:
+            out.append(("SocketMode", f"{0o660 if self.mode is None else self.mode:04o}"))
+            out += [
+                (k, v) for k, v in (("SocketUser", self.user), ("SocketGroup", self.group)) if v
+            ]
+        out.append(("Accept", "yes" if self.accept else "no"))
+        return tuple(out)
+
+
+def _require_socket(service: Service) -> None:
+    """``Service.socket``: a :class:`Listen`, with ``accept=True`` exactly for a template."""
+    socket = service.socket
+    if socket is None:
+        return
+    if not isinstance(socket, Listen):
+        raise _fail(service, f"socket must be a Listen, got {socket!r}.")
+    template = unit_name(service.name).endswith("@.service")
+    if socket.accept != template:
+        name = service.name.removesuffix(".service").removesuffix("@")
+        raise _fail(
+            service,
+            f"service {service.name!r} "
+            + (
+                "is a template, so its socket needs accept=True."
+                if template
+                else "takes one connection per instance (accept=True), so it must be a template."
+            ),
+            hint=f"Use Service({name + '@'!r}, ..., socket=Listen(..., accept=True)) for one "
+            f"instance per connection, or Service({name!r}, ...) with accept=False.",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UnitReady(Ready):
+    """``task.ready``: "the boot :class:`Task` whose unit is *step* has finished".
+
+    ``Service``/``Task``/``Unit``/``Mount(needs=[task.ready])`` renders ``After=`` and
+    ``Requires=`` on that unit. A ``BootStep`` cannot wait for one.
+    """
+
+    @property
+    def unit(self) -> str:
+        """The unit that must have finished."""
+        return self.step
+
+
+def _require_service_name(owner: object, name: object) -> None:
+    if not isinstance(name, str) or not _UNIT_NAME.fullmatch(name):
+        raise _fail(owner, f"invalid unit name {name!r}.")
+    if "." in name and not name.endswith(".service"):
+        raise _fail(owner, f"{name!r} must be a .service unit.")
+
+
+def _require_command(owner: object, command: object, what: str) -> None:
+    if isinstance(command, str):
+        _require_name(owner, command, what)
+        words = command.split()
+    elif isinstance(command, tuple) and command:
+        _require_names(owner, command, f"{what} argument")
+        words = list(command)
+    else:
+        raise _fail(owner, f"{what} must be a command line or a non-empty argv.")
+    if not words[0].lstrip("+-!@:").startswith("/"):
+        raise _fail(
+            owner,
+            f"{what} {words[0]!r} is not an absolute path.",
+            hint="Spell the program's full path (systemd does not search $PATH): "
+            f"'/usr/bin/{words[0].lstrip('+-!@:')}'.",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Task(Declared):
+    """A oneshot job: ``Task("migrate", "/usr/bin/app migrate")`` runs once per boot.
+
+    Without *schedule* the unit is ``Type=oneshot`` + ``RemainAfterExit=yes``, enabled into
+    the boot target, and ``.ready`` lets other units wait for it. With
+    ``schedule=Every("1h")`` or ``Calendar("daily")`` it also renders ``<name>.timer``
+    (enabled into ``timers.target``) and the service is left for the timer to start.
+    *user* ``None`` runs it as a system user named after the task (declared unless the
+    variant declares it), ``Dynamic()`` as a transient user; *state* is its
+    ``StateDirectory=`` (and working directory); *timeout* bounds each run
+    (``TimeoutStartSec=``, ``None``: systemd's unbounded oneshot default); *hardening*
+    defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps, as on
+    :class:`Service`.
+    """
+
+    name: str
+    command: str | tuple[str, ...]
+    _: KW_ONLY
+    schedule: Every | Calendar | None = None
+    description: str | None = None
+    user: str | Dynamic | None = None
+    group: str | None = None
+    state: str | None = None
+    timeout: str | None = "5min"
+    after: tuple[UnitTarget, ...] = ()
+    requires: tuple[UnitTarget, ...] = ()
+    wants: tuple[UnitTarget, ...] = ()
+    needs: Sequence[Ready] = (RUNTIME_INIT,)
+    hardening: Hardening = Hardening.strict()
+    wanted_by: str | None = None
+
+    def __post_init__(self) -> None:
+        _freeze(self, "command")
+        _require_service_name(self, self.name)
+        if "@" in self.name:
+            raise _fail(self, f"task {self.name!r} cannot be a template unit.")
+        _require_command(self, self.command, "command")
+        if self.schedule is not None and not isinstance(self.schedule, (Every, Calendar)):
+            raise _fail(
+                self, f"schedule must be Every(...) or Calendar(...), got {self.schedule!r}."
+            )
+        if self.user is not None and not isinstance(self.user, Dynamic):
+            if not isinstance(self.user, str) or not _GROUP_NAME.fullmatch(self.user):
+                raise _fail(self, f"invalid user name {self.user!r}.")
+        stem = unit_name(self.name).removesuffix(".service")
+        if self.user is None and not (_GROUP_NAME.fullmatch(stem) and len(stem) <= 32):
+            raise _fail(
+                self,
+                f"task {self.name!r} would run as user {stem!r}, which is not a valid user name.",
+                hint="pass user= (a user the variant declares) or user=Dynamic().",
+            )
+        for what in ("group", "description", "wanted_by"):
+            if (value := getattr(self, what)) is not None:
+                _require_name(self, value, what)
+        if self.state is not None:
+            _require_relative(self, self.state, "state")
+        if self.timeout is not None:
+            _require_span(self, self.timeout, "timeout", "TimeoutStartSec", "Service")
+        require_targets(self, "after", "requires", "wants")
+        _require_steps(self, "needs", sentinel=True)
+        if not isinstance(self.hardening, Hardening):
+            raise _fail(self, f"hardening must be a Hardening, got {self.hardening!r}.")
+        if self.schedule is not None and self.wanted_by is not None:
+            raise _fail(self, "a scheduled task is started by its timer; drop wanted_by.")
+
+    @property
+    def unit(self) -> str:
+        """The ``.service`` unit name."""
+        return unit_name(self.name)
+
+    @property
+    def ready(self) -> UnitReady:
+        """A ``needs=`` handle: "this boot task has finished" (not for scheduled tasks)."""
+        if self.schedule is not None:
+            raise ValidationError(
+                f"Task {self.name!r} runs on a schedule, so it never 'finishes' at boot.",
+                hint="Wait for a boot task (no schedule=), or order with after=.",
+            )
+        return UnitReady(self.unit)
+
+
+@dataclass(frozen=True, slots=True)
+class Mount(Declared):
+    """A filesystem mounted by systemd: ``Mount("/var/lib/app/cache", "tmpfs", type="tmpfs")``.
+
+    The unit is named from *where* (``systemd-escape --path``:
+    ``/var/lib/app/cache`` -> ``var-lib-app-cache.mount``). *options* render
+    ``Options=`` joined with commas. Enabled mounts are wanted by ``local-fs.target``;
+    a mount that *needs* a runtime-init step (a bind mount from an encrypted disk) is
+    wanted by the boot target instead and gains ``nofail``, so it is not ordered before
+    ``local-fs.target``. For encrypted and data disks use :class:`Disk`.
+    """
+
+    where: str
+    what: str
+    _: KW_ONLY
+    type: str | None = None
+    options: tuple[str, ...] = ()
+    description: str | None = None
+    after: tuple[UnitTarget, ...] = ()
+    requires: tuple[UnitTarget, ...] = ()
+    needs: Sequence[Ready] = ()
+    enabled: bool = True
+    wanted_by: str | None = None
+
+    def __post_init__(self) -> None:
+        _freeze(self, "options")
+        _require_absolute(self, self.where, "where")
+        if self.where == "/" or posixpath.normpath(self.where) != self.where:
+            raise _fail(
+                self,
+                f"mount point {self.where!r} must be a normalized path other than /.",
+                hint=f"Use {posixpath.normpath(self.where)!r}.",
+            )
+        _require_name(self, self.what, "what")
+        if any(ch.isspace() for ch in self.what):
+            raise _fail(self, f"what {self.what!r} contains whitespace.")
+        if self.type is not None and (
+            not isinstance(self.type, str) or not _FS_TYPE.fullmatch(self.type)
+        ):
+            raise _fail(self, f"invalid filesystem type {self.type!r}.")
+        for option in self.options:
+            if (
+                not isinstance(option, str)
+                or not option
+                or any(ch.isspace() or ch == "," for ch in option)
+            ):
+                raise _fail(
+                    self,
+                    f"invalid mount option {option!r}.",
+                    hint="Pass one option per item: options=('size=256M', 'mode=0750').",
+                )
+        for what in ("description", "wanted_by"):
+            if (value := getattr(self, what)) is not None:
+                _require_name(self, value, what)
+        _require_bool(self, self.enabled, "enabled")
+        require_targets(self, "after", "requires")
+        _require_steps(self, "needs", sentinel=True)
+
+    @property
+    def unit(self) -> str:
+        """The ``.mount`` unit name (``systemd-escape --path`` of *where*)."""
+        return mount_unit(self.where)
+
+
 type Declaration = (
     Package
     | File
@@ -1727,6 +2301,8 @@ type Declaration = (
     | RuntimeTools
     | Build
     | Kernel
+    | Task
+    | Mount
 )
 
 DECLARATION_TYPES: tuple[type, ...] = (
@@ -1750,6 +2326,8 @@ DECLARATION_TYPES: tuple[type, ...] = (
     RuntimeTools,
     Build,
     Kernel,
+    Task,
+    Mount,
 )
 
 
@@ -1813,8 +2391,12 @@ __all__ = [
     "Hook",
     "Http",
     "Install",
+    "Calendar",
+    "Every",
     "Kernel",
     "Key",
+    "Listen",
+    "Mount",
     "Mkosi",
     "Package",
     "Pairs",
@@ -1836,7 +2418,9 @@ __all__ = [
     "Setting",
     "Target",
     "Template",
+    "Task",
     "Unit",
+    "UnitReady",
     "User",
     "Variant",
     "key_fields",
