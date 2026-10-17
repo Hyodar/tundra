@@ -108,7 +108,10 @@ def test_go_recipe_renders_like_the_equivalent_script() -> None:
     assert copy_deps and uses_deps  # a script build has no dependency cache to use
     recipe_hook = recipe_hook.replace(copy_deps, "").replace(uses_deps, "")
     unkeyed = re.compile(r"build\}/tool-[0-9a-f]{16}")
-    assert unkeyed.sub("KEY", recipe_hook) == unkeyed.sub("KEY", script_hook)
+    recipe_marker, recipe_body = recipe_hook.split("\n", 1)
+    script_marker, script_body = script_hook.split("\n", 1)
+    assert recipe_marker != script_marker  # the marker names the declaration: recipe or script
+    assert unkeyed.sub("KEY", recipe_body) == unkeyed.sub("KEY", script_body)
     assert recipe_hook != script_hook  # the cache fingerprint covers the build spec
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -10,8 +11,9 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE, run_main
-from tundravm import Imported, import_tree
-from tundravm.declarative import compile, diff, lint, load
+from tundravm import Build, Git, Go, Imported, Install, Recipe, import_tree
+from tundravm._source import GitSource, Source
+from tundravm.declarative import Fragment, Mkosi, compile, diff, lint, load, lock
 from tundravm.declarative.lifecycle import read_tree
 from tundravm.errors import ValidationError
 from tundravm.templates import TEMPLATES, render_recipe_template
@@ -53,6 +55,27 @@ set -e
 mkosi-chroot systemctl enable myapp.service
 echo built > "$BUILDROOT/etc/myapp/stamp"
 """
+
+
+def _resolver(source: Source) -> str:
+    """A pin per source, the same on every call: a commit for git, a sha256 for http."""
+    digest = hashlib.sha256(source.describe().encode()).hexdigest()
+    return digest[:40] if source.kind == "git" else digest
+
+
+def _template_recipe(tmp_path: Path, template: str) -> Recipe:
+    source = tmp_path / f"{template}.py"
+    source.write_text(
+        render_recipe_template(
+            title=template,
+            filename=source.name,
+            base="debian/trixie",
+            backend="inprocess",
+            template=template,
+        ),
+        encoding="utf-8",
+    )
+    return load(source)
 
 
 def _template_tree(tmp_path: Path, template: str) -> Path:
@@ -99,6 +122,80 @@ def test_template_trees_round_trip(tmp_path: Path, template: str) -> None:
     assert imported.coverage["declared"] > imported.coverage["verbatim"]
 
 
+PROVER_BUILDS = {
+    "key-generation": ("./cmd/key-gen", "/usr/bin/key-gen"),
+    "disk-encryption": ("./cmd/disk-setup", "/usr/bin/disk-setup"),
+    "secret-delivery": ("./cmd/secret-delivery", "/usr/bin/secret-delivery"),
+}
+
+
+def _builds(recipe: Recipe) -> dict[str, Build]:
+    return {item.name: item for item in recipe.common.items if isinstance(item, Build)}
+
+
+def test_locked_prover_tree_round_trips_with_its_builds(tmp_path: Path) -> None:
+    recipe = _template_recipe(tmp_path, "prover")
+    locked = lock(recipe, resolver=_resolver)
+    tree = tmp_path / "mkosi"
+    compile(recipe, lock=locked).write(tree)
+    imported = import_tree(tree, name="prover")
+    builds = _builds(imported.recipe)
+    tools = Git("https://github.com/Hyodar/tundra-tools.git", "master")
+    for name, (package, dest) in PROVER_BUILDS.items():
+        output = dest.rsplit("/", 1)[1]
+        assert builds[name] == Build(
+            name,
+            tools,
+            recipe=Go(package=package, output=output),
+            install=(Install(f"build/{output}", dest, artifact=True),),
+        )
+    assert builds["tdxs"].script is not None and builds["tdxs"].source == tools
+    assert "EfiStub(" in imported.recipe_source
+    assert any(
+        note.startswith("round trip: the recipe compiles back to this tree once locked")
+        for note in imported.notes
+    )
+    assert _errors(imported) == []
+    again = lock(imported.recipe, resolver=_resolver)
+    assert again.pins == locked.pins
+    assert diff(compile(imported.recipe, lock=again), tree) == ""
+
+
+def test_unlocked_prover_tree_imports_builds(tmp_path: Path) -> None:
+    tree = _template_tree(tmp_path, "prover")
+    imported = import_tree(tree, name="prover")
+    assert sorted(_builds(imported.recipe)) == sorted([*PROVER_BUILDS, "tdxs"])
+    assert diff(compile(imported.recipe), tree) == ""
+    assert imported.coverage["lost"] == 0
+
+
+def test_pinned_nethermind_v1_build_comes_back_at_its_commit(tmp_path: Path) -> None:
+    build = Build(
+        "tool",
+        Git("https://example.com/acme/tool.git", "main", subdir="cmd"),
+        recipe=Go(package="./tool", output="tool", env={"CGO_ENABLED": "0", "A": "x y"}),
+        install=(Install("build/tool", "/usr/bin/tool"),),
+        cache_key="tool-cache",
+    )
+    recipe = Recipe("tool", Fragment("tool", items=(build,)), mkosi=Mkosi(dialect="nethermind-v1"))
+    tree = tmp_path / "mkosi"
+    compile(recipe, lock=lock(recipe, resolver=_resolver)).write(tree)
+    imported = import_tree(tree, name="tool", dialect="nethermind-v1")
+    (found,) = _builds(imported.recipe).values()
+    commit = _resolver(GitSource("https://example.com/acme/tool.git", "main"))
+    assert found.source == Git("https://example.com/acme/tool.git", commit, subdir="cmd")
+    assert found.recipe is None and found.cache_key == "tool-cache"
+    assert found.script is not None and found.script.startswith("mkdir -p ./build && ")
+    assert diff(compile(imported.recipe), tree) == ""
+    lost = [n for n in imported.notes if n.startswith("build tool: ")]
+    assert lost == [
+        "build tool: the recipe kind is lost (a Go, Cargo or Dotnet recipe comes back as "
+        f"script=); the ref it was locked from is lost (pinned to {commit[:12]})"
+    ]
+    assert imported.coverage["lost"] == 1
+    assert imported.grouped_notes()["lost declaration"] == tuple(lost)
+
+
 def test_service_template_imports_first_class_declarations(tmp_path: Path) -> None:
     imported = import_tree(_template_tree(tmp_path, "service"))
     kinds = {type(item).__name__ for item in imported.recipe.common.items}
@@ -124,6 +221,10 @@ def test_surge_tree_round_trips_under_nethermind_v1() -> None:
     assert "round trip: the recipe compiles back to this tree" in imported.notes
     assert [n for n in imported.notes if "not mapped" in n] == []
     assert _errors(imported) == []
+    builds = _builds(imported.recipe)
+    assert sorted(builds) == sorted([*PROVER_BUILDS, "tdxs", "raiko", "taiko-client", "nethermind"])
+    assert builds["raiko"].cache_key == "raiko-feat_tdx"
+    assert imported.coverage["lost"] == len(builds)
 
 
 def test_dialect_is_guessed_from_the_tree() -> None:
@@ -231,8 +332,9 @@ def test_cli_prints_the_module_and_reports_on_stderr(
     assert code == 0
     assert stdout.startswith('"""demo image recipe, imported from an mkosi tree')
     err = capsys.readouterr().err
-    assert "coverage: " in err
-    assert "note: round trip: the recipe compiles back to this tree" in err
+    assert "coverage: " in err and " lost\n" in err
+    assert "other (" in err
+    assert "  note: round trip: the recipe compiles back to this tree" in err
 
 
 def test_cli_json_and_overwrite(tmp_path: Path) -> None:
@@ -244,7 +346,7 @@ def test_cli_json_and_overwrite(tmp_path: Path) -> None:
     assert set(payload) == {"schema", "recipe_source", "recipe", "notes", "coverage"}
     assert payload["schema"] == "tundravm.import/1"
     assert payload["recipe_source"] == out.read_text(encoding="utf-8")
-    assert set(payload["coverage"]) == {"declared", "verbatim"}
+    assert set(payload["coverage"]) == {"declared", "verbatim", "lost"}
     code, _ = run_main("import", str(tree), "--output", str(out))
     assert code != 0
     code, _ = run_main("import", str(tree), "--output", str(out), "--force")

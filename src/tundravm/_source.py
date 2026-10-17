@@ -65,6 +65,9 @@ toolchains (``go``, ``cargo``, ``nuget``), mounted with the checkouts."""
 DEPS_BUILD_DIR = ".tundravm-deps"
 """Where a mounted hook copies a dependency cache: ``$BUILDROOT/build/.tundravm-deps/<cache>``
 (``/build/.tundravm-deps/<cache>`` inside mkosi-chroot), so the mounted tree stays read-only."""
+BUILD_MARKER = "# tundravm build: "
+"""The first line of a mounted build hook: its declaration as JSON follows
+(:meth:`SourceBuild.marker`)."""
 _NETWORK_TIMEOUT = 60.0
 """Seconds :func:`default_resolver` waits on ``git ls-remote`` or a stalled download."""
 
@@ -430,6 +433,11 @@ def _recipe_payload(build: BuildRecipe) -> dict[str, object]:
     return payload
 
 
+def _compact(payload: Mapping[str, object]) -> dict[str, object]:
+    """*payload* without its ``None`` values."""
+    return {key: value for key, value in payload.items() if value is not None}
+
+
 InstallKind = Literal["artifact", "file", "tree"]
 
 
@@ -727,6 +735,34 @@ class SourceBuild(NamedSource):
         *distribution* (the variant's ``Lowered.build_distribution``) enters the
         mounted hook's cache fingerprint.
         """
+        if mounted:
+            return f"{self.marker()}\n{self._render(pin, True, distribution)}"
+        return self._render(pin, False, distribution)
+
+    def marker(self) -> str:
+        """``# tundravm build: <json>``: the declaration a mounted hook is rendered from.
+
+        The JSON is :meth:`to_payload` without ``mark_unpinned`` and ``None``
+        values, keys sorted and no spaces: what ``tundravm import`` reads the
+        build back from. It holds no lockfile pin, so a pinned hook names the same.
+        """
+        payload = _compact(
+            {
+                "name": self.name,
+                "source": _compact(self.source.to_payload()),
+                "build": _recipe_payload(self.build),
+                "install": [
+                    _compact({"kind": s.kind, "path": s.path, "dest": s.dest, "mode": s.mode})
+                    for s in self.install
+                ],
+                "cache_key": self.cache_key,
+            }
+        )
+        return BUILD_MARKER + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def _render(
+        self, pin: str | None, mounted: bool, distribution: Mapping[str, object] | None
+    ) -> str:
         effective = self.source.inline_pin or pin
         workdir = Build.chroot_path(self.name).rel
         if isinstance(self.source, GitSource) and self.source.subdir:

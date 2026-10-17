@@ -100,6 +100,10 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `changes` notes declared variants the evidence did not bake instead of reporting them added; `evidence(variants=...)` in any order verifies; the evidence note's `measure` command uses `--build`/`--variant`.
 - Docs: an Install section and a lifecycle-order quickstart in the README, serialization round trips in docs/api.md, the tutorial re-run on the current CLI with a "Review the next change" step, and "Cutting a release" and "Reviewing a release" in concepts.
 
+- `tundravm explore [RECIPE]` / `explore()` / `Exploration`: one self-contained, escaped HTML page (inline CSS and a small script, readable without JS) with an overview (settings, lint findings with hints, lock state and pins, bake artifacts), a declarations × variants matrix with provenance, each variant's emitted tree annotated with the declarations behind every file and cross-linked both ways, and hooks and builds in run order; `--format json` prints the same model (`tundravm.explore/1`).
+- `tundravm import` recovers source builds: current-dialect build hooks start with a `# tundravm build: <json>` declaration line that is read back into the exact `Build` (recipe, install, cache key), so an imported locked tree re-locks to the same pins and compiles back byte-identical; nethermind-v1 hooks come back as `Build(..., script=)` with notes on what they lose. `Install(..., artifact=True)` installs a recipe's own output. `Imported.coverage["lost"]` and `Imported.grouped_notes()`; the text report groups notes by reason.
+- **Breaking:** recipe digests of current-dialect recipes with source builds change (the new hook line): re-lock them.
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

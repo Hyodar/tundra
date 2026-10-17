@@ -20,6 +20,7 @@ REPORTS: dict[str, tuple[str, ...]] = {
     "status": ("status", "--format", "json"),
     "config": ("config", "--format", "json"),
     "evidence": ("evidence", "--format", "json"),
+    "explore": ("explore", "--format", "json"),
     "import": ("import", "mkosi", "--format", "json"),
     "measure": ("measure", "--variant", "default", "--allow-placeholder", "--format", "json"),
     "verify": ("verify", "build/evidence", "--format", "json"),

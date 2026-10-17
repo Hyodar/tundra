@@ -128,10 +128,11 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "9f9e6b98aac49ff870e81b97801bcd01b742ec6575800773550e628050c8ff77"
-EQUIVALENCE_RECIPE = "9a4c9a5ec0e619b154ad097cc63d1d0c98eca22ebf5df9d2a4af34e9fcd78cd9"
+EQUIVALENCE_TREE = "95caafea3144c6d2d482481d87bb830dc6d9b23fba4d6a42c39f783e1e04c4aa"
+EQUIVALENCE_RECIPE = "7b68c360794b2bdb977a8d24dcb3bfe5e5305590f94901ce200946d472b18ede"
 """The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
-fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly."""
+fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly
+(re-recorded when current-dialect build hooks gained their ``# tundravm build:`` line)."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:

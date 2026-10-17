@@ -887,7 +887,10 @@ def source_build(build: Build, *, mark_unpinned: bool = True) -> SourceBuild:
         SourceInstall.tree(step.source, step.destination)
         if step.directory
         else SourceInstall(
-            "file", step.destination, step.source, None if step.mode is None else _mode(step.mode)
+            "artifact" if step.artifact else "file",
+            step.destination,
+            None if step.artifact else step.source,
+            None if step.mode is None else _mode(step.mode),
         )
         for step in build.install
     )

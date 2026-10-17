@@ -16,6 +16,7 @@ from tundravm.declarative import (
     File,
     Fragment,
     Git,
+    Go,
     Group,
     Hook,
     Http,
@@ -128,6 +129,17 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
         lambda: Build("b", GIT, "make", (Install("a", "/usr/bin/x"), Install("b", "/opt/x"))),
     ),
     ("kernel config str", lambda: Kernel("6.1", GIT, config="k.config")),  # type: ignore[arg-type]
+    ("install artifact dir", lambda: Install("out", "/opt/out", mode=None, artifact=True)),
+    ("artifact of a script", lambda: Build("b", GIT, "make", (Install("b", "/x", artifact=True),))),
+    (
+        "artifact not the recipe's",
+        lambda: Build(
+            "b",
+            GIT,
+            recipe=Go(output="tool"),
+            install=(Install("bin/tool", "/usr/bin/tool", artifact=True),),
+        ),
+    ),
 ]
 
 
@@ -152,6 +164,7 @@ def test_valid_declarations_construct() -> None:
         store=disk,
     )
     Install("share", "/usr/share/a", mode=None, directory=True)
+    Build("b", GIT, recipe=Go(output="t"), install=(Install("build/t", "/t", artifact=True),))
     Unit("ssh.socket", enabled=False, masked=True)
     Hook("h", "boot", "echo", env=(("A", "1"),), cwd="/tmp", after=("g",))
     Kernel("6.13.12", Git("https://github.com/gregkh/linux", "v6.13.12"), cmdline="quiet")

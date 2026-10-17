@@ -87,6 +87,14 @@ QEMU_BASIC_DIGEST = "e5b76ccba49652aaa80470a44e57c8c9acb94562c8d96f3cc0513b17830
 GO_SCRIPT = (
     'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
 )
+# The first line of _build()'s current-dialect hook: its declaration, for `tundravm import`.
+TOOL_MARKER = (
+    '# tundravm build: {"build":{"kind":"script","output":"build/tool","packages":["golang"],'
+    '"script":"mkdir -p ./build && go build -trimpath -ldflags \\"-s -w -buildid=\\" '
+    '-o ./build/tool ./cmd/tool"},"install":[{"dest":"/usr/bin/tool","kind":"file",'
+    '"mode":"0755","path":"build/tool"}],"name":"tool","source":{"kind":"git","ref":"main",'
+    '"submodules":false,"url":"https://example.com/acme/tool.git"}}'
+)
 
 # The hook Tdxs wrote by hand before source builds existed (default repo and branch).
 TDXS_LEGACY_HOOK = (
@@ -202,7 +210,8 @@ def test_build_lowers_to_source_build_packages_and_hook() -> None:
     assert "BuildPackages=\n    git\n    golang\n" in _read(tree, "default/mkosi.conf")
     hooks = _hooks(tree)
     assert hooks == _spec().render(mounted=True)
-    assert hooks.startswith("# unpinned: main\n")
+    assert hooks.startswith(f"{TOOL_MARKER}\n# unpinned: main\n")
+    assert _spec().marker() == TOOL_MARKER
 
 
 def test_payload_has_source_builds_only_when_declared() -> None:
@@ -262,6 +271,7 @@ def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
     recipe = _recipe(_build())
     unpinned = _hooks(compile(recipe))
     assert unpinned == (
+        f"{TOOL_MARKER}\n"
         "# unpinned: main\n"
         "echo 'tundravm: source build tool is not pinned: run tundravm lock, then "
         "tundravm fetch' >&2 && exit 1"
@@ -271,6 +281,7 @@ def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
     checkout = f'"$SRCDIR/tundravm-sources/{directory}"'
     cache = '"${BUILDDIR:-$BUILDROOT/build}/tool-4e1ad77c7e3da2b6"'
     assert pinned == (
+        f"{TOOL_MARKER}\n"
         f'if ! ([ -d {cache} ] && [ "$(ls -A {cache} 2>/dev/null)" ]); then '
         f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: {directory} is not "
         "fetched: run tundravm fetch RECIPE' >&2; exit 1; } && "
@@ -280,7 +291,7 @@ def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
         f'install -D -m 0755 "$BUILDROOT/build/tool/build/tool" {cache}/tool; fi && '
         f'install -D -m 0755 {cache}/tool "$DESTDIR/usr/bin/tool"'
     )
-    assert "git" not in pinned and "$BUILDDIR/" not in pinned
+    assert "git" not in pinned.split("\n", 1)[1] and "$BUILDDIR/" not in pinned
     moved = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_B))))
     assert f"tool-{SHA_B[:12]}" in moved and SHA_A[:12] not in moved
 
@@ -331,7 +342,7 @@ def test_http_source_rendering() -> None:
     recipe = _recipe(build)
     spec = lower(recipe).source_builds()["prover"]
     assert spec.packages == ("curl", "cargo")
-    assert _hooks(compile(recipe)).startswith(f"# unpinned: {url}\n")
+    assert _hooks(compile(recipe)).split("\n", 1)[1].startswith(f"# unpinned: {url}\n")
     hook = spec.render()
     assert hook.startswith(f"# unpinned: {url}\n")
     assert "cargo build --release --frozen --features a,b --bin prover" in hook
@@ -341,7 +352,7 @@ def test_http_source_rendering() -> None:
     assert "--strip-components=1" in pinned
     inline = _hooks(compile(_recipe(replace(build, source=Http(url, sha256="c" * 64)))))
     assert f'"$SRCDIR/tundravm-sources/{source_dir("prover", "c" * 64, url, http=True)}"' in inline
-    assert "curl" not in inline and "sha256sum" not in inline
+    assert "curl" not in inline.split("\n", 1)[1] and "sha256sum" not in inline
 
 
 def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
@@ -349,7 +360,8 @@ def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
     assert TDXS_LEGACY_HOOK in _hooks(compile(historical)).splitlines()
     assert lower(historical).source_builds()["tdxs"].render() == TDXS_LEGACY_HOOK
     current = _hooks(compile(_recipe(Tdxs())))
-    assert current.startswith("# unpinned: master\n")
+    assert current.startswith('# tundravm build: {"build":{"kind":"script"')
+    assert current.split("\n", 1)[1].startswith("# unpinned: master\n")
     assert "run tundravm lock, then tundravm fetch" in current
 
 
@@ -411,7 +423,7 @@ def test_unpinned_compile_emits_marker() -> None:
 def test_pin_for_another_ref_is_ignored() -> None:
     locked = lock(_recipe(_build()), resolver=_Fixed(SHA_A))
     hook = _hooks(compile(_recipe(_build("dev")), lock=locked))
-    assert hook.startswith("# unpinned: dev\n")
+    assert hook.split("\n", 1)[1].startswith("# unpinned: dev\n")
     assert SHA_A not in hook
 
 

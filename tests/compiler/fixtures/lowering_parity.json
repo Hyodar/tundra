@@ -50,40 +50,40 @@
     }
   },
   "04_storage_and_secrets": {
-    "recipe": "4d48e1b50e6674f7e8eb2e319cb666742a40e18e02fe2d65db8b17a7edd6d186",
-    "tree": "eb736c7bbbdfd5bb8f382a45b79643b8de6a8dd7cf91a0ebc876a49654868ea6",
+    "recipe": "2f51ad258bc955833805134c5c1492137eca6a6e7946e347a5cec2274c2a39b2",
+    "tree": "1154522a20c2ff1631a765aad40f670c79917642a12bab1d5de6730748c4320e",
     "variants": {
       "default": {
-        "recipe": "4d48e1b50e6674f7e8eb2e319cb666742a40e18e02fe2d65db8b17a7edd6d186",
-        "tree": "eb736c7bbbdfd5bb8f382a45b79643b8de6a8dd7cf91a0ebc876a49654868ea6"
+        "recipe": "2f51ad258bc955833805134c5c1492137eca6a6e7946e347a5cec2274c2a39b2",
+        "tree": "1154522a20c2ff1631a765aad40f670c79917642a12bab1d5de6730748c4320e"
       }
     }
   },
   "05_source_builds": {
-    "recipe": "53ee0dc702dacea4cb9d39881c8b006acce80e0050898c9ca36e4673c7675bc2",
-    "tree": "9e8c47aa981e9f0060ef3470231a78a1f85272a1b8ad62db5b2d4f1f5c2edccd",
+    "recipe": "4b49889393f7a30c4e3d652e424aaee6b56e282a4315baadc9968d8c143c5fe6",
+    "tree": "4ba6af1c963866b694d4dcfd6a6176f8b9f6144eeeb82e8a7c4ee9a5d8d70c70",
     "variants": {
       "default": {
-        "recipe": "53ee0dc702dacea4cb9d39881c8b006acce80e0050898c9ca36e4673c7675bc2",
-        "tree": "9e8c47aa981e9f0060ef3470231a78a1f85272a1b8ad62db5b2d4f1f5c2edccd"
+        "recipe": "4b49889393f7a30c4e3d652e424aaee6b56e282a4315baadc9968d8c143c5fe6",
+        "tree": "4ba6af1c963866b694d4dcfd6a6176f8b9f6144eeeb82e8a7c4ee9a5d8d70c70"
       }
     }
   },
   "06_attestation": {
-    "recipe": "6f1f76f1c51fc5800f6b73c5ee9bd05f9f40cea9beefb2d6a96288e22ff84d8a",
-    "tree": "90cdda2a0949ddf0ef04d04df387f8f954146ca8f949b74517622974e8df8f89",
+    "recipe": "d2d15bd457a57c2e9f8017dcefbcf51c4887ede23755fe2822ff66eaf351787b",
+    "tree": "e9d427c30381a6024a90f4db1a544bf42141fb1341e28c9e85bce28187cf2604",
     "variants": {
       "attester": {
-        "recipe": "6789a23286c94924fe78e3dde4e39f6fb11fa09483d00c63e2ba17242687a7fa",
-        "tree": "6f7b823fb2dae83b8fb762df48e7bfbef1a23248b09ae2a995ba9afe1b6d0a07"
+        "recipe": "8f75058de6ab38eb686d7498a43e90bdd8127d99980e93c98780bac926f2599e",
+        "tree": "9f5fde7d8de7a77cd31ec1ded345153f78f5404128eb264d3bf7e36070202351"
       },
       "azure-verifier": {
-        "recipe": "72f9097f6769d0535ce5932ad412a4ff0a1c28ce3a3045d27ec7f3fc6e852119",
-        "tree": "44a8b92c421db84725bd12ee6e29de70b1d9124e4f01beb92e419a63036ab994"
+        "recipe": "b993b5670001c0126509fb5423d7aaf83e21fb6cb988e16d45e0b8f43f8ae241",
+        "tree": "d654fb3eb522b2b02f138fda4049b93e83f733d1a06b473e3f8a54785593cbca"
       },
       "verifier": {
-        "recipe": "e9cdb14215e7cfaea44887f91bced7f5448a08faf7b7cbf4c5fb2a7247a9ebdb",
-        "tree": "57278cbb3b63119f95887ad4940bbe5fcbfdb0ef43f878536e23c9fefaf66e7d"
+        "recipe": "bb350b4b210c158cc97f9b614e01e52ee0eb7ce13250206409221e644ca5ec17",
+        "tree": "d1ecb31192c0a9b13b8de239f88192de03079ab59be38f59ce249310707ca2e1"
       }
     }
   },
@@ -120,24 +120,24 @@
     }
   },
   "init-prover": {
-    "recipe": "3b8e8b661a84f60a36ef6bb84d886115c2d69551718c9d8108e002fde0fdc07b",
-    "tree": "47479379c35ae2af79e31e6c2cf2ae4c2d0ef8c778eb65552ed8f818763c4bf3",
+    "recipe": "103733f956fbbc7d88daebc003f01564e0fb28ba4e992a0a58b22490f0e8f9c7",
+    "tree": "b92de21e8dd2051e0614f28e55776424f8ce2f104d9f0f8363f9ddeba693e88b",
     "variants": {
       "azure": {
-        "recipe": "b7086a0379a5066813d10d1963d3e738ae5de4080237193f3b4a2c7184244864",
-        "tree": "42cb4397bb57ec0562e76dabd84773f92e58c831855345b90d94edbe0d743505"
+        "recipe": "c1c5c91479a0ee38b84a198c0f9acf842ff145d261746e19222cf8c2acfe97c6",
+        "tree": "2921df736d3a82ca186fddb3a47fa3fd74c80d39fbabbf3964b3a1815526661b"
       },
       "default": {
-        "recipe": "9ef2368bdc39bdc2a19126b24ca86e6b47bbf26924ef100d55be0c29a43e2c47",
-        "tree": "59c7913c5c894d0b33c0aa73b9e3ced974d08b5fc6f0d000b88a20a5be4e7552"
+        "recipe": "f1b2375398001a2ce92e1b5437463749a7877b1da5a5e2640ce34770567e8bd1",
+        "tree": "97d5de0f6ffe99503c57b793f6d78ad8a23e7bbea8a0310ff5a04317504f5a04"
       },
       "dev": {
-        "recipe": "d3d01b810c8b5a93fe584e087f4d56ea9db28b6728bf0c5b9c8ee3ed7559f6c6",
-        "tree": "0e4cb93f4bf50944de590b7fd0c9e36ae172d4aaede6cdad5e511e675bfa158e"
+        "recipe": "b2c35a2e553111c5567df93fda3f27efb7e3ac035266e7ed004a45192f90535e",
+        "tree": "6ffcb9873e20ef7c684cdd99ab9a286c4557f7ef3402496f825a93e62686d6c2"
       },
       "gcp": {
-        "recipe": "9b1a34ac3d91596b19bba557f880c14eeb7250e3d38c5361d7b5fa269de2b881",
-        "tree": "9ce1dce4a90fb1dc09be1b6005cdd227265ae93672f2f670a7d52be300b325ed"
+        "recipe": "b33de30620ee084bb959b1a66c552b55b66ebd31d06f0071064eacac13b1bbf4",
+        "tree": "503afc306eb95d7db283a0b834d3425d245a82d0182d4865a96cc28263ce3bff"
       }
     }
   },

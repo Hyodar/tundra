@@ -117,6 +117,7 @@ from .explain import (
     render_why,
     render_why_markdown,
 )
+from .explore import EXPLORE_FORMATS, PAGE_NAME, explore
 from .formats import (
     annotation_path,
     format_help,
@@ -672,6 +673,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_changes(sub)
 
     _add_release(sub)
+
+    _add_explore(sub)
 
     doctor_cmd = sub.add_parser(
         "doctor",
@@ -1633,6 +1636,7 @@ _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
     "status": (("build", "build"), ("tree", "tree"), ("lockfile", "lockfile")),
     "evidence": (("build", "build"), ("lockfile", "lockfile")),
     "changes": (("lockfile", "lockfile"),),
+    "explore": (("build", "build"), ("lockfile", "lockfile")),
     "release": (("build", "build"), ("lockfile", "lockfile"), ("backend", "backend")),
     "clean": (("build", "build"),),
     "doctor": (("backend", "backend"),),
@@ -2533,6 +2537,65 @@ def _cmd_changes(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+def _add_explore(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Write one self-contained HTML page that explains the recipe."
+    cmd = _add_command(sub, "explore", _cmd_explore, help=help_text)
+    cmd.description = (
+        help_text + " Overview (settings, recipe digest, lint findings, lockfile state "
+        "with section digests and pins, the bake in --build when there is one), a "
+        "declarations x variants matrix with each declaration's fields and provenance, "
+        "every variant's compiled tree with each file's content and the declarations "
+        "behind it, and the hooks, runtime-init steps and source builds in run order; "
+        "declarations and files link to each other. No network, nothing baked."
+    )
+    _add_build(
+        cmd,
+        "Build directory whose bake-result.json lists the artifacts; the page goes to "
+        f"BUILD/{PAGE_NAME} (default: build).",
+    )
+    cmd.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help=(
+            "Lockfile whose pins apply and whose drift is shown (default: "
+            "build/tundravm.lock when it exists; else the lock shows as missing)."
+        ),
+    )
+    cmd.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=f"Write the page (or the JSON) to FILE instead of BUILD/{PAGE_NAME}.",
+    )
+    cmd.add_argument(
+        "--format",
+        choices=EXPLORE_FORMATS,
+        default="html",
+        help=(
+            "html (default) writes the page and prints its path; json prints the same "
+            "model (to FILE with --output) with schema tundravm.explore/1."
+        ),
+    )
+
+
+def _cmd_explore(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    names = _variants(loaded, args) if args.variant else None
+    base = _build_dir(args)
+    lock: Path = args.lockfile if args.lockfile is not None else loaded.lowered().lock_path
+    found = explore(loaded.recipe, variants=names, lock=lock, build=base)
+    if args.format == "json" and args.output is None:
+        print(found.json(), file=out)
+        return EXIT_OK
+    target: Path = args.output if args.output is not None else base / PAGE_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(found.json() + "\n" if args.format == "json" else found.html(), "utf-8")
+    print(target, file=out)
+    return EXIT_OK
+
+
 def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args) if args.variant else None
@@ -2941,11 +3004,14 @@ def _cmd_import(args: argparse.Namespace, out: TextIO) -> int:
         print(f"wrote {target}", file=report)
     coverage = found.coverage
     print(
-        f"coverage: {coverage['declared']} declared, {coverage['verbatim']} verbatim",
+        f"coverage: {coverage['declared']} declared, {coverage['verbatim']} verbatim, "
+        f"{coverage['lost']} lost",
         file=report,
     )
-    for note in found.notes:
-        print(f"note: {note}", file=report)
+    for reason, notes in found.grouped_notes().items():
+        print(f"{reason} ({len(notes)}):", file=report)
+        for note in notes:
+            print(f"  note: {note}", file=report)
     return EXIT_OK
 
 

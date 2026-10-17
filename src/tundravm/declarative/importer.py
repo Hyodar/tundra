@@ -22,11 +22,12 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import MISSING, dataclass, field, fields, is_dataclass
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
 from tundravm._modules.init import Init as InitGenerator
+from tundravm._source import DebFile, HttpSource
 from tundravm.backends.base import is_mkosi_state
 from tundravm.compiler.emit_mkosi import (
     ARCH_TO_MKOSI,
@@ -48,6 +49,7 @@ from tundravm.errors import ValidationError
 from tundravm.models import DebloatConfig, ProfileState
 from tundravm.platforms import azure, gcp
 
+from ._import_builds import Recovered, build_items
 from .lower import _kernel
 from .model import (
     EMPTY_FRAGMENT,
@@ -122,6 +124,8 @@ _NATIVE_SCRIPTS: dict[str, Phase] = {
 }
 _SKIPPED = ("mkosi.sandbox", "mkosi.cache", "mkosi.tools", "mkosi.builddir", "mkosi.output")
 _VERBATIM = (File, Hook, Setting)
+_PUBLIC_NAMES = {"GoBuild": "Go", "CargoBuild": "Cargo", "DotnetBuild": "Dotnet"}
+"""The ``tundravm`` names of the build recipes (their classes are the compiler's)."""
 _ORDERED = (Hook, Service, User, Group, Init, Fragment)
 
 
@@ -140,6 +144,14 @@ class Imported:
     recipe: Recipe
     notes: tuple[str, ...] = ()
     coverage: Mapping[str, int] = field(default_factory=dict)
+
+    def grouped_notes(self) -> dict[str, tuple[str, ...]]:
+        """``notes`` by :func:`note_reason`, in :data:`NOTE_REASONS` order; no empty groups."""
+        return {
+            reason: grouped
+            for reason in NOTE_REASONS
+            if (grouped := tuple(n for n in self.notes if note_reason(n) == reason))
+        }
 
     def to_json(self) -> dict[str, Any]:
         """The fields as JSON values (``recipe`` as its name and variant names)."""
@@ -211,6 +223,7 @@ def import_tree(
         notes.append(f"single variant directory imported as variant {read[0].name!r}")
     for found in read:
         notes.extend(f"{found.name}: {note}" for note in found.notes)
+    notes.extend(_lost_builds(read))
     recipe_value, merge_notes = _assemble(recipe_name, read, chosen, root)
     notes.extend(merge_notes)
     source = _module_source(recipe_value, tree=root, output=output)
@@ -222,13 +235,63 @@ def import_tree(
         namespace["__file__"] = str(Path(output).resolve())
     exec(compile(formatted, str(output or "<imported recipe>"), "exec"), namespace)
     recipe = namespace["recipe"]
-    notes.extend(_round_trip_notes(recipe, root, [f.name for f in read], single=single))
+    pinned: dict[str, list[tuple[str, str]]] = {}
+    pins: set[str] = set()
+    for found in read:
+        for rel, locked, unlocked, label in found.swaps:
+            pinned.setdefault(f"{found.name}/{rel}", []).append((locked, unlocked))
+            pins.add(label)
+    names = [found.name for found in read]
+    notes.extend(
+        _round_trip_notes(recipe, root, names, single=single, pins=sorted(pins), pinned=pinned)
+    )
+    coverage = _coverage(recipe)
+    coverage["lost"] = sum(1 for note in notes if note_reason(note) == "lost declaration")
     return Imported(
         recipe_source=formatted,
         recipe=recipe,
         notes=tuple(notes),
-        coverage=_coverage(recipe),
+        coverage=coverage,
     )
+
+
+NOTE_REASONS = ("unmapped file", "lost declaration", "skipped", "other")
+"""The reasons :meth:`Imported.grouped_notes` groups notes by, in report order."""
+
+
+def note_reason(note: str) -> str:
+    """Why *note* was written: one of :data:`NOTE_REASONS`.
+
+    ``unmapped file``: a tree file no declaration maps; ``lost declaration``: a
+    setting or declaration the recipe cannot carry as written (a build's recipe
+    kind or locked-from ref, a dropped or differing setting); ``skipped``: a
+    symlink, empty directory, non-text script or build state left out.
+    """
+    if note.endswith(": not mapped"):
+        return "unmapped file"
+    if note.endswith((" is not imported", "; not imported")) or ": skipped (" in note:
+        return "skipped"
+    lost = (" is lost", " are lost", "dropped", " differs ", "is not mapped", "are not mapped")
+    if any(marker in note for marker in lost) or "has no Recipe." in note:
+        return "lost declaration"
+    return "other"
+
+
+def _lost_builds(read: Sequence[_Found]) -> list[str]:
+    """One note per source build that came back lossy, once when every variant agrees."""
+    seen: dict[str, dict[str, str]] = {}
+    for found in read:
+        for build in found.builds:
+            if build.lost is not None:
+                seen.setdefault(build.build.name, {})[found.name] = build.lost
+    notes: list[str] = []
+    for name, by_variant in seen.items():
+        texts = set(by_variant.values())
+        if len(by_variant) == len(read) and len(texts) == 1:
+            notes.append(f"build {name}: {texts.pop()}")
+        else:
+            notes.extend(f"{v}: build {name}: {text}" for v, text in by_variant.items())
+    return notes
 
 
 # ── tree layout ─────────────────────────────────────────────────────────
@@ -341,6 +404,10 @@ class _Found:
     wide: dict[str, Any]
     mkosi: dict[str, Any]
     notes: list[str]
+    builds: list[Recovered] = field(default_factory=list)
+    """The source builds read back."""
+    swaps: list[tuple[str, str, str, str]] = field(default_factory=list)
+    """``(script, pinned text, unpinned text, name@pin)`` per lock-pinned hook read back."""
 
 
 @dataclass
@@ -360,6 +427,9 @@ class _VariantReader:
     skeleton_paths: list[str] = field(default_factory=list)
     sync_text: tuple[str, str, str] | None = None
     finalize_commands: list[str] | None = None
+    builds: list[Recovered] = field(default_factory=list)
+    swaps: list[tuple[str, str, str, str]] = field(default_factory=list)
+    postinst_rel: str = ""
 
     @property
     def historical(self) -> bool:
@@ -422,7 +492,16 @@ class _VariantReader:
         if debloat is not None and debloat != Debloat():
             items.append(debloat)
         self._leftovers()
-        return _Found(self.variant, items, targets, self.wide, self.mkosi, self.notes)
+        return _Found(
+            self.variant,
+            items,
+            targets,
+            self.wide,
+            self.mkosi,
+            self.notes,
+            self.builds,
+            self.swaps,
+        )
 
     # ── mkosi.conf ──
 
@@ -545,7 +624,7 @@ class _VariantReader:
 
     def _kernel(
         self, conf: list[_Line], scripts: dict[Phase, list[str]], paths: _PathPool
-    ) -> tuple[Kernel | None, list[Hook]]:
+    ) -> tuple[Kernel | None, list[Item]]:
         info = self.kernel_conf
         build = scripts.get("build", [])
         text = self.text(build[0]) if len(build) == 1 else None
@@ -582,7 +661,7 @@ class _VariantReader:
                 if name in self.environment:
                     self.environment.remove(name)
             self._finish_environment()
-            return kernel, [Hook("build", "build", body)] if body.strip() else []
+            return kernel, self._build_items(build[0], body.split("\n")) if body.strip() else []
         self.notes.append("kernel build script not recognized; kernel settings are not mapped")
         self._finish_environment()
         return None, []
@@ -692,6 +771,7 @@ class _VariantReader:
             parsed.extra = rels
             return parsed
         self.consumed.add(rels[0])
+        self.postinst_rel = rels[0]
         lines = text[len(PREAMBLE) :].removesuffix("\n").split("\n") if text != PREAMBLE else []
         lines = parsed.take_minimize(lines)
         lines = parsed.take_synthetic(lines, historical=self.historical)
@@ -899,7 +979,9 @@ class _VariantReader:
                 body, exact = _body(text)
                 if not exact:
                     self.notes.append(f"{rel}: not in the compiler's script format; body kept")
-                if body.strip():
+                if body.strip() and phase == "build":
+                    items.extend(self._build_items(rel, body.split("\n")))
+                elif body.strip():
                     items.extend(_segments(phase, body.split("\n")))
         for name, phase in _NATIVE_SCRIPTS.items():
             text = self.take(name)
@@ -916,9 +998,20 @@ class _VariantReader:
             items.extend(_segments("finalize", finalize))
         return items
 
+    def _build_items(self, rel: str, lines: list[str]) -> list[Item]:
+        """The build script *rel*'s commands: ``Build`` per source build hook, ``Hook`` between."""
+        items, recovered = build_items(lines, historical=self.historical, notes=self.notes, rel=rel)
+        self.builds.extend(recovered)
+        self.swaps.extend(
+            (rel, found.pinned, found.unpinned, f"{found.build.name}@{found.lock_pin}")
+            for found in recovered
+            if found.lock_pin is not None
+        )
+        return list(items)
+
     def _postinst_items(self, lines: list[str]) -> list[Item]:
         """The postinst commands as hooks, with the EFI stub and accounts recognized in place."""
-        stub = _efi_stub_in(lines, historical=self.historical)
+        stub = _efi_stub_in(lines, historical=self.historical) or self._pinned_efi_stub(lines)
         blocks: list[tuple[int, int, Item]] = []
         if stub is not None:
             blocks.append(stub)
@@ -939,6 +1032,33 @@ class _VariantReader:
             start = end
         items.extend(_segments("postinst", lines[start:], part))
         return items
+
+    def _pinned_efi_stub(self, lines: list[str]) -> tuple[int, int, Item] | None:
+        """A lock-pinned ``EfiStub`` hook (current dialect), from the recipe's snapshot."""
+        snapshot = self.wide.get("snapshot")
+        if self.historical or not snapshot:
+            return None
+        for index, line in enumerate(lines):
+            check = re.fullmatch(
+                r'echo "([0-9a-f]{64})  \$SRCDIR/tundravm-sources/(efi-stub[\w-]*)-[0-9a-f]{12}-'
+                r'[0-9a-f]{8}/systemd-boot-efi_(\S+)_amd64\.deb" \| sha256sum -c --quiet -',
+                line,
+            )
+            if check is None or index < 4:
+                continue
+            pin, name, version = check.groups()
+            try:
+                stub = EfiStub(snapshot=snapshot, version=version)
+            except ValidationError:
+                return None
+            unpinned = stub.render_script()
+            block = DebFile(name, HttpSource(stub.deb_url), unpinned).render(pin)
+            start, end = index - 4, index - 4 + block.count("\n") + 1
+            if "\n".join(lines[start:end]) != block:
+                return None
+            self.swaps.append((self.postinst_rel, block, unpinned, f"{name}@{pin[:12]}"))
+            return start, end, stub
+        return None
 
     def _leftovers(self) -> None:
         for current, dirnames, filenames in os.walk(self.root):
@@ -1532,16 +1652,20 @@ class _Writer:
         if isinstance(value, tuple):
             parts = [self.value(v, hint=hint, field_name=field_name) for v in value]
             return "(" + ", ".join(parts) + ("," if len(parts) == 1 else "") + ")"
+        if isinstance(value, Mapping):
+            items = (f"{self.value(k)}: {self.value(v, hint=hint)}" for k, v in value.items())
+            return "{" + ", ".join(items) + "}"
         if is_dataclass(value) and not isinstance(value, type):
             return self.call(value)
         raise TypeError(f"cannot render {value!r}")
 
     def call(self, obj: Any) -> str:
         cls = type(obj)
+        name = _PUBLIC_NAMES.get(cls.__name__, cls.__name__)
         if isinstance(obj, Composite):
-            self.utils.add(cls.__name__)
+            self.utils.add(name)
         else:
-            self.imports.add(cls.__name__)
+            self.imports.add(name)
         hint = _hint(obj)
         args: list[str] = []
         positional = True
@@ -1558,7 +1682,7 @@ class _Writer:
             if value == default and type(value) is type(default):
                 continue
             args.append(f"{item.name}={self.value(value, hint=hint, field_name=item.name)}")
-        return f"{cls.__name__}({', '.join(args)})"
+        return f"{name}({', '.join(args)})"
 
 
 def _hint(obj: object) -> str:
@@ -1653,9 +1777,20 @@ def _ruff_format(source: str, output: Path | None) -> tuple[str, str | None]:
 
 
 def _round_trip_notes(
-    recipe: Recipe, root: Path, names: Sequence[str], *, single: bool
+    recipe: Recipe,
+    root: Path,
+    names: Sequence[str],
+    *,
+    single: bool,
+    pins: Sequence[str] = (),
+    pinned: Mapping[str, Sequence[tuple[str, str]]] | None = None,
 ) -> list[str]:
-    """Compile *recipe* and name the tree paths it does not give back."""
+    """Compile *recipe* and name the tree paths it does not give back.
+
+    *pinned* maps a build script to its lock-pinned hooks, each with the
+    unpinned text it compiles to without the lockfile: the tree is compared
+    with those swapped in, and *pins* (``name@pin``) named in the verdict.
+    """
     from tundravm.errors import TdxError
 
     from .lifecycle import _digest_mode, read_tree
@@ -1672,11 +1807,24 @@ def _round_trip_notes(
         path = f"{names[0]}/{entry.path}" if single else entry.path
         if single or path.split("/", 1)[0] in names:
             want[path] = entry
+    for path, swaps in (pinned or {}).items():
+        found = want.get(path)
+        if found is None or found.content is None:
+            continue
+        text = found.content.decode("utf-8")
+        for locked, unlocked in swaps:
+            text = text.replace(locked, unlocked, 1)
+        want[path] = replace(found, content=text.encode("utf-8"))
     differ = sorted(
         path
         for path in want.keys() | got.keys()
         if _entry_view(want.get(path), _digest_mode) != _entry_view(got.get(path), _digest_mode)
     )
+    if not differ and pins:
+        return [
+            "round trip: the recipe compiles back to this tree once locked to the same pins "
+            f"({', '.join(pins)})"
+        ]
     if not differ:
         return ["round trip: the recipe compiles back to this tree"]
     shown = ", ".join(differ[:10]) + (f" and {len(differ) - 10} more" if len(differ) > 10 else "")
@@ -1690,4 +1838,4 @@ def _entry_view(entry: Any, mode: Callable[[Any], int]) -> tuple[Any, ...] | Non
     return (entry.content, entry.symlink, mode(entry))
 
 
-__all__ = ["Imported", "import_tree"]
+__all__ = ["NOTE_REASONS", "Imported", "import_tree", "note_reason"]

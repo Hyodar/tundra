@@ -920,17 +920,30 @@ class Http:
 
 @dataclass(frozen=True, slots=True)
 class Install:
-    """Install *source* (relative to the build directory) at *destination*."""
+    """Install *source* (relative to the build directory) at *destination*.
+
+    ``artifact=True`` installs a recipe's own output: *source* is its ``artifact``
+    path (``build/<output>`` for ``Go``), and the build caches it as the artifact
+    the way the generated ``Key``/``Disk``/``Secrets`` builds do.
+    """
 
     source: str
     destination: str
     mode: int | None = 0o755
     directory: bool = False
+    artifact: bool = False
 
     def __post_init__(self) -> None:
         _require_relative(self, self.source, "source")
         _require_absolute(self, self.destination, "destination")
         _require_mode(self, self.mode)
+        _require_bool(self, self.artifact, "artifact")
+        if self.artifact and (self.directory or self.mode is None):
+            raise _fail(
+                self,
+                f"artifact {self.source!r} is a file installed with a mode.",
+                hint="Drop directory=True and mode=None, or artifact=True.",
+            )
         if self.directory and self.mode is not None:
             raise _fail(
                 self,
@@ -1005,6 +1018,17 @@ class Build:
             if not isinstance(step, Install):
                 raise _fail(self, f"build {self.name!r} install step {step!r} is not Install.")
             names.append(posixpath.basename(step.destination.rstrip("/")))
+            if step.artifact and (
+                self.recipe is None or posixpath.normpath(step.source) != self.recipe.artifact
+            ):
+                expected = "a recipe=" if self.recipe is None else repr(self.recipe.artifact)
+                raise _fail(
+                    self,
+                    f"build {self.name!r} installs {step.source!r} as its artifact, "
+                    f"not {expected}.",
+                    hint="artifact=True names the recipe's output path; "
+                    "install other files without it.",
+                )
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise _fail(

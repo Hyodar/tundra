@@ -7,7 +7,8 @@ A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
 running image's quote against a verifier policy, ``sbom`` lists what a baked
 artifact contains and ``evidence`` gathers an auditor's record of a bake, which
 ``verify_evidence`` checks on its own and ``changes`` compares with the recipe now;
-``release`` runs them all into one immutable release directory.
+``release`` runs them all into one immutable release directory and ``explore``
+renders one page that explains a recipe to someone who has not read it.
 ``diff``, ``measure`` and ``deploy`` are ``tundravm.declarative.diff``/``measure``/
 ``deploy`` (at the top level those names are modules). The shipped fragments are
 in :mod:`tundravm.declarative.utils`.
@@ -105,6 +106,7 @@ from .errors import (
 )
 from .evidence import Evidence, evidence
 from .explain import Why, explain_why
+from .explore import Exploration, explore
 from .recipe import load_recipe
 from .release import Release, release
 from .verify import EvidenceVerification, verify_evidence
@@ -131,6 +133,7 @@ __all__ = [
     "Entry",
     "Evidence",
     "EvidenceVerification",
+    "Exploration",
     "FetchedSource",
     "File",
     "Fragment",
@@ -188,6 +191,7 @@ __all__ = [
     "doctor",
     "evidence",
     "explain_why",
+    "explore",
     "fetch",
     "import_tree",
     "lint",

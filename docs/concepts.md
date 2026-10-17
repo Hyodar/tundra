@@ -69,7 +69,7 @@ Equal repeats deduplicate silently. Two different declarations with the same ide
 
 `tundravm.declarative.resolve.provenance(recipe, variant=NAME)` records how resolution reached its result: for every identity the variant touched, the steps that touched it, in order, each an `Origin(action, variant, fragments)`. The action is `declared` (in `common`), `added` (by a variant's `add`), `replaced` (by a variant's `replace`) or `removed` (by a variant's `remove`); `fragments` is the chain of fragments the declaration came through, empty for `replace` and `remove`, which name declarations directly. A removed identity stays in the result with `removed` as its last step, and resolution errors are not raised here (`resolve` and `lint` report them).
 
-`tundravm inspect --variant NAME --why SUBJECT` and `explain_why(recipe, variant, subject)` build on it: for one emitted object (an image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME`) they print the declarations behind it with these steps, the compiled files that hold it and the lines the compiler generated for it (see [CLI: Explaining one object](cli.md#explaining-one-object)).
+`tundravm inspect --variant NAME --why SUBJECT` and `explain_why(recipe, variant, subject)` build on it: for one emitted object (an image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME`) they print the declarations behind it with these steps, the compiled files that hold it and the lines the compiler generated for it (see [CLI: Explaining one object](cli.md#explaining-one-object)). `tundravm explore` (`explore(recipe)`) puts these steps for every declaration and every emitted file on one page, cross-linked, so a reviewer can follow a file back to its fragment and overlay without reading the recipe (see [CLI: Explore](cli.md#explore)).
 
 ## Lowering and compiling
 
@@ -300,7 +300,7 @@ Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
 
 | Step | Function | CLI | Needs |
 |---|---|---|---|
-| Inspect | `resolve`, `resolve_all`, `explain_why` | `inspect`, `inspect --why` | the recipe |
+| Inspect | `resolve`, `resolve_all`, `explain_why`, `explore` | `inspect`, `inspect --why`, `explore` | the recipe |
 | Lint | `lint(recipe, lock=None)` | `lint` | the recipe; a lock applies its pins and adds drift |
 | Compile | `compile(recipe, lock=None) -> Tree` | `compile` | the recipe; a lock applies its pins |
 | Watch | `lint` and `compile --check` again on each change (`tundravm.watch.Watch`) | `watch` | the recipe; writes the tree only with `--write` |

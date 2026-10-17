@@ -11,6 +11,7 @@ from typing import Literal
 import pytest
 from examples.fragments import Nethermind, Raiko, TaikoClient
 
+from tundravm._source import BUILD_MARKER
 from tundravm.declarative import (
     Build,
     Disk,
@@ -176,8 +177,9 @@ def test_every_declaration_that_builds_from_source_is_a_source_build() -> None:
     ]
     lines = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all))).splitlines()
     emitted = ("tdxs", "key-generation", "disk-encryption", "secret-delivery")
-    assert len(lines) == len(emitted)
-    for hook, name in zip(lines, emitted, strict=True):
+    assert len(lines) == 2 * len(emitted)  # each hook follows its `# tundravm build:` marker
+    for marker, hook, name in zip(lines[::2], lines[1::2], emitted, strict=True):
+        assert json.loads(marker.removeprefix(BUILD_MARKER))["name"] == name
         assert f'mkdir -p "$BUILDROOT/build/{name}" && ' in hook
 
 
