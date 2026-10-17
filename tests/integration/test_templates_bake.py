@@ -93,9 +93,13 @@ def test_service_template_bakes_with_its_app(tmp_path: Path) -> None:
             assert _sudo_test("-L", wants / name), f"{name} is not linked into {wants}"
             assert _sudo_readlink(wants / name).endswith(f"/{name}")
 
-        init = root / "usr/bin/runtime-init"
-        assert _sudo_test("-x", init)
-        assert "mkdir -p /var/lib/app && chown app:app /var/lib/app" in _sudo_read(init)
+        step = root / "usr/lib/runtime-init/app-state"
+        assert _sudo_test("-x", step)
+        assert "mkdir -p /var/lib/app && chown app:app /var/lib/app" in _sudo_read(step)
+        step_unit = _sudo_read(root / "usr/lib/systemd/system/runtime-init-app-state.service")
+        assert "ExecStart=/usr/lib/runtime-init/app-state" in step_unit
+        aggregate = _sudo_read(root / "usr/lib/systemd/system/runtime-init.service")
+        assert "Requires=runtime-init-app-state.service" in aggregate
 
         assert _sudo_read(root / "etc/app/app.conf") == "version=0.1.0\nlisten=0.0.0.0:8080\n"
         passwd = _sudo_read(root / "etc/passwd").splitlines()
@@ -205,9 +209,12 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         assert "trixie-updates" in _sudo_read(listed / "debian-updates.sources")
         assert not _sudo_test("-e", listed / "bookworm-security.sources")
         assert not _sudo_test("-e", listed / "debian-backports.sources")
-        unit = _sudo_read(root / "usr/lib/systemd/system/runtime-init.service")
+        # Each boot step waits for the network; the aggregate unit only requires the steps.
+        unit = _sudo_read(root / "usr/lib/systemd/system/runtime-init-app-state.service")
         assert "After=network-online.target\nWants=network-online.target\n" in unit
         assert "network-setup" not in unit
+        aggregate = _sudo_read(root / "usr/lib/systemd/system/runtime-init.service")
+        assert "Requires=runtime-init-app-state.service" in aggregate
         assert "Requires=runtime-init.service" in _sudo_read(
             root / "usr/lib/systemd/system/app.service"
         )
