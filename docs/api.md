@@ -12,7 +12,7 @@ from tundravm.declarative.utils import Composite, DevTools, Tdxs
 from tundravm.declarative import diff, measure, deploy
 ```
 
-`tundravm` exports the declarations and the `packages()` helper, the build toolchains `Go`, `Cargo` and `Dotnet`, [`Resources`](#resources), the recipe types, the lifecycle functions and result types, `release` and `Release` (from `tundravm.release`; the top-level `tundravm.release` is the function, so import the module as `import tundravm.release` or `from tundravm.release import STAGES`), `attest` and `Attestation` (from `tundravm.attestation`), `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub`, `Backports`, `GoBinary` and `CargoBinary`, and their base class `Composite`, live in `tundravm.declarative.utils`. `tundravm.__version__` is the package version that `tundravm --version` prints.
+`tundravm` exports the declarations and the `packages()` helper, the build toolchains `Go`, `Cargo` and `Dotnet`, [`Resources`](#resources), the recipe types, the lifecycle functions and result types, `release` and `Release` (from `tundravm.release`; the top-level `tundravm.release` is the function, so import the module as `import tundravm.release` or `from tundravm.release import STAGES`), `attest` and `Attestation` (from `tundravm.attestation`), `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub`, `Backports`, `GoBinary` and `CargoBinary`, their base class `Composite`, `ConfigFile`, `Export` and `HttpEndpoint` live in `tundravm.declarative.utils`; the `component` decorator is in `tundravm` and `tundravm.declarative`. `tundravm.__version__` is the package version that `tundravm --version` prints.
 
 ## Recipe, variants, fragments
 
@@ -23,16 +23,30 @@ from tundravm.declarative import diff, measure, deploy
 | `name` | `str` | required |
 | `items` | `tuple[Declaration \| Fragment, ...]` | `()`: the recipe's own declarations and fragments, which every variant inheriting `"base"` starts from (provenance level `common`) |
 | `variants` | `tuple[Variant, ...]` | `(Variant("default", outputs=("qemu",)),)` |
-| `base` | `str` | `"debian/trixie"` |
+| `platform` | `Platform` | `Debian("trixie", boot=None)`: the distribution, its archive and what it declares in every variant (see below) |
+| `mkosi` | `Mkosi` | `Mkosi()` |
+| `policy` | `Policy \| None` | `None` (the default `Policy()`); see [policy](policy.md) |
+
+At least one variant; names are unique. `recipe.variant(name)` returns one or raises `ValidationError`.
+
+### `Platform` and `Debian`
+
+`Recipe(platform=Debian("trixie", snapshot="20251113T083151Z"))` names what the image builds on. `Platform` is the base class; `Debian(release, *, ...)` is the distribution it ships. `platform.name` is `debian/<release>` (mkosi's `Distribution=`/`Release=`).
+
+| Field | Type | Default |
+|---|---|---|
+| `release` | `str` | required: a release name such as `"trixie"`, not `debian/trixie` |
 | `arch` | `"x86_64" \| "aarch64"` | `"x86_64"` |
+| `snapshot` | `str \| None` | `None`; a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=` (with no `mirror`, mkosi reads `https://snapshot.debian.org`). A URL or a value with whitespace raises `ValidationError`: the root goes in `mirror` |
 | `mirror` | `str \| None` | `None` (the distribution default); a mirror root written as `Mirror=`, which mkosi completes itself (`<mirror>/debian`, or `<mirror>/archive/debian/<snapshot>` with `snapshot`), so it is never a full archive URL |
 | `tools_mirror` | `str \| None` | `None`; the tools tree's mirror root (`ToolsTreeMirror=`), completed the same way |
 | `epoch` | `int \| None` | `0`: reproducible (`SOURCE_DATE_EPOCH=0`, stable seed, `IMAGE_VERSION` stripped); `None`: not reproducible; other values set `SourceDateEpoch=` and `SOURCE_DATE_EPOCH` to that value |
-| `mkosi` | `Mkosi` | `Mkosi()` |
-| `policy` | `Policy \| None` | `None` (the default `Policy()`); see [policy](policy.md) |
-| `snapshot` | `str \| None` | `None`; a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=` (with no `mirror`, mkosi reads `https://snapshot.debian.org`). A URL or a value with whitespace raises `ValidationError`: the root goes in `mirror` |
+| `items` | `tuple[Declaration \| Fragment, ...]` | `()`: declarations and fragments the platform adds to every variant (a kernel, `Backports()`, `Setting` escape hatches) |
+| `boot` | `"systemd" \| "uki" \| None` | `"systemd"`: install `kernel_package` and `systemd`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`; `"uki"`: `kmod`, `systemd`, `systemd-boot-efi` for a UKI whose `/init` the image ships; `None`: no packages, for a `Bootable=no` image |
+| `kernel_package` | `str \| None` | `"linux-image-amd64"`; `None` when the image declares its own `Kernel(...)` |
+| `efi_stub` | `str \| None` | `None`; a `systemd-boot-efi` version: the platform adds `EfiStub(snapshot=..., version=efi_stub)` from its own archive (`snapshot`, under `mirror` when both are set, or a `mirror` that is a snapshot archive URL), so the stub and the packages cannot disagree. No archive raises `ValidationError` |
 
-At least one variant; names are unique. `recipe.variant(name)` returns one or raises `ValidationError`.
+`platform.packages` lists the package names it installs (`kernel_package` and the `boot` set). Every variant gets the platform's declarations, standalone ones (`inherits=None`) included, before `Recipe.items`; their provenance level is `platform` (`declared in the platform`), and a variant edits or removes them by ref like any other. A distribution-specific bundle is a subclass with other defaults, such as `NethermindPlatform` in `examples/nethermind_base.py`.
 
 ### `Variant`
 
@@ -91,7 +105,7 @@ recipe = Recipe(
 | `init_script` | `str \| None` | `None`; text written to `mkosi.skeleton/init` (mode 0755) |
 | `version_script` | `bool` | `False`; emit `mkosi.version` |
 | `cloud_postoutput` | `bool` | `True`; emit the Azure/GCP disk conversion postoutput scripts |
-| `strip_os_release` | `bool \| None` | `None`: strip `IMAGE_VERSION` from `os-release` when `Recipe.epoch` is set |
+| `strip_os_release` | `bool \| None` | `None`: strip `IMAGE_VERSION` from `os-release` when the platform's `epoch` is set |
 
 `nethermind-v1` spells groups and users as postinst `groupadd`/`useradd` lines, omits the `# tundravm build:` declaration line and the `# unpinned:` marker of build hooks, clones sources inside the build sandbox, leaves kernel sources out of the lockfile and generates backports with a sync hook, matching the historical nethermind-tdx tree.
 
@@ -140,7 +154,7 @@ Mapping fields (`env`, `limits`, `variables`, `keep_paths_by_variant`, `Tdxs.exp
 | `Setting` | `section`, `key`, `values: tuple[str, ...]`; per variant | section, key |
 | `Kernel` | `version`, `source: Git \| Http`, `config: Path \| None = None`, `cmdline=""`, `tdx=True` | one per variant |
 
-No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkosi escape hatch, and settings belong to the variant that declares them. `Output.Seed`, `Output.OutputDirectory`, `Output.CompressOutput`, `Output.ManifestFormat`, `Build.PackageCacheDirectory`, `Build.WithNetwork`, `Build.Environment`, `Build.SandboxTrees` and `Content.CleanPackageMetadata` map onto compiler options. Any other key is written verbatim into that variant's `mkosi.conf`, under its section, one `Key=value` line per value. Keys the compiler writes itself (`Packages`, `BuildPackages`, `Mirror`, `Format`, `ImageId`, `KernelCommandLine`, `ExtraTrees`, the phase script keys such as `BuildScripts`, ...) raise `ValidationError` naming the declaration to use instead (`Package(name)`, `Recipe.mirror`, `Hook(name, phase, script)`, ...). `Setting("Build", "BuildSources", ("src[:dest]", ...))` mounts host directories into the variant's build.
+No `Debloat` means the compiler default (debloat enabled). `Setting` is the mkosi escape hatch, and settings belong to the variant that declares them. `Output.Seed`, `Output.OutputDirectory`, `Output.CompressOutput`, `Output.ManifestFormat`, `Build.PackageCacheDirectory`, `Build.WithNetwork`, `Build.Environment`, `Build.SandboxTrees` and `Content.CleanPackageMetadata` map onto compiler options. Any other key is written verbatim into that variant's `mkosi.conf`, under its section, one `Key=value` line per value. Keys the compiler writes itself (`Packages`, `BuildPackages`, `Mirror`, `Format`, `ImageId`, `KernelCommandLine`, `ExtraTrees`, the phase script keys such as `BuildScripts`, ...) raise `ValidationError` naming the declaration to use instead (`Package(name)`, `Debian(mirror=...)`, `Hook(name, phase, script)`, ...). `Setting("Build", "BuildSources", ("src[:dest]", ...))` mounts host directories into the variant's build.
 
 `Kernel.source` is a `Git` branch, tag or full commit hash, with `subdir` and `submodules`, or an `Http` tarball, which needs `sha256=` and is checked against it before unpacking. In the current dialect a built kernel's source (a `Kernel` with `config`) is locked and fetched like a source build: its lockfile pin is named `kernel`, or `kernel-<variant>` for a variant whose kernel source differs from the default variant's, `lock --update kernel` re-resolves it, and the kernel build script copies the host checkout without its `.git` (so the kernel version string stays clean). Under `nethermind-v1` the lockfile pins no kernel and the build clones it. A variant whose settings or kernel differ from the default variant's lowers standalone with its own `mkosi.conf` lines, kernel build and config.
 
@@ -418,36 +432,52 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 | `DevTools(*, root_password="tdx", salt=None, reproducible=True)` | `devtools` | Debugging packages, a serial console unit, root password login. Never ship it: mark its variant `release=False`. The password is hashed with a fixed salt so a second build matches: `salt` (1 to 16 of `[A-Za-z0-9./]`), else the first 16 hex digits of `sha256("tundravm-devtools:<variant name>")`, which the postinst computes from mkosi's `$IMAGE_ID`. `reproducible=False` keeps the historical random salt (the surge `nethermind-v1` tree). |
 | `GoBinary(name, source, *, package, install=None, env={}, tags=(), ldflags="-s -w -buildid=", cache_namespace=None)` | *name* | `Build(name, source, using=Go(output=<install file name>, package=..., ...), install=(Install("build/<install file name>", install),))`, equal to that hand-written `Build`. `install` defaults to `/usr/bin/<name>`; `executable` is it, for `Service(name, f"{binary.executable} --flag")` |
 | `CargoBinary(name, source, *, bin=None, package=None, install=None, features=(), profile="release", env={}, cache_namespace=None)` | *name* | `Build(name, source, using=Cargo(output=<install file name>, ...), install=(Install("target/<profile>/<bin, package or install file name>", install),))`; `install` and `executable` as for `GoBinary` |
-| `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot: `snapshot` is a snapshot ID (`"20251113T083151Z"`, read from `snapshot.debian.org`) or a snapshot archive URL, and it must carry `version` (the templates pair `20251113T083151Z` with `257.8-1~deb13u1`). Outside `nethermind-v1` the package (`systemd-boot-efi_<version>_amd64.deb` in the snapshot's pool) is a source named `efi-stub`: `lock` pins its sha256, `fetch` downloads it on the host, and the current dialect's hook checks the mounted copy against the pin and installs it with `dpkg -i`. Without a pin the hook downloads the package into `$BUILDROOT/` (mkosi-chroot mounts its own `/tmp`) and fails with that advice when the download fails; `nethermind-v1` downloads it with `curl` |
-| `Backports(*, archive_url=None, release=None, include_sid=True)` | `backports` | Debian backports and (with `include_sid`, the default) sid apt sources for the build's apt, not the image; `include_sid=False` leaves sid and its pin out, so a package missing from the release and backports fails the build. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `archive_url` verbatim, else `Recipe.mirror` and `Recipe.snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the release of `Recipe.base`. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
+| `EfiStub(*, snapshot, version)` | `efi-stub` | A postinst hook installing `systemd-boot-efi` `version` from a Debian snapshot: `snapshot` is a snapshot ID (`"20251113T083151Z"`, read from `snapshot.debian.org`) or a snapshot archive URL, and it must carry `version` (`Debian(efi_stub=version)` adds one from the platform's own archive; the templates pair `20251113T083151Z` with `257.8-1~deb13u1`). Outside `nethermind-v1` the package (`systemd-boot-efi_<version>_amd64.deb` in the snapshot's pool) is a source named `efi-stub`: `lock` pins its sha256, `fetch` downloads it on the host, and the current dialect's hook checks the mounted copy against the pin and installs it with `dpkg -i`. Without a pin the hook downloads the package into `$BUILDROOT/` (mkosi-chroot mounts its own `/tmp`) and fails with that advice when the download fails; `nethermind-v1` downloads it with `curl` |
+| `Backports(*, archive_url=None, release=None, include_sid=True)` | `backports` | Debian backports and (with `include_sid`, the default) sid apt sources for the build's apt, not the image; `include_sid=False` leaves sid and its pin out, so a package missing from the release and backports fails the build. The current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and `preferences.d/debian-backports.pref` at compile time, pinning backports to 200 and sid to 100 so packages come from the release unless it lacks them. The URI is `archive_url` verbatim, else the platform's `mirror` and `snapshot` completed as mkosi does, else `http://deb.debian.org/debian`; the suite is `release`, else the platform's release. `nethermind-v1` generates the sources with a sync hook and `Setting("Build", "SandboxTrees", ...)`, with no pins |
 
 `Tdxs.from_policy(policy, *, validator="tdx", mrtd=None, allow_placeholder=False, **fields)` builds a verifier from a policy file `tundravm measure --export-policy` wrote (or its dict): its `RTMR0`..`RTMR3` become `expected_measurements` under the keys the tundra-tools validator reads (`rtmr0`..`rtmr3`, lower-case hex). RTMR tools do not report MRTD and the validator checks only the registers it is given, so pass `mrtd=` to check it too. A placeholder policy raises `MeasurementError` unless `allow_placeholder=True`; a missing required register or a wrong `schema_version` raises `ValidationError`. `Tdxs.from_measurements(measurements, ...)` does the same for a `measure()` result. Other keyword arguments are `Tdxs` fields. A `Tdxs` read from a file records it in `policy_file` (`None` otherwise; not configuration, so equality and `repr` skip it), which [`recipe_inputs`](#recipe-inputs) reports.
 
 `issuer`/`validator` are a `TdxsType` (`"tdx"`, `"azure"`, `"gcp"` or `"simulator"`) or `None`. `TUNDRA_TOOLS` is `Git("https://github.com/Hyodar/tundra-tools.git", "master")`. `Backports.render_sources(*, mirror, release, snapshot=None)` and `render_preferences(*, release)` return the two files' text (the recipe's mirror root, release and snapshot; the fragment's own fields win). `BACKPORTS_TREE` is the `SandboxTrees` entry `Backports` adds under `nethermind-v1`, `"mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"`. Each class is an instance of `Fragment`, so it goes wherever a `Fragment` does: in `common`, in a variant's `add`, or among another fragment's `items`.
 
-### `Composite`
+### `component` and `Composite`
 
-`Composite` is the `Fragment` subclass the shipped fragments are built on. A subclass declares its configuration as dataclass fields and returns its contents from `compose()`:
+`@component` (from `tundravm`) turns an annotated class into a `Composite`, the `Fragment` subclass the shipped fragments are built on: a frozen, slotted dataclass with keyword-only fields whose `compose()` returns or yields its contents.
 
 ```python
-from dataclasses import dataclass
+from collections.abc import Iterator
 
-from tundravm import Fragment, Package
+from tundravm import Package, component
 from tundravm.declarative.utils import Composite
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class Debugging(Composite):
     gdb: bool = True
 
-    def compose(self) -> Fragment:
-        tools = ("strace", "gdb") if self.gdb else ("strace",)
-        return Fragment("debugging", items=tuple(Package(name) for name in tools))
+    def compose(self) -> Iterator[Package]:
+        yield Package("strace")
+        if self.gdb:
+            yield Package("gdb")
 ```
 
-- Decorate the subclass with `@dataclass(frozen=True, slots=True, kw_only=True)`. Construction calls `compose()` once; its `name`, `items`, `requires` and `checks` become the instance's.
-- `compose()` must return a `Fragment` (anything else is a `ValidationError`); it may raise `ValidationError` for bad field values. A subclass without `compose()` raises `NotImplementedError` when constructed.
-- The configuration fields alone are the instance's `repr` and equality: `Debugging()` prints as `Debugging(gdb=True)`, and two equal configurations are the same fragment, so including both expands once. Lists passed for fields are frozen into tuples.
+- `component(cls)` or `component(*, name=None, requires=())`. Construction freezes list and dict values (and defaults) into tuples and `FrozenMap`s, refuses a `str`, `int`, `float` or `bool` field (or one of those `| None`) holding another type with `ValidationError`, then calls `compose()` once. A class without `compose()` is a `ValidationError` where it is decorated.
+- `compose()` returns an iterable of declarations and fragments, or a whole `Fragment` whose `name`, `requires` and `checks` become the instance's (anything else is a `ValidationError`). It may raise `ValidationError` for bad field values.
+- The fragment is named `name`, else after an `id` (or `name`) field, else after the class in kebab case (`HealthCheck` is `health-check`). It requires `requires`, plus the `provider` of each `Export` held in a field (directly or in a tuple). A `check(self, resolved)` method returning diagnostics is its check.
+- Subclass `Composite` so a type checker sees instances as fragments; a plain class is rebased onto `Composite` at runtime. The configuration fields alone are the instance's `repr` and equality: `Debugging()` prints as `Debugging(gdb=True)`, and two equal configurations are the same fragment, so including both expands once.
+
+`Export(*, provider=None)` is the base of typed values a component publishes in a property for other components to consume; build one with `provider=self.name`. `HttpEndpoint(host, port, path="/", *, scheme="http", provider=None)` is where a service answers HTTP: `address` is `host:port` (an IPv6 host in brackets), `url` is `scheme://address/path`; a bad host, a port outside 1..65535 or a path without a leading `/` is a `ValidationError`.
+
+### `ConfigFile`
+
+`ConfigFile.yaml(path, data, *, mode=0o644, stage="extra", allow_secret=False, sort_keys=True)` and `ConfigFile.toml`, `ConfigFile.json`, `ConfigFile.ini` and `ConfigFile.env`, with the same keywords, render a config file and return `File.text(path, text, mode=..., stage=..., allow_secret=...)`: equal to the hand-written `File` with those bytes, with the same recipe digest and tree. Data is `str`, `int`, `float` (finite), `bool`, `None`, lists or tuples and mappings with `str` keys; anything else (a set, a non-`str` key, `nan`) is a `ValidationError`. Mapping keys are sorted unless `sort_keys=False`, which keeps insertion order; floats are their `repr` (`0.5`, `1.0e-05`), booleans `true`/`false`, and the file ends in a newline.
+
+| Constructor | Data | Output |
+|---|---|---|
+| `yaml` | a mapping or a list | Block style, two-space indents, sequences indented under their key; a list of scalars is one flow line (`["127.0.0.1:9100"]`). A string is plain unless YAML 1.1 or 1.2 would read it as another type (`"yes"`, `"8080"`, `"1e3"`) or it holds other characters; then it is JSON-quoted |
+| `toml` | a mapping | A table's keys, then its sub-tables (`[a.b]`) and arrays of tables (`[[a]]`, a list of mappings); a mapping inside a list is an inline table; `None` is refused (TOML has no null) |
+| `json` | a mapping or a list | `json.dumps(data, indent=2, sort_keys=sort_keys, ensure_ascii=False)` |
+| `ini` | a mapping of sections to mappings | `[section]` blocks of `key = value`, a blank line apart; a list value repeats the key, `None` leaves it out |
+| `env` | a mapping | `KEY=value` lines; a value of letters, digits and `_./:@%+,-` is bare, others double-quoted with `"`, `\`, `$` and backticks escaped |
 
 The examples ship more: `NethermindBase(*, snapshot=PINNED_MIRROR)` in [`examples/nethermind_base.py`](../examples/nethermind_base.py), and `Raiko(*, source)`, `TaikoClient(*, source)`, `Nethermind(*, source)` in [`examples/fragments/`](../examples/fragments/).
 
@@ -513,7 +543,7 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `secret-target-unsupported` | error | A `SecretFile` or `SecretEnv` whose provider does not write it at boot: the built-in `tundra-tools` provider writes only the SSH key, an `ExternalDelivery` only its `supports` kinds. Declare `Secrets(delivery=ExternalDelivery(NAME, supports=...))` naming what writes it, or remove the target and use the SSH key flow |
 | `secret-in-file` | error | A `File`, `Template` or `FileTree` file holds what looks like a credential: a PEM private key (header and body), an AWS access key id (`AKIA`/`ASIA`), a GitHub token (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), in a config-like file (under `/etc`, or `.conf`, `.ini`, `.env`, `.yaml`, `.toml`, `.json`, ...) a `token`/`secret`/`password`/`api_key = value` assignment with a token-like value, or in a `secrets.yaml` a literal under a sensitive or `value`/`default`/`data` key. Documentation values (`EXAMPLE`, `changeme`, `xxxx`), paths, `$VAR`/`{{ }}` references, commented-out assignments, public keys and certificates do not count; the message names the kind and line, never the value. Deliver it at boot with a `SecretFile` or `SecretEnv` target of a `Secrets` whose `ExternalDelivery` writes it (the hint names the kinds the variant's provider writes), or pass `allow_secret=True` |
 | `secret-in-env` | error | A unit file, a verbatim `Unit`'s or the one a `Service` renders (`Environment=` lines, or a key or token anywhere in it: `exec_start`, `exec_start_pre`, `env`...), holds a credential: a key or token as above, or a token-like literal for a `*TOKEN`, `*SECRET`, `*PASSWORD`, `*API_KEY`, `*ACCESS_KEY` variable. A `Service` finding names its field (`in exec_start`), a `Unit`'s the directive and line (`in ExecStart= (line 3)`). Deliver it with `SecretEnv(NAME, service=...)` under an `ExternalDelivery` that writes env targets, or pass `allow_secret=True` |
-| `recipe-arch-unsupported` | error | `Recipe(arch="aarch64")` with `EfiStub` (it installs the `_amd64.deb` systemd-boot-efi) or a `qemu` target (the QEMU adapter runs `qemu-system-x86_64`) |
+| `recipe-arch-unsupported` | error | `Debian(arch="aarch64")` with `EfiStub` (it installs the `_amd64.deb` systemd-boot-efi) or a `qemu` target (the QEMU adapter runs `qemu-system-x86_64`) |
 
 Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`, `lock-removed` (each with the section as `subject`), and `lock-stale` when every section matches but the whole-recipe digest does not. Host tools (from `doctor`): `tool-missing`.
 

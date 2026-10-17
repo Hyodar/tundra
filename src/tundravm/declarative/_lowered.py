@@ -79,7 +79,7 @@ class Lowered:
     tools_tree_mirror: str | None = None
     snapshot: str | None = None
     epoch: int | None = None
-    """``Recipe.epoch``: ``SOURCE_DATE_EPOCH``, ``None`` for a non-reproducible build."""
+    """``Platform.epoch``: ``SOURCE_DATE_EPOCH``, ``None`` for a non-reproducible build."""
     reproducible: bool = True
     policy: Policy = field(default_factory=Policy)
     backend: BuildBackend | None = None

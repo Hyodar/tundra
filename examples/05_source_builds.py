@@ -18,6 +18,7 @@ records their commit and sha256.
 from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
     Build,
+    Debian,
     Git,
     Http,
     Install,
@@ -27,8 +28,6 @@ from tundravm.declarative import (
     User,
 )
 from tundravm.declarative.utils import GoBinary
-
-BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
 
 NODE_EXPORTER = "1.8.2"
 PROMETHEUS = "v2.53.0"
@@ -66,9 +65,9 @@ prometheus = Build(
 
 recipe = Recipe(
     name="source-builds",
-    base="debian/bookworm",
+    platform=Debian("bookworm"),
     items=(
-        *(Package(name) for name in (*BOOT, "ca-certificates")),
+        Package("ca-certificates"),
         node_exporter,
         prometheus,
         User("prometheus", home="/var/lib/prometheus"),

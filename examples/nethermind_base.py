@@ -1,17 +1,21 @@
-"""Nethermind TDX base layer: the NethermindEth/nethermind-tdx base image as a fragment.
+"""Nethermind TDX base layer: the NethermindEth/nethermind-tdx base image as a platform.
 
-Teaches building a real base image as one ``Composite``. ``NethermindBase`` declares
-what every nethermind-tdx image shares:
+Teaches building a real base image as a ``Platform`` plus one ``Composite``.
+``NethermindPlatform`` is what every nethermind-tdx image builds on:
 
+- Debian trixie from the pinned snapshot mirror, ``SOURCE_DATE_EPOCH=0``
+- a UKI with its own ``/init`` (``boot="uki"``) and the EFI stub pinned from that mirror
 - a TDX kernel built from source with the repository's config and a hardened command line
-- reproducible output (fixed seed, ``SOURCE_DATE_EPOCH=0``) and a pinned EFI stub
-- Debian backports generated at sync time
+- reproducible output (fixed seed) and Debian backports generated at sync time
+
+``NethermindBase`` declares what every image on it shares:
+
 - skeleton files: the custom ``/init``, static DNS and DHCP network setup, read from
   ``nethermind-base/`` next to this module with ``Resources.from_module(__name__)``
 - full systemd debloat (binary stripping, unit masking, path removal)
 - the ``tdxs`` attestation service
 
-Recipes built on it (``surge-tdx-prover/image.py``) set ``mkosi=NETHERMIND_V1`` to emit
+Recipes built on them (``surge-tdx-prover/image.py``) set ``mkosi=NETHERMIND_V1`` to emit
 the historical tree byte for byte. ``recipe`` below is the base layer on its own.
 
     tundravm inspect examples/nethermind_base.py
@@ -24,7 +28,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tundravm.declarative import (
+    Boot,
+    Debian,
     Debloat,
+    Declaration,
     File,
     Fragment,
     Git,
@@ -35,7 +42,7 @@ from tundravm.declarative import (
     Resources,
     Setting,
 )
-from tundravm.declarative.utils import Backports, Composite, EfiStub, Tdxs
+from tundravm.declarative.utils import Backports, Composite, Tdxs
 
 ASSETS = Resources.from_module(__name__)
 
@@ -54,10 +61,8 @@ SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
 NETHERMIND_V1 = Mkosi(dialect="nethermind-v1")
 """Compiler dialect that reproduces the historical nethermind-tdx tree."""
 
+# NethermindPlatform's boot="uki" set brings kmod, systemd and systemd-boot-efi.
 RUNTIME_PACKAGES = (
-    "kmod",
-    "systemd",
-    "systemd-boot-efi",
     "busybox",
     "util-linux",
     "procps",
@@ -95,28 +100,43 @@ NETWORK_SETUP_SERVICE = ASSETS.text("nethermind-base/network-setup.service")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class NethermindBase(Composite):
-    """The nethermind-tdx base layer; *snapshot* is the Debian snapshot the EFI stub comes from."""
+class NethermindPlatform(Debian):
+    """Debian trixie from *mirror*, with the TDX kernel, pinned EFI stub and build settings.
 
-    snapshot: str = PINNED_MIRROR
+    *mirror* is a snapshot archive, so the EFI stub comes from the same snapshot as
+    every package.
+    """
+
+    release: str = "trixie"
+    mirror: str | None = PINNED_MIRROR
+    tools_mirror: str | None = PINNED_MIRROR
+    boot: Boot | None = "uki"
+    kernel_package: str | None = None
+    efi_stub: str | None = EFI_STUB_VERSION
+    items: tuple[Declaration | Fragment, ...] = (
+        Kernel(
+            KERNEL_VERSION,
+            Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
+            config=KERNEL_CONFIG,
+            cmdline=KERNEL_CMDLINE,
+        ),
+        Setting("Output", "Seed", (SEED,)),
+        Setting("Output", "OutputDirectory", ("build",)),
+        Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
+        Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
+        Backports(),
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NethermindBase(Composite):
+    """The nethermind-tdx base layer: /init, network setup, packages, debloat and tdxs."""
 
     def compose(self) -> Fragment:
         return Fragment(
             "nethermind-base",
             items=(
-                Kernel(
-                    KERNEL_VERSION,
-                    Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
-                    config=KERNEL_CONFIG,
-                    cmdline=KERNEL_CMDLINE,
-                ),
-                Setting("Output", "Seed", (SEED,)),
-                Setting("Output", "OutputDirectory", ("build",)),
-                Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
-                Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
                 File.text("/init", TDX_INIT, mode=0o755, stage="skeleton"),
-                EfiStub(snapshot=self.snapshot, version=EFI_STUB_VERSION),
-                Backports(),
                 *(Package(name) for name in RUNTIME_PACKAGES),
                 *(Package(name, role="build") for name in BUILD_PACKAGES),
                 File.text("/etc/resolv.conf", RESOLV_CONF, stage="skeleton"),
@@ -131,4 +151,9 @@ class NethermindBase(Composite):
         )
 
 
-recipe = Recipe(name="nethermind-tdx", items=(NethermindBase(),), mkosi=NETHERMIND_V1)
+recipe = Recipe(
+    name="nethermind-tdx",
+    platform=NethermindPlatform(),
+    items=(NethermindBase(),),
+    mkosi=NETHERMIND_V1,
+)

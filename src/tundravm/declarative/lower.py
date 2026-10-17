@@ -96,12 +96,12 @@ _BOOL_SETTINGS: dict[tuple[str, str], str] = {
     ("Content", "CleanPackageMetadata"): "clean_package_metadata",
 }
 _COMPILER_KEYS: dict[str, str] = {
-    "Distribution": "Recipe.base",
-    "Release": "Recipe.base",
-    "Architecture": "Recipe.arch",
-    "Mirror": "Recipe.mirror",
-    "ToolsTreeMirror": "Recipe.tools_mirror",
-    "SourceDateEpoch": "Recipe.epoch",
+    "Distribution": "Recipe.platform (Debian(release))",
+    "Release": "Recipe.platform (Debian(release))",
+    "Architecture": "Debian(arch=...)",
+    "Mirror": "Debian(mirror=...)",
+    "ToolsTreeMirror": "Debian(tools_mirror=...)",
+    "SourceDateEpoch": "Debian(epoch=...)",
     "Format": "Variant targets (the compiler always builds a UKI)",
     "ImageId": "the variant name",
     "Packages": "Package(name)",
@@ -158,10 +158,12 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     }
     kernels = {name: _variant_kernel(r.items) for name, r in resolved.items()}
     builder = StateBuilder(
-        RecipeState.initialize(base=recipe.base, arch=recipe.arch, default_profile=default.name),
+        RecipeState.initialize(
+            base=recipe.platform.name, arch=recipe.platform.arch, default_profile=default.name
+        ),
         historical=dialect == HISTORICAL,
     )
-    reproducible = recipe.epoch is not None
+    reproducible = recipe.platform.epoch is not None
     strip = recipe.mkosi.strip_os_release
     if reproducible:
         builder.strip_image_version(enabled=True)
@@ -230,10 +232,10 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     return Lowered(
         state=builder.state,
         modules=builder.modules,
-        mirror=recipe.mirror,
-        tools_tree_mirror=recipe.tools_mirror,
-        snapshot=recipe.snapshot,
-        epoch=recipe.epoch,
+        mirror=recipe.platform.mirror,
+        tools_tree_mirror=recipe.platform.tools_mirror,
+        snapshot=recipe.platform.snapshot,
+        epoch=recipe.platform.epoch,
         reproducible=reproducible,
         mkosi=options[default.name],
         kernel=kernels[default.name],
@@ -267,24 +269,28 @@ def _local_sources(recipe: Recipe, resolved: dict[str, Resolved]) -> frozenset[s
 
 
 def _check_mirrors(recipe: Recipe) -> None:
-    """Reject a ``Recipe.mirror``/``tools_mirror`` that names an archive, not a mirror root.
+    """Reject a platform ``mirror``/``tools_mirror`` that names an archive, not a mirror root.
 
     mkosi appends ``<distribution>`` (or ``archive/<distribution>/<snapshot>``) to
     ``Mirror=``, so a URL that already ends there resolves to nothing.
     """
-    distribution = recipe.base.partition("/")[0]
-    for what, url in (("mirror", recipe.mirror), ("tools_mirror", recipe.tools_mirror)):
+    distribution = recipe.platform.distribution
+    platform = type(recipe.platform).__name__
+    for what, url in (
+        ("mirror", recipe.platform.mirror),
+        ("tools_mirror", recipe.platform.tools_mirror),
+    ):
         if url is None:
             continue
         path = urlparse(url).path.rstrip("/")
         if path.endswith(f"/{distribution}") or "/archive/" in f"{path}/":
             raise ValidationError(
-                f"Recipe.{what} {url!r} names an archive; mkosi appends "
+                f"{platform}({what}=...) {url!r} names an archive; mkosi appends "
                 f"'{distribution}' (or 'archive/{distribution}/<snapshot>') to it.",
                 hint="Pass the mirror root, e.g. 'https://deb.debian.org', and pin a "
-                "snapshot with Recipe(snapshot='20251113T083151Z') (mirror defaults to "
+                f"snapshot with {platform}(snapshot='20251113T083151Z') (mirror defaults to "
                 "https://snapshot.debian.org then).",
-                context={"field": f"Recipe.{what}"},
+                context={"field": f"{platform}.{what}"},
             )
 
 
@@ -297,7 +303,7 @@ def _fragments(recipe: Recipe) -> Iterator[Fragment]:
             if isinstance(item, Fragment):
                 yield from walk(item)
 
-    for item in recipe.items:
+    for item in (*recipe.platform.contribution(), *recipe.items):
         if isinstance(item, Fragment):
             yield from walk(item)
     for variant in recipe.variants:
@@ -311,13 +317,13 @@ def _backports_sources(recipe: Recipe) -> dict[Declaration, tuple[tuple[str, str
     place of the hook: mkosi 26 reads ``SandboxTrees=`` before any script runs and
     gives sync scripts no ``$BUILDDIR``.
     """
-    release = recipe.base.partition("/")[2]
+    release = recipe.platform.release
     found: dict[Declaration, tuple[tuple[str, str], ...]] = {}
     for fragment in _fragments(recipe):
         if isinstance(fragment, Backports):
             hook = next(item for item in fragment.items if isinstance(item, Hook))
             sources = fragment.render_sources(
-                mirror=recipe.mirror, release=release, snapshot=recipe.snapshot
+                mirror=recipe.platform.mirror, release=release, snapshot=recipe.platform.snapshot
             )
             pins = fragment.render_preferences(release=release)
             found[hook] = ((BACKPORTS_SOURCES, sources), (BACKPORTS_PINS, pins))
@@ -512,8 +518,8 @@ def _mkosi_options(
     environment: dict[str, str] = {}
     passthrough: list[str] = []
     verbatim: list[tuple[str, str, tuple[str, ...]]] = []
-    if recipe.epoch:
-        environment["SOURCE_DATE_EPOCH"] = str(recipe.epoch)
+    if recipe.platform.epoch:
+        environment["SOURCE_DATE_EPOCH"] = str(recipe.platform.epoch)
     for setting in settings:
         key = (setting.section, setting.key)
         if key == BUILD_SOURCES:

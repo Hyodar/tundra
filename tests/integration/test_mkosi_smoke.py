@@ -12,7 +12,7 @@ import pytest
 
 from tundravm import File, Package, Recipe, Service, Setting, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import lock, lower
+from tundravm.declarative import Debian, lock, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.declarative.utils import Tdxs
 from tundravm.models import BakeResult
@@ -38,7 +38,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
             User("appuser", system=True, shell="/bin/false"),
             Setting("Content", "Bootable", ("no",)),
         ),
-        base="debian/bookworm",
+        platform=Debian("bookworm", boot=None),
     )
 
     emit_dir = tmp_path / "mkosi"
@@ -73,7 +73,7 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     recipe = Recipe(
         "smoke",
         items=(Package("systemd"), Tdxs()),
-        base="debian/bookworm",
+        platform=Debian("bookworm", boot=None),
     )
 
     emit_dir = tmp_path / "mkosi"
@@ -132,7 +132,7 @@ def test_raw_disk_format(tmp_path: Path) -> None:
     recipe = Recipe(
         "smoke",
         items=(Package("systemd"), Setting("Content", "Bootable", ("no",))),
-        base="debian/bookworm",
+        platform=Debian("bookworm", boot=None),
     )
 
     backend = LocalLinuxBackend(

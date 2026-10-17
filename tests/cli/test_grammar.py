@@ -162,12 +162,12 @@ def test_init_writes_loadable_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.chdir(tmp_path)
     target = tmp_path / "my_node.py"
     code, out = run_main(
-        "init", str(tmp_path), "--name", "my_node", "--backend", "inprocess", "--base", "debian/sid"
+        "init", str(tmp_path), "--name", "my_node", "--backend", "inprocess", "--release", "sid"
     )
     assert code == EXIT_OK
     assert f"created {target}" in out
     source = target.read_text(encoding="utf-8")
-    assert 'base="debian/sid"' in source
+    assert 'platform=Debian("sid")' in source
     assert "InProcessBackend()" in source
 
     code, out = run_main("inspect", str(target), "--format", "json")

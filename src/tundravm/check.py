@@ -549,9 +549,9 @@ def _rule_kernel_missing(
             "'A kernel must be installed in the image to build a UKI'"
         ),
         hint=(
-            'Add Package("linux-image-amd64") for the distribution kernel, declare '
-            'Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a '
-            "non-bootable image."
+            'Keep Debian(kernel_package="linux-image-amd64") for the distribution kernel, '
+            'declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) '
+            "with Debian(boot=None) for a non-bootable image."
         ),
         variant=profile_name,
     )
@@ -570,7 +570,7 @@ def _rule_recipe_arch_unsupported(
             severity="error",
             code="recipe-arch-unsupported",
             message=(
-                "Recipe.arch is aarch64 but EfiStub installs the amd64 systemd-boot-efi "
+                "the platform's arch is aarch64 but EfiStub installs the amd64 systemd-boot-efi "
                 "package, whose x86-64 EFI stub cannot boot an arm64 UKI"
             ),
             hint=(
@@ -585,12 +585,12 @@ def _rule_recipe_arch_unsupported(
             severity="error",
             code="recipe-arch-unsupported",
             message=(
-                "Recipe.arch is aarch64 but the variant targets qemu, whose deploy adapter "
+                "the platform's arch is aarch64 but the variant targets qemu, whose deploy adapter "
                 "boots images with qemu-system-x86_64"
             ),
             hint=(
                 "The qemu adapter runs qemu-system-x86_64 only, and TDX guests are x86-64: "
-                "set Recipe(arch='x86_64')."
+                "set Debian(..., arch='x86_64')."
             ),
             variant=profile_name,
             subject="qemu",

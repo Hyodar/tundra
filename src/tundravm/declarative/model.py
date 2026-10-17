@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import KW_ONLY, MISSING, dataclass, field
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from typing import Literal, get_args, overload
+from typing import ClassVar, Literal, get_args, overload
 
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
@@ -139,7 +139,7 @@ def _require_names(owner: object, values: tuple[str, ...], what: str) -> None:
         _require_name(owner, value, what)
 
 
-def _require_items(owner: Fragment | Recipe, items: tuple[object, ...]) -> None:
+def _require_items(owner: Fragment | Recipe | Platform, items: tuple[object, ...]) -> None:
     if not isinstance(items, tuple):
         raise _fail(owner, f"{owner.name!r} items must be a list or tuple, got {items!r}.")
     for item in items:
@@ -254,7 +254,7 @@ class Mkosi:
     ``init_script`` is written to ``mkosi.skeleton/init`` (mode 0755);
     ``version_script`` emits ``mkosi.version``; ``cloud_postoutput`` emits the
     Azure/GCP disk conversion postoutput scripts; ``strip_os_release`` strips
-    ``IMAGE_VERSION`` from ``os-release`` (``None``: when ``Recipe.epoch`` is set).
+    ``IMAGE_VERSION`` from ``os-release`` (``None``: when ``Platform.epoch`` is set).
     """
 
     layout: Literal["directories", "native"] = "directories"
@@ -271,46 +271,54 @@ class Mkosi:
             _require_name(self, self.init_script, "init_script")
 
 
-@dataclass(frozen=True, slots=True)
-class Recipe:
-    """The whole image: recipe-wide settings, its own items and the variants.
+Boot = Literal["systemd", "uki"]
+BOOT_PACKAGES: dict[str, tuple[str, ...]] = {
+    "systemd": ("systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi"),
+    "uki": ("kmod", "systemd", "systemd-boot-efi"),
+}
+"""The packages each ``Debian(boot=...)`` mode installs, after the kernel package.
 
-    ``items`` are the declarations and fragments every variant that inherits
-    ``"base"`` (the default) starts from; their provenance level is ``common``.
+``systemd`` boots systemd as init (``systemd-sysv``) with ``udev``; ``uki`` is a
+unified kernel image whose ``/init`` the image supplies: ``kmod``, systemd's tools
+and the UKI's EFI stub (``systemd-boot-efi``).
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class Platform:
+    """What a recipe builds on: a distribution *release*, its archive and its boot set.
+
+    ``mirror`` and ``tools_mirror`` are mirror roots that mkosi completes itself
+    (``debian`` or ``archive/debian/<snapshot>``); with a ``snapshot`` and no
+    ``mirror`` mkosi reads ``https://snapshot.debian.org``. ``epoch`` is
+    ``SOURCE_DATE_EPOCH`` (``None``: a non-reproducible build). ``items`` are
+    declarations and fragments every variant gets, standalone ones included, after
+    :attr:`packages`; their provenance level is ``platform``. Spell a platform with
+    a distribution's class, :class:`Debian`.
     """
 
-    name: str
-    items: tuple[Declaration | Fragment, ...] = ()
-    variants: tuple[Variant, ...] = (Variant("default", outputs=("qemu",)),)
-    base: str = "debian/trixie"
+    distribution: ClassVar[str] = ""
+    release: str
+    _: KW_ONLY
     arch: Literal["x86_64", "aarch64"] = "x86_64"
+    snapshot: str | None = None
+    """A distribution snapshot ID (``20251113T083151Z`` for Debian): mkosi's ``Snapshot=``."""
     mirror: str | None = None
     tools_mirror: str | None = None
     epoch: int | None = 0
-    mkosi: Mkosi = Mkosi()
-    policy: Policy | None = None
-    snapshot: str | None = None
-    """A distribution snapshot ID (``20251113T083151Z`` for Debian): mkosi's ``Snapshot=``.
-
-    ``mirror`` and ``tools_mirror`` are mirror roots that mkosi completes itself
-    (``debian`` or ``archive/debian/<snapshot>``); with a snapshot and no ``mirror``
-    mkosi reads ``https://snapshot.debian.org``.
-    """
+    items: tuple[Declaration | Fragment, ...] = ()
 
     def __post_init__(self) -> None:
-        _freeze(self, "items", "variants")
-        _require_name(self, self.name)
-        _require_items(self, self.items)
-        if not self.variants:
-            raise _fail(self, "a recipe needs at least one variant.")
-        names: set[str] = set()
-        for variant in self.variants:
-            if not isinstance(variant, Variant):
-                raise _fail(self, f"variants= holds {variant!r}, not a Variant.")
-            if variant.name in names:
-                raise _fail(self, f"variant {variant.name!r} is declared twice.")
-            names.add(variant.name)
-        _require_name(self, self.base, "base")
+        if not self.distribution:
+            raise _fail(self, "name a distribution: Debian('trixie').")
+        _freeze(self, "items")
+        _require_name(self, self.release, "release")
+        if "/" in self.release:
+            raise _fail(
+                self,
+                f"release {self.release!r} is a release name, not a base.",
+                hint=f"Pass the release alone: {type(self).__name__}('trixie').",
+            )
         _require_choice(self, self.arch, ("x86_64", "aarch64"), "arch")
         for what, url in (("mirror", self.mirror), ("tools_mirror", self.tools_mirror)):
             if url is not None:
@@ -326,6 +334,125 @@ class Recipe:
                 )
         if self.epoch is not None and (isinstance(self.epoch, bool) or self.epoch < 0):
             raise _fail(self, f"epoch {self.epoch!r} must be a non-negative int or None.")
+        _require_items(self, self.items)
+
+    @property
+    def name(self) -> str:
+        """``debian/trixie``: the distribution and release, mkosi's ``Distribution``/``Release``."""
+        return f"{self.distribution}/{self.release}"
+
+    @property
+    def packages(self) -> tuple[str, ...]:
+        """The package names the platform installs in every variant."""
+        return ()
+
+    def contribution(self) -> tuple[Declaration | Fragment, ...]:
+        """What the platform declares in every variant: :attr:`packages`, then ``items``."""
+        return (*(Package(name) for name in self.packages), *self.items)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Debian(Platform):
+    """A Debian *release*: ``Debian("trixie", snapshot="20251113T083151Z")``.
+
+    ``boot`` picks the boot set (:data:`BOOT_PACKAGES`) installed after
+    ``kernel_package`` (``None``: the image declares its own ``Kernel``);
+    ``boot=None`` installs neither, for a non-bootable image. ``efi_stub`` pins the
+    UKI's EFI stub to that ``systemd-boot-efi`` version, from the platform's own
+    archive (:attr:`efi_archive`), so the stub and the packages cannot disagree.
+    """
+
+    distribution: ClassVar[str] = "debian"
+    boot: Boot | None = "systemd"
+    kernel_package: str | None = "linux-image-amd64"
+    efi_stub: str | None = None
+
+    def __post_init__(self) -> None:
+        Platform.__post_init__(self)
+        if self.boot is not None:
+            _require_choice(self, self.boot, tuple(BOOT_PACKAGES), "boot")
+        if self.kernel_package is not None:
+            _require_name(self, self.kernel_package, "kernel_package")
+        if self.efi_stub is not None:
+            _require_name(self, self.efi_stub, "efi_stub")
+            if self.efi_archive is None:
+                raise _fail(
+                    self,
+                    "efi_stub needs the archive it comes from: the platform pins no snapshot.",
+                    hint="Pass snapshot='20251113T083151Z' (a snapshot of the release that "
+                    "ships that systemd-boot-efi version).",
+                )
+
+    @property
+    def packages(self) -> tuple[str, ...]:
+        """``kernel_package`` and the ``boot`` set; nothing when ``boot`` is ``None``."""
+        if self.boot is None:
+            return ()
+        kernel = () if self.kernel_package is None else (self.kernel_package,)
+        return (*kernel, *BOOT_PACKAGES[self.boot])
+
+    @property
+    def efi_archive(self) -> str | None:
+        """Where :attr:`efi_stub` comes from: the snapshot (under ``mirror`` when set).
+
+        Without a snapshot, a ``mirror`` that is itself a snapshot archive URL
+        (``.../archive/debian/<snapshot>/``, the ``nethermind-v1`` spelling).
+        """
+        if self.snapshot is not None:
+            if self.mirror is None:
+                return self.snapshot
+            return f"{self.mirror.rstrip('/')}/archive/debian/{self.snapshot}"
+        if self.mirror is not None and "/archive/" in self.mirror:
+            return self.mirror
+        return None
+
+    def contribution(self) -> tuple[Declaration | Fragment, ...]:
+        """:attr:`packages`, the pinned EFI stub, then ``items``."""
+        from .utils import EfiStub
+
+        stub: tuple[Fragment, ...] = ()
+        if self.efi_stub is not None and self.efi_archive is not None:
+            stub = (EfiStub(snapshot=self.efi_archive, version=self.efi_stub),)
+        return (*(Package(name) for name in self.packages), *stub, *self.items)
+
+
+@dataclass(frozen=True, slots=True)
+class Recipe:
+    """The whole image: its platform, recipe-wide settings, its own items and the variants.
+
+    ``platform`` (``Debian("trixie", ...)``) is the distribution and archive, and
+    declares its packages and ``items`` in every variant first (provenance level
+    ``platform``). ``items`` are the declarations and fragments every variant that
+    inherits ``"base"`` (the default) starts from; their provenance level is ``common``.
+    """
+
+    name: str
+    items: tuple[Declaration | Fragment, ...] = ()
+    variants: tuple[Variant, ...] = (Variant("default", outputs=("qemu",)),)
+    platform: Platform = field(default_factory=lambda: Debian("trixie", boot=None))
+    """The distribution, its archive and what it declares (default: bare Debian trixie)."""
+    mkosi: Mkosi = Mkosi()
+    policy: Policy | None = None
+
+    def __post_init__(self) -> None:
+        _freeze(self, "items", "variants")
+        _require_name(self, self.name)
+        _require_items(self, self.items)
+        if not self.variants:
+            raise _fail(self, "a recipe needs at least one variant.")
+        names: set[str] = set()
+        for variant in self.variants:
+            if not isinstance(variant, Variant):
+                raise _fail(self, f"variants= holds {variant!r}, not a Variant.")
+            if variant.name in names:
+                raise _fail(self, f"variant {variant.name!r} is declared twice.")
+            names.add(variant.name)
+        if not isinstance(self.platform, Platform):
+            raise _fail(
+                self,
+                f"platform= holds {self.platform!r}, not a Platform.",
+                hint="Pass a distribution: platform=Debian('trixie').",
+            )
         if not isinstance(self.mkosi, Mkosi):
             raise _fail(self, "mkosi= must be a Mkosi value.")
         if self.policy is not None and not isinstance(self.policy, Policy):

@@ -14,14 +14,14 @@ from tundravm.errors import ValidationError
 from tundravm.recipe import load_image
 
 RECIPE = """
-from tundravm import File, Fragment, Package, Recipe, Unit, Variant
+from tundravm import Debian, File, Fragment, Package, Recipe, Unit, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
 
 recipe = Recipe(
     name="loaded",
-    base="debian/bookworm",
+    platform=Debian("bookworm", boot=None),
     items=(
         Package("curl"),
         File("/etc/motd", "hello\\n"),

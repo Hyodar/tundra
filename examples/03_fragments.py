@@ -3,10 +3,12 @@
 Teaches:
 
 - a plain ``Fragment`` is a value: define it once, nest it in any recipe or variant;
-- a ``Composite`` turns its dataclass fields into a fragment through ``compose()``;
+- ``@component`` turns an annotated class into a fragment whose items ``compose()`` yields;
+- ``ConfigFile.yaml``/``ConfigFile.env`` render config files from data;
 - ``requires=`` names fragments the same variant must also hold (lint reports
-  ``fragment-requires-missing`` otherwise);
-- ``checks=`` are lint rules that see each resolved variant.
+  ``fragment-requires-missing`` otherwise); a component holding another's export
+  (``HttpEndpoint``) requires that component without naming it;
+- a component's ``check()`` is a lint rule that sees each resolved variant.
 
     tundravm inspect examples/03_fragments.py
     tundravm lint examples/03_fragments.py
@@ -15,10 +17,12 @@ Teaches:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterator
 
 from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
+    Debian,
+    Declaration,
     Diagnostic,
     File,
     Fragment,
@@ -27,14 +31,16 @@ from tundravm.declarative import (
     Recipe,
     Repository,
     Resolved,
+    Service,
     Unit,
     Variant,
+    component,
 )
-from tundravm.declarative.utils import Composite
-
-BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
+from tundravm.declarative.utils import Composite, ConfigFile, HttpEndpoint
 
 SYSCTL = "kernel.kptr_restrict=2\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1\n"
+
+TIMER = "[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\n\n[Install]\nWantedBy=timers.target\n"
 
 # A plain fragment: security updates and kernel hardening, shared by every variant.
 hardening = Fragment(
@@ -60,54 +66,69 @@ node_exporter = Fragment(
 )
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component(requires=("node-exporter",))
 class Metrics(Composite):
     """Prometheus scraping the node exporter; *listen* is where its web UI and API bind.
 
-    Fragment name: ``metrics``. Requires ``node-exporter``.
+    Fragment name: ``metrics``. Requires ``node-exporter``. Exports :attr:`health`.
     """
 
     listen: str = "127.0.0.1"
     port: int = 9090
     scrape_interval: str = "15s"
 
-    def compose(self) -> Fragment:
-        config = (
-            f"global:\n  scrape_interval: {self.scrape_interval}\n"
-            "scrape_configs:\n"
-            "  - job_name: node\n"
-            "    static_configs:\n"
-            '      - targets: ["127.0.0.1:9100"]\n'
-        )
-        args = f'ARGS="--web.listen-address={self.listen}:{self.port}"\n'
-        return Fragment(
-            "metrics",
-            requires=("node-exporter",),
-            items=(
-                Package("prometheus"),
-                File("/etc/prometheus/prometheus.yml", config),
-                File("/etc/default/prometheus", args),
-                Unit("prometheus.service", enabled=True),
-            ),
-            checks=(self.check_exposure,),
-        )
+    @property
+    def health(self) -> HttpEndpoint:
+        """Prometheus's health endpoint, for a component that probes it."""
+        return HttpEndpoint(self.listen, self.port, "/-/healthy", provider=self.name)
 
-    def check_exposure(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+    def compose(self) -> Iterator[Declaration]:
+        yield Package("prometheus")
+        yield ConfigFile.yaml(
+            "/etc/prometheus/prometheus.yml",
+            {
+                "global": {"scrape_interval": self.scrape_interval},
+                "scrape_configs": [
+                    {"job_name": "node", "static_configs": [{"targets": ["127.0.0.1:9100"]}]}
+                ],
+            },
+        )
+        args = {"ARGS": f"--web.listen-address={self.health.address}"}
+        yield ConfigFile.env("/etc/default/prometheus", args)
+        yield Unit("prometheus.service", enabled=True)
+
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: a cloud image must not serve metrics on a public address."""
         if self.listen.startswith("127.") or not {"azure", "gcp"} & set(resolved.outputs):
             return ()
         message = f"prometheus listens on {self.listen} in a cloud image"
-        return (Diagnostic("metrics-exposed", "warning", message, variant=resolved.variant),)
+        return (Diagnostic("metrics-exposed", "warning", message),)
 
+
+@component
+class HealthCheck(Composite):
+    """A timer probing *target* once a minute; requires the fragment that exports it."""
+
+    target: HttpEndpoint
+
+    def compose(self) -> Iterator[Declaration]:
+        yield Package("curl")
+        probe = f"/usr/bin/curl -fsS -o /dev/null {self.target.url}"
+        yield Service("healthcheck", probe, description="Probe the service", type="oneshot")
+        yield Unit("healthcheck.timer", TIMER, enabled=True)
+
+
+metrics = Metrics()  # Metrics(listen="0.0.0.0") makes lint warn for the gcp variant
 
 recipe = Recipe(
     name="fragments",
-    base="debian/bookworm",
+    platform=Debian("bookworm"),
     items=(
-        *(Package(name) for name in (*BOOT, "ca-certificates")),
+        Package("ca-certificates"),
         hardening,
         node_exporter,
-        Metrics(),  # Metrics(listen="0.0.0.0") makes lint warn for the gcp variant
+        metrics,
+        HealthCheck(target=metrics.health),
     ),
     variants=(
         Variant("default", outputs=("qemu",)),

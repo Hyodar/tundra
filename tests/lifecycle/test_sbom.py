@@ -13,6 +13,7 @@ from tundravm import Artifact, Backend, Sbom, bake, sbom
 from tundravm._source import Source
 from tundravm.declarative import (
     Build,
+    Debian,
     Git,
     Install,
     Lock,
@@ -75,7 +76,7 @@ def _recipe() -> Recipe:
             ),
             EfiStub(snapshot=SNAPSHOT, version=EFI_VERSION),
         ),
-        snapshot=SNAPSHOT,
+        platform=Debian("trixie", snapshot=SNAPSHOT, boot=None),
         variants=(Variant("default", outputs=("qemu",)),),
     )
 

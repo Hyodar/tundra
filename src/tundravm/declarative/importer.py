@@ -54,6 +54,7 @@ from .lower import _kernel
 from .model import (
     DECLARATION_TYPES,
     EMPTY_FRAGMENT,
+    Debian,
     Debloat,
     Declaration,
     Declared,
@@ -539,7 +540,7 @@ class _VariantReader:
             if arch in reverse:
                 self.wide["arch"] = reverse[arch]
             else:
-                self.notes.append(f"Architecture={arch} has no Recipe.arch; using x86_64")
+                self.notes.append(f"Architecture={arch} has no Debian(arch=...); using x86_64")
         self.wide["mirror"] = one("Mirror")
         self.wide["tools_mirror"] = one("ToolsTreeMirror")
         self.wide["snapshot"] = one("Snapshot")
@@ -1526,16 +1527,25 @@ def _assemble(
         items = _without_target_packages(other.items, other.targets, common)
         variants.append(_overlay_variant(other, items, common))
     wide = first.wide
-    recipe = Recipe(
-        name=name,
-        items=tuple(common),
-        variants=tuple(variants),
-        base=wide["base"],
+    distribution, _, release = str(wide["base"]).partition("/")
+    if distribution != "debian" or not release:
+        notes.append(f"Distribution/Release {wide['base']!r} is not a Debian release; using trixie")
+        release = "trixie"
+    # The tree lists its packages itself, so the platform contributes none (boot=None).
+    platform = Debian(
+        release,
         arch=wide.get("arch", "x86_64"),
         mirror=wide["mirror"],
         tools_mirror=wide["tools_mirror"],
         epoch=wide["epoch"],
         snapshot=wide["snapshot"],
+        boot=None,
+    )
+    recipe = Recipe(
+        name=name,
+        items=tuple(common),
+        variants=tuple(variants),
+        platform=platform,
         mkosi=Mkosi(dialect=dialect, **first.mkosi),
     )
     return recipe, notes

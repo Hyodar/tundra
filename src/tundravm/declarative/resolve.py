@@ -47,13 +47,16 @@ Action = Literal["declared", "added", "edited", "removed"]
 
 COMMON_LEVEL = "common"
 """The :attr:`Origin.variant` of declarations that come from ``Recipe.items``."""
+PLATFORM_LEVEL = "platform"
+"""The :attr:`Origin.variant` of what ``Recipe.platform`` declares (every variant gets it)."""
 
 
 @dataclass(frozen=True, slots=True)
 class Origin:
     """One step of an item's resolution: who touched it, how, and through which fragments.
 
-    ``variant`` is ``"common"`` for ``Recipe.items``; ``fragments`` runs from the
+    ``variant`` is ``"platform"`` for what ``Recipe.platform`` declares and
+    ``"common"`` for ``Recipe.items``; ``fragments`` runs from the
     level's own fragment down to the one holding the declaration (empty for
     ``changes``, which name declarations by ref, and for direct ``Recipe.items``);
     ``fields`` are the fields an ``edited`` step set.
@@ -66,13 +69,20 @@ class Origin:
 
     def describe(self) -> str:
         """``size edited in variant small-key``, ``added in common via base``."""
-        where = "in common" if self.variant == COMMON_LEVEL else f"in variant {self.variant}"
+        where = level_name(self.variant)
         chain = " > ".join(
             name if kind in ("Fragment", "") else f"{name} ({kind})"
             for name, kind in self.fragments
         )
         edited = f"{', '.join(self.fields)} " if self.fields else ""
         return f"{edited}{self.action} {where}" + (f" via {chain}" if chain else "")
+
+
+def level_name(level: str) -> str:
+    """``in common``, ``in the platform`` or ``in variant <name>`` for an origin *level*."""
+    if level == COMMON_LEVEL:
+        return "in common"
+    return "in the platform" if level == PLATFORM_LEVEL else f"in variant {level}"
 
 
 CLOUD_TARGETS: frozenset[str] = frozenset({"azure", "gcp"})
@@ -177,7 +187,7 @@ class _Resolution:
         level: str,
     ) -> None:
         """Add one level's declarations; equal repeats dedupe, different ones collide."""
-        action: Action = "declared" if level == COMMON_LEVEL else "added"
+        action: Action = "declared" if level in (COMMON_LEVEL, PLATFORM_LEVEL) else "added"
         for item, path in items:
             key = identity(item)
             existing = self.items.get(key)
@@ -444,6 +454,9 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     chain = ancestry(recipe, name)
     # Problems inside ``common`` belong to no single variant: lint() reports them once.
     state = _Resolution(variant="")
+    platform = recipe.platform.contribution()
+    if platform:
+        state.add_level(state.expand_items(platform), where="platform", level=PLATFORM_LEVEL)
     if chain[0].inherits == BASE_VARIANT:
         state.add_level(state.expand_items(recipe.items), where="common", level=COMMON_LEVEL)
     state.variant = name
@@ -521,6 +534,7 @@ def lint(recipe: Recipe, *, variants: Sequence[str] | None = None) -> tuple[Diag
 __all__ = [
     "CLOUD_TARGETS",
     "COMMON_LEVEL",
+    "PLATFORM_LEVEL",
     "Action",
     "FragmentRef",
     "Identity",
@@ -529,6 +543,7 @@ __all__ = [
     "describe",
     "has_init",
     "identity",
+    "level_name",
     "lint",
     "order_hooks",
     "order_inits",

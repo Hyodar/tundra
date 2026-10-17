@@ -1,6 +1,6 @@
 """Surge TDX Prover: the full NethermindEth/nethermind-tdx image as one declarative recipe.
 
-``recipe`` is the nethermind-tdx base layer plus the prover stack (Raiko, the Taiko
+``recipe`` is the nethermind-tdx platform and base layer plus the prover stack (Raiko, the Taiko
 client and Nethermind, all built from source), a TPM-sealed key, an encrypted
 ``/persistent`` disk and secrets delivered over HTTP. ``default`` targets QEMU;
 ``azure`` and ``gcp`` add their platform glue; ``devtools`` adds debugging access.
@@ -10,7 +10,7 @@ See the result with ``tundravm inspect examples/surge-tdx-prover/image.py --vari
 from __future__ import annotations
 
 from examples.fragments import Nethermind, Raiko, TaikoClient
-from examples.nethermind_base import NETHERMIND_V1, PINNED_MIRROR, NethermindBase
+from examples.nethermind_base import NETHERMIND_V1, NethermindBase, NethermindPlatform
 
 from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import (
@@ -124,10 +124,7 @@ system = Fragment(
 
 recipe = Recipe(
     name="surge-tdx-prover",
-    base="debian/trixie",
-    mirror=PINNED_MIRROR,
-    tools_mirror=PINNED_MIRROR,
-    epoch=0,
+    platform=NethermindPlatform(),
     mkosi=NETHERMIND_V1,
     items=(
         NethermindBase(),

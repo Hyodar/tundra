@@ -58,7 +58,7 @@ Build:    tundravm bake $filename --build build
 
 '''
 
-_MINIMAL = r'''from tundravm import File, Package, Recipe, Unit, Variant
+_MINIMAL = r'''from tundravm import Debian, File, Package, Recipe, Unit, Variant
 $backend_import
 
 HELLO_UNIT = """\
@@ -77,15 +77,9 @@ backend = $backend_expr
 
 recipe = Recipe(
     name="$title",
-    base="$base",
+    # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
+    platform=Debian("$release"),
     items=(
-        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-        Package("linux-image-amd64"),
-        Package("systemd"),
-        Package("systemd-sysv"),
-        Package("udev"),
-        Package("kmod"),
-        Package("systemd-boot-efi"),
         Package("ca-certificates"),
         File.text("/etc/motd", "$title\n"),
         Unit("hello.service", HELLO_UNIT, enabled=True),
@@ -97,9 +91,9 @@ recipe = Recipe(
 _APP_IMPORTS = {
     "service": (
         "from tundravm import (\n"
+        "    Debian,\n"
+        "    Declaration,\n"
         "    Diagnostic,\n"
-        "    File,\n"
-        "    Fragment,\n"
         "    Init,\n"
         "    Package,\n"
         "    Recipe,\n"
@@ -107,15 +101,16 @@ _APP_IMPORTS = {
         "    Service,\n"
         "    User,\n"
         "    Variant,\n"
+        "    component,\n"
         ")\n"
         "$backend_import\n"
-        "from tundravm.declarative.utils import Composite, DevTools\n"
+        "from tundravm.declarative.utils import Composite, ConfigFile, DevTools, HttpEndpoint\n"
     ),
     "cloud": (
         "from tundravm import (\n"
+        "    Debian,\n"
+        "    Declaration,\n"
         "    Diagnostic,\n"
-        "    File,\n"
-        "    Fragment,\n"
         "    Init,\n"
         "    Package,\n"
         "    Recipe,\n"
@@ -123,16 +118,23 @@ _APP_IMPORTS = {
         "    Service,\n"
         "    User,\n"
         "    Variant,\n"
+        "    component,\n"
         ")\n"
         "$backend_import\n"
-        "from tundravm.declarative.utils import Backports, Composite, DevTools, EfiStub\n"
+        "from tundravm.declarative.utils import (\n"
+        "    Backports,\n"
+        "    Composite,\n"
+        "    ConfigFile,\n"
+        "    DevTools,\n"
+        "    HttpEndpoint,\n"
+        ")\n"
     ),
     "prover": (
         "from tundravm import (\n"
+        "    Debian,\n"
+        "    Declaration,\n"
         "    Diagnostic,\n"
         "    Disk,\n"
-        "    File,\n"
-        "    Fragment,\n"
         "    Init,\n"
         "    Key,\n"
         "    Package,\n"
@@ -143,14 +145,16 @@ _APP_IMPORTS = {
         "    Service,\n"
         "    User,\n"
         "    Variant,\n"
+        "    component,\n"
         ")\n"
         "$backend_import\n"
         "from tundravm.declarative.utils import (\n"
         "    TUNDRA_TOOLS,\n"
         "    Backports,\n"
         "    Composite,\n"
+        "    ConfigFile,\n"
         "    DevTools,\n"
-        "    EfiStub,\n"
+        "    HttpEndpoint,\n"
         "    Tdxs,\n"
         ")\n"
     ),
@@ -161,7 +165,7 @@ APP_VERSION = "0.1.0"
 APP_PORT = 8080
 $constants
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class App(Composite):
     """The app: its account, config file, a first-boot step, the service and a lint rule.
 
@@ -171,34 +175,33 @@ class App(Composite):
     version: str
     port: int
 
-    def compose(self) -> Fragment:
-        config = f"version={self.version}\nlisten=0.0.0.0:{self.port}\n"
-        return Fragment(
+    @property
+    def http(self) -> HttpEndpoint:
+        """Where the app answers HTTP inside the image, for a component that probes it."""
+        return HttpEndpoint("127.0.0.1", self.port, provider=self.name)
+
+    def compose(self) -> Iterator[Declaration]:
+        yield User("app", home="/var/lib/app")
+        config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
+        yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
+        # Runs in runtime-init before the service starts (after_init=True).
+        yield Init("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app")
+        yield Service(
             "app",
-            items=(
-                User("app", home="/var/lib/app"),
-                File.text("/etc/app/app.conf", config),
-                # Runs in runtime-init before the service starts (after_init=True).
-                Init("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
-                Service(
-                    "app",
-                    "/usr/bin/app --config /etc/app/app.conf",
-                    description=f"app {self.version}",
-                    user="app",
-                    working_dir="/var/lib/app",
-                    restart="on-failure",
-                    wanted_by="minimal.target",
-                ),
-            ),
-            checks=(self.check_port,),
+            "/usr/bin/app --config /etc/app/app.conf",
+            description=f"app {self.version}",
+            user="app",
+            working_dir="/var/lib/app",
+            restart="on-failure",
+            wanted_by="minimal.target",
         )
 
-    def check_port(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""
         if self.port >= 1024:
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
-        return (Diagnostic("app-privileged-port", "error", message, variant=resolved.variant),)
+        return (Diagnostic("app-privileged-port", "error", message),)
 
 
 backend = $backend_expr
@@ -207,15 +210,9 @@ backend = $backend_expr
 _SERVICE_RECIPE = r"""
 recipe = Recipe(
     name="$title",
-    base="$base",
+    # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
+    platform=Debian("$release"),
     items=(
-        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-        Package("linux-image-amd64"),
-        Package("systemd"),
-        Package("systemd-sysv"),
-        Package("udev"),
-        Package("kmod"),
-        Package("systemd-boot-efi"),
         Package("ca-certificates"),
         App(version=APP_VERSION, port=APP_PORT),
     ),
@@ -236,20 +233,12 @@ EFI_STUB_VERSION = "257.8-1~deb13u1"
 _CLOUD_RECIPE = r"""
 recipe = Recipe(
     name="$title",
-    base="$base",
-    snapshot=SNAPSHOT,
+    # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
+    platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
     items=(
-        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-        Package("linux-image-amd64"),
-        Package("systemd"),
-        Package("systemd-sysv"),
-        Package("udev"),
-        Package("kmod"),
-        Package("systemd-boot-efi"),
         Package("ca-certificates"),
         Package("curl", role="build"),
         Backports(),
-        EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),
         App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(
@@ -280,16 +269,9 @@ secrets = Secrets(store=disk)
 
 recipe = Recipe(
     name="$title",
-    base="$base",
-    snapshot=SNAPSHOT,
+    # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
+    platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
     items=(
-        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-        Package("linux-image-amd64"),
-        Package("systemd"),
-        Package("systemd-sysv"),
-        Package("udev"),
-        Package("kmod"),
-        Package("systemd-boot-efi"),
         Package("ca-certificates"),
         Package("cryptsetup"),
         # Root logs in over SSH with the key Secrets delivers; socat relays /var/tdxs.sock.
@@ -297,7 +279,6 @@ recipe = Recipe(
         Package("socat"),
         Package("curl", role="build"),
         Backports(),
-        EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),
         # The key, disk and secrets steps run the tundra-tools binaries Tdxs builds from.
         key,
         disk,
@@ -318,17 +299,17 @@ recipe = Recipe(
 _SOURCES: dict[str, str] = {
     "minimal": _HEADER + _MINIMAL,
     "service": _HEADER
-    + "from dataclasses import dataclass\n\n"
+    + "from collections.abc import Iterator\n\n"
     + _APP_IMPORTS["service"]
     + _APP
     + _SERVICE_RECIPE,
     "cloud": _HEADER
-    + "from dataclasses import dataclass\n\n"
+    + "from collections.abc import Iterator\n\n"
     + _APP_IMPORTS["cloud"]
     + _APP
     + _CLOUD_RECIPE,
     "prover": _HEADER
-    + "from dataclasses import dataclass\n\n"
+    + "from collections.abc import Iterator\n\n"
     + _APP_IMPORTS["prover"]
     + _APP
     + _PROVER_RECIPE,
@@ -665,7 +646,7 @@ def render_recipe_template(
     *,
     title: str,
     filename: str,
-    base: str,
+    release: str,
     backend: str,
     template: str = DEFAULT_TEMPLATE,
 ) -> str:
@@ -676,7 +657,7 @@ def render_recipe_template(
         title=title,
         template=template,
         filename=filename,
-        base=base,
+        release=release,
         backend_import=backend_import,
         backend_expr=backend_expr,
         constants=constants,

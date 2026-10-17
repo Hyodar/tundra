@@ -45,7 +45,7 @@ APP_VERSION = "0.1.0"
 APP_PORT = 8080
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class App(Composite):
     """The app: its account, config file, a first-boot step, the service and a lint rule.
 
@@ -55,49 +55,42 @@ class App(Composite):
     version: str
     port: int
 
-    def compose(self) -> Fragment:
-        config = f"version={self.version}\nlisten=0.0.0.0:{self.port}\n"
-        return Fragment(
+    @property
+    def http(self) -> HttpEndpoint:
+        """Where the app answers HTTP inside the image, for a component that probes it."""
+        return HttpEndpoint("127.0.0.1", self.port, provider=self.name)
+
+    def compose(self) -> Iterator[Declaration]:
+        yield User("app", home="/var/lib/app")
+        config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
+        yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
+        # Runs in runtime-init before the service starts (after_init=True).
+        yield Init("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app")
+        yield Service(
             "app",
-            items=(
-                User("app", home="/var/lib/app"),
-                File.text("/etc/app/app.conf", config),
-                # Runs in runtime-init before the service starts (after_init=True).
-                Init("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app"),
-                Service(
-                    "app",
-                    "/usr/bin/app --config /etc/app/app.conf",
-                    description=f"app {self.version}",
-                    user="app",
-                    working_dir="/var/lib/app",
-                    restart="on-failure",
-                    wanted_by="minimal.target",
-                ),
-            ),
-            checks=(self.check_port,),
+            "/usr/bin/app --config /etc/app/app.conf",
+            description=f"app {self.version}",
+            user="app",
+            working_dir="/var/lib/app",
+            restart="on-failure",
+            wanted_by="minimal.target",
         )
 
-    def check_port(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""
         if self.port >= 1024:
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
-        return (Diagnostic("app-privileged-port", "error", message, variant=resolved.variant),)
+        return (Diagnostic("app-privileged-port", "error", message),)
 
 
 backend = InProcessBackend()
 
 recipe = Recipe(
     name="node",
-    base="debian/trixie",
+    # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
+    platform=Debian("trixie"),
     items=(
-        # Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-        Package("linux-image-amd64"),
-        Package("systemd"),
-        Package("systemd-sysv"),
-        Package("udev"),
-        Package("kmod"),
-        Package("systemd-boot-efi"),
         Package("ca-certificates"),
         App(version=APP_VERSION, port=APP_PORT),
     ),
@@ -108,8 +101,9 @@ recipe = Recipe(
 )
 ```
 
-- `items` holds what every variant shares: the packages that make the image bootable and the `App` fragment.
-- `App` is a `Composite`, a `Fragment` whose configuration is its own dataclass fields. `compose()` returns its contents: an account, a config file, a first-boot `Init` step and a generated systemd `Service`. Its `checks` run during `lint`: `App(port=80)` reports `app-privileged-port`.
+- `platform` is what the image builds on: `Debian("trixie")` is the distribution plus its boot set (the kernel, systemd as init, udev and the UKI's EFI stub), declared in every variant with provenance `platform`. `tundravm inspect` lists them like any other package.
+- `items` holds what every variant shares: `ca-certificates` and the `App` fragment.
+- `App` is a component: `@component` makes the class a frozen dataclass whose fields (`version`, `port`) are its configuration, and each instance is a `Fragment` named after the class. `compose()` yields its contents: an account, a config file rendered by `ConfigFile.env`, a first-boot `Init` step and a generated systemd `Service`. Its `check` method runs during `lint`: `App(port=80)` reports `app-privileged-port`. Its `http` property exports where it listens, for [step 14](#14-write-a-fragment).
 - The service runs `/usr/bin/app`, which the recipe does not ship yet. Add a `Build(...)` or a `Package(...)` for it before you bake a real image.
 - `dev` inherits `default` and adds `DevTools()`: a serial console, root login and debugging tools. Never ship it: `release=False` keeps it out of every release ([step 19](#19-cut-a-release)).
 
@@ -211,14 +205,14 @@ no findings
 [exit 0]
 ```
 
-Every variant here bakes a bootable UKI, and a UKI needs a kernel. Comment out `Package("linux-image-amd64")` in `items` and lint again:
+Every variant here bakes a bootable UKI, and a UKI needs a kernel. Pass `Debian("trixie", kernel_package=None)` and lint again:
 
 ```console
 $ tundravm lint node.py
 error kernel-missing [default]: variant builds a bootable UKI but installs no kernel, so mkosi stops with 'A kernel must be installed in the image to build a UKI'
-    hint: Add Package("linux-image-amd64") for the distribution kernel, declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a non-bootable image.
+    hint: Keep Debian(kernel_package="linux-image-amd64") for the distribution kernel, declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) with Debian(boot=None) for a non-bootable image.
 error kernel-missing [dev]: variant builds a bootable UKI but installs no kernel, so mkosi stops with 'A kernel must be installed in the image to build a UKI'
-    hint: Add Package("linux-image-amd64") for the distribution kernel, declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a non-bootable image.
+    hint: Keep Debian(kernel_package="linux-image-amd64") for the distribution kernel, declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) with Debian(boot=None) for a non-bootable image.
 2 errors, 0 warnings, 0 infos
 [exit 1]
 
@@ -424,7 +418,7 @@ next: tundravm deploy qemu --variant debug
 [exit 0]
 ```
 
-`--verify-reproducible` bakes the same variants a second time into `build/.reproduce`, from the same lockfile and source checkouts, and compares every artifact's sha256 with the first build's (`-q` hides the progress of both bakes). All three match, so the second build is removed; `bake-result.json` records the outcome as `declarative.reproducibility` (state `matched`), for the bake and for each variant it built, and `tundravm status` shows `reproducibility matched` on each artifact line. A mismatch keeps `build/.reproduce` and fails with `E_REPRODUCIBILITY`, a table of the artifacts that differ and a hint naming `tundravm diff` and the usual causes (see [CLI: Bake](cli.md#bake)). The in-process backend is deterministic, so here the check only exercises the pipeline. With a real backend the second build runs mkosi again from scratch, which catches timestamps, build ids and packages installed without an archive snapshot (`Recipe(snapshot=...)`; see [Reproducibility](reproducibility.md)).
+`--verify-reproducible` bakes the same variants a second time into `build/.reproduce`, from the same lockfile and source checkouts, and compares every artifact's sha256 with the first build's (`-q` hides the progress of both bakes). All three match, so the second build is removed; `bake-result.json` records the outcome as `declarative.reproducibility` (state `matched`), for the bake and for each variant it built, and `tundravm status` shows `reproducibility matched` on each artifact line. A mismatch keeps `build/.reproduce` and fails with `E_REPRODUCIBILITY`, a table of the artifacts that differ and a hint naming `tundravm diff` and the usual causes (see [CLI: Bake](cli.md#bake)). The in-process backend is deterministic, so here the check only exercises the pipeline. With a real backend the second build runs mkosi again from scratch, which catches timestamps, build ids and packages installed without an archive snapshot (`Debian(snapshot=...)`; see [Reproducibility](reproducibility.md)).
 
 ## 10. Measure
 
@@ -646,13 +640,13 @@ On a host with QEMU and a real bake, `deploy` boots the baked image (a UKI, on O
 
 ## 14. Write a fragment
 
-Say every image that runs the app should also probe it once a minute. Write that as a `Composite`, like `App`, in `fragments.py` next to the recipe:
+Say every image that runs the app should also probe it once a minute. Write that as a component, like `App`, in `fragments.py` next to the recipe:
 
 ```python
-from dataclasses import dataclass
+from collections.abc import Iterator
 
-from tundravm import Diagnostic, File, Fragment, Package, Resolved, Service, Unit
-from tundravm.declarative.utils import Composite
+from tundravm import Declaration, Package, Service, Unit, component
+from tundravm.declarative.utils import Composite, HttpEndpoint
 
 TIMER = """\
 [Unit]
@@ -667,54 +661,38 @@ WantedBy=minimal.target
 """
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component(name="healthcheck")
 class HealthCheck(Composite):
-    """A timer that probes the app's port once a minute. Fragment name: ``healthcheck``."""
+    """A timer that probes *target* once a minute. Fragment name: ``healthcheck``."""
 
-    port: int
+    target: HttpEndpoint
 
-    def compose(self) -> Fragment:
-        return Fragment(
-            "healthcheck",
-            requires=("app",),  # the fragment App composes
-            checks=(self.check_port,),
-            items=(
-                Package("curl"),
-                Service(
-                    "app-healthcheck",
-                    f"/usr/bin/curl -fsS -o /dev/null http://127.0.0.1:{self.port}/",
-                    description="Probe the app",
-                    type="oneshot",
-                ),
-                Unit("app-healthcheck.timer", TIMER, enabled=True),
-            ),
+    def compose(self) -> Iterator[Declaration]:
+        yield Package("curl")
+        yield Service(
+            "app-healthcheck",
+            f"/usr/bin/curl -fsS -o /dev/null {self.target.url}",
+            description="Probe the app",
+            type="oneshot",
         )
-
-    def check_port(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
-        """Lint rule: probe the port the app's config listens on."""
-        listen = f"listen=0.0.0.0:{self.port}\n"
-        for item in resolved.items:
-            if isinstance(item, File) and item.path == "/etc/app/app.conf" and listen in item.content:
-                return ()
-        message = f"the app does not listen on port {self.port}"
-        return (Diagnostic("healthcheck-port", "error", message, variant=resolved.variant),)
+        yield Unit("app-healthcheck.timer", TIMER, enabled=True)
 ```
 
-- `HealthCheck(port=9090)` is itself a `Fragment`: it goes in `Recipe.items`, a variant's `add`, or another fragment's `items`. `compose()` runs once, at construction.
-- `requires` names fragments that must be in the same variant; without `App`, lint reports `fragment-requires-missing`.
-- `checks` are functions from the resolved variant to diagnostics; they run during `lint` (and `resolve`, which fails on errors). `check_port` reads the config file `App` declared, so the probe and the service cannot disagree on the port.
+- `HealthCheck(target=app.http)` is itself a `Fragment`: it goes in `Recipe.items`, a variant's `add`, or another fragment's `items`. `compose()` runs once, at construction. `name=` names the fragment; without it, it would be `health-check`, after the class.
+- `target` is the `HttpEndpoint` `App` exports, so the probe reads the port from the app instead of parsing `/etc/app/app.conf`: the two cannot disagree. Subclassing `Composite` lets a type checker see `HealthCheck(...)` as a `Fragment`.
+- Holding an export makes the component require its provider: without `App` in the variant, lint reports `fragment-requires-missing`. `@component(requires=(...))` names other fragments a component needs, and a `check(self, resolved)` method, like `App.check`, is a lint rule.
 - A generated `Service` is enabled into `minimal.target` unless `wanted_by` names another target, so the probe also runs once at boot; the timer repeats it every minute.
 
-Use it in `node.py`: add `from fragments import HealthCheck` after the tundravm imports and `HealthCheck(port=APP_PORT),` after `App(...)` in `items`. A wrong port is a lint error:
+Use it in `node.py`: add `from fragments import HealthCheck` after the tundravm imports, bind `app = App(version=APP_VERSION, port=APP_PORT)` above the recipe, and put `app,` and `HealthCheck(target=app.http),` in `items` in place of `App(...)`. Without `app` in `items`, lint names the missing provider:
 
 ```console
 $ tundravm lint node.py --variant default
-error healthcheck-port [default]: the app does not listen on port 8080
+error fragment-requires-missing [default] healthcheck: fragment 'healthcheck' requires fragment 'app', which this variant does not include
 1 error, 0 warnings, 0 infos
 [exit 1]
 ```
 
-That was `HealthCheck(port=8080)`. With `port=APP_PORT` the `healthcheck-port` error is gone, and what `lint` reports is drift: it checks the recipe against the lockfile the table configures, which step 7 wrote before the probe existed:
+With `app` back in `items` that error is gone, and what `lint` reports is drift: it checks the recipe against the lockfile the table configures, which step 7 wrote before the probe existed:
 
 ```console
 $ tundravm lint node.py --variant default
@@ -771,25 +749,27 @@ Add tests for the fragment in `tests/test_healthcheck.py`. `tundravm.testing` wo
 from fragments import HealthCheck
 from node import App
 
-from tundravm import Fragment, Package, Recipe, lint
+from tundravm import Fragment, Package, Recipe, Service, lint
 from tundravm.testing import assert_clean, assert_diagnostic
+
+APP = App(version="1", port=8080)
 
 
 def image(*items: Fragment) -> Recipe:
     return Recipe(name="t", items=(Package("linux-image-amd64"), *items))
 
 
-def test_probes_the_app_port() -> None:
-    assert_clean(lint(image(App(version="1", port=8080), HealthCheck(port=8080))))
+def test_probes_the_app() -> None:
+    assert_clean(lint(image(APP, HealthCheck(target=APP.http))))
 
 
 def test_needs_the_app() -> None:
-    assert_diagnostic(lint(image(HealthCheck(port=8080))), "fragment-requires-missing")
+    assert_diagnostic(lint(image(HealthCheck(target=APP.http))), "fragment-requires-missing")
 
 
-def test_probes_the_wrong_port() -> None:
-    found = lint(image(App(version="1", port=8080), HealthCheck(port=9090)))
-    assert_diagnostic(found, "healthcheck-port", variant="default")
+def test_probes_the_port_the_app_exports() -> None:
+    (probe,) = [item for item in HealthCheck(target=APP.http).items if isinstance(item, Service)]
+    assert probe.exec_start == "/usr/bin/curl -fsS -o /dev/null http://127.0.0.1:8080/"
 ```
 
 - `image()` builds a one-variant recipe (`default`, for qemu) around the fragments under test, with the kernel package so `kernel-missing` stays quiet.

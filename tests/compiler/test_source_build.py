@@ -61,7 +61,7 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 REPO = "https://example.com/acme/tool.git"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-# The former examples/qemu_basic.py, kept verbatim: its digest predates source builds.
+# The former examples/qemu_basic.py, on a platform: its digest predates source builds.
 QEMU_BASIC = '''\
 """Minimal QEMU-focused recipe.
 
@@ -70,11 +70,11 @@ tundravm bake examples/qemu_basic.py
 """
 
 from tundravm.backends import LimaMkosiBackend
-from tundravm.declarative import File, Fragment, Package, Recipe
+from tundravm.declarative import Debian, File, Fragment, Package, Recipe
 
 recipe = Recipe(
     name="qemu-basic",
-    base="debian/bookworm",
+    platform=Debian("bookworm", boot=None),
     items=(Package("curl"), Package("jq"), File("/etc/motd", "QEMU profile\\n")),
 )
 

@@ -15,6 +15,7 @@ import pytest
 
 from tundravm import (
     Backend,
+    Debian,
     Debloat,
     Declaration,
     ExternalDelivery,
@@ -363,7 +364,12 @@ def test_kernel_missing_is_per_variant() -> None:
 def _arm(*items: Declaration | Fragment, target: str = "azure") -> Recipe:
     variant = Variant("default", outputs=(target,))  # type: ignore[arg-type]
     common = Fragment("common", items=(*CLEAN, *items))
-    return Recipe("check", items=(common,), variants=(variant,), arch="aarch64")
+    return Recipe(
+        "check",
+        items=(common,),
+        variants=(variant,),
+        platform=Debian("trixie", arch="aarch64", boot=None),
+    )
 
 
 def test_aarch64_with_efi_stub_is_unsupported() -> None:

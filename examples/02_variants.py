@@ -3,9 +3,9 @@
 Teaches ``Variant``: ``add`` a fragment; ``changes`` that edit or remove an inherited
 declaration by its identity (its type plus natural key), through its ref: ``motd.ref`` for
 a value you hold, ``Package.ref("jq")`` for one you do not; ``inherits`` chains (the
-default ``"base"`` is ``Recipe.items``, ``None`` starts from nothing); ``outputs`` for the
-targets it builds. ``packages()`` bundles ``Package`` declarations without inventing a
-fragment name.
+default ``"base"`` is ``Recipe.items``, ``None`` starts from the platform alone); ``outputs``
+for the targets it builds. Every variant, standalone ones too, gets the platform's boot
+set. ``packages()`` bundles ``Package`` declarations without inventing a fragment name.
 
     tundravm inspect examples/02_variants.py --diff-variants default dev
     tundravm compile examples/02_variants.py --tree build/variants/mkosi
@@ -13,18 +13,16 @@ fragment name.
 """
 
 from tundravm.backends import InProcessBackend
-from tundravm.declarative import Debloat, File, Package, Recipe, Variant, packages
-
-BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
+from tundravm.declarative import Debian, Debloat, File, Package, Recipe, Variant, packages
 
 motd = File("/etc/motd", "production\n")
 debloat = Debloat()
 
 recipe = Recipe(
     name="variants",
-    base="debian/bookworm",
+    platform=Debian("bookworm"),
     items=(
-        packages(*BOOT, "ca-certificates", "curl", "jq"),
+        packages("ca-certificates", "curl", "jq"),
         motd,
         debloat,
     ),
@@ -45,12 +43,12 @@ recipe = Recipe(
         ),
         # default minus jq: a ref names a declaration you hold no value for.
         Variant("slim", inherits="default", changes=(Package.ref("jq").remove(),)),
-        # Standalone: none of Recipe.items, e.g. a rescue image.
+        # Standalone: the platform without Recipe.items, e.g. a rescue image.
         Variant(
             "rescue",
             inherits=None,
             outputs=("qemu",),
-            add=packages(*BOOT, "busybox", "e2fsprogs"),
+            add=packages("busybox", "e2fsprogs"),
         ),
     ),
 )

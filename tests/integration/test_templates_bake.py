@@ -70,7 +70,7 @@ def test_service_template_bakes_with_its_app(tmp_path: Path) -> None:
         render_recipe_template(
             title="node",
             filename="node.py",
-            base="debian/trixie",
+            release="trixie",
             backend="local",
             template="service",
         ),
@@ -140,7 +140,7 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         render_recipe_template(
             title="node",
             filename="node.py",
-            base="debian/trixie",
+            release="trixie",
             backend="local",
             template="cloud",
         ),

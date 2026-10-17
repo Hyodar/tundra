@@ -13,6 +13,7 @@ from tundravm._source import Install as SourceInstall
 from tundravm.declarative import (
     Build,
     Cargo,
+    Debian,
     Dotnet,
     Fragment,
     Git,
@@ -285,16 +286,17 @@ def test_mounted_cache_key_fingerprints_what_the_build_produces() -> None:
         _keyed(install=(Install("build/tool", "/usr/local/bin/tool"),)),
     ]
     keys = [_cache_key(_recipe(build)) for build in changed]
-    arm = Recipe("tool", items=(_keyed(),), arch="aarch64")
+    arm = Recipe("tool", items=(_keyed(),), platform=Debian("trixie", arch="aarch64", boot=None))
     keys.append(_cache_key(arm))
     assert key not in keys and len(set(keys)) == len(keys)
     assert _cache_key(_recipe(_keyed(cache_namespace="team/tool"))) == f"team_tool-{fingerprint}"
 
 
 def test_mounted_cache_key_fingerprints_the_distribution() -> None:
-    def with_(*items: object, **recipe: object) -> str:
+    def with_(*items: object, release: str = "trixie", **platform: object) -> str:
         fragment = Fragment("tool", items=(_keyed(), *items))  # type: ignore[arg-type]
-        return _cache_key(Recipe("tool", items=(fragment,), **recipe))  # type: ignore[arg-type]
+        debian = Debian(release, boot=None, **platform)  # type: ignore[arg-type]
+        return _cache_key(Recipe("tool", items=(fragment,), platform=debian))
 
     key = with_()
     assert with_(Package("htop")) == key  # image packages are not the toolchain
@@ -303,7 +305,7 @@ def test_mounted_cache_key_fingerprints_the_distribution() -> None:
         with_(snapshot="20260101T000000Z"),
         with_(snapshot="20260201T000000Z"),
         with_(mirror="https://mirror.example.com"),
-        with_(base="debian/bookworm"),
+        with_(release="bookworm"),
         with_(Repository("extra", "https://repo.example.com/debian", "trixie")),
         with_(
             Repository("extra", "https://repo.example.com/debian", "trixie", ("main", "contrib"))

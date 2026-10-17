@@ -38,6 +38,7 @@ DENYLIST = {
         r"\b(?:inspect|lint)\b[^\n]*--json\b(?!-)"
     ),
     "elided measure flags (--build, --variant)": re.compile(r"\bmeasure \.\.\."),
+    "removed init --base flag (--release)": re.compile(r"\binit\b[^\n]*--base\b"),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 
@@ -53,6 +54,10 @@ RENAMED = {
     "replace-missing/-mismatch lint codes (edit-missing; refs)": re.compile(
         r"\b(?:replace-missing|disk-key-mismatch|secret-store-mismatch)\b"
     ),
+    "Recipe.base/arch/mirror/snapshot/epoch (Recipe.platform)": re.compile(
+        r"\bRecipe\.(?:base|arch|mirror|tools_mirror|snapshot|epoch)\b"
+    ),
+    "BOOT package tuple (Debian(boot=...))": re.compile(r"\bBOOT\s*=\s*\(|\*BOOT\b"),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {
@@ -64,7 +69,14 @@ RENAMED_KEYWORDS = {
         "remove": "changes=(value.ref.remove(),)",
     },
     "Build": {"recipe": "using=", "cache_key": "cache_namespace="},
-    "Recipe": {"common": "items="},
+    "Recipe": {
+        "common": "items=",
+        **{
+            name: f"platform=Debian(..., {name}=...)"
+            for name in ("arch", "mirror", "tools_mirror", "snapshot", "epoch")
+        },
+        "base": "platform=Debian(release)",
+    },
 }
 """Keyword arguments of these calls that no longer exist, with their replacement."""
 DOCS = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
@@ -137,6 +149,7 @@ def test_examples_cite_only_the_declarative_api() -> None:
         'error(hint=f"img.apply({theirs}(), {mine}())")',
         "error(hint='pin it with HttpSource(sha256=...)')",
         "MESSAGE = 'see `tundravm check RECIPE`'",
+        "HINT = 'run tundravm init --base debian/sid'",
     ],
 )
 def test_denylist_catches_fluent_hints(source: str) -> None:
@@ -183,6 +196,12 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         'Variant("slim", inherits="default", remove=(Package("jq"),))',
         "for item in variant.replace: ...  # Variant.replace",
         "`replace-missing` and `disk-key-mismatch`",
+        'Recipe("r", base="debian/trixie")',
+        'Recipe(\n    name="r",\n    snapshot=SNAPSHOT,\n    items=(),\n)',
+        'Recipe("r", arch="aarch64", mirror="https://m", tools_mirror="https://m", epoch=None)',
+        "pin it with Recipe.snapshot",
+        'BOOT = ("linux-image-amd64", "systemd")',
+        "packages(*BOOT, 'curl')",
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:
@@ -197,5 +216,7 @@ def test_renamed_guard_passes_the_current_spellings() -> None:
         "ArtifactRef(target='qemu', path=p)\nassert_clean(RECIPE, warnings='allow')\n"
         'Variant("slim", changes=(Package.ref("jq").remove(), motd.ref.edit(mode=0o600)))\n'
         'Variant("d", add=Fragment("f", (Debloat(remove=("/x",)),)))\n'
+        'Recipe("r", platform=Debian("trixie", snapshot=SNAPSHOT, arch="x86_64", epoch=0))\n'
+        'EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1")\nmcopy ::EFI/BOOT/BOOTX64.EFI\n'
     )
     assert _renamed(source) == []

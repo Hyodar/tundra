@@ -18,6 +18,7 @@ import pytest
 
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
 from tundravm.declarative import (
+    Debian,
     Debloat,
     File,
     Fragment,
@@ -85,7 +86,7 @@ def rich_recipe(kernel_config: Path, *, layout: str = "per_directory") -> Recipe
             Variant("default", outputs=("qemu",)),
             Variant("gcp", outputs=("gcp",), add=Fragment("gcp", items=(Package("jq"),))),
         ),
-        base="debian/bookworm",
+        platform=Debian("bookworm", boot=None),
         mkosi=Mkosi(layout="native") if layout == "native" else Mkosi(),
     )
 

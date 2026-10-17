@@ -69,7 +69,7 @@ def _template_recipe(tmp_path: Path, template: str) -> Recipe:
         render_recipe_template(
             title=template,
             filename=source.name,
-            base="debian/trixie",
+            release="trixie",
             backend="inprocess",
             template=template,
         ),
@@ -84,7 +84,7 @@ def _template_tree(tmp_path: Path, template: str) -> Path:
         render_recipe_template(
             title=template,
             filename=source.name,
-            base="debian/trixie",
+            release="trixie",
             backend="inprocess",
             template=template,
         ),

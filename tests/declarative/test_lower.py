@@ -10,6 +10,7 @@ from tundravm._options import MkosiOptions
 from tundravm.check import check
 from tundravm.declarative import (
     Build,
+    Debian,
     Debloat,
     Disk,
     ExternalDelivery,
@@ -115,7 +116,7 @@ def declarative_recipe() -> Recipe:
     )
     return Recipe(
         name="equivalence",
-        base="debian/bookworm",
+        platform=Debian("bookworm", boot=None),
         items=(common,),
         variants=(
             Variant("default", outputs=("qemu",)),
@@ -201,9 +202,9 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
             Setting("Build", "WithNetwork", ("no",)),
             Setting("Build", "SandboxTrees", ("a:/b", "c:/d")),
         ),
-        mirror="https://mirror/",
-        tools_mirror="https://tools/",
-        epoch=7,
+        platform=Debian(
+            "trixie", mirror="https://mirror/", tools_mirror="https://tools/", epoch=7, boot=None
+        ),
         mkosi=Mkosi(layout="native", dialect="nethermind-v1"),
     )
     img = lower(recipe)
@@ -227,7 +228,7 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
         dialect="nethermind-v1",
     )
     assert img.reproducible
-    assert not lower(Recipe("r", epoch=None)).reproducible
+    assert not lower(Recipe("r", platform=Debian("trixie", epoch=None, boot=None))).reproducible
 
 
 @pytest.mark.parametrize(
@@ -402,8 +403,9 @@ def test_runtime_tools_default_and_key_handoff() -> None:
 # ── Declarations added for the declarative-only API ─────────────────────
 
 
-def _one(*items: object, **recipe: object) -> Recipe:
-    return Recipe("r", items=items, **recipe)  # type: ignore[arg-type]
+def _one(*items: object, epoch: int | None = 0, **recipe: object) -> Recipe:
+    platform = Debian("trixie", epoch=epoch, boot=None)
+    return Recipe("r", items=items, platform=platform, **recipe)  # type: ignore[arg-type]
 
 
 def test_service_lowers_to_the_generated_unit() -> None:

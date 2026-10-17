@@ -21,6 +21,7 @@ is a plain partition baked into the image instead. ``Disk`` without ``device=`` 
 
 from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
+    Debian,
     Disk,
     ExternalDelivery,
     Key,
@@ -37,8 +38,6 @@ from tundravm.declarative import (
     User,
 )
 from tundravm.declarative.utils import TUNDRA_TOOLS
-
-BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
 
 key = Key("key_persistent", output="/run/keys/persistent")
 disk = Disk("disk_persistent", mount="/persistent", key=key, mapper="cryptpersistent")
@@ -72,9 +71,10 @@ secrets = Secrets(
 
 recipe = Recipe(
     name="storage-and-secrets",
-    base="debian/bookworm",
+    platform=Debian("bookworm"),
     items=(
-        *(Package(name) for name in (*BOOT, "cryptsetup", "ca-certificates")),
+        Package("cryptsetup"),
+        Package("ca-certificates"),
         Partition("logs", size="4G", mount="/var/log/app"),
         key,
         disk,

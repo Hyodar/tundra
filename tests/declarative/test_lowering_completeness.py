@@ -344,7 +344,7 @@ def test_unmapped_settings_are_written_verbatim(tmp_path: Path) -> None:
     ("setting", "alternative"),
     [
         (Setting("Content", "Packages", ("vim",)), "Package(name)"),
-        (Setting("Distribution", "Mirror", ("https://x",)), "Recipe.mirror"),
+        (Setting("Distribution", "Mirror", ("https://x",)), "Debian(mirror=...)"),
         (Setting("Content", "BuildScripts", ("x.sh",)), "Hook(name, phase, script)"),
         (Setting("Build", "Seed", ("x",)), "Setting('Output', 'Seed', ...)"),
     ],

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tundravm._source import GitSource, HttpSource, checkout_identity
 from tundravm.cli import main
+from tundravm.declarative import Recipe
 from tundravm.models import BakeRequest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -72,3 +75,8 @@ def conf_list(conf: str, key: str) -> list[str]:
 def bake_request(tmp_path: Path) -> BakeRequest:
     """A ``default`` bake request with its build and emit dirs under *tmp_path*."""
     return BakeRequest(profile="default", build_dir=tmp_path / "build", emit_dir=tmp_path / "emit")
+
+
+def on_platform(recipe: Recipe, **changes: Any) -> Recipe:
+    """*recipe* with its platform's fields *changes* replaced (``snapshot=``, ``mirror=``, ...)."""
+    return replace(recipe, platform=replace(recipe.platform, **changes))

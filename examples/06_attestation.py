@@ -20,6 +20,7 @@ below accept it only because they pass ``allow_placeholder=True``.
 
 from tundravm.backends import InProcessBackend
 from tundravm.declarative import (
+    Debian,
     Fragment,
     Package,
     Policy,
@@ -30,8 +31,6 @@ from tundravm.declarative import (
     Variant,
 )
 from tundravm.declarative.utils import Tdxs
-
-BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
 
 # What a trusted attester measures to: `tundravm measure --export-policy` output.
 PEER_POLICY = Resources.from_module(__name__).file("peer.policy.json")
@@ -55,9 +54,9 @@ app = Fragment(
 
 recipe = Recipe(
     name="attestation",
-    base="debian/bookworm",
+    platform=Debian("bookworm"),
     policy=Policy(require_frozen_lock=True),
-    items=(*(Package(name) for name in (*BOOT, "ca-certificates")), app),
+    items=(Package("ca-certificates"), app),
     variants=(
         # Proves what it runs: issues TDX quotes, checks nothing.
         Variant("attester", outputs=("qemu",), add=Tdxs(issuer="tdx")),

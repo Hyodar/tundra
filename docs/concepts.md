@@ -6,15 +6,16 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 
 | Concept | Type | Role |
 |---|---|---|
-| Recipe | `Recipe` | The whole image: recipe-wide settings, its own `items` and the variants |
+| Recipe | `Recipe` | The whole image: its platform, recipe-wide settings, its own `items` and the variants |
+| Platform | `Debian` (a `Platform`) | What the image builds on: the distribution release, arch, archive (`snapshot`, `mirror`), `epoch`, and the declarations every variant gets (the `boot` package set, a pinned `efi_stub`, `items`) |
 | Declaration | `Package`, `File`, `Service`, `Unit`, `Key`, `Disk`, `Build`, ... | One typed fact about the image, identified by type plus natural key |
-| Fragment | `Fragment` | A named group of declarations and nested fragments, with `requires` and `checks`; a `Composite` subclass computes one from its fields |
+| Fragment | `Fragment` | A named group of declarations and nested fragments, with `requires` and `checks`; a `@component` class computes one from its fields |
 | Variant | `Variant` | An overlay on the variant it `inherits` (`add`, `changes`, `outputs`); one mkosi directory and artifact each |
 | Lock | `Lock` | Section digests of the resolved recipe plus one pin per source build |
 | Tree | `Tree` | The compiled mkosi project, in memory until written; has a digest |
 | Artifact | `Artifact` | A baked disk image of one variant and target, with the digests it came from |
 
-Every one of them is a frozen dataclass. Nothing in a recipe is mutated after construction: a `Composite` fragment computes its contents once, from its fields, a variant describes a change instead of applying it, and the lifecycle functions take values and return values.
+Every one of them is a frozen dataclass. Nothing in a recipe is mutated after construction: a component computes its contents once, from its fields, a variant describes a change instead of applying it, and the lifecycle functions take values and return values.
 
 ```python
 from tundravm import Package, Recipe, Variant
@@ -38,7 +39,7 @@ Declarations validate themselves at construction: relative paths, empty names, u
 
 `resolve(recipe, variant=NAME)` turns one variant into a `Resolved`: a flat, ordered tuple of declarations, the variant's outputs, and the names of the fragments it included. Resolution runs in this order:
 
-1. **Ancestry.** The variant's `inherits` chain is walked to the root. `inherits="base"` (the default) means `Recipe.items`; `inherits=None` means nothing is inherited; any other value names a declared variant. Unknown names and cycles raise.
+1. **Ancestry.** The variant's `inherits` chain is walked to the root. Every variant starts from the platform's declarations (provenance level `platform`); `inherits="base"` (the default) adds `Recipe.items`; `inherits=None` means nothing else is inherited; any other value names a declared variant. Unknown names and cycles raise.
 2. **Expansion.** Fragments are flattened depth-first. A fragment name seen twice expands once when both are equal; two different fragments with the same name are `fragment-conflict`.
 3. **Overlay.** For each variant from the root down: its `changes` edit or drop inherited declarations, in order, then its `add` fragment is expanded and added.
 4. **References.** Disk keys, secret stores, init and hook `after=` names, ordering contradictions and the variant's outputs are checked.
@@ -134,7 +135,7 @@ Kernel(KERNEL_VERSION, KERNEL_SOURCE, config=assets.file("kernel/kernel.config")
 
 ### Bootable images
 
-By default every variant compiles to `Format=uki`, a bootable unified kernel image, and mkosi can only build one from an image that holds a kernel. A bootable variant therefore declares a `Kernel(...)` built from source or installs a distribution kernel package (`Package("linux-image-amd64")`, any `linux-image-*`, or Ubuntu's `linux-generic`, `linux-kvm` and `linux-virtual`). Without either, lint reports `kernel-missing`, an error, so `bake` stops at its lint step before mkosi runs. A disk that is never booted declares `Setting("Content", "Bootable", ("no",))` instead: its variant compiles to `Format=disk` and `Bootable=no` and needs no kernel. The `init` templates install the Debian kernel together with `systemd-sysv`, `udev`, `kmod` and `systemd-boot-efi`.
+By default every variant compiles to `Format=uki`, a bootable unified kernel image, and mkosi can only build one from an image that holds a kernel. A bootable variant therefore declares a `Kernel(...)` built from source or installs a distribution kernel package (the platform's `kernel_package`, `"linux-image-amd64"` by default, any `linux-image-*`, or Ubuntu's `linux-generic`, `linux-kvm` and `linux-virtual`). Without either, lint reports `kernel-missing`, an error, so `bake` stops at its lint step before mkosi runs. A disk that is never booted declares `Setting("Content", "Bootable", ("no",))` on `Debian(boot=None)` instead: its variant compiles to `Format=disk` and `Bootable=no` and needs no kernel. `Debian(release)` (`boot="systemd"`) installs the Debian kernel together with `systemd`, `systemd-sysv`, `udev`, `kmod` and `systemd-boot-efi`, as the `init` templates do.
 
 ## Runtime init
 

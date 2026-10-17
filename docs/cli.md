@@ -3,7 +3,7 @@
 `tundravm` (also `python -m tundravm`) runs the lifecycle on a recipe file. Every recipe command loads the `Recipe` the file binds and runs one step on the selected variants; `measure`, `deploy` and `sbom` read the `bake-result.json` a bake wrote into the build directory.
 
 ```
-tundravm init [DIR] [--name NAME] [--template minimal|service|cloud|prover] [--base BASE] [--backend KIND]
+tundravm init [DIR] [--name NAME] [--template minimal|service|cloud|prover] [--release RELEASE] [--backend KIND]
               [--ci github|none] [--with-tests | --no-tests] [--force] [--no-doctor]
 tundravm init --list-templates
 tundravm inspect RECIPE [--variant NAME]... [--format text|json|markdown] [--diff-variants A B] [--lockfile PATH]
@@ -142,7 +142,7 @@ pyproject: /home/me/node/pyproject.toml
 | Flag | Effect |
 |---|---|
 | `--template minimal\|service\|cloud\|prover` | Starter recipe (default `service`). `--list-templates` prints the four with a one-line description and exits. |
-| `--base BASE` | Base distribution (default `debian/trixie`). |
+| `--release RELEASE` | Debian release the recipe's `platform=Debian(...)` names (default `trixie`). |
 | `--backend KIND` | Backend the recipe binds to `backend` (default `lima`). |
 | `--ci github\|none` | `github` also writes `.github/workflows/tundravm.yml` (default `none`); on an existing project, only the workflow (see below). |
 | `--recipe RECIPE` | With `--ci github`: the existing project's recipe, relative to `DIR`; only the workflow is written. |
@@ -158,7 +158,7 @@ cloud    service plus azure and gcp variants, backports and an EFI stub pinned t
 prover   cloud plus a TPM-sealed key, an encrypted disk, SSH key delivery and the tdxs attestation service
 ```
 
-Every template installs the Debian kernel and the packages a UKI boots with (`linux-image-amd64`, `systemd`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`), so it bakes a bootable UKI as written and passes `kernel-missing` (see [Lint](#lint)).
+Every template builds on `Debian(release)`, whose `boot="systemd"` set installs the Debian kernel and the packages a UKI boots with (`linux-image-amd64`, `systemd`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`), so it bakes a bootable UKI as written and passes `kernel-missing` (see [Lint](#lint)).
 
 It writes:
 
@@ -245,7 +245,7 @@ On a fresh machine or a CI runner, `uv sync` installs the pinned tundravm and `p
 
 What maps back:
 
-- `mkosi.conf` and `mkosi.conf.d/*.conf`: `Distribution`/`Release`, `Architecture`, `Mirror`, `ToolsTreeMirror`, `Snapshot`, `SourceDateEpoch` become `Recipe(base=, arch=, mirror=, tools_mirror=, snapshot=, epoch=)`; `Packages=` and `BuildPackages=` become `Package(...)` (`role="build"`); the kernel comment and build script a `Kernel`; every other key a `Setting(section, key, values)`. Keys the compiler writes itself (`ImageId`, `ExtraTrees`, `ManifestFormat=json`, the script keys, ...) are dropped.
+- `mkosi.conf` and `mkosi.conf.d/*.conf`: `Distribution`/`Release`, `Architecture`, `Mirror`, `ToolsTreeMirror`, `Snapshot`, `SourceDateEpoch` become `platform=Debian(release, arch=, mirror=, tools_mirror=, snapshot=, epoch=, boot=None)` (the tree lists its packages itself, so the platform adds none); `Packages=` and `BuildPackages=` become `Package(...)` (`role="build"`); the kernel comment and build script a `Kernel`; every other key a `Setting(section, key, values)`. Keys the compiler writes itself (`ImageId`, `ExtraTrees`, `ManifestFormat=json`, the script keys, ...) are dropped.
 - `mkosi.extra/**` and `mkosi.skeleton/**`: a unit under `usr/lib/systemd/system` whose content is exactly what `Service(...)` renders becomes that `Service`, any other unit a `Unit(name, content)`; text files become `File(path, content, mode=)` (`stage="skeleton"` for the skeleton). Binary files and files over 64 KiB become `File(path, TREE / ...)`, read from the tree at compile time, with a note. Symlinks and empty directories are noted and not imported. The group write bit a `002` umask leaves is dropped from modes.
 - The compiler's own lines become declarations again: the synthetic postinst (`User`, `Group`, unit enablement, masking and disabling, `Debloat`'s systemd minimisation), the finalize debloat block, `runtime-init` (`Init`), the cloud glue (`target="azure"`/`"gcp"`), backports (`Backports`) and the EFI stub (`EfiStub`, unpinned or locked; a locked one is read with the recipe's `Snapshot=`).
 - Source build hooks in the build script become `Build(...)` again (see the guarantees below); the generated lines after a recognized hook are not imported.
@@ -450,7 +450,7 @@ files (in prod/):
 ```console
 $ tundravm lint node.py
 error kernel-missing [default]: variant builds a bootable UKI but installs no kernel, so mkosi stops with 'A kernel must be installed in the image to build a UKI'
-    hint: Add Package("linux-image-amd64") for the distribution kernel, declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) for a non-bootable image.
+    hint: Keep Debian(kernel_package="linux-image-amd64") for the distribution kernel, declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) with Debian(boot=None) for a non-bootable image.
 1 error, 0 warnings, 0 infos
 [exit 1]
 ```
@@ -651,7 +651,7 @@ next: tundravm deploy qemu --build build --variant default
     variant  target  first         second
     default  azure   0c5b4a2e9f13  0c5b4a2e9f13  match
     default  qemu    1fa043adea90  6d2e81c4b7a0  mismatch
-  Hint: The second build is kept in build/.reproduce. Compare the compiled trees with `tundravm diff RECIPE --tree build/.reproduce/mkosi` and the images with diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and packages installed without a snapshot (Recipe(snapshot=...)).
+  Hint: The second build is kept in build/.reproduce. Compare the compiled trees with `tundravm diff RECIPE --tree build/.reproduce/mkosi` and the images with diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and packages installed without a snapshot (Debian(snapshot=...)).
     second_build: build/.reproduce
     differ: default/qemu
   [exit 2]

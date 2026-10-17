@@ -45,7 +45,7 @@ from .declarative.lifecycle import (
 )
 from .declarative.lower import lower
 from .declarative.model import BUILTIN_INITS, Declaration, Hook, Init, Recipe
-from .declarative.resolve import COMMON_LEVEL, Identity, Origin, _run, identity
+from .declarative.resolve import Identity, Origin, _run, identity, level_name
 from .declarative.resolve import describe as describe_identity
 from .errors import TdxError, ValidationError
 from .explain import _changed_fields, _emitted_for, _fragment_chain
@@ -234,10 +234,10 @@ def _recipe_entry(
     if recipe is not None:
         return {
             "name": recipe.name,
-            "base": recipe.base,
-            "arch": recipe.arch,
-            "snapshot": recipe.snapshot,
-            "mirror": recipe.mirror,
+            "base": recipe.platform.name,
+            "arch": recipe.platform.arch,
+            "snapshot": recipe.platform.snapshot,
+            "mirror": recipe.platform.mirror,
             "dialect": recipe.mkosi.dialect,
             "layout": recipe.mkosi.layout,
             "digest": None,
@@ -789,7 +789,7 @@ def _badge(state: object, text: object = None) -> str:
 
 def _origin_text(origin: Mapping[str, Any]) -> str:
     level = str(origin["level"])
-    where = "in common" if level == COMMON_LEVEL else f"in variant {level}"
+    where = level_name(level)
     via = f" via {origin['via']}" if origin["via"] else ""
     edited = f"{origin['fields']} " if origin.get("fields") else ""
     return f"{edited}{origin['action']} {where}{via}"

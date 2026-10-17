@@ -10,22 +10,23 @@ from tundravm import Fragment, Package
 DEBUGGING = Fragment("debugging", items=(Package("strace"), Package("gdb")))
 ```
 
-**A `Composite` subclass**, the recommended way to ship a configurable fragment: a frozen dataclass whose fields are the configuration and whose `compose()` returns the contents. Each instance is itself a `Fragment`.
+**A component**, the recommended way to ship a configurable fragment: a class decorated with `@component`, whose annotated fields are the configuration and whose `compose()` yields the contents. Each instance is itself a `Fragment`.
 
 ```python
-from dataclasses import dataclass
+from collections.abc import Iterator
 
-from tundravm import Fragment, Package
+from tundravm import Package, component
 from tundravm.declarative.utils import Composite
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class Debugging(Composite):
     gdb: bool = True
 
-    def compose(self) -> Fragment:
-        tools = ("strace", "gdb") if self.gdb else ("strace",)
-        return Fragment("debugging", items=tuple(Package(name) for name in tools))
+    def compose(self) -> Iterator[Package]:
+        yield Package("strace")
+        if self.gdb:
+            yield Package("gdb")
 ```
 
 ```python
@@ -37,14 +38,52 @@ Debugging(gdb=True)
 True
 ```
 
-The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are written this way, and so are `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/) and `NethermindBase` in [`examples/nethermind_base.py`](../examples/nethermind_base.py).
+The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are components whose `compose()` returns a whole `Fragment`, and `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/) and `NethermindBase` in [`examples/nethermind_base.py`](../examples/nethermind_base.py) are `Composite` subclasses written as plain dataclasses, which still works.
 
-## Writing a `Composite`
+What every image of a family builds on (its kernel, EFI stub, backports and `Setting` lines) belongs in a platform rather than a fragment: subclass `Debian` with other defaults (`items=` for the declarations), as `NethermindPlatform` does next to `NethermindBase`, and recipes pass `platform=NethermindPlatform()`. Its declarations reach every variant, standalone ones included, with provenance `platform`.
 
-- Decorate the subclass with `@dataclass(frozen=True, slots=True, kw_only=True)`. Keyword-only fields keep call sites readable (`Tdxs(after_init=True)`) and let a required field follow ones with defaults.
-- Construction calls `compose()` once; the instance takes the returned fragment's `name`, `items`, `requires` and `checks`. `compose()` must return a `Fragment`.
-- Validate fields in `compose()` and raise `ValidationError` for bad values, as `EfiStub` does for an empty `snapshot`. The error surfaces where the recipe constructs the fragment.
-- The fields alone are the instance's `repr` and equality, so two instances with the same configuration are the same fragment and expand once. Lists passed for fields are frozen into tuples; keep the other fields immutable too (strings, numbers, declarations, other fragments).
+## Writing a component
+
+- `@component` makes the class a frozen, slotted dataclass with keyword-only fields (`Tdxs(after_init=True)`), so a required field may follow ones with defaults. A `str`, `int`, `float` or `bool` field (or one of those `| None`) refuses a value of another type where the recipe constructs it; list and dict values and defaults are frozen into tuples and `FrozenMap`s.
+- Subclass `Composite` (from `tundravm.declarative.utils`) so a type checker sees instances as fragments; `@component` on a plain class makes it a `Composite` at runtime too.
+- Construction calls `compose()` once. It returns or yields the fragment's declarations and nested fragments; it may instead return a whole `Fragment(...)` when the name, `requires` or `checks` depend on the fields.
+- The fragment is named after the class (`PrometheusExporter` is `prometheus-exporter`), after an `id` (or `name`) field when there is one, or after `@component(name="...")`.
+- `@component(requires=("node-exporter",))` names fragments the variant must also hold. A `check(self, resolved)` method returning diagnostics is the fragment's lint rule (see [Checks](#checks)).
+- Validate other fields in `compose()` and raise `ValidationError` for bad values, as `EfiStub` does for an empty `snapshot`. The error surfaces where the recipe constructs the fragment.
+- The fields alone are the instance's `repr` and equality, so two instances with the same configuration are the same fragment and expand once. Keep field values immutable (strings, numbers, declarations, other fragments, exports).
+
+### Exports
+
+A component publishes what others need from it as a typed value, in a property: `HttpEndpoint(host, port, path="/")` (with `url` and `address`) is the shipped one, and other facts subclass `Export` as frozen dataclasses. Build it with `provider=self.name`; a component that holds the value in a field then requires the provider's fragment, so the consumer neither names that fragment nor parses its files:
+
+```python
+@component
+class App(Composite):
+    port: int
+
+    @property
+    def http(self) -> HttpEndpoint:
+        return HttpEndpoint("127.0.0.1", self.port, provider=self.name)
+    ...
+
+
+@component
+class HealthCheck(Composite):
+    target: HttpEndpoint  # HealthCheck(target=app.http) requires "app"
+    ...
+```
+
+### Config files
+
+`ConfigFile.yaml(path, data)`, `ConfigFile.toml`, `ConfigFile.json`, `ConfigFile.ini` and `ConfigFile.env` (in `tundravm.declarative.utils`) render a config file from data and return an ordinary `File`, so the digest and tree are those of the hand-written file with the same bytes. Data is `str`, `int`, `float`, `bool`, `None`, lists and mappings with `str` keys. Keys are written sorted (`sort_keys=False` keeps insertion order), floats as `repr`, booleans as `true`/`false`, and each file ends in a newline. `mode`, `stage` and `allow_secret` are `File.text`'s.
+
+```python
+ConfigFile.yaml("/etc/prometheus/prometheus.yml", {"global": {"scrape_interval": "15s"}})
+# global:
+#   scrape_interval: 15s
+ConfigFile.env("/etc/default/prometheus", {"ARGS": "--web.listen-address=127.0.0.1:9090"})
+# ARGS="--web.listen-address=127.0.0.1:9090"
+```
 
 ## Anatomy
 
@@ -63,9 +102,19 @@ A Prometheus node exporter that keeps its textfile collector directory on the en
 
 ```python
 # exporter.py
-from dataclasses import dataclass
+from collections.abc import Iterator
 
-from tundravm import Diagnostic, Disk, Fragment, Init, Package, Resolved, Unit
+from tundravm import (
+    Declaration,
+    Diagnostic,
+    Disk,
+    Fragment,
+    Init,
+    Package,
+    Resolved,
+    Unit,
+    component,
+)
 from tundravm.declarative.utils import Composite
 
 EXPORTER_UNIT = """\
@@ -96,37 +145,31 @@ def exporter_check(image: Resolved) -> tuple[Diagnostic, ...]:
     )
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class PrometheusExporter(Composite):
     """The node exporter, writing its textfile collector under /persistent on *storage*."""
 
     storage: Fragment
 
-    def compose(self) -> Fragment:
-        return Fragment(
-            "prometheus-exporter",
-            requires=(self.storage.name,),
-            checks=(exporter_check,),
-            items=(
-                self.storage,
-                Package("prometheus-node-exporter"),
-                Init(
-                    "exporter-directory",
-                    "install -d -m 0755 /persistent/exporter\n",
-                    priority=25,
-                    after=("disks",),
-                ),
-                Init(
-                    "exporter-ready",
-                    "printf 'tundra_boot_ready 1\\n' > /persistent/exporter/boot.prom\n",
-                    priority=40,
-                    after=("exporter-directory", "secrets"),
-                ),
-                Unit(
-                    "prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True
-                ),
-            ),
+    def compose(self) -> Iterator[Declaration | Fragment]:
+        yield self.storage
+        yield Package("prometheus-node-exporter")
+        yield Init(
+            "exporter-directory",
+            "install -d -m 0755 /persistent/exporter\n",
+            priority=25,
+            after=("disks",),
         )
+        yield Init(
+            "exporter-ready",
+            "printf 'tundra_boot_ready 1\\n' > /persistent/exporter/boot.prom\n",
+            priority=40,
+            after=("exporter-directory", "secrets"),
+        )
+        yield Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True)
+
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+        return exporter_check(resolved)
 ```
 
 ```python

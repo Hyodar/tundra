@@ -6,6 +6,7 @@ import pytest
 from tundravm.cli import EXIT_SDK_ERROR, main
 from tundravm.declarative import (
     Backend,
+    Debian,
     Fragment,
     Package,
     Recipe,
@@ -36,7 +37,7 @@ def _recipe(*packages: str) -> Recipe:
     return Recipe(
         "lockfile",
         items=(Package("linux-image-amd64"), *(Package(name) for name in packages)),
-        base="debian/bookworm",
+        platform=Debian("bookworm", boot=None),
     )
 
 
@@ -58,7 +59,7 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
     recipe = Recipe(
         "lockfile",
         items=(Package("curl"),),
-        base="debian/bookworm",
+        platform=Debian("bookworm", boot=None),
         variants=(
             Variant("default", outputs=("qemu",)),
             Variant("dev", add=Fragment("dev", items=(Package("jq"),))),

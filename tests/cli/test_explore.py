@@ -42,7 +42,7 @@ def _template(tmp_path: Path, template: str) -> Path:
         render_recipe_template(
             title=template,
             filename=path.name,
-            base="debian/trixie",
+            release="trixie",
             backend="inprocess",
             template=template,
         ),

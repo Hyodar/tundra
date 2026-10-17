@@ -30,13 +30,13 @@ git add uv.lock      # committed, the generated workflow installs exactly it (`u
 
 ```python
 # node.py
-from tundravm import File, Package, Recipe, Service, Unit, User, Variant
+from tundravm import Debian, File, Package, Recipe, Service, Unit, User, Variant
 from tundravm.backends import LimaMkosiBackend
 
 recipe = Recipe(
     name="node",
+    platform=Debian("trixie"),  # the kernel and systemd boot set every variant needs
     items=(
-        Package("linux-image-amd64"),  # a bootable variant needs a kernel (lint: kernel-missing)
         Package("curl"),
         File("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
         User("app", shell="/bin/false"),
@@ -84,7 +84,7 @@ Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and
 
 - **Deterministic output.** The same recipe always compiles to the same mkosi tree, byte for byte. `compile --check` fails CI when the committed tree is stale.
 - **One definition, several targets.** A variant with `outputs=("azure",)` or `outputs=("gcp",)` gets the platform integration; QEMU qcow2, Azure VHD and GCP tar.gz come from one recipe.
-- **Composition without mutation.** Fragments are values: a plain `Fragment(...)`, or a `Composite` subclass configured by its fields. Keys, disks and secrets reference each other as objects, and the runtime-init sequence they need is derived, not hand-ordered.
+- **Composition without mutation.** Fragments are values: a plain `Fragment(...)`, or a `@component` class configured by its fields. Keys, disks and secrets reference each other as objects, and the runtime-init sequence they need is derived, not hand-ordered.
 - **Locked inputs.** The lockfile records a digest per recipe section and a commit or hash per source build. Bakes are frozen against it, and `lock --check` names what drifted.
 - **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the measurements policy, SBOMs, lint) into an `evidence.json` index with a pass, fail or incomplete verdict and stable reason codes (`--require` makes missing checks count), a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
 - **Secrets lint.** `secret-in-file` and `secret-in-env` refuse private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments, naming the kind and line but never the value; credentials go in `Secrets` and arrive at boot, written by the provider `Secrets(delivery=)` names (`secret-target-unsupported` refuses a target nobody writes: the built-in delivery writes only the SSH key).
@@ -97,7 +97,7 @@ The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full
 |---|---|
 | **Recipe** | The whole image: name, base, arch, mirrors, epoch, its own `items` and the variants. An immutable value bound to `recipe` in a Python file. |
 | **Declaration** | One typed fact about the image: `Package`, `File`, `Template`, `User`, `Group`, `Service`, `Unit`, `Hook`, `Init`, `Key`, `Disk`, `Secrets`, `Build`, `Kernel`, `Setting`, ... Identified by type plus natural key (package name, file path, unit name). |
-| **Fragment** | A named group of declarations and nested fragments, with `requires` (fragments that must also be present) and `checks` (lint functions). A reusable "module" is a `Composite`: a `Fragment` subclass whose fields are its configuration. |
+| **Fragment** | A named group of declarations and nested fragments, with `requires` (fragments that must also be present) and `checks` (lint functions). A reusable "module" is a `@component` class: a `Fragment` whose fields are its configuration. |
 | **Variant** | An overlay on its parent: `add` a fragment, edit or remove inherited declarations by ref (`changes`), set the `target`. One mkosi directory per variant and one artifact per target. |
 | **Lock** | Section digests of the resolved recipe plus a pin per source build. `tundravm.lock`, committed next to the tree. |
 | **Tree** | The compiled mkosi project, held in memory until written. Its digest is what `compile --check` and golden tests compare. |
@@ -107,38 +107,31 @@ See [`docs/concepts.md`](docs/concepts.md) for resolution rules, runtime-init or
 
 ## Fragments and composition
 
-A reusable piece of an image is a `Composite`: a `Fragment` subclass whose dataclass fields are its configuration and whose `compose()` returns its contents. `requires` names fragments that must be in the same variant, and `checks` run against the resolved variant during `lint`:
+A reusable piece of an image is a component: a class decorated with `@component`, whose fields are its configuration and whose `compose()` yields its contents. `@component(requires=...)` names fragments that must be in the same variant, and a `check` method runs against the resolved variant during `lint`:
 
 ```python
-from dataclasses import dataclass
+from collections.abc import Iterator
 
-from tundravm import Diagnostic, Disk, Fragment, Init, Package, Resolved, Unit
+from tundravm import Declaration, Diagnostic, Disk, Fragment, Init, Package, Resolved, Unit, component
 from tundravm.declarative.utils import Composite
 
-def exporter_check(image: Resolved) -> tuple[Diagnostic, ...]:
-    if any(isinstance(item, Disk) and item.mount == "/persistent" for item in image.items):
-        return ()
-    return (Diagnostic("exporter-storage-missing", "error", "the exporter needs a disk mounted at /persistent"),)
-
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class PrometheusExporter(Composite):
     storage: Fragment
 
-    def compose(self) -> Fragment:
-        return Fragment(
-            "prometheus-exporter",
-            requires=(self.storage.name,),
-            checks=(exporter_check,),
-            items=(
-                self.storage,
-                Package("prometheus-node-exporter"),
-                Init("exporter-directory", "install -d -m 0755 /persistent/exporter\n", priority=25, after=("disks",)),
-                Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True),
-            ),
-        )
+    def compose(self) -> Iterator[Declaration | Fragment]:
+        yield self.storage
+        yield Package("prometheus-node-exporter")
+        yield Init("exporter-directory", "install -d -m 0755 /persistent/exporter\n", priority=25, after=("disks",))
+        yield Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, after_init=True)
+
+    def check(self, image: Resolved) -> tuple[Diagnostic, ...]:
+        if any(isinstance(item, Disk) and item.mount == "/persistent" for item in image.items):
+            return ()
+        return (Diagnostic("exporter-storage-missing", "error", "the exporter needs a disk mounted at /persistent"),)
 ```
 
-`PrometheusExporter(storage=storage)` is itself a `Fragment`. A one-off with nothing to configure can stay a plain `Fragment(...)` value. Identical fragments included twice expand once; two different fragments with the same name are an error. `tundravm.declarative.utils` ships `Tdxs()` (the attestation quote service), `DevTools()` (serial console and root login, never ship it), `EfiStub(snapshot=, version=)` and `Backports()`. The full example is in [`docs/module-authoring.md`](docs/module-authoring.md).
+`PrometheusExporter(storage=storage)` is itself a `Fragment`. A one-off with nothing to configure can stay a plain `Fragment(...)` value. Identical fragments included twice expand once; two different fragments with the same name are an error. `tundravm.declarative.utils` ships `Tdxs()` (the attestation quote service), `DevTools()` (serial console and root login, never ship it), `EfiStub(snapshot=, version=)` and `Backports()`. A component can also export typed values, such as an `HttpEndpoint`, that another component takes as a field instead of parsing its files, and `ConfigFile.yaml`/`toml`/`json`/`ini`/`env` render config files from data as ordinary `File`s. The full example is in [`docs/module-authoring.md`](docs/module-authoring.md).
 
 Keys, disks and secrets are declarations that reference each other by object, so a disk cannot name a key that does not exist:
 
@@ -173,10 +166,10 @@ variants=(
 
 - **Byte-stable trees.** `epoch=0` (the default) emits a fixed `SourceDateEpoch`/`SOURCE_DATE_EPOCH`, a stable `Seed` and strips `IMAGE_VERSION`. `tundravm compile --check` exits 1 when the committed tree differs from the recipe; `tundravm.testing.assert_tree` does the same in a test.
 - **Lock sections.** `tundravm lock` writes a version 4 lockfile with one digest per section: `distribution`, `compiler`, and per variant `packages`, `files`, `kernel`, `debloat`, ... (`variants.<variant>.packages`). The recipe digest includes the tundravm version. `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
-- **Pinned archive.** `Recipe(snapshot="20251113T083151Z")` builds from that Debian snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `EfiStub(snapshot=, version=)` pins the EFI stub to a version the snapshot carries.
+- **Pinned archive.** `Debian("trixie", snapshot="20251113T083151Z")` builds from that Debian snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `Debian(..., efi_stub=version)` pins the EFI stub to a version that same snapshot carries.
 - **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and an air-gapped bake needs `tundravm fetch` first (sources and, when the host has the toolchain, dependency caches), `bake --offline`, and a reachable local package mirror. Checkouts and dependency caches are verified before reuse, and `fetch --force` replaces a modified checkout and refills the caches. `lock --update NAME` re-resolves one source (`<variant>/<name>` for a build pinned per variant); `lock --offline` never touches the network. `fetch` also prefetches each Go, Cargo and .NET build's dependencies with the host toolchain into `build/.sources/deps/` and downloads the `EfiStub` package, so `bake --offline` (mkosi `--with-network=no`) builds with no network in the sandbox.
 - **Frozen bakes.** `bake` is frozen against `--lockfile`, the `lockfile` of `[tool.tundravm]` (which must exist), or `build/tundravm.lock` whenever it exists, and refuses a recipe that drifted (`E_LOCKFILE`).
-- **Snapshots.** `Recipe(snapshot="20251113T083151Z")` pins the Debian archive at snapshot.debian.org for packages and the tools tree; `EfiStub(snapshot=..., version=...)` pins the EFI stub to the same snapshot.
+- **Snapshots.** `Debian(snapshot="20251113T083151Z")` pins the Debian archive at snapshot.debian.org for packages and the tools tree; `Debian(efi_stub=...)` pins the EFI stub to the same snapshot.
 
 See [`docs/reproducibility.md`](docs/reproducibility.md).
 
@@ -230,7 +223,7 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 |---|---|
 | [`01_minimal.py`](examples/01_minimal.py) | The smallest recipe: a base, packages and a file as the recipe's `items`; no variants means one QEMU `default` |
 | [`02_variants.py`](examples/02_variants.py) | `Variant` overlays: `add`, `changes` that edit/remove by identity (refs), `inherits` chains, a standalone `inherits=None` variant, `outputs=("azure", "gcp")`, `packages()` |
-| [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment` and a `Composite` with fields, `requires=` and a lint `checks=` rule |
+| [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment`, `@component` classes with `ConfigFile`-rendered config, `requires=`, a lint `check` and an exported `HttpEndpoint` consumed by a health check |
 | [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | TPM-sealed `Key`, encrypted `Disk`, `Secrets` with `Schema`s and file/env targets an `ExternalDelivery` writes, `RuntimeTools`, `Partition` |
 | [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball `using` the `Go` toolchain and from a `Git` tag with a script; file and directory installs; `cache_namespace` |
 | [`06_attestation.py`](examples/06_attestation.py) | `Tdxs()` as attester and as verifier built with `Tdxs.from_policy()` from `peer.policy.json` (a placeholder export of `measure --export-policy`), plus `Policy(require_frozen_lock=True)` |

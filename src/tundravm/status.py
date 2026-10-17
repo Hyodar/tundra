@@ -299,13 +299,13 @@ def _recipe(loaded: RecipeFile, img: Lowered, names: tuple[str, ...], shown: str
         "digest": digest,
         "variants": list(names),
         "dialect": img.mkosi.dialect,
-        "base": recipe.base,
-        "snapshot": recipe.snapshot,
+        "base": recipe.platform.name,
+        "snapshot": recipe.platform.snapshot,
     }
     detail = (
         f"{shown}  digest {digest[:12]}  variants {', '.join(names)}  "
-        f"dialect {img.mkosi.dialect}  base {recipe.base}"
-        + (f"  snapshot {recipe.snapshot}" if recipe.snapshot else "")
+        f"dialect {img.mkosi.dialect}  base {recipe.platform.name}"
+        + (f"  snapshot {recipe.platform.snapshot}" if recipe.platform.snapshot else "")
     )
     return StatusItem("recipe", "ok", detail, data)
 

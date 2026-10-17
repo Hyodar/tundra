@@ -7,11 +7,11 @@ tundravm makes two promises and gives you a check for each:
 | The same recipe compiles to the same mkosi tree, byte for byte | `tundravm compile --check`, `assert_tree`, `Tree.digest` |
 | The same recipe and lockfile fetch the same inputs | `tundravm lock --check`, frozen `bake` |
 
-Byte-identical *disk images* additionally depend on the Debian archive, the build backend and mkosi itself; pin the first with `Recipe.snapshot` and run the same backend.
+Byte-identical *disk images* additionally depend on the Debian archive, the build backend and mkosi itself; pin the first with `Debian(snapshot=...)` and run the same backend.
 
 ## Reproducible output
 
-`Recipe.epoch` controls the time and identity settings the compiler emits:
+The platform's `epoch` (`Debian(epoch=...)`) controls the time and identity settings the compiler emits:
 
 | `epoch` | Emitted |
 |---|---|
@@ -21,22 +21,18 @@ Byte-identical *disk images* additionally depend on the Debian archive, the buil
 
 Every `mkosi.conf` also gets `ManifestFormat=json` and `CleanPackageMetadata=true`. Lowering never touches the network, and `Path` contents are read at compile time, so the tree depends only on the recipe, the files it reads, and the lock.
 
-Pin the archive with `Recipe.snapshot`, and the EFI stub with the `EfiStub` fragment:
+Pin the archive with the platform's `snapshot`, and the EFI stub with its `efi_stub`:
 
 ```python
-from tundravm.declarative import Fragment, Recipe
-from tundravm.declarative.utils import EfiStub
-
-SNAPSHOT = "20251113T083151Z"
+from tundravm.declarative import Debian, Recipe
 
 recipe = Recipe(
     name="node",
-    snapshot=SNAPSHOT,
-    items=(EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1"),),
+    platform=Debian("trixie", snapshot="20251113T083151Z", efi_stub="257.8-1~deb13u1"),
 )
 ```
 
-`snapshot` is the snapshot ID, written as mkosi's `Snapshot=`; mkosi reads it from `https://snapshot.debian.org` unless `mirror` names another root. `mirror` and `tools_mirror` are mirror roots that mkosi completes (`<root>/debian`, `<root>/archive/debian/<snapshot>`), never full archive URLs. `EfiStub` takes the same ID (or a snapshot archive URL), and its `version` must be one that snapshot carries: the `cloud` and `prover` templates pair `20251113T083151Z` with `257.8-1~deb13u1`. `Backports` follows the recipe's mirror and snapshot, and pins backports to 200 and sid to 100 so the release's packages win. Outside `nethermind-v1`, `tundravm lock` also pins the `EfiStub` package's sha256 as the source `efi-stub`, and `fetch` downloads it on the host (see [Hermetic builds](#hermetic-builds)).
+`snapshot` is the snapshot ID, written as mkosi's `Snapshot=`; mkosi reads it from `https://snapshot.debian.org` unless `mirror` names another root. `mirror` and `tools_mirror` are mirror roots that mkosi completes (`<root>/debian`, `<root>/archive/debian/<snapshot>`), never full archive URLs. `efi_stub` adds an `EfiStub` from that same snapshot, so the stub and the packages cannot disagree, and its version must be one that snapshot carries: the `cloud` and `prover` templates pair `20251113T083151Z` with `257.8-1~deb13u1`. `Backports` follows the platform's mirror and snapshot, and pins backports to 200 and sid to 100 so the release's packages win. Outside `nethermind-v1`, `tundravm lock` also pins the `EfiStub` package's sha256 as the source `efi-stub`, and `fetch` downloads it on the host (see [Hermetic builds](#hermetic-builds)).
 
 ## Committed trees
 

@@ -816,9 +816,7 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         action="store_true",
         help="Print the templates with a one-line description each, then exit.",
     )
-    init.add_argument(
-        "--base", default="debian/trixie", help="Base distribution (default: %(default)s)."
-    )
+    init.add_argument("--release", default="trixie", help="Debian release (default: %(default)s).")
     init.add_argument(
         "--backend",
         choices=sorted(BACKEND_SNIPPETS),
@@ -3426,7 +3424,7 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
         recipe: render_recipe_template(
             title=title,
             filename=recipe.name,
-            base=args.base,
+            release=args.release,
             backend=args.backend,
             template=args.template,
         )

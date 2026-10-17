@@ -78,8 +78,10 @@ def test_another_recipe_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     _project(tmp_path, monkeypatch)
     recipe = Path("node.py")
     source = recipe.read_text()
-    assert 'Package("systemd")' in source
-    edited = source.replace('Package("systemd")', 'Package("systemd"), Package("htop")', 1)
+    assert 'Package("ca-certificates")' in source
+    edited = source.replace(
+        'Package("ca-certificates")', 'Package("ca-certificates"), Package("htop")', 1
+    )
     recipe.write_text(edited)
     code, _ = run_main("witness", str(RELEASE), "--builder", "alice")
     assert code == EXIT_SDK_ERROR

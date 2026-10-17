@@ -12,6 +12,7 @@ a recipe and explicit inputs and returns explicit results.
 from tundravm.policy import Policy
 from tundravm.recipe import load
 
+from ._component import component
 from .bom import Sbom, sbom
 from .importer import Imported, import_tree
 from .lifecycle import (
@@ -44,9 +45,11 @@ from .lifecycle import (
 )
 from .lower import lower
 from .model import (
+    Boot,
     Build,
     Cargo,
     Check,
+    Debian,
     Debloat,
     Declaration,
     Diagnostic,
@@ -71,6 +74,7 @@ from .model import (
     Pairs,
     Partition,
     Phase,
+    Platform,
     Recipe,
     Ref,
     Remove,
@@ -98,9 +102,11 @@ __all__ = [
     "Artifact",
     "Azure",
     "Backend",
+    "Boot",
     "Build",
     "Cargo",
     "Check",
+    "Debian",
     "Debloat",
     "Declaration",
     "Deployment",
@@ -133,6 +139,7 @@ __all__ = [
     "Partition",
     "Phase",
     "Pin",
+    "Platform",
     "Policy",
     "Qemu",
     "Recipe",
@@ -158,6 +165,7 @@ __all__ = [
     "Variant",
     "bake",
     "compile",
+    "component",
     "deploy",
     "diff",
     "doctor",

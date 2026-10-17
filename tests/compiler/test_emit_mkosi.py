@@ -1,13 +1,14 @@
 from collections.abc import Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
 
 import pytest
 
+from tests.helpers import on_platform
 from tundravm.compiler import DEFAULT_TDX_INIT_SCRIPT
 from tundravm.compiler.emit_mkosi import ARCH_TO_MKOSI
 from tundravm.declarative import (
+    Debian,
     Debloat,
     Declaration,
     File,
@@ -51,9 +52,7 @@ def _recipe(
         "test",
         items=items,
         variants=tuple(variants or (Variant("default", outputs=("qemu",)),)),
-        base="debian/bookworm",
-        arch=arch,
-        epoch=epoch,
+        platform=Debian("bookworm", arch=arch, epoch=epoch, boot=None),
         mkosi=mkosi or Mkosi(),
     )
 
@@ -813,7 +812,7 @@ def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
 def test_compile_backports_writes_static_sandbox_sources(tmp_path: Path) -> None:
     """current: Backports() is a compile-time mkosi.sandbox file, with no hook or builddir tree."""
     recipe = _recipe(Package("systemd"), Backports(), epoch=None)
-    recipe = replace(recipe, snapshot="20251113T083151Z")
+    recipe = on_platform(recipe, snapshot="20251113T083151Z")
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
@@ -853,9 +852,9 @@ def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
         in (plain.mkosi.sandbox_files[0][1])
     )
     assert not _phase_scripts(_recipe(Backports(), epoch=None), "sync")
-    rooted = lower(replace(_recipe(Backports(), epoch=None), mirror="https://m.example/"))
+    rooted = lower(on_platform(_recipe(Backports(), epoch=None), mirror="https://m.example/"))
     assert "URIs: https://m.example/debian\n" in rooted.mkosi.sandbox_files[0][1]
-    snap = replace(
+    snap = on_platform(
         _recipe(Backports(), epoch=None), mirror="https://m.example", snapshot="20250101T000000Z"
     )
     assert (
@@ -866,7 +865,7 @@ def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
 
 def test_compile_snapshot_writes_the_snapshot_line(tmp_path: Path) -> None:
     """Recipe.snapshot is mkosi's Snapshot=; the mirror stays a root."""
-    recipe = replace(
+    recipe = on_platform(
         _recipe(Package("systemd")),
         mirror="https://snapshot.debian.org",
         snapshot="20251113T083151Z",
@@ -885,18 +884,20 @@ def test_compile_snapshot_writes_the_snapshot_line(tmp_path: Path) -> None:
 )
 def test_compile_rejects_an_archive_url_as_the_mirror(field: str, url: str) -> None:
     """current: mkosi appends the archive path to Mirror=, so a full archive URL is refused."""
-    with pytest.raises(ValidationError, match=f"Recipe.{field} .* names an archive"):
+    with pytest.raises(ValidationError, match=f"Debian\\({field}=...\\) .* names an archive"):
         recipe = _recipe(Package("systemd"))
         if field == "mirror":
-            lower(replace(recipe, mirror=url))
+            lower(on_platform(recipe, mirror=url))
         else:
-            lower(replace(recipe, tools_mirror=url))
+            lower(on_platform(recipe, tools_mirror=url))
 
 
 def test_compile_historical_dialect_keeps_an_archive_mirror(tmp_path: Path) -> None:
     """nethermind-v1 writes the historical full archive URL unchanged."""
     url = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
-    recipe = replace(_recipe(Package("systemd"), mkosi=Mkosi(dialect="nethermind-v1")), mirror=url)
+    recipe = on_platform(
+        _recipe(Package("systemd"), mkosi=Mkosi(dialect="nethermind-v1")), mirror=url
+    )
     assert f"Mirror={url}\n" in _conf(_compile(recipe, tmp_path / "mkosi"))
 
 

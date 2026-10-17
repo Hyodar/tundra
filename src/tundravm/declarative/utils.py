@@ -15,7 +15,7 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Mapping
-from dataclasses import KW_ONLY, dataclass, field, fields
+from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -29,11 +29,11 @@ from tundravm.measure.policy import (
     validator_measurements,
 )
 
+from ._component import Composite, Export, HttpEndpoint, component
+from .config import ConfigFile
 from .model import (
     Build,
     Cargo,
-    Check,
-    Declaration,
     File,
     Fragment,
     Git,
@@ -78,48 +78,9 @@ _SOURCES_STANZA = (
 
 _DEFAULT_ROOT_PASSWORD = "tdx"
 _UNSAFE_PASSWORD = frozenset('"$`\\\n')
-_DERIVED = ("name", "items", "requires", "checks")
 
 
-@dataclass(frozen=True, slots=True)
-class Composite(Fragment):
-    """A :class:`Fragment` built from its own fields.
-
-    Subclass it as ``@dataclass(frozen=True, slots=True, kw_only=True)``, declare
-    the configuration as fields and return the contents from :meth:`compose`. The
-    instance takes that fragment's ``name``, ``items``, ``requires`` and ``checks``;
-    its ``repr`` and equality are its configuration fields. Lists passed for
-    fields are frozen into tuples, mappings into immutable ``FrozenMap`` copies.
-    """
-
-    name: str = field(init=False, repr=False, compare=False)
-    items: tuple[Declaration | Fragment, ...] = field(init=False, repr=False, compare=False)
-    requires: tuple[str, ...] = field(init=False, repr=False, compare=False)
-    checks: tuple[Check, ...] = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        for item in fields(self):
-            if not item.init:
-                continue
-            if isinstance(value := getattr(self, item.name), list):
-                object.__setattr__(self, item.name, tuple(value))
-            elif isinstance(value, Mapping):
-                object.__setattr__(self, item.name, FrozenMap(value))
-        composed = self.compose()
-        if not isinstance(composed, Fragment):
-            raise ValidationError(
-                f"{type(self).__name__}.compose() returned {composed!r}, not a Fragment.",
-                hint="Return Fragment(name, items=(...)) from compose().",
-            )
-        for name in _DERIVED:
-            object.__setattr__(self, name, getattr(composed, name))
-
-    def compose(self) -> Fragment:
-        """The fragment this instance stands for."""
-        raise NotImplementedError(f"{type(self).__name__} does not implement compose().")
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class Backports(Composite):
     """Debian backports (and, with *include_sid*, sid) sources for apt during the build.
 
@@ -131,9 +92,9 @@ class Backports(Composite):
     sid. ``include_sid=False`` drops the sid source and its pin, so a package
     missing from the release and backports fails the build instead of coming from
     unstable. *archive_url* is the apt URI used
-    verbatim; without it the sources follow ``Recipe.mirror`` (a mirror root) and
-    ``Recipe.snapshot`` the way mkosi does, else ``deb.debian.org``. Without
-    *release*, the release of ``Recipe.base``. Under ``nethermind-v1`` a sync hook
+    verbatim; without it the sources follow the platform's ``mirror`` (a mirror root)
+    and ``snapshot`` the way mkosi does, else ``deb.debian.org``. Without
+    *release*, the platform's release. Under ``nethermind-v1`` a sync hook
     generates them into ``mkosi.builddir``, reading the build's mirror and
     ``$RELEASE``, with no pins. Fragment name: ``backports``.
     """
@@ -199,8 +160,8 @@ class Backports(Composite):
         suite = self.release or release
         if not suite:
             raise ValidationError(
-                "Backports needs a Debian release: Recipe.base names none.",
-                hint="Set Recipe.base to e.g. 'debian/trixie', or pass Backports(release=...).",
+                "Backports needs a Debian release: the platform names none.",
+                hint="Use platform=Debian('trixie'), or pass Backports(release=...).",
             )
         backports = _SOURCES_STANZA.format(mirror=uri, suite=f"{suite}-backports")
         if not self.include_sid:
@@ -232,7 +193,7 @@ def _snapshot_archive(snapshot: str) -> str:
     return snapshot if "/" in snapshot else _join(_SNAPSHOT_ROOT, f"archive/debian/{snapshot}")
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class EfiStub(Composite):
     """``systemd-boot-efi`` *version* from the Debian *snapshot*, for a pinned EFI stub.
 
@@ -309,7 +270,7 @@ _STUB_COPY = (
 )
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class Tdxs(Composite):
     """The ``tdxs`` attestation service: source build, config, socket-activated units, account.
 
@@ -436,7 +397,7 @@ class Tdxs(Composite):
         )
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@component
 class DevTools(Composite):
     """Debugging tools, a serial console and password root login. Never ship it: mark its
     variant ``Variant(..., release=False)``.
@@ -601,9 +562,12 @@ __all__ = [
     "Backports",
     "CargoBinary",
     "Composite",
+    "ConfigFile",
     "DevTools",
     "EfiStub",
+    "Export",
     "GoBinary",
+    "HttpEndpoint",
     "Tdxs",
     "TdxsType",
 ]

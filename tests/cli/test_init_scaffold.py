@@ -102,14 +102,16 @@ def test_every_template_installs_the_distribution_kernel(tmp_path: Path, templat
     for variant in recipe.variants:
         assert kernel in tundravm.resolve(recipe, variant=variant.name).items, variant.name
 
-    items = tuple(item for item in recipe.items if item != kernel)
-    stripped = dataclasses.replace(recipe, items=items)
+    assert recipe.platform.packages[0] == kernel.name
+    assert isinstance(recipe.platform, tundravm.Debian)
+    platform = dataclasses.replace(recipe.platform, kernel_package=None)
+    stripped = dataclasses.replace(recipe, platform=platform)
     assert "kernel-missing" in {d.code for d in tundravm.lint(stripped)}
 
 
 @pytest.mark.parametrize("template", list(TEMPLATES))
 def test_render_is_a_pure_function_of_its_arguments(template: str) -> None:
-    args = {"title": "n", "filename": "n.py", "base": "debian/trixie", "backend": "lima"}
+    args = {"title": "n", "filename": "n.py", "release": "trixie", "backend": "lima"}
     first = render_recipe_template(**args, template=template)
     assert first == render_recipe_template(**args, template=template)
     assert "$" not in first

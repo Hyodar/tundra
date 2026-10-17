@@ -1357,7 +1357,7 @@ def _report_reproducibility(
             f"The second build is kept in {scratch}. Compare the compiled trees with "
             f"`tundravm diff RECIPE --tree {scratch / 'mkosi'}` and the images with "
             "diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and "
-            "packages installed without a snapshot (Recipe(snapshot=...))."
+            "packages installed without a snapshot (Debian(snapshot=...))."
         ),
         context={
             "second_build": str(scratch),

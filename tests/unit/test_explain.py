@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from tundravm import (
+    Debian,
     Debloat,
     File,
     Fragment,
@@ -68,8 +69,7 @@ def _recipe() -> Recipe:
             ),
             Variant("cloud", outputs=("qemu", "gcp")),
         ),
-        base="debian/trixie",
-        mirror="https://deb.example",
+        platform=Debian("trixie", mirror="https://deb.example", boot=None),
     )
 
 
@@ -234,7 +234,7 @@ def test_summary_omits_empty_sections() -> None:
     recipe = Recipe(
         "bare",
         variants=(Variant("default", outputs=("qemu",)), bare),
-        epoch=None,
+        platform=Debian("trixie", epoch=None, boot=None),
     )
     text = render(describe(lower(recipe), profile="bare"))
 

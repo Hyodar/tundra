@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import source_dir
+from tests.helpers import on_platform, source_dir
 from tundravm._source import GitSource
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.declarative import (
@@ -316,7 +316,7 @@ def test_the_kernel_cache_key_covers_the_distribution_outside_nethermind_v1(
 ) -> None:
     def keyed(dialect: str, snapshot: str | None) -> tuple[str, Recipe]:
         kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
-        recipe = replace(_recipe(kernel, dialect=dialect), snapshot=snapshot)
+        recipe = on_platform(_recipe(kernel, dialect=dialect), snapshot=snapshot)
         locked = lock(recipe, resolver=lambda s: "c" * 40)
         script = _script(recipe, tmp_path / f"{dialect}-{snapshot}", locked)
         return script.split("\n")[3], recipe

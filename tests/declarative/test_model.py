@@ -10,6 +10,7 @@ import pytest
 
 from tundravm.declarative import (
     Build,
+    Debian,
     Debloat,
     Disk,
     File,
@@ -47,9 +48,10 @@ GIT = Git("https://example.com/r.git", "main")
 
 def test_design_defaults() -> None:
     recipe = Recipe("r")
-    assert recipe.base == "debian/trixie"
+    assert recipe.platform == Debian("trixie", boot=None)
+    assert recipe.platform.name == "debian/trixie" and recipe.platform.packages == ()
     assert recipe.variants == (Variant("default", outputs=("qemu",)),)
-    assert recipe.epoch == 0 and recipe.mkosi == Mkosi("directories", "current")
+    assert recipe.platform.epoch == 0 and recipe.mkosi == Mkosi("directories", "current")
     assert Variant("v").inherits == "base" and Variant("v").add == Fragment("empty")
     assert User("u").system is True and Group("g").system is True
     assert Disk("d", "/data").device is None and Disk("d", "/data").format == "on_fail"
@@ -82,7 +84,7 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("declaration in changes", lambda: Variant("v", changes=(Package("a"),))),  # type: ignore[arg-type]
     ("no variants", lambda: Recipe("r", variants=())),
     ("duplicate variants", lambda: Recipe("r", variants=(Variant("a"),) * 2)),
-    ("negative epoch", lambda: Recipe("r", epoch=-1)),
+    ("negative epoch", lambda: Recipe("r", platform=Debian("trixie", epoch=-1, boot=None))),
     ("bad layout", lambda: Mkosi(layout="flat")),  # type: ignore[arg-type]
     ("empty package", lambda: Package("")),
     ("package role", lambda: Package("a", role="dev")),  # type: ignore[arg-type]

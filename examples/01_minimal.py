@@ -1,8 +1,10 @@
 """The smallest useful recipe: a few packages and one file in a QEMU image.
 
-Teaches: a ``Recipe`` is a name, a base distribution and its ``items``, the
-declarations every variant shares (``packages()`` bundles ``Package`` declarations);
-with no ``variants`` it builds one ``default`` variant for QEMU.
+Teaches: a ``Recipe`` is a name, a ``platform`` and its ``items``. The platform
+``Debian("bookworm")`` is the distribution plus its boot set (the kernel, systemd as
+init, udev and the UKI's EFI stub; ``recipe.platform.packages`` lists them); the
+items are the declarations every variant shares (``packages()`` bundles ``Package``
+declarations). With no ``variants`` it builds one ``default`` variant for QEMU.
 
     tundravm inspect examples/01_minimal.py
     tundravm compile examples/01_minimal.py --tree build/minimal/mkosi
@@ -10,16 +12,13 @@ with no ``variants`` it builds one ``default`` variant for QEMU.
 """
 
 from tundravm.backends import InProcessBackend
-from tundravm.declarative import File, Recipe, packages
-
-# Boot: the distribution kernel, systemd as init, udev and the UKI's EFI stub.
-BOOT = ("linux-image-amd64", "systemd", "systemd-sysv", "udev", "kmod", "systemd-boot-efi")
+from tundravm.declarative import Debian, File, Recipe, packages
 
 recipe = Recipe(
     name="minimal",
-    base="debian/bookworm",
+    platform=Debian("bookworm"),
     items=(
-        packages(*BOOT, "curl", "jq"),
+        packages("curl", "jq"),
         File("/etc/motd", "Hello from tundravm\n"),
     ),
 )

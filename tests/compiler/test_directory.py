@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main
-from tundravm.declarative import FileTree, Fragment, Recipe, Variant, compile, lower
+from tundravm.declarative import Debian, FileTree, Fragment, Recipe, Variant, compile, lower
 from tundravm.errors import ValidationError
 from tundravm.models import FileEntry
 
@@ -28,7 +28,7 @@ def _tree(root: Path) -> Path:
 
 
 def _recipe(*directories: FileTree, epoch: int | None = 0) -> Recipe:
-    return Recipe("tree", items=directories, epoch=epoch)
+    return Recipe("tree", items=directories, platform=Debian("trixie", epoch=epoch, boot=None))
 
 
 def _files(recipe: Recipe, variant: str = "default") -> list[FileEntry]:

@@ -12,7 +12,7 @@ from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
 from tundravm import Package, Recipe, ValidationError, load_recipe
 from tundravm.recipe import load_image
 
-HEADER = "from tundravm import Fragment, Package, Recipe\n"
+HEADER = "from tundravm import Debian, Fragment, Package, Recipe\n"
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
@@ -37,9 +37,9 @@ def test_loads_build_factory(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "def build() -> Recipe:\n    return Recipe('r', base='debian/trixie')\n",
+        HEADER + "def build() -> Recipe:\n    return Recipe('r', platform=Debian('trixie'))\n",
     )
-    assert load_recipe(recipe).base == "debian/trixie"
+    assert load_recipe(recipe).platform.release == "trixie"
 
 
 def test_discovers_single_build_prefixed_factory(tmp_path: Path) -> None:
@@ -47,18 +47,19 @@ def test_discovers_single_build_prefixed_factory(tmp_path: Path) -> None:
         tmp_path,
         "recipe.py",
         HEADER + "def helper():\n    return 1\n"
-        "def build_surge_prover():\n    return Recipe('r', base='debian/sid')\n",
+        "def build_surge_prover():\n    return Recipe('r', platform=Debian('sid'))\n",
     )
-    assert load_recipe(recipe).base == "debian/sid"
+    assert load_recipe(recipe).platform.release == "sid"
 
 
 def test_discovers_factory_by_return_annotation(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "def make_the_thing() -> Recipe:\n    return Recipe('r', base='debian/sid')\n",
+        HEADER
+        + "def make_the_thing() -> Recipe:\n    return Recipe('r', platform=Debian('sid'))\n",
     )
-    assert load_recipe(recipe).base == "debian/sid"
+    assert load_recipe(recipe).platform.release == "sid"
 
 
 def test_discovers_single_anonymous_instance(tmp_path: Path) -> None:
@@ -70,13 +71,13 @@ def test_attr_override_selects_instance_or_factory(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
         "recipe.py",
-        HEADER + "recipe = Recipe('r', base='debian/bookworm')\n"
-        "other = Recipe('r', base='debian/trixie')\n"
-        "def third() -> Recipe:\n    return Recipe('r', base='debian/sid')\n",
+        HEADER + "recipe = Recipe('r', platform=Debian('bookworm'))\n"
+        "other = Recipe('r', platform=Debian('trixie'))\n"
+        "def third() -> Recipe:\n    return Recipe('r', platform=Debian('sid'))\n",
     )
-    assert load_recipe(recipe).base == "debian/bookworm"
-    assert load_recipe(recipe, attribute="other").base == "debian/trixie"
-    assert load_recipe(recipe, attribute="third").base == "debian/sid"
+    assert load_recipe(recipe).platform.release == "bookworm"
+    assert load_recipe(recipe, attribute="other").platform.release == "trixie"
+    assert load_recipe(recipe, attribute="third").platform.release == "sid"
     assert load_image(recipe, attribute="third").state.base == "debian/sid"
 
 
@@ -219,7 +220,7 @@ def test_errors_in_a_helper_module_point_at_the_helper(tmp_path: Path) -> None:
 
 
 def test_sdk_errors_raised_by_the_recipe_pass_through(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r', base=1)\n")
+    recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r', platform=Debian(1))\n")
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
     assert "location" not in excinfo.value.context
