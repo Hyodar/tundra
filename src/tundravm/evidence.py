@@ -306,7 +306,8 @@ def evidence(
         variants=names,
         lock=NO_LOCK if locked is None else locked,
     )
-    lint_rows = [d.to_dict() for d in diagnostics]
+    # Source lines are checkout-specific: the bundle never records them.
+    lint_rows = [{**d.to_dict(), "location": ""} for d in diagnostics]
     members["lint.json"] = _json_bytes(lint_rows)
     compiled = _compiled_tree(img, artifacts, locked)
     digests = _recipe_digests(img, names, locked)

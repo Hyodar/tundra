@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
+from tundravm._location import declared_at, display_location, located
 from tundravm._modules.init import order_steps
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
@@ -61,23 +62,26 @@ class Origin:
     ``"common"`` for ``Recipe.items``; ``fragments`` runs from the
     level's own fragment down to the one holding the declaration (empty for
     ``changes``, which name declarations by ref, and for direct ``Recipe.items``);
-    ``fields`` are the fields an ``edited`` step set.
+    ``fields`` are the fields an ``edited`` step set. ``location`` is the absolute
+    ``file:line`` of the declaration, or of the edit or removal, ``""`` when unknown.
     """
 
     action: Action
     variant: str
     fragments: tuple[FragmentRef, ...] = ()
     fields: tuple[str, ...] = ()
+    location: str = ""
 
     def describe(self) -> str:
-        """``size edited in variant small-key``, ``added in common via base``."""
+        """``size edited at recipe.py:30 in variant small-key``, ``added in common via base``."""
         where = level_name(self.variant)
         chain = " > ".join(
             name if kind in ("Fragment", "") else f"{name} ({kind})"
             for name, kind in self.fragments
         )
         edited = f"{', '.join(self.fields)} " if self.fields else ""
-        return f"{edited}{self.action} {where}" + (f" via {chain}" if chain else "")
+        at = f" at {display_location(self.location)}" if self.location else ""
+        return f"{edited}{self.action}{at} {where}" + (f" via {chain}" if chain else "")
 
 
 def level_name(level: str) -> str:
@@ -129,9 +133,14 @@ class _Resolution:
         *,
         subject: str = "",
         severity: Severity = "error",
+        at: object = None,
     ) -> None:
+        """Report one finding located where *at* (a declaration, fragment or change) was written."""
+        location = display_location(declared_at(at))
         self.diagnostics.append(
-            Diagnostic(code, severity, message, subject=subject, variant=self.variant)
+            Diagnostic(
+                code, severity, message, subject=subject, variant=self.variant, location=location
+            )
         )
 
     def expand(self, fragment: Fragment) -> list[tuple[Declaration, tuple[FragmentRef, ...]]]:
@@ -168,6 +177,7 @@ class _Resolution:
                     "fragment-conflict",
                     f"two different fragments are named {fragment.name!r}",
                     subject=fragment.name,
+                    at=fragment,
                 )
             return
         self.fragments[fragment.name] = fragment
@@ -194,14 +204,17 @@ class _Resolution:
             key = identity(item)
             existing = self.items.get(key)
             if existing is None or existing == item:
-                self.record(key, Origin(action, level, path))
+                self.record(key, Origin(action, level, path, location=item.declared_at))
             if existing is None:
                 self.items[key] = item
             elif existing != item:
+                first = display_location(existing.declared_at)
                 self.report(
                     "identity-collision",
-                    f"{describe(key)} is declared twice with different values ({where})",
+                    f"{describe(key)} is declared twice with different values ({where})"
+                    + (f"; first declared at {first}" if first else ""),
                     subject=describe(key),
+                    at=item,
                 )
 
     def apply_changes(self, variant: Variant) -> None:
@@ -215,21 +228,27 @@ class _Resolution:
                     "edit-missing" if isinstance(change, Edit) else "remove-missing",
                     f"variant {variant.name!r} {verb} {change.target}, which it does not inherit",
                     subject=str(change.target),
+                    at=change,
                 )
             elif isinstance(change, Edit):
                 try:
-                    self.items[key] = replace(cast(Any, current), **change.fields)
+                    edited = replace(cast(Any, current), **change.fields)
                 except ValidationError as exc:
                     self.report(
                         "edit-invalid",
                         f"variant {variant.name!r} edits {change.target}: {exc.args[0]}",
                         subject=str(change.target),
+                        at=change,
                     )
                     continue
-                self.record(key, Origin("edited", variant.name, fields=tuple(change.fields)))
+                self.items[key] = located(edited, current.declared_at)
+                fields = tuple(change.fields)
+                self.record(
+                    key, Origin("edited", variant.name, fields=fields, location=change.declared_at)
+                )
             else:
                 del self.items[key]
-                self.record(key, Origin("removed", variant.name))
+                self.record(key, Origin("removed", variant.name, location=change.declared_at))
 
 
 def ancestry(recipe: Recipe, name: str) -> tuple[Variant, ...]:
@@ -276,6 +295,7 @@ def _check_targets(state: _Resolution, chain: Sequence[Variant]) -> None:
                 f"variant {variant.name!r} targets {', '.join(own)} but inherits the "
                 f"{', '.join(clouds)} platform integration of the variant it inherits",
                 subject=variant.name,
+                at=variant,
             )
         if own:
             inherited = own
@@ -409,6 +429,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                     f"{describe(identity(item))} references {ref}, which variant "
                     f"{state.variant!r} does not declare",
                     subject=item.ref.identity[-1],
+                    at=item,
                 )
 
     nodes = step_nodes(items)
@@ -422,11 +443,14 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                         f"boot step {step.name!r} runs {edge} {handle.step!r}, which this variant "
                         "does not declare",
                         subject=step.name,
+                        at=step,
                     )
     try:
         order_steps(nodes)
     except ValidationError as exc:
-        state.report("step-cycle", str(exc))
+        steps = (item for item in items if isinstance(item, BootStep))
+        culprit = next((step for step in steps if repr(step.name) in str(exc)), None)
+        state.report("step-cycle", str(exc), subject=culprit.name if culprit else "", at=culprit)
     for unit in (item for item in items if isinstance(item, (Unit, Service))):
         for handle in unit.needs:
             if handle.step != ALL_STEPS and handle.step not in step_names:
@@ -435,6 +459,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                     f"{type(unit).__name__.lower()} {unit.name!r} needs step {handle.step!r}, "
                     "which this variant does not declare",
                     subject=unit.name,
+                    at=unit,
                 )
 
     hooks = [item for item in items if isinstance(item, Hook)]
@@ -446,11 +471,13 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                     "hook-after-undefined",
                     f"hook {hook.name!r} runs after {dep!r}, which this variant does not declare",
                     subject=hook.name,
+                    at=hook,
                 )
     try:
         order_hooks(hooks)
     except ValidationError as exc:
-        state.report("hook-order", str(exc))
+        late = next((hook for hook in hooks if repr(hook.name) in str(exc)), None)
+        state.report("hook-order", str(exc), subject=late.name if late else "", at=late)
 
     if not nodes:
         for unit in (i for i in items if isinstance(i, Unit) and i.needs):
@@ -459,6 +486,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                 f"unit {unit.name!r} waits for runtime-init, but this variant declares no "
                 "runtime-init step",
                 subject=unit.name,
+                at=unit,
                 severity="warning",
             )
 
@@ -501,12 +529,49 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                     f"fragment {fragment.name!r} requires fragment {required!r}, which this "
                     "variant does not include",
                     subject=fragment.name,
+                    at=fragment,
                 )
         for check in fragment.checks:
-            for diagnostic in check(resolved):
+            for diagnostic in locate(check(resolved), items):
                 found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
                 state.diagnostics.append(found)
     return resolved, state
+
+
+def _subjects(items: Iterable[Declaration]) -> dict[str, list[Declaration]]:
+    """The located *items* by every name a diagnostic subject may give them."""
+    found: dict[str, list[Declaration]] = {}
+    for item in items:
+        if not item.declared_at:
+            continue
+        names = {describe(identity(item)), *item.ref.identity}
+        for attr in ("name", "path"):
+            if isinstance(value := getattr(item, attr, None), str):
+                names.add(value)
+        for name in names:
+            found.setdefault(name, []).append(item)
+    return found
+
+
+def locate(diagnostics: Iterable[Diagnostic], items: Sequence[Declaration]) -> list[Diagnostic]:
+    """*diagnostics*, each without a location pointed at the declaration of *items* its
+    subject names (the one whose type starts the code, ``service-…`` for a ``Service``)."""
+    subjects: dict[str, list[Declaration]] | None = None
+    out: list[Diagnostic] = []
+    for diagnostic in diagnostics:
+        if not diagnostic.location and diagnostic.subject:
+            subjects = _subjects(items) if subjects is None else subjects
+            candidates = subjects.get(diagnostic.subject, ())
+            prefix = diagnostic.code.split("-")[0]
+            item = next(
+                (c for c in candidates if type(c).__name__.lower() == prefix),
+                candidates[0] if candidates else None,
+            )
+            if item is not None:
+                location = display_location(item.declared_at)
+                diagnostic = replace(diagnostic, location=location)
+        out.append(diagnostic)
+    return out
 
 
 def provenance(recipe: Recipe, *, variant: str) -> dict[Identity, tuple[Origin, ...]]:
@@ -526,8 +591,9 @@ def resolve(recipe: Recipe, *, variant: str) -> Resolved:
     if errors:
         first = errors[0]
         more = f" (and {len(errors) - 1} more)" if len(errors) > 1 else ""
+        at = f" at {first.location}" if first.location else ""
         raise ValidationError(
-            f"variant {variant!r}: {first.code}: {first.message}{more}",
+            f"variant {variant!r}: {first.code}: {first.message}{at}{more}",
             hint="Run tundravm.declarative.lint(recipe) for every diagnostic.",
             context={"variant": variant, "codes": ", ".join(d.code for d in errors[:5])},
         )
@@ -563,6 +629,7 @@ __all__ = [
     "identity",
     "level_name",
     "lint",
+    "locate",
     "order_hooks",
     "order_boot_steps",
     "builtin_steps",

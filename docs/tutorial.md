@@ -184,7 +184,7 @@ To ask where one object comes from, name it with `--why`: an image path, or `uni
 $ tundravm inspect node.py --variant dev --why unit:app
 why unit:app (variant dev)
   Service(app.service)
-    declared in common via app (App)
+    declared at node.py:53 in common via app (App)
 files (in dev/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
@@ -195,7 +195,7 @@ generated:
 [exit 0]
 ```
 
-The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `BootStep`, and `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)) and the enablement into `minimal.target`. A declaration a variant adds, edits or removes lists that step too (`content edited in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
+The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added two things of its own: the ordering after `runtime-init.service` (the variant has a runtime-init step, `App`'s `BootStep`, and `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)) and the enablement into `minimal.target`. `node.py:53` is the line in `App.compose()` that constructs the `Service`: every declaration records where it was written, and `lint` points at the same lines. A declaration a variant adds, edits or removes lists that step too, with the line of the edit (`content edited at FILE:LINE in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
 
 ## 3. Lint
 
@@ -310,6 +310,13 @@ watching node.py every 1s (Ctrl-C stops)
 - Ctrl-C prints `stopped` and exits 0.
 
 `watch` polls `node.py` and every `.py` beside it, such as the `fragments.py` of step 14, the files the recipe reads, the lockfile, `pyproject.toml` and the tree, every second (`--interval` changes that), and re-imports the modules the recipe takes from its directory before each check. Its counts are `lint`'s, lockfile drift included, so a `tundravm lock` in another terminal clears them. `--write` recompiles a stale tree on each change instead of reporting it. See [CLI: Watch](cli.md#watch).
+
+To see the whole image rather than one line, run `tundravm preview` instead: it serves the [explore](cli.md#explore) page on localhost, re-renders it on the same changes `watch` polls for and the open page reloads itself, keeping the last good page under an error banner while the recipe does not load. See [CLI: Preview](cli.md#preview).
+
+```console
+$ tundravm preview node.py
+previewing node.py at http://127.0.0.1:8765/ (Ctrl-C stops)
+```
 
 ## 7. Change the recipe
 

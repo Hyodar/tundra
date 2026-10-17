@@ -87,7 +87,7 @@ def test_a_known_file_carries_its_declaration_and_provenance(tmp_path: Path) -> 
     )
     assert record["declarations"] == ["File(extra, /etc/app/app.conf)"]
     assert record["image_path"] == "/etc/app/app.conf"
-    assert "declared in common via app (App)" in page
+    assert re.search(r"declared at \S+/service\.py:\d+ in common via app \(App\)", page)
     anchor = re.search(r'<tr class="decl" id="(d\d+)"[^>]*File\(extra, /etc/app/app.conf\)', page)
     assert anchor is not None
     assert f'declared by <a href="#{anchor.group(1)}">' in page
@@ -212,7 +212,7 @@ def test_cli_writes_the_page_into_the_build_directory(
     code, out = run_main("explore", str(path), "--variant", "dev", "--format", "json")
     assert code == EXIT_OK
     data = json.loads(out)
-    assert data["schema"] == "tundravm.explore/4"
+    assert data["schema"] == "tundravm.explore/5"
     assert [v["name"] for v in data["variants"]] == ["dev"]
     assert data["bake"]["artifacts"][0]["sha256"] == digest
 

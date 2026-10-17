@@ -25,10 +25,12 @@ class Diagnostic:
 
     *subject* names what it is about (a path, unit, user, lockfile section;
     ``""`` for none). *variant* is the variant it is in, ``""`` for the recipe as a
-    whole (``Recipe.items``, the lockfile, the host). *location* is reserved for
-    the source position it points at, ``file:line`` (``""`` when unknown, which it is
-    for every built-in check: a declaration does not record where it was written);
-    ``lint --format github`` annotates that line. *hint* says what to do about it.
+    whole (``Recipe.items``, the lockfile, the host). *location* is the source line it
+    points at, ``file:line`` with the file relative to the working directory (absolute
+    outside it), ``""`` when unknown: built-in checks fill it from the declaration,
+    fragment or variant change at fault (``Located.declared_at``), and a fragment check's
+    finding without one gets its subject's declaration; lock, host and lockfile findings
+    have none. ``lint --format github`` annotates that line. *hint* says what to do about it.
     *context* holds extra ``(key, value)`` facts, sorted by key (a mapping is
     converted).
     """

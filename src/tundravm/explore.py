@@ -7,7 +7,7 @@ there is one), every declaration across the variants with its provenance, the
 compiled tree of each variant with each file's content and the declarations
 that produced it, and the hooks, runtime-init steps and source builds in the
 order they run. :meth:`Exploration.to_dict` is that model as JSON
-(``"schema": "tundravm.explore/4"``) and :meth:`Exploration.html` one
+(``"schema": "tundravm.explore/5"``) and :meth:`Exploration.html` one
 self-contained page: inline CSS and a small inline script (tabs, filters,
 cross-link jumps) that reads as a static page without it.
 """
@@ -24,6 +24,7 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+from ._location import display_location
 from ._modules.init import runtime_init_order
 from .compiler import PHASE_ORDER
 from .declarative._lowered import Lowered
@@ -52,7 +53,7 @@ from .errors import TdxError, ValidationError
 from .explain import _changed_fields, _emitted_for, _fragment_chain
 from .models import BAKE_RESULT_FILENAME
 
-EXPLORE_SCHEMA = "tundravm.explore/4"
+EXPLORE_SCHEMA = "tundravm.explore/5"
 EXPLORE_FORMATS = ("html", "json")
 PAGE_NAME = "explore.html"
 """``tundravm explore`` writes ``BUILD/explore.html`` unless ``--output`` says otherwise."""
@@ -425,6 +426,7 @@ def _origin(origin: Origin) -> dict[str, str]:
         "level": origin.variant,
         "via": _fragment_chain(origin),
         "fields": ", ".join(origin.fields),
+        "location": display_location(origin.location),
     }
 
 
@@ -793,7 +795,8 @@ def _origin_text(origin: Mapping[str, Any]) -> str:
     where = level_name(level)
     via = f" via {origin['via']}" if origin["via"] else ""
     edited = f"{origin['fields']} " if origin.get("fields") else ""
-    return f"{edited}{origin['action']} {where}{via}"
+    at = f" at {origin['location']}" if origin.get("location") else ""
+    return f"{edited}{origin['action']}{at} {where}{via}"
 
 
 class _Anchors:

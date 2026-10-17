@@ -199,6 +199,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `doctor [RECIPE]` | Probe the host tools a backend needs; with a recipe, lint it too |
 | `ci RECIPE` | `lint --strict`, `compile --check` and `lock --check`; stop at the first failure |
 | `watch [RECIPE]` | Lint the recipe and compare it with its committed tree (`--tree`, else `[tool.tundravm]` `tree`, else `BUILD/mkosi`) at start and whenever the recipe or a `.py` beside it changes, one line per check; never writes unless `--write`; `--interval SECONDS`; Ctrl-C exits 0 |
+| `preview [RECIPE]` | Serve the `explore` page on `127.0.0.1:8765` (`--host`, `--port`, `--open`) and re-render it whenever the recipe or anything `watch` polls changes; the page reloads itself and shows an error banner over the last good rendering while the recipe does not load; a non-loopback `--host` needs `--allow-remote`; Ctrl-C exits 0 |
 | `import TREE` | Generate a recipe module from an existing mkosi tree; prints coverage, notes and whether it compiles back (`--output FILE`, `--name`, `--dialect`) |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
 | `clean [RECIPE]` | Remove output of the build directory (`--build DIR`) by part (`--what sources,tree,artifacts,evidence,state,reproduce` or `--what all`); without `--what` it lists what `all` would remove |

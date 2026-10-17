@@ -28,6 +28,7 @@ tundravm release [RECIPE] --version VERSION [--variant NAME]... [--sign KEY | --
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--tree DIR] [--lockfile PATH] [--format auto|text|github]
 tundravm watch   RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--interval SECONDS] [--write]
+tundravm preview [RECIPE] [--variant NAME]... [--build DIR] [--lockfile PATH] [--host ADDR] [--port N] [--allow-remote] [--open] [--interval SECONDS]
 tundravm status  RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--verify] [--releases DIR] [--format text|json|markdown]
 tundravm clean   [RECIPE] [--build DIR] [--what sources,tree,artifacts,evidence,state,reproduce|all] [--remove-lockfile PATH] [--dry-run]
 tundravm config  [RECIPE] [--build DIR] [--tree DIR] [--lockfile PATH] [--backend KIND] [--format text|json]
@@ -92,6 +93,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `doctor` | Python and tundravm versions, the backend's host tools (for `local` also the optional `ukify`, `systemd-repart`, `apt` and `pefile`, probed under the Python that runs mkosi, and with a `RECIPE` that has `azure` or `gcp` variants the optional `qemu-img` or `sgdisk` their disk conversion needs on the host; see [Local backend](#local-backend)), the optional measurement tools; with `RECIPE`, its lint summary. | a required tool is missing |
 | `ci` | `lint --strict`, `compile --check` (against `--tree`) and `lock --check` in order; stops at the first failure. The one `--lockfile` (default `build/tundravm.lock`) is loaded once and shared: lint and the tree check apply its pins, the lock check compares against it. | any step fails, including a missing lockfile |
 | `watch` | Polls the recipe file and every `.py` under its directory; on each change re-runs lint and the tree check against `--tree` (default: the table's `tree`, else `BUILD/mkosi`, with `--build` default `build`), or recompiles it with `--write`, printing one line (see [Watch](#watch)). | never (Ctrl-C exits 0) |
+| `preview` | Serves the `explore` page from memory at `http://127.0.0.1:8765/` (`--host`, `--port`; a non-loopback `--host` needs `--allow-remote`; `--open` opens a browser) and re-renders it whenever anything `watch` polls changes; the page reloads itself, and a recipe that fails to load keeps the last good page under an error banner (see [Preview](#preview)). | never (Ctrl-C exits 0) |
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
 | `clean` | Removes the parts `--what LIST` names of the build directory (`--build`, default: the table's `build`, else `build`): `sources`, `tree`, `artifacts`, `evidence`, `state`, `reproduce`, or `all`; the lockfile only when `--remove-lockfile` names it; never a release directory. Without `--what` it lists what `--what all` would remove (see [Project status](#project-status)). | a path could not be removed, or a part held a release |
 | `config` | Prints the `recipe`, `tree`, `build`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
@@ -118,7 +120,7 @@ Every command reads the table, and every command that takes `RECIPE` then runs w
 - The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`. The keys are `recipe`, `tree`, `build`, `lockfile` and `backend`, plus `require`, a list of `evidence --require` checks (`require = ["reproducible", "lock", "measured"]`; a non-list or an unknown check is `E_VALIDATION`): the one requirement set. [`status`](#project-status) judges release readiness against it, and [`evidence`](#evidence) and [`release`](#release) require it when `--require` is omitted (a resumed release keeps the set it started with). Without the key the set is `reproducible, lock`; `--require ''` requires none; a table that still has `out`, the old name of `build`, fails with `E_VALIDATION` (`[tool.tundravm] key(s) out in PATH were renamed.`, hint `Rename out to build (e.g. build = "build").`).
 - Precedence per value: an explicit argument or flag, then the table, then the built-in default (`build/mkosi`, `build`, `build/tundravm.lock`, the recipe file's `backend`). For `measure`, `deploy` and `sbom` the default build directory is `build` beside the `pyproject.toml` when a table is found without a `build`, else `./build`.
 - For the commands that take `RECIPE`, the table's paths apply when `RECIPE` is omitted or names the table's recipe; another explicit `RECIPE` uses the built-in defaults.
-- `tree` is `--tree` of `compile`, `diff`, `ci`, `status` and `watch` (the tree they write, compare or check); `build` is `--build` of `fetch`, `bake`, `measure`, `deploy`, `sbom`, `evidence`, `release`, `status`, `watch` and `clean`; `lockfile` is `--lockfile` everywhere it is taken, drift diagnostics of `lint` included (`clean --remove-lockfile` names a lockfile to delete, never resolved); `backend` is `bake --backend`, `release --backend` and `doctor --backend`, and `bake` and `release` keep the recipe file's own backend instance when it is of that kind.
+- `tree` is `--tree` of `compile`, `diff`, `ci`, `status` and `watch` (the tree they write, compare or check); `build` is `--build` of `fetch`, `bake`, `measure`, `deploy`, `sbom`, `evidence`, `release`, `status`, `watch`, `explore`, `preview` and `clean`; `lockfile` is `--lockfile` everywhere it is taken, drift diagnostics of `lint` included (`clean --remove-lockfile` names a lockfile to delete, never resolved); `backend` is `bake --backend`, `release --backend` and `doctor --backend`, and `bake` and `release` keep the recipe file's own backend instance when it is of that kind.
 - A configured `lockfile` stays selected before the file exists and is never replaced by `build/tundravm.lock`. Until `tundravm lock` writes it, `inspect`, `lint`, `compile`, `diff` and `fetch` print `` note: configured lockfile PATH does not exist; run `tundravm lock` to create it `` on stderr and run without pins, `status` reports `configured lockfile PATH does not exist; run tundravm lock` on its `lock` line, and `bake` fails with `E_LOCKFILE` instead of baking unfrozen.
 - Without `RECIPE` and without a table, a recipe command exits 2 with `the following arguments are required: recipe (no pyproject.toml with a [tool.tundravm] table ...)`; `doctor`, `clean` and `config` keep working without one.
 
@@ -399,15 +401,15 @@ A module-level `backend` holding a backend instance (`LimaMkosiBackend(...)`, `N
 
 | Format | Shape |
 |---|---|
-| `text` | One line per finding (`error disk-key-undefined [default] data: ...`; `[common]` for an empty variant, as in `github`; an `at: file:line` line under a finding that has a source location) and a summary line |
-| `json` | `{"schema": "tundravm.lint/2", "diagnostics": [...], "summary": {...}}` (`lint`; each diagnostic has `code`, `severity`, `message`, `subject`, `variant`, `location`, `hint` and `context`: `variant` is the variant, `""` for the recipe as a whole, `location` the source position (`file:line`; `""` for every built-in check), `hint` is `null` when there is none, `context` an object of strings); `{"schema": "tundravm.inspect/3", "digest": ..., "variants": {NAME: {...}}}` (`inspect`) |
-| `github` | `::error file=...,title=...::message` workflow commands that annotate the pull request |
+| `text` | One line per finding (`error disk-key-undefined [default] data: ...`; `[common]` for an empty variant, as in `github`; an `at: file:line` line under a finding that has a source location, the recipe line of the declaration, fragment or variant change at fault: `    at: app.py:3`) and a summary line |
+| `json` | `{"schema": "tundravm.lint/2", "diagnostics": [...], "summary": {...}}` (`lint`; each diagnostic has `code`, `severity`, `message`, `subject`, `variant`, `location`, `hint` and `context`: `variant` is the variant, `""` for the recipe as a whole, `location` the recipe line the finding points at (`file:line`, relative to the working directory; `""` for lock, lockfile and host findings), `hint` is `null` when there is none, `context` an object of strings); `{"schema": "tundravm.inspect/4", "digest": ..., "variants": {NAME: {...}}}` (`inspect`) |
+| `github` | `::error file=...,line=...,title=...::message` workflow commands that annotate the pull request: a finding with a location annotates that recipe line (`::error file=app.py,line=3,title=service-user-missing::...`), one without annotates the recipe file |
 | `markdown` | Tables, ready for `$GITHUB_STEP_SUMMARY` or a PR comment (`lint`: `\| Severity \| Code \| Location \| Subject \| Message \| Hint \|`) |
 | `stat` | Changed files only (`diff`) |
 
 `inspect` takes `text`, `json` or `markdown` (no `auto`).
 
-Every `--format json` report carries a top-level `"schema": "tundravm.<verb>/N"` key that names its shape and version: `inspect` (also `--why` and `--diff-variants`), `status`, `config`, `attest`, `import` and `measure` at 1, `lint` at 2 (each diagnostic's `variant` beside its source `location`), `evidence` at 3 (`evidence.json` verbatim, with its attestations), `changes` at 2 and `explore` at 2. `sbom` writes its native SPDX or CycloneDX document unchanged. Under every machine-readable format (`--format json`, and `sbom`'s `spdx-json` and `cyclonedx-json`, its default included) an SDK error is one `tundravm.error/1` JSON line on stderr; under the others it is a text block.
+Every `--format json` report carries a top-level `"schema": "tundravm.<verb>/N"` key that names its shape and version: `inspect` (also `--why` and `--diff-variants`) at 4 (its origins carry `fields` and the `location` that declared, edited or removed them), `status`, `config`, `attest`, `import` and `measure` at 1, `lint` at 2 (each diagnostic's `variant` beside its source `location`), `evidence` at 3 (`evidence.json` verbatim, with its attestations), `changes` at 2 and `explore` at 5 (its origins carry their `location`). `sbom` writes its native SPDX or CycloneDX document unchanged. Under every machine-readable format (`--format json`, and `sbom`'s `spdx-json` and `cyclonedx-json`, its default included) an SDK error is one `tundravm.error/1` JSON line on stderr; under the others it is a text block.
 
 When an SDK error (an `E_*` code) ends a command run with a machine-readable format (`--format json`, `sbom --format spdx-json` or `cyclonedx-json`), stderr gets exactly one JSON line instead of the `error [E_...]: ...` block, and the exit code is 2:
 
@@ -456,17 +458,17 @@ Outputs: `qemu` → `azure`
 | changed | `File(extra, /etc/motd)` | content |
 ```
 
-`--format json` prints `{"schema": "tundravm.inspect/3", "a", "b", "outputs": {A: [...], B: [...]}, "added": [...], "removed": [...], "changed": [{"declaration", "fields"}]}`. A `~` line names the fields that differ.
+`--format json` prints `{"schema": "tundravm.inspect/4", "a", "b", "outputs": {A: [...], B: [...]}, "added": [...], "removed": [...], "changed": [{"declaration", "fields"}]}`. A `~` line names the fields that differ.
 
 ### Explaining one object
 
-`inspect RECIPE --variant NAME --why SUBJECT` explains one object of one variant. `SUBJECT` is an absolute image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME` (a bare name is tried as each). It prints the declarations that produce it (type and natural key), each with its resolution steps: `declared in common`, `added in variant X`, `size edited in variant Y` (an edit names the fields it set), `removed in variant Z`, with the fragment chain it came through (a Composite shows its class, `tdxs (Tdxs)`). Then the compiled-tree files that hold it, relative to the variant's directory, and the lines the compiler generated for it: `After=`/`Requires=` on the runtime-init units its `needs=` names, `systemctl enable` and `minimal.target.wants` links, drop-ins. The variant is compiled into a scratch directory; only temporary compilation files are written (under the system temp dir). An unknown subject is `E_VALIDATION` with close matches. For a recipe whose `prod` variant extends `dev` and edits `/etc/app.conf`'s content:
+`inspect RECIPE --variant NAME --why SUBJECT` explains one object of one variant. `SUBJECT` is an absolute image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME` (a bare name is tried as each). It prints the declarations that produce it (type and natural key), each with its resolution steps: `declared at FILE:LINE in common`, `added at FILE:LINE in variant X`, `size edited at FILE:LINE in variant Y` (an edit names the fields it set and the line of the edit), `removed at FILE:LINE in variant Z` (the line is where the declaration, edit or removal is written, relative to the working directory), with the fragment chain it came through (a Composite shows its class, `tdxs (Tdxs)`). Then the compiled-tree files that hold it, relative to the variant's directory, and the lines the compiler generated for it: `After=`/`Requires=` on the runtime-init units its `needs=` names, `systemctl enable` and `minimal.target.wants` links, drop-ins. The variant is compiled into a scratch directory; only temporary compilation files are written (under the system temp dir). An unknown subject is `E_VALIDATION` with close matches. For a recipe whose `prod` variant extends `dev` and edits `/etc/app.conf`'s content:
 
 ```console
 $ tundravm inspect two.py --variant prod --why /usr/lib/systemd/system/app.service
 why /usr/lib/systemd/system/app.service (variant prod)
   Service(app.service)
-    declared in common via app
+    declared at two.py:9 in common via app
 files (in prod/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
@@ -477,13 +479,13 @@ generated:
 $ tundravm inspect two.py --variant prod --why /etc/app.conf
 why /etc/app.conf (variant prod)
   File(extra, /etc/app.conf)
-    declared in common via app
-    content edited in variant prod
+    declared at two.py:8 in common via app
+    content edited at two.py:23 in variant prod
 files (in prod/):
   mkosi.extra/etc/app.conf
 ```
 
-`--format json` prints `{"schema": "tundravm.inspect/3", "variant", "subject", "declarations": [{"declaration", "type", "key", "present", "origins": [{"action", "variant", "fragments": [{"name", "class"}], "fields"}]}], "fragments", "files", "generated"}`; `--format markdown` a table of declarations and steps. A removed declaration is listed with `present: false` and no files. The Python form is `tundravm.explain_why(recipe, variant, subject)`.
+`--format json` prints `{"schema": "tundravm.inspect/4", "variant", "subject", "declarations": [{"declaration", "type", "key", "present", "origins": [{"action", "variant", "fragments": [{"name", "class"}], "fields", "location"}]}], "fragments", "files", "generated"}` (`location` is `file:line`, `""` when unknown); `--format markdown` a table of declarations and steps with a `Location` column. A removed declaration is listed with `present: false` and no files. The Python form is `tundravm.explain_why(recipe, variant, subject)`.
 
 ## Lint
 
@@ -497,7 +499,24 @@ error kernel-missing [default]: variant builds a bootable UKI but installs no ke
 [exit 1]
 ```
 
-`bake` lints first, so this stops it with `E_LINT` before the backend runs mkosi. See [Concepts: Bootable images](concepts.md#bootable-images) for the three fixes; the [API reference](api.md#lint-rules) lists every code.
+A finding about a declaration, fragment or variant change also names the recipe line that wrote it, relative to the working directory (every declaration records where it was constructed: the first caller outside tundravm, so a module's declarations point at the line that uses the module). For an `app.py` whose line 3 is `app = Service("app", "/usr/bin/app", user="ghost")` and that declares no `User("ghost")`:
+
+```console
+$ tundravm lint app.py
+error service-user-missing [default] app: service 'app' runs as user 'ghost', which is never created
+    at: app.py:3
+    hint: Declare User('ghost') in variant 'default', or drop user= to run as root.
+1 error, 0 warnings, 0 infos
+[exit 1]
+$ tundravm lint app.py --format github
+::error file=app.py,line=3,title=service-user-missing::[default] app: service 'app' runs as user 'ghost', which is never created (Declare User('ghost') in variant 'default', or drop user= to run as root.)
+1 error, 0 warnings, 0 infos
+[exit 1]
+```
+
+A variant change points at its own line (`remove-missing`, `edit-missing`, `edit-invalid`), a collision at the second declaration (its message names the first one's line), `step-cycle` at a step in the cycle. `resolve()` and every command that resolves append the line to the error: `variant 'dev': remove-missing: variant 'dev' removes Unit(gone.service), which it does not inherit at recipe.py:13`. Findings about the lockfile, the lock or the host carry no line.
+
+`bake` lints first, so an error such as `kernel-missing` stops it with `E_LINT` before the backend runs mkosi. See [Concepts: Bootable images](concepts.md#bootable-images) for the three fixes; the [API reference](api.md#lint-rules) lists every code.
 
 ## Lockfile drift
 
@@ -1275,13 +1294,13 @@ unknown: default measurements: the evidence holds no valid measurements policy
 | Tab | Shows |
 |---|---|
 | Overview | The recipe's name, base, arch, snapshot, mirror, dialect, layout and recipe digest; the lint summary with every finding (severity, code, variant, location, subject, message, hint), as `lint` reports them with the lockfile's pins applied; the lockfile's state (`current`, `drifted` with one line per drifted section, or `missing`), its recipe digest, compiler version, section digests and source pins (`--lockfile`, default `build/tundravm.lock` when it exists); and, when `--build` holds a bake, its backend, the simulated flag, the reproducibility state `bake --verify-reproducible` recorded and every artifact with its sha256 |
-| Variants | What each variant inherits, its outputs, declaration count and resolved fragments, then a matrix with one row per declaration and one column per variant: `●` present (from `common`), `+` added by a variant overlay (its own or an ancestor's), `~` edited (with the fields that differ from the first variant that has it), `−` removed, `·` absent. Expanding a declaration shows its key fields, and per variant the resolution steps (`declared in common via app`, `content edited in variant prod`), the tree files it produced and the lines the compiler generated for it (enablement links, runtime-init ordering) |
+| Variants | What each variant inherits, its outputs, declaration count and resolved fragments, then a matrix with one row per declaration and one column per variant: `●` present (from `common`), `+` added by a variant overlay (its own or an ancestor's), `~` edited (with the fields that differ from the first variant that has it), `−` removed, `·` absent. Expanding a declaration shows its key fields, and per variant the resolution steps with the recipe line of each (`declared at two.py:8 in common via app`, `content edited at two.py:23 in variant prod`), the tree files it produced and the lines the compiler generated for it (enablement links, runtime-init ordering) |
 | Emitted tree | Per variant, every path of its compiled tree grouped by directory, with its mode, size and sha256 prefix and the declarations that produced it (`declared by File(extra, /etc/app.conf)`, as `inspect --why` finds them; a compiler-generated file says so). Each file expands to its content: text up to 64 KiB (a longer file is truncated with a note; the page shows at most 4 MiB of content in all), a binary file is noted, not shown |
 | Hooks & builds | Per variant, the build hooks in stage order (`sync` to `boot`) with their scripts, each named after its `Hook` declaration or marked as generated; the runtime-init steps in the order they run (the topological order of their `after`/`before` edges), each badged with its step name and named after its `BootStep` or marked as the built-in `keys`, `disks` or `secrets`; the source builds with their URL, ref, pin (`unpinned` without one) and install destinations; the kernel and its source |
 
 A declaration's name links to the files it produced and each file's "declared by" links back to the declaration; following a link switches to its tab, opens the collapsed entry and highlights it. The Variants tab has a filter box and an "only declarations that differ" switch; the Emitted tree tab has a path filter. Without JavaScript the tabs read as one long page, entries expand as native `<details>` and the links still jump.
 
-`--format json` prints the model the page renders from instead (to `FILE` with `--output`): `{"schema": "tundravm.explore/4", "recipe", "lint", "lock", "bake", "variants": [{"name", "inherits", "outputs", "fragments", "declarations"}], "declarations": [{"declaration", "type", "key", "fields", "variants": {NAME: {"state", "origins", "changed", "files", "generated"}}}], "trees": {NAME: {"files": [{"path", "image_path", "type", "mode", "size", "sha256", "binary", "truncated", "text", "declarations"}]}}, "scripts": {NAME: {"hooks", "init", "sources", "kernel"}}, "notes"}`. `Exploration.from_dict(data).html()` renders it again.
+`--format json` prints the model the page renders from instead (to `FILE` with `--output`): `{"schema": "tundravm.explore/5", "recipe", "lint", "lock", "bake", "variants": [{"name", "inherits", "outputs", "fragments", "declarations"}], "declarations": [{"declaration", "type", "key", "fields", "variants": {NAME: {"state", "origins", "changed", "files", "generated"}}}], "trees": {NAME: {"files": [{"path", "image_path", "type", "mode", "size", "sha256", "binary", "truncated", "text", "declarations"}]}}, "scripts": {NAME: {"hooks", "init", "sources", "kernel"}}, "notes"}`. `Exploration.from_dict(data).html()` renders it again.
 
 ## Release
 
@@ -1518,6 +1537,20 @@ watching node.py every 1s (Ctrl-C stops)
 14:03:05 error [E_VALIDATION] Recipe node.py failed to load: syntax error at node.py:96: invalid syntax
 14:03:12 lint 0 errors 0 warnings; tree stale (1 file)
 ^Cstopped
+```
+
+## Preview
+
+`tundravm preview [RECIPE] [--variant NAME ...] [--lockfile PATH] [--build DIR] [--host 127.0.0.1] [--port 8765] [--open]` is the [explore](#explore) page as a live view while you edit. It renders the page in memory (nothing is written), serves it at `/` on `--host`:`--port` (`--port 0` picks a free port) and prints the URL; `--open` also opens it in the default browser. It polls what [`watch`](#watch) polls (the recipe, the `.py` files under its directory, the host files its declarations read, `pyproject.toml` and the lockfile) plus `BUILD/bake-result.json`, every `--interval SECONDS` (default `1`), and on a change loads the recipe again (sibling modules re-imported) and re-renders the page. `/version` answers a number that moves only when the page does; a small inline script on the page polls it every second and reloads, so the browser follows the editor.
+
+A recipe that fails to load (a syntax or import error, an unknown `--variant`) keeps the last good page under a red banner with the error's message, its `file:line` when the error names one, and its hint; before any page has rendered, the banner stands alone. Lint errors show the same banner, one entry per error with its code, location and hint, above the fresh page. Each rendering prints one line, `HH:MM:SS vN lint N errors N warnings` or `HH:MM:SS vN error [E_CODE] message`, where `vN` is the page's version.
+
+The page shows the recipe's contents, file contents included, so the server binds to `127.0.0.1` by default and refuses a non-loopback `--host` (an `E_VALIDATION` error) unless `--allow-remote` is given, which prints a warning on stderr. It uses only the standard library's `http.server`. Ctrl-C stops it with exit 0.
+
+```console
+$ tundravm preview node.py
+previewing node.py at http://127.0.0.1:8765/ (Ctrl-C stops)
+14:02:11 v1 lint 0 errors 0 warnings
 ```
 
 ## Project status

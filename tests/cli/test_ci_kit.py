@@ -351,7 +351,8 @@ def test_lint_github_lines_parse(recipe: Path) -> None:
     assert len(found) == 1
     level, props, message = found[0]
     assert level == "error"
-    assert props == {"file": "recipe.py", "title": "service-user-missing"}  # relative to CWD
+    line = str(len(recipe.read_text().splitlines()))  # GHOST's line, relative to CWD
+    assert props == {"file": "recipe.py", "line": line, "title": "service-user-missing"}
     assert message.startswith("[default] w: ") and "(Declare" in message
     assert out.rstrip().endswith("1 error, 0 warnings, 0 infos")
 
@@ -378,8 +379,9 @@ def test_lint_markdown_table(recipe: Path) -> None:
     recipe.write_text(recipe.read_text() + GHOST)
     code, out = run_main("lint", str(recipe), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
-    assert out.startswith("| Severity | Code | Variant | Subject | Message | Hint |\n|---|")
-    assert "| error | `service-user-missing` | `default` | `w` |" in out
+    header = "| Severity | Code | Variant | Location | Subject | Message | Hint |\n|---|"
+    assert out.startswith(header)
+    assert "| error | `service-user-missing` | `default` | `recipe.py:" in out
     assert "**1 error, 0 warnings, 0 infos**" in out
 
 

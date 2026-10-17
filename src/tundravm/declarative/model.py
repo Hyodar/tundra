@@ -18,6 +18,7 @@ from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import ClassVar, Literal, get_args, overload
 
+from tundravm._location import Located, anchored
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
 from tundravm._source import FrozenMap
@@ -157,7 +158,7 @@ def _require_items(owner: Fragment | Recipe | Platform, items: tuple[object, ...
 
 
 @dataclass(frozen=True, slots=True)
-class Fragment:
+class Fragment(Located):
     """A named group of declarations and nested fragments (what a module returns)."""
 
     name: str
@@ -179,7 +180,7 @@ EMPTY_FRAGMENT = Fragment("empty")
 
 
 @dataclass(frozen=True, slots=True)
-class Variant:
+class Variant(Located):
     """An overlay on the variant it ``inherits``: ``"base"`` is ``Recipe.items``, ``None`` is
     standalone. ``outputs`` names the targets it builds (empty: inherited, ``qemu`` at the root).
 
@@ -287,7 +288,7 @@ and the UKI's EFI stub (``systemd-boot-efi``).
 
 
 @dataclass(frozen=True, slots=True)
-class Platform:
+class Platform(Located):
     """What a recipe builds on: a distribution *release*, its archive and its boot set.
 
     ``mirror`` and ``tools_mirror`` are mirror roots that mkosi completes itself
@@ -349,8 +350,11 @@ class Platform:
         return ()
 
     def contribution(self) -> tuple[Declaration | Fragment, ...]:
-        """What the platform declares in every variant: :attr:`packages`, then ``items``."""
-        return (*(Package(name) for name in self.packages), *self.items)
+        """What the platform declares in every variant: :attr:`packages` (located where the
+        platform was written), then ``items``."""
+        with anchored(self.declared_at):
+            packages = tuple(Package(name) for name in self.packages)
+        return (*packages, *self.items)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -413,9 +417,11 @@ class Debian(Platform):
         from .utils import EfiStub
 
         stub: tuple[Fragment, ...] = ()
-        if self.efi_stub is not None and self.efi_archive is not None:
-            stub = (EfiStub(snapshot=self.efi_archive, version=self.efi_stub),)
-        return (*(Package(name) for name in self.packages), *stub, *self.items)
+        with anchored(self.declared_at):
+            if self.efi_stub is not None and self.efi_archive is not None:
+                stub = (EfiStub(snapshot=self.efi_archive, version=self.efi_stub),)
+            packages = tuple(Package(name) for name in self.packages)
+        return (*packages, *stub, *self.items)
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,7 +547,7 @@ class Ref:
 
 
 @dataclass(frozen=True, slots=True)
-class Edit:
+class Edit(Located):
     """Set ``fields`` of the inherited declaration ``target``: ``key.ref.edit(size=32)``.
 
     Fields must exist on the target's type and may not be identity fields.
@@ -576,7 +582,7 @@ class Edit:
 
 
 @dataclass(frozen=True, slots=True)
-class Remove:
+class Remove(Located):
     """Drop the inherited declaration ``target``: ``Unit.ref("ssh.service").remove()``."""
 
     target: Ref
@@ -634,7 +640,7 @@ class _RefAccessor:
         return Ref(kind, tuple(_key_part(kind, k, getattr(obj, k)) for k in key_fields(kind)))
 
 
-class Declared:
+class Declared(Located):
     """Base of the declaration types: each value has a :class:`Ref` (``value.ref``)."""
 
     __slots__ = ()

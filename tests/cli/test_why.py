@@ -57,8 +57,8 @@ def test_why_an_edited_file_shows_both_steps_and_its_destination(recipe: Path) -
     assert out.splitlines() == [
         "why /etc/app.conf (variant prod)",
         "  File(extra, /etc/app.conf)",
-        "    declared in common via app",
-        "    content edited in variant prod",
+        "    declared at recipe.py:9 in common via app",
+        "    content edited at recipe.py:24 in variant prod",
         "files (in prod/):",
         "  mkosi.extra/etc/app.conf",
     ]
@@ -70,7 +70,7 @@ def test_why_a_service_lists_the_generated_dependencies(recipe: Path) -> None:
     subject = "/usr/lib/systemd/system/app.service"
     code, out = run_main("inspect", str(recipe), "--variant", "prod", "--why", subject)
     assert code == EXIT_OK
-    assert "  Service(app.service)\n    declared in common via app\n" in out
+    assert "  Service(app.service)\n    declared at recipe.py:10 in common via app\n" in out
     assert "  mkosi.extra/usr/lib/systemd/system/app.service\n" in out
     generated = out.split("generated:\n", 1)[1].splitlines()
     assert "  After=runtime-init.service (needs RUNTIME_INIT)" in generated
@@ -83,7 +83,7 @@ def test_why_a_service_lists_the_generated_dependencies(recipe: Path) -> None:
 
 def test_why_names_the_composite_class_in_the_fragment_chain(recipe: Path) -> None:
     out = run_main("inspect", str(recipe), "--variant", "prod", "--why", "/etc/tdxs/config.yaml")[1]
-    assert "    added in variant prod via tdxs (Tdxs)\n" in out
+    assert "    added at recipe.py:22 in variant prod via tdxs (Tdxs)\n" in out
     assert "  mkosi.extra/etc/tdxs/config.yaml\n" in out
 
 
@@ -157,8 +157,8 @@ def test_explain_why_is_the_python_form(recipe: Path) -> None:
     assert why.files == ("mkosi.extra/etc/app.conf",)
     (entry,) = why.declarations
     assert entry.origins == (
-        Origin("declared", "common", (("app", "Fragment"),)),
-        Origin("edited", "prod", fields=("content",)),
+        Origin("declared", "common", (("app", "Fragment"),), location=f"{recipe}:9"),
+        Origin("edited", "prod", fields=("content",), location=f"{recipe}:24"),
     )
     with pytest.raises(ValidationError, match="Nothing in the variant matches"):
         explain_why(loaded, "prod", "hook:missing")
@@ -166,8 +166,10 @@ def test_explain_why_is_the_python_form(recipe: Path) -> None:
 
 def test_provenance_records_every_step(recipe: Path) -> None:
     trace = provenance(load_recipe(recipe), variant="prod")
-    assert trace[("Package", "curl", "runtime")][-1] == Origin("removed", "prod")
-    assert trace[("Package", "systemd", "runtime")] == (Origin("declared", "common", ()),)
+    removed = Origin("removed", "prod", location=f"{recipe}:25")
+    assert trace[("Package", "curl", "runtime")][-1] == removed
+    declared = Origin("declared", "common", (), location=f"{recipe}:16")
+    assert trace[("Package", "systemd", "runtime")] == (declared,)
     assert trace[("Unit", "tdxs.service")][0].fragments == (("tdxs", "Tdxs"),)
 
 

@@ -84,6 +84,7 @@ from ._lowered import LOCK_FILENAME, Lowered
 from .lower import lower
 from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
 from .resolve import lint as _resolution_lint
+from .resolve import locate, resolve
 
 Scheme = Literal["rtmr", "azure", "gcp"]
 BackendKind = Literal["lima", "nix", "local", "inprocess"]
@@ -565,12 +566,26 @@ def check_report(
         elif lock is not None:
             img = replace(img, lock_file=Path(lock))
         checked = _check.check(img, profiles=profiles)
+    if recipe is not None:
+        checked = _located(recipe, checked)
     checked = sorted(checked, key=lambda d: (d.variant, _SEVERITY[d.severity], d.code, d.subject))
     found.extend(d for d in checked if d not in found)
     return found
 
 
 _SEVERITY = {"error": 0, "warning": 1, "info": 2}
+
+
+def _located(recipe: Recipe, diagnostics: Sequence[Diagnostic]) -> list[Diagnostic]:
+    """*diagnostics* pointed at the declarations their subjects name in their variants."""
+    declared = {v.name for v in recipe.variants}
+    out: list[Diagnostic] = []
+    for name in dict.fromkeys(d.variant for d in diagnostics):
+        group = [d for d in diagnostics if d.variant == name]
+        if name in declared and any(not d.location and d.subject for d in group):
+            group = locate(group, resolve(recipe, variant=name).items)
+        out.extend(group)
+    return out
 
 
 def lint(

@@ -9,7 +9,8 @@ build directory holding ``bake-result.json`` (``measure``, ``deploy``, ``sbom``
 and ``evidence`` read the artifacts a ``bake`` recorded there) and ``--output
 FILE`` a document written. ``init`` bootstraps a recipe project and ``ci``
 runs lint, compile and lock checks in one go; ``watch`` re-runs lint and the
-tree check whenever the recipe changes; ``status`` reports where the project
+tree check whenever the recipe changes; ``preview`` serves the ``explore`` page
+and reloads it as the recipe changes; ``status`` reports where the project
 stands and ``clean`` removes build output; ``completion`` prints a shell
 completion script. With no arguments the help and a quickstart are printed.
 Every ``--format json`` report carries ``"schema": "tundravm.<verb>/N"``.
@@ -27,6 +28,7 @@ exception while it runs) is an ``E_VALIDATION`` error naming ``file:line``;
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import json
 import os
@@ -35,6 +37,7 @@ import re
 import sys
 import traceback
 import warnings
+import webbrowser
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, replace
 from pathlib import Path
@@ -123,7 +126,7 @@ from .explain import (
     render_why,
     render_why_markdown,
 )
-from .explore import EXPLORE_FORMATS, PAGE_NAME, explore
+from .explore import EXPLORE_FORMATS, PAGE_NAME, Exploration, explore
 from .formats import (
     annotation_path,
     format_help,
@@ -138,6 +141,7 @@ from .measure import rtmr as rtmr_measure
 from .measure.policy import write_policy
 from .models import BAKE_RESULT_FILENAME
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
+from .preview import Preview, is_loopback, serve, url_of
 from .project import (
     DEFAULTS,
     PATH_KEYS,
@@ -210,7 +214,7 @@ def main(
     """Run the CLI and return an exit code (never raises for SDK errors).
 
     *runner* replaces the host-tool probe ``doctor`` and ``init`` run (tests);
-    *ticks* bounds ``watch``'s polling loop to one poll per item (tests).
+    *ticks* bounds ``watch``'s and ``preview``'s polling loop to one poll per item (tests).
     Usage errors exit 2 through argparse's ``SystemExit``.
     """
     out = stdout if stdout is not None else sys.stdout
@@ -240,11 +244,12 @@ def main(
         return 130
 
 
-REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 3}
+REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 4}
 """Verbs whose ``--format json`` report moved past version 1: lint's diagnostics carry
 ``variant`` beside ``location``; config's ``values`` hold ``require``, a list; inspect
 names what a variant ``inherits`` and a variant diff's ``outputs``, and its origins carry
-``fields`` with the action ``edited`` (no longer ``replaced``)."""
+``fields`` with the action ``edited`` (no longer ``replaced``) and the ``location``
+(``file:line``) that declared, edited or removed it."""
 
 
 def schema(verb: str) -> str:
@@ -758,6 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     _add_watch(sub)
+    _add_preview(sub)
     _add_status(sub)
     _add_clean(sub)
     _add_config(sub)
@@ -1902,6 +1908,7 @@ _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
     "evidence": (("build", "build"), ("lockfile", "lockfile")),
     "changes": (("lockfile", "lockfile"),),
     "explore": (("build", "build"), ("lockfile", "lockfile")),
+    "preview": (("build", "build"), ("lockfile", "lockfile")),
     "release": (("build", "build"), ("lockfile", "lockfile"), ("backend", "backend")),
     "witness": (("backend", "backend"),),
     "clean": (("build", "build"),),
@@ -2924,7 +2931,7 @@ def _add_explore(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         default="html",
         help=(
             "html (default) writes the page and prints its path; json prints the same "
-            "model (to FILE with --output) with schema tundravm.explore/4."
+            "model (to FILE with --output) with schema tundravm.explore/5."
         ),
     )
 
@@ -3197,12 +3204,18 @@ def _cmd_watch(args: argparse.Namespace, out: TextIO) -> int:
     recipe: Path = args.recipe
     print(f"watching {recipe} every {args.interval:g}s (Ctrl-C stops)", file=out, flush=True)
     sources = Sources.of(recipe)
-    origins: dict[str, str] = args.origins
-    flags = {"recipe": args.recipe if origins.get("recipe") == "flag" else None}
-    for attr, key in _PROJECT_FLAGS["watch"]:
-        flags[attr] = getattr(args, attr, None) if origins.get(key) == "flag" else None
+    flags = _flag_values(args, "watch")
     loop = Watch(sources, lambda: _watch_check(args, sources, flags), out, interval=args.interval)
     return loop.run(args.ticks)
+
+
+def _flag_values(args: argparse.Namespace, verb: str) -> dict[str, Path | None]:
+    """The RECIPE and *verb*'s configurable paths given on the command line (else ``None``)."""
+    origins: dict[str, str] = args.origins
+    flags = {"recipe": args.recipe if origins.get("recipe") == "flag" else None}
+    for attr, key in _PROJECT_FLAGS[verb]:
+        flags[attr] = getattr(args, attr, None) if origins.get(key) == "flag" else None
+    return flags
 
 
 def _watch_project(args: argparse.Namespace, flags: dict[str, Path | None]) -> None:
@@ -3295,6 +3308,113 @@ def _watch_error(args: argparse.Namespace, exc: TdxError) -> str:
     if args.traceback:
         traceback.print_exception(exc, file=sys.stderr)
     return f"error [{exc.code}] {exc.args[0]}"
+
+
+def _add_preview(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Serve the explore page on localhost and reload it whenever the recipe changes."
+    cmd = _add_command(sub, "preview", _cmd_preview, help=help_text)
+    cmd.epilog = (
+        RESOLUTION_HELP
+        + " "
+        + (
+            "Renders the `tundravm explore` page in memory and serves it at /, re-rendering "
+            "on every change `tundravm watch` polls for (RECIPE, the .py files under its "
+            "directory, the host files its declarations read, the lockfile, "
+            "pyproject.toml, BUILD/bake-result.json). The page polls /version every second "
+            "and reloads when it moves. A recipe that fails to load keeps the last good "
+            "page under an error banner (message, hint, file:line); lint errors show the "
+            "banner above the fresh page. Prints the URL, then one `HH:MM:SS vN ...` line "
+            "per rendering. Writes nothing. Ctrl-C stops it with exit 0."
+        )
+    )
+    _add_build(cmd, "Build directory whose bake-result.json lists the artifacts (default: build).")
+    cmd.add_argument(
+        "--lockfile",
+        type=Path,
+        default=None,
+        help="Lockfile whose pins apply and whose drift is shown, as `explore --lockfile`.",
+    )
+    cmd.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Address to bind (default: %(default)s; a non-loopback one needs --allow-remote).",
+    )
+    cmd.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Port to bind; 0 picks a free one (default: %(default)s).",
+    )
+    cmd.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Serve on a non-loopback --host: anyone who reaches it reads the recipe's contents.",
+    )
+    cmd.add_argument("--open", action="store_true", help="Open the page in the default browser.")
+    cmd.add_argument(
+        "--interval",
+        type=_interval,
+        default=1.0,
+        metavar="SECONDS",
+        help="Seconds between polls of the sources (default: %(default)s).",
+    )
+
+
+def _cmd_preview(args: argparse.Namespace, out: TextIO) -> int:
+    host: str = args.host
+    if not is_loopback(host):
+        if not args.allow_remote:
+            raise ValidationError(
+                f"Refusing to serve the preview on {host}: not a loopback address.",
+                hint="The page shows the recipe's contents; pass --allow-remote to serve "
+                "it there anyway, or drop --host for 127.0.0.1.",
+            )
+        print(
+            f"warning: serving on {host}: anyone who can reach it reads the recipe's contents",
+            file=sys.stderr,
+        )
+    sources = Sources.of(args.recipe)
+    flags = _flag_values(args, "preview")
+    preview = Preview(lambda: _preview_load(args, sources, flags))
+    server = serve(preview, host, args.port)
+    try:
+        url = url_of(server)
+        print(f"previewing {args.recipe} at {url} (Ctrl-C stops)", file=out, flush=True)
+        if args.open:
+            webbrowser.open(url)
+        loop = Watch(sources, preview.render, out, interval=args.interval)
+        return loop.run(args.ticks)
+    finally:
+        with contextlib.suppress(KeyboardInterrupt):  # a second Ctrl-C while stopping
+            server.shutdown()
+        server.server_close()
+
+
+def _preview_load(
+    args: argparse.Namespace, sources: Sources, flags: dict[str, Path | None]
+) -> Exploration:
+    """One ``preview`` rendering: ``explore``'s model, tracking its inputs in *sources*.
+
+    A recipe that does not load keeps the inputs of the last one that did.
+    """
+    try:
+        _watch_project(args, flags)
+        sources.recipe = args.recipe.resolve()
+        loaded = _load(args)
+        sources.track({*_watch_inputs(args), *recipe_inputs(loaded.recipe), *resource_reads()})
+        names = _variants(loaded, args) if args.variant else None
+        base = _build_dir(args)
+        sources.ignore(base)
+        found = explore(loaded.recipe, variants=names, lock=args.lockfile, build=base)
+    except TdxError as exc:
+        sources.track({*sources.inputs, *_watch_inputs(args)})
+        if args.traceback:
+            traceback.print_exception(exc, file=sys.stderr)
+        raise
+    lock: str | None = found.model["lock"]["source"]
+    extra = {base / BAKE_RESULT_FILENAME, *(() if lock is None else (Path(lock),))}
+    sources.track({*sources.inputs, *extra})
+    return found
 
 
 def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tundravm._location import display_location
 from tundravm.declarative import (
     Debian,
     Package,
@@ -89,5 +90,7 @@ def test_every_variant_gets_the_platform_with_its_provenance() -> None:
     assert Package("udev") not in resolve(recipe, variant="no-udev").items
     origins = provenance(recipe, variant="default")[("Package", "systemd", "runtime")]
     assert [(o.action, o.variant) for o in origins] == [("declared", PLATFORM_LEVEL)]
-    assert origins[0].describe() == "declared in the platform"
+    assert origins[0].location == f"{__file__}:80"  # where the platform is written
+    at = display_location(origins[0].location)
+    assert origins[0].describe() == f"declared at {at} in the platform"
     assert lower(recipe).base == "debian/trixie"
