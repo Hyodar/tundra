@@ -44,8 +44,9 @@ RESOLUTION_HELP = (
     "tree (the compiled mkosi tree, every --tree), build (the build directory holding "
     "bake-result.json, every --build), lockfile (--lockfile; not clean's), backend "
     "(bake and doctor --backend) and require (a list of evidence checks, such as "
-    '["reproducible", "lock"], that status judges release readiness against; default '
-    "reproducible and lock), with paths relative to the pyproject.toml. They apply "
+    '["reproducible", "lock"]: what status judges release readiness against and what '
+    "evidence and release require when --require is omitted; default reproducible and "
+    "lock; --require '' requires none), with paths relative to the pyproject.toml. They apply "
     "to every command when RECIPE is omitted or names the table's recipe; commands "
     "without RECIPE (measure, deploy, sbom) always apply them. An explicit RECIPE or flag "
     "always wins; then the table; then the built-in default. A configured lockfile is "
@@ -57,8 +58,8 @@ RESOLUTION_HELP = (
 
 
 REQUIRE_KEY = "require"
-"""The table's one list: the evidence checks (``evidence --require``) ``status`` judges
-release readiness against."""
+"""The table's one list: the evidence checks ``status`` judges release readiness against
+and ``evidence`` and ``release`` require when ``--require`` is omitted."""
 
 
 @dataclass(frozen=True, slots=True)

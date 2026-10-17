@@ -31,6 +31,7 @@ from .declarative.lifecycle import (
     read_artifacts,
     read_lock,
     using_lock,
+    variant_tree_digest,
 )
 from .declarative.lower import lower
 from .declarative.model import Recipe
@@ -498,9 +499,13 @@ def _current_build(
     if not set(recorded) <= _recipe_digests(img, baked, current):
         return (), f"it was baked from another recipe (digest {recorded[0][:12]})"
     tree = _compiled_tree(img, artifacts, current)
-    trees = sorted({a.tree_digest for a in artifacts})
-    if tree is None or trees != [tree.digest]:
-        return (), f"it was baked from another tree (digest {trees[0][:12]})"
+    moved = [
+        a
+        for a in artifacts
+        if tree is None or a.tree_digest != variant_tree_digest(tree, a.variant)
+    ]
+    if moved:
+        return (), f"it was baked from another tree (digest {moved[0].tree_digest[:12]})"
     sha = None if current is None else hashlib.sha256(current.text().encode()).hexdigest()
     if {a.lock_sha256 for a in artifacts} != {sha}:
         return (), "it read another lockfile than the current one"

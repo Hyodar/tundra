@@ -188,8 +188,9 @@ def test_recorded_contradictions_fail_with_reasons(tmp_path: Path) -> None:
     out = _baked(tmp_path, recipe)
     manifest = out / "bake-result.json"
     payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload["declarative"]["recipe_digest"] = "0" * 64
-    payload["declarative"]["tree_digest"] = "1" * 64
+    for entry in payload["variants"].values():
+        entry["declarative"]["recipe_digest"] = "0" * 64
+        entry["declarative"]["tree_digest"] = "1" * 64
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     read_artifacts(out)[0].path.unlink()
     found = _evidence(recipe, out, require=("lock",))
@@ -291,7 +292,7 @@ def test_cli_writes_the_directory_bundle_and_page(
 ) -> None:
     recipe = write_recipe_file(tmp_path, RECIPE, monkeypatch)
     assert run_main("lock", str(recipe))[0] == EXIT_OK
-    assert run_main("bake", str(recipe))[0] == EXIT_OK
+    assert run_main("bake", str(recipe), "--verify-reproducible")[0] == EXIT_OK
     code, out = run_main(
         "evidence", str(recipe), "--format", "json", "--bundle", "e.tar.gz", "--html", "e.html"
     )
@@ -304,10 +305,10 @@ def test_cli_writes_the_directory_bundle_and_page(
     assert (tmp_path / "e.tar.gz").is_file()
     assert 'id="verdict"' in (tmp_path / "e.html").read_text(encoding="utf-8")
     (tmp_path / "build" / "tundravm.lock").unlink()
-    code, out = run_main("evidence", str(recipe))
+    code, out = run_main("evidence", str(recipe), "--require", "")
     assert code == EXIT_OK
     assert "lock       missing" in out
-    code, out = run_main("evidence", str(recipe), "--require", "lock,reproducible")
+    code, out = run_main("evidence", str(recipe))  # requires reproducible,lock by default
     assert code == EXIT_FAILURE
     assert "verdict incomplete" in out
     assert "  required   reproducible, lock" in out
@@ -345,6 +346,11 @@ def _record(out: Path, reproducibility: dict[str, object]) -> None:
     manifest = out / "bake-result.json"
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["declarative"]["reproducibility"] = reproducibility
+    for name, entry in payload["variants"].items():
+        differ = reproducibility.get("differ")
+        listed = differ if isinstance(differ, list) else []
+        own = [item for item in listed if str(item).startswith(f"{name}/")]
+        entry["declarative"]["reproducibility"] = {**reproducibility, "differ": own}
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -463,7 +469,12 @@ def test_a_subset_of_the_baked_variants_matches_its_tree(
         lock=out / "tundravm.lock",
     )
     assert released.passed and released.variants == ("default",)
-    assert sorted(a.variant for a in read_artifacts(out)) == ["default"]
+    # the release's bake of default keeps azure's entry, with its own tree digest
+    assert sorted(a.variant for a in read_artifacts(out)) == ["azure", "default"]
+    payload = json.loads((out / "bake-result.json").read_text(encoding="utf-8"))
+    assert payload["variants_baked"] == ["default"]
     assert (out / "mkosi" / "azure").is_dir()  # the full bake's tree is still there
     again = _evidence(recipe, out)
-    assert again.passed and again.index["variants"]["default"]["tree_matches"] is True
+    assert again.passed, again.index["verdict"]["reasons"]
+    assert again.index["variants"]["default"]["tree_matches"] is True
+    assert again.index["variants"]["azure"]["tree_matches"] is True

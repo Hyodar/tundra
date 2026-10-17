@@ -560,7 +560,10 @@ def _index_checks(
             message = f"the index lists variant {name}, which {BAKE_RESULT_FILENAME} lacks"
             checks.append(_inconsistent(f"variants.{name}", message))
             continue
-        checks.extend(_variant_facts(name, record, entry, extra, recorded, simulated, derived))
+        own = _mapping(entry.get(MANIFEST_KEY)) or extra  # schema 2: one record for the bake
+        reproduced = recorded_reproducibility(own)
+        made = bool(own.get("simulated", simulated))
+        checks.extend(_variant_facts(name, record, entry, own, reproduced, made, derived))
         artifacts = {
             row.get("target"): row for row in record.get("artifacts", []) if isinstance(row, dict)
         }
@@ -845,7 +848,7 @@ def _tree_check(
         if union != whole:
             problems.append(f"the variants' rows hash to {str(union)[:12]}, not its tree digest")
     baked = derived["variants"][name].get("tree_digest")
-    matches = None if not baked else whole == baked
+    matches = None if not baked else baked in (own, whole)  # whole: a schema 2 bake's
     derived["variants"][name]["tree_matches"] = matches
     checks = _facts(f"variants.{name}", record, {"tree_matches": matches}, str(member))
     if problems:

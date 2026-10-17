@@ -188,6 +188,26 @@ def test_deploy_rejects_malformed_param(
     assert "Unknown qemu parameter(s): vcpus" in capsys.readouterr().err
 
 
+def test_deploy_refuses_a_firmware_param_that_is_not_a_file(
+    recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_main("bake", str(recipe))
+    manifest = str(tmp_path / "build")
+    missing = tmp_path / "TDVF.fd"
+    argv = (
+        "deploy",
+        "qemu",
+        "--build",
+        manifest,
+        "--variant",
+        "default",
+        "--allow-simulated-artifact",
+    )
+    code, _ = run_main(*argv, "--param", "tdx=true", "--param", f"firmware={missing}")
+    assert code == EXIT_SDK_ERROR
+    assert f"QEMU firmware not found: {missing}" in capsys.readouterr().err
+
+
 def _runner(returncode: int) -> ProbeRunner:
     def runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         stdout = f"{argv[0]} 9.9.9\nsecond line\n" if returncode == 0 else ""

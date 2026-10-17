@@ -608,7 +608,9 @@ class CompileResult:
 BAKE_RESULT_FILENAME = "bake-result.json"
 REPRODUCE_DIRNAME = ".reproduce"
 """Where ``bake --verify-reproducible`` builds the second time (``BUILD/.reproduce``)."""
-BAKE_RESULT_SCHEMA_VERSION = 2
+BAKE_RESULT_SCHEMA_VERSION = 3
+"""3: a bake of some variants keeps the others' entries; ``variants_baked`` names the ones
+it built, and each variant entry's ``declarative`` record holds its own provenance."""
 
 
 @dataclass(slots=True)
@@ -646,6 +648,7 @@ class BakeResult:
             "lock_digest": self.lock_digest,
             "lock_sha256": self.lock_sha256,
             "variants": profiles,
+            "variants_baked": sorted(self.profiles),
         }
         path = base / BAKE_RESULT_FILENAME
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

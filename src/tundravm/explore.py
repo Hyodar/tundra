@@ -41,6 +41,7 @@ from .declarative.lifecycle import (
     reproducibility_of,
     using_lock,
     variant_names,
+    variant_provenance,
 )
 from .declarative.lower import lower
 from .declarative.model import BUILTIN_INITS, Declaration, Hook, Init, Recipe
@@ -329,7 +330,10 @@ def _bake_entry(build: Path | None, notes: list[str]) -> dict[str, Any] | None:
                 "path": str(a.path),
                 "sha256": a.sha256,
                 "simulated": a.simulated,
-                "reproducibility": reproducibility_of(reproduced, f"{a.variant}/{a.target}"),
+                "reproducibility": reproducibility_of(
+                    recorded_reproducibility(variant_provenance(payload, a.variant)),
+                    f"{a.variant}/{a.target}",
+                ),
             }
             for a in artifacts
         ],

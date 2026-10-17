@@ -29,11 +29,14 @@ REPORTS: dict[str, tuple[str, ...]] = {
 }
 """One JSON run per verb, from inside a scaffolded, compiled, locked and baked project."""
 
-SCHEMA_VERSIONS = {"evidence": 3, "changes": 2, "lint": 2, "explore": 2}
+SCHEMA_VERSIONS = {"evidence": 3, "changes": 2, "lint": 2, "explore": 2, "config": 2}
 """Verbs whose report schema moved past version 1."""
 
-COVERED_ELSEWHERE = {"attest": "tests/cli/test_attest.py::test_cli_attest_json_and_markdown"}
-"""JSON-capable verbs whose run needs more than a project (a tdxs issuer)."""
+COVERED_ELSEWHERE = {
+    "attest": "tests/cli/test_attest.py::test_cli_attest_json_and_markdown",
+    "witness": "tests/lifecycle/test_witness.py::test_witness_matches_a_release",
+}
+"""JSON-capable verbs whose run needs more than a project (a tdxs issuer, a release)."""
 
 
 def _json_verbs() -> set[str]:

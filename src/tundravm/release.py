@@ -1556,7 +1556,11 @@ def is_release(path: Path) -> bool:
 
 
 def verify_release(
-    path: Path, *, allowed_signers: Path | None = None, signer: str | None = None
+    path: Path,
+    *,
+    allowed_signers: Path | None = None,
+    signer: str | None = None,
+    max_age: float | timedelta | None = None,
 ) -> ReleaseVerification:
     """Check the release directory at *path* on its own, without the recipe or the build.
 
@@ -1572,6 +1576,8 @@ def verify_release(
     :func:`~tundravm.verify_evidence`, the release's artifacts as the build, its
     ``required`` checks and the same signers. Raises ``ValidationError`` when *path* is
     not a release directory.
+        *max_age* judges bundled attestation records with that freshness window instead of
+    the one the evidence recorded (``verify_evidence(max_age=)``).
     """
     root = Path(path)
     if not is_release(root):
@@ -1615,6 +1621,7 @@ def verify_release(
                 require=required,
                 allowed_signers=allowed_signers,
                 signer=signer,
+                max_age=max_age,
             )
         except ValidationError as exc:
             message = f"{BUNDLE_NAME} could not be checked: {exc.args[0] if exc.args else exc}"

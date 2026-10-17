@@ -339,6 +339,8 @@ def _real_manifest(recipe: Path) -> str:
     path = Path(_manifest(recipe)) / "bake-result.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["declarative"]["simulated"] = False
+    for entry in payload["variants"].values():
+        entry["declarative"]["simulated"] = False
     path.write_text(json.dumps(payload), encoding="utf-8")
     return str(path.parent)
 

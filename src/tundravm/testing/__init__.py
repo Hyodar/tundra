@@ -40,6 +40,8 @@ from tundravm.declarative.lifecycle import (
     check_report,
     read_artifacts,
     read_tree,
+    variant_provenance,
+    variant_tree_digest,
 )
 from tundravm.declarative.model import (
     Check,
@@ -345,12 +347,20 @@ def fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) ->
     path.write_text(f"simulated: variant={variant} target={target} tree={tree.digest}\n")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest = base / BAKE_RESULT_FILENAME
+    previous = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else {}
     result = BakeResult.load(base) if manifest.is_file() else BakeResult(backend=INPROCESS)
     profile = result.profiles.setdefault(variant, ProfileBuildResult(profile=variant))
     profile.artifacts[target] = ArtifactRef(target=target, path=path, digest=digest)
     result.save(base)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload[MANIFEST_KEY] = {"recipe_digest": "", "simulated": True, "tree_digest": tree.digest}
+    payload[MANIFEST_KEY] = {"recipe_digest": "", "simulated": True}
+    payload["variants_baked"] = [variant]
+    for name, entry in payload["variants"].items():
+        entry[MANIFEST_KEY] = dict(variant_provenance(previous, name))
+    payload["variants"][variant][MANIFEST_KEY] = {
+        **payload[MANIFEST_KEY],
+        "tree_digest": variant_tree_digest(tree, variant),
+    }
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return next(a for a in read_artifacts(base) if a.variant == variant and a.target == target)
 

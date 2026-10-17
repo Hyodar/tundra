@@ -4,7 +4,8 @@ The parts (``clean --what``) are ``sources`` (``BUILD/.sources``), ``tree``
 (``BUILD/mkosi``, the bake's own tree), ``artifacts`` (each ``BUILD/<variant>/`` and
 ``BUILD/bake-result.json``), ``evidence`` (``BUILD/evidence``, what ``tundravm
 evidence`` writes), ``state`` (``BUILD/.mkosi``, which holds the cached tools tree,
-and the mkosi state next to the tree's config) and ``reproduce`` (``BUILD/.reproduce``,
+the mkosi state next to the tree's config, and ``BUILD/.tundravm-hashes.json``, the
+artifact sha256s ``status`` caches) and ``reproduce`` (``BUILD/.reproduce``,
 the second build a failed ``bake --verify-reproducible`` keeps). The lockfile is never
 one of them, and a release directory never goes: a part that holds one (``release
 --releases`` pointed inside the build directory) is refused (:func:`holds_release`).
@@ -20,6 +21,7 @@ from collections.abc import Callable, Collection, Iterable, Sequence
 from pathlib import Path
 from shutil import which
 
+from ._hashes import HASH_CACHE_NAME
 from ._source import SOURCES_DIRNAME
 from .backends.base import MKOSI_STATE_NAMES
 from .backends.local_linux import STATE_DIRNAME
@@ -77,6 +79,7 @@ def clean_paths(build: Path, parts: Collection[str], *, variants: Iterable[str] 
         paths.append(build / EVIDENCE_DIRNAME)
     if "state" in parts:
         paths.append(build / STATE_DIRNAME)
+        paths.append(build / HASH_CACHE_NAME)
         if "tree" not in parts:
             paths.extend(_tree_state(build / TREE_DIRNAME))
     if "reproduce" in parts:

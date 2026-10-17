@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 from tundravm.project import find_project
 
 TABLE = """[tool.tundravm]
@@ -92,6 +92,7 @@ def test_explicit_flags_override_the_table(project: Path) -> None:
         "build": {"value": "o", "origin": "flag"},
         "lockfile": {"value": "build/tundravm.lock", "origin": "pyproject", "exists": False},
         "backend": {"value": "lima", "origin": "flag"},
+        "require": {"value": ["reproducible", "lock"], "origin": "default"},
     }
 
 
@@ -113,6 +114,7 @@ def test_config_text_names_each_origin(project: Path) -> None:
         "  build     build                pyproject",
         "  lockfile  build/tundravm.lock  pyproject; does not exist; run `tundravm lock`",
         "  backend   inprocess            pyproject",
+        "  require   reproducible,lock    default",
     ]
     assert run_main("lock")[0] == EXIT_OK
     assert "  lockfile  build/tundravm.lock  pyproject\n" in run_main("config")[1]
@@ -126,7 +128,7 @@ def test_config_reports_the_backend_the_recipe_file_binds(project: Path) -> None
     )
     values = json.loads(run_main("config", "--format", "json")[1])["values"]
     assert values["backend"] == {"value": "inprocess", "origin": "recipe"}
-    assert run_main("config")[1].splitlines()[-1] == (
+    assert run_main("config")[1].splitlines()[-2] == (
         "  backend   inprocess            recipe (the recipe file's `backend`)"
     )
 
@@ -214,3 +216,33 @@ def test_a_configured_build_reaches_every_artifact_verb(
     capsys.readouterr()
     assert run_main("deploy", "qemu", "--variant", "default")[0] == EXIT_SDK_ERROR
     assert "Refusing to deploy a simulated artifact." in capsys.readouterr().err
+
+
+def test_require_is_one_set_for_status_evidence_release_and_config(project: Path) -> None:
+    pyproject = project / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    pyproject.write_text(text + 'require = ["lock"]\n', encoding="utf-8")
+    values = json.loads(run_main("config", "--format", "json")[1])["values"]
+    assert values["require"] == {"value": ["lock"], "origin": "pyproject"}
+    assert run_main("lock")[0] == EXIT_OK
+    assert run_main("bake", "-q")[0] == EXIT_OK  # one build: reproducibility unchecked
+    assert json.loads(run_main("status", "--format", "json")[1])["release_require"] == ["lock"]
+    code, out = run_main("evidence", "--format", "json")
+    assert code == EXIT_OK, out
+    assert json.loads(out)["verdict"]["required"] == ["lock"]
+    assert run_main("evidence", "--require", "reproducible")[0] == EXIT_FAILURE
+
+    code, out = run_main("release", "--version", "1.0")
+    assert code == EXIT_OK, out
+    spec = json.loads((project / "releases" / "node-1.0" / "release.json").read_text())["spec"]
+    assert spec["require"] == ["lock"]  # the resolved set is what the release records
+    code, out = run_main("release", "--version", "2.0", "--require", "")
+    assert code == EXIT_OK, out
+    spec = json.loads((project / "releases" / "node-2.0" / "release.json").read_text())["spec"]
+    assert spec["require"] == []
+
+    pyproject.write_text(text, encoding="utf-8")  # unset: reproducible and lock
+    code, out = run_main("evidence", "--format", "json")
+    assert json.loads(out)["verdict"]["required"] == ["reproducible", "lock"]
+    code, out = run_main("evidence", "--require", "", "--format", "json")
+    assert json.loads(out)["verdict"]["required"] == []

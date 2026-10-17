@@ -57,6 +57,13 @@ def _release(payload: dict[str, object]) -> dict[str, dict[str, object]]:
     return entry
 
 
+def _items(payload: dict[str, object]) -> list[dict[str, object]]:
+    section = payload["artifacts"]
+    assert isinstance(section, dict)
+    found: list[dict[str, object]] = section["items"]
+    return found
+
+
 def _codes(payload: dict[str, object], variant: str) -> list[str]:
     reasons = _release(payload)[variant]["reasons"]
     assert isinstance(reasons, list)
@@ -89,8 +96,11 @@ def test_readiness_follows_a_second_build_then_release(recipe: Path) -> None:
     assert _release(released)["default"]["released"] == str(Path("releases") / "node-1.0")
     assert released["releases_in_progress"] == []
     assert released["next"] == UP_TO_DATE
-    # the release baked only what it ships, so the dev variant is still to bake
-    assert _status(str(recipe))["next"] == f"tundravm bake {recipe}"
+    # the release baked only what it ships; dev keeps the entry of the bake before it
+    after = _status(str(recipe))
+    dev = [item for item in _items(after) if item["variant"] == "dev"]
+    assert [item["verdict"] for item in dev] == ["ok"]
+    assert after["next"] == UP_TO_DATE
 
 
 def test_release_lines_in_text(recipe: Path) -> None:
@@ -236,3 +246,33 @@ def test_pyproject_require_is_read(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.chdir(tmp_path)
     project = find_project()
     assert project is not None and project.require == ("lock", "measured")
+
+
+def test_a_subset_bake_keeps_the_other_variants_and_their_own_tree(recipe: Path) -> None:
+    assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
+    recipe.write_text(RECIPE.replace('Package("strace")', 'Package("gdb")'), encoding="utf-8")
+    assert run_main("lock", str(recipe))[0] == EXIT_OK
+    assert run_main("bake", str(recipe), "--variant", "default", "-q")[0] == EXIT_OK
+    payload = json.loads((recipe.parent / "build" / "bake-result.json").read_text())
+    assert payload["variants_baked"] == ["default"] and sorted(payload["variants"]) == [
+        "default",
+        "dev",
+    ]
+    items = {item["variant"]: item for item in _items(_status(str(recipe)))}
+    assert items["default"]["verdict"] == "ok"
+    assert items["dev"]["verdict"] == "stale"  # its own tree digest no longer compiles
+    assert items["dev"]["tree_matches"] is False
+
+
+def test_a_bake_drops_the_entry_of_a_variant_the_recipe_no_longer_declares(
+    recipe: Path,
+) -> None:
+    assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
+    start = RECIPE.index('        Variant("dev"')
+    end = RECIPE.index("release=False),") + len("release=False),\n")
+    recipe.write_text(RECIPE[:start] + RECIPE[end:], encoding="utf-8")
+    assert run_main("lock", str(recipe))[0] == EXIT_OK
+    assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
+    payload = json.loads((recipe.parent / "build" / "bake-result.json").read_text())
+    assert sorted(payload["variants"]) == ["default"]
+    assert [item["verdict"] for item in _items(_status(str(recipe)))] == ["ok"]

@@ -1,7 +1,7 @@
 """QEMU deployment adapter.
 
 Launches a QEMU VM with the baked artifact, supporting:
-- OVMF firmware for UEFI boot (TDVF via ``-bios`` for a TDX guest)
+- OVMF firmware for UEFI boot (TDVF via ``-bios`` for a TDX guest), or ``firmware=PATH``
 - UKI (Unified Kernel Image) via -kernel flag
 - TDX confidential computing support
 - Port forwarding for SSH and every declared ``Secrets`` port
@@ -65,6 +65,21 @@ def _find_firmware(paths: tuple[str, ...], name: str) -> str:
     )
 
 
+def _given_firmware(path: str, *, tdx: bool) -> str:
+    """``firmware=PATH`` as an absolute path (a detached QEMU runs from ``/``); ``""`` unset."""
+    if not path:
+        return ""
+    if not Path(path).is_file():
+        kind = "TDVF (OVMF built with TDX support)" if tdx else "OVMF"
+        raise DeploymentError(
+            f"QEMU firmware not found: {path}",
+            hint=f"Pass --param firmware= the path of an existing {kind} image, or drop it "
+            "to boot the first one installed.",
+            context={"firmware": path},
+        )
+    return str(Path(path).absolute())
+
+
 @dataclass(slots=True)
 class QemuDeployAdapter:
     name: str = "qemu"
@@ -83,6 +98,7 @@ class QemuDeployAdapter:
         ssh_port = params.pop("ssh_port", "2222")
         enable_tdx = params.pop("tdx", "false").lower() == "true"
         daemonize = params.pop("daemonize", "true").lower() == "true"
+        firmware = _given_firmware(params.pop("firmware", ""), tdx=enable_tdx)
         forwards = parse_forwards(params.pop("forward", ""))
         hosts = [ssh_port, *(str(host) for host, _ in forwards)]
         if len(set(hosts)) != len(hosts):
@@ -119,11 +135,13 @@ class QemuDeployAdapter:
             cmd.extend(["-object", "tdx-guest,id=tdx0"])
         cmd.extend(["-cpu", "host", "-m", memory, "-smp", cpus, "-no-reboot"])
 
-        # Firmware: TDVF through -bios for TDX (it cannot run from pflash), else OVMF pflash
+        # Firmware: TDVF through -bios for TDX (it cannot run from pflash), else OVMF pflash;
+        # a given firmware replaces the searched one (-bios for a disk image without TDX)
         if enable_tdx:
-            cmd.extend(["-bios", _find_firmware(TDVF_PATHS, "TDVF (OVMF.fd with TDX support)")])
+            tdvf = firmware or _find_firmware(TDVF_PATHS, "TDVF (OVMF.fd with TDX support)")
+            cmd.extend(["-bios", tdvf])
         elif is_uki:
-            ovmf_code = _find_firmware(OVMF_CODE_PATHS, "OVMF_CODE")
+            ovmf_code = firmware or _find_firmware(OVMF_CODE_PATHS, "OVMF_CODE")
             # The VARS store is written to: boot from a per-variant copy, not /usr/share
             ovmf_vars = _run_dir(artifact_path.absolute(), request.profile) / VARS_COPY
             if not ovmf_vars.exists():
@@ -136,6 +154,8 @@ class QemuDeployAdapter:
                     f"file={ovmf_vars},if=pflash,format=raw",
                 ]
             )
+        elif firmware:
+            cmd.extend(["-bios", firmware])
         if is_uki:
             cmd.extend(["-kernel", str(artifact_path)])
         else:
@@ -213,6 +233,7 @@ class QemuDeployAdapter:
             "ssh_port": ssh_port,
             "tdx": str(enable_tdx).lower(),
             "is_uki": str(is_uki).lower(),
+            **({"firmware": firmware} if firmware else {}),
             **({"forward": format_forwards(forwards)} if forwards else {}),
             **state,
             **params,

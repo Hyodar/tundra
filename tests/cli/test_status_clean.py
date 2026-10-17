@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, source_dir, write_recipe_file
+from tundravm import _hashes as hashes_module
 from tundravm import clean as clean_module
+from tundravm._hashes import HASH_CACHE_NAME
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, main
 from tundravm.declarative import lock, write_lock
 from tundravm.recipe import load_recipe
@@ -350,6 +352,42 @@ def test_status_probes_the_backend_with_the_injected_runner(
     assert backend["name"] == "nix_mkosi"
     assert backend["missing"]
     assert calls
+
+
+def test_status_caches_artifact_hashes_until_a_file_changes(
+    recipe: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_main("lock", str(recipe))[0] == EXIT_OK
+    assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
+    hashed: list[Path] = []
+    real = hashes_module.file_sha256
+
+    def counting(path: Path) -> str:
+        hashed.append(path.resolve())
+        return real(path)
+
+    monkeypatch.setattr(hashes_module, "file_sha256", counting)
+    disk = (BUILD / "default" / "disk.qcow2").resolve()
+    _status(str(recipe))
+    assert disk in hashed and (BUILD / HASH_CACHE_NAME).is_file()
+    hashed.clear()
+    _status(str(recipe))
+    assert hashed == []  # every artifact is unchanged: nothing is hashed again
+    info = disk.stat()
+    os.utime(disk, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+    _status(str(recipe))
+    assert set(hashed) == {disk}  # the touched file only
+    hashed.clear()
+    _status(str(recipe), "--verify")
+    assert disk in hashed  # --verify bypasses the cache
+    hashed.clear()
+    assert run_main("evidence", str(recipe), "--require", "")[0] == EXIT_OK
+    assert disk in hashed  # evidence always hashes the bytes
+
+    code, out = run_main("clean", str(recipe), "--what", "state")
+    assert code == EXIT_OK
+    assert f"removed {BUILD / HASH_CACHE_NAME}" in out.splitlines()
+    assert not (BUILD / HASH_CACHE_NAME).exists()
 
 
 # ── clean ────────────────────────────────────────────────────────────────

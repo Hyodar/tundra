@@ -306,6 +306,9 @@ recipe = Recipe(
             Package("systemd-boot-efi"),
             Package("ca-certificates"),
             Package("cryptsetup"),
+            # Root logs in over SSH with the key Secrets delivers; socat relays /var/tdxs.sock.
+            Package("openssh-server"),
+            Package("socat"),
             Package("curl", role="build"),
             Backports(),
             EfiStub(snapshot=SNAPSHOT, version=EFI_STUB_VERSION),

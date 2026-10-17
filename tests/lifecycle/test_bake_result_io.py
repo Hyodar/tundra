@@ -54,7 +54,8 @@ def test_round_trip_stores_relative_paths_inside_build_dir(tmp_path: Path) -> No
 
     assert path == build_dir / BAKE_RESULT_FILENAME
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2 and "profiles" not in payload
+    assert payload["schema_version"] == 3 and "profiles" not in payload
+    assert payload["variants_baked"] == sorted(payload["variants"])
     assert payload["lock_sha256"] == "cd" * 32
     entry = payload["variants"]["default"]
     assert entry["manifest_digests"] == {"azure": "ef" * 32, "qemu": None}

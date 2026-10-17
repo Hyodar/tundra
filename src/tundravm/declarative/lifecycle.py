@@ -22,9 +22,10 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
-from typing import Final, Literal, get_args
+from typing import Any, Final, Literal, get_args
 
 from tundravm import check as _check
+from tundravm._hashes import artifact_sha256
 from tundravm._modules import SecretDelivery
 from tundravm._source import (
     SOURCES_DIRNAME,
@@ -69,6 +70,7 @@ from tundravm.measure import derive_measurements
 from tundravm.measure.policy import policy_payload
 from tundravm.models import (
     BAKE_RESULT_FILENAME,
+    BAKE_RESULT_SCHEMA_VERSION,
     REPRODUCE_DIRNAME,
     ArtifactRef,
     BakeResult,
@@ -298,6 +300,9 @@ class Qemu:
     """``False`` runs QEMU in the foreground with its console on this terminal."""
     forward: tuple[tuple[int, int], ...] = ()
     """``(host, guest)`` TCP ports forwarded besides ``ssh_port``; ``Secrets`` ports are added."""
+    firmware: str | None = None
+    """The firmware image to boot instead of the first one installed: TDVF with ``tdx``
+    (``-bios``), else OVMF (the code pflash of a UKI, ``-bios`` for a disk image)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,6 +437,11 @@ def read_variant_tree(
     whole = read_tree(root, variants=variants, warn=warn)
     entries = [entry for entry in whole.entries if entry.path.split("/", 1)[0] in variants]
     return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
+
+
+def variant_tree_digest(tree: Tree, variant: str) -> str:
+    """The digest of *variant*'s directory of *tree* alone, as a bake records it per variant."""
+    return _tree_digest([entry for entry in tree.entries if entry.path.split("/", 1)[0] == variant])
 
 
 def _digest_mode(entry: Entry) -> int:
@@ -1083,37 +1093,76 @@ def bake_image(
                 reporter=reporter,
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
+        manifest = destination / BAKE_RESULT_FILENAME
+        kept = _kept_variants(manifest)
         result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
-        tree = read_variant_tree(
-            destination / "mkosi", sorted(result.profiles), warn=_tree_warning(reporter)
-        )
         recipe_digest = (
             locked.recipe_digest
             if locked is not None
             else (read_lock(lock_path).recipe_digest if lock_path.is_file() else "")
         )
-        manifest = destination / BAKE_RESULT_FILENAME
         payload = json.loads(manifest.read_text(encoding="utf-8"))
-        payload[MANIFEST_KEY] = {
-            "recipe_digest": recipe_digest,
-            "simulated": simulated,
-            "tree_digest": tree.digest,
-        }
-        ports = {name: secret_ports(baking, name) for name in sorted(result.profiles)}
-        if any(ports.values()):
-            payload[MANIFEST_KEY]["ports"] = {name: list(p) for name, p in ports.items() if p}
+        lockfile = None
         if locked is not None:
             source = lock_source if lock_source is not None else lock_path
             # None: an in-memory Lock read through a scratch copy
-            payload[MANIFEST_KEY]["lockfile"] = (
-                str(source) if lock_source is not None or used == lock_path else None
-            )
+            lockfile = str(source) if lock_source is not None or used == lock_path else None
+        payload[MANIFEST_KEY] = {"recipe_digest": recipe_digest, "simulated": simulated}
+        if locked is not None:
+            payload[MANIFEST_KEY]["lockfile"] = lockfile
+        warn = _tree_warning(reporter)
+        for name in sorted(result.profiles):
+            tree = read_variant_tree(destination / "mkosi", [name], warn=warn)
+            payload["variants"][name][MANIFEST_KEY] = {
+                **payload[MANIFEST_KEY],
+                "baked_at": payload.get("created_at"),
+                "backend": payload.get("backend"),
+                "lock_digest": payload.get("lock_digest"),
+                "lock_sha256": payload.get("lock_sha256"),
+                "tree_digest": tree.digest,
+                "ports": list(secret_ports(baking, name)),
+                "reproducibility": None,
+            }
+        for name, entry in kept.items():
+            if name in img.state.profiles:  # a variant the recipe dropped goes
+                payload["variants"].setdefault(name, entry)
         _write_json(manifest, payload)
         if verify_reproducible:
             _verify_reproducible(
                 baking, result, used, manifest, frozen=locked is not None, reporter=reporter
             )
-    return result, read_artifacts(destination)
+    return result, tuple(a for a in read_artifacts(destination) if a.variant in result.profiles)
+
+
+def _kept_variants(manifest: Path) -> dict[str, Any]:
+    """The variant entries of the ``bake-result.json`` already at *manifest* that carry their
+    own provenance: what a bake of other variants keeps. Empty when it is absent, unreadable
+    or from an older schema."""
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema_version") != BAKE_RESULT_SCHEMA_VERSION:
+        return {}
+    found = payload.get("variants")
+    if not isinstance(found, dict):
+        return {}
+    return {
+        str(name): entry
+        for name, entry in found.items()
+        if isinstance(entry, dict) and isinstance(entry.get(MANIFEST_KEY), dict)
+    }
+
+
+def variant_provenance(payload: Mapping[str, Any], variant: str) -> Mapping[str, Any]:
+    """*variant*'s own ``declarative`` record in a ``bake-result.json`` *payload*: the digests,
+    backend, lockfile and reproducibility of the bake that built it; empty when absent."""
+    variants = payload.get("variants")
+    entry = variants.get(variant) if isinstance(variants, Mapping) else None
+    found = entry.get(MANIFEST_KEY) if isinstance(entry, Mapping) else None
+    return found if isinstance(found, Mapping) else {}
 
 
 ReproducibilityState = Literal["running", "matched", "different", "error", "interrupted"]
@@ -1167,14 +1216,14 @@ def _record_reproducibility(
     differ: Sequence[str] = (),
     error: str | None = None,
 ) -> None:
-    """Set ``declarative.reproducibility`` of *manifest* to *state*, atomically."""
+    """Set ``declarative.reproducibility`` of *manifest* to *state*, atomically: the bake's,
+    and each baked variant's (``variants_baked``), listing that variant's artifacts that differ."""
     payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload[MANIFEST_KEY]["reproducibility"] = {
-        "state": state,
-        "second_build": second_build,
-        "differ": list(differ),
-        "error": error,
-    }
+    record = {"state": state, "second_build": second_build, "differ": list(differ), "error": error}
+    payload[MANIFEST_KEY]["reproducibility"] = record
+    for name in payload.get("variants_baked") or ():
+        own = [item for item in differ if item.startswith(f"{name}/")]
+        payload["variants"][name][MANIFEST_KEY]["reproducibility"] = {**record, "differ": own}
     _write_json(manifest, payload)
 
 
@@ -1393,17 +1442,19 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
     result = BakeResult.load(base)
     try:
         payload = json.loads((base / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
-        extra = payload.get(MANIFEST_KEY) or {}
-    except (OSError, ValueError, AttributeError) as exc:
+        if not isinstance(payload, dict):
+            raise ValueError("not a JSON object")
+    except (OSError, ValueError) as exc:
         raise StateError(
             f"Unreadable bake result: {exc}",
             hint="Run `tundravm bake RECIPE` again to rewrite bake-result.json.",
             context={"path": str(path)},
         ) from exc
-    simulated = bool(extra.get("simulated", result.backend == INPROCESS))
-    ports = extra.get("ports") or {}
     artifacts: list[Artifact] = []
     for variant, profile in sorted(result.profiles.items()):
+        own = variant_provenance(payload, variant)
+        simulated = bool(own.get("simulated", result.backend == INPROCESS))
+        lock_sha256 = own.get("lock_sha256", result.lock_sha256)
         for target, ref in sorted(profile.artifacts.items()):
             artifacts.append(
                 Artifact(
@@ -1411,12 +1462,12 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
                     variant=variant,
                     target=target,
                     sha256=ref.digest or "",
-                    recipe_digest=str(extra.get("recipe_digest", "")),
-                    lock_digest=result.lock_digest or "",
-                    tree_digest=str(extra.get("tree_digest", "")),
+                    recipe_digest=str(own.get("recipe_digest") or ""),
+                    lock_digest=str(own.get("lock_digest") or result.lock_digest or ""),
+                    tree_digest=str(own.get("tree_digest") or ""),
                     simulated=simulated,
-                    ports=tuple(int(port) for port in ports.get(variant, ())),
-                    lock_sha256=result.lock_sha256,
+                    ports=tuple(int(port) for port in own.get("ports") or ()),
+                    lock_sha256=None if lock_sha256 is None else str(lock_sha256),
                     manifest_sha256=ref.manifest_digest,
                     build=base,
                 )
@@ -1457,8 +1508,7 @@ def verify_artifact(artifact: Artifact) -> None:
             context=context,
         )
     try:
-        with artifact.path.open("rb") as handle:
-            actual = hashlib.file_digest(handle, "sha256").hexdigest()
+        actual = artifact_sha256(artifact.path)
     except OSError as exc:
         raise ArtifactError(
             f"Cannot read artifact {artifact.path}: {exc.strerror or exc}.",
@@ -1515,10 +1565,13 @@ def measure(
 
 
 def deploy_parameters(using: DeployTarget) -> dict[str, str]:
-    """*using*'s fields as the adapter's string parameters (``forward`` as ``HOST:GUEST,...``)."""
+    """*using*'s fields as the adapter's string parameters (``forward`` as ``HOST:GUEST,...``;
+    an unset ``None`` field is left out)."""
     params: dict[str, str] = {}
     for item in fields(using):
         value = getattr(using, item.name)
+        if value is None:
+            continue
         if isinstance(value, bool):
             params[item.name] = str(value).lower()
         elif isinstance(value, tuple):

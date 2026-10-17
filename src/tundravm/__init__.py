@@ -8,7 +8,8 @@ running image's quote against a verifier policy, ``sbom`` lists what a baked
 artifact contains and ``evidence`` gathers an auditor's record of a bake, which
 ``verify_evidence`` checks on its own and ``changes`` compares with the recipe now;
 ``release`` runs them all into one immutable release directory, which
-``verify_release`` checks against its signed manifest, and ``explore``
+``verify_release`` checks against its signed manifest, ``witness`` rebuilds
+elsewhere and ``verify_witnesses`` counts against a trust policy, and ``explore``
 renders one page that explains a recipe to someone who has not read it.
 ``diff``, ``measure`` and ``deploy`` are ``tundravm.declarative.diff``/``measure``/
 ``deploy`` (at the top level those names are modules). The shipped fragments are
@@ -111,6 +112,7 @@ from .explore import Exploration, explore
 from .recipe import load_recipe
 from .release import Release, ReleaseVerification, release, verify_release
 from .verify import EvidenceVerification, verify_evidence
+from .witness import Witness, WitnessVerification, verify_witnesses, witness
 
 __all__ = [
     "Artifact",
@@ -186,6 +188,8 @@ __all__ = [
     "ValidationError",
     "Variant",
     "Why",
+    "Witness",
+    "WitnessVerification",
     "attest",
     "bake",
     "changes",
@@ -212,6 +216,8 @@ __all__ = [
     "verify_artifact",
     "verify_evidence",
     "verify_release",
+    "verify_witnesses",
+    "witness",
     "write_lock",
     "__version__",
 ]

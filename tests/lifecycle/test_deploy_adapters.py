@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tundravm.declarative.lifecycle import Qemu, deploy_parameters
 from tundravm.deploy import get_adapter
 from tundravm.deploy.azure import AzureDeployAdapter
 from tundravm.deploy.gcp import GcpDeployAdapter
@@ -176,6 +177,53 @@ def test_qemu_tdx_boots_tdvf_through_bios_with_a_split_irqchip(
     assert cmd[cmd.index("-bios") + 1] == firmware["OVMF.fd"]
     assert not any("if=pflash" in arg for arg in cmd)
     assert "-kernel" in cmd
+
+
+def test_qemu_firmware_param_replaces_the_searched_image(
+    tmp_path: Path, firmware: dict[str, str]
+) -> None:
+    own = tmp_path / "own" / "TDVF.fd"
+    own.parent.mkdir()
+    own.write_text("tdvf", encoding="utf-8")
+    run = Recorder()
+    result = QemuDeployAdapter(runner=run).deploy(
+        _qemu_request(tmp_path, tdx="true", firmware=str(own))
+    )
+    (tdx,) = run.calls
+    assert tdx[tdx.index("-bios") + 1] == str(own)
+    assert result.metadata["firmware"] == str(own)
+
+    run = Recorder()
+    QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path / "uki", firmware=str(own)))
+    (uki,) = run.calls
+    assert f"file={own},if=pflash,format=raw,readonly=on" in uki and "-bios" not in uki
+    assert any(arg.endswith("qemu-ovmf-vars.fd,if=pflash,format=raw") for arg in uki)
+
+    run = Recorder()
+    disk = _qemu_request(tmp_path / "disk", name="disk.qcow2", firmware=str(own))
+    QemuDeployAdapter(runner=run).deploy(disk)
+    (raw,) = run.calls
+    assert raw[raw.index("-bios") + 1] == str(own)
+    assert not any("if=pflash" in arg for arg in raw)
+
+
+def test_qemu_refuses_a_missing_firmware_before_launching(
+    tmp_path: Path, firmware: dict[str, str]
+) -> None:
+    run = Recorder()
+    missing = tmp_path / "nope" / "OVMF.fd"
+    with pytest.raises(DeploymentError, match="QEMU firmware not found") as excinfo:
+        QemuDeployAdapter(runner=run).deploy(
+            _qemu_request(tmp_path, tdx="true", firmware=str(missing))
+        )
+    assert "TDVF" in (excinfo.value.hint or "")
+    assert excinfo.value.context["firmware"] == str(missing)
+    assert run.calls == []
+
+
+def test_qemu_deploy_parameters_leave_an_unset_firmware_out() -> None:
+    assert "firmware" not in deploy_parameters(Qemu())
+    assert deploy_parameters(Qemu(firmware="/fw/OVMF.fd"))["firmware"] == "/fw/OVMF.fd"
 
 
 def test_qemu_forwards_every_port_besides_ssh(tmp_path: Path, firmware: dict[str, str]) -> None:

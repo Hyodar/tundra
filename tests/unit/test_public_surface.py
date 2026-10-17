@@ -84,6 +84,8 @@ EXPECTED_TOP_LEVEL = [
     "ValidationError",
     "Variant",
     "Why",
+    "Witness",
+    "WitnessVerification",
     "__version__",
     "attest",
     "bake",
@@ -111,6 +113,8 @@ EXPECTED_TOP_LEVEL = [
     "verify_artifact",
     "verify_evidence",
     "verify_release",
+    "verify_witnesses",
+    "witness",
     "write_lock",
 ]
 

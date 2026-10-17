@@ -17,17 +17,18 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from ._hashes import HashCache
 from ._source import SOURCES_DIRNAME, is_fetched
 from .check import summarize
 from .declarative._lowered import Lowered
 from .declarative.bom import manifest_path
 from .declarative.lifecycle import (
     INPROCESS,
-    MANIFEST_KEY,
     NO_LOCK,
     Artifact,
     Lock,
@@ -41,6 +42,8 @@ from .declarative.lifecycle import (
     reproducibility_of,
     requirements_of,
     using_lock,
+    variant_provenance,
+    variant_tree_digest,
     verify_artifact,
 )
 from .diff import diff_against
@@ -254,21 +257,22 @@ def project_status(
     sources = _sources(img, names, lock, build)
     tree_item = _tree(img, names, lock, tree_path)
     manifest = build / BAKE_RESULT_FILENAME
-    artifacts, baked = _artifacts(img, names, lock, manifest, verify=verify)
-    backend = _backend(loaded, runner)
-    lint = _lint(loaded, names, lock)
     required = tuple(require)
     released = _released(img, lock_path, releases, loaded.recipe.name)
-    readiness = _readiness(
-        loaded,
-        names,
-        baked,
-        build=build,
-        lock_path=lock_path,
-        runner=runner,
-        require=required,
-        released=released,
-    )
+    with nullcontext() if verify else HashCache(build).using():
+        artifacts, baked = _artifacts(img, names, lock, manifest, verify=verify)
+        readiness = _readiness(
+            loaded,
+            names,
+            baked,
+            build=build,
+            lock_path=lock_path,
+            runner=runner,
+            require=required,
+            released=released,
+        )
+    backend = _backend(loaded, runner)
+    lint = _lint(loaded, names, lock)
     status = ProjectStatus(
         recipe=_recipe(loaded, img, names, invocation.recipe_path or invocation.recipe),
         lint=lint,
@@ -451,12 +455,10 @@ def _artifacts(
         ), ()
     try:
         artifacts = read_artifacts(manifest.parent)
-        extra = json.loads(manifest.read_text(encoding="utf-8")).get(MANIFEST_KEY) or {}
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
     except (TdxError, OSError, ValueError) as exc:
         detail = f"{manifest} is unreadable: {exc}"
         return tuple(StatusItem("artifact", "stale", detail, {"variant": n}) for n in names), ()
-    lockfile = extra.get("lockfile") if isinstance(extra, Mapping) else None
-    recorded = recorded_reproducibility(extra) if isinstance(extra, Mapping) else None
     current = _current_digests(img, lock, artifacts)
     items: list[StatusItem] = []
     for name in names:
@@ -464,6 +466,9 @@ def _artifacts(
         if not baked:
             detail = f"{name}: not in {manifest}"
             items.append(StatusItem("artifact", "missing", detail, {"variant": name}))
+        own = variant_provenance(payload, name)
+        lockfile = own.get("lockfile")
+        recorded = recorded_reproducibility(own)
         for artifact in baked:
             subject = f"{artifact.variant}/{artifact.target}"
             reproducibility = reproducibility_of(recorded, subject)
@@ -498,16 +503,17 @@ def _manifests(artifacts: Sequence[Artifact], names: tuple[str, ...]) -> tuple[S
 
 def _current_digests(
     img: Lowered, lock: Lock | None, artifacts: Sequence[Artifact]
-) -> tuple[str | None, set[str]]:
-    """The tree digest the baked variants compile to now, and the recipe digests to accept."""
-    baked = tuple(sorted({artifact.variant for artifact in artifacts}))
+) -> tuple[dict[str, str], set[str]]:
+    """The tree digest each baked variant compiles to now, and the recipe digests to accept."""
     declared = set(img.state.profiles)
-    if not baked or not set(baked) <= declared:
-        return None, set()
+    baked = tuple(sorted({artifact.variant for artifact in artifacts} & declared))
+    if not baked:
+        return {}, set()
     try:
-        tree = compile_image(img, baked, locked=lock).digest
+        compiled = compile_image(img, baked, locked=lock)
+        tree = {name: variant_tree_digest(compiled, name) for name in baked}
     except TdxError:
-        tree = None
+        tree = {}
     scopes = {tuple(sorted(declared)), baked}
     if lock is not None and set(lock_variants(lock.lockfile)) <= declared:
         scopes.add(lock_variants(lock.lockfile))
@@ -527,7 +533,7 @@ def _integrity(artifact: Artifact, *, verify: bool) -> Integrity:
 
 def _artifact(
     artifact: Artifact,
-    current: tuple[str | None, set[str]],
+    current: tuple[dict[str, str], set[str]],
     lockfile: object,
     *,
     verify: bool,
@@ -540,7 +546,8 @@ def _artifact(
     size = path.stat().st_size if path.is_file() else None
     integrity = _integrity(artifact, verify=verify and size is not None)
     recipe_ok = None if not artifact.recipe_digest else artifact.recipe_digest in recipes
-    tree_ok = None if not artifact.tree_digest else artifact.tree_digest == tree
+    baked_tree = artifact.tree_digest
+    tree_ok = None if not baked_tree else baked_tree == tree.get(artifact.variant)
     data: dict[str, object] = {
         "variant": artifact.variant,
         "target": artifact.target,

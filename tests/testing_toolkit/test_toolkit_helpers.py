@@ -25,7 +25,7 @@ from tundravm import (
     lock,
     read_artifacts,
 )
-from tundravm.declarative.lifecycle import read_tree
+from tundravm.declarative.lifecycle import read_tree, variant_tree_digest
 from tundravm.errors import ValidationError
 from tundravm.testing import (
     CompiledTree,
@@ -318,7 +318,7 @@ def test_fake_bake_merges_into_one_manifest(tmp_path: Path) -> None:
     assert qemu.path == tmp_path / "default" / "disk.qcow2"
     assert azure.path == tmp_path / "azure" / "disk.vhd"
     assert qemu.simulated and azure.simulated
-    assert qemu.tree_digest == tree.digest
+    assert qemu.tree_digest == variant_tree_digest(tree, "default")
     assert set(read_artifacts(tmp_path)) == {qemu, azure}
 
 

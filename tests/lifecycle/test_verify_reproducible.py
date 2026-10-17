@@ -189,7 +189,10 @@ def test_a_failed_second_build_keeps_the_first_builds_record(
         "differ": [],
         "error": None,
     }
-    assert running["tree_digest"] and running["recipe_digest"]
+    assert running["recipe_digest"] and "tree_digest" not in running  # per variant now
+    payload = json.loads((out / "bake-result.json").read_text(encoding="utf-8"))
+    own = payload["variants"]["default"]["declarative"]
+    assert own["tree_digest"] and own["reproducibility"]["state"] == state
     recorded = _declarative(out)
     assert recorded["reproducibility"]["state"] == state  # type: ignore[index]
     error_text = recorded["reproducibility"]["error"]  # type: ignore[index]

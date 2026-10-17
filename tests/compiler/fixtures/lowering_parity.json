@@ -120,24 +120,24 @@
     }
   },
   "init-prover": {
-    "recipe": "c400c9f73d40a5ff60f72b7a3cc44efc82f8febb3f419cb9d4e21622822a54f4",
-    "tree": "fa9229dce07c94e14738777811c7fdac63cb6d3aa8becec0667cdf52ad262132",
+    "recipe": "1b817820c29b4665fdaec8592c7416881e005ee949caee0fd9c90c3158b7bc15",
+    "tree": "d36712c2cce3dcfa745aeb6c8c8ce157b37e7e1d0a108d58a3fbc9a5da79b13b",
     "variants": {
       "azure": {
-        "recipe": "c1c5c91479a0ee38b84a198c0f9acf842ff145d261746e19222cf8c2acfe97c6",
-        "tree": "2921df736d3a82ca186fddb3a47fa3fd74c80d39fbabbf3964b3a1815526661b"
+        "recipe": "ae5cadb57eb03a167987c5c44c7bde4dc545d1d4129403dd2b31ccbcc3b77da1",
+        "tree": "12a09994dcfd9ee7dfc5eeb5332229cb2d4360f715098fa33f62313626bbbd4e"
       },
       "default": {
-        "recipe": "f1b2375398001a2ce92e1b5437463749a7877b1da5a5e2640ce34770567e8bd1",
-        "tree": "97d5de0f6ffe99503c57b793f6d78ad8a23e7bbea8a0310ff5a04317504f5a04"
+        "recipe": "8bb970e9322d1a8088d1da72c19a49f21bacab8ebe5b8085d653e479dd61fc50",
+        "tree": "544a7c12e5dd7d17bd6b1762f28075ac9615e31defb45effacc4ed1f7689fbb2"
       },
       "dev": {
         "recipe": "6557a6b3e787a505a747db1cbd27673cc0634f900b0f5cc7593871b88ef3dae3",
         "tree": "b863c7e124beeb15ae59a34597c604e8558a5f984408016d6b562895ed4a8e2b"
       },
       "gcp": {
-        "recipe": "b33de30620ee084bb959b1a66c552b55b66ebd31d06f0071064eacac13b1bbf4",
-        "tree": "503afc306eb95d7db283a0b834d3425d245a82d0182d4865a96cc28263ce3bff"
+        "recipe": "c6399483a7dd76a1c314946081e82b759b2111bbd46a0c9a81a9ae7fd6463e15",
+        "tree": "750cf28d679da06fd8f68e6ca1eecdf86ce6fc6b39e54a953fe0223f3ad62779"
       }
     }
   },

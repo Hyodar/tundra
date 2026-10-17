@@ -302,7 +302,7 @@ def test_cli_prints_markdown_for_a_pull_request(
 ) -> None:
     path = write_recipe_file(tmp_path, RECIPE.format(extra="jq"), monkeypatch)
     assert run_main("lock", str(path))[0] == EXIT_OK
-    assert run_main("bake", str(path))[0] == EXIT_OK
+    assert run_main("bake", str(path), "--verify-reproducible")[0] == EXIT_OK
     assert run_main("evidence", str(path), "--bundle", "v1.tar.gz")[0] == EXIT_OK
     path.write_text(RECIPE.format(extra="htop"), encoding="utf-8")
     assert run_main("lock", str(path))[0] == EXIT_OK

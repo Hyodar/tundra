@@ -94,6 +94,7 @@ from .declarative.lifecycle import (
     run_probe,
     select_artifact,
     using_lock,
+    variant_provenance,
     write_lock,
 )
 from .declarative.model import Target
@@ -181,6 +182,7 @@ from .templates import (
 )
 from .verify import VERIFY_FORMATS, verify_evidence
 from .watch import Sources, Watch, lint_failure, tree_verdict, verdict
+from .witness import WITNESS_FORMATS, verify_witnesses, witness_image, witnesses_dir
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -237,9 +239,9 @@ def main(
         return 130
 
 
-REPORT_VERSIONS = {"lint": 2}
+REPORT_VERSIONS = {"lint": 2, "config": 2}
 """Verbs whose ``--format json`` report moved past version 1: lint's diagnostics carry
-``variant`` beside ``location``."""
+``variant`` beside ``location``; config's ``values`` hold ``require``, a list."""
 
 
 def schema(verb: str) -> str:
@@ -670,7 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help=(
             "Target setting (repeatable). qemu: memory, cpus, ssh_port, tdx, daemonize, "
-            "forward (HOST:GUEST[,HOST:GUEST...]); "
+            "forward (HOST:GUEST[,HOST:GUEST...]), firmware (a TDVF or OVMF image path); "
             "azure: storage_account, resource_group, location, vm_size, gallery, secure_boot "
             "(needs signed=true), signed; "
             "gcp: project, bucket, zone, machine_type."
@@ -701,6 +703,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_changes(sub)
 
     _add_release(sub)
+
+    _add_witness(sub)
 
     _add_explore(sub)
 
@@ -1069,8 +1073,9 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "[tool.tundravm] build, else the recipe's build directory, else build): "
             "sources (BUILD/.sources), tree (BUILD/mkosi, the bake's own tree, never the "
             "committed one), artifacts (each BUILD/<variant>/ and BUILD/bake-result.json), "
-            "evidence (BUILD/evidence), state (BUILD/.mkosi and the mkosi state in "
-            "BUILD/mkosi), reproduce (BUILD/.reproduce, the second build of bake "
+            "evidence (BUILD/evidence), state (BUILD/.mkosi, the mkosi state in "
+            "BUILD/mkosi and BUILD/.tundravm-hashes.json, status's hash cache), reproduce "
+            "(BUILD/.reproduce, the second build of bake "
             "--verify-reproducible), or all. Without --what, list what --what all would "
             "remove and exit 0. The lockfile is removed only when --remove-lockfile names "
             "it. A release directory is never removed: a part that holds one (`release "
@@ -1323,11 +1328,12 @@ def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> N
     cmd.add_argument(
         "--require",
         type=_evidence_requirements,
-        default=(),
+        default=None,
         metavar="LIST",
         help=(
             f"Comma-separated checks that must be present ({', '.join(EVIDENCE_REQUIREMENTS)}): "
-            "a missing one makes the verdict incomplete (exit 1) instead of a note."
+            f"a missing one makes the verdict incomplete (exit 1) instead of a note "
+            f"(default: [{TABLE}] require, else {','.join(DEFAULT_REQUIRE)}; '' requires none)."
         ),
     )
     cmd.add_argument(
@@ -1441,6 +1447,35 @@ def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         help="The principal to check the signature for (default: the file's for the key).",
     )
     cmd.add_argument(
+        "--max-age",
+        type=_duration,
+        default=None,
+        metavar="DURATION",
+        help="Judge bundled attestation records with this freshness window (e.g. 24h, 30m) "
+        "instead of the one the evidence recorded.",
+    )
+    cmd.add_argument(
+        "--witnesses",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="A release's witness files (default with --min-witnesses: "
+        "RELEASES/<name>.witnesses/).",
+    )
+    cmd.add_argument(
+        "--min-witnesses",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Require N distinct signed witnesses that rebuilt every artifact of the release "
+        "(the publisher excluded); signatures are checked with --allowed-signers.",
+    )
+    cmd.add_argument(
+        "--allow-simulated",
+        action="store_true",
+        help="Count witnesses that rebuilt with the in-process backend.",
+    )
+    cmd.add_argument(
         "--format",
         choices=VERIFY_FORMATS,
         default="text",
@@ -1496,6 +1531,78 @@ def _add_changes(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         choices=CHANGES_FORMATS,
         default="text",
         help="Report format (default: %(default)s); markdown is meant for a pull request.",
+    )
+
+
+def _add_witness(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    help_text = "Rebuild a release from this checkout and say whether the bytes agree."
+    cmd = sub.add_parser(
+        "witness",
+        help=help_text,
+        description=(
+            help_text + " The recipe's digest must be the release's recipe_digest and the "
+            "lockfile is the release's own, from its evidence bundle (its sha256 must be the "
+            "release's lock_sha256). The released variants are baked into the witness's own "
+            "build directory and every artifact's sha256 is compared with the release's. The "
+            "witness file, witness-<builder>.json, goes beside the release in "
+            "RELEASES/<name>.witnesses/ (a release directory is immutable), with --sign also "
+            "its .sig in the tundravm-witness namespace; `tundravm verify RELEASE_DIR "
+            "--min-witnesses N` counts them."
+        ),
+        epilog=(
+            "Exits 0 when every artifact matches, 1 when one differs (the witness build is "
+            "kept for comparison), 2 when the rebuild could not run."
+        ),
+    )
+    cmd.set_defaults(handler=_cmd_witness)
+    cmd.add_argument(
+        "release", type=Path, metavar="RELEASE_DIR", help="The release directory to rebuild."
+    )
+    cmd.add_argument(
+        "recipe",
+        type=Path,
+        nargs="?",
+        default=None,
+        help=f"This checkout's recipe .py file (default: recipe in [{TABLE}] of pyproject.toml).",
+    )
+    _add_import_options(cmd)
+    _add_build(
+        cmd,
+        "Witness build directory (default: build/witness-<release>, removed when every "
+        "artifact matches).",
+    )
+    cmd.add_argument(
+        "--backend",
+        choices=BACKEND_KINDS,
+        default=None,
+        help="Build backend (default: the recipe file's `backend`).",
+    )
+    cmd.add_argument(
+        "--builder",
+        default=None,
+        metavar="NAME",
+        help="The witness's name, and its principal when signing (default: <user>@<host>).",
+    )
+    cmd.add_argument(
+        "--sign",
+        type=Path,
+        default=None,
+        metavar="KEY",
+        help="Sign the witness file with this SSH private key (ssh-keygen -Y sign).",
+    )
+    cmd.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Where to write the witness file (default: "
+        "RELEASES/<name>.witnesses/witness-<builder>.json).",
+    )
+    cmd.add_argument(
+        "--format",
+        choices=WITNESS_FORMATS,
+        default="text",
+        help="Report format (default: %(default)s); json prints the witness file.",
     )
 
 
@@ -1564,7 +1671,9 @@ def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         metavar="LIST",
         help=(
             f"Comma-separated checks the evidence must hold ({', '.join(EVIDENCE_REQUIREMENTS)}); "
-            "a missing one fails the release. '' requires none (on a resume: with --change-spec)."
+            f"a missing one fails the release (default: a resumed release's own, else [{TABLE}] "
+            f"require, else {','.join(DEFAULT_REQUIRE)}). '' requires none (on a resume: with "
+            "--change-spec)."
         ),
     )
     cmd.add_argument(
@@ -1765,6 +1874,7 @@ _PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
     "changes": (("lockfile", "lockfile"),),
     "explore": (("build", "build"), ("lockfile", "lockfile")),
     "release": (("build", "build"), ("lockfile", "lockfile"), ("backend", "backend")),
+    "witness": (("backend", "backend"),),
     "clean": (("build", "build"),),
     "doctor": (("backend", "backend"),),
     "config": (
@@ -1828,6 +1938,26 @@ def _apply_project(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             )
         setattr(args, attr, value)
         origins[key] = "pyproject"
+    if verb in _REQUIRE_VERBS:
+        _apply_require(args, project)
+
+
+_REQUIRE_VERBS = frozenset({"status", "evidence", "release", "config"})
+"""The verbs that judge evidence against one requirement set: ``--require``, else the table's."""
+
+
+def _apply_require(args: argparse.Namespace, project: ProjectConfig | None) -> None:
+    """Set ``args.require``: ``--require``, else *project*'s ``require``, else
+    :data:`DEFAULT_REQUIRE`; its origin goes in ``args.origins["require"]``."""
+    origins: dict[str, str] = args.origins
+    if getattr(args, "require", None) is not None:
+        origins["require"] = "flag"
+    elif project is not None and project.require is not None:
+        args.require = project.require
+        origins["require"] = "pyproject"
+    else:
+        args.require = DEFAULT_REQUIRE
+        origins["require"] = "default"
 
 
 def _same_path(a: Path, b: Path) -> bool:
@@ -1854,9 +1984,9 @@ def _cmd_config(args: argparse.Namespace, out: TextIO) -> int:
         print(json_report("config", {"pyproject": source, "values": values}), file=out)
         return EXIT_OK
     print(f"pyproject: {source or f'none (no [{TABLE}] table here or above)'}", file=out)
-    width = max(len(str(entry["value"] or "-")) for entry in values.values())
+    width = max(len(_config_shown(entry)) for entry in values.values())
     for key, entry in values.items():
-        shown = str(entry["value"] or "-")
+        shown = _config_shown(entry)
         loaded = values["recipe"]["exists"] is True
         print(f"  {key:<8}  {shown:<{width}}  {_config_origin(key, entry, loaded)}", file=out)
     return EXIT_OK
@@ -1893,7 +2023,16 @@ def _config_values(args: argparse.Namespace) -> dict[str, dict[str, object]]:
         values["backend"] = {"value": kind, "origin": "default" if bound is None else "recipe"}
     else:
         values["backend"] = {"value": None, "origin": "default"}
+    values["require"] = {"value": list(args.require), "origin": origins["require"]}
     return values
+
+
+def _config_shown(entry: dict[str, object]) -> str:
+    """*entry*'s value as ``config`` prints it: ``-`` when unset, ``require`` comma-joined."""
+    value = entry["value"]
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value) or "'' (none)"
+    return str(value or "-")
 
 
 def _backend_kind(backend: BuildBackend) -> str:
@@ -2569,7 +2708,7 @@ def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
     artifact = _artifact(args, None)
     document = sbom(
         artifact,
-        lock=_sbom_lock(_build_dir(args), args.lockfile),
+        lock=_sbom_lock(_build_dir(args), args.lockfile, artifact.variant),
         allow_unbound=args.allow_unbound,
     )
     text = document.render(args.format)
@@ -2586,13 +2725,14 @@ def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
-def _sbom_lock(base: Path, flag: Path | None) -> Lock | None:
-    """``--lockfile``, else the lockfile the bake in *base* recorded, else its tundravm.lock."""
+def _sbom_lock(base: Path, flag: Path | None, variant: str) -> Lock | None:
+    """``--lockfile``, else the lockfile the bake of *variant* in *base* recorded, else its
+    tundravm.lock."""
     if flag is not None:
         return read_lock(flag)
     try:
-        payload = json.loads((base / "bake-result.json").read_text(encoding="utf-8"))
-        recorded = (payload.get("declarative") or {}).get("lockfile")
+        payload = json.loads((base / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
+        recorded = variant_provenance(payload, variant).get("lockfile")
     except (OSError, ValueError, AttributeError):
         recorded = None
     for candidate in (recorded and Path(recorded), base / "tundravm.lock"):
@@ -2639,12 +2779,19 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
 def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
     if is_release(args.evidence):
         return _verify_release(args, out)
+    if args.witnesses is not None or args.min_witnesses is not None:
+        raise ValidationError(
+            f"--witnesses and --min-witnesses apply to a release directory, not {args.evidence}.",
+            hint="Verify the release directory (the one holding release.json) with them.",
+            context={"evidence": str(args.evidence)},
+        )
     result = verify_evidence(
         args.evidence,
         build=args.build,
         require=args.require,
         allowed_signers=args.allowed_signers,
         signer=args.signer,
+        max_age=args.max_age,
     )
     print(result.render(args.format), file=out, end="")
     if args.html is not None:
@@ -2669,9 +2816,30 @@ def _verify_release(args: argparse.Namespace, out: TextIO) -> int:
                 "requirements: drop the flag, or verify its evidence.tar.gz on its own.",
                 context={"release": str(args.evidence)},
             )
-    found = verify_release(args.evidence, allowed_signers=args.allowed_signers, signer=args.signer)
-    print(found.render(args.format), file=out, end="")
-    return EXIT_OK if found.passed else EXIT_FAILURE
+    found = verify_release(
+        args.evidence,
+        allowed_signers=args.allowed_signers,
+        signer=args.signer,
+        max_age=args.max_age,
+    )
+    if args.witnesses is None and args.min_witnesses is None:
+        print(found.render(args.format), file=out, end="")
+        return EXIT_OK if found.passed else EXIT_FAILURE
+    witnessed = verify_witnesses(
+        args.evidence,
+        args.witnesses if args.witnesses is not None else witnesses_dir(args.evidence),
+        min_witnesses=1 if args.min_witnesses is None else args.min_witnesses,
+        allowed_signers=args.allowed_signers,
+        allow_simulated=args.allow_simulated,
+    )
+    if args.format == "json":
+        report = json.loads(found.render("json"))
+        report["witnesses"] = witnessed.to_dict()
+        print(json.dumps(report, indent=2, sort_keys=True), file=out)
+    else:
+        print(found.render(args.format), file=out, end="")
+        print(witnessed.render("text"), file=out, end="")
+    return EXIT_OK if found.passed and witnessed.passed else EXIT_FAILURE
 
 
 def _cmd_changes(args: argparse.Namespace, out: TextIO) -> int:
@@ -2748,6 +2916,31 @@ def _cmd_explore(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+def _cmd_witness(args: argparse.Namespace, out: TextIO) -> int:
+    loaded = _load(args)
+    img = loaded.lowered()
+    if args.backend is not None:
+        img = replace(img, backend=Backend(args.backend).build_backend())
+    steps = sys.stderr if args.format == "json" else out
+    result = witness_image(
+        loaded.recipe,
+        img,
+        args.release,
+        build=args.build,
+        builder=args.builder,
+        sign=args.sign,
+        output=args.output,
+        progress=lambda line: print(line, file=steps, flush=True),
+    )
+    print(result.render(args.format), file=out, end="")
+    written = [str(path) for path in (result.path, result.signature) if path is not None]
+    if written:
+        print(f"wrote {' and '.join(written)}", file=steps)
+    if result.verdict == "error":
+        return EXIT_SDK_ERROR
+    return EXIT_OK if result.matched else EXIT_FAILURE
+
+
 def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args)
     names = _variants(loaded, args) if args.variant else None
@@ -2772,6 +2965,8 @@ def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
         )
     stages = sys.stderr if args.format == "json" else out
     resume = _release_command(args)
+    resuming = (root / STATE_NAME).is_file() and not args.restart
+    inherit = resuming and args.origins["require"] != "flag"  # a resume keeps its spec's
     blocked = root.is_dir() and not (root / STATE_NAME).is_file() and any(root.iterdir())
     try:
         result = release_image(
@@ -2781,7 +2976,7 @@ def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
             variants=names,
             sign=args.sign,
             unsigned=args.no_sign,
-            require=args.require,
+            require=None if inherit else args.require,
             since=args.since,
             releases=releases,
             build=args.build if args.build is not None else Path(img.build_dir),
@@ -2817,7 +3012,7 @@ def _release_command(args: argparse.Namespace) -> str:
     words += ["--version", args.version]
     for name in args.variant or ():
         words += ["--variant", name]
-    require = None if args.require is None else ",".join(args.require) or "''"
+    require = (",".join(args.require) or "''") if origins.get("require") == "flag" else None
     for flag, value in (
         ("--sign", args.sign),
         ("--require", require),
@@ -3094,7 +3289,6 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         releases=args.releases,
         backend=backend,
     )
-    require = None if configured is None else configured.require
     status = project_status(
         loaded,
         names,
@@ -3104,7 +3298,7 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         invocation=call,
         verify=args.verify,
         tree=args.tree,
-        require=DEFAULT_REQUIRE if require is None else require,
+        require=args.require,
         releases=args.releases
         or (
             Path("releases")

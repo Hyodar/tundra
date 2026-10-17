@@ -443,7 +443,9 @@ def test_cli_signs_evidence_and_verifies_it(
     allowed = _allowed(tmp_path, "release@example.com", public)
     assert run_main("lock", str(recipe))[0] == EXIT_OK
     assert run_main("bake", str(recipe))[0] == EXIT_OK
-    code, _ = run_main("evidence", str(recipe), "--sign", str(key), "--bundle", "e.tar.gz")
+    code, _ = run_main(
+        "evidence", str(recipe), "--require", "", "--sign", str(key), "--bundle", "e.tar.gz"
+    )
     assert code == EXIT_OK
     assert (tmp_path / "build" / "evidence" / "evidence.json.sig").is_file()
     code, out = run_main(

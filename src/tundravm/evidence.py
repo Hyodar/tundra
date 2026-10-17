@@ -54,6 +54,8 @@ from .declarative.lifecycle import (
     recorded_reproducibility,
     reproducibility_of,
     run_probe,
+    variant_provenance,
+    variant_tree_digest,
     verify_artifact,
 )
 from .declarative.lower import lower
@@ -306,9 +308,9 @@ def evidence(
     lint_rows = [d.to_dict() for d in diagnostics]
     members["lint.json"] = _json_bytes(lint_rows)
     compiled = _compiled_tree(img, artifacts, locked)
-    tree = None if compiled is None else compiled.digest
     digests = _recipe_digests(img, names, locked)
     reproduced = recorded_reproducibility(extra)
+    payload = _manifest_payload(manifest)
     records = {
         name: _variant(
             name,
@@ -318,8 +320,10 @@ def evidence(
             recipe=recipe,
             locked=locked,
             policy=policy,
-            tree=tree,
-            reproducibility=reproducibility_of(reproduced, name),
+            tree=None if compiled is None else variant_tree_digest(compiled, name),
+            reproducibility=reproducibility_of(
+                recorded_reproducibility(variant_provenance(payload, name)), name
+            ),
             members=members,
             notes=notes,
             allow_unbound=allow_unbound,
@@ -542,8 +546,8 @@ def tree_rows_digest(rows: Iterable[tuple[str, Mapping[str, Any]]]) -> str:
 def _tree_manifest(variant: str, tree: Tree) -> bytes:
     """``variants/<variant>/tree.json``: every file the variant's compiled tree emits.
 
-    ``tree_digest`` is the digest of the whole tree compiled for ``compiled_variants``
-    (what a bake of them records); ``variant_digest`` covers this variant's rows alone.
+    ``tree_digest`` is the digest of the whole tree compiled for ``compiled_variants``;
+    ``variant_digest`` covers this variant's rows alone, what a bake records for it.
     """
     rows = tree_rows(tree, variant)
     return _json_bytes(
