@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,6 +34,7 @@ from tundravm._source import Source
 from tundravm.cli import EXIT_OK
 from tundravm.declarative import lower, write_lock
 from tundravm.declarative.bom import manifest_path
+from tundravm.errors import ValidationError
 
 REPO = "https://example.com/app.git"
 FIRST = "a" * 40
@@ -138,11 +140,19 @@ def test_a_package_a_file_and_a_pin_that_changed(tmp_path: Path, released: Path)
     (pin,) = report.section("pins")
     assert (pin.change, pin.subject, pin.old, pin.new) == ("changed", "app", FIRST, SECOND)
     assert pin.detail == "ref main"
-    packages = {(c.change, c.subject): (c.old, c.new) for c in report.section("packages")}
-    assert packages == {
+    declared = {(c.change, c.subject): (c.old, c.new) for c in report.section("packages")}
+    assert declared == {("added", "htop"): (None, None), ("removed", "jq"): (None, None)}
+    installed = {(c.change, c.subject): (c.old, c.new) for c in report.section("installed")}
+    assert installed == {
         ("added", "htop"): (None, "3.2.2-2"),
         ("removed", "jq"): ("1.6-2.1", None),
         ("changed", "curl"): ("7.88.1-10", "8.5.0-2"),
+    }
+    states = {(c.section, c.state) for c in report.comparisons}
+    assert states == {
+        ("packages", "compared"),
+        ("installed", "compared"),
+        ("measurements", "unknown"),
     }
     files = {c.subject: c for c in report.section("files")}
     motd = files["mkosi.extra/etc/motd"]
@@ -151,7 +161,7 @@ def test_a_package_a_file_and_a_pin_that_changed(tmp_path: Path, released: Path)
     assert files["mkosi.conf"].change == "changed" and files["mkosi.conf"].origins == ()
     assert report.counts()["measurements"] == 0
     payload = json.loads(report.render("json"))
-    assert payload["schema"] == "tundravm.changes/1"
+    assert payload["schema"] == "tundravm.changes/2"
     assert payload["counts"]["pins"] == 1
 
 
@@ -161,15 +171,16 @@ def test_markdown_groups_the_sections_with_counts(tmp_path: Path, released: Path
     markdown = report.render("markdown")
     assert markdown.startswith("## Changes since evidence `2023-11-14T22:13:20Z`")
     assert "| Source pins | 1 |" in markdown
-    assert "### Packages (2)" in markdown  # declared packages: no version change is claimed
+    assert "### Declared packages (2)" in markdown
     assert "| added | `default` | `htop` | — | — |" in markdown
     assert "| changed | `app` | ref main | `aaaaaaaaaaaa` | `bbbbbbbbbbbb` |" in markdown
     assert "| changed | `default` | `mkosi.extra/etc/motd` | content |" in markdown
-    assert "<details><summary>Notes</summary>" in markdown
     text = report.render()
     assert "  pins          1" in text
     assert "  ~ app  aaaaaaaaaaaa -> bbbbbbbbbbbb  (ref main)" in text
-    assert any("declared ones, unversioned" in note for note in report.notes)
+    assert "unknown: default installed: the current side has no usable bake: no --build" in text
+    assert "### Not compared (2)" in markdown
+    assert report.section("installed") == ()
 
 
 def test_measurement_registers_compare_when_both_sides_have_policies(
@@ -199,6 +210,47 @@ def test_measurement_registers_compare_when_both_sides_have_policies(
     report = changes(recipe, since=bundle, lock=locked, build=build)
     (register,) = report.section("measurements")
     assert (register.subject, register.old, register.new) == ("RTMR1", "11" * 48, "22" * 48)
+    (build / "default" / "policy.json").write_text(policy("9" * 64, "22" * 48), encoding="utf-8")
+    report = changes(recipe, since=bundle, lock=locked, build=build)
+    assert report.section("measurements") == ()
+    (unknown,) = [c for c in report.unknown if c.section == "measurements"]
+    assert unknown.reason is not None
+    assert unknown.reason.endswith("measured no artifact of the current bake of default")
+
+
+def test_a_side_without_the_data_is_unknown_not_removals(tmp_path: Path, released: Path) -> None:
+    recipe = _recipe(extra="htop")
+    locked = _locked(recipe, FIRST)
+    stale = _bake(_recipe(), _locked(_recipe(), FIRST), tmp_path / "stale")
+    _record_manifest(stale, {"curl": "7.88.1-10"})
+    report = changes(recipe, since=released, lock=locked, build=stale)
+    assert report.section("installed") == ()
+    (installed,) = [c for c in report.unknown if c.section == "installed"]
+    assert installed.reason is not None and "baked from another recipe" in installed.reason
+    assert any(n.startswith(f"the bake in {stale} is not used: it was baked") for n in report.notes)
+    current = _bake(recipe, locked, tmp_path / "v2")
+    report = changes(recipe, since=released, lock=locked, build=current)
+    (installed,) = [c for c in report.unknown if c.section == "installed"]
+    assert installed.reason == "the current bake of default/qemu has no mkosi manifest"
+    assert _subjects(report, "packages") == [
+        ("added", "default", "htop"),
+        ("removed", "default", "jq"),
+    ]
+    (measured,) = [c for c in report.unknown if c.section == "measurements"]
+    assert measured.reason == "the evidence holds no valid measurements policy"
+
+
+def test_the_previous_release_directory_is_taken_for_its_bundle(
+    tmp_path: Path, released: Path
+) -> None:
+    release = tmp_path / "releases" / "1.0"
+    release.mkdir(parents=True)
+    (release / "release.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValidationError, match="holds no evidence.tar.gz"):
+        changes(_recipe(), since=release)
+    shutil.copy(released, release / "evidence.tar.gz")
+    report = changes(_recipe(), since=release, lock=_locked(_recipe(), FIRST))
+    assert report.changes == () and report.since == str(release / "evidence.tar.gz")
 
 
 def test_lowered_recipe_and_a_new_variant(tmp_path: Path, released: Path) -> None:

@@ -151,9 +151,25 @@ def test_tdxs_after_init_orders_after_runtime_init() -> None:
 
 def test_devtools_root_password() -> None:
     hooks = [item for item in DevTools(root_password="s3cret").items if isinstance(item, Hook)]
-    assert 'openssl passwd -6 "s3cret"' in hooks[-1].script
+    script = hooks[-1].script
+    assert 'openssl passwd -6 -salt "$SALT" "s3cret"' in script
+    assert "SALT=$(printf 'tundravm-devtools:%s' \"${IMAGE_ID:-devtools}\" | sha256sum" in script
     with pytest.raises(ValidationError):
         DevTools(root_password='a"b')
+
+
+def test_devtools_salt_is_fixed_unless_reproducible_is_false() -> None:
+    def login(tools: DevTools) -> str:
+        return [item for item in tools.items if isinstance(item, Hook)][-1].script
+
+    assert 'SALT="devtools01"\nROOT_PASS=$(openssl passwd -6 -salt "$SALT" "tdx")' in login(
+        DevTools(salt="devtools01")
+    )
+    historical = login(DevTools(reproducible=False))
+    assert 'ROOT_PASS=$(openssl passwd -6 "tdx")' in historical and "SALT" not in historical
+    for bad in ({"salt": "has space"}, {"salt": "x" * 17}, {"salt": "ok", "reproducible": False}):
+        with pytest.raises(ValidationError, match="salt"):
+            DevTools(**bad)
 
 
 def test_utils_are_fragments_configured_by_their_fields() -> None:
@@ -163,7 +179,7 @@ def test_utils_are_fragments_configured_by_their_fields() -> None:
     assert [type(item) for item in efi.items] == [Hook]
     assert repr(efi) == f"EfiStub(snapshot={SNAPSHOT!r}, version='255.4-1')"
     assert str(inspect.signature(EfiStub)) == "(*, snapshot: 'str', version: 'str') -> None"
-    assert repr(DevTools()) == "DevTools(root_password='tdx')"
+    assert repr(DevTools()) == "DevTools(root_password='tdx', salt=None, reproducible=True)"
     assert repr(Backports(release="trixie")) == "Backports(archive_url=None, release='trixie')"
     assert Tdxs().source == TUNDRA_TOOLS
     assert Tdxs().name == "tdxs" and Tdxs(after_init=True) != Tdxs()

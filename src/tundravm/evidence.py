@@ -31,11 +31,11 @@ from string import Template
 from typing import Any, Literal
 
 from . import _ssh_sig
-from . import check as _check
 from .backends.base import Requirement
 from .declarative._lowered import Lowered
-from .declarative.bom import sbom
+from .declarative.bom import manifest_path, sbom
 from .declarative.lifecycle import (
+    INPROCESS,
     MANIFEST_KEY,
     NO_LOCK,
     Artifact,
@@ -61,30 +61,33 @@ from .declarative.resolve import provenance
 from .errors import ArtifactError, StateError, TdxError, ValidationError
 from .lockfile import lock_variants
 from .measure.policy import is_placeholder, read_policy
+from .measure.rtmr import MEASURABLE_SUFFIXES, measurable
 from .models import BAKE_RESULT_FILENAME
 
-EVIDENCE_SCHEMA_VERSION = 1
 INDEX_NAME = "evidence.json"
 SIGNATURE_NAME = "evidence.json.sig"
 """The SSH signature of ``evidence.json`` (``ssh-keygen -Y sign -n tundravm-evidence``)."""
-EVIDENCE_SCHEMA = "tundravm.evidence/1"
-"""The ``schema`` of ``evidence.json``, which ``evidence --format json`` prints verbatim."""
+EVIDENCE_SCHEMA = "tundravm.evidence/2"
+"""The ``schema`` of ``evidence.json``, which ``evidence --format json`` prints verbatim: the one
+identifier of the index's structure, which ``verify`` reads and refuses any other of."""
 TREE_SCHEMA = "tundravm.tree/1"
 """The ``schema`` of each ``variants/<variant>/tree.json`` member."""
 BUNDLE_ROOT = "evidence"
 """The top-level directory every member of a bundle sits under."""
 EvidenceFormat = Literal["text", "json"]
 EVIDENCE_FORMATS: tuple[EvidenceFormat, ...] = ("text", "json")
-EvidenceRequirement = Literal["reproducible", "measured", "real", "lock"]
+EvidenceRequirement = Literal["reproducible", "measured", "real", "lock", "installed"]
 EVIDENCE_REQUIREMENTS: tuple[EvidenceRequirement, ...] = (
     "reproducible",
     "measured",
     "real",
     "lock",
+    "installed",
 )
 """What ``require=`` (``evidence --require``) can demand; a missing one makes the verdict
 ``incomplete`` instead of a note: a recorded ``matched`` second build, a valid measurements
-policy bound to each artifact, real (not simulated) artifacts, a lockfile."""
+policy bound to each artifact, real (not simulated) artifacts, a lockfile, and an SBOM with
+the installed inventory (mkosi's manifest) for each artifact."""
 _MKOSI = Requirement(
     tool="mkosi",
     probe=("mkosi", "--version"),
@@ -144,10 +147,16 @@ class Evidence:
         return replace(self, signature=signature)
 
     def write(self, directory: Path) -> Path:
-        """Write every file under *directory* (created; files of a previous run replaced, and
-        a previous run's ``evidence.json.sig`` removed when this evidence is unsigned)."""
+        """Write every file under *directory* (created; files of a previous run replaced, the
+        members its index lists that this evidence does not hold removed, as is its
+        ``evidence.json.sig`` when this evidence is unsigned)."""
         root = Path(directory)
-        for name, data in self.files().items():
+        files = self.files()
+        for name in _previous_members(root):
+            if name not in files:
+                (root / name).unlink(missing_ok=True)
+                _prune(root, (root / name).parent)
+        for name, data in files.items():
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
@@ -269,7 +278,8 @@ def evidence(
         variants=names,
         lock=NO_LOCK if locked is None else locked,
     )
-    members["lint.json"] = _json_bytes([d.to_dict() for d in diagnostics])
+    lint_rows = [d.to_dict() for d in diagnostics]
+    members["lint.json"] = _json_bytes(lint_rows)
     compiled = _compiled_tree(img, artifacts, locked)
     tree = None if compiled is None else compiled.digest
     digests = _recipe_digests(img, names, locked)
@@ -277,6 +287,7 @@ def evidence(
     records = {
         name: _variant(
             name,
+            img,
             [a for a in artifacts if a.variant == name],
             base=base,
             recipe=recipe,
@@ -291,7 +302,9 @@ def evidence(
         for name in names
     }
     for name in names:
+        records[name]["tree"] = None
         if compiled is not None and name in compiled.variants:
+            records[name]["tree"] = f"variants/{name}/tree.json"
             members[f"variants/{name}/tree.json"] = _tree_manifest(name, compiled)
         else:
             notes.append(
@@ -301,17 +314,16 @@ def evidence(
         notes.append("no recipe given (a lowered recipe): the provenance summary is left out")
     index: dict[str, Any] = {
         "schema": EVIDENCE_SCHEMA,
-        "schema_version": EVIDENCE_SCHEMA_VERSION,
         "created": _created(),
         "recipe": _recipe_entry(recipe, img, recipe_path, digests, artifacts, names),
         "bake": {
             "path": str(manifest),
             "backend": _manifest_field(manifest, "backend"),
-            "simulated": bool(extra.get("simulated", False)),
+            "simulated": bake_simulated(_manifest_payload(manifest)),
             "reproducibility": reproduced,
         },
         "lockfile": lock_entry,
-        "lint": _lint_entry(diagnostics),
+        "lint": lint_entry(lint_rows),
         "tools": _tools(runner, notes),
         "variants": records,
     }
@@ -557,8 +569,37 @@ def _integrity(artifact: Artifact) -> str:
     return "verified"
 
 
+def _previous_members(root: Path) -> list[str]:
+    """The members the ``evidence.json`` already in *root* lists, each a plain relative path
+    inside *root*; none when there is no readable index."""
+    try:
+        listed = json.loads((root / INDEX_NAME).read_text(encoding="utf-8")).get("members")
+    except (OSError, ValueError, AttributeError):
+        return []
+    names = [str(name) for name in listed] if isinstance(listed, dict) else []
+    return [
+        name
+        for name in names
+        if not Path(name).is_absolute() and ".." not in Path(name).parts and name != INDEX_NAME
+    ]
+
+
+def _prune(root: Path, directory: Path) -> None:
+    """Remove *directory* and its parents up to *root* while they are empty."""
+    while directory != root and directory.is_dir() and not any(directory.iterdir()):
+        directory.rmdir()
+        directory = directory.parent
+
+
+def declared_packages(img: Lowered, variant: str) -> list[str]:
+    """The packages *img* declares for *variant*, sorted: ``variants.<variant>.declared_packages``
+    of the index, which ``changes`` compares with the recipe's later."""
+    return sorted(str(name) for name in img.state.effective_profile(variant).packages)
+
+
 def _variant(
     name: str,
+    img: Lowered,
     artifacts: Sequence[Artifact],
     *,
     base: Path,
@@ -593,23 +634,32 @@ def _variant(
         member = f"variants/{name}/sbom-{artifact.target}.spdx.json"
         members[member] = document.render("spdx-json").encode()
         notes.extend(f"{name}/{artifact.target} sbom: {note}" for note in document.notes)
+        manifest: str | None = None
+        if document.manifest_found:
+            manifest = f"variants/{name}/manifest-{artifact.target}.json"
+            members[manifest] = manifest_path(artifact).read_bytes()
         sboms.append(
             {
                 "target": artifact.target,
                 "member": member,
+                "manifest_member": manifest,
                 "packages": len(document.packages),
                 "sources": len(document.sources),
-                "manifest_found": document.manifest_found,
+                "complete": document.complete,
+                "missing": list(document.missing),
                 "bound": document.bound,
             }
         )
     recorded_tree = next((a.tree_digest for a in artifacts if a.tree_digest), "")
+    measurements = _policy(name, artifacts, base, policy, members, notes)
     return {
         "artifacts": rows,
         "tree_digest": recorded_tree or None,
         "tree_matches": None if not recorded_tree or tree is None else recorded_tree == tree,
         "reproducibility": reproducibility,
-        "policy": _policy(name, artifacts, base, policy, members, notes),
+        "policy": measurements,
+        "coverage": coverage(rows, measurements),
+        "declared_packages": declared_packages(img, name),
         "sbom": sboms,
         "provenance": None if recipe is None else _provenance(recipe, name),
     }
@@ -648,7 +698,48 @@ def _policy(
         "tool": payload.get("tool"),
         "registers": sorted(dict(payload.get("registers") or {})),  # type: ignore[call-overload]
         "artifact_matches": sha in {a.sha256 for a in artifacts} if sha else None,
+        "measures": {
+            "target": next((a.target for a in artifacts if sha and a.sha256 == sha), None),
+            "sha256": sha,
+        },
     }
+
+
+def coverage(
+    rows: Sequence[Mapping[str, Any]], policy: Mapping[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Per artifact row of a variant, whether its measurements *policy* measures it: ``target``,
+    ``sha256``, ``state`` (``measured`` or ``unmeasured``) and the ``reason`` it is not (a
+    format no tool reads, no usable policy, or the policy measures another artifact).
+
+    An artifact counts as measured only when the policy names its own sha256: the bake
+    does not record which UKI a disk image holds, so a disk is not covered by the
+    measurement of the UKI inside it.
+    """
+    usable = policy is not None and policy.get("valid") and not policy.get("placeholder")
+    measures: Mapping[str, Any] = (policy or {}).get("measures") or {}
+    found: list[dict[str, Any]] = []
+    for row in rows:
+        entry = {"target": row["target"], "sha256": row["sha256"]}
+        if usable and measures.get("sha256") == row["sha256"]:
+            found.append({**entry, "state": "measured", "reason": None})
+            continue
+        suffix = Path(str(row["path"])).suffix
+        if not measurable(str(row["path"])):
+            readable = ", ".join(sorted(MEASURABLE_SUFFIXES))
+            reason = (
+                f"its format ({suffix or 'no suffix'}) is not measurable: tools read {readable}"
+            )
+        elif policy is None:
+            reason = "no measurements policy"
+        elif not usable:
+            reason = "the policy is invalid or a placeholder"
+        elif measures.get("target"):
+            reason = f"the policy measures {measures['target']}"
+        else:
+            reason = "the policy measures another artifact"
+        found.append({**entry, "state": "unmeasured", "reason": reason})
+    return found
 
 
 def _provenance(recipe: Recipe, variant: str) -> dict[str, dict[str, int]]:
@@ -664,10 +755,25 @@ def _provenance(recipe: Recipe, variant: str) -> dict[str, dict[str, int]]:
     return {"fragments": dict(sorted(fragments.items())), "actions": dict(sorted(actions.items()))}
 
 
-def _lint_entry(diagnostics: Sequence[_check.Diagnostic]) -> dict[str, Any]:
-    counts = _check.summarize(diagnostics)
-    codes = Counter(d.code for d in diagnostics)
-    return {"member": "lint.json", **counts, "codes": dict(sorted(codes.items()))}
+def lint_entry(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The index's ``lint`` entry from ``lint.json``'s rows: the count per severity and per code."""
+    severities = Counter(str(row.get("severity")) for row in rows)
+    codes = Counter(str(row.get("code")) for row in rows)
+    return {
+        "member": "lint.json",
+        "errors": severities["error"],
+        "warnings": severities["warning"],
+        "infos": severities["info"],
+        "codes": dict(sorted(codes.items())),
+    }
+
+
+def bake_simulated(payload: Mapping[str, Any]) -> bool:
+    """Whether the bake of a ``bake-result.json`` *payload* is simulated, as
+    :func:`~tundravm.declarative.read_artifacts` reads it."""
+    extra = payload.get(MANIFEST_KEY)
+    recorded = extra.get("simulated") if isinstance(extra, Mapping) else None
+    return bool(payload.get("backend") == INPROCESS if recorded is None else recorded)
 
 
 def _tools(runner: ProbeRunner | None, notes: list[str]) -> dict[str, str | None]:
@@ -731,9 +837,19 @@ def _verdict(
         add("incomplete", "lock-unbound", None, "the lockfile is not the one the bake used")
     for name, record in variants.items():
         for entry in record["sbom"]:
-            if not entry["bound"]:
-                subject = f"{name}/{entry['target']}"
+            subject = f"{name}/{entry['target']}"
+            if entry["missing"]:
+                gone = ", ".join(entry["missing"])
+                message = f"the {gone} the bake recorded is gone: the SBOM is not bound to the bake"
+                add("incomplete", "sbom-material-missing", subject, message)
+            elif not entry["bound"]:
                 add("incomplete", "sbom-unbound", subject, "the SBOM is not bound to the bake")
+            if not entry["complete"]:
+                message = (
+                    f"the SBOM of {subject} lists the declared packages: no installed inventory "
+                    "(mkosi manifest)"
+                )
+                absent("installed", "sbom-incomplete", subject, message, noted=True)
     lint = index["lint"]
     if lint["errors"]:
         add("fail", "lint-errors", None, f"lint reports {lint['errors']} error(s)")
@@ -769,6 +885,15 @@ def _verdict(
         elif state == "missing":
             message = f"no measurements policy for {name}"
             absent("measured", "policy-missing", name, message, noted=True)
+    for name, record in variants.items():
+        if policies[name] != "verified":
+            continue
+        for entry in record["coverage"]:
+            if entry["state"] != "measured":
+                subject = f"{name}/{entry['target']}"
+                message = f"{subject} is not measured: {entry['reason']}"
+                absent("measured", "artifact-unmeasured", subject, message)
+    covered = [entry["state"] for r in variants.values() for entry in r["coverage"]]
     simulated = [f"{name}/{row['target']}" for name, row in rows if row["simulated"]]
     if simulated:
         absent(
@@ -798,6 +923,13 @@ def _verdict(
             ("changed", "unknown", "matches"),
         ),
         "policy": _worst(policies.values(), _POLICY_ORDER),
+        "measured": "none"
+        if "measured" not in covered
+        else ("full" if set(covered) == {"measured"} else "partial"),
+        "sbom": _worst(
+            (_sbom_state(entry) for record in variants.values() for entry in record["sbom"]),
+            _SBOM_ORDER,
+        ),
         "artifacts": "simulated" if simulated else "real",
         "required": list(required),
         "reasons": reasons,
@@ -807,6 +939,15 @@ def _verdict(
 
 _REPRODUCED_ORDER = ("different", "error", "interrupted", "running", "not checked", "matched")
 _POLICY_ORDER = ("invalid", "placeholder", "mismatch", "unbound", "missing", "verified")
+_SBOM_ORDER = ("material-missing", "unbound", "declared", "installed")
+
+
+def _sbom_state(entry: Mapping[str, Any]) -> str:
+    if entry["missing"]:
+        return "material-missing"
+    if not entry["bound"]:
+        return "unbound"
+    return "installed" if entry["complete"] else "declared"
 
 
 def _worst(states: Iterable[str], order: Sequence[str]) -> str:
@@ -846,6 +987,8 @@ def _text(index: Mapping[str, Any]) -> str:
         f"  lock       {verdict['lock']}",
         f"  reproduce  {verdict['reproducible']}",
         f"  policy     {verdict['policy']}",
+        f"  measured   {verdict['measured']}",
+        f"  sbom       {verdict['sbom']}",
         f"  artifacts  {verdict['artifacts']}",
         f"  lint       {verdict['lint']}",
     ]
@@ -953,12 +1096,18 @@ def _variant_html(name: str, record: Mapping[str, Any]) -> str:
     policy = record["policy"]
     parts.append("<h3>Measurements policy</h3>")
     parts.append(_pairs(policy) if policy else "<p>none</p>")
+    parts.append(
+        _table(
+            ("target", "sha256", "measured", "why not"),
+            [(c["target"], c["sha256"], c["state"], c["reason"]) for c in record["coverage"]],
+        )
+    )
     parts.append("<h3>SBOM</h3>")
     parts.append(
         _table(
-            ("target", "member", "packages", "sources", "mkosi manifest"),
+            ("target", "member", "packages", "sources", "installed", "bound"),
             [
-                (s["target"], s["member"], s["packages"], s["sources"], s["manifest_found"])
+                (s["target"], s["member"], s["packages"], s["sources"], s["complete"], s["bound"])
                 for s in record["sbom"]
             ],
         )
@@ -980,7 +1129,17 @@ def render_html(index: Mapping[str, Any]) -> str:
     title = str(recipe["name"] or recipe["path"] or "bake")
     checks = "".join(
         f"<span>{html.escape(key)}: {html.escape(str(verdict[key]))}</span>"
-        for key in ("integrity", "lock", "reproducible", "lint", "recipe", "tree", "policy")
+        for key in (
+            "integrity",
+            "lock",
+            "reproducible",
+            "lint",
+            "recipe",
+            "tree",
+            "policy",
+            "measured",
+            "sbom",
+        )
     )
     reasons = "".join(
         f"<li><code>{html.escape(r['severity'])} {html.escape(r['code'])}</code> "

@@ -6,12 +6,14 @@ The parts (``clean --what``) are ``sources`` (``BUILD/.sources``), ``tree``
 evidence`` writes), ``state`` (``BUILD/.mkosi``, which holds the cached tools tree,
 and the mkosi state next to the tree's config) and ``reproduce`` (``BUILD/.reproduce``,
 the second build a failed ``bake --verify-reproducible`` keeps). The lockfile is never
-one of them.
+one of them, and a release directory never goes: a part that holds one (``release
+--releases`` pointed inside the build directory) is refused (:func:`holds_release`).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from collections.abc import Callable, Collection, Iterable, Sequence
@@ -82,6 +84,41 @@ def clean_paths(build: Path, parts: Collection[str], *, variants: Iterable[str] 
     return [path for path in paths if path.exists() or path.is_symlink()]
 
 
+RELEASE_INDEX = "release.json"
+"""The file that marks a release directory (``tundravm release``)."""
+RELEASE_DEPTH = 3
+"""How deep below a part :func:`holds_release` looks: a releases directory directly in
+it, or one level further down."""
+
+
+def holds_release(path: Path) -> Path | None:
+    """A release directory at or under *path* (to :data:`RELEASE_DEPTH`), else ``None``.
+
+    A release directory holds ``release.json`` with a ``tundravm.release/`` schema.
+    """
+    if not path.is_dir() or path.is_symlink():
+        return None
+    base = len(path.parts)
+    for current, dirs, files in os.walk(path):
+        here = Path(current)
+        if RELEASE_INDEX in files and _is_release_index(here / RELEASE_INDEX):
+            return here
+        if len(here.parts) - base >= RELEASE_DEPTH:
+            dirs.clear()
+        dirs.sort()
+    return None
+
+
+def _is_release_index(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(payload, dict) and str(payload.get("schema", "")).startswith(
+        "tundravm.release/"
+    )
+
+
 def _tree_state(tree: Path) -> list[Path]:
     """mkosi's build state next to the config at *tree* and in its variant directories."""
     if not tree.is_dir():
@@ -129,6 +166,7 @@ __all__ = [
     "SudoRunner",
     "baked_variants",
     "clean_paths",
+    "holds_release",
     "owner_hint",
     "remove",
     "run_sudo",

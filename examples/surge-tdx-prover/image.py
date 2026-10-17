@@ -147,7 +147,7 @@ recipe = Recipe(
         Variant("default", target="qemu"),
         Variant("azure", parent="default", target="azure"),
         Variant("gcp", parent="default", target="gcp"),
-        Variant("devtools", parent="default", add=DevTools()),  # never ship it
+        Variant("devtools", parent="default", add=DevTools(reproducible=False)),  # never ship it
     ),
 )
 

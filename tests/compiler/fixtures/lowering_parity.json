@@ -88,8 +88,8 @@
     }
   },
   "init-cloud": {
-    "recipe": "6c0c11183b941a1f4e74aaf94cea584214364acd13020a7770847b5d4d1ccf15",
-    "tree": "80f02de76cd115a7c651efd69104218be7cb1aa71fd743dde075e95fd198b477",
+    "recipe": "7b0e4bc04321b54bb3c3e7679dae02191fc5f3aaf78af29eb67b4a207d7e4825",
+    "tree": "a5f37641ccc79aa0834ee9e9b8cee9a9ca80b35b60e12eb70718237e1406ecbc",
     "variants": {
       "azure": {
         "recipe": "504abcef1a51c20942c02976575fb15b063daba81bf271b7cdabc3d0c5612297",
@@ -100,8 +100,8 @@
         "tree": "91b8a6a6cffb1166cd640341c2e1d9e2b6bd0ba4c6e17ed6d8e5472dd63234e4"
       },
       "dev": {
-        "recipe": "419c705feb5cd0bdff59beecd71aaaaf63cf024e0f4531de6e077bf06d25f879",
-        "tree": "9026628b1adb92ed47cef55aa032d0166c38872375bb3a3e8a8c9ef3dfbbf276"
+        "recipe": "29ff3c22a8e6db086ef09ee66e1d1f5c728539cea16101cff7046ee8529f4014",
+        "tree": "64d904641fd2bc9ca7927c54fd47d4e3d64088b5a67c6e1b37998ba66643cb0b"
       },
       "gcp": {
         "recipe": "cf4c59dfb4b3442d3549ce78266a6e36285623710ad7b198dbe4c79a4c791261",
@@ -120,8 +120,8 @@
     }
   },
   "init-prover": {
-    "recipe": "103733f956fbbc7d88daebc003f01564e0fb28ba4e992a0a58b22490f0e8f9c7",
-    "tree": "b92de21e8dd2051e0614f28e55776424f8ce2f104d9f0f8363f9ddeba693e88b",
+    "recipe": "c400c9f73d40a5ff60f72b7a3cc44efc82f8febb3f419cb9d4e21622822a54f4",
+    "tree": "fa9229dce07c94e14738777811c7fdac63cb6d3aa8becec0667cdf52ad262132",
     "variants": {
       "azure": {
         "recipe": "c1c5c91479a0ee38b84a198c0f9acf842ff145d261746e19222cf8c2acfe97c6",
@@ -132,8 +132,8 @@
         "tree": "97d5de0f6ffe99503c57b793f6d78ad8a23e7bbea8a0310ff5a04317504f5a04"
       },
       "dev": {
-        "recipe": "b2c35a2e553111c5567df93fda3f27efb7e3ac035266e7ed004a45192f90535e",
-        "tree": "6ffcb9873e20ef7c684cdd99ab9a286c4557f7ef3402496f825a93e62686d6c2"
+        "recipe": "6557a6b3e787a505a747db1cbd27673cc0634f900b0f5cc7593871b88ef3dae3",
+        "tree": "b863c7e124beeb15ae59a34597c604e8558a5f984408016d6b562895ed4a8e2b"
       },
       "gcp": {
         "recipe": "b33de30620ee084bb959b1a66c552b55b66ebd31d06f0071064eacac13b1bbf4",
@@ -142,16 +142,16 @@
     }
   },
   "init-service": {
-    "recipe": "d54816d1907e5f5d194d2ef274279ef08df88b5d9cb5f618f67762c2483f6658",
-    "tree": "43ff923ce05ca074cd971c456865e8558269d78f97f3ea9b4456525c721b7828",
+    "recipe": "be02c65178ec00d972f41c1721a845ad6787d7ab882ad8396a48d357555e09ac",
+    "tree": "6accd4edb0115613a31124a70825a93c5f221c912866a87c36400b00f148375e",
     "variants": {
       "default": {
         "recipe": "230c2adf5ff93b170c0b6b531b81c1df22f64d38e54d2226bad35e7ca2ac0da1",
         "tree": "dc8359a01bc084b909568890d50c70771aa460b8a2c648c2c9fb60924aef0365"
       },
       "dev": {
-        "recipe": "54644e43b1933a0572d546eb15ca9da05c97e994fd2cfa365dc35dbd80005a0c",
-        "tree": "fe99e2553a724e62676b563c6fe9f2ab165238a83b08f7a3113cee3461134391"
+        "recipe": "019db0c6c3efdbd851bec615d82e77b34cdd867981d7b1ced2bee3015e53923e",
+        "tree": "efa005f09c2592617ff19d5774db8b86f3c6a791cc1f3b6c37677ede5fc5816c"
       }
     }
   },

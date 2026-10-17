@@ -183,6 +183,19 @@ def mkosi_python() -> str:
     return words[0] if words and "python" in os.path.basename(words[0]) else "python3"
 
 
+def mkosi_version() -> str | None:
+    """What ``mkosi --version`` prints (``mkosi 25.3``), or ``None`` without a working mkosi."""
+    if shutil.which("mkosi") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["mkosi", "--version"], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
 def host_has_pefile() -> bool:
     """Whether the Python that runs mkosi on the host imports ``pefile``."""
     try:
@@ -239,6 +252,25 @@ class LocalLinuxBackend:
             for req in HOST_BUILD_TOOLS
         )
         return (mkosi, *privilege, *tools)
+
+    def fingerprint(self) -> dict[str, object]:
+        """The backend name, ``privilege``, ``mkosi_args``, the tools tree and mkosi's version.
+
+        ``tools_tree`` is the ``--tools-tree`` ``mkosi_args`` pass, else ``host`` when the
+        host has ``ukify`` and ``pefile`` and ``default`` when it lacks one (a recipe
+        without ``ToolsTree=`` then gets mkosi's default tools tree); ``mkosi`` is what
+        ``mkosi --version`` prints, ``None`` when it is not on ``PATH``.
+        """
+        passed = _last_arg(self.mkosi_args, "--tools-tree")
+        if passed is None:
+            passed = "host" if host_has_ukify() and host_has_pefile() else "default"
+        return {
+            "name": self.name,
+            "privilege": self.privilege,
+            "mkosi_args": list(self.mkosi_args),
+            "tools_tree": passed,
+            "mkosi": mkosi_version(),
+        }
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         return (

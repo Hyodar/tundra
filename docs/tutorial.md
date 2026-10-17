@@ -582,6 +582,8 @@ evidence 2023-11-14T22:13:20Z  verdict pass
   lock       current
   reproduce  matched
   policy     missing
+  measured   none
+  sbom       declared
   artifacts  simulated
   lint       clean
   default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
@@ -927,6 +929,8 @@ evidence 2023-11-14T22:13:20Z  verdict pass
   lock       current
   reproduce  matched
   policy     missing
+  measured   none
+  sbom       declared
   artifacts  simulated
   lint       clean
   default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
@@ -979,7 +983,8 @@ Recipe `node`, variants `default`: 6 changes.
 | Recipe and tree | 2 |
 | Lockfile sections | 2 |
 | Source pins | 0 |
-| Packages | 0 |
+| Declared packages | 0 |
+| Installed packages | 0 |
 | Emitted files | 2 |
 | Measurements | 0 |
 
@@ -1004,16 +1009,16 @@ Recipe `node`, variants `default`: 6 changes.
 | changed | `default` | `mkosi.extra/etc/app/app.conf` | content | File(extra, /etc/app/app.conf) (declared in base > app) |
 | changed | `default` | `mkosi.extra/usr/lib/systemd/system/app.service` | content | Service(app.service) (declared in base > app) |
 
-<details><summary>Notes</summary>
+### Not compared (2)
 
-- current packages are the recipe's declared ones, unversioned (pass --build DIR for the versions a bake installed)
-- default: package versions are not compared where the evidence has none
-
-</details>
+| Variant | Section | Why |
+|---|---|---|
+| `default` | Installed packages | the evidence holds no installed inventory (no SBOM from a mkosi manifest) |
+| `default` | Measurements | the evidence holds no valid measurements policy |
 [exit 0]
 ```
 
-`changes` reads the bundle and the recipe as it is now, and nothing from the network: the recipe and per-variant tree digests, the lockfile sections that drifted, source pins, packages, every emitted file that changed with the declaration behind it, and the measured registers. The version bump touched two files of `default`, the config and the service's description, both from `App`. `--variant default` matches the bundle, which holds only `default`; without it `debug` and `dev` would be listed as added variants. `--build build` would compare package versions from a new bake's SBOM. The default format is text; `--format json` carries `"schema": "tundravm.changes/1"`. See [CLI: Changes](cli.md#changes).
+`changes` reads the bundle and the recipe as it is now, and nothing from the network: the recipe and per-variant tree digests, the lockfile sections that drifted, source pins, the declared packages, the installed packages, every emitted file that changed with the declaration behind it, and the measured registers. The version bump touched two files of `default`, the config and the service's description, both from `App`. `--variant default` matches the bundle, which holds only `default`; without it `debug` and `dev` would be listed as added variants. Declared packages are compared with declared ones and installed with installed: the in-process bake left no installed inventory and there is no current bake to compare registers with, so both are listed as not compared rather than as removals. `--build build` would compare the installed packages and registers of a new bake of this recipe. The default format is text; `--format json` carries `"schema": "tundravm.changes/2"`. See [CLI: Changes](cli.md#changes).
 
 ## 18. Status and clean
 

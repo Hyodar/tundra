@@ -105,6 +105,10 @@ class NixMkosiBackend:
     def cleanup(self, request: BakeRequest) -> None:
         pass
 
+    def fingerprint(self) -> dict[str, object]:
+        """The backend name and the extra mkosi arguments; mkosi comes from the flake."""
+        return {"name": self.name, "mkosi_args": list(self.mkosi_args)}
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

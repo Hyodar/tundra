@@ -71,6 +71,10 @@ class InProcessBackend:
     def cleanup(self, request: BakeRequest) -> None:
         pass
 
+    def fingerprint(self) -> dict[str, object]:
+        """``{"name": "inprocess"}``: it has no settings."""
+        return {"name": self.name}
+
 
 def _discard(line: str) -> None:
     del line

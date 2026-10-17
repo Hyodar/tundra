@@ -377,7 +377,7 @@ def test_clean_without_flags_lists_everything_and_removes_nothing(baked: Path) -
         f"would remove {BUILD / '.mkosi'}",
         f"would remove {BUILD / '.reproduce'}",
         "pass --what all to remove them, or --what with some of sources, tree, artifacts, "
-        "evidence, state, reproduce (the lockfile stays unless --lockfile names it)",
+        "evidence, state, reproduce (the lockfile stays unless --remove-lockfile names it)",
     ]
     assert _listing(BUILD) == before
 
@@ -408,10 +408,26 @@ def test_clean_all_keeps_the_lockfile_unless_named(baked: Path) -> None:
     assert _listing(BUILD) == ["tundravm.lock"]
     assert _status(str(baked))["next"] == f"tundravm compile {baked} --tree {BUILD / 'mkosi'}"
 
-    code, out = run_main("clean", str(baked), "--what", "all", "--lockfile", "build/tundravm.lock")
+    code, out = run_main(
+        "clean", str(baked), "--what", "all", "--remove-lockfile", "build/tundravm.lock"
+    )
     assert (code, out) == (EXIT_OK, "removed build/tundravm.lock\n")
     assert _listing(BUILD) == []
     assert run_main("clean", str(baked), "--what", "all")[1] == "nothing to clean in build\n"
+
+
+def test_clean_never_removes_a_release_inside_the_build_directory(baked: Path) -> None:
+    release = BUILD / "evidence" / "releases" / "node-1.0"
+    release.mkdir(parents=True)
+    (release / "release.json").write_text('{"schema": "tundravm.release/1"}\n', encoding="utf-8")
+    code, out = run_main("clean", str(baked), "--what", "all")
+    assert code == EXIT_FAILURE
+    lines = out.splitlines()
+    assert lines[0] == (
+        f"refused {BUILD / 'evidence'}: it holds release {release}; clean never removes a release"
+    )
+    assert lines[1] == "hint: keep --releases outside the build directory"
+    assert (release / "release.json").is_file() and not (BUILD / "mkosi").exists()
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can delete read-only directories")

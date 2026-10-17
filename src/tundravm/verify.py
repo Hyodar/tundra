@@ -13,6 +13,7 @@ the index, the signature against an allowed-signers file, and the requirements o
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import html
 import json
@@ -26,19 +27,26 @@ from string import Template
 from typing import Any, Literal
 
 from . import _ssh_sig
+from .declarative.bom import parse_manifest, spdx_packages
+from .declarative.lifecycle import MANIFEST_KEY, recorded_reproducibility, reproducibility_of
 from .errors import TdxError, ValidationError
 from .evidence import (
     BUNDLE_ROOT,
     EVIDENCE_REQUIREMENTS,
+    EVIDENCE_SCHEMA,
     INDEX_NAME,
     SIGNATURE_NAME,
     TREE_SCHEMA,
     _requirements,
     _table,
     _verdict,
+    bake_simulated,
+    coverage,
+    lint_entry,
     tree_rows_digest,
 )
 from .measure.policy import is_placeholder, read_policy
+from .models import BAKE_RESULT_FILENAME
 
 VERIFY_SCHEMA = "tundravm.verify/1"
 """The ``schema`` key of :meth:`EvidenceVerification.to_dict` (``verify --format json``)."""
@@ -253,7 +261,16 @@ def verify_evidence(
 ) -> EvidenceVerification:
     """Check the evidence at *path* (a bundle, the directory, or its ``evidence.json``).
 
-    Needs no recipe, checkout or bake directory. *build* is a build directory (or a
+    Needs no recipe, checkout or bake directory. The index must carry the ``schema``
+    this tundravm writes (:data:`~tundravm.evidence.EVIDENCE_SCHEMA`) and list every
+    core member (``bake-result.json``, ``lint.json``, the lockfile when it names one,
+    each SBOM, manifest, policy and ``tree.json``). Every fact the verdict uses that a
+    member records (reproducibility, simulated, artifact sha256s, lint counts, the
+    lockfile sha256, SBOM and policy facts) is derived from that member, an index
+    that says otherwise is ``index-inconsistent``, and the verdict is recomputed
+    from the derived facts.
+
+    *build* is a build directory (or a
     release directory) holding the artifacts, laid out as the bake was
     (``<variant>/<file>``) or by target or file name, re-hashed against the index.
     *require* names checks from :data:`~tundravm.evidence.EVIDENCE_REQUIREMENTS`, as
@@ -285,13 +302,23 @@ def verify_evidence(
             )
         )
         return EvidenceVerification(str(path), tuple(checks), {}, required)
+    schema = _schema_check(index)
+    if schema is not None:
+        return EvidenceVerification(str(path), (schema,), index, required)
     checks.extend(_member_checks(files, listed, problems))
+    checks.extend(_guarded("member", lambda: _core_checks(index, listed)))
     present = {
         name: files[name]
         for name in listed
         if name in files and _matches(files[name], listed[name])
     }
-    checks.extend(_guarded("index", lambda: _index_checks(index, present)))
+    derived: Mapping[str, Any] = index
+    try:
+        found, derived = _index_checks(index, present)
+        checks.extend(found)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        message = f"the index does not have the shape evidence writes: {exc!r}"
+        checks.append(_check("index", INDEX_NAME, "fail", message, "index-inconsistent"))
     signature, signed_by = _signature_check(raw, files.get(SIGNATURE_NAME), allowed_signers, signer)
     if signature is not None:
         checks.append(signature)
@@ -306,12 +333,30 @@ def verify_evidence(
     else:
         message = "artifacts were not re-hashed: pass --build DIR"
         notes.append({"code": "artifacts-unchecked", "message": message})
-    checks.extend(_verdict_checks(index, required))
+    checks.extend(_verdict_checks(index, derived, required))
     order = {kind: n for n, kind in enumerate(CHECK_KINDS)}
     ordered = sorted(checks, key=lambda c: order[c.kind])
     return EvidenceVerification(
         str(path), tuple(ordered), index, required, signer=signed_by, notes=tuple(notes)
     )
+
+
+def _schema_check(index: Mapping[str, Any]) -> VerifyCheck | None:
+    """A failed check unless ``schema`` is the one this tundravm reads, and the only one."""
+    schema = index.get("schema")
+    if schema != EVIDENCE_SCHEMA:
+        message = (
+            f"{INDEX_NAME} has schema {schema!r}; this tundravm reads {EVIDENCE_SCHEMA} "
+            "(make the evidence again with this tundravm)"
+        )
+        return _check("index", "schema", "fail", message, "schema-unsupported")
+    if "schema_version" in index:
+        message = (
+            f"{INDEX_NAME} carries schema_version {index['schema_version']!r} besides "
+            f"schema {schema}: schema alone names the structure"
+        )
+        return _check("index", "schema_version", "fail", message, "index-inconsistent")
+    return None
 
 
 def _guarded(kind: str, run: Callable[[], list[VerifyCheck]]) -> list[VerifyCheck]:
@@ -380,6 +425,50 @@ def _member_checks(
     return checks
 
 
+def core_members(index: Mapping[str, Any]) -> dict[str, str]:
+    """Each member the evidence *index* cannot be checked without, by name, with the field
+    that requires it: ``bake-result.json`` and ``lint.json`` always, the lockfile when
+    ``lockfile`` names one, and each SBOM, manifest, policy and ``tree.json`` a variant names."""
+    found = {BAKE_RESULT_FILENAME: "the bake record", "lint.json": "lint.member"}
+    lockfile = index.get("lockfile")
+    if lockfile is not None:
+        found[str(lockfile["member"])] = "lockfile.member"
+    for name, record in sorted(_mapping(index.get("variants")).items()):
+        for entry in record.get("sbom") or []:
+            target = entry.get("target")
+            found[str(entry["member"])] = f"variants.{name}.sbom.{target}.member"
+            if entry.get("manifest_member"):
+                found[str(entry["manifest_member"])] = (
+                    f"variants.{name}.sbom.{target}.manifest_member"
+                )
+        policy = record.get("policy")
+        if policy is not None:
+            found[str(policy["member"])] = f"variants.{name}.policy.member"
+        if record.get("tree"):
+            found[str(record["tree"])] = f"variants.{name}.tree"
+    return found
+
+
+def _core_checks(index: Mapping[str, Any], listed: Mapping[str, Any]) -> list[VerifyCheck]:
+    """A ``core-member-missing`` fail for each core member the index does not list."""
+    return [
+        _check(
+            "member",
+            name,
+            "fail",
+            f"required by {field}, but the index does not list it: the facts it records "
+            "cannot be checked",
+            "core-member-missing",
+        )
+        for name, field in sorted(core_members(index).items())
+        if name not in listed
+    ]
+
+
+def _inconsistent(subject: str, message: str) -> VerifyCheck:
+    return _check("index", subject, "fail", message, "index-inconsistent")
+
+
 def _mapping(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -393,82 +482,155 @@ def _json(data: bytes | None) -> Any:
         return None
 
 
-def _index_checks(index: Mapping[str, Any], present: Mapping[str, bytes]) -> list[VerifyCheck]:
-    """The index against its own (hash-verified) members; a member that failed is not read."""
+def _shown(value: object) -> str:
+    """*value* as a check message shows it: a sha256 by its first 12 digits, else as JSON."""
+    if isinstance(value, str) and len(value) == 64:
+        return value[:12]
+    return json.dumps(value, sort_keys=True)
+
+
+def _facts(
+    subject: str, asserted: Mapping[str, Any], actual: Mapping[str, Any], source: str
+) -> list[VerifyCheck]:
+    """One pass check when *asserted* holds each of *actual*'s facts, else an
+    ``index-inconsistent`` fail per field (``subject.field``) that disagrees with *source*."""
+    wrong = [key for key in actual if asserted.get(key) != actual[key]]
+    if not wrong:
+        message = f"{', '.join(actual)} as {source} records"
+        return [_check("index", subject, "pass", message)]
+    return [
+        _check(
+            "index",
+            f"{subject}.{key}",
+            "fail",
+            f"the index says {_shown(asserted.get(key))}, {source} gives {_shown(actual[key])}",
+            "index-inconsistent",
+        )
+        for key in wrong
+    ]
+
+
+def _index_checks(
+    index: Mapping[str, Any], present: Mapping[str, bytes]
+) -> tuple[list[VerifyCheck], dict[str, Any]]:
+    """The index against its own (hash-verified) members, and the index with every fact the
+    verdict uses replaced by the one its member records; a member that failed is not read."""
     checks: list[VerifyCheck] = []
-
-    def agree(subject: str, ok: bool, message: str, problem: str) -> None:
-        if ok:
-            checks.append(_check("index", subject, "pass", message))
-        else:
-            checks.append(_check("index", subject, "fail", problem, "index-inconsistent"))
-
-    bake = _json(present.get("bake-result.json"))
+    derived: dict[str, Any] = copy.deepcopy(dict(index))
+    rows = _json(present.get("lint.json"))
+    if isinstance(rows, list):
+        lint = lint_entry([row for row in rows if isinstance(row, dict)])
+        facts = {key: lint[key] for key in ("errors", "warnings", "infos", "codes")}
+        checks.extend(_facts("lint", index["lint"], facts, "lint.json"))
+        derived["lint"] = {**index["lint"], **facts}
+    bake = _json(present.get(BAKE_RESULT_FILENAME))
     if not isinstance(bake, dict):
-        return checks
-    checks.extend(_lock_check(index, present, bake))
-    variants = _mapping(index.get("variants"))
+        return checks, derived
+    extra = _mapping(bake.get(MANIFEST_KEY))
+    recorded = recorded_reproducibility(extra)
+    simulated = bake_simulated(bake)
+    facts = {"backend": bake.get("backend"), "simulated": simulated, "reproducibility": recorded}
+    checks.extend(_facts("bake", index["bake"], facts, BAKE_RESULT_FILENAME))
+    derived["bake"] = {**index["bake"], **facts}
+    baked_digest = extra.get("recipe_digest") or None
+    checks.extend(
+        _facts("recipe", index["recipe"], {"baked_digest": baked_digest}, BAKE_RESULT_FILENAME)
+    )
+    derived["recipe"] = {**index["recipe"], "baked_digest": baked_digest}
+    lock = _lock_facts(index, present, bake)
+    if lock is not None:
+        checks.extend(_facts("lockfile", index["lockfile"], lock, "the lockfile member"))
+        derived["lockfile"] = {**index["lockfile"], **lock}
     baked = _mapping(bake.get("variants"))
-    for name, record in sorted(variants.items()):
-        rows = {
+    for name, record in sorted(_mapping(index.get("variants")).items()):
+        entry = baked.get(name)
+        if not isinstance(entry, dict):
+            message = f"the index lists variant {name}, which {BAKE_RESULT_FILENAME} lacks"
+            checks.append(_inconsistent(f"variants.{name}", message))
+            continue
+        checks.extend(_variant_facts(name, record, entry, extra, recorded, simulated, derived))
+        artifacts = {
             row.get("target"): row for row in record.get("artifacts", []) if isinstance(row, dict)
         }
-        recorded = (baked.get(name) or {}).get("artifact_digests") or {}
-        for target, row in sorted(rows.items()):
-            subject = f"{name}/{target}"
-            agree(
-                subject,
-                recorded.get(target) == row.get("sha256"),
-                f"artifact sha256 {str(row.get('sha256'))[:12]} is bake-result.json's",
-                f"the index lists artifact sha256 {str(row.get('sha256'))[:12]}, bake-result.json "
-                f"records {str(recorded.get(target))[:12]}",
-            )
-        for entry in record.get("sbom", []):
-            document = _json(present.get(str(entry.get("member"))))
-            if document is None:
-                continue
-            row = rows.get(entry.get("target")) or {}
-            described = _spdx_artifact(document)
-            agree(
-                str(entry.get("member")),
-                described == row.get("sha256"),
-                f"describes artifact sha256 {str(described)[:12]}",
-                f"describes artifact sha256 {str(described)[:12]}, the index lists "
-                f"{str(row.get('sha256'))[:12]}",
-            )
-        checks.extend(_policy_check(name, record, rows, present))
-        checks.extend(_tree_check(name, record, variants, present))
+        lock_bound = derived["lockfile"]["bound"] if derived.get("lockfile") else True
+        manifests = _mapping(entry.get("manifest_digests"))
+        for n, sbom_entry in enumerate(record.get("sbom", [])):
+            checks.extend(_sbom_check(sbom_entry, artifacts, present))
+            bound = _sbom_facts(sbom_entry, manifests, present, lock_bound=lock_bound)
+            if bound is not None:
+                subject = f"variants.{name}.sbom.{sbom_entry.get('target')}"
+                source = (
+                    "the bundled manifest"
+                    if sbom_entry.get("manifest_member")
+                    else f"{BAKE_RESULT_FILENAME} (no manifest bundled)"
+                )
+                checks.extend(_facts(subject, sbom_entry, bound, source))
+                derived["variants"][name]["sbom"][n] = {**sbom_entry, **bound}
+            checks.extend(_sbom_packages(sbom_entry, present))
+        measured = {
+            row.get("target"): row
+            for row in derived["variants"][name].get("artifacts", [])
+            if isinstance(row, dict)
+        }
+        checks.extend(_policy_check(name, record, measured, present, derived))
+        covered = coverage(list(measured.values()), derived["variants"][name].get("policy"))
+        source = "the policy and bake-result.json"
+        checks.extend(_facts(f"variants.{name}", record, {"coverage": covered}, source))
+        derived["variants"][name]["coverage"] = covered
+        checks.extend(_tree_check(name, record, index["variants"], present, derived))
+    return checks, derived
+
+
+def _variant_facts(
+    name: str,
+    record: Mapping[str, Any],
+    entry: Mapping[str, Any],
+    extra: Mapping[str, Any],
+    recorded: Mapping[str, object] | None,
+    simulated: bool,
+    derived: dict[str, Any],
+) -> list[VerifyCheck]:
+    """*name*'s reproducibility, tree digest and artifacts as ``bake-result.json`` records them."""
+    subject = f"variants.{name}"
+    facts = {
+        "reproducibility": reproducibility_of(recorded, name),
+        "tree_digest": extra.get("tree_digest") or None,
+    }
+    checks = _facts(subject, record, facts, BAKE_RESULT_FILENAME)
+    out = derived["variants"][name]
+    out.update(facts)
+    rows = [(n, row) for n, row in enumerate(record.get("artifacts", [])) if isinstance(row, dict)]
+    digests = _mapping(entry.get("artifact_digests"))
+    targets = sorted(str(target) for target in _mapping(entry.get("artifacts")))
+    listed = sorted(str(row.get("target")) for _, row in rows)
+    if listed != targets:
+        message = (
+            f"the index lists artifacts {', '.join(listed) or '(none)'}, "
+            f"{BAKE_RESULT_FILENAME} records {', '.join(targets) or '(none)'}"
+        )
+        checks.append(_inconsistent(f"{subject}.artifacts", message))
+    for n, row in rows:
+        target = str(row.get("target"))
+        actual = {"sha256": digests.get(target), "simulated": simulated}
+        checks.extend(_facts(f"{subject}.artifacts.{target}", row, actual, BAKE_RESULT_FILENAME))
+        out["artifacts"][n] = {**row, **actual}
     return checks
 
 
-def _lock_check(
+def _lock_facts(
     index: Mapping[str, Any], present: Mapping[str, bytes], bake: Mapping[str, Any]
-) -> list[VerifyCheck]:
+) -> dict[str, Any] | None:
+    """The lockfile's sha256, the one the bake recorded and whether they agree, or ``None``
+    when the index names no lockfile or its member is not readable."""
     lockfile = index.get("lockfile")
     if not isinstance(lockfile, dict):
-        return []
+        return None
     data = present.get(str(lockfile.get("member")))
     if data is None:
-        return []
+        return None
     actual = _sha256(data)
     recorded = bake.get("lock_sha256")
-    consistent = (
-        lockfile.get("sha256") == actual
-        and lockfile.get("recorded_sha256") == recorded
-        and lockfile.get("bound") is (actual == recorded)
-    )
-    if consistent and actual == recorded:
-        message = f"sha256 {actual[:12]} is the lock_sha256 bake-result.json records"
-        return [_check("index", "tundravm.lock", "pass", message)]
-    if consistent:
-        message = f"sha256 {actual[:12]} is not the bake's {str(recorded)[:12]}, as the index says"
-        return [_check("index", "tundravm.lock", "pass", message)]
-    message = (
-        f"the lockfile hashes to {actual[:12]} and bake-result.json records "
-        f"{str(recorded)[:12]}, but the index says sha256 {str(lockfile.get('sha256'))[:12]}, "
-        f"bound {lockfile.get('bound')}"
-    )
-    return [_check("index", "tundravm.lock", "fail", message, "index-inconsistent")]
+    return {"sha256": actual, "recorded_sha256": recorded, "bound": actual == recorded}
 
 
 def _spdx_artifact(document: Any) -> str | None:
@@ -488,11 +650,75 @@ def _spdx_artifact(document: Any) -> str | None:
     return None
 
 
+def _sbom_check(
+    entry: Mapping[str, Any],
+    artifacts: Mapping[Any, Mapping[str, Any]],
+    present: Mapping[str, bytes],
+) -> list[VerifyCheck]:
+    """The SBOM member describes the artifact sha256 the index lists for its target."""
+    member = str(entry.get("member"))
+    document = _json(present.get(member))
+    if document is None:
+        return []
+    row = artifacts.get(entry.get("target")) or {}
+    described = _spdx_artifact(document)
+    if described == row.get("sha256"):
+        return [_check("index", member, "pass", f"describes artifact sha256 {_shown(described)}")]
+    listed = _shown(row.get("sha256"))
+    message = f"describes artifact sha256 {_shown(described)}, the index lists {listed}"
+    return [_inconsistent(member, message)]
+
+
+def _sbom_facts(
+    entry: Mapping[str, Any],
+    manifests: Mapping[str, Any],
+    present: Mapping[str, bytes],
+    *,
+    lock_bound: bool,
+) -> dict[str, Any] | None:
+    """Whether the SBOM is ``complete`` (its manifest is bundled), what the bake recorded that
+    is ``missing`` and whether it is ``bound`` (the bundled manifest is the one
+    ``bake-result.json`` records, and the lockfile is bound); ``None`` when the manifest
+    member is listed but not readable (its member check says why)."""
+    member = entry.get("manifest_member")
+    data = present.get(str(member)) if member else None
+    if member and data is None:
+        return None
+    recorded = manifests.get(str(entry.get("target")))
+    missing = ["manifest"] if recorded is not None and data is None else []
+    matches = data is None if recorded is None else data is not None and _sha256(data) == recorded
+    return {"complete": data is not None, "missing": missing, "bound": matches and lock_bound}
+
+
+def _sbom_packages(entry: Mapping[str, Any], present: Mapping[str, bytes]) -> list[VerifyCheck]:
+    """The SBOM's packages against the ones its bundled manifest lists, name and version."""
+    member = str(entry.get("member"))
+    document = _json(present.get(member))
+    manifest = _json(present.get(str(entry.get("manifest_member"))))
+    if not isinstance(document, dict) or manifest is None:
+        return []
+    listed = spdx_packages(document)
+    try:
+        _, packages = parse_manifest(manifest, str(entry.get("manifest_member")))
+    except TdxError as exc:
+        return [_inconsistent(member, f"its bundled manifest does not parse: {exc}")]
+    installed = {package.name: package.version for package in packages}
+    if listed == installed:
+        return [_check("index", member, "pass", f"{len(listed)} packages, as its manifest lists")]
+    differ = sorted(
+        name for name in {*listed, *installed} if listed.get(name) != installed.get(name)
+    )
+    shown = ", ".join(differ[:5]) + (", ..." if len(differ) > 5 else "")
+    message = f"its packages are not the ones its bundled manifest lists: {shown}"
+    return [_inconsistent(member, message)]
+
+
 def _policy_check(
     name: str,
     record: Mapping[str, Any],
     rows: Mapping[Any, Mapping[str, Any]],
     present: Mapping[str, bytes],
+    derived: dict[str, Any],
 ) -> list[VerifyCheck]:
     policy = record.get("policy")
     if not isinstance(policy, dict):
@@ -501,39 +727,25 @@ def _policy_check(
     raw = _json(present.get(member))
     if raw is None and member not in present:
         return []
+    subject = f"variants.{name}.policy"
     try:
         payload = read_policy(raw if isinstance(raw, dict) else {})
     except TdxError:
-        ok = policy.get("valid") is False
-        message = "not a valid policy, as the index says"
-        problem = "not a valid policy, but the index says it is"
-        return [_policy_result(member, ok, message, problem)]
-    measured = payload.get("artifact")
-    sha = measured.get("sha256") if isinstance(measured, dict) else None
-    shas = {row.get("sha256") for row in rows.values()}
-    matches = (sha in shas) if sha else None
-    registers = sorted(dict(payload.get("registers") or {}))  # type: ignore[call-overload]
-    ok = (
-        policy.get("valid") is True
-        and policy.get("artifact_matches") == matches
-        and policy.get("placeholder") == is_placeholder(payload)
-        and policy.get("registers") == registers
-    )
-    message = f"measured artifact sha256 {str(sha)[:12]}" + (
-        ", the variant's" if matches else ", not the variant's (as the index says)"
-    )
-    problem = (
-        f"measured artifact sha256 {str(sha)[:12]} (matches: {matches}), registers "
-        f"{', '.join(registers)}; the index says matches {policy.get('artifact_matches')}, "
-        f"registers {', '.join(policy.get('registers') or [])}"
-    )
-    return [_policy_result(member, ok, message, problem)]
-
-
-def _policy_result(member: str, ok: bool, message: str, problem: str) -> VerifyCheck:
-    if ok:
-        return _check("index", member, "pass", message)
-    return _check("index", member, "fail", problem, "index-inconsistent")
+        facts: dict[str, Any] = {"valid": False}
+    else:
+        measured = payload.get("artifact")
+        sha = measured.get("sha256") if isinstance(measured, dict) else None
+        shas = {row.get("sha256") for row in rows.values()}
+        target = next((t for t, row in rows.items() if sha and row.get("sha256") == sha), None)
+        facts = {
+            "valid": True,
+            "placeholder": is_placeholder(payload),
+            "registers": sorted(dict(payload.get("registers") or {})),  # type: ignore[call-overload]
+            "artifact_matches": (sha in shas) if sha else None,
+            "measures": {"target": target, "sha256": sha},
+        }
+    derived["variants"][name]["policy"] = {**policy, **facts}
+    return _facts(subject, policy, facts, member)
 
 
 def _tree_check(
@@ -541,9 +753,20 @@ def _tree_check(
     record: Mapping[str, Any],
     variants: Mapping[str, Any],
     present: Mapping[str, bytes],
+    derived: dict[str, Any],
 ) -> list[VerifyCheck]:
-    member = f"variants/{name}/tree.json"
-    manifest = _json(present.get(member))
+    member = record.get("tree")
+    if not member:
+        derived["variants"][name]["tree_matches"] = None
+        if record.get("tree_matches") is None:
+            return []
+        message = (
+            f"the index says {_shown(record.get('tree_matches'))}, but names no tree.json "
+            "to derive it from"
+        )
+        subject = f"variants.{name}.tree_matches"
+        return [_check("index", subject, "fail", message, "index-inconsistent")]
+    manifest = _json(present.get(str(member)))
     if not isinstance(manifest, dict) or manifest.get("schema") != TREE_SCHEMA:
         return []
     rows = manifest.get("files") or []
@@ -557,12 +780,6 @@ def _tree_check(
             f"its rows hash to {str(own)[:12]}, it says {str(manifest.get('variant_digest'))[:12]}"
         )
     whole = manifest.get("tree_digest")
-    matches = record.get("tree_matches")
-    if matches is not None and (whole == record.get("tree_digest")) != matches:
-        problems.append(
-            f"its tree digest {str(whole)[:12]} and the baked "
-            f"{str(record.get('tree_digest'))[:12]} disagree with tree_matches {matches}"
-        )
     compiled = [str(v) for v in manifest.get("compiled_variants") or []]
     together = [_json(present.get(f"variants/{v}/tree.json")) for v in compiled]
     if compiled and all(isinstance(m, dict) for m in together):
@@ -580,10 +797,18 @@ def _tree_check(
             union = None
         if union != whole:
             problems.append(f"the variants' rows hash to {str(union)[:12]}, not its tree digest")
+    baked = derived["variants"][name].get("tree_digest")
+    matches = None if not baked else whole == baked
+    derived["variants"][name]["tree_matches"] = matches
+    checks = _facts(f"variants.{name}", record, {"tree_matches": matches}, str(member))
     if problems:
-        return [_check("index", member, "fail", "; ".join(problems), "index-inconsistent")]
-    message = f"{len(rows)} entries hash to its variant digest {str(own)[:12]}"
-    return [_check("index", member, "pass", message)]
+        checks.append(
+            _check("index", str(member), "fail", "; ".join(problems), "index-inconsistent")
+        )
+    else:
+        message = f"{len(rows)} entries hash to its variant digest {str(own)[:12]}"
+        checks.append(_check("index", str(member), "pass", message))
+    return checks
 
 
 def _signature_check(
@@ -654,26 +879,29 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verdict_checks(index: Mapping[str, Any], required: Sequence[str]) -> list[VerifyCheck]:
-    """The stored verdict against one recomputed from the recorded facts, then the verdict
-    those facts give under the recorded and the given requirements."""
+def _verdict_checks(
+    index: Mapping[str, Any], derived: Mapping[str, Any], required: Sequence[str]
+) -> list[VerifyCheck]:
+    """The stored verdict against one recomputed from the facts *derived* from the members
+    (the index's own where no member records them), then the verdict those facts give
+    under the recorded and the given requirements."""
     stored = index.get("verdict")
     recorded_required = stored.get("required", []) if isinstance(stored, dict) else []
     try:
-        recomputed = _verdict(index, tuple(recorded_required), [])
+        recomputed = _verdict(derived, tuple(recorded_required), [])
         wanted = _requirements(tuple(dict.fromkeys([*recorded_required, *required])))
-        demanded = _verdict(index, wanted, [])
+        demanded = _verdict(derived, wanted, [])
     except (KeyError, TypeError, AttributeError, ValidationError) as exc:
         message = f"the recorded facts do not give a verdict: {exc!r}"
         return [_check("verdict", None, "fail", message, "index-inconsistent")]
     checks: list[VerifyCheck] = []
     if recomputed != stored:
-        message = "the recorded verdict disagrees with the recorded facts: " + _verdict_diff(
-            stored if isinstance(stored, dict) else {}, recomputed
+        message = "the recorded verdict disagrees with the facts its members give: " + (
+            _verdict_diff(stored if isinstance(stored, dict) else {}, recomputed)
         )
         checks.append(_check("verdict", "recorded", "fail", message, "index-inconsistent"))
     else:
-        message = f"the recorded verdict {recomputed['overall']} follows from the recorded facts"
+        message = f"the recorded verdict {recomputed['overall']} follows from the members' facts"
         checks.append(_check("verdict", "recorded", "pass", message))
     for reason in demanded["reasons"]:
         state: VerifyState = "fail" if reason["severity"] == "fail" else "missing"

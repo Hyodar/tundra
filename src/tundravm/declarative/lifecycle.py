@@ -424,9 +424,12 @@ def read_tree(
     return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
 
 
-def read_variant_tree(root: Path, variants: Sequence[str]) -> Tree:
-    """The tree of *variants*' directories under *root*, as :func:`compile` returns it."""
-    whole = read_tree(root, variants=variants)
+def read_variant_tree(
+    root: Path, variants: Sequence[str], *, warn: Callable[[str], None] | None = None
+) -> Tree:
+    """The tree of *variants*' directories under *root*, as :func:`compile` returns it; another
+    variant's directory a previous bake left there is not part of it."""
+    whole = read_tree(root, variants=variants, warn=warn)
     entries = [entry for entry in whole.entries if entry.path.split("/", 1)[0] in variants]
     return Tree(entries=tuple(entries), digest=_tree_digest(entries), variants=tuple(variants))
 
@@ -1081,7 +1084,9 @@ def bake_image(
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
         result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
-        tree = read_tree(destination / "mkosi", warn=_tree_warning(reporter))
+        tree = read_variant_tree(
+            destination / "mkosi", sorted(result.profiles), warn=_tree_warning(reporter)
+        )
         recipe_digest = (
             locked.recipe_digest
             if locked is not None

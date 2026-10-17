@@ -1,11 +1,15 @@
 """SSH signatures over evidence: ``ssh-keygen -Y sign`` and ``-Y verify``, no Python dependency.
 
-The namespace is :data:`NAMESPACE`, so a signature made for evidence cannot be
-replayed as a git commit or file signature, nor one of those as evidence.
+The namespace is :data:`NAMESPACE` (a release manifest's :data:`RELEASE_NAMESPACE`), so
+a signature made for evidence cannot be replayed as a git commit or file signature, nor
+one of those as evidence, nor an evidence signature as a release manifest's.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +21,8 @@ from .errors import StateError, ValidationError
 
 NAMESPACE = "tundravm-evidence"
 """The ``-n`` namespace every evidence signature is made and checked in."""
+RELEASE_NAMESPACE = "tundravm-release"
+"""The ``-n`` namespace a release manifest (``release-manifest.json.sig``) is signed in."""
 TOOL = "ssh-keygen"
 _TIMEOUT = 60
 
@@ -63,8 +69,10 @@ def _said(result: subprocess.CompletedProcess[bytes]) -> str:
     return text.splitlines()[-1] if text else f"exit status {result.returncode}"
 
 
-def sign(data: bytes, key: Path, *, runner: SigRunner | None = None) -> bytes:
-    """The armored SSH signature of *data* by the private key at *key*."""
+def sign(
+    data: bytes, key: Path, *, namespace: str = NAMESPACE, runner: SigRunner | None = None
+) -> bytes:
+    """The armored SSH signature of *data* by the private key at *key*, in *namespace*."""
     path = Path(key)
     if not path.is_file():
         raise ValidationError(
@@ -81,7 +89,7 @@ def sign(data: bytes, key: Path, *, runner: SigRunner | None = None) -> bytes:
         target = Path(scratch) / "evidence.json"
         target.write_bytes(data)
         result = run(
-            [tool, "-Y", "sign", "-q", "-f", str(path), "-n", NAMESPACE, str(target)], None
+            [tool, "-Y", "sign", "-q", "-f", str(path), "-n", namespace, str(target)], None
         )
         signature = target.with_name("evidence.json.sig")
         if result.returncode != 0 or not signature.is_file():
@@ -121,15 +129,31 @@ def public_key(key: Path, *, runner: SigRunner | None = None) -> str:
     return f"{fields[0]} {fields[1]}"
 
 
+def fingerprint(public: str) -> str:
+    """The ``SHA256:...`` fingerprint ``ssh-keygen -l`` prints for *public* (``TYPE BASE64``)."""
+    words = public.split()
+    try:
+        blob = base64.b64decode(words[1], validate=True)
+    except (IndexError, binascii.Error) as exc:
+        raise ValidationError(
+            f"{public!r} is not an SSH public key.",
+            hint="Pass the key as `ssh-keygen -y -f KEY` prints it: `TYPE BASE64`.",
+        ) from exc
+    digest = base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+    return f"SHA256:{digest}"
+
+
 def verify(
     data: bytes,
     signature: bytes,
     allowed_signers: Path,
     *,
     signer: str | None = None,
+    namespace: str = NAMESPACE,
     runner: SigRunner | None = None,
 ) -> SignatureCheck:
-    """Check *signature* over *data* against *allowed_signers* (an OpenSSH allowed-signers file).
+    """Check *signature* over *data* against *allowed_signers* (an OpenSSH allowed-signers file),
+    in *namespace*.
 
     *signer* is the principal to check; without it the principals the file lists
     for the signing key (``ssh-keygen -Y find-principals``) are tried in order.
@@ -164,7 +188,7 @@ def verify(
                 )
         last = ""
         for principal in principals:
-            argv = [tool, "-Y", "verify", "-f", str(allowed), "-I", principal, "-n", NAMESPACE]
+            argv = [tool, "-Y", "verify", "-f", str(allowed), "-I", principal, "-n", namespace]
             result = run([*argv, "-s", str(sig)], data)
             if result.returncode == 0:
                 said = (result.stdout or b"").decode(errors="replace").strip()

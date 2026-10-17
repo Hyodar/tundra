@@ -109,12 +109,21 @@ class Sbom:
     (relative to the bake output directory for an artifact)."""
     manifest_found: bool = False
     bound: bool = True
-    """``False`` when ``allow_unbound`` accepted a lockfile or manifest other than the bake's:
-    the document is incomplete, and a note says what is unbound."""
+    """Whether the materials match the bake: ``False`` when ``allow_unbound`` accepted a
+    lockfile or manifest other than the bake's, or a material the bake recorded is gone
+    (``missing``); the document is incomplete, and a note says why."""
+    missing: tuple[str, ...] = ()
+    """The materials the bake recorded that are gone (``manifest``); each makes it unbound."""
     created: str = ""
     """ISO 8601 UTC creation time: ``SOURCE_DATE_EPOCH`` when set, else when built."""
     notes: tuple[str, ...] = ()
     """What the document could not include, and why (missing manifest, no lockfile)."""
+
+    @property
+    def complete(self) -> bool:
+        """Whether the installed inventory (mkosi's manifest) is available: ``False`` when the
+        packages listed are the declared ones, unversioned."""
+        return self.manifest_found
 
     @property
     def packages(self) -> tuple[Component, ...]:
@@ -242,6 +251,7 @@ class Sbom:
             ("artifact sha256", self.artifact_sha256),
             ("manifest", _manifest_cell(self)),
             ("bound", "yes" if self.bound else "no (incomplete)"),
+            ("installed", "yes" if self.complete else "no (declared packages)"),
             ("tundravm", self.tundravm_version),
         )
         return tuple((key, value or "-") for key, value in rows)
@@ -306,15 +316,22 @@ def read_manifest(path: Path) -> tuple[dict[str, str], tuple[Component, ...]]:
     ``{"manifest_version": 1, "config": {...}, "packages": [{"type", "name",
     "version", "architecture"}], "extension": {...}}``.
     """
-    context = {"path": str(path)}
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ArtifactError(
             f"Unreadable mkosi manifest {path}: {exc}.",
             hint="Bake the variant again to rewrite it.",
-            context=context,
+            context={"path": str(path)},
         ) from exc
+    return parse_manifest(payload, path)
+
+
+def parse_manifest(
+    payload: object, path: Path | str = "the manifest"
+) -> tuple[dict[str, str], tuple[Component, ...]]:
+    """:func:`read_manifest` of an already parsed *payload*; *path* names it in errors."""
+    context = {"path": str(path)}
     if not isinstance(payload, dict) or payload.get("manifest_version") != MANIFEST_VERSION:
         version = payload.get("manifest_version") if isinstance(payload, dict) else None
         raise ArtifactError(
@@ -369,8 +386,9 @@ def _of_artifact(
     if artifact.simulated:
         notes.append("the artifact is simulated (in-process backend): nothing was installed")
     shown = _relative(path, artifact.build)
-    if artifact.manifest_sha256 is not None and not path.is_file():
-        notes.append(f"the manifest the bake recorded at {shown} is gone")
+    missing = ("manifest",) if artifact.manifest_sha256 is not None and not path.is_file() else ()
+    if missing:
+        notes.append(f"the manifest the bake recorded at {shown} is gone: the document is unbound")
     packages, config, found = _packages(path, declared, distribution.get("arch"), notes, shown)
     if lock is None:
         notes.append("no lockfile: source pins are not listed")
@@ -391,7 +409,8 @@ def _of_artifact(
         tundravm_version=_version(),
         manifest=shown,
         manifest_found=found,
-        bound=not unbound,
+        bound=not unbound and not missing,
+        missing=missing,
         created=_created(),
         notes=tuple(notes),
     )
@@ -599,6 +618,22 @@ def _created() -> str:
         datetime.fromtimestamp(int(epoch), UTC) if epoch.isdigit() else datetime.now(UTC)
     ).replace(microsecond=0)
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def spdx_packages(document: Mapping[str, Any]) -> dict[str, str]:
+    """Name to version (empty when unknown) of each package an SPDX *document*'s image
+    ``CONTAINS``, as :meth:`Sbom.to_spdx` writes it."""
+    contained = {
+        r.get("relatedSpdxElement")
+        for r in document.get("relationships") or []
+        if isinstance(r, dict) and r.get("relationshipType") == "CONTAINS"
+    }
+    found: dict[str, str] = {}
+    for package in document.get("packages") or []:
+        if isinstance(package, dict) and package.get("SPDXID") in contained:
+            version = str(package.get("versionInfo") or "")
+            found[str(package.get("name"))] = "" if version == "NOASSERTION" else version
+    return found
 
 
 # ── PURLs and serializers ────────────────────────────────────────────────

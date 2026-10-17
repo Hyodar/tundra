@@ -29,6 +29,9 @@ REPORTS: dict[str, tuple[str, ...]] = {
 }
 """One JSON run per verb, from inside a scaffolded, compiled, locked and baked project."""
 
+SCHEMA_VERSIONS = {"evidence": 2, "changes": 2}
+"""Verbs whose report schema moved past version 1."""
+
 COVERED_ELSEWHERE = {"attest": "tests/cli/test_attest.py::test_cli_attest_json_and_markdown"}
 """JSON-capable verbs whose run needs more than a project (a tdxs issuer)."""
 
@@ -66,7 +69,7 @@ def test_json_report_carries_its_schema(
     monkeypatch.chdir(project)
     code, out = run_main(*REPORTS[verb])
     assert code in (0, 1), out
-    assert json.loads(out)["schema"] == f"tundravm.{verb}/1"
+    assert json.loads(out)["schema"] == f"tundravm.{verb}/{SCHEMA_VERSIONS.get(verb, 1)}"
 
 
 def test_evidence_json_on_disk_is_what_the_report_prints(

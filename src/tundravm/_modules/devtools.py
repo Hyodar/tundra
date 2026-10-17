@@ -1,6 +1,9 @@
 """Packages, serial console unit and login script of the ``declarative.utils.DevTools`` fragment.
 
-Development/debugging only: it enables password-based root login.
+Development/debugging only: it enables password-based root login. The root password is
+hashed with a fixed salt (:data:`DERIVED_SALT_LINE`) so that two builds of the variant
+write the same ``/etc/shadow``; :data:`DEVTOOLS_POSTINST_SCRIPT` is the historical script,
+whose ``openssl passwd`` picks a random salt on every build.
 """
 
 from __future__ import annotations
@@ -47,6 +50,19 @@ WantedBy=minimal.target
 # ---------------------------------------------------------------------------
 # PostInst script — root password, dropbear/openssh auth configuration
 # ---------------------------------------------------------------------------
+
+HISTORICAL_HASH_LINE = 'ROOT_PASS=$(openssl passwd -6 "tdx")'
+"""The line of :data:`DEVTOOLS_POSTINST_SCRIPT` that hashes the password with a random salt."""
+
+DERIVED_SALT_LINE = (
+    "SALT=$(printf 'tundravm-devtools:%s' \"${IMAGE_ID:-devtools}\" | sha256sum | cut -c1-16)"
+)
+"""The default salt: the first 16 hex digits of ``sha256("tundravm-devtools:<IMAGE_ID>")``,
+where mkosi's ``$IMAGE_ID`` is the variant's name (tundravm sets ``ImageId=`` and
+``--image-id`` to it), so it is fixed per variant."""
+
+SALTED_HASH_LINE = 'ROOT_PASS=$(openssl passwd -6 -salt "$SALT" "tdx")'
+"""The line that hashes the password with ``$SALT``, which the line before it sets."""
 
 DEVTOOLS_POSTINST_SCRIPT = """\
 # Set root password and unlock account

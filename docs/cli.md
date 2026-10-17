@@ -20,14 +20,15 @@ tundravm attest  --issuer ENDPOINT [--validator ENDPOINT] --policy FILE [--nonce
 tundravm sbom    [--build DIR] [--variant NAME] [--lockfile PATH] [--format spdx-json|cyclonedx-json|text|markdown] [--output FILE] [--allow-unbound]
 tundravm evidence [RECIPE] [--variant NAME]... [--build DIR] [--lockfile PATH] [--policy FILE] [--bundle FILE] [--html FILE] [--format text|json] [--require LIST] [--allow-unbound] [--sign KEY]
 tundravm verify  EVIDENCE [--build DIR] [--require LIST] [--allowed-signers FILE] [--signer PRINCIPAL] [--format text|json] [--html FILE]
+tundravm verify  RELEASE_DIR [--allowed-signers FILE] [--signer PRINCIPAL] [--format text|json]
 tundravm changes [RECIPE] --since EVIDENCE [--variant NAME]... [--build DIR] [--lockfile PATH] [--format text|json|markdown]
-tundravm release [RECIPE] --version VERSION [--variant NAME]... [--sign KEY] [--require LIST] [--since PREVIOUS] [--releases DIR]
-                 [--build DIR] [--lockfile PATH] [--backend KIND] [--resume | --restart] [--format text|json]
+tundravm release [RECIPE] --version VERSION [--variant NAME]... [--sign KEY | --no-sign] [--require LIST] [--since PREVIOUS] [--releases DIR]
+                 [--build DIR] [--lockfile PATH] [--backend KIND] [--resume | --restart] [--change-spec] [--allow-ineligible] [--format text|json]
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--tree DIR] [--lockfile PATH] [--format auto|text|github]
 tundravm watch   RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--interval SECONDS] [--write]
 tundravm status  RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
-tundravm clean   [RECIPE] [--build DIR] [--what sources,tree,artifacts,evidence,state,reproduce|all] [--lockfile PATH] [--dry-run]
+tundravm clean   [RECIPE] [--build DIR] [--what sources,tree,artifacts,evidence,state,reproduce|all] [--remove-lockfile PATH] [--dry-run]
 tundravm config  [RECIPE] [--build DIR] [--tree DIR] [--lockfile PATH] [--backend KIND] [--format text|json]
 tundravm completion bash|zsh|fish
 ```
@@ -90,7 +91,7 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `ci` | `lint --strict`, `compile --check` (against `--tree`) and `lock --check` in order; stops at the first failure. The one `--lockfile` (default `build/tundravm.lock`) is loaded once and shared: lint and the tree check apply its pins, the lock check compares against it. | any step fails, including a missing lockfile |
 | `watch` | Polls the recipe file and every `.py` under its directory; on each change re-runs lint and the tree check against `--tree` (default: the table's `tree`, else `BUILD/mkosi`, with `--build` default `build`), or recompiles it with `--write`, printing one line (see [Watch](#watch)). | never (Ctrl-C exits 0) |
 | `status` | Read-only, network-free report of where the project stands, one line per item with a verdict, then the single most useful next command (see [Project status](#project-status)). | never (exit 0) |
-| `clean` | Removes the parts `--what LIST` names of the build directory (`--build`, default: the table's `build`, else `build`): `sources`, `tree`, `artifacts`, `evidence`, `state`, `reproduce`, or `all`; the lockfile only when `--lockfile` names it. Without `--what` it lists what `--what all` would remove (see [Project status](#project-status)). | a path could not be removed |
+| `clean` | Removes the parts `--what LIST` names of the build directory (`--build`, default: the table's `build`, else `build`): `sources`, `tree`, `artifacts`, `evidence`, `state`, `reproduce`, or `all`; the lockfile only when `--remove-lockfile` names it; never a release directory. Without `--what` it lists what `--what all` would remove (see [Project status](#project-status)). | a path could not be removed, or a part held a release |
 | `config` | Prints the `recipe`, `tree`, `build`, `lockfile` and `backend` the commands resolve and where each came from: `flag`, `pyproject`, `default` or, for `backend`, `recipe` (the kind of the recipe file's `backend`); a recipe or lockfile that does not exist is marked (see [Project configuration](#project-configuration)). | |
 | `import` | Generates a recipe module from an existing mkosi tree (`TREE`: one variant directory or a directory of them): `--output FILE` writes it (`--force` overwrites), else it goes to stdout; `--name`, `--dialect`, `--format text\|json`. Reports the declared/verbatim coverage, notes for what it skipped or could not map, and whether the recipe compiles back to `TREE` (see [Import](#import)). | |
 | `completion` | Prints a bash, zsh or fish completion script for this version's verbs, flags and flag choices (see [Shell completion](#shell-completion)). | |
@@ -115,7 +116,7 @@ Every command reads the table, and every command that takes `RECIPE` then runs w
 - The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`. The keys are `recipe`, `tree`, `build`, `lockfile` and `backend`; a table that still has `out`, the old name of `build`, fails with `E_VALIDATION` (`[tool.tundravm] key(s) out in PATH were renamed.`, hint `Rename out to build (e.g. build = "build").`).
 - Precedence per value: an explicit argument or flag, then the table, then the built-in default (`build/mkosi`, `build`, `build/tundravm.lock`, the recipe file's `backend`). For `measure`, `deploy` and `sbom` the default build directory is `build` beside the `pyproject.toml` when a table is found without a `build`, else `./build`.
 - For the commands that take `RECIPE`, the table's paths apply when `RECIPE` is omitted or names the table's recipe; another explicit `RECIPE` uses the built-in defaults.
-- `tree` is `--tree` of `compile`, `diff`, `ci`, `status` and `watch` (the tree they write, compare or check); `build` is `--build` of `fetch`, `bake`, `measure`, `deploy`, `sbom`, `evidence`, `release`, `status`, `watch` and `clean`; `lockfile` is `--lockfile` everywhere except `clean`, drift diagnostics of `lint` included; `backend` is `bake --backend`, `release --backend` and `doctor --backend`, and `bake` and `release` keep the recipe file's own backend instance when it is of that kind.
+- `tree` is `--tree` of `compile`, `diff`, `ci`, `status` and `watch` (the tree they write, compare or check); `build` is `--build` of `fetch`, `bake`, `measure`, `deploy`, `sbom`, `evidence`, `release`, `status`, `watch` and `clean`; `lockfile` is `--lockfile` everywhere it is taken, drift diagnostics of `lint` included (`clean --remove-lockfile` names a lockfile to delete, never resolved); `backend` is `bake --backend`, `release --backend` and `doctor --backend`, and `bake` and `release` keep the recipe file's own backend instance when it is of that kind.
 - A configured `lockfile` stays selected before the file exists and is never replaced by `build/tundravm.lock`. Until `tundravm lock` writes it, `inspect`, `lint`, `compile`, `diff` and `fetch` print `` note: configured lockfile PATH does not exist; run `tundravm lock` to create it `` on stderr and run without pins, `status` reports `configured lockfile PATH does not exist; run tundravm lock` on its `lock` line, and `bake` fails with `E_LOCKFILE` instead of baking unfrozen.
 - Without `RECIPE` and without a table, a recipe command exits 2 with `the following arguments are required: recipe (no pyproject.toml with a [tool.tundravm] table ...)`; `doctor`, `clean` and `config` keep working without one.
 
@@ -899,9 +900,9 @@ A C3 instance has a gVNIC network interface and NVMe disks, so the image's kerne
 
 - **Packages**: the JSON package manifest mkosi writes next to the artifact (`ManifestFormat=json` is emitted for every variant, so a real bake leaves `BUILD/<variant>/output/<variant>.manifest`; `<variant>.manifest.json` is read too). Each distribution package with its version and architecture, plus its repository when the manifest records one (mkosi 26 does not). Without a manifest, as after an in-process bake, the document says so (a `note:` line, `creationInfo.comment`, CycloneDX `metadata.properties`) and lists the packages the recipe declares, unversioned.
 - **Sources**: the lockfile's pins for the variant: each source build (`<variant>/<name>` when pinned per variant) with its URL, ref, commit and the paths its `Install` steps write; the built kernel (`kernel`, `kernel-<variant>`); the `EfiStub` package (`efi-stub`) with its URL and sha256. `--lockfile FILE` names the lockfile; by default it is the one the bake recorded in `bake-result.json`, else `tundravm.lock` in the bake directory. Without one, sources are not listed.
-- **Metadata**: variant, base, arch, snapshot and mirror (from the lockfile's `distribution` section, else the manifest's `config`), the recipe, tree and artifact digests from `bake-result.json`, the artifact and manifest paths relative to the bake directory (moving `build/` elsewhere gives the same document), `bound` and the tundravm version.
+- **Metadata**: variant, base, arch, snapshot and mirror (from the lockfile's `distribution` section, else the manifest's `config`), the recipe, tree and artifact digests from `bake-result.json`, the artifact and manifest paths relative to the bake directory (moving `build/` elsewhere gives the same document), `bound`, `installed` (`yes` when the packages are mkosi's installed inventory, `no (declared packages)` when they are the recipe's declarations) and the tundravm version.
 
-The document is bound to the bake. `sbom` first hashes the artifact and fails with `E_ARTIFACT_CHANGED` when it changed since the bake. The bake records in `bake-result.json` the sha256 of the lockfile it read (`lock_sha256`, `null` without one) and of the manifest beside each artifact (`manifest_digests`, `null` when there was none); a lockfile that hashes to something else (or any lockfile when the bake read none), or a manifest that changed or appeared since, also fails with `E_ARTIFACT_CHANGED`, naming both sha256 prefixes. `--allow-unbound` writes the document anyway: `bound` reads `no (incomplete)` and a note says what is unbound. A manifest the bake recorded that is gone is a note; the declared packages are listed instead.
+The document is bound to the bake. `sbom` first hashes the artifact and fails with `E_ARTIFACT_CHANGED` when it changed since the bake. The bake records in `bake-result.json` the sha256 of the lockfile it read (`lock_sha256`, `null` without one) and of the manifest beside each artifact (`manifest_digests`, `null` when there was none); a lockfile that hashes to something else (or any lockfile when the bake read none), or a manifest that changed or appeared since, also fails with `E_ARTIFACT_CHANGED`, naming both sha256 prefixes. `--allow-unbound` writes the document anyway: `bound` reads `no (incomplete)` and a note says what is unbound. A manifest the bake recorded that is gone leaves the document unbound too: `bound` reads `no (incomplete)`, a note says the manifest is gone, and the declared packages are listed instead (`Sbom.missing` is `("manifest",)`). `Sbom.bound` is whether the materials are the bake's; `Sbom.complete` whether the installed inventory is there: a simulated bake's document is bound but not complete.
 
 | `--format` | Shape |
 |---|---|
@@ -938,16 +939,17 @@ wrote spdx-json build/default.spdx.json
 
 | Member | Holds |
 |---|---|
-| `evidence.json` | The index: `schema` (`tundravm.evidence/1`), `schema_version`, `created` (ISO 8601 UTC; `SOURCE_DATE_EPOCH` when set), `recipe` (`name`, `path`, `file_sha256`, `digest` now, `baked_digest` the bake recorded, `matches_bake`), `bake` (`path`, `backend`, `simulated`, `reproducibility`: the recorded state object or `null`), `lockfile` (`source`, `version`, `compiler_version`, `recipe_digest`, `sha256`, `recorded_sha256` (the `lock_sha256` the bake recorded), `bound`, `drift`, `verdict`: `current` or `drifted`; `null` without one), `lint` (`errors`, `warnings`, `infos`, `codes`), `tools` (`tundravm`, `python`, `mkosi` as `mkosi --version` prints it on this host, `null` when absent), per variant its `artifacts` (`target`, `path`, `size`, `sha256`, `integrity`: `verified`, `mismatch` or `missing`, `simulated`), `tree_digest`, `tree_matches`, `reproducibility` (the state `bake --verify-reproducible` recorded for the variant: `matched`, `different`, `running`, `error`, `interrupted`, or `null` when not checked), `policy`, `sbom` (per artifact: `target`, `member`, `packages`, `sources`, `manifest_found`, `bound`; an artifact that changed or is gone gets no SBOM, and a note) and `provenance` (declarations per fragment and resolution actions: `declared`, `added`, `replaced`, `removed`), the `verdict`, the `notes` and `members` (`sha256` and `size` of every other file) |
+| `evidence.json` | The index: `schema` (`tundravm.evidence/2`, the one identifier of its structure: there is no `schema_version`), `created` (ISO 8601 UTC; `SOURCE_DATE_EPOCH` when set), `recipe` (`name`, `path`, `file_sha256`, `digest` now, `baked_digest` the bake recorded, `matches_bake`), `bake` (`path`, `backend`, `simulated`, `reproducibility`: the recorded state object or `null`), `lockfile` (`source`, `version`, `compiler_version`, `recipe_digest`, `sha256`, `recorded_sha256` (the `lock_sha256` the bake recorded), `bound`, `drift`, `verdict`: `current` or `drifted`; `null` without one), `lint` (`errors`, `warnings`, `infos`, `codes`), `tools` (`tundravm`, `python`, `mkosi` as `mkosi --version` prints it on this host, `null` when absent), per variant its `artifacts` (`target`, `path`, `size`, `sha256`, `integrity`: `verified`, `mismatch` or `missing`, `simulated`), `tree_digest`, `tree_matches`, `tree` (its `tree.json` member, `null` when left out), `reproducibility` (the state `bake --verify-reproducible` recorded for the variant: `matched`, `different`, `running`, `error`, `interrupted`, or `null` when not checked), `policy` (`member`, `valid`, `placeholder`, `registers`, `artifact_matches` and `measures`: the `target` and `sha256` of the artifact it measures), `coverage` (per artifact: `target`, `sha256`, `state` `measured` or `unmeasured`, and the `reason` it is not: a format no measurement tool reads, no usable policy, or the policy measures another artifact), `declared_packages` (the packages the recipe declares for the variant, which `changes` compares), `sbom` (per artifact: `target`, `member`, `manifest_member` (the bundled package manifest, `null` when there is none), `packages`, `sources`, `complete` (the installed inventory is there), `missing` (`["manifest"]` when the manifest the bake recorded is gone), `bound`; an artifact that changed or is gone gets no SBOM, and a note) and `provenance` (declarations per fragment and resolution actions: `declared`, `added`, `replaced`, `removed`), the `verdict`, the `notes` and `members` (`sha256` and `size` of every other file) |
 | `bake-result.json` | The bake manifest, verbatim |
 | `tundravm.lock` | The lockfile, verbatim: `--lockfile FILE`, else the one the bake recorded, else `BUILD/tundravm.lock` |
 | `lint.json` | Every lint diagnostic of the selected variants, with the lockfile's pins applied |
 | `variants/<variant>/sbom-<target>.spdx.json` | The SPDX 2.3 SBOM of each verified artifact, as `tundravm sbom` writes it |
+| `variants/<variant>/manifest-<target>.json` | The mkosi package manifest the SBOM was made from, verbatim, when the bake left one: `verify` re-derives the SBOM's packages from it |
 | `variants/<variant>/policy.json` | The measurements policy: `--policy FILE` for every selected variant, else `BUILD/<variant>/policy.json` when it exists; the index says whether it is a placeholder and whether its `artifact.sha256` is the artifact's |
 | `variants/<variant>/tree.json` | Every entry of the variant's compiled tree as the recipe compiles now (`schema` `tundravm.tree/1`): `files`, each with `path` (relative to the variant's directory), `type` (`file`, `symlink`, `directory`), `mode` (octal, as the tree digest sees it: `0755` or `0644` by exec bit), `sha256` and `size` for a file, `target` for a symlink; `variant_digest` over those rows, `tree_digest` and `compiled_variants` of the whole tree compiled for the baked variants (what the bake records when `tree_matches`). `changes` compares it with the current tree |
 | `evidence.json.sig` | With `--sign KEY` only: the SSH signature of the exact bytes of `evidence.json` (`ssh-keygen -Y sign -n tundravm-evidence`); it covers every member through their sha256 in the index. It is not listed in `members`, and an unsigned run removes a previous run's |
 
-The `verdict` holds each check's state: `integrity` (`verified` when every artifact still hashes to the sha256 the bake recorded, else `mismatch` or `missing`), `lock` (`current`, `drifted` or `missing`), `reproducible` (`matched`, `different`, `running`, `error`, `interrupted` or `not checked`), `lint` (`clean`, `warnings` or `errors`), `recipe` and `tree` (`matches`, `changed` or `unknown`), `policy` (`verified`, `invalid`, `placeholder`, `mismatch`, `unbound` or `missing`), `artifacts` (`real` or `simulated`), `required` (the `--require` names), `reasons` and `overall`. Each reason is `{"severity", "code", "subject", "message"}`; `subject` is a variant, a `variant/target` or `null`. `overall` is `fail` when any reason is a contradiction, `incomplete` when the only reasons are required checks that are missing, else `pass`; `evidence` exits 1 unless it is `pass`.
+The `verdict` holds each check's state: `integrity` (`verified` when every artifact still hashes to the sha256 the bake recorded, else `mismatch` or `missing`), `lock` (`current`, `drifted` or `missing`), `reproducible` (`matched`, `different`, `running`, `error`, `interrupted` or `not checked`), `lint` (`clean`, `warnings` or `errors`), `recipe` and `tree` (`matches`, `changed` or `unknown`), `policy` (`verified`, `invalid`, `placeholder`, `mismatch`, `unbound` or `missing`), `measured` (`full` when every artifact is measured, `partial` when some are, else `none`), `sbom` (the worst SBOM: `material-missing`, `unbound`, `declared` or `installed`), `artifacts` (`real` or `simulated`), `required` (the `--require` names), `reasons` and `overall`. Each reason is `{"severity", "code", "subject", "message"}`; `subject` is a variant, a `variant/target` or `null`. `overall` is `fail` when any reason is a contradiction, `incomplete` when the only reasons are required checks that are missing, else `pass`; `evidence` exits 1 unless it is `pass`.
 
 | Reason code | Severity | When |
 |---|---|---|
@@ -965,10 +967,13 @@ The `verdict` holds each check's state: `integrity` (`verified` when every artif
 | `reproducibility-unchecked` | incomplete with `--require reproducible` | The bake did not run `--verify-reproducible` |
 | `reproducibility-incomplete` | incomplete with `--require reproducible` | The second build is `running`, ended in `error` or was `interrupted` |
 | `policy-missing`, `policy-unbound` | incomplete with `--require measured` | No policy for the variant, or one naming no artifact sha256 |
+| `artifact-unmeasured` | incomplete with `--require measured` | The variant's policy is valid, but measures another of its artifacts (each artifact counts as measured only when the policy names its own sha256; the bake does not record which UKI a disk image holds) |
+| `sbom-incomplete` | incomplete with `--require installed` | The SBOM lists the declared packages: no mkosi manifest beside the artifact |
 | `simulated-artifact` | incomplete with `--require real` | The artifacts are simulated (in-process backend) |
 | `lock-unbound`, `sbom-unbound` | incomplete | `--allow-unbound` recorded a lockfile or an SBOM that is not bound to the bake |
+| `sbom-material-missing` | incomplete | The manifest the bake recorded for an artifact is gone: its SBOM lists the declared packages and is not bound |
 
-Without `--require`, a missing check (no lockfile, no reproducibility check, no policy, simulated artifacts) is a note in the index and in the output, as is what could not be included (no mkosi manifest beside a simulated artifact).
+Without `--require`, a missing check (no lockfile, no reproducibility check, no policy, an unmeasured artifact, simulated artifacts, no installed inventory) is a note in the index and in the output, as is what could not be included (no mkosi manifest beside a simulated artifact).
 
 | Flag | Effect |
 |---|---|
@@ -976,10 +981,10 @@ Without `--require`, a missing check (no lockfile, no reproducibility check, no 
 | `--lockfile FILE` | The lockfile to record and check for drift |
 | `--policy FILE` | A `measure --export-policy` file for every selected variant |
 | `--bundle FILE` | Also write a deterministic `tar.gz`: members sorted under `evidence/`, owned by `0:0` with mode `0644`, every mtime (and the gzip header's) `SOURCE_DATE_EPOCH`, else 0, so two runs over the same bake with the same `SOURCE_DATE_EPOCH` give the same bytes |
-| `--html FILE` | Also write one self-contained HTML page (inline CSS, no scripts or external assets, every value escaped): a verdict banner (integrity, lock, reproducible, lint, recipe, tree, policy) listing every reason, the recipe, lockfile, lint and tools tables, a section per variant (artifacts, policy, SBOM, provenance), the notes and the members with their sha256 |
-| `--format text\|json` | How the index is printed: a summary with every member's sha256 (default), or `evidence.json` itself, verbatim (it carries `"schema": "tundravm.evidence/1"`) |
+| `--html FILE` | Also write one self-contained HTML page (inline CSS, no scripts or external assets, every value escaped): a verdict banner (integrity, lock, reproducible, lint, recipe, tree, policy, measured, sbom) listing every reason, the recipe, lockfile, lint and tools tables, a section per variant (artifacts, policy, measurement coverage, SBOM, provenance), the notes and the members with their sha256 |
+| `--format text\|json` | How the index is printed: a summary with every member's sha256 (default), or `evidence.json` itself, verbatim (it carries `"schema": "tundravm.evidence/2"`) |
 | `--allow-unbound` | Record a lockfile that does not hash to the `lock_sha256` the bake recorded, and SBOMs over an unbound lockfile or manifest, instead of failing with `E_ARTIFACT_CHANGED`; adds the `incomplete` reasons `lock-unbound` and `sbom-unbound` |
-| `--require LIST` | Comma-separated checks that must be present: `reproducible` (a recorded `matched` second build), `measured` (a valid, non-placeholder policy bound to each artifact), `real` (no simulated artifact), `lock` (a lockfile). A missing one is an `incomplete` reason (exit 1) instead of a note |
+| `--require LIST` | Comma-separated checks that must be present: `reproducible` (a recorded `matched` second build), `measured` (a valid, non-placeholder policy bound to each variant, measuring every artifact of it), `real` (no simulated artifact), `lock` (a lockfile), `installed` (each SBOM holds mkosi's installed inventory). A missing one is an `incomplete` reason (exit 1) instead of a note |
 | `--sign KEY` | Sign `evidence.json` with the SSH private key `KEY` (`ssh-keygen -Y sign -f KEY -n tundravm-evidence`; a key without a passphrase, or a `.pub` whose private key is in `ssh-agent`) and write `evidence.json.sig` beside it and into `--bundle`. Without `ssh-keygen` on `PATH` it fails with `E_STATE` and a hint; a key it cannot use fails with `E_VALIDATION` |
 
 After the [tutorial](tutorial.md)'s bake and `bake --verify-reproducible` (three variants, no `policy.json` beside them):
@@ -996,6 +1001,8 @@ evidence 2023-11-14T22:13:20Z  verdict pass
   lock       current
   reproduce  matched
   policy     missing
+  measured   none
+  sbom       declared
   artifacts  simulated
   lint       clean
   debug/qemu  build/debug/disk.qcow2  sha256 b50a5a5aeaac  verified
@@ -1044,15 +1051,29 @@ members:
 
 ## Verify
 
-`tundravm verify EVIDENCE` checks what `evidence` wrote without the recipe, the checkout or the bake directory: `EVIDENCE` is the `--bundle` file, the `BUILD/evidence` directory or its `evidence.json`. A bundle is read in memory (nothing is extracted, a member outside `evidence/` or that is not a plain file fails the check) and a directory is walked without following links. Each check is `pass`, `fail` or `missing`; `verify` exits 0 only when every one passes.
+`tundravm verify EVIDENCE` checks what `evidence` wrote without the recipe, the checkout or the bake directory: `EVIDENCE` is the `--bundle` file, the `BUILD/evidence` directory or its `evidence.json`. A bundle is read in memory (nothing is extracted, a member outside `evidence/` or that is not a plain file fails the check) and a directory is walked without following links. Each check is `pass`, `fail` or `missing`; `verify` exits 0 only when every one passes. It reads only the index structure this tundravm writes: a `schema` other than `tundravm.evidence/2` is one `schema-unsupported` fail (make the evidence again), and an index that also carries `schema_version` is `index-inconsistent`.
 
 | Check | Passes when | Reason code otherwise |
 |---|---|---|
-| `member` | Every member hashes to the `sha256` (and has the `size`) the index lists | `member-hash-mismatch` (fail), `member-missing` (missing); a file the index does not list is `index-inconsistent` |
-| `index` | The index agrees with its members: the lockfile hashes to the index's `lockfile.sha256` and, as its `bound` says, to the `lock_sha256` `bake-result.json` records; each artifact sha256 is the one `bake-result.json` records; each SBOM describes (its image package's SHA256 checksum) the artifact sha256 the index lists; each policy's `artifact.sha256`, placeholder flag and registers are what the index says; each `tree.json`'s rows hash to its `variant_digest`, all variants' rows to its `tree_digest`, and that agrees with `tree_matches` | `index-inconsistent` |
+| `member` | Every member hashes to the `sha256` (and has the `size`) the index lists, and the index lists every core member: `bake-result.json`, `lint.json`, the lockfile when `lockfile` names one, and each SBOM, bundled manifest, policy and `tree.json` a variant names | `member-hash-mismatch` (fail), `member-missing` (missing), `core-member-missing` (fail: a core member the index does not list, so the facts it records cannot be checked); a file the index does not list is `index-inconsistent` |
+| `index` | Each fact the index records that a (hash-verified) member also records is the member's: see below. The subject names the index field (`bake.simulated`, `lint.errors`, `variants.default.artifacts.qemu.sha256`, `variants.default.policy.measures`); a member that failed its own check is not read | `index-inconsistent`, one per field that disagrees |
 | `artifact` | With `--build DIR` (a build directory, or a [release](#release) directory): each artifact found under `DIR` (at its path in `bake-result.json`, `<variant>/<target>/<file>`, `<variant>/<file>`, or `<file>` when no other artifact has that name) hashes to the index's sha256 | `artifact-hash-mismatch` (fail), `artifact-missing` (missing) |
 | `signature` | With `--allowed-signers FILE`: `evidence.json.sig` verifies over `evidence.json` with `ssh-keygen -Y verify -n tundravm-evidence` for `--signer PRINCIPAL`, else for the principals `FILE` lists for the signing key (`ssh-keygen -Y find-principals`) | `signature-invalid` (fail), `signature-missing` (missing: the evidence is unsigned) |
-| `verdict` | The stored verdict is the one the recorded facts give (recomputed as `evidence` computes it), and those facts give `pass` under the recorded and the `--require` requirements | `index-inconsistent` for a stored verdict the facts do not give; otherwise each reason with the [evidence code](#evidence) it has there (`fail` reasons fail, `incomplete` ones are missing) |
+| `verdict` | The stored verdict is the one the facts derived from the members give (recomputed as `evidence` computes it), and those facts give `pass` under the recorded and the `--require` requirements | `index-inconsistent` for a stored verdict the facts do not give; otherwise each reason with the [evidence code](#evidence) it has there (`fail` reasons fail, `incomplete` ones are missing) |
+
+What `verify` derives from the members, and so does not take from the index:
+
+| Index field | Derived from |
+|---|---|
+| `bake.backend`, `bake.simulated`, `bake.reproducibility`, `recipe.baked_digest` | `bake-result.json` |
+| per variant `reproducibility`, `tree_digest`, the artifact targets, each artifact's `sha256` and `simulated` | `bake-result.json` |
+| `lint.errors`, `warnings`, `infos`, `codes` | `lint.json` |
+| `lockfile.sha256`, `recorded_sha256`, `bound` | the lockfile member and `bake-result.json`'s `lock_sha256` |
+| each SBOM's `complete`, `missing`, `bound`, its described artifact sha256 and its packages (name and version) | the SBOM, its bundled `manifest-<target>.json` and the `manifest_digests` `bake-result.json` records |
+| `policy.valid`, `placeholder`, `registers`, `artifact_matches`, `measures`, and each artifact's `coverage` | the policy member and the artifact sha256s above |
+| `tree_matches`, and each `tree.json`'s `variant_digest` and `tree_digest` | the `tree.json` rows and `bake-result.json`'s tree digest |
+
+The verdict is recomputed from those derived facts. What no member records stays the producer's assertion, covered only by the signature: `created`, the recipe's `name`, `path`, `file_sha256` and current `digest` (and so `matches_bake`), the lockfile's `drift` (against a recipe the evidence does not hold), `tools`, each artifact's `integrity` and `size` (re-checked only with `--build`), `declared_packages`, `provenance` and the `notes`.
 
 Without `--allowed-signers` the signature is not checked and a note says so: `unsigned` (no `evidence.json.sig`) or `signature-unchecked`; without `--build`, `artifacts-unchecked`. `--format json` prints `{"schema": "tundravm.verify/1", "evidence", "verdict", "passed", "counts", "required", "signer", "recorded": {"created", "recipe", "verdict"}, "checks": [{"kind", "subject", "state", "code", "message"}], "notes": [{"code", "message"}]}`; `verdict` is `fail` when a check failed, `incomplete` when one is missing, else `pass`. `--html FILE` also writes one self-contained page: the verdict banner with the counts, the problems, every check and the notes.
 
@@ -1066,10 +1087,10 @@ wrote build/evidence
 signed evidence.json with release-key: evidence.json.sig
 wrote v1.tar.gz
 $ tundravm verify v1.tar.gz --allowed-signers allowed_signers --build build
-verify v1.tar.gz  verdict pass  (13 pass, 0 fail, 0 missing)
+verify v1.tar.gz  verdict pass  (20 pass, 0 fail, 0 missing)
   evidence   2023-11-14T22:13:20Z  recipe node  recorded verdict pass
   member     5/5 pass
-  index      4/4 pass
+  index      11/11 pass
   artifact   1/1 pass
   signature  1/1 pass, signed by release@example.com
   verdict    2/2 pass
@@ -1080,10 +1101,10 @@ The same evidence directory with a byte appended to `lint.json`, `tree.json` del
 
 ```console
 $ tundravm verify tampered --allowed-signers allowed_signers --build artifacts --require reproducible
-verify tampered  verdict fail  (6 pass, 4 fail, 2 missing)
+verify tampered  verdict fail  (11 pass, 4 fail, 2 missing)
   evidence   2023-11-14T22:13:20Z  recipe node  recorded verdict pass
   member     3/5 pass
-  index      3/3 pass
+  index      8/8 pass
   artifact   0/1 pass
   signature  0/1 pass
   verdict    0/2 pass
@@ -1093,25 +1114,28 @@ problems:
   missing  member-missing  variants/default/tree.json: listed in the index, not in the evidence
   fail     artifact-hash-mismatch  default/qemu: artifacts/default/disk.qcow2 hashes to 19480efbd829, the index lists 1fa043adea90
   fail     signature-invalid  evidence.json.sig: does not verify against allowed_signers: Signature verification failed: incorrect signature
-  fail     index-inconsistent  recorded: the recorded verdict disagrees with the recorded facts: lint errors (facts: clean)
+  fail     index-inconsistent  recorded: the recorded verdict disagrees with the facts its members give: lint errors (facts: clean)
   missing  reproducibility-unchecked  default: reproducibility of default was not checked (bake --verify-reproducible) (required: reproducible)
 [exit 1]
 ```
 
 ## Changes
 
-`tundravm changes [RECIPE] --since EVIDENCE` compares a previous release's evidence (a bundle or directory, as `verify` reads it) with the recipe and lockfile as they are now, for the evidence's variants the recipe still declares (`--variant` picks some). A variant only the evidence has is reported as removed; one only the recipe declares is added, unless the evidence's lockfile holds it (it existed but was not baked), which is a note: `variant azure is not in the evidence (it was not baked): not compared`. It compiles the current tree once, reads nothing from the network and exits 0.
+`tundravm changes [RECIPE] --since EVIDENCE` compares a previous release's evidence (a bundle or directory, as `verify` reads it, or a [release](#release) directory: `release.json` beside the `evidence.tar.gz` it reads) with the recipe and lockfile as they are now, for the evidence's variants the recipe still declares (`--variant` picks some). A variant only the evidence has is reported as removed; one only the recipe declares is added, unless the evidence's lockfile holds it (it existed but was not baked), which is a note: `variant azure is not in the evidence (it was not baked): not compared`. It compiles the current tree once, reads nothing from the network and exits 0.
 
 | Section | Compares |
 |---|---|
 | Recipe and tree | The recipe digest (`recipe.digest` of the index against the recipe now) and each variant's `variant_digest` (its `tree.json` against the current tree) |
 | Lockfile sections | The section digests of the evidence's `tundravm.lock` against the current lockfile's (`--lockfile`, default `build/tundravm.lock` when it exists; without one, against the recipe's sections now), named as [lock drift](#lockfile-drift) names them, with the same item detail (`+htop -jq`, `~/etc/motd`); other variants' sections are left out |
 | Source pins | Each pin by name (or URL): `ref`, then the old and new commit or sha256; pins only one side has are added or removed |
-| Packages | The packages each variant's SBOM in the evidence lists against the current ones: the SBOM of the bake in `--build DIR` (mkosi's manifest, with versions) when given, else the packages the recipe declares, unversioned (a note says so). Added and removed by name; a version change only when both sides have versions |
+| Declared packages | The packages the evidence's recipe declared for each variant (`declared_packages` of the index) against the ones the recipe declares now: added and removed by name |
+| Installed packages | The packages the evidence's SBOMs list from mkosi's installed inventory (`complete` SBOMs only) against those of the current bake in `--build DIR`: added, removed, and a version change |
 | Emitted files | Each variant's `tree.json` rows against the current tree: added, removed and changed files (`content`, `mode 0644 -> 0755`, a type or symlink target), each added or changed file under `mkosi.extra` or `mkosi.skeleton` with the declarations that produce it, as `inspect --why` finds them (the first 25; a note says when more were left unexplained) |
-| Measurements | The registers of the evidence's `policy.json` against `BUILD/<variant>/policy.json` of `--build DIR`, when both exist |
+| Measurements | The registers of the evidence's valid `policy.json` against `BUILD/<variant>/policy.json` of `--build DIR` |
 
-Text groups the changes by section with a count line per section, then `+`, `-` or `~` lines; `--format markdown` is a heading, a count table and one table per non-empty section, with the notes folded in a `<details>` block, ready to paste into a pull request; `--format json` prints `{"schema": "tundravm.changes/1", "since", "created", "recipe", "variants", "counts", "changes": [{"section", "change", "subject", "variant", "old", "new", "detail", "origins"}], "notes"}`. Evidence made before `tree.json` existed gives no file comparison, with a note.
+Declarations are compared with declarations and installed packages with installed ones, never one with the other. A comparison one side has no data for is `unknown`, with the reason, never a list of removals: evidence made before `tundravm.evidence/2` records no declared packages; a simulated bake has no installed inventory; without `--build` the current side has neither installed packages nor registers. `--build DIR` is used only when its bake is of the current recipe (its recipe digest), tree (the compiled tree of its variants) and lockfile (the sha256 the bake recorded); otherwise a note says why and the installed packages and registers are `unknown`. Its SBOMs count only when bound to it and holding the installed inventory, and its `policy.json` only when it measured one of the variant's artifacts in that bake.
+
+Text groups the changes by section with a count line per section, then `+`, `-` or `~` lines, an `unknown:` line per comparison that was not made, and the notes; `--format markdown` is a heading, a count table, one table per non-empty section and a `Not compared` table, with the notes folded in a `<details>` block, ready to paste into a pull request; `--format json` prints `{"schema": "tundravm.changes/2", "since", "created", "recipe", "variants", "counts", "changes": [{"section", "change", "subject", "variant", "old", "new", "detail", "origins"}], "comparisons": [{"section", "variant", "state", "reason"}], "notes"}`; `section` is `recipe`, `lockfile`, `pins`, `packages` (declared), `installed`, `files` or `measurements`, and a comparison's `state` is `compared` or `unknown`. Evidence made before `tree.json` existed gives no file comparison, with a note.
 
 After the signed release above, swapping `jq` for `htop` and changing `/etc/motd`, then locking again:
 
@@ -1122,6 +1146,7 @@ changes since evidence 2023-11-14T22:13:20Z (v1.tar.gz)  recipe node  variants d
   lockfile      2
   pins          0
   packages      2
+  installed     0
   files         2
   measurements  0
 recipe (2):
@@ -1136,8 +1161,8 @@ packages (2):
 files (2):
   ~ default  mkosi.conf  (content)
   ~ default  mkosi.extra/etc/motd  (content)  from File(extra, /etc/motd) (declared in common)
-note: current packages are the recipe's declared ones, unversioned (pass --build DIR for the versions a bake installed)
-note: default: package versions are not compared where the evidence has none
+unknown: default installed: the evidence holds no installed inventory (no SBOM from a mkosi manifest)
+unknown: default measurements: the evidence holds no valid measurements policy
 [exit 0]
 ```
 
@@ -1172,71 +1197,144 @@ A declaration's name links to the files it produced and each file's "declared by
 | `changes` | `tundravm changes` against `--since PREVIOUS` (a release directory or an evidence bundle; default: the newest finished release of the recipe in `RELEASES`, by when it finished, then by version); skipped for the first release |
 | `notes` | `RELEASE/RELEASE.md`: the version, variants, recipe digest, lockfile sha256, the artifacts with their sha256, the reproducibility state, the measured registers, the verify verdict with every reason, and the changes report |
 
-The directory then holds the artifacts, `evidence.tar.gz` (with `evidence.json.sig` inside when signed), `evidence.html`, `<variant>/policy.json` (when measured), `<variant>/sbom-<target>.spdx.json`, `RELEASE.md` and `release.json`: `{"schema": "tundravm.release/1", "name", "recipe", "version", "created", "tundravm", "recipe_digest", "lock_sha256", "variants", "backend", "simulated", "reproducibility", "required", "since", "signer": {"principal", "public_key"} | null, "artifacts": [{"variant", "target", "path", "sha256"}], "stages": [{"name", "status": "done" | "skipped", "resumed", "started", "finished", "seconds", "inputs", "outputs": {PATH: SHA256}, "summary"}], "verdict", "reasons": [{"source": "evidence" | "verify", "severity", "code", "subject", "message"}], "finished"}`. `--format json` prints it to stdout and moves the stage lines to stderr.
+Then `release.json` and `release-manifest.json` are written, and with `--sign` `release-manifest.json.sig`. The directory holds the artifacts, `evidence.tar.gz` (with `evidence.json.sig` inside when signed), `evidence.html`, `<variant>/policy.json` (when measured), `<variant>/sbom-<target>.spdx.json`, `RELEASE.md`, `release.json`, `release-manifest.json` and, signed, its `.sig`. `release.json`: `{"schema": "tundravm.release/1", "name", "recipe", "version", "created", "tundravm", "recipe_digest", "lock_sha256", "variants", "skipped": [{"variant", "reason"}], "allow_ineligible", "backend", "simulated", "reproducibility", "required", "since", "signer": {"principal", "public_key"} | null, "spec": {"variants", "require", "signing": {"public_key", "fingerprint"} | null, "since": {"path", "label"} | null, "backend": {...}, "allow_ineligible"}, "spec_history": [{"at", "changes": {KEY: {"old", "new"}}}], "artifacts": [{"variant", "target", "path", "sha256"}], "stages": [{"name", "execution": "completed" | "skipped" | "failed", "verdict": "pass" | "fail" | "incomplete" | null, "resumed", "started", "finished", "seconds", "inputs", "outputs": {PATH: SHA256}, "summary"}], "verdict", "reasons": [{"source": "evidence" | "verify", "severity", "code", "subject", "message"}], "finished", "manifest": "release-manifest.json"}`. A stage's `execution` says whether it ran (`skipped`: it did not apply, the summary says why); its `verdict` is what `evidence`, `verify` and `notes` concluded (`null` for the other stages). `--format json` prints `release.json` to stdout and moves the stage lines to stderr.
 
 The verdict is `pass` only when the evidence and its verification pass, every `--require` check included. The in-process backend's artifacts are simulated: the release says `(simulated)`, `RELEASE.md` says so, and `--require real` fails it. Exit 0 when it passes, 1 when it fails, 2 on an SDK error.
 
-**Resuming.** Until the release passes, its directory holds `release.state.json` (`schema` `tundravm.release-state/1`): each completed stage with the sha256 of its inputs (its own settings plus everything the stages before it produced), the sha256 of each file it wrote, and the files outside the release it relies on (`bake-result.json` and the artifacts in `BUILD`). Running the release again resumes (`--resume` says so explicitly, and fails when there is nothing to resume): a stage whose inputs are unchanged and whose files still hash as recorded is kept (`kept`, no time); the first stage whose inputs changed runs, and so does every stage after it. So a changed `--require` or `--sign` reruns from `evidence`, a changed `--since` from `changes`, a new lockfile from `lock-check`, and a tampered SBOM from `sbom`. `--restart` discards the state and the files. An SDK error mid-release ends with `resume with: COMMAND` on stderr (under `--format json`, the error line's `context.resume`); so does a failing verdict, since a failed release stays resumable.
+**Eligibility.** A variant marked `Variant(..., release=False)` is not for release: the `init` scaffolds mark their `dev` variant (`DevTools()`, root login with a password) that way. Without `--variant`, `release` releases every eligible variant and prints `skip variant NAME: Variant(release=False): not for release` for each other one (`release.json`'s `skipped`). Naming an ineligible variant with `--variant` fails with `E_VALIDATION` unless `--allow-ineligible` is given, which `release.json` records (`allow_ineligible`). `release=True` is the default and stays out of the recipe digest, so recipes that never set it keep their digests and lockfiles; `release=False` is part of the variant's lockfile section. `DevTools` hashes its root password with a fixed salt (by default derived from the variant name, see [the fragments](api.md)), so a dev variant's second build matches the first.
 
-**Immutability.** A release that passed drops its state and is final: `release --version` of it again fails with `E_STATE` (`Hint: Bump the version (--version) to cut a new release.`), `--restart` included.
+**The manifest.** `release-manifest.json` (`schema` `tundravm.release-manifest/1`) names the release and lists every file of the directory, `release.json` included, with its sha256 and size:
+
+```json
+{
+  "schema": "tundravm.release-manifest/1",
+  "name": "node-1.0", "recipe": "node", "version": "1.0",
+  "recipe_digest": "be02c651...", "lock_sha256": "28667dc3...", "created": "2026-10-17T16:35:56Z",
+  "signer": null,
+  "files": [
+    {"path": "RELEASE.md", "sha256": "bd78c4ba...", "size": 928},
+    {"path": "default/disk.qcow2", "sha256": "1fa043ad...", "size": 114},
+    {"path": "default/sbom-qemu.spdx.json", "sha256": "6708a1b6...", "size": 7272},
+    {"path": "evidence.html", "sha256": "df2a232a...", "size": 7196},
+    {"path": "evidence.tar.gz", "sha256": "70816586...", "size": 6292},
+    {"path": "release.json", "sha256": "5a5e984e...", "size": 5150}
+  ]
+}
+```
+
+With `--sign KEY`, `signer` is `{"principal": "release", "public_key", "fingerprint"}` and `release-manifest.json.sig` is `ssh-keygen -Y sign` of the manifest in the `tundravm-release` namespace (the evidence's own signature uses `tundravm-evidence`).
+
+**Verifying a release.** `tundravm verify RELEASE_DIR` (any directory holding `release.json`) checks a release on its own: every file the manifest lists is re-hashed (`file-hash-mismatch`, `file-missing`), any other file fails (`file-unlisted`; only the `.sig` is not listed), `--allowed-signers FILE` checks the manifest signature (`manifest-signature-invalid`; `manifest-unsigned` when the `.sig` is gone but `release.json` names a signer or `--allowed-signers` was given; unchecked, it is a note), `release.json` must agree with the manifest (name, recipe, version, recipe digest, lockfile sha256, created, every artifact's sha256) and be finished (`release-inconsistent`), and then the evidence bundle is verified as `tundravm verify evidence.tar.gz --build RELEASE_DIR` would, with the release's `required` checks and the same `--allowed-signers`/`--signer`. One allowed-signers line serves both signatures: `release namespaces="tundravm-evidence,tundravm-release" ssh-ed25519 AAAA...`. `--build`, `--require` and `--html` do not apply to a release directory. `--format json` prints `{"schema": "tundravm.release-verify/1", "release", "verdict", "passed", "counts", "signer", "recorded": {"name", "version", "created"}, "checks", "evidence": {the tundravm.verify/1 report} | null, "notes"}`; the library call is `verify_release(path, *, allowed_signers=None, signer=None)`. Exit 0 when every check passes, 1 otherwise.
+
+**Resuming.** Until the release passes, its directory holds `release.state.json` (`schema` `tundravm.release-state/1`): the release's specification, written when it starts (`spec`: the variants, the `--require` checks, the signing key's path, public half and fingerprint, `--since`, the backend's fingerprint, the resolved build directory, `--allow-ineligible`), each change made to it (`spec_history`), and each stage with the sha256 of its inputs (its own settings plus everything the stages before it produced), the sha256 of each file it wrote, and the files outside the release it relies on (`bake-result.json`, the artifacts in `BUILD`, and each package manifest the SBOMs are generated from, or that it was absent). Running the release again resumes (`--resume` says so explicitly, and fails when there is nothing to resume) and inherits every option it omits from the spec: a release started with `--require real --sign KEY` keeps both. Giving a different value (fewer `--require` checks, `--no-sign`, another key, other variants, another `--since`, other backend settings or build directory) fails with `E_STATE` unless `--change-spec` is given; dropping a check or the signature would weaken what the release accepts, so it is never implicit. The change is recorded in `release.json`'s `spec_history` with its old and new values. A stage whose inputs are unchanged and whose files still hash as recorded is kept (`kept`, no time); the first stage whose inputs changed runs, and so does every stage after it. The bake's inputs include the backend's fingerprint (`{"name", ...}`: for `local` its `privilege`, `mkosi_args`, tools tree and `mkosi --version`; for `lima` the VM size and instance) and the build directory, so a changed backend setting bakes again; a changed `--require` or signing key reruns from `evidence`, a changed `--since` from `changes`, a new lockfile from `lock-check`, a tampered SBOM or a changed package manifest from `sbom`. A stage that raises is recorded as `execution: failed` and runs again on the resume. `--restart` discards the state, the spec and the files. An SDK error mid-release ends with `resume with: COMMAND` on stderr (under `--format json`, the error line's `context.resume`); so does a failing verdict, since a failed release stays resumable. A refused spec change prints no resume line: its hint says what to do.
+
+**Immutability.** A release that passed drops its state and is final: `release --version` of it again fails with `E_STATE` (`Hint: Bump the version (--version) to cut a new release.`), `--restart` included. `tundravm clean` never removes a release directory.
 
 ```console
 $ tundravm release --version 1.0
-[1/9] lock-check  done      0.0s  lock current (build/tundravm.lock), sha256 fda99a724906
+skip variant dev: Variant(release=False): not for release
+[1/9] lock-check  done      0.0s  lock current (build/tundravm.lock), sha256 28667dc31627
 [2/9] fetch       skipped   0.0s  in-process backend: nothing is built, nothing to fetch
-[3/9] bake        done      0.0s  2 artifacts, reproducible: matched, simulated
+[3/9] bake        done      0.0s  1 artifacts, reproducible: matched, simulated
 [4/9] measure     skipped   0.0s  simulated artifacts: nothing to measure
-[5/9] sbom        done      0.0s  2 SPDX documents, 27 packages
+[5/9] sbom        done      0.0s  1 SPDX documents, 7 packages
 [6/9] evidence    done      0.1s  verdict pass
-[7/9] verify      done      0.0s  verdict pass: 18/18 checks pass
+[7/9] verify      done      0.0s  verdict pass: 19/19 checks pass
 [8/9] changes     skipped   0.0s  no earlier release of this recipe to compare with
 [9/9] notes       done      0.0s  RELEASE.md, verdict pass
 release releases/node-1.0: pass (simulated)
 [exit 0]
 ```
 
-After adding `Package("htop")` and locking again, a release that requires real artifacts fails, stays resumable, and resumes without baking again once the requirement is dropped:
+After adding `Package("htop")` and locking again, a release that requires real artifacts fails and stays resumable; resuming it inherits `--require real`, dropping the requirement is refused, and `--change-spec` drops it without baking again:
 
 ```console
 $ tundravm release --version 1.1 --require real
-[1/9] lock-check  done      0.0s  lock current (build/tundravm.lock), sha256 b8ea35658807
+skip variant dev: Variant(release=False): not for release
+[1/9] lock-check  done      0.0s  lock current (build/tundravm.lock), sha256 f7d83ceba1bc
 [2/9] fetch       skipped   0.0s  in-process backend: nothing is built, nothing to fetch
-[3/9] bake        done      0.0s  2 artifacts, reproducible: matched, simulated
+[3/9] bake        done      0.0s  1 artifacts, reproducible: matched, simulated
 [4/9] measure     skipped   0.0s  simulated artifacts: nothing to measure
-[5/9] sbom        done      0.0s  2 SPDX documents, 29 packages
+[5/9] sbom        done      0.0s  1 SPDX documents, 8 packages
 [6/9] evidence    done      0.1s  verdict incomplete
-[7/9] verify      done      0.0s  verdict incomplete: 17/18 checks pass
-[8/9] changes     done      0.0s  since node-1.0: 9 changes
+[7/9] verify      done      0.0s  verdict incomplete: 18/19 checks pass
+[8/9] changes     done      0.0s  since node-1.0: 5 changes
 [9/9] notes       done      0.0s  RELEASE.md, verdict fail
-  evidence  simulated-artifact  default/qemu, dev/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
-  verify    simulated-artifact  default/qemu, dev/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
+  evidence  simulated-artifact  default/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
+  verify    simulated-artifact  default/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
 release releases/node-1.1: fail (simulated)
 resume with: tundravm release --version 1.1 --require real
 [exit 1]
 $ tundravm release --version 1.1
-[1/9] lock-check  kept            lock current (build/tundravm.lock), sha256 b8ea35658807
+skip variant dev: Variant(release=False): not for release
+[1/9] lock-check  kept            lock current (build/tundravm.lock), sha256 f7d83ceba1bc
 [2/9] fetch       skipped         in-process backend: nothing is built, nothing to fetch
-[3/9] bake        kept            2 artifacts, reproducible: matched, simulated
+[3/9] bake        kept            1 artifacts, reproducible: matched, simulated
 [4/9] measure     skipped         simulated artifacts: nothing to measure
-[5/9] sbom        kept            2 SPDX documents, 29 packages
+[5/9] sbom        kept            1 SPDX documents, 8 packages
+[6/9] evidence    kept            verdict incomplete
+[7/9] verify      kept            verdict incomplete: 18/19 checks pass
+[8/9] changes     kept            since node-1.0: 5 changes
+[9/9] notes       kept            RELEASE.md, verdict fail
+  evidence  simulated-artifact  default/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
+  verify    simulated-artifact  default/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
+release releases/node-1.1: fail (simulated)
+resume with: tundravm release --version 1.1
+[exit 1]
+$ tundravm release --version 1.1 --require ''
+error [E_STATE]: Release node-1.1 was started with another specification: require ["real"] -> [].
+Hint: Omit the option to keep what the release started with, or pass --change-spec (release(change_spec=True)) to change it; the change is recorded in release.json's spec_history.
+  release: node-1.1
+  changed: require
+[exit 2]
+$ tundravm release --version 1.1 --require '' --change-spec
+skip variant dev: Variant(release=False): not for release
+[1/9] lock-check  kept            lock current (build/tundravm.lock), sha256 f7d83ceba1bc
+[2/9] fetch       skipped         in-process backend: nothing is built, nothing to fetch
+[3/9] bake        kept            1 artifacts, reproducible: matched, simulated
+[4/9] measure     skipped         simulated artifacts: nothing to measure
+[5/9] sbom        kept            1 SPDX documents, 8 packages
 [6/9] evidence    done      0.1s  verdict pass
-[7/9] verify      done      0.0s  verdict pass: 18/18 checks pass
-[8/9] changes     done      0.0s  since node-1.0: 9 changes
+[7/9] verify      done      0.0s  verdict pass: 19/19 checks pass
+[8/9] changes     done      0.0s  since node-1.0: 5 changes
 [9/9] notes       done      0.0s  RELEASE.md, verdict pass
 release releases/node-1.1: pass (simulated)
 [exit 0]
 $ ls -R releases/node-1.1
 releases/node-1.1:
-RELEASE.md  default  dev  evidence.html  evidence.tar.gz  release.json
+RELEASE.md  default  evidence.html  evidence.tar.gz  release-manifest.json  release.json
 
 releases/node-1.1/default:
 disk.qcow2  sbom-qemu.spdx.json
-
-releases/node-1.1/dev:
-disk.qcow2  sbom-qemu.spdx.json
 ```
 
-`RELEASE.md` ends with the `changes --format markdown` report since `node-1.0`, its headings one level down. To check a release elsewhere: `tundravm verify releases/node-1.1/evidence.tar.gz --build releases/node-1.1`, with `--allowed-signers FILE` naming the signer's key when it was signed.
+`release.json`'s `spec_history` then holds `{"at": ..., "changes": {"require": {"old": ["real"], "new": []}}}`. `RELEASE.md` ends with the `changes --format markdown` report since `node-1.0`, its headings one level down. To check the release elsewhere, and after someone edited it:
+
+```console
+$ tundravm verify releases/node-1.1
+verify releases/node-1.1  verdict pass  (26 pass, 0 fail, 0 missing)
+  manifest   node-1.1  version 1.1  created 2026-10-17T16:36:03Z
+  file       6/6 pass
+  release    1/1 pass
+  evidence   pass: 19/19 checks pass
+  note       unsigned: the release carries no release-manifest.json.sig
+[exit 0]
+$ echo "Also: trust me." >> releases/node-1.1/RELEASE.md; echo '{}' > releases/node-1.1/default/extra.json
+$ # ...and "version": "1.2" in releases/node-1.1/release.json
+$ tundravm verify releases/node-1.1
+verify releases/node-1.1  verdict fail  (23 pass, 4 fail, 0 missing)
+  manifest   node-1.1  version 1.1  created 2026-10-17T16:36:03Z
+  file       4/7 pass
+  release    0/1 pass
+  evidence   pass: 19/19 checks pass
+  note       unsigned: the release carries no release-manifest.json.sig
+problems:
+  fail     file-hash-mismatch  RELEASE.md: sha256 2ed6af7bf4f865cd... (2202 bytes), the manifest lists f605fc73bb2c3c9a... (2186 bytes)
+  fail     file-hash-mismatch  release.json: sha256 af7611a0ae30007d... (5389 bytes), the manifest lists 9a70262f0f700eea... (5390 bytes)
+  fail     file-unlisted  default/extra.json: default/extra.json is in the release but not in release-manifest.json
+  fail     release-inconsistent  version: release.json says version '1.2', the manifest '1.1'
+[exit 1]
+```
 
 ## Watch
 
@@ -1325,7 +1423,7 @@ next: tundravm bake node.py
 | `reproduce` | `BUILD/.reproduce`, the second build a failed `bake --verify-reproducible` keeps |
 | `all` | Every part above |
 
-The lockfile is never removed unless `--lockfile PATH` names it, and [releases](#release) live outside the build directory. It prints `removed PATH` per path, or `would remove PATH` with `--dry-run`; without `--what` it lists what `--what all` would remove and removes nothing:
+The lockfile is never removed unless `--remove-lockfile PATH` names it. A [release](#release) directory is never removed: a part that holds one (because `release --releases` points inside the build directory, say `--releases build/evidence/releases`) is refused with `refused PATH: it holds release RELEASE; clean never removes a release` and the hint `keep --releases outside the build directory`, the other parts are removed, and `clean` exits 1. It prints `removed PATH` per path, or `would remove PATH` with `--dry-run`; without `--what` it lists what `--what all` would remove and removes nothing:
 
 ```console
 $ tundravm clean node.py
@@ -1334,7 +1432,7 @@ would remove build/default
 would remove build/dev
 would remove build/bake-result.json
 would remove build/evidence
-pass --what all to remove them, or --what with some of sources, tree, artifacts, evidence, state, reproduce (the lockfile stays unless --lockfile names it)
+pass --what all to remove them, or --what with some of sources, tree, artifacts, evidence, state, reproduce (the lockfile stays unless --remove-lockfile names it)
 ```
 
 A path the user cannot delete (mkosi output a `local` bake left root-owned) is removed with `sudo rm -rf` when `sudo` is available; otherwise `clean` prints `not removed PATH: ...` and a hint, and exits 1.

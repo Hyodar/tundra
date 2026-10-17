@@ -12,6 +12,7 @@ declarations through the compiler's account prelude instead.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -410,12 +411,19 @@ class Tdxs(Composite):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DevTools(Composite):
-    """Debugging tools, a serial console and password root login. Never ship it.
+    """Debugging tools, a serial console and password root login. Never ship it: mark its
+    variant ``Variant(..., release=False)``.
 
-    Fragment name: ``devtools``.
+    The root password is hashed with a fixed salt, so a second build of the variant
+    matches the first: *salt* (1 to 16 of ``[A-Za-z0-9./]``), or by default the first 16
+    hex digits of ``sha256("tundravm-devtools:<variant name>")``, computed in the
+    postinst script from mkosi's ``$IMAGE_ID``. ``reproducible=False`` keeps the
+    historical random salt (``nethermind-v1`` trees). Fragment name: ``devtools``.
     """
 
     root_password: str = _DEFAULT_ROOT_PASSWORD
+    salt: str | None = None
+    reproducible: bool = True
 
     def compose(self) -> Fragment:
         if not self.root_password or _UNSAFE_PASSWORD & set(self.root_password):
@@ -424,10 +432,23 @@ class DevTools(Composite):
                 "'`' or '\\'.",
                 hint="Pick a password of plain letters, digits and punctuation on one line.",
             )
-        login = _devtools.DEVTOOLS_POSTINST_SCRIPT.replace(
-            f'openssl passwd -6 "{_DEFAULT_ROOT_PASSWORD}"',
-            f'openssl passwd -6 "{self.root_password}"',
-        )
+        if self.salt is not None and (
+            not self.reproducible or not re.fullmatch(r"[A-Za-z0-9./]{1,16}", self.salt)
+        ):
+            raise ValidationError(
+                f"DevTools salt {self.salt!r} must be 1 to 16 of A-Z, a-z, 0-9, '.' and '/', "
+                "with reproducible=True.",
+                hint="Pass a short salt such as salt='devtools01', or omit it for the one "
+                "derived from the variant name.",
+            )
+        hashed = f'openssl passwd -6 "{self.root_password}"'
+        if self.reproducible:
+            salt = _devtools.DERIVED_SALT_LINE if self.salt is None else f'SALT="{self.salt}"'
+            hashed = f'openssl passwd -6 -salt "$SALT" "{self.root_password}"'
+            line = f"{salt}\nROOT_PASS=$({hashed})"
+        else:
+            line = f"ROOT_PASS=$({hashed})"
+        login = _devtools.DEVTOOLS_POSTINST_SCRIPT.replace(_devtools.HISTORICAL_HASH_LINE, line)
         return Fragment(
             "devtools",
             items=(

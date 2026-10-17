@@ -99,6 +99,9 @@ class Lowered:
     secret_allowed: Mapping[str, frozenset[str]] = field(default_factory=dict, repr=False)
     """Per profile, what declares ``allow_secret=True``: file paths, ``Directory`` paths
     ending in ``/`` and service unit names. Outside the recipe digest."""
+    unreleased: frozenset[str] = frozenset()
+    """Profiles of variants marked ``Variant(release=False)``: their payload carries
+    ``"release": false`` (an eligible variant's carries nothing, so its digest is unchanged)."""
 
     @property
     def base(self) -> str:
@@ -214,6 +217,8 @@ class Lowered:
             entry["kernel"] = kernel_payload(self.kernel_for(name))
             if name in self.profile_mkosi:
                 entry["mkosi"] = mkosi_payload(self.profile_mkosi[name])
+            if name in self.unreleased:
+                entry["release"] = False
         return {
             "distribution": {
                 "base": self.state.base,

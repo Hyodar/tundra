@@ -51,6 +51,23 @@ class BuildBackend(Protocol):
         """Release backend runtime resources."""
 
 
+class FingerprintedBackend(BuildBackend, Protocol):
+    """A :class:`BuildBackend` that says what decides how it builds; every shipped backend
+    is one. ``release`` records the fingerprint in the bake stage's inputs and in the
+    release's specification, so a changed setting bakes again."""
+
+    def fingerprint(self) -> dict[str, object]:
+        """``name`` plus the backend's settings, as JSON."""
+
+
+def backend_fingerprint(backend: BuildBackend) -> dict[str, object]:
+    """*backend*'s ``fingerprint()`` (:class:`FingerprintedBackend`), or
+    ``{"name": backend.name}`` for a backend without one."""
+    method = getattr(backend, "fingerprint", None)
+    found = method() if callable(method) else None
+    return dict(found) if isinstance(found, dict) else {"name": backend.name}
+
+
 # ---------------------------------------------------------------------------
 # Streaming subprocess execution
 # ---------------------------------------------------------------------------

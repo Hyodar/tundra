@@ -79,7 +79,7 @@ def test_devtools_variant_enables_serial_console_in_postinst(tree: CompiledTree)
 def test_devtools_postinst_sets_root_password(tree: CompiledTree) -> None:
     """Verify the postinst script sets root password via openssl passwd."""
     postinst = tree.script("postinst", profile="devtools")
-    assert 'openssl passwd -6 "tdx"' in postinst
+    assert 'openssl passwd -6 -salt "$SALT" "tdx"' in postinst
     assert "usermod -p" in postinst
     assert "passwd -u root" in postinst
 

@@ -8,8 +8,9 @@ import json
 import shutil
 import subprocess
 import tarfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -31,9 +32,10 @@ from tundravm import (
 )
 from tundravm import _ssh_sig as ssh_sig
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
-from tundravm.declarative import write_lock
+from tundravm.declarative import read_artifacts, write_lock
+from tundravm.declarative.bom import manifest_path
 from tundravm.errors import StateError, ValidationError
-from tundravm.evidence import tree_rows, tree_rows_digest
+from tundravm.evidence import _verdict, tree_rows, tree_rows_digest
 
 EPOCH = "1700000000"
 NEEDS_SSH = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="needs ssh-keygen")
@@ -97,8 +99,12 @@ def test_a_clean_bundle_and_directory_pass_with_their_artifacts(
     }
     subjects = {c["subject"] for c in payload["checks"] if c["kind"] == "index"}
     assert {
-        "tundravm.lock",
-        "default/qemu",
+        "bake",
+        "lint",
+        "lockfile",
+        "recipe",
+        "variants.default",
+        "variants.default.artifacts.qemu",
         "variants/default/sbom-qemu.spdx.json",
         "variants/default/tree.json",
     } <= subjects
@@ -183,8 +189,105 @@ def test_an_edited_index_is_inconsistent(tmp_path: Path) -> None:
     codes = {
         (state, code, subject) for state, code, subject in _problems(verify_evidence(directory))
     }
-    assert ("fail", "index-inconsistent", "default/qemu") in codes
+    assert ("fail", "index-inconsistent", "variants.default.artifacts.qemu.sha256") in codes
     assert ("fail", "index-inconsistent", "variants/default/sbom-qemu.spdx.json") in codes
+
+
+def _forge(directory: Path, edit: Callable[[dict[str, Any]], None]) -> None:
+    """Edit evidence.json with *edit*, then store the verdict the edited facts give."""
+    index_path = directory / "evidence.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    edit(index)
+    index["verdict"] = _verdict(index, tuple(index["verdict"]["required"]), [])
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+
+def _relist(directory: Path, name: str) -> None:
+    """List member *name* in evidence.json with its current sha256 and size."""
+    index_path = directory / "evidence.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    data = (directory / name).read_bytes()
+    index["members"][name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+
+def test_an_omitted_bake_record_fails_as_a_core_member(tmp_path: Path) -> None:
+    build, found = _baked(tmp_path)
+    directory = found.write(build / "evidence")
+    (directory / "bake-result.json").unlink()
+
+    def drop(index: dict[str, Any]) -> None:
+        del index["members"]["bake-result.json"]
+
+    _forge(directory, drop)
+    result = verify_evidence(directory)
+    assert result.verdict == "fail"
+    assert _problems(result) == [("fail", "core-member-missing", "bake-result.json")]
+    (directory / "lint.json").unlink()
+    _forge(directory, lambda index: index["members"].pop("lint.json"))
+    assert ("fail", "core-member-missing", "lint.json") in _problems(verify_evidence(directory))
+
+
+def test_reproducibility_and_simulated_claims_are_derived_from_the_bake_record(
+    tmp_path: Path,
+) -> None:
+    build, found = _baked(tmp_path)
+    directory = found.write(build / "evidence")
+    matched: dict[str, Any] = {
+        "state": "matched",
+        "second_build": ".reproduce",
+        "differ": [],
+        "error": None,
+    }
+
+    def claim(index: dict[str, Any]) -> None:
+        index["bake"].update(simulated=False, reproducibility=matched)
+        for record in index["variants"].values():
+            record["reproducibility"] = "matched"
+            for row in record["artifacts"]:
+                row["simulated"] = False
+        index["verdict"]["required"] = ["reproducible", "real"]
+
+    _forge(directory, claim)
+    assert json.loads((directory / "evidence.json").read_text())["verdict"]["overall"] == "pass"
+    problems = _problems(verify_evidence(directory))
+    assert {
+        ("fail", "index-inconsistent", "bake.simulated"),
+        ("fail", "index-inconsistent", "bake.reproducibility"),
+        ("fail", "index-inconsistent", "variants.default.reproducibility"),
+        ("fail", "index-inconsistent", "variants.default.artifacts.qemu.simulated"),
+        ("fail", "index-inconsistent", "recorded"),
+        ("missing", "reproducibility-unchecked", "default"),
+        ("missing", "simulated-artifact", "azure/azure, default/qemu"),
+    } <= set(problems)
+
+
+def test_lint_counts_are_derived_from_lint_json(tmp_path: Path) -> None:
+    build, found = _baked(tmp_path)
+    directory = found.write(build / "evidence")
+    error = {"code": "E999", "severity": "error", "message": "x", "subject": None}
+    (directory / "lint.json").write_text(json.dumps([error]), encoding="utf-8")
+    _relist(directory, "lint.json")
+    assert _problems(verify_evidence(directory)) == [
+        ("fail", "index-inconsistent", "lint.errors"),
+        ("fail", "index-inconsistent", "lint.codes"),
+        ("fail", "index-inconsistent", "recorded"),
+        ("fail", "lint-errors", None),
+    ]
+
+
+def test_only_the_current_evidence_schema_is_read(tmp_path: Path) -> None:
+    build, found = _baked(tmp_path)
+    directory = found.write(build / "evidence")
+    index_path = directory / "evidence.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert index["schema"] == "tundravm.evidence/2" and "schema_version" not in index
+    index_path.write_text(json.dumps({**index, "schema": "tundravm.evidence/1"}))
+    assert _problems(verify_evidence(directory)) == [("fail", "schema-unsupported", "schema")]
+    index_path.write_text(json.dumps({**index, "schema_version": 1}))
+    assert _problems(verify_evidence(directory)) == [
+        ("fail", "index-inconsistent", "schema_version")
+    ]
 
 
 def test_a_lockfile_swapped_with_its_index_entry_is_caught(tmp_path: Path) -> None:
@@ -201,7 +304,14 @@ def test_a_lockfile_swapped_with_its_index_entry_is_caught(tmp_path: Path) -> No
     }
     index_path.write_text(json.dumps(index), encoding="utf-8")
     assert _problems(verify_evidence(directory)) == [
-        ("fail", "index-inconsistent", "tundravm.lock")
+        ("fail", "index-inconsistent", "lockfile.sha256"),
+        ("fail", "index-inconsistent", "lockfile.bound"),
+        ("fail", "index-inconsistent", "variants.azure.sbom.azure.bound"),
+        ("fail", "index-inconsistent", "variants.default.sbom.qemu.bound"),
+        ("fail", "index-inconsistent", "recorded"),
+        ("missing", "lock-unbound", None),
+        ("missing", "sbom-unbound", "azure/azure"),
+        ("missing", "sbom-unbound", "default/qemu"),
     ]
 
 
@@ -365,4 +475,63 @@ def test_an_index_of_another_shape_is_inconsistent_not_a_crash(tmp_path: Path) -
     index_path.write_text("[]", encoding="utf-8")
     assert _problems(verify_evidence(directory)) == [
         ("fail", "index-inconsistent", "evidence.json")
+    ]
+
+
+def test_the_sbom_is_rederived_from_its_bundled_manifest(tmp_path: Path) -> None:
+    recipe = _recipe()
+    build = tmp_path / "build"
+    locked = lock(recipe)
+    write_lock(locked, build / "tundravm.lock")
+    bake(recipe, lock=locked, backend=Backend("inprocess"), build=build, variants=["default"])
+    artifact = read_artifacts(build)[0]
+    packages = [{"type": "deb", "name": "curl", "version": "8.5.0-2", "architecture": "amd64"}]
+    text = json.dumps({"manifest_version": 1, "config": {}, "packages": packages})
+    manifest_path(artifact).write_text(text, encoding="utf-8")
+    result = build / "bake-result.json"
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    payload["variants"]["default"]["manifest_digests"]["qemu"] = hashlib.sha256(
+        text.encode()
+    ).hexdigest()
+    result.write_text(json.dumps(payload), encoding="utf-8")
+    directory = evidence(recipe, build=build, runner=_mkosi).write(build / "evidence")
+    assert verify_evidence(directory).passed
+    member = directory / "variants" / "default" / "manifest-qemu.json"
+    member.write_text(text.replace("8.5.0-2", "9.9.9-1"), encoding="utf-8")
+    _relist(directory, "variants/default/manifest-qemu.json")
+    assert _problems(verify_evidence(directory)) == [
+        ("fail", "index-inconsistent", "variants.default.sbom.qemu.bound"),
+        ("fail", "index-inconsistent", "variants/default/sbom-qemu.spdx.json"),
+        ("fail", "index-inconsistent", "recorded"),
+        ("missing", "sbom-unbound", "default/qemu"),
+    ]
+    member.unlink()
+    _forge(directory, lambda index: index["members"].pop("variants/default/manifest-qemu.json"))
+    assert ("fail", "core-member-missing", "variants/default/manifest-qemu.json") in _problems(
+        verify_evidence(directory)
+    )
+
+
+def test_measurement_coverage_is_derived_from_the_policy(tmp_path: Path) -> None:
+    build, _ = _baked(tmp_path)
+    artifact = read_artifacts(build)[1]
+    policy = {
+        "schema_version": 1,
+        "scheme": "rtmr",
+        "tool": "measured-boot",
+        "tool_version": "1.0",
+        "artifact": {"path": "disk.qcow2", "sha256": artifact.sha256},
+        "registers": {f"RTMR{i}": "ab" * 48 for i in range(3)},
+    }
+    (build / "default" / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
+    found = evidence(_recipe(), build=build, runner=_mkosi, variants=["default"])
+    directory = found.write(build / "evidence")
+    assert verify_evidence(directory, require=("measured",)).passed
+
+    def claim(index: dict[str, Any]) -> None:
+        index["variants"]["default"]["policy"]["measures"]["target"] = "azure"
+
+    _forge(directory, claim)
+    assert _problems(verify_evidence(directory)) == [
+        ("fail", "index-inconsistent", "variants.default.policy.measures"),
     ]

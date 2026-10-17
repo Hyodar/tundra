@@ -111,6 +111,17 @@ class LimaMkosiBackend:
             ),
         )
 
+    def fingerprint(self) -> dict[str, object]:
+        """The backend name, the VM's size and instance, and the extra mkosi arguments."""
+        return {
+            "name": self.name,
+            "cpus": self.cpus,
+            "memory": self.memory,
+            "disk": self.disk,
+            "instance": self.instance_name,
+            "mkosi_args": list(self.mkosi_args),
+        }
+
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
         """Single mount: build_dir -> /home/debian/mnt."""
         return (MountSpec(source=request.build_dir, target=VM_MOUNT),)

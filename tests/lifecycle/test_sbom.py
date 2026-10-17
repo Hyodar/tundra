@@ -198,6 +198,23 @@ def test_missing_manifest_lists_declared_packages_and_says_so(tmp_path: Path, lo
     assert len(document.sources) == 2
 
 
+def test_a_recorded_manifest_that_is_gone_unbinds_the_document(
+    tmp_path: Path, locked: Lock
+) -> None:
+    artifact = _artifact(tmp_path, lock=locked)
+    complete = sbom(artifact, lock=locked)
+    assert complete.bound and complete.complete and complete.missing == ()
+    assert ("installed", "yes") in complete.metadata()
+    manifest_path(artifact).unlink()
+    document = sbom(artifact, lock=locked)
+    assert not document.bound and not document.complete
+    assert document.missing == ("manifest",)
+    assert ("installed", "no (declared packages)") in document.metadata()
+    assert any("is gone: the document is unbound" in note for note in document.notes)
+    simulated = sbom(_artifact(tmp_path / "other", manifest=False, lock=locked), lock=locked)
+    assert simulated.bound and not simulated.complete and simulated.missing == ()
+
+
 def test_artifact_without_lock_lists_no_sources(tmp_path: Path) -> None:
     document = sbom(_artifact(tmp_path))
     assert document.sources == ()

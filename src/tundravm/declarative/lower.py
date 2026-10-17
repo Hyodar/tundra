@@ -242,6 +242,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         local_sources=_local_sources(recipe, resolved),
         deb_files=() if dialect == HISTORICAL else _efi_stub_debs(recipe),
         secret_allowed={name: _secret_allowed(r.items) for name, r in resolved.items()},
+        unreleased=frozenset(variant.name for variant in selected if not variant.release),
         **extra,
     )
 

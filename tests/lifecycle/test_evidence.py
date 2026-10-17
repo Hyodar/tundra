@@ -24,9 +24,13 @@ from tundravm import (
     bake,
     evidence,
     lock,
+    release,
+    verify_evidence,
 )
+from tundravm.backends import InProcessBackend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative import lower, read_artifacts, write_lock
+from tundravm.declarative.bom import manifest_path
 from tundravm.errors import ArtifactError, ValidationError
 
 EPOCH = "1700000000"
@@ -77,12 +81,14 @@ def test_index_records_every_member_with_its_sha256(tmp_path: Path, epoch: None)
         "integrity": "verified",
         "lint": "clean",
         "lock": "current",
+        "measured": "none",
         "overall": "pass",
         "policy": "missing",
         "reasons": [],
         "recipe": "matches",
         "reproducible": "not checked",
         "required": [],
+        "sbom": "declared",
         "tree": "matches",
     }
     assert any("reproducibility of default was not checked" in n for n in found.notes)
@@ -361,3 +367,100 @@ def test_a_different_second_build_fails_only_its_variant(tmp_path: Path) -> None
     assert _codes(found) == [("fail", "not-reproducible", "azure")]
     assert found.index["variants"]["default"]["reproducibility"] == "matched"
     assert found.index["verdict"]["reproducible"] == "different"
+
+
+def _record_manifest(out: Path, versions: dict[str, str]) -> Path:
+    """A mkosi manifest beside default/qemu, recorded in bake-result.json as a bake does."""
+    artifact = read_artifacts(out)[1]
+    packages = [
+        {"type": "deb", "name": name, "version": version, "architecture": "amd64"}
+        for name, version in versions.items()
+    ]
+    text = json.dumps({"manifest_version": 1, "config": {}, "packages": packages})
+    path = manifest_path(artifact)
+    path.write_text(text, encoding="utf-8")
+    result = out / "bake-result.json"
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    payload["variants"]["default"]["manifest_digests"]["qemu"] = digest
+    result.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def test_a_recorded_manifest_is_bundled_and_its_loss_unbinds_the_sbom(tmp_path: Path) -> None:
+    recipe = _recipe()
+    out = _baked(tmp_path, recipe)
+    manifest = _record_manifest(out, {"curl": "8.5.0-2", "linux-image-amd64": "6.12.48-1"})
+    found = _evidence(recipe, out, require=("installed",))
+    (entry,) = found.index["variants"]["default"]["sbom"]
+    assert entry["manifest_member"] == "variants/default/manifest-qemu.json"
+    assert found.members[entry["manifest_member"]] == manifest.read_bytes()
+    assert (entry["bound"], entry["complete"], entry["missing"]) == (True, True, [])
+    assert _codes(found) == [("incomplete", "sbom-incomplete", "azure/azure")]
+    assert found.index["verdict"]["sbom"] == "declared"
+    alone = _evidence(recipe, out, variants=["default"], require=("installed",))
+    assert alone.passed and alone.index["verdict"]["sbom"] == "installed"
+    manifest.unlink()
+    gone = _evidence(recipe, out, variants=["default"])
+    (entry,) = gone.index["variants"]["default"]["sbom"]
+    assert (entry["bound"], entry["complete"], entry["missing"]) == (False, False, ["manifest"])
+    assert entry["manifest_member"] is None
+    assert _codes(gone) == [("incomplete", "sbom-material-missing", "default/qemu")]
+    assert gone.index["verdict"]["sbom"] == "material-missing"
+
+
+def test_measurement_coverage_is_per_artifact(tmp_path: Path) -> None:
+    recipe = _recipe()
+    out = _baked(tmp_path, recipe)
+    qemu, azure = read_artifacts(out)[1], read_artifacts(out)[0]
+    second = out / "default" / "disk.vhd"
+    second.write_bytes(azure.path.read_bytes())
+    result = out / "bake-result.json"
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    payload["variants"]["default"]["artifacts"]["azure"] = "default/disk.vhd"
+    payload["variants"]["default"]["artifact_digests"]["azure"] = azure.sha256
+    payload["variants"]["default"]["manifest_digests"]["azure"] = None
+    result.write_text(json.dumps(payload), encoding="utf-8")
+    policy = out / "default" / "policy.json"
+    policy.write_text(json.dumps(_policy(qemu.sha256)), encoding="utf-8")
+    found = _evidence(recipe, out, variants=["default"])
+    record = found.index["variants"]["default"]
+    assert record["policy"]["measures"] == {"target": "qemu", "sha256": qemu.sha256}
+    assert [(c["target"], c["state"]) for c in record["coverage"]] == [
+        ("azure", "unmeasured"),
+        ("qemu", "measured"),
+    ]
+    assert record["coverage"][0]["reason"].startswith("its format (.vhd) is not measurable")
+    assert found.passed and found.index["verdict"]["measured"] == "partial"
+    assert any("default/azure is not measured" in note for note in found.notes)
+    required = _evidence(recipe, out, variants=["default"], require=("measured",))
+    assert _codes(required) == [("incomplete", "artifact-unmeasured", "default/azure")]
+
+
+def test_a_subset_of_the_baked_variants_matches_its_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", EPOCH)
+    recipe = _recipe()
+    out = _baked(tmp_path, recipe)
+    _evidence(recipe, out).write(out / "evidence")
+    alone = _evidence(recipe, out, variants=["default"])
+    assert alone.passed, alone.index["verdict"]["reasons"]
+    assert alone.index["variants"]["default"]["tree_matches"] is True
+    directory = alone.write(out / "evidence")  # over the evidence of both variants
+    assert not (directory / "variants" / "azure").exists()
+    assert verify_evidence(directory).passed
+    released = release(
+        recipe,
+        version="1.0",
+        backend=InProcessBackend(),
+        variants=("default",),
+        releases=tmp_path / "releases",
+        build=out,
+        lock=out / "tundravm.lock",
+    )
+    assert released.passed and released.variants == ("default",)
+    assert sorted(a.variant for a in read_artifacts(out)) == ["default"]
+    assert (out / "mkosi" / "azure").is_dir()  # the full bake's tree is still there
+    again = _evidence(recipe, out)
+    assert again.passed and again.index["variants"]["default"]["tree_matches"] is True

@@ -1,12 +1,14 @@
 """What changed since a release: a previous evidence bundle against the current recipe and lock.
 
 :func:`changes` reads the evidence ``tundravm evidence`` wrote for an earlier bake
-(the bundle or the directory) and compares it with the recipe and lockfile as
-they are now: the recipe and per-variant tree digests, the lockfile's section
-digests, the source pins, the packages (by the SBOMs' versions when both sides
-have them), the emitted files of each variant's compiled tree (from the
+(the bundle, the directory, or a release directory holding it) and compares it
+with the recipe and lockfile as they are now: the recipe and per-variant tree
+digests, the lockfile's section digests, the source pins, the declared packages
+(with the recipe's), the installed packages (the evidence's SBOMs with those of a
+current bake), the emitted files of each variant's compiled tree (from the
 evidence's ``tree.json``, each changed file annotated with the declarations
-that produce it) and the measured registers. The answer is a
+that produce it) and the measured registers. A comparison one side has no data
+for is ``unknown``, never a list of removals. The answer is a
 :class:`ChangeReport`, rendered as text, JSON or Markdown for a pull request.
 """
 
@@ -20,8 +22,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .declarative._lowered import Lowered
-from .declarative.bom import sbom
+from .declarative.bom import sbom, spdx_packages
 from .declarative.lifecycle import (
+    Artifact,
     Lock,
     Tree,
     compile_image,
@@ -32,7 +35,15 @@ from .declarative.lifecycle import (
 from .declarative.lower import lower
 from .declarative.model import Recipe
 from .errors import TdxError, ValidationError
-from .evidence import INDEX_NAME, TREE_SCHEMA, tree_rows, tree_rows_digest
+from .evidence import (
+    INDEX_NAME,
+    TREE_SCHEMA,
+    _compiled_tree,
+    _recipe_digests,
+    declared_packages,
+    tree_rows,
+    tree_rows_digest,
+)
 from .formats import md_cell, md_table
 from .lockfile import describe_change, parse_lockfile, section_digests, section_values
 from .lockfile.drift import _section_variant
@@ -40,20 +51,28 @@ from .lockfile.model import Lockfile
 from .measure.policy import read_policy
 from .verify import read_evidence
 
-CHANGES_SCHEMA = "tundravm.changes/1"
+CHANGES_SCHEMA = "tundravm.changes/2"
 """The ``schema`` key of :meth:`ChangeReport.to_dict` (``changes --format json``)."""
 ChangeKind = Literal["added", "removed", "changed"]
+ComparisonState = Literal["compared", "unknown"]
 ChangesFormat = Literal["text", "json", "markdown"]
 CHANGES_FORMATS: tuple[ChangesFormat, ...] = ("text", "json", "markdown")
 SECTIONS: tuple[tuple[str, str], ...] = (
     ("recipe", "Recipe and tree"),
     ("lockfile", "Lockfile sections"),
     ("pins", "Source pins"),
-    ("packages", "Packages"),
+    ("packages", "Declared packages"),
+    ("installed", "Installed packages"),
     ("files", "Emitted files"),
     ("measurements", "Measurements"),
 )
 """Each section of a report and its title, in report order."""
+COMPARED = ("packages", "installed", "measurements")
+"""The per-variant sections a :class:`Comparison` says were compared or are ``unknown``."""
+RELEASE_INDEX = "release.json"
+"""The index of a release directory, which ``--since`` takes for the evidence it holds."""
+RELEASE_BUNDLE = "evidence.tar.gz"
+"""The evidence bundle in a release directory."""
 ORIGIN_LIMIT = 25
 """At most this many changed files are explained (each compiles the variant once)."""
 STAGE_DIRS = ("mkosi.extra", "mkosi.skeleton")
@@ -89,6 +108,25 @@ class Change:
 
 
 @dataclass(frozen=True, slots=True)
+class Comparison:
+    """Whether a variant's ``section`` (:data:`COMPARED`) was ``compared`` or is ``unknown``
+    because one side lacks the data; ``reason`` says which side and why."""
+
+    section: str
+    variant: str
+    state: ComparisonState
+    reason: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "section": self.section,
+            "variant": self.variant,
+            "state": self.state,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ChangeReport:
     """What :func:`changes` found since the evidence at ``since``."""
 
@@ -99,6 +137,14 @@ class ChangeReport:
     variants: tuple[str, ...]
     changes: tuple[Change, ...]
     notes: tuple[str, ...] = ()
+    comparisons: tuple[Comparison, ...] = ()
+    """For each variant, whether its declared and installed packages and its registers were
+    compared; an ``unknown`` one reports no change."""
+
+    @property
+    def unknown(self) -> tuple[Comparison, ...]:
+        """The comparisons one side had no data for."""
+        return tuple(c for c in self.comparisons if c.state == "unknown")
 
     @property
     def changed(self) -> bool:
@@ -111,7 +157,7 @@ class ChangeReport:
         return {name: len(self.section(name)) for name, _ in SECTIONS}
 
     def to_dict(self) -> dict[str, object]:
-        """What ``changes --format json`` prints; ``schema`` is ``tundravm.changes/1``."""
+        """What ``changes --format json`` prints; ``schema`` is ``tundravm.changes/2``."""
         return {
             "schema": CHANGES_SCHEMA,
             "since": self.since,
@@ -120,6 +166,7 @@ class ChangeReport:
             "variants": list(self.variants),
             "counts": self.counts(),
             "changes": [change.to_dict() for change in self.changes],
+            "comparisons": [comparison.to_dict() for comparison in self.comparisons],
             "notes": list(self.notes),
         }
 
@@ -142,22 +189,30 @@ def changes(
 ) -> ChangeReport:
     """What changed between the evidence at *since* and the recipe and lockfile as they are now.
 
-    *since* is an evidence bundle or directory. *lock* (a :class:`Lock` or a path)
-    defaults to the recipe's lockfile when it exists. *variants* defaults to the
-    evidence's variants the recipe still declares; a declared variant the evidence's
-    lockfile already held but that was not baked is noted, not reported as added.
-    *build* is a bake directory of the current recipe whose SBOMs (mkosi manifests)
-    give the current package
-    versions and whose ``<variant>/policy.json`` the current registers; without it
-    the current packages are the declared ones, unversioned. Nothing is written.
+    *since* is an evidence bundle or directory, or a release directory (``release.json``
+    beside ``evidence.tar.gz``). *lock* (a :class:`Lock` or a path) defaults to the
+    recipe's lockfile when it exists. *variants* defaults to the evidence's variants
+    the recipe still declares; a declared variant the evidence's lockfile already
+    held but that was not baked is noted, not reported as added.
+
+    Declared packages are compared with declared ones (the evidence's
+    ``declared_packages`` with the recipe's) and installed with installed (the
+    evidence's SBOMs that hold mkosi's inventory with those of the bake in *build*).
+    *build* is used only when its recipe, tree and lockfile are the current ones;
+    its SBOMs only when bound to it, and its ``<variant>/policy.json`` (the current
+    registers) only when it measured one of the variant's artifacts. A comparison
+    one side has no data for is ``unknown`` in :attr:`ChangeReport.comparisons`, with
+    the reason. Nothing is written.
     """
     recipe = recipe_or_lowered if isinstance(recipe_or_lowered, Recipe) else None
     img = lower(recipe) if recipe is not None else recipe_or_lowered
     assert isinstance(img, Lowered)
-    files, _ = read_evidence(Path(since))
-    index = _index(files, Path(since))
+    since = _evidence_path(Path(since))
+    files, _ = read_evidence(since)
+    index = _index(files, since)
     notes: list[str] = []
     found: list[Change] = []
+    compared: list[Comparison] = []
     _note_unverified(files, index, notes)
     declared = tuple(img.state.profiles)
     previous = _previous_lock(files, notes)
@@ -168,8 +223,12 @@ def changes(
     tree = _current_tree(img, names, current, notes)
     found.extend(_lock_changes(previous, current, img, names, declared, notes))
     found.extend(_pin_changes(previous, current, notes))
+    baked, unused = _current_build(img, build, current)
+    if build is not None and unused is not None:
+        notes.append(f"the bake in {build} is not used: {unused}")
     for name in names:
-        found.extend(_package_changes(name, files, index, img, current, build, notes))
+        found.extend(_declared_changes(name, index, img, compared))
+        found.extend(_installed_changes(name, files, index, baked, unused, current, compared))
     budget = [ORIGIN_LIMIT]
     with using_lock(img, current) as pinned:
         for name in names:
@@ -177,7 +236,7 @@ def changes(
     if budget[0] < 0:
         notes.append(f"only the first {ORIGIN_LIMIT} changed files are explained")
     for name in names:
-        found.extend(_register_changes(name, files, index, build, notes))
+        found.extend(_register_changes(name, files, index, build, baked, unused, compared))
     order = {name: n for n, (name, _) in enumerate(SECTIONS)}
     ordered = sorted(found, key=lambda c: order[c.section])
     recipe_entry = index.get("recipe") or {}
@@ -188,10 +247,25 @@ def changes(
         variants=names,
         changes=tuple(ordered),
         notes=tuple(dict.fromkeys(notes)),
+        comparisons=tuple(compared),
     )
 
 
 # ── the two sides ────────────────────────────────────────────────────────
+
+
+def _evidence_path(since: Path) -> Path:
+    """*since*, or the evidence bundle of the release directory it names."""
+    if not (since.is_dir() and (since / RELEASE_INDEX).is_file()):
+        return since
+    bundle = since / RELEASE_BUNDLE
+    if not bundle.is_file():
+        raise ValidationError(
+            f"The release directory {since} holds no {RELEASE_BUNDLE}.",
+            hint="Finish the release (`tundravm release`), or pass its evidence bundle.",
+            context={"path": str(since)},
+        )
+    return bundle
 
 
 def _index(files: Mapping[str, bytes], since: Path) -> dict[str, Any]:
@@ -404,93 +478,140 @@ def _ref(old: str | None, new: str | None) -> str:
     return f"ref {old} -> {new}"
 
 
-def _previous_packages(
+def _current_build(
+    img: Lowered, build: Path | None, current: Lock | None
+) -> tuple[tuple[Artifact, ...], str | None]:
+    """The artifacts of the bake in *build* and ``None``, or none and why that bake does not
+    describe the current recipe: another recipe, tree or lockfile."""
+    if build is None:
+        return (), "no --build DIR"
+    try:
+        artifacts = read_artifacts(Path(build))
+    except TdxError as exc:
+        return (), f"it holds no readable bake ({exc})"
+    baked = sorted({a.variant for a in artifacts})
+    if not artifacts:
+        return (), "it holds no artifact"
+    if not set(baked) <= set(img.state.profiles):
+        return (), f"it bakes variants the recipe no longer declares ({', '.join(baked)})"
+    recorded = sorted({a.recipe_digest for a in artifacts})
+    if not set(recorded) <= _recipe_digests(img, baked, current):
+        return (), f"it was baked from another recipe (digest {recorded[0][:12]})"
+    tree = _compiled_tree(img, artifacts, current)
+    trees = sorted({a.tree_digest for a in artifacts})
+    if tree is None or trees != [tree.digest]:
+        return (), f"it was baked from another tree (digest {trees[0][:12]})"
+    sha = None if current is None else hashlib.sha256(current.text().encode()).hexdigest()
+    if {a.lock_sha256 for a in artifacts} != {sha}:
+        return (), "it read another lockfile than the current one"
+    return artifacts, None
+
+
+def _unknown(
+    compared: list[Comparison], section: str, name: str, reason: str | None
+) -> list[Change]:
+    """Record *section* of *name* as compared (*reason* ``None``) or ``unknown``; no change."""
+    state: ComparisonState = "compared" if reason is None else "unknown"
+    compared.append(Comparison(section, name, state, reason))
+    return []
+
+
+def _package_rows(
+    section: str, name: str, old: Mapping[str, str], new: Mapping[str, str]
+) -> list[Change]:
+    """Packages added, removed and (when both sides have a version) changed."""
+    found = [
+        Change(section, "added", p, variant=name, new=new[p] or None)
+        for p in sorted(new.keys() - old.keys())
+    ]
+    found += [
+        Change(section, "removed", p, variant=name, old=old[p] or None)
+        for p in sorted(old.keys() - new.keys())
+    ]
+    found += [
+        Change(section, "changed", p, variant=name, old=old[p], new=new[p])
+        for p in sorted(old.keys() & new.keys())
+        if old[p] and new[p] and old[p] != new[p]
+    ]
+    return found
+
+
+def _declared_changes(
+    name: str, index: Mapping[str, Any], img: Lowered, compared: list[Comparison]
+) -> list[Change]:
+    """The packages the evidence's recipe declared for *name* against the ones declared now."""
+    record = index["variants"].get(name) or {}
+    old = record.get("declared_packages")
+    if not isinstance(old, list):
+        reason = "the evidence records no declared packages (made before tundravm.evidence/2)"
+        return _unknown(compared, "packages", name, reason)
+    _unknown(compared, "packages", name, None)
+    new = declared_packages(img, name)
+    return _package_rows("packages", name, dict.fromkeys(map(str, old), ""), dict.fromkeys(new, ""))
+
+
+def _previous_installed(
     name: str, files: Mapping[str, bytes], index: Mapping[str, Any]
 ) -> dict[str, str] | None:
+    """The installed packages the evidence's SBOMs of *name* list, from mkosi's inventory;
+    ``None`` when no SBOM holds one."""
     record = index["variants"].get(name) or {}
     found: dict[str, str] | None = None
     for entry in record.get("sbom") or []:
         document = _json(files.get(str(entry.get("member"))))
-        if not isinstance(document, dict):
+        if entry.get("complete") is not True or not isinstance(document, dict):
             continue
         found = found if found is not None else {}
-        found.update(_spdx_packages(document))
+        found.update(spdx_packages(document))
     return found
 
 
-def _spdx_packages(document: Mapping[str, Any]) -> dict[str, str]:
-    """Name to version (empty when unknown) of each package the image ``CONTAINS``."""
-    contained = {
-        r.get("relatedSpdxElement")
-        for r in document.get("relationships") or []
-        if isinstance(r, dict) and r.get("relationshipType") == "CONTAINS"
-    }
-    found: dict[str, str] = {}
-    for package in document.get("packages") or []:
-        if isinstance(package, dict) and package.get("SPDXID") in contained:
-            version = str(package.get("versionInfo") or "")
-            found[str(package.get("name"))] = "" if version == "NOASSERTION" else version
-    return found
-
-
-def _current_packages(
-    name: str, img: Lowered, locked: Lock | None, build: Path | None, notes: list[str]
-) -> dict[str, str]:
-    if build is not None:
+def _current_installed(
+    name: str, baked: Sequence[Artifact], unused: str | None, locked: Lock | None
+) -> tuple[dict[str, str] | None, str | None]:
+    """The packages the current bake installed for *name*, or ``None`` and why not."""
+    if unused is not None:
+        return None, f"the current side has no usable bake: {unused}"
+    found: dict[str, str] | None = None
+    for artifact in (a for a in baked if a.variant == name):
         try:
-            baked = [a for a in read_artifacts(Path(build)) if a.variant == name]
-            if baked:
-                document = sbom(baked[0], lock=locked, allow_unbound=True)
-                return {c.name: c.version for c in document.packages}
-            notes.append(f"{build} holds no artifact of {name}: its declared packages are used")
+            document = sbom(artifact, lock=locked, allow_unbound=True)
         except TdxError as exc:
-            notes.append(
-                f"{name}: the bake in {build} gives no SBOM ({exc}); declared packages used"
-            )
-    else:
-        notes.append(
-            "current packages are the recipe's declared ones, unversioned "
-            "(pass --build DIR for the versions a bake installed)"
-        )
-    profiles = img.payload().get("profiles")
-    entry = profiles.get(name) if isinstance(profiles, dict) else None
-    declared = entry.get("packages") if isinstance(entry, dict) else None
-    return {str(package): "" for package in declared or ()}
+            return None, f"the current bake's SBOM of {name}/{artifact.target}: {exc}"
+        if not document.bound:
+            return None, f"the current bake's SBOM of {name}/{artifact.target} is not bound to it"
+        if not document.complete:
+            return None, f"the current bake of {name}/{artifact.target} has no mkosi manifest"
+        found = found if found is not None else {}
+        found.update({c.name: c.version for c in document.packages})
+    if found is None:
+        return None, f"the current bake has no artifact of {name}"
+    return found, None
 
 
-def _package_changes(
+def _installed_changes(
     name: str,
     files: Mapping[str, bytes],
     index: Mapping[str, Any],
-    img: Lowered,
+    baked: Sequence[Artifact],
+    unused: str | None,
     locked: Lock | None,
-    build: Path | None,
-    notes: list[str],
+    compared: list[Comparison],
 ) -> list[Change]:
-    old = _previous_packages(name, files, index)
+    """The packages the evidence's bake installed against the ones the current bake did."""
+    old = _previous_installed(name, files, index)
     if old is None:
-        notes.append(f"{name}: the evidence holds no SBOM: packages are not compared")
-        return []
-    new = _current_packages(name, img, locked, build, notes)
-    found = [
-        Change("packages", "added", p, variant=name, new=new[p] or None)
-        for p in sorted(new.keys() - old.keys())
-    ]
-    found += [
-        Change("packages", "removed", p, variant=name, old=old[p] or None)
-        for p in sorted(old.keys() - new.keys())
-    ]
-    both = sorted(old.keys() & new.keys())
-    versioned = [p for p in both if old[p] and new[p]]
-    if both and len(versioned) < len(both):
-        side = "the evidence" if not all(old[p] for p in both) else "the current side"
-        notes.append(f"{name}: package versions are not compared where {side} has none")
-    found += [
-        Change("packages", "changed", p, variant=name, old=old[p], new=new[p])
-        for p in versioned
-        if old[p] != new[p]
-    ]
-    return found
+        return _unknown(
+            compared,
+            "installed",
+            name,
+            "the evidence holds no installed inventory (no SBOM from a mkosi manifest)",
+        )
+    new, reason = _current_installed(name, baked, unused, locked)
+    if new is None:
+        return _unknown(compared, "installed", name, reason)
+    _unknown(compared, "installed", name, None)
+    return _package_rows("installed", name, old, new)
 
 
 def _file_changes(
@@ -601,19 +722,22 @@ def _register_changes(
     files: Mapping[str, bytes],
     index: Mapping[str, Any],
     build: Path | None,
-    notes: list[str],
+    baked: Sequence[Artifact],
+    unused: str | None,
+    compared: list[Comparison],
 ) -> list[Change]:
     record = index["variants"].get(name) or {}
     policy = record.get("policy")
     member = policy.get("member") if isinstance(policy, dict) else None
     old = _registers(_json(files.get(str(member))) if member else None)
-    current = None if build is None else Path(build) / name / "policy.json"
-    new = _registers(_json(current.read_bytes()) if current and current.is_file() else None)
-    if old is None or new is None:
-        if old is not None or new is not None or build is not None:
-            side = "the evidence" if old is None else f"{current}"
-            notes.append(f"{name}: no measurements policy in {side}: registers are not compared")
-        return []
+    if old is None:
+        return _unknown(
+            compared, "measurements", name, "the evidence holds no valid measurements policy"
+        )
+    new, reason = _current_registers(name, build, baked, unused)
+    if new is None:
+        return _unknown(compared, "measurements", name, reason)
+    _unknown(compared, "measurements", name, None)
     return [
         Change(
             "measurements",
@@ -628,6 +752,25 @@ def _register_changes(
         for register in sorted({*old, *new})
         if old.get(register) != new.get(register)
     ]
+
+
+def _current_registers(
+    name: str, build: Path | None, baked: Sequence[Artifact], unused: str | None
+) -> tuple[dict[str, str] | None, str | None]:
+    """The registers of ``BUILD/<name>/policy.json`` when it measured one of the current
+    bake's artifacts of *name*, else ``None`` and why not."""
+    if build is None or unused is not None:
+        return None, f"the current side has no usable bake: {unused}"
+    path = Path(build) / name / "policy.json"
+    payload = _json(path.read_bytes()) if path.is_file() else None
+    registers = _registers(payload)
+    if registers is None:
+        return None, f"{path} is not a valid measurements policy (or is missing)"
+    measured = payload.get("artifact") if isinstance(payload, dict) else None
+    sha = measured.get("sha256") if isinstance(measured, dict) else None
+    if sha not in {a.sha256 for a in baked if a.variant == name}:
+        return None, f"{path} measured no artifact of the current bake of {name}"
+    return registers, None
 
 
 def _registers(payload: Any) -> dict[str, str] | None:
@@ -690,6 +833,7 @@ def _text(report: ChangeReport) -> str:
             lines.extend(_line(change) for change in found)
     if not report.changed:
         lines.append("no changes")
+    lines.extend(f"unknown: {c.variant} {c.section}: {c.reason}" for c in report.unknown)
     lines.extend(f"note: {note}" for note in report.notes)
     return "\n".join(lines) + "\n"
 
@@ -725,7 +869,7 @@ def _rows(name: str, found: Iterable[Change]) -> tuple[tuple[str, ...], list[tup
     if name == "recipe":
         header = ("Change", "Subject", "Before", "After")
         return header, [(c.change, md_cell(c.subject), _code(c.old), _code(c.new)) for c in found]
-    subject = "Package" if name == "packages" else "Register"
+    subject = "Register" if name == "measurements" else "Package"
     header = ("Change", "Variant", subject, "Before", "After")
     return header, [
         (
@@ -755,6 +899,14 @@ def _markdown(report: ChangeReport) -> str:
             header, rows = _rows(name, found)
             parts.append(f"### {title} ({len(found)})")
             parts.append(md_table(header, rows))
+    if report.unknown:
+        titles = dict(SECTIONS)
+        rows = [
+            (md_cell(c.variant, code=True), titles[c.section], md_cell(c.reason))
+            for c in report.unknown
+        ]
+        parts.append(f"### Not compared ({len(rows)})")
+        parts.append(md_table(("Variant", "Section", "Why"), rows))
     if report.notes:
         parts.append(
             "<details><summary>Notes</summary>\n\n"
@@ -767,8 +919,10 @@ def _markdown(report: ChangeReport) -> str:
 __all__ = [
     "CHANGES_FORMATS",
     "CHANGES_SCHEMA",
+    "COMPARED",
     "SECTIONS",
     "Change",
     "ChangeReport",
+    "Comparison",
     "changes",
 ]

@@ -37,7 +37,14 @@ _SHA384_HEX = re.compile(rf"[0-9a-f]{{{SHA384_HEX_LENGTH}}}")
 _RTMR_KEY = re.compile(r"rtmr(\d+)", re.IGNORECASE)
 _MEASURED_BOOT_SUFFIXES = frozenset({".efi", ".raw", ".img"})
 _DSTACK_MR_SUFFIXES = frozenset({".efi"})
+MEASURABLE_SUFFIXES = _MEASURED_BOOT_SUFFIXES | _DSTACK_MR_SUFFIXES
+"""The artifact suffixes a measurement tool reads: a UKI (``.efi``) or a raw disk image."""
 _OUTPUT_EXCERPT = 200
+
+
+def measurable(path: str | Path) -> bool:
+    """Whether a measurement tool reads the artifact at *path*, by its suffix."""
+    return Path(path).suffix in MEASURABLE_SUFFIXES
 
 
 class _ToolFailed(Exception):

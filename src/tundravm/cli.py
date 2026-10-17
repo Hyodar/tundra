@@ -53,6 +53,7 @@ from .clean import (
     PARTS,
     TREE_DIRNAME,
     clean_paths,
+    holds_release,
     owner_hint,
     remove,
     sudo_runner,
@@ -144,7 +145,15 @@ from .project import (
     render_table,
 )
 from .recipe import RecipeFile, load_file
-from .release import RELEASE_FORMATS, STAGES, STATE_NAME, release_image, release_name
+from .release import (
+    RELEASE_FORMATS,
+    STAGES,
+    STATE_NAME,
+    is_release,
+    release_image,
+    release_name,
+    verify_release,
+)
 from .status import Invocation, project_status, render_status
 from .templates import (
     BACKEND_SNIPPETS,
@@ -1029,7 +1038,9 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "evidence (BUILD/evidence), state (BUILD/.mkosi and the mkosi state in "
             "BUILD/mkosi), reproduce (BUILD/.reproduce, the second build of bake "
             "--verify-reproducible), or all. Without --what, list what --what all would "
-            "remove and exit 0. The lockfile is removed only when --lockfile names it."
+            "remove and exit 0. The lockfile is removed only when --remove-lockfile names "
+            "it. A release directory is never removed: a part that holds one (`release "
+            "--releases` inside the build directory) is refused, and clean exits 1."
         ),
         epilog=(
             "A path this user cannot delete (root-owned mkosi output) is removed with "
@@ -1055,9 +1066,10 @@ def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         help=f"Comma-separated parts to remove: {', '.join(PARTS)} or all.",
     )
     clean.add_argument(
-        "--lockfile",
+        "--remove-lockfile",
         type=Path,
         default=None,
+        metavar="PATH",
         help="Also remove this lockfile (never removed otherwise).",
     )
     clean.add_argument(
@@ -1300,8 +1312,9 @@ def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         description=(
             help_text + " Every member against the sha256 evidence.json lists; the index "
             "against its members (the lockfile against the lock_sha256 bake-result.json "
-            "records, each SBOM, policy and tree.json against the artifact and digests the "
-            "index names, the recorded verdict recomputed from the recorded facts); "
+            "records, each SBOM, manifest, policy and tree.json against the artifact and "
+            "digests the index names, every fact the verdict uses derived from its member "
+            "and the recorded verdict recomputed from them); "
             "the artifacts in --build re-hashed against the index; the signature against "
             "--allowed-signers; the --require checks."
         ),
@@ -1315,7 +1328,8 @@ def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         "evidence",
         type=Path,
         help="The evidence: a bundle from `evidence --bundle`, its BUILD/evidence directory, "
-        "or that directory's evidence.json.",
+        "or that directory's evidence.json; or a release directory (one holding "
+        "release.json), checked against its release-manifest.json.",
     )
     _add_build(
         cmd,
@@ -1372,21 +1386,24 @@ def _add_changes(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
     cmd.description = (
         help_text + " Compares the evidence (--since) with the recipe and lockfile as they "
         "are now: the recipe and tree digests, the lockfile's sections, the source pins, "
-        "the packages, the emitted files of each variant's tree (each with the "
-        "declarations behind it) and the measured registers."
+        "the declared packages, the installed packages, the emitted files of each "
+        "variant's tree (each with the declarations behind it) and the measured "
+        "registers. A comparison one side has no data for is reported unknown."
     )
     cmd.add_argument(
         "--since",
         type=Path,
         required=True,
         metavar="EVIDENCE",
-        help="The previous evidence: a bundle from `evidence --bundle` or its directory.",
+        help="The previous evidence: a bundle from `evidence --bundle`, its directory, or a "
+        "release directory (release.json beside evidence.tar.gz).",
     )
     _add_build(
         cmd,
-        "Build directory of the current recipe: its SBOMs give the current package versions "
-        "and BUILD/<variant>/policy.json the current registers (default: none, the "
-        "declared packages unversioned).",
+        "Bake directory of the current recipe, used only when its recipe, tree and lockfile "
+        "are the current ones: its bound SBOMs give the installed packages and "
+        "BUILD/<variant>/policy.json, when it measured one of its artifacts, the current "
+        "registers (default: none; installed packages and registers are unknown).",
     )
     cmd.add_argument(
         "--lockfile",
@@ -1413,16 +1430,23 @@ def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         "the bundle just written; changes compares with the previous release; notes "
         "writes RELEASE.md. Everything lands in RELEASES/<recipe>-<version>/: the artifacts "
         "(copied from BUILD), evidence.tar.gz, evidence.html, <variant>/policy.json, "
-        "<variant>/sbom-<target>.spdx.json, RELEASE.md and release.json."
+        "<variant>/sbom-<target>.spdx.json, RELEASE.md, release.json and "
+        "release-manifest.json (every file with its sha256 and size; with --sign also "
+        "release-manifest.json.sig), which `tundravm verify RELEASES/<recipe>-<version>` "
+        "checks. Without --variant, every variant not marked Variant(release=False) is "
+        "released; naming one that is needs --allow-ineligible."
     )
     cmd.epilog = (
         RESOLUTION_HELP
         + " "
         + (
-            f"Until the release passes, its directory holds {STATE_NAME}: each completed "
-            "stage with the sha256 of its inputs and outputs. Running the same command "
-            "again resumes: stages whose inputs and outputs are unchanged are kept, the "
-            "first stage whose inputs changed runs with every stage after it. A release "
+            f"Until the release passes, its directory holds {STATE_NAME}: the release's "
+            "specification (variants, --require, the signing key, --since, the backend's "
+            "settings, the build directory) and each completed stage with the sha256 of its "
+            "inputs and outputs. Running it again resumes and inherits every option it "
+            "omits; a different one fails with E_STATE unless --change-spec is given. "
+            "Stages whose inputs and outputs are unchanged are kept, the first stage whose "
+            "inputs changed runs with every stage after it. A release "
             "that passed is immutable: releasing its version again fails with E_STATE. "
             "Prints one line per stage and a last line with the release path and verdict; "
             "exits 0 when it passes, 1 when the evidence, its verification or a --require "
@@ -1436,25 +1460,45 @@ def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> No
         metavar="VERSION",
         help="The release's version; the directory is RELEASES/<recipe>-<VERSION>.",
     )
-    cmd.add_argument(
+    signing = cmd.add_mutually_exclusive_group()
+    signing.add_argument(
         "--sign",
         type=Path,
         default=None,
         metavar="KEY",
         help=(
-            "Sign the evidence with this SSH private key, as `evidence --sign`; verify then "
-            "checks the signature with its public half."
+            "Sign the evidence and release-manifest.json with this SSH private key, as "
+            "`evidence --sign`; verify then checks the signature with its public half."
         ),
+    )
+    signing.add_argument(
+        "--no-sign",
+        action="store_true",
+        help="Drop the signing key a resumed release started with (needs --change-spec).",
     )
     cmd.add_argument(
         "--require",
         type=_evidence_requirements,
-        default=(),
+        default=None,
         metavar="LIST",
         help=(
             f"Comma-separated checks the evidence must hold ({', '.join(EVIDENCE_REQUIREMENTS)}); "
-            "a missing one fails the release."
+            "a missing one fails the release. '' requires none (on a resume: with --change-spec)."
         ),
+    )
+    cmd.add_argument(
+        "--change-spec",
+        action="store_true",
+        help=(
+            f"Let a resumed release change what it started with ({STATE_NAME}'s spec: "
+            "--variant, --require, --sign/--no-sign, --since, --allow-ineligible, the "
+            "backend's settings, --build); recorded in release.json's spec_history."
+        ),
+    )
+    cmd.add_argument(
+        "--allow-ineligible",
+        action="store_true",
+        help="Release a --variant marked Variant(release=False) (recorded in release.json).",
     )
     cmd.add_argument(
         "--since",
@@ -2506,6 +2550,8 @@ def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
+    if is_release(args.evidence):
+        return _verify_release(args, out)
     result = verify_evidence(
         args.evidence,
         build=args.build,
@@ -2520,6 +2566,25 @@ def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
         target.write_text(result.html(), encoding="utf-8")
         print(f"wrote {target}", file=sys.stderr)
     return EXIT_OK if result.passed else EXIT_FAILURE
+
+
+def _verify_release(args: argparse.Namespace, out: TextIO) -> int:
+    """``verify RELEASE_DIR``: the manifest, its signature, release.json and the evidence."""
+    for flag, value in (
+        ("--build", args.build),
+        ("--require", args.require),
+        ("--html", args.html),
+    ):
+        if value:
+            raise ValidationError(
+                f"{flag} does not apply to a release directory ({args.evidence}).",
+                hint="A release is checked against its own manifest, artifacts and recorded "
+                "requirements: drop the flag, or verify its evidence.tar.gz on its own.",
+                context={"release": str(args.evidence)},
+            )
+    found = verify_release(args.evidence, allowed_signers=args.allowed_signers, signer=args.signer)
+    print(found.render(args.format), file=out, end="")
+    return EXIT_OK if found.passed else EXIT_FAILURE
 
 
 def _cmd_changes(args: argparse.Namespace, out: TextIO) -> int:
@@ -2628,17 +2693,20 @@ def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
             version=args.version,
             variants=names,
             sign=args.sign,
+            unsigned=args.no_sign,
             require=args.require,
             since=args.since,
             releases=releases,
             build=args.build if args.build is not None else Path(img.build_dir),
             lock=_lock_path(img, args.lockfile),
             restart=args.restart,
+            change_spec=args.change_spec,
+            allow_ineligible=args.allow_ineligible,
             recipe_path=args.recipe,
             progress=lambda line: print(line, file=stages, flush=True),
         )
     except TdxError as exc:
-        if blocked:  # finished, or not a release: nothing to resume
+        if blocked or "changed" in exc.context:  # finished, not a release, or a refused spec
             raise
         if _wants_json(args):
             exc.context = {**exc.context, "resume": resume}
@@ -2660,14 +2728,18 @@ def _release_command(args: argparse.Namespace) -> str:
     words += ["--version", args.version]
     for name in args.variant or ():
         words += ["--variant", name]
+    require = None if args.require is None else ",".join(args.require) or "''"
     for flag, value in (
         ("--sign", args.sign),
-        ("--require", ",".join(args.require) or None),
+        ("--require", require),
         ("--since", args.since),
         ("--releases", args.releases),
     ):
         if value is not None:
             words += [flag, str(value)]
+    for flag, given in (("--no-sign", args.no_sign), ("--allow-ineligible", args.allow_ineligible)):
+        if given:
+            words.append(flag)
     for flag, key in (("--build", "build"), ("--lockfile", "lockfile"), ("--backend", "backend")):
         if origins.get(key) == "flag":
             words += [flag, str(getattr(args, key))]
@@ -2948,23 +3020,31 @@ def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
     if destination is None:
         destination = _build_dir(args)
     chosen: tuple[str, ...] = args.what
-    listing = not chosen and args.lockfile is None
+    lockfile: Path | None = args.remove_lockfile
+    listing = not chosen and lockfile is None
     paths = clean_paths(destination, PARTS if listing else chosen, variants=variants)
-    if args.lockfile is not None and args.lockfile.is_file():
-        paths.append(args.lockfile)
+    refused = [(path, found) for path in paths if (found := holds_release(path)) is not None]
+    paths = [path for path in paths if all(path != held for held, _ in refused)]
+    for path, found in refused:
+        print(f"refused {path}: it holds release {found}; clean never removes a release", file=out)
+    if refused:
+        print("hint: keep --releases outside the build directory", file=out)
+    if lockfile is not None and lockfile.is_file():
+        paths.append(lockfile)
     if not paths:
-        print(f"nothing to clean in {destination}", file=out)
-        return EXIT_OK
+        if not refused:
+            print(f"nothing to clean in {destination}", file=out)
+        return EXIT_FAILURE if refused else EXIT_OK
     if args.dry_run or listing:
         for path in paths:
             print(f"would remove {path}", file=out)
         if listing:
             print(
                 f"pass --what all to remove them, or --what with some of {', '.join(PARTS)} "
-                "(the lockfile stays unless --lockfile names it)",
+                "(the lockfile stays unless --remove-lockfile names it)",
                 file=out,
             )
-        return EXIT_OK
+        return EXIT_FAILURE if refused and not listing else EXIT_OK
     sudo = sudo_runner()
     failed: list[Path] = []
     for path in paths:
@@ -2977,7 +3057,7 @@ def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
     if failed:
         print(owner_hint(failed), file=out)
         return EXIT_FAILURE
-    return EXIT_OK
+    return EXIT_FAILURE if refused else EXIT_OK
 
 
 def _cmd_import(args: argparse.Namespace, out: TextIO) -> int:

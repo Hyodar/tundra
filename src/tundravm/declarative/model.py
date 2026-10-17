@@ -169,10 +169,16 @@ class Variant:
     target: Target | None = None
     targets: tuple[Target, ...] = ()
     """Several outputs from one variant; ``target`` is the one-output shorthand."""
+    release: bool = True
+    """Whether ``tundravm release`` ships it by default; ``False`` for a development variant
+    (``DevTools``), which ``release`` then skips unless named with ``--allow-ineligible``.
+    Only ``False`` is part of the recipe digest."""
 
     def __post_init__(self) -> None:
         _freeze(self, "replace", "remove", "targets")
         _require_name(self, self.name)
+        if not isinstance(self.release, bool):
+            raise _fail(self, f"release= of {self.name!r} must be True or False.")
         if self.name == BASE_PARENT:
             raise _fail(self, f"{BASE_PARENT!r} is reserved for Recipe.common.")
         if self.parent is not None:

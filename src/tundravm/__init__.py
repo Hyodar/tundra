@@ -7,7 +7,8 @@ A :class:`Recipe` (recipe-wide settings, a ``common`` :class:`Fragment` and its
 running image's quote against a verifier policy, ``sbom`` lists what a baked
 artifact contains and ``evidence`` gathers an auditor's record of a bake, which
 ``verify_evidence`` checks on its own and ``changes`` compares with the recipe now;
-``release`` runs them all into one immutable release directory and ``explore``
+``release`` runs them all into one immutable release directory, which
+``verify_release`` checks against its signed manifest, and ``explore``
 renders one page that explains a recipe to someone who has not read it.
 ``diff``, ``measure`` and ``deploy`` are ``tundravm.declarative.diff``/``measure``/
 ``deploy`` (at the top level those names are modules). The shipped fragments are
@@ -108,7 +109,7 @@ from .evidence import Evidence, evidence
 from .explain import Why, explain_why
 from .explore import Exploration, explore
 from .recipe import load_recipe
-from .release import Release, release
+from .release import Release, ReleaseVerification, release, verify_release
 from .verify import EvidenceVerification, verify_evidence
 
 __all__ = [
@@ -162,6 +163,7 @@ __all__ = [
     "Qemu",
     "Recipe",
     "Release",
+    "ReleaseVerification",
     "Repository",
     "ReproducibilityError",
     "Resolved",
@@ -208,6 +210,7 @@ __all__ = [
     "sbom",
     "verify_artifact",
     "verify_evidence",
+    "verify_release",
     "write_lock",
     "__version__",
 ]

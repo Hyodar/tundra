@@ -246,18 +246,24 @@ def _hash_artifacts(
     return digests
 
 
+def package_manifest_candidates(artifact: Path, variant: str) -> list[Path]:
+    """Where mkosi may have written *variant*'s package manifest, in the order they are tried:
+    ``<variant>.manifest``, ``<variant>.manifest.json``, then the same for the artifact stem."""
+    directory = artifact.parent
+    stem = artifact.name.split(".", 1)[0]
+    names = dict.fromkeys(
+        f"{name}{suffix}" for name in (variant, stem) for suffix in (".manifest", ".manifest.json")
+    )
+    return [directory / name for name in names]
+
+
 def package_manifest(artifact: Path, variant: str) -> Path:
     """Where mkosi wrote the package manifest of *variant*'s *artifact*: ``<variant>.manifest``.
 
     ``<variant>.manifest.json`` and ``<artifact stem>.manifest`` beside it are taken
     too when they exist; the first candidate is returned when none does.
     """
-    directory = artifact.parent
-    stem = artifact.name.split(".", 1)[0]
-    names = dict.fromkeys(
-        f"{name}{suffix}" for name in (variant, stem) for suffix in (".manifest", ".manifest.json")
-    )
-    candidates = [directory / name for name in names]
+    candidates = package_manifest_candidates(artifact, variant)
     return next((path for path in candidates if path.is_file()), candidates[0])
 
 

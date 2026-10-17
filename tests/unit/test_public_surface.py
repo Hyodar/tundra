@@ -61,6 +61,7 @@ EXPECTED_TOP_LEVEL = [
     "Qemu",
     "Recipe",
     "Release",
+    "ReleaseVerification",
     "Repository",
     "ReproducibilityError",
     "Resolved",
@@ -108,6 +109,7 @@ EXPECTED_TOP_LEVEL = [
     "sbom",
     "verify_artifact",
     "verify_evidence",
+    "verify_release",
     "write_lock",
 ]
 
