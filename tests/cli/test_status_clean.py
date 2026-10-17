@@ -16,7 +16,6 @@ from tundravm import clean as clean_module
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, main
 from tundravm.declarative import lock, write_lock
 from tundravm.recipe import load_recipe
-from tundravm.status import UP_TO_DATE
 
 RECIPE = """
 from tundravm import Fragment, Package, Recipe, Variant
@@ -86,6 +85,11 @@ def _verdicts(payload: dict[str, object]) -> dict[str, object]:
     return {section: _verdict(payload, section) for section in sections}
 
 
+def _second_build(recipe: Path, flags: str = "") -> str:
+    """``next`` once the bake is current: the default readiness requires ``reproducible``."""
+    return f"tundravm bake {recipe}{flags} --verify-reproducible"
+
+
 # ── status ───────────────────────────────────────────────────────────────
 
 
@@ -114,7 +118,7 @@ def test_status_verdicts_and_next_follow_lock_compile_bake(recipe: Path) -> None
     assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
     baked = _status(str(recipe))
     assert _verdicts(baked)["artifacts"] == "ok"
-    assert baked["next"] == UP_TO_DATE
+    assert baked["next"] == _second_build(recipe)
 
 
 def test_status_text_has_one_line_per_item_and_exits_zero(recipe: Path) -> None:
@@ -130,6 +134,8 @@ def test_status_text_has_one_line_per_item_and_exits_zero(recipe: Path) -> None:
         "artifact",
         "artifact",
         "backend",
+        "release",
+        "release",
         "next:",
     ]
     assert out.splitlines()[2].split()[:2] == ["lock", "missing"]
@@ -147,6 +153,9 @@ def test_status_json_shape(recipe: Path) -> None:
         "manifests",
         "next",
         "recipe",
+        "release",
+        "release_require",
+        "releases_in_progress",
         "schema",
         "sources",
         "tree",
@@ -194,6 +203,7 @@ def test_status_markdown_has_a_table_per_section(recipe: Path) -> None:
         "## Tree",
         "## Artifacts",
         "## Backend",
+        "## Release",
     ]
     assert out.count("| Verdict | Detail |") == len(headings)
     assert out.rstrip().endswith(f"**Next:** `tundravm lock {recipe}`")
@@ -212,7 +222,7 @@ def test_status_variant_selects_items_and_next(recipe: Path) -> None:
     assert isinstance(recipe_entry, dict)
     assert recipe_entry["variants"] == ["default"]
     assert [item["variant"] for item in _items(one, "artifacts")] == ["default"]
-    assert one["next"] == UP_TO_DATE
+    assert one["next"] == _second_build(recipe, " --variant default")
 
     azure = _status(str(recipe), "--variant", "azure")
     assert azure["next"] == f"tundravm compile {recipe} --variant azure --tree {BUILD / 'mkosi'}"
@@ -221,7 +231,7 @@ def test_status_variant_selects_items_and_next(recipe: Path) -> None:
 def test_status_flags_artifacts_stale_after_editing_the_recipe(recipe: Path) -> None:
     assert run_main("lock", str(recipe))[0] == EXIT_OK
     assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
-    assert _status(str(recipe))["next"] == UP_TO_DATE
+    assert _status(str(recipe))["next"] == _second_build(recipe)
 
     recipe.write_text(RECIPE.replace('Package("curl"),', 'Package("curl"), Package("htop"),'))
     edited = _status(str(recipe))
@@ -237,7 +247,7 @@ def test_status_flags_artifacts_stale_after_editing_the_recipe(recipe: Path) -> 
     assert run_main("lock", str(recipe))[0] == EXIT_OK
     assert _status(str(recipe))["next"] == f"tundravm compile {recipe} --tree {BUILD / 'mkosi'}"
     assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
-    assert _status(str(recipe))["next"] == UP_TO_DATE
+    assert _status(str(recipe))["next"] == _second_build(recipe)
 
 
 def test_status_verify_hashes_artifacts(recipe: Path) -> None:
@@ -251,7 +261,7 @@ def test_status_verify_hashes_artifacts(recipe: Path) -> None:
     items = _items(verified, "artifacts")
     assert {(item["verdict"], item["integrity"]) for item in items} == {("ok", "verified")}
     assert "integrity verified" in str(items[0]["detail"])
-    assert verified["next"] == UP_TO_DATE
+    assert verified["next"] == _second_build(recipe)
 
     (BUILD / "default" / "disk.qcow2").write_bytes(b"swapped after the bake\n")
     assert {item["verdict"] for item in _items(_status(str(recipe)), "artifacts")} == {"ok"}

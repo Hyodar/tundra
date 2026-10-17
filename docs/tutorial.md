@@ -1,6 +1,6 @@
 # Tutorial
 
-This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, leave `watch` running while you edit, change the recipe and see the diff and the lock drift, bake, prove the bake reproducible, measure and export a verifier policy, list what is in the image, package the evidence and verify it, deploy, then write a fragment of your own, test it next to the generated tests, run the CI gate and read the workflow that runs it, sign the evidence of a release and review the next change against it, and finally ask where the project stands and clean the build directory. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`. The one command that needs a running TDX VM, attesting it, is shown but not run.
+This walk-through starts from an empty directory and follows the project `tundravm init` writes: lock it, inspect the starter recipe and ask where one of its objects comes from, lint it (and see what happens without a kernel), add a variant, lock again and compile, leave `watch` running while you edit, change the recipe and see the diff and the lock drift, bake, prove the bake reproducible, measure and export a verifier policy, list what is in the image, package the evidence and verify it, deploy, then write a fragment of your own, test it next to the generated tests, run the CI gate and read the workflow that runs it, sign the evidence of a release and review the next change against it, ask where the project stands and clean the build directory, and finally cut a release, resume it after a failed run and verify it on another machine. Everything runs on the in-process backend, which needs no build tools and writes simulated artifacts. Every transcript below is real output; exit codes are shown as `[exit N]`. The one command that needs a running TDX VM, attesting it, is shown but not run.
 
 You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `tundravm` command (`uv sync` in a checkout of this repository installs it in `.venv/bin`; tundravm is not on PyPI yet). The `pyproject.toml` that `init` writes depends on the tundravm you ran it with, pinned as a git requirement, `tundravm @ git+https://github.com/Hyodar/tundra@<commit>` (`master` when the running commit cannot be determined), so `uv sync` and `uv run` in the project install it on a fresh machine and in CI. To use an unreleased local checkout instead, `uv add --editable PATH/TO/tundravm` overrides that requirement; step 15 does so before running the project's tests.
 
@@ -106,7 +106,7 @@ recipe = Recipe(
     ),
     variants=(
         Variant("default", target="qemu"),
-        Variant("dev", parent="default", add=DevTools()),  # never ship it
+        Variant("dev", parent="default", add=DevTools(), release=False),  # never ship it
     ),
 )
 ```
@@ -114,7 +114,7 @@ recipe = Recipe(
 - `common` holds what every variant shares: the packages that make the image bootable and the `App` fragment.
 - `App` is a `Composite`, a `Fragment` whose configuration is its own dataclass fields. `compose()` returns its contents: an account, a config file, a first-boot `Init` step and a generated systemd `Service`. Its `checks` run during `lint`: `App(port=80)` reports `app-privileged-port`.
 - The service runs `/usr/bin/app`, which the recipe does not ship yet. Add a `Build(...)` or a `Package(...)` for it before you bake a real image.
-- `dev` inherits `default` and adds `DevTools()`: a serial console, root login and debugging tools. Never ship it.
+- `dev` inherits `default` and adds `DevTools()`: a serial console, root login and debugging tools. Never ship it: `release=False` keeps it out of every release ([step 19](#19-cut-a-release)).
 
 The `.gitignore` block ignores `build/` but keeps `build/tundravm.lock`, which you commit.
 
@@ -509,11 +509,11 @@ Hint: Export the policy from a real measurement: `tundravm measure --export-poli
 [exit 2]
 ```
 
-With a policy from a real measurement and the image running on a TDX host with the `tdxs` service (`Tdxs()` in the variant; the `prover` template has it), forward the service's socket over SSH and attest. This was not run here, since it needs a TDX VM:
+With a policy from a real measurement and the image running on a TDX host with the `tdxs` service (`Tdxs()` in the variant; the `prover` template has it), relay the service's socket over SSH and attest. The key the image's secret delivery installs carries `no-port-forwarding`, so `ssh -L` with it is refused; a command channel is not, so each connection runs `socat` in the image ([CLI: Real TDX](cli.md#real-tdx) has the whole sequence, including a second account for `ssh -L`). This was not run here, since it needs a TDX VM:
 
 ```bash
-ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock root@localhost &
-tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json
+socat UNIX-LISTEN:./tdxs.sock,fork EXEC:'ssh -p 2222 root@localhost socat - UNIX-CONNECT\:/var/tdxs.sock' &
+tundravm attest --issuer unix:./tdxs.sock --validator unix:./validator.sock --policy peer.json
 ```
 
 `--validator` points at a `tdxs` validator on your side (not in the image), which checks the quote's signature, certificate chain and collateral. It prints the signature status, the nonce check and one `match`, `mismatch` or `unchecked` line per register (MRTD, RTMR0..RTMR3), then `verdict: trusted` (exit 0) or `verdict: untrusted` (exit 1); [CLI: Attest](cli.md#attest) shows the output. Without `--validator` the signature is unchecked and the verdict is only `measurements-match` (exit 0) or `measurements-mismatch` (exit 1), never `trusted`.
@@ -1022,11 +1022,11 @@ Recipe `node`, variants `default`: 6 changes.
 
 ## 18. Status and clean
 
-`status` answers where the project stands, writing nothing and touching no network:
+`status` answers where the project stands, writing nothing and touching no network. Past the bake it also answers whether the project can ship:
 
 ```console
 $ tundravm status
-recipe    ok       node.py  digest 92e819884267  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest c34fda2242a7  variants default, dev, debug  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      ok       build/tundravm.lock  v4  up to date
 source    n/a      no source builds or kernels
@@ -1038,11 +1038,13 @@ manifest  n/a      build/default/default.manifest  simulated: nothing was instal
 manifest  n/a      build/dev/dev.manifest  simulated: nothing was installed
 manifest  n/a      build/debug/debug.manifest  simulated: nothing was installed
 backend   ok       inprocess: no host tools needed
+release   blocked  default: blocked (recipe-mismatch, tree-mismatch, lock-unbound, sbom-unbound)  requires reproducible, lock
+release   blocked  debug: blocked (recipe-mismatch, tree-mismatch, lock-unbound, sbom-unbound)  requires reproducible, lock
 next: tundravm bake
 [exit 0]
 ```
 
-The recipe, lock and committed tree agree, but the version bump came after the bake, so every artifact is `stale` and `next` is the bake. `--verify` also hashes each artifact against the sha256 the bake recorded. `next` leaves out what the `[tool.tundravm]` table supplies. See [CLI: Project status](cli.md#project-status).
+The recipe, lock and committed tree agree, but the version bump came after the bake, so every artifact is `stale` and `next` is the bake. The `release` lines say the same from the release's side, with the reason codes `evidence` would give: the bake no longer matches the recipe and its tree (`recipe-mismatch`, `tree-mismatch`), and the lockfile and the SBOMs' inputs changed since (`lock-unbound`, `sbom-unbound`). There is one per variant that can ship; `dev` has none. Readiness is judged against `reproducible, lock` unless the `[tool.tundravm]` table sets `require = [...]`. `--verify` also hashes each artifact against the sha256 the bake recorded. `next` leaves out what the `[tool.tundravm]` table supplies. See [CLI: Project status](cli.md#project-status).
 
 `clean` removes the build directory's output by part. Without `--what` it lists what `--what all` would remove:
 
@@ -1052,9 +1054,9 @@ would remove build/mkosi
 would remove build/debug
 would remove build/default
 would remove build/dev
-would remove build/evidence
 would remove build/bake-result.json
-pass --what all to remove them, or --what with some of sources, tree, artifacts, evidence, state, reproduce (the lockfile stays unless --lockfile names it)
+would remove build/evidence
+pass --what all to remove them, or --what with some of sources, tree, artifacts, evidence, state, reproduce (the lockfile stays unless --remove-lockfile names it)
 [exit 0]
 
 $ tundravm clean --what all
@@ -1062,12 +1064,12 @@ removed build/mkosi
 removed build/debug
 removed build/default
 removed build/dev
-removed build/evidence
 removed build/bake-result.json
+removed build/evidence
 [exit 0]
 
 $ tundravm status
-recipe    ok       node.py  digest 92e819884267  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest c34fda2242a7  variants default, dev, debug  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      ok       build/tundravm.lock  v4  up to date
 source    n/a      no source builds or kernels
@@ -1076,8 +1078,169 @@ artifact  missing  default: not baked (no build/bake-result.json)
 artifact  missing  dev: not baked (no build/bake-result.json)
 artifact  missing  debug: not baked (no build/bake-result.json)
 backend   ok       inprocess: no host tools needed
+release   blocked  default: blocked (not-baked)  requires reproducible, lock
+release   blocked  debug: blocked (not-baked)  requires reproducible, lock
 next: tundravm bake
 [exit 0]
 ```
 
-`build/mkosi` is the bake's own copy of the tree; the committed `mkosi/` is never touched. The lockfile stays unless `--lockfile` names it, and `build/evidence/` stays too. From here the loop starts again at step 8.
+`build/mkosi` is the bake's own copy of the tree; the committed `mkosi/` is never touched. The lockfile stays unless `--remove-lockfile` names it. Nothing is baked now, so each `release` line is `blocked (not-baked)`.
+
+## 19. Cut a release
+
+A release is one directory holding the shipped artifacts with their policies, SBOMs, evidence and notes, cut from the locked recipe and immutable once it passes. `release` runs every step itself (lock check, fetch, a bake built twice and compared, measure, SBOM, evidence, verify, changes, notes), so it starts from the cleaned build directory. Require a check the in-process backend cannot pass, `real`, to see a release that does not finish:
+
+```console
+$ tundravm release --version 1.0 --require real
+skip variant dev: Variant(release=False): not for release
+[1/9] lock-check  done      0.0s  lock current (build/tundravm.lock), sha256 27a797c05db1
+[2/9] fetch       skipped   0.0s  in-process backend: nothing is built, nothing to fetch
+[3/9] bake        done      0.0s  2 artifacts, reproducible: matched, simulated
+[4/9] measure     skipped   0.0s  simulated artifacts: nothing to measure
+[5/9] sbom        done      0.0s  2 SPDX documents, 17 packages
+[6/9] evidence    done      0.1s  verdict incomplete
+[7/9] verify      done      0.0s  verdict incomplete: 28/29 checks pass
+[8/9] changes     skipped   0.0s  no earlier release of this recipe to compare with
+[9/9] notes       done      0.0s  RELEASE.md, verdict fail
+resume with: tundravm release --version 1.0 --require real
+  evidence  simulated-artifact  debug/qemu, default/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
+  verify    simulated-artifact  debug/qemu, default/qemu: the artifacts are simulated (in-process backend): nothing was built (required: real)
+release releases/node-1.0: fail (simulated)
+[exit 1]
+```
+
+`dev` is skipped: it is `Variant(release=False)`, so only `default` and `debug` ship (`--variant dev --allow-ineligible` would force it, recorded in `release.json`). Every stage ran, but the evidence is `incomplete`: the artifacts are simulated and `real` was required. A release that fails keeps `release.state.json` in its directory, so it can resume, and the run ends with the command that does. `status` shows both:
+
+```console
+$ tundravm status
+recipe    ok       node.py  digest c34fda2242a7  variants default, dev, debug  dialect current  base debian/trixie
+lint      ok       0 errors, 0 warnings, 0 infos
+lock      ok       build/tundravm.lock  v4  up to date
+source    n/a      no source builds or kernels
+tree      ok       mkosi: up to date with the recipe
+artifact  ok       default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
+artifact  missing  dev: not in build/bake-result.json
+artifact  ok       debug/qemu  build/debug/disk.qcow2  112 B  sha256 b50a5a5aeaac  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
+manifest  n/a      build/default/default.manifest  simulated: nothing was installed
+manifest  n/a      build/debug/debug.manifest  simulated: nothing was installed
+backend   ok       inprocess: no host tools needed
+release   ok       default: ready  requires reproducible, lock
+release   ok       debug: ready  requires reproducible, lock
+release   pending  node-1.0: in progress at releases/node-1.0, verdict fail (simulated-artifact)  resume with: tundravm release --version 1.0
+next: tundravm bake
+[exit 0]
+```
+
+The release's own bake is current and was built twice, so `default` and `debug` are `ready` against `reproducible, lock`. The `pending` line is the unfinished release with its resume command. `next` is still the bake because the release baked only what it ships: `dev` is no longer in `build/bake-result.json`.
+
+Resuming as is would fail the same way, since the resume inherits `--require real`. Dropping a check weakens what the release accepts, so it is refused unless you say so:
+
+```console
+$ tundravm release --version 1.0 --require reproducible,lock
+error [E_STATE]: Release node-1.0 was started with another specification: require ["real"] -> ["reproducible", "lock"].
+Hint: Omit the option to keep what the release started with, or pass --change-spec (release(change_spec=True)) to change it; the change is recorded in release.json's spec_history.
+  release: node-1.0
+  changed: require
+[exit 2]
+
+$ tundravm release --version 1.0 --require reproducible,lock --change-spec
+skip variant dev: Variant(release=False): not for release
+[1/9] lock-check  kept            lock current (build/tundravm.lock), sha256 27a797c05db1
+[2/9] fetch       skipped         in-process backend: nothing is built, nothing to fetch
+[3/9] bake        kept            2 artifacts, reproducible: matched, simulated
+[4/9] measure     skipped         simulated artifacts: nothing to measure
+[5/9] sbom        kept            2 SPDX documents, 17 packages
+[6/9] evidence    done      0.1s  verdict pass
+[7/9] verify      done      0.0s  verdict pass: 29/29 checks pass
+[8/9] changes     skipped   0.0s  no earlier release of this recipe to compare with
+[9/9] notes       done      0.0s  RELEASE.md, verdict pass
+release releases/node-1.0: pass (simulated)
+[exit 0]
+
+$ jq .spec_history releases/node-1.0/release.json
+[
+  {
+    "at": "2026-10-17T18:22:00Z",
+    "changes": {
+      "require": {
+        "new": [
+          "reproducible",
+          "lock"
+        ],
+        "old": [
+          "real"
+        ]
+      }
+    }
+  }
+]
+[exit 0]
+```
+
+With `--change-spec` the resumed run takes the new requirement. Stages whose inputs did not change are `kept`, and the first one whose inputs did, `evidence`, runs again with every stage after it. `release.json` records the change in `spec_history` with the old and new values, so a reviewer sees that `real` was dropped and when.
+
+A finished release is self-contained. Copy it elsewhere (a sibling directory stands in for another machine here) and `verify` checks it without the recipe or the build directory: every file against `release-manifest.json`, `release.json` against the manifest, and the bundled evidence again:
+
+```console
+$ mkdir ../handoff && cp -r releases/node-1.0 ../handoff/
+[exit 0]
+
+$ tundravm verify ../handoff/node-1.0
+verify ../handoff/node-1.0  verdict pass  (38 pass, 0 fail, 0 missing)
+  manifest   node-1.0  version 1.0  created 2026-10-17T18:22:01Z
+  file       8/8 pass
+  release    1/1 pass
+  evidence   pass: 29/29 checks pass
+  note       unsigned: the release carries no release-manifest.json.sig
+[exit 0]
+```
+
+The note says the release is unsigned: `release --sign KEY` signs `release-manifest.json` and the evidence, and `verify --allowed-signers` then names the signer, as in step 17. Back in the project:
+
+```console
+$ tundravm status
+recipe    ok       node.py  digest c34fda2242a7  variants default, dev, debug  dialect current  base debian/trixie
+lint      ok       0 errors, 0 warnings, 0 infos
+lock      ok       build/tundravm.lock  v4  up to date
+source    n/a      no source builds or kernels
+tree      ok       mkosi: up to date with the recipe
+artifact  ok       default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
+artifact  missing  dev: not in build/bake-result.json
+artifact  ok       debug/qemu  build/debug/disk.qcow2  112 B  sha256 b50a5a5aeaac  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
+manifest  n/a      build/default/default.manifest  simulated: nothing was installed
+manifest  n/a      build/debug/debug.manifest  simulated: nothing was installed
+backend   ok       inprocess: no host tools needed
+release   ok       default: ready  requires reproducible, lock  released as releases/node-1.0
+release   ok       debug: ready  requires reproducible, lock  released as releases/node-1.0
+next: tundravm bake
+[exit 0]
+
+$ tundravm status --variant default --variant debug
+recipe    ok       node.py  digest f1fb3ce4e0ee  variants default, debug  dialect current  base debian/trixie
+lint      ok       0 errors, 0 warnings, 0 infos
+lock      ok       build/tundravm.lock  v4  up to date
+source    n/a      no source builds or kernels
+tree      ok       mkosi: up to date with the recipe
+artifact  ok       default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
+artifact  ok       debug/qemu  build/debug/disk.qcow2  112 B  sha256 b50a5a5aeaac  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
+manifest  n/a      build/default/default.manifest  simulated: nothing was installed
+manifest  n/a      build/debug/debug.manifest  simulated: nothing was installed
+backend   ok       inprocess: no host tools needed
+release   ok       default: ready  requires reproducible, lock  released as releases/node-1.0
+release   ok       debug: ready  requires reproducible, lock  released as releases/node-1.0
+next: everything is up to date
+[exit 0]
+```
+
+Each shipped variant is `ready` and `released as releases/node-1.0`, the newest finished release, cut from this recipe and lockfile. Over every variant `next` still bakes `dev`; over the variants the release ships, nothing is left to do. Releasing version `1.0` again fails with `E_STATE`: a finished release is immutable, so bump `--version`. Releases live in `releases/`, outside the build directory, and `clean` never removes one:
+
+```console
+$ tundravm clean --what all
+removed build/mkosi
+removed build/debug
+removed build/default
+removed build/bake-result.json
+[exit 0]
+```
+
+`releases/node-1.0` is untouched. With a real backend, `status` goes on past the bake to `measure` and `attest` before it suggests the release; [CLI: Real TDX](cli.md#real-tdx) walks through that path, and [CLI: Release](cli.md#release) has every option. From here the loop starts again at step 8.

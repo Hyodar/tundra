@@ -54,15 +54,22 @@ tundravm lock                                           # build/tundravm.lock: s
 tundravm compile --tree mkosi                           # emit the mkosi tree, one directory per variant; commit it
 tundravm watch                                          # one lint + tree-check line per save; Ctrl-C stops
 tundravm bake --verify-reproducible                     # build every variant twice, frozen against the lock
-tundravm measure --variant default --export-policy peer.json  # expected RTMRs and the verifier policy
-tundravm deploy qemu --variant default                  # boot the baked artifact
-tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json  # quote vs policy
-tundravm evidence --sign ~/.ssh/id_ed25519 --bundle evidence.tar.gz  # signed auditor record with a verdict
-tundravm verify evidence.tar.gz --allowed-signers allowed_signers    # re-check it anywhere, signature included
-tundravm changes --since evidence.tar.gz --format markdown           # after the next edit: what a reviewer checks
+tundravm measure --variant default --export-policy build/default/policy.json  # expected RTMRs, where evidence looks
+tundravm deploy qemu --variant default --param tdx=true # boot it as a TDX guest (needs a TDX host, see below)
+tundravm attest --issuer unix:./tdxs.sock --validator unix:./validator.sock \
+  --policy build/default/policy.json --record build/default/attestation.json  # quote vs policy, kept as a record
+tundravm evidence --variant default --attestation build/default/attestation.json \
+  --sign ~/.ssh/id_ed25519 --bundle evidence.tar.gz      # signed auditor record with a verdict
+tundravm verify evidence.tar.gz --build build --allowed-signers allowed_signers  # re-check it anywhere, image bytes too
+tundravm release --version 1.0 --variant default \
+  --require reproducible,measured,lock,attested \
+  --attestation build/default/attestation.json         # releases/node-1.0, immutable once it passes
+tundravm changes --since releases/node-1.0 --format markdown  # after the next edit: what a reviewer checks
 ```
 
-Run the commands with `uv run` in the project (or with its `.venv` activated); `tundravm status` names the next one to run at any point. `attest` asks the booted image's tdxs service for a quote, so the recipe needs `Tdxs` (the `prover` template declares it); `--validator` names a tdxs validator that checks the quote's signature and collateral. `evidence --sign` signs `evidence.json` with an SSH key (`ssh-keygen -Y sign`); `verify --allowed-signers` checks that signature against an OpenSSH allowed-signers file. `changes --since` compares the recipe and lockfile as they are now with that evidence.
+Run the commands with `uv run` in the project (or with its `.venv` activated); `tundravm status` names the next one to run at any point. Pass the same `--variant` to `measure`, `deploy`, `evidence` and `release`: `measure` and `deploy` need one when the bake holds several variants, and `evidence` and `release` otherwise cover every baked (or eligible) variant, each of which then needs its own policy and record. `measure --export-policy build/default/policy.json` writes the policy where `evidence` looks for it by default (`BUILD/<variant>/policy.json`); a policy anywhere else needs `evidence --policy FILE`, and without one `evidence` notes the variant as unmeasured. `attest` asks the booted image's tdxs service for a quote, so the recipe needs `Tdxs` (the `prover` template declares it); `--validator` names a tdxs validator that checks the quote's signature and collateral, and `--record` keeps the result for `evidence --attestation` and `release --attestation` (at `BUILD/<variant>/attestation.json`, `status` counts it towards release readiness). `evidence --sign` signs `evidence.json` with an SSH key (`ssh-keygen -Y sign`); `verify --allowed-signers` checks that signature against an OpenSSH allowed-signers file, and `verify --build build` also re-hashes the images the bundle describes (without it the artifacts' bytes are not checked). `release` bakes twice, measures, bundles and verifies again into `releases/node-1.0`; `--require` makes each named check fatal. A reproducible bake gives the release the same artifact and policy, so the record still applies; when it does not, the release stops at `attested`: attest the image against `releases/node-1.0/default/policy.json` and resume with `tundravm release --version 1.0 --attestation FILE`. `changes --since` compares the recipe and lockfile as they are now with that release.
+
+Moving from the simulator to a TDX host takes `--param tdx=true` (TDVF firmware through `-bios`), a host kernel, KVM and QEMU with TDX support, a tdxs validator running on the verifying side, and a way to reach the image's `/var/tdxs.sock`: the key `Secrets` delivers is installed with `no-port-forwarding`, so `ssh -L` with it is refused. [CLI: Real TDX](docs/cli.md#real-tdx) has the sequence; it has not been run on TDX hardware.
 
 `init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init` also writes a `[tool.tundravm]` table (`recipe`, `tree`, `build`, `lockfile`, `backend`) into `pyproject.toml` that every command reads, so in a scaffolded project `RECIPE` is optional (`tundravm status` with no arguments reports on `node.py`) and `measure`, `deploy` and `sbom` find the bake in the configured `build` directory. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
 

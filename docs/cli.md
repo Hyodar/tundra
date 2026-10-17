@@ -27,7 +27,7 @@ tundravm release [RECIPE] --version VERSION [--variant NAME]... [--sign KEY | --
 tundravm doctor  [RECIPE] [--backend KIND]
 tundravm ci      RECIPE [--variant NAME]... [--tree DIR] [--lockfile PATH] [--format auto|text|github]
 tundravm watch   RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--interval SECONDS] [--write]
-tundravm status  RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--verify] [--format text|json|markdown]
+tundravm status  RECIPE [--variant NAME]... [--build DIR] [--tree DIR] [--lockfile PATH] [--verify] [--releases DIR] [--format text|json|markdown]
 tundravm clean   [RECIPE] [--build DIR] [--what sources,tree,artifacts,evidence,state,reproduce|all] [--remove-lockfile PATH] [--dry-run]
 tundravm config  [RECIPE] [--build DIR] [--tree DIR] [--lockfile PATH] [--backend KIND] [--format text|json]
 tundravm completion bash|zsh|fish
@@ -113,7 +113,7 @@ backend = "inprocess"
 
 Every command reads the table, and every command that takes `RECIPE` then runs without it: `tundravm status`, `tundravm lint`, `tundravm compile --check`; `measure`, `deploy` and `sbom`, which take no `RECIPE`, find the bake in the configured `build`. In a project with `build = "dist"`, bare `tundravm sbom`, `measure`, `status`, `evidence` and `clean` all use `dist/`. The rules:
 
-- The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`. The keys are `recipe`, `tree`, `build`, `lockfile` and `backend`; a table that still has `out`, the old name of `build`, fails with `E_VALIDATION` (`[tool.tundravm] key(s) out in PATH were renamed.`, hint `Rename out to build (e.g. build = "build").`).
+- The table is read from the nearest `pyproject.toml` that has one, starting in the working directory and walking up. Paths in it are relative to that file. Unknown keys and non-string values are `E_VALIDATION`. The keys are `recipe`, `tree`, `build`, `lockfile` and `backend`, plus `require`, a list of `evidence --require` checks (`require = ["reproducible", "lock", "measured"]`; a non-list or an unknown check is `E_VALIDATION`) that [`status`](#project-status) judges release readiness against; a table that still has `out`, the old name of `build`, fails with `E_VALIDATION` (`[tool.tundravm] key(s) out in PATH were renamed.`, hint `Rename out to build (e.g. build = "build").`).
 - Precedence per value: an explicit argument or flag, then the table, then the built-in default (`build/mkosi`, `build`, `build/tundravm.lock`, the recipe file's `backend`). For `measure`, `deploy` and `sbom` the default build directory is `build` beside the `pyproject.toml` when a table is found without a `build`, else `./build`.
 - For the commands that take `RECIPE`, the table's paths apply when `RECIPE` is omitted or names the table's recipe; another explicit `RECIPE` uses the built-in defaults.
 - `tree` is `--tree` of `compile`, `diff`, `ci`, `status` and `watch` (the tree they write, compare or check); `build` is `--build` of `fetch`, `bake`, `measure`, `deploy`, `sbom`, `evidence`, `release`, `status`, `watch` and `clean`; `lockfile` is `--lockfile` everywhere it is taken, drift diagnostics of `lint` included (`clean --remove-lockfile` names a lockfile to delete, never resolved); `backend` is `bake --backend`, `release --backend` and `doctor --backend`, and `bake` and `release` keep the recipe file's own backend instance when it is of that kind.
@@ -756,7 +756,7 @@ Hint: bake-result.json records sha256 1fa043adea90; Bake the variant again to re
 An SDK error (unreachable issuer or validator, not a TDX quote, a bad or placeholder policy) exits 2. `reasons` lists why a verdict is not positive: `validator-rejected`, `nonce-mismatch`, `register-mismatch`, `simulated`.
 
 ```console
-$ ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock root@localhost &
+$ socat UNIX-LISTEN:./tdxs.sock,fork EXEC:'ssh -p 2222 root@localhost socat - UNIX-CONNECT\:/var/tdxs.sock' &
 $ tundravm attest --issuer unix:./tdxs.sock --validator tcp://127.0.0.1:7001 --policy peer.json
 attestation unix:./tdxs.sock (tdx, quote v4)
 policy: peer.json
@@ -773,8 +773,8 @@ verdict: untrusted
 [exit 1]
 ```
 
-- `--issuer` and `--validator` are `unix:PATH` (or a bare path) or `tcp://HOST:PORT`. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by forwarding the socket over SSH as above, or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). tdxs serves no http, so an `http://` or `https://` endpoint fails with `E_VALIDATION` (`Endpoint 'http://x' is http, which tdxs does not serve.`) before anything is contacted.
-- The validator is a `tdxs` with a validator configured, run on the verifying side (not in the image under test). It gets `{"method": "validate", "data": {"document": HEX, "nonce": HEX}}` and answers `{"data": {"userData": HEX, "valid": true}, "error": null}` to accept; a `validator error: ...` reply is a rejection (printed as `signature invalid (ENDPOINT): ...`, reason `validator-rejected`).
+- `--issuer` and `--validator` are `unix:PATH` (or a bare path) or `tcp://HOST:PORT`. The `tdxs` service listens on the unix socket `/var/tdxs.sock` in the image and speaks JSON lines: one `{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}` request, one `{"data": {"document": HEX}, "error": null}` reply, whose document is the hex of the JSON attestation document (`raw_quote`, `user_data`, `nonce` in base64, and `platform`). Reach it from the host by relaying the socket over an SSH command channel as above (the key `Secrets` delivers is installed with `no-port-forwarding`, so `ssh -L` with it is refused; see [Real TDX](#real-tdx)), or with a forwarded TCP port (`deploy --param forward=7000:7000` and a `socat TCP-LISTEN:7000,fork UNIX-CONNECT:/var/tdxs.sock` in the image). tdxs serves no http, so an `http://` or `https://` endpoint fails with `E_VALIDATION` (`Endpoint 'http://x' is http, which tdxs does not serve.`) before anything is contacted.
+- The validator is a `tdxs` with a validator configured, run on the verifying side (not in the image under test; [Real TDX](#real-tdx) has a config). tdxs listens only on a unix socket, so `--validator unix:./validator.sock` names it directly and a `tcp://` validator is one relayed to that socket (`socat TCP-LISTEN:7001,fork UNIX-CONNECT:./validator.sock`). It gets `{"method": "validate", "data": {"document": HEX, "nonce": HEX}}` and answers `{"data": {"userData": HEX, "valid": true}, "error": null}` to accept; a `validator error: ...` reply is a rejection (printed as `signature invalid (ENDPOINT): ...`, reason `validator-rejected`).
 - Without `--validator` the output says `signature unchecked (no --validator)` and ends with a `note:` line; the verdict is never `trusted`.
 - A `simulator` issuer's quote is not a TDX quote: its registers come from the issuer's `metadata` reply (`(simulator, issuer metadata)` in the header), and its nonce check reads the quote's first 32 bytes followed by 32 zero bytes. Its verdict is at best `simulated`, which exits 1 unless `--allow-simulated`.
 - An unreachable issuer or validator, an issuer that replies with an `error` (`issuer error: tdx: failed to get raw quote: ...`), or a validator that cannot judge (`validator not configured`, a reply without `data.valid`) is `E_ATTESTATION`; a reply that is not a TDX quote is `E_MEASUREMENT`; a placeholder policy is refused with `E_MEASUREMENT`; a bad `--nonce` or policy file is `E_VALIDATION`.
@@ -821,8 +821,8 @@ qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -no-reboot
 
 - The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's port 22. Every port a `Secrets` of the variant listens on (recorded by the bake in `bake-result.json`) is forwarded from the same host port, so the host can deliver secrets to `localhost:8080`; `--param forward=HOST:GUEST,...` adds forwards, and one naming a `Secrets` port as its guest port replaces that default (`forward=18080:8080`). Two forwards on one host port are refused.
 - QEMU detaches by default (`daemonize=true`): the serial console goes to `serial_log` (`tail -f build/default/qemu-serial.log`), the monitor listens on the `monitor` socket (`socat - UNIX-CONNECT:build/default/qemu.monitor`, then `info status` or `quit`) and the pid to `pidfile` (`kill "$(cat build/default/qemu.pid)"`). The three live in `BUILD/<variant>`, so a second `deploy` of a variant that is still running fails on its pid file. The socket path must fit a unix socket (107 bytes), or `deploy` fails before starting QEMU. `--attach` keeps QEMU in the foreground instead, with `-nographic -serial mon:stdio` and no log, socket or pid file.
-- `tdx=true` boots TDVF, OVMF built with TDX support, through `-bios` (a TDX guest cannot run firmware from pflash): `/usr/share/ovmf/OVMF.fd`, `/usr/share/edk2/ovmf/OVMF.inteltdx.fd`, `/usr/share/OVMF/OVMF.fd` or `/usr/share/qemu/OVMF.fd`, the first found. It replaces the two pflash drives above with `-bios /usr/share/ovmf/OVMF.fd` and passes `-machine q35,accel=kvm,kernel-irqchip=split,confidential-guest-support=tdx0 -object tdx-guest,id=tdx0`, which needs a TDX host (kernel, KVM and QEMU with TDX support).
-- Checks: `ssh -p 2222 root@localhost` once the image's `sshd` has a key for you (boot), `systemctl status` of your services there (application), and the quote checked against `peer.json` with `tundravm attest --issuer unix:./tdxs.sock --validator ENDPOINT --policy peer.json` after forwarding the image's `/var/tdxs.sock` (see [Attest](#attest)), or by a verifier built with `Tdxs.from_policy("peer.json")`, which also verifies the collateral (attestation; needs `tdx=true` on a TDX host).
+- `tdx=true` boots TDVF, OVMF built with TDX support, through `-bios` (a TDX guest cannot run firmware from pflash): `/usr/share/ovmf/OVMF.fd`, `/usr/share/edk2/ovmf/OVMF.inteltdx.fd`, `/usr/share/OVMF/OVMF.fd` or `/usr/share/qemu/OVMF.fd`, the first found. It replaces the two pflash drives above with `-bios /usr/share/ovmf/OVMF.fd` and passes `-machine q35,accel=kvm,kernel-irqchip=split,confidential-guest-support=tdx0 -object tdx-guest,id=tdx0`, which needs a TDX host (kernel, KVM and QEMU with TDX support; see [Real TDX](#real-tdx)).
+- Checks: `ssh -p 2222 root@localhost` once the image's `sshd` has a key for you (boot), `systemctl status` of your services there (application), and the quote checked against `peer.json` with `tundravm attest --issuer unix:./tdxs.sock --validator ENDPOINT --policy peer.json` after relaying the image's `/var/tdxs.sock` (see [Attest](#attest) and [Real TDX](#real-tdx)), or by a verifier built with `Tdxs.from_policy("peer.json")`, which also verifies the collateral (attestation; needs `tdx=true` on a TDX host).
 
 **Azure.** Needs `az` on `PATH` after `az login`, an existing resource group (`resource_group`, default `tdx-vms`) and a storage account (`storage_account`, required); the adapter creates the `tdx-images` container in it when missing. The blob upload passes no credentials, so `az` must be able to look up the account key (or read `AZURE_STORAGE_KEY`). A confidential VM boots only from an Azure Compute Gallery image whose definition supports it, so the adapter publishes the VHD as a gallery image version first. `vm_size` must be a TDX confidential size: the DCesv5/DCedsv5 series (default `Standard_DC2es_v5`) or the ECesv5/ECedsv5 series. Bake an `azure` variant, which converts its disk to a fixed VHD:
 
@@ -894,6 +894,52 @@ gcloud compute instances create tdx-gcp-<6 hex> --project=my-project --zone=us-c
 ```
 
 A C3 instance has a gVNIC network interface and NVMe disks, so the image's kernel needs the `gve` and `nvme` drivers. `gcloud compute instances get-serial-port-output tdx-gcp-c95cfe --zone us-central1-a --project my-project` shows the boot. Tear down with `gcloud compute instances delete tdx-gcp-c95cfe --zone us-central1-a --project my-project`, `gcloud compute images delete tdx-gcp-45c3b6c0 --project my-project` and `gcloud storage rm gs://my-bucket/tdx-images/tdx-gcp-45c3b6c0.tar.gz`.
+
+### Real TDX
+
+The QEMU sequence above runs on any KVM host, and the [tutorial](tutorial.md) stands in for TDX with the in-process backend and a `simulator` issuer. On a TDX host the steps change as below. This sequence has not been run on TDX hardware: the host requirements are the upstream ones, the validator config is read from the `tundra-tools` source (`pkg/tdxs`), and only the SSH relay was checked, against OpenSSH 9.6 with the same `authorized_keys` restriction line.
+
+1. **Host** (unverified). TDX enabled in the firmware setup, a host kernel whose KVM supports TDX (upstream Linux 6.16 or later, or a distribution's TDX host kernel) loaded with `kvm_intel.tdx=1` (`cat /sys/module/kvm_intel/parameters/tdx` prints `Y`), and a QEMU with the `tdx-guest` object (upstream 10.1 or later). TDVF is the first of the four paths in the `tdx=true` bullet above; there is no `--param` for another path, so install the distribution's TDX build of OVMF there. The firmware is measured into MRTD, which `measure` does not predict: `Tdxs.from_policy(..., mrtd=)` checks it when you know the value.
+2. **Image.** `Tdxs` for the issuer (`/var/tdxs.sock`, mode `0660`, `root:tdx`), `Package("openssh-server")` and, for the relay in step 4, `Package("socat")`. The guest kernel must provide `/dev/tdx_guest` (unverified per kernel).
+3. **Boot and deliver a key.** `measure` needs `measured-boot` or `dstack-mr`; a placeholder policy is refused by `attest`.
+
+   ```console
+   $ tundravm measure --variant default --export-policy build/default/policy.json
+   $ tundravm deploy qemu --variant default --param tdx=true
+   $ curl -X POST --data-binary "$(cut -d' ' -f2 ~/.ssh/id_ed25519.pub)" http://localhost:8080/
+   ```
+
+4. **Reach tdxs.** `secret-delivery` replaces `/root/.ssh/authorized_keys` (`Secrets(ssh_directory=)`) with `no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 KEY`, so `ssh -L ./tdxs.sock:/var/tdxs.sock` with that key fails (`channel 1: open failed: connect failed: open failed`). The restriction does not cover commands, so relay over a command channel as root with the same key; each connection to `./tdxs.sock` runs one `ssh` whose remote `socat` connects to the image's socket:
+
+   ```console
+   $ socat UNIX-LISTEN:./tdxs.sock,fork EXEC:'ssh -p 2222 root@localhost socat - UNIX-CONNECT\:/var/tdxs.sock' &
+   ```
+
+   For `ssh -L` instead, declare a second account whose key carries no restriction (unverified in a booted image): `User("attest", home="/home/attest", groups=("tdx",))` and `File("/home/attest/.ssh/authorized_keys", "ssh-ed25519 AAAA... attest\n")`, then `ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock attest@localhost`. The public key is part of the image and so of its measurements: changing it is a new image.
+5. **Run a validator** on the verifying side, never in the image under test. tdxs listens only on a unix socket, and a validator-only config has no issuer, so it needs no TDX device (unverified: not run by this guide). Build it from `tundra-tools` (`go build -o tdxs ./cmd/tdxs`) and start `./tdxs --config validator.yaml`:
+
+   ```yaml
+   transport:
+     type: socket
+     config:
+       file_path: ./validator.sock
+   validator:
+     type: tdx                  # azure or gcp for those platforms
+     config:
+       get_collateral: true     # fetch the collateral to check the quote against
+       check_revocations: true
+   ```
+
+6. **Attest, record, release.**
+
+   ```console
+   $ tundravm attest --issuer unix:./tdxs.sock --validator unix:./validator.sock \
+       --policy build/default/policy.json --record build/default/attestation.json
+   $ tundravm release --version 1.0 --variant default \
+       --require reproducible,measured,lock,attested --attestation build/default/attestation.json
+   ```
+
+   A `trusted` verdict needs the validator to accept the quote. The release bakes and measures again; when its policy (`releases/node-1.0/default/policy.json`) is not the one the record was checked against, it fails at `attested`: attest again with `--policy releases/node-1.0/default/policy.json` and resume with `--attestation FILE` (see [Release](#release)).
 
 ## SBOM
 
@@ -1379,7 +1425,7 @@ watching node.py every 1s (Ctrl-C stops)
 
 ## Project status
 
-`tundravm status RECIPE` answers "where is this project at?" without writing anything or touching the network. It prints one line per item, `LABEL VERDICT DETAIL`, for the selected variants (`--variant`, default all), then `next: COMMAND`:
+`tundravm status RECIPE` answers "where is this project at, and can it ship?" without writing anything or touching the network. It prints one line per item, `LABEL VERDICT DETAIL`, for the selected variants (`--variant`, default all), then `next: COMMAND`. Past the bake it is a release-readiness view: one `release` line per variant that can ship, judged as `evidence` would judge its bake, and one per release still in progress.
 
 | Line | Reports | Verdicts |
 |---|---|---|
@@ -1391,24 +1437,48 @@ watching node.py every 1s (Ctrl-C stops)
 | `artifact` | one per baked variant and target in `BUILD/bake-result.json` (`--build`, default `build`): path, size, sha256 prefix, integrity (`unchecked`; with `--verify` the file is hashed: `verified` or `mismatch`), `reproducibility STATE` when `bake --verify-reproducible` recorded it (`"reproducibility": "matched"`, `"different"`, `"running"`, `"error"`, `"interrupted"` or `null` in JSON; `different` only for an artifact that differed), `simulated`, the lockfile the bake used; stale when the recipe digest or the tree digest it was baked from no longer matches, or on an integrity mismatch | `ok`, `stale`, `missing` |
 | `manifest` | one per baked variant: mkosi's package manifest beside the artifact (`<variant>.manifest`), which `sbom` and `evidence` read | `ok`, `missing` (the SBOM lists the declared packages only), `n/a` (a simulated artifact: nothing was installed) |
 | `backend` | the recipe file's `backend` and how many of its host tools `doctor` finds | `ok`, `missing`, `n/a` (no backend) |
+| `release` | one per selected variant eligible for release (not `Variant(release=False)`): the evidence its bake would give (`evidence --variant V --require LIST --allow-unbound`, which hashes its artifacts, reads `BUILD/<variant>/policy.json` and, when present, the `attest --record` file `BUILD/<variant>/attestation.json`), `ready` when that verdict would pass, else `blocked (CODES)` with evidence's reason codes: contradictions (`recipe-mismatch`, `tree-mismatch`, `integrity-mismatch`, `lock-drifted`, `lint-errors`, `not-reproducible`, `policy-placeholder`, ...) and each required check that is missing (`reproducibility-unchecked`, `lock-missing`, `policy-missing`, `artifact-unmeasured`, `attestation-missing`, `simulated-artifact`, `sbom-incomplete`, ...), or `not-baked`; then `requires LIST` and, once the newest finished release in `RELEASES` was cut from this recipe and lockfile, `released as PATH`. `LIST` is the table's `require`, else `reproducible, lock`. One `n/a` line when no selected variant is eligible | `ok`, `blocked`, `n/a` |
+| `release` | one per unfinished release of the recipe in `RELEASES` (`--releases DIR`, default `releases` beside the `pyproject.toml`, else `./releases`), a directory still holding `release.state.json`: `NAME: in progress at PATH`, where it stopped (`stopped at STAGE`, `verdict fail (CODES)`) and `resume with: tundravm release --version VERSION` (a resume inherits the rest of the spec) | `pending` |
 
-`next` follows the lifecycle: `tundravm lint` when there are errors, else `tundravm lock`, `tundravm fetch --build DIR`, `tundravm compile --tree DIR`, `tundravm bake --build DIR` (or `tundravm doctor` when the backend lacks a tool), and `everything is up to date` once every line is `ok` or `n/a` (a `manifest` line does not change `next`). It repeats `--variant`, `--build` and `--lockfile` as given, and `--tree` unless the tree came from the table (values from `[tool.tundravm]` are left out, so a configured project gets `next: tundravm lock`); a checkout modified since the fetch makes it `tundravm fetch --force`. `status` always exits 0. `--format json` prints `"schema": "tundravm.status/1"` and one object per section (`recipe`, `lint`, `lock`, `sources`, `tree`, `artifacts`, `backend`), each with a `verdict`, plus `manifests`, a list of `{"variant", "path", "present"}` per baked variant, and `next`; `sources` and `artifacts` hold `items`. `--format markdown` prints a table per section.
+`next` follows the lifecycle: `tundravm lint` when there are errors, else `tundravm lock`, `tundravm fetch --build DIR`, `tundravm compile --tree DIR`, `tundravm bake --build DIR` (or `tundravm doctor` when the backend lacks a tool); then, for the first blocked `release` line, `tundravm bake --verify-reproducible` (reproducibility unchecked; a bake the evidence contradicts, `lock-unbound` included, gets `tundravm bake`, with `--verify-reproducible` when `reproducible` is required), `tundravm measure --variant V --export-policy BUILD/V/policy.json` (a policy code), `tundravm attest --issuer ISSUER --validator VALIDATOR --policy BUILD/V/policy.json --record BUILD/V/attestation.json` (an attestation code); then a pending release's `resume with:` command; then `tundravm release --version VERSION --require LIST`. `everything is up to date` only when every line is `ok` or `n/a` (a `manifest` line does not change `next`), every eligible variant is ready and the newest finished release was cut from this recipe and lockfile. A blocked line no single command clears (a simulated artifact that a required `measured`, `attested` or `real` needs replaced, `not-reproducible`, ...) makes it `release blocked: V (CODES): ...`, never `everything is up to date`. It repeats `--variant`, `--build`, `--lockfile` and `--releases` as given, and `--tree` unless the tree came from the table (values from `[tool.tundravm]` are left out, so a configured project gets `next: tundravm lock`); a checkout modified since the fetch makes it `tundravm fetch --force`. `status` always exits 0. `--format json` prints `"schema": "tundravm.status/1"` and one object per section (`recipe`, `lint`, `lock`, `sources`, `tree`, `artifacts`, `backend`), each with a `verdict`, plus `manifests`, a list of `{"variant", "path", "present"}` per baked variant, `release` (`{VARIANT: {"ready", "reasons", "released", "verdict", "detail"}}`, `reasons` as evidence's `{"severity", "code", "subject", "message"}`), `release_require`, `releases_in_progress` (per pending release: `name`, `version`, `path`, `spec`, `completed`, `failed`, `verdict`, `reasons`, `resume`) and `next`; `sources` and `artifacts` hold `items`. `--format markdown` prints a table per section, the `release` lines under `## Release`.
+
+Releases live outside the build directory, in `RELEASES`: `release` writes them there and `clean` never removes one (see below), so `clean --what all` leaves a project whose `release` lines read `blocked (not-baked)` while its finished releases stay where they are.
 
 After `init --backend inprocess`, `lock` and `bake --backend inprocess`, adding a package to the recipe:
 
 ```console
 $ tundravm status node.py
-recipe    ok       node.py  digest 49222658d740  variants default, dev  dialect current  base debian/trixie
+recipe    ok       node.py  digest 1eab1ea5a220  variants default, dev  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      stale    build/tundravm.lock  v4  2 sections drifted
 source    n/a      no source builds or kernels
-tree      stale    build/mkosi: 2 files differ from the recipe
+tree      missing  mkosi: not compiled
 artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
 artifact  stale    dev/qemu  build/dev/disk.qcow2  110 B  sha256 9cfb8b5c2f31  integrity unchecked (--verify hashes it)  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
 manifest  n/a      build/default/default.manifest  simulated: nothing was installed
 manifest  n/a      build/dev/dev.manifest  simulated: nothing was installed
 backend   ok       inprocess: no host tools needed
+release   blocked  default: blocked (recipe-mismatch, tree-mismatch, lock-drifted, reproducibility-unchecked)  requires reproducible, lock
 next: tundravm lock node.py
+```
+
+`dev` has no `release` line: the starter marks it `Variant(release=False)`. Once the recipe is locked, compiled and baked with `--verify-reproducible`, the last lines read:
+
+```console
+$ tundravm status
+...
+backend   ok       inprocess: no host tools needed
+release   ok       default: ready  requires reproducible, lock
+next: tundravm release --version VERSION --require reproducible,lock
+```
+
+With `require = ["reproducible", "lock", "measured"]` in the table, the simulated artifact cannot be measured, so no command clears it:
+
+```console
+$ tundravm status
+...
+release   blocked  default: blocked (policy-missing)  requires reproducible, lock, measured
+next: release blocked: default (policy-missing): simulated artifacts need a bake with a real --backend
 ```
 
 `status --verify` hashes each artifact; an artifact whose bytes changed since the bake is `stale`:

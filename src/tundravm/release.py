@@ -784,6 +784,77 @@ def previous_release(releases: Path, recipe: str, *, exclude: str | None = None)
     return max(found)[2] if found else None
 
 
+def releases_in_progress(releases: Path, recipe: str) -> list[dict[str, Any]]:
+    """Each unfinished release of *recipe* under *releases* (a ``release.state.json`` beside
+    it), oldest version first: ``name``, ``version``, ``path``, ``spec`` (as recorded),
+    ``completed`` (the stages kept so far, in order), ``failed`` (the stage that raised, or
+    ``None``), ``verdict`` and ``reasons`` (the distinct codes of its last ``release.json``,
+    when a run got that far). Reads only; an unreadable state is skipped."""
+    found: list[tuple[tuple[tuple[int, int | str], ...], dict[str, Any]]] = []
+    if not Path(releases).is_dir():
+        return []
+    prefix = f"{recipe}-"
+    for path in Path(releases).iterdir():
+        try:
+            state = json.loads((path / STATE_NAME).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(state, dict) or state.get("schema") != STATE_SCHEMA:
+            continue
+        name, stages = state.get("release"), state.get("stages")
+        if not isinstance(stages, dict):
+            continue
+        if not isinstance(name, str) or not name.startswith(prefix) or name != path.name:
+            continue
+        version = name[len(prefix) :]
+        recorded = [stages[stage] for stage in STAGES if isinstance(stages.get(stage), dict)]
+        index = _read_index(path / INDEX_NAME)
+        listed = index.get("reasons")
+        reasons: list[Any] = listed if isinstance(listed, list) else []
+        found.append(
+            (
+                _version_key(version),
+                {
+                    "name": name,
+                    "version": version,
+                    "path": str(path),
+                    "spec": state.get("spec") if isinstance(state.get("spec"), dict) else {},
+                    "completed": [
+                        str(entry.get("name"))
+                        for entry in recorded
+                        if entry.get("execution") in ("completed", "skipped")
+                    ],
+                    "failed": next(
+                        (
+                            str(entry.get("name"))
+                            for entry in recorded
+                            if entry.get("execution") == "failed"
+                        ),
+                        None,
+                    ),
+                    "verdict": index.get("verdict"),
+                    "reasons": list(
+                        dict.fromkeys(
+                            str(reason.get("code"))
+                            for reason in reasons
+                            if isinstance(reason, dict)
+                        )
+                    ),
+                },
+            )
+        )
+    return [row for _, row in sorted(found, key=lambda pair: pair[0])]
+
+
+def _read_index(path: Path) -> dict[str, Any]:
+    """``release.json`` at *path*, or ``{}`` when there is none or it is unreadable."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _version_key(version: str) -> tuple[tuple[int, int | str], ...]:
     return tuple(
         (0, int(part)) if part.isdigit() else (1, part)
@@ -1744,5 +1815,6 @@ __all__ = [
     "release",
     "release_image",
     "release_name",
+    "releases_in_progress",
     "verify_release",
 ]

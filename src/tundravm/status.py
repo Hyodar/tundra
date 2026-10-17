@@ -3,18 +3,23 @@
 One :class:`StatusItem` per thing the lifecycle produces (the lockfile, each
 source checkout, the mkosi tree, each baked artifact and its variant's package
 manifest) plus the recipe, its lint summary and the build backend's host tools,
-each with a verdict. ``next`` is the
-single most useful command to run next.
+each with a verdict. Past the bake it is a release-readiness view: one ``release``
+line per variant eligible for release, ``ready`` or ``blocked`` with the reason codes
+:func:`~tundravm.evidence.evidence` gives against the required checks, and one per
+release of the recipe still in progress. ``next`` is the single most useful command
+to run next: lock, fetch, compile, bake, then a second build, ``measure``, ``attest``
+and ``release``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from ._source import SOURCES_DIRNAME, is_fetched
 from .check import summarize
@@ -39,22 +44,67 @@ from .declarative.lifecycle import (
     verify_artifact,
 )
 from .diff import diff_against
-from .errors import SourceError, TdxError
+from .errors import SourceError, TdxError, ValidationError
+from .evidence import evidence
 from .formats import md_cell, md_table
 from .lockfile import lock_variants
 from .models import BAKE_RESULT_FILENAME
 from .recipe import RecipeFile
+from .release import INDEX_NAME as RELEASE_INDEX
+from .release import previous_release, releases_in_progress
 
-Verdict = Literal["ok", "stale", "missing", "n/a", "error"]
+Verdict = Literal["ok", "stale", "missing", "n/a", "error", "blocked", "pending"]
 Integrity = Literal["verified", "unchecked", "mismatch"]
 """An artifact's bytes against their recorded sha256; ``unchecked`` unless ``verify``."""
-VERDICTS: tuple[Verdict, ...] = ("ok", "stale", "missing", "n/a", "error")
-"""``error`` is only the lint verdict: the recipe has error diagnostics."""
+VERDICTS: tuple[Verdict, ...] = ("ok", "stale", "missing", "n/a", "error", "blocked", "pending")
+"""``error`` is only the lint verdict: the recipe has error diagnostics. ``blocked`` is only
+a ``release`` line's (a required check is missing, or something contradicts the bake), and
+``pending`` a release in progress."""
 
 UP_TO_DATE = "everything is up to date"
+"""``next`` when the build is current, every eligible variant is ready and the newest
+finished release was cut from this recipe and lockfile: never while a release is blocked."""
+BLOCKED = "release blocked"
+"""How ``next`` starts when readiness is blocked by something no single command fixes."""
+DEFAULT_REQUIRE: tuple[str, ...] = ("reproducible", "lock")
+"""The checks release readiness is judged against without ``[tool.tundravm] require``."""
+ATTESTATION_NAME = "attestation.json"
+"""``BUILD/<variant>/attestation.json``: the ``attest --record`` file readiness bundles."""
 TREE_DIRNAME = "mkosi"
 
-_RANK: dict[Verdict, int] = {"n/a": 0, "ok": 1, "stale": 2, "missing": 3, "error": 4}
+_RANK: dict[Verdict, int] = {
+    "n/a": 0,
+    "ok": 1,
+    "pending": 2,
+    "stale": 2,
+    "blocked": 3,
+    "missing": 3,
+    "error": 4,
+}
+_REBAKE = frozenset(
+    {"recipe-mismatch", "tree-mismatch", "integrity-mismatch", "artifact-missing", "lock-unbound"}
+)
+_REPRODUCE = frozenset({"reproducibility-unchecked", "reproducibility-incomplete"})
+_MEASURE = frozenset(
+    {
+        "policy-missing",
+        "policy-unbound",
+        "policy-invalid",
+        "policy-placeholder",
+        "policy-artifact-mismatch",
+        "artifact-unmeasured",
+    }
+)
+_ATTEST = frozenset(
+    {
+        "attestation-missing",
+        "attestation-policy-mismatch",
+        "attestation-untrusted",
+        "attestation-stale",
+    }
+)
+_NEEDS_REAL = _MEASURE | _ATTEST | {"simulated-artifact"}
+"""Codes a simulated (in-process) artifact can never clear: it needs a real bake."""
 _LABEL_WIDTH = 10
 _VERDICT_WIDTH = 9
 
@@ -88,6 +138,10 @@ class Invocation:
     """Whether a ``compile`` suggestion spells out ``--tree TREE`` (not when configured)."""
     recipe_path: str = ""
     """The path the ``recipe`` line shows; empty: ``recipe``."""
+    releases: Path | None = None
+    """``--releases`` as ``next`` repeats it: ``None`` unless given on the command line."""
+    backend: str | None = None
+    """The backend kind a release would bake with, to tell a resume that needs ``--backend``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +157,13 @@ class ProjectStatus:
     """One ``manifest`` line per baked variant: mkosi's package manifest beside its artifact."""
     backend: StatusItem
     next: str
+    releases: tuple[StatusItem, ...] = ()
+    """One ``release`` line per selected variant eligible for release: ``ok`` (ready) or
+    ``blocked``; one ``n/a`` line when none is eligible."""
+    in_progress: tuple[StatusItem, ...] = ()
+    """One ``release`` line (``pending``) per unfinished release of the recipe."""
+    require: tuple[str, ...] = DEFAULT_REQUIRE
+    """The checks readiness was judged against."""
 
     def items(self) -> tuple[StatusItem, ...]:
         """Every line in report order."""
@@ -116,6 +177,8 @@ class ProjectStatus:
             *self.artifacts,
             *self.manifests,
             self.backend,
+            *self.releases,
+            *self.in_progress,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -137,6 +200,19 @@ class ProjectStatus:
             },
             "manifests": [dict(item.data) for item in self.manifests],
             "backend": self.backend.to_dict(),
+            "release": {
+                str(item.data["variant"]): {
+                    "ready": item.data["ready"],
+                    "reasons": item.data["reasons"],
+                    "released": item.data["released"],
+                    "verdict": item.verdict,
+                    "detail": item.detail,
+                }
+                for item in self.releases
+                if "variant" in item.data
+            },
+            "release_require": list(self.require),
+            "releases_in_progress": [dict(item.data) for item in self.in_progress],
             "next": self.next,
         }
 
@@ -156,11 +232,20 @@ def project_status(
     invocation: Invocation,
     verify: bool = False,
     tree: Path | None = None,
+    require: Sequence[str] = DEFAULT_REQUIRE,
+    releases: Path = Path("releases"),
 ) -> ProjectStatus:
     """Report *variants* of *loaded* against the build directory *build*; never writes.
 
     *tree* is the compiled mkosi tree (default: ``BUILD/mkosi``). With *verify*
     each artifact's file is hashed against its recorded sha256.
+
+    Each selected variant eligible for release (``Variant(release=True)``) gets a
+    readiness line: the evidence its bake would give (:func:`~tundravm.evidence.evidence`,
+    hashing its artifacts, with ``BUILD/<variant>/policy.json`` and, when present,
+    ``BUILD/<variant>/attestation.json``) against *require*, ready only when its verdict
+    would pass. *releases* is searched for unfinished releases of the recipe and for
+    the newest finished one.
     """
     tree_path = tree if tree is not None else build / TREE_DIRNAME
     img = loaded.lowered()
@@ -172,6 +257,18 @@ def project_status(
     artifacts, baked = _artifacts(img, names, lock, manifest, verify=verify)
     backend = _backend(loaded, runner)
     lint = _lint(loaded, names, lock)
+    required = tuple(require)
+    released = _released(img, lock_path, releases, loaded.recipe.name)
+    readiness = _readiness(
+        loaded,
+        names,
+        baked,
+        build=build,
+        lock_path=lock_path,
+        runner=runner,
+        require=required,
+        released=released,
+    )
     status = ProjectStatus(
         recipe=_recipe(loaded, img, names, invocation.recipe_path or invocation.recipe),
         lint=lint,
@@ -183,6 +280,9 @@ def project_status(
         manifests=_manifests(baked, names),
         backend=backend,
         next="",
+        releases=readiness,
+        in_progress=_in_progress(loaded, releases, build, invocation),
+        require=required,
     )
     return replace(status, next=_next(status, invocation, tree_path))
 
@@ -487,6 +587,153 @@ def _size(size: int) -> str:
     return f"{size} B"
 
 
+def _released(img: Lowered, lock_path: Path, releases: Path, recipe: str) -> dict[str, str]:
+    """Per variant, the newest finished release of *recipe* when it was cut from this recipe
+    (every variant's digest) and this lockfile's bytes; empty otherwise."""
+    found = previous_release(releases, recipe)
+    if found is None or not lock_path.is_file():
+        return {}
+    try:
+        payload = json.loads((found / RELEASE_INDEX).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    digest = img.select(tuple(img.state.profiles)).digest()
+    lock_sha256 = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    if payload.get("recipe_digest") != digest or payload.get("lock_sha256") != lock_sha256:
+        return {}
+    return {str(name): str(found) for name in payload.get("variants") or ()}
+
+
+def _readiness(
+    loaded: RecipeFile,
+    names: tuple[str, ...],
+    baked: Sequence[Artifact],
+    *,
+    build: Path,
+    lock_path: Path,
+    runner: ProbeRunner,
+    require: tuple[str, ...],
+    released: Mapping[str, str],
+) -> tuple[StatusItem, ...]:
+    """One ``release`` line per variant of *names* eligible for release."""
+    declared = {variant.name: variant for variant in loaded.recipe.variants}
+    eligible = [name for name in names if name in declared and declared[name].release]
+    shown = ", ".join(require) or "nothing"
+    if not eligible:
+        detail = "no selected variant is eligible for release (Variant(release=False))"
+        return (StatusItem("release", "n/a", detail, {"require": list(require)}),)
+    items: list[StatusItem] = []
+    for name in eligible:
+        reasons = _blockers(
+            loaded,
+            name,
+            baked=any(artifact.variant == name for artifact in baked),
+            build=build,
+            lock_path=lock_path,
+            runner=runner,
+            require=require,
+        )
+        data: dict[str, object] = {
+            "variant": name,
+            "ready": not reasons,
+            "reasons": reasons,
+            "require": list(require),
+            "released": None if reasons else released.get(name),
+        }
+        if reasons:
+            codes = ", ".join(dict.fromkeys(str(reason["code"]) for reason in reasons))
+            detail = f"{name}: blocked ({codes})  requires {shown}"
+            items.append(StatusItem("release", "blocked", detail, data))
+            continue
+        tail = f"  released as {released[name]}" if name in released else ""
+        items.append(StatusItem("release", "ok", f"{name}: ready  requires {shown}{tail}", data))
+    return tuple(items)
+
+
+def _blockers(
+    loaded: RecipeFile,
+    name: str,
+    *,
+    baked: bool,
+    build: Path,
+    lock_path: Path,
+    runner: ProbeRunner,
+    require: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Why *name*'s evidence would not pass against *require* (evidence's reasons)."""
+    if not baked:
+        return [_reason("not-baked", name, f"{name} is not baked")]
+    record = build / name / ATTESTATION_NAME
+
+    def gather(records: Sequence[Path]) -> list[dict[str, Any]]:
+        found = evidence(
+            loaded.recipe,
+            build=build,
+            variants=[name],
+            lock=lock_path if lock_path.is_file() else None,
+            runner=runner,
+            require=require,
+            allow_unbound=True,
+            attestations=records,
+        )
+        return [dict(reason) for reason in found.reasons]
+
+    try:
+        if not record.is_file():
+            return gather(())
+        try:
+            return gather((record,))
+        except ValidationError:
+            return gather(())  # a record of another artifact: as if there were none
+    except TdxError as exc:
+        message = str(exc.args[0]) if exc.args else str(exc)
+        return [_reason("evidence-unavailable", name, message)]
+
+
+def _reason(code: str, subject: str, message: str) -> dict[str, Any]:
+    return {"severity": "incomplete", "code": code, "subject": subject, "message": message}
+
+
+def _in_progress(
+    loaded: RecipeFile, releases: Path, build: Path, call: Invocation
+) -> tuple[StatusItem, ...]:
+    """One ``pending`` line per unfinished release of the recipe under *releases*."""
+    items: list[StatusItem] = []
+    for row in releases_in_progress(releases, loaded.recipe.name):
+        resume = _resume_command(row, build, call)
+        codes = ", ".join(row["reasons"])
+        if row["failed"] is not None:
+            where = f"stopped at {row['failed']}"
+        elif row["verdict"] is not None:
+            where = f"verdict {row['verdict']}" + (f" ({codes})" if codes else "")
+        else:
+            where = f"{len(row['completed'])} stages kept"
+        detail = f"{row['name']}: in progress at {row['path']}, {where}  resume with: {resume}"
+        items.append(StatusItem("release", "pending", detail, {**row, "resume": resume}))
+    return tuple(items)
+
+
+def _resume_command(row: Mapping[str, Any], build: Path, call: Invocation) -> str:
+    """The ``tundravm release`` command that resumes the release of *row*: it inherits every
+    option its spec recorded, so only the paths and a backend other than this one's."""
+    spec: Mapping[str, Any] = row["spec"]
+    words = ["tundravm", "release", call.recipe, "--version", str(row["version"])]
+    if call.releases is not None:
+        words += ["--releases", str(call.releases)]
+    recorded = spec.get("build")
+    if isinstance(recorded, str) and Path(recorded) != build.resolve():
+        words += ["--build", recorded]
+    elif call.build is not None:
+        words += ["--build", str(call.build)]
+    if call.lockfile is not None:
+        words += ["--lockfile", str(call.lockfile)]
+    backend = spec.get("backend")
+    kind = backend.get("name") if isinstance(backend, Mapping) else None
+    if isinstance(kind, str) and kind != call.backend:
+        words += ["--backend", kind]
+    return " ".join(word for word in words if word)
+
+
 def _backend(loaded: RecipeFile, runner: ProbeRunner) -> StatusItem:
     backend = loaded.backend
     if backend is None:
@@ -534,7 +781,67 @@ def _next_command(status: ProjectStatus, call: Invocation, tree: Path) -> str:
         if status.backend.verdict == "missing":
             return f"tundravm doctor {call.recipe}"
         return f"tundravm bake {call.recipe}{variants}{build_flag}{lock_flag}"
-    return UP_TO_DATE
+    return _release_next(status, call)
+
+
+def _release_next(status: ProjectStatus, call: Invocation) -> str:
+    """Past a current bake: a second build, ``measure``, ``attest``, then ``release``."""
+    variants = "".join(f" --variant {name}" for name in call.variants)
+    build_flag = "" if call.build is None else f" --build {call.build}"
+    lock_flag = "" if call.lockfile is None else f" --lockfile {call.lockfile}"
+    build = status.manifest.parent
+    codes = {
+        str(item.data["variant"]): list(dict.fromkeys(str(r["code"]) for r in _reasons(item)))
+        for item in status.releases
+        if item.verdict == "blocked"
+    }
+    every = {code for found in codes.values() for code in found}
+    simulated = {str(item.data.get("variant")) for item in status.artifacts if _simulated(item)}
+    if "lock-missing" in every:
+        return f"tundravm lock {call.recipe}{variants}{lock_flag}"
+    if every & (_REBAKE | _REPRODUCE):
+        twice = bool(every & _REPRODUCE) or "reproducible" in status.require
+        again = " --verify-reproducible" if twice else ""
+        return f"tundravm bake {call.recipe}{variants}{build_flag}{lock_flag}{again}"
+    for name, found in codes.items():
+        if name in simulated:
+            continue
+        policy = build / name / "policy.json"
+        if set(found) & _MEASURE:
+            return f"tundravm measure{build_flag} --variant {name} --export-policy {policy}"
+        if set(found) & _ATTEST:
+            record = build / name / ATTESTATION_NAME
+            return (
+                "tundravm attest --issuer ISSUER --validator VALIDATOR "
+                f"--policy {policy} --record {record}"
+            )
+    if status.in_progress:
+        return str(status.in_progress[0].data["resume"])
+    if codes:
+        listed = "; ".join(f"{name} ({', '.join(found)})" for name, found in codes.items())
+        if any(name in simulated and set(found) & _NEEDS_REAL for name, found in codes.items()):
+            return f"{BLOCKED}: {listed}: simulated artifacts need a bake with a real --backend"
+        require = ",".join(status.require) or "''"
+        return f"{BLOCKED}: {listed}: tundravm evidence --require {require} says why"
+    ready = [item for item in status.releases if item.verdict == "ok"]
+    if all(item.data["released"] for item in ready):
+        return UP_TO_DATE
+    named = "".join(f" --variant {item.data['variant']}" for item in ready) if variants else ""
+    releases = "" if call.releases is None else f" --releases {call.releases}"
+    require = ",".join(status.require) or "''"
+    return (
+        f"tundravm release {call.recipe} --version VERSION{named} --require {require}"
+        f"{releases}{build_flag}{lock_flag}"
+    )
+
+
+def _reasons(item: StatusItem) -> list[Mapping[str, Any]]:
+    reasons = item.data.get("reasons")
+    return [r for r in reasons if isinstance(r, Mapping)] if isinstance(reasons, list) else []
+
+
+def _simulated(item: StatusItem) -> bool:
+    return item.data.get("simulated") is True
 
 
 # ── rendering ────────────────────────────────────────────────────────────
@@ -554,7 +861,17 @@ def render_status(status: ProjectStatus, fmt: str) -> str:
     return "\n".join(lines)
 
 
-_SECTIONS = ("Recipe", "Lint", "Lock", "Sources", "Tree", "Artifacts", "Manifests", "Backend")
+_SECTIONS = (
+    "Recipe",
+    "Lint",
+    "Lock",
+    "Sources",
+    "Tree",
+    "Artifacts",
+    "Manifests",
+    "Backend",
+    "Release",
+)
 
 
 def _markdown(status: ProjectStatus) -> str:
@@ -568,6 +885,7 @@ def _markdown(status: ProjectStatus) -> str:
         status.artifacts,
         status.manifests,
         (status.backend,),
+        (*status.releases, *status.in_progress),
     )
     blocks = [f"# tundravm status: `{status.recipe.data['path']}`"]
     for heading, items in zip(_SECTIONS, groups, strict=True):
@@ -575,11 +893,15 @@ def _markdown(status: ProjectStatus) -> str:
             continue
         rows = [(md_cell(item.verdict), md_cell(item.detail, code=False)) for item in items]
         blocks.append(f"## {heading}\n\n{md_table(('Verdict', 'Detail'), rows)}")
-    blocks.append(f"**Next:** {md_cell(status.next, code=status.next != UP_TO_DATE)}")
+    command = status.next.startswith("tundravm ")
+    blocks.append(f"**Next:** {md_cell(status.next, code=command)}")
     return "\n\n".join(blocks)
 
 
 __all__ = [
+    "ATTESTATION_NAME",
+    "BLOCKED",
+    "DEFAULT_REQUIRE",
     "UP_TO_DATE",
     "VERDICTS",
     "Invocation",

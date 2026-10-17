@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Literal, get_args
 
 from .errors import ValidationError
+from .evidence import EVIDENCE_REQUIREMENTS
 
 PYPROJECT = "pyproject.toml"
 TABLE = "tool.tundravm"
@@ -41,8 +42,10 @@ RESOLUTION_HELP = (
     "[tool.tundravm] table is found in the working directory or a parent (the "
     "nearest one with the table wins; `tundravm init` writes it). Its keys: recipe, "
     "tree (the compiled mkosi tree, every --tree), build (the build directory holding "
-    "bake-result.json, every --build), lockfile (--lockfile; not clean's) and backend "
-    "(bake and doctor --backend), with paths relative to the pyproject.toml. They apply "
+    "bake-result.json, every --build), lockfile (--lockfile; not clean's), backend "
+    "(bake and doctor --backend) and require (a list of evidence checks, such as "
+    '["reproducible", "lock"], that status judges release readiness against; default '
+    "reproducible and lock), with paths relative to the pyproject.toml. They apply "
     "to every command when RECIPE is omitted or names the table's recipe; commands "
     "without RECIPE (measure, deploy, sbom) always apply them. An explicit RECIPE or flag "
     "always wins; then the table; then the built-in default. A configured lockfile is "
@@ -53,12 +56,19 @@ RESOLUTION_HELP = (
 )
 
 
+REQUIRE_KEY = "require"
+"""The table's one list: the evidence checks (``evidence --require``) ``status`` judges
+release readiness against."""
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectConfig:
     """The ``[tool.tundravm]`` table of *path*, with its paths made absolute."""
 
     path: Path
     values: Mapping[str, str] = field(default_factory=dict)
+    require: tuple[str, ...] | None = None
+    """``require``: the checks a release must hold, in the order given; ``None`` when unset."""
 
     @property
     def root(self) -> Path:
@@ -97,11 +107,12 @@ def find_project(start: Path | None = None) -> ProjectConfig | None:
         if candidate.is_file():
             table = _table(candidate)
             if table is not None:
-                return ProjectConfig(candidate, table)
+                values, require = table
+                return ProjectConfig(candidate, values, require)
     return None
 
 
-def _table(path: Path) -> dict[str, str] | None:
+def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None] | None:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -129,13 +140,14 @@ def _table(path: Path) -> dict[str, str] | None:
             + f' (e.g. {RENAMED_KEYS[renamed[0]]} = "build").',
             context={"path": str(path)},
         )
-    unknown = sorted(set(table) - set(CONFIG_KEYS))
+    unknown = sorted(set(table) - {*CONFIG_KEYS, REQUIRE_KEY})
     if unknown:
         raise ValidationError(
             f"Unknown [{TABLE}] key(s) in {path}: {', '.join(unknown)}.",
-            hint=f"[{TABLE}] accepts: {', '.join(CONFIG_KEYS)}",
+            hint=f"[{TABLE}] accepts: {', '.join((*CONFIG_KEYS, REQUIRE_KEY))}",
             context={"path": str(path)},
         )
+    require = _require(table.pop(REQUIRE_KEY), path) if REQUIRE_KEY in table else None
     values: dict[str, str] = {}
     for key, value in table.items():
         if not isinstance(value, str) or not value:
@@ -145,7 +157,26 @@ def _table(path: Path) -> dict[str, str] | None:
                 context={"path": str(path)},
             )
         values[key] = value
-    return values
+    return values, require
+
+
+def _require(value: object, path: Path) -> tuple[str, ...]:
+    """``require`` as given: a list of evidence checks, each one known."""
+    known = ", ".join(EVIDENCE_REQUIREMENTS)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValidationError(
+            f"[{TABLE}] {REQUIRE_KEY} in {path} must be a list of strings.",
+            hint=f'Write it as {REQUIRE_KEY} = ["reproducible", "lock"], from: {known}.',
+            context={"path": str(path)},
+        )
+    unknown = [item for item in value if item not in EVIDENCE_REQUIREMENTS]
+    if unknown:
+        raise ValidationError(
+            f"[{TABLE}] {REQUIRE_KEY} in {path} names unknown check(s): {', '.join(unknown)}.",
+            hint=f"Require any of: {known}.",
+            context={"path": str(path)},
+        )
+    return tuple(dict.fromkeys(value))
 
 
 def render_table(*, recipe: str, backend: str) -> str:
@@ -166,6 +197,7 @@ __all__ = [
     "PATH_KEYS",
     "PYPROJECT",
     "RENAMED_KEYS",
+    "REQUIRE_KEY",
     "RESOLUTION_HELP",
     "TABLE",
     "ConfigKey",

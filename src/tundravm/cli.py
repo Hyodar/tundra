@@ -157,7 +157,14 @@ from .release import (
     release_name,
     verify_release,
 )
-from .status import Invocation, project_status, render_status
+from .status import (
+    ATTESTATION_NAME,
+    BLOCKED,
+    DEFAULT_REQUIRE,
+    Invocation,
+    project_status,
+    render_status,
+)
 from .templates import (
     BACKEND_SNIPPETS,
     DEFAULT_TEMPLATE,
@@ -964,7 +971,7 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         sub,
         "status",
         _cmd_status,
-        help="Report where the project stands: lock, sources, tree, artifacts, next step.",
+        help="Report where the project stands: lock, sources, tree, artifacts, release readiness.",
     )
     status.epilog = (
         RESOLUTION_HELP
@@ -972,10 +979,18 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         + (
             "Read-only and network-free; always exits 0. One line per item with a verdict "
             "(ok, stale, missing, n/a; lint says error when the recipe has errors), then "
-            "`next: COMMAND`, the single most useful command to run (or `everything is up "
-            "to date`). Artifacts are stale when the recipe or the tree they were baked "
-            "from changed since, or (with --verify) when their bytes no longer match the "
-            "sha256 the bake recorded."
+            "`next: COMMAND`, the single most useful command to run. Artifacts are stale when "
+            "the recipe or the tree they were baked from changed since, or (with --verify) "
+            "when their bytes no longer match the sha256 the bake recorded. Then one `release` "
+            "line per variant eligible for release: ok (ready) or blocked, with the reason "
+            "codes `evidence --require` would give for its bake (hashing its artifacts) "
+            f"against [{TABLE}] require (default: {','.join(DEFAULT_REQUIRE)}), reading "
+            f"BUILD/<variant>/policy.json and BUILD/<variant>/{ATTESTATION_NAME}; and one "
+            "pending line per unfinished release of the recipe in RELEASES, with its "
+            "`resume with:` command. Past the bake, next follows a second build, measure, "
+            "attest and release; `everything is up to date` only when every eligible "
+            "variant is ready and the newest finished release was cut from this recipe and "
+            f"lockfile, and `{BLOCKED}: ...` when no single command clears a reason."
         )
     )
     _add_build(status, "Build directory holding the sources and artifacts (default: build).")
@@ -993,6 +1008,13 @@ def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "Hash each artifact and compare it with the sha256 the bake recorded "
             "(integrity verified or mismatch); without it integrity is unchecked."
         ),
+    )
+    status.add_argument(
+        "--releases",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Directory of releases (default: releases beside pyproject.toml, else ./releases).",
     )
     status.add_argument(
         "--format",
@@ -3056,6 +3078,11 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
     names = _variants(loaded, args)
     img = loaded.lowered()
     origins: dict[str, str] = args.origins
+    project: ProjectConfig | None = args.project
+    configured = project if origins.get("recipe") != "flag" or _table_recipe(args) else None
+    backend = None if configured is None else configured.get("backend")
+    if backend is None and loaded.backend is not None:
+        backend = loaded.backend.name
     call = Invocation(
         recipe="" if origins.get("recipe") == "pyproject" else str(args.recipe),
         build=args.build if origins.get("build") == "flag" else None,
@@ -3064,7 +3091,10 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         variants=names if args.variant else (),
         tree_flag=origins.get("tree") != "pyproject",
         recipe_path=str(args.recipe),
+        releases=args.releases,
+        backend=backend,
     )
+    require = None if configured is None else configured.require
     status = project_status(
         loaded,
         names,
@@ -3074,10 +3104,24 @@ def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
         invocation=call,
         verify=args.verify,
         tree=args.tree,
+        require=DEFAULT_REQUIRE if require is None else require,
+        releases=args.releases
+        or (
+            Path("releases")
+            if project is None
+            else Path(os.path.relpath(project.root / "releases"))
+        ),
     )
     report = render_status(status, args.format)
     print(json_report("status", report) if args.format == "json" else report, file=out)
     return EXIT_OK
+
+
+def _table_recipe(args: argparse.Namespace) -> bool:
+    """Whether RECIPE, given on the command line, is the ``[tool.tundravm]`` table's."""
+    project: ProjectConfig | None = args.project
+    configured = None if project is None else project.path_of("recipe")
+    return configured is None or _same_path(args.recipe, configured)
 
 
 def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
