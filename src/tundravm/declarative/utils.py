@@ -616,6 +616,90 @@ def RuntimeFile(  # noqa: N802 - a declaration factory, spelled like the declara
     return BootStep(name or _step_name("file", target), script, after=tuple(after))
 
 
+RunStage = Literal["prepare", "build", "postinst", "finalize"]
+"""When a :func:`Run` command runs while the image is built."""
+RUN_STAGES: tuple[str, ...] = ("prepare", "build", "postinst", "finalize")
+_RUN_SHELL = ("bash", "-euo", "pipefail", "-c")
+
+
+def Run(  # noqa: N802 - a declaration factory, spelled like the declarations
+    command: str | Sequence[str],
+    *,
+    stage: RunStage = "postinst",
+    user: str | None = None,
+    name: str | None = None,
+    after: Sequence[str] = (),
+) -> Hook:
+    """A :class:`Hook` that runs *command* inside the image while it is built.
+
+    *command* is a shell command line (``"update-ca-certificates --fresh"``), a
+    script of several lines, or a sequence of words (``["install", "-d", path]``,
+    each quoted for you). A line whose words need no quoting runs as it is; any
+    other runs through ``bash -euo pipefail -c`` inside the image, so pipes,
+    ``&&`` and redirections never escape to the build host.
+
+    *stage* says when, in plain words:
+
+    - ``"postinst"`` (default): after the packages, files and source builds are in
+      the image. Configure the image here.
+    - ``"finalize"``: last, once everything else, debloat included, has run.
+    - ``"prepare"``: after the packages are installed, before source builds.
+    - ``"build"``: inside the build environment, with the build packages; what it
+      writes outside ``$DESTDIR`` does not reach the image.
+
+    *user* runs the command as that account (``runuser``), which must exist by
+    then (a ``User`` declaration's account exists from ``postinst`` on); ``None``
+    runs it as root. The hook is named *name*, else ``run-`` and the program's
+    name; *after* names hooks of the same stage it runs after.
+    """
+    _require_run_choice(stage)
+    words = _run_words(command)
+    first = words[-1].split()[0] if words[0] == _RUN_SHELL[0] and len(words) > 1 else words[0]
+    if user is not None:
+        if not isinstance(user, str) or not user or not _ACCOUNT.fullmatch(user):
+            raise ValidationError(
+                f"Run: user {user!r} is not an account name.", hint='Pass a name such as "app".'
+            )
+        words = ["runuser", "-u", user, "--", *words]
+    script = "mkosi-chroot " + shlex.join(words)
+    program = posixpath.basename(first) or "command"
+    return Hook(name or _step_name("run-", program), stage, script, after=tuple(after))
+
+
+_ACCOUNT = re.compile(r"[a-z_][a-z0-9_-]*\$?")
+
+
+def _require_run_choice(stage: object) -> None:
+    if stage not in RUN_STAGES:
+        raise ValidationError(
+            f"Run: stage {stage!r} is not one of {', '.join(RUN_STAGES)}.",
+            hint='Most commands belong in stage="postinst" (the default).',
+        )
+
+
+def _run_words(command: str | Sequence[str]) -> list[str]:
+    """*command* as the words ``mkosi-chroot`` runs: the words of a plain command line,
+    a sequence as given, anything else wrapped in :data:`_RUN_SHELL`."""
+    if isinstance(command, str):
+        text = command.strip()
+        if not text:
+            raise ValidationError("Run: the command is empty.", hint="Pass the command to run.")
+        try:
+            words = shlex.split(text)
+        except ValueError:
+            words = []
+        if words and shlex.join(words) == text:
+            return words
+        return [*_RUN_SHELL, text]
+    words = list(command)
+    if not words or not all(isinstance(word, str) and word for word in words):
+        raise ValidationError(
+            f"Run: command {command!r} must be a non-empty sequence of non-empty strings.",
+            hint='Pass a command line ("update-ca-certificates --fresh") or its words.',
+        )
+    return words
+
+
 def _runtime_path(owner: str, path: str) -> str:
     if not isinstance(path, str) or not path.startswith("/") or path == "/":
         raise ValidationError(
@@ -651,6 +735,9 @@ __all__ = [
     "Export",
     "GoBinary",
     "HttpEndpoint",
+    "RUN_STAGES",
+    "Run",
+    "RunStage",
     "RuntimeDirectory",
     "RuntimeFile",
     "Tdxs",

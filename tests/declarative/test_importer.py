@@ -276,7 +276,8 @@ def _conf_values(text: str) -> dict[str, list[str]]:
 def test_foreign_tree_imports_and_compiles_to_the_same_image(tmp_path: Path) -> None:
     tree = _foreign_tree(tmp_path / "tree")
     imported = import_tree(tree, name="myapp")
-    assert lint(imported.recipe) == ()
+    # the verbatim postinst enables a unit that Unit(enabled=True) could declare
+    assert [d.code for d in lint(imported.recipe)] == ["hook-covered", "unit-raw"]
     assert _ruff_formatted(imported.recipe_source)
     assert "myapp: mkosi.postinst: imported as a postinst hook (scripts/ in the tree)" in (
         imported.notes

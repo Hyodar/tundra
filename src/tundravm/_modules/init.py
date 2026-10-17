@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
-from textwrap import dedent
 
+from tundravm._units import v1
+from tundravm._units.render import render
 from tundravm.errors import ValidationError
 from tundravm.models import ALL_STEPS, FileEntry, InitScriptEntry, ProfileState
 
@@ -173,13 +174,11 @@ class Init:
 
 def render_service_unit(*, network_setup: bool = True) -> str:
     """The ``nethermind-v1`` ``runtime-init.service``, which runs ``/usr/bin/runtime-init``."""
-    return _aggregate(_network(network_setup), "/usr/bin/runtime-init")
+    return v1.runtime_init(network_setup=network_setup)
 
 
 def _network(network_setup: bool) -> str:
-    if network_setup:
-        return "After=network.target network-setup.service\nRequires=network-setup.service"
-    return "After=network-online.target\nWants=network-online.target"
+    return v1.network_ordering(network_setup)
 
 
 def _direct_deps(
@@ -198,30 +197,22 @@ def _direct_deps(
 
 def _step_unit_text(step: str, network: str, deps: Sequence[str]) -> str:
     """``runtime-init-<step>.service``: *network* plus *deps* in ``After=``/``Requires=``."""
-    lines = network.split("\n")
+    unit = [(key, value) for key, _, value in (line.partition("=") for line in network.split("\n"))]
     for directive in ("After", "Requires"):
-        index = next((i for i, line in enumerate(lines) if line.startswith(f"{directive}=")), None)
+        index = next((i for i, (key, _) in enumerate(unit) if key == directive), None)
         if deps and index is None:
-            lines.append(f"{directive}={' '.join(deps)}")
+            unit.append((directive, " ".join(deps)))
         elif deps and index is not None:
-            lines[index] = " ".join([lines[index], *deps])
-    head = ["[Unit]", f"Description=Runtime Init: {step}", *lines, "", "[Service]"]
-    tail = ["Type=oneshot", f"ExecStart={STEP_DIRECTORY}/{step}", "RemainAfterExit=yes", ""]
-    return "\n".join([*head, *tail])
+            unit[index] = (directive, " ".join([unit[index][1], *deps]))
+    service = [("Type", "oneshot"), ("ExecStart", f"{STEP_DIRECTORY}/{step}")]
+    return render(
+        [
+            ("Unit", [("Description", f"Runtime Init: {step}"), *unit]),
+            ("Service", [*service, ("RemainAfterExit", "yes")]),
+        ]
+    )
 
 
 def _aggregate(ordering: str, exec_start: str) -> str:
     """``runtime-init.service``: *ordering* is its ``After=``/``Requires=``/``Wants=`` lines."""
-    return dedent("""\
-        [Unit]
-        Description=Runtime Init
-        {ordering}
-
-        [Service]
-        Type=oneshot
-        ExecStart={exec_start}
-        RemainAfterExit=yes
-
-        [Install]
-        WantedBy=minimal.target
-    """).format(ordering=ordering, exec_start=exec_start)
+    return v1.oneshot("Runtime Init", ordering, exec_start)

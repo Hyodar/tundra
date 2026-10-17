@@ -491,6 +491,23 @@ def _setting_bool(setting: Setting, value: str) -> bool:
     )
 
 
+def _typed_options(recipe: Recipe) -> dict[str, Any]:
+    """The ``MkosiOptions`` fields set by ``Recipe.mkosi`` and ``Debian`` (each variant's
+    ``Setting`` of the same key overrides them)."""
+    config = recipe.mkosi
+    typed: dict[str, Any] = {
+        "seed": config.seed,
+        "output_directory": config.output_dir,
+        "package_cache_directory": config.package_cache,
+        "compress_output": config.compress,
+        "manifest_format": config.manifest,
+        "with_network": config.build_network,
+        "clean_package_metadata": getattr(recipe.platform, "clean_package_metadata", True),
+    }
+    defaults = MkosiOptions()
+    return {key: value for key, value in typed.items() if value != getattr(defaults, key)}
+
+
 def _mkosi_options(
     recipe: Recipe,
     settings: Sequence[Setting],
@@ -511,6 +528,7 @@ def _mkosi_options(
         "generate_cloud_postoutput": config.cloud_postoutput,
         "dialect": config.dialect,
     }
+    changes.update(_typed_options(recipe))
     if sandbox_files:
         changes["sandbox_files"] = sandbox_files
     environment: dict[str, str] = {}

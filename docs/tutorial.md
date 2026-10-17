@@ -65,7 +65,7 @@ class App(Composite):
         config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
         yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
         # A boot step: Service waits for every runtime-init step unless given needs=.
-        yield BootStep("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app")
+        yield RuntimeDirectory("/var/lib/app", owner="app", group="app", name="app-state")
         yield Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",
@@ -103,7 +103,7 @@ recipe = Recipe(
 
 - `platform` is what the image builds on: `Debian("trixie")` is the distribution plus its boot set (the kernel, systemd as init, udev and the UKI's EFI stub), declared in every variant with provenance `platform`. `tundravm inspect` lists them like any other package.
 - `items` holds what every variant shares: `ca-certificates` and the `App` fragment.
-- `App` is a component: `@component` makes the class a frozen dataclass whose fields (`version`, `port`) are its configuration, and each instance is a `Fragment` named after the class. `compose()` yields its contents: an account, a config file rendered by `ConfigFile.env`, a first-boot `BootStep` and a generated systemd `Service` (which waits for every boot step by default). Its `check` method runs during `lint`: `App(port=80)` reports `app-privileged-port`. Its `http` property exports where it listens, for [step 14](#14-write-a-fragment).
+- `App` is a component: `@component` makes the class a frozen dataclass whose fields (`version`, `port`) are its configuration, and each instance is a `Fragment` named after the class. `compose()` yields its contents: an account, a config file rendered by `ConfigFile.env`, a first-boot `BootStep` (`RuntimeDirectory` creates `/var/lib/app` for the account) and a generated systemd `Service` (which waits for every boot step by default). Its `check` method runs during `lint`: `App(port=80)` reports `app-privileged-port`. Its `http` property exports where it listens, for [step 14](#14-write-a-fragment).
 - The service runs `/usr/bin/app`, which the recipe does not ship yet. Add a `Build(...)` or a `Package(...)` for it before you bake a real image.
 - `dev` inherits `default` and adds `DevTools()`: a serial console, root login and debugging tools. Never ship it: `release=False` keeps it out of every release ([step 19](#19-cut-a-release)).
 

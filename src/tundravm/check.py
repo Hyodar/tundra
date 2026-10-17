@@ -14,6 +14,7 @@ import json
 import posixpath
 import re
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,7 @@ from .models import ProfileState, ServiceSpec, unit_name
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
+    from .declarative.model import Recipe
 
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
 
@@ -704,6 +706,102 @@ def _rule_secret_in_env(
             )
 
 
+# ── systemd unit text (every unit a variant ships) ──────────────────────
+#
+# ``tundravm._units.lint`` holds the rules; these wrappers feed them the variant's
+# units (shipped files and generated services) and the facts they check against.
+
+
+def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> Iterator[Diagnostic]:
+    from ._units.lint import Facts, ShippedUnit, unit_findings
+
+    units: list[ShippedUnit] = []
+    for path, content in _shipped_files(state):
+        if is_unit_path(path) and not path.endswith("/"):
+            text = content.decode("utf-8", "replace") if isinstance(content, bytes) else content
+            subject = path if posixpath.dirname(path).endswith(".d") else posixpath.basename(path)
+            units.append(ShippedUnit(subject, path, text))
+    shipped = {unit.name for unit in units}
+    for svc in state.services:
+        name = unit_name(svc.name)
+        if svc.command and name not in shipped:
+            path = f"/usr/lib/systemd/system/{name}"
+            units.append(ShippedUnit(svc.name, path, _systemd_unit_content(svc), generated=True))
+    commands = _command_text(state)
+    users = {u.name for u in state.users} | _BASE_USERS
+    groups = {g.name for g in state.groups} | {u.name for u in state.users if u.gid is None}
+    groups |= _BASE_GROUPS
+
+    def made(name: str, known: set[str], tools: str) -> bool:
+        # A Debian package creates its daemon's account (prometheus-node-exporter: prometheus).
+        packaged = any(package.startswith(name.lstrip("_")) for package in state.packages)
+        return (
+            name in known
+            or packaged
+            or bool(re.search(rf"\b({tools})\b[^\n;&|]*\b{re.escape(name)}\b", commands))
+        )
+
+    facts = Facts(
+        variant=profile_name,
+        enabled=frozenset(unit_name(s.name) for s in state.services if s.enabled),
+        has_user=lambda name: made(name, users, "useradd|adduser"),
+        has_group=lambda name: made(name, groups, "groupadd|addgroup"),
+        packages=bool(state.packages),
+        style=image.mkosi_for(profile_name).dialect != "nethermind-v1",
+    )
+    yield from unit_findings(units, facts)
+
+
+def unit_declaration_check(
+    recipe: Recipe, *, variants: Sequence[str] | None = None
+) -> list[Diagnostic]:
+    """``unit-raw`` and ``unit-as-file`` findings of *recipe*'s own declarations.
+
+    Both are style codes, so a ``nethermind-v1`` recipe (historical unit bytes) has none.
+    """
+    from .declarative.model import File, Unit
+
+    if recipe.mkosi.dialect == "nethermind-v1":
+        return []
+    selected = set(variants) if variants is not None else {v.name for v in recipe.variants}
+    groups = [("", (*recipe.platform.contribution(), *recipe.items))]
+    groups += [(v.name, (v.add,)) for v in recipe.variants if v.name in selected]
+    found: list[Diagnostic] = []
+    for variant, items in groups:
+        for item in _own_declarations(items):
+            if isinstance(item, Unit) and item.content is not None:
+                if unit_name(item.name).endswith(".service"):
+                    found.append(_located(_unit_raw(item.name, variant), item))
+            elif isinstance(item, File) and is_unit_path(_norm(item.path)):
+                found.append(_located(_unit_as_file(item.path, variant), item))
+    return found
+
+
+def _unit_raw(name: str, variant: str) -> Diagnostic:
+    return Diagnostic(
+        code="unit-raw",
+        severity="info",
+        message=f"unit {name!r} is hand-written unit text",
+        subject=name,
+        variant=variant,
+        hint=(
+            f"Declare Service({posixpath.splitext(name)[0]!r}, command, ...) instead: the "
+            "compiler renders the unit, its ordering after needs= and its enablement."
+        ),
+    )
+
+
+def _unit_as_file(path: str, variant: str) -> Diagnostic:
+    return Diagnostic(
+        code="unit-as-file",
+        severity="info",
+        message=f"the unit file {path!r} is shipped as a File",
+        subject=path,
+        variant=variant,
+        hint="Ship it as Unit(name, text) so enabled=, needs= and the unit lint apply to it.",
+    )
+
+
 def _rule_module_checks(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -725,6 +823,7 @@ RULES: list[Rule] = [
     _rule_recipe_arch_unsupported,
     _rule_secret_in_file,
     _rule_secret_in_env,
+    _rule_unit_text,
     _rule_module_checks,
 ]
 
@@ -879,11 +978,156 @@ def failing(diagnostics: Sequence[Diagnostic], *, strict: bool = False) -> bool:
 _GITHUB_COMMANDS: dict[str, str] = {"error": "error", "warning": "warning", "info": "notice"}
 
 
+# ── Raw mkosi settings and build commands (recipe declarations) ─────────
+#
+# ``declaration_check`` reads the recipe's own declarations rather than the lowered
+# state: a typed field and the ``Setting`` it replaces lower to the same options.
+# Declarations composed by tundravm's shipped fragments are skipped (the recipe
+# cannot change them), and the ``nethermind-v1`` dialect reports nothing: its raw
+# spellings reproduce a historical tree.
+
+TYPED_SETTINGS: dict[tuple[str, str], str] = {
+    ("Output", "Seed"): "Mkosi(seed=...)",
+    ("Output", "OutputDirectory"): "Mkosi(output_dir=...)",
+    ("Output", "CompressOutput"): "Mkosi(compress=...)",
+    ("Output", "ManifestFormat"): "Mkosi(manifest=...)",
+    ("Build", "PackageCacheDirectory"): "Mkosi(package_cache=...)",
+    ("Build", "WithNetwork"): "Mkosi(build_network=...)",
+    ("Content", "CleanPackageMetadata"): "Debian(clean_package_metadata=...)",
+}
+"""mkosi keys a typed field sets, and that field (lint ``setting-raw``)."""
+_VARIANT_SETTING = " The field is recipe-wide: keep the Setting when only this variant needs it."
+_KERNEL_PASSTHROUGH = frozenset({"KERNEL_IMAGE", "KERNEL_VERSION"})
+_CHROOT = "mkosi-chroot "
+_COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"groupadd\b.*?(?P<name>[a-z_][a-z0-9_-]*)$"), 'Group("{name}")'),
+    (re.compile(r"useradd\b.*?(?P<name>[a-z_][a-z0-9_-]*)$"), 'User("{name}")'),
+    (
+        re.compile(
+            r"usermod\s+(?:-a\s+-G|-aG|--append\s+--groups)\s+(?P<groups>\S+)\s+(?P<name>\S+)$"
+        ),
+        'User("{name}", groups={groups})',
+    ),
+    (re.compile(r"systemctl\s+enable\s+(?P<name>\S+)$"), 'Unit("{name}", enabled=True)'),
+    (re.compile(r"systemctl\s+disable\s+(?P<name>\S+)$"), 'Unit("{name}", enabled=False)'),
+    (re.compile(r"systemctl\s+mask\s+(?P<name>\S+)$"), 'Unit("{name}", masked=True)'),
+)
+"""Build-time commands a declaration already runs, and that declaration (``hook-covered``)."""
+
+
+def declaration_check(recipe: Recipe, *, variants: Sequence[str] | None = None) -> list[Diagnostic]:
+    """``setting-raw`` and ``hook-covered`` findings of *recipe*'s own declarations.
+
+    Declarations of ``Recipe.items`` and the platform report with variant ``""``,
+    a variant's ``add`` with its name (only when *variants* selects it).
+    """
+    from .declarative.model import Kernel
+
+    if recipe.mkosi.dialect == "nethermind-v1":
+        return []
+    selected = set(variants) if variants is not None else {v.name for v in recipe.variants}
+    groups = [("", (*recipe.platform.contribution(), *recipe.items))]
+    groups += [(v.name, (v.add,)) for v in recipe.variants if v.name in selected]
+    found: list[Diagnostic] = []
+    for variant, items in groups:
+        own = list(_own_declarations(items))
+        kernel = any(isinstance(item, Kernel) and item.config is not None for item in own)
+        for item in own:
+            found.extend(_declaration_findings(item, variant, kernel=kernel))
+    return found
+
+
+def _own_declarations(items: Iterable[object]) -> Iterator[object]:
+    """*items* flattened through fragments, but not into tundravm's shipped composites."""
+    from .declarative._component import Composite
+    from .declarative.model import Fragment
+
+    for item in items:
+        if isinstance(item, Fragment):
+            if not (isinstance(item, Composite) and type(item).__module__.startswith("tundravm.")):
+                yield from _own_declarations(item.items)
+        else:
+            yield item
+
+
+def _declaration_findings(item: object, variant: str, *, kernel: bool) -> Iterator[Diagnostic]:
+    from .declarative.model import BootStep, Hook, Setting
+
+    if isinstance(item, Setting):
+        typed = TYPED_SETTINGS.get((item.section, item.key))
+        if typed is None and (item.section, item.key) == ("Build", "Environment"):
+            if kernel and set(item.values) <= _KERNEL_PASSTHROUGH:
+                typed = "nothing: Kernel(config=...) passes KERNEL_IMAGE and KERNEL_VERSION"
+        if typed is not None:
+            yield _located(
+                Diagnostic(
+                    code="setting-raw",
+                    severity="info",
+                    message=f"Setting {item.section}.{item.key} has a typed spelling: {typed}",
+                    subject=f"{item.section}.{item.key}",
+                    variant=variant,
+                    hint=f"Declare {typed} instead; Setting is for keys tundravm has no field for."
+                    + (
+                        _VARIANT_SETTING
+                        if variant and typed.startswith(("Mkosi", "Debian"))
+                        else ""
+                    ),
+                ),
+                item,
+            )
+    elif isinstance(item, Hook | BootStep):
+        chroot = isinstance(item, Hook)
+        for declaration in _covered(item.script, chroot=chroot):
+            yield _located(
+                Diagnostic(
+                    code="hook-covered",
+                    severity="info",
+                    message=f"{type(item).__name__} {item.name!r} runs what {declaration} declares",
+                    subject=item.name,
+                    variant=variant,
+                    hint=f"Declare {declaration} instead of the command.",
+                ),
+                item,
+            )
+
+
+def _covered(script: str, *, chroot: bool) -> list[str]:
+    """The declarations that cover commands of *script* (a hook's lines run through
+    ``mkosi-chroot`` when *chroot*; a boot step's run in the image as they are)."""
+    found: list[str] = []
+    commands = [part.strip() for line in script.splitlines() for part in re.split(r"&&|;", line)]
+    for command in commands:
+        if chroot:
+            if not command.startswith(_CHROOT):
+                continue
+            command = command[len(_CHROOT) :].strip()
+        for pattern, template in _COVERED:
+            if match := pattern.match(command):
+                fields = match.groupdict()
+                if "groups" in fields:
+                    fields["groups"] = repr(tuple(fields["groups"].split(",")))
+                found.append(template.format(**fields).replace("'", '"'))
+    words = [command.split()[0] for command in commands if command.split()]
+    if not chroot and "mkdir" in words and "chown" in words:
+        found.append("RuntimeDirectory(path, owner=...)")
+    return list(dict.fromkeys(found))
+
+
+def _located(diagnostic: Diagnostic, item: object) -> Diagnostic:
+    from ._location import display_location
+
+    where = getattr(item, "declared_at", "")
+    return replace(diagnostic, location=display_location(where)) if where else diagnostic
+
+
 __all__ = [
     "RULES",
+    "TYPED_SETTINGS",
     "Diagnostic",
     "Rule",
     "check",
+    "declaration_check",
+    "unit_declaration_check",
     "failing",
     "render",
     "render_as",

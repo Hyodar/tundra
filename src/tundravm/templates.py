@@ -91,7 +91,6 @@ recipe = Recipe(
 _APP_IMPORTS = {
     "service": (
         "from tundravm import (\n"
-        "    BootStep,\n"
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
@@ -104,11 +103,16 @@ _APP_IMPORTS = {
         "    component,\n"
         ")\n"
         "$backend_import\n"
-        "from tundravm.declarative.utils import Composite, ConfigFile, DevTools, HttpEndpoint\n"
+        "from tundravm.declarative.utils import (\n"
+        "    Composite,\n"
+        "    ConfigFile,\n"
+        "    DevTools,\n"
+        "    HttpEndpoint,\n"
+        "    RuntimeDirectory,\n"
+        ")\n"
     ),
     "cloud": (
         "from tundravm import (\n"
-        "    BootStep,\n"
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
@@ -127,11 +131,11 @@ _APP_IMPORTS = {
         "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
+        "    RuntimeDirectory,\n"
         ")\n"
     ),
     "prover": (
         "from tundravm import (\n"
-        "    BootStep,\n"
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
@@ -155,6 +159,7 @@ _APP_IMPORTS = {
         "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
+        "    RuntimeDirectory,\n"
         "    Tdxs,\n"
         ")\n"
     ),
@@ -185,7 +190,7 @@ class App(Composite):
         config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
         yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
         # A boot step: Service waits for every runtime-init step unless given needs=.
-        yield BootStep("app-state", "mkdir -p /var/lib/app && chown app:app /var/lib/app")
+        yield RuntimeDirectory("/var/lib/app", owner="app", group="app", name="app-state")
         yield Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",

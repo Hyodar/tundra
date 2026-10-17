@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from tundravm._units import v1
 from tundravm.errors import ValidationError
 
 TDXS_BUILD_PACKAGES = (
@@ -100,41 +101,15 @@ class Tdxs:
         return lines
 
     def render_service_unit(self) -> str:
-        lines = ["[Unit]", "Description=TDXS", f"Requires={self.socket_name}"]
-        lines.append("")
-        lines.extend(
-            [
-                "[Service]",
-                f"User={self.user}",
-                f"Group={self.group}",
-                f"WorkingDirectory=/home/{self.user}",
-                "Type=notify",
-                "ExecStart=/usr/bin/tdxs \\",
-                f"    --config {self.config_path} \\",
-                f"    --log-level {self.log_level}",
-                "Restart=on-failure",
-                "",
-                "[Install]",
-                "WantedBy=default.target",
-                "",
-            ]
+        return v1.tdxs_service(
+            socket=self.socket_name,
+            user=self.user,
+            group=self.group,
+            config=self.config_path,
+            log_level=self.log_level,
         )
-        return "\n".join(lines)
 
     def render_socket_unit(self) -> str:
-        lines = ["[Unit]", "Description=TDXS Socket", ""]
-        lines.extend(
-            [
-                "[Socket]",
-                f"ListenStream={self.socket_path}",
-                f"SocketMode={self.socket_mode}",
-                f"SocketUser={self.socket_user}",
-                f"SocketGroup={self.group}",
-                "Accept=false",
-                "",
-                "[Install]",
-                "WantedBy=sockets.target",
-                "",
-            ]
+        return v1.tdxs_socket(
+            path=self.socket_path, mode=self.socket_mode, user=self.socket_user, group=self.group
         )
-        return "\n".join(lines)

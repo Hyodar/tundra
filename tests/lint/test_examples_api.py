@@ -18,6 +18,10 @@ INHERENT_WARNINGS = frozenset({"source-unpinned", "disk-auto-format"})
 """Warning codes an example may report: unpinned refs clear with ``tundravm lock``; a
 ``Disk`` that picks its device at boot stays a warning until the recipe names one."""
 
+KNOWN_WARNINGS = {"03_fragments.py": frozenset({"timer-service-enabled"})}
+"""Per-example warnings the typed API removes later: 03's timer-activated healthcheck is
+also enabled at boot until ``Task(schedule=...)`` exists (docs/design/systemd-units.md)."""
+
 COMMAND = re.compile(r"^\s+tundravm (\w+) (\S+)", re.MULTILINE)
 
 EXAMPLES = pytest.mark.parametrize(
@@ -91,7 +95,8 @@ def test_example_binds_a_recipe(path: Path) -> None:
 def test_example_lints_without_errors(path: Path) -> None:
     found = lint(_recipe(path))
     assert [d for d in found if d.severity == "error"] == []
-    assert {d.code for d in found if d.severity == "warning"} <= INHERENT_WARNINGS
+    allowed = INHERENT_WARNINGS | KNOWN_WARNINGS.get(path.name, frozenset())
+    assert {d.code for d in found if d.severity == "warning"} <= allowed
 
 
 @EXAMPLES

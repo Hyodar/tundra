@@ -114,7 +114,7 @@ def test_service_user_root_base_or_hook_created_is_fine() -> None:
         Hook("hookuser", "postinst", "mkosi-chroot useradd --system hookuser"),
         Service("c", "/usr/bin/c", user="hookuser"),
     )
-    assert report(subject) == []
+    assert codes(subject) == ["hook-covered"]  # User("hookuser") says it without the hook
 
 
 # b. file-path-duplicate

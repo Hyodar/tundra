@@ -37,6 +37,7 @@ from tundravm._modules.secret_delivery import (
 )
 from tundravm._source import BuildRecipe, GitSource, HttpSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as SourceInstall
+from tundravm._units.render import render
 from tundravm.errors import ValidationError
 from tundravm.models import (
     NETWORK_SETUP_UNIT,
@@ -803,7 +804,7 @@ def _unit(
     elif waits:
         listed = " ".join(waits)
         dropin = f"{UNIT_DIRECTORY}/{unit_name(unit.name)}.d/{NEEDS_DROPIN}"
-        _add_file(profile, dropin, f"[Unit]\nAfter={listed}\nRequires={listed}\n")
+        _add_file(profile, dropin, render([("Unit", [("After", listed), ("Requires", listed)])]))
     if not states:
         return
     if unit.enabled is True:

@@ -6,7 +6,7 @@ Teaches building a real base image as a ``Platform`` plus one ``Composite``.
 - Debian trixie from the pinned snapshot mirror, ``SOURCE_DATE_EPOCH=0``
 - a UKI with its own ``/init`` (``boot="uki"``) and the EFI stub pinned from that mirror
 - a TDX kernel built from source with the repository's config and a hardened command line
-- reproducible output (fixed seed) and Debian backports generated at sync time
+- Debian backports generated at sync time
 
 ``NethermindBase`` declares what every image on it shares:
 
@@ -16,7 +16,8 @@ Teaches building a real base image as a ``Platform`` plus one ``Composite``.
 - the ``tdxs`` attestation service
 
 Recipes built on them (``surge-tdx-prover/image.py``) set ``mkosi=NETHERMIND_V1`` to emit
-the historical tree byte for byte. ``recipe`` below is the base layer on its own.
+the historical tree byte for byte: its dialect, partition UUID seed and build directories.
+``recipe`` below is the base layer on its own.
 
     tundravm inspect examples/nethermind_base.py
     tundravm lint examples/nethermind_base.py   # source-unpinned until locked
@@ -40,7 +41,6 @@ from tundravm.declarative import (
     Package,
     Recipe,
     Resources,
-    Setting,
 )
 from tundravm.declarative.utils import Backports, Composite, Tdxs
 
@@ -58,8 +58,13 @@ KERNEL_CMDLINE = (
 )
 SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
 
-NETHERMIND_V1 = Mkosi(dialect="nethermind-v1")
-"""Compiler dialect that reproduces the historical nethermind-tdx tree."""
+NETHERMIND_V1 = Mkosi(
+    dialect="nethermind-v1",
+    seed=SEED,
+    output_dir="build",
+    package_cache="mkosi.cache",
+)
+"""Compiler dialect, seed and build layout that reproduce the historical nethermind-tdx tree."""
 
 # NethermindPlatform's boot="uki" set brings kmod, systemd and systemd-boot-efi.
 RUNTIME_PACKAGES = (
@@ -120,10 +125,6 @@ class NethermindPlatform(Debian):
             config=KERNEL_CONFIG,
             cmdline=KERNEL_CMDLINE,
         ),
-        Setting("Output", "Seed", (SEED,)),
-        Setting("Output", "OutputDirectory", ("build",)),
-        Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
-        Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
         Backports(),
     )
 

@@ -5,6 +5,7 @@ Teaches:
 - a plain ``Fragment`` is a value: define it once, nest it in any recipe or variant;
 - ``@component`` turns an annotated class into a fragment whose items ``compose()`` yields;
 - ``ConfigFile.yaml``/``ConfigFile.env`` render config files from data;
+- ``Run`` runs a command inside the image while it is built;
 - ``requires=`` names fragments the same variant must also hold (lint reports
   ``fragment-requires-missing`` otherwise); a component holding another's export
   (``HttpEndpoint``) requires that component without naming it;
@@ -26,7 +27,6 @@ from tundravm.declarative import (
     Diagnostic,
     File,
     Fragment,
-    Hook,
     Package,
     Recipe,
     Repository,
@@ -36,7 +36,7 @@ from tundravm.declarative import (
     Variant,
     component,
 )
-from tundravm.declarative.utils import Composite, ConfigFile, HttpEndpoint
+from tundravm.declarative.utils import Composite, ConfigFile, HttpEndpoint, Run
 
 SYSCTL = "kernel.kptr_restrict=2\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1\n"
 
@@ -53,7 +53,8 @@ hardening = Fragment(
             priority=10,
         ),
         File("/etc/sysctl.d/90-hardening.conf", SYSCTL),
-        Hook("ca-certificates", "postinst", "mkosi-chroot update-ca-certificates --fresh"),
+        # a command run inside the image as it is built (stage="postinst" by default)
+        Run("update-ca-certificates --fresh", name="ca-certificates"),
     ),
 )
 

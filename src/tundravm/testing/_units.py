@@ -5,30 +5,24 @@ from __future__ import annotations
 import shlex
 from collections.abc import Mapping
 
+from tundravm._units import UnitText
+
 Sections = Mapping[str, Mapping[str, tuple[str, ...]]]
 """``{section: {key: values}}``: every assignment of a key, in file order."""
 
 
 def parse_unit(text: str) -> Sections:
-    """A systemd unit's sections; an empty assignment (``After=``) resets the key's list."""
+    """A systemd unit's sections; an empty assignment (``After=``) resets the key's list.
+
+    A view over the package's one lossless unit parser, :class:`tundravm._units.UnitText`.
+    """
     sections: dict[str, dict[str, list[str]]] = {}
-    current: dict[str, list[str]] | None = None
-    pending = ""
-    for raw in text.splitlines():
-        line = pending + raw.strip()
-        pending = ""
-        if line.endswith("\\"):
-            pending = line[:-1].rstrip() + " "
-            continue
-        if not line or line.startswith(("#", ";")):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            current = sections.setdefault(line[1:-1], {})
-        elif current is not None and "=" in line:
-            key, _, value = line.partition("=")
-            values = current.setdefault(key.strip(), [])
-            if value.strip():
-                values.append(value.strip())
+    for section in UnitText.parse(text).sections:
+        current = sections.setdefault(section.name, {})
+        for directive in section.directives:
+            values = current.setdefault(directive.key, [])
+            if directive.value:
+                values.append(directive.value)
             else:
                 values.clear()
     return {name: {k: tuple(v) for k, v in keys.items()} for name, keys in sections.items()}

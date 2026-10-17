@@ -17,7 +17,6 @@ from tundravm.declarative import (
     Disk,
     File,
     Fragment,
-    Hook,
     Key,
     Package,
     Recipe,
@@ -26,7 +25,7 @@ from tundravm.declarative import (
     Unit,
     Variant,
 )
-from tundravm.declarative.utils import DevTools
+from tundravm.declarative.utils import DevTools, Run
 
 RUNTIME_PACKAGES = (
     "prometheus",
@@ -98,13 +97,13 @@ disk = Disk(
 prover_stack = Fragment(
     "prover-stack",
     items=(
-        # The historical tree spells this group "-r", unlike the tdx group Tdxs declares.
-        Hook("eth-group", "postinst", "mkosi-chroot groupadd -r eth"),
+        # The historical tree runs groupadd itself; a new recipe declares Group("eth").
+        Run("groupadd -r eth", name="eth-group"),
         Raiko(),
         TaikoClient(),
         Nethermind(),
-        # Nethermind reads the TDX devices too; the tree grants it with usermod.
-        Hook("nethermind-tdx-group", "postinst", "mkosi-chroot usermod -a -G tdx nethermind-surge"),
+        # Nethermind reads the TDX devices too; the historical tree grants it with usermod.
+        Run("usermod -a -G tdx nethermind-surge", name="nethermind-tdx-group"),
     ),
 )
 

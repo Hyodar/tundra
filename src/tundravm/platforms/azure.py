@@ -8,6 +8,8 @@ VHD postoutput script the compiler generates when
 
 from __future__ import annotations
 
+from tundravm._units import v1
+
 # ---------------------------------------------------------------------------
 # Azure provisioning completion script
 # ---------------------------------------------------------------------------
@@ -111,24 +113,8 @@ exit 1
 # Systemd service unit for azure-complete-provisioning
 # ---------------------------------------------------------------------------
 
-AZURE_PROVISIONING_SERVICE = """\
-[Unit]
-Description=Azure Provisioning Completion
-After=network.target network-setup.service
-Requires=network-setup.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/azure-complete-provisioning
-RemainAfterExit=yes
-
-[Install]
-WantedBy=minimal.target
-"""
+AZURE_PROVISIONING_SERVICE = v1.AZURE_PROVISIONING
 """The unit for a profile that ships ``network-setup.service`` (always under ``nethermind-v1``)."""
 
-AZURE_PROVISIONING_SERVICE_ONLINE = AZURE_PROVISIONING_SERVICE.replace(
-    "After=network.target network-setup.service\nRequires=network-setup.service",
-    "After=network-online.target\nWants=network-online.target",
-)
+AZURE_PROVISIONING_SERVICE_ONLINE = v1.AZURE_PROVISIONING_ONLINE
 """The unit for any other profile: it waits for ``network-online.target``, as runtime-init does."""

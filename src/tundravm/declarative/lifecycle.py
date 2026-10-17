@@ -619,7 +619,11 @@ def check_report(
             img = replace(img, lock_file=Path(lock))
         checked = _check.check(img, profiles=profiles)
     if recipe is not None:
-        checked = _located(recipe, checked)
+        checked = [
+            *_located(recipe, checked),
+            *_check.declaration_check(recipe, variants=names),
+            *_check.unit_declaration_check(recipe, variants=names),
+        ]
     checked = sorted(checked, key=lambda d: (d.variant, _SEVERITY[d.severity], d.code, d.subject))
     found.extend(d for d in checked if d not in found)
     return found

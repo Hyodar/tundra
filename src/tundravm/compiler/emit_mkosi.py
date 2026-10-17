@@ -22,6 +22,8 @@ from typing import Literal, Protocol, get_args
 from urllib.parse import urlparse
 
 from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource
+from tundravm._units import v1
+from tundravm._units.render import service_unit
 from tundravm.errors import ValidationError
 from tundravm.models import (
     Arch,
@@ -105,17 +107,7 @@ DEFAULT_TDX_INIT_SCRIPT = textwrap.dedent("""\
 """)
 
 # Minimal systemd target matching nethermind-tdx base/mkosi.skeleton
-MINIMAL_TARGET_UNIT = (
-    "[Unit]\n"
-    "Description=Minimal System\n"
-    "Requires=basic.target\n"
-    "Conflicts=rescue.service rescue.target\n"
-    "After=basic.target rescue.service rescue.target\n"
-    "AllowIsolate=yes\n"
-    "\n"
-    "[Install]\n"
-    "WantedBy=default.target"
-)
+MINIMAL_TARGET_UNIT = v1.MINIMAL_TARGET
 
 # GCP postoutput: creates ESP image, GPT disk, wraps in deterministic tar.gz
 GCP_POSTOUTPUT_SCRIPT = textwrap.dedent("""\
@@ -366,15 +358,6 @@ def _parse_mode(mode: str) -> int:
         ) from exc
 
 
-def _systemd_env_assignment(key: str, value: str) -> str:
-    """``KEY=value``, double-quoted per systemd rules when *value* needs it."""
-    assignment = f"{key}={value}"
-    if value and not any(ch.isspace() or ch in "\"'\\" for ch in value):
-        return assignment
-    escaped = assignment.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
 def _make_dir(path: Path) -> None:
     """Create *path* and its missing parents as ``DIR_MODE``, whatever the umask."""
     missing: list[Path] = []
@@ -439,76 +422,8 @@ def _write_repository(
 
 
 def _systemd_unit_content(svc: ServiceSpec) -> str:
-    """Generate a real systemd .service unit file from a ServiceSpec."""
-    lines: list[str] = ["[Unit]", f"Description={svc.description or svc.name}"]
-
-    if svc.after:
-        lines.append(f"After={' '.join(svc.after)}")
-    if svc.requires:
-        lines.append(f"Requires={' '.join(svc.requires)}")
-    if svc.wants:
-        lines.append(f"Wants={' '.join(svc.wants)}")
-    if svc.extra_unit and "Unit" in svc.extra_unit:
-        for key, value in sorted(svc.extra_unit["Unit"].items()):
-            lines.append(f"{key}={value}")
-
-    lines.append("")
-    lines.append("[Service]")
-    lines.append(f"Type={svc.type or 'simple'}")
-
-    for pre in svc.exec_start_pre:
-        lines.append(f"ExecStartPre={pre}")
-    if svc.command:
-        lines.append(f"ExecStart={' '.join(svc.command)}")
-    if svc.user:
-        lines.append(f"User={svc.user}")
-    if svc.group:
-        lines.append(f"Group={svc.group}")
-    if svc.working_dir:
-        lines.append(f"WorkingDirectory={svc.working_dir}")
-    if svc.env_file:
-        lines.append(f"EnvironmentFile={svc.env_file}")
-    for key, value in sorted(svc.env.items()):
-        lines.append(f"Environment={_systemd_env_assignment(key, value)}")
-    if svc.restart != "no":
-        lines.append(f"Restart={svc.restart}")
-        lines.append("RestartSec=5")
-    for resource, value in sorted(svc.limits.items()):
-        lines.append(f"Limit{resource}={value}")
-    if svc.kill_mode:
-        lines.append(f"KillMode={svc.kill_mode}")
-    if svc.timeout_stop:
-        lines.append(f"TimeoutStopSec={svc.timeout_stop}")
-
-    # Security hardening for strict profile
-    if svc.security_profile == "strict":
-        lines.extend(
-            [
-                "ProtectSystem=strict",
-                "ProtectHome=yes",
-                "PrivateTmp=yes",
-                "NoNewPrivileges=yes",
-                "ProtectKernelModules=yes",
-                "ProtectKernelTunables=yes",
-                "ProtectControlGroups=yes",
-                "RestrictSUIDSGID=yes",
-                "MemoryDenyWriteExecute=yes",
-            ]
-        )
-
-    if svc.extra_unit and "Service" in svc.extra_unit:
-        for key, value in sorted(svc.extra_unit["Service"].items()):
-            lines.append(f"{key}={value}")
-
-    lines.append("")
-    lines.append("[Install]")
-    lines.append(f"WantedBy={svc.wanted_by or 'minimal.target'}")
-    if svc.extra_unit and "Install" in svc.extra_unit:
-        for key, value in sorted(svc.extra_unit["Install"].items()):
-            lines.append(f"{key}={value}")
-    lines.append("")
-
-    return "\n".join(lines)
+    """Generate a real systemd .service unit file from a ServiceSpec (``_units.render``)."""
+    return service_unit(svc)
 
 
 def _groupadd_command(group: GroupSpec) -> str:

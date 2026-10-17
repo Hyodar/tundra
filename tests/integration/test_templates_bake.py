@@ -95,7 +95,7 @@ def test_service_template_bakes_with_its_app(tmp_path: Path) -> None:
 
         step = root / "usr/lib/runtime-init/app-state"
         assert _sudo_test("-x", step)
-        assert "mkdir -p /var/lib/app && chown app:app /var/lib/app" in _sudo_read(step)
+        assert "install -d -m 0755 -o app -g app /var/lib/app" in _sudo_read(step)
         step_unit = _sudo_read(root / "usr/lib/systemd/system/runtime-init-app-state.service")
         assert "ExecStart=/usr/lib/runtime-init/app-state" in step_unit
         aggregate = _sudo_read(root / "usr/lib/systemd/system/runtime-init.service")

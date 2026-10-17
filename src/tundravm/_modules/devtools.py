@@ -8,6 +8,8 @@ whose ``openssl passwd`` picks a random salt on every build.
 
 from __future__ import annotations
 
+from tundravm._units import v1
+
 # ---------------------------------------------------------------------------
 # Debug packages installed in the devtools profile
 # ---------------------------------------------------------------------------
@@ -32,20 +34,7 @@ DEVTOOLS_PACKAGES: tuple[str, ...] = (
 # serial-console.service — enables serial getty on ttyS0
 # ---------------------------------------------------------------------------
 
-SERIAL_CONSOLE_SERVICE = """\
-[Unit]
-Description=Serial Console
-After=systemd-logind.service
-
-[Service]
-Type=oneshot
-ExecStart=/bin/systemctl enable serial-getty@ttyS0.service
-ExecStartPost=/bin/systemctl start serial-getty@ttyS0.service
-RemainAfterExit=yes
-
-[Install]
-WantedBy=minimal.target
-"""
+SERIAL_CONSOLE_SERVICE = v1.SERIAL_CONSOLE
 
 # ---------------------------------------------------------------------------
 # PostInst script — root password, dropbear/openssh auth configuration

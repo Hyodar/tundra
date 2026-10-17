@@ -64,6 +64,16 @@ def test_list_templates_prints_each_name_with_a_description(
     assert list(tmp_path.iterdir()) == []
 
 
+TEMPLATE_INFOS: dict[str, set[str]] = {
+    "minimal": {"unit-raw"},
+    "service": set(),
+    "cloud": set(),
+    "prover": {"requires-without-after", "socket-service-started"},
+}
+"""Info findings each template reports until the typed units replace its unit text
+(docs/design/systemd-units.md): hello.service is raw text, tdxs ships a socket pair."""
+
+
 @pytest.mark.parametrize("template", list(TEMPLATES))
 def test_template_loads_lints_and_compiles_deterministically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template: str
@@ -75,8 +85,10 @@ def test_template_loads_lints_and_compiles_deterministically(
     assert tuple(v.name for v in recipe.variants) == TEMPLATE_VARIANTS[template]
 
     expected = set(EXPECTED_FINDINGS[template])
-    assert {d.code for d in tundravm.lint(recipe)} == expected
-    if not expected:
+    found = tundravm.lint(recipe)
+    assert {d.code for d in found if d.severity != "info"} == expected
+    assert {d.code for d in found if d.severity == "info"} == TEMPLATE_INFOS[template]
+    if not found:
         assert f"lint {NAME}.py: no findings" in out
 
     monkeypatch.chdir(project)

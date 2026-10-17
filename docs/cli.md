@@ -516,6 +516,22 @@ $ tundravm lint app.py --format github
 
 A variant change points at its own line (`remove-missing`, `edit-missing`, `edit-invalid`), a collision at the second declaration (its message names the first one's line), `step-cycle` at a step in the cycle. `resolve()` and every command that resolves append the line to the error: `variant 'dev': remove-missing: variant 'dev' removes Unit(gone.service), which it does not inherit at recipe.py:13`. Findings about the lockfile, the lock or the host carry no line.
 
+Every unit the image ships is parsed and checked against systemd 257's directives, whether it is a `Unit`'s text, a `File` under a systemd directory or a unit the compiler renders. A typo that systemd would silently ignore is an error before anything is built:
+
+```console
+$ tundravm lint app.py
+info unit-raw [common] app.service: unit 'app.service' is hand-written unit text
+    at: app.py:7
+    hint: Declare Service('app', command, ...) instead: the compiler renders the unit, its ordering after needs= and its enablement.
+error unit-value-invalid [default] app.service: [Service] Restart=onfailure is invalid: expected one of always, no, on-abnormal, on-abort, on-failure, on-success, on-watchdog
+    at: app.py:7
+    hint: systemd ignores an invalid assignment and keeps the default.
+1 error, 0 warnings, 1 info
+[exit 1]
+```
+
+The [unit text codes](api.md#lint-rules) cover sections, directives and values, relative `Exec*=` programs, accounts nothing creates, socket and timer pairing, enabling a unit without `[Install]`, contradictory relations and hand-made state directories; the style ones are off under the `nethermind-v1` dialect.
+
 `bake` lints first, so an error such as `kernel-missing` stops it with `E_LINT` before the backend runs mkosi. See [Concepts: Bootable images](concepts.md#bootable-images) for the three fixes; the [API reference](api.md#lint-rules) lists every code.
 
 ## Lockfile drift

@@ -15,17 +15,16 @@ from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.testing import recipe_file, run_cli
 
 RECIPE_SOURCE = """
-from tundravm import File, Fragment, Package, Recipe, Unit, User, Variant
+from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
-APP = "[Unit]\\nDescription=app\\n\\n[Service]\\nUser=app\\nExecStart=/usr/bin/true\\n"
 backend = InProcessBackend()
 recipe = Recipe(
     "demo",
     items=(
         Package("curl"), Package("linux-image-amd64"), File("/etc/motd", "hi\\n"),
         User("app", shell="/bin/false"),
-        Unit("app.service", APP, enabled=True),
+        Service("app", "/usr/bin/true", user="app"),
     ),
     variants=(
         Variant("default", outputs=("qemu",)),

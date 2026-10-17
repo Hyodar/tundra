@@ -61,6 +61,7 @@ _ENTRY_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 _BUILD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _CACHE_NAMESPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@/-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
@@ -272,6 +273,9 @@ class Mkosi:
     ``version_script`` emits ``mkosi.version``; ``cloud_postoutput`` emits the
     Azure/GCP disk conversion postoutput scripts; ``strip_os_release`` strips
     ``IMAGE_VERSION`` from ``os-release`` (``None``: when ``Platform.epoch`` is set).
+
+    The build mechanics below have defaults a recipe rarely changes; each is one
+    mkosi key, which ``Setting`` must not repeat (lint ``setting-raw``).
     """
 
     layout: Literal["directories", "native"] = "directories"
@@ -280,12 +284,36 @@ class Mkosi:
     version_script: bool = False
     cloud_postoutput: bool = True
     strip_os_release: bool | None = None
+    seed: str | None = None
+    """The seed of the image's partition UUIDs (mkosi ``Seed=``, a UUID). ``None``: the
+    compiler's fixed seed; set it only to reproduce a tree built with another one."""
+    output_dir: str | None = None
+    """Where mkosi writes the image, relative to the tree (``OutputDirectory=``). ``None``:
+    mkosi's default, which ``tundravm bake`` collects from."""
+    package_cache: str | None = None
+    """mkosi's package cache directory, relative to the tree (``PackageCacheDirectory=``).
+    ``None``: mkosi's default."""
+    compress: Literal["zstd", "xz", "gz"] | None = None
+    """Compress the image file (``CompressOutput=``). ``None``: uncompressed."""
+    manifest: Literal["json", "changelog"] = "json"
+    """The package manifest written next to the image (``ManifestFormat=``)."""
+    build_network: bool = True
+    """Whether build scripts and source builds reach the network (``WithNetwork=``)."""
 
     def __post_init__(self) -> None:
         _require_choice(self, self.layout, ("directories", "native"), "layout")
         _require_choice(self, self.dialect, ("current", "nethermind-v1"), "dialect")
         if self.init_script is not None:
             _require_name(self, self.init_script, "init_script")
+        for what in ("seed", "output_dir", "package_cache"):
+            if (value := getattr(self, what)) is not None:
+                _require_name(self, value, what)
+        if self.seed is not None and not _UUID.fullmatch(self.seed):
+            raise _fail(self, f"seed {self.seed!r} must be a UUID.")
+        if self.compress is not None:
+            _require_choice(self, self.compress, ("zstd", "xz", "gz"), "compress")
+        _require_choice(self, self.manifest, ("json", "changelog"), "manifest")
+        _require_bool(self, self.build_network, "build_network")
 
 
 Boot = Literal["systemd", "uki"]
@@ -386,9 +414,13 @@ class Debian(Platform):
     boot: Boot | None = "systemd"
     kernel_package: str | None = "linux-image-amd64"
     efi_stub: str | None = None
+    clean_package_metadata: bool = True
+    """Remove apt's and dpkg's package metadata from the finished image
+    (mkosi ``CleanPackageMetadata=``); ``False`` keeps ``apt``/``dpkg`` usable in it."""
 
     def __post_init__(self) -> None:
         Platform.__post_init__(self)
+        _require_bool(self, self.clean_package_metadata, "clean_package_metadata")
         if self.boot is not None:
             _require_choice(self, self.boot, tuple(BOOT_PACKAGES), "boot")
         if self.kernel_package is not None:

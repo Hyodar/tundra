@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.disk_encryption import DiskEncryption, DiskSpec
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
+from tundravm._units.render import render
 from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
 from tundravm.models import SecretSpec, ships_unit
@@ -127,8 +128,13 @@ class SecretDelivery(Module):
         """
         name = "tundravm-secrets" if self.env_suffix is None else f"tundravm-{self.env_suffix}"
         return {
-            f"{_UNIT_DIRECTORY}/{service}.d/{name}.conf": (
-                f"[Service]\nEnvironmentFile={'' if required else '-'}{self.env_file(service)}\n"
+            f"{_UNIT_DIRECTORY}/{service}.d/{name}.conf": render(
+                [
+                    (
+                        "Service",
+                        [("EnvironmentFile", f"{'' if required else '-'}{self.env_file(service)}")],
+                    )
+                ]
             )
             for service, required in self.env_services().items()
         }
