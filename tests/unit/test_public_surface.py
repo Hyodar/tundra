@@ -23,6 +23,7 @@ EXPECTED_TOP_LEVEL = [
     "Calendar",
     "Cargo",
     "ChangeReport",
+    "Condition",
     "Debian",
     "Debloat",
     "Declaration",

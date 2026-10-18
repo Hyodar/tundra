@@ -2626,15 +2626,32 @@ def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
         policy = measurements.to_policy(allow_placeholder=args.allow_placeholder)
         write_policy(policy, args.export_policy)
         print(f"wrote policy {args.export_policy}", file=sys.stderr)
+    covers = covered_outputs(read_artifacts(_build_dir(args)), artifact, measurements)
     if args.format == "json":
-        payload = {**measurements.to_dict(), "variant": artifact.variant}
+        payload = {**measurements.to_dict(), "variant": artifact.variant, "covers": covers}
         print(json_report("measure", payload), file=out)
         return EXIT_OK
     if args.format == "markdown":
         print(render_measurements_markdown(measurements, artifact=artifact), file=out)
         return EXIT_OK
-    print(render_measurements(measurements, artifact=artifact), file=out)
+    print(render_measurements(measurements, artifact=artifact, covers=covers), file=out)
     return EXIT_OK
+
+
+def covered_outputs(
+    artifacts: Sequence[Artifact], artifact: Artifact, measurements: Measurements
+) -> list[str]:
+    """The outputs of *artifact*'s variant that boot the UKI *measurements* measured: the UKI
+    itself (``qemu``) and every disk whose bake recorded it as the boot payload. A variant
+    with ``outputs=("qemu", "azure", "gcp")`` builds one UKI, so one measurement covers all."""
+    uki = measurements.boot_payload_digest
+    if not uki:
+        return [artifact.target]
+    return sorted(
+        a.target
+        for a in artifacts
+        if a.variant == artifact.variant and uki in (a.sha256, a.boot_payload_sha256)
+    )
 
 
 PLACEHOLDER_BANNER = (
@@ -2643,12 +2660,17 @@ PLACEHOLDER_BANNER = (
 )
 
 
-def render_measurements(measurements: Measurements, *, artifact: Artifact) -> str:
-    """Human-readable ``Measurements``: header, ``source:`` provenance line, aligned values."""
+def render_measurements(
+    measurements: Measurements, *, artifact: Artifact, covers: Sequence[str] = ()
+) -> str:
+    """Human-readable ``Measurements``: header, ``source:`` provenance line, the outputs that
+    boot the measured UKI (when more than one), aligned values."""
     lines = [
         f"measurements {artifact.variant} ({measurements.scheme})",
         f"source: {measurements.tool} ({artifact.path})",
     ]
+    if len(covers) > 1:
+        lines.append(f"one UKI, {len(covers)} outputs: {', '.join(covers)}")
     rows = _measurement_rows(measurements)
     width = max((len(key) for key, _ in rows), default=0)
     lines.extend(f"  {key:<{width}}  {value}" for key, value in rows)

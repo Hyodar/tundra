@@ -2,11 +2,19 @@
 
 ``tundravm.declarative.state`` installs ``udev``, ships the metadata DNS
 files, the disk naming rules and their NVMe helper, and sets the ``gcp``
-target, whose tar.gz postoutput script the compiler generates when
-``MkosiOptions.generate_cloud_postoutput`` is true (the default).
+target. The current dialect applies the metadata DNS at boot through
+:func:`metadata_dns_service` (on Compute Engine only); the disk rules match GCE
+disk models only, so the glue is inert on other clouds. The ``gcp`` target's
+tar.gz postoutput script is generated when ``MkosiOptions.generate_cloud_postoutput``
+is true (the default).
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tundravm.declarative.model import Service
 
 # ---------------------------------------------------------------------------
 # /etc/hosts — GCP metadata server DNS entries
@@ -74,3 +82,38 @@ fi
 # Trim trailing whitespace
 echo "${SERIAL}" | sed 's/[[:space:]]*$//'
 """
+
+# ---------------------------------------------------------------------------
+# Metadata DNS, applied at boot on GCP only (current dialect)
+# ---------------------------------------------------------------------------
+
+GCP_RESOLV_CONF_PATH = "/usr/lib/tundravm/gcp/resolv.conf"
+"""Where the current dialect ships :data:`GCP_RESOLV_CONF`; ``gcp-metadata-dns.service``
+copies it over ``/etc/resolv.conf`` on Compute Engine only."""
+
+
+def metadata_dns_service() -> Service:
+    """``gcp-metadata-dns.service``: a root oneshot gated by ``ConditionVirtualization=google``
+    that points ``/etc/resolv.conf`` at the metadata server before the network comes up.
+
+    A static ``/etc/resolv.conf`` naming 169.254.169.254 would break DNS on QEMU and Azure;
+    gated at runtime, one UKI serves every output (``outputs=("qemu", "azure", "gcp")``).
+    """
+    from tundravm.declarative.model import Service
+    from tundravm.declarative.systemd import Condition, Hardening, Root
+
+    return Service(
+        "gcp-metadata-dns",
+        ("/usr/bin/cp", GCP_RESOLV_CONF_PATH, "/etc/resolv.conf"),
+        description="GCP metadata server DNS",
+        user=Root(),
+        type="oneshot",
+        remain_after_exit=True,
+        restart="no",
+        restart_sec=None,
+        before=("network-pre.target", "network-setup.service"),
+        needs=(),
+        hardening=Hardening.relaxed(),
+        write_paths=("/etc/resolv.conf",),
+        conditions=(Condition.virtualization("google"),),
+    )

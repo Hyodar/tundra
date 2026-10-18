@@ -129,9 +129,10 @@ def provisioning_task(network_setup: bool) -> Task:
     """The provisioning unit as a typed ``Task`` (current dialect): a root boot oneshot
     (no ``User=``: it reads DMI and posts to the wireserver) under
     ``Hardening.relaxed()``, after ``network-setup.service`` when the profile ships it,
-    else ``network-online.target``; it does not wait for runtime-init."""
+    else ``network-online.target``; it does not wait for runtime-init. It is gated by
+    ``ConditionVirtualization=microsoft``, so the same UKI boots cleanly on QEMU and GCP."""
     from tundravm.declarative.model import Task
-    from tundravm.declarative.systemd import Hardening, Root
+    from tundravm.declarative.systemd import Condition, Hardening, Root
 
     return Task(
         "azure-complete-provisioning",
@@ -143,4 +144,5 @@ def provisioning_task(network_setup: bool) -> Task:
         wants=() if network_setup else ("network-online.target",),
         needs=(),
         hardening=Hardening.relaxed(),
+        conditions=(Condition.virtualization("microsoft"),),
     )

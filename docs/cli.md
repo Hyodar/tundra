@@ -79,8 +79,8 @@ tundravm inspect: error: unrecognized arguments: --fromat json (did you mean --f
 | `diff` | Unified diff from the tree at `--tree` (default: the table's `tree`, else `build/mkosi`; `--tree BUILD/.reproduce/mkosi` is the second build of `bake --verify-reproducible`) to what the recipe compiles to. `--stat` lists changed files. | the trees differ |
 | `lock` | Writes the lockfile to `--lockfile` (default `build/tundravm.lock`) for the selected variants: version 5, with the `distribution`, `compiler`, `variants.<name>.kernel` and `variants.<name>.debloat` sections and the build `toolchain` (mkosi version and source, systemd, nixpkgs rev + narHash for the nix and lima backends, tundravm version+commit, the built-in measurement replay and GCP firmware table versions; see [reproducibility](reproducibility.md#pinned-toolchain)), printed as `toolchain: ...`; `--update toolchain` records the running toolchain again and re-resolves nixpkgs. A build whose source differs between variants is pinned per variant as `<variant>/<name>` (drift line `sources.<variant>.<name>`); `--update <variant>/<name>` re-resolves one variant's pin, `--update <name>` every variant's. `--check` prints the drift instead (see [Lockfile drift](#lockfile-drift)), then one `warning: toolchain-drift: ...` line per toolchain field the running toolchain differs on (`error:` with `--strict` or `strict_toolchain = true`). An older lockfile fails with `E_LOCKFILE`: lock again. | `--check` and the lock is stale, or toolchain drift under `--strict` |
 | `fetch` | Checks the source builds, built kernels' sources and `EfiStub` package (`efi-stub`) of the selected variants out on this host, as the invoking user, into `BUILD/.sources/<name>-<pin12>-<id8>` (`--build`, default `build`; `id8` hashes the url, subdirectory and submodules) at the pins of `--lockfile` (default `build/tundravm.lock` when it exists; unpinned sources are resolved first). Complete checkouts are verified and kept: git `HEAD` is the pin, `git status` is empty (untracked and ignored files included) and requested submodules are initialised; an http checkout matches the sha256 manifest written at fetch time. A modified one fails with `E_SOURCE` (`source <name> checkout modified/incomplete: run tundravm fetch --force`); `--force` checks every source out again and refills the dependency caches. Outside `nethermind-v1`, `bake` runs it first and mounts `BUILD/.sources` into the build; `bake --no-fetch` builds from the checkouts already there and fails with `E_STATE` when one is missing. It also prefetches each `Go`, `Cargo` and `Dotnet` build's dependencies with the host's toolchain into `BUILD/.sources/deps/{go,cargo,nuget}` and lists the outcome in a `deps:` column: `go: prefetched`, `go: kept`, `go: prefetched (was incomplete: ...)`, `go: incomplete (...)`, `skipped (no host go)`, `skipped (offline)` or `failed (...)` (see [Fetch](#fetch)). | |
-| `bake` | Compiles and builds every selected variant into `--build` (default `build`), then writes `BUILD/bake-result.json`. `--verify-reproducible` builds them a second time into `BUILD/.reproduce` and fails with `E_REPRODUCIBILITY` (exit 1) unless every artifact's sha256 matches (see [Bake](#bake)). | |
-| `measure` | Expected measurements of one variant baked into `--build` (default `build`), as text, JSON or Markdown (`--format`). `--scheme` (`qemu` default, `gcp`, `azure`, `portable`) picks the host family the registers are predicted for. `--export-policy FILE` also writes the `tundravm.policy/2` verifier policy `attest` and `Tdxs.from_policy` read (see [Measure and deploy](#measure-and-deploy) and [policy](policy.md#measurement-policies)). | |
+| `bake` | Compiles and builds every selected variant into `--build` (default `build`), then writes `BUILD/bake-result.json`. A variant with several outputs builds one UKI: the `qemu` artifact is the UKI and the `azure`/`gcp` disks wrap it, so their `boot_payloads` entries all record its one sha256. `--verify-reproducible` builds them a second time into `BUILD/.reproduce` and fails with `E_REPRODUCIBILITY` (exit 1) unless every artifact's sha256 matches (see [Bake](#bake)). | |
+| `measure` | Expected measurements of one variant baked into `--build` (default `build`), as text, JSON or Markdown (`--format`). `--scheme` (`qemu` default, `gcp`, `azure`, `portable`) picks the host family the registers are predicted for. When the measured UKI is the boot payload of several outputs, the text says `one UKI, N outputs: ...` and the JSON lists them under `covers`: one policy per scheme covers every disk that boots it. `--export-policy FILE` also writes the `tundravm.policy/2` verifier policy `attest` and `Tdxs.from_policy` read (see [Measure and deploy](#measure-and-deploy) and [policy](policy.md#measurement-policies)). | |
 | `deploy` | Deploys the artifact of one variant baked into `--build` (default `build`) to `TARGET`: `qemu`, `azure` or `gcp`. | |
 | `attest` | Asks a running image's `tdxs` issuer (`--issuer`) for a quote bound to a nonce, has a `tdxs` validator (`--validator`) judge its signature and collateral, and checks its MRTD and RTMR0..RTMR3 against a verifier policy (`--policy`, from `measure --export-policy`): a register matches when the quote holds any of the policy's accepted values. It prints the signature status, the nonce check, one `match`/`mismatch`/`unchecked` line per register with the label of the value that matched, then the verdict. `trusted` needs the validator; without one the verdict is `measurements-match` or `measurements-mismatch` (see [Attest](#attest)). | the verdict is `untrusted`, `measurements-mismatch` or `simulated` (without `--allow-simulated`) |
 | `sbom` | The software bill of materials of one baked variant (`--build DIR`, default `build`; `--variant`): mkosi's package manifest beside the artifact, the lockfile's source pins and the recipe metadata, merged into SPDX 2.3 JSON (default), CycloneDX 1.5 JSON, text or Markdown (`--format`); `--output FILE` writes it to a file (see [SBOM](#sbom)). | |
@@ -166,7 +166,7 @@ pyproject: /home/me/node/pyproject.toml
 $ tundravm init --list-templates
 minimal  packages, one file and one verbatim unit; a single qemu variant
 service  an App fragment (generated service, config, first-boot step, lint rule) plus a dev variant (default)
-cloud    service plus azure and gcp variants, backports and an EFI stub pinned to a Debian snapshot
+cloud    service with one UKI for qemu, azure and gcp, backports and an EFI stub pinned to a Debian snapshot
 prover   cloud plus a TPM-sealed key, an encrypted disk, SSH key delivery and the tdxs attestation service
 ```
 
@@ -986,10 +986,10 @@ qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -no-reboot
 **Azure.** Needs `az` on `PATH` after `az login`, an existing resource group (`resource_group`, default `tdx-vms`) and a storage account (`storage_account`, required); the adapter creates the `tdx-images` container in it when missing. The blob upload passes no credentials, so `az` must be able to look up the account key (or read `AZURE_STORAGE_KEY`). A confidential VM boots only from an Azure Compute Gallery image whose definition supports it, so the adapter publishes the VHD as a gallery image version first. `vm_size` must be a TDX confidential size: the DCesv5/DCedsv5 series (default `Standard_DC2es_v5`) or the ECesv5/ECedsv5 series. Bake an `azure` variant, which converts its disk to a fixed VHD:
 
 ```console
-$ tundravm bake image.py --variant azure --backend local
-$ tundravm deploy azure --variant azure --param storage_account=mystorage
+$ tundravm bake image.py --backend local
+$ tundravm deploy azure --variant default --param storage_account=mystorage
 deployed azure to azure
-  deployment      azure-azure-336db4ce
+  deployment      azure-default-336db4ce
   endpoint        azure://tdx-vms/tdx-azure-6fdd87
   artifact_path   build/azure/output/node_0.1.0.vhd
   blob            tdx-images/node_0.1.0-e79c907b.vhd
@@ -1027,10 +1027,10 @@ az vm create --resource-group tdx-vms --name tdx-azure-<6 hex> --location eastus
 **GCP.** Needs `gcloud` on `PATH` after `gcloud auth login`; `project` and `bucket` (an existing GCS bucket) are required. The gcloud must be current: one whose GA `gcloud compute instances create` takes `--confidential-compute-type=TDX`, which any release since Intel TDX on C3 became generally available (late 2024) does (`gcloud components update` updates an older one). The upload runs `gcloud storage cp` directly; `gsutil` is not used. Intel TDX instances run on the C3 machine series (default `c3-standard-4`) in zones that offer it. Bake a `gcp` variant, which packs its disk as a `tar.gz`:
 
 ```console
-$ tundravm bake image.py --variant gcp --backend local
-$ tundravm deploy gcp --variant gcp --param project=my-project --param bucket=my-bucket
+$ tundravm bake image.py --backend local
+$ tundravm deploy gcp --variant default --param project=my-project --param bucket=my-bucket
 deployed gcp to gcp
-  deployment     gcp-gcp-ef5e8a92
+  deployment     gcp-default-ef5e8a92
   endpoint       gcp://my-project/us-central1-a/tdx-gcp-c95cfe
   artifact_path  build/gcp/output/node_0.1.0.tar.gz
   blob           gs://my-bucket/tdx-images/tdx-gcp-45c3b6c0.tar.gz

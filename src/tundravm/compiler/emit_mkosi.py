@@ -25,6 +25,13 @@ from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource
 from tundravm._units import v1
 from tundravm._units.render import service_unit
 from tundravm.errors import ValidationError
+from tundravm.kernel_modules import (
+    MODULE_SETS_VERSION,
+    NO_MODULES,
+    ModuleSelection,
+    debloat_paths_remove,
+    module_selection,
+)
 from tundravm.models import (
     Arch,
     CommandSpec,
@@ -432,6 +439,8 @@ class EmitConfig:
     output_directory: str | None = None
     with_network: bool = True
     clean_package_metadata: bool = True
+    kernel_modules: tuple[str, ...] | Literal["all"] = ()
+    """``Debian(kernel_modules=...)``: see :func:`tundravm.kernel_modules.module_selection`."""
     manifest_format: str = "json"
     sandbox_trees: tuple[str, ...] = ()
     sandbox_files: tuple[tuple[str, str], ...] = ()
@@ -878,6 +887,7 @@ class DeterministicMkosiEmitter:
             profile_dir = destination / profile_name
             _reset_dir(profile_dir)
             profile_config = config.for_profile(profile_name)
+            modules = _module_selection(profile, profile_config)
 
             # Generate mkosi.extra/ overlay tree (files, templates, service units)
             self._emit_extra_tree(profile_dir, profile)
@@ -896,6 +906,7 @@ class DeterministicMkosiEmitter:
                 profile=profile,
                 recipe=recipe,
                 config=profile_config,
+                modules=modules,
             )
 
             # Emit cloud postoutput scripts based on output_targets
@@ -913,6 +924,7 @@ class DeterministicMkosiEmitter:
                 repositories=profile.repositories,
                 phase_scripts=phase_scripts,
                 cloud_postoutput_scripts=cloud_scripts,
+                modules=modules,
             )
 
             conf_path = profile_dir / "mkosi.conf"
@@ -963,6 +975,11 @@ class DeterministicMkosiEmitter:
             )
         default = recipe.effective_profile(default_name)
         self._validate_profile_phases(profile_name=default_name, profile=default)
+        # The root tree boots every profile: it keeps the modules all of them select.
+        modules = _module_selection(default, config)
+        for profile_name in profile_names:
+            effective = recipe.effective_profile(profile_name)
+            modules = modules.union(_module_selection(effective, config))
 
         # Root: the full default profile
         self._emit_skeleton_tree(destination, default, config)
@@ -975,6 +992,7 @@ class DeterministicMkosiEmitter:
             profile=default,
             recipe=recipe,
             config=config,
+            modules=modules,
         )
         root_cloud: tuple[Path, ...] = ()
         if config.generate_cloud_postoutput:
@@ -990,6 +1008,7 @@ class DeterministicMkosiEmitter:
                 repositories=default.repositories,
                 phase_scripts=root_scripts,
                 cloud_postoutput_scripts=root_cloud,
+                modules=modules,
             ),
             FILE_MODE,
         )
@@ -1179,6 +1198,7 @@ class DeterministicMkosiEmitter:
         profile: ProfileState,
         recipe: RecipeState,
         config: EmitConfig | None = None,
+        modules: ModuleSelection = NO_MODULES,
     ) -> dict[Phase, Path]:
         """Emit phase scripts + synthetic postinst/finalize."""
         scripts_dir = profile_dir / "scripts"
@@ -1207,7 +1227,7 @@ class DeterministicMkosiEmitter:
 
             # For finalize: prepend debloat path removal
             if phase == "finalize":
-                synthetic_lines = self._synthetic_finalize_lines(profile)
+                synthetic_lines = self._synthetic_finalize_lines(profile, modules)
                 accounts = _sorts_accounts(config)
                 if synthetic_lines or commands or accounts:
                     script_name = f"{index:02d}-{phase}.sh"
@@ -1295,13 +1315,16 @@ class DeterministicMkosiEmitter:
 
         return commands
 
-    def _synthetic_finalize_lines(self, profile: ProfileState) -> list[str]:
-        """Generate debloat shell lines for the finalize script."""
+    def _synthetic_finalize_lines(
+        self, profile: ProfileState, modules: ModuleSelection = NO_MODULES
+    ) -> list[str]:
+        """Generate the kernel module check and debloat shell lines for the finalize script."""
         config = profile.debloat
+        lines = _kernel_module_check(modules.modules)
         if not config.enabled:
-            return []
-
-        lines: list[str] = []
+            return lines
+        if lines:
+            lines.append("")
 
         # Clean files in var directories (preserve directory structure)
         if config.clean_var_dirs:
@@ -1310,7 +1333,7 @@ class DeterministicMkosiEmitter:
                 lines.append(f'find "$BUILDROOT{var_dir}" -type f -delete')
 
         # Path removal (remains in finalize — runs on host with $BUILDROOT)
-        paths = config.effective_paths_remove
+        paths = debloat_paths_remove(config, modules)
         if paths:
             lines.append("")
             lines.append("# Debloat: remove unnecessary paths")
@@ -1420,6 +1443,7 @@ class DeterministicMkosiEmitter:
         repositories: list[RepositorySpec],
         phase_scripts: dict[Phase, Path],
         cloud_postoutput_scripts: tuple[Path, ...] = (),
+        modules: ModuleSelection = NO_MODULES,
     ) -> str:
         distribution, release = _parse_base(config.base)
         lines: list[str] = []
@@ -1505,6 +1529,10 @@ class DeterministicMkosiEmitter:
                 entry = f"{host_path}:{target}" if target else host_path
                 lines.append(f"BuildSources={entry}")
 
+        if modules.modules:
+            module_lines = "\n".join(f"    {m}" for m in modules.modules)
+            lines.append(f"KernelModules=\n{module_lines}")
+
         # Kernel configuration
         if not config.bootable:
             lines.append("Bootable=no")
@@ -1578,6 +1606,48 @@ def _require_profile(recipe: RecipeState, name: str) -> None:
             hint="Create the profile before calling compile().",
             context={"profile": name, "operation": "emit_mkosi"},
         )
+
+
+def _module_selection(profile: ProfileState, config: EmitConfig) -> ModuleSelection:
+    """*profile*'s kernel modules under *config* (a built kernel selects none)."""
+    return module_selection(profile, config.kernel_modules, built_kernel=config.kernel is not None)
+
+
+_KERNEL_MODULE_CHECK = textwrap.dedent(r"""
+    # Kernel modules: mkosi kept KernelModules= and their dependencies (tundravm module sets
+    # v@VERSION@); each must be in the image
+    kdirs=("$BUILDROOT"/usr/lib/modules/*/)
+    if [ ! -d "${kdirs[0]}" ]; then
+        echo "tundravm: no kernel modules under /usr/lib/modules" >&2
+        exit 1
+    fi
+    for kdir in "${kdirs[@]}"; do
+        present=$({
+            find "$kdir" -name '*.ko*' -printf '%f\n'
+            sed 's|.*/||' "${kdir}modules.builtin" 2>/dev/null || true
+        } | sed 's/\.ko.*//' | tr _ -)
+        for module in @MODULES@; do
+            if ! grep -qxF "${module//_/-}" <<<"$present"; then
+                echo "tundravm: kernel module $module is not in kernel $(basename "$kdir"):" \
+                    "drop it from Debian(kernel_modules=...) or pick a kernel that ships it" >&2
+                exit 1
+            fi
+        done
+    done
+""").strip("\n")
+"""The finalize check of :func:`_kernel_module_check`."""
+
+
+def _kernel_module_check(modules: tuple[str, ...]) -> list[str]:
+    """Finalize lines failing the build when one of *modules* is not in the image.
+
+    mkosi pruned ``/usr/lib/modules`` to ``KernelModules=`` before the finalize scripts run;
+    a module that is neither a ``.ko`` file nor built in is missing from this kernel.
+    """
+    if not modules:
+        return []
+    text = _KERNEL_MODULE_CHECK.replace("@VERSION@", str(MODULE_SETS_VERSION))
+    return text.replace("@MODULES@", " ".join(modules)).split("\n")
 
 
 def _native_overlay(recipe: RecipeState, name: str) -> ProfileState:

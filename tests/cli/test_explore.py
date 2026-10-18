@@ -141,11 +141,11 @@ def test_markup_in_names_and_contents_is_escaped() -> None:
 
 
 def test_json_round_trips(tmp_path: Path) -> None:
-    found = explore(load(_template(tmp_path, "prover")), variants=["default", "azure"])
+    found = explore(load(_template(tmp_path, "prover")), variants=["default", "dev"])
     data = json.loads(found.json())
     assert data == found.to_dict()
     assert data["schema"] == EXPLORE_SCHEMA
-    assert [v["name"] for v in data["variants"]] == ["default", "azure"]
+    assert [v["name"] for v in data["variants"]] == ["default", "dev"]
     again = Exploration.from_dict(data)
     assert again.html() == found.html()
     assert again.to_dict() == data

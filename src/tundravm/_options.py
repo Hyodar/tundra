@@ -21,6 +21,9 @@ class MkosiOptions:
     """``WithNetwork=`` for build scripts."""
     clean_package_metadata: bool = True
     """``CleanPackageMetadata=``."""
+    kernel_modules: tuple[str, ...] | Literal["all"] = ()
+    """``Debian(kernel_modules=...)``: names added to each variant's curated module set
+    (``KernelModules=``), or ``"all"``."""
     manifest_format: str = "json"
     """``ManifestFormat=``."""
     compress_output: str | None = None

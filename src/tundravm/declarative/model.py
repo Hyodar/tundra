@@ -31,11 +31,13 @@ from tundravm.policy import Policy
 
 from .systemd import (
     SERVICE_OWNED,
+    Condition,
     Dynamic,
     Extra,
     Hardening,
     Root,
     UnitTarget,
+    condition_entries,
     mount_unit,
     require_extra,
     require_targets,
@@ -412,6 +414,34 @@ class Platform(Located):
         return (*packages, *self.items)
 
 
+def _check_kernel_modules(platform: Debian) -> None:
+    """``Debian(kernel_modules=...)``: ``"all"`` or module names, for a distribution kernel."""
+    from tundravm.kernel_modules import MODULE_NAME
+
+    value = platform.kernel_modules
+    if value == "all":
+        return
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise _fail(platform, f"kernel_modules must be 'all' or a tuple of names, got {value!r}.")
+    object.__setattr__(platform, "kernel_modules", tuple(value))
+    for name in value:
+        if not isinstance(name, str) or not MODULE_NAME.fullmatch(name):
+            raise _fail(
+                platform,
+                f"kernel_modules entry {name!r} is not a module name.",
+                hint="Name a module as modprobe takes it, e.g. 'vmw_vsock_virtio_transport' "
+                "(no globs, no .ko suffix).",
+            )
+    if value and platform.kernel_package is None:
+        raise _fail(
+            platform,
+            "kernel_modules selects modules of kernel_package, which this platform does not "
+            "install.",
+            hint="A built Kernel(...) has no loadable modules: build the drivers in "
+            "(its config_file) instead.",
+        )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Debian(Platform):
     """A Debian *release*: ``Debian("trixie", snapshot="20251113T083151Z")``.
@@ -430,10 +460,15 @@ class Debian(Platform):
     clean_package_metadata: bool = True
     """Remove apt's and dpkg's package metadata from the finished image
     (mkosi ``CleanPackageMetadata=``); ``False`` keeps ``apt``/``dpkg`` usable in it."""
+    kernel_modules: tuple[str, ...] | Literal["all"] = ()
+    """The modules of ``kernel_package`` the image keeps (mkosi ``KernelModules=``, which adds
+    their dependencies): the curated set of each variant's outputs
+    (:mod:`tundravm.kernel_modules`) plus these names; ``"all"`` keeps every module."""
 
     def __post_init__(self) -> None:
         Platform.__post_init__(self)
         _require_bool(self, self.clean_package_metadata, "clean_package_metadata")
+        _check_kernel_modules(self)
         if self.boot is not None:
             _require_choice(self, self.boot, tuple(BOOT_PACKAGES), "boot")
         if self.kernel_package is not None:
@@ -1051,6 +1086,8 @@ class Service(Declared):
     renders no ``[Install]`` and enables nothing. ``extra`` is the escape hatch for
     directives no field covers (linted ``unit-extra``). ``Unit`` ships verbatim text.
     ``allow_secret`` silences ``secret-in-env`` for the rendered unit, every field.
+    ``conditions`` renders ``Condition*=`` lines (``Condition.virtualization("microsoft")``):
+    systemd skips the unit, without failing, where one does not hold.
     """
 
     name: str
@@ -1095,9 +1132,11 @@ class Service(Declared):
     extra: Extra = field(default_factory=FrozenMap)
     socket: Listen | None = None
     remain_after_exit: bool = False
+    conditions: tuple[Condition, ...] = ()
 
     def __post_init__(self) -> None:
-        _freeze(self, "exec_start", "exec_start_pre")
+        _freeze(self, "exec_start", "exec_start_pre", "conditions")
+        condition_entries(self, self.conditions)
         _require_steps(self, "needs", sentinel=True)
         _require_bool(self, self.allow_secret, "allow_secret")
         _require_bool(self, self.enabled, "enabled")
@@ -2205,8 +2244,8 @@ class Task(Declared):
     ``User=`` line (root plumbing); *state* is its
     ``StateDirectory=`` (and working directory); *timeout* bounds each run
     (``TimeoutStartSec=``, ``None``: systemd's unbounded oneshot default); *hardening*
-    defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps, as on
-    :class:`Service`.
+    defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps and
+    *conditions* gate it (``Condition.virtualization("google")``), as on :class:`Service`.
     """
 
     name: str
@@ -2224,9 +2263,11 @@ class Task(Declared):
     needs: Sequence[Ready] = (RUNTIME_INIT,)
     hardening: Hardening = Hardening.strict()
     wanted_by: str | None = None
+    conditions: tuple[Condition, ...] = ()
 
     def __post_init__(self) -> None:
-        _freeze(self, "command")
+        _freeze(self, "command", "conditions")
+        condition_entries(self, self.conditions)
         _require_service_name(self, self.name)
         if "@" in self.name:
             raise _fail(self, f"task {self.name!r} cannot be a template unit.")

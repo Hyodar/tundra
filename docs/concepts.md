@@ -21,8 +21,7 @@ recipe = Recipe(
         Service("app", "/usr/bin/sleep infinity"),
     ),
     variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("azure", inherits="default", outputs=("azure",)),
+        Variant("default", outputs=("qemu", "azure", "gcp")),  # one UKI, three disks
         Variant("dev", inherits="default", add=DevTools(), release=False),
         Variant("prod", changes=(motd.ref.edit(content="production\n"),)),
     ),
@@ -128,7 +127,7 @@ mkosi/
     ...
 ```
 
-Debloat runs at finalize, over the whole image. Its default list removes `/usr/lib/modules`, which is right for a built `Kernel` (it installs only its `vmlinuz`) and wrong for the distribution's modular kernel (`Debian(kernel_package="linux-image-amd64")`, the default), whose virtio, `tdx_guest` and cloud NIC drivers live there: declare `Debloat(keep_modules=True)` to keep them, or `keep_modules=False` to remove them on purpose. A declared `Debloat` that removes them under a modular kernel is lint `debloat-removes-modules` (error); the implicit default is not checked. In a reproducible current-dialect build, finalize then ends with the deterministic accounts step (see [reproducibility](reproducibility.md#what-the-current-dialect-normalizes)).
+Debloat runs at finalize, over the whole image. Its default list removes `/usr/lib/modules`, which is right for a built `Kernel` (it installs only its `vmlinuz`) and wrong for the distribution's modular kernel (`Debian(kernel_package="linux-image-amd64")`, the default), whose virtio, `tdx_guest` and cloud NIC drivers live there. Under a modular kernel the implicit default (no `Debloat` declared) keeps `/usr/lib/modules`, which mkosi has already pruned to the variant's [kernel modules](#kernel-modules); a declared `Debloat` says `keep_modules=True` to keep them or `keep_modules=False` to remove them on purpose. Lint `debloat-removes-modules` (error) reports a debloat, declared or implicit, whose removal list still deletes them under a modular kernel. In a reproducible current-dialect build, finalize then ends with the deterministic accounts step (see [reproducibility](reproducibility.md#what-the-current-dialect-normalizes)).
 
 Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. Inside a phase, hooks keep their declaration order except where `after=` moves one behind another hook of the same phase. A hook that runs `after` a hook of a later phase is `hook-order`.
 
@@ -161,6 +160,19 @@ Kernel(KERNEL_VERSION, KERNEL_SOURCE, config=assets.file("kernel/kernel.config")
 ### Bootable images
 
 By default every variant compiles to `Format=uki`, a bootable unified kernel image, and mkosi can only build one from an image that holds a kernel. A bootable variant therefore declares a `Kernel(...)` built from source or installs a distribution kernel package (the platform's `kernel_package`, `"linux-image-amd64"` by default, any `linux-image-*`, or Ubuntu's `linux-generic`, `linux-kvm` and `linux-virtual`). Without either, lint reports `kernel-missing`, an error, so `bake` stops at its lint step before mkosi runs. A disk that is never booted declares `Setting("Content", "Bootable", ("no",))` on `Debian(boot=None)` instead: its variant compiles to `Format=disk` and `Bootable=no` and needs no kernel. `Debian(release)` (`boot="systemd"`) installs the Debian kernel together with `systemd`, `systemd-sysv`, `udev`, `kmod` and `systemd-boot-efi`, as the `init` templates do.
+
+### Kernel modules
+
+The UKI's initrd is the whole root file system, so every module under `/usr/lib/modules` is memory and a driver the host can reach through a device it offers. A variant on the distribution's modular kernel therefore keeps only the drivers its outputs boot on: lowering writes them as mkosi `KernelModules=` (one name per line), mkosi keeps them with their module and firmware dependencies and deletes the rest before finalize, and the finalize script then fails the build if one of them is neither a `.ko` file nor built into that kernel. The curated sets live in `tundravm.kernel_modules`, checked against Debian trixie's `linux-image-amd64`:
+
+| Set | When | Modules |
+| --- | --- | --- |
+| `TDX_GUEST_MODULES` | every variant | `tdx_guest`, `virtio_net`, `virtio_blk`, `virtio_scsi`, `sd_mod`, `nvme`, `efivarfs` |
+| `AZURE_MODULES` | `azure` output | `hv_vmbus`, `hv_netvsc`, `hv_storvsc`, `hv_utils`, `pci_hyperv`, `mana` |
+| `GCP_MODULES` | `gcp` output | `gve`, `nvme`, `virtio_scsi` |
+| `DISK_MODULES` | a `Disk` | `dm_crypt`, `xts`, `aesni_intel`, `algif_skcipher`, `ext4`, `crc32c_intel` |
+
+A variant with several outputs keeps the union, so `outputs=("qemu", "azure", "gcp")` boots on all three. `Debian(kernel_modules=("vsock", "tun"))` adds names to every variant's set; `Debian(kernel_modules="all")` writes no `KernelModules=` and keeps every module. A built `Kernel` installs no modules and selects nothing: build its drivers in through its config. Under `Mkosi(layout="native")` the root tree keeps the union of every profile's set. `tundravm import` maps a tree's `KernelModules=` back to the names it adds to the curated set (none: the default), and a modular tree without it to `"all"`.
 
 ## Runtime init
 
@@ -322,14 +334,18 @@ A variant produces one mkosi directory and, when baked, one artifact. Its `outpu
 
 ```python
 variants=(
-    Variant("default", outputs=("qemu",)),
-    Variant("azure", inherits="default", outputs=("azure",)),
-    Variant("gcp", inherits="default", outputs=("gcp",)),
+    Variant("default", outputs=("qemu", "azure", "gcp")),
     Variant("devtools", inherits="default", add=DevTools()),
 )
 ```
 
-`outputs=("azure", "gcp")` gives one variant several outputs (one disk image each); an empty `outputs` inherits them (`qemu` at the root). A child cannot drop a cloud output it inherits (`target-inconsistent`): give it `inherits=None` or have it inherit a qemu variant instead.
+An empty `outputs` inherits them (`qemu` at the root). A child cannot drop a cloud output it inherits (`target-inconsistent`): give it `inherits=None` or have it inherit a qemu variant instead.
+
+### One image, every cloud
+
+A variant with several outputs builds **one** UKI. The `qemu` artifact is that UKI; the Azure VHD and the GCP tar.gz are packaging, written by postoutput scripts that put the same UKI on an ESP. So a variant with `outputs=("qemu", "azure", "gcp")` has one boot payload, one sha256 the bake records for every disk (`boot_payloads` in `bake-result.json`), and one set of OS measurements (RTMR1/RTMR2) that `measure` derives once per scheme from that UKI. `measure` prints `one UKI, 3 outputs: azure, gcp, qemu`, and evidence and release count the VHD and the tar.gz as measured through that boot payload (an `azure` policy still names no TDX register: Azure's paravisor measures the vTPM, not the TD).
+
+That only works if the cloud glue is inert off its cloud. Lowering gates it at boot (the `nethermind-v1` dialect keeps its historical, ungated units): `azure-complete-provisioning.service` carries `ConditionVirtualization=microsoft`, and `gcp-metadata-dns.service`, which points `/etc/resolv.conf` at the metadata server, carries `ConditionVirtualization=google` (the GCE disk naming rules match GCE disk models only). Your own one-cloud units take `conditions=(Condition.virtualization("microsoft"),)`; the lint `cloud-glue-unconditional` warns about a known one-cloud unit (Azure provisioning, `walinuxagent`, the Google guest agents) that lacks it in a variant whose UKI also boots elsewhere. Separate per-cloud variants still work (surge keeps them for its historical tree), but each is its own UKI and its own measurement set.
 
 How a variant lowers depends on what it does:
 

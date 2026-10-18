@@ -110,6 +110,22 @@ def test_service_template_bakes_with_its_app(service_build: Path) -> None:
     assert any(line.startswith("app:") and "/usr/sbin/nologin" in line for line in passwd)
 
 
+def test_service_template_keeps_its_curated_kernel_modules(service_build: Path) -> None:
+    """mkosi kept ``KernelModules=`` (the qemu set) and dropped the rest; debloat kept them."""
+    root = service_build / "default" / "output" / "default"
+    found = subprocess.run(
+        ["sudo", "find", str(root / "usr/lib/modules"), "-name", "*.ko*", "-printf", "%f\\n"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    names = {name.split(".ko")[0].replace("-", "_") for name in found}
+    assert {"tdx_guest", "virtio_net", "virtio_blk", "nvme"} <= names
+    # Dependencies come along; drivers the qemu set does not need do not.
+    assert "net_failover" in names
+    assert not {"btrfs", "hv_vmbus", "gve"} & names
+
+
 @pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
 def test_service_template_units_verify_and_are_sandboxed(service_build: Path) -> None:
     """``systemd-analyze verify`` accepts every generated unit in the baked image, and the
@@ -197,7 +213,9 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             in_image=False,
         ),
     )
-    recipe = replace(recipe, items=(*recipe.items, *repositories))
+    # A directory-format bake checks the image, not the Azure/GCP disks (they need qemu-img).
+    variants = tuple(replace(variant, outputs=("qemu",)) for variant in recipe.variants)
+    recipe = replace(recipe, items=(*recipe.items, *repositories), variants=variants)
     backend = _Capturing(LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"]))
     out = tmp_path / "build"
     try:

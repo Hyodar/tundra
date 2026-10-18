@@ -42,11 +42,18 @@ from tundravm.compiler.emit_mkosi import (
     PHASE_TO_MKOSI_KEY,
     DeterministicMkosiEmitter,
     _groupadd_command,
+    _kernel_module_check,
     _render_kernel_build_script,
     _useradd_command,
     cloud_postoutput_script,
 )
 from tundravm.errors import ValidationError
+from tundravm.kernel_modules import (
+    MODULE_NAME,
+    KernelModules,
+    curated_modules,
+    installs_kernel_package,
+)
 from tundravm.models import MODULES_PATH, DebloatConfig, ProfileState
 from tundravm.platforms import azure, gcp
 
@@ -132,12 +139,31 @@ def _azure_files() -> dict[str, tuple[str, ...]]:
     return {**_AZURE_FILES, unit: (*_AZURE_FILES[unit], *typed)}
 
 
-_GCP_FILES = {
+_GCP_FILES: dict[str, tuple[str, ...]] = {
     "etc/hosts": (gcp.GCP_HOSTS,),
     "etc/resolv.conf": (gcp.GCP_RESOLV_CONF,),
     "usr/lib/udev/rules.d/65-gce-disk-naming.rules": (gcp.GCE_DISK_NAMING_RULES,),
     "usr/lib/udev/google_nvme_id": (gcp.GOOGLE_NVME_ID,),
 }
+_GCP_DNS_UNIT = "gcp-metadata-dns.service"
+
+
+def _gcp_files(historical: bool) -> dict[str, tuple[str, ...]]:
+    """:data:`_GCP_FILES` under ``nethermind-v1``; the current dialect ships the resolver file
+    under ``/usr/lib`` with the ``ConditionVirtualization=google`` unit that copies it."""
+    if historical:
+        return _GCP_FILES
+    from tundravm._units.parse import rendered
+
+    files = {path: texts for path, texts in _GCP_FILES.items() if path != "etc/resolv.conf"}
+    unit = rendered(gcp.metadata_dns_service())[_GCP_DNS_UNIT]
+    return {
+        **files,
+        gcp.GCP_RESOLV_CONF_PATH.lstrip("/"): (gcp.GCP_RESOLV_CONF,),
+        f"{UNIT_DIR}/{_GCP_DNS_UNIT}": (unit,),
+    }
+
+
 _TARGET_PACKAGES = {"azure": "dmidecode", "gcp": "udev"}
 _SCRIPT_PHASES: dict[str, Phase] = {key: phase for phase, key in PHASE_TO_MKOSI_KEY.items()}
 _NATIVE_SCRIPTS: dict[str, Phase] = {
@@ -457,6 +483,10 @@ class _VariantReader:
     builds: list[Recovered] = field(default_factory=list)
     swaps: list[tuple[str, str, str, str]] = field(default_factory=list)
     postinst_rel: str = ""
+    listed_modules: tuple[str, ...] | None = None
+    """``KernelModules=`` (sorted), ``None`` when the tree selects no modules."""
+    modular: bool = False
+    """Whether the variant boots a distribution kernel's modules (no built ``Kernel``)."""
 
     @property
     def historical(self) -> bool:
@@ -484,10 +514,16 @@ class _VariantReader:
         skeleton = self._tree_files("mkosi.skeleton")
         targets = self._targets(extra, scripts)
         kernel, build_hooks = self._kernel(conf, scripts, paths)
+        self.modular = kernel is None and installs_kernel_package(p.name for p in packages)
+        modules = self._kernel_modules(targets)
+        if modules is not None:
+            self.wide["kernel_modules"] = modules
         composites = self._backports(settings, scripts)
         postinst = self._postinst(scripts)
         if "azure" in targets and _AZURE_UNIT in postinst.enabled and not self.historical:
             postinst.enabled.remove(_AZURE_UNIT)  # the azure target's provisioning Task
+        if "gcp" in targets and _GCP_DNS_UNIT in postinst.enabled and not self.historical:
+            postinst.enabled.remove(_GCP_DNS_UNIT)  # the gcp target's metadata DNS Service
         debloat = self._debloat(postinst, scripts)
         if debloat is None or debloat.minimize_systemd:
             if skeleton.get("etc/systemd/system/minimal.target") == MINIMAL_TARGET_UNIT:
@@ -579,7 +615,9 @@ class _VariantReader:
         ]
         scripts: dict[Phase, list[str]] = {}
         settings: dict[tuple[str, str], list[str]] = {}
-        kernel_keys = {"Bootable", "KernelCommandLine"}
+        kernel_keys = {"Bootable", "KernelCommandLine", "KernelModules"}
+        listed = [n for line in conf if line.key == "KernelModules" for n in _words(line.value)]
+        self.listed_modules = tuple(sorted(set(listed))) if listed else None
         handled = {
             "Distribution",
             "Release",
@@ -733,7 +771,7 @@ class _VariantReader:
         targets: list[Target] = []
         cloud: tuple[tuple[Target, Mapping[str, tuple[str, ...]], str], ...] = (
             ("azure", _azure_files(), AZURE_POSTOUTPUT_SCRIPT),
-            ("gcp", _GCP_FILES, GCP_POSTOUTPUT_SCRIPT),
+            ("gcp", _gcp_files(self.historical), GCP_POSTOUTPUT_SCRIPT),
         )
         for target, files, base in cloud:
             if not all(extra.get(path) in texts for path, texts in files.items()):
@@ -827,6 +865,7 @@ class _VariantReader:
             synthetic, commands = lines[: max(cut - 1, 0)], lines[cut + 1 :]
         else:
             synthetic, commands = lines, []
+        synthetic = self._take_module_check(synthetic)
         candidate = _debloat_from(synthetic, postinst.minimize)
         if candidate is None:
             if synthetic and synthetic != [""]:
@@ -845,11 +884,54 @@ class _VariantReader:
         if stripped != (self.wide["epoch"] is not None):
             self.mkosi["strip_os_release"] = stripped
         self.finalize_commands = commands
-        removed = debloat_config(candidate).effective_paths_remove
-        if candidate != Debloat() and MODULES_PATH in removed:
-            # The tree deletes the modules: say so, as lint debloat-removes-modules asks.
-            candidate = replace(candidate, keep_modules=False)
-        return candidate
+        return self._module_debloat(candidate)
+
+    def _kernel_modules(self, targets: tuple[Target, ...]) -> KernelModules | None:
+        """``Debian(kernel_modules=...)`` for ``KernelModules=``: what it adds to the curated
+        set of *targets*; ``"all"`` without it; ``None`` without a modular kernel."""
+        if not self.modular:
+            return None
+        if self.listed_modules is None:
+            return "all"
+        names = {name for name in self.listed_modules if MODULE_NAME.fullmatch(name)}
+        if len(names) != len(self.listed_modules):
+            self.notes.append("KernelModules= patterns other than module names are not mapped")
+        curated = set(curated_modules(targets))
+        if missing := sorted(curated - names):
+            self.notes.append(
+                f"KernelModules= leaves out {', '.join(missing)}; the recipe keeps the curated set"
+            )
+        return tuple(sorted(names - curated))
+
+    def _take_module_check(self, lines: list[str]) -> list[str]:
+        """*lines* without the finalize check of ``KernelModules=`` the compiler writes."""
+        if not self.listed_modules:
+            return lines
+        check = _kernel_module_check(self.listed_modules)
+        if lines[: len(check)] != check:
+            return lines
+        rest = lines[len(check) :]
+        return rest[1:] if rest[:1] == [""] else rest
+
+    def _module_debloat(self, candidate: Debloat) -> Debloat:
+        """*candidate* stating what the tree does with ``/usr/lib/modules``.
+
+        Under a modular kernel the implicit default keeps the modules mkosi selected and a
+        declared ``Debloat`` says ``keep_modules``; under a built one a declared ``Debloat``
+        that deletes them says so, as lint ``debloat-removes-modules`` asks.
+        """
+        if not candidate.enabled:
+            return candidate
+        removed = MODULES_PATH in debloat_config(candidate).effective_paths_remove
+        if not self.modular:
+            if candidate != Debloat() and removed:
+                return replace(candidate, keep_modules=False)
+            return candidate
+        if removed:
+            return replace(candidate, keep_modules=False)
+        rest = tuple(path for path in candidate.keep_paths if path != MODULES_PATH)
+        base = replace(candidate, keep_paths=rest)
+        return base if base == Debloat() else replace(base, keep_modules=True)
 
     # ── units and runtime-init ──
 
@@ -1450,6 +1532,7 @@ def _assemble(
 ) -> tuple[Recipe, list[str]]:
     first = found[0]
     notes: list[str] = []
+    modules = _kernel_modules_of(found, notes)
     for other in found[1:]:
         for key, value in first.wide.items():
             if other.wide.get(key) != value:
@@ -1479,6 +1562,7 @@ def _assemble(
         epoch=wide["epoch"],
         snapshot=wide["snapshot"],
         boot=None,
+        kernel_modules=modules,
     )
     recipe = Recipe(
         name=name,
@@ -1488,6 +1572,23 @@ def _assemble(
         mkosi=Mkosi(dialect=dialect, **first.mkosi),
     )
     return recipe, notes
+
+
+def _kernel_modules_of(found: list[_Found], notes: list[str]) -> KernelModules:
+    """The variants' one ``kernel_modules`` (taken out of their ``wide``), noting a mismatch."""
+    specs: list[tuple[str, KernelModules]] = [
+        (f.name, f.wide.pop("kernel_modules")) for f in found if "kernel_modules" in f.wide
+    ]
+    if not specs:
+        return ()
+    name, spec = specs[0]
+    for other, value in specs[1:]:
+        if value != spec:
+            notes.append(
+                f"{other}: kernel_modules {value!r} differs from {name}'s {spec!r}; "
+                f"the recipe uses {name}'s"
+            )
+    return spec
 
 
 def _without_target_packages(

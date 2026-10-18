@@ -159,6 +159,7 @@ def service_unit(svc: ServiceSpec) -> str:
     """
     unit: list[tuple[str, str]] = [("Description", svc.description or svc.name)]
     unit += [(key, " ".join(names)) for key, names in _relations(svc) if names]
+    unit += svc.conditions
     service: list[tuple[str, str]] = [("Type", str(svc.type or "simple"))]
     if svc.remain_after_exit:
         service.append(("RemainAfterExit", "yes"))
@@ -262,6 +263,7 @@ def dropin_unit(
     when given. With *reset_exec_start* the ``ExecStart=`` reset line precedes the command."""
     unit = [("Description", svc.description)] if svc.description else []
     unit += [(key, " ".join(names)) for key, names in _relations(svc) if names]
+    unit += svc.conditions
     service: list[tuple[str, str]] = []
     service += [("ExecStartPre", command_line(shlex.split(pre))) for pre in svc.exec_start_pre]
     if svc.command:

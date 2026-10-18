@@ -25,6 +25,7 @@ from ._source import DebFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
 from .formats import annotation_path, md_cell, md_table, workflow_command
+from .kernel_modules import debloat_paths_remove, installs_kernel_package, module_selection
 from .models import MODULES_PATH, ProfileState, ServiceSpec, unit_name
 
 if TYPE_CHECKING:
@@ -145,9 +146,6 @@ _ESSENTIAL_BINARIES = frozenset(
 )
 
 _SHIPPED_PREFIXES = ("/usr/local/bin/", "/opt/", "/usr/bin/")
-
-# Ubuntu kernel metapackages outside the linux-image* namespace.
-_KERNEL_METAPACKAGES = frozenset({"linux-generic", "linux-kvm", "linux-virtual"})
 
 
 def _norm(path: str) -> str:
@@ -493,22 +491,12 @@ def _unpinned_advice(spec: NamedSource, *, fetches: bool) -> tuple[str, str]:
     )
 
 
-def _installs_kernel(packages: Iterable[str]) -> bool:
-    for package in packages:
-        name = re.split(r"[/=]", package, maxsplit=1)[0]
-        if name == "linux-image" or name.startswith("linux-image-"):
-            return True
-        if name in _KERNEL_METAPACKAGES:
-            return True
-    return False
-
-
 def _rule_kernel_missing(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     if not image.mkosi_for(profile_name).bootable or image.kernel_for(profile_name) is not None:
         return
-    if _installs_kernel(state.packages):
+    if installs_kernel_package(state.packages):
         return
     yield Diagnostic(
         severity="error",
@@ -540,13 +528,18 @@ def _rule_debloat_removes_modules(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     config = state.debloat
-    # Only a declared Debloat: the implicit default stays as it was (see docs/concepts.md).
-    if not (config.enabled and config.declared) or config.keep_modules is False:
+    if not config.enabled or config.keep_modules is False:
         return
     # A built Kernel installs only its vmlinuz: nothing under /usr/lib/modules loads.
-    if image.kernel_for(profile_name) is not None or not _installs_kernel(state.packages):
+    selection = module_selection(
+        state,
+        image.mkosi_for(profile_name).kernel_modules,
+        built_kernel=image.kernel_for(profile_name) is not None,
+    )
+    if not selection.modular:
         return
-    pattern = _removes(config.effective_paths_remove, MODULES_PATH)
+    # What finalize removes: the implicit default already keeps the modules mkosi selected.
+    pattern = _removes(debloat_paths_remove(config, selection), MODULES_PATH)
     if pattern is None:
         return
     yield Diagnostic(
@@ -790,6 +783,7 @@ def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> I
         has_group=lambda name: made(name, groups, "groupadd|addgroup"),
         packages=bool(state.packages),
         style=image.mkosi_for(profile_name).dialect != "nethermind-v1",
+        outputs=frozenset(state.output_targets),
     )
     yield from unit_findings(units, facts)
 

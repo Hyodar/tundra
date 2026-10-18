@@ -106,7 +106,7 @@ from .model import (
 )
 from .resolve import identity, resolve, resolve_all
 from .resources import Resources
-from .systemd import Dynamic, Hardening, Root
+from .systemd import Condition, Dynamic, Hardening, Root
 
 __all__ = [
     "Artifact",
@@ -116,6 +116,7 @@ __all__ = [
     "Build",
     "Cargo",
     "Check",
+    "Condition",
     "Debian",
     "Debloat",
     "Declaration",

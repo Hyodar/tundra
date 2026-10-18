@@ -29,7 +29,8 @@ recipe = Recipe(
     variants=(
         # Recipe.items as is, built for QEMU.
         Variant("default", outputs=("qemu",)),
-        # The same tree twice: an Azure VHD and a GCP image from one variant.
+        # One UKI wrapped twice, an Azure VHD and a GCP image: its cloud glue is gated at
+        # boot (ConditionVirtualization=), so one set of measurements covers both.
         Variant("cloud", inherits="default", outputs=("azure", "gcp")),
         # Inherits default's outputs; adds tools, edits the motd and keeps systemd whole.
         Variant(

@@ -213,12 +213,18 @@ class StateBuilder:
         assert inherited is None or not any(t in CLOUD_TARGETS for t in inherited)
         profile = self.state.ensure_profile(name)
         _set_targets(profile, targets)
+        declared = len(profile.services)
         for target in targets:
             if target == "azure":
                 self._azure(profile)
             elif target == "gcp":
-                _gcp(profile)
+                self._gcp(profile)
         _set_targets(profile, targets)  # platform integrations narrow the targets to their own
+        # The cloud glue units come first, so a variant extending a cloud-targeted default
+        # and one lowered standalone list (and enable) their units in the same order.
+        glue = profile.services[declared:]
+        del profile.services[declared:]
+        profile.services[:0] = glue
 
     # ── declarations ────────────────────────────────────────────────────
 
@@ -451,15 +457,23 @@ class StateBuilder:
             _task(profile, azure.provisioning_task(network_setup), users=(), historical=False)
         _set_targets(profile, ("azure",))
 
+    def _gcp(self, profile: ProfileState) -> None:
+        """The GCP integration: udev, metadata DNS, disk naming rules and their helper.
 
-def _gcp(profile: ProfileState) -> None:
-    """The GCP integration: udev, metadata DNS, disk naming rules and their helper."""
-    profile.packages.add("udev")
-    _add_file(profile, "/etc/hosts", gcp.GCP_HOSTS)
-    _add_file(profile, "/etc/resolv.conf", gcp.GCP_RESOLV_CONF)
-    _add_file(profile, "/usr/lib/udev/rules.d/65-gce-disk-naming.rules", gcp.GCE_DISK_NAMING_RULES)
-    _add_file(profile, "/usr/lib/udev/google_nvme_id", gcp.GOOGLE_NVME_ID, "0755")
-    _set_targets(profile, ("gcp",))
+        ``nethermind-v1`` ships a static ``/etc/resolv.conf``; the current dialect ships it
+        under ``/usr/lib`` and copies it into place at boot on Compute Engine only."""
+        profile.packages.add("udev")
+        _add_file(profile, "/etc/hosts", gcp.GCP_HOSTS)
+        if self.historical:
+            _add_file(profile, "/etc/resolv.conf", gcp.GCP_RESOLV_CONF)
+        else:
+            _add_file(profile, gcp.GCP_RESOLV_CONF_PATH, gcp.GCP_RESOLV_CONF)
+            _service(profile, gcp.metadata_dns_service(), users=(), historical=False)
+        _add_file(
+            profile, "/usr/lib/udev/rules.d/65-gce-disk-naming.rules", gcp.GCE_DISK_NAMING_RULES
+        )
+        _add_file(profile, "/usr/lib/udev/google_nvme_id", gcp.GOOGLE_NVME_ID, "0755")
+        _set_targets(profile, ("gcp",))
 
 
 # ── ProfileState writes ──────────────────────────────────────────────────
@@ -955,6 +969,7 @@ def _service(
             type=service.type,
             remain_after_exit=service.remain_after_exit,
             restart_sec=None if restart_sec == "5" else restart_sec or "",
+            conditions=tuple(condition.entry for condition in service.conditions),
             **fields,  # type: ignore[arg-type]
         )
     )
@@ -1393,6 +1408,7 @@ def _task(
             hardening=task.hardening.entries(),
             wanted_by=task.wanted_by,
             needs=_steps(task.needs),
+            conditions=tuple(condition.entry for condition in task.conditions),
         )
     )
     if task.schedule is not None:

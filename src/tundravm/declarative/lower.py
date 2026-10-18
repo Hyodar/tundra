@@ -110,6 +110,10 @@ _COMPILER_KEYS: dict[str, str] = {
     "BuildPackages": "Package(name, role='build')",
     "Bootable": "Kernel(...) or Package('linux-image-amd64'); only Bootable=no is accepted",
     "KernelCommandLine": "Kernel(cmdline=...)",
+    **{
+        key: "Debian(kernel_modules=...)"
+        for key in ("KernelModules", "KernelModulesInclude", "KernelModulesExclude")
+    },
     "ExtraTrees": "File/FileTree/Template(stage='extra')",
     "SkeletonTrees": "File/FileTree/Template(stage='skeleton')",
     **{key: "Hook(name, phase, script)" for key in PHASE_TO_MKOSI_KEY.values()},
@@ -507,6 +511,7 @@ def _typed_options(recipe: Recipe) -> dict[str, Any]:
         "manifest_format": config.manifest,
         "with_network": config.build_network,
         "clean_package_metadata": getattr(recipe.platform, "clean_package_metadata", True),
+        "kernel_modules": getattr(recipe.platform, "kernel_modules", ()),
     }
     defaults = MkosiOptions()
     return {key: value for key, value in typed.items() if value != getattr(defaults, key)}

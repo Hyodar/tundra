@@ -38,7 +38,7 @@ TEMPLATES: dict[str, str] = {
     "minimal": "packages, one file and one verbatim unit; a single qemu variant",
     "service": "an App fragment (generated service, config, first-boot step, lint rule) "
     "plus a dev variant",
-    "cloud": "service plus azure and gcp variants, backports and an EFI stub "
+    "cloud": "service with one UKI for qemu, azure and gcp, backports and an EFI stub "
     "pinned to a Debian snapshot",
     "prover": "cloud plus a TPM-sealed key, an encrypted disk, SSH key delivery and the tdxs "
     "attestation service",
@@ -227,9 +227,8 @@ recipe = Recipe(
         App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("azure", inherits="default", outputs=("azure",)),
-        Variant("gcp", inherits="default", outputs=("gcp",)),
+        # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
+        Variant("default", outputs=("qemu", "azure", "gcp")),
         Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
     ),
 )
@@ -273,9 +272,8 @@ recipe = Recipe(
         App(version=APP_VERSION, port=APP_PORT),
     ),
     variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("azure", inherits="default", outputs=("azure",)),
-        Variant("gcp", inherits="default", outputs=("gcp",)),
+        # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
+        Variant("default", outputs=("qemu", "azure", "gcp")),
         Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
     ),
 )
@@ -602,8 +600,8 @@ jobs:
 TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {
     "minimal": ("default",),
     "service": ("default", "dev"),
-    "cloud": ("default", "azure", "gcp", "dev"),
-    "prover": ("default", "azure", "gcp", "dev"),
+    "cloud": ("default", "dev"),
+    "prover": ("default", "dev"),
 }
 """The variants each template declares."""
 

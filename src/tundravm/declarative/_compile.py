@@ -234,6 +234,7 @@ def _emit_config_for(
         "snapshot": lowered.snapshot,
         "with_network": options.with_network,
         "clean_package_metadata": options.clean_package_metadata,
+        "kernel_modules": options.kernel_modules,
         "manifest_format": options.manifest_format,
         "compress_output": options.compress_output,
         "output_directory": options.output_directory,

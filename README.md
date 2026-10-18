@@ -44,8 +44,8 @@ recipe = Recipe(
         Unit("ssh.socket", enabled=False, masked=True),
     ),
     variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("azure", inherits="default", outputs=("azure",)),
+        # One UKI, three disks: the Azure/GCP glue is gated at boot (ConditionVirtualization=).
+        Variant("default", outputs=("qemu", "azure", "gcp")),
     ),
 )
 backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
@@ -83,7 +83,7 @@ Moving from the simulator to a TDX host takes `--param tdx=true` (TDVF firmware 
 Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and are painful to keep reproducible across cloud targets. A recipe gives you:
 
 - **Deterministic output.** The same recipe always compiles to the same mkosi tree, byte for byte. `compile --check` fails CI when the committed tree is stale.
-- **One definition, several targets.** A variant with `outputs=("azure",)` or `outputs=("gcp",)` gets the platform integration; QEMU qcow2, Azure VHD and GCP tar.gz come from one recipe.
+- **One image, every cloud.** `Variant("default", outputs=("qemu", "azure", "gcp"))` builds one UKI and wraps it as an Azure VHD and a GCP tar.gz; the cloud glue is gated at boot (`ConditionVirtualization=microsoft`/`google`), so one set of measurements covers every output.
 - **Composition without mutation.** Fragments are values: a plain `Fragment(...)`, or a `@component` class configured by its fields. Keys, disks and secrets reference each other as objects, and the runtime-init sequence they need is derived, not hand-ordered.
 - **Locked inputs.** The lockfile records a digest per recipe section and a commit or hash per source build. Bakes are frozen against it, and `lock --check` names what drifted.
 - **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the measurements policy, SBOMs, lint) into an `evidence.json` index with a pass, fail or incomplete verdict and stable reason codes (`--require` makes missing checks count), a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
@@ -147,12 +147,11 @@ storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
 ```python
 variants=(
-    Variant("default", outputs=("qemu",)),
-    Variant("azure", inherits="default", outputs=("azure",)),
-    Variant("azure-debug", inherits="azure", add=DevTools(), release=False),  # chained; never released
+    Variant("default", outputs=("qemu", "azure", "gcp")),  # one UKI, three disk images
+    Variant("debug", inherits="default", add=DevTools(), release=False),  # never released
+    Variant("debug-strace", inherits="debug", add=packages("strace")),  # chained
     Variant("prod", changes=(motd.ref.edit(content="prod\n"),)),  # motd = File.text("/etc/motd", ...)
     Variant("slim", changes=(Package.ref("jq").remove(),)),
-    Variant("clouds", inherits="default", outputs=("azure", "gcp")),  # one variant, two disk images
     Variant("bare", inherits=None, add=packages("curl")),
 )
 ```
@@ -160,7 +159,7 @@ variants=(
 - `inherits` is `"base"` (the default, meaning `Recipe.items`), another variant's name, or `None` for a standalone variant that inherits nothing.
 - `add` is a fragment; `packages("strace", "gdb")` bundles packages without inventing a fragment name. Adding a declaration whose identity the variant already inherits with a different value is an `identity-collision` error.
 - `changes` edits or drops inherited declarations by identity: `value.ref.edit(field=...)` sets fields (`edit-missing` if the variant inherits no such identity), `value.ref.remove()` drops one (`remove-missing`), and `Type.ref(key)` (`Unit.ref("ssh.service")`) names one you hold no value for. `Disk(key=key)` and `Secrets(store=disk)` hold refs too, so `key.ref.edit(size=32)` is the whole change for a smaller key.
-- `outputs` names the targets the variant builds (`qemu`, `azure`, `gcp`; one disk image each), inherited from the variant it inherits when empty; cloud targets add their platform integration. A child cannot drop a cloud target it inherits (`target-inconsistent`).
+- `outputs` names the targets the variant builds (`qemu`, `azure`, `gcp`), inherited from the variant it inherits when empty; cloud targets add their platform integration, gated at boot by `ConditionVirtualization=` so it is inert elsewhere. All of a variant's outputs wrap the same UKI: one sha256 and one set of measurements. A child cannot drop a cloud target it inherits (`target-inconsistent`).
 
 `Setting`s and the `Kernel` belong to the variant that declares them; declare them in `Recipe.items` to share them. A variant with its own settings or kernel lowers standalone. See [Variants and targets](docs/concepts.md#variants-and-targets).
 

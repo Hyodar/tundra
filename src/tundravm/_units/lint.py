@@ -62,6 +62,8 @@ class Facts:
     has_group: Callable[[str], bool]
     packages: bool
     style: bool
+    outputs: frozenset[str] = frozenset()
+    """The variant's output targets (``qemu``, ``azure``, ``gcp``): the hosts its UKI boots on."""
 
 
 def _finding(
@@ -277,9 +279,63 @@ def unit_findings(units: Sequence[ShippedUnit], facts: Facts) -> list[Diagnostic
         found.extend(_accounts(unit, text, facts))
         found.extend(_relations(unit, text, facts))
     found.extend(_activation(parsed, facts))
+    found.extend(_cloud_glue(parsed, facts))
     if not facts.style:
         found = [d for d in found if d.code not in STYLE_CODES]
     return list(dict.fromkeys(found))
 
 
-__all__ = ["FALSE", "STYLE_CODES", "TRUE", "Facts", "ShippedUnit", "unit_findings"]
+CLOUD_GLUE: dict[str, str] = {
+    "azure-complete-provisioning.service": "microsoft",
+    "walinuxagent.service": "microsoft",
+    "waagent.service": "microsoft",
+    "google-guest-agent.service": "google",
+    "google-startup-scripts.service": "google",
+    "google-shutdown-scripts.service": "google",
+    "google-osconfig-agent.service": "google",
+    "gcp-metadata-dns.service": "google",
+}
+"""Units that only make sense on one cloud -> the ``ConditionVirtualization=`` id that gates
+them (``microsoft``: Azure, ``google``: Compute Engine)."""
+
+_GLUE_TARGET = {"microsoft": "azure", "google": "gcp"}
+
+
+def _cloud_glue(
+    parsed: Sequence[tuple[ShippedUnit, UnitText]], facts: Facts
+) -> Iterator[Diagnostic]:
+    """``cloud-glue-unconditional``: a one-cloud unit (:data:`CLOUD_GLUE`) in a variant whose
+    UKI also boots elsewhere, with no ``ConditionVirtualization=`` of its cloud in the unit
+    or a drop-in: it would run, and fail, on the other outputs."""
+    gated: dict[str, set[str]] = {}
+    for unit, text in parsed:
+        gated.setdefault(unit.name, set()).update(_words(text, "Unit", "ConditionVirtualization"))
+    for unit, _ in parsed:
+        kind = CLOUD_GLUE.get(unit.name)
+        if kind is None or unit.is_dropin:
+            continue
+        others = sorted(facts.outputs - {_GLUE_TARGET[kind]})
+        if not others or kind in gated[unit.name]:
+            continue
+        yield _finding(
+            unit,
+            facts,
+            "cloud-glue-unconditional",
+            "warning",
+            f"{unit.name} only works on {_GLUE_TARGET[kind]} but has no "
+            f"ConditionVirtualization={kind}; the variant's UKI also boots on "
+            f"{', '.join(others)}",
+            f'Add conditions=(Condition.virtualization("{kind}"),) to the Service/Task (or '
+            f"ConditionVirtualization={kind} to the unit text) so it stays inert elsewhere.",
+        )
+
+
+__all__ = [
+    "CLOUD_GLUE",
+    "FALSE",
+    "STYLE_CODES",
+    "TRUE",
+    "Facts",
+    "ShippedUnit",
+    "unit_findings",
+]

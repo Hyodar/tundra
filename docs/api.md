@@ -45,6 +45,7 @@ At least one variant; names are unique. `recipe.variant(name)` returns one or ra
 | `boot` | `"systemd" \| "uki" \| None` | `"systemd"`: install `kernel_package` and `systemd`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`; `"uki"`: `kmod`, `systemd`, `systemd-boot-efi` for a UKI whose `/init` the image ships; `None`: no packages, for a `Bootable=no` image |
 | `kernel_package` | `str \| None` | `"linux-image-amd64"`; `None` when the image declares its own `Kernel(...)` |
 | `clean_package_metadata` | `bool` | `True`: remove apt's and dpkg's package metadata from the finished image (`CleanPackageMetadata=`); `False` keeps `apt`/`dpkg` usable in it |
+| `kernel_modules` | `tuple[str, ...] \| "all"` | `()`: each variant on `kernel_package` keeps the curated set of its outputs (`tundravm.kernel_modules`: the TDX guest set, plus Azure's or GCP's, plus the disk set under a `Disk`), written as `KernelModules=` and checked at finalize; names (as `modprobe` takes them, no globs or `.ko`) add to that set; `"all"` keeps every module. A built `Kernel` selects nothing; with `kernel_package=None` a non-empty tuple raises `ValidationError`. See [kernel modules](concepts.md#kernel-modules) |
 | `efi_stub` | `str \| None` | `None`; a `systemd-boot-efi` version: the platform adds `EfiStub(snapshot=..., version=efi_stub)` from its own archive (`snapshot`, under `mirror` when both are set, or a `mirror` that is a snapshot archive URL), so the stub and the packages cannot disagree. No archive raises `ValidationError` |
 
 `platform.packages` lists the package names it installs (`kernel_package` and the `boot` set). Every variant gets the platform's declarations, standalone ones (`inherits=None`) included, before `Recipe.items`; their provenance level is `platform` (`declared at FILE:LINE in the platform`, the line that constructs the platform), and a variant edits or removes them by ref like any other. A distribution-specific bundle is a subclass with other defaults, such as `NethermindPlatform` in `examples/nethermind_base.py`.
@@ -173,6 +174,7 @@ Mapping fields (`env`, `limits`, `variables`, `keep_paths_by_variant`, `Tdxs.exp
 | `needs` | `(RUNTIME_INIT,)` | `After=`/`Requires=` the runtime-init units it waits for, first |
 | `enabled` | `True` | `[Install] WantedBy=` plus the build-time enable; `False` renders no `[Install]` |
 | `wanted_by` | `None` (`minimal.target`) | `WantedBy=` |
+| `conditions` | `()` | `Condition*=` lines in `[Unit]`, in declaration order, from `Condition` constructors: `Condition.virtualization("microsoft")` (`ConditionVirtualization=`; `microsoft` is Azure, `google` is GCP, also `kvm`, `vm`, ...), `Condition.path_exists(path)`, `Condition.kernel_command_line(word)`, `Condition.first_boot()`; each takes `negate=True` for `!`. systemd skips the unit, without failing, where one does not hold: cloud glue gated this way keeps one UKI bootable on every output |
 | `extra` | `{}` | the escape hatch, `{"Service": {"OOMScoreAdjust": "-500"}}`: sections `Unit`, `Service`, `Install`; keys must be systemd 257 directives no field renders; a list renders one line per item; keys render sorted after the typed ones; linted `unit-extra` |
 | `allow_secret` | `False` | nothing (silences `secret-in-env`) |
 | `socket` | `None` | a `Listen(...)` renders and enables `<name>.socket`; the service is started by it (no `[Install]`, not enabled); see [Tasks, sockets and mounts](#tasks-sockets-and-mounts) |
@@ -227,6 +229,8 @@ renders `healthcheck.service` (`Type=oneshot`, `User=healthcheck`, `TimeoutStart
 
 `Mount("/var/lib/app/cache", "tmpfs", type="tmpfs", options=("size=256M", "mode=0750"))` renders `var-lib-app-cache.mount` (`What=`, `Where=`, `Type=`, `Options=` joined with commas; the name is `systemd-escape --path` of `where`, so `/var/lib/my-app` is `var-lib-my\x2dapp.mount`), wanted by `local-fs.target`. A mount that `needs` a runtime-init step or a boot task (a bind mount from an encrypted disk) waits for it, is wanted by the boot target instead and gains the `nofail` option, so it is not ordered before `local-fs.target`. `enabled=False` renders no `[Install]`. Encrypted and data disks stay `Disk`.
 
+`Task(..., conditions=(Condition.virtualization("google"),))` takes the same `conditions` as `Service`.
+
 A `Task` and a `Service` cannot share a name. The generated units pass the unit lint's activation rules (`socket-service-unpaired`, `timer-unit-missing`, `timer-service-enabled`).
 
 ### Scripts and ordering
@@ -246,7 +250,7 @@ A `Task` and a `Service` cannot share a name. The generated units pass the unit 
 |---|---|---|
 | `Repository` | `name`, `url`, `suite`, `components=("main",)`, `keyring=None`, `priority=100`, `in_image=True`: the current dialect writes the source (and its keyring) under `mkosi.sandbox/`, where the build's apt reads it, and with `in_image=True` also into the image's `/etc/apt`; `False` keeps it out of the image | name |
 | `Partition` | `name`, `size`, `mount`, `filesystem="ext4"` | name |
-| `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant: Mapping[str, Sequence[str]] = {}` (`{variant: paths}` kept only in that variant), `keep_modules: bool | None = None` (`True` keeps `/usr/lib/modules`; `False` removes it on purpose; `None` removes it with the default list, which lint `debloat-removes-modules` rejects under a modular distribution kernel) | one per variant |
+| `Debloat` | `enabled=True`, `remove=None` (compiler default list), `extra_remove=()`, `keep_paths=()`, `minimize_systemd=True`, `keep_units=None`, `keep_binaries=None`, `keep_units_extra=()` (kept on top of `keep_units` or its default), `keep_paths_by_variant: Mapping[str, Sequence[str]] = {}` (`{variant: paths}` kept only in that variant), `keep_modules: bool | None = None` (`True` keeps `/usr/lib/modules`; `False` removes it on purpose; `None` removes it with the default list, which lint `debloat-removes-modules` rejects under a modular distribution kernel; with no `Debloat` declared the default keeps it under that kernel) | one per variant |
 | `Setting` | `section`, `key`, `values: tuple[str, ...]`; per variant | section, key |
 | `Kernel` | `version`, `source: Git \| Http`, `config: Path \| None = None`, `cmdline=""`, `tdx=True` | one per variant |
 
@@ -632,7 +636,7 @@ Compiler rules (on the lowered recipe, when resolution found no error):
 | `service-command-not-shipped` | warning | A generated service runs a binary nothing ships |
 | `debloat-removes-needed-unit` | warning | Debloat masks a unit a service needs |
 | `debloat-removes-declared-file` | warning | Debloat deletes a declared file at finalize |
-| `debloat-removes-modules` | error | A declared `Debloat` removes `/usr/lib/modules` (the default list, a parent path or a glob) while the variant boots the distribution's modular kernel (no `Kernel`, a `linux-image-*` package): its drivers (virtio, `tdx_guest`, cloud NICs) never load. `Debloat(keep_modules=True)` keeps them, `keep_modules=False` removes them on purpose; a built `Kernel` installs no modules and never triggers it. The implicit default debloat (no `Debloat` declared) is not checked |
+| `debloat-removes-modules` | error | The variant's debloat removes `/usr/lib/modules` (the default list of a declared `Debloat`, a parent path or a glob) while the variant boots the distribution's modular kernel (no `Kernel`, a `linux-image-*` package): its drivers (virtio, `tdx_guest`, cloud NICs) never load. `Debloat(keep_modules=True)` keeps them, `keep_modules=False` removes them on purpose; a built `Kernel` installs no modules and never triggers it. The implicit default (no `Debloat` declared) is checked too, and keeps the modules mkosi selected (`Debian(kernel_modules=)`) |
 | `source-unpinned` | warning (error / info by policy) | A source build, or in the current dialect a built kernel's source or an `EfiStub` package (`efi-stub`), has no pin in `build/tundravm.lock` |
 | `disk-key-path-mismatch` | warning | A disk reads a key file the key does not write |
 | `disk-auto-format` | warning (error with `Policy(storage_safety="error")`) | A `Disk(device=None)` with `format` other than `"never"`: `disk-setup` picks the largest whole `/dev/sd*` disk, boot disk included, and can format it. Set an explicit `device`, or `format="never"` for a disk prepared beforehand |
@@ -667,6 +671,7 @@ Unit text (every unit and drop-in a variant ships, parsed with systemd 257's dir
 | `timer-unit-missing` | error (warning when the variant installs packages) | An `x.timer` whose unit (`x.service` or `Unit=`) the variant neither ships, generates nor enables |
 | `timer-service-enabled` | warning | A timer-activated service is also enabled at boot, so it runs once outside its schedule |
 | `relation-conflict` | error | A unit pulls in (`Requires=`/`Wants=`) and `Conflicts=` the same unit, is ordered both `Before=` and `After=` it, or names itself |
+| `cloud-glue-unconditional` | warning | A unit that only works on one cloud (`azure-complete-provisioning`, `walinuxagent`/`waagent`, `google-guest-agent` and the other Google agents, `gcp-metadata-dns`) ships in a variant whose outputs include another host, with no `ConditionVirtualization=` of its cloud (`microsoft`, `google`) in the unit or a drop-in: it would run, and fail, elsewhere. Add `conditions=(Condition.virtualization(...),)` |
 | `requires-without-after` | info | Unit text with `Requires=x` and no `After=x`: both start in parallel |
 | `state-dir-mkdir` | info | An `ExecStartPre=` makes a directory under `/var/lib`, `/var/log`, `/run` or `/var/cache` (`mkdir`, `install -d`): `StateDirectory=` and its siblings do it |
 | `unit-raw` | info | A `Unit` ships hand-written `.service` text that a `Service(...)` declaration renders (reported on the recipe's own declarations, like the raw spellings above) |

@@ -131,6 +131,7 @@ _LIST_SETTINGS = frozenset(
         "EnvironmentFiles",
         "PassEnvironment",
         "KernelCommandLine",
+        "KernelModules",
         "KernelModulesInclude",
         "KernelModulesExclude",
         "Initrds",

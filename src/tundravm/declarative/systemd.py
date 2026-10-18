@@ -26,10 +26,12 @@ if TYPE_CHECKING:
 __all__ = [
     "SERVICE_OWNED",
     "UNIT_REF_KINDS",
+    "Condition",
     "Dynamic",
     "Extra",
     "Hardening",
     "UnitTarget",
+    "condition_entries",
     "extra_entries",
     "mount_unit",
     "require_extra",
@@ -221,6 +223,87 @@ class Root:
     """``user=Root()``: root plumbing that renders no ``User=`` line (systemd's default
     user), as runtime-init steps and platform glue do; linted ``service-runs-as-root``.
     ``user="root"`` spells ``User=root``."""
+
+
+# ── conditions ───────────────────────────────────────────────────────────
+
+_VIRTUALIZATION = frozenset(
+    "vm container private-users qemu kvm amazon zvm vmware microsoft oracle powervm xen"
+    " bochs uml parallels bhyve qnx apple sre google acrn openvz lxc lxc-libvirt"
+    " systemd-nspawn docker podman rkt wsl proot pouch".split()
+)
+"""The ``ConditionVirtualization=`` words systemd 257 accepts besides yes/no (vm and
+container classes and ``systemd-detect-virt`` ids); ``microsoft`` is Hyper-V/Azure and
+``google`` is Compute Engine."""
+
+
+@dataclass(frozen=True, slots=True)
+class Condition:
+    """One ``Condition*=`` line of a generated unit's ``[Unit]`` section: systemd skips the
+    unit (no failure) when it does not hold. ``conditions=(Condition.virtualization("microsoft"),)``
+    keeps cloud glue inert off its cloud, so one UKI serves every output. Build one with a
+    constructor; *negate* prefixes the value with ``!``."""
+
+    key: str
+    value: str
+
+    @classmethod
+    def virtualization(cls, kind: str, *, negate: bool = False) -> Condition:
+        """``ConditionVirtualization=``: ``microsoft`` (Azure), ``google`` (GCP), ``kvm``,
+        ``vm`` ..."""
+        if kind not in _VIRTUALIZATION:
+            raise ValidationError(
+                f"Condition.virtualization: unknown kind {kind!r}.",
+                hint=f"Use one of: {', '.join(sorted(_VIRTUALIZATION))}.",
+            )
+        return cls("ConditionVirtualization", _negated(kind, negate))
+
+    @classmethod
+    def path_exists(cls, path: str, *, negate: bool = False) -> Condition:
+        """``ConditionPathExists=``: the unit runs only when *path* exists."""
+        if not isinstance(path, str) or not path.startswith("/") or "\n" in path:
+            raise ValidationError(
+                f"Condition.path_exists: {path!r} is not an absolute path.",
+                hint='Pass a path like "/dev/tdx_guest".',
+            )
+        return cls("ConditionPathExists", _negated(path, negate))
+
+    @classmethod
+    def kernel_command_line(cls, word: str, *, negate: bool = False) -> Condition:
+        """``ConditionKernelCommandLine=``: *word* (``debug``, ``key=value``) is on the
+        kernel command line."""
+        if not isinstance(word, str) or not word or any(ch.isspace() for ch in word):
+            raise ValidationError(
+                f"Condition.kernel_command_line: {word!r} is not one word.",
+                hint='Pass one word, like "debug" or "tundravm.mode=dev".',
+            )
+        return cls("ConditionKernelCommandLine", _negated(word, negate))
+
+    @classmethod
+    def first_boot(cls, first: bool = True) -> Condition:
+        """``ConditionFirstBoot=``: only on (or, with ``first=False``, never on) first boot."""
+        return cls("ConditionFirstBoot", "yes" if first else "no")
+
+    @property
+    def entry(self) -> tuple[str, str]:
+        """The ``(key, value)`` line it renders."""
+        return self.key, self.value
+
+
+def _negated(value: str, negate: bool) -> str:
+    return f"!{value}" if negate else value
+
+
+def condition_entries(owner: object, conditions: object) -> tuple[tuple[str, str], ...]:
+    """Validate *owner*'s ``conditions=`` and return their lines, in declaration order."""
+    items = tuple(conditions) if isinstance(conditions, (tuple, list)) else None
+    if items is None or not all(isinstance(item, Condition) for item in items):
+        raise _fail(
+            owner,
+            f"conditions= must be a tuple of Condition, got {conditions!r}.",
+            hint='Use conditions=(Condition.virtualization("microsoft"),).',
+        )
+    return tuple(item.entry for item in items)
 
 
 # ── relations ────────────────────────────────────────────────────────────

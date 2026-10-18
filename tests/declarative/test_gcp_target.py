@@ -10,12 +10,15 @@ from tundravm.platforms.gcp import (
     GCE_DISK_NAMING_RULES,
     GCP_HOSTS,
     GCP_RESOLV_CONF,
+    GCP_RESOLV_CONF_PATH,
     GOOGLE_NVME_ID,
 )
 from tundravm.testing import CompiledTree, compile_tree
 
 HOSTS = "mkosi.extra/etc/hosts"
 RESOLV_CONF = "mkosi.extra/etc/resolv.conf"
+SHIPPED_RESOLV_CONF = f"mkosi.extra{GCP_RESOLV_CONF_PATH}"
+DNS_UNIT = "mkosi.extra/usr/lib/systemd/system/gcp-metadata-dns.service"
 UDEV_RULES = "mkosi.extra/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
 NVME_ID = "mkosi.extra/usr/lib/udev/google_nvme_id"
 RECIPE = Recipe(
@@ -44,9 +47,14 @@ def test_gcp_hosts_content() -> None:
     assert "169.254.169.254 metadata.google.internal metadata" in GCP_HOSTS
 
 
-def test_gcp_variant_emits_resolv_conf(tree: CompiledTree) -> None:
-    assert RESOLV_CONF in tree.files(variant="gcp")
-    assert tree.read(RESOLV_CONF, variant="gcp") == GCP_RESOLV_CONF
+def test_gcp_variant_applies_metadata_dns_at_boot_on_gcp_only(tree: CompiledTree) -> None:
+    """No static /etc/resolv.conf: it would break DNS where the same UKI boots off GCP."""
+    assert RESOLV_CONF not in tree.files(variant="gcp")
+    assert tree.read(SHIPPED_RESOLV_CONF, variant="gcp") == GCP_RESOLV_CONF
+    unit = tree.read(DNS_UNIT, variant="gcp")
+    assert "ConditionVirtualization=google" in unit
+    assert f"ExecStart=/usr/bin/cp {GCP_RESOLV_CONF_PATH} /etc/resolv.conf" in unit
+    assert "Before=network-pre.target network-setup.service" in unit
 
 
 def test_gcp_resolv_conf_content() -> None:

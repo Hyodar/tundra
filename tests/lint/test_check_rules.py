@@ -288,7 +288,7 @@ def test_kept_or_knowingly_removed_modules_are_fine() -> None:
     assert report(recipe(Debloat(keep_modules=False))) == []
     assert report(recipe(Debloat(keep_paths=("/usr/lib/modules",)))) == []
     assert report(recipe(Debloat(enabled=False))) == []
-    # The implicit default (no Debloat declared) stays silent.
+    # The implicit default (no Debloat declared) keeps the modules mkosi selected.
     assert report(recipe()) == []
 
 

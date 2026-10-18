@@ -35,7 +35,7 @@ from tundravm import (
     verify_evidence,
 )
 from tundravm.backends import InProcessBackend, inprocess
-from tundravm.cli import EXIT_FAILURE, EXIT_OK
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, covered_outputs, render_measurements
 from tundravm.declarative import lower, measure, read_artifacts, write_lock
 from tundravm.declarative.bom import manifest_path
 from tundravm.declarative.lifecycle import select_artifact
@@ -575,6 +575,42 @@ def test_a_disk_booting_the_measured_uki_is_measured(
     assert record["policy"]["measures"]["boot_payload"] == uki.sha256
     assert found.passed and found.index["verdict"]["measured"] == "full"
     assert f"default/azure  measured (via {via})" in found.render()
+
+
+def test_one_uki_covers_every_cloud_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``outputs=("qemu", "azure", "gcp")`` is one UKI: one measurement covers all three."""
+    monkeypatch.setitem(inprocess.TARGET_FILENAMES, "qemu", "disk.efi")
+    recipe = Recipe(
+        "node",
+        items=(Package("curl"), Package("linux-image-amd64")),
+        variants=(Variant("default", outputs=("qemu", "azure", "gcp")),),
+    )
+    out = _baked(tmp_path, recipe)
+    swap_in_uki(out, select_artifact(read_artifacts(out), variant="default", target="qemu").path)
+    artifacts = read_artifacts(out)
+    uki = replace(select_artifact(artifacts, variant="default", target="qemu"), simulated=False)
+    disks = [a for a in artifacts if a.target != "qemu"]
+    assert {(a.target, a.boot_payload_sha256) for a in disks} == {
+        ("azure", uki.sha256),
+        ("gcp", uki.sha256),
+    }
+    measured = measure(uki)
+    covers = covered_outputs(artifacts, uki, measured)
+    assert covers == ["azure", "gcp", "qemu"]
+    assert "one UKI, 3 outputs: azure, gcp, qemu" in render_measurements(
+        measured, artifact=uki, covers=covers
+    )
+    policy = measured.to_policy()
+    policy["registers"] = {**policy["registers"], "MRTD": ["ee" * 48], "RTMR0": ["ff" * 48]}  # type: ignore[dict-item]
+    policy["unverifiable"] = {}
+    write_policy(policy, out / "default" / "policy.json")
+    record = _evidence(recipe, out, require=("measured",)).index["variants"]["default"]
+    via = f"boot payload {uki.sha256[:12]}"
+    assert [(c["target"], c["state"], c.get("via")) for c in record["coverage"]] == [
+        ("azure", "measured", via),
+        ("gcp", "measured", via),
+        ("qemu", "measured", None),
+    ]
 
 
 def test_a_disk_booting_another_uki_is_unmeasured(

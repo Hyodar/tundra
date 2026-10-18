@@ -232,6 +232,8 @@ class ServiceSpec:
     """Rendered ``Hardening`` directives; ``None`` falls back to ``security_profile``."""
     mounts_for: tuple[str, ...] = ()
     """``RequiresMountsFor=`` paths: ``write_paths`` on a declared mount point."""
+    conditions: tuple[tuple[str, str], ...] = ()
+    """``Condition*=`` lines, in declaration order (``conditions=`` on Service/Task)."""
 
     def extras(self) -> dict[str, object]:
         """Optional unit fields that are set, keyed by name (empty for a plain service)."""
@@ -267,6 +269,7 @@ class ServiceSpec:
             "cache": self.cache,
             "write_paths": list(self.write_paths),
             "mounts_for": list(self.mounts_for),
+            "conditions": [f"{key}={value}" for key, value in self.conditions],
             "timeout_start": self.timeout_start,
             "extra": {
                 section: {k: v if isinstance(v, str) else list(v) for k, v in sorted(keys.items())}
