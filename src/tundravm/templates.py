@@ -177,11 +177,13 @@ class App(Composite):
         # Runs as system user "app" (declared for you), sandboxed by Hardening.strict(),
         # restarted on failure; state="app" is /var/lib/app, made by systemd, owned by
         # app and its working directory. It waits for every runtime-init step (needs=).
+        # ports= is where it listens: TeeBase's firewall opens it.
         yield Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",
             description=f"app {self.version}",
             state="app",
+            ports=(self.port,),
         )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
@@ -201,7 +203,8 @@ recipe = Recipe(
     # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
     platform=Debian("$release"),
     items=(
-        # NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.
+        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl
+        # hardening, DNS, no apt timers: opt out per flag.
         TeeBase(),
         Package("ca-certificates"),
         App(version=APP_VERSION, port=APP_PORT),
@@ -226,7 +229,8 @@ recipe = Recipe(
     # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
     platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
     items=(
-        # NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.
+        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl
+        # hardening, DNS, no apt timers: opt out per flag.
         TeeBase(),
         Package("ca-certificates"),
         Package("curl", role="build"),
@@ -263,7 +267,8 @@ recipe = Recipe(
     # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
     platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
     items=(
-        # NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.
+        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl
+        # hardening, DNS, no apt timers: opt out per flag.
         TeeBase(),
         Package("ca-certificates"),
         Package("cryptsetup"),

@@ -46,6 +46,8 @@ from tundravm.models import (
     ServiceSpec,
     UnitAction,
     UserSpec,
+    debloat_units_keep,
+    declared_paths,
 )
 
 PHASE_ORDER: tuple[Phase, ...] = (
@@ -617,17 +619,6 @@ def _image_packages(profile: ProfileState) -> list[str]:
     if profile.users or profile.groups:
         packages.add(ACCOUNT_TOOLS_PACKAGE)
     return sorted(packages)
-
-
-def _enabled_templates(profile: ProfileState) -> set[str]:
-    """Templates of the packaged instances *profile* enables (``serial-getty@.service`` for
-    ``Unit("serial-getty@ttyS0.service", enabled=True)``): debloat must not mask them, or
-    the enabled instance is masked too."""
-    return {
-        svc.name.partition("@")[0] + "@.service"
-        for svc in profile.services
-        if svc.enabled and not svc.command and "@" in svc.name and "@." not in svc.name
-    }
 
 
 def _useradd_command(user: UserSpec) -> str:
@@ -1491,7 +1482,7 @@ class DeterministicMkosiEmitter:
                 lines.append(f'find "$BUILDROOT{var_dir}" -type f -delete')
 
         # Path removal (remains in finalize — runs on host with $BUILDROOT)
-        paths = debloat_paths_remove(config, modules)
+        paths = debloat_paths_remove(config, modules, declared_paths(profile))
         if paths:
             lines.append("")
             lines.append("# Debloat: remove unnecessary paths")
@@ -1523,7 +1514,7 @@ class DeterministicMkosiEmitter:
         config = profile.debloat
         if config.enabled and config.systemd_minimize:
             bins_keep = sorted(config.systemd_bins_keep)
-            units_keep = sorted({*config.effective_units_keep, *_enabled_templates(profile)})
+            units_keep = debloat_units_keep(profile)
 
             # Binary cleanup via mkosi-chroot dpkg-query
             lines.append("")

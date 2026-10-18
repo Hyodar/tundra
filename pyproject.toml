@@ -36,6 +36,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "integration: integration tests (deselect with '-m \"not integration\"')",
+    "boot: boots a baked image under QEMU (needs qemu-system-x86_64 and OVMF)",
 ]
 
 [tool.ruff]

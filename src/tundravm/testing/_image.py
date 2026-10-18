@@ -34,6 +34,7 @@ from tundravm.declarative.resolve import (
     resolve,
     step_nodes,
 )
+from tundravm.declarative.utils import Network
 from tundravm.diagnostics import Diagnostic
 from tundravm.models import unit_name
 
@@ -42,9 +43,10 @@ from ._units import UnitView, parse_conf
 Role = Literal["runtime", "build"]
 Stage = Literal["skeleton", "extra"]
 
-TEST_PLATFORM = Fragment("test-platform", (Package("linux-image-amd64"),))
-"""What :func:`fragment_plan` boots on by default: the kernel package, so ``kernel-missing``
-stays quiet and the fragment's own findings stand alone."""
+TEST_PLATFORM = Fragment("test-platform", (Package("linux-image-amd64"), Network()))
+"""What :func:`fragment_plan` boots on by default: the kernel package and a DHCP
+:class:`~tundravm.declarative.utils.Network`, so ``kernel-missing`` and ``network-missing``
+stay quiet and the fragment's own findings stand alone."""
 
 UNIT_DIRS = ("/usr/lib/systemd/system", "/etc/systemd/system")
 _ENABLE = re.compile(r"systemctl\s+(enable|mask|disable)\s+([^\n;&|]+)")

@@ -15,6 +15,7 @@ Built-in drivers (``virtio_console``, the TPM's ``tpm_tis``/``tpm_crb``) need no
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -85,6 +86,16 @@ DISK_MODULES: tuple[str, ...] = (
 )
 """A variant that declares a ``Disk``, on top of its outputs' sets."""
 
+FIREWALL_MODULES: tuple[str, ...] = (
+    # nftables (pulls nfnetlink); the inet family, filter chains and sets are built into it.
+    "nf_tables",
+    # The firewall's "ct state established,related" (pulls nf_conntrack, nf_defrag_ipv4/6).
+    "nft_ct",
+    # Firewall(default="reject"): TCP resets and ICMP unreachables (pulls nf_reject_ipv4/6).
+    "nft_reject_inet",
+)
+"""A variant that installs ``nftables`` (a ``Firewall``), on top of its outputs' sets."""
+
 TARGET_MODULES: dict[str, tuple[str, ...]] = {
     "qemu": (),
     "azure": AZURE_MODULES,
@@ -141,13 +152,17 @@ def installs_kernel_package(packages: Iterable[str]) -> bool:
     return False
 
 
-def curated_modules(targets: Iterable[str], *, disks: bool = False) -> tuple[str, ...]:
+def curated_modules(
+    targets: Iterable[str], *, disks: bool = False, firewall: bool = False
+) -> tuple[str, ...]:
     """The curated set for an image booting on every one of *targets* (sorted, unique)."""
     selected = set(TDX_GUEST_MODULES)
     for target in targets:
         selected.update(TARGET_MODULES.get(target, ()))
     if disks:
         selected.update(DISK_MODULES)
+    if firewall:
+        selected.update(FIREWALL_MODULES)
     return tuple(sorted(selected))
 
 
@@ -164,22 +179,39 @@ def module_selection(
     if spec == "all":
         return ModuleSelection(modular=True)
     disks = any(entry.name == _DISK_STEP for entry in profile.init_scripts)
-    curated = curated_modules(profile.output_targets, disks=disks)
+    firewall = any(re.split(r"[/=]", p, maxsplit=1)[0] == "nftables" for p in profile.packages)
+    curated = curated_modules(profile.output_targets, disks=disks, firewall=firewall)
     return ModuleSelection(modular=True, modules=tuple(sorted({*curated, *spec})))
 
 
-def debloat_paths_remove(config: DebloatConfig, selection: ModuleSelection) -> tuple[str, ...]:
-    """The paths *config* removes; the implicit default keeps a modular kernel's modules
-    (mkosi already pruned them to the selection). A declared ``Debloat`` removes its list."""
+def removes_path(pattern: str, path: str) -> bool:
+    """Whether debloat removal entry *pattern* (a path or a glob) deletes *path*."""
+    return path == pattern or path.startswith(pattern + "/") or fnmatch.fnmatch(path, pattern)
+
+
+def debloat_paths_remove(
+    config: DebloatConfig, selection: ModuleSelection, declared: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """The paths *config* removes. The implicit default keeps a modular kernel's modules
+    (mkosi already pruned them to the selection) and every entry that would delete one of the
+    *declared* file paths (``/etc/systemd/network`` under ``Network``). A declared ``Debloat``
+    removes its list (lint: ``debloat-removes-declared-file``)."""
     paths = config.effective_paths_remove
-    if selection.modular and not config.declared:
-        return tuple(path for path in paths if path != MODULES_PATH)
-    return paths
+    if config.declared:
+        return paths
+    placed = tuple(declared)
+    return tuple(
+        path
+        for path in paths
+        if not (selection.modular and path == MODULES_PATH)
+        and not any(removes_path(path, file) for file in placed)
+    )
 
 
 __all__ = [
     "AZURE_MODULES",
     "DISK_MODULES",
+    "FIREWALL_MODULES",
     "GCP_MODULES",
     "MODULE_NAME",
     "MODULE_SETS_VERSION",
@@ -192,4 +224,5 @@ __all__ = [
     "debloat_paths_remove",
     "installs_kernel_package",
     "module_selection",
+    "removes_path",
 ]

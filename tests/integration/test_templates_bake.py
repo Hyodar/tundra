@@ -157,6 +157,65 @@ def test_service_template_units_verify_and_are_sandboxed(service_build: Path) ->
     assert float(found[1]) < 5.0
 
 
+NETWORK_UNITS = (
+    "systemd-networkd.service",
+    "systemd-networkd.socket",
+    "systemd-networkd-wait-online.service",
+    "nftables.service",
+)
+"""The packaged units TeeBase's Network and Firewall enable; debloat must leave them unmasked."""
+
+
+def test_service_template_brings_up_the_network_behind_a_firewall(service_build: Path) -> None:
+    """TeeBase's ``Network`` and ``Firewall``: the ``.network`` file and the ruleset survive
+    debloat, their units are enabled and unmasked, and the kernel keeps nftables' modules."""
+    root = service_build / "default" / "output" / "default"
+    network = _sudo_read(root / "etc/systemd/network/50-tundravm.network")
+    assert "Name=en* eth*\n" in network and "DHCP=yes\n" in network
+    ruleset = _sudo_read(root / "etc/nftables.conf")
+    assert "policy drop;" in ruleset
+    assert 'tcp dport 8080 accept comment "app.service"' in ruleset
+    system = root / "etc/systemd/system"
+    for unit in NETWORK_UNITS:
+        wants = "sockets.target.wants" if unit.endswith(".socket") else "minimal.target.wants"
+        assert _sudo_test("-L", system / wants / unit), f"{unit} is not linked into {wants}"
+        assert not _sudo_test("-L", system / unit), f"{unit} is masked"
+    dropin = root / "usr/lib/systemd/system/systemd-networkd-wait-online.service.d"
+    assert "--any --timeout=30" in _sudo_read(dropin / "50-tundravm-network.conf")
+    passwd = _sudo_read(root / "etc/passwd")
+    assert "\nsystemd-network:" in passwd  # networkd's User=
+    found = subprocess.run(
+        ["sudo", "find", str(root / "usr/lib/modules"), "-name", "nf*.ko*", "-printf", "%f\\n"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    names = {name.split(".ko")[0] for name in found}
+    assert {"nf_tables", "nft_ct", "nft_reject_inet", "nf_conntrack"} <= names
+    nft = shutil.which("nft") or "/usr/sbin/nft"
+    if Path(nft).exists():  # the host's nft parses the ruleset against the host kernel
+        check = subprocess.run(
+            ["sudo", nft, "-c", "-f", str(root / "etc/nftables.conf")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert check.returncode == 0, check.stderr
+
+
+@pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
+def test_service_template_network_units_verify(service_build: Path) -> None:
+    """``systemd-analyze verify`` accepts the networkd and nftables units with their drop-ins."""
+    root = service_build / "default" / "output" / "default"
+    verify = subprocess.run(
+        ["sudo", "systemd-analyze", "verify", f"--root={root}", *NETWORK_UNITS],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+
+
 class _Capturing:
     """A :class:`LocalLinuxBackend` that keeps mkosi's output lines."""
 

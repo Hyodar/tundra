@@ -12,6 +12,7 @@ declarations through the compiler's account prelude instead.
 
 from __future__ import annotations
 
+import ipaddress
 import posixpath
 import re
 import shlex
@@ -32,13 +33,16 @@ from tundravm.measure.policy import (
 
 from ._component import Composite, Export, HttpEndpoint, component
 from ._kernel_hardening import KernelHardening
+from ._network import NETWORK_DIR
 from .config import ConfigFile
 from .model import (
     BootStep,
     Build,
     Cargo,
     Declaration,
+    DropIn,
     File,
+    Firewall,
     Fragment,
     Git,
     Go,
@@ -47,6 +51,7 @@ from .model import (
     Http,
     Install,
     Package,
+    Port,
     Ready,
     Setting,
     Unit,
@@ -661,6 +666,134 @@ maxupdateskew 100.0
 """
 
 
+NETWORK_FILE = f"{NETWORK_DIR}/50-tundravm.network"
+"""The ``.network`` file :class:`Network` writes."""
+_WAIT_ONLINE = "/usr/lib/systemd/systemd-networkd-wait-online"
+_INTERFACE = re.compile(r"[A-Za-z0-9*?\[\]!_.:-]+")
+
+
+@dataclass(frozen=True, slots=True)
+class StaticAddress:
+    """A fixed address for :class:`Network`: ``StaticAddress("10.0.0.5/24", gateway="10.0.0.1")``.
+
+    *address* is CIDR (address and prefix length); *gateway*, when set, is the default route.
+    """
+
+    address: str
+    gateway: str | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            interface = ipaddress.ip_interface(self.address)
+        except ValueError:
+            interface = None
+        if interface is None or "/" not in self.address:
+            raise ValidationError(
+                f"StaticAddress: {self.address!r} is not an address with a prefix length.",
+                hint="Pass CIDR: StaticAddress('10.0.0.5/24').",
+            )
+        if self.gateway is not None:
+            try:
+                gateway = ipaddress.ip_address(self.gateway)
+            except ValueError:
+                gateway = None
+            if gateway is None or gateway.version != interface.version:
+                raise ValidationError(
+                    f"StaticAddress: gateway {self.gateway!r} is not an IPv{interface.version} "
+                    "address.",
+                    hint="Pass the router's address in the same family as the address.",
+                )
+
+    @property
+    def version(self) -> int:
+        """4 or 6."""
+        return ipaddress.ip_interface(self.address).version
+
+
+@component
+class Network(Composite):
+    """Interfaces systemd-networkd brings up at boot; ``network-online.target`` waits for them.
+
+    Writes :data:`NETWORK_FILE` matching *interfaces* (shell globs; the defaults cover
+    predictable ``en*`` and kernel ``eth*`` names) and enables ``systemd-networkd`` (Debian
+    ships it in ``systemd``). *dhcp* takes a DHCPv4 lease, and with *ipv6* IPv6 router
+    advertisements and DHCPv6 when they ask for it; the DHCP server sets no hostname, resolver
+    or time source (:class:`TeeBase` pins those). *static* is a fixed address instead of DHCP
+    (pass ``dhcp=False``). With *wait_online*, ``systemd-networkd-wait-online`` holds
+    ``network-online.target`` until any matched interface is configured, at most
+    *wait_timeout* seconds, so a boot without a NIC continues. The implicit debloat keeps the
+    networkd units and the ``.network`` file. Fragment name: ``network``.
+    """
+
+    dhcp: bool = True
+    interfaces: tuple[str, ...] = ("en*", "eth*")
+    static: StaticAddress | None = None
+    ipv6: bool = True
+    wait_online: bool = True
+    wait_timeout: int = 30
+
+    def compose(self) -> Iterator[Declaration]:
+        if not self.interfaces or not all(_INTERFACE.fullmatch(i) for i in self.interfaces):
+            raise ValidationError(
+                f"Network: interfaces {self.interfaces!r} must be interface names or globs.",
+                hint="Pass interfaces=('en*', 'eth*').",
+            )
+        if self.static is not None and not isinstance(self.static, StaticAddress):
+            raise ValidationError(
+                "Network: static= must be a StaticAddress or None.",
+                hint="Pass static=StaticAddress('10.0.0.5/24', gateway='10.0.0.1').",
+            )
+        if self.dhcp == (self.static is not None):
+            raise ValidationError(
+                "Network takes DHCP or a static address: "
+                + ("both are set." if self.dhcp else "neither is set."),
+                hint="Network() for DHCP, Network(dhcp=False, static=StaticAddress(...)).",
+            )
+        if self.static is not None and self.static.version == 6 and not self.ipv6:
+            raise ValidationError(
+                "Network: a static IPv6 address needs ipv6=True.",
+                hint="Drop ipv6=False, or pass an IPv4 address.",
+            )
+        if self.wait_timeout <= 0:
+            raise ValidationError(
+                "Network: wait_timeout must be a positive number of seconds.",
+                hint="Pass wait_timeout=30, or wait_online=False not to wait.",
+            )
+        yield File.text(NETWORK_FILE, self.network_file())
+        yield Unit("systemd-networkd.service", enabled=True)
+        yield Unit("systemd-networkd.socket", enabled=True)
+        wait = Unit(
+            "systemd-networkd-wait-online.service",
+            enabled=True,
+            dropin=DropIn(
+                "50-tundravm-network",
+                exec_start=(_WAIT_ONLINE, "--any", f"--timeout={self.wait_timeout}"),
+            ),
+        )
+        yield wait if self.wait_online else Unit(wait.name, enabled=False)
+
+    def network_file(self) -> str:
+        """The text of :data:`NETWORK_FILE`."""
+        network = [f"DHCP={('yes' if self.ipv6 else 'ipv4') if self.dhcp else 'no'}"]
+        if self.static is not None:
+            network.append(f"Address={self.static.address}")
+            if self.static.gateway is not None:
+                network.append(f"Gateway={self.static.gateway}")
+        network.append(f"IPv6AcceptRA={'yes' if self.ipv6 else 'no'}")
+        if not self.ipv6:
+            network.append("LinkLocalAddressing=no")
+        text = (
+            "# tundravm Network: the interfaces systemd-networkd brings up\n"
+            f"[Match]\nName={' '.join(self.interfaces)}\n\n[Network]\n" + "\n".join(network) + "\n"
+        )
+        if self.dhcp:
+            text += (
+                "\n[DHCPv4]\n# The host's DHCP server names no hostname, resolver or time source\n"
+                "UseHostname=no\nUseDNS=no\nUseNTP=no\n"
+            )
+        return text
+
+
 @component
 class TeeBase(Composite):
     """The baseline every confidential VM image wants; each piece opts out with its flag.
@@ -674,6 +807,10 @@ class TeeBase(Composite):
     *dns*: a static ``/etc/resolv.conf`` naming the *nameservers*; on Compute Engine
     ``gcp-metadata-dns.service`` replaces it at boot with the metadata server.
     *mask*: masks :data:`TEE_MASKED_UNITS` (apt timers, the tty1 getty).
+    *network*: :class:`Network` (DHCP on every ``en*``/``eth*`` interface); pass
+    ``network=False`` and add your own ``Network(...)`` to configure it.
+    *firewall*: :class:`Firewall`, which drops inbound traffic except the ports the variant's
+    services declare; pass ``firewall=False`` and add your own ``Firewall(...)`` to change it.
     Fragment name: ``tee-base``.
     """
 
@@ -686,8 +823,10 @@ class TeeBase(Composite):
     dns: bool = True
     nameservers: tuple[str, ...] = TEE_NAMESERVERS
     mask: bool = True
+    network: bool = True
+    firewall: bool = True
 
-    def compose(self) -> Iterator[Declaration]:
+    def compose(self) -> Iterator[Declaration | Fragment]:
         if self.time:
             if not self.nts_servers:
                 raise ValidationError(
@@ -714,6 +853,10 @@ class TeeBase(Composite):
         if self.mask:
             for unit, _reason in TEE_MASKED_UNITS:
                 yield Unit(unit, masked=True)
+        if self.network:
+            yield Network()
+        if self.firewall:
+            yield Firewall()
 
     def _chrony_conf(self) -> str:
         nts = "".join(f"server {server} iburst nts\n" for server in self.nts_servers)
@@ -906,14 +1049,19 @@ __all__ = [
     "DevTools",
     "EfiStub",
     "Export",
+    "Firewall",
     "GoBinary",
     "HttpEndpoint",
     "KernelHardening",
+    "NETWORK_FILE",
+    "Network",
+    "Port",
     "RUN_STAGES",
     "Run",
     "RunStage",
     "RuntimeDirectory",
     "RuntimeFile",
+    "StaticAddress",
     "TEE_HYPERVISOR_CLOCKS",
     "TEE_MASKED_UNITS",
     "TEE_NAMESERVERS",

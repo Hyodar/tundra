@@ -629,6 +629,32 @@ def enable_unit(profile: ProfileState, unit: str) -> None:
         profile.services[index] = replace(profile.services[index], enabled=True)
 
 
+def declared_paths(profile: ProfileState) -> set[str]:
+    """The normalized paths of the files, templates and skeleton files *profile* places."""
+    paths = {_norm_path(f.path) for f in profile.files}
+    paths.update(_norm_path(t.path) for t in profile.templates)
+    paths.update(_norm_path(f.path) for f in profile.skeleton_files)
+    return paths
+
+
+def debloat_units_keep(profile: ProfileState) -> tuple[str, ...]:
+    """The units *profile*'s systemd debloat leaves unmasked: its keep list, plus the packaged
+    ``systemd-*`` units and targets the profile enables (an enabled instance keeps its
+    template), since masking one would undo the enable. Debloat masks only the ``systemd``
+    package's units, so other packages' units need no entry."""
+    shipped = {PurePosixPath(f.path).name for f in (*profile.files, *profile.skeleton_files)}
+    keep = set(profile.debloat.effective_units_keep)
+    for svc in profile.services:
+        if not svc.enabled or svc.command:
+            continue
+        unit = unit_name(svc.name)
+        if "@" in unit and "@." not in unit:
+            keep.add(unit.partition("@")[0] + "@.service")
+        elif unit not in shipped and (unit.startswith("systemd-") or unit.endswith(".target")):
+            keep.add(unit)
+    return tuple(sorted(keep))
+
+
 def ships_unit(profile: ProfileState, unit: str) -> bool:
     """Whether *profile* (an effective profile) ships, generates or enables *unit*."""
     files = (*profile.files, *profile.skeleton_files)
@@ -911,6 +937,8 @@ __all__ = [
     "ProfileBuildResult",
     "ProfileState",
     "RepositorySpec",
+    "debloat_units_keep",
+    "declared_paths",
     "merge_profiles",
     "unit_name",
     "RecipeState",

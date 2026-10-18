@@ -190,11 +190,13 @@ app = Fragment(
     items=(
         # Runs as system user APP (declared for you), restarts on failure, and is
         # sandboxed by Hardening.strict(): it writes only to its state directory.
+        # ports= is where it listens: TeeBase's firewall opens it.
         Service(
             APP,
             # The flags are a guess: change them to the ones your program takes.
             f"{binary.executable} --addr=:{PORT}",
-            description=APP,$state
+            description=APP,
+            ports=(PORT,),$state
             env={$env},$needs
         ),
     ),
@@ -279,7 +281,8 @@ def render_app_recipe(
     backend_import, backend_expr = backend
     env = ['"STATE_DIRECTORY": STATE_DIR'] if spec.disk else []
     items = [
-        "# NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.",
+        "# NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl",
+        "# hardening, DNS, no apt timers: opt out per flag.",
         "TeeBase()",
         'Package("ca-certificates")',
     ]
@@ -376,6 +379,9 @@ def test_tee_baseline_is_in_the_image() -> None:
     journal = IMAGE.file("/etc/systemd/journald.conf.d/50-tundravm-tee.conf").text
     assert "Storage = volatile" in journal
     assert "kexec_load_disabled = 1" in IMAGE.file("/etc/sysctl.d/50-tundravm-tee.conf").text
+    # DHCP on every NIC, and a firewall that drops inbound traffic except APP's port.
+    assert "DHCP=yes" in IMAGE.file("/etc/systemd/network/50-tundravm.network").text
+    assert f"tcp dport {PORT} accept" in IMAGE.file("/etc/nftables.conf").text
 $extra
 
 def test_service_fragment_plans_on_its_own() -> None:

@@ -46,7 +46,7 @@ from tundravm import (
 )
 from tundravm.check import Diagnostic, check, render, render_github, render_markdown
 from tundravm.cli import main
-from tundravm.declarative import lower
+from tundravm.declarative import compile, lower
 from tundravm.declarative.lifecycle import check_report
 from tundravm.declarative.utils import EfiStub
 
@@ -261,13 +261,25 @@ def test_debloat_keep_extra_or_disabled_is_fine() -> None:
 
 def test_debloat_removes_declared_file() -> None:
     network = File("/etc/systemd/network/10-eth.network", "[Match]\n")
-    [diag] = report(recipe(network))
+    [diag] = report(recipe(network, Debloat(keep_modules=True)))
     assert (diag.code, diag.subject) == (
         "debloat-removes-declared-file",
         "/etc/systemd/network/10-eth.network",
     )
     kept = Debloat(keep_paths=("/etc/systemd/network",), keep_modules=True)
     assert report(recipe(network, kept)) == []
+
+
+def test_implicit_debloat_keeps_declared_files_and_enabled_systemd_units() -> None:
+    network = File("/etc/systemd/network/10-eth.network", "[Match]\n")
+    networkd = Unit("systemd-networkd.service", enabled=True)
+    assert report(recipe(network, networkd)) == []
+    tree = {e.path: (e.content or b"").decode() for e in compile(recipe(network, networkd)).entries}
+    finalize = next(text for path, text in tree.items() if path.endswith("finalize.sh"))
+    postinst = next(text for path, text in tree.items() if path.endswith("postinst.sh"))
+    assert '"$BUILDROOT/etc/systemd/network"' not in finalize
+    assert '"$BUILDROOT/usr/lib/systemd/network"' in finalize
+    assert '"systemd-networkd.service"' in postinst.split("systemd_svc_whitelist=")[1]
 
 
 def test_declared_debloat_removing_modules_of_a_modular_kernel_is_an_error() -> None:
@@ -326,12 +338,18 @@ def test_secret_requires_a_delivery_target() -> None:
 def test_secret_delivery_applied_is_fine(secrets: Secrets) -> None:
     # no Disk store: store=None, otherwise secret-store-undefined
     # The delivery tool builds from an unpinned branch; that is source-unpinned's concern.
-    assert [d for d in report(recipe(secrets)) if d.code != "source-unpinned"] == []
+    # The recipe brings up no interface for the SSH key POST: network-missing's concern.
+    ignored = ("source-unpinned", "network-missing")
+    assert [d for d in report(recipe(secrets)) if d.code not in ignored] == []
 
 
 def test_secret_target_unsupported_by_the_builtin_provider() -> None:
     token = Secret("token", (SecretFile("/run/token"), SecretEnv("TOKEN")))
-    found = [d for d in report(recipe(Secrets(entries=(token,)))) if d.code != "source-unpinned"]
+    found = [
+        d
+        for d in report(recipe(Secrets(entries=(token,))))
+        if d.code not in ("source-unpinned", "network-missing")
+    ]
     assert [(d.severity, d.code, d.subject) for d in found] == [
         ("error", "secret-target-unsupported", "token"),
         ("error", "secret-target-unsupported", "token"),

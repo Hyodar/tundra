@@ -41,7 +41,7 @@ from tundravm.declarative import (
     Service,
     User,
 )
-from tundravm.declarative.utils import TUNDRA_TOOLS
+from tundravm.declarative.utils import TUNDRA_TOOLS, Network
 
 key = Key("key_persistent", output="/run/keys/persistent")
 disk = Disk("disk_persistent", mount="/persistent", key=key, mapper="cryptpersistent")
@@ -88,6 +88,8 @@ recipe = Recipe(
         disk,
         secrets,
         RuntimeTools(TUNDRA_TOOLS),
+        # DHCP: the SSH key step waits for a POST on port 8080, so an interface must be up.
+        Network(),
         # Ship /usr/bin/app with a Build(...) (see 05_source_builds.py) or a Package(...).
         # The service runs as "app" (its name; declared here for the home on the disk),
         # sandboxed by Hardening.strict(): it writes only where write_paths/logs say, and

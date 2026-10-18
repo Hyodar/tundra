@@ -243,7 +243,7 @@ Every example loads, lints without errors and compiles deterministically; `tests
 | [`docs/cli.md`](docs/cli.md) | Every command and flag, recipe loading, output formats, exit codes, CI |
 | [`docs/api.md`](docs/api.md) | Every declaration, lifecycle function, result type, error and lint rule |
 | [`docs/module-authoring.md`](docs/module-authoring.md) | Writing fragments: `requires`, `checks`, boot-step ordering (`needs=`, `.ready`), builds, tests |
-| [`docs/testing.md`](docs/testing.md) | `tundravm.testing` helpers and pytest fixtures |
+| [`docs/testing.md`](docs/testing.md) | `tundravm.testing` helpers and pytest fixtures, booting a baked image under QEMU in a test |
 | [`docs/reproducibility.md`](docs/reproducibility.md) | Reproducible output, lock sections, pinned sources, golden trees |
 | [`docs/policy.md`](docs/policy.md) | `Policy` options and CI settings |
 | [`docs/design/declarative-api.md`](docs/design/declarative-api.md) | Design record of this API, with implementation notes |
@@ -256,6 +256,8 @@ uv run ruff check .
 uv run mypy .
 uv run pytest
 ```
+
+`uv run pytest` skips the real bakes without mkosi and non-interactive `sudo`, and the boots (`tests/integration/test_templates_boot.py`, marker `boot`) without QEMU and OVMF too. `tundravm.testing.boot()` boots a baked UKI under QEMU with OVMF and reports the units its serial console shows started and failed; CI's `boot` job bakes and boots the `minimal` and `service` templates on every push ([docs/testing.md](docs/testing.md#booting-an-image-in-tests)).
 
 ## Troubleshooting
 

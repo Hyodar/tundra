@@ -6,8 +6,9 @@ compiled in memory and read as values (packages, files, units, users, init
 steps, hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint
 findings, :func:`assert_tree` and :func:`assert_tree_matches` compare against
 a golden directory, :func:`compile_tree` writes a tree to disk,
-:func:`fake_bake` and :func:`bake_in_process` produce simulated artifacts, and
-:func:`fake_fragment` builds a small :class:`~tundravm.Fragment` to compose with.
+:func:`fake_bake` and :func:`bake_in_process` produce simulated artifacts,
+:func:`fake_fragment` builds a small :class:`~tundravm.Fragment` to compose with, and
+:func:`boot` boots a baked image under QEMU and reads its serial console.
 
 Importing this package does not import pytest. The fixtures live in
 ``tundravm.testing.pytest_plugin``, which pytest loads automatically once
@@ -58,6 +59,14 @@ from tundravm.declarative.model import (
 from tundravm.diagnostics import Diagnostic, Severity
 from tundravm.diff import TreeDiff, _foreign_profile_globs, diff_trees
 from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
+from tundravm.testing._boot import (
+    BootResult,
+    BootUnavailable,
+    ConsoleScan,
+    boot,
+    boot_unavailable,
+    scan_console,
+)
 from tundravm.testing._image import (
     TEST_PLATFORM,
     Image,
@@ -476,7 +485,10 @@ def run_cli(*argv: str | os.PathLike[str]) -> tuple[int, str, str]:
 __all__ = [
     "TEST_PLATFORM",
     "UPDATE_GOLDEN_ENV",
+    "BootResult",
+    "BootUnavailable",
     "CompiledTree",
+    "ConsoleScan",
     "Image",
     "ImageFile",
     "InitStep",
@@ -488,6 +500,8 @@ __all__ = [
     "assert_tree",
     "assert_tree_matches",
     "bake_in_process",
+    "boot",
+    "boot_unavailable",
     "compile_tree",
     "fake_bake",
     "fake_fragment",
@@ -495,4 +509,5 @@ __all__ = [
     "plan",
     "recipe_file",
     "run_cli",
+    "scan_console",
 ]

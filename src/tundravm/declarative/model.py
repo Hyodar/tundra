@@ -582,6 +582,7 @@ _KEY_FIELDS: dict[str, tuple[str, ...]] = {
     "RuntimeTools": (),
     "Kernel": (),
     "Mount": ("where",),
+    "Firewall": (),
 }
 """Identity fields of the declaration types that are not identified by ``name`` alone."""
 
@@ -1134,9 +1135,11 @@ class Service(Declared):
     socket: Listen | None = None
     remain_after_exit: bool = False
     conditions: tuple[Condition, ...] = ()
+    ports: tuple[Port | int, ...] = ()
 
     def __post_init__(self) -> None:
         _freeze(self, "exec_start", "exec_start_pre", "conditions")
+        _require_ports(self, "ports")
         condition_entries(self, self.conditions)
         _require_steps(self, "needs", sentinel=True)
         _require_bool(self, self.allow_secret, "allow_secret")
@@ -2359,6 +2362,62 @@ def _require_socket(service: Service) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class Port:
+    """An inbound port: ``Port(8080)`` (TCP) or ``Port(53, "udp")``.
+
+    ``Service(ports=...)`` names the ports a service binds itself and ``Firewall(allow=...)``
+    opens ports; both also take a bare ``int``, a TCP port.
+    """
+
+    number: int
+    protocol: Literal["tcp", "udp"] = "tcp"
+
+    def __post_init__(self) -> None:
+        number = self.number
+        if isinstance(number, bool) or not isinstance(number, int) or not 0 < number < 65536:
+            raise _fail(self, f"port {number!r} is not a port number (1-65535).")
+        _require_choice(self, self.protocol, ("tcp", "udp"), "protocol")
+
+    def __str__(self) -> str:
+        return f"{self.number}/{self.protocol}"
+
+
+def _require_ports(owner: object, name: str) -> None:
+    """Normalize field *name* of *owner* to a tuple of :class:`Port` (an ``int`` is TCP)."""
+    values = getattr(owner, name)
+    if isinstance(values, (str, bytes, int, Port)) or not isinstance(values, (tuple, list)):
+        raise _fail(owner, f"{name} must be a tuple of ports, got {values!r}.", hint="(8080,)")
+    ports = tuple(value if isinstance(value, Port) else Port(value) for value in values)
+    object.__setattr__(owner, name, ports)
+
+
+@dataclass(frozen=True, slots=True)
+class Firewall(Declared):
+    """An nftables firewall: inbound traffic is dropped unless allowed; outbound is not filtered.
+
+    Resolution expands it into ``/etc/nftables.conf``, the ``nftables`` package and an enabled
+    ``nftables.service``. Inbound it accepts established and related traffic, loopback, the
+    ICMPv6 messages IPv6 cannot work without (RFC 4890), DHCP replies, *allow*, port 22 with
+    *ssh*, and with *collect* every port a service of the variant declares
+    (``Service(ports=...)``, a ``socket=Listen(port)`` that is not loopback-only). The rest is
+    dropped (*default* ``"drop"``) or answered with a TCP reset or ICMP unreachable
+    (``"reject"``); nothing is forwarded.
+    """
+
+    allow: tuple[Port | int, ...] = ()
+    _: KW_ONLY
+    default: Literal["drop", "reject"] = "drop"
+    ssh: bool = False
+    collect: bool = True
+
+    def __post_init__(self) -> None:
+        _require_ports(self, "allow")
+        _require_choice(self, self.default, ("drop", "reject"), "default")
+        _require_bool(self, self.ssh, "ssh")
+        _require_bool(self, self.collect, "collect")
+
+
+@dataclass(frozen=True, slots=True)
 class UnitReady(Ready):
     """``task.ready``: "the boot :class:`Task` whose unit is *step* has finished".
 
@@ -2570,6 +2629,7 @@ type Declaration = (
     | KernelConfig
     | Task
     | Mount
+    | Firewall
 )
 
 DECLARATION_TYPES: tuple[type, ...] = (
@@ -2596,6 +2656,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     KernelConfig,
     Task,
     Mount,
+    Firewall,
 )
 
 
@@ -2652,6 +2713,7 @@ __all__ = [
     "ExternalDelivery",
     "File",
     "FileTree",
+    "Firewall",
     "Fragment",
     "Git",
     "Go",
@@ -2673,6 +2735,7 @@ __all__ = [
     "Pairs",
     "Partition",
     "Phase",
+    "Port",
     "Recipe",
     "Ready",
     "Ref",

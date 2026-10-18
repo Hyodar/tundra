@@ -50,12 +50,12 @@
     }
   },
   "04_storage_and_secrets": {
-    "recipe": "20228128c6861c595b5c5afb3591c420da88846db5318b8f9b6a811776e06e95",
-    "tree": "9858ca47ae6efe5a86b00aaea7c8858752cd66f1325b9142fcc69cb9934650ea",
+    "recipe": "c15cde9328d11caff671fc668bd10ba3fd2dac3d685b2d74bf94648e550e79ca",
+    "tree": "9a71706bebf2711935b1119c14807d984d79eff42fa566567031d3f3c26f0506",
     "variants": {
       "default": {
-        "recipe": "20228128c6861c595b5c5afb3591c420da88846db5318b8f9b6a811776e06e95",
-        "tree": "9858ca47ae6efe5a86b00aaea7c8858752cd66f1325b9142fcc69cb9934650ea"
+        "recipe": "c15cde9328d11caff671fc668bd10ba3fd2dac3d685b2d74bf94648e550e79ca",
+        "tree": "9a71706bebf2711935b1119c14807d984d79eff42fa566567031d3f3c26f0506"
       }
     }
   },
@@ -88,16 +88,16 @@
     }
   },
   "init-cloud": {
-    "recipe": "fe96f0cc0f1cf365c8b0ad19aafbf2694c6237360064d267d866ef8cc024e426",
-    "tree": "1547e5287d4b5943cedd31b40c54913a212354554da1efaea5d117eb506bee00",
+    "recipe": "d1653c5d4eedaf8ce8469557d68704c8de9627360e8d9825de183336accd7c89",
+    "tree": "1ac5e09e0565366e2afc1c1088c857b9b8b087ef1f2f24dc9fcb28a6cc6e1d48",
     "variants": {
       "default": {
-        "recipe": "e33d554a94f1fd9a0bdc15991b1748eba2d42470aa1b64e13e0984f51b757d17",
-        "tree": "cae92f1db56f99a0834353e7cc44bd48b0e355a40d8c65a28208a38289d0b248"
+        "recipe": "465fe634677fbb8a5fd239fa3db01dc53a8bb83778bb4e0cbe20b60366422032",
+        "tree": "9531705eaa9b8de3d72cb6660e2b3dc4693fa158a2b695eb0e92e241575e9d85"
       },
       "dev": {
-        "recipe": "b4019e447db5bd66b47e3fc434c3790207d4aa1c43161f7162e402963b0b727d",
-        "tree": "ac304cc20e217ce6cddf939096f712addd1d0593f8a2a054931cbb0f96059949"
+        "recipe": "76d434c20a1810434285a00772d6287130b5efaefe91bbf395cd1a7e0f982b88",
+        "tree": "110c58a24e40925afeafd923d966f270aab82284d14a11fa94dadaf9ef93c7e9"
       }
     }
   },
@@ -112,30 +112,30 @@
     }
   },
   "init-prover": {
-    "recipe": "11aa5f85962dac6625af403cd2d4f114e6341b0e819dab9d8eafdc20983ec959",
-    "tree": "c6f89974eee0460f7977264a692162b85ca112e485625497cbe492e9e6cf9531",
+    "recipe": "361f5b93548e358bcd3893f2f6ebe0ebb96504bb57be6c49750b2bd2eb49c657",
+    "tree": "b97c388b65bada65b8fe8331e403555d89bac3716105b103b4db0bcdb0f9d3b6",
     "variants": {
       "default": {
-        "recipe": "9356f467fdd5ac5156da6a30f8a6c2e606b8a69fb0bf388cd18be69306702f5d",
-        "tree": "f5e8460a49004d9ed3dc8853218724c680005c6bb133a147f61002fd51076f1a"
+        "recipe": "dc653db3d5274e892dcaa6e02396aca7b785abba1b35ea0579002d41931b1ab2",
+        "tree": "6f32db6f016e9044497079824a0510824d25020f4bd60a18eb328ab46d231f3c"
       },
       "dev": {
-        "recipe": "ad0bb9ccbaf7b716ec562a35c01182016c7bcb8fcec2d1705c03f91af8805d2b",
-        "tree": "451fcf77490209de4a6cf3bea0de8cef3d8563a925bdd90d8bcc6a9c95b59550"
+        "recipe": "dbcec10b64f7965659ec9f08b659f983a979b5c27fd6ef030b4937bbe6d0af9b",
+        "tree": "4c5846d0929c47b5542a38ac4c9d03588cb51affdbcec866dbc2a46f264921f5"
       }
     }
   },
   "init-service": {
-    "recipe": "a1e401d7c46d6abd1effc3aba2836b29593284bb7838765aacf85d993176ac50",
-    "tree": "3f8c84829d3cbbf6a8c00f605654c290d67c9bbd8a477bc24c287907294ca7c8",
+    "recipe": "d361f5616f1197ce0300225a1ec17bc4fc54d2d536669651e4c8e3dd822cfa92",
+    "tree": "f882a9626270fb4e3580e60e0c609d47ac2636d4c19bd09607a8b279d19b59b2",
     "variants": {
       "default": {
-        "recipe": "cbb93f57fcb5fd84f5901dab42a7cd18516ffe92af53a9b660f0f8e7cf7ce2ec",
-        "tree": "41573e8a4b2e417875e5da4169f325953d89326f8630449fdf9b227a868ecd57"
+        "recipe": "bf8056552103394abd629eb82188281f057fee17fdc074da9b667a5249a4c03e",
+        "tree": "2e3706ce7d032f3ead19568ea34eff2452b926869c7b86f0fb62632f41a6f672"
       },
       "dev": {
-        "recipe": "bf8b32df93cb3a3954a15d2f2cd75affc96cf82a4aac843d744690cc08233d54",
-        "tree": "b65c407306533f9122c19cfe7c6ccd51620e56e81f4b4e0660b60d04e4e3f3dd"
+        "recipe": "6a5b3e123bf49c0a5a1e1f066c3ef4c2170a2b1c2e10b1e6e0e1154e0b512427",
+        "tree": "ee67a2e4a9ca7663261ee2dfb0d54355cf0dac745cd754607bb905ea71941fed"
       }
     }
   },

@@ -248,7 +248,7 @@ def test_disk_and_secret_store_references() -> None:
         "r",
         items=(disk, Secrets(store=Disk("other", "/other"))),
     )
-    found = lint(recipe)
+    found = tuple(d for d in lint(recipe) if d.code != "network-missing")  # the SSH key step
     assert codes(found) == ["disk-key-undefined", "secret-store-undefined"]
     assert found[0].message == "Disk(d) references Key(k), which variant 'default' does not declare"
     # A ref names the identity: another Key("k") value is the one the disk uses.

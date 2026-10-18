@@ -11,13 +11,15 @@ import itertools
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import pytest
 
 from tundravm.declarative.model import Package, Recipe
-from tundravm.testing import CompiledTree, Variants, compile_tree
+from tundravm.testing import BootResult, BootUnavailable, CompiledTree, Variants, compile_tree
+from tundravm.testing import boot as _boot
 from tundravm.testing import run_cli as _run_cli
+from tundravm.testing._boot import Bootable
 
 
 class CompileFactory(Protocol):
@@ -25,6 +27,13 @@ class CompileFactory(Protocol):
 
 
 CliRunner = Callable[..., tuple[int, str, str]]
+BootRunner = Callable[..., BootResult]
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "boot: boots a baked image under QEMU (needs qemu-system-x86_64 and OVMF)"
+    )
 
 
 @pytest.fixture
@@ -57,4 +66,20 @@ def run_cli() -> CliRunner:
     return runner
 
 
-__all__ = ["CliRunner", "CompileFactory", "compiled", "recipe", "run_cli"]
+@pytest.fixture
+def boot(tmp_path: Path) -> BootRunner:
+    """``boot(artifact, **kwargs) -> BootResult``: :func:`tundravm.testing.boot` with the
+    console log under ``tmp_path``; skips the test when QEMU or OVMF is missing."""
+    counter = itertools.count()
+
+    def runner(artifact: Bootable, **kwargs: Any) -> BootResult:
+        kwargs.setdefault("log", tmp_path / f"boot-{next(counter)}" / "console.log")
+        try:
+            return _boot(artifact, **kwargs)
+        except BootUnavailable as exc:
+            pytest.skip(f"cannot boot here: {exc}")
+
+    return runner
+
+
+__all__ = ["BootRunner", "CliRunner", "CompileFactory", "boot", "compiled", "recipe", "run_cli"]

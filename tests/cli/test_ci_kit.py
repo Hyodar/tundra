@@ -488,6 +488,7 @@ from tundravm import (
     SecretFile, Secrets, Service, Variant,
 )
 from tundravm.backends.inprocess import InProcessBackend
+from tundravm.declarative.utils import Network
 
 backend = InProcessBackend()
 TOOLS = RuntimeTools(Git("https://github.com/Hyodar/tundra-tools", "{sha}"))
@@ -502,6 +503,7 @@ ITEMS = (
         delivery=ExternalDelivery("app-secrets", supports=("file",), ready_path="/run/app/token"),
     ),
     Service("app", "/usr/bin/app"),
+    Network(),  # the SSH key step listens on port 8080
 )
 recipe = Recipe(
     "runtime",

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tundravm.declarative import File, Package, Unit
-from tundravm.declarative.utils import TEE_MASKED_UNITS, TEE_SYSCTL, TeeBase
+from tundravm.declarative import File, Firewall, Package, Unit
+from tundravm.declarative.utils import TEE_MASKED_UNITS, TEE_SYSCTL, Network, TeeBase
 from tundravm.errors import ValidationError
 
 
@@ -14,7 +14,7 @@ def _items(base: TeeBase) -> list[object]:
 
 
 def test_defaults_declare_time_journal_sysctl_dns_and_masks() -> None:
-    items = _items(TeeBase())
+    items = _items(TeeBase(network=False, firewall=False))
     files = {item.path: item for item in items if isinstance(item, File)}
     assert set(files) == {
         "/etc/chrony/chrony.conf",
@@ -38,8 +38,23 @@ def test_defaults_declare_time_journal_sysctl_dns_and_masks() -> None:
     assert all(unit.masked for unit in units.values())
 
 
+def test_defaults_bring_up_the_network_behind_a_firewall() -> None:
+    items = _items(TeeBase())
+    assert [type(item).__name__ for item in items[-2:]] == ["Network", "Firewall"]
+    assert items[-2] == Network() and items[-1] == Firewall()
+
+
 def test_each_piece_opts_out() -> None:
-    assert _items(TeeBase(time=False, journal=False, sysctl=False, dns=False, mask=False)) == []
+    off = TeeBase(
+        time=False,
+        journal=False,
+        sysctl=False,
+        dns=False,
+        mask=False,
+        network=False,
+        firewall=False,
+    )
+    assert _items(off) == []
     hypervisor_free = _items(TeeBase(hypervisor_clocks=(), journal=False, sysctl=False))
     chrony = next(i for i in hypervisor_free if isinstance(i, File) and "chrony" in i.path)
     assert "169.254" not in str(chrony.content)

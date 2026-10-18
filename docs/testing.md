@@ -304,6 +304,45 @@ def test_watch_reports_a_stale_tree(tmp_path, monkeypatch):
     assert stopped == "stopped"
 ```
 
+## Booting an image in tests
+
+`boot(artifact, *, timeout=300, memory="2G", cpus=2, firmware=None, kvm="auto", markers=DEFAULT_MARKERS, expect_units=(), cmdline=CONSOLE_CMDLINE, settle=3.0, log=None, network=True, qemu="qemu-system-x86_64", extra_args=()) -> BootResult` boots a baked image under QEMU with OVMF and reads its serial console. It boots the way `tundravm deploy --target qemu` boots without TDX: OVMF from pflash (a writable copy of the variable store beside the log) and the UKI through `-kernel`; a `.raw`, `.qcow2` or `.vhd` disk goes on a virtio drive with `snapshot=on`, so the artifact is never written. `artifact` is an `Artifact` from `bake_image`, a path, or a directory holding exactly one `.efi`.
+
+Nothing is added to the image. The console settings reach the kernel through SMBIOS (`io.systemd.stub.kernel-cmdline-extra`, the way `mkosi vm` passes them), which systemd-stub appends to the UKI's own command line when Secure Boot is off: `CONSOLE_CMDLINE` is `console=ttyS0 systemd.show_status=yes systemd.status_unit_format=name systemd.log_color=no panic=-1`. QEMU runs with `-no-reboot`, no display and no monitor, a user-mode virtio NIC (`network=False` for none), and KVM when `/dev/kvm` is usable (`kvm="auto"`), TCG otherwise.
+
+The boot ends when every marker (by default `Reached target minimal.target`, the target every tundravm image boots into) is on the console and every unit in `expect_units` (`"app"` means `app.service`) started or failed, plus `settle` seconds for a unit that fails just after; on a fatal line (`Kernel panic`, emergency or rescue mode, a dead PID 1); when QEMU exits; or after `timeout` seconds. QEMU is then stopped. The `BootResult` holds:
+
+| Field | |
+|---|---|
+| `console` | The serial console, ANSI escapes stripped; `log` is the file it was written to |
+| `started`, `failed` | Units from systemd's status lines: `Started`/`Finished`/`Reached target`/`Listening on`/`Mounted`, and `Failed to start`/`Failed to mount`/`Dependency failed for` |
+| `fatal` | Console lines that ended the boot |
+| `missing` | Markers not seen and expected units not started |
+| `duration`, `timed_out`, `returncode`, `stderr`, `command` | Seconds taken, whether the timeout hit, QEMU's exit status (`None` when the harness stopped it), its output, and the command line |
+
+`ok` is true when nothing is missing, failed or fatal and the boot did not time out; `assert_booted()` raises an `AssertionError` carrying `summary()` (the problems, QEMU's stderr and the console's last lines) otherwise. `boot` raises `BootUnavailable` when QEMU or OVMF is missing, and `boot_unavailable()` returns the reason (or `None`) for a `skipif`. The `boot` fixture wraps it: the log goes under `tmp_path` and a missing QEMU or OVMF skips the test.
+
+```python
+import pytest
+
+from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.declarative.lifecycle import bake_image
+from tundravm.recipe import load_file
+
+
+@pytest.mark.boot
+def test_image_boots(boot, tmp_path):
+    lowered = load_file("image.py").lowered()
+    backend = LocalLinuxBackend(privilege="sudo")
+    _, artifacts = bake_image(lowered, ("default",), locked=None, backend=backend, build=tmp_path)
+    (uki,) = [artifact for artifact in artifacts if artifact.target == "qemu"]
+    result = boot(uki, expect_units=("app",), timeout=900)
+    result.assert_booted()
+    assert "app.service" in result.started
+```
+
+`scan_console(text)` reads a transcript the same way (`ConsoleScan(started, failed, fatal)`) for a log captured elsewhere. A booted check needs a real bake (mkosi and root), QEMU and OVMF; `tests/testing_toolkit/test_boot.py` covers the harness itself with a fake QEMU that prints a console transcript.
+
 ## Pytest fixtures
 
 The `tundravm` pytest plugin is registered through an entry point, so installing tundravm makes its fixtures available (disable with `pytest -p no:tundravm`):
@@ -313,6 +352,7 @@ The `tundravm` pytest plugin is registered through an entry point, so installing
 | `recipe` | A minimal lint-clean `Recipe(name="test", items=(Package("linux-image-amd64"),))` with one `default` variant; the kernel package keeps `kernel-missing` quiet |
 | `compiled` | `compiled(recipe, variants=None) -> CompiledTree`, compiled into a fresh directory under `tmp_path` |
 | `run_cli` | The `run_cli` helper |
+| `boot` | `boot(artifact, **kwargs) -> BootResult`: `tundravm.testing.boot` with the console log under `tmp_path`; skips the test when QEMU or OVMF is missing. The plugin also registers the `boot` marker |
 
 A test module that defines its own `recipe` fixture overrides the plugin's.
 
@@ -336,4 +376,17 @@ uv run pytest tests/unit/test_public_surface.py    # tundravm.__all__ against th
 ```bash
 uv run pytest tests/integration/test_templates_bake.py -m integration   # the template bakes alone
 uv run pytest -m "not integration"                                      # everything but them
+```
+
+### Template boots
+
+`tests/integration/test_templates_boot.py` (markers `integration` and `boot`) bakes the `minimal` and `service` templates' `default` variants as UKIs with `LocalLinuxBackend(privilege="sudo")` and boots each with `boot()` (4G of memory: the UKI unpacks the whole image into RAM). The service image also ships a stub `/usr/bin/app` (a shell script that sleeps), since the template leaves the real binary to the user. It needs mkosi 25+, non-interactive `sudo`, `qemu-system-x86_64` and OVMF, and is skipped without them; `TUNDRAVM_BOOT_REQUIRED=1` turns the skip into a failure.
+
+- **`minimal`**: reaches `minimal.target`, the `hello` task finishes, no unit fails.
+- **`service`**: TeeBase, debloat, the curated kernel modules and the strict sandbox still reach `minimal.target`, `app.service` starts, no unit fails; `tdx_guest` ships but the VM has no TDX, so it stays unloaded and no console line reports a TDX failure.
+
+CI's `boot` job installs mkosi, `qemu-system-x86` and `ovmf`, opens `/dev/kvm` to the runner user when the runner has it (the boots fall back to TCG otherwise), runs the file with `TUNDRAVM_BOOT_REQUIRED=1` and `TUNDRAVM_BOOT_TIMEOUT=1500`, and uploads the console logs (`TUNDRAVM_BOOT_LOGS`) when it fails. The `test` job leaves QEMU out, so there the boots skip.
+
+```bash
+uv run pytest tests/integration/test_templates_boot.py -m boot -v   # the template boots alone
 ```

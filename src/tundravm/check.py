@@ -25,8 +25,14 @@ from ._source import DebFile, KernelFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
 from .formats import annotation_path, md_cell, md_table, workflow_command
-from .kernel_modules import debloat_paths_remove, installs_kernel_package, module_selection
-from .models import MODULES_PATH, ProfileState, ServiceSpec, unit_name
+from .kernel_modules import (
+    NO_MODULES,
+    debloat_paths_remove,
+    installs_kernel_package,
+    module_selection,
+    removes_path,
+)
+from .models import MODULES_PATH, ProfileState, ServiceSpec, debloat_units_keep, unit_name
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -373,7 +379,7 @@ def _rule_debloat_removes_needed_unit(
     config = state.debloat
     if not (config.enabled and config.systemd_minimize):
         return
-    keep = set(config.effective_units_keep) | {"minimal.target"}
+    keep = set(debloat_units_keep(state)) | {"minimal.target"}
     own_units = {unit_name(s.name) for s in state.services}
     own_units.update(posixpath.basename(p) for p in _declared_paths(state))
 
@@ -418,10 +424,11 @@ def _rule_debloat_removes_declared_file(
     config = state.debloat
     if not config.enabled:
         return
-    removed = list(config.effective_paths_remove) + list(config.clean_var_dirs)
-    for path in sorted(_declared_paths(state)):
+    declared = _declared_paths(state)
+    removed = [*debloat_paths_remove(config, NO_MODULES, declared), *config.clean_var_dirs]
+    for path in sorted(declared):
         for pattern in removed:
-            if path == pattern or path.startswith(pattern + "/") or fnmatch.fnmatch(path, pattern):
+            if removes_path(pattern, path):
                 yield Diagnostic(
                     severity="warning",
                     code="debloat-removes-declared-file",

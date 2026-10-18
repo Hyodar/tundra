@@ -16,8 +16,16 @@ from tundravm._location import declared_at, display_location, located
 from tundravm._modules.init import order_steps
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
+from tundravm.models import NETWORK_SETUP_UNIT, unit_name
 
 from ._component import exports
+from ._network import (
+    NETWORK_CONFIG_PACKAGES,
+    NETWORKD_DIRS,
+    allowed_ports,
+    expand_firewall,
+    listening,
+)
 from .model import (
     ALL_STEPS,
     BASE_VARIANT,
@@ -31,10 +39,13 @@ from .model import (
     Disk,
     Edit,
     File,
+    FileTree,
+    Firewall,
     Fragment,
     Hook,
     Key,
     Mount,
+    Package,
     Recipe,
     Ref,
     Resolved,
@@ -143,12 +154,19 @@ class _Resolution:
         subject: str = "",
         severity: Severity = "error",
         at: object = None,
+        hint: str | None = None,
     ) -> None:
         """Report one finding located where *at* (a declaration, fragment or change) was written."""
         location = display_location(declared_at(at))
         self.diagnostics.append(
             Diagnostic(
-                code, severity, message, subject=subject, variant=self.variant, location=location
+                code,
+                severity,
+                message,
+                subject=subject,
+                variant=self.variant,
+                location=location,
+                hint=hint,
             )
         )
 
@@ -538,7 +556,9 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 state.expand(variant.add), where=f"variant {variant.name!r}", level=variant.name
             )
     _check_targets(state, chain)
+    _expand_firewall(state)
     items = tuple(state.items.values())
+    _check_network(state, items)
     _check_references(state, items)
     _check_exports(state)
     _check_executables(state, items)
@@ -564,6 +584,82 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
                 state.diagnostics.append(found)
     return resolved, state
+
+
+def _expand_firewall(state: _Resolution) -> None:
+    """Replace the variant's :class:`Firewall` with what it renders, now that the services whose
+    ports it opens are final; the rendered declarations keep its location and provenance."""
+    key = ("Firewall",)
+    firewall = state.items.get(key)
+    if not isinstance(firewall, Firewall):
+        return
+    del state.items[key]
+    for port, units in listening(state.items.values()).items():
+        if port not in allowed_ports(firewall, state.items.values()):
+            state.report(
+                "port-unreachable",
+                f"{', '.join(units)} listens on {port}, which the firewall does not allow",
+                subject=units[0],
+                severity="warning",
+                at=firewall,
+                hint=f"Firewall(allow=({port.number},)) opens it; collect=True opens every port "
+                "a service declares.",
+            )
+    for item in expand_firewall(firewall, state.items.values()):
+        rendered = located(item, firewall.declared_at)
+        ident = identity(rendered)
+        existing = state.items.get(ident)
+        if existing is not None and existing != rendered:
+            state.report(
+                "identity-collision",
+                f"{describe(ident)} is declared, and the variant's Firewall renders another",
+                subject=describe(ident),
+                at=existing,
+            )
+            continue
+        state.items.setdefault(ident, rendered)
+        state.declared.setdefault(ident, rendered)
+        state.trace.setdefault(ident, []).extend(state.trace.get(key, ()))
+
+
+def _configures_network(items: Sequence[Declaration]) -> bool:
+    """Whether *items* bring interfaces up: a ``.network`` file, a network-setup unit, a tree
+    that may hold either, or a package that configures interfaces itself."""
+    for item in items:
+        if isinstance(item, File) and (
+            any(item.path.startswith(d + "/") for d in NETWORKD_DIRS)
+            or item.path == "/etc/network/interfaces"
+        ):
+            return True
+        if isinstance(item, FileTree) and any(
+            d == item.path.rstrip("/") or d.startswith(item.path.rstrip("/") + "/")
+            for d in NETWORKD_DIRS
+        ):
+            return True
+        if isinstance(item, Unit | Service | Task) and unit_name(item.name) == NETWORK_SETUP_UNIT:
+            return True
+        if isinstance(item, Package) and item.name in NETWORK_CONFIG_PACKAGES:
+            return True
+    return False
+
+
+def _check_network(state: _Resolution, items: Sequence[Declaration]) -> None:
+    """``network-missing``: the variant serves ports or syncs time but brings up no interface."""
+    if _configures_network(items):
+        return
+    needs = [f"{units[0]} listens on {port}" for port, units in listening(items).items()]
+    if any(isinstance(item, Package) and item.name == "chrony" for item in items):
+        needs.append("chrony syncs time from network servers")
+    if not needs:
+        return
+    state.report(
+        "network-missing",
+        f"{needs[0]}{f' (and {len(needs) - 1} more)' if len(needs) > 1 else ''}, but the "
+        "variant configures no network interface",
+        subject=state.variant,
+        severity="warning",
+        hint="Add Network() (TeeBase(network=True) does), or ship a .network file.",
+    )
 
 
 def _check_exports(state: _Resolution) -> None:
