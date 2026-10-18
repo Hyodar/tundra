@@ -91,7 +91,11 @@ def test_a_known_file_carries_its_declaration_and_provenance(tmp_path: Path) -> 
     anchor = re.search(r'<tr class="decl" id="(d\d+)"[^>]*File\(extra, /etc/app/app.conf\)', page)
     assert anchor is not None
     assert f'declared by <a href="#{anchor.group(1)}">' in page
-    row = next(r for r in found.to_dict()["declarations"] if r["declaration"].startswith("File("))
+    row = next(
+        r
+        for r in found.to_dict()["declarations"]
+        if r["declaration"].endswith("/etc/app/app.conf)")
+    )
     assert row["variants"]["dev"]["files"] == [
         {"group": "dev", "path": "mkosi.extra/etc/app/app.conf"}
     ]

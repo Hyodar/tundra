@@ -32,7 +32,7 @@ import subprocess
 import tempfile
 import tomllib
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.error import HTTPError, URLError
@@ -148,6 +148,10 @@ def _assignment(key: str, value: str) -> str:
     return f'{key}="{escaped}"'
 
 
+_SOURCE_DATE_EPOCH = 'SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"'
+"""A reproducible recipe's epoch: the build's ``SOURCE_DATE_EPOCH``, else ``0``."""
+
+
 def _env_assignments(env: Mapping[str, str]) -> str:
     return " ".join(_assignment(key, value) for key, value in env.items())
 
@@ -218,6 +222,10 @@ class GoBuild:
 
     ``output_dir`` is relative to the source tree. ``mkdir`` creates it before the
     build; ``go build -o`` creates it too, so turning it off only drops the step.
+    ``reproducible`` adds ``-buildvcs=false``, ``CGO_ENABLED=0`` (unless ``cgo``
+    or ``env`` sets it) and ``SOURCE_DATE_EPOCH`` (the build's, else ``0``); ``None``
+    (the default) is on, except under the ``nethermind-v1`` dialect, whose historical
+    hooks render without them.
     """
 
     output: str
@@ -228,6 +236,8 @@ class GoBuild:
     packages: tuple[str, ...] = ("golang",)
     output_dir: str = field(default="./build", metadata=_since("./build"))
     mkdir: bool = field(default=True, metadata=_since(True))
+    reproducible: bool | None = field(default=None, metadata=_since(None))
+    cgo: bool = field(default=False, metadata=_since(False))
 
     kind: Literal["go"] = field(default="go", init=False, repr=False)
     tool: ClassVar[str] = "go"
@@ -262,15 +272,42 @@ class GoBuild:
         env = f"{_env_assignments(self.env)} " if self.env else ""
         tags = f" -tags {','.join(self.tags)}" if self.tags else ""
         mkdir = f"mkdir -p {self.output_dir} && " if self.mkdir else ""
+        flags = " -buildvcs=false" if self.reproducible else ""
+        if self.reproducible:
+            cgo = "" if self.cgo or "CGO_ENABLED" in self.env else "CGO_ENABLED=0 "
+            epoch = "" if "SOURCE_DATE_EPOCH" in self.env else f"{_SOURCE_DATE_EPOCH} "
+            env = f"{epoch}{cgo}{env}"
         return (
-            f"cd {workdir} && {mkdir}{env}go build -trimpath{tags} "
+            f"cd {workdir} && {mkdir}{env}go build -trimpath{flags}{tags} "
             f'-ldflags "{self.ldflags}" -o {self.output_dir}/{self.output} {self.package}'
         )
 
 
+CARGO_RUSTFLAGS = (
+    "-C",
+    "target-cpu=generic",
+    "-C",
+    "link-arg=-Wl,--build-id=none",
+    "-C",
+    "symbol-mangling-version=v0",
+)
+"""The rustc flags a reproducible ``CargoBuild`` adds: flashbots-images'
+``scripts/build_rust_package.sh`` set (no host CPU features, no linker build id,
+stable v0 symbol names)."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CargoBuild:
-    """``cargo fetch && cargo build --frozen``; *bin* or *package* selects the target."""
+    """``cargo fetch && cargo build --frozen``; *bin* or *package* selects the target.
+
+    ``auditable`` builds with ``cargo auditable`` (adding the ``cargo-auditable``
+    package), which embeds the crate list in a ``.dep-v0`` section ``tundravm sbom``
+    reads. ``reproducible`` adds :data:`CARGO_RUSTFLAGS` and the path remap to the
+    project's ``build.rustflags`` (``--config``; prepended to an ``env`` ``RUSTFLAGS``,
+    which would replace them), one codegen unit, no incremental build and
+    ``SOURCE_DATE_EPOCH`` (the build's, else ``0``). ``None`` (the default) is on,
+    except under the ``nethermind-v1`` dialect, whose historical hooks render without.
+    """
 
     output: str
     bin: str | None = None
@@ -279,6 +316,8 @@ class CargoBuild:
     profile: str = "release"
     env: Mapping[str, str] = field(default_factory=FrozenMap)
     packages: tuple[str, ...] = ("cargo",)
+    auditable: bool | None = field(default=None, metadata=_since(None))
+    reproducible: bool | None = field(default=None, metadata=_since(None))
 
     kind: Literal["cargo"] = field(default="cargo", init=False, repr=False)
     tool: ClassVar[str] = "cargo"
@@ -288,6 +327,8 @@ class CargoBuild:
 
     def __post_init__(self) -> None:
         _freeze_recipe(self, ("env",), ("features", "packages"))
+        if self.auditable is True and "cargo-auditable" not in self.packages:
+            object.__setattr__(self, "packages", (*self.packages, "cargo-auditable"))
 
     def prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
         """``cargo fetch --locked`` into the cargo home *cache*, and its environment."""
@@ -305,17 +346,40 @@ class CargoBuild:
     def artifact(self) -> str:
         return f"target/{self.profile}/{self.bin or self.package or self.output}"
 
+    def _environment(self, workdir: str) -> tuple[dict[str, str], str]:
+        """The exports and the ``--config`` argument :attr:`reproducible` adds to ``env``."""
+        if not self.reproducible:
+            return dict(self.env), ""
+        rustflags = [*CARGO_RUSTFLAGS, f"--remap-path-prefix={workdir}=/build"]
+        prefix = f"CARGO_PROFILE_{self.profile.upper().replace('-', '_')}"
+        env = {
+            f"{prefix}_CODEGEN_UNITS": "1",
+            f"{prefix}_INCREMENTAL": "false",
+            "CARGO_TERM_COLOR": "never",
+            **self.env,
+        }
+        if "RUSTFLAGS" in self.env:
+            env["RUSTFLAGS"] = " ".join((*rustflags, self.env["RUSTFLAGS"]))
+            return env, ""
+        toml = "build.rustflags=" + json.dumps(rustflags, separators=(",", ":"))
+        return env, f" --config {shlex.quote(toml)}"
+
     def command(self, workdir: str) -> str:
-        env = f"export {_env_assignments(self.env)} && " if self.env else ""
+        environment, config = self._environment(workdir)
+        exports = _env_assignments(environment)
+        if self.reproducible and "SOURCE_DATE_EPOCH" not in environment:
+            exports = f"{_SOURCE_DATE_EPOCH} {exports}"
+        env = f"export {exports} && " if exports else ""
         profile = "--release" if self.profile == "release" else f"--profile {self.profile}"
-        flags = ""
+        flags = config
         if self.features:
             flags += f" --features {','.join(self.features)}"
         if self.package:
             flags += f" --package {self.package}"
         if self.bin:
             flags += f" --bin {self.bin}"
-        return f"{env}cd {workdir} && cargo fetch && cargo build {profile} --frozen{flags}"
+        cargo = "cargo auditable" if self.auditable else "cargo"
+        return f"{env}cd {workdir} && cargo fetch && {cargo} build {profile} --frozen{flags}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -416,6 +480,20 @@ class ScriptBuild:
 BuildRecipe = GoBuild | CargoBuild | DotnetBuild | ScriptBuild
 LanguageBuild = GoBuild | CargoBuild | DotnetBuild
 """The build recipes whose dependencies ``tundravm fetch`` prefetches on the host."""
+
+
+def resolve_recipe(build: BuildRecipe, *, mounted: bool) -> BuildRecipe:
+    """*build* with its dialect defaults decided: a ``None`` ``reproducible`` or ``auditable``
+    is *mounted* (on for the current dialect's mounted hooks, off for ``nethermind-v1``)."""
+    if isinstance(build, GoBuild) and build.reproducible is None:
+        return replace(build, reproducible=mounted)
+    if isinstance(build, CargoBuild) and None in (build.reproducible, build.auditable):
+        return replace(
+            build,
+            reproducible=mounted if build.reproducible is None else build.reproducible,
+            auditable=mounted if build.auditable is None else build.auditable,
+        )
+    return build
 
 
 def _recipe_payload(build: BuildRecipe) -> dict[str, object]:
@@ -597,6 +675,36 @@ class KernelSource(NamedSource):
 
 
 @dataclass(frozen=True, slots=True)
+class KernelFile(NamedSource):
+    """A file a composed kernel's build reads: its Debian config package or an http patch.
+
+    Named ``kernel-config`` or ``kernel-patch-<patch>`` (``-<variant>`` appended when
+    the variant's differs from the default's), it is locked by sha256 and fetched on
+    the host like any source; :meth:`mounted` checks the mounted copy in the build.
+    """
+
+    name: str
+    source: HttpSource
+    lock_name: str | None = field(default=None, compare=False, repr=False, kw_only=True)
+
+    def mounted(self, pin: str | None) -> tuple[str, tuple[str, ...]]:
+        """``(path, shell lines)``: the sha256-checked copy at *path*, else lines that fail."""
+        effective = self.source.inline_pin or pin
+        if effective is None:
+            message = f"tundravm: {self.name} is not pinned: run tundravm lock, then tundravm fetch"
+            return "", (f"echo {shlex.quote(message)} >&2", "exit 1")
+        directory = f"$SRCDIR/{SOURCES_MOUNT}/{self.pin_dir(effective)}"
+        path = f'"{directory}/{self.source.filename}"'
+        missing = shlex.quote(
+            f"tundravm: {self.pin_dir(effective)} is not fetched: run tundravm fetch RECIPE"
+        )
+        return path, (
+            f'[ -f "{directory}/{FETCH_MARKER}" ] || {{ echo {missing} >&2; exit 1; }}',
+            f'echo "{effective}  {directory}/{self.source.filename}" | sha256sum -c --quiet -',
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DebFile(NamedSource):
     """A ``.deb`` a postinst hook installs with ``dpkg -i``: :class:`EfiStub`'s package.
 
@@ -704,8 +812,13 @@ class SourceBuild(NamedSource):
     @property
     def packages(self) -> tuple[str, ...]:
         """Build packages the source fetch and the build recipe need."""
+        return self.build_packages(mounted=False)
+
+    def build_packages(self, *, mounted: bool) -> tuple[str, ...]:
+        """:attr:`packages` with the recipe's dialect defaults decided (``cargo-auditable``)."""
         fetch = ("git",) if isinstance(self.source, GitSource) else ("curl",)
-        return tuple(dict.fromkeys((*fetch, *self.build.packages)))
+        recipe = resolve_recipe(self.build, mounted=mounted)
+        return tuple(dict.fromkeys((*fetch, *recipe.packages)))
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -768,7 +881,8 @@ class SourceBuild(NamedSource):
         workdir = Build.chroot_path(self.name).rel
         if isinstance(self.source, GitSource) and self.source.subdir:
             workdir = f"{workdir}/{self.source.subdir.strip('/')}"
-        build = self.build.command(f"/build/{workdir}")
+        recipe = resolve_recipe(self.build, mounted=mounted)
+        build = recipe.command(f"/build/{workdir}")
         inner = build.replace("'", "'\\''")
         if mounted:
             if effective is None:
@@ -852,8 +966,8 @@ class SourceBuild(NamedSource):
         """The first 16 hex of the sha256 over what a mounted build produces.
 
         Canonical JSON of the source pin (with git's ``subdir`` and
-        ``submodules``), the build recipe and install steps as the lockfile
-        records them, the toolchain (recipe kind and packages) and the
+        ``submodules``), the build recipe (dialect defaults decided, see
+        :func:`resolve_recipe`) and install steps, the toolchain (recipe kind and packages) and the
         *distribution* it comes from: base, architecture, mirror, snapshot,
         repositories, build packages and build settings
         (``Lowered.build_distribution``).
@@ -863,13 +977,16 @@ class SourceBuild(NamedSource):
             source.update(subdir=self.source.subdir, submodules=self.source.submodules)
         spec = {
             "source": source,
-            "build": _recipe_payload(self.build),
+            "build": _recipe_payload(resolve_recipe(self.build, mounted=True)),
             "install": [
                 {"kind": step.kind, "path": step.path, "dest": step.dest, "mode": step.mode}
                 for step in self.install
             ],
             "distribution": dict(distribution),
-            "toolchain": {"kind": self.build.kind, "packages": list(self.packages)},
+            "toolchain": {
+                "kind": self.build.kind,
+                "packages": list(self.build_packages(mounted=True)),
+            },
         }
         return fingerprint(spec)
 
@@ -1691,6 +1808,7 @@ __all__ = [
     "HttpSource",
     "Install",
     "InstallKind",
+    "KernelFile",
     "KernelSource",
     "LanguageBuild",
     "NOT_PREFETCHED",

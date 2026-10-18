@@ -18,6 +18,8 @@ from tundravm._modules.init import runtime_init_order
 from tundravm._options import MkosiOptions
 from tundravm._source import (
     DebFile,
+    HttpSource,
+    KernelFile,
     KernelSource,
     NamedSource,
     Resolver,
@@ -293,7 +295,7 @@ class Lowered:
         profile's kernel source differs from the default profile's.
         """
         kernel = self.kernel_for(profile)
-        if kernel is None or not kernel.config_file:
+        if kernel is None or not kernel.built:
             return None
         spec = KernelSource.of(kernel)
         if profile in self.profile_kernels and (
@@ -301,6 +303,35 @@ class Lowered:
         ):
             return replace(spec, name=f"kernel-{profile}")
         return spec
+
+    def kernel_files(self, profile: str) -> tuple[KernelFile, ...]:
+        """The downloads *profile*'s composed kernel reads, under their lockfile names.
+
+        Its Debian config package (``kernel-config``) and http patches
+        (``kernel-patch-<name>``); ``-<profile>`` is appended to a file that differs
+        from the default profile's.
+        """
+        default = {} if profile == self.default_profile else self._kernel_files(None)
+        return tuple(
+            spec
+            if default.get(spec.name) in (None, spec)
+            else replace(spec, name=f"{spec.name}-{profile}")
+            for spec in self._kernel_files(profile).values()
+        )
+
+    def _kernel_files(self, profile: str | None) -> dict[str, KernelFile]:
+        kernel = self.kernel if profile is None else self.kernel_for(profile)
+        if kernel is None:
+            return {}
+        found: dict[str, KernelFile] = {}
+        if kernel.base_deb is not None:
+            source = HttpSource(kernel.base_deb, sha256=kernel.base_deb_sha256)
+            found["kernel-config"] = KernelFile("kernel-config", source)
+        for patch in kernel.patches:
+            if patch.url is not None:
+                name = f"kernel-patch-{patch.name}"
+                found[name] = KernelFile(name, HttpSource(patch.url, sha256=patch.sha256))
+        return found
 
     def deb_file(self, profile: str) -> DebFile | None:
         """The ``EfiStub`` package *profile*'s postinst hooks install, under its lockfile name.
@@ -339,9 +370,14 @@ class Lowered:
         if not self.fetches_sources:
             return sources
         for profile in self.active:
+            files = [
+                (spec, f"the kernel's {spec.name}", "a kernel file's")
+                for spec in self.kernel_files(profile)
+            ]
             for spec, what, owner in (
                 (self.kernel_source(profile), "the kernel's source", "the kernel's"),
                 (self.deb_file(profile), "the EfiStub package", "the EfiStub package's"),
+                *files,
             ):
                 if spec is None:
                     continue
@@ -548,6 +584,40 @@ def kernel_payload(kernel: Kernel | None) -> dict[str, object] | None:
         "cmdline": kernel.cmdline,
         "tdx": kernel.tdx,
         **config,
+        **_composed_payload(kernel),
+    }
+
+
+def _file_sha256(path: str | Path) -> str | None:
+    """*path*'s sha256, ``None`` when it does not exist (compiling it fails)."""
+    found = Path(path)
+    return hashlib.sha256(found.read_bytes()).hexdigest() if found.is_file() else None
+
+
+def _composed_payload(kernel: Kernel) -> dict[str, object]:
+    """A composed kernel's base, requested options, patches and module mode; else nothing.
+
+    Downloads are recorded by url (their sha256 is the ``fetches`` entry), local
+    files by their sha256.
+    """
+    if not kernel.composed:
+        return {}
+    if kernel.base_deb is not None:
+        base: dict[str, object] = {"deb": kernel.base_deb, "member": kernel.base_member}
+    else:
+        assert kernel.base_file is not None
+        base = {"sha256": _file_sha256(kernel.base_file)}
+    patches: list[dict[str, object]] = [
+        {"name": patch.name, "url": patch.url}
+        if patch.url is not None
+        else {"name": patch.name, "sha256": _file_sha256(patch.path or "")}
+        for patch in kernel.patches
+    ]
+    return {
+        "base": base,
+        "options": dict(kernel.options),
+        "patches": patches,
+        "modules": kernel.modules,
     }
 
 

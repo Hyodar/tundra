@@ -10,6 +10,7 @@ Lists passed for tuple fields are frozen into tuples.
 from __future__ import annotations
 
 import functools
+import hashlib
 import posixpath
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -1992,13 +1993,148 @@ class Build(Declared):
         _require_env(self)
 
 
+_DEBIAN_KERNEL_VERSION = re.compile(r"(\d+\.\d+)(\.\d+)*-[0-9A-Za-z.+~]+")
+_KCONFIG_OPTION = re.compile(r"CONFIG_[A-Z0-9_]+")
+
+
+@dataclass(frozen=True, slots=True)
+class DebianConfig:
+    """``Kernel(base=DebianConfig("6.12.48-1"))``: the config Debian ships for that kernel.
+
+    *version* is the Debian ``linux`` package version (``apt-cache policy
+    linux-config-6.12``); the config is ``config.<arch>_none_<flavor>.xz`` of
+    ``linux-config-<major.minor>`` in the pool of *snapshot* (default: the platform's).
+    ``tundravm lock`` pins the package's sha256, ``tundravm fetch`` downloads it on the host.
+    """
+
+    version: str
+    _: KW_ONLY
+    flavor: str = "cloud-amd64"
+    arch: str = "amd64"
+    snapshot: str | None = None
+    sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.version, str) or not _DEBIAN_KERNEL_VERSION.fullmatch(self.version):
+            raise _fail(
+                self,
+                f"version {self.version!r} is not a Debian linux package version.",
+                hint="Pass the package version, e.g. '6.12.48-1' (6.12.48+deb13 is the "
+                "kernel ABI the package of that version installs).",
+            )
+        for what in ("flavor", "arch"):
+            _require_name(self, getattr(self, what), what)
+        if self.snapshot is not None:
+            _require_name(self, self.snapshot, "snapshot")
+        if self.sha256 is not None and not _SHA256.fullmatch(self.sha256):
+            raise _fail(self, "sha256 must be 64 lowercase hex characters.")
+
+    @property
+    def series(self) -> str:
+        """``6.12`` of ``6.12.48-1``: the ``linux-config-<series>`` package."""
+        match = _DEBIAN_KERNEL_VERSION.fullmatch(self.version)
+        assert match is not None
+        return match.group(1)
+
+    @property
+    def member(self) -> str:
+        """The compressed config inside the package."""
+        return f"./usr/src/linux-config-{self.series}/config.{self.arch}_none_{self.flavor}.xz"
+
+    def url(self, archive: str) -> str:
+        """The package in the pool of the snapshot *archive* (an archive URL)."""
+        return (
+            f"{archive.rstrip('/')}/pool/main/l/linux/"
+            f"linux-config-{self.series}_{self.version}_{self.arch}.deb"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class KernelPatch:
+    """``Kernel(patches=(KernelPatch(path),))``: a patch applied with ``patch -p1``, in order.
+
+    *source* is a local :class:`~pathlib.Path` or an :class:`Http` download (locked by
+    sha256 like any fetch). *name* (default: the file name) names it when it fails.
+    """
+
+    source: Path | Http
+    _: KW_ONLY
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, (Path, Http)):
+            raise _fail(self, "source must be a pathlib.Path or Http(url, sha256).")
+        if self.name is None:
+            raw = self.source.name if isinstance(self.source, Path) else self.source.url
+            object.__setattr__(self, "name", posixpath.basename(raw.split("?", 1)[0]))
+        if not isinstance(self.name, str) or not re.fullmatch(r"[A-Za-z0-9][\w.+-]*", self.name):
+            raise _fail(self, f"patch name {self.name!r} must be a file name.")
+
+
+@dataclass(frozen=True, slots=True)
+class KernelConfig(Declared):
+    """Requested kernel options: ``KernelConfig({"CONFIG_XFS_FS": "y", "CONFIG_IO_URING": None})``.
+
+    ``None`` (or ``"n"``) turns an option off. Every ``KernelConfig`` of a variant (and
+    the built ``Kernel``'s ``fragments``) is merged in declaration order onto the base
+    config; two that set one option differently are an error. The build checks
+    every value survived ``olddefconfig``. *name* (default: from the content) is the
+    identity a variant removes it by.
+    """
+
+    options: Mapping[str, str | None]
+    _: KW_ONLY
+    name: str = ""
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        options = _freeze_map(self, "options")
+        normal: dict[str, str] = {}
+        for key, value in options.items():
+            if not _KCONFIG_OPTION.fullmatch(key):
+                raise _fail(self, f"option {key!r} is not a CONFIG_* name.")
+            if value is None:
+                value = "n"
+            if not isinstance(value, str) or not value or "\n" in value:
+                raise _fail(self, f"{key}: value {value!r} must be y, m, n, None or a value.")
+            normal[key] = value
+        if not normal:
+            raise _fail(self, "KernelConfig sets no option.")
+        object.__setattr__(self, "options", FrozenMap(normal))
+        if not self.name:
+            digest = hashlib.sha256(repr(sorted(normal.items())).encode()).hexdigest()
+            object.__setattr__(self, "name", f"config-{digest[:12]}")
+        _require_name(self, self.name)
+
+    def lines(self) -> tuple[str, ...]:
+        """The options as ``.config`` lines (``# CONFIG_X is not set`` for ``n``)."""
+        return tuple(
+            f"# {key} is not set" if value == "n" else f"{key}={value}"
+            for key, value in self.options.items()
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Kernel(Declared):
+    """A kernel the build compiles: ``Kernel(version, Git(...), base=DebianConfig(...))``.
+
+    ``base`` is the config to start from (a Debian package's, or a local file);
+    ``fragments`` (and the variant's :class:`KernelConfig` declarations) and
+    ``patches`` compose it; ``modules=False`` builds everything in
+    (``CONFIG_MODULES=n``), ``True`` builds and installs loadable modules.
+    ``config=`` is a whole, final config used as is (none of the others apply).
+    """
+
     version: str
     source: Git | Http
     config: Path | None = None
     cmdline: str = ""
     tdx: bool = True
+    _: KW_ONLY
+    base: DebianConfig | Path | None = None
+    fragments: tuple[KernelConfig, ...] = ()
+    patches: tuple[KernelPatch, ...] = ()
+    modules: bool = False
 
     def __post_init__(self) -> None:
         _require_name(self, self.version, "version")
@@ -2006,6 +2142,36 @@ class Kernel(Declared):
             raise _fail(self, "source must be Git or Http.")
         if self.config is not None and not isinstance(self.config, Path):
             raise _fail(self, "config must be a pathlib.Path.")
+        _freeze(self, "fragments", "patches")
+        _require_bool(self, self.modules, "modules")
+        if self.base is not None and not isinstance(self.base, (DebianConfig, Path)):
+            raise _fail(self, "base must be DebianConfig(...) or a pathlib.Path.")
+        if not all(isinstance(item, KernelConfig) for item in self.fragments):
+            raise _fail(self, "fragments must be KernelConfig values.")
+        if not all(isinstance(item, KernelPatch) for item in self.patches):
+            raise _fail(self, "patches must be KernelPatch values.")
+        names = [patch.name for patch in self.patches]
+        if len(set(names)) != len(names):
+            raise _fail(self, f"two patches share a name: {names!r}.")
+        composing = self.base is not None or self.fragments or self.patches or self.modules
+        if self.config is not None and composing:
+            raise _fail(
+                self,
+                "config= is a whole, final config: base, fragments, patches and modules "
+                "do not apply to it.",
+                hint="Pass base=Path(...) to compose from that file instead.",
+            )
+        if self.base is None and (self.fragments or self.patches):
+            raise _fail(
+                self,
+                "fragments and patches need a base config to apply to.",
+                hint='Pass base=DebianConfig("6.12.48-1") or base=Path("kernel.config").',
+            )
+
+    @property
+    def built(self) -> bool:
+        """Whether the build compiles this kernel (it has a config or a base)."""
+        return self.config is not None or self.base is not None
 
 
 # ── Tasks, schedules, sockets and mounts (docs/design/systemd-units.md 2.4-2.6) ──
@@ -2401,6 +2567,7 @@ type Declaration = (
     | RuntimeTools
     | Build
     | Kernel
+    | KernelConfig
     | Task
     | Mount
 )
@@ -2426,6 +2593,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     RuntimeTools,
     Build,
     Kernel,
+    KernelConfig,
     Task,
     Mount,
 )
@@ -2493,7 +2661,10 @@ __all__ = [
     "Install",
     "Calendar",
     "Every",
+    "DebianConfig",
     "Kernel",
+    "KernelConfig",
+    "KernelPatch",
     "Key",
     "Listen",
     "Mount",

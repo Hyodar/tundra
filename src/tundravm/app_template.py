@@ -219,7 +219,7 @@ $items    ),
 
 def _imports(spec: AppSpec, backend_import: str) -> str:
     names = ["Debian", "Fragment", "Git", "Package", "Recipe", "Service", "Variant"]
-    utils = ["DevTools", "GoBinary"]
+    utils = ["DevTools", "GoBinary", "TeeBase"]
     if spec.disk:
         names += ["Disk", "Key", "RuntimeTools"]
     if spec.secret:
@@ -278,7 +278,11 @@ def render_app_recipe(
     """The recipe source ``tundravm init --app go`` writes for *spec*."""
     backend_import, backend_expr = backend
     env = ['"STATE_DIRECTORY": STATE_DIR'] if spec.disk else []
-    items = ['Package("ca-certificates")']
+    items = [
+        "# NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.",
+        "TeeBase()",
+        'Package("ca-certificates")',
+    ]
     sections = _CONSTANTS
     if spec.disk:
         sections += _DISK
@@ -363,6 +367,15 @@ def test_service_is_enabled() -> None:
     service = IMAGE.service(APP)
     assert service.enabled
     assert service.wanted_by == ("minimal.target",)
+
+
+def test_tee_baseline_is_in_the_image() -> None:
+    # TeeBase(): authenticated (NTS) time, a RAM-only journal, kernel sysctl hardening.
+    assert "chrony" in IMAGE.packages
+    assert " nts\n" in IMAGE.file("/etc/chrony/chrony.conf").text
+    journal = IMAGE.file("/etc/systemd/journald.conf.d/50-tundravm-tee.conf").text
+    assert "Storage = volatile" in journal
+    assert "kexec_load_disabled = 1" in IMAGE.file("/etc/sysctl.d/50-tundravm-tee.conf").text
 $extra
 
 def test_service_fragment_plans_on_its_own() -> None:

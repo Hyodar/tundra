@@ -415,6 +415,38 @@ class Kernel:
     source_submodules: bool = False
     source_archive: str | None = None
     source_sha256: str | None = None
+    base_file: str | Path | None = None
+    """A local base config: the start of the composed config (``config_file`` is the whole one)."""
+    base_deb: str | None = None
+    """The Debian ``linux-config`` package whose *base_member* is the base config."""
+    base_deb_sha256: str | None = None
+    base_member: str | None = None
+    options: tuple[tuple[str, str], ...] = ()
+    """Requested ``CONFIG_*`` values (``n`` for off), merged onto the base and checked after
+    ``olddefconfig``."""
+    patches: tuple[KernelPatchSpec, ...] = ()
+    modules: bool = False
+    """Build and install loadable modules; ``False`` requests ``CONFIG_MODULES=n``."""
+
+    @property
+    def composed(self) -> bool:
+        """Whether the config is composed from a base (with options and patches)."""
+        return self.base_file is not None or self.base_deb is not None
+
+    @property
+    def built(self) -> bool:
+        """Whether the build phase compiles this kernel: a whole config or a base."""
+        return bool(self.config_file) or self.composed
+
+
+@dataclass(frozen=True, slots=True)
+class KernelPatchSpec:
+    """A kernel patch applied with ``patch -p1``: a local *path*, or *url* checked by sha256."""
+
+    name: str
+    path: str | Path | None = None
+    url: str | None = None
+    sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -870,6 +902,7 @@ __all__ = [
     "GroupSpec",
     "HookSpec",
     "Kernel",
+    "KernelPatchSpec",
     "KillMode",
     "OutputTarget",
     "PartitionSpec",

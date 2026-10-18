@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from ._modules.init import is_init_path
 from ._modules.secret_delivery import SecretDelivery
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
-from ._source import DebFile, KernelSource, NamedSource
+from ._source import DebFile, KernelFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
 from .formats import annotation_path, md_cell, md_table, workflow_command
@@ -474,6 +474,11 @@ def _unpinned_advice(spec: NamedSource, *, fetches: bool) -> tuple[str, str]:
             f"Run `tundravm lock RECIPE` to pin it as {spec.name!r}{fetch}, or give "
             "Kernel a Git source with a 40-hex commit ref.",
         )
+    if isinstance(spec, KernelFile):
+        return (
+            f"the kernel's {spec.name} ({source.kind} {source.url}) is not pinned in the lockfile",
+            f"Run `tundravm lock RECIPE` to pin its sha256 as {spec.name!r}{fetch}.",
+        )
     if isinstance(spec, DebFile):
         return (
             f"EfiStub package ({source.kind} {source.url}) is not pinned in the lockfile",
@@ -522,6 +527,46 @@ def _removes(patterns: Iterable[str], path: str) -> str | None:
         if fnmatch.fnmatch(path, pattern):
             return pattern
     return None
+
+
+def _rule_built_kernel_modules(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    """A built kernel's modules: ``kernel_modules`` it cannot have, or a debloat deleting them."""
+    kernel = image.kernel_for(profile_name)
+    if kernel is None or not kernel.built:
+        return
+    loadable = kernel.composed and kernel.modules
+    selected = image.mkosi_for(profile_name).kernel_modules
+    if selected and not loadable:
+        yield Diagnostic(
+            severity="warning",
+            code="kernel-modules-ignored",
+            message=(
+                "Debian(kernel_modules=...) selects modules, but the built kernel has no "
+                "loadable modules (Kernel(modules=False) or a whole config=)"
+            ),
+            hint="Drop kernel_modules and build those drivers in (KernelConfig), or pass "
+            "Kernel(modules=True).",
+            variant=profile_name,
+            subject="kernel_modules",
+        )
+    config = state.debloat
+    if loadable and config.enabled and config.keep_modules is not True:
+        pattern = _removes(config.effective_paths_remove, MODULES_PATH)
+        if pattern is not None and config.keep_modules is None:
+            yield Diagnostic(
+                severity="error",
+                code="debloat-removes-modules",
+                message=(
+                    f"debloat removes {pattern} but the built kernel installs its loadable "
+                    "modules there (Kernel(modules=True))"
+                ),
+                hint="Debloat(keep_modules=True) keeps them; or build them in "
+                "(Kernel(modules=False)).",
+                variant=profile_name,
+                subject=MODULES_PATH,
+            )
 
 
 def _rule_debloat_removes_modules(
@@ -933,6 +978,7 @@ RULES: list[Rule] = [
     _rule_source_unpinned,
     _rule_kernel_missing,
     _rule_debloat_removes_modules,
+    _rule_built_kernel_modules,
     _rule_recipe_arch_unsupported,
     _rule_secret_in_file,
     _rule_secret_in_env,
@@ -1144,7 +1190,7 @@ def declaration_check(recipe: Recipe, *, variants: Sequence[str] | None = None) 
     found: list[Diagnostic] = []
     for variant, items in groups:
         own = list(_own_declarations(items))
-        kernel = any(isinstance(item, Kernel) and item.config is not None for item in own)
+        kernel = any(isinstance(item, Kernel) and item.built for item in own)
         for item in own:
             found.extend(_declaration_findings(item, variant, kernel=kernel))
     return found

@@ -15,7 +15,7 @@ import re
 import shlex
 import shutil
 import textwrap
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol, get_args
@@ -466,6 +466,9 @@ class EmitConfig:
     kernel_distribution: str | None = None
     """Outside ``nethermind-v1``: the fingerprint of what the pinned kernel compiles
     against (``Lowered.build_distribution``), which its cache key ends with."""
+    kernel_files: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    """A composed kernel's downloads: ``(url, mounted path, lines that check it)``; an
+    unpinned one has no path and lines that fail (``KernelFile.mounted``)."""
     profiles: Mapping[str, EmitConfig] = field(default_factory=dict)
     """Profiles with their own settings or kernel; the rest use this configuration."""
 
@@ -752,6 +755,151 @@ def _kernel_source_identity(kernel: Kernel) -> str:
     )
 
 
+_LEGACY_CONFIGURE = """\
+cp kernel/kernel.config "$KERNEL_CACHE/src/.config"
+cd "$KERNEL_CACHE/src"
+
+# Reproducibility environment
+export KBUILD_BUILD_TIMESTAMP="1970-01-01"
+export KBUILD_BUILD_USER="tundravm"
+export KBUILD_BUILD_HOST="tundravm"
+
+make olddefconfig
+make -j"$(nproc)" bzImage ARCH=x86_64"""
+
+_MODULES_INSTALL = """\
+RELEASE=$(make -s -C "$KERNEL_CACHE/src" kernelrelease)
+if [ "$RELEASE" != "$KERNEL_VERSION" ]; then
+    echo "tundravm: the kernel builds release $RELEASE, not $KERNEL_VERSION" >&2
+    exit 1
+fi
+make -C "$KERNEL_CACHE/src" modules_install INSTALL_MOD_PATH="${DESTDIR}/usr" \\
+    INSTALL_MOD_STRIP=1 ARCH=x86_64"""
+
+_KCONFIG_CHECK = """\
+# Kconfig drops a requested option whose dependencies are unmet: check each survived
+kconfig_check() {
+    local final
+    final=$(sed -n "s/^$1=//p" .config)
+    if [ "${final:-n}" != "$2" ]; then
+        echo "tundravm: kernel-option-dropped: $1 requested $2, final ${final:-n}" >&2
+        return 1
+    fi
+}
+dropped=0"""
+
+
+def kernel_patch_file(index: int, name: str) -> str:
+    """Where a local kernel patch lands in the tree, under ``kernel/patches``."""
+    return f"{index:02d}-{name}"
+
+
+def kernel_fragment(kernel: Kernel) -> str:
+    """The requested options as a ``.config`` fragment (``kernel/fragment.config``)."""
+    return "".join(
+        f"# {key} is not set\n" if value == "n" else f"{key}={value}\n"
+        for key, value in kernel.options
+    )
+
+
+def _kernel_file(
+    files: Sequence[tuple[str, str, tuple[str, ...]]], url: str
+) -> tuple[str, list[str]]:
+    """The mounted *url* and its check lines; lines that fail when it is not mounted."""
+    for found, path, lines in files:
+        if found == url:
+            return path, list(lines)
+    message = f"tundravm: {url} is not pinned: run tundravm lock, then tundravm fetch"
+    return "", [f"echo {shlex.quote(message)} >&2", "exit 1"]
+
+
+def _composed_configure(kernel: Kernel, files: Sequence[tuple[str, str, tuple[str, ...]]]) -> str:
+    """Base config, patches in order, the fragment, ``olddefconfig``, the check, the build."""
+    lines = ['KERNEL_TREE="$PWD/kernel"']
+    if kernel.base_deb is not None:
+        deb, check = _kernel_file(files, kernel.base_deb)
+        member = shlex.quote(kernel.base_member or "")
+        lines += check
+        lines += [
+            f"dpkg-deb --fsys-tarfile {deb} | tar -xO {member} \\",
+            '    | xz -dc > "$KERNEL_CACHE/src/.config"',
+        ]
+    else:
+        lines.append('cp kernel/base.config "$KERNEL_CACHE/src/.config"')
+    for index, patch in enumerate(kernel.patches, 1):
+        if patch.url is not None:
+            path, check = _kernel_file(files, patch.url)
+            lines += check
+        else:
+            path = f'"$KERNEL_TREE/patches/{kernel_patch_file(index, patch.name)}"'
+        failed = shlex.quote(f"tundravm: kernel patch {patch.name} does not apply")
+        lines += [
+            f'patch -d "$KERNEL_CACHE/src" -p1 --batch --forward < {path} \\',
+            f"    || {{ echo {failed} >&2; exit 1; }}",
+        ]
+    lines += [
+        'cd "$KERNEL_CACHE/src"',
+        "",
+        "# Reproducibility environment",
+        'export KBUILD_BUILD_TIMESTAMP="1970-01-01"',
+        'export KBUILD_BUILD_USER="tundravm"',
+        'export KBUILD_BUILD_HOST="tundravm"',
+        "",
+        './scripts/kconfig/merge_config.sh -m .config "$KERNEL_TREE/fragment.config"',
+        "make olddefconfig",
+        _KCONFIG_CHECK,
+        *(
+            f"kconfig_check {key} {shlex.quote(value)} || dropped=1"
+            for key, value in kernel.options
+        ),
+        '[ "$dropped" -eq 0 ] || exit 1',
+        f'make -j"$(nproc)" bzImage{" modules" if kernel.modules else ""} ARCH=x86_64',
+    ]
+    return "\n".join(lines)
+
+
+def _composed_identity(kernel: Kernel, files: Sequence[tuple[str, str, tuple[str, ...]]]) -> str:
+    """What a composed kernel's cache key covers: base, fragment, patches and module mode."""
+
+    def digest(path: str | Path | None) -> str:
+        found = Path(path or "")
+        return hashlib.sha256(found.read_bytes()).hexdigest() if found.is_file() else str(path)
+
+    pins = {url: "\n".join(lines) for url, _, lines in files}
+    parts = [
+        f"base:{kernel.base_deb}:{pins.get(kernel.base_deb or '', '')}"
+        if kernel.base_deb is not None
+        else f"base:{digest(kernel.base_file)}",
+        "fragment:" + kernel_fragment(kernel),
+        *(
+            f"patch:{p.name}:{p.url}:{pins.get(p.url, '')}"
+            if p.url is not None
+            else f"patch:{p.name}:{digest(p.path)}"
+            for p in kernel.patches
+        ),
+        f"modules:{kernel.modules}",
+    ]
+    return "\n".join(parts)
+
+
+def _emit_composed_kernel(directory: Path, kernel: Kernel) -> None:
+    """Write a composed kernel's fragment, local base and local patches under *directory*."""
+    _write(directory / "fragment.config", kernel_fragment(kernel), FILE_MODE)
+    local = [(kernel.base_file, directory / "base.config")] if kernel.base_file else []
+    for index, patch in enumerate(kernel.patches, 1):
+        if patch.path is not None:
+            local.append((patch.path, directory / "patches" / kernel_patch_file(index, patch.name)))
+    for source, dest in local:
+        path = Path(source or "")
+        if not path.is_file():
+            raise ValidationError(
+                f"Kernel {kernel.version}: {path} does not exist.",
+                hint="Pass the path of an existing file (assets.file(...)).",
+                context={"path": str(path)},
+            )
+        _write(dest, path.read_text(encoding="utf-8"), FILE_MODE)
+
+
 def _render_kernel_build_script(
     kernel: Kernel,
     dialect: str = "current",
@@ -759,6 +907,7 @@ def _render_kernel_build_script(
     pin: str | None = None,
     checkout: str | None = None,
     distribution: str | None = None,
+    files: Sequence[tuple[str, str, tuple[str, ...]]] = (),
 ) -> str:
     """Render a build script that fetches, configures, and compiles the Linux kernel.
 
@@ -767,7 +916,10 @@ def _render_kernel_build_script(
     host-fetched *checkout* of *pin* (see :func:`_kernel_copy`), keys the cache
     by the pin and the *distribution* fingerprint, so another snapshot, mirror
     or toolchain rebuilds, and falls back to the build overlay for it, since
-    mkosi sets ``$BUILDDIR`` only with ``BuildDirectory=``.
+    mkosi sets ``$BUILDDIR`` only with ``BuildDirectory=``. A composed kernel
+    (``base``) starts from its base config, applies its patches in order, merges
+    ``kernel/fragment.config``, runs ``olddefconfig`` and checks every requested
+    option survived (*files*: its mounted downloads, ``EmitConfig.kernel_files``).
     """
     historical = dialect == "nethermind-v1"
     cache_root = "${BUILDDIR}" if historical else "${BUILDDIR:-$BUILDROOT/build}"
@@ -777,6 +929,8 @@ def _render_kernel_build_script(
         config_path = Path(kernel.config_file)
         if config_path.exists():
             config_hash_source = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    if kernel.composed:
+        config_hash_source = _composed_identity(kernel, files)
     source_identity = _kernel_source_identity(kernel)
     if source_identity:
         config_hash_source += "\n" + source_identity
@@ -791,6 +945,11 @@ def _render_kernel_build_script(
             if distribution is not None:
                 cache_key += f"-{distribution}"
     fetch = ("\n" + " " * 12).join(fetch_lines)
+    configure_text = _composed_configure(kernel, files) if kernel.composed else _LEGACY_CONFIGURE
+    configure = ("\n" + " " * 12).join(configure_text.split("\n"))
+    modules_install = ""
+    if kernel.composed and kernel.modules:
+        modules_install = ("\n" + " " * 8).join(("", *_MODULES_INSTALL.split("\n")))
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash
         set -euo pipefail
@@ -806,16 +965,7 @@ def _render_kernel_build_script(
 
             {fetch}
 
-            cp kernel/kernel.config "$KERNEL_CACHE/src/.config"
-            cd "$KERNEL_CACHE/src"
-
-            # Reproducibility environment
-            export KBUILD_BUILD_TIMESTAMP="1970-01-01"
-            export KBUILD_BUILD_USER="tundravm"
-            export KBUILD_BUILD_HOST="tundravm"
-
-            make olddefconfig
-            make -j"$(nproc)" bzImage ARCH=x86_64
+            {configure}
 
             mkdir -p "$KERNEL_CACHE/done"
         fi
@@ -823,7 +973,7 @@ def _render_kernel_build_script(
         # Install kernel to destination
         INSTALL_DIR="${{DESTDIR}}/usr/lib/modules/${{KERNEL_VERSION}}"
         mkdir -p "$INSTALL_DIR"
-        cp "$KERNEL_CACHE/src/arch/x86/boot/bzImage" "$INSTALL_DIR/vmlinuz"
+        cp "$KERNEL_CACHE/src/arch/x86/boot/bzImage" "$INSTALL_DIR/vmlinuz"{modules_install}
 
         # Export for downstream phases
         export KERNEL_IMAGE="$INSTALL_DIR/vmlinuz"
@@ -1175,7 +1325,14 @@ class DeterministicMkosiEmitter:
                 _write(target_path, MINIMAL_TARGET_UNIT, FILE_MODE)
 
     def _emit_kernel_config(self, profile_dir: Path, config: EmitConfig) -> None:
-        """Copy kernel config file into the output tree if present."""
+        """Copy kernel config file into the output tree if present.
+
+        A composed kernel writes ``kernel/fragment.config``, its local base as
+        ``kernel/base.config`` and its local patches under ``kernel/patches``.
+        """
+        if config.kernel and config.kernel.composed:
+            _emit_composed_kernel(profile_dir / "kernel", config.kernel)
+            return
         if config.kernel and config.kernel.config_file:
             config_src = Path(config.kernel.config_file)
             if not config_src.exists():
@@ -1241,13 +1398,14 @@ class DeterministicMkosiEmitter:
                 continue
 
             # For build: prepend kernel build script if kernel has config_file
-            if phase == "build" and config and config.kernel and config.kernel.config_file:
+            if phase == "build" and config and config.kernel and config.kernel.built:
                 kernel_script = _render_kernel_build_script(
                     config.kernel,
                     config.dialect,
                     pin=config.kernel_pin,
                     checkout=config.kernel_checkout,
                     distribution=config.kernel_distribution,
+                    files=config.kernel_files,
                 )
                 if commands:
                     # Combine kernel build + user-defined build commands
@@ -1493,7 +1651,7 @@ class DeterministicMkosiEmitter:
         # Collect environment passthrough keys
         passthrough_keys = list(config.environment_passthrough or ())
         # Auto-add kernel env vars when kernel has config_file
-        if config.kernel and config.kernel.config_file:
+        if config.kernel and config.kernel.built:
             for kvar in ("KERNEL_IMAGE", "KERNEL_VERSION"):
                 if kvar not in passthrough_keys:
                     passthrough_keys.append(kvar)

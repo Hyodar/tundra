@@ -96,6 +96,7 @@ _APP_IMPORTS = {
         "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
+        "    TeeBase,\n"
         ")\n"
     ),
     "cloud": (
@@ -117,6 +118,7 @@ _APP_IMPORTS = {
         "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
+        "    TeeBase,\n"
         ")\n"
     ),
     "prover": (
@@ -144,6 +146,7 @@ _APP_IMPORTS = {
         "    DevTools,\n"
         "    HttpEndpoint,\n"
         "    Tdxs,\n"
+        "    TeeBase,\n"
         ")\n"
     ),
 }
@@ -198,6 +201,8 @@ recipe = Recipe(
     # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
     platform=Debian("$release"),
     items=(
+        # NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.
+        TeeBase(),
         Package("ca-certificates"),
         App(version=APP_VERSION, port=APP_PORT),
     ),
@@ -221,6 +226,8 @@ recipe = Recipe(
     # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
     platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
     items=(
+        # NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.
+        TeeBase(),
         Package("ca-certificates"),
         Package("curl", role="build"),
         Backports(),
@@ -256,6 +263,8 @@ recipe = Recipe(
     # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
     platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
     items=(
+        # NTS time, RAM-only journal, sysctl hardening, DNS, no apt timers: opt out per flag.
+        TeeBase(),
         Package("ca-certificates"),
         Package("cryptsetup"),
         # Root logs in over SSH with the key Secrets delivers; socat relays /var/tdxs.sock.

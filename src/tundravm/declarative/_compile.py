@@ -212,9 +212,15 @@ def _kernel_pin(
     """``EmitConfig`` fields for *profile*'s kernel: pin, checkout and distribution fingerprint."""
     spec = lowered.kernel_source(profile)
     pin = None if spec is None or not lowered.fetches_sources else spec.pin_from(pins)
+    files = tuple(
+        (file.source.url, *file.mounted(file.pin_from(pins) if lowered.fetches_sources else None))
+        for file in lowered.kernel_files(profile)
+    )
+    found: dict[str, object] = {"kernel_files": files} if files else {}
     if spec is None or pin is None:
-        return {}
+        return found
     return {
+        **found,
         "kernel_pin": pin,
         "kernel_checkout": spec.pin_dir(pin),
         "kernel_distribution": lowered.distribution_fingerprint(profile),

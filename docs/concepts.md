@@ -161,6 +161,23 @@ Kernel(KERNEL_VERSION, KERNEL_SOURCE, config=assets.file("kernel/kernel.config")
 
 By default every variant compiles to `Format=uki`, a bootable unified kernel image, and mkosi can only build one from an image that holds a kernel. A bootable variant therefore declares a `Kernel(...)` built from source or installs a distribution kernel package (the platform's `kernel_package`, `"linux-image-amd64"` by default, any `linux-image-*`, or Ubuntu's `linux-generic`, `linux-kvm` and `linux-virtual`). Without either, lint reports `kernel-missing`, an error, so `bake` stops at its lint step before mkosi runs. A disk that is never booted declares `Setting("Content", "Bootable", ("no",))` on `Debian(boot=None)` instead: its variant compiles to `Format=disk` and `Bootable=no` and needs no kernel. `Debian(release)` (`boot="systemd"`) installs the Debian kernel together with `systemd`, `systemd-sysv`, `udev`, `kmod` and `systemd-boot-efi`, as the `init` templates do.
 
+### Built kernels
+
+`Kernel(version, source, base=..., fragments=..., patches=..., modules=False)` composes the kernel's config instead of taking one whole file:
+
+```python
+Kernel(
+    "6.12.48",
+    Git("https://github.com/gregkh/linux", "v6.12.48"),          # lock pins the commit
+    base=DebianConfig("6.12.48-1"),                               # Debian's cloud config, locked by sha256
+    patches=(KernelPatch(assets.file("kernel/0001-badaml.patch")),),
+)
+KernelConfig({"CONFIG_XFS_FS": "y", "CONFIG_IO_URING": None}, name="storage")  # any component may add one
+KernelHardening()                                                 # flashbots' deny list + hardening options
+```
+
+The build copies the source, writes the base config (`DebianConfig` extracts `config.<arch>_none_<flavor>.xz` from the `linux-config` package that `tundravm fetch` downloaded and checked; a `Path` base is copied into the tree as `kernel/base.config`), applies the patches in order with `patch -p1` (one that does not apply stops the build naming it), merges `kernel/fragment.config` with `merge_config.sh -m`, runs `make olddefconfig` and then checks every requested option against the final `.config`: Kconfig silently drops an option whose dependencies are unmet, so the build fails with `kernel-option-dropped: CONFIG_X requested y, final n` instead of shipping a kernel without it. The requested options are `CONFIG_MODULES=n` (unless `modules=True`), the kernel's `fragments`, then every `KernelConfig` the variant declares, in declaration order; two that set one option differently are an error (`kernel-option-conflict`) naming both. `modules=False`, the default, builds everything in, so the image carries only `vmlinuz`; `modules=True` also builds the modules and installs them under `/usr/lib/modules/<version>` (the build checks the kernel release equals `version`). `config=` keeps its meaning, a whole, final config used as is, and excludes the others. Lint `kernel-modules-ignored` warns when `Debian(kernel_modules=...)` selects modules a monolithic kernel cannot have.
+
 ### Kernel modules
 
 The UKI's initrd is the whole root file system, so every module under `/usr/lib/modules` is memory and a driver the host can reach through a device it offers. A variant on the distribution's modular kernel therefore keeps only the drivers its outputs boot on: lowering writes them as mkosi `KernelModules=` (one name per line), mkosi keeps them with their module and firmware dependencies and deletes the rest before finalize, and the finalize script then fails the build if one of them is neither a `.ko` file nor built into that kernel. The curated sets live in `tundravm.kernel_modules`, checked against Debian trixie's `linux-image-amd64`:
@@ -209,6 +226,20 @@ These declarations put systemd units in the image:
 `Unit(..., needs=[disk.ready])` adds `After=runtime-init-disks.service` and `Requires=runtime-init-disks.service` to the shipped text's `[Unit]` section, one unit per needed step. `needs=[RUNTIME_INIT]` adds `runtime-init.service`, and so does any `needs` under `nethermind-v1`. A `needs` naming a step the variant does not declare is `needs-undefined`, an error. A `Unit` with `needs` in a variant with no runtime-init step gets a `needs-without-init` warning from `lint`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (`Tdxs(legacy_units=True)` and `DevTools(reproducible=False)` ship their historical unit text that way).
 
 `Template(path, template, variables={})` is a file rendered with `str.format_map(variables)` at lowering time, for config files that differ only in a few values.
+
+### The TEE baseline
+
+A confidential VM trusts its own code but not its host, and the host still owns the clock, the disks, the console and the network. `TeeBase()` (in `tundravm.declarative.utils`, used by the `service`, `cloud` and `prover` templates and `init --app`) declares what every such image should have, each piece a typed declaration behind its own flag:
+
+| Flag | Declares | Why | Source |
+|---|---|---|---|
+| `time` | `chrony` with NTS servers (`time.cloudflare.com`, `nts.netnod.se`), refined by the GCP and AWS hypervisor clocks under `maxdistance 1.0`; `chrony.service` enabled | the host sets an unauthenticated guest clock, and TLS, certificate expiry and time-based policy depend on it; NTS (RFC 8915) authenticates the time | flashbots-images `shared/mkosi.extra/etc/chrony/chrony.conf` |
+| `journal` | `journald.conf.d/50-tundravm-tee.conf`: `Storage=volatile`, `RuntimeMaxUse=128M`, `ForwardToConsole=no` | logs stay in guest RAM, capped; nothing reaches a host-readable disk or the host-owned console | flashbots-images `etc/systemd/journald.conf.d/00-size-limit.conf`, `journald.conf(5)` |
+| `sysctl` | `/etc/sysctl.d/50-tundravm-tee.conf` (`TEE_SYSCTL`): `kptr_restrict=2`, `dmesg_restrict=1`, `unprivileged_bpf_disabled=1`, `bpf_jit_harden=2`, `kexec_load_disabled=1` (the measured kernel cannot be replaced), `yama.ptrace_scope=2`, `perf_event_paranoid=3`, `sysrq=0`, `suid_dumpable=0`, the `fs.protected_*` set, and ICMP redirect, source-route, reverse-path and SYN-cookie network settings; each line names its reason and is `-`-prefixed, so a key the kernel lacks is skipped | kernel attack surface a guest does not need | KSPP recommended settings, flashbots-images `etc/sysctl.d/10-kernel-hardening.conf`, the kernel's `admin-guide/sysctl` |
+| `dns` | a static `/etc/resolv.conf` naming `1.1.1.1` and `1.0.0.1` | names resolve without trusting a DHCP-supplied resolver; on Compute Engine `gcp-metadata-dns.service` replaces the file at boot with the metadata server, as before | flashbots-images `etc/systemd/resolved.conf` (Cloudflare) |
+| `mask` | `Unit(name, masked=True)` for `apt-daily.timer`, `apt-daily-upgrade.timer`, `dpkg-db-backup.timer` and `getty@tty1.service` (`TEE_MASKED_UNITS`) | the running image stays the measured one, and the host-owned console offers no login; debloat already masks the `systemd` package's other units | flashbots-images `shared/mkosi.postinst.d/90-debloat-systemd.sh` |
+
+Turn a piece off with its flag (`TeeBase(dns=False)` when the recipe ships its own resolver) or change its inputs (`nts_servers=`, `hypervisor_clocks=()`, `nameservers=`, `journal_max_use=`). flashbots-images resolves over DNS-over-TLS through `systemd-resolved`; `TeeBase` keeps a plain `resolv.conf` so the GCP glue, which copies the metadata resolver over it, keeps working.
 
 ## Keys, disks and secrets
 

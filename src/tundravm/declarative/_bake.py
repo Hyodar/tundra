@@ -18,6 +18,7 @@ from tundravm._source import (
     NOT_PREFETCHED,
     SOURCES_DIRNAME,
     DebFile,
+    KernelFile,
     KernelSource,
     LanguageBuild,
     SourceBuild,
@@ -372,6 +373,8 @@ def _fetched_sources(
             if isinstance(spec, KernelSource)
             else "EfiStub package"
             if isinstance(spec, DebFile)
+            else "Kernel file"
+            if isinstance(spec, KernelFile)
             else "Source build"
         )
         pin = spec.pin_from(pins)

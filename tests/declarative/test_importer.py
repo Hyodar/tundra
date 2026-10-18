@@ -202,8 +202,11 @@ def test_service_template_imports_first_class_declarations(tmp_path: Path) -> No
     imported = import_tree(tree, output=out)
     kinds = {type(item).__name__ for item in imported.recipe.items}
     assert {"Service", "User", "File", "Package"} <= kinds
-    # The template's only unit is its typed app service: no unit text comes back verbatim.
-    assert not [item for item in imported.recipe.items if isinstance(item, Unit)]
+    # The template's only unit file is its typed app service: no unit text comes back
+    # verbatim (TeeBase's packaged units come back as enable/mask states).
+    units = [item for item in imported.recipe.items if isinstance(item, Unit)]
+    assert not [unit for unit in units if unit.content is not None]
+    assert {unit.name for unit in units if unit.masked} >= {"apt-daily.timer"}
     assert [v.name for v in imported.recipe.variants] == ["default", "dev"]
     assert "parent=None" not in imported.recipe_source
     out.write_text(imported.recipe_source, encoding="utf-8")

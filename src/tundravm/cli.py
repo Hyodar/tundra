@@ -1360,6 +1360,17 @@ def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
             "recorded; it is marked incomplete with a note."
         ),
     )
+    sbom_cmd.add_argument(
+        "--binaries",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Directory with the built binaries at their image paths (an unpacked root) or "
+            "by file name: each source build's binary adds the Go modules or cargo "
+            "auditable crates it records as nested components."
+        ),
+    )
 
 
 def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -2929,6 +2940,7 @@ def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
         artifact,
         lock=_sbom_lock(_build_dir(args), args.lockfile, artifact.variant),
         allow_unbound=args.allow_unbound,
+        binaries=args.binaries,
     )
     text = document.render(args.format)
     if args.output is not None or args.format.endswith("-json"):

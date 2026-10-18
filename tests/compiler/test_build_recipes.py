@@ -82,8 +82,9 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
         "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/go ]; then export "
         "GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod && "
         '{ [ "$WITH_NETWORK" != 0 ] || export GOPROXY=off; }; fi && '
-        "cd /build/tool && mkdir -p ./build && go build -trimpath "
-        '-ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool\'' in hooks
+        "cd /build/tool && mkdir -p ./build && "
+        'SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" CGO_ENABLED=0 go build -trimpath '
+        '-buildvcs=false -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool\'' in hooks
     )
     assert (
         '{ [ ! -d "$SRCDIR/tundravm-sources/deps/go" ] || '
@@ -97,8 +98,8 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
 def test_go_recipe_renders_like_the_equivalent_script() -> None:
     install = (Install("build/tool", "/usr/bin/tool"),)
     script = (
-        'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" '
-        "-o ./build/tool ./cmd/tool"
+        'mkdir -p ./build && SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" CGO_ENABLED=0 '
+        'go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
     )
     by_recipe = Build(
         "tool", Git(REPO, "main"), using=Go(package="./cmd/tool", output="tool"), install=install
@@ -131,11 +132,40 @@ def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
         "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/cargo ]; then export "
         "CARGO_HOME=/build/.tundravm-deps/cargo && "
         '{ [ "$WITH_NETWORK" != 0 ] || export CARGO_NET_OFFLINE=true; }; fi && '
-        'export RUSTFLAGS="-C x" && cd /build/tool && cargo fetch && '
-        "cargo build --release --frozen --features tdx --bin tool'"
+        'export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" '
+        "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_INCREMENTAL=false "
+        'CARGO_TERM_COLOR=never RUSTFLAGS="-C target-cpu=generic '
+        "-C link-arg=-Wl,--build-id=none -C symbol-mangling-version=v0 "
+        '--remap-path-prefix=/build/tool=/build -C x" && cd /build/tool && cargo fetch && '
+        "cargo auditable build --release --frozen --features tdx --bin tool'"
     ) in hooks
     assert '"$BUILDROOT/build/tool/target/release/tool"' in hooks
-    assert "BuildPackages=\n    cargo\n    git\n" in _conf(tree)
+    assert "BuildPackages=\n    cargo\n    cargo-auditable\n    git\n" in _conf(tree)
+
+
+def test_cargo_recipe_merges_its_rustflags_with_the_project_config() -> None:
+    command = Cargo(output="tool").command("/build/tool")
+    assert command == "cd /build/tool && cargo fetch && cargo build --release --frozen"
+    resolved = Cargo(output="tool", reproducible=True, auditable=True).command("/build/tool")
+    assert resolved.endswith(
+        "cargo auditable build --release --frozen --config 'build.rustflags=["
+        '"-C","target-cpu=generic","-C","link-arg=-Wl,--build-id=none",'
+        '"-C","symbol-mangling-version=v0","--remap-path-prefix=/build/tool=/build"]\''
+    )
+    assert Cargo(output="tool", auditable=True).packages == ("cargo", "cargo-auditable")
+    plain = Cargo(output="tool", reproducible=True, auditable=False).command("/build/tool")
+    assert " cargo build --release --frozen --config " in plain
+
+
+def test_go_recipe_cgo_and_dialect_defaults() -> None:
+    go = Go(package="./cmd/tool", output="tool")
+    assert "-buildvcs" not in go.command("/build/tool")  # None: nethermind-v1 renders it so
+    assert "CGO_ENABLED" not in Go(
+        package="./cmd/tool", output="tool", reproducible=True, cgo=True
+    ).command("/build/tool")
+    own = Go(package="./x", output="x", reproducible=True, env={"CGO_ENABLED": "1"})
+    assert "CGO_ENABLED=0" not in own.command("/build/x")
+    assert "CGO_ENABLED=1 go build -trimpath -buildvcs=false" in own.command("/build/x")
 
 
 def test_dotnet_recipe_renders_dotnet_publish() -> None:

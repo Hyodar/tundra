@@ -22,7 +22,7 @@ import os
 import re
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, get_args
@@ -33,16 +33,26 @@ from tundravm.errors import ArtifactError, ValidationError
 from tundravm.lockfile import LockedFetch
 
 from ._bake import package_manifest
+from ._embedded import embedded_dependencies
 from ._lowered import Lowered
 from .lifecycle import Artifact, Lock, verify_artifact
 
-ComponentKind = Literal["package", "build", "kernel", "efi-stub"]
+ComponentKind = Literal["package", "build", "kernel", "efi-stub", "go-module", "crate"]
+EMBEDDED_KINDS: frozenset[str] = frozenset({"go-module", "crate"})
+"""Component kinds read from a built binary (``Component.parent`` names the build)."""
 SbomFormat = Literal["spdx-json", "cyclonedx-json", "text", "markdown"]
 SBOM_FORMATS: tuple[SbomFormat, ...] = get_args(SbomFormat)
 MANIFEST_VERSION = 1
 """The mkosi manifest version this parser reads (mkosi 26 writes ``manifest_version: 1``)."""
 
-_KIND_ORDER: dict[str, int] = {"package": 0, "build": 1, "kernel": 2, "efi-stub": 3}
+_KIND_ORDER: dict[str, int] = {
+    "package": 0,
+    "build": 1,
+    "kernel": 2,
+    "efi-stub": 3,
+    "go-module": 4,
+    "crate": 5,
+}
 _DEB_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 _FROM_MKOSI_ARCH = {"x86-64": "x86_64", "arm64": "aarch64"}
 _PURL_TYPES = {"deb": "deb", "rpm": "rpm", "pkg": "alpm"}
@@ -52,10 +62,12 @@ _NAMESPACE = uuid.UUID("6f1e0c52-2f6b-5b1c-9a57-7475e6472a76")
 
 @dataclass(frozen=True, slots=True)
 class Component:
-    """One thing in the image: a distribution ``package`` or a pinned source.
+    """One thing in the image: a distribution ``package``, a pinned source or an embedded one.
 
     Sources are a ``build`` (a source build), the ``kernel`` built from source
     (``kernel-<variant>`` when the variant's differs) or the ``efi-stub`` package.
+    Embedded dependencies are the ``go-module`` and ``crate`` entries a build's binary
+    records (Go build information, ``cargo auditable``); *parent* names that build.
     """
 
     kind: ComponentKind
@@ -76,6 +88,8 @@ class Component:
     """The image paths a source build installs (its ``Install`` destinations)."""
     declared: bool = False
     """A package the recipe declares, listed because no manifest says what was installed."""
+    parent: str = ""
+    """The source build whose binary records this ``go-module`` or ``crate``."""
 
     @property
     def git(self) -> bool:
@@ -131,7 +145,14 @@ class Sbom:
 
     @property
     def sources(self) -> tuple[Component, ...]:
-        return tuple(c for c in self.components if c.kind != "package")
+        return tuple(
+            c for c in self.components if c.kind != "package" and c.kind not in EMBEDDED_KINDS
+        )
+
+    @property
+    def embedded(self) -> tuple[Component, ...]:
+        """The Go modules and crates the built binaries record."""
+        return tuple(c for c in self.components if c.kind in EMBEDDED_KINDS)
 
     def render(self, format: SbomFormat = "spdx-json") -> str:
         """The document as *format*: ``spdx-json``, ``cyclonedx-json``, ``text`` or ``markdown``."""
@@ -155,9 +176,13 @@ class Sbom:
         image = "SPDXRef-Image"
         packages: list[dict[str, Any]] = [self._spdx_image(image)]
         relationships: list[dict[str, str]] = [_relation("SPDXRef-DOCUMENT", "DESCRIBES", image)]
+        builds = {c.name: _spdx_id(c) for c in self.components if c.kind == "build"}
         for component in self.components:
             ref = _spdx_id(component)
             packages.append(_spdx_package(component, ref, self._distro()))
+            if component.kind in EMBEDDED_KINDS and component.parent in builds:
+                relationships.append(_relation(builds[component.parent], "DEPENDS_ON", ref))
+                continue
             kind = "CONTAINS" if component.kind == "package" else "GENERATED_FROM"
             relationships.append(_relation(image, kind, ref))
         creation: dict[str, Any] = {
@@ -223,6 +248,16 @@ class Sbom:
         if self.notes:
             metadata["properties"] = [{"name": "tundravm:note", "value": n} for n in self.notes]
         components = [_cyclonedx_component(c, self._distro()) for c in self.components]
+        refs = {c.name: _spdx_id(c).removeprefix("SPDXRef-") for c in self.components}
+        nested: dict[str, list[str]] = {}
+        for component, entry in zip(self.components, components, strict=True):
+            if component.kind in EMBEDDED_KINDS and component.parent in refs:
+                nested.setdefault(refs[component.parent], []).append(entry["bom-ref"])
+        top = [
+            entry["bom-ref"]
+            for component, entry in zip(self.components, components, strict=True)
+            if component.kind not in EMBEDDED_KINDS or component.parent not in refs
+        ]
         return {
             "bomFormat": "CycloneDX",
             "specVersion": "1.5",
@@ -231,7 +266,8 @@ class Sbom:
             "metadata": metadata,
             "components": components,
             "dependencies": [
-                {"ref": "image", "dependsOn": [c["bom-ref"] for c in components]},
+                {"ref": "image", "dependsOn": top},
+                *({"ref": ref, "dependsOn": deps} for ref, deps in sorted(nested.items())),
             ],
         }
 
@@ -278,6 +314,7 @@ def sbom(
     lock: Lock | None = None,
     manifest: Path | None = None,
     allow_unbound: bool = False,
+    binaries: Path | None = None,
 ) -> Sbom:
     """The bill of materials of a baked *subject* (an :class:`Artifact`) or a lowered recipe.
 
@@ -294,10 +331,53 @@ def sbom(
     (``E_ARTIFACT_CHANGED``). *allow_unbound* accepts them instead, with a note,
     and marks the document incomplete (``bound`` is false). Paths in the document
     are relative to the bake output directory, so moving it changes nothing.
+
+    *binaries* is a directory holding the built binaries, at their image paths (an
+    unpacked root) or by file name (a build cache): each source build's installed
+    binary that records its dependencies (Go build information, ``cargo auditable``'s
+    ``.dep-v0``) adds them as ``go-module`` or ``crate`` components, a note naming
+    any binary not found or recording nothing.
     """
     if isinstance(subject, Artifact):
-        return _of_artifact(subject, lock, manifest, allow_unbound=allow_unbound)
-    return _of_lowered(subject, lock, manifest)
+        document = _of_artifact(subject, lock, manifest, allow_unbound=allow_unbound)
+    else:
+        document = _of_lowered(subject, lock, manifest)
+    if binaries is None:
+        return document
+    notes = list(document.notes)
+    found = _embedded(document.sources, Path(binaries), notes)
+    return replace(document, components=_sorted((*document.components, *found)), notes=tuple(notes))
+
+
+def _embedded(sources: Iterable[Component], root: Path, notes: list[str]) -> list[Component]:
+    """The dependencies the binaries of the ``build`` *sources* record, read under *root*."""
+    found: dict[tuple[str, str, str, str], Component] = {}
+    for source in sources:
+        if source.kind != "build":
+            continue
+        for dest in source.installs:
+            path = next(
+                (p for p in (root / dest.lstrip("/"), root / Path(dest).name) if p.is_file()),
+                None,
+            )
+            if path is None:
+                notes.append(f"binaries: {source.name}'s {dest} is not under {root}")
+                continue
+            deps = embedded_dependencies(path.read_bytes())
+            if deps is None:
+                notes.append(
+                    f"binaries: {source.name}'s {dest} records no dependencies "
+                    "(not Go 1.18+ build information or cargo auditable)"
+                )
+                continue
+            for dep in deps:
+                if not dep.main:
+                    origin = dep.source if dep.kind == "crate" else ""
+                    key = (dep.kind, dep.name, dep.version, source.name)
+                    found[key] = Component(
+                        dep.kind, dep.name, dep.version, origin=origin, parent=source.name
+                    )
+    return list(found.values())
 
 
 def manifest_path(artifact: Artifact) -> Path:
@@ -646,8 +726,15 @@ def purl(component: Component, *, namespace: str = "debian", distro: str = "") -
     (``rpm``/``alpm`` for those manifests). A git source:
     ``pkg:generic/<name>@<commit>?vcs_url=git+<url>@<ref>``; an http one:
     ``pkg:generic/<name>@<sha256>?checksum=sha256:<sha256>&download_url=<url>``.
-    Parts are percent-encoded as the PURL spec's canonical form does.
+    An embedded Go module: ``pkg:golang/<module path>@<version>``; a crate:
+    ``pkg:cargo/<name>@<version>``. Parts are percent-encoded as the PURL spec's
+    canonical form does.
     """
+    if component.kind == "go-module":
+        path = "/".join(_quote(part) for part in component.name.split("/"))
+        return f"pkg:golang/{path}@{_quote(component.version)}"
+    if component.kind == "crate":
+        return f"pkg:cargo/{_quote(component.name)}@{_quote(component.version)}"
     name = _quote(component.name.replace("/", "-"))
     version = f"@{_quote(component.version)}" if component.version else ""
     qualifiers: dict[str, str] = {}
@@ -717,7 +804,10 @@ def _spdx_package(component: Component, ref: str, distro: tuple[str, str]) -> di
     }
     if component.sha256:
         entry["checksums"] = [{"algorithm": "SHA256", "checksumValue": component.sha256}]
-    if component.kind != "package":
+    if component.kind in EMBEDDED_KINDS:
+        entry["primaryPackagePurpose"] = "LIBRARY"
+        entry["sourceInfo"] = f"{component.kind} recorded in the binary of {component.parent}"
+    elif component.kind != "package":
         entry["primaryPackagePurpose"] = "SOURCE" if component.git else "ARCHIVE"
         if component.ref:
             entry["sourceInfo"] = f"{component.kind} from git ref {component.ref}"
@@ -738,8 +828,9 @@ def _spdx_package(component: Component, ref: str, distro: tuple[str, str]) -> di
 
 
 def _cyclonedx_component(component: Component, distro: tuple[str, str]) -> dict[str, Any]:
+    library = component.kind in ("package", "efi-stub") or component.kind in EMBEDDED_KINDS
     entry: dict[str, Any] = {
-        "type": "library" if component.kind in ("package", "efi-stub") else "application",
+        "type": "library" if library else "application",
         "bom-ref": _spdx_id(component).removeprefix("SPDXRef-"),
         "name": component.name,
     }
@@ -759,6 +850,8 @@ def _cyclonedx_component(component: Component, distro: tuple[str, str]) -> dict[
     properties.extend({"name": "tundravm:install", "value": dest} for dest in component.installs)
     if component.declared:
         properties.append({"name": "tundravm:declared", "value": "true"})
+    if component.parent:
+        properties.append({"name": "tundravm:parent", "value": component.parent})
     entry["properties"] = properties
     return entry
 
@@ -791,6 +884,11 @@ def _source_rows(document: Sbom) -> list[tuple[str, ...]]:
     ]
 
 
+def _embedded_rows(document: Sbom) -> list[tuple[str, ...]]:
+    return [(c.name, c.kind, c.version, c.parent, c.origin or "-") for c in document.embedded]
+
+
+_EMBEDDED_HEADER = ("NAME", "KIND", "VERSION", "BUILD", "ORIGIN")
 _PACKAGE_HEADER = ("NAME", "VERSION", "ARCH", "ORIGIN")
 _SOURCE_HEADER = ("NAME", "KIND", "PIN", "REF", "URL", "INSTALLS")
 
@@ -816,6 +914,9 @@ def _text(document: Sbom) -> str:
     lines.append(f"sources ({len(document.sources)})")
     if document.sources:
         lines.extend(_table(_SOURCE_HEADER, _source_rows(document)))
+    if document.embedded:
+        lines.extend(("", f"embedded ({len(document.embedded)})"))
+        lines.extend(_table(_EMBEDDED_HEADER, _embedded_rows(document)))
     lines.extend(f"note: {note}" for note in document.notes)
     return "\n".join(lines) + "\n"
 
@@ -838,6 +939,9 @@ def _markdown(document: Sbom) -> str:
     lines.extend(["", f"### Sources ({len(document.sources)})", ""])
     if document.sources:
         lines.extend(_md_table(_SOURCE_HEADER, _source_rows(document)))
+    if document.embedded:
+        lines.extend(["", f"### Embedded dependencies ({len(document.embedded)})", ""])
+        lines.extend(_md_table(_EMBEDDED_HEADER, _embedded_rows(document)))
     if document.notes:
         lines.append("")
         lines.extend(f"> note: {note}" for note in document.notes)

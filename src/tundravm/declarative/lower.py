@@ -24,15 +24,17 @@ from __future__ import annotations
 
 import posixpath
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from tundravm._location import display_location
 from tundravm._options import MkosiOptions
 from tundravm._source import DebFile, HttpSource
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel as FluentKernel
-from tundravm.models import RecipeState, unit_name
+from tundravm.models import KernelPatchSpec, RecipeState, unit_name
 
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
@@ -48,9 +50,12 @@ from .model import (
     Hook,
     Http,
     Kernel,
+    KernelConfig,
+    KernelPatch,
     Key,
     Mount,
     Partition,
+    Platform,
     Recipe,
     Repository,
     Resolved,
@@ -76,7 +81,7 @@ from .state import (
     inject_after_init,
     useradd_line,
 )
-from .utils import BACKPORTS_TREE, Backports, EfiStub
+from .utils import BACKPORTS_TREE, Backports, EfiStub, _snapshot_archive
 
 BACKPORTS_SOURCES = BACKPORTS_TREE.partition(":")[2]
 """Where :class:`Backports` sources go in the build sandbox (``current`` dialect)."""
@@ -162,7 +167,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         )
         for name, r in resolved.items()
     }
-    kernels = {name: _variant_kernel(r.items) for name, r in resolved.items()}
+    kernels = {name: _variant_kernel(r.items, recipe.platform) for name, r in resolved.items()}
     builder = StateBuilder(
         RecipeState.initialize(
             base=recipe.platform.name, arch=recipe.platform.arch, default_profile=default.name
@@ -361,7 +366,7 @@ def _wide(items: Sequence[Declaration]) -> dict[tuple[str, ...], Declaration]:
     return {
         identity(item): item
         for item in items
-        if isinstance(item, Kernel)
+        if isinstance(item, Kernel | KernelConfig)
         or (isinstance(item, Setting) and (item.section, item.key) != BUILD_SOURCES)
     }
 
@@ -439,12 +444,87 @@ def _overlay(
     return own, reemit
 
 
-def _variant_kernel(items: Sequence[Declaration]) -> FluentKernel | None:
+def _variant_kernel(
+    items: Sequence[Declaration], platform: Platform | None = None
+) -> FluentKernel | None:
     kernel = next((item for item in items if isinstance(item, Kernel)), None)
-    return None if kernel is None else _kernel(kernel)
+    configs = [item for item in items if isinstance(item, KernelConfig)]
+    if kernel is None:
+        if configs:
+            raise ValidationError(
+                f"KernelConfig {configs[0].name!r} configures a kernel, but the variant "
+                "builds none.",
+                hint='Declare Kernel(version, source, base=DebianConfig("6.12.48-1")).',
+            )
+        return None
+    if configs and kernel.base is None:
+        raise ValidationError(
+            f"KernelConfig {configs[0].name!r} needs a composed kernel; Kernel "
+            f"{kernel.version} takes a whole config file.",
+            hint="Pass Kernel(base=Path(...)) instead of config= to compose from it.",
+        )
+    return _kernel(kernel, configs, platform)
 
 
-def _kernel(kernel: Kernel) -> FluentKernel:
+def merged_kernel_options(
+    kernel: Kernel, configs: Sequence[KernelConfig] = ()
+) -> tuple[tuple[str, str], ...]:
+    """The requested options: ``CONFIG_MODULES``, the fragments, then *configs*, in order.
+
+    Two declarations setting one option differently raise ``kernel-option-conflict``,
+    naming both.
+    """
+    merged: dict[str, tuple[str, str]] = {}
+    if not kernel.modules:
+        merged["CONFIG_MODULES"] = ("n", "Kernel(modules=False)")
+    for config in (*kernel.fragments, *configs):
+        where = display_location(config.declared_at)
+        label = f"KernelConfig {config.name!r}" + (f" ({where})" if where else "")
+        for option, raw in config.options.items():
+            value = raw or "n"
+            seen = merged.get(option)
+            if seen is not None and seen[0] != value:
+                raise ValidationError(
+                    f"kernel-option-conflict: {option} is {seen[0]} in {seen[1]} "
+                    f"and {value} in {label}.",
+                    hint="Drop one of them, or remove one declaration from the variant "
+                    "(KernelConfig.ref(name).remove()).",
+                    context={"option": option},
+                )
+            merged.setdefault(option, (value, label))
+    return tuple((option, value) for option, (value, _) in merged.items())
+
+
+def _kernel_base(kernel: Kernel, platform: Platform | None) -> dict[str, Any]:
+    """The ``FluentKernel`` fields of *kernel*'s base config."""
+    base = kernel.base
+    if base is None:
+        return {}
+    if isinstance(base, Path):
+        return {"base_file": base}
+    archive = base.snapshot or getattr(platform, "efi_archive", None)
+    if archive is None:
+        raise ValidationError(
+            f"DebianConfig {base.version}: the platform pins no snapshot to fetch it from.",
+            hint="Pass Debian(snapshot='20251113T083151Z') or DebianConfig(snapshot=...).",
+        )
+    return {
+        "base_deb": base.url(_snapshot_archive(archive)),
+        "base_deb_sha256": base.sha256,
+        "base_member": base.member,
+    }
+
+
+def _kernel_patch(patch: KernelPatch) -> KernelPatchSpec:
+    name = patch.name or ""
+    if isinstance(patch.source, Path):
+        return KernelPatchSpec(name, path=patch.source)
+    return KernelPatchSpec(name, url=patch.source.url, sha256=patch.source.sha256)
+
+
+def _kernel(
+    kernel: Kernel, configs: Sequence[KernelConfig] = (), platform: Platform | None = None
+) -> FluentKernel:
     """The compiler's kernel: tag ``v<version>`` stays ``source_ref=None``."""
     common: dict[str, Any] = {
         "version": kernel.version,
@@ -452,6 +532,13 @@ def _kernel(kernel: Kernel) -> FluentKernel:
         "cmdline": kernel.cmdline or None,
         "tdx": kernel.tdx,
     }
+    if kernel.base is not None:
+        common.update(
+            _kernel_base(kernel, platform),
+            options=merged_kernel_options(kernel, configs),
+            patches=tuple(_kernel_patch(patch) for patch in kernel.patches),
+            modules=kernel.modules,
+        )
     source = kernel.source
     if isinstance(source, Http):
         if source.sha256 is None:

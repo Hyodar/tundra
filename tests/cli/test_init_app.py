@@ -55,7 +55,7 @@ def test_app_recipe_builds_the_binary_and_runs_it_as_a_service(tmp_path: Path) -
     assert service.values("Service", "ExecStartPre") == ()
     assert service.values("Service", "ProtectSystem") == ("strict",)
     assert {d.code for d in image.lint() if d.severity != "info"} == {"source-unpinned"}
-    assert "6 passed" in generated_tests(tmp_path)
+    assert "7 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
 
 
@@ -87,7 +87,7 @@ def test_disk_and_external_secret(tmp_path: Path) -> None:
     assert unit.values("Unit", "RequiresMountsFor") == ("/persistent/hello",)
     assert "install -d" not in (tmp_path / "hello.py").read_text(encoding="utf-8")
     assert "DISK_DEVICE = " in (tmp_path / "hello.py").read_text(encoding="utf-8")
-    assert "8 passed" in generated_tests(tmp_path)
+    assert "9 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
 
 
@@ -98,7 +98,7 @@ def test_external_secret_without_a_disk_waits_for_its_delivery(tmp_path: Path) -
     assert after.startswith("runtime-init-delivery-writer.service")
     text = (tmp_path / "hello.py").read_text(encoding="utf-8")
     assert "YOU PROVIDE IT" in text and "needs=(delivery.ready,)" in text
-    assert "7 passed" in generated_tests(tmp_path)
+    assert "8 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
 
 

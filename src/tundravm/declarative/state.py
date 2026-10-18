@@ -87,6 +87,7 @@ from .model import (
     Hook,
     Http,
     Kernel,
+    KernelConfig,
     Key,
     Mount,
     Package,
@@ -326,7 +327,7 @@ class StateBuilder:
                     self._build_from(profile, source_build(item, mark_unpinned=not self.historical))
                 case Kernel(source=Http()) if self.historical:
                     profile.build_packages.add("curl")  # the build hook downloads the archive
-                case BootStep() | Setting() | Kernel() | RuntimeTools():
+                case BootStep() | Setting() | Kernel() | KernelConfig() | RuntimeTools():
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
             if isinstance(unit, Service):
@@ -362,7 +363,7 @@ class StateBuilder:
                 hint="Give each source build a unique name.",
                 context={"profile": profile.name, "build_from": spec.name},
             )
-        profile.build_packages.update(spec.packages)
+        profile.build_packages.update(spec.build_packages(mounted=not self.historical))
         profile.source_builds[spec.name] = spec
         _shell(profile, spec.render(mounted=not self.historical), phase="build")
 

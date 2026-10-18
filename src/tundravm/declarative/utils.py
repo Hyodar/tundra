@@ -15,7 +15,7 @@ from __future__ import annotations
 import posixpath
 import re
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -31,11 +31,13 @@ from tundravm.measure.policy import (
 )
 
 from ._component import Composite, Export, HttpEndpoint, component
+from ._kernel_hardening import KernelHardening
 from .config import ConfigFile
 from .model import (
     BootStep,
     Build,
     Cargo,
+    Declaration,
     File,
     Fragment,
     Git,
@@ -501,9 +503,9 @@ def _install_path(kind: str, name: str, install: str | None) -> str:
 class GoBinary(Composite):
     """A Go program built from *source* and installed at :attr:`executable`.
 
-    The ``Build`` named *name* runs ``go build -trimpath`` of *package* (``Go``)
-    into ``build/<file name of install>`` and installs it at *install*
-    (``/usr/bin/<name>`` by default). ``executable`` is that path, for a
+    The ``Build`` named *name* runs ``go build -trimpath -buildvcs=false`` of *package*
+    (``Go``; ``CGO_ENABLED=0`` unless *cgo*) into ``build/<file name of install>`` and
+    installs it at *install* (``/usr/bin/<name>`` by default). ``executable`` is that path, for a
     ``Service`` command: ``Service(name, f"{binary.executable} --flag")``.
     Fragment name: *name*.
     """
@@ -516,6 +518,7 @@ class GoBinary(Composite):
     env: Mapping[str, str] = field(default_factory=FrozenMap)
     tags: tuple[str, ...] = ()
     ldflags: str = _GO_LDFLAGS
+    cgo: bool = False
     cache_namespace: str | None = None
 
     @property
@@ -531,6 +534,7 @@ class GoBinary(Composite):
             ldflags=self.ldflags,
             tags=self.tags,
             env=self.env,
+            cgo=self.cgo,
         )
         build = Build(
             self.name,
@@ -546,8 +550,9 @@ class GoBinary(Composite):
 class CargoBinary(Composite):
     """A Rust program built from *source* and installed at :attr:`executable`.
 
-    The ``Build`` named *name* runs ``cargo build --frozen`` (``Cargo``; *bin* or
-    *package* selects the target, *profile* its directory) and installs
+    The ``Build`` named *name* runs ``cargo auditable build --frozen`` (``Cargo``; plain
+    ``cargo build`` with ``auditable=False``; *bin* or *package* selects the target,
+    *profile* its directory) with reproducible ``rustflags`` and installs
     ``target/<profile>/<bin, package or install file name>`` at *install*
     (``/usr/bin/<name>`` by default). Fragment name: *name*.
     """
@@ -561,6 +566,7 @@ class CargoBinary(Composite):
     features: tuple[str, ...] = ()
     profile: str = "release"
     env: Mapping[str, str] = field(default_factory=FrozenMap)
+    auditable: bool | None = None
     cache_namespace: str | None = None
 
     @property
@@ -577,6 +583,7 @@ class CargoBinary(Composite):
             features=self.features,
             profile=self.profile,
             env=self.env,
+            auditable=self.auditable,
         )
         build = Build(
             self.name,
@@ -586,6 +593,143 @@ class CargoBinary(Composite):
             cache_namespace=self.cache_namespace,
         )
         return Fragment(self.name, items=(build,))
+
+
+_FB = "flashbots-images shared/mkosi.extra"
+_KSPP = "KSPP: kspp.github.io/Recommended_Settings"
+_SYSCTL_DOC = "linux: Documentation/admin-guide/sysctl"
+
+TEE_NTS_SERVERS = ("time.cloudflare.com", "nts.netnod.se")
+"""The NTS (RFC 8915) servers :class:`TeeBase` syncs from: flashbots-images'
+``shared/mkosi.extra/etc/chrony/chrony.conf``."""
+
+TEE_HYPERVISOR_CLOCKS = ("169.254.169.254", "169.254.169.123")
+"""Cloud hypervisor NTP endpoints (GCP metadata, AWS time sync) that refine the NTS sources."""
+
+TEE_NAMESERVERS = ("1.1.1.1", "1.0.0.1")
+"""The resolvers :class:`TeeBase` writes to ``/etc/resolv.conf``: flashbots-images'
+``shared/mkosi.extra/etc/systemd/resolved.conf`` (Cloudflare)."""
+
+TEE_SYSCTL: tuple[tuple[str, str, str], ...] = (
+    ("kernel.kptr_restrict", "2", f"hide kernel pointers from every user ({_KSPP})"),
+    ("kernel.dmesg_restrict", "1", f"only CAP_SYSLOG reads the kernel log ({_KSPP})"),
+    ("kernel.unprivileged_bpf_disabled", "1", f"no unprivileged eBPF, for good ({_KSPP})"),
+    ("net.core.bpf_jit_harden", "2", f"constant blinding in the BPF JIT ({_KSPP})"),
+    ("kernel.kexec_load_disabled", "1", f"the measured kernel cannot be replaced ({_KSPP})"),
+    ("kernel.yama.ptrace_scope", "2", f"only CAP_SYS_PTRACE attaches to processes ({_KSPP})"),
+    ("kernel.perf_event_paranoid", "3", f"no unprivileged perf events ({_FB}/etc/sysctl.d)"),
+    ("kernel.sysrq", "0", f"the host-owned console sends no magic SysRq ({_SYSCTL_DOC}/kernel)"),
+    ("fs.suid_dumpable", "0", f"setuid programs never dump core ({_KSPP})"),
+    ("fs.protected_symlinks", "1", f"no symlink races in sticky dirs ({_FB}/etc/sysctl.d)"),
+    ("fs.protected_hardlinks", "1", f"no hardlinks to others' files ({_FB}/etc/sysctl.d)"),
+    ("fs.protected_fifos", "2", f"no FIFO spoofing in sticky dirs ({_KSPP})"),
+    ("fs.protected_regular", "2", f"no regular-file spoofing in sticky dirs ({_KSPP})"),
+    ("net.ipv4.conf.all.accept_redirects", "0", f"ignore ICMP redirects ({_SYSCTL_DOC}/net)"),
+    ("net.ipv4.conf.default.accept_redirects", "0", "ignore ICMP redirects on new interfaces"),
+    ("net.ipv6.conf.all.accept_redirects", "0", f"ignore ICMPv6 redirects ({_SYSCTL_DOC}/net)"),
+    ("net.ipv4.conf.all.send_redirects", "0", f"the guest is not a router ({_SYSCTL_DOC}/net)"),
+    ("net.ipv4.conf.all.accept_source_route", "0", "drop source-routed packets"),
+    ("net.ipv4.conf.all.rp_filter", "2", f"drop unroutable sources ({_SYSCTL_DOC}/net)"),
+    ("net.ipv4.tcp_syncookies", "1", f"survive SYN floods ({_SYSCTL_DOC}/net)"),
+)
+"""``(key, value, reason)`` lines of :class:`TeeBase`'s ``/etc/sysctl.d`` file. Each line is
+``-``-prefixed, so a key the kernel lacks (no Yama, no IPv6) is skipped, not a boot failure
+(``sysctl.d(5)``)."""
+
+TEE_MASKED_UNITS: tuple[tuple[str, str], ...] = (
+    ("apt-daily.timer", "no package list refresh at runtime: the image is what was measured"),
+    ("apt-daily-upgrade.timer", "no unattended upgrades: they would change measured software"),
+    ("dpkg-db-backup.timer", "no dpkg database backups on a volatile root"),
+    ("getty@tty1.service", "no login prompt on the host-owned console"),
+)
+"""``(unit, reason)`` of the units :class:`TeeBase` masks; flashbots-images masks every
+unlisted systemd unit (``shared/mkosi.postinst.d/90-debloat-systemd.sh``), and tundravm's
+debloat does that for the ``systemd`` package, so these are the other packages' units."""
+
+_TEE_HEADER = "# tundravm TeeBase\n"
+_JOURNALD_DROPIN = "/etc/systemd/journald.conf.d/50-tundravm-tee.conf"
+_SYSCTL_FILE = "/etc/sysctl.d/50-tundravm-tee.conf"
+_CHRONY_TAIL = """\
+# Reject a source whose root distance exceeds one second
+maxdistance 1.0
+driftfile /var/lib/chrony/chrony.drift
+ntsdumpdir /var/lib/chrony
+# Step the clock in the first three updates if it is off by more than a second
+makestep 1 3
+rtcsync
+maxupdateskew 100.0
+"""
+
+
+@component
+class TeeBase(Composite):
+    """The baseline every confidential VM image wants; each piece opts out with its flag.
+
+    *time*: ``chrony`` syncs from the *nts_servers* over NTS (RFC 8915), so the host cannot
+    set the guest's clock (TLS, certificate and policy checks depend on it); the
+    *hypervisor_clocks* only refine them (flashbots-images ``etc/chrony/chrony.conf``).
+    *journal*: journald keeps logs in RAM, capped (``Storage=volatile``, a
+    ``journald.conf.d`` drop-in): nothing reaches a host-readable disk.
+    *sysctl*: the :data:`TEE_SYSCTL` hardening in ``/etc/sysctl.d/50-tundravm-tee.conf``.
+    *dns*: a static ``/etc/resolv.conf`` naming the *nameservers*; on Compute Engine
+    ``gcp-metadata-dns.service`` replaces it at boot with the metadata server.
+    *mask*: masks :data:`TEE_MASKED_UNITS` (apt timers, the tty1 getty).
+    Fragment name: ``tee-base``.
+    """
+
+    time: bool = True
+    nts_servers: tuple[str, ...] = TEE_NTS_SERVERS
+    hypervisor_clocks: tuple[str, ...] = TEE_HYPERVISOR_CLOCKS
+    journal: bool = True
+    journal_max_use: str = "128M"
+    sysctl: bool = True
+    dns: bool = True
+    nameservers: tuple[str, ...] = TEE_NAMESERVERS
+    mask: bool = True
+
+    def compose(self) -> Iterator[Declaration]:
+        if self.time:
+            if not self.nts_servers:
+                raise ValidationError(
+                    "TeeBase(time=True) needs at least one NTS server.",
+                    hint="Pass nts_servers=('time.cloudflare.com',), or time=False.",
+                )
+            yield Package("chrony")
+            yield Package("ca-certificates")  # NTS-KE checks the servers' TLS certificates
+            yield File.text("/etc/chrony/chrony.conf", self._chrony_conf())
+            yield Unit("chrony.service", enabled=True)
+        if self.journal:
+            journal = {
+                "Storage": "volatile",
+                "RuntimeMaxUse": self.journal_max_use,
+                "ForwardToConsole": "no",
+            }
+            yield ConfigFile.ini(_JOURNALD_DROPIN, {"Journal": journal}, sort_keys=False)
+        if self.sysctl:
+            lines = [f"# {reason}\n-{key} = {value}" for key, value, reason in TEE_SYSCTL]
+            yield File.text(_SYSCTL_FILE, _TEE_HEADER + "\n".join(lines) + "\n")
+        if self.dns:
+            servers = "".join(f"nameserver {server}\n" for server in self.nameservers)
+            yield File.text("/etc/resolv.conf", _TEE_HEADER + servers)
+        if self.mask:
+            for unit, _reason in TEE_MASKED_UNITS:
+                yield Unit(unit, masked=True)
+
+    def _chrony_conf(self) -> str:
+        nts = "".join(f"server {server} iburst nts\n" for server in self.nts_servers)
+        refine = "".join(
+            f"server {clock} iburst minpoll 4 maxpoll 4\n" for clock in self.hypervisor_clocks
+        )
+        return (
+            f"{_TEE_HEADER}# Authenticated NTS sources\n{nts}"
+            + (
+                "# Hypervisor clocks refine them; authselectmode mix (the default) keeps an\n"
+                f"# unauthenticated source from overruling the NTS ones\n{refine}"
+                if refine
+                else ""
+            )
+            + _CHRONY_TAIL
+        )
 
 
 def RuntimeDirectory(  # noqa: N802 - a declaration factory, spelled like the declarations
@@ -764,11 +908,18 @@ __all__ = [
     "Export",
     "GoBinary",
     "HttpEndpoint",
+    "KernelHardening",
     "RUN_STAGES",
     "Run",
     "RunStage",
     "RuntimeDirectory",
     "RuntimeFile",
+    "TEE_HYPERVISOR_CLOCKS",
+    "TEE_MASKED_UNITS",
+    "TEE_NAMESERVERS",
+    "TEE_NTS_SERVERS",
+    "TEE_SYSCTL",
     "Tdxs",
     "TdxsType",
+    "TeeBase",
 ]
