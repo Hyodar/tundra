@@ -22,7 +22,7 @@ next:
   3. uv run pytest tests                    run test_node.py against mkosi/
   4. tundravm ci node.py --tree mkosi       the lint, tree and lockfile checks CI runs
   5. tundravm bake node.py --build build    build the image
-  `uv sync` installs the pinned dependency, tundravm at 1111444654a1
+  `uv sync` installs the pinned dependency, tundravm at 0db3f45de51b
 then commit mkosi/ and build/tundravm.lock; the workflow checks both
 
 checking the inprocess backend (tundravm doctor --backend inprocess):
@@ -65,11 +65,13 @@ class App(Composite):
         # Runs as system user "app" (declared for you), sandboxed by Hardening.strict(),
         # restarted on failure; state="app" is /var/lib/app, made by systemd, owned by
         # app and its working directory. It waits for every runtime-init step (needs=).
+        # ports= is where it listens: TeeBase's firewall opens it.
         yield Service(
             "app",
             "/usr/bin/app --config /etc/app/app.conf",
             description=f"app {self.version}",
             state="app",
+            ports=(self.port,),
         )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
@@ -87,6 +89,9 @@ recipe = Recipe(
     # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
     platform=Debian("trixie"),
     items=(
+        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl
+        # hardening, DNS, no apt timers: opt out per flag.
+        TeeBase(),
         Package("ca-certificates"),
         App(version=APP_VERSION, port=APP_PORT),
     ),
@@ -98,8 +103,9 @@ recipe = Recipe(
 ```
 
 - `platform` is what the image builds on: `Debian("trixie")` is the distribution plus its boot set (the kernel, systemd as init, udev and the UKI's EFI stub), declared in every variant with provenance `platform`. `tundravm inspect` lists them like any other package.
-- `items` holds what every variant shares: `ca-certificates` and the `App` fragment.
-- `App` is a component: `@component` makes the class a frozen dataclass whose fields (`version`, `port`) are its configuration, and each instance is a `Fragment` named after the class. `compose()` yields its contents: a config file rendered by `ConfigFile.env` and a generated systemd `Service`, which runs as its own system user `app` (declared for you), restarts on failure, runs in the `Hardening.strict()` sandbox and keeps its state in `state="app"` (`StateDirectory=`, `/var/lib/app`), waiting for every boot step by default. Its `check` method runs during `lint`: `App(port=80)` reports `app-privileged-port`. Its `http` property exports where it listens, for [step 14](#14-write-a-fragment).
+- `items` holds what every variant shares: `TeeBase()`, `ca-certificates` and the `App` fragment.
+- `TeeBase()` is the baseline a confidential VM wants, each piece behind a flag: `chrony` over NTS so the host cannot set the clock, DHCP on every Ethernet interface (`Network()`), an nftables `Firewall()` that drops inbound traffic except the ports the variant's services declare, a RAM-only journal, sysctl hardening, a static `/etc/resolv.conf`, and masked apt timers and tty1 getty. `TeeBase(firewall=False)` drops one piece; see [Concepts: The TEE baseline](concepts.md#the-tee-baseline).
+- `App` is a component: `@component` makes the class a frozen dataclass whose fields (`version`, `port`) are its configuration, and each instance is a `Fragment` named after the class. `compose()` yields its contents: a config file rendered by `ConfigFile.env` and a generated systemd `Service`, which runs as its own system user `app` (declared for you), restarts on failure, runs in the `Hardening.strict()` sandbox and keeps its state in `state="app"` (`StateDirectory=`, `/var/lib/app`), waiting for every boot step by default; `ports=(self.port,)` is where it listens, which the firewall opens. Its `check` method runs during `lint`: `App(port=80)` reports `app-privileged-port`. Its `http` property exports where it listens, for [step 14](#14-write-a-fragment).
 - The service runs `/usr/bin/app`, which the recipe does not ship yet. Add a `Build(...)` or a `Package(...)` for it before you bake a real image.
 - `dev` inherits `default` and adds `DevTools()`: a serial console, root login and debugging tools. Never ship it: `release=False` keeps it out of every release ([step 19](#19-cut-a-release)).
 
@@ -151,18 +157,24 @@ $ tundravm inspect node.py --variant dev
 Image: debian/trixie (x86_64)  variant=dev  reproducible=yes
 Policy: mutable_ref_policy=warn network_mode=online require_frozen_lock=no storage_safety=warn
 Inherits: default
-Fragments (2): app devtools
-Packages (20): apt bash-completion ca-certificates curl dnsutils iputils-ping kmod linux-image-amd64 net-tools netcat-openbsd openssh-server socat strace systemd systemd-boot-efi systemd-sysv tcpdump tcpflow udev vim
-Files (2):
-  /etc/app/app.conf                               0644  34B  sha256:681b227aa566
-  /usr/lib/systemd/system/serial-console.service  0644  263B  sha256:016dd361c717
+Fragments (4): tee-base network app devtools
+Packages (22): apt bash-completion ca-certificates chrony curl dnsutils iputils-ping kmod linux-image-amd64 net-tools netcat-openbsd nftables openssh-server socat strace systemd systemd-boot-efi systemd-sysv tcpdump tcpflow udev vim
+Files (8):
+  /etc/app/app.conf                                                                        0644  34B  sha256:681b227aa566
+  /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
+  /etc/nftables.conf                                                                       0755  829B  sha256:9a686b2478b3
+  /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
+  /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
+  /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
+  /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea
+  /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
 Users (1):
   app  system  shell=/usr/sbin/nologin
+Units: enable chrony.service, systemd-networkd.service, systemd-networkd.socket, systemd-networkd-wait-online.service, nftables.service, serial-getty@ttyS0.service; mask apt-daily.timer, apt-daily-upgrade.timer, dpkg-db-backup.timer, getty@tty1.service
 Services (1):
   app  /usr/bin/app --config /etc/app/app.conf  restart=on-failure  type=exec  user=app  cwd=/var/lib/app
 Hooks:
-  postinst (2):
-    mkosi-chroot systemctl enable serial-console.service
+  postinst (1):
     SALT=$(printf 'tundravm-devtools:%s' "${IMAGE_ID:-devtools}" | sha256sum | cu...
   finalize (1):
     sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release"
@@ -171,7 +183,7 @@ Targets: qemu
 [exit 0]
 ```
 
-`Inherits:` is the variant `dev` builds on and `Fragments:` the fragments it includes: `app` from `App` in `Recipe.items`, and `devtools` from its own `add`. `Hooks:` shows each script's first line, cut at 80 characters: the second `postinst` hook derives a fixed salt from the variant name before hashing the root password, so a second build of `dev` gives the same image (step 9). Without `--variant` every variant is shown. `--format json` adds the recipe digest the lockfile records; `--format markdown` renders tables for a CI job summary.
+`Inherits:` is the variant `dev` builds on and `Fragments:` the fragments it includes: `tee-base` and the `network` fragment it nests, and `app` from `App`, all in `Recipe.items`, and `devtools` from its own `add`. Most of the files are `TeeBase`'s: the chrony, journald, sysctl, resolver and networkd configuration, and `/etc/nftables.conf`, the firewall's ruleset, which drops inbound traffic except loopback, replies, DHCP and TCP port 8080, the port `App`'s service declares (`comment "app.service"`). `Units:` lists the units the variant enables and masks: `TeeBase` enables chrony, networkd and nftables and masks the apt timers and the tty1 getty, and `DevTools` enables the serial getty. `Hooks:` shows each script's first line, cut at 80 characters: the `postinst` hook derives a fixed salt from the variant name before hashing the root password, so a second build of `dev` gives the same image (step 9). Without `--variant` every variant is shown. `--format json` adds the recipe digest the lockfile records; `--format markdown` renders tables for a CI job summary.
 
 To ask where one object comes from, name it with `--why`: an image path, or `unit:`, `package:`, `hook:` or `init:` and a name.
 
@@ -179,7 +191,7 @@ To ask where one object comes from, name it with `--why`: an image path, or `uni
 $ tundravm inspect node.py --variant dev --why unit:app
 why unit:app (variant dev)
   Service(app.service)
-    declared at node.py:56 in common via app (App)
+    declared at node.py:58 in common via app (App)
 files (in dev/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
@@ -188,7 +200,7 @@ generated:
 [exit 0]
 ```
 
-The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added the enablement into `minimal.target` (a variant with runtime-init steps would also get the ordering after `runtime-init.service`: `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)). `node.py:56` is the line in `App.compose()` that constructs the `Service`: every declaration records where it was written, and `lint` points at the same lines. A declaration a variant adds, edits or removes lists that step too, with the line of the edit (`content edited at FILE:LINE in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
+The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added the enablement into `minimal.target` (a variant with runtime-init steps would also get the ordering after `runtime-init.service`: `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)). `node.py:58` is the line in `App.compose()` that constructs the `Service`: every declaration records where it was written, and `lint` points at the same lines. A declaration a variant adds, edits or removes lists that step too, with the line of the edit (`content edited at FILE:LINE in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
 
 ## 3. Lint
 
@@ -231,19 +243,21 @@ no findings
 
 Warnings do not fail `lint` unless you pass `--strict`.
 
-A credential baked into the image is refused the same way, since every copy of the disk would carry it. Generate a key with `ssh-keygen -t ed25519 -N "" -f deploy.key`, ship it with `File.copy("/etc/app/deploy.key", Path("deploy.key"))` in `items` (and `from pathlib import Path`, `File` from `tundravm`), and lint:
+A credential baked into the image is refused the same way, since every copy of the disk would carry it. Generate a key with `ssh-keygen -t ed25519 -N "" -f deploy.key`, ship it with `File.copy("/etc/app/deploy.key", Path("deploy.key"))` in `items`, after `Package("ca-certificates")` (and `from pathlib import Path`, `File` from `tundravm`), and lint:
 
 ```console
 $ tundravm lint node.py
 error secret-in-file [default] /etc/app/deploy.key: the file holds a private key (line 1); it is baked into the image
+    at: node.py:87
     hint: Deliver it at boot instead of baking it into the image, where every copy and every registry holding it exposes it. The built-in Secrets() delivery provisions only an SSH key: put the value in a Secret with a SecretFile or SecretEnv target under Secrets(delivery=ExternalDelivery(NAME)), naming what writes it at boot (a cloud secret store, a custom unit). If it is not a secret, pass allow_secret=True to the declaration.
 error secret-in-file [dev] /etc/app/deploy.key: the file holds a private key (line 1); it is baked into the image
+    at: node.py:87
     hint: Deliver it at boot instead of baking it into the image, where every copy and every registry holding it exposes it. The built-in Secrets() delivery provisions only an SSH key: put the value in a Secret with a SecretFile or SecretEnv target under Secrets(delivery=ExternalDelivery(NAME)), naming what writes it at boot (a cloud secret store, a custom unit). If it is not a secret, pass allow_secret=True to the declaration.
 2 errors, 0 warnings, 0 infos
 [exit 1]
 ```
 
-The message names the kind of credential and its line, never the value. A real key reaches the VM at boot instead, as a `SecretFile` of a `Secrets` whose `ExternalDelivery` writes it (the built-in delivery writes only the SSH key); `allow_secret=True` on the `File` is for a value that only looks like one (see [Concepts: Secrets never belong in the image](concepts.md#secrets-never-belong-in-the-image)). Remove the `File`, the import and `deploy.key` before going on.
+The message names the kind of credential and its line in the file, never the value; `at:` is the recipe line that declares the `File`. A real key reaches the VM at boot instead, as a `SecretFile` of a `Secrets` whose `ExternalDelivery` writes it (the built-in delivery writes only the SSH key); `allow_secret=True` on the `File` is for a value that only looks like one (see [Concepts: Secrets never belong in the image](concepts.md#secrets-never-belong-in-the-image)). Remove the `File`, the import and `deploy.key` before going on.
 
 ## 4. Add a variant
 
@@ -276,12 +290,12 @@ locked build/tundravm.lock
 $ tundravm compile node.py --tree mkosi
 compiled mkosi
   variants:      default, dev, debug
-  recipe_digest: 049d8ecc7775bba29209e4f5261d78a92c572e8bfd07636adda524dc904fdff1
-  tree_digest:   978caeeee19e2424925bf6fcc0ca3a4775d36ec17a937e56a8a5a32a72c2c56e
+  recipe_digest: 4e7d7ab0b907b51d6834bc97d5976d47f086c9e8650b7ac71f0edec879db426a
+  tree_digest:   863d2589314f04de07c3198c7759c544b0733b68fe2d3eee005e9d650174064a
 [exit 0]
 ```
 
-The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports each of its sections as a `lock-added` error (`variants.debug.packages is not in the lock`, ...). The lockfile (version 5) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest) and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` holds one directory per variant (`mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Commit it: it is the reviewable form of the image.
+The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports each of its sections as a `lock-added` error (`variants.debug.packages is not in the lock`, ...). The lockfile (version 5) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest), the build `toolchain` (the tundravm and measurement tool versions, and with a real backend mkosi and systemd), and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` holds one directory per variant (`mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Commit it: it is the reviewable form of the image.
 
 ## 6. Iterate with watch
 
@@ -290,16 +304,16 @@ The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports e
 ```console
 $ tundravm watch node.py
 watching node.py every 1s (Ctrl-C stops)
-23:23:24 lint 0 errors 0 warnings; tree up to date
-23:23:27 lint 3 errors (app-privileged-port: app runs as user app and cannot bind port 80)
-23:23:30 lint 3 errors 0 warnings; lock drifted (3 sections); tree stale (3 files)
+05:09:25 lint 0 errors 0 warnings; tree up to date
+05:09:29 lint 3 errors (app-privileged-port: app runs as user app and cannot bind port 80)
+05:09:33 lint 3 errors 0 warnings; lock drifted (3 sections); tree stale (6 files)
 ^Cstopped
 [exit 0]
 ```
 
 - The first line is the check at start: `mkosi/` (the table's `tree`) matches what step 5 compiled.
 - Port 80 trips `App`'s `app-privileged-port` check in all three variants. An error-level fragment check keeps the recipe from lowering, so the line names the first error instead of the counts and checks no tree; `watch` keeps polling.
-- Port 9090 passes the check. The three errors left are lockfile drift, one `variants.<variant>.files` section per variant (`lock drifted (3 sections)`), and three files of `mkosi/` are stale, one `app.conf` per variant. `watch` never writes the tree or the lock; step 7 shows the diff, locks again and recompiles.
+- Port 9090 passes the check. The three errors left are lockfile drift, one `variants.<variant>.files` section per variant (`lock drifted (3 sections)`), and six files of `mkosi/` are stale: per variant, `app.conf` and the firewall's `/etc/nftables.conf`, which now opens 9090 instead of 8080. `watch` never writes the tree or the lock; step 7 shows the diff, locks again and recompiles.
 - Ctrl-C prints `stopped` and exits 0.
 
 `watch` polls `node.py` and every `.py` beside it, such as the `fragments.py` of step 14, the files the recipe reads, the lockfile, `pyproject.toml` and the tree, every second (`--interval` changes that), and re-imports the modules the recipe takes from its directory before each check. Its counts are `lint`'s, lockfile drift included, so a `tundravm lock` in another terminal clears them. `--write` recompiles a stale tree on each change instead of reporting it. See [CLI: Watch](cli.md#watch).
@@ -309,7 +323,10 @@ To see the whole image rather than one line, run `tundravm preview` instead: it 
 ```console
 $ tundravm preview node.py
 previewing node.py at http://127.0.0.1:8765/ (Ctrl-C stops)
+05:09:56 v1 lint 0 errors 0 warnings
 ```
+
+Each re-render prints a line with the page's version. The page's variant table lists each variant's fragments (`tee-base, network, app` for `default`), and every declaration on it names where it came from: the chrony configuration, the journald and sysctl drop-ins, the resolver, the masked units and the firewall's `/etc/nftables.conf` all read `declared at node.py:84 in common via tee-base (TeeBase)`, the line of `TeeBase()` in `items`, and the networkd configuration reads `via tee-base (TeeBase) > network (Network)`, the fragment `TeeBase` nests.
 
 ## 7. Change the recipe
 
@@ -324,13 +341,28 @@ diff --git a/default/mkosi.extra/etc/app/app.conf b/default/mkosi.extra/etc/app/
  version=0.1.0
 -listen=0.0.0.0:8080
 +listen=0.0.0.0:9090
+diff --git a/default/mkosi.extra/etc/nftables.conf b/default/mkosi.extra/etc/nftables.conf
+--- a/default/mkosi.extra/etc/nftables.conf
++++ b/default/mkosi.extra/etc/nftables.conf
+@@ -12,7 +12,7 @@
+ 		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+ 		udp sport 67 udp dport 68 accept comment "DHCPv4 replies"
+ 		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept comment "DHCPv6 replies"
+-		tcp dport 8080 accept comment "app.service"
++		tcp dport 9090 accept comment "app.service"
+ 	}
+ 	chain forward {
+ 		type filter hook forward priority filter; policy drop;
 [exit 1]
 
 $ tundravm compile node.py --tree mkosi --check
 M  debug/mkosi.extra/etc/app/app.conf
+M  debug/mkosi.extra/etc/nftables.conf
 M  default/mkosi.extra/etc/app/app.conf
+M  default/mkosi.extra/etc/nftables.conf
 M  dev/mkosi.extra/etc/app/app.conf
-3 files changed
+M  dev/mkosi.extra/etc/nftables.conf
+6 files changed
 [exit 1]
 ```
 
@@ -338,13 +370,13 @@ M  dev/mkosi.extra/etc/app/app.conf
 
 ```console
 $ tundravm lock node.py --check
-~ variants.debug.files: ~/etc/app/app.conf
-~ variants.default.files: ~/etc/app/app.conf
-~ variants.dev.files: ~/etc/app/app.conf
+~ variants.debug.files: ~/etc/app/app.conf ~/etc/nftables.conf
+~ variants.default.files: ~/etc/app/app.conf ~/etc/nftables.conf
+~ variants.dev.files: ~/etc/app/app.conf ~/etc/nftables.conf
 [exit 1]
 
 $ tundravm lock node.py --check --variant default
-~ variants.default.files: ~/etc/app/app.conf
+~ variants.default.files: ~/etc/app/app.conf ~/etc/nftables.conf
 [exit 1]
 
 $ tundravm lock node.py
@@ -358,8 +390,8 @@ lock is up to date
 $ tundravm compile node.py --tree mkosi
 compiled mkosi
   variants:      default, dev, debug
-  recipe_digest: 9b3ae2ac824585295b474ccf7a97abbf735bcedac315e6b32858fcc9aec4ab50
-  tree_digest:   385d3c0dfb5bcf9b2acf51050b97fa598235d9960bb7c60eac2b1c52ecf854f8
+  recipe_digest: e79b8c583a5910d662abeba6e0003f0f6d9a08e1e55d917594a21b0f44308a7a
+  tree_digest:   61fc56c610b68658b9d12321587eee17c4e636585221983681c6bdf73cc34c9a
 [exit 0]
 ```
 
@@ -441,7 +473,26 @@ source: placeholder (build/default/disk.qcow2)
 [exit 0]
 ```
 
-`measure` reads the bake in the build directory (`--build`, here the table's `build`) and first checks the artifact against the sha256 the bake recorded: a disk file changed since the bake is `E_ARTIFACT_CHANGED`. With a real bake the registers are replayed from the UKI offline and the `source:` line names `tundravm-measure` instead of `placeholder`. The default scheme, `qemu`, predicts RTMR1 and RTMR2; MRTD and RTMR0 depend on the host's firmware, so they are listed as unverifiable with the reason. `--scheme gcp` adds every MRTD/RTMR0 Google's firmwares produce, `--scheme portable` keeps only RTMR1/RTMR2 for every firmware, and `--scheme azure` predicts no TDX register (see [Policy: Schemes](policy.md#schemes)). To ship the same image to the clouds, give the variant `outputs=("qemu", "azure", "gcp")`: it is still one UKI (the Azure and GCP glue only runs on its cloud, `ConditionVirtualization=`), so each scheme's policy comes from that one UKI and covers all three disks, and `measure` says `one UKI, 3 outputs: azure, gcp, qemu`.
+`measure` reads the bake in the build directory (`--build`, here the table's `build`) and first checks the artifact against the sha256 the bake recorded: a disk file changed since the bake is `E_ARTIFACT_CHANGED`. With a real bake the registers are replayed from the UKI offline and the `source:` line names `tundravm-measure` instead of `placeholder`. The default scheme, `qemu`, predicts RTMR1 and RTMR2; MRTD and RTMR0 depend on the host's firmware, so they are listed as unverifiable with the reason. `--scheme` picks another verifier's view of the same UKI (see [Policy: Schemes](policy.md#schemes)): `gcp` adds every MRTD/RTMR0 Google's firmwares produce, `portable` keeps only RTMR1/RTMR2, leaving the firmware registers to the platform's own verifier, and `azure` predicts no TDX register. A cloud scheme needs that cloud's output:
+
+```console
+$ tundravm measure --variant default --allow-placeholder --scheme portable
+PLACEHOLDER: not real measurements. These values are derived from artifact digests; never put them in an attestation policy.
+measurements default (portable)
+source: placeholder (build/default/disk.qcow2)
+  RTMR1  62b35ad438c5fb8c5a389a03c77a893928b576e70a836ac55573aa91828e39f3
+  RTMR2  59f9281c924ffaf9272e96da67ad32f738c34500abf9f9c15fc51a8db9068a5e
+  MRTD   unverifiable: portable: firmware register, left to the platform's own verifier
+  RTMR0  unverifiable: portable: firmware register, left to the platform's own verifier
+[exit 0]
+
+$ tundravm measure --variant default --allow-placeholder --scheme gcp
+error [E_STATE]: No baked artifact for default/gcp.
+Hint: Baked: debug/qemu, default/qemu, dev/qemu. Bake that variant and target first.
+[exit 2]
+```
+
+To ship the same image to the clouds, give the variant `outputs=("qemu", "azure", "gcp")`: it is still one UKI (the Azure and GCP glue only runs on its cloud, `ConditionVirtualization=`), so each scheme's policy comes from that one UKI and covers all three disks, and `measure` says `one UKI, 3 outputs: azure, gcp, qemu`.
 
 A verifier, an image that checks its peers' quotes, needs these values as its expected measurements. `--export-policy` writes them to a policy file:
 
@@ -536,8 +587,8 @@ sbom default
   arch             x86_64
   snapshot         -
   mirror           -
-  recipe digest    9b3ae2ac824585295b474ccf7a97abbf735bcedac315e6b32858fcc9aec4ab50
-  tree digest      dabe2f4e7aa320c218339acf88b05eae1ce787258b54a69d3dfe665c0162bdb5
+  recipe digest    e79b8c583a5910d662abeba6e0003f0f6d9a08e1e55d917594a21b0f44308a7a
+  tree digest      541ba0951ea6b4e9cf071c27067eeb903ad4593fe62e6df4f5c7beadc4aee586
   artifact         default/disk.qcow2
   artifact sha256  1fa043adea909e9ad008e0db46ed1c9935adf90aee9c49d20940d6316c5c2e79
   manifest         default/default.manifest (missing)
@@ -545,11 +596,13 @@ sbom default
   installed        no (declared packages)
   tundravm         0.1.0
 
-packages (7)
+packages (9)
   NAME               VERSION  ARCH   ORIGIN
   ca-certificates    -        amd64  declared
+  chrony             -        amd64  declared
   kmod               -        amd64  declared
   linux-image-amd64  -        amd64  declared
+  nftables           -        amd64  declared
   systemd            -        amd64  declared
   systemd-boot-efi   -        amd64  declared
   systemd-sysv       -        amd64  declared
@@ -561,7 +614,7 @@ note: no mkosi package manifest at default/default.manifest: listing the package
 [exit 0]
 ```
 
-`sbom` merges three records of one baked variant: mkosi's package manifest beside the artifact, the lockfile's source pins, and the recipe metadata and digests from `bake-result.json` (`tree digest` is the digest of the variant's own directory of the tree, which the bake records per variant, so it is not `compile`'s `tree_digest` of every variant). Paths are relative to the build directory, so moving `build/` gives the same document. `bound  yes` says the document describes this bake: the artifact still hashes to the sha256 the bake recorded, and the lockfile (and a manifest, when there is one) is the one the bake read; otherwise `sbom` fails with `E_ARTIFACT_CHANGED`. The in-process bake installed nothing, so there is no manifest: the notes say so, `installed  no` says the table lists the packages the recipe declares, without versions. After a real bake the table lists every installed package with the version and architecture from mkosi's manifest, `sources` lists each source build, built kernel and `EfiStub` package with its pin, and `snapshot` names the archive snapshot when the recipe pins one (the starter does not). See [CLI: SBOM](cli.md#sbom).
+`sbom` merges three records of one baked variant: mkosi's package manifest beside the artifact, the lockfile's source pins, and the recipe metadata and digests from `bake-result.json` (`tree digest` is the digest of the variant's own directory of the tree, which the bake records per variant, so it is not `compile`'s `tree_digest` of every variant). Paths are relative to the build directory, so moving `build/` gives the same document. `bound  yes` says the document describes this bake: the artifact still hashes to the sha256 the bake recorded, and the lockfile (and a manifest, when there is one) is the one the bake read; otherwise `sbom` fails with `E_ARTIFACT_CHANGED`. The in-process bake installed nothing, so there is no manifest: the notes say so, `installed  no` says the table lists the packages the recipe declares, without versions. After a real bake the table lists every installed package with the version and architecture from mkosi's manifest, `sources` lists each source build, built kernel and `EfiStub` package with its pin, and `snapshot` names the archive snapshot when the recipe pins one (the starter does not). Once the recipe ships `/usr/bin/app` as a `GoBinary` or a `Cargo` build, `--binaries DIR` (a directory holding the built binaries) adds the Go modules or `cargo auditable` crates embedded in each one as components of that build. See [CLI: SBOM](cli.md#sbom).
 
 The default format is SPDX 2.3 JSON, and `--output` writes it to a file to publish next to `peer.json`:
 
@@ -585,11 +638,12 @@ wrote build/evidence
 wrote evidence.tar.gz
 wrote report.html
 evidence 2023-11-14T22:13:20Z  verdict pass
-  recipe     node.py  digest 9b3ae2ac8245  matches
+  recipe     node.py  digest e79b8c583a59  matches
   tree       matches
   integrity  verified
   lock       current
   reproduce  matched
+  toolchain  measure.gcp-firmware-table dstack-mr-gcp@b16e08b, measure.tundravm-measure 1.0+attest-12f1e29.dstack-mr-gcp-b16e08b, tundravm 0.1.0+0db3f45de51b
   policy     missing
   measured   none
   sbom       declared
@@ -599,11 +653,11 @@ evidence 2023-11-14T22:13:20Z  verdict pass
   required   reproducible, lock
   default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
 members:
-  376519f62b6ecdb7260df1bced94d50a8c51c739f99379b369e3396e3ae5882b  bake-result.json
+  73f9008f1a2e5d13a419ba4ebace02c71bd8e1dfa8d6c7823687c6c7618a0f5f  bake-result.json
   37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570  lint.json
-  1b151f74ef39f05c8267d9a1ef0cb260174d239ec8bb3bd108c0fa044379437c  tundravm.lock
-  8a19d598d8d7fda601a1cb87256b5d035b2f855225b4dfea705e4ffba81582bf  variants/default/sbom-qemu.spdx.json
-  df4fa23210e9b8734deda48a48413deb166552970978b0f23145aeaed45cd412  variants/default/tree.json
+  c2af36fcb02e1da306e37839be192bb20b7e2f070480e32bd798950778796777  tundravm.lock
+  6357dfe39c50c974001024d2d0d7557d926e2f0b4cb3c301438b6568f85c2378  variants/default/sbom-qemu.spdx.json
+  84d25f9f03004cbdbbb17ea2f01a692848aa53d2120eed437400c4e7466fde10  variants/default/tree.json
 note: default/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
 note: default/qemu sbom: no mkosi package manifest at default/default.manifest: listing the packages the recipe declares, without versions
 note: no measurements policy for variant default (build/default/policy.json does not exist); write one with `tundravm measure --build build --variant default --export-policy build/default/policy.json`
@@ -611,7 +665,7 @@ note: the artifacts are simulated (in-process backend): nothing was built
 [exit 0]
 ```
 
-`evidence` builds nothing. It reads `build/bake-result.json`, checks that the recipe and its compiled tree are the ones the bake recorded (`recipe`, `tree`), hashes each artifact again against the sha256 the bake recorded (`integrity`), compares the lockfile with the recipe (`lock`), reads back the outcome step 9 recorded (`reproduce`) and lints the recipe with the lock's pins (`lint`). A contradiction makes the verdict `fail`, with one line per reason under `reasons:`, and exits 1: append one byte to `build/default/disk.qcow2` and the summary reads `integrity  mismatch` and the reason `integrity-mismatch  default/qemu: build/default/disk.qcow2 changed since the bake`. What the bake must hold is the project's requirement set, `required  reproducible, lock`: the `[tool.tundravm]` table's `require`, else those two, the same set `status` judges release readiness against and `release` requires. A required check that is missing makes the verdict `incomplete` (exit 1); here both are present. What is absent and not required is a note, here the policy and real artifacts; `--require measured,real` makes those required instead (the flag replaces the set, and `--require ''` requires nothing), as the CI workflow of step 16 does with `reproducible,lock` (plus `real` for a real backend).
+`evidence` builds nothing. It reads `build/bake-result.json`, checks that the recipe and its compiled tree are the ones the bake recorded (`recipe`, `tree`), hashes each artifact again against the sha256 the bake recorded (`integrity`), compares the lockfile with the recipe (`lock`), reads back the outcome step 9 recorded (`reproduce`), names the toolchain the bake recorded (`toolchain`; a real bake adds mkosi and systemd) and lints the recipe with the lock's pins (`lint`). A contradiction makes the verdict `fail`, with one line per reason under `reasons:`, and exits 1: append one byte to `build/default/disk.qcow2` and the summary reads `integrity  mismatch` and the reason `integrity-mismatch  default/qemu: build/default/disk.qcow2 changed since the bake`. What the bake must hold is the project's requirement set, `required  reproducible, lock`: the `[tool.tundravm]` table's `require`, else those two, the same set `status` judges release readiness against and `release` requires. A required check that is missing makes the verdict `incomplete` (exit 1); here both are present. What is absent and not required is a note, here the policy and real artifacts; `--require measured,real` makes those required instead (the flag replaces the set, and `--require ''` requires nothing), as the CI workflow of step 16 does with `reproducible,lock` (plus `real` for a real backend).
 
 Step 10's placeholder policy is not evidence: `--policy peer.json` adds it as `variants/default/policy.json`, the summary reads `policy  placeholder`, and the verdict fails with `policy-placeholder  default: peer.json holds placeholder registers`. Without the flag, `evidence` takes `build/default/policy.json` when it exists, so after a real bake export the policy there (`measure --variant default --export-policy build/default/policy.json`).
 
@@ -689,6 +743,7 @@ Use it in `node.py`: add `from fragments import HealthCheck` after the tundravm 
 ```console
 $ tundravm lint node.py --variant default
 error fragment-requires-missing [default] healthcheck: fragment 'healthcheck' requires fragment 'app', which this variant does not include
+    at: node.py:90
 1 error, 0 warnings, 0 infos
 [exit 1]
 ```
@@ -700,12 +755,14 @@ $ tundravm lint node.py --variant default
 error lock-changed [common] variants.default.files: variants.default.files changed since the lock: +/usr/lib/systemd/system/app-healthcheck…
 error lock-changed [common] variants.default.packages: variants.default.packages changed since the lock: +curl
 error lock-changed [common] variants.default.services: variants.default.services changed since the lock: +app-healthcheck +app-healthcheck.timer
-3 errors, 0 warnings, 0 infos
+error lock-changed [common] variants.default.users: variants.default.users changed since the lock: +app-healthcheck
+4 errors, 0 warnings, 0 infos
 [exit 1]
 
 $ tundravm inspect node.py --variant default | grep -E "Fragments|Units|app-healthcheck "
-Fragments (2): app healthcheck
-Units: enable app-healthcheck.timer
+Fragments (4): tee-base network app healthcheck
+  app-healthcheck  system  shell=/usr/sbin/nologin
+Units: enable chrony.service, systemd-networkd.service, systemd-networkd.socket, systemd-networkd-wait-online.service, app-healthcheck.timer, nftables.service; mask apt-daily.timer, apt-daily-upgrade.timer, dpkg-db-backup.timer, getty@tty1.service
   app-healthcheck  /usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/  restart=no  type=oneshot  user=app-healthcheck  disabled
 
 $ tundravm diff node.py --tree mkosi --variant default --stat
@@ -727,12 +784,12 @@ no findings
 $ tundravm compile node.py --tree mkosi
 compiled mkosi
   variants:      default, dev, debug
-  recipe_digest: ce3ac7f8a16ce86d0d8cb703d5afa043ab3d2b56f77735a28e454a7defd6829f
-  tree_digest:   2d4fe8545d74b73fb8d45802aef294cef533ca024f409ba5706194df5c8e0d65
+  recipe_digest: ad93886075725ba0357cdc4612c4962204abbe62be2c60843ddaf28208036c1d
+  tree_digest:   165af2e82e50a6009c013be72f5b97c2ffc08fea9e6b57da27964c770610056b
 [exit 0]
 ```
 
-`mkosi.conf` gained `curl`, and `06-postinst.sh` enables the probe and its timer. The recipe directory is importable while the recipe loads, so `fragments.py` needs no packaging. The [fragment guide](module-authoring.md) covers builds, units and ordering in depth.
+`mkosi.conf` gained `curl`, and `06-postinst.sh` creates the probe's system user and enables its timer. The recipe directory is importable while the recipe loads, so `fragments.py` needs no packaging. The [fragment guide](module-authoring.md) covers builds, units and ordering in depth.
 
 ## 15. Test it
 
@@ -750,14 +807,15 @@ Add tests for the fragment in `tests/test_healthcheck.py`. `tundravm.testing` wo
 from fragments import HealthCheck
 from node import App
 
-from tundravm import Fragment, Package, Recipe, Service, lint
+from tundravm import Fragment, Package, Recipe, Task, lint
+from tundravm.declarative.utils import Network
 from tundravm.testing import assert_clean, assert_diagnostic
 
 APP = App(version="1", port=8080)
 
 
 def image(*items: Fragment) -> Recipe:
-    return Recipe(name="t", items=(Package("linux-image-amd64"), *items))
+    return Recipe(name="t", items=(Package("linux-image-amd64"), Network(), *items))
 
 
 def test_probes_the_app() -> None:
@@ -769,11 +827,11 @@ def test_needs_the_app() -> None:
 
 
 def test_probes_the_port_the_app_exports() -> None:
-    (probe,) = [item for item in HealthCheck(target=APP.http).items if isinstance(item, Service)]
-    assert probe.exec_start == "/usr/bin/curl -fsS -o /dev/null http://127.0.0.1:8080/"
+    (probe,) = [item for item in HealthCheck(target=APP.http).items if isinstance(item, Task)]
+    assert probe.command == "/usr/bin/curl -fsS -o /dev/null http://127.0.0.1:8080/"
 ```
 
-- `image()` builds a one-variant recipe (`default`, for qemu) around the fragments under test, with the kernel package so `kernel-missing` stays quiet.
+- `image()` builds a one-variant recipe (`default`, for qemu) around the fragments under test, with the kernel package so `kernel-missing` stays quiet and `Network()` so `network-missing` does: the app's service declares a port, and lint warns when no interface is configured to reach it (the recipe gets `Network()` from `TeeBase()`).
 - `assert_clean(lint(recipe))` fails on errors and warnings, whatever it is given (a recipe, `lint()` findings or a `fragment_plan(...)` image); `warnings="allow"` fails on errors only and `allow=("code",)` accepts some.
 - `assert_diagnostic` returns the first diagnostic matching every field you give, or fails listing what was found.
 
@@ -790,22 +848,24 @@ pythonpath = ["."]
 $ uv add --editable /home/me/tundra
 Using CPython 3.12.3 interpreter at: /usr/bin/python3
 Creating virtual environment at: .venv
-Resolved 8 packages in 41ms
+Resolved 8 packages in 2ms
    Building tundravm @ file:///home/me/tundra
       Built tundravm @ file:///home/me/tundra
-Prepared 1 package in 277ms
+Prepared 1 package in 265ms
 Installed 1 package in 1ms
  + tundravm==0.1.0 (from file:///home/me/tundra)
 [exit 0]
 
 $ uv run pytest -q tests
-Installed 5 packages in 8ms
+Installed 5 packages in 11ms
 ......                                                                   [100%]
-6 passed in 0.07s
+6 passed in 0.13s
 [exit 0]
 ```
 
 The override records your checkout's path in `[tool.uv.sources]` and in `uv.lock`; keep it out of commits, since the path exists only on your machine.
+
+These tests never boot anything. With a real bake, QEMU and OVMF, `tundravm.testing.boot()` boots the baked UKI and reads its serial console: `boot(uki, expect_units=("app",)).assert_booted()` fails unless the boot reaches `minimal.target` and `app.service` starts, and the `boot` pytest fixture skips the test on a host without QEMU or OVMF, like this one. See [Testing: Booting an image in tests](testing.md#booting-an-image-in-tests).
 
 In a project of your own, the loop is: edit the recipe with `tundravm watch node.py` running, `tundravm compile node.py --tree mkosi` once its line says `tree stale`, `uv run pytest tests`, `tundravm lock node.py`.
 
@@ -907,11 +967,12 @@ wrote build/evidence
 signed evidence.json with ../review-key: evidence.json.sig
 wrote v1.tar.gz
 evidence 2023-11-14T22:13:20Z  verdict pass
-  recipe     node.py  digest ce3ac7f8a16c  matches
+  recipe     node.py  digest ad9388607572  matches
   tree       matches
   integrity  verified
   lock       current
   reproduce  matched
+  toolchain  measure.gcp-firmware-table dstack-mr-gcp@b16e08b, measure.tundravm-measure 1.0+attest-12f1e29.dstack-mr-gcp-b16e08b, tundravm 0.1.0+0db3f45de51b
   policy     missing
   measured   none
   sbom       declared
@@ -921,11 +982,11 @@ evidence 2023-11-14T22:13:20Z  verdict pass
   required   reproducible, lock
   default/qemu  build/default/disk.qcow2  sha256 1fa043adea90  verified
 members:
-  4138a79ad6439291e3b901adc69c119cc9e5c67d1cbc132eaa9ebe87da58fd94  bake-result.json
+  6bef3df1cced8afaba648e1322ce93c217bd3de41f1613802b458dc7dc4297b1  bake-result.json
   37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570  lint.json
-  0922d2d369b9dd102538856e3c7d0f6e006d88e539418366c90bae54d41093c8  tundravm.lock
-  031609bda69d5ae5f6be39f8be479c83d3e92e0406a2ed3cbe5444c97eefa32f  variants/default/sbom-qemu.spdx.json
-  f9bbe7f3fddb64400f26e368da546efe4812d85c2d18008d07b02ecd7fcd1653  variants/default/tree.json
+  d89a7fc763f11bc0575f0d9dbbfa8b37fe03fe901c54a3e52bdb5c7f5be73a7d  tundravm.lock
+  442414cfe9644ce61d48c5e8de44e37d3c667da07f99c306dd7617683368147c  variants/default/sbom-qemu.spdx.json
+  87aff139bdf78beda8899a07e03cc98d48de586f87031452134824174d551c34  variants/default/tree.json
 note: default/qemu sbom: the artifact is simulated (in-process backend): nothing was installed
 note: default/qemu sbom: no mkosi package manifest at default/default.manifest: listing the packages the recipe declares, without versions
 note: no measurements policy for variant default (build/default/policy.json does not exist); write one with `tundravm measure --build build --variant default --export-policy build/default/policy.json`
@@ -955,8 +1016,8 @@ locked build/tundravm.lock
 $ tundravm compile node.py --tree mkosi
 compiled mkosi
   variants:      default, dev, debug
-  recipe_digest: 121034b97122932f0bfe22251f580335bfaca85d2bb92ea1e439ee84f5d16dd8
-  tree_digest:   3d19790524e58d0aafb0da815d544d85918b9589165718933f2143fccc75f724
+  recipe_digest: 12c49c11c89d0da4eea89276637e898d7160cf91317e4ce0639eb81aea1fd9eb
+  tree_digest:   ce1d27ac082a26a54c512d6730143893766e152f29c080d7f55fde516af0ed5f
 [exit 0]
 
 $ tundravm changes node.py --since v1.tar.gz --variant default --format markdown
@@ -978,8 +1039,8 @@ Recipe `node`, variants `default`: 6 changes.
 
 | Change | Subject | Before | After |
 |---|---|---|---|
-| changed | recipe digest | `ce3ac7f8a16c` | `121034b97122` |
-| changed | default tree | `e3ea04984524` | `97968626e1e6` |
+| changed | recipe digest | `ad9388607572` | `12c49c11c89d` |
+| changed | default tree | `3e680be53604` | `a6588398ebc7` |
 
 ### Lockfile sections (2)
 
@@ -1012,9 +1073,9 @@ Recipe `node`, variants `default`: 6 changes.
 
 ```console
 $ tundravm status
-recipe    ok       node.py  digest 121034b97122  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
-lock      ok       build/tundravm.lock  v4  up to date
+lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
 tree      ok       mkosi: up to date with the recipe
 artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock  recipe and tree changed since the bake
@@ -1057,9 +1118,9 @@ removed build/.tundravm-hashes.json
 [exit 0]
 
 $ tundravm status
-recipe    ok       node.py  digest 121034b97122  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
-lock      ok       build/tundravm.lock  v4  up to date
+lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
 tree      ok       mkosi: up to date with the recipe
 artifact  missing  default: not baked (no build/bake-result.json)
@@ -1081,12 +1142,12 @@ A release is one directory holding the shipped artifacts with their policies, SB
 ```console
 $ tundravm release --version 1.0 --require real
 skip variant dev: Variant(release=False): not for release
-[1/9] lock-check  done      0.0s  lock current (build/tundravm.lock), sha256 39c9f185d5a4
+[1/9] lock-check  done      0.0s  lock current (build/tundravm.lock), sha256 5f5ba608ef4d
 [2/9] fetch       skipped   0.0s  in-process backend: nothing is built, nothing to fetch
-[3/9] bake        done      0.0s  2 artifacts, reproducible: matched, simulated
+[3/9] bake        done      0.1s  2 artifacts, reproducible: matched, simulated
 [4/9] measure     skipped   0.0s  simulated artifacts: nothing to measure
-[5/9] sbom        done      0.0s  2 SPDX documents, 17 packages
-[6/9] evidence    done      0.1s  verdict incomplete
+[5/9] sbom        done      0.0s  2 SPDX documents, 21 packages
+[6/9] evidence    done      0.2s  verdict incomplete
 [7/9] verify      done      0.0s  verdict incomplete: 28/29 checks pass
 [8/9] changes     skipped   0.0s  no earlier release of this recipe to compare with
 [9/9] notes       done      0.0s  RELEASE.md, verdict fail
@@ -1101,9 +1162,9 @@ release releases/node-1.0: fail (simulated)
 
 ```console
 $ tundravm status
-recipe    ok       node.py  digest 121034b97122  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
-lock      ok       build/tundravm.lock  v4  up to date
+lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
 tree      ok       mkosi: up to date with the recipe
 artifact  ok       default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
@@ -1133,12 +1194,12 @@ Hint: Omit the option to keep what the release started with, or pass --change-sp
 
 $ tundravm release --version 1.0 --require reproducible,lock --change-spec
 skip variant dev: Variant(release=False): not for release
-[1/9] lock-check  kept            lock current (build/tundravm.lock), sha256 39c9f185d5a4
+[1/9] lock-check  kept            lock current (build/tundravm.lock), sha256 5f5ba608ef4d
 [2/9] fetch       skipped         in-process backend: nothing is built, nothing to fetch
 [3/9] bake        kept            2 artifacts, reproducible: matched, simulated
 [4/9] measure     skipped         simulated artifacts: nothing to measure
-[5/9] sbom        kept            2 SPDX documents, 17 packages
-[6/9] evidence    done      0.1s  verdict pass
+[5/9] sbom        kept            2 SPDX documents, 21 packages
+[6/9] evidence    done      0.2s  verdict pass
 [7/9] verify      done      0.0s  verdict pass: 29/29 checks pass
 [8/9] changes     skipped   0.0s  no earlier release of this recipe to compare with
 [9/9] notes       done      0.0s  RELEASE.md, verdict pass
@@ -1148,7 +1209,7 @@ release releases/node-1.0: pass (simulated)
 $ jq .spec_history releases/node-1.0/release.json
 [
   {
-    "at": "2026-10-17T21:32:20Z",
+    "at": "2026-10-18T03:14:56Z",
     "changes": {
       "require": {
         "new": [
@@ -1175,7 +1236,7 @@ $ mkdir ../handoff && cp -r releases/node-1.0 ../handoff/
 
 $ tundravm verify ../handoff/node-1.0
 verify ../handoff/node-1.0  verdict pass  (38 pass, 0 fail, 0 missing)
-  manifest   node-1.0  version 1.0  created 2026-10-17T21:32:20Z
+  manifest   node-1.0  version 1.0  created 2026-10-18T03:14:56Z
   file       8/8 pass
   release    1/1 pass
   evidence   pass: 29/29 checks pass
@@ -1187,9 +1248,9 @@ The note says the release is unsigned: `release --sign KEY` signs `release-manif
 
 ```console
 $ tundravm status
-recipe    ok       node.py  digest 121034b97122  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
-lock      ok       build/tundravm.lock  v4  up to date
+lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
 tree      ok       mkosi: up to date with the recipe
 artifact  ok       default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock
@@ -1204,9 +1265,9 @@ next: tundravm bake
 [exit 0]
 
 $ tundravm status --variant default --variant debug
-recipe    ok       node.py  digest aa7062dbf390  variants default, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest f233478eac3e  variants default, debug  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
-lock      ok       build/tundravm.lock  v4  up to date
+lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
 tree      ok       mkosi: up to date with the recipe
 artifact  ok       default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  reproducibility matched  simulated  lock build/tundravm.lock

@@ -1683,9 +1683,9 @@ After `init --backend inprocess`, `lock` and `bake --backend inprocess`, adding 
 
 ```console
 $ tundravm status node.py
-recipe    ok       node.py  digest 1eab1ea5a220  variants default, dev  dialect current  base debian/trixie
+recipe    ok       node.py  digest c803918380cc  variants default, dev  dialect current  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
-lock      stale    build/tundravm.lock  v4  2 sections drifted
+lock      stale    build/tundravm.lock  v5  2 sections drifted
 source    n/a      no source builds or kernels
 tree      missing  mkosi: not compiled
 artifact  stale    default/qemu  build/default/disk.qcow2  114 B  sha256 1fa043adea90  integrity unchecked (--verify hashes it)  simulated  lock build/tundravm.lock  recipe and tree changed since the bake

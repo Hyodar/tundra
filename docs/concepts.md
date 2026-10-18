@@ -4,7 +4,7 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 
 ## The model in one recipe
 
-A recipe says three things. Its **platform** is what every variant builds on: `Debian("trixie", snapshot=..., boot="systemd", efi_stub=...)` is the distribution release and archive, plus the packages a bootable image needs (the kernel and the systemd boot set, `recipe.platform.packages`). Its **items** are the declarations every variant starts from: typed facts (`Package`, `File`, `User`, `Service`, `Build`, `Disk`, ...) and fragments that group them. A reusable fragment is a **component**: a `@component` class whose fields are its configuration and whose `compose()` yields its contents (`GoBinary`, `DevTools` and `Tdxs` in `tundravm.declarative.utils` are components too). Its **variants** each describe one image as a change to the variant it `inherits`: `add` a fragment, `changes` that edit or remove inherited declarations through their refs (`motd.ref.edit(content=...)`, `Unit.ref("ssh.service").remove()`), and the `outputs` it builds (`qemu`, `azure`, `gcp`).
+A recipe says three things. Its **platform** is what every variant builds on: `Debian("trixie", snapshot=..., boot="systemd", efi_stub=...)` is the distribution release and archive, plus the packages a bootable image needs (the kernel and the systemd boot set, `recipe.platform.packages`). Its **items** are the declarations every variant starts from: typed facts (`Package`, `File`, `User`, `Service`, `Build`, `Disk`, ...) and fragments that group them. A reusable fragment is a **component**: a `@component` class whose fields are its configuration and whose `compose()` yields its contents (`GoBinary`, `DevTools`, `Tdxs` and `TeeBase` in `tundravm.declarative.utils` are components too). Its **variants** each describe one image as a change to the variant it `inherits`: `add` a fragment, `changes` that edit or remove inherited declarations through their refs (`motd.ref.edit(content=...)`, `Unit.ref("ssh.service").remove()`), and the `outputs` it builds (`qemu`, `azure`, `gcp`).
 
 ```python
 from tundravm import Debian, File, Package, Recipe, Service, Variant
@@ -45,99 +45,17 @@ Resolving a variant flattens platform, items and the variant chain into one orde
 
 Every one of them is a frozen dataclass. Nothing in a recipe is mutated after construction: a component computes its contents once, from its fields, a variant describes a change instead of applying it, and the lifecycle functions take values and return values.
 
-`Recipe` fields: `name`, `platform` (default `Debian("trixie", boot=None)`: no kernel, so pass `Debian(release)` for a bootable image), `items` (its own declarations and fragments; `packages("curl", "jq")` bundles packages without a fragment name), `variants` (default: one `Variant("default", outputs=("qemu",))`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults). The archive and build settings are the platform's: `Debian(release, arch=, snapshot=, mirror=, tools_mirror=, epoch=0, boot="systemd", kernel_package="linux-image-amd64", efi_stub=None, items=())`.
+## The platform
+
+The platform is what every variant builds on, and every variant starts from its declarations (provenance level `platform`). `Recipe` fields: `name`, `platform` (default `Debian("trixie", boot=None)`: no kernel, so pass `Debian(release)` for a bootable image), `items` (its own declarations and fragments; `packages("curl", "jq")` bundles packages without a fragment name), `variants` (default: one `Variant("default", outputs=("qemu",))`), `mkosi` (compiler settings: `Mkosi(layout=, dialect=, ...)`) and `policy` (a [`Policy`](policy.md), or `None` for the defaults). The archive and build settings are the platform's: `Debian(release, arch=, snapshot=, mirror=, tools_mirror=, epoch=0, boot="systemd", kernel_package="linux-image-amd64", efi_stub=None, clean_package_metadata=True, kernel_modules=(), items=())`. `boot` and `kernel_package` decide whether the image can boot (see [Bootable images](#bootable-images)), and `kernel_modules` which drivers it keeps (see [Kernel modules](#kernel-modules)).
 
 ### Mirrors and snapshots
 
 `Debian(mirror=, tools_mirror=)` are mirror roots, written as mkosi's `Mirror=` and `ToolsTreeMirror=`: mkosi appends `debian` (or `archive/debian/<snapshot>`) itself, so a full archive URL there is wrong. `snapshot` is a snapshot ID such as `"20251113T083151Z"`, written as `Snapshot=`; with no `mirror`, mkosi reads it from `https://snapshot.debian.org`, so every package comes from that point in time. A URL in `snapshot` is a `ValidationError` that says to put the root in `mirror`. The `cloud` and `prover` templates set `Debian(release, snapshot="20251113T083151Z", efi_stub="257.8-1~deb13u1")`: the platform pins `EfiStub` to a `systemd-boot-efi` version that snapshot carries; `Backports` derives its sources from the same mirror and snapshot.
 
-Declarations validate themselves at construction: relative paths, empty names, unknown phases, out-of-range modes, a `Disk` whose `key` is a string, or a `Unit` that ships a file without a type suffix raise `ValidationError` right where the value is built.
+## Items
 
-## Resolution
-
-`resolve(recipe, variant=NAME)` turns one variant into a `Resolved`: a flat, ordered tuple of declarations, the variant's outputs, and the names of the fragments it included. Resolution runs in this order:
-
-1. **Ancestry.** The variant's `inherits` chain is walked to the root. Every variant starts from the platform's declarations (provenance level `platform`); `inherits="base"` (the default) adds `Recipe.items`; `inherits=None` means nothing else is inherited; any other value names a declared variant. Unknown names and cycles raise.
-2. **Expansion.** Fragments are flattened depth-first. A fragment name seen twice expands once when both are equal; two different fragments with the same name are `fragment-conflict`.
-3. **Overlay.** For each variant from the root down: its `changes` edit or drop inherited declarations, in order, then its `add` fragment is expanded and added.
-4. **References.** Disk keys, secret stores, init and hook `after=` names, ordering contradictions and the variant's outputs are checked.
-5. **Fragment rules.** Every included fragment's `requires` must name another included fragment, and its `checks` run against the `Resolved` value.
-
-### Identity
-
-Two declarations are "the same" when they have the same identity, the type plus a natural key:
-
-| Declaration | Identity |
-|---|---|
-| `Package` | name, role (`runtime`/`build`) |
-| `File`, `FileTree`, `Template` | stage (`skeleton`/`extra`), normalized path |
-| `Unit`, `Service` | unit name (`app` and `app.service` are the same) |
-| `Setting` | section, key |
-| `Debloat`, `RuntimeTools`, `Kernel` | the type alone (one per variant) |
-| everything else | name |
-
-Equal repeats deduplicate silently. Two different declarations with the same identity are `identity-collision`, whether they meet inside one level or between a variant's `add` and what it inherits. There is no "last one wins": a variant that wants to change an inherited declaration says so in `changes`.
-
-A change targets an identity through a ref: `value.ref` for a value you hold, `Type.ref(*key)` for one you do not (`Unit.ref("ssh.service")`, `Package.ref("jq")`). `ref.edit(**fields)` sets fields of the inherited declaration and `ref.remove()` drops it:
-
-```python
-key = Key("data", output="/run/key")
-disk = Disk("data", mount="/data", key=key)     # the disk holds key.ref, not the value
-secrets = Secrets(store=disk)                   # likewise disk.ref
-recipe = Recipe(
-    "r",
-    items=(key, disk, secrets, Unit("ssh.service", enabled=True)),
-    variants=(
-        Variant("default"),
-        Variant("small-key", inherits="default", changes=(key.ref.edit(size=32),)),
-        Variant("no-ssh", inherits="default", changes=(Unit.ref("ssh.service").remove(),)),
-    ),
-)
-```
-
-`small-key` edits one field: the disk and the secrets still name the key and the disk by identity, so they need no new values, and lowering binds the disk to the 32-byte key. Each change must match something inherited (`edit-missing`, `remove-missing`); an edit names fields of its type, never an identity field, and an edited value is checked like a declared one (`edit-invalid`). Editing one field twice in a variant, or editing and removing the same identity, is refused when the `Variant` is built. A variant that wants a different identity removes the old declaration and adds the new one.
-
-### Diagnostics
-
-`resolve()` raises `ValidationError` on the first error. `lint(recipe)` returns every problem as a `Diagnostic(code, severity, message, subject, variant, location, hint, context)` instead: resolution problems, fragment checks, and (when nothing is an error so far) the compiler's own rules on the lowered image, with their hints. `variant` is the variant a finding is in, or `""` for the recipe as a whole (the common fragment, the lockfile, the host). The [API reference](api.md#lint-rules) lists every code.
-
-### Provenance
-
-`tundravm.declarative.resolve.provenance(recipe, variant=NAME)` records how resolution reached its result: for every identity the variant touched, the steps that touched it, in order, each an `Origin(action, variant, fragments, fields, location)`. The action is `declared` (in `Recipe.items`, the level `common`), `added` (by a variant's `add`), `edited` (by an edit in a variant's `changes`; `fields` names the fields it set) or `removed` (by a removal); `fragments` is the chain of fragments the declaration came through, empty for changes, which name declarations by ref, and for a declaration placed directly in `Recipe.items`. `location` is where the step was written: every declaration, `Fragment`, `Variant`, platform and `Edit`/`Remove` records the `file:line` of the call that constructed it (`declared_at`: the first caller outside tundravm, so what a module or component declares points at the recipe line that uses it, and what a platform declares at the platform). It is not part of the value: two declarations written on different lines are equal, hash the same and give the same recipe digest, lockfile and compiled tree, and evidence records no lines. A declared or added step carries the declaration's line, an edit or removal its own (an edited declaration keeps its original line). `inspect --why` and `explore` print the line relative to the working directory: `declared at node.py:53 in common via app (App)`, `size edited at recipe.py:30 in variant small-key`; lint findings use the same lines (see [CLI: Lint](cli.md#lint)). A removed identity stays in the result with `removed` as its last step, and resolution errors are not raised here (`resolve` and `lint` report them).
-
-`tundravm inspect --variant NAME --why SUBJECT` and `explain_why(recipe, variant, subject)` build on it: for one emitted object (an image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME`) they print the declarations behind it with these steps, the compiled files that hold it and the lines the compiler generated for it (see [CLI: Explaining one object](cli.md#explaining-one-object)). `tundravm explore` (`explore(recipe)`) puts these steps for every declaration and every emitted file on one page, cross-linked, so a reviewer can follow a file back to its fragment and overlay without reading the recipe (see [CLI: Explore](cli.md#explore)).
-
-## Lowering and compiling
-
-`compile(recipe)` resolves each variant and lowers it onto the internal compiler, which emits one mkosi directory per variant:
-
-Lowering writes each variant's compiler state directly from its resolved declarations, in declaration order (hooks per phase, `BootStep`s in graph order, runtime tools after the declarations they belong to), and the compiler emits that state.
-Internally `lower()` returns a frozen `Lowered` value (`declarative/_lowered.py`); `declarative/_compile.py` emits it and `declarative/_bake.py` builds it.
-
-```
-mkosi/
-  default/
-    mkosi.conf
-    mkosi.skeleton/...        # File(stage="skeleton"), minimal.target
-    mkosi.extra/...           # File, FileTree, Unit content, runtime-init
-    scripts/04-build.sh       # Build declarations, build-phase hooks
-    scripts/06-postinst.sh    # accounts, unit enablement, postinst hooks
-    scripts/07-finalize.sh    # debloat, IMAGE_VERSION strip, finalize hooks, account sort
-  azure/
-    ...
-```
-
-Debloat runs at finalize, over the whole image. Its default list removes `/usr/lib/modules`, which is right for a built `Kernel` (it installs only its `vmlinuz`) and wrong for the distribution's modular kernel (`Debian(kernel_package="linux-image-amd64")`, the default), whose virtio, `tdx_guest` and cloud NIC drivers live there. Under a modular kernel the implicit default (no `Debloat` declared) keeps `/usr/lib/modules`, which mkosi has already pruned to the variant's [kernel modules](#kernel-modules); a declared `Debloat` says `keep_modules=True` to keep them or `keep_modules=False` to remove them on purpose. Lint `debloat-removes-modules` (error) reports a debloat, declared or implicit, whose removal list still deletes them under a modular kernel. In a reproducible current-dialect build, finalize then ends with the deterministic accounts step (see [reproducibility](reproducibility.md#what-the-current-dialect-normalizes)).
-
-Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. Inside a phase, hooks keep their declaration order except where `after=` moves one behind another hook of the same phase. A hook that runs `after` a hook of a later phase is `hook-order`.
-
-A command that only needs to run inside the image while it is built is a `Run("update-ca-certificates --fresh")` (from `tundravm.declarative.utils`): it renders the `Hook` with the `mkosi-chroot` prefix, quotes a sequence of words, runs anything with shell syntax through `bash -euo pipefail -c` inside the image, and takes a `stage` in plain words (`"postinst"` by default; `"finalize"`, `"prepare"`, `"build"`). Accounts, unit enablement and state directories are declarations, not commands: lint `hook-covered` names `Group`, `User(groups=)`, `Unit(enabled=)` or `RuntimeDirectory` when a hook or boot step spells one by hand.
-
-Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, templates, `FileTree` sources, kernel configs) are read at lowering time. A `FileTree` keeps what it reads: without `mode` each file's and empty directory's permission bits, symlinks as links (`symlinks="follow"` ships what they point to instead) and empty directories; the lockfile records each entry's `kind` (`file`, `symlink`, `directory`). The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
-
-The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. The current dialect targets mkosi 26: apt sources that the build needs (`Repository`, `Backports`) are written at compile time under `mkosi.sandbox/`, where mkosi's apt reads them, and postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so a recipe without a version works under `set -u`. `dialect="nethermind-v1"` spells user and group creation as postinst lines, leaves build hooks unmarked and clones sources inside the build, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
-
-The rest of mkosi's build mechanics have opinionated defaults a recipe rarely touches, so it never needs an mkosi section or key name: the compiler's fixed partition UUID seed, mkosi's own output and package cache directories, an uncompressed image with a JSON manifest, network for build scripts, and package metadata cleaned from the image. `Mkosi(seed=, output_dir=, package_cache=, compress=, manifest=, build_network=)` and `Debian(clean_package_metadata=)` change them for every variant. `Setting(section, key, values)` stays the escape hatch for the long tail of mkosi keys; a `Setting` that repeats a typed field reports `setting-raw` (info) naming it.
+`Recipe.items`, a variant's `add` and a fragment's `items` hold declarations and fragments. A declaration is one typed fact (`Package`, `File`, `User`, `Service`, `Task`, `Mount`, `Key`, `Disk`, `Secrets`, `Build`, `Kernel`, `Firewall`, ...), identified by its type plus a natural key (see [Identity](#identity)); the API reference lists [every declaration](api.md#declarations). Declarations validate themselves at construction: relative paths, empty names, unknown phases, out-of-range modes, a `Disk` whose `key` is a string, or a `Unit` that ships a file without a type suffix raise `ValidationError` right where the value is built.
 
 ### Paths and assets
 
@@ -157,40 +75,19 @@ Kernel(KERNEL_VERSION, KERNEL_SOURCE, config=assets.file("kernel/kernel.config")
 
 `file()` and `directory()` return absolute paths and fail at once, naming the module and the relative path, when the file is missing. `File.text` and `File.copy` say which kind of content a `File` holds; both build the same `File` the constructor does, so the digests do not change. `File.copy(..., mode=None)`, its default, ships `0755` when the source has an execute bit and `0644` otherwise: the bits git records, whatever the checkout's umask. `tundravm watch` notices edits to every file these return or read.
 
-### Bootable images
+## Services, tasks and units
 
-By default every variant compiles to `Format=uki`, a bootable unified kernel image, and mkosi can only build one from an image that holds a kernel. A bootable variant therefore declares a `Kernel(...)` built from source or installs a distribution kernel package (the platform's `kernel_package`, `"linux-image-amd64"` by default, any `linux-image-*`, or Ubuntu's `linux-generic`, `linux-kvm` and `linux-virtual`). Without either, lint reports `kernel-missing`, an error, so `bake` stops at its lint step before mkosi runs. A disk that is never booted declares `Setting("Content", "Bootable", ("no",))` on `Debian(boot=None)` instead: its variant compiles to `Format=disk` and `Bootable=no` and needs no kernel. `Debian(release)` (`boot="systemd"`) installs the Debian kernel together with `systemd`, `systemd-sysv`, `udev`, `kmod` and `systemd-boot-efi`, as the `init` templates do.
+These declarations put systemd units in the image:
 
-### Built kernels
+- **`Service`: a generated service.** `Service("app", "/usr/bin/app", state="app")` renders `/usr/lib/systemd/system/app.service` from typed fields and enables it; nobody writes the unit text. Each field is one directive: the command (a shell-like string or an argv, quoted for systemd), the account (`user`, `group`, `groups`, or `user=Dynamic()` for `DynamicUser=`), writable directories by name instead of `mkdir` (`state="app"` is `/var/lib/app`, created by systemd and owned by the service user; `logs`, `runtime`, `cache`, `write_paths`), secrets as `credentials` (`LoadCredential=`) rather than environment, `env`/`env_file`, restart policy and timeouts, `limits`, the sandbox (`hardening=Hardening.strict()`, `.relaxed()` or `.none()`, with per-knob overrides such as `jit=True`), and relations to other units by name or ref (`requires=` and `wants=` also order `After=`). `enabled=False` generates the unit without enabling it. Anything else goes through `extra=`, which lint reports as `unit-extra`. `needs=[...]` lists the runtime-init steps it waits for. The default, `needs=[RUNTIME_INIT]`, waits for every step (`runtime-init.service`) whenever the variant has one. `needs=()` starts it without waiting. The defaults are secure and opinionated: `Type=exec`, `Restart=on-failure` with `RestartSec=5s`, the `Hardening.strict()` sandbox, and a dedicated system user named after the service, declared for you unless the variant declares it (`user="root"` opts out and lint reports `service-runs-as-root`; `hardening=Hardening.none()` is `hardening-disabled`). [API: declarations](api.md#declarations) lists every field with its default.
+- **`Task`: a oneshot job, at boot or on a schedule.** `Task("migrate", "/usr/bin/app migrate")` runs once per boot (`Type=oneshot`, `RemainAfterExit=yes`, a 5-minute start timeout, the strict sandbox, its own system user), and `migrate.ready` lets a `Service` wait for it (`needs=[migrate.ready]`). `schedule=Every("1h")` or `schedule=Calendar("daily")` generates `<name>.timer` and enables only the timer, so the job never also runs at boot. A `Task` is an application's unit; a `BootStep` is part of the runtime-init chain.
+- **`Service(..., socket=Listen(...))`: socket activation.** systemd listens on the port or socket path (`<name>.socket`, enabled) and starts the service on the first connection; the service itself is not enabled.
+- **`Mount`: a filesystem systemd mounts.** `Mount("/var/lib/app/cache", "tmpfs", type="tmpfs")` renders `var-lib-app-cache.mount` (the name is computed from the path) for tmpfs, bind and network mounts; encrypted and data disks are `Disk`.
+- **`Unit`: verbatim text, or a packaged unit's state.** `Unit("app.service", content, enabled=True)` ships `content` (a string or a `Path` to read) exactly as written; the name needs its type suffix. `Unit("openntpd.service", enabled=True)` or `Unit("ssh.socket", enabled=False, masked=True)` only changes the state of a unit a package ships; it must enable, disable or mask something, or carry `dropin=DropIn(...)`, which changes the packaged unit through `<unit>.d/20-tundravm.conf` with the same typed fields (`Unit("nginx.service", enabled=True, dropin=DropIn(limits={"NOFILE": 65536}))`).
 
-`Kernel(version, source, base=..., fragments=..., patches=..., modules=False)` composes the kernel's config instead of taking one whole file:
+`Unit(..., needs=[disk.ready])` adds `After=runtime-init-disks.service` and `Requires=runtime-init-disks.service` to the shipped text's `[Unit]` section, one unit per needed step. `needs=[RUNTIME_INIT]` adds `runtime-init.service`, and so does any `needs` under `nethermind-v1`. A `needs` naming a step the variant does not declare is `needs-undefined`, an error. A `Unit` with `needs` in a variant with no runtime-init step gets a `needs-without-init` warning from `lint`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (`Tdxs(legacy_units=True)` and `DevTools(reproducible=False)` ship their historical unit text that way). `tundravm units convert FILE...` turns existing unit text into these typed declarations (a `.socket` and `.service` pair into `Service(socket=Listen(...))`, a `.timer` and its oneshot into a scheduled `Task`, a `.mount` into a `Mount`, a drop-in into `Unit(dropin=DropIn(...))`), and `tundravm units render RECIPE --unit NAME` prints the text one variant generates for a unit (see [CLI: Units](cli.md#units)).
 
-```python
-Kernel(
-    "6.12.48",
-    Git("https://github.com/gregkh/linux", "v6.12.48"),          # lock pins the commit
-    base=DebianConfig("6.12.48-1"),                               # Debian's cloud config, locked by sha256
-    patches=(KernelPatch(assets.file("kernel/0001-badaml.patch")),),
-)
-KernelConfig({"CONFIG_XFS_FS": "y", "CONFIG_IO_URING": None}, name="storage")  # any component may add one
-KernelHardening()                                                 # flashbots' deny list + hardening options
-```
-
-The build copies the source, writes the base config (`DebianConfig` extracts `config.<arch>_none_<flavor>.xz` from the `linux-config` package that `tundravm fetch` downloaded and checked; a `Path` base is copied into the tree as `kernel/base.config`), applies the patches in order with `patch -p1` (one that does not apply stops the build naming it), merges `kernel/fragment.config` with `merge_config.sh -m`, runs `make olddefconfig` and then checks every requested option against the final `.config`: Kconfig silently drops an option whose dependencies are unmet, so the build fails with `kernel-option-dropped: CONFIG_X requested y, final n` instead of shipping a kernel without it. The requested options are `CONFIG_MODULES=n` (unless `modules=True`), the kernel's `fragments`, then every `KernelConfig` the variant declares, in declaration order; two that set one option differently are an error (`kernel-option-conflict`) naming both. `modules=False`, the default, builds everything in, so the image carries only `vmlinuz`; `modules=True` also builds the modules and installs them under `/usr/lib/modules/<version>` (the build checks the kernel release equals `version`). `config=` keeps its meaning, a whole, final config used as is, and excludes the others. Lint `kernel-modules-ignored` warns when `Debian(kernel_modules=...)` selects modules a monolithic kernel cannot have.
-
-### Kernel modules
-
-The UKI's initrd is the whole root file system, so every module under `/usr/lib/modules` is memory and a driver the host can reach through a device it offers. A variant on the distribution's modular kernel therefore keeps only the drivers its outputs boot on: lowering writes them as mkosi `KernelModules=` (one name per line), mkosi keeps them with their module and firmware dependencies and deletes the rest before finalize, and the finalize script then fails the build if one of them is neither a `.ko` file nor built into that kernel. The curated sets live in `tundravm.kernel_modules`, checked against Debian trixie's `linux-image-amd64`:
-
-| Set | When | Modules |
-| --- | --- | --- |
-| `TDX_GUEST_MODULES` | every variant | `tdx_guest`, `virtio_net`, `virtio_blk`, `virtio_scsi`, `sd_mod`, `nvme`, `efivarfs` |
-| `AZURE_MODULES` | `azure` output | `hv_vmbus`, `hv_netvsc`, `hv_storvsc`, `hv_utils`, `pci_hyperv`, `mana` |
-| `GCP_MODULES` | `gcp` output | `gve`, `nvme`, `virtio_scsi` |
-| `DISK_MODULES` | a `Disk` | `dm_crypt`, `xts`, `aesni_intel`, `algif_skcipher`, `ext4`, `crc32c_intel` |
-| `FIREWALL_MODULES` | the `nftables` package (a `Firewall`) | `nf_tables`, `nft_ct`, `nft_reject_inet` |
-
-A variant with several outputs keeps the union, so `outputs=("qemu", "azure", "gcp")` boots on all three. `Debian(kernel_modules=("vsock", "tun"))` adds names to every variant's set; `Debian(kernel_modules="all")` writes no `KernelModules=` and keeps every module. A built `Kernel` installs no modules and selects nothing: build its drivers in through its config. Under `Mkosi(layout="native")` the root tree keeps the union of every profile's set. `tundravm import` maps a tree's `KernelModules=` back to the names it adds to the curated set (none: the default), and a modular tree without it to `"all"`.
+`Template(path, template, variables={})` is a file rendered with `str.format_map(variables)` at lowering time, for config files that differ only in a few values.
 
 ## Runtime init
 
@@ -213,48 +110,6 @@ Unit("prometheus-node-exporter.service", EXPORTER_UNIT, enabled=True, needs=[mar
 ```
 
 In the current dialect each step is a oneshot unit, `runtime-init-<step>.service`, running `/usr/lib/runtime-init/<step>`. Its `After=`/`Requires=` name the steps it runs after. `runtime-init.service` requires every step and is enabled in `minimal.target`. Steps that do not depend on each other can run in parallel. Under `nethermind-v1`, one script, `/usr/bin/runtime-init`, runs every step in the topological order from `runtime-init.service`. Every step unit, like that script's unit, requires and orders after `network-setup.service` only when the variant ships that unit. Otherwise it orders after `network-online.target` (`Wants=`), and so does an `azure` variant's provisioning unit. The lockfile records the steps in run order (each step's name and script digest), so reordering steps drifts the lock (see [Reproducibility](reproducibility.md)).
-
-## Services, tasks and units
-
-These declarations put systemd units in the image:
-
-- **`Service`: a generated service.** `Service("app", "/usr/bin/app", state="app")` renders `/usr/lib/systemd/system/app.service` from typed fields and enables it; nobody writes the unit text. Each field is one directive: the command (a shell-like string or an argv, quoted for systemd), the account (`user`, `group`, `groups`, or `user=Dynamic()` for `DynamicUser=`), writable directories by name instead of `mkdir` (`state="app"` is `/var/lib/app`, created by systemd and owned by the service user; `logs`, `runtime`, `cache`, `write_paths`), secrets as `credentials` (`LoadCredential=`) rather than environment, `env`/`env_file`, restart policy and timeouts, `limits`, the sandbox (`hardening=Hardening.strict()`, `.relaxed()` or `.none()`, with per-knob overrides such as `jit=True`), and relations to other units by name or ref (`requires=` and `wants=` also order `After=`). `enabled=False` generates the unit without enabling it. Anything else goes through `extra=`, which lint reports as `unit-extra`. `needs=[...]` lists the runtime-init steps it waits for. The default, `needs=[RUNTIME_INIT]`, waits for every step (`runtime-init.service`) whenever the variant has one. `needs=()` starts it without waiting. The defaults are secure and opinionated: `Type=exec`, `Restart=on-failure` with `RestartSec=5s`, the `Hardening.strict()` sandbox, and a dedicated system user named after the service, declared for you unless the variant declares it (`user="root"` opts out and lint reports `service-runs-as-root`; `hardening=Hardening.none()` is `hardening-disabled`). [API: declarations](api.md#declarations) lists every field with its default.
-- **`Task`: a oneshot job, at boot or on a schedule.** `Task("migrate", "/usr/bin/app migrate")` runs once per boot (`Type=oneshot`, `RemainAfterExit=yes`, a 5-minute start timeout, the strict sandbox, its own system user), and `migrate.ready` lets a `Service` wait for it (`needs=[migrate.ready]`). `schedule=Every("1h")` or `schedule=Calendar("daily")` generates `<name>.timer` and enables only the timer, so the job never also runs at boot. A `Task` is an application's unit; a `BootStep` is part of the runtime-init chain.
-- **`Service(..., socket=Listen(...))`: socket activation.** systemd listens on the port or socket path (`<name>.socket`, enabled) and starts the service on the first connection; the service itself is not enabled.
-- **`Mount`: a filesystem systemd mounts.** `Mount("/var/lib/app/cache", "tmpfs", type="tmpfs")` renders `var-lib-app-cache.mount` (the name is computed from the path) for tmpfs, bind and network mounts; encrypted and data disks are `Disk`.
-- **`Unit`: verbatim text, or a packaged unit's state.** `Unit("app.service", content, enabled=True)` ships `content` (a string or a `Path` to read) exactly as written; the name needs its type suffix. `Unit("openntpd.service", enabled=True)` or `Unit("ssh.socket", enabled=False, masked=True)` only changes the state of a unit a package ships; it must enable, disable or mask something, or carry `dropin=DropIn(...)`, which changes the packaged unit through `<unit>.d/20-tundravm.conf` with the same typed fields (`Unit("nginx.service", enabled=True, dropin=DropIn(limits={"NOFILE": 65536}))`).
-
-`Unit(..., needs=[disk.ready])` adds `After=runtime-init-disks.service` and `Requires=runtime-init-disks.service` to the shipped text's `[Unit]` section, one unit per needed step. `needs=[RUNTIME_INIT]` adds `runtime-init.service`, and so does any `needs` under `nethermind-v1`. A `needs` naming a step the variant does not declare is `needs-undefined`, an error. A `Unit` with `needs` in a variant with no runtime-init step gets a `needs-without-init` warning from `lint`. Apart from that, tundravm never edits `Unit` text. Use `Service` when the fields cover what you need and `Unit` when you want the exact bytes (`Tdxs(legacy_units=True)` and `DevTools(reproducible=False)` ship their historical unit text that way).
-
-`Template(path, template, variables={})` is a file rendered with `str.format_map(variables)` at lowering time, for config files that differ only in a few values.
-
-### The TEE baseline
-
-A confidential VM trusts its own code but not its host, and the host still owns the clock, the disks, the console and the network. `TeeBase()` (in `tundravm.declarative.utils`, used by the `service`, `cloud` and `prover` templates and `init --app`) declares what every such image should have, each piece a typed declaration behind its own flag:
-
-| Flag | Declares | Why | Source |
-|---|---|---|---|
-| `time` | `chrony` with NTS servers (`time.cloudflare.com`, `nts.netnod.se`), refined by the GCP and AWS hypervisor clocks under `maxdistance 1.0`; `chrony.service` enabled | the host sets an unauthenticated guest clock, and TLS, certificate expiry and time-based policy depend on it; NTS (RFC 8915) authenticates the time | flashbots-images `shared/mkosi.extra/etc/chrony/chrony.conf` |
-| `journal` | `journald.conf.d/50-tundravm-tee.conf`: `Storage=volatile`, `RuntimeMaxUse=128M`, `ForwardToConsole=no` | logs stay in guest RAM, capped; nothing reaches a host-readable disk or the host-owned console | flashbots-images `etc/systemd/journald.conf.d/00-size-limit.conf`, `journald.conf(5)` |
-| `sysctl` | `/etc/sysctl.d/50-tundravm-tee.conf` (`TEE_SYSCTL`): `kptr_restrict=2`, `dmesg_restrict=1`, `unprivileged_bpf_disabled=1`, `bpf_jit_harden=2`, `kexec_load_disabled=1` (the measured kernel cannot be replaced), `yama.ptrace_scope=2`, `perf_event_paranoid=3`, `sysrq=0`, `suid_dumpable=0`, the `fs.protected_*` set, and ICMP redirect, source-route, reverse-path and SYN-cookie network settings; each line names its reason and is `-`-prefixed, so a key the kernel lacks is skipped | kernel attack surface a guest does not need | KSPP recommended settings, flashbots-images `etc/sysctl.d/10-kernel-hardening.conf`, the kernel's `admin-guide/sysctl` |
-| `dns` | a static `/etc/resolv.conf` naming `1.1.1.1` and `1.0.0.1` | names resolve without trusting a DHCP-supplied resolver; on Compute Engine `gcp-metadata-dns.service` replaces the file at boot with the metadata server, as before | flashbots-images `etc/systemd/resolved.conf` (Cloudflare) |
-| `network` | a nested `Network()`: DHCP on every `en*`/`eth*` interface through systemd-networkd | without an address the image serves nothing and chrony reaches no NTS server | flashbots-images `shared/mkosi.extra/etc/systemd/network/10-ethernet.network` |
-| `firewall` | `Firewall()`: inbound traffic dropped except the ports the variant's services declare | the host and everything on its network reach every port the guest opens; only the declared ones should answer | flashbots-images `modules/flashbox/common/mkosi.extra/usr/bin/init-firewall.sh` (default-drop inbound) |
-| `mask` | `Unit(name, masked=True)` for `apt-daily.timer`, `apt-daily-upgrade.timer`, `dpkg-db-backup.timer` and `getty@tty1.service` (`TEE_MASKED_UNITS`) | the running image stays the measured one, and the host-owned console offers no login; debloat already masks the `systemd` package's other units | flashbots-images `shared/mkosi.postinst.d/90-debloat-systemd.sh` |
-
-Turn a piece off with its flag (`TeeBase(dns=False)` when the recipe ships its own resolver) or change its inputs (`nts_servers=`, `hypervisor_clocks=()`, `nameservers=`, `journal_max_use=`). flashbots-images resolves over DNS-over-TLS through `systemd-resolved`; `TeeBase` keeps a plain `resolv.conf` so the GCP glue, which copies the metadata resolver over it, keeps working.
-
-### Networking and the firewall
-
-A Debian image with no network configuration boots with every interface down: nothing it serves is reachable, `network-online.target` only means "networkd is not there", and chrony reaches no NTS server. `Network()` (in `tundravm.declarative.utils`, part of `TeeBase()`) writes `/etc/systemd/network/50-tundravm.network`, which takes a DHCP lease on every `en*` and `eth*` interface (predictable and kernel names), accepts IPv6 router advertisements, and ignores the DHCP server's hostname, resolver and time servers (`TeeBase` pins the resolver and NTS sources). It enables `systemd-networkd`, which Debian ships in the `systemd` package, and `systemd-networkd-wait-online` with `--any --timeout=30`: units ordered after `network-online.target` (runtime-init's boot steps, the Azure provisioning task) wait until one interface is configured, and a boot without a NIC goes on after 30 seconds instead of hanging. `Network(dhcp=False, static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1"))` sets a fixed address; `ipv6=False`, `interfaces=` and `wait_timeout=` adjust the rest. There is no `systemd-resolved`: the static `/etc/resolv.conf` (and the GCP metadata resolver unit that replaces it) stays in charge of names.
-
-Debloat masks the `systemd` package's units and deletes `/etc/systemd/network` by default. Without a declared `Debloat`, the default keeps every removal path a declared file lives under and the packaged `systemd-*` units and targets the variant enables, so `Network()` works as is; a declared `Debloat` keeps its own lists, and lint `debloat-removes-declared-file` names what to add to `keep_paths`.
-
-`Firewall()` (a declaration; `TeeBase()` adds one) writes an nftables ruleset to `/etc/nftables.conf` and enables `nftables.service`, which loads it before the network comes up. Inbound it accepts established and related traffic, loopback, the ICMPv6 types IPv6 needs (RFC 4890: errors, packet-too-big, neighbor discovery, router advertisements), DHCPv4 and DHCPv6 replies, and the opened ports; everything else is dropped (`default="reject"` answers with a TCP reset or ICMP unreachable instead), forwarding included. Outbound traffic is not filtered: the guest's own code is trusted, and a confidential VM's outbound peers (NTS servers, attestation collateral, the application's own peers) vary by application.
-
-The opened ports are collected, so a recipe names each port once: every `Service(ports=(8080,))` (a port the program binds itself), every `Service(socket=Listen(...))` on a port that is not loopback-only, and the `Secrets` boot step's SSH-key port, plus `Firewall(allow=(Port(51820, "udp"),))` and `ssh=True` (22/tcp). Each opened port is one rule commented with what listens on it, so the measured ruleset says why it is open. Resolution renders the ruleset after every variant level is applied, so a variant that adds a service opens its port in that variant only. `collect=False` opens only `allow`, and lint `port-unreachable` then names each service port the firewall drops. A variant installing `nftables` keeps the `nf_tables`, `nft_ct` and `nft_reject_inet` kernel modules (see [kernel modules](#kernel-modules)).
-
-Lint `network-missing` warns when a variant listens on a port, waits for the SSH key over HTTP (`Secrets`) or installs `chrony`, but brings up no interface: no `.network` file, no `network-setup.service` (the `nethermind-v1` images' own), no `/etc/network/interfaces` and no package that manages interfaces (`ifupdown`, `netplan.io`, `network-manager`, `cloud-init`, `dhcpcd`).
 
 ## Keys, disks and secrets
 
@@ -333,6 +188,204 @@ An image is copied to every host, registry and bucket that holds it, and its mea
 
 The boot-time tools come from the `tundra-tools` repository and are built from source like any other `Build`. `RuntimeTools(source=Git(...), key_config=..., disk_config=..., secret_config=..., secret_manifest=...)` overrides where they come from and where their configs live; without it the defaults (`tundra-tools` `master`, `/etc/tdx/*.yaml`) apply.
 
+## Variants and targets
+
+A variant produces one mkosi directory and, when baked, one artifact. Its `outputs` (`qemu`, `azure` or `gcp`, inherited from the variant it inherits, `qemu` at the root) decides the disk format and adds the platform integration: an `azure` variant gets the Azure provisioning service and `dmidecode` and converts its disk to a fixed VHD (`parted`, `qemu-img`) in a postoutput script; a `gcp` variant gets the GCP equivalents and a `tar.gz` disk (`sgdisk`). Those scripts run wherever mkosi runs its tools: on the host, or inside mkosi's tools tree when the build uses one, in which case the local backend installs `qemu-utils`, `gdisk` and `parted` into it.
+
+```python
+variants=(
+    Variant("default", outputs=("qemu", "azure", "gcp")),
+    Variant("devtools", inherits="default", add=DevTools()),
+)
+```
+
+An empty `outputs` inherits them (`qemu` at the root). A child cannot drop a cloud output it inherits (`target-inconsistent`): give it `inherits=None` or have it inherit a qemu variant instead.
+
+### One image, every cloud
+
+A variant with several outputs builds **one** UKI. The `qemu` artifact is that UKI; the Azure VHD and the GCP tar.gz are packaging, written by postoutput scripts that put the same UKI on an ESP. So a variant with `outputs=("qemu", "azure", "gcp")` has one boot payload, one sha256 the bake records for every disk (`boot_payloads` in `bake-result.json`), and one set of OS measurements (RTMR1/RTMR2) that `measure` derives once per scheme from that UKI. `measure` prints `one UKI, 3 outputs: azure, gcp, qemu`, and evidence and release count the VHD and the tar.gz as measured through that boot payload (an `azure` policy still names no TDX register: Azure's paravisor measures the vTPM, not the TD).
+
+That only works if the cloud glue is inert off its cloud. Lowering gates it at boot (the `nethermind-v1` dialect keeps its historical, ungated units): `azure-complete-provisioning.service` carries `ConditionVirtualization=microsoft`, and `gcp-metadata-dns.service`, which points `/etc/resolv.conf` at the metadata server, carries `ConditionVirtualization=google` (the GCE disk naming rules match GCE disk models only). Your own one-cloud units take `conditions=(Condition.virtualization("microsoft"),)`; the lint `cloud-glue-unconditional` warns about a known one-cloud unit (Azure provisioning, `walinuxagent`, the Google guest agents) that lacks it in a variant whose UKI also boots elsewhere. Separate per-cloud variants still work (surge keeps them for its historical tree), but each is its own UKI and its own measurement set.
+
+## Resolution
+
+`resolve(recipe, variant=NAME)` turns one variant into a `Resolved`: a flat, ordered tuple of declarations, the variant's outputs, and the names of the fragments it included. Resolution runs in this order:
+
+1. **Ancestry.** The variant's `inherits` chain is walked to the root. Every variant starts from the platform's declarations (provenance level `platform`); `inherits="base"` (the default) adds `Recipe.items`; `inherits=None` means nothing else is inherited; any other value names a declared variant. Unknown names and cycles raise.
+2. **Expansion.** Fragments are flattened depth-first. A fragment name seen twice expands once when both are equal; two different fragments with the same name are `fragment-conflict`.
+3. **Overlay.** For each variant from the root down: its `changes` edit or drop inherited declarations, in order, then its `add` fragment is expanded and added.
+4. **References.** Disk keys, secret stores, init and hook `after=` names, ordering contradictions and the variant's outputs are checked.
+5. **Fragment rules.** Every included fragment's `requires` must name another included fragment, and its `checks` run against the `Resolved` value.
+
+### Identity
+
+Two declarations are "the same" when they have the same identity, the type plus a natural key:
+
+| Declaration | Identity |
+|---|---|
+| `Package` | name, role (`runtime`/`build`) |
+| `File`, `FileTree`, `Template` | stage (`skeleton`/`extra`), normalized path |
+| `Service`, `Task` | unit name (`app` and `app.service` are the same) |
+| `Unit` | unit name |
+| `Mount` | mount point |
+| `Setting` | section, key |
+| `Debloat`, `RuntimeTools`, `Kernel`, `Firewall` | the type alone (one per variant) |
+| everything else | name |
+
+Equal repeats deduplicate silently. Two different declarations with the same identity are `identity-collision`, whether they meet inside one level or between a variant's `add` and what it inherits. There is no "last one wins": a variant that wants to change an inherited declaration says so in `changes`.
+
+A change targets an identity through a ref: `value.ref` for a value you hold, `Type.ref(*key)` for one you do not (`Unit.ref("ssh.service")`, `Package.ref("jq")`). `ref.edit(**fields)` sets fields of the inherited declaration and `ref.remove()` drops it:
+
+```python
+key = Key("data", output="/run/key")
+disk = Disk("data", mount="/data", key=key)     # the disk holds key.ref, not the value
+secrets = Secrets(store=disk)                   # likewise disk.ref
+recipe = Recipe(
+    "r",
+    items=(key, disk, secrets, Unit("ssh.service", enabled=True)),
+    variants=(
+        Variant("default"),
+        Variant("small-key", inherits="default", changes=(key.ref.edit(size=32),)),
+        Variant("no-ssh", inherits="default", changes=(Unit.ref("ssh.service").remove(),)),
+    ),
+)
+```
+
+`small-key` edits one field: the disk and the secrets still name the key and the disk by identity, so they need no new values, and lowering binds the disk to the 32-byte key. Each change must match something inherited (`edit-missing`, `remove-missing`); an edit names fields of its type, never an identity field, and an edited value is checked like a declared one (`edit-invalid`). Editing one field twice in a variant, or editing and removing the same identity, is refused when the `Variant` is built. A variant that wants a different identity removes the old declaration and adds the new one.
+
+### Diagnostics
+
+`resolve()` raises `ValidationError` on the first error. `lint(recipe)` returns every problem as a `Diagnostic(code, severity, message, subject, variant, location, hint, context)` instead: resolution problems, fragment checks, and (when nothing is an error so far) the compiler's own rules on the lowered image, with their hints. `variant` is the variant a finding is in, or `""` for the recipe as a whole (the common fragment, the lockfile, the host). The [API reference](api.md#lint-rules) lists every code.
+
+### Provenance
+
+`tundravm.declarative.resolve.provenance(recipe, variant=NAME)` records how resolution reached its result: for every identity the variant touched, the steps that touched it, in order, each an `Origin(action, variant, fragments, fields, location)`. The action is `declared` (in `Recipe.items`, the level `common`), `added` (by a variant's `add`), `edited` (by an edit in a variant's `changes`; `fields` names the fields it set) or `removed` (by a removal); `fragments` is the chain of fragments the declaration came through, empty for changes, which name declarations by ref, and for a declaration placed directly in `Recipe.items`. `location` is where the step was written: every declaration, `Fragment`, `Variant`, platform and `Edit`/`Remove` records the `file:line` of the call that constructed it (`declared_at`: the first caller outside tundravm, so what a module or component declares points at the recipe line that uses it, and what a platform declares at the platform). It is not part of the value: two declarations written on different lines are equal, hash the same and give the same recipe digest, lockfile and compiled tree, and evidence records no lines. A declared or added step carries the declaration's line, an edit or removal its own (an edited declaration keeps its original line). `inspect --why` and `explore` print the line relative to the working directory: `declared at node.py:53 in common via app (App)`, `size edited at recipe.py:30 in variant small-key`; lint findings use the same lines (see [CLI: Lint](cli.md#lint)). A removed identity stays in the result with `removed` as its last step, and resolution errors are not raised here (`resolve` and `lint` report them).
+
+`tundravm inspect --variant NAME --why SUBJECT` and `explain_why(recipe, variant, subject)` build on it: for one emitted object (an image path, `unit:NAME`, `package:NAME`, `hook:NAME` or `init:NAME`) they print the declarations behind it with these steps, the compiled files that hold it and the lines the compiler generated for it (see [CLI: Explaining one object](cli.md#explaining-one-object)). `tundravm explore` (`explore(recipe)`) puts these steps for every declaration and every emitted file on one page, cross-linked, so a reviewer can follow a file back to its fragment and overlay without reading the recipe (see [CLI: Explore](cli.md#explore)).
+
+## Networking and the TEE baseline
+
+The host of a confidential VM owns its clock, disks, console and network. These declarations give the image what it needs to boot onto a network it does not trust: `TeeBase()` bundles them, and `Network()` and `Firewall()` can also be declared alone.
+
+### The TEE baseline
+
+A confidential VM trusts its own code but not its host, and the host still owns the clock, the disks, the console and the network. `TeeBase()` (in `tundravm.declarative.utils`, used by the `service`, `cloud` and `prover` templates and `init --app`) declares what every such image should have, each piece a typed declaration behind its own flag:
+
+| Flag | Declares | Why | Source |
+|---|---|---|---|
+| `time` | `chrony` with NTS servers (`time.cloudflare.com`, `nts.netnod.se`), refined by the GCP and AWS hypervisor clocks under `maxdistance 1.0`; `chrony.service` enabled | the host sets an unauthenticated guest clock, and TLS, certificate expiry and time-based policy depend on it; NTS (RFC 8915) authenticates the time | flashbots-images `shared/mkosi.extra/etc/chrony/chrony.conf` |
+| `journal` | `journald.conf.d/50-tundravm-tee.conf`: `Storage=volatile`, `RuntimeMaxUse=128M`, `ForwardToConsole=no` | logs stay in guest RAM, capped; nothing reaches a host-readable disk or the host-owned console | flashbots-images `etc/systemd/journald.conf.d/00-size-limit.conf`, `journald.conf(5)` |
+| `sysctl` | `/etc/sysctl.d/50-tundravm-tee.conf` (`TEE_SYSCTL`): `kptr_restrict=2`, `dmesg_restrict=1`, `unprivileged_bpf_disabled=1`, `bpf_jit_harden=2`, `kexec_load_disabled=1` (the measured kernel cannot be replaced), `yama.ptrace_scope=2`, `perf_event_paranoid=3`, `sysrq=0`, `suid_dumpable=0`, the `fs.protected_*` set, and ICMP redirect, source-route, reverse-path and SYN-cookie network settings; each line names its reason and is `-`-prefixed, so a key the kernel lacks is skipped | kernel attack surface a guest does not need | KSPP recommended settings, flashbots-images `etc/sysctl.d/10-kernel-hardening.conf`, the kernel's `admin-guide/sysctl` |
+| `dns` | a static `/etc/resolv.conf` naming `1.1.1.1` and `1.0.0.1` | names resolve without trusting a DHCP-supplied resolver; on Compute Engine `gcp-metadata-dns.service` replaces the file at boot with the metadata server, as before | flashbots-images `etc/systemd/resolved.conf` (Cloudflare) |
+| `network` | a nested `Network()`: DHCP on every `en*`/`eth*` interface through systemd-networkd | without an address the image serves nothing and chrony reaches no NTS server | flashbots-images `shared/mkosi.extra/etc/systemd/network/10-ethernet.network` |
+| `firewall` | `Firewall()`: inbound traffic dropped except the ports the variant's services declare | the host and everything on its network reach every port the guest opens; only the declared ones should answer | flashbots-images `modules/flashbox/common/mkosi.extra/usr/bin/init-firewall.sh` (default-drop inbound) |
+| `mask` | `Unit(name, masked=True)` for `apt-daily.timer`, `apt-daily-upgrade.timer`, `dpkg-db-backup.timer` and `getty@tty1.service` (`TEE_MASKED_UNITS`) | the running image stays the measured one, and the host-owned console offers no login; debloat already masks the `systemd` package's other units | flashbots-images `shared/mkosi.postinst.d/90-debloat-systemd.sh` |
+
+Turn a piece off with its flag (`TeeBase(dns=False)` when the recipe ships its own resolver) or change its inputs (`nts_servers=`, `hypervisor_clocks=()`, `nameservers=`, `journal_max_use=`). flashbots-images resolves over DNS-over-TLS through `systemd-resolved`; `TeeBase` keeps a plain `resolv.conf` so the GCP glue, which copies the metadata resolver over it, keeps working.
+
+### Networking and the firewall
+
+A Debian image with no network configuration boots with every interface down: nothing it serves is reachable, `network-online.target` only means "networkd is not there", and chrony reaches no NTS server. `Network()` (in `tundravm.declarative.utils`, part of `TeeBase()`) writes `/etc/systemd/network/50-tundravm.network`, which takes a DHCP lease on every `en*` and `eth*` interface (predictable and kernel names), accepts IPv6 router advertisements, and ignores the DHCP server's hostname, resolver and time servers (`TeeBase` pins the resolver and NTS sources). It enables `systemd-networkd`, which Debian ships in the `systemd` package, and `systemd-networkd-wait-online` with `--any --timeout=30`: units ordered after `network-online.target` (runtime-init's boot steps, the Azure provisioning task) wait until one interface is configured, and a boot without a NIC goes on after 30 seconds instead of hanging. `Network(dhcp=False, static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1"))` sets a fixed address; `ipv6=False`, `interfaces=` and `wait_timeout=` adjust the rest. There is no `systemd-resolved`: the static `/etc/resolv.conf` (and the GCP metadata resolver unit that replaces it) stays in charge of names.
+
+Debloat masks the `systemd` package's units and deletes `/etc/systemd/network` by default. Without a declared `Debloat`, the default keeps every removal path a declared file lives under and the packaged `systemd-*` units and targets the variant enables, so `Network()` works as is; a declared `Debloat` keeps its own lists, and lint `debloat-removes-declared-file` names what to add to `keep_paths`.
+
+`Firewall()` (a declaration; `TeeBase()` adds one) writes an nftables ruleset to `/etc/nftables.conf` and enables `nftables.service`, which loads it before the network comes up. Inbound it accepts established and related traffic, loopback, the ICMPv6 types IPv6 needs (RFC 4890: errors, packet-too-big, neighbor discovery, router advertisements), DHCPv4 and DHCPv6 replies, and the opened ports; everything else is dropped (`default="reject"` answers with a TCP reset or ICMP unreachable instead), forwarding included. Outbound traffic is not filtered: the guest's own code is trusted, and a confidential VM's outbound peers (NTS servers, attestation collateral, the application's own peers) vary by application.
+
+The opened ports are collected, so a recipe names each port once: every `Service(ports=(8080,))` (a port the program binds itself), every `Service(socket=Listen(...))` on a port that is not loopback-only, and the `Secrets` boot step's SSH-key port, plus `Firewall(allow=(Port(51820, "udp"),))` and `ssh=True` (22/tcp). Each opened port is one rule commented with what listens on it, so the measured ruleset says why it is open. Resolution renders the ruleset after every variant level is applied, so a variant that adds a service opens its port in that variant only. `collect=False` opens only `allow`, and lint `port-unreachable` then names each service port the firewall drops. A variant installing `nftables` keeps the `nf_tables`, `nft_ct` and `nft_reject_inet` kernel modules (see [kernel modules](#kernel-modules)).
+
+Lint `network-missing` warns when a variant listens on a port, waits for the SSH key over HTTP (`Secrets`) or installs `chrony`, but brings up no interface: no `.network` file, no `network-setup.service` (the `nethermind-v1` images' own), no `/etc/network/interfaces` and no package that manages interfaces (`ifupdown`, `netplan.io`, `network-manager`, `cloud-init`, `dhcpcd`).
+
+## Kernels
+
+A bootable image needs a kernel: the distribution's modular one, which keeps only the drivers its outputs boot on, or one built from source, composed from a base config, patches and config fragments.
+
+### Bootable images
+
+By default every variant compiles to `Format=uki`, a bootable unified kernel image, and mkosi can only build one from an image that holds a kernel. A bootable variant therefore declares a `Kernel(...)` built from source or installs a distribution kernel package (the platform's `kernel_package`, `"linux-image-amd64"` by default, any `linux-image-*`, or Ubuntu's `linux-generic`, `linux-kvm` and `linux-virtual`). Without either, lint reports `kernel-missing`, an error, so `bake` stops at its lint step before mkosi runs. A disk that is never booted declares `Setting("Content", "Bootable", ("no",))` on `Debian(boot=None)` instead: its variant compiles to `Format=disk` and `Bootable=no` and needs no kernel. `Debian(release)` (`boot="systemd"`) installs the Debian kernel together with `systemd`, `systemd-sysv`, `udev`, `kmod` and `systemd-boot-efi`, as the `init` templates do.
+
+### Built kernels
+
+`Kernel(version, source, base=..., fragments=..., patches=..., modules=False)` composes the kernel's config instead of taking one whole file:
+
+```python
+Kernel(
+    "6.12.48",
+    Git("https://github.com/gregkh/linux", "v6.12.48"),          # lock pins the commit
+    base=DebianConfig("6.12.48-1"),                               # Debian's cloud config, locked by sha256
+    patches=(KernelPatch(assets.file("kernel/0001-badaml.patch")),),
+)
+KernelConfig({"CONFIG_XFS_FS": "y", "CONFIG_IO_URING": None}, name="storage")  # any component may add one
+KernelHardening()                                                 # flashbots' deny list + hardening options
+```
+
+The build copies the source, writes the base config (`DebianConfig` extracts `config.<arch>_none_<flavor>.xz` from the `linux-config` package that `tundravm fetch` downloaded and checked; a `Path` base is copied into the tree as `kernel/base.config`), applies the patches in order with `patch -p1` (one that does not apply stops the build naming it), merges `kernel/fragment.config` with `merge_config.sh -m`, runs `make olddefconfig` and then checks every requested option against the final `.config`: Kconfig silently drops an option whose dependencies are unmet, so the build fails with `kernel-option-dropped: CONFIG_X requested y, final n` instead of shipping a kernel without it. The requested options are `CONFIG_MODULES=n` (unless `modules=True`), the kernel's `fragments`, then every `KernelConfig` the variant declares, in declaration order; two that set one option differently are an error (`kernel-option-conflict`) naming both. `modules=False`, the default, builds everything in, so the image carries only `vmlinuz`; `modules=True` also builds the modules and installs them under `/usr/lib/modules/<version>` (the build checks the kernel release equals `version`). `config=` keeps its meaning, a whole, final config used as is, and excludes the others. Lint `kernel-modules-ignored` warns when `Debian(kernel_modules=...)` selects modules a monolithic kernel cannot have.
+
+### Kernel modules
+
+The UKI's initrd is the whole root file system, so every module under `/usr/lib/modules` is memory and a driver the host can reach through a device it offers. A variant on the distribution's modular kernel therefore keeps only the drivers its outputs boot on: lowering writes them as mkosi `KernelModules=` (one name per line), mkosi keeps them with their module and firmware dependencies and deletes the rest before finalize, and the finalize script then fails the build if one of them is neither a `.ko` file nor built into that kernel. The curated sets live in `tundravm.kernel_modules`, checked against Debian trixie's `linux-image-amd64`:
+
+| Set | When | Modules |
+| --- | --- | --- |
+| `TDX_GUEST_MODULES` | every variant | `tdx_guest`, `virtio_net`, `virtio_blk`, `virtio_scsi`, `sd_mod`, `nvme`, `efivarfs` |
+| `AZURE_MODULES` | `azure` output | `hv_vmbus`, `hv_netvsc`, `hv_storvsc`, `hv_utils`, `pci_hyperv`, `mana` |
+| `GCP_MODULES` | `gcp` output | `gve`, `nvme`, `virtio_scsi` |
+| `DISK_MODULES` | a `Disk` | `dm_crypt`, `xts`, `aesni_intel`, `algif_skcipher`, `ext4`, `crc32c_intel` |
+| `FIREWALL_MODULES` | the `nftables` package (a `Firewall`) | `nf_tables`, `nft_ct`, `nft_reject_inet` |
+
+A variant with several outputs keeps the union, so `outputs=("qemu", "azure", "gcp")` boots on all three. `Debian(kernel_modules=("vsock", "tun"))` adds names to every variant's set; `Debian(kernel_modules="all")` writes no `KernelModules=` and keeps every module. A built `Kernel` installs no modules and selects nothing: build its drivers in through its config. Under `Mkosi(layout="native")` the root tree keeps the union of every profile's set. `tundravm import` maps a tree's `KernelModules=` back to the names it adds to the curated set (none: the default), and a modular tree without it to `"all"`.
+
+## Lowering and compiling
+
+`compile(recipe)` resolves each variant and lowers it onto the internal compiler, which emits one mkosi directory per variant.
+
+Lowering writes each variant's compiler state directly from its resolved declarations, in declaration order (hooks per phase, `BootStep`s in graph order, runtime tools after the declarations they belong to), and the compiler emits that state.
+Internally `lower()` returns a frozen `Lowered` value (`declarative/_lowered.py`); `declarative/_compile.py` emits it and `declarative/_bake.py` builds it.
+
+```
+mkosi/
+  default/
+    mkosi.conf
+    mkosi.skeleton/...        # File(stage="skeleton"), minimal.target
+    mkosi.extra/...           # File, FileTree, Unit content, runtime-init
+    scripts/04-build.sh       # Build declarations, build-phase hooks
+    scripts/06-postinst.sh    # accounts, unit enablement, postinst hooks
+    scripts/07-finalize.sh    # debloat, IMAGE_VERSION strip, finalize hooks, account sort
+  azure/
+    ...
+```
+
+Debloat runs at finalize, over the whole image. Its default list removes `/usr/lib/modules`, which is right for a built `Kernel` (it installs only its `vmlinuz`) and wrong for the distribution's modular kernel (`Debian(kernel_package="linux-image-amd64")`, the default), whose virtio, `tdx_guest` and cloud NIC drivers live there. Under a modular kernel the implicit default (no `Debloat` declared) keeps `/usr/lib/modules`, which mkosi has already pruned to the variant's [kernel modules](#kernel-modules); a declared `Debloat` says `keep_modules=True` to keep them or `keep_modules=False` to remove them on purpose. Lint `debloat-removes-modules` (error) reports a debloat, declared or implicit, whose removal list still deletes them under a modular kernel. In a reproducible current-dialect build, finalize then ends with the deterministic accounts step (see [reproducibility](reproducibility.md#what-the-current-dialect-normalizes)).
+
+Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. Inside a phase, hooks keep their declaration order except where `after=` moves one behind another hook of the same phase. A hook that runs `after` a hook of a later phase is `hook-order`.
+
+A command that only needs to run inside the image while it is built is a `Run("update-ca-certificates --fresh")` (from `tundravm.declarative.utils`): it renders the `Hook` with the `mkosi-chroot` prefix, quotes a sequence of words, runs anything with shell syntax through `bash -euo pipefail -c` inside the image, and takes a `stage` in plain words (`"postinst"` by default; `"finalize"`, `"prepare"`, `"build"`). Accounts, unit enablement and state directories are declarations, not commands: lint `hook-covered` names `Group`, `User(groups=)`, `Unit(enabled=)` or `RuntimeDirectory` when a hook or boot step spells one by hand.
+
+Lowering is deterministic and never touches the network; `Path` contents (file sources, unit files, templates, `FileTree` sources, kernel configs) are read at lowering time. A `FileTree` keeps what it reads: without `mode` each file's and empty directory's permission bits, symlinks as links (`symlinks="follow"` ships what they point to instead) and empty directories; the lockfile records each entry's `kind` (`file`, `symlink`, `directory`). The result is a `Tree`: entries (path, bytes, mode, symlink) plus a digest over all of them. `Tree.write(path)` writes it, replacing the variant directories it holds.
+
+The `Mkosi` setting picks the emission: `layout="directories"` and `dialect="current"` by default. The current dialect targets mkosi 26: apt sources that the build needs (`Repository`, `Backports`) are written at compile time under `mkosi.sandbox/`, where mkosi's apt reads them, and postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so a recipe without a version works under `set -u`. `dialect="nethermind-v1"` spells user and group creation as postinst lines, leaves build hooks unmarked and clones sources inside the build, which is what the historical nethermind-tdx tree expects (see [`design/lowering-nethermind-v1.md`](design/lowering-nethermind-v1.md)).
+
+The rest of mkosi's build mechanics have opinionated defaults a recipe rarely touches, so it never needs an mkosi section or key name: the compiler's fixed partition UUID seed, mkosi's own output and package cache directories, an uncompressed image with a JSON manifest, network for build scripts, and package metadata cleaned from the image. `Mkosi(seed=, output_dir=, package_cache=, compress=, manifest=, build_network=)` and `Debian(clean_package_metadata=)` change them for every variant. `Setting(section, key, values)` stays the escape hatch for the long tail of mkosi keys; a `Setting` that repeats a typed field reports `setting-raw` (info) naming it.
+
+### How variants lower
+
+How a variant lowers depends on what it does:
+
+- A variant that inherits `base` or the default variant, and which only adds declarations or edits `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant's directory. This keeps committed trees such as surge's byte-identical.
+- Every other variant (inheriting another variant, standalone, removing anything, replacing other kinds, changing keys, disks or secrets, mounting its own `BuildSources`, having its own settings or kernel, or leaving a cloud-targeted default variant's targets) is lowered standalone from its own resolved declarations, with its own `mkosi.conf` lines and kernel.
+
+The default variant (the one named `default`, else the first root variant) may itself inherit another variant; that variant then lowers like any other.
+
+These still raise `ValidationError` when you compile, lint or bake:
+
+- a standalone-lowered variant under `Mkosi(layout="native")`, because mkosi applies the root configuration to every profile; the error lists each such variant with its reason;
+- in the current dialect, a variant under `Mkosi(layout="native")` whose build distribution (repositories, build packages, Build settings) differs from the default variant's while the root builds a kernel or source builds, because an overlay cannot suppress the root hook; match the default's distribution or use the per-directory layout;
+- unreadable files, `Unit` or `Template` sources that are not UTF-8, and missing or empty `FileTree` sources;
+- a `Template` placeholder without a value, and a malformed `Setting` value (a non-boolean `Build.WithNetwork`, several values for a single-valued key);
+- a `Setting` for a key the compiler writes itself (`Packages`, `Mirror`, `Format`, ...), naming the declaration to use instead;
+- a `Kernel` from `Http` without `sha256`;
+- two `Secrets` whose config, manifest or delivered file paths overlap;
+- variant `inherits` cycles and `BootStep`/`Hook` ordering cycles.
+
 ## Builds and pinning
 
 `Build` compiles something from source during the mkosi build phase:
@@ -354,7 +407,7 @@ The recipe records the symbolic source (`master`), never a commit. `tundravm loc
 
 In the current dialect the build sandbox never fetches a source. `tundravm fetch` (and `bake`, which runs it first) checks each pinned source out on the host, as the invoking user, into `build/.sources/<name>-<pin12>-<id8>/` (`id8` hashes the url, subdirectory and submodules): a git source at its pinned commit, an http source verified against its sha256. A JSON marker records each completed checkout, and a checkout is verified before reuse (git `HEAD` at the pin with a clean tree and initialised submodules, http files matching the recorded manifest); a modified one fails with `E_SOURCE` until `tundravm fetch --force` replaces it. A build whose source differs between variants is pinned per variant, as `<variant>/<name>`. Your git credentials and SSH agent apply, so private repositories work, and one checkout serves every variant that builds that (source, pin). The backend mounts `build/.sources` into the build at `$SRCDIR/tundravm-sources` (ephemerally: nothing a script writes there reaches the host), and each build hook copies its checkout into `$BUILDROOT/build/<name>` before running the script. A hook whose source has no pin fails with a pointer to `tundravm lock` and `tundravm fetch`.
 
-A built kernel (a `Kernel` with `config`) is a source too: its lockfile pin is named `kernel`, or `kernel-<variant>` when a variant's kernel source differs from the default variant's; `inspect` shows `pinned=`; `source-unpinned` covers it; and the kernel build script copies the checkout without `.git`, so the kernel version string stays clean. `nethermind-v1` keeps cloning sources and kernels inside the sandbox, as the historical tree does. See [reproducibility](reproducibility.md#sources-fetched-on-the-host).
+A built `Kernel` is a source too (a `DebianConfig` base is a download as well: the `linux-config` package, which `fetch` downloads and checks against its sha256): its lockfile pin is named `kernel`, or `kernel-<variant>` when a variant's kernel source differs from the default variant's; `inspect` shows `pinned=`; `source-unpinned` covers it; and the kernel build script copies the checkout without `.git`, so the kernel version string stays clean. `nethermind-v1` keeps cloning sources and kernels inside the sandbox, as the historical tree does. See [reproducibility](reproducibility.md#sources-fetched-on-the-host).
 
 ### Hermetic builds
 
@@ -373,43 +426,6 @@ The caches are filled by the host's toolchain and read by the image's, so they h
 - **Go.** A `go.mod` whose `go` or `toolchain` line is newer than the image's Go makes it download that toolchain, which an offline bake cannot do; the image's Go has to satisfy `go.mod`.
 
 See [reproducibility](reproducibility.md#hermetic-builds).
-
-## Variants and targets
-
-A variant produces one mkosi directory and, when baked, one artifact. Its `outputs` (`qemu`, `azure` or `gcp`, inherited from the variant it inherits, `qemu` at the root) decides the disk format and adds the platform integration: an `azure` variant gets the Azure provisioning service and `dmidecode` and converts its disk to a fixed VHD (`parted`, `qemu-img`) in a postoutput script; a `gcp` variant gets the GCP equivalents and a `tar.gz` disk (`sgdisk`). Those scripts run wherever mkosi runs its tools: on the host, or inside mkosi's tools tree when the build uses one, in which case the local backend installs `qemu-utils`, `gdisk` and `parted` into it.
-
-```python
-variants=(
-    Variant("default", outputs=("qemu", "azure", "gcp")),
-    Variant("devtools", inherits="default", add=DevTools()),
-)
-```
-
-An empty `outputs` inherits them (`qemu` at the root). A child cannot drop a cloud output it inherits (`target-inconsistent`): give it `inherits=None` or have it inherit a qemu variant instead.
-
-### One image, every cloud
-
-A variant with several outputs builds **one** UKI. The `qemu` artifact is that UKI; the Azure VHD and the GCP tar.gz are packaging, written by postoutput scripts that put the same UKI on an ESP. So a variant with `outputs=("qemu", "azure", "gcp")` has one boot payload, one sha256 the bake records for every disk (`boot_payloads` in `bake-result.json`), and one set of OS measurements (RTMR1/RTMR2) that `measure` derives once per scheme from that UKI. `measure` prints `one UKI, 3 outputs: azure, gcp, qemu`, and evidence and release count the VHD and the tar.gz as measured through that boot payload (an `azure` policy still names no TDX register: Azure's paravisor measures the vTPM, not the TD).
-
-That only works if the cloud glue is inert off its cloud. Lowering gates it at boot (the `nethermind-v1` dialect keeps its historical, ungated units): `azure-complete-provisioning.service` carries `ConditionVirtualization=microsoft`, and `gcp-metadata-dns.service`, which points `/etc/resolv.conf` at the metadata server, carries `ConditionVirtualization=google` (the GCE disk naming rules match GCE disk models only). Your own one-cloud units take `conditions=(Condition.virtualization("microsoft"),)`; the lint `cloud-glue-unconditional` warns about a known one-cloud unit (Azure provisioning, `walinuxagent`, the Google guest agents) that lacks it in a variant whose UKI also boots elsewhere. Separate per-cloud variants still work (surge keeps them for its historical tree), but each is its own UKI and its own measurement set.
-
-How a variant lowers depends on what it does:
-
-- A variant that inherits `base` or the default variant, and which only adds declarations or edits `File`, `User`, `Group`, `Partition`, `Repository` or `Debloat`, lowers as an overlay of the default variant's directory. This keeps committed trees such as surge's byte-identical.
-- Every other variant (inheriting another variant, standalone, removing anything, replacing other kinds, changing keys, disks or secrets, mounting its own `BuildSources`, having its own settings or kernel, or leaving a cloud-targeted default variant's targets) is lowered standalone from its own resolved declarations, with its own `mkosi.conf` lines and kernel.
-
-The default variant (the one named `default`, else the first root variant) may itself inherit another variant; that variant then lowers like any other.
-
-These still raise `ValidationError` when you compile, lint or bake:
-
-- a standalone-lowered variant under `Mkosi(layout="native")`, because mkosi applies the root configuration to every profile; the error lists each such variant with its reason;
-- in the current dialect, a variant under `Mkosi(layout="native")` whose build distribution (repositories, build packages, Build settings) differs from the default variant's while the root builds a kernel or source builds, because an overlay cannot suppress the root hook; match the default's distribution or use the per-directory layout;
-- unreadable files, `Unit` or `Template` sources that are not UTF-8, and missing or empty `FileTree` sources;
-- a `Template` placeholder without a value, and a malformed `Setting` value (a non-boolean `Build.WithNetwork`, several values for a single-valued key);
-- a `Setting` for a key the compiler writes itself (`Packages`, `Mirror`, `Format`, ...), naming the declaration to use instead;
-- a `Kernel` from `Http` without `sha256`;
-- two `Secrets` whose config, manifest or delivered file paths overlap;
-- variant `inherits` cycles and `BootStep`/`Hook` ordering cycles.
 
 ## Lifecycle
 
@@ -462,12 +478,6 @@ The in-process backend writes simulated artifacts (`Artifact.simulated`). `measu
 6. The workflow's `bake` job is opt-in: once the repository variable `TUNDRAVM_BAKE_BACKEND` names a backend, it bakes twice with it after `check` passes (`bake --verify-reproducible`).
 7. It then runs `evidence --bundle --html` and uploads the bundle, its HTML report and the built images as the `tundravm-bake` artifact, the record a reviewer checks without your machine.
 
-### Supply chain
-
-`sbom(artifact, lock=locked)` answers "what is in this image" from what the build already pins and records, without opening the image: mkosi's package manifest beside the artifact (every installed distribution package and version, from the snapshot the recipe names), the lockfile's pins (each source build's URL, ref and commit and the paths it installs, the built kernel's source, the `EfiStub` package's URL and sha256) and the recipe metadata (base, arch, snapshot, mirror, the recipe, tree and artifact digests, the tundravm version). `Sbom.render()` writes SPDX 2.3 or CycloneDX 1.5 JSON with a package URL per component, or text and Markdown tables (`tundravm sbom`; see [CLI: SBOM](cli.md#sbom)). Everything in it is sorted and its ids derive from its content, so with a snapshot, a lockfile and `SOURCE_DATE_EPOCH` the same bake gives the same document, one more artifact to publish next to the measurements. A simulated bake has no manifest: the document says so and lists the packages the recipe declares, unversioned.
-
-`evidence(recipe, build=BUILD)` (`tundravm evidence`) puts what an auditor asks about one bake into a single record, without rebuilding anything: the recipe digest now and the one the bake recorded, the lockfile verbatim with its drift against the recipe, every artifact re-hashed against the sha256 in `bake-result.json`, the tree digest, the reproducibility outcome `bake --verify-reproducible` recorded, the measurements policy (`BUILD/<variant>/policy.json` or `policy=`, marked when it is a placeholder or exported from another artifact), an SPDX SBOM per artifact, the lint summary, a provenance summary per variant and the tool versions. `evidence.json` indexes these files with each one's sha256 and size. The verdict is `fail` when the record contradicts itself or the recipe: an artifact no longer hashes to its recorded sha256 or is gone, the recipe, tree or lockfile drifted since the bake, lint has errors, the second build differed, or the policy is invalid, a placeholder or measured another artifact. It is `incomplete` when a check `require=` (`evidence --require reproducible,measured,real,lock`) demands is missing, and otherwise `pass` (a bake that never ran the reproducibility check passes as `not checked` unless `reproducible` is required); `Evidence.reasons` says why, and the command exits 1 unless the verdict is `pass`. What could not be gathered and was not required (no lockfile, no policy, no mkosi manifest) is a note in the index, never a silent gap. `Evidence.write()` lays the files out as a directory, `Evidence.bundle()` packs them into a `tar.gz` and `Evidence.html()` renders one self-contained page with a pass/fail banner. The bundle is deterministic: members sorted, owned by `0:0` with mode `0644`, and every timestamp, the index's `created` included, taken from `SOURCE_DATE_EPOCH` (without it the archive's are 0 and `created` is the current time), so with `SOURCE_DATE_EPOCH` set two runs over the same bake give the same bytes and a reviewer can check the bundle by its sha256 (see [CLI: Evidence](cli.md#evidence)).
-
 ## Backends
 
 | Backend | `Backend(kind)` | Runs mkosi |
@@ -505,6 +515,16 @@ Placeholder values are derived from the artifact digest. They are never real mea
 
 A policy from `measure --export-policy` can be checked two ways. `tundravm attest --issuer unix:./tdxs.sock --validator ENDPOINT --policy peer.json` (or `attest()`) asks the running image's `tdxs` issuer for a quote bound to a fresh nonce, has a `tdxs` validator check the quote's signature, certificate chain and collateral, reads MRTD and RTMR0..RTMR3 from the quote and reports `match` (the quote holds one of the policy's accepted values; the matched label is shown), `mismatch` or `unchecked` per register (see [CLI: Attest](cli.md#attest)). `trusted` now means three things held at once: the validator accepted the attestation document, the quote's whole 64-byte `report_data` binds the nonce, and every register the policy holds matched; the platform is not the simulator. A validator rejection, or a mismatch with a validator, is `untrusted`. Without a validator nothing vouches for the quote's origin, so the verdict is only `measurements-match` or `measurements-mismatch` (`signature_status: unchecked`), a quick operator check rather than trust; a simulator issuer is `simulated` at best. `tdxs` speaks JSON lines on the unix socket `/var/tdxs.sock` in the image, so the issuer is that socket relayed to the host (over an SSH command channel, since the delivered key forbids `ssh -L`; see [Secret delivery at boot](#secret-delivery-at-boot)), then `unix:./tdxs.sock`, or a TCP port relayed to it (`tcp://HOST:PORT`); it serves no http, and an `http://` or `https://` endpoint is a `ValidationError`. A `Tdxs` validator built with `Tdxs.from_policy("peer.json")` verifies the collateral as well and is what a relying service should run. `bake --verify-reproducible` is the build-side counterpart: it bakes twice and proves the artifacts are identical.
 
+## Release and trust
+
+A bake's artifacts and measurements are claims. These records let someone without your machine check them: what is in the image, the evidence of one bake, a release cut from the locked recipe, and rebuilds by others.
+
+### Supply chain
+
+`sbom(artifact, lock=locked)` answers "what is in this image" from what the build already pins and records, without opening the image: mkosi's package manifest beside the artifact (every installed distribution package and version, from the snapshot the recipe names), the lockfile's pins (each source build's URL, ref and commit and the paths it installs, the built kernel's source, the `EfiStub` package's URL and sha256) and the recipe metadata (base, arch, snapshot, mirror, the recipe, tree and artifact digests, the tundravm version). `Sbom.render()` writes SPDX 2.3 or CycloneDX 1.5 JSON with a package URL per component, or text and Markdown tables (`tundravm sbom`; see [CLI: SBOM](cli.md#sbom)). Everything in it is sorted and its ids derive from its content, so with a snapshot, a lockfile and `SOURCE_DATE_EPOCH` the same bake gives the same document, one more artifact to publish next to the measurements. A simulated bake has no manifest: the document says so and lists the packages the recipe declares, unversioned.
+
+`evidence(recipe, build=BUILD)` (`tundravm evidence`) puts what an auditor asks about one bake into a single record, without rebuilding anything: the recipe digest now and the one the bake recorded, the lockfile verbatim with its drift against the recipe, every artifact re-hashed against the sha256 in `bake-result.json`, the tree digest, the reproducibility outcome `bake --verify-reproducible` recorded, the measurements policy (`BUILD/<variant>/policy.json` or `policy=`, marked when it is a placeholder or exported from another artifact), an SPDX SBOM per artifact, the lint summary, a provenance summary per variant and the tool versions. `evidence.json` indexes these files with each one's sha256 and size. The verdict is `fail` when the record contradicts itself or the recipe: an artifact no longer hashes to its recorded sha256 or is gone, the recipe, tree or lockfile drifted since the bake, lint has errors, the second build differed, or the policy is invalid, a placeholder or measured another artifact. It is `incomplete` when a check `require=` (`evidence --require reproducible,measured,real,lock`) demands is missing, and otherwise `pass` (a bake that never ran the reproducibility check passes as `not checked` unless `reproducible` is required); `Evidence.reasons` says why, and the command exits 1 unless the verdict is `pass`. What could not be gathered and was not required (no lockfile, no policy, no mkosi manifest) is a note in the index, never a silent gap. `Evidence.write()` lays the files out as a directory, `Evidence.bundle()` packs them into a `tar.gz` and `Evidence.html()` renders one self-contained page with a pass/fail banner. The bundle is deterministic: members sorted, owned by `0:0` with mode `0644`, and every timestamp, the index's `created` included, taken from `SOURCE_DATE_EPOCH` (without it the archive's are 0 and `created` is the current time), so with `SOURCE_DATE_EPOCH` set two runs over the same bake give the same bytes and a reviewer can check the bundle by its sha256 (see [CLI: Evidence](cli.md#evidence)).
+
 ### Reviewing a release
 
 Evidence is what a release leaves behind for review. `tundravm evidence --sign KEY --bundle vN.tar.gz` packs the bake's record: digests, the lockfile, SBOMs, the measurements policy, and each variant's emitted-file manifest in `tree.json`. It signs the index, and the index holds every member's sha256, so the one signature covers the whole bundle. Anyone with the bundle and an allowed-signers file can then run `tundravm verify vN.tar.gz --allowed-signers FILE --build DIR` without the recipe or the repository. It confirms nothing was swapped or edited, that the bundle agrees with itself, and that the artifacts they hold are the ones it describes. For the next release, `tundravm changes --since vN.tar.gz --format markdown` compares that record with the recipe and lockfile as they are now. It lists which lockfile sections, pins, packages, emitted files and registers moved, and which declarations produced each changed file, as a table ready for the pull request.
@@ -517,6 +537,6 @@ Evidence is what a release leaves behind for review. `tundravm evidence --sign K
 
 A release is its publisher's claim about which bytes a recipe and a lockfile build. `tundravm witness RELEASE_DIR` lets someone else check that claim: from their own checkout, with the release's own lockfile, they rebuild the released variants and sign whether every artifact's sha256 matches. `tundravm verify RELEASE_DIR --min-witnesses 2` then accepts the release only when two distinct principals, neither of them the publisher, signed matching witnesses of this very manifest. A witness proves reproducibility across builders, not that the recipe or its sources are safe, so pick witnesses whose build environments really differ.
 
-### Adopting an existing mkosi tree
+## Adopting an existing mkosi tree
 
 `tundravm import mkosi --output image.py` turns a tree you already have into a recipe. Configuration keys, packages, files and units become declarations, and what tundravm generated itself (accounts, enablement, debloat, runtime-init, cloud glue, backports, the EFI stub) becomes the declaration that generates it again. What has no first-class declaration stays verbatim as `File`, `Unit`, `Hook` or `Setting`, and the report counts both. The last note says whether the recipe compiles back to the tree. Commit the generated module, check that `tundravm diff image.py --tree mkosi` is empty, then refactor it into fragments at your own pace, re-running `diff` after each step.
