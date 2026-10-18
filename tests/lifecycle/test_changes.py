@@ -188,14 +188,15 @@ def test_measurement_registers_compare_when_both_sides_have_policies(
     build = _bake(recipe, locked, tmp_path / "v1")
 
     def policy(sha: str, rtmr1: str) -> str:
-        registers = {"RTMR0": "ab" * 48, "RTMR1": rtmr1, "RTMR2": "cd" * 48}
+        registers = {"RTMR0": ["ab" * 48], "RTMR1": [rtmr1], "RTMR2": ["cd" * 48]}
         payload = {
-            "schema_version": 1,
-            "scheme": "rtmr",
-            "tool": "measured-boot",
+            "schema_version": 2,
+            "scheme": "qemu",
+            "tool": "tundravm-measure",
             "tool_version": "1.0",
             "artifact": {"path": "disk.qcow2", "sha256": sha},
             "registers": registers,
+            "unverifiable": {"MRTD": "host firmware"},
         }
         return json.dumps(payload)
 

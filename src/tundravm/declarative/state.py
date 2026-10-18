@@ -41,6 +41,7 @@ from tundravm._units.render import activation_unit, dropin_unit, render
 from tundravm.errors import ValidationError
 from tundravm.models import (
     LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP,
+    MODULES_PATH,
     NETWORK_SETUP_UNIT,
     VALID_PHASES,
     CommandSpec,
@@ -528,19 +529,23 @@ def _debloat_config(
     systemd_units_keep: tuple[str, ...] | None = None,
     extra_keep_units: tuple[str, ...] = (),
     systemd_bins_keep: tuple[str, ...] | None = None,
+    keep_modules: bool | None = None,
+    declared: bool = False,
 ) -> DebloatConfig:
     """An enabled ``DebloatConfig``; unset (or empty) lists keep the defaults."""
     defaults = DebloatConfig()
     return DebloatConfig(
         enabled=True,
         paths_remove=paths_remove or defaults.paths_remove,
-        paths_skip=tuple(paths_skip),
+        paths_skip=(*paths_skip, MODULES_PATH) if keep_modules else tuple(paths_skip),
         extra_remove_paths=tuple(extra_remove_paths),
         paths_skip_for_profiles=tuple(sorted((paths_skip_for_profiles or {}).items())),
         systemd_minimize=systemd_minimize,
         systemd_units_keep=systemd_units_keep or defaults.systemd_units_keep,
         extra_keep_units=tuple(extra_keep_units),
         systemd_bins_keep=systemd_bins_keep or defaults.systemd_bins_keep,
+        keep_modules=keep_modules,
+        declared=declared,
     )
 
 
@@ -558,6 +563,8 @@ def _debloat(item: Debloat, *, historical: bool = False) -> DebloatConfig:
         systemd_units_keep=item.keep_units or legacy,
         extra_keep_units=item.keep_units_extra,
         systemd_bins_keep=item.keep_binaries,
+        keep_modules=item.keep_modules,
+        declared=True,
     )
 
 

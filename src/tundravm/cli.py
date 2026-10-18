@@ -138,8 +138,7 @@ from .formats import (
     workflow_command,
 )
 from .lockfile import LockDrift
-from .measure import PlaceholderMeasurementWarning
-from .measure import rtmr as rtmr_measure
+from .measure import MEASURE_TOOL, MEASURE_VERSION, PlaceholderMeasurementWarning
 from .measure.policy import write_policy
 from .models import BAKE_RESULT_FILENAME
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
@@ -199,7 +198,7 @@ EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_SDK_ERROR = 2
 
-MEASUREMENT_SCHEMES: tuple[Scheme, ...] = ("rtmr", "azure", "gcp")
+MEASUREMENT_SCHEMES: tuple[Scheme, ...] = ("qemu", "gcp", "azure", "portable")
 BACKEND_KINDS: tuple[BackendKind, ...] = get_args(BackendKind)
 
 QUICKSTART = """\
@@ -644,7 +643,13 @@ def build_parser() -> argparse.ArgumentParser:
         sub, "measure", _cmd_measure, help="Derive expected TDX measurements of a baked variant."
     )
     measure_cmd.add_argument(
-        "--scheme", default="rtmr", choices=MEASUREMENT_SCHEMES, help="Measurement scheme."
+        "--scheme",
+        default="qemu",
+        choices=MEASUREMENT_SCHEMES,
+        help=(
+            "Host family (default: %(default)s): qemu and portable predict RTMR1/RTMR2, gcp "
+            "adds Google's MRTD/RTMR0 sets, azure records vTPM PCRs (no TDX register)."
+        ),
     )
     measure_cmd.add_argument(
         "--format",
@@ -661,9 +666,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help=(
-            "Also write a verifier policy for Tdxs.from_policy(): JSON with schema_version, "
-            "scheme, tool, tool_version, artifact {path, sha256} and registers RTMR0..RTMR2 "
-            "(RTMR3 when measured). rtmr only; placeholder values need --allow-placeholder "
+            "Also write a verifier policy (tundravm.policy/2) for Tdxs.from_policy() and "
+            "attest: registers with their accepted values, unverifiable registers with the "
+            "reason, artifact {path, sha256}; placeholder values need --allow-placeholder "
             "and carry a note saying they are placeholders."
         ),
     )
@@ -2611,7 +2616,7 @@ def _artifact(args: argparse.Namespace, target: Target | None) -> Artifact:
 
 def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
     scheme = cast(Scheme, args.scheme)
-    artifact = _artifact(args, None if scheme == "rtmr" else cast(Target, scheme))
+    artifact = _artifact(args, cast(Target, scheme) if scheme in ("gcp", "azure") else None)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", PlaceholderMeasurementWarning)
         measurements = measure(artifact, scheme=scheme, allow_placeholder=args.allow_placeholder)
@@ -2644,14 +2649,32 @@ def render_measurements(measurements: Measurements, *, artifact: Artifact) -> st
         f"measurements {artifact.variant} ({measurements.scheme})",
         f"source: {measurements.tool} ({artifact.path})",
     ]
-    width = max((len(key) for key, _ in measurements.values), default=0)
-    lines.extend(f"  {key:<{width}}  {value}" for key, value in measurements.values)
+    rows = _measurement_rows(measurements)
+    width = max((len(key) for key, _ in rows), default=0)
+    lines.extend(f"  {key:<{width}}  {value}" for key, value in rows)
     return "\n".join(lines)
+
+
+def _measurement_rows(measurements: Measurements) -> list[tuple[str, str]]:
+    """One row per register: its value, ``N accepted values (firmware sets)`` or
+    ``unverifiable: <reason>``; then the scheme's vTPM PCRs."""
+    single = dict(measurements.values)
+    rows = []
+    for name, entries in measurements.registers:
+        rows.append((name, single.get(name) or f"{len(entries)} accepted values (see the policy)"))
+    rows.extend((name, f"unverifiable: {why}") for name, why in measurements.unverifiable)
+    pcrs = dict(measurements.extra).get("vtpm_pcrs")
+    if isinstance(pcrs, dict):
+        rows.extend((f"vTPM {name}", str(value)) for name, value in sorted(pcrs.items()))
+    return rows
 
 
 def render_measurements_markdown(measurements: Measurements, *, artifact: Artifact) -> str:
     """``Measurements`` as Markdown: a heading, the provenance line and a register table."""
-    rows = [(md_cell(key), md_cell(value, code=True)) for key, value in measurements.values]
+    rows = [
+        (md_cell(key), md_cell(value, code=value.isalnum()))
+        for key, value in _measurement_rows(measurements)
+    ]
     return "\n\n".join(
         (
             f"# tundravm measure: `{artifact.variant}` ({measurements.scheme})",
@@ -2793,11 +2816,9 @@ def default_doctor_backends() -> tuple[BuildBackend, ...]:
 
 
 def _probe_measurement_tools(runner: ProbeRunner, out: TextIO) -> None:
-    """Print the optional RTMR measurement tools; they never fail ``doctor``."""
+    """Print the measurement implementation: built in, so it never fails ``doctor``."""
     print("measurement tools:", file=out)
-    for requirement in rtmr_measure.requirements():
-        _, line = probe(requirement, runner)
-        print(f"  {line}", file=out)
+    print(f"  ok {MEASURE_TOOL} {MEASURE_VERSION} (built in)", file=out)
 
 
 def _probe_cloud_tools(

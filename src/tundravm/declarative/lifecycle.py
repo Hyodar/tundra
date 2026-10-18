@@ -67,7 +67,7 @@ from tundravm.lockfile import (
     serialize_lockfile,
 )
 from tundravm.measure import derive_measurements
-from tundravm.measure.policy import policy_payload
+from tundravm.measure.policy import policy_payload, single_values
 from tundravm.models import (
     BAKE_RESULT_FILENAME,
     BAKE_RESULT_SCHEMA_VERSION,
@@ -87,7 +87,7 @@ from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
 from .resolve import lint as _resolution_lint
 from .resolve import locate, resolve
 
-Scheme = Literal["rtmr", "azure", "gcp"]
+Scheme = Literal["qemu", "gcp", "azure", "portable"]
 BackendKind = Literal["lima", "nix", "local", "inprocess"]
 TreeLayout = Literal["directories", "native"]
 """How a :class:`Tree` lays its variants out: a directory each, or ``Mkosi(layout="native")``:
@@ -252,8 +252,12 @@ class Artifact:
 
 @dataclass(frozen=True, slots=True)
 class Measurements:
-    """Expected measurement *values*; ``tool`` names what measured them.
+    """Expected measurements; ``tool`` names what measured them.
 
+    ``registers`` holds each register's accepted values (a hex string, or a dict with
+    ``value`` and ``firmware``/``label``); ``values`` the registers with one accepted
+    value. ``unverifiable`` names the registers the scheme cannot predict, with the
+    reason; ``extra`` the scheme's other policy fields (``sources``, ``vtpm_pcrs``).
     ``artifact_path`` is the measured file (:func:`measure` sets it), which the
     verifier policy records next to ``artifact_digest``. ``boot_payload_path`` and
     ``boot_payload_digest`` name the UKI the measurement is of (the artifact itself
@@ -267,6 +271,9 @@ class Measurements:
     artifact_path: str = ""
     boot_payload_path: str = ""
     boot_payload_digest: str = ""
+    registers: tuple[tuple[str, tuple[str | Mapping[str, str], ...]], ...] = ()
+    unverifiable: Pairs = ()
+    extra: tuple[tuple[str, object], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """The measurements as JSON values: artifact, artifact_digest, boot_payload, scheme,
@@ -278,18 +285,23 @@ class Measurements:
             "scheme": self.scheme,
             "tool": self.tool,
             "values": dict(self.values),
+            "registers": {name: list(entries) for name, entries in self.registers},
+            "unverifiable": dict(self.unverifiable),
+            **dict(self.extra),
         }
 
     def to_policy(self, *, allow_placeholder: bool = False) -> dict[str, object]:
         """The verifier policy ``measure --export-policy`` writes and ``Tdxs.from_policy`` reads.
 
-        rtmr measurements only; placeholder values are refused (``MeasurementError``)
-        unless *allow_placeholder*, and then carry a note saying so.
+        Placeholder values are refused (``MeasurementError``) unless
+        *allow_placeholder*, and then carry a note saying so.
         """
         return policy_payload(
             scheme=self.scheme,
             tool=self.tool,
-            values=dict(self.values),
+            registers={name: list(entries) for name, entries in self.registers},
+            unverifiable=dict(self.unverifiable),
+            extra=dict(self.extra),
             artifact_path=self.artifact_path,
             artifact_sha256=self.artifact_digest,
             boot_payload=self._boot_payload(),
@@ -1632,13 +1644,16 @@ def verify_artifact(artifact: Artifact) -> None:
 
 
 def measure(
-    artifact: Artifact, *, scheme: Scheme = "rtmr", allow_placeholder: bool = False
+    artifact: Artifact, *, scheme: Scheme = "qemu", allow_placeholder: bool = False
 ) -> Measurements:
-    """Expected measurements of *artifact* from ``measured-boot``/``dstack-mr``.
+    """Expected TDX measurements of *artifact* on the hosts of *scheme*.
+
+    tundravm replays the boot event log from the UKI (and the disk's GPT) itself;
+    ``Measurements.unverifiable`` names the registers the scheme cannot predict.
 
     The artifact's bytes are checked against their recorded sha256 first
-    (``verify_artifact``). Without a tool this raises ``MeasurementError``;
-    *allow_placeholder* returns digest-derived values instead
+    (``verify_artifact``). An artifact that is no UKI or disk raises
+    ``MeasurementError``; *allow_placeholder* returns digest-derived values instead
     (``tool="placeholder"``). Simulated artifacts are refused unless
     *allow_placeholder*. A disk artifact whose bake recorded the UKI it boots is
     measured through that UKI when no tool reads the disk's format (the UKI's bytes
@@ -1674,9 +1689,13 @@ def measure(
     tool = str(found.source)
     if found.tool_version is not None:
         tool += f" {found.tool_version}"
+    registers = {name: tuple(entries) for name, entries in found.registers.items()}
     return Measurements(
         scheme=scheme,
-        values=tuple(sorted(found.values.items())),
+        values=tuple(sorted(single_values(found.registers).items())),
+        registers=tuple(sorted(registers.items())),
+        unverifiable=tuple(sorted(found.unverifiable.items())),
+        extra=tuple(sorted(found.extra.items())),
         tool=tool,
         artifact_digest=artifact.sha256,
         artifact_path=str(artifact.path),

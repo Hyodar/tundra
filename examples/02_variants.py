@@ -16,7 +16,7 @@ from tundravm.backends import InProcessBackend
 from tundravm.declarative import Debian, Debloat, File, Package, Recipe, Variant, packages
 
 motd = File("/etc/motd", "production\n")
-debloat = Debloat()
+debloat = Debloat(keep_modules=True)  # Debian's kernel loads its drivers from /usr/lib/modules
 
 recipe = Recipe(
     name="variants",

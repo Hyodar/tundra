@@ -4,13 +4,14 @@ Teaches ``Tdxs()``: it builds the tundra-tools attestation service from source a
 runs it socket-activated on ``/var/tdxs.sock`` as user ``tdxs`` in group ``tdx``.
 ``issuer`` makes this VM produce quotes; ``validator`` makes it check peers' quotes
 against ``expected_measurements``. ``Tdxs.from_policy()`` reads them from the policy
-file ``tundravm measure --export-policy`` writes for the image you trust (RTMR0..2;
-pass ``mrtd=`` to check MRTD too). Services that talk to the socket join the ``tdx``
-group. ``Policy(require_frozen_lock=True)`` refuses to bake without a lockfile.
+file ``tundravm measure --export-policy`` writes for the image you trust (the registers
+its scheme predicts; pass ``mrtd=`` to check an MRTD the policy marks unverifiable).
+Services that talk to the socket join the ``tdx`` group.
+``Policy(require_frozen_lock=True)`` refuses to bake without a lockfile.
 
     tundravm lock examples/06_attestation.py      # pin tundra-tools (network)
     tundravm bake examples/06_attestation.py --variant attester --build build/attestation
-    tundravm measure --build build/attestation --scheme rtmr \
+    tundravm measure --build build/attestation --scheme qemu \
         --export-policy examples/peer.policy.json
 
 The committed ``peer.policy.json`` came from a simulated (in-process) bake with

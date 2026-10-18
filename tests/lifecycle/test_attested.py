@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.cli.test_attest import NONCE, R0, R1, R2, R3, FakeIssuer, FakeValidator
+from tests.cli.test_attest import MRTD, NONCE, R0, R1, R2, R3, FakeIssuer, FakeValidator
 from tests.helpers import run_main
 from tundravm import (
     Attestation,
@@ -59,12 +59,19 @@ def _mkosi(argv: Any) -> Any:
 
 def _policy(artifact_sha: str) -> dict[str, object]:
     return {
-        "schema_version": 1,
-        "scheme": "rtmr",
-        "tool": "measured-boot",
-        "tool_version": "1.2",
+        "schema_version": 2,
+        "schema": "tundravm.policy/2",
+        "scheme": "qemu",
+        "tool": "tundravm-measure",
+        "tool_version": "1.0",
         "artifact": {"path": "default/image.qcow2", "sha256": artifact_sha},
-        "registers": {"RTMR0": R0.hex(), "RTMR1": R1.hex(), "RTMR2": R2.hex()},
+        "registers": {
+            "MRTD": [MRTD.hex()],
+            "RTMR0": [R0.hex()],
+            "RTMR1": [R1.hex()],
+            "RTMR2": [R2.hex()],
+        },
+        "unverifiable": {},
     }
 
 

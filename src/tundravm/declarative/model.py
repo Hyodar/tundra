@@ -1442,8 +1442,14 @@ class Debloat(Declared):
     """Units kept on top of ``keep_units`` (or its default list)."""
     keep_paths_by_variant: Mapping[str, Sequence[str]] = field(default_factory=FrozenMap)
     """``{variant: paths}``: paths kept only when building that variant."""
+    keep_modules: bool | None = None
+    """``True`` keeps ``/usr/lib/modules``; ``False`` removes it on purpose. ``None`` (default)
+    removes it with the default list, which lint ``debloat-removes-modules`` rejects when the
+    variant boots a modular distribution kernel."""
 
     def __post_init__(self) -> None:
+        if self.keep_modules is not None and not isinstance(self.keep_modules, bool):
+            raise _fail(self, "keep_modules must be True, False or None.")
         _freeze(
             self,
             "remove",

@@ -39,11 +39,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .errors import AttestationError, MeasurementError, ValidationError
 from .formats import md_cell, md_table
-from .measure.policy import is_placeholder, read_policy
+from .measure.policy import is_placeholder, match_registers, read_policy
 
 Transport = Callable[[Mapping[str, object]], Mapping[str, object]]
 """Sends one tdxs request envelope (``{"method", "data"}``) and returns the reply envelope."""
@@ -179,15 +179,27 @@ def report_data_for(user_data: bytes, nonce: bytes) -> bytes:
 
 @dataclass(frozen=True, slots=True)
 class RegisterCheck:
-    """One register: the quote's value, the policy's (``None``: not in the policy), the verdict."""
+    """One register: the quote's value, the policy's accepted values (empty: not in the
+    policy), the verdict and the label of the accepted value it matched."""
 
     name: str
     verdict: RegisterVerdict
     actual: str | None
-    expected: str | None
+    expected: tuple[str | Mapping[str, str], ...] = ()
+    matched: str | None = None
+
+    @property
+    def values(self) -> tuple[str, ...]:
+        """The accepted values, without their labels."""
+        return tuple(e if isinstance(e, str) else str(e.get("value")) for e in self.expected)
 
     def to_dict(self) -> dict[str, object]:
-        return {"actual": self.actual, "expected": self.expected, "verdict": self.verdict}
+        return {
+            "actual": self.actual,
+            "expected": [e if isinstance(e, str) else dict(e) for e in self.expected],
+            "matched": self.matched,
+            "verdict": self.verdict,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +407,7 @@ def attest(
         raise MeasurementError(
             "Refusing to attest against a placeholder policy.",
             hint="Export the policy from a real measurement: "
-            "`tundravm measure --export-policy FILE` with measured-boot or dstack-mr.",
+            "`tundravm measure --scheme SCHEME --export-policy FILE` on a real bake.",
             context={"policy": "dict" if isinstance(policy, Mapping) else str(policy)},
         )
     expected = data["registers"]
@@ -419,7 +431,7 @@ def attest(
     if validator is not None:
         judge = validator_transport if validator_transport is not None else connect(validator)
         status, rejection, answer = _validate(judge, validator, encoded, challenge)
-    checks = tuple(_check(name, actual.get(name), expected.get(name)) for name in REGISTERS)
+    checks = _checks(expected, actual)
     artifact = data.get("artifact")
     return Attestation(
         issuer=issuer,
@@ -510,11 +522,28 @@ def _judgement(reply: Mapping[str, object]) -> tuple[SignatureStatus, str | None
     return "invalid", "the validator answered valid=false"
 
 
-def _check(name: str, actual: str | None, expected: object) -> RegisterCheck:
-    if not isinstance(expected, str):
-        return RegisterCheck(name, "unchecked", actual, None)
-    verdict: RegisterVerdict = "match" if actual == expected else "mismatch"
-    return RegisterCheck(name, verdict, actual, expected)
+def _checks(expected: Mapping[str, object], actual: Mapping[str, str]) -> tuple[RegisterCheck, ...]:
+    """Each register of :data:`REGISTERS` against the policy's accepted values."""
+    found = match_registers(expected, actual)
+    checks = []
+    for name in REGISTERS:
+        verdict, hit = found[name]
+        entries = expected.get(name)
+        accepted_entries = tuple(entries) if isinstance(entries, list) else ()
+        label = None if hit is None else hit.describe()
+        checks.append(
+            RegisterCheck(
+                name, cast(RegisterVerdict, verdict), actual.get(name), accepted_entries, label
+            )
+        )
+    return tuple(checks)
+
+
+def _stored_expected(value: object) -> list[object] | None:
+    """A record's stored ``expected``: the accepted entries (a lone string is one)."""
+    if isinstance(value, str):
+        return [value]
+    return list(value) if isinstance(value, list) and value else None
 
 
 def _nonce_bytes(nonce: str | bytes | None) -> bytes:
@@ -702,7 +731,7 @@ def read_attestation(
     stored_registers = data.get("registers") if isinstance(data.get("registers"), Mapping) else {}
     assert isinstance(stored_registers, Mapping)
     expected: dict[str, object] = {
-        name: (stored_registers.get(name) or {}).get("expected")
+        name: _stored_expected((stored_registers.get(name) or {}).get("expected"))
         for name in REGISTERS
         if isinstance(stored_registers.get(name), Mapping)
     }
@@ -715,7 +744,7 @@ def read_attestation(
             expected = dict(given["registers"])  # type: ignore[call-overload]
             artifact = given.get("artifact")
     status, why, endpoint, reply, problems = _recorded_judgement(data.get("validator"))
-    checks = tuple(_check(name, actual.get(name), expected.get(name)) for name in REGISTERS)
+    checks = _checks(expected, actual)
     derived = Attestation(
         issuer=str(data.get("issuer") or ""),
         platform=platform or "unknown",
@@ -985,7 +1014,7 @@ def render_attestation(result: Attestation, fmt: str) -> str:
                 md_cell(r.name),
                 md_cell(r.verdict),
                 md_cell(r.actual, code=True),
-                md_cell(r.expected, code=True),
+                md_cell(r.matched or ", ".join(v[:12] for v in r.values), code=True),
             )
             for r in result.registers
         ]
@@ -1009,9 +1038,16 @@ def render_attestation(result: Attestation, fmt: str) -> str:
         lines.append(f"{'':<6} {'quote':<9}  {result.report_data}")
         lines.append(f"{'':<6} {'expected':<9}  {result.expected_report_data}")
     for check in result.registers:
-        lines.append(f"{check.name:<6} {check.verdict:<9}  {check.actual or '-'}")
+        via = f"  ({check.matched})" if check.matched else ""
+        lines.append(f"{check.name:<6} {check.verdict:<9}  {check.actual or '-'}{via}")
         if check.verdict == "mismatch":
-            lines.append(f"{'':<6} {'policy':<9}  {check.expected}")
+            accepted_values = check.values
+            shown = (
+                accepted_values[0]
+                if len(accepted_values) == 1
+                else (f"one of {len(accepted_values)} accepted values")
+            )
+            lines.append(f"{'':<6} {'policy':<9}  {shown}")
     if result.validator is None:
         lines.append(f"note: {CHECKS_NOTE}")
     if reasons:

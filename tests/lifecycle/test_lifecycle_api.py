@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -279,42 +280,65 @@ def test_lock_status_with_resolver_reports_moved_refs() -> None:
 
 
 def test_measurements_to_dict_and_verify() -> None:
-    found = Measurements("rtmr", (("rtmr0", "aa"), ("rtmr1", "bb")), "dstack-mr 1.0", "d1", "x.efi")
+    found = Measurements(
+        "qemu",
+        (("RTMR1", "aa"), ("RTMR2", "bb")),
+        "tundravm-measure 1.0",
+        "d1",
+        "x.efi",
+        registers=(("RTMR1", ("aa",)), ("RTMR2", ("bb",))),
+        unverifiable=(("MRTD", "host"), ("RTMR0", "host")),
+    )
 
     assert found.to_dict() == {
         "artifact": "x.efi",
         "artifact_digest": "d1",
         "boot_payload": None,
-        "scheme": "rtmr",
-        "tool": "dstack-mr 1.0",
-        "values": {"rtmr0": "aa", "rtmr1": "bb"},
+        "scheme": "qemu",
+        "tool": "tundravm-measure 1.0",
+        "values": {"RTMR1": "aa", "RTMR2": "bb"},
+        "registers": {"RTMR1": ["aa"], "RTMR2": ["bb"]},
+        "unverifiable": {"MRTD": "host", "RTMR0": "host"},
     }
-    assert found.verify({"rtmr0": "aa", "rtmr1": "bb"}) == ()
-    assert found.verify({"rtmr0": "aa", "rtmr1": "cc", "rtmr2": "dd"}) == ("rtmr1", "rtmr2")
+    assert found.verify({"RTMR1": "aa", "RTMR2": "bb"}) == ()
+    assert found.verify({"RTMR1": "aa", "RTMR2": "cc", "RTMR3": "dd"}) == ("RTMR2", "RTMR3")
 
 
 def test_measurements_policy_round_trips_into_a_tdxs_verifier(tmp_path: Path) -> None:
-    registers = {f"RTMR{i}": f"{i:x}" * 96 for i in range(4)}
+    values = {f"RTMR{i}": f"{i:x}" * 96 for i in range(4)}
+    mrtd = [{"value": "e" * 96, "firmware": "fw-a"}, {"value": "f" * 96, "firmware": "fw-b"}]
     found = Measurements(
-        "rtmr", tuple(sorted(registers.items())), "measured-boot 1.2", "d1", "build/x.efi"
+        "gcp",
+        tuple(sorted(values.items())),
+        "tundravm-measure 1.0",
+        "d1",
+        "build/x.raw",
+        registers=(("MRTD", tuple(mrtd)), *((k, (v,)) for k, v in sorted(values.items()))),
+        extra=(("firmware_table", "t1"),),
     )
     policy = found.to_policy()
     assert policy == {
-        "schema_version": 1,
-        "scheme": "rtmr",
-        "tool": "measured-boot",
-        "tool_version": "1.2",
-        "artifact": {"path": "build/x.efi", "sha256": "d1"},
-        "registers": registers,
+        "schema_version": 2,
+        "schema": "tundravm.policy/2",
+        "scheme": "gcp",
+        "tool": "tundravm-measure",
+        "tool_version": "1.0",
+        "artifact": {"path": "build/x.raw", "sha256": "d1"},
+        "registers": {"MRTD": mrtd, **{k: [v] for k, v in values.items()}},
+        "unverifiable": {},
+        "firmware_table": "t1",
     }
     path = tmp_path / "policy.json"
     write_policy(policy, path)
     assert read_policy(path) == policy
-    verifier = Tdxs.from_policy(path)
-    expected = {name.lower(): value for name, value in registers.items()}
+    with pytest.raises(MeasurementError, match="one value per register"):
+        Tdxs.from_policy(path)
+    verifier = Tdxs.from_policy(path, firmware="fw-b")
+    expected = {name.lower(): value for name, value in values.items()}
+    expected["mrtd"] = "f" * 96
     assert verifier.expected_measurements == expected
-    assert Tdxs.from_measurements(found).expected_measurements == expected
-    placeholder = Measurements("rtmr", tuple(sorted(registers.items())), "placeholder", "d1")
+    assert Tdxs.from_measurements(found, firmware="fw-b").expected_measurements == expected
+    placeholder = replace(found, tool="placeholder")
     with pytest.raises(MeasurementError, match="placeholder"):
         placeholder.to_policy()
     assert "note" in placeholder.to_policy(allow_placeholder=True)

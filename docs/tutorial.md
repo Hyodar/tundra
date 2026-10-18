@@ -31,12 +31,11 @@ python 3.12.3
 backend inprocess: available
   no external tools required
 measurement tools:
-  missing (optional) measured-boot — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
-  missing (optional) dstack-mr — Real RTMR measurements need it. Install measured-boot or dstack-mr and make sure it is on PATH.
+  ok tundravm-measure 1.0+attest-12f1e29.dstack-mr-gcp-b16e08b (built in)
 [exit 0]
 ```
 
-The recipe is named after the directory (`--name` overrides it). `init` writes the `service` starter (`--template` picks another, `tundravm init --list-templates` lists them), a tests module for it, `pyproject.toml` and `README.md` when they are absent, and, with `--ci github`, the GitHub Actions workflow [step 16](#16-ci) walks through. Pass `--ci github` here: `init` refuses to run again over an existing `node.py` without `--force`, which rewrites the recipe. It lints the recipe, prints the next steps, and ends with `tundravm doctor --backend inprocess`, which needs no tools; the measurement tools are optional (see [Measure](#10-measure)). `--no-doctor` skips the probe. For tab completion of verbs and flags, see [CLI: Shell completion](cli.md#shell-completion).
+The recipe is named after the directory (`--name` overrides it). `init` writes the `service` starter (`--template` picks another, `tundravm init --list-templates` lists them), a tests module for it, `pyproject.toml` and `README.md` when they are absent, and, with `--ci github`, the GitHub Actions workflow [step 16](#16-ci) walks through. Pass `--ci github` here: `init` refuses to run again over an existing `node.py` without `--force`, which rewrites the recipe. It lints the recipe, prints the next steps, and ends with `tundravm doctor --backend inprocess`, which needs no tools; measurement is built in (see [Measure](#10-measure)). `--no-doctor` skips the probe. For tab completion of verbs and flags, see [CLI: Shell completion](cli.md#shell-completion).
 
 `node.py` binds a `Recipe` to `recipe` and a backend to `backend`. Below its docstring and imports:
 
@@ -433,15 +432,16 @@ Hint: Bake with a real backend, or pass allow_placeholder=True for test values.
 
 $ tundravm measure --variant default --allow-placeholder
 PLACEHOLDER: not real measurements. These values are derived from artifact digests; never put them in an attestation policy.
-measurements default (rtmr)
+measurements default (qemu)
 source: placeholder (build/default/disk.qcow2)
-  RTMR0  7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7
-  RTMR1  dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd
-  RTMR2  44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279
+  RTMR1  21be70e83c1c6600f1f9fc1c08a09c54aaceb74e0a4d2ad0151e113f4ed0a47d
+  RTMR2  5eadb91e4bb32aee2c8d3c296877128ef2af386be007ffa17b6b08b37e23bb2d
+  MRTD   unverifiable: QEMU: depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; take it from a quote of a host you trust
+  RTMR0  unverifiable: QEMU: depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; take it from a quote of a host you trust
 [exit 0]
 ```
 
-`measure` reads the bake in the build directory (`--build`, here the table's `build`) and first checks the artifact against the sha256 the bake recorded: a disk file changed since the bake is `E_ARTIFACT_CHANGED`. With a real bake and `measured-boot` or `dstack-mr` on `PATH`, the `source:` line names that tool instead of `placeholder`.
+`measure` reads the bake in the build directory (`--build`, here the table's `build`) and first checks the artifact against the sha256 the bake recorded: a disk file changed since the bake is `E_ARTIFACT_CHANGED`. With a real bake the registers are replayed from the UKI offline and the `source:` line names `tundravm-measure` instead of `placeholder`. The default scheme, `qemu`, predicts RTMR1 and RTMR2; MRTD and RTMR0 depend on the host's firmware, so they are listed as unverifiable with the reason. `--scheme gcp` adds every MRTD/RTMR0 Google's firmwares produce, `--scheme portable` keeps only RTMR1/RTMR2 for every firmware, and `--scheme azure` predicts no TDX register (see [Policy: Schemes](policy.md#schemes)).
 
 A verifier, an image that checks its peers' quotes, needs these values as its expected measurements. `--export-policy` writes them to a policy file:
 
@@ -449,11 +449,12 @@ A verifier, an image that checks its peers' quotes, needs these values as its ex
 $ tundravm measure --variant default --allow-placeholder --export-policy peer.json
 PLACEHOLDER: not real measurements. These values are derived from artifact digests; never put them in an attestation policy.
 wrote policy peer.json
-measurements default (rtmr)
+measurements default (qemu)
 source: placeholder (build/default/disk.qcow2)
-  RTMR0  7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7
-  RTMR1  dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd
-  RTMR2  44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279
+  RTMR1  21be70e83c1c6600f1f9fc1c08a09c54aaceb74e0a4d2ad0151e113f4ed0a47d
+  RTMR2  5eadb91e4bb32aee2c8d3c296877128ef2af386be007ffa17b6b08b37e23bb2d
+  MRTD   unverifiable: QEMU: depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; take it from a quote of a host you trust
+  RTMR0  unverifiable: QEMU: depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; take it from a quote of a host you trust
 [exit 0]
 
 $ cat peer.json
@@ -468,18 +469,26 @@ $ cat peer.json
   },
   "note": "PLACEHOLDER: these registers are derived from artifact digests, not measured; no TEE reproduces them. Replace this file with `tundravm measure --export-policy` output from a real bake before trusting a verifier built from it.",
   "registers": {
-    "RTMR0": "7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7",
-    "RTMR1": "dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd",
-    "RTMR2": "44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279"
+    "RTMR1": [
+      "21be70e83c1c6600f1f9fc1c08a09c54aaceb74e0a4d2ad0151e113f4ed0a47d"
+    ],
+    "RTMR2": [
+      "5eadb91e4bb32aee2c8d3c296877128ef2af386be007ffa17b6b08b37e23bb2d"
+    ]
   },
-  "schema_version": 1,
-  "scheme": "rtmr",
+  "schema": "tundravm.policy/2",
+  "schema_version": 2,
+  "scheme": "qemu",
   "tool": "placeholder",
-  "tool_version": null
+  "tool_version": null,
+  "unverifiable": {
+    "MRTD": "QEMU: depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; take it from a quote of a host you trust",
+    "RTMR0": "QEMU: depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; take it from a quote of a host you trust"
+  }
 }
 ```
 
-Placeholder values are written only with `--allow-placeholder`, and then with the `note`. `Tdxs.from_policy()` turns the file into the verifier fragment, renaming the registers to the keys the tundra-tools validator reads:
+Each register holds a list of accepted values: a quote matches when it holds any of them (a `gcp` policy accepts one MRTD per Google firmware). Placeholder values are written only with `--allow-placeholder`, and then with the `note`. `Tdxs.from_policy()` turns the file into the verifier fragment, renaming the registers to the keys the tundra-tools validator reads:
 
 ```pycon
 >>> from tundravm.declarative.utils import Tdxs
@@ -487,7 +496,7 @@ Placeholder values are written only with `--allow-placeholder`, and then with th
 >>> verifier.validator
 'tdx'
 >>> dict(verifier.expected_measurements)
-{'rtmr0': '7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7', 'rtmr1': 'dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd', 'rtmr2': '44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279'}
+{'rtmr1': '21be70e83c1c6600f1f9fc1c08a09c54aaceb74e0a4d2ad0151e113f4ed0a47d', 'rtmr2': '5eadb91e4bb32aee2c8d3c296877128ef2af386be007ffa17b6b08b37e23bb2d'}
 >>> Tdxs.from_policy("peer.json", validator="tdx")
 Traceback (most recent call last):
   ...
@@ -496,14 +505,14 @@ Hint: Export the policy from a real measurement, or pass allow_placeholder=True 
   policy: peer.json
 ```
 
-A policy exported from a real measurement needs no `allow_placeholder`. MRTD is not in the policy: RTMR tools do not report it, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", inherits="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, name it next to the recipe file with `Resources.from_module(__name__).file("peer.json")` (see [Concepts: Paths and assets](concepts.md#paths-and-assets)).
+A policy exported from a real measurement needs no `allow_placeholder`. A `qemu` policy lists MRTD as unverifiable, and the validator checks only the registers it is given, so pass `mrtd="<hex>"` to have it checked too. The verifier is a fragment like any other, so it goes in a variant's `add` (`Variant("verifier", inherits="default", add=verifier)`); `examples/06_attestation.py` builds one from `examples/peer.policy.json`. `"peer.json"` is relative to the working directory: in a recipe, name it next to the recipe file with `Resources.from_module(__name__).file("peer.json")` (see [Concepts: Paths and assets](concepts.md#paths-and-assets)).
 
 Once the image runs, `tundravm attest` checks it against the policy: it asks the image's `tdxs` issuer for a quote bound to a fresh nonce and compares the quote's registers with the policy's. It refuses a placeholder policy before contacting anything:
 
 ```console
 $ tundravm attest --issuer unix:./tdxs.sock --policy peer.json
 error [E_MEASUREMENT]: Refusing to attest against a placeholder policy.
-Hint: Export the policy from a real measurement: `tundravm measure --export-policy FILE` with measured-boot or dstack-mr.
+Hint: Export the policy from a real measurement: `tundravm measure --scheme SCHEME --export-policy FILE` on a real bake.
   policy: peer.json
 [exit 2]
 ```

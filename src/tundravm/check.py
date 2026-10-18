@@ -25,7 +25,7 @@ from ._source import DebFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
 from .formats import annotation_path, md_cell, md_table, workflow_command
-from .models import ProfileState, ServiceSpec, unit_name
+from .models import MODULES_PATH, ProfileState, ServiceSpec, unit_name
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -526,6 +526,45 @@ def _rule_kernel_missing(
     )
 
 
+def _removes(patterns: Iterable[str], path: str) -> str | None:
+    """The first of *patterns* (debloat removal paths or globs) that deletes *path*."""
+    for pattern in patterns:
+        if path == pattern or path.startswith(pattern.rstrip("/") + "/"):
+            return pattern
+        if fnmatch.fnmatch(path, pattern):
+            return pattern
+    return None
+
+
+def _rule_debloat_removes_modules(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    config = state.debloat
+    # Only a declared Debloat: the implicit default stays as it was (see docs/concepts.md).
+    if not (config.enabled and config.declared) or config.keep_modules is False:
+        return
+    # A built Kernel installs only its vmlinuz: nothing under /usr/lib/modules loads.
+    if image.kernel_for(profile_name) is not None or not _installs_kernel(state.packages):
+        return
+    pattern = _removes(config.effective_paths_remove, MODULES_PATH)
+    if pattern is None:
+        return
+    yield Diagnostic(
+        severity="error",
+        code="debloat-removes-modules",
+        message=(
+            f"debloat removes {pattern} but the variant boots the distribution's modular "
+            "kernel, whose drivers (virtio, tdx_guest, cloud NICs) then never load"
+        ),
+        hint=(
+            "Debloat(keep_modules=True) keeps them; Debloat(keep_modules=False) removes them "
+            "on purpose; or declare Kernel(...) built with everything the image needs."
+        ),
+        variant=profile_name,
+        subject=MODULES_PATH,
+    )
+
+
 _EFI_STUB_DEB = re.compile(r"systemd-boot-efi_\S*_amd64\.deb")
 
 
@@ -899,6 +938,7 @@ RULES: list[Rule] = [
     _rule_debloat_removes_declared_file,
     _rule_source_unpinned,
     _rule_kernel_missing,
+    _rule_debloat_removes_modules,
     _rule_recipe_arch_unsupported,
     _rule_secret_in_file,
     _rule_secret_in_env,

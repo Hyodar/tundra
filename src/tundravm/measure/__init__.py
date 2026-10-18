@@ -1,12 +1,13 @@
-"""Measurement backend dispatch and model exports."""
+"""Measurement scheme dispatch and model exports."""
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from tundravm.errors import MeasurementError
 from tundravm.measure.model import (
+    MEASURE_TOOL,
+    MEASURE_VERSION,
     MeasurementBackend,
     Measurements,
     MeasurementSource,
@@ -14,8 +15,7 @@ from tundravm.measure.model import (
 )
 from tundravm.models import ProfileBuildResult
 
-from . import azure, gcp, rtmr
-from .rtmr import ToolLocator, ToolRunner
+from . import schemes
 
 
 def derive_measurements(
@@ -24,62 +24,31 @@ def derive_measurements(
     profile: str,
     profile_result: ProfileBuildResult,
     allow_placeholder: bool = False,
-    tool_locator: ToolLocator | None = None,
-    runner: ToolRunner | None = None,
 ) -> Measurements:
-    """Measure *profile_result*'s artifacts; placeholder values need ``allow_placeholder``."""
-    artifact_paths, digests_by_target, digests_by_path = _artifact_data(profile_result)
-    if not digests_by_target:
+    """Measure *profile_result*'s artifact for scheme *backend*; placeholder values (for an
+    artifact that is no UKI or disk, such as a simulated one) need ``allow_placeholder``."""
+    if not profile_result.artifacts:
         raise MeasurementError(
             "No artifacts are available for measurement derivation.",
             hint="Bake the variant before measuring it.",
             context={"profile": profile, "backend": backend},
         )
-    if backend == "rtmr":
-        return rtmr.derive(
-            profile,
-            artifact_digests=digests_by_path,
-            artifact_paths=artifact_paths,
-            allow_placeholder=allow_placeholder,
-            tool_locator=tool_locator,
-            runner=runner,
-        )
-    if backend == "azure":
-        return azure.derive(profile, digests_by_target, allow_placeholder=allow_placeholder)
-    if backend == "gcp":
-        return gcp.derive(profile, digests_by_target, allow_placeholder=allow_placeholder)
-    raise MeasurementError(
-        "Unsupported measurement backend.",
-        hint="Use one of: rtmr, azure, gcp",
-        context={"backend": backend},
+    _, artifact = sorted(profile_result.artifacts.items())[0]
+    payload = artifact.boot_payload
+    return schemes.derive(
+        backend,
+        artifact=Path(artifact.path),
+        uki=None if payload is None else Path(payload),
+        allow_placeholder=allow_placeholder,
     )
 
 
-def _artifact_data(
-    profile_result: ProfileBuildResult,
-) -> tuple[tuple[Path, ...], dict[str, str], dict[str, str]]:
-    artifact_paths: list[Path] = []
-    digests_by_target: dict[str, str] = {}
-    digests_by_path: dict[str, str] = {}
-    for target, artifact in sorted(profile_result.artifacts.items()):
-        path = Path(artifact.path)
-        payload = path.read_bytes()
-        digest = hashlib.sha256(payload).hexdigest()
-        artifact_paths.append(path)
-        digests_by_target[target] = digest
-        digests_by_path[str(path)] = digest
-        if artifact.boot_payload is not None:
-            # a disk no tool reads is measured through the UKI it boots
-            artifact_paths.append(Path(artifact.boot_payload))
-    return tuple(artifact_paths), digests_by_target, digests_by_path
-
-
 __all__ = [
+    "MEASURE_TOOL",
+    "MEASURE_VERSION",
     "MeasurementBackend",
     "MeasurementSource",
     "Measurements",
     "PlaceholderMeasurementWarning",
-    "ToolLocator",
-    "ToolRunner",
     "derive_measurements",
 ]

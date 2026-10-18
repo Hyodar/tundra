@@ -123,10 +123,12 @@ mkosi/
     mkosi.extra/...           # File, FileTree, Unit content, runtime-init
     scripts/04-build.sh       # Build declarations, build-phase hooks
     scripts/06-postinst.sh    # accounts, unit enablement, postinst hooks
-    scripts/07-finalize.sh    # debloat, IMAGE_VERSION strip, finalize hooks
+    scripts/07-finalize.sh    # debloat, IMAGE_VERSION strip, finalize hooks, account sort
   azure/
     ...
 ```
+
+Debloat runs at finalize, over the whole image. Its default list removes `/usr/lib/modules`, which is right for a built `Kernel` (it installs only its `vmlinuz`) and wrong for the distribution's modular kernel (`Debian(kernel_package="linux-image-amd64")`, the default), whose virtio, `tdx_guest` and cloud NIC drivers live there: declare `Debloat(keep_modules=True)` to keep them, or `keep_modules=False` to remove them on purpose. A declared `Debloat` that removes them under a modular kernel is lint `debloat-removes-modules` (error); the implicit default is not checked. In a reproducible current-dialect build, finalize then ends with the deterministic accounts step (see [reproducibility](reproducibility.md#what-the-current-dialect-normalizes)).
 
 Script names follow the mkosi phases a `Hook` can run in: `sync`, `skeleton`, `prepare`, `build`, `extra`, `postinst`, `finalize`, `postoutput`, `clean`, `repart`, `boot`. Inside a phase, hooks keep their declaration order except where `after=` moves one behind another hook of the same phase. A hook that runs `after` a hook of a later phase is `hook-order`.
 
@@ -372,7 +374,7 @@ Recipe + Lock + Backend ──bake──▶ Artifact(s) + build/bake-result.json
 | Lock | `lock(recipe, previous=None) -> Lock` | `lock` | the network, unless every source is already pinned |
 | Fetch | `fetch(recipe, lock=, build=, force=False) -> tuple[FetchedSource, ...]` | `fetch` | the network (as you), unless the checkouts are already there; `go`, `cargo` or `dotnet` on `PATH` to prefetch dependencies |
 | Bake | `bake(recipe, lock=, backend=, build=, fetch=True, offline=False) -> tuple[Artifact, ...]` | `bake` | a backend; fetches first unless `fetch=False` (`--no-fetch`); `offline=True` (`--offline`) needs every checkout and dependency cache fetched |
-| Measure | `measure(artifact, scheme="rtmr") -> Measurements` | `measure` | `measured-boot` or `dstack-mr`, or `allow_placeholder` |
+| Measure | `measure(artifact, scheme="qemu") -> Measurements` | `measure` | a UKI or disk artifact (offline replay), or `allow_placeholder` |
 | Deploy | `deploy(artifact, using=Qemu()/Azure(...)/Gcp(...), allow_simulated=False) -> Deployment` | `deploy` | the target's tool (`qemu-system-x86_64`, `az`, `gcloud`) |
 | Attest | `attest(issuer, policy, validator=None, nonce=None) -> Attestation` | `attest` | the running image's `tdxs` issuer (a unix socket, `unix:PATH`, or `tcp://HOST:PORT`), a `tdxs` validator for a `trusted` verdict, and a policy from `measure --export-policy`, not a placeholder |
 | SBOM | `sbom(artifact, lock=None, manifest=None) -> Sbom` | `sbom` | a real bake (its mkosi package manifest); a lock for the source pins |
@@ -427,16 +429,19 @@ A backend gets one `BakeRequest` per variant (`profile`, `build_dir`, `emit_dir`
 
 `measure(artifact, scheme=)` derives the values a verifier should expect:
 
-- `rtmr` uses `measured-boot` or `dstack-mr` on `PATH` and returns RTMR values; `Measurements.tool` names the tool and version.
-- `azure` and `gcp` have no local tool yet; they return placeholders only with `allow_placeholder=True`.
+- `qemu` and `portable` replay the UKI's boot measurements in Python and predict RTMR1/RTMR2; MRTD/RTMR0 depend on the host's firmware and are listed as unverifiable.
+- `gcp` adds every MRTD/RTMR0 Google's published firmwares produce (several accepted values per register, labelled by firmware and machine type).
+- `azure` predicts no TDX register (Azure's paravisor owns the TD) and records vTPM PCR4/9/11 instead.
 
-`Measurements.to_dict()` gives the values (`artifact`, `artifact_digest`, `scheme`, `tool`, `values`), and `Measurements.verify(expected)` returns the registers that differ from an expected set (empty when all match). `Measurements.to_policy()` is the verifier policy that `tundravm measure --export-policy FILE` writes (it refuses placeholder values unless `allow_placeholder=True`), which `Tdxs.from_policy(FILE)` (or `Tdxs.from_measurements(measurements)` in-process) turns into a validator's `expected_measurements`; RTMR tools do not report MRTD, so pass `mrtd=` to have it checked too (see [API: Shipped fragments](api.md#shipped-fragments)).
+`Measurements.tool` is `tundravm-measure` and its version. [Policy](policy.md#measurement-policies) has the schema, the per-scheme table and the sources.
+
+`Measurements.to_dict()` gives the values (`artifact`, `artifact_digest`, `boot_payload`, `registers`, `scheme`, `tool`, `unverifiable`, `values`), and `Measurements.verify(expected)` returns the registers that differ from an expected set (empty when all match). `Measurements.to_policy()` is the verifier policy that `tundravm measure --export-policy FILE` writes (it refuses placeholder values unless `allow_placeholder=True`), which `Tdxs.from_policy(FILE)` (or `Tdxs.from_measurements(measurements)` in-process) turns into a validator's `expected_measurements`; when the policy lists MRTD as unverifiable, pass `mrtd=` to have it checked too (see [API: Shipped fragments](api.md#shipped-fragments)).
 
 Placeholder values are derived from the artifact digest. They are never real measurements and must never go into an attestation policy.
 
 ### Attesting a running image
 
-A policy from `measure --export-policy` can be checked two ways. `tundravm attest --issuer unix:./tdxs.sock --validator ENDPOINT --policy peer.json` (or `attest()`) asks the running image's `tdxs` issuer for a quote bound to a fresh nonce, has a `tdxs` validator check the quote's signature, certificate chain and collateral, reads MRTD and RTMR0..RTMR3 from the quote and reports `match`, `mismatch` or `unchecked` per register (see [CLI: Attest](cli.md#attest)). `trusted` now means three things held at once: the validator accepted the attestation document, the quote's whole 64-byte `report_data` binds the nonce, and every register the policy holds matched; the platform is not the simulator. A validator rejection, or a mismatch with a validator, is `untrusted`. Without a validator nothing vouches for the quote's origin, so the verdict is only `measurements-match` or `measurements-mismatch` (`signature_status: unchecked`), a quick operator check rather than trust; a simulator issuer is `simulated` at best. `tdxs` speaks JSON lines on the unix socket `/var/tdxs.sock` in the image, so the issuer is that socket relayed to the host (over an SSH command channel, since the delivered key forbids `ssh -L`; see [Secret delivery at boot](#secret-delivery-at-boot)), then `unix:./tdxs.sock`, or a TCP port relayed to it (`tcp://HOST:PORT`); it serves no http, and an `http://` or `https://` endpoint is a `ValidationError`. A `Tdxs` validator built with `Tdxs.from_policy("peer.json")` verifies the collateral as well and is what a relying service should run. `bake --verify-reproducible` is the build-side counterpart: it bakes twice and proves the artifacts are identical.
+A policy from `measure --export-policy` can be checked two ways. `tundravm attest --issuer unix:./tdxs.sock --validator ENDPOINT --policy peer.json` (or `attest()`) asks the running image's `tdxs` issuer for a quote bound to a fresh nonce, has a `tdxs` validator check the quote's signature, certificate chain and collateral, reads MRTD and RTMR0..RTMR3 from the quote and reports `match` (the quote holds one of the policy's accepted values; the matched label is shown), `mismatch` or `unchecked` per register (see [CLI: Attest](cli.md#attest)). `trusted` now means three things held at once: the validator accepted the attestation document, the quote's whole 64-byte `report_data` binds the nonce, and every register the policy holds matched; the platform is not the simulator. A validator rejection, or a mismatch with a validator, is `untrusted`. Without a validator nothing vouches for the quote's origin, so the verdict is only `measurements-match` or `measurements-mismatch` (`signature_status: unchecked`), a quick operator check rather than trust; a simulator issuer is `simulated` at best. `tdxs` speaks JSON lines on the unix socket `/var/tdxs.sock` in the image, so the issuer is that socket relayed to the host (over an SSH command channel, since the delivered key forbids `ssh -L`; see [Secret delivery at boot](#secret-delivery-at-boot)), then `unix:./tdxs.sock`, or a TCP port relayed to it (`tcp://HOST:PORT`); it serves no http, and an `http://` or `https://` endpoint is a `ValidationError`. A `Tdxs` validator built with `Tdxs.from_policy("peer.json")` verifies the collateral as well and is what a relying service should run. `bake --verify-reproducible` is the build-side counterpart: it bakes twice and proves the artifacts are identical.
 
 ### Reviewing a release
 

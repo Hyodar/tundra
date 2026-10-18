@@ -134,14 +134,15 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "d188f6c7b2121c35dd94d3773860c1ad9ff624ad215b0669a600fe37fb2bb793"
+EQUIVALENCE_TREE = "11451ea28fab28378a578a467b44a7bcb20f5f0b026f08951f949bb908ef99f5"
 EQUIVALENCE_RECIPE = "50b37696b96f1c0a8382a3d834befb70b49b7c935e67af49c251d902412900b1"
 """The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
 fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly
 (re-recorded when current-dialect build hooks gained their ``# tundravm build:`` line, and
 when runtime-init became a graph of boot steps, one unit per step, locked by step name, and
 when debloat's default keep list gained ``timers.target``, and when the azure provisioning
-unit became a typed ``Task`` and runtime-init step units render through the typed table)."""
+unit became a typed ``Task`` and runtime-init step units render through the typed table, and
+when reproducible current-dialect finalize scripts gained the deterministic accounts step)."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:

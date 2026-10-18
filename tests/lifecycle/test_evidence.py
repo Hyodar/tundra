@@ -8,6 +8,7 @@ import json
 import subprocess
 import tarfile
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,8 @@ from tundravm.declarative.lifecycle import select_artifact
 from tundravm.errors import ArtifactError, ValidationError
 from tundravm.evidence import _secrets
 from tundravm.measure.policy import write_policy
+
+from .test_measure import build_uki
 
 EPOCH = "1700000000"
 NAME = "<script>alert(1)</script>"
@@ -235,14 +238,22 @@ def test_recorded_contradictions_fail_with_reasons(tmp_path: Path) -> None:
     assert "  fail        tree-mismatch  default: the compiled tree changed since the bake" in text
 
 
-def _policy(artifact_sha: str, *, placeholder: bool = False) -> dict[str, object]:
+def _policy(
+    artifact_sha: str, *, placeholder: bool = False, scheme: str = "gcp"
+) -> dict[str, object]:
+    """A schema 2 policy accepting one value per register; ``qemu`` leaves MRTD/RTMR0
+    unverifiable."""
+    names = ("RTMR1", "RTMR2") if scheme == "qemu" else ("MRTD", "RTMR0", "RTMR1", "RTMR2")
     return {
-        "schema_version": 1,
-        "scheme": "rtmr",
-        "tool": "placeholder" if placeholder else "measured-boot",
+        "schema_version": 2,
+        "scheme": scheme,
+        "tool": "placeholder" if placeholder else "tundravm-measure",
         "tool_version": "1.0",
         "artifact": {"path": "disk.qcow2", "sha256": artifact_sha},
-        "registers": {f"RTMR{i}": ("cd" * 32 if placeholder else "ab" * 48) for i in range(3)},
+        "registers": {name: ["cd" * 32 if placeholder else "ab" * 48] for name in names},
+        "unverifiable": {"MRTD": "host firmware", "RTMR0": "host firmware"}
+        if scheme == "qemu"
+        else {},
     }
 
 
@@ -267,19 +278,30 @@ def test_policy_is_copied_and_matched_to_the_artifact(tmp_path: Path) -> None:
     recipe = _recipe()
     out = _baked(tmp_path, recipe)
     artifact = read_artifacts(out)[1]
-    policy = {
-        "schema_version": 1,
-        "scheme": "rtmr",
-        "tool": "measured-boot",
-        "tool_version": "1.0",
-        "artifact": {"path": str(artifact.path), "sha256": artifact.sha256},
-        "registers": {f"RTMR{i}": "ab" * 48 for i in range(3)},
-    }
+    policy = {**_policy(artifact.sha256), "artifact": {"path": str(artifact.path)}}
+    policy["artifact"] = {"path": str(artifact.path), "sha256": artifact.sha256}
     (out / "default" / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
     entry = _evidence(recipe, out).index["variants"]["default"]["policy"]
     assert entry["artifact_matches"] is True
     assert entry["placeholder"] is False
-    assert entry["registers"] == ["RTMR0", "RTMR1", "RTMR2"]
+    assert entry["registers"] == ["MRTD", "RTMR0", "RTMR1", "RTMR2"]
+    assert (entry["scheme"], entry["unverifiable"]) == ("gcp", {})
+
+
+def test_unverifiable_registers_leave_measured_incomplete(tmp_path: Path) -> None:
+    recipe = _recipe()
+    out = _baked(tmp_path, recipe)
+    artifact = read_artifacts(out)[1]
+    policy = _policy(artifact.sha256, scheme="qemu")
+    (out / "default" / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
+    found = _evidence(recipe, out, variants=["default"])
+    entry = found.index["variants"]["default"]["policy"]
+    assert entry["unverifiable"] == {"MRTD": "host firmware", "RTMR0": "host firmware"}
+    assert found.passed and found.index["verdict"]["policy"] == "verified"
+    required = _evidence(recipe, out, variants=["default"], require=("measured",))
+    assert _codes(required) == [("incomplete", "policy-unverifiable", "default")]
+    (reason,) = required.index["verdict"]["reasons"]
+    assert "cannot verify MRTD, RTMR0" in reason["message"]
 
 
 def test_lowered_recipe_leaves_out_provenance(tmp_path: Path) -> None:
@@ -447,11 +469,11 @@ def test_measurement_coverage_is_per_artifact(tmp_path: Path) -> None:
     recipe = _recipe()
     out = _baked(tmp_path, recipe)
     qemu, azure = read_artifacts(out)[1], read_artifacts(out)[0]
-    second = out / "default" / "disk.vhd"
+    second = out / "default" / "disk.vmdk"
     second.write_bytes(azure.path.read_bytes())
     result = out / "bake-result.json"
     payload = json.loads(result.read_text(encoding="utf-8"))
-    payload["variants"]["default"]["artifacts"]["azure"] = "default/disk.vhd"
+    payload["variants"]["default"]["artifacts"]["azure"] = "default/disk.vmdk"
     payload["variants"]["default"]["artifact_digests"]["azure"] = azure.sha256
     payload["variants"]["default"]["manifest_digests"]["azure"] = None
     result.write_text(json.dumps(payload), encoding="utf-8")
@@ -464,7 +486,7 @@ def test_measurement_coverage_is_per_artifact(tmp_path: Path) -> None:
         ("azure", "unmeasured"),
         ("qemu", "measured"),
     ]
-    assert record["coverage"][0]["reason"].startswith("its format (.vhd) is not measurable")
+    assert record["coverage"][0]["reason"].startswith("its format (.vmdk) is not measurable")
     assert found.passed and found.index["verdict"]["measured"] == "partial"
     assert any("default/azure is not measured" in note for note in found.notes)
     required = _evidence(recipe, out, variants=["default"], require=("measured",))
@@ -505,18 +527,19 @@ def test_a_subset_of_the_baked_variants_matches_its_tree(
     assert again.index["variants"]["azure"]["tree_matches"] is True
 
 
-def _measured_boot(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    """A fake ``measured-boot``: its version, or RTMR0..2 written to the output file."""
-    if argv[1:] == ["--version"]:
-        return subprocess.CompletedProcess(list(argv), 0, stdout="measured-boot 1.0\n")
-    rtmr = {str(i): {"expected": "ab" * 48} for i in range(3)}
-    Path(argv[2]).write_text(json.dumps({"rtmr": rtmr}), encoding="utf-8")
-    return subprocess.CompletedProcess(list(argv), 0, stdout="", stderr="")
+def swap_in_uki(out: Path, artifact: Path) -> None:
+    """Make the baked *artifact* a real UKI and record its new sha256 in ``bake-result.json``."""
+    old = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    content = build_uki()
+    artifact.write_bytes(content)
+    result = out / "bake-result.json"
+    text = result.read_text(encoding="utf-8")
+    result.write_text(text.replace(old, hashlib.sha256(content).hexdigest()), encoding="utf-8")
 
 
 def _uki_and_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Recipe, Path]:
     """One variant baked as the UKI ``disk.efi`` (qemu) and a disk booting it (azure), with
-    the policy ``measure`` exports for the UKI."""
+    the policy ``measure`` exports for the UKI, its MRTD/RTMR0 taken from a trusted host."""
     monkeypatch.setitem(inprocess.TARGET_FILENAMES, "qemu", "disk.efi")
     recipe = Recipe(
         "node",
@@ -524,10 +547,15 @@ def _uki_and_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Reci
         variants=(Variant("default", outputs=("qemu", "azure")),),
     )
     out = _baked(tmp_path, recipe)
-    monkeypatch.setattr("tundravm.measure.rtmr.shutil.which", lambda tool: tool)
-    monkeypatch.setattr("tundravm.measure.rtmr.run_tool", _measured_boot)
     uki = select_artifact(read_artifacts(out), variant="default", target="qemu")
-    write_policy(measure(uki, allow_placeholder=True).to_policy(), out / "default" / "policy.json")
+    swap_in_uki(out, uki.path)
+    uki = replace(
+        select_artifact(read_artifacts(out), variant="default", target="qemu"), simulated=False
+    )
+    policy = measure(uki).to_policy()
+    policy["registers"] = {**policy["registers"], "MRTD": ["ee" * 48], "RTMR0": ["ff" * 48]}  # type: ignore[dict-item]
+    policy["unverifiable"] = {}
+    write_policy(policy, out / "default" / "policy.json")
     return recipe, out
 
 

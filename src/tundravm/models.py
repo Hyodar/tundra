@@ -28,6 +28,9 @@ UnitAction = Literal["disable", "mask"]
 UnitKind = Literal["service", "socket", "timer", "mount"]
 """What a ``ServiceSpec`` renders: ``<name>.service`` (the default), a socket, timer or mount."""
 
+MODULES_PATH = "/usr/lib/modules"
+"""Where a kernel's loadable modules live; the default debloat list removes it."""
+
 DEFAULT_DEBLOAT_PATHS_REMOVE = (
     "/etc/machine-id",
     "/etc/ssh/ssh_host_*_key*",
@@ -357,6 +360,11 @@ class DebloatConfig:
     extra_keep_units: tuple[str, ...] = ()
     systemd_bins_keep: tuple[str, ...] = DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP
     clean_var_dirs: tuple[str, ...] = ("/var/log", "/var/cache")
+    keep_modules: bool | None = None
+    """``Debloat(keep_modules=...)``: ``True`` keeps ``/usr/lib/modules``, ``False`` removes it
+    knowingly (no ``debloat-removes-modules``), ``None`` follows the removal list."""
+    declared: bool = False
+    """Whether a ``Debloat`` declaration set this (else it is the implicit default)."""
 
     @property
     def effective_paths_remove(self) -> tuple[str, ...]:

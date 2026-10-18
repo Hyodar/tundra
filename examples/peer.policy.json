@@ -5,12 +5,22 @@
   },
   "note": "PLACEHOLDER: these registers are derived from artifact digests, not measured; no TEE reproduces them. Replace this file with `tundravm measure --export-policy` output from a real bake before trusting a verifier built from it.",
   "registers": {
-    "RTMR0": "7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7",
-    "RTMR1": "dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd",
-    "RTMR2": "44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279"
+    "RTMR0": [
+      "7d4a783e463026f1bf368940a2756fecfa424b441f168a9ff7379e64694193e7"
+    ],
+    "RTMR1": [
+      "dd1479258b13a05aae3225aafd02ed18734c750d8942fb0b90287461f5bcbbcd"
+    ],
+    "RTMR2": [
+      "44d2ceafa105d213275b16a09db56cc14a2e5ca83a1233bbed1c806d31d53279"
+    ]
   },
-  "schema_version": 1,
-  "scheme": "rtmr",
+  "schema": "tundravm.policy/2",
+  "schema_version": 2,
+  "scheme": "qemu",
   "tool": "placeholder",
-  "tool_version": null
+  "tool_version": null,
+  "unverifiable": {
+    "MRTD": "QEMU: depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; take it from a quote of a host you trust"
+  }
 }

@@ -511,17 +511,23 @@ def test_the_sbom_is_rederived_from_its_bundled_manifest(tmp_path: Path) -> None
     )
 
 
+def _policy(artifact: dict[str, str]) -> dict[str, object]:
+    """A schema 2 policy accepting one value for each of MRTD and RTMR0..RTMR2."""
+    return {
+        "schema_version": 2,
+        "scheme": "gcp",
+        "tool": "tundravm-measure",
+        "tool_version": "1.0",
+        "artifact": artifact,
+        "registers": {name: ["ab" * 48] for name in ("MRTD", "RTMR0", "RTMR1", "RTMR2")},
+        "unverifiable": {},
+    }
+
+
 def test_measurement_coverage_is_derived_from_the_policy(tmp_path: Path) -> None:
     build, _ = _baked(tmp_path)
     artifact = read_artifacts(build)[1]
-    policy = {
-        "schema_version": 1,
-        "scheme": "rtmr",
-        "tool": "measured-boot",
-        "tool_version": "1.0",
-        "artifact": {"path": "disk.qcow2", "sha256": artifact.sha256},
-        "registers": {f"RTMR{i}": "ab" * 48 for i in range(3)},
-    }
+    policy = _policy({"path": "disk.qcow2", "sha256": artifact.sha256})
     (build / "default" / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
     found = evidence(_recipe(), build=build, runner=_mkosi, variants=["default"])
     directory = found.write(build / "evidence")
@@ -548,14 +554,7 @@ def test_measurement_through_a_boot_payload_is_rederived_from_the_bake_record(
     build = tmp_path / "build"
     bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=build)
     uki = next(a for a in read_artifacts(build) if a.target == "qemu")
-    policy = {
-        "schema_version": 1,
-        "scheme": "rtmr",
-        "tool": "measured-boot",
-        "tool_version": "1.0",
-        "artifact": {"path": str(uki.path), "sha256": uki.sha256},
-        "registers": {f"RTMR{i}": "ab" * 48 for i in range(3)},
-    }
+    policy = _policy({"path": str(uki.path), "sha256": uki.sha256})
     (build / "default" / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
     found = evidence(recipe, build=build, runner=_mkosi, require=("measured",))
     assert found.index["verdict"]["measured"] == "full"

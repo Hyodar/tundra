@@ -66,8 +66,8 @@ from .declarative.model import Recipe
 from .declarative.resolve import provenance
 from .errors import ArtifactError, StateError, TdxError, ValidationError
 from .lockfile import lock_variants
-from .measure.policy import is_placeholder, read_policy
-from .measure.rtmr import MEASURABLE_SUFFIXES, measurable
+from .measure.policy import is_placeholder, read_policy, unverifiable
+from .measure.schemes import MEASURABLE_SUFFIXES, measurable
 from .models import BAKE_RESULT_FILENAME
 from .toolchain import Toolchain
 
@@ -830,7 +830,8 @@ def _policy(
 
 def policy_facts(payload: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """What a valid policy *payload* says about a variant's artifact *rows*: ``placeholder``,
-    ``registers``, ``artifact_matches`` (its artifact is one of them or the UKI one boots;
+    ``scheme``, ``registers`` (those with accepted values), ``unverifiable`` (register:
+    reason), ``artifact_matches`` (its artifact is one of them or the UKI one boots;
     ``None`` when it names no sha256) and ``measures``: the ``target`` whose artifact it
     names, that ``sha256`` and, when the policy records it, the sha256 of the UKI it
     measured (``boot_payload``)."""
@@ -847,7 +848,9 @@ def policy_facts(payload: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) 
         measures["boot_payload"] = boot["sha256"]
     return {
         "placeholder": is_placeholder(payload),
+        "scheme": payload.get("scheme"),
         "registers": sorted(dict(payload.get("registers") or {})),
+        "unverifiable": unverifiable(payload),
         "artifact_matches": (sha in shas) if sha else None,
         "measures": measures,
     }
@@ -886,7 +889,7 @@ def coverage(
         elif not measurable(str(row["path"])):
             readable = ", ".join(sorted(MEASURABLE_SUFFIXES))
             reason = (
-                f"its format ({suffix or 'no suffix'}) is not measurable: tools read {readable}"
+                f"its format ({suffix or 'no suffix'}) is not measurable: measure reads {readable}"
             )
         elif policy is None:
             reason = "no measurements policy"
@@ -1113,6 +1116,12 @@ def _verdict(
     for name, record in variants.items():
         if policies[name] != "verified":
             continue
+        gaps = (record["policy"] or {}).get("unverifiable") or {}
+        if gaps:
+            source = record["policy"].get("source")
+            why = "; ".join(f"{reg}: {reason}" for reg, reason in sorted(gaps.items()))
+            message = f"{source} cannot verify {', '.join(sorted(gaps))} ({why})"
+            absent("measured", "policy-unverifiable", name, message)
         for entry in record["coverage"]:
             if entry["state"] != "measured":
                 subject = f"{name}/{entry['target']}"

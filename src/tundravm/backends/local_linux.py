@@ -94,6 +94,16 @@ CLOUD_IMAGE_TOOLS: tuple[tuple[str, Requirement], ...] = (
         ),
     ),
     (
+        "azure",
+        Requirement(
+            tool="sgdisk",
+            probe=("sgdisk", "--version"),
+            hint="The azure variant partitions its disk with it: "
+            "install gdisk, or bake --variant default",
+            optional=True,
+        ),
+    ),
+    (
         "gcp",
         Requirement(
             tool="sgdisk",
@@ -110,7 +120,8 @@ CLOUD_IMAGE_TOOLS: tuple[tuple[str, Requirement], ...] = (
 def cloud_tools(targets: Iterable[str]) -> tuple[Requirement, ...]:
     """The cloud postoutput tools *targets* need, once each, in table order."""
     wanted = set(targets)
-    return tuple(req for target, req in CLOUD_IMAGE_TOOLS if target in wanted)
+    found = {req.tool: req for target, req in CLOUD_IMAGE_TOOLS if target in wanted}
+    return tuple(found.values())
 
 
 CLOUD_TOOLS_TREE_PACKAGES = ("qemu-utils", "gdisk", "parted")

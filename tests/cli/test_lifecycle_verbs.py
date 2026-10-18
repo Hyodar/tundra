@@ -73,16 +73,17 @@ def test_measure_after_bake_in_separate_invocation(recipe: Path, tmp_path: Path)
         "--variant",
         "default",
         "--scheme",
-        "rtmr",
+        "qemu",
         "--format",
         "json",
         "--allow-placeholder",
     )
     assert code == EXIT_OK
     payload = json.loads(out)
-    assert payload["scheme"] == "rtmr"
+    assert payload["scheme"] == "qemu"
     assert payload["tool"] == "placeholder"
-    assert payload["values"]
+    assert sorted(payload["values"]) == ["RTMR1", "RTMR2"]
+    assert sorted(payload["unverifiable"]) == ["MRTD", "RTMR0"]
 
     code, out = run_main(
         "measure",
@@ -103,7 +104,7 @@ def test_measure_refuses_simulated_artifact_without_allow_placeholder(
 ) -> None:
     assert run_main("bake", str(recipe), *DEFAULT)[0] == EXIT_OK
     capsys.readouterr()
-    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr")
+    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "qemu")
     assert code == EXIT_SDK_ERROR
     assert "simulated artifact" in capsys.readouterr().err
 
@@ -111,7 +112,7 @@ def test_measure_refuses_simulated_artifact_without_allow_placeholder(
 def test_measure_without_bake_reports_state_error(
     recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr")
+    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "qemu")
     assert code == EXIT_SDK_ERROR
     err = capsys.readouterr().err
     assert "E_STATE" in err
@@ -123,7 +124,7 @@ def test_measure_needs_a_variant_when_several_are_baked(
 ) -> None:
     run_main("bake", str(recipe), *BOTH)
     code, _ = run_main(
-        "measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr", "--allow-placeholder"
+        "measure", "--build", str(tmp_path / "build"), "--scheme", "qemu", "--allow-placeholder"
     )
     assert code == EXIT_SDK_ERROR
     assert "pass --variant NAME" in capsys.readouterr().err
@@ -275,7 +276,7 @@ def test_measure_reads_the_build_dir_manifest(recipe: Path, tmp_path: Path) -> N
     assert code == EXIT_OK
     assert (out_dir / "bake-result.json").exists()
 
-    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "rtmr")
+    code, _ = run_main("measure", "--build", str(tmp_path / "build"), "--scheme", "qemu")
     assert code == EXIT_SDK_ERROR
 
     code, out = run_main(
@@ -283,13 +284,13 @@ def test_measure_reads_the_build_dir_manifest(recipe: Path, tmp_path: Path) -> N
         "--build",
         str(out_dir),
         "--scheme",
-        "rtmr",
+        "qemu",
         "--format",
         "json",
         "--allow-placeholder",
     )
     assert code == EXIT_OK
-    assert json.loads(out)["scheme"] == "rtmr"
+    assert json.loads(out)["scheme"] == "qemu"
 
 
 def test_doctor_local_marks_tools_tree_tools_optional_with_the_fix(
@@ -333,7 +334,8 @@ def test_doctor_probes_the_cloud_tools_of_azure_variants(tmp_path: Path) -> None
     text = out.getvalue()
     assert "cloud image tools:\n  missing (optional) qemu-img — " in text
     assert "install qemu-utils, or bake --variant default" in text
-    assert "sgdisk" not in text
+    # The azure VHD's GPT is laid out with sgdisk (fixed GUIDs), as gcp's is.
+    assert "missing (optional) sgdisk — The azure variant partitions its disk" in text
     assert code == EXIT_FAILURE  # mkosi itself is missing; the cloud tool stays optional
 
 

@@ -76,7 +76,7 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
         Fragment("tool", items=(Package("curl"),), checks=(warn,)),
         Package("linux-image-amd64"),
         File("/etc/motd", "hi\\n"),
-        Debloat(extra_remove=("/etc/motd",)),
+        Debloat(extra_remove=("/etc/motd",), keep_modules=True),
     ))
     """
     path = recipe_file(tmp_path, source)
@@ -147,7 +147,7 @@ def test_cli_bake_measure_deploy_doctor(
         "--allow-placeholder",
     )
     assert code == 0 and out.startswith("measurements azure (azure)") and "PLACEHOLDER" in err
-    code, _, err = run_cli("measure", "--build", manifest, "--scheme", "rtmr")
+    code, _, err = run_cli("measure", "--build", manifest, "--scheme", "qemu")
     assert code == 2 and "pass --variant" in err
 
     def fake_qemu(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:

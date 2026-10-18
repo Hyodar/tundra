@@ -34,6 +34,20 @@ recipe = Recipe(
 
 `snapshot` is the snapshot ID, written as mkosi's `Snapshot=`; mkosi reads it from `https://snapshot.debian.org` unless `mirror` names another root. `mirror` and `tools_mirror` are mirror roots that mkosi completes (`<root>/debian`, `<root>/archive/debian/<snapshot>`), never full archive URLs. `efi_stub` adds an `EfiStub` from that same snapshot, so the stub and the packages cannot disagree, and its version must be one that snapshot carries: the `cloud` and `prover` templates pair `20251113T083151Z` with `257.8-1~deb13u1`. `Backports` follows the platform's mirror and snapshot, and pins backports to 200 and sid to 100 so the release's packages win. Outside `nethermind-v1`, `tundravm lock` also pins the `EfiStub` package's sha256 as the source `efi-stub`, and `fetch` downloads it on the host (see [Hermetic builds](#hermetic-builds)).
 
+## What the current dialect normalizes
+
+With an `epoch` set, current-dialect trees also normalize what mkosi leaves to the build host. `nethermind-v1` keeps its pinned scripts, so the surge tree is unchanged.
+
+| What | How | Why |
+|---|---|---|
+| Account databases | Every finalize script ends with a step that sorts `/etc/passwd` and `/etc/group` by numeric id (then name), puts `/etc/shadow` and `/etc/gshadow` in that same order (what `pwck --sort` and `grpck --sort` do; entries with no account go last, by name), sorts `/etc/subuid` and `/etc/subgid` by first id, and deletes the `/etc/*-` backups (`passwd-`, `group-`, `shadow-`, `gshadow-`, ...). It runs on the host with `sort` and `awk`, after debloat and finalize hooks, and rewrites each file in place, so `shadow` keeps its mode and group | `useradd`, `groupadd` and package maintainer scripts append in the order they run, which changes with package versions and declaration order (Debian #963788). The backups are the previous versions of the same files |
+| Azure VHD and GCP disk: the ESP | Sized to the UKI plus 32 MiB, rounded up to whole MiB (64 MiB at least, so FAT32 fits); `mkfs.vfat -F 32 --invariant` with a volume serial from the first 8 hex digits of the UKI's sha256; `EFI/BOOT/BOOTX64.EFI` copied with `mcopy -m` from a tree that `touch` dates to `SOURCE_DATE_EPOCH`, under `TZ=UTC` and with `SOURCE_DATE_EPOCH` exported for mtools; one entry per directory, so directory order is fixed | `mformat` and `mkfs.vfat` pick a random serial, and mtools stamps entries with the wall clock in local time. A fixed 500 MB ESP grew with nothing and wasted upload size |
+| The disk around it | `sgdisk` with fixed disk and partition GUIDs (`12345678-…`, `87654321-…`), the ESP at 1 MiB; the Azure disk is the ESP plus 2 MiB (whole MiB, as Azure requires), the GCP disk rounds up to whole GiB | `parted` writes random GUIDs |
+| Azure VHD footer | `qemu-img convert -O vpc` writes the wall clock and a random unique id into the 512-byte footer; the script pins the timestamp to `SOURCE_DATE_EPOCH`, sets the unique id to the first 16 bytes of the disk's sha256, and recomputes the footer checksum (`python3`) | Without this no two VHDs match, even from the same UKI |
+| GCP `tar.gz` | `tar --format=oldgnu --sparse --hole-detection=raw --sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner`, piped to `gzip -n` | The sparse map otherwise depends on the build filesystem's extents, the owner on the build user, and gzip's header on the time |
+
+**The UKI's `.osrel` and `.uname` are left alone.** flashbots-images strips `.osrel` after the build ("systemd-stub > 255 merges .osrel section into initrd at runtime"). From systemd 257 the stub does pass `.osrel` to the kernel as `/.extra/os-release` in a cpio it generates at boot, but it does not measure that cpio (`tpm_pcr = UINT32_MAX` in `src/boot/stub.c`, v257): it measures the `.osrel` section itself into PCR 11, and the firmware measures the whole UKI into PCR 4 / RTMR1. The section is not taken from the stub: mkosi passes `ukify --os-release @<image>/usr/lib/os-release --uname <kver>`, so `.osrel` is the image's own os-release and `.uname` the kernel version, both fixed by the image. The only build-dependent field, `IMAGE_VERSION`, is already stripped from os-release at finalize (above), before mkosi builds the UKI. Stripping `.osrel` would therefore change no measurement's reproducibility, only drop a section systemd tools read (`bootctl`, sd-boot menus). A different stub version does change the UKI and its measurements, through the stub's own code; pin it with `efi_stub`.
+
 ## Committed trees
 
 Commit the compiled tree and check it in CI:
@@ -100,9 +114,11 @@ Pinned inputs are not enough: two builders with the same lockfile must also run 
   "mkosi": {"version": "25.3", "source": "nix", "rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188"},
   "systemd": "257",
   "nixpkgs": {"rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188", "narHash": "sha256-...", "lastModified": 1787498568},
-  "measure": {"measured-boot": "1.2.0"}
+  "measure": {"gcp-firmware-table": "dstack-mr-gcp@b16e08b", "tundravm-measure": "1.0+attest-12f1e29.dstack-mr-gcp-b16e08b"}
 }
 ```
+
+`measure` is the offline register replay `tundravm measure` runs and the GCP firmware table it embeds ([policy](policy.md#sources)); both move only with the tundravm version.
 
 - **nix and lima backends: the lock decides.** `lock` resolves `nixos-unstable` to a rev and narHash (keeping the previous lock's pin unless `--update toolchain`) and reads that nixpkgs' mkosi and systemd versions. The generated flake takes nixpkgs from `github:NixOS/nixpkgs/<rev>` with a `flake.lock` holding the narHash, refuses to evaluate when that nixpkgs' mkosi is not the locked version, and runs mkosi with a `PATH` of Nix tools only (no host passthrough). When nixpkgs cannot be resolved (`--offline`, no `nix` on this host) the lock says why in `unpinned` and `lock` warns `toolchain not pinned: ...`; the build then follows `nixos-unstable`.
 - **local backend: the lock records, tundravm compares.** `mkosi` comes from tundravm's Python environment (`source: "pip"`, with the commit of a git install) or from `PATH` (`"host"`); systemd is `ukify --version`.

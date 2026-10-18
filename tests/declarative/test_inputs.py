@@ -31,11 +31,9 @@ def test_recipe_inputs_names_every_path_in_every_variant(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     policy = tmp_path / "peer.json"
-    registers = {"RTMR0": R, "RTMR1": R, "RTMR2": R}
-    policy.write_text(
-        json.dumps({"schema_version": 1, "scheme": "rtmr", "tool": "t", "registers": registers}),
-        encoding="utf-8",
-    )
+    registers = {"RTMR0": [R], "RTMR1": [R], "RTMR2": [R]}
+    payload = {"schema_version": 2, "scheme": "qemu", "tool": "t", "registers": registers}
+    policy.write_text(json.dumps({**payload, "unverifiable": {"MRTD": "host"}}), encoding="utf-8")
     common = Fragment(
         "common",
         items=(
@@ -87,8 +85,9 @@ def test_recipe_inputs_include_what_the_platform_declares(
 
 def test_tdxs_policy_file_is_not_configuration(tmp_path: Path) -> None:
     policy = tmp_path / "peer.json"
-    payload = {"schema_version": 1, "scheme": "rtmr", "tool": "t", "registers": {}}
-    payload["registers"] = {"RTMR0": R, "RTMR1": R, "RTMR2": R}
+    payload: dict[str, object] = {"schema_version": 2, "scheme": "qemu", "tool": "t"}
+    payload["registers"] = {"RTMR0": [R], "RTMR1": [R], "RTMR2": [R]}
+    payload["unverifiable"] = {"MRTD": "host firmware"}
     policy.write_text(json.dumps(payload), encoding="utf-8")
 
     from_file = Tdxs.from_policy(policy)

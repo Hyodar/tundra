@@ -226,6 +226,152 @@ AZURE_POSTOUTPUT_SCRIPT = textwrap.dedent("""\
     echo "Successfully created VHD: $VHD_FILE"
 """)
 
+# Finalize, current dialect: account databases in a fixed order, without the "-" backups.
+ACCOUNTS_FINALIZE = textwrap.dedent("""\
+    # Deterministic accounts (Debian #963788): passwd and group by numeric id, then name;
+    # shadow and gshadow in that order, as pwck --sort and grpck --sort leave them; subuid
+    # and subgid by first id. Then drop the "-" backups useradd and groupadd leave behind.
+    tundravm_sort_by_field() {
+        local file="$BUILDROOT/etc/$1"
+        [ -f "$file" ] || return 0
+        LC_ALL=C sort -t: -k"$2,$2n" -k1,1 -o "$file" "$file"
+    }
+    tundravm_sort_like() {
+        local order="$BUILDROOT/etc/$1" file="$BUILDROOT/etc/$2"
+        [ -f "$order" ] && [ -f "$file" ] || return 0
+        LC_ALL=C awk -F: 'NR == FNR { rank[$1] = FNR; next }
+            { print (($1 in rank) ? rank[$1] : 1000000) ":" $0 }' "$order" "$file" |
+            LC_ALL=C sort -t: -k1,1n -k2,2 | cut -d: -f2- >"$file.tundravm"
+        cat "$file.tundravm" >"$file"
+        rm -f "$file.tundravm"
+    }
+    tundravm_sort_by_field passwd 3
+    tundravm_sort_by_field group 3
+    tundravm_sort_like passwd shadow
+    tundravm_sort_like group gshadow
+    tundravm_sort_by_field subuid 2
+    tundravm_sort_by_field subgid 2
+    find "$BUILDROOT/etc" -maxdepth 1 -type f -name '*-' -delete
+""")
+"""The finalize step every reproducible current-dialect profile ends with (its own block).
+
+``cat >`` rewrites in place, so ``shadow`` keeps its mode and group."""
+
+
+# Current dialect: the ESP both cloud scripts build, byte-reproducible from the UKI alone.
+_DETERMINISTIC_ESP = """\
+# Deterministic ESP (current dialect): sized to the UKI plus a fixed 32 MiB (64 MiB at
+# least, so FAT32 fits); a volume serial from the UKI's sha256; one entry per directory,
+# copied with mcopy -m from a tree dated SOURCE_DATE_EPOCH, under TZ=UTC (FAT keeps
+# local times); mkfs.vfat --invariant fixes the rest of the boot sector.
+export TZ=UTC SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+UKI_SHA=$(sha256sum "$EFI" | cut -c1-64)
+ESP_MB=$(( ($(stat -c %s "$EFI") + 33 * 1024 * 1024 - 1) / (1024 * 1024) ))
+[ "$ESP_MB" -ge 64 ] || ESP_MB=64
+rm -rf "$TMP/esp" "$TMP/esp.img"
+mkdir -p "$TMP/esp/EFI/BOOT"
+cp "$EFI" "$TMP/esp/EFI/BOOT/BOOTX64.EFI"
+find "$TMP/esp" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+truncate -s "${ESP_MB}M" "$TMP/esp.img"
+mkfs.vfat -F 32 -n ESP -i "${UKI_SHA:0:8}" --invariant "$TMP/esp.img"
+mcopy -b -s -p -Q -m -i "$TMP/esp.img" "$TMP/esp/EFI" ::
+"""
+
+# The disk around it: GPT with fixed GUIDs, the ESP at 1 MiB.
+_DETERMINISTIC_DISK = """\
+DISK_GUID="12345678-1234-5678-1234-567812345678"
+PARTITION_GUID="87654321-4321-8765-4321-876543218765"
+truncate -s "${DISK_MB}M" "$DISK"
+sgdisk --disk-guid="$DISK_GUID" \\
+    -n 1:2048:$(( 2048 + ESP_MB * 2048 - 1 )) -t 1:ef00 -u 1:"$PARTITION_GUID" -c 1:ESP \\
+    "$DISK"
+dd if="$TMP/esp.img" of="$DISK" bs=1M seek=1 conv=notrunc,sparse status=none
+"""
+
+AZURE_POSTOUTPUT_SCRIPT_CURRENT = (
+    """\
+#!/bin/bash
+set -euxo pipefail
+
+EFI="${OUTPUTDIR}/${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}.efi"
+VHD="${OUTPUTDIR}/${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}.vhd"
+TMP="${OUTPUTDIR}/azure-tmp"
+
+[ -f "$EFI" ] || { echo "Error: EFI file not found at $EFI"; exit 1; }
+mkdir -p "$TMP"
+
+"""
+    + _DETERMINISTIC_ESP
+    + """
+# GPT disk: the ESP plus 1 MiB in front and 1 MiB for the backup GPT (Azure wants whole MiB).
+DISK="$TMP/azure_image.raw"
+DISK_MB=$(( ESP_MB + 2 ))
+"""
+    + _DETERMINISTIC_DISK
+    + """
+qemu-img convert -O vpc -o subformat=fixed,force_size "$DISK" "$VHD"
+
+# qemu-img stamps the VHD footer with the wall clock and a random unique id: pin the
+# timestamp to SOURCE_DATE_EPOCH, derive the id from the disk, recompute the checksum.
+python3 - "$VHD" "$SOURCE_DATE_EPOCH" "$(sha256sum "$DISK" | cut -c1-32)" <<'PY'
+import struct, sys
+path, epoch, unique = sys.argv[1], int(sys.argv[2]), bytes.fromhex(sys.argv[3])
+with open(path, "r+b") as vhd:
+    vhd.seek(-512, 2)
+    footer = bytearray(vhd.read(512))
+    assert footer[:8] == b"conectix", "not a fixed VHD footer"
+    footer[24:28] = struct.pack(">I", max(epoch - 946684800, 0))  # seconds since 2000
+    footer[68:84] = unique
+    footer[64:68] = bytes(4)
+    footer[64:68] = struct.pack(">I", ~sum(footer) & 0xFFFFFFFF)
+    vhd.seek(-512, 2)
+    vhd.write(footer)
+PY
+
+rm -rf "$TMP"
+echo "Successfully created VHD: $VHD"
+"""
+)
+"""The ``azure`` postoutput script outside ``nethermind-v1``: a reproducible VHD."""
+
+GCP_POSTOUTPUT_SCRIPT_CURRENT = (
+    """\
+#!/bin/bash
+set -euxo pipefail
+
+EFI="${OUTPUTDIR}/${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}.efi"
+TAR="${OUTPUTDIR}/${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}.tar.gz"
+TMP="${OUTPUTDIR}/gcp-tmp"
+
+[ -f "$EFI" ] || { echo "Error: $EFI not found"; exit 1; }
+mkdir -p "$TMP"
+
+"""
+    + _DETERMINISTIC_ESP
+    + """
+# GPT disk: GCP wants a whole number of GiB, the ESP plus 1 MiB in front and the backup GPT.
+DISK="$TMP/disk.raw"
+DISK_MB=$(( (ESP_MB + 2 + 1023) / 1024 * 1024 ))
+"""
+    + _DETERMINISTIC_DISK
+    + """
+# GCP's tar.gz: oldgnu with a sparse disk.raw, holes found by reading (not by the build
+# filesystem's extents), fixed owner and date, and gzip without a name or timestamp.
+touch -d "@$SOURCE_DATE_EPOCH" "$DISK"
+tar --format=oldgnu --sparse --hole-detection=raw --sort=name \\
+    --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \\
+    -cf - -C "$TMP" disk.raw | gzip -n >"$TAR"
+
+rm -rf "$TMP"
+"""
+)
+"""The ``gcp`` postoutput script outside ``nethermind-v1``: a reproducible ``tar.gz``."""
+
+_CURRENT_CLOUD_SCRIPTS = {
+    AZURE_POSTOUTPUT_SCRIPT: AZURE_POSTOUTPUT_SCRIPT_CURRENT,
+    GCP_POSTOUTPUT_SCRIPT: GCP_POSTOUTPUT_SCRIPT_CURRENT,
+}
+
 HISTORICAL_OUTPUT_NAME = "${IMAGE_ID}_${IMAGE_VERSION}"
 """The output name the cloud postoutput scripts spell under the ``nethermind-v1`` dialect."""
 OUTPUT_NAME = "${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}"
@@ -235,14 +381,15 @@ OUTPUT_NAME = "${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}"
 def cloud_postoutput_script(script: str, dialect: str = "current") -> str:
     """*script* (a cloud postoutput script) as *dialect* emits it.
 
-    The ``current`` dialect reads mkosi's output name whether or not the image has
-    a version; ``nethermind-v1`` keeps the historical ``${IMAGE_ID}_${IMAGE_VERSION}``.
+    ``nethermind-v1`` keeps the historical scripts verbatim. The ``current`` dialect
+    emits the reproducible :data:`AZURE_POSTOUTPUT_SCRIPT_CURRENT` and
+    :data:`GCP_POSTOUTPUT_SCRIPT_CURRENT`, which read mkosi's output name whether or
+    not the image has a version (any other script: that name substituted).
     """
-    return (
-        script
-        if dialect == "nethermind-v1"
-        else script.replace(HISTORICAL_OUTPUT_NAME, OUTPUT_NAME)
-    )
+    if dialect == "nethermind-v1":
+        return script
+    current = _CURRENT_CLOUD_SCRIPTS.get(script)
+    return current if current is not None else script.replace(HISTORICAL_OUTPUT_NAME, OUTPUT_NAME)
 
 
 # mkosi.version: git-based version script
@@ -1061,12 +1208,13 @@ class DeterministicMkosiEmitter:
             # For finalize: prepend debloat path removal
             if phase == "finalize":
                 synthetic_lines = self._synthetic_finalize_lines(profile)
-                if synthetic_lines or commands:
+                accounts = _sorts_accounts(config)
+                if synthetic_lines or commands or accounts:
                     script_name = f"{index:02d}-{phase}.sh"
                     script_path = scripts_dir / script_name
                     _write(
                         script_path,
-                        self._render_finalize_script(synthetic_lines, commands),
+                        self._render_finalize_script(synthetic_lines, commands, accounts=accounts),
                         EXEC_MODE,
                     )
                     phase_scripts[phase] = script_path
@@ -1242,9 +1390,10 @@ class DeterministicMkosiEmitter:
         return "\n".join(lines)
 
     def _render_finalize_script(
-        self, synthetic_lines: list[str], commands: list[CommandSpec]
+        self, synthetic_lines: list[str], commands: list[CommandSpec], *, accounts: bool = False
     ) -> str:
-        """Render finalize script with debloat path removal + user commands."""
+        """Render finalize script with debloat path removal + user commands, then
+        (*accounts*) :data:`ACCOUNTS_FINALIZE`, after anything that adds an account."""
         lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
         lines.extend(synthetic_lines)
 
@@ -1255,7 +1404,10 @@ class DeterministicMkosiEmitter:
                 lines.append(self._render_command_line(command))
 
         lines.append("")
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        if accounts:
+            text += ("\n" if synthetic_lines or commands else "") + ACCOUNTS_FINALIZE
+        return text
 
     def _render_conf(
         self,
@@ -1412,6 +1564,11 @@ class DeterministicMkosiEmitter:
         if command.cwd is not None:
             rendered = f"(cd {shlex.quote(command.cwd)} && {rendered})"
         return rendered
+
+
+def _sorts_accounts(config: EmitConfig | None) -> bool:
+    """Whether finalize ends with :data:`ACCOUNTS_FINALIZE`: reproducible, current dialect."""
+    return config is not None and config.reproducible and config.dialect != "nethermind-v1"
 
 
 def _require_profile(recipe: RecipeState, name: str) -> None:

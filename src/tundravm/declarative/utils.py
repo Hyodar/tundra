@@ -305,14 +305,20 @@ class Tdxs(Composite):
         *,
         validator: TdxsType = "tdx",
         mrtd: str | None = None,
+        firmware: str | None = None,
+        label: str | None = None,
         allow_placeholder: bool = False,
         **kwargs: Any,
     ) -> Tdxs:
         """A verifier whose ``expected_measurements`` are *policy*'s registers.
 
         *policy* is a file ``tundravm measure --export-policy`` wrote (or its
-        dict). Registers become the validator's lower-case keys (``rtmr0``..);
-        RTMR tools do not report MRTD, so pass *mrtd* to have it checked too.
+        dict). Registers become the validator's lower-case keys (``rtmr0``..), one value
+        each: the tdxs validator compares a single expected value per register, so a
+        register the policy accepts several values for (a gcp policy's per-firmware MRTD
+        and RTMR0) is narrowed with *firmware* and *label*.
+        Unverifiable registers are not checked; pass *mrtd* to check an MRTD the
+        policy cannot predict (a qemu host you trust).
         A placeholder policy is refused unless *allow_placeholder*. Other
         keyword arguments are ``Tdxs`` fields (``issuer``, ``check_revocations``...).
         """
@@ -331,7 +337,13 @@ class Tdxs(Composite):
             )
         registers = data["registers"]
         assert isinstance(registers, dict)
-        expected = validator_measurements(registers, mrtd=mrtd)
+        expected = validator_measurements(registers, mrtd=mrtd, firmware=firmware, label=label)
+        if not expected:
+            raise MeasurementError(
+                "The policy accepts no TDX register value, so the validator would check nothing.",
+                hint="An azure policy measures the vTPM, not the TD; verify its vtpm_pcrs with a "
+                "vTPM verifier, or export a qemu/gcp/portable policy.",
+            )
         verifier = cls(validator=validator, expected_measurements=dict(expected), **kwargs)
         if not isinstance(policy, Mapping):
             object.__setattr__(verifier, "policy_file", Path(policy))
@@ -347,7 +359,7 @@ class Tdxs(Composite):
         allow_placeholder: bool = False,
         **kwargs: Any,
     ) -> Tdxs:
-        """:meth:`from_policy` for a ``measure()`` result (rtmr scheme) in memory."""
+        """:meth:`from_policy` for a ``measure()`` result in memory."""
         return cls.from_policy(
             measurements.to_policy(allow_placeholder=allow_placeholder),
             validator=validator,
@@ -363,6 +375,13 @@ class Tdxs(Composite):
                 f"got {self.expected_measurements!r}.",
                 hint="Pass a dict: expected_measurements={'rtmr0': '<hex>'}.",
             )
+        for key, value in self.expected_measurements.items():
+            if not isinstance(value, str):
+                raise ValidationError(
+                    f"Tdxs: expected_measurements[{key!r}] must be one hex string, got {value!r}.",
+                    hint="The tdxs validator compares one value per register; pick one "
+                    "(Tdxs.from_policy(policy, firmware=..., label=...) does it for a policy).",
+                )
         spec = _tdxs.Tdxs(
             issuer_type=self.issuer,
             validator_type=self.validator,

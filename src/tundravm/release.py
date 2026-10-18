@@ -72,7 +72,7 @@ from .errors import (
 )
 from .evidence import DEFAULT_MAX_AGE, _requirements, demands, evidence
 from .formats import md_cell, md_table
-from .measure.policy import write_policy
+from .measure.policy import accepted, write_policy
 from .models import BAKE_RESULT_FILENAME
 from .verify import EvidenceVerification, VerifyCheck, verify_evidence
 
@@ -1129,7 +1129,8 @@ def _stage_measure(run: _Run) -> _Outcome:
     try:
         for name in run.names:
             artifact = select_artifact(artifacts, variant=name)
-            policies[name] = measure(artifact).to_policy()
+            scheme = artifact.target if artifact.target in ("gcp", "azure") else "qemu"
+            policies[name] = measure(artifact, scheme=scheme).to_policy()
     except MeasurementError as exc:
         if required:
             raise
@@ -1146,7 +1147,11 @@ def _stage_measure(run: _Run) -> _Outcome:
         outputs[relative] = _file_sha256(run.root / relative)
         watched[str(source.resolve())] = _file_sha256(source)
         raw = policy.get("registers")
-        registers[name] = {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        registers[name] = (
+            {k: ",".join(a.value for a in accepted(raw, k)) for k in raw}
+            if isinstance(raw, dict)
+            else {}
+        )
     tool = next((str(p.get("tool")) for p in policies.values()), "")
     summary = f"{len(policies)} policies ({tool})"
     return _Outcome(

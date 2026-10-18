@@ -1,81 +1,156 @@
-"""Verifier policy files: RTMR measurements handed from ``measure`` to ``Tdxs``.
+"""Verifier policy files: the TDX registers a quote may hold, handed from ``measure`` to verifiers.
 
-``tundravm measure --export-policy FILE`` writes one; ``Tdxs.from_policy``
-reads it into the ``expected_measurements`` of a ``tdxs`` validator. The file
-is JSON with ``schema_version``, ``scheme``, ``tool``, ``tool_version``,
-``artifact`` (``path``, ``sha256``), ``registers`` (``RTMR0``..``RTMR2``
-required, ``RTMR3`` and ``MRTD`` optional) and, for placeholder values, a
-``note`` saying so. ``boot_payload`` (``path``, ``sha256``), when present, is the
-UKI the registers are a measurement of: the artifact itself for a UKI, else the
-UKI the bake recorded the disk artifact booting.
+``tundravm measure --export-policy FILE`` writes one (``schema_version`` 2,
+``tundravm.policy/2``); ``Tdxs.from_policy``, ``attest``, ``evidence`` and ``verify``
+read it. ``registers`` maps ``MRTD``/``RTMR0``..``RTMR3`` to the list of values a
+genuine quote may hold: a hex string, or ``{"value": hex, "firmware": ..., "label": ...}``
+naming what the value belongs to. A register matches when the quote holds any accepted
+value. ``unverifiable`` maps each of ``MRTD``/``RTMR0``..``RTMR2`` the scheme cannot
+predict offline to the reason; every one of them is either accepted or unverifiable.
+``scheme``, ``tool``/``tool_version``, ``artifact``/``boot_payload`` (``path``,
+``sha256``), ``sources`` (where firmware values come from) and, for placeholders, a
+``note`` complete it. Schema 1 files (one value per register) are refused.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from tundravm.errors import MeasurementError, ValidationError
 
-POLICY_SCHEMA_VERSION = 1
-REQUIRED_REGISTERS = ("RTMR0", "RTMR1", "RTMR2")
-OPTIONAL_REGISTERS = ("RTMR3", "MRTD")
+POLICY_SCHEMA_VERSION = 2
+POLICY_SCHEMA = "tundravm.policy/2"
+SCHEMES = ("qemu", "gcp", "azure", "portable")
+REGISTERS = ("MRTD", "RTMR0", "RTMR1", "RTMR2", "RTMR3")
+COVERED = ("MRTD", "RTMR0", "RTMR1", "RTMR2")
+"""Registers a policy must either accept values for or declare unverifiable."""
 PLACEHOLDER_TOOL = "placeholder"
 PLACEHOLDER_NOTE = (
     "PLACEHOLDER: these registers are derived from artifact digests, not measured; "
     "no TEE reproduces them. Replace this file with `tundravm measure --export-policy` "
     "output from a real bake before trusting a verifier built from it."
 )
+REEXPORT_HINT = "Export the policy again: `tundravm measure --scheme SCHEME --export-policy FILE`."
 
 _HEX = re.compile(r"[0-9a-f]+")
 _SHA384_HEX = 96
 _PLACEHOLDER_HEX = 64
+_LABELS = ("firmware", "label")
+
+
+@dataclass(frozen=True, slots=True)
+class Accepted:
+    """One accepted register value and what it belongs to (a firmware, a machine type)."""
+
+    value: str
+    firmware: str | None = None
+    label: str | None = None
+
+    def describe(self) -> str | None:
+        """``firmware label`` joined, ``None`` for an unlabelled value."""
+        parts = [p for p in (self.firmware, self.label) if p]
+        return " ".join(parts) or None
+
+
+def accepted(registers: Mapping[str, object], name: str) -> tuple[Accepted, ...]:
+    """The accepted values of register *name* in a checked policy's ``registers``."""
+    entries = registers.get(name)
+    if not isinstance(entries, list):
+        return ()
+    found = []
+    for entry in entries:
+        if isinstance(entry, str):
+            found.append(Accepted(entry))
+        elif isinstance(entry, Mapping):
+            found.append(
+                Accepted(
+                    str(entry["value"]),
+                    firmware=_text(entry.get("firmware")),
+                    label=_text(entry.get("label")),
+                )
+            )
+    return tuple(found)
+
+
+def match_registers(
+    registers: Mapping[str, object], actual: Mapping[str, str | None]
+) -> dict[str, tuple[str, Accepted | None]]:
+    """Per register of :data:`REGISTERS`: ``(verdict, matched value)``; the verdict is
+    ``match``, ``mismatch`` or ``unchecked`` (the policy accepts no value for it).
+
+    Values labelled with a ``firmware`` pair up: MRTD and RTMR0 matching values of two
+    different firmwares is a mismatch of RTMR0.
+    """
+    found: dict[str, tuple[str, Accepted | None]] = {}
+    for name in REGISTERS:
+        values = accepted(registers, name)
+        if not values:
+            found[name] = ("unchecked", None)
+            continue
+        hit = next((a for a in values if a.value == actual.get(name)), None)
+        found[name] = ("match" if hit else "mismatch", hit)
+    mrtd, rtmr0 = found["MRTD"][1], found["RTMR0"][1]
+    if mrtd and rtmr0 and mrtd.firmware and rtmr0.firmware and mrtd.firmware != rtmr0.firmware:
+        found["RTMR0"] = ("mismatch", None)
+    return found
+
+
+def single_values(registers: Mapping[str, object]) -> dict[str, str]:
+    """Registers with exactly one accepted value, as ``{name: value}``."""
+    return {
+        name: values[0].value for name in registers if len(values := accepted(registers, name)) == 1
+    }
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def policy_payload(
     *,
     scheme: str,
     tool: str,
-    values: Mapping[str, str],
+    registers: Mapping[str, Sequence[str | Mapping[str, str]]],
     artifact_path: str,
     artifact_sha256: str,
+    unverifiable: Mapping[str, str] | None = None,
     boot_payload: Mapping[str, str] | None = None,
+    extra: Mapping[str, object] | None = None,
     allow_placeholder: bool = False,
 ) -> dict[str, object]:
     """The normalised policy for one measured artifact; raises on placeholders or gaps.
 
-    *tool* is ``Measurements.tool`` (``"measured-boot 1.2"``: name, then version).
-    *boot_payload* (``path``, ``sha256``) is the UKI measured, recorded when known.
+    *tool* is ``Measurements.tool`` (``"tundravm 0.9"``: name, then version).
+    *extra* adds scheme fields (``sources``, ``firmware_table``, ``vtpm_pcrs``).
     """
-    if scheme != "rtmr":
-        raise ValidationError(
-            f"A verifier policy needs rtmr measurements, not {scheme}.",
-            hint="Run `tundravm measure --scheme rtmr --export-policy FILE`.",
-        )
     name, _, version = tool.partition(" ")
     placeholder = name == PLACEHOLDER_TOOL
     if placeholder and not allow_placeholder:
         raise MeasurementError(
             "Refusing to export placeholder measurements as a verifier policy.",
-            hint="Measure with measured-boot or dstack-mr, or pass --allow-placeholder "
-            "for a test policy (marked as a placeholder in its note).",
+            hint="Measure a real bake, or pass --allow-placeholder for a test policy "
+            "(marked as a placeholder in its note).",
         )
-    registers = _registers(values, placeholder=placeholder, where="the measurements")
     payload: dict[str, object] = {
+        **dict(extra or {}),
         "schema_version": POLICY_SCHEMA_VERSION,
+        "schema": POLICY_SCHEMA,
         "scheme": scheme,
         "tool": name,
         "tool_version": version or None,
         "artifact": {"path": artifact_path, "sha256": artifact_sha256},
-        "registers": registers,
+        "registers": {k: list(v) for k, v in registers.items()},
+        "unverifiable": dict(unverifiable or {}),
     }
     if boot_payload is not None:
         payload["boot_payload"] = {"path": boot_payload["path"], "sha256": boot_payload["sha256"]}
     if placeholder:
         payload["note"] = PLACEHOLDER_NOTE
-    return payload
+    return _checked(payload, where="the measurements")
 
 
 def write_policy(payload: Mapping[str, object], path: Path) -> None:
@@ -86,7 +161,7 @@ def write_policy(payload: Mapping[str, object], path: Path) -> None:
 
 
 def read_policy(source: str | Path | Mapping[str, object]) -> dict[str, object]:
-    """A policy file (or its parsed dict), checked: schema version, scheme and registers."""
+    """A policy file (or its parsed dict), checked: schema, scheme, registers, unverifiable."""
     where = "the policy"
     if isinstance(source, Mapping):
         data: object = dict(source)
@@ -108,51 +183,78 @@ def read_policy(source: str | Path | Mapping[str, object]) -> dict[str, object]:
         raise ValidationError(
             f"{where} is not a JSON object.", hint="Pass a file `--export-policy` wrote."
         )
-    version = data.get("schema_version")
-    if version != POLICY_SCHEMA_VERSION:
-        raise ValidationError(
-            f"{where} has schema_version {version!r}; this tundravm reads {POLICY_SCHEMA_VERSION}.",
-            hint="Export the policy again with this tundravm version.",
-        )
-    if data.get("scheme") != "rtmr":
-        raise ValidationError(
-            f"{where} holds {data.get('scheme')!r} measurements, not rtmr.",
-            hint="Export the policy with --scheme rtmr.",
-        )
-    raw = data.get("registers")
-    if not isinstance(raw, dict):
-        raise ValidationError(
-            f"{where} has no registers object.", hint="Pass a file `--export-policy` wrote."
-        )
-    placeholder = data.get("tool") == PLACEHOLDER_TOOL
-    data["registers"] = _registers(raw, placeholder=placeholder, where=where)
-    return data
+    return _checked(data, where=where)
 
 
 def is_placeholder(policy: Mapping[str, object]) -> bool:
     return policy.get("tool") == PLACEHOLDER_TOOL
 
 
-def _registers(values: Mapping[str, object], *, placeholder: bool, where: str) -> dict[str, str]:
-    """*values* with upper-case names and lower-case hex; required registers must be there."""
-    found: dict[str, str] = {}
-    for key, value in values.items():
-        name = str(key).upper()
-        if name not in (*REQUIRED_REGISTERS, *OPTIONAL_REGISTERS):
-            continue
-        found[name] = _hex(name, value, placeholder=placeholder, where=where)
-    missing = [name for name in REQUIRED_REGISTERS if name not in found]
-    if missing:
+def unverifiable(policy: Mapping[str, object]) -> dict[str, str]:
+    """The registers a checked policy cannot predict, with the reason."""
+    raw = policy.get("unverifiable")
+    return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, Mapping) else {}
+
+
+def _checked(data: dict[str, object], *, where: str) -> dict[str, object]:
+    version = data.get("schema_version")
+    if version != POLICY_SCHEMA_VERSION:
+        old = " (one value per register, no longer read)" if version == 1 else ""
         raise ValidationError(
-            f"{where} lacks register(s) {', '.join(missing)}.",
-            hint=f"A verifier policy needs {', '.join(REQUIRED_REGISTERS)}; measure an "
-            "artifact the tool can read (a UKI .efi or a raw disk image).",
+            f"{where} has schema_version {version!r}{old}; this tundravm reads "
+            f"{POLICY_SCHEMA_VERSION} ({POLICY_SCHEMA}).",
+            hint=REEXPORT_HINT,
         )
-    return dict(sorted(found.items()))
+    if data.get("scheme") not in SCHEMES:
+        raise ValidationError(
+            f"{where} holds {data.get('scheme')!r} measurements.",
+            hint=f"Schemes: {', '.join(SCHEMES)}. {REEXPORT_HINT}",
+        )
+    raw = data.get("registers")
+    gaps = data.get("unverifiable", {})
+    if not isinstance(raw, dict) or not isinstance(gaps, dict):
+        raise ValidationError(f"{where} has no registers/unverifiable objects.", hint=REEXPORT_HINT)
+    placeholder = data.get("tool") == PLACEHOLDER_TOOL
+    registers = {
+        str(k).upper(): _entries(str(k).upper(), v, placeholder=placeholder, where=where)
+        for k, v in raw.items()
+        if str(k).upper() in REGISTERS
+    }
+    reasons = {str(k).upper(): str(v) for k, v in gaps.items() if str(k).upper() in REGISTERS}
+    missing = [n for n in COVERED if n not in registers and n not in reasons]
+    both = [n for n in reasons if n in registers]
+    if missing or both:
+        raise ValidationError(
+            f"{where}: register(s) {', '.join(missing or both)} are "
+            + ("neither accepted nor unverifiable." if missing else "accepted and unverifiable."),
+            hint=f"Each of {', '.join(COVERED)} needs accepted values or an unverifiable "
+            f"reason. {REEXPORT_HINT}",
+        )
+    data["registers"] = dict(sorted(registers.items()))
+    data["unverifiable"] = dict(sorted(reasons.items()))
+    return data
+
+
+def _entries(
+    name: str, values: object, *, placeholder: bool, where: str
+) -> list[str | dict[str, str]]:
+    if not isinstance(values, list) or not values:
+        raise ValidationError(
+            f"{where}: {name} is not a non-empty list of accepted values.", hint=REEXPORT_HINT
+        )
+    found: list[str | dict[str, str]] = []
+    for entry in values:
+        if isinstance(entry, Mapping):
+            labels = {k: str(entry[k]) for k in _LABELS if entry.get(k)}
+            value = _hex(name, entry.get("value"), placeholder=placeholder, where=where)
+            found.append({"value": value, **labels})
+        else:
+            found.append(_hex(name, entry, placeholder=placeholder, where=where))
+    return found
 
 
 def _hex(name: str, value: object, *, placeholder: bool, where: str) -> str:
-    text = str(value).strip().lower() if isinstance(value, str) else ""
+    text = value.strip().lower() if isinstance(value, str) else ""
     lengths = (_SHA384_HEX, _PLACEHOLDER_HEX) if placeholder else (_SHA384_HEX,)
     if not _HEX.fullmatch(text) or len(text) not in lengths:
         raise ValidationError(
@@ -163,27 +265,65 @@ def _hex(name: str, value: object, *, placeholder: bool, where: str) -> str:
 
 
 def validator_measurements(
-    registers: Mapping[str, str], *, mrtd: str | None = None
+    registers: Mapping[str, object],
+    *,
+    mrtd: str | None = None,
+    firmware: str | None = None,
+    label: str | None = None,
 ) -> tuple[tuple[str, str], ...]:
-    """*registers* as the tdxs validator's ``expected_measurements`` keys (``rtmr0``, ``mrtd``).
+    """*registers* as the tdxs validator's ``expected_measurements`` keys (``rtmr0``,
+    ``mrtd``), one value per register: the tdxs validator compares each register with a
+    single expected value.
 
-    The validator compares only the registers it is given, so MRTD is checked only
-    when the policy holds it or *mrtd* supplies it (RTMR tools do not report MRTD).
+    A register with several accepted values (a gcp policy lists one MRTD per firmware and
+    one RTMR0 per firmware and machine type) is narrowed to the values labelled
+    *firmware* and *label* (unlabelled values always stay); if more than one remains,
+    ``MeasurementError`` names the choices. MRTD is checked only when the policy accepts
+    values for it or *mrtd* supplies one.
     """
-    keyed = {name.lower(): value for name, value in registers.items()}
+    keyed: dict[str, str] = {}
+    for name in REGISTERS:
+        values = tuple(
+            a
+            for a in accepted(registers, name)
+            if (firmware is None or a.firmware in (None, firmware))
+            and (label is None or a.label in (None, label))
+        )
+        if not values:
+            continue
+        distinct = sorted({a.value for a in values})
+        if len(distinct) > 1:
+            choices = sorted({a.describe() or a.value[:12] for a in values})
+            raise MeasurementError(
+                f"The tdxs validator checks one value per register, and {name} has "
+                f"{len(distinct)} accepted values ({', '.join(choices[:6])}"
+                f"{', ...' if len(choices) > 6 else ''}).",
+                hint="Pick the deployment's firmware and machine type: "
+                "Tdxs.from_policy(policy, firmware='...', label='...'), "
+                "or verify the quote with `tundravm attest`, which accepts any listed value.",
+                context={"register": name},
+            )
+        keyed[name.lower()] = distinct[0]
     if mrtd is not None:
         keyed["mrtd"] = _hex("MRTD", mrtd, placeholder=False, where="mrtd=")
     return tuple(sorted(keyed.items()))
 
 
 __all__ = [
-    "OPTIONAL_REGISTERS",
+    "COVERED",
     "PLACEHOLDER_NOTE",
+    "POLICY_SCHEMA",
     "POLICY_SCHEMA_VERSION",
-    "REQUIRED_REGISTERS",
+    "REGISTERS",
+    "SCHEMES",
+    "Accepted",
+    "accepted",
     "is_placeholder",
+    "match_registers",
     "policy_payload",
     "read_policy",
+    "single_values",
+    "unverifiable",
     "validator_measurements",
     "write_policy",
 ]

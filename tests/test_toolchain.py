@@ -15,6 +15,7 @@ from tests.helpers import write_recipe_file
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, main
+from tundravm.measure import MEASURE_VERSION
 from tundravm.toolchain import (
     MkosiTool,
     NixpkgsPin,
@@ -58,7 +59,10 @@ def test_local_backend_probes_host_mkosi_systemd_and_measure_tools() -> None:
 
     assert found.mkosi == MkosiTool("25.3", "host")
     assert found.systemd == "257"
-    assert found.measure == (("measured-boot", "1.2.0"),)
+    assert found.measure == (
+        ("gcp-firmware-table", "dstack-mr-gcp@b16e08b"),
+        ("tundravm-measure", MEASURE_VERSION),
+    )
     assert found.nixpkgs is None
 
 
@@ -131,7 +135,8 @@ def test_lock_records_the_toolchain_and_lint_reports_drift(tmp_path: Path) -> No
 
     code, text = cli("lock", str(recipe), "--lockfile", str(lock), versions=VERSIONS)
     assert code == EXIT_OK
-    assert "toolchain: mkosi 25.3 (host), systemd 257, measured-boot 1.2.0" in text
+    assert "toolchain: mkosi 25.3 (host), systemd 257, gcp-firmware-table" in text
+    assert f"tundravm-measure {MEASURE_VERSION}" in text
     recorded = json.loads(lock.read_text(encoding="utf-8"))
     assert recorded["version"] == 5
     assert recorded["toolchain"]["mkosi"] == {"source": "host", "version": "25.3"}

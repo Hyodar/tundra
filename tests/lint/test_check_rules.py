@@ -254,7 +254,7 @@ def test_debloat_masks_needed_units() -> None:
 
 
 def test_debloat_keep_extra_or_disabled_is_fine() -> None:
-    kept = Debloat(keep_units_extra=("systemd-networkd.service",))
+    kept = Debloat(keep_units_extra=("systemd-networkd.service",), keep_modules=True)
     assert report(recipe(NEEDS_NETWORKD, kept)) == []
     assert report(recipe(NEEDS_NETWORKD, Debloat(enabled=False))) == []
 
@@ -266,7 +266,39 @@ def test_debloat_removes_declared_file() -> None:
         "debloat-removes-declared-file",
         "/etc/systemd/network/10-eth.network",
     )
-    assert report(recipe(network, Debloat(keep_paths=("/etc/systemd/network",)))) == []
+    kept = Debloat(keep_paths=("/etc/systemd/network",), keep_modules=True)
+    assert report(recipe(network, kept)) == []
+
+
+def test_declared_debloat_removing_modules_of_a_modular_kernel_is_an_error() -> None:
+    [diag] = report(recipe(Debloat()))
+    assert (diag.code, diag.severity, diag.subject) == (
+        "debloat-removes-modules",
+        "error",
+        "/usr/lib/modules",
+    )
+    assert "keep_modules=True" in (diag.hint or "")
+    # A parent path or a glob removes them too.
+    custom = Debloat(remove=("/usr/lib/mod*",))
+    assert codes(recipe(custom)) == ["debloat-removes-modules"]
+
+
+def test_kept_or_knowingly_removed_modules_are_fine() -> None:
+    assert report(recipe(Debloat(keep_modules=True))) == []
+    assert report(recipe(Debloat(keep_modules=False))) == []
+    assert report(recipe(Debloat(keep_paths=("/usr/lib/modules",)))) == []
+    assert report(recipe(Debloat(enabled=False))) == []
+    # The implicit default (no Debloat declared) stays silent.
+    assert report(recipe()) == []
+
+
+def test_keep_modules_keeps_the_path_out_of_finalize() -> None:
+    from tundravm.declarative import lower
+
+    kept = lower(recipe(Debloat(keep_modules=True))).state.effective_profile("default")
+    assert "/usr/lib/modules" not in kept.debloat.effective_paths_remove
+    removed = lower(recipe(Debloat(keep_modules=False))).state.effective_profile("default")
+    assert "/usr/lib/modules" in removed.debloat.effective_paths_remove
 
 
 # j. secrets

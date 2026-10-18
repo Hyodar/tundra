@@ -49,7 +49,7 @@ from .formats import md_cell, md_table
 from .lockfile import describe_change, parse_lockfile, section_digests, section_values
 from .lockfile.drift import _section_variant
 from .lockfile.model import Lockfile
-from .measure.policy import read_policy
+from .measure.policy import accepted, read_policy
 from .verify import read_evidence
 
 CHANGES_SCHEMA = "tundravm.changes/2"
@@ -785,7 +785,11 @@ def _registers(payload: Any) -> dict[str, str] | None:
         checked = read_policy(payload)
     except TdxError:
         return None
-    return {str(k): str(v) for k, v in dict(checked.get("registers") or {}).items()}  # type: ignore[call-overload]
+    registers = checked.get("registers")
+    assert isinstance(registers, dict)
+    return {
+        name: ",".join(a.value for a in accepted(registers, name)) for name in sorted(registers)
+    }
 
 
 # ── rendering ────────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@ def test_completion_lists_every_verb_and_format_choice(shell: Shell) -> None:
     assert FORMAT_CHOICES >= {"auto", "text", "json", "markdown", "github", "stat"}
     for choice in FORMAT_CHOICES:
         assert choice in script, choice
-    for choices in ("inprocess lima local nix", "rtmr azure gcp", "qemu azure gcp"):
+    for choices in ("inprocess lima local nix", "qemu gcp azure portable", "qemu azure gcp"):
         assert choices in script
 
 

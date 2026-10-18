@@ -32,6 +32,7 @@ from tundravm.attestation import (
     AttestationRecord,
     parse_quote,
     read_attestation,
+    render_attestation,
     report_data_for,
 )
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
@@ -62,14 +63,31 @@ def tdx_quote(
     return header + descriptor + bytes(body) + struct.pack("<I", 0)
 
 
-def policy(**registers: bytes) -> dict[str, object]:
+COVERED = ("MRTD", "RTMR0", "RTMR1", "RTMR2")
+
+
+def _entry(value: bytes | Mapping[str, object]) -> object:
+    if isinstance(value, bytes):
+        return value.hex()
+    return {k: (v.hex() if isinstance(v, bytes) else v) for k, v in value.items()}
+
+
+def policy(**registers: bytes | list[bytes | Mapping[str, object]]) -> dict[str, object]:
+    """A schema 2 policy accepting *registers* (one value, or a list of accepted entries);
+    the covered registers it does not accept are unverifiable."""
+    accepted = {
+        name: [_entry(v) for v in (value if isinstance(value, list) else [value])]
+        for name, value in registers.items()
+    }
     return {
-        "schema_version": 1,
-        "scheme": "rtmr",
-        "tool": "measured-boot",
-        "tool_version": "1.2",
+        "schema_version": 2,
+        "schema": "tundravm.policy/2",
+        "scheme": "qemu",
+        "tool": "tundravm-measure",
+        "tool_version": "1.0",
         "artifact": {"path": "build/default/image.efi", "sha256": "f" * 64},
-        "registers": {name: value.hex() for name, value in registers.items()},
+        "registers": accepted,
+        "unverifiable": {n: "test: not predicted" for n in COVERED if n not in accepted},
     }
 
 
@@ -239,7 +257,8 @@ def test_a_register_mismatch_is_untrusted_with_a_validator_and_mismatch_without(
     checks = {check.name: check for check in judged.registers}
     assert checks["RTMR3"].verdict == "match"
     assert checks["MRTD"].verdict == "mismatch"
-    assert checks["MRTD"].expected == "99" * 48 and checks["MRTD"].actual == MRTD.hex()
+    assert checks["MRTD"].values == ("99" * 48,) and checks["MRTD"].actual == MRTD.hex()
+    assert checks["MRTD"].matched is None
     assert judged.verdict == "untrusted" and judged.reasons == ("register-mismatch",)
     unjudged = attest("tcp://h:1", peer, transport=FakeIssuer())
     assert unjudged.verdict == "measurements-mismatch" and not unjudged.passed
@@ -327,7 +346,7 @@ def test_placeholder_policies_and_bad_nonces_are_refused() -> None:
     placeholder = {
         **PEER,
         "tool": "placeholder",
-        "registers": {f"RTMR{i}": "a" * 64 for i in (0, 1, 2)},
+        "registers": {f"RTMR{i}": ["a" * 64] for i in (0, 1, 2)},
     }
     with pytest.raises(MeasurementError, match="placeholder policy"):
         attest("tcp://h:1", placeholder, transport=FakeIssuer())
@@ -359,7 +378,8 @@ def test_to_dict_is_the_stable_json_shape() -> None:
     assert payload["verdict"] in VERDICTS
     assert payload["registers"]["RTMR0"] == {  # type: ignore[index]
         "actual": R0.hex(),
-        "expected": R0.hex(),
+        "expected": [R0.hex()],
+        "matched": None,
         "verdict": "match",
     }
 
@@ -512,7 +532,8 @@ def test_cli_attest_json_and_markdown(
     assert payload["policy"] == str(peer_file) and payload["issuer"] == url
     assert payload["registers"]["RTMR3"] == {
         "actual": R3.hex(),
-        "expected": None,
+        "expected": [],
+        "matched": None,
         "verdict": "unchecked",
     }
     code, out = run_main(
@@ -522,7 +543,7 @@ def test_cli_attest_json_and_markdown(
     assert out.startswith(f"# tundravm attest: `{url}`")
     assert "**Verdict:** `measurements-match`" in out
     assert "| Register | Verdict | Quote | Policy |" in out
-    assert f"| RTMR0 | match | `{R0.hex()}` | `{R0.hex()}` |" in out
+    assert f"| RTMR0 | match | `{R0.hex()}` | `{R0.hex()[:12]}` |" in out
 
 
 def test_cli_attest_exits_2_when_the_issuer_is_unreachable(
@@ -626,7 +647,8 @@ def test_a_record_keeps_the_document_the_policy_and_the_validator_reply(tmp_path
     )
     assert record["registers"]["RTMR1"] == {
         "actual": R1.hex(),
-        "expected": R1.hex(),
+        "expected": [R1.hex()],
+        "matched": None,
         "verdict": "match",
     }
 
@@ -662,7 +684,8 @@ def test_an_edited_expectation_is_caught_against_the_policy(tmp_path: Path) -> N
     for register in ("RTMR1",):
         record["registers"][register] = {  # type: ignore[index]
             "actual": bytes(48).hex(),
-            "expected": bytes(48).hex(),
+            "expected": [bytes(48).hex()],
+            "matched": None,
             "verdict": "match",
         }
     record["verdict"], record["reasons"] = "trusted", []
@@ -713,3 +736,93 @@ def test_cli_attest_record_writes_the_record(
     assert found.verdict == "measurements-match" and found.record["validator"] is None
     assert found.record["policy"]["path"] == str(peer_file)
     assert found.record["policy"]["sha256"] == hashlib.sha256(peer_file.read_bytes()).hexdigest()
+
+
+# ── schema 2: several accepted values per register ──────────────────────
+
+OTHER = b"\x77" * 48
+
+
+def test_a_register_matches_any_accepted_value_and_reports_its_label() -> None:
+    peer = policy(
+        MRTD=MRTD,
+        RTMR0=R0,
+        RTMR1=[{"value": OTHER, "label": "old"}, {"value": R1, "firmware": "fw-a", "label": "c3"}],
+        RTMR2=[OTHER, R2],
+    )
+    result = attest("tcp://h:1", peer, nonce=NONCE, transport=FakeIssuer())
+    checks = {check.name: check for check in result.registers}
+    assert checks["RTMR1"].verdict == "match" and checks["RTMR1"].matched == "fw-a c3"
+    assert checks["RTMR1"].values == (OTHER.hex(), R1.hex())
+    assert checks["RTMR2"].verdict == "match" and checks["RTMR2"].matched is None
+    assert result.verdict == "measurements-match"
+    assert f"RTMR1  match      {R1.hex()}  (fw-a c3)" in render_attestation(result, "text")
+    registers = json.loads(render_attestation(result, "json"))["registers"]
+    assert registers["RTMR1"]["matched"] == "fw-a c3"
+    assert registers["RTMR1"]["expected"][1] == {
+        "value": R1.hex(),
+        "firmware": "fw-a",
+        "label": "c3",
+    }
+
+
+def test_mrtd_and_rtmr0_of_different_firmwares_do_not_pair() -> None:
+    peer = policy(
+        MRTD=[{"value": MRTD, "firmware": "fw-a"}, {"value": OTHER, "firmware": "fw-b"}],
+        RTMR0=[{"value": OTHER, "firmware": "fw-a"}, {"value": R0, "firmware": "fw-b"}],
+        RTMR1=R1,
+        RTMR2=R2,
+    )
+    result = attest("tcp://h:1", peer, nonce=NONCE, transport=FakeIssuer())
+    checks = {check.name: check for check in result.registers}
+    assert checks["MRTD"].verdict == "match" and checks["MRTD"].matched == "fw-a"
+    assert checks["RTMR0"].verdict == "mismatch" and checks["RTMR0"].matched is None
+    assert result.verdict == "measurements-mismatch" and result.reasons == ("register-mismatch",)
+    judged = attest(
+        "tcp://h:1",
+        peer,
+        validator="tcp://v:2",
+        transport=FakeIssuer(),
+        validator_transport=FakeValidator(),
+    )
+    assert judged.verdict == "untrusted"
+
+
+def test_a_multi_value_record_round_trips_and_re_derives_offline(tmp_path: Path) -> None:
+    peer = policy(
+        MRTD=[{"value": OTHER, "firmware": "fw-b"}, {"value": MRTD, "firmware": "fw-a"}],
+        RTMR0=[{"value": R0, "firmware": "fw-a", "label": "c3-standard-4"}],
+        RTMR1=[OTHER, R1],
+        RTMR2=R2,
+    )
+    result = attest(
+        "tcp://h:1",
+        peer,
+        nonce=NONCE,
+        validator="tcp://verifier:7001",
+        transport=FakeIssuer(),
+        validator_transport=FakeValidator(),
+        clock=lambda: OBSERVED,
+    )
+    assert result.verdict == "trusted"
+    path = result.save(tmp_path / "att.json")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["registers"]["RTMR0"]["matched"] == "fw-a c3-standard-4"
+    found = read_attestation(path)
+    assert found.consistent and found.verdict == "trusted"
+    assert found.attestation.record() == result.record()
+    against = read_attestation(path, policy=peer)
+    assert against.policy_matches is True and against.consistent
+
+
+def test_a_schema_1_policy_is_refused_with_a_re_export_hint() -> None:
+    old = {
+        "schema_version": 1,
+        "scheme": "rtmr",
+        "tool": "measured-boot",
+        "artifact": {"path": "build/default/image.efi", "sha256": "f" * 64},
+        "registers": {"RTMR0": R0.hex(), "RTMR1": R1.hex(), "RTMR2": R2.hex()},
+    }
+    with pytest.raises(ValidationError, match="schema_version 1") as exc:
+        attest("tcp://h:1", old, nonce=NONCE, transport=FakeIssuer())
+    assert exc.value.hint is not None and "--export-policy" in exc.value.hint

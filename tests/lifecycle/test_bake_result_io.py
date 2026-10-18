@@ -105,4 +105,4 @@ def test_bake_saves_and_a_fresh_read_measures_and_finds_it(tmp_path: Path) -> No
     fresh = read_artifacts(build_dir)
     assert fresh == baked
     with pytest.warns(PlaceholderMeasurementWarning):
-        assert measure(fresh[0], scheme="rtmr", allow_placeholder=True).values
+        assert measure(fresh[0], scheme="qemu", allow_placeholder=True).values

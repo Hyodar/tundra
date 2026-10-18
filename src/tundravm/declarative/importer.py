@@ -31,6 +31,7 @@ from tundravm._source import DebFile, HttpSource
 from tundravm._units.parse import Conversion, convert, enables
 from tundravm.backends.base import is_mkosi_state
 from tundravm.compiler.emit_mkosi import (
+    ACCOUNTS_FINALIZE,
     ARCH_TO_MKOSI,
     AZURE_POSTOUTPUT_SCRIPT,
     DEFAULT_SEED,
@@ -46,7 +47,7 @@ from tundravm.compiler.emit_mkosi import (
     cloud_postoutput_script,
 )
 from tundravm.errors import ValidationError
-from tundravm.models import DebloatConfig, ProfileState
+from tundravm.models import MODULES_PATH, DebloatConfig, ProfileState
 from tundravm.platforms import azure, gcp
 
 from ._import_builds import Recovered, build_items
@@ -813,6 +814,9 @@ class _VariantReader:
     def _debloat(self, postinst: _Postinst, scripts: dict[Phase, list[str]]) -> Debloat | None:
         rels = scripts.get("finalize", [])
         text = self.text(rels[0]) if len(rels) == 1 else None
+        if text is not None and text.endswith(ACCOUNTS_FINALIZE):  # recompiling adds it back
+            text = text.removesuffix(ACCOUNTS_FINALIZE)
+            text = text if text == PREAMBLE else text.removesuffix("\n")
         self.finalize_commands = None
         if text is None or not text.startswith(PREAMBLE):
             return Debloat(enabled=False) if postinst.minimize is None else None
@@ -841,6 +845,10 @@ class _VariantReader:
         if stripped != (self.wide["epoch"] is not None):
             self.mkosi["strip_os_release"] = stripped
         self.finalize_commands = commands
+        removed = debloat_config(candidate).effective_paths_remove
+        if candidate != Debloat() and MODULES_PATH in removed:
+            # The tree deletes the modules: say so, as lint debloat-removes-modules asks.
+            candidate = replace(candidate, keep_modules=False)
         return candidate
 
     # ── units and runtime-init ──

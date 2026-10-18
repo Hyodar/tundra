@@ -65,7 +65,8 @@ class Toolchain:
 
     *tundravm* is ``<version>`` or ``<version>+<commit>``. *systemd* is the version
     of the ukify/systemd-boot mkosi uses. *nixpkgs* is set for the nix and lima
-    backends. *measure* maps each RTMR measurement tool found to its version.
+    backends. *measure* maps the built-in measurement replay and its GCP firmware table to
+    their versions.
     *rosetta* is true for a Lima VM translating x86-64 with Rosetta, which makes the
     bake ``reproducible: not guaranteed (rosetta)``.
     """
@@ -224,8 +225,9 @@ def toolchain_drift(
 
 # ── probes ───────────────────────────────────────────────────────────────
 
-MEASURE_TOOLS = ("measured-boot", "dstack-mr")
-"""The RTMR measurement tools recorded when found (``tundravm measure`` runs them)."""
+MEASURE_TOOLS = ("tundravm-measure", "gcp-firmware-table")
+"""What ``toolchain.measure`` records: the built-in replay's version and the GCP firmware
+table it embeds (both ship with tundravm, so a different version means other values)."""
 
 
 def run_probe(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -307,10 +309,12 @@ def probe_systemd(runner: ProbeRunner) -> str | None:
     return None
 
 
-def probe_measure(runner: ProbeRunner) -> tuple[tuple[str, str], ...]:
-    """Each measurement tool found and its version."""
-    found = ((tool, _output(runner, (tool, "--version"))) for tool in MEASURE_TOOLS)
-    return tuple((tool, version_token(text)) for tool, text in found if text is not None)
+def probe_measure(runner: ProbeRunner | None = None) -> tuple[tuple[str, str], ...]:
+    """The measurement implementation: built into tundravm, so nothing is probed."""
+    from .measure.gcp_firmware import TABLE_VERSION
+    from .measure.model import MEASURE_VERSION
+
+    return tuple(sorted(zip(MEASURE_TOOLS, (MEASURE_VERSION, TABLE_VERSION), strict=True)))
 
 
 # ── nixpkgs ──────────────────────────────────────────────────────────────
@@ -372,7 +376,7 @@ def running_toolchain(
     lock pins, so *locked*'s nixpkgs, mkosi and systemd are what runs; without one,
     *resolver* resolves nixpkgs now (``None``: unresolved, mkosi follows the branch).
     ``host`` probes mkosi and ukify on this host; a backend without one (in-process)
-    runs no mkosi. Measurement tools are always probed on this host.
+    runs no mkosi. The measurement implementation ships with tundravm.
     """
     run = runner if runner is not None else run_probe
     source = getattr(backend, "toolchain_source", None)
