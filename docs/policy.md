@@ -39,6 +39,7 @@ A measurement policy is JSON, schema `tundravm.policy/2`:
 | `boot_payload` | `path` and `sha256` of the UKI the registers measure, when known (the artifact itself for a UKI, the UKI a disk boots) |
 | `registers` | Register name (`MRTD`, `RTMR0`..`RTMR3`) to a non-empty list of accepted values: a SHA-384 hex string, or `{"value", "firmware", "label"}` naming what the value belongs to |
 | `unverifiable` | Register name to the reason the scheme cannot predict it offline |
+| `platform_approval` | Optional: `MRTD` and/or `RTMR0` to a non-empty list of values the operator approves for the platform (`measure --export-policy FILE --approve-mrtd HEX --approve-rtmr0 HEX`). Kept apart from the measured `registers`; matched like them, printed `(operator-approved)` |
 | `firmware_table`, `sources` | `gcp` only: the firmware table version and the Google firmware files its values come from |
 | `vtpm_pcrs` | `azure` only: `PCR4`, `PCR9`, `PCR11` (SHA-256) the guest's boot extends into the vTPM. A vTPM quote verifier checks them; `tdxs` and `attest` do not |
 | `note` | Placeholder policies only: says the values are not measurements |
@@ -51,7 +52,18 @@ A register matches when the quote's value is any accepted value. Values labelled
 
 `Tdxs.from_policy` gives the `tdxs` validator one string per single-valued register and a list for a register with several accepted values.
 
-`evidence --require measured` makes a variant whose policy has unverifiable registers `incomplete` (code `policy-unverifiable`), with each register and its reason; without `--require measured` it is a note.
+`evidence --require measured` makes a variant whose policy has unverifiable registers `incomplete` (code `policy-unverifiable`), with each register and its reason; without `--require measured` it is a note. A register the policy's `platform_approval` approves no longer counts as unverifiable.
+
+### Trust coverage
+
+`attest` says `trusted` only when the quote is authentic (a `tdxs` validator accepted it), it binds the nonce, no register mismatches, and every one of these matched an accepted value:
+
+| Registers | What they measure | Accepted values come from |
+|---|---|---|
+| MRTD, RTMR0 | The platform: the TD firmware (TDVF) and its configuration (ACPI tables, CFV) | The scheme (`gcp`), or the operator's `platform_approval` (`qemu`, `portable`) |
+| RTMR1, RTMR2 | The image: its boot path and UKI | The scheme's replay |
+
+When nothing disagreed but one of the four had no accepted value, the verdict is `partial` (reasons `platform-unverified`, `image-unverified`): `attest` exits 1 unless `--accept-partial`, and `evidence --require attested` reports `attestation-partial`. A validator's `valid` says the quote is genuine; it does not say the firmware was one you approve, so a `qemu` or `portable` policy needs `platform_approval` (take MRTD and RTMR0 from a quote of a host you trust) before it can be trusted. `Tdxs.from_policy` checks the approved values too. An `azure` policy is refused: the TDX quote measures Azure's paravisor, the image is measured into the vTPM, and vTPM evidence is not supported yet.
 
 ### Schemes
 

@@ -1367,7 +1367,11 @@ class DeterministicMkosiEmitter:
                     script_path = scripts_dir / script_name
                     _write(
                         script_path,
-                        self._render_postinst_script(all_commands, profile),
+                        self._render_postinst_script(
+                            all_commands,
+                            profile,
+                            historical=config is not None and config.dialect == "nethermind-v1",
+                        ),
                         EXEC_MODE,
                     )
                     phase_scripts[phase] = script_path
@@ -1375,7 +1379,10 @@ class DeterministicMkosiEmitter:
 
             # For finalize: prepend debloat path removal
             if phase == "finalize":
-                synthetic_lines = self._synthetic_finalize_lines(profile, modules)
+                historical = config is not None and config.dialect == "nethermind-v1"
+                synthetic_lines = self._synthetic_finalize_lines(
+                    profile, modules, historical=historical
+                )
                 accounts = _sorts_accounts(config)
                 if synthetic_lines or commands or accounts:
                     script_name = f"{index:02d}-{phase}.sh"
@@ -1465,9 +1472,15 @@ class DeterministicMkosiEmitter:
         return commands
 
     def _synthetic_finalize_lines(
-        self, profile: ProfileState, modules: ModuleSelection = NO_MODULES
+        self,
+        profile: ProfileState,
+        modules: ModuleSelection = NO_MODULES,
+        *,
+        historical: bool = False,
     ) -> list[str]:
-        """Generate the kernel module check and debloat shell lines for the finalize script."""
+        """Generate the kernel module check and debloat shell lines for the finalize script
+        (*historical*: ``nethermind-v1`` quotes a removal glob whole, so it never matches)."""
+        remove = _quoted_path if historical else _globbed_path
         config = profile.debloat
         lines = _kernel_module_check(modules.modules)
         if not config.enabled:
@@ -1487,7 +1500,7 @@ class DeterministicMkosiEmitter:
             lines.append("")
             lines.append("# Debloat: remove unnecessary paths")
             for path in sorted(paths):
-                lines.append(f'rm -rf "$BUILDROOT{path}"')
+                lines.append(f"rm -rf {remove(path)}")
 
         # Profile-conditional path removal: paths removed only when profile is NOT active
         conditional = config.profile_conditional_paths
@@ -1497,13 +1510,16 @@ class DeterministicMkosiEmitter:
             for profile_name in sorted(conditional):
                 for path in conditional[profile_name]:
                     lines.append(f'if [[ ! "${{PROFILES:-}}" == *"{profile_name}"* ]]; then')
-                    lines.append(f'    rm -rf "$BUILDROOT{path}"')
+                    lines.append(f"    rm -rf {remove(path)}")
                     lines.append("fi")
 
         return lines
 
-    def _render_postinst_script(self, commands: list[CommandSpec], profile: ProfileState) -> str:
-        """Render postinst script with user creation, service enablement, and debloat."""
+    def _render_postinst_script(
+        self, commands: list[CommandSpec], profile: ProfileState, *, historical: bool = False
+    ) -> str:
+        """Render postinst script with user creation, service enablement, and debloat
+        (*historical*: ``nethermind-v1``'s unit masking lines)."""
         lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
 
         # Render all commands (synthetic + user-defined)
@@ -1536,22 +1552,11 @@ class DeterministicMkosiEmitter:
 
             # Unit masking via mkosi-chroot dpkg-query
             lines.append("")
-            lines.append("# Debloat: mask unwanted systemd units")
-            keep_list = " ".join(f'"{u}"' for u in units_keep)
-            lines.append(f"systemd_svc_whitelist=({keep_list})")
-            lines.append('SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"')
-            lines.append('mkdir -p "$SYSTEMD_DIR"')
-            lines.append(
-                "mkosi-chroot dpkg-query -L systemd | "
-                "grep -E '\\.service$|\\.socket$|\\.timer$|\\.target$|\\.mount$' | "
-                "sed 's|.*/||' | while read -r unit; do"
-            )
-            lines.append(
-                '    if ! printf \'%s\\n\' "${systemd_svc_whitelist[@]}" | grep -qx "$unit"; then'
-            )
-            lines.append('        ln -sf /dev/null "$SYSTEMD_DIR/$unit"')
-            lines.append("    fi")
-            lines.append("done")
+            if not historical:
+                keep_list = " ".join(f'"{u}"' for u in units_keep)
+                lines.extend(_DEBLOAT_MASK.replace("@KEEP@", keep_list).split("\n"))
+            else:
+                lines.extend(_historical_mask_lines(units_keep))
 
             # Set default target
             lines.append("")
@@ -1762,6 +1767,94 @@ def _module_selection(profile: ProfileState, config: EmitConfig) -> ModuleSelect
     return module_selection(profile, config.kernel_modules, built_kernel=config.kernel is not None)
 
 
+_GLOB = re.compile(r"[*?]|\[[^]/]*\]")
+"""The glob characters of a debloat removal entry (``/etc/ssh/ssh_host_*_key*``)."""
+
+
+def _quoted_path(path: str) -> str:
+    """*path* under ``$BUILDROOT``, quoted whole (``nethermind-v1``: a glob stays literal)."""
+    return f'"$BUILDROOT{path}"'
+
+
+def _globbed_path(path: str) -> str:
+    """*path* under ``$BUILDROOT`` as a shell word whose literal parts are quoted and whose glob
+    characters expand; a glob matching nothing stays literal, which ``rm -rf`` ignores."""
+    word, start = '"$BUILDROOT', 0
+    for match in _GLOB.finditer(path):
+        word += path[start : match.start()] + '"' + match.group() + '"'
+        start = match.end()
+    word += path[start:] + '"'
+    return word.replace('""', "")
+
+
+def _historical_mask_lines(units_keep: tuple[str, ...]) -> list[str]:
+    """``nethermind-v1``'s unit masking (nethermind-tdx ``debloat-systemd.sh``), verbatim."""
+    keep_list = " ".join(f'"{u}"' for u in units_keep)
+    return [
+        "# Debloat: mask unwanted systemd units",
+        f"systemd_svc_whitelist=({keep_list})",
+        'SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"',
+        'mkdir -p "$SYSTEMD_DIR"',
+        "mkosi-chroot dpkg-query -L systemd | "
+        "grep -E '\\.service$|\\.socket$|\\.timer$|\\.target$|\\.mount$' | "
+        "sed 's|.*/||' | while read -r unit; do",
+        '    if ! printf \'%s\\n\' "${systemd_svc_whitelist[@]}" | grep -qx "$unit"; then',
+        '        ln -sf /dev/null "$SYSTEMD_DIR/$unit"',
+        "    fi",
+        "done",
+    ]
+
+
+_DEBLOAT_MASK = textwrap.dedent(r"""
+    # Debloat: mask unwanted systemd units
+    systemd_svc_whitelist=(@KEEP@)
+    SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"
+    mkdir -p "$SYSTEMD_DIR"
+    # Keep the targets the enabled units order against or pull in: masking one drops the
+    # ordering (networkd starts after network-pre.target, which nftables.service precedes)
+    for link in "$SYSTEMD_DIR"/*.wants/* "$SYSTEMD_DIR"/*.requires/*; do
+        [ -L "$link" ] || continue
+        unit=${link##*/}
+        case $unit in *@?*.*) unit="${unit%%@*}@.${unit##*.}" ;; esac
+        for file in "$BUILDROOT"{/usr/lib,/etc}/systemd/system/"$unit"{,.d/*.conf}; do
+            [ -f "$file" ] || continue
+            pattern='s/^(After|Before|Wants|Requires|Requisite|BindsTo)=//p'
+            for target in $(sed -nE "$pattern" "$file"); do
+                case $target in *.target) systemd_svc_whitelist+=("$target") ;; esac
+            done
+        done
+    done
+    mkosi-chroot dpkg-query -L systemd |
+        grep -E '\.(service|socket|timer|target|mount|path|automount)$' |
+        sed 's|.*/||' | while read -r unit; do
+        if ! printf '%s\n' "${systemd_svc_whitelist[@]}" | grep -qx "$unit"; then
+            ln -sf /dev/null "$SYSTEMD_DIR/$unit"
+        fi
+    done
+    # A kept trigger whose unit is masked can only fail ("Refusing to start, unit ... to
+    # trigger not loaded"): mask it too
+    mkosi-chroot dpkg-query -L systemd |
+        grep -E '/systemd/system/[^/]+\.(socket|timer|path|automount)$' | while read -r path; do
+        trigger=${path##*/}
+        [ "$(readlink "$SYSTEMD_DIR/$trigger" || true)" != /dev/null ] || continue
+        unit=$(sed -nE 's/^(Unit|Service)=//p' "$BUILDROOT$path" | tail -n 1)
+        if [ -z "$unit" ]; then
+            case $trigger in
+                *.automount) unit=${trigger%.*}.mount ;;
+                *) unit=${trigger%.*}.service ;;
+            esac
+        fi
+        if [ "$(readlink "$SYSTEMD_DIR/$unit" || true)" = /dev/null ]; then
+            ln -sf /dev/null "$SYSTEMD_DIR/$trigger"
+        fi
+    done
+""").strip("\n")
+"""Current-dialect unit masking: every unit of the ``systemd`` package but the keep list
+(``@KEEP@``) and the targets the enabled units reference, then every kept trigger (socket,
+timer, path, automount) whose unit is masked. ``nethermind-v1`` keeps its historical lines,
+which leave paths and automounts unmasked."""
+
+
 _KERNEL_MODULE_CHECK = textwrap.dedent(r"""
     # Kernel modules: mkosi kept KernelModules= and their dependencies (tundravm module sets
     # v@VERSION@); each must be in the image
@@ -1782,6 +1875,41 @@ _KERNEL_MODULE_CHECK = textwrap.dedent(r"""
                 exit 1
             fi
         done
+        # modules.dep is still the kernel package's (mkosi runs no depmod when it only keeps
+        # modules): its line for a listed module names every module that loads first.
+        files=$(find "$kdir" -name '*.ko*' -printf '%P\n')
+        for module in @MODULES@; do
+            line=$(grep -E "(^|/)${module//[_-]/[_-]}\.ko[^:/]*:" "${kdir}modules.dep" || true)
+            for dep in ${line#*:}; do
+                if ! grep -qxF "$dep" <<<"$files"; then
+                    echo "tundravm: kernel module $module needs $dep, which is not in the image" >&2
+                    exit 1
+                fi
+            done
+        done
+        # A "pre:" softdep of a kept module names a module or an alias (libcrc32c's crc32c),
+        # which mkosi does not follow: one module in the image must provide it.
+        while read -r _ owner rest; do
+            grep -qxF "${owner//_/-}" <<<"$present" || continue
+            pre=${rest#*pre:}
+            [ "$pre" != "$rest" ] || continue
+            for wanted in ${pre%%post:*}; do
+                found=
+                for candidate in "$wanted" $(awk -v a="$wanted" '$2 == a {print $3}' \
+                    "${kdir}modules.alias"); do
+                    if grep -qxF "${candidate//_/-}" <<<"$present"; then found=1; fi
+                done
+                if [ -z "$found" ]; then
+                    echo "tundravm: kernel module $owner loads $wanted first (softdep), and no" \
+                        "module in the image provides it: add one to Debian(kernel_modules=...)" >&2
+                    exit 1
+                fi
+            done
+        done < <(grep '^softdep ' "${kdir}modules.softdep" 2>/dev/null || true)
+        # Index only the kept modules, so modprobe and systemd do not chase pruned ones.
+        if [ -x "$BUILDROOT/usr/sbin/depmod" ]; then
+            mkosi-chroot depmod -a "$(basename "$kdir")"
+        fi
     done
 """).strip("\n")
 """The finalize check of :func:`_kernel_module_check`."""

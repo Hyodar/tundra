@@ -1,17 +1,24 @@
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import bake_request
-from tundravm.backends.base import write_flake_nix
+from tundravm.backends.base import StreamResult, write_flake_nix
 from tundravm.backends.lima import LimaMkosiBackend
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.backends.nix import NixMkosiBackend
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest
-from tundravm.toolchain import MkosiTool, NixpkgsPin, Toolchain
+from tundravm.toolchain import (
+    MkosiTool,
+    NixpkgsPin,
+    Toolchain,
+    running_toolchain,
+    toolchain_drift,
+)
 
 
 def test_nix_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
@@ -79,29 +86,6 @@ def test_nix_backend_prepare_writes_flake_nix(
     flake = request.emit_dir / "flake.nix"
     assert flake.exists()
     assert "mkosi" in flake.read_text()
-
-
-def test_nix_backend_detects_nix_shell(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("IN_NIX_SHELL", "1")
-    assert NixMkosiBackend._in_nix_shell() is True
-
-
-def test_nix_backend_detects_nix_store(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("IN_NIX_SHELL", raising=False)
-    monkeypatch.setenv("NIX_STORE", "/nix/store")
-    assert NixMkosiBackend._in_nix_shell() is True
-
-
-def test_nix_backend_not_in_nix_shell_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("IN_NIX_SHELL", raising=False)
-    monkeypatch.delenv("NIX_STORE", raising=False)
-    assert NixMkosiBackend._in_nix_shell() is False
 
 
 def test_nix_backend_build_mkosi_args_per_directory(tmp_path: Path) -> None:
@@ -218,3 +202,127 @@ def test_backends_declare_their_toolchain_source() -> None:
     assert NixMkosiBackend.toolchain_source == "nix"
     assert LimaMkosiBackend.toolchain_source == "nix"
     assert LocalLinuxBackend.toolchain_source == "host"
+
+
+_STORE_MKOSI = "/nix/store/0abc-mkosi/bin/mkosi"
+
+
+def _ambient_shell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unrelated Nix shell whose PATH holds an mkosi of another version."""
+    bin_dir = tmp_path / "ambient-bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "mkosi"
+    fake.write_text("#!/bin/sh\necho 'mkosi 99.0'\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("IN_NIX_SHELL", "impure")
+    monkeypatch.setenv("NIX_STORE", "/nix/store")
+    monkeypatch.setattr("tundravm.backends.nix.shutil.which", lambda _: "/usr/bin/nix")
+
+
+def _fake_nix(
+    monkeypatch: pytest.MonkeyPatch, identity: str, returncode: int = 0
+) -> list[list[str]]:
+    """Record every command the backend runs; the identity probe prints *identity*."""
+    ran: list[list[str]] = []
+
+    def streaming(argv: list[str], **_: object) -> StreamResult:
+        ran.append(list(argv))
+        return StreamResult(0, ())
+
+    def capture(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        ran.append(list(argv))
+        return subprocess.CompletedProcess(argv, returncode, identity, "nix: boom")
+
+    monkeypatch.setattr("tundravm.backends.nix.run_streaming", streaming)
+    monkeypatch.setattr("tundravm.backends.nix._capture", capture)
+    return ran
+
+
+def test_nix_backend_enters_the_pinned_shell_inside_an_unrelated_nix_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ambient_shell(tmp_path, monkeypatch)
+    ran = _fake_nix(monkeypatch, f"{_STORE_MKOSI}\nmkosi 25.3\n")
+    request = replace(bake_request(tmp_path), toolchain=_PINNED)
+    backend = NixMkosiBackend()
+
+    backend.execute(request)
+
+    flake = f"path:{request.emit_dir.resolve()}"
+    assert ran[0][:4] == ["nix", "develop", flake, "-c"]
+    assert ran[0][4] == "mkosi"
+    assert ran[1][:4] == ["nix", "develop", flake, "-c"]
+    assert all(argv[0] == "nix" for argv in ran)
+
+
+def test_running_toolchain_reports_the_mkosi_that_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ambient_shell(tmp_path, monkeypatch)
+    _fake_nix(monkeypatch, f"{_STORE_MKOSI}\nmkosi 25.3\n")
+    backend = NixMkosiBackend()
+    backend.execute(replace(bake_request(tmp_path), toolchain=_PINNED))
+
+    found = running_toolchain(backend, locked=_PINNED)
+
+    assert found.mkosi == MkosiTool("25.3", "nix", _PIN.rev, path=_STORE_MKOSI)
+    assert found.payload()["mkosi"]["path"] == _STORE_MKOSI
+    assert found.nixpkgs == _PIN
+
+
+def test_running_toolchain_never_copies_the_lock_over_an_observed_mkosi() -> None:
+    backend = NixMkosiBackend()
+    backend.executed_mkosi = MkosiTool("26.0", "nix", None, path=_STORE_MKOSI)
+
+    found = running_toolchain(backend, locked=_PINNED)
+
+    assert found.mkosi is not None
+    assert found.mkosi.version == "26.0"
+    assert toolchain_drift(_PINNED, found)
+
+
+def test_nix_backend_refuses_a_shell_running_another_mkosi_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ambient_shell(tmp_path, monkeypatch)
+    _fake_nix(monkeypatch, "/nix/store/9zzz-mkosi-99/bin/mkosi\nmkosi 99.0\n")
+    backend = NixMkosiBackend()
+
+    with pytest.raises(BackendExecutionError, match=r"ran mkosi 99\.0.*pins mkosi 25\.3"):
+        backend.execute(replace(bake_request(tmp_path), toolchain=_PINNED))
+    assert backend.executed_mkosi is None
+
+
+def test_nix_backend_refuses_an_mkosi_outside_the_nix_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ambient_shell(tmp_path, monkeypatch)
+    ambient = str(tmp_path / "ambient-bin" / "mkosi")
+    _fake_nix(monkeypatch, f"{ambient}\nmkosi 25.3\n")
+
+    with pytest.raises(BackendExecutionError, match="outside the Nix store"):
+        NixMkosiBackend().execute(replace(bake_request(tmp_path), toolchain=_PINNED))
+
+
+def test_nix_backend_fails_when_the_shell_cannot_identify_mkosi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ambient_shell(tmp_path, monkeypatch)
+    _fake_nix(monkeypatch, "", returncode=1)
+
+    with pytest.raises(BackendExecutionError, match="Could not identify.*boom"):
+        NixMkosiBackend().execute(replace(bake_request(tmp_path), toolchain=_PINNED))
+
+
+def test_unpinned_nix_bake_records_the_observed_version_not_the_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ambient_shell(tmp_path, monkeypatch)
+    _fake_nix(monkeypatch, f"{_STORE_MKOSI}\nmkosi 26.1\n")
+    backend = NixMkosiBackend()
+    backend.execute(bake_request(tmp_path))
+
+    found = running_toolchain(backend)
+
+    assert found.mkosi == MkosiTool("26.1", "nix", None, path=_STORE_MKOSI)

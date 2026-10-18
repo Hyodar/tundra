@@ -1,15 +1,18 @@
 import io
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import bake_request
+from tundravm.backends.base import StreamResult
 from tundravm.backends.lima import LimaMkosiBackend, lima_yaml
 from tundravm.cli import EXIT_OK, doctor
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest
+from tundravm.toolchain import MkosiTool, NixpkgsPin, Toolchain, running_toolchain
 
 
 def test_lima_mount_plan_single_mount(tmp_path: Path) -> None:
@@ -199,3 +202,84 @@ def _limactl(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
     if argv[0] == "limactl":
         return subprocess.CompletedProcess(list(argv), 0, stdout="limactl version 1.0.0\n")
     raise FileNotFoundError(argv[0])
+
+
+_PIN = NixpkgsPin(rev="56c02bc00adcf003215cc4bd996d6efaf4cff188", nar_hash="sha256-x")
+_PINNED = Toolchain(
+    tundravm="0.1.0", mkosi=MkosiTool("25.3", "nix", _PIN.rev), systemd="257", nixpkgs=_PIN
+)
+_STORE_MKOSI = "/nix/store/0abc-mkosi/bin/mkosi"
+
+
+def _fake_vm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity: str, returncode: int = 0
+) -> tuple[LimaMkosiBackend, BakeRequest, list[str]]:
+    """A Lima backend whose VM commands are recorded; the identity probe prints *identity*."""
+    ran: list[str] = []
+    backend = LimaMkosiBackend(cpus=2, memory="4GiB", disk="20GiB", instance_name="t")
+    build = tmp_path / "build"
+    request = replace(
+        BakeRequest(profile="default", build_dir=build, emit_dir=build / "mkosi"),
+        toolchain=_PINNED,
+    )
+
+    def lima_exec(
+        self: LimaMkosiBackend, instance: str, cmd: str
+    ) -> subprocess.CompletedProcess[str]:
+        ran.append(cmd)
+        out = identity if "command -v mkosi" in cmd else ""
+        code = returncode if "command -v mkosi" in cmd else 0
+        return subprocess.CompletedProcess(["ssh"], code, out, "nix: boom")
+
+    def streaming(argv: Sequence[str], **_: object) -> StreamResult:
+        ran.append(argv[-1])
+        return StreamResult(0, ())
+
+    monkeypatch.setattr("tundravm.backends.lima.shutil.which", lambda _: "/usr/bin/limactl")
+    monkeypatch.setattr("tundravm.backends.lima.run_streaming", streaming)
+    monkeypatch.setattr(LimaMkosiBackend, "_lima_exec", lima_exec)
+    return backend, request, ran
+
+
+def test_lima_records_the_mkosi_the_pinned_vm_shell_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend, request, ran = _fake_vm(tmp_path, monkeypatch, f"{_STORE_MKOSI}\nmkosi 25.3\n")
+
+    backend.execute(request)
+
+    probe = next(cmd for cmd in ran if "command -v mkosi" in cmd)
+    assert "/home/debian/.nix-profile/bin/nix develop path:/home/debian/mnt/mkosi -c" in probe
+    assert backend.executed_mkosi == MkosiTool("25.3", "nix", _PIN.rev, path=_STORE_MKOSI)
+    found = running_toolchain(backend, locked=_PINNED)
+    assert found.mkosi == backend.executed_mkosi
+    assert found.payload()["mkosi"]["path"] == _STORE_MKOSI
+
+
+def test_lima_refuses_a_vm_shell_running_another_mkosi_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = "/nix/store/9zzz-mkosi-99/bin/mkosi\nmkosi 99.0\n"
+    backend, request, _ = _fake_vm(tmp_path, monkeypatch, identity)
+
+    with pytest.raises(BackendExecutionError, match=r"ran mkosi 99\.0.*pins mkosi 25\.3"):
+        backend.execute(request)
+    assert backend.executed_mkosi is None
+
+
+def test_lima_refuses_an_mkosi_outside_the_nix_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend, request, _ = _fake_vm(tmp_path, monkeypatch, "/usr/bin/mkosi\nmkosi 25.3\n")
+
+    with pytest.raises(BackendExecutionError, match="outside the Nix store"):
+        backend.execute(request)
+
+
+def test_lima_fails_when_the_vm_shell_cannot_identify_mkosi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend, request, _ = _fake_vm(tmp_path, monkeypatch, "", returncode=1)
+
+    with pytest.raises(BackendExecutionError, match="Could not identify.*boom"):
+        backend.execute(request)

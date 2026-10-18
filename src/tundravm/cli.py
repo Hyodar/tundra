@@ -249,8 +249,9 @@ def main(
         return 130
 
 
-REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 4}
-"""Verbs whose ``--format json`` report moved past version 1: lint's diagnostics carry
+REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 4, "attest": 2}
+"""Verbs whose ``--format json`` report moved past version 1: attest's verdict can be
+``partial`` (trust needs MRTD, RTMR0, RTMR1 and RTMR2 each matched); lint's diagnostics carry
 ``variant`` beside ``location``; config's ``values`` hold ``require``, a list; inspect
 names what a variant ``inherits`` and a variant diff's ``outputs``, and its origins carry
 ``fields`` with the action ``edited`` (no longer ``replaced``) and the ``location``
@@ -672,6 +673,19 @@ def build_parser() -> argparse.ArgumentParser:
             "and carry a note saying they are placeholders."
         ),
     )
+    for register in ("MRTD", "RTMR0"):
+        measure_cmd.add_argument(
+            f"--approve-{register.lower()}",
+            action="append",
+            default=None,
+            metavar="HEX",
+            help=(
+                f"With --export-policy: approve this {register} for the platform (repeatable), "
+                "kept as the policy's platform_approval. Take it from a quote of a host you "
+                "trust; attest is trusted only when MRTD and RTMR0 match approved values "
+                "(qemu and portable cannot predict them)."
+            ),
+        )
     measure_cmd.add_argument(
         "--allow-placeholder",
         action="store_true",
@@ -1233,8 +1247,12 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "must be SHA-256(nonce) followed by 32 zero bytes), one line per register "
             "(match, mismatch, or unchecked when the policy does not hold it) and the "
             "verdict: trusted or untrusted with --validator, measurements-match or "
-            "measurements-mismatch without one, simulated for a simulator issuer. Exit 0 "
-            "for trusted or measurements-match (simulated with --allow-simulated), 1 for "
+            "measurements-mismatch without one, simulated for a simulator issuer, partial "
+            "when nothing disagreed but MRTD, RTMR0 (the platform: approve them with `measure "
+            "--approve-mrtd/--approve-rtmr0`), RTMR1 or RTMR2 went unchecked. An azure policy "
+            "is refused (its image is measured into the vTPM, not verified here). Exit 0 "
+            "for trusted or measurements-match (simulated with --allow-simulated, partial "
+            "with --accept-partial), 1 for "
             "every other verdict, 2 on an SDK error (unreachable issuer or validator, not a "
             "TDX quote, a bad or placeholder policy)."
         ),
@@ -1279,12 +1297,20 @@ def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         help="Exit 0 for a simulator issuer whose measurements match (verdict: simulated).",
     )
     attest_cmd.add_argument(
+        "--accept-partial",
+        action="store_true",
+        help=(
+            "Exit 0 for a partial verdict: nothing disagreed, but MRTD/RTMR0 (the platform) "
+            "or RTMR1/RTMR2 (the image) had no accepted value to check. Never trusted."
+        ),
+    )
+    attest_cmd.add_argument(
         "--record",
         type=Path,
         default=None,
         metavar="FILE",
         help=(
-            "Also keep the attestation as a tundravm.attestation/1 record in FILE: the "
+            "Also keep the attestation as a tundravm.attestation/2 record in FILE: the "
             "document as received, nonce, report_data, registers, the policy's sha256 and "
             "artifact, the validator's whole reply, the verdict and observed_at. "
             "`evidence --attestation FILE` bundles it and `verify` re-derives it offline."
@@ -1368,7 +1394,10 @@ def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         help=(
             "Directory with the built binaries at their image paths (an unpacked root) or "
             "by file name: each source build's binary adds the Go modules or cargo "
-            "auditable crates it records as nested components."
+            "auditable crates it records as nested components, when its sha256 is the one "
+            "the bake recorded from the UKI's initrd. Any other binary (or one the bake "
+            "could not record) is listed as unbound with its path and sha256, its "
+            "dependencies are not components and the document is marked incomplete."
         ),
     )
 
@@ -2633,8 +2662,20 @@ def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
         measurements = measure(artifact, scheme=scheme, allow_placeholder=args.allow_placeholder)
     if measurements.tool == "placeholder":
         print(PLACEHOLDER_BANNER, file=sys.stderr)
+    if (args.approve_mrtd or args.approve_rtmr0) and args.export_policy is None:
+        raise ValidationError(
+            "--approve-mrtd/--approve-rtmr0 approve values in an exported policy.",
+            hint="Add --export-policy FILE.",
+        )
     if args.export_policy is not None:
-        policy = measurements.to_policy(allow_placeholder=args.allow_placeholder)
+        approval: dict[str, Sequence[str]] = {
+            name: values
+            for name, values in (("MRTD", args.approve_mrtd), ("RTMR0", args.approve_rtmr0))
+            if values
+        }
+        policy = measurements.to_policy(
+            allow_placeholder=args.allow_placeholder, platform_approval=approval or None
+        )
         write_policy(policy, args.export_policy)
         print(f"wrote policy {args.export_policy}", file=sys.stderr)
     covers = covered_outputs(read_artifacts(_build_dir(args)), artifact, measurements)
@@ -2920,6 +2961,7 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
         validator=args.validator,
         nonce=args.nonce,
         allow_simulated=args.allow_simulated,
+        accept_partial=args.accept_partial,
     )
     report = render_attestation(result, args.format)
     print(json_report("attest", report) if args.format == "json" else report, file=out)

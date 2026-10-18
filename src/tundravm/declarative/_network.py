@@ -27,6 +27,17 @@ from .model import (
 NFTABLES_CONF = "/etc/nftables.conf"
 """The ruleset ``nftables.service`` loads at boot (``nft -f``), before the network is up."""
 
+NETWORKD_FIREWALL_DROPIN = (
+    "/usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf"
+)
+"""The drop-in tying systemd-networkd to ``nftables.service``."""
+
+NETWORKD_FIREWALL_TEXT = (
+    "# tundravm Firewall: no interface comes up unless the ruleset loaded\n"
+    "[Unit]\nRequires=nftables.service\nAfter=nftables.service\n"
+)
+"""networkd (and ``network-online.target`` through wait-online) fails with the firewall."""
+
 NETWORK_DIR = "/etc/systemd/network"
 """Where ``Network`` writes its ``.network`` file."""
 
@@ -157,9 +168,18 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
 
 
 def expand_firewall(firewall: Firewall, items: Iterable[Declaration]) -> tuple[Declaration, ...]:
-    """The declarations *firewall* stands for in a variant declaring *items*."""
-    return (
+    """The declarations *firewall* stands for in a variant declaring *items*: with an enabled
+    ``systemd-networkd`` (``Network``), :data:`NETWORKD_FIREWALL_DROPIN` too."""
+    items = tuple(items)
+    rendered: tuple[Declaration, ...] = (
         Package("nftables"),
         File.text(NFTABLES_CONF, nftables_conf(firewall, items), mode=0o755),
         Unit("nftables.service", enabled=True),
     )
+    networkd = any(
+        isinstance(item, Unit) and item.name == "systemd-networkd.service" and item.enabled
+        for item in items
+    )
+    if networkd:
+        rendered += (File.text(NETWORKD_FIREWALL_DROPIN, NETWORKD_FIREWALL_TEXT),)
+    return rendered

@@ -159,6 +159,53 @@ def test_scan_console_reads_status_lines_in_every_unit_format() -> None:
     assert scan.failed == ("web.service", "data.mount") and scan.fatal == ()
 
 
+def test_a_unit_that_fails_or_exits_after_starting_is_caught() -> None:
+    scan = scan_console(
+        "[  OK  ] Started app.service - App.\n"
+        "[  OK  ] Started worker.service.\n"
+        "[    1.9] systemd[1]: hello.service: Deactivated successfully.\n"
+        "[  OK  ] Finished hello.service.\n"
+        "[    2.1] systemd[1]: app.service: Main process exited, code=exited, status=1/FAILURE\n"
+        "[    2.1] systemd[1]: app.service: Failed with result 'exit-code'.\n"
+        "[    2.2] systemd[1]: worker.service: Deactivated successfully.\n"
+    )
+    assert scan.failed == ("app.service",)
+    assert scan.exited == ("worker.service",)  # a finished oneshot is done, not exited
+    assert {"app.service", "worker.service", "hello.service"} <= set(scan.started)
+
+
+def test_an_expected_unit_that_exits_fails_the_boot(fake: Fake) -> None:
+    gone = "[   3.0] systemd[1]: app.service: Deactivated successfully.\r\n"
+    result = fake.run(*BOOTED, gone, expect_units=("app", "hello"))
+    assert not result.ok and result.exited == ("app.service",) and result.missing == ()
+    assert "exited units: app.service" in result.summary()
+
+
+def test_the_summary_shows_a_failed_units_own_lines(fake: Fake) -> None:
+    lines = (
+        "[    1.87] systemd[1]: Starting nftables.service...\n",
+        "[    1.90] nft[155]: /etc/nftables.conf:7:3-30: Error: Could not process rule\n",
+        "[    1.91] systemd[1]: nftables.service: Failed with result 'exit-code'.\n",
+        "[FAILED] Failed to start nftables.service.\n",
+        "[    1.92] chronyd[160]: chronyd version 4.6 starting\n",
+    )
+    result = fake.run(*BOOTED, *lines)
+    summary = result.summary()
+    assert result.failed == ("nftables.service",)
+    section = summary.split("--- nftables.service ---\n", 1)[1].split("\n---", 1)[0]
+    assert "nft[155]: /etc/nftables.conf:7:3-30: Error" in section
+    assert "Failed with result 'exit-code'" in section and "chronyd" not in section
+
+
+def test_qemu_exiting_with_an_error_after_the_markers_fails_the_boot(fake: Fake) -> None:
+    result = fake.run(*BOOTED, hang=0, exit_code=3, settle=5)
+    assert result.missing == () and result.returncode == 3 and not result.ok
+
+
+def test_the_console_carries_the_journal() -> None:
+    assert "systemd.journald.forward_to_console=1" in CONSOLE_CMDLINE
+
+
 def test_qemu_command_boots_a_disk_on_a_snapshot_with_a_single_firmware(tmp_path: Path) -> None:
     firmware = tmp_path / "OVMF.fd"
     firmware.write_bytes(b"fw")

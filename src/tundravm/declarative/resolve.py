@@ -57,6 +57,7 @@ from .model import (
     UnitReady,
     Variant,
 )
+from .systemd import target_unit
 
 Identity = tuple[str, ...]
 
@@ -558,6 +559,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     _check_targets(state, chain)
     _expand_firewall(state)
     items = tuple(state.items.values())
+    _check_unit_files(state, items)
     _check_network(state, items)
     _check_references(state, items)
     _check_exports(state)
@@ -584,6 +586,45 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
                 state.diagnostics.append(found)
     return resolved, state
+
+
+def _unit_files(item: Declaration) -> tuple[str, ...]:
+    """The unit files *item* writes: a ``Service``'s or ``Task``'s (with its socket or
+    timer), a ``Mount``'s, a ``Unit``'s that ships text."""
+    if isinstance(item, Service):
+        unit = unit_name(item.name)
+        stem = unit.removesuffix(".service").removesuffix("@")
+        return (unit, *((stem + ".socket",) if item.socket is not None else ()))
+    if isinstance(item, Task):
+        timer = item.unit.removesuffix(".service") + ".timer"
+        return (item.unit, *((timer,) if item.schedule is not None else ()))
+    if isinstance(item, Mount):
+        return (target_unit(item.ref),)
+    if isinstance(item, Unit) and item.content is not None:
+        return (item.name,)
+    return ()
+
+
+def _check_unit_files(state: _Resolution, items: Sequence[Declaration]) -> None:
+    """Report two declarations writing one unit file: one file would silently replace the
+    other (``Service("app")`` and ``Unit("app.service", text)``, ``Task`` and ``Service``)."""
+    writers: dict[str, Declaration] = {}
+    for item in items:
+        for unit in _unit_files(item):
+            first = writers.setdefault(unit, item)
+            if first is item:
+                continue
+            where = display_location(declared_at(first))
+            state.report(
+                "unit-collision",
+                f"{describe(identity(item))} and {describe(identity(first))}"
+                + (f" (declared at {where})" if where else "")
+                + f" both write {unit}",
+                subject=unit,
+                at=item,
+                hint="Rename one of them; a packaged unit takes Unit(name, dropin=...), and a "
+                "Service's own unit is changed through its fields.",
+            )
 
 
 def _expand_firewall(state: _Resolution) -> None:

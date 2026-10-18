@@ -103,6 +103,32 @@ class Component:
 
 
 @dataclass(frozen=True, slots=True)
+class UnboundBinary:
+    """A binary ``binaries=`` read whose sha256 is not the one the bake recorded for its
+    image path (or the bake recorded none): its embedded dependencies are listed here,
+    with where they came from, and never as components of the image."""
+
+    build: str
+    dest: str
+    """The image path the build installs it at."""
+    path: str
+    """Where it was read: under the ``binaries`` directory, at its image path or file name."""
+    sha256: str
+    recorded: str | None
+    """The sha256 the bake recorded for ``dest``; ``None`` when it recorded none."""
+    dependencies: tuple[Component, ...] = ()
+
+    def describe(self) -> str:
+        """One sentence: which binary, its sha256, what the bake recorded."""
+        baked = (
+            "the bake recorded no digest for it"
+            if self.recorded is None
+            else f"the bake recorded {self.recorded}"
+        )
+        return f"{self.build}'s {self.dest} read from {self.path} hashes to {self.sha256}; {baked}"
+
+
+@dataclass(frozen=True, slots=True)
 class Sbom:
     """A software bill of materials for one variant; :meth:`render` serializes it."""
 
@@ -132,6 +158,9 @@ class Sbom:
     """ISO 8601 UTC creation time: ``SOURCE_DATE_EPOCH`` when set, else when built."""
     notes: tuple[str, ...] = ()
     """What the document could not include, and why (missing manifest, no lockfile)."""
+    unbound_binaries: tuple[UnboundBinary, ...] = ()
+    """The ``binaries=`` whose sha256 the bake did not record: their dependencies are not
+    components, and each makes the document unbound."""
 
     @property
     def complete(self) -> bool:
@@ -191,7 +220,17 @@ class Sbom:
         }
         if self.notes:
             creation["comment"] = " ".join(self.notes)
+        annotations = [
+            {
+                "annotationDate": self.created,
+                "annotationType": "OTHER",
+                "annotator": f"Tool: tundravm-{self.tundravm_version}",
+                "comment": _unbound_comment(binary),
+            }
+            for binary in self.unbound_binaries
+        ]
         return {
+            **({"annotations": annotations} if annotations else {}),
             "spdxVersion": "SPDX-2.3",
             "dataLicense": "CC0-1.0",
             "SPDXID": "SPDXRef-DOCUMENT",
@@ -258,7 +297,18 @@ class Sbom:
             for component, entry in zip(self.components, components, strict=True)
             if component.kind not in EMBEDDED_KINDS or component.parent not in refs
         ]
+        tool = {"type": "application", "name": "tundravm", "version": self.tundravm_version}
+        annotations = [
+            {
+                "subjects": ["image"],
+                "annotator": {"component": tool},
+                "timestamp": self.created,
+                "text": _unbound_comment(binary),
+            }
+            for binary in self.unbound_binaries
+        ]
         return {
+            **({"annotations": annotations} if annotations else {}),
             "bomFormat": "CycloneDX",
             "specVersion": "1.5",
             "serialNumber": f"urn:uuid:{self._uuid()}",
@@ -299,8 +349,9 @@ class Sbom:
 
     def _uuid(self) -> uuid.UUID:
         """A name-based UUID over everything but the creation time: same inputs, same id."""
+        unbound = [_unbound_comment(b) for b in self.unbound_binaries]
         payload = json.dumps(
-            [list(self.metadata()), [_key(c) for c in self.components]], sort_keys=True
+            [list(self.metadata()), [_key(c) for c in self.components], *unbound], sort_keys=True
         )
         return uuid.uuid5(_NAMESPACE, payload)
 
@@ -336,7 +387,11 @@ def sbom(
     unpacked root) or by file name (a build cache): each source build's installed
     binary that records its dependencies (Go build information, ``cargo auditable``'s
     ``.dep-v0``) adds them as ``go-module`` or ``crate`` components, a note naming
-    any binary not found or recording nothing.
+    any binary not found or recording nothing. A binary is only taken when its sha256
+    is the one the bake recorded for its image path (``Artifact.installed``, read from
+    the UKI's initrd); otherwise (another binary, or nothing recorded, as for a lowered
+    recipe) it goes to :attr:`Sbom.unbound_binaries` with its path, sha256 and
+    dependencies, and the document is unbound (incomplete) with a note.
     """
     if isinstance(subject, Artifact):
         document = _of_artifact(subject, lock, manifest, allow_unbound=allow_unbound)
@@ -345,13 +400,30 @@ def sbom(
     if binaries is None:
         return document
     notes = list(document.notes)
-    found = _embedded(document.sources, Path(binaries), notes)
-    return replace(document, components=_sorted((*document.components, *found)), notes=tuple(notes))
+    recorded = subject.installed if isinstance(subject, Artifact) else None
+    found, unbound = _embedded(document.sources, Path(binaries), notes, recorded or {})
+    notes.extend(
+        f"unbound, the document is incomplete: binaries: {binary.describe()}; its "
+        f"{len(binary.dependencies)} dependencies are listed as unbound, not as components"
+        for binary in unbound
+    )
+    return replace(
+        document,
+        components=_sorted((*document.components, *found)),
+        notes=tuple(notes),
+        bound=document.bound and not unbound,
+        unbound_binaries=tuple(unbound),
+    )
 
 
-def _embedded(sources: Iterable[Component], root: Path, notes: list[str]) -> list[Component]:
-    """The dependencies the binaries of the ``build`` *sources* record, read under *root*."""
+def _embedded(
+    sources: Iterable[Component], root: Path, notes: list[str], recorded: Mapping[str, str]
+) -> tuple[list[Component], list[UnboundBinary]]:
+    """The dependencies the binaries of the ``build`` *sources* record, read under *root*:
+    those of a binary whose sha256 is the one the bake *recorded* for its image path, and
+    the binaries whose sha256 is not (or was not recorded), with theirs."""
     found: dict[tuple[str, str, str, str], Component] = {}
+    unbound: list[UnboundBinary] = []
     for source in sources:
         if source.kind != "build":
             continue
@@ -363,21 +435,40 @@ def _embedded(sources: Iterable[Component], root: Path, notes: list[str]) -> lis
             if path is None:
                 notes.append(f"binaries: {source.name}'s {dest} is not under {root}")
                 continue
-            deps = embedded_dependencies(path.read_bytes())
+            data = path.read_bytes()
+            deps = embedded_dependencies(data)
             if deps is None:
                 notes.append(
                     f"binaries: {source.name}'s {dest} records no dependencies "
                     "(not Go 1.18+ build information or cargo auditable)"
                 )
                 continue
-            for dep in deps:
-                if not dep.main:
-                    origin = dep.source if dep.kind == "crate" else ""
-                    key = (dep.kind, dep.name, dep.version, source.name)
-                    found[key] = Component(
-                        dep.kind, dep.name, dep.version, origin=origin, parent=source.name
-                    )
-    return list(found.values())
+            components: dict[tuple[str, str, str, str], Component] = {
+                (dep.kind, dep.name, dep.version, source.name): Component(
+                    dep.kind,
+                    dep.name,
+                    dep.version,
+                    origin=dep.source if dep.kind == "crate" else "",
+                    parent=source.name,
+                )
+                for dep in deps
+                if not dep.main
+            }
+            sha = _sha256(data)
+            if recorded.get(dest) == sha:
+                found.update(components)
+                continue
+            unbound.append(
+                UnboundBinary(
+                    source.name,
+                    dest,
+                    str(path),
+                    sha,
+                    recorded.get(dest),
+                    tuple(components.values()),
+                )
+            )
+    return list(found.values()), unbound
 
 
 def manifest_path(artifact: Artifact) -> Path:
@@ -889,6 +980,32 @@ def _embedded_rows(document: Sbom) -> list[tuple[str, ...]]:
 
 
 _EMBEDDED_HEADER = ("NAME", "KIND", "VERSION", "BUILD", "ORIGIN")
+_UNBOUND_HEADER = ("BUILD", "INSTALLS", "READ FROM", "SHA256", "RECORDED")
+_UNBOUND_DEPS_HEADER = ("NAME", "KIND", "VERSION", "BUILD", "BINARY", "ORIGIN")
+
+
+def _unbound_comment(binary: UnboundBinary) -> str:
+    """An unbound binary for an SPDX or CycloneDX annotation: provenance, then its purls."""
+    purls = ", ".join(purl(c) for c in binary.dependencies) or "none"
+    return (
+        f"unbound binary: {binary.describe()}; the dependencies it records are not verified "
+        f"against the image and are not components: {purls}"
+    )
+
+
+def _unbound_rows(document: Sbom) -> tuple[list[tuple[str, ...]], list[tuple[str, ...]]]:
+    """Rows of the unbound binaries and of the dependencies each records."""
+    binaries: list[tuple[str, ...]] = [
+        (b.build, b.dest, b.path, b.sha256, b.recorded or "-") for b in document.unbound_binaries
+    ]
+    deps: list[tuple[str, ...]] = [
+        (c.name, c.kind, c.version, b.build, b.dest, c.origin or "-")
+        for b in document.unbound_binaries
+        for c in b.dependencies
+    ]
+    return binaries, deps
+
+
 _PACKAGE_HEADER = ("NAME", "VERSION", "ARCH", "ORIGIN")
 _SOURCE_HEADER = ("NAME", "KIND", "PIN", "REF", "URL", "INSTALLS")
 
@@ -917,6 +1034,12 @@ def _text(document: Sbom) -> str:
     if document.embedded:
         lines.extend(("", f"embedded ({len(document.embedded)})"))
         lines.extend(_table(_EMBEDDED_HEADER, _embedded_rows(document)))
+    if document.unbound_binaries:
+        binaries, deps = _unbound_rows(document)
+        lines.extend(("", f"unbound binaries ({len(binaries)})"))
+        lines.extend(_table(_UNBOUND_HEADER, binaries))
+        lines.extend(("", f"unbound dependencies ({len(deps)})"))
+        lines.extend(_table(_UNBOUND_DEPS_HEADER, deps))
     lines.extend(f"note: {note}" for note in document.notes)
     return "\n".join(lines) + "\n"
 
@@ -942,6 +1065,12 @@ def _markdown(document: Sbom) -> str:
     if document.embedded:
         lines.extend(["", f"### Embedded dependencies ({len(document.embedded)})", ""])
         lines.extend(_md_table(_EMBEDDED_HEADER, _embedded_rows(document)))
+    if document.unbound_binaries:
+        binaries, deps = _unbound_rows(document)
+        lines.extend(["", f"### Unbound binaries ({len(binaries)})", ""])
+        lines.extend(_md_table(_UNBOUND_HEADER, binaries))
+        lines.extend(["", f"### Unbound dependencies ({len(deps)})", ""])
+        lines.extend(_md_table(_UNBOUND_DEPS_HEADER, deps))
     if document.notes:
         lines.append("")
         lines.extend(f"> note: {note}" for note in document.notes)

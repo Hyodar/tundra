@@ -26,6 +26,7 @@ from tundravm._modules import tdxs as _tdxs
 from tundravm._source import FrozenMap
 from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import (
+    approved_registers,
     is_placeholder,
     read_policy,
     validator_measurements,
@@ -324,8 +325,10 @@ class Tdxs(Composite):
         each: the tdxs validator compares a single expected value per register, so a
         register the policy accepts several values for (a gcp policy's per-firmware MRTD
         and RTMR0) is narrowed with *firmware* and *label*.
-        Unverifiable registers are not checked; pass *mrtd* to check an MRTD the
-        policy cannot predict (a qemu host you trust).
+        Unverifiable registers are not checked unless the policy's ``platform_approval``
+        (``measure --approve-mrtd/--approve-rtmr0``) approves values for them, which are
+        checked like measured ones; *mrtd* overrides the MRTD to check (a qemu host you
+        trust).
         A placeholder policy is refused unless *allow_placeholder*. Other
         keyword arguments are ``Tdxs`` fields (``issuer``, ``check_revocations``...).
         """
@@ -342,8 +345,7 @@ class Tdxs(Composite):
                 "allow_placeholder=True for a test image.",
                 context={"policy": str(policy) if not isinstance(policy, Mapping) else "dict"},
             )
-        registers = data["registers"]
-        assert isinstance(registers, dict)
+        registers = approved_registers(data)
         expected = validator_measurements(registers, mrtd=mrtd, firmware=firmware, label=label)
         if not expected:
             raise MeasurementError(

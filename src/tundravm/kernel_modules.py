@@ -23,7 +23,7 @@ from typing import Literal
 
 from tundravm.models import MODULES_PATH, DebloatConfig, ProfileState
 
-MODULE_SETS_VERSION = 1
+MODULE_SETS_VERSION = 2
 """Bumped whenever a curated set changes; the generated finalize check names it."""
 
 TDX_GUEST_MODULES: tuple[str, ...] = (
@@ -93,6 +93,10 @@ FIREWALL_MODULES: tuple[str, ...] = (
     "nft_ct",
     # Firewall(default="reject"): TCP resets and ICMP unreachables (pulls nf_reject_ipv4/6).
     "nft_reject_inet",
+    # nf_tables and nf_conntrack pull libcrc32c, whose init allocates the "crc32c" cipher
+    # and fails without an implementation: its softdep names the alias crc32c, which mkosi
+    # skips (the first boots' nftables.service failed on it). The generic one runs anywhere.
+    "crc32c_generic",
 )
 """A variant that installs ``nftables`` (a ``Firewall``), on top of its outputs' sets."""
 

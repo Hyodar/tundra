@@ -134,7 +134,7 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "50efe4c0bcd7d6829727380464b55522dc4d2e50d9407bc9158a3577ad125482"
+EQUIVALENCE_TREE = "86f8db6d09f04659a43dcb04ffb2e37252cc84fb72b83138a5b2a0f0c17a068d"
 EQUIVALENCE_RECIPE = "e650653c311025468325f44534964be348eef12f66437c0af9dbaef97c63b680"
 """The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
 fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly
@@ -144,7 +144,9 @@ when debloat's default keep list gained ``timers.target``, and when the azure pr
 unit became a typed ``Task`` and runtime-init step units render through the typed table, and
 when reproducible current-dialect finalize scripts gained the deterministic accounts step, and
 when the azure provisioning unit gained ``ConditionVirtualization=microsoft`` and cloud glue
-units moved first in a profile's unit order)."""
+units moved first in a profile's unit order, and when current-dialect debloat started masking
+packaged triggers with their units, keeping the targets enabled units reference, and expanding
+removal globs)."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:

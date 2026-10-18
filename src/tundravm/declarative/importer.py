@@ -841,7 +841,7 @@ class _VariantReader:
         self.consumed.add(rels[0])
         self.postinst_rel = rels[0]
         lines = text[len(PREAMBLE) :].removesuffix("\n").split("\n") if text != PREAMBLE else []
-        lines = parsed.take_minimize(lines)
+        lines = parsed.take_minimize(lines, historical=self.historical)
         lines = parsed.take_synthetic(lines, historical=self.historical)
         lines = parsed.take_unit_states(lines)
         parsed.commands = lines
@@ -866,7 +866,7 @@ class _VariantReader:
         else:
             synthetic, commands = lines, []
         synthetic = self._take_module_check(synthetic)
-        candidate = _debloat_from(synthetic, postinst.minimize)
+        candidate = _debloat_from(synthetic, postinst.minimize, historical=self.historical)
         if candidate is None:
             if synthetic and synthetic != [""]:
                 self.notes.append(f"{rels[0]}: finalize lines not recognized; kept as a hook")
@@ -1214,7 +1214,7 @@ class _Postinst:
     minimize: tuple[tuple[str, ...], tuple[str, ...]] | None = None
     extra: list[str] = field(default_factory=list)
 
-    def take_minimize(self, lines: list[str]) -> list[str]:
+    def take_minimize(self, lines: list[str], *, historical: bool) -> list[str]:
         marker = "# Debloat: remove unwanted systemd binaries"
         if marker not in lines:
             return lines
@@ -1229,7 +1229,7 @@ class _Postinst:
         if len(lists) != 2:
             return lines
         bins, units = lists
-        if lines[index - 1 :] != _minimize_lines(bins, units):
+        if lines[index - 1 :] != _minimize_lines(bins, units, historical=historical):
             return lines
         self.minimize = (bins, units)
         return lines[: index - 1]
@@ -1285,10 +1285,12 @@ def _states_reproduce(enabled: list[str], disabled: list[str], masked: list[str]
     return [u for u in order if u in masked] == masked
 
 
-def _minimize_lines(bins: Sequence[str], units: Sequence[str]) -> list[str]:
+def _minimize_lines(
+    bins: Sequence[str], units: Sequence[str], *, historical: bool = False
+) -> list[str]:
     config = DebloatConfig(systemd_bins_keep=tuple(bins), systemd_units_keep=tuple(units))
     text = DeterministicMkosiEmitter()._render_postinst_script(
-        [], ProfileState(name="import", debloat=config)
+        [], ProfileState(name="import", debloat=config), historical=historical
     )
     return text[len(PREAMBLE) :].removesuffix("\n").split("\n")
 
@@ -1456,25 +1458,29 @@ def _typed_units(
 
 
 def _debloat_from(
-    lines: list[str], minimize: tuple[tuple[str, ...], tuple[str, ...]] | None
+    lines: list[str],
+    minimize: tuple[tuple[str, ...], tuple[str, ...]] | None,
+    *,
+    historical: bool = False,
 ) -> Debloat | None:
-    """The :class:`Debloat` whose finalize lines are *lines*, if there is one."""
+    """The :class:`Debloat` whose finalize lines are *lines*, if there is one (*historical*:
+    written by ``nethermind-v1``)."""
     if not lines or lines[0] != "# Debloat: clean files in var directories":
         return None
     removed: list[str] = []
     conditional: dict[str, list[str]] = {}
     profile: str | None = None
     for line in lines:
-        rm = re.fullmatch(r'(\s*)rm -rf "\$BUILDROOT(/[^"]*)"', line)
+        rm = re.fullmatch(r'(\s*)rm -rf "\$BUILDROOT(/\S*)', line)  # a glob: quotes around it
         cond = re.fullmatch(r'if \[\[ ! "\$\{PROFILES:-\}" == \*"([^"]+)"\* \]\]; then', line)
         if cond:
             profile = cond.group(1)
         elif line == "fi":
             profile = None
         elif rm and profile is not None and rm.group(1):
-            conditional.setdefault(profile, []).append(rm.group(2))
+            conditional.setdefault(profile, []).append(rm.group(2).replace('"', ""))
         elif rm and not rm.group(1):
-            removed.append(rm.group(2))
+            removed.append(rm.group(2).replace('"', ""))
     defaults = DebloatConfig()
     default_paths = set(defaults.paths_remove)
     kept_by_variant = {path for paths in conditional.values() for path in paths}
@@ -1501,13 +1507,13 @@ def _debloat_from(
         return None
     config = debloat_config(candidate)
     emitted = DeterministicMkosiEmitter()._synthetic_finalize_lines(
-        ProfileState(name="import", debloat=config)
+        ProfileState(name="import", debloat=config), historical=historical
     )
     if emitted != lines:
         return None
     if minimize is not None and _minimize_lines(
-        config.systemd_bins_keep, config.effective_units_keep
-    ) != _minimize_lines(*minimize):
+        config.systemd_bins_keep, config.effective_units_keep, historical=historical
+    ) != _minimize_lines(*minimize, historical=historical):
         return None
     return candidate
 

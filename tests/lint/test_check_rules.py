@@ -253,6 +253,12 @@ def test_debloat_masks_needed_units() -> None:
     assert "keep_units" in (diags[0].hint or "")
 
 
+def test_debloat_keeps_the_targets_an_enabled_service_pulls_in() -> None:
+    """The current dialect's masking keeps the targets enabled units reference."""
+    online = Service("web", "/usr/bin/web", wants=("network-online.target", "time-set.target"))
+    assert report(recipe(online)) == []
+
+
 def test_debloat_keep_extra_or_disabled_is_fine() -> None:
     kept = Debloat(keep_units_extra=("systemd-networkd.service",), keep_modules=True)
     assert report(recipe(NEEDS_NETWORKD, kept)) == []

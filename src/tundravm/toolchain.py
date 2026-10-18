@@ -38,12 +38,15 @@ class MkosiTool:
 
     *source* is ``nix`` (the pinned nixpkgs' mkosi), ``pip`` (installed in tundravm's
     Python environment) or ``host`` (found on PATH). *rev* is the nixpkgs rev for
-    ``nix`` and the git commit of a pip install from git.
+    ``nix`` and the git commit of a pip install from git. *path* is the resolved
+    executable a bake observed running (a ``/nix/store`` path for ``nix``); a lock,
+    which records what should run, leaves it ``None``.
     """
 
     version: str
     source: MkosiSource
     rev: str | None = None
+    path: str | None = None
 
     def label(self) -> str:
         rev = f" @{self.rev[:12]}" if self.rev else ""
@@ -92,6 +95,8 @@ class Toolchain:
             mkosi: dict[str, Any] = {"version": self.mkosi.version, "source": self.mkosi.source}
             if self.mkosi.rev:
                 mkosi["rev"] = self.mkosi.rev
+            if self.mkosi.path:
+                mkosi["path"] = self.mkosi.path
             out["mkosi"] = mkosi
         if self.systemd is not None:
             out["systemd"] = self.systemd
@@ -129,6 +134,7 @@ class Toolchain:
                 version=str(mkosi.get("version", "")),
                 source=cast(MkosiSource, str(mkosi.get("source", "host"))),
                 rev=None if mkosi.get("rev") is None else str(mkosi["rev"]),
+                path=None if mkosi.get("path") is None else str(mkosi["path"]),
             ),
             systemd=None if raw.get("systemd") is None else str(raw["systemd"]),
             nixpkgs=None
@@ -370,11 +376,14 @@ def running_toolchain(
     locked: Toolchain | None = None,
     resolver: NixpkgsResolver | None = None,
 ) -> Toolchain:
-    """The toolchain *backend* runs with: pinned from *locked*, resolved, or probed on the host.
+    """The toolchain *backend* runs with: observed, pinned from *locked*, resolved, or probed.
 
-    A backend whose ``toolchain_source`` is ``nix`` (nix, lima) runs the nixpkgs the
-    lock pins, so *locked*'s nixpkgs, mkosi and systemd are what runs; without one,
-    *resolver* resolves nixpkgs now (``None``: unresolved, mkosi follows the branch).
+    A backend whose ``toolchain_source`` is ``nix`` (nix, lima) always enters the flake
+    pinned to the lock's nixpkgs (whose mkosi version the flake guards), so *locked*'s
+    nixpkgs, mkosi and systemd are what it will run; without one, *resolver* resolves
+    nixpkgs now (``None``: unresolved, mkosi follows the branch). Once the backend has
+    run mkosi, the identity it observed (``executed_mkosi``: the resolved executable and
+    its ``--version``) replaces the expected mkosi, so a bake records what actually ran.
     ``host`` probes mkosi and ukify on this host; a backend without one (in-process)
     runs no mkosi. The measurement implementation ships with tundravm.
     """
@@ -392,6 +401,9 @@ def running_toolchain(
             mkosi = MkosiTool(found.mkosi, "nix", found.pin.rev)
         else:
             mkosi = MkosiTool(NIXPKGS_BRANCH, "nix")
+        observed = getattr(backend, "executed_mkosi", None)
+        if isinstance(observed, MkosiTool):
+            mkosi = observed
     elif source == "host":
         mkosi, systemd = probe_mkosi(run), probe_systemd(run)
     return Toolchain(

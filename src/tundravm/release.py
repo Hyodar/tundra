@@ -340,7 +340,7 @@ def release(
     is the previous release (its directory, or an evidence bundle) the changes are
     against; default: the newest finished release of the recipe in *releases*.
     *recipe_path* is recorded in the evidence. *progress* receives one line per stage.
-    *attestations* are ``tundravm.attestation/1`` records (``attest --record``) the
+    *attestations* are ``tundravm.attestation/2`` records (``attest --record``) the
     evidence bundles, and *max_age* (seconds or a ``timedelta``; default a day) how far
     their ``observed_at`` may be from the moment the evidence stage judges them (its wall
     clock, never ``SOURCE_DATE_EPOCH``) for ``attested``, which also requires every

@@ -103,6 +103,7 @@ _ATTEST = frozenset(
         "attestation-missing",
         "attestation-policy-mismatch",
         "attestation-untrusted",
+        "attestation-partial",
         "attestation-stale",
     }
 )

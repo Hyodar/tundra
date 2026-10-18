@@ -8,7 +8,7 @@ import re
 import subprocess
 import textwrap
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Protocol
 from tundravm.models import ArtifactRef, BakeRequest, BakeResult, OutputTarget
 
 if TYPE_CHECKING:
-    from tundravm.toolchain import NixpkgsPin, Toolchain
+    from tundravm.toolchain import MkosiTool, NixpkgsPin, Toolchain
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +260,56 @@ def flake_lock(pin: NixpkgsPin) -> str:
         "version": 7,
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+MKOSI_IDENTITY_SCRIPT = 'm=$(command -v mkosi) && readlink -f "$m" && mkosi --version'
+"""Run in a pinned nix shell: the resolved mkosi executable, then its version line."""
+NIX_STORE_PREFIX = "/nix/store/"
+
+
+def pinned_mkosi(
+    probe: subprocess.CompletedProcess[str],
+    request: BakeRequest,
+    *,
+    context: Mapping[str, str],
+    hint: str,
+) -> MkosiTool:
+    """The mkosi a pinned nix shell ran, from :data:`MKOSI_IDENTITY_SCRIPT`'s output *probe*.
+
+    ``BackendExecutionError`` when the shell said nothing, resolved mkosi outside the Nix
+    store, or runs a version other than the one *request*'s lockfile pins.
+    """
+    from tundravm.errors import BackendExecutionError
+    from tundravm.toolchain import MkosiTool, version_token
+
+    lines = [line.strip() for line in (probe.stdout or "").splitlines() if line.strip()]
+    if probe.returncode != 0 or len(lines) < 2:
+        detail = (probe.stderr or "").strip().splitlines()[-1:] or ["no output"]
+        raise BackendExecutionError(
+            f"Could not identify the mkosi the pinned Nix shell runs: {detail[0]}",
+            hint=hint,
+            context=dict(context),
+        )
+    path, version = lines[-2], version_token(lines[-1])
+    if not path.startswith(NIX_STORE_PREFIX):
+        raise BackendExecutionError(
+            f"The pinned Nix shell resolved mkosi outside the Nix store: {path}.",
+            hint="The flake's mkosi must come first on PATH; " + hint,
+            context=dict(context),
+        )
+    toolchain = request.toolchain
+    pin = None if toolchain is None else toolchain.nixpkgs
+    locked = None if toolchain is None else toolchain.mkosi
+    pinned = pin is not None and locked is not None and locked.source == "nix"
+    if pinned and locked is not None and locked.version != version:
+        raise BackendExecutionError(
+            f"The pinned Nix shell ran mkosi {version} ({path}), but tundravm.lock "
+            f"pins mkosi {locked.version}.",
+            hint="Run `tundravm lock --update toolchain` to pin the mkosi nixpkgs "
+            "provides, then bake again.",
+            context=dict(context),
+        )
+    return MkosiTool(version, "nix", None if pin is None else pin.rev, path=path)
 
 
 def write_flake_nix(target_dir: Path, toolchain: Toolchain | None = None) -> Path:

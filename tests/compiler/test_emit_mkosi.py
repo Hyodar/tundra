@@ -356,11 +356,17 @@ def test_compile_debloat_uses_dpkg_query(tmp_path: Path) -> None:
 
     # Binary cleanup via dpkg-query
     assert "mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/'" in content
-    # Unit masking via dpkg-query
+    # Unit masking via dpkg-query: paths and automounts too, and the triggers of masked units
+    assert "grep -E '\\.(service|socket|timer|target|mount|path|automount)$'" in content
+    assert "grep -E '/systemd/system/[^/]+\\.(socket|timer|path|automount)$'" in content
+    # nethermind-v1 keeps the historical masking, which leaves paths and automounts alone.
+    historical = _compile(_recipe(Debloat(enabled=True), mkosi=HISTORICAL), tmp_path / "v1")
+    content = _script(historical, "06-postinst.sh").read_text(encoding="utf-8")
     assert (
         "mkosi-chroot dpkg-query -L systemd | "
         "grep -E '\\.service$|\\.socket$|\\.timer$|\\.target$|\\.mount$'"
     ) in content
+    assert "automount" not in content
 
 
 def test_compile_default_target(tmp_path: Path) -> None:

@@ -411,3 +411,38 @@ def test_release_bundles_records_and_a_resume_inherits_them(
     assert not stage.resumed and final.passed, final.reasons
     assert final.spec["max_age"] == 3 * 86400
     assert verify_evidence(root / "evidence.tar.gz", require=("attested",)).passed
+
+
+def test_a_partial_record_leaves_attested_incomplete(
+    baked: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """An authentic quote whose platform registers no policy value approves is not attested."""
+    build, policy = baked
+    data = json.loads(policy.read_text(encoding="utf-8"))
+    for name in ("MRTD", "RTMR0"):
+        del data["registers"][name]
+        data["unverifiable"][name] = "qemu: depends on the host's TDVF"
+    policy.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", "utf-8")
+    record = _attested(policy, tmp_path / "att.json")
+    assert json.loads(record.read_text(encoding="utf-8"))["verdict"] == "partial"
+    found = _evidence(build, record, require=("attested",))
+    assert ("incomplete", "attestation-partial", "default/qemu") in _reasons(found)
+    assert found.index["verdict"]["attested"] == "partial"
+    directory = found.write(build / "evidence")
+    problems = _problems(verify_evidence(directory, require=("attested",)))
+    assert ("missing", "attestation-partial", "default/qemu") in problems
+
+
+def test_an_approved_platform_closes_the_unverifiable_gap_and_is_trusted(
+    baked: tuple[Path, Path], tmp_path: Path
+) -> None:
+    build, policy = baked
+    data = json.loads(policy.read_text(encoding="utf-8"))
+    data["platform_approval"] = {n: data["registers"].pop(n) for n in ("MRTD", "RTMR0")}
+    data["unverifiable"] = {n: "qemu: depends on the host's TDVF" for n in ("MRTD", "RTMR0")}
+    policy.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", "utf-8")
+    record = _attested(policy, tmp_path / "att.json")
+    found = _evidence(build, record, require=("attested",))
+    assert found.passed, found.reasons
+    assert found.index["verdict"]["attested"] == "trusted"
+    assert verify_evidence(found.write(build / "evidence"), require=("attested",)).passed

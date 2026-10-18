@@ -203,6 +203,65 @@ def test_service_template_brings_up_the_network_behind_a_firewall(service_build:
         assert check.returncode == 0, check.stderr
 
 
+def _modules_dir(root: Path) -> Path:
+    found = subprocess.run(
+        ["sudo", "find", str(root / "usr/lib/modules"), "-mindepth", "1", "-maxdepth", "1"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert len(found) == 1, found
+    return Path(found[0])
+
+
+def test_service_template_loads_nftables_modules_with_their_dependencies(
+    service_build: Path,
+) -> None:
+    """Every module ``modules.dep`` names for nf_tables and nft_ct is in the image, libcrc32c's
+    ``crc32c`` softdep has a provider (the first boots' nftables.service failed without one),
+    and the index lists only kept modules (depmod ran after mkosi pruned them)."""
+    root = service_build / "default" / "output" / "default"
+    kdir = _modules_dir(root)
+    present = set(
+        subprocess.run(
+            ["sudo", "find", str(kdir), "-name", "*.ko*", "-printf", "%P\\n"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+    )
+    deps: dict[str, list[str]] = {}
+    for line in _sudo_read(kdir / "modules.dep").splitlines():
+        module, _, needs = line.partition(":")
+        deps[module] = needs.split()
+    for name in ("nf_tables", "nft_ct", "nft_reject_inet"):
+        [module] = [m for m in deps if m.rsplit("/", 1)[-1].split(".ko")[0] == name]
+        assert {module, *deps[module]} <= present, (name, deps[module])
+    assert "kernel/crypto/crc32c_generic.ko.xz" in present
+    assert set(deps) == present, set(deps) ^ present
+
+
+def test_service_template_debloat_masks_triggers_and_keeps_ordering(service_build: Path) -> None:
+    """A trigger whose unit debloat masks is masked too (systemd-ask-password-console.path
+    failed the first boots), the targets enabled units order against stay, networkd waits for
+    the firewall, and no SSH host private key is left in the image."""
+    root = service_build / "default" / "output" / "default"
+    system = root / "etc/systemd/system"
+    for unit in ("systemd-ask-password-console.path", "proc-sys-fs-binfmt_misc.automount"):
+        assert _sudo_readlink(system / unit) == "/dev/null", unit
+    for target in ("network-pre.target", "network.target"):
+        assert not _sudo_test("-L", system / target), f"{target} is masked"
+    dropin = root / "usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf"
+    assert "Requires=nftables.service\n" in _sudo_read(dropin)
+    keys = subprocess.run(
+        ["sudo", "find", str(root / "etc"), "-name", "ssh_host_*_key"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert keys == []
+
+
 @pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
 def test_service_template_network_units_verify(service_build: Path) -> None:
     """``systemd-analyze verify`` accepts the networkd and nftables units with their drop-ins."""

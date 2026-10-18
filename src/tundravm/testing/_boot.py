@@ -32,10 +32,13 @@ CONSOLE_CMDLINE = (
     "systemd.show_status=yes",
     "systemd.status_unit_format=name",
     "systemd.log_color=no",
+    "systemd.journald.forward_to_console=1",
     "panic=-1",
 )
 """Appended to the image's command line: kernel and systemd status lines on the serial
-console, unit names in them, and a panic that ends the VM (QEMU runs ``-no-reboot``)."""
+console, unit names in them, the journal too (a failed unit's own output; the command line
+overrides ``ForwardToConsole=no`` in ``journald.conf.d``, see ``journald.conf(5)``), and a
+panic that ends the VM (QEMU runs ``-no-reboot``)."""
 
 FATAL = (
     "Kernel panic - not syncing",
@@ -55,8 +58,12 @@ _END = r"(?=[\s.]|$)"
 _STARTED = re.compile(rf"\b(?:Started|Finished|Reached target|Listening on|Mounted) {_UNIT}{_END}")
 _FAILED = re.compile(
     rf"\b(?:Failed to start|Failed to mount|Failed to listen on|Dependency failed for) "
-    rf"{_UNIT}{_END}"
+    rf"{_UNIT}{_END}|(?<!\S){_UNIT}: Failed with result "
 )
+_FINISHED = re.compile(rf"\bFinished {_UNIT}{_END}")
+_STOPPED = re.compile(rf"\bStopped {_UNIT}{_END}|(?<!\S){_UNIT}: Deactivated successfully")
+_SOURCE = re.compile(r"^\[\s*[0-9.]+\]\s+([^\s\[:]+)(?:\[[0-9]+\])?:\s")
+"""The identifier of a journal line forwarded to the console (``nft[155]: ...``)."""
 
 
 def clean_console(raw: str) -> str:
@@ -66,26 +73,59 @@ def clean_console(raw: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ConsoleScan:
-    """What a console transcript says: units started and failed, fatal lines."""
+    """What a console transcript says: units started and failed, fatal lines.
+
+    *failed* holds every unit that failed to start or failed later (``Failed with result``),
+    *exited* the units whose last state is stopped after ``Started`` (a ``Finished`` oneshot
+    that deactivates is done, not exited).
+    """
 
     started: tuple[str, ...]
     failed: tuple[str, ...]
     fatal: tuple[str, ...]
+    exited: tuple[str, ...] = ()
 
 
 def scan_console(text: str) -> ConsoleScan:
     """Read systemd's status lines and the kernel's fatal messages out of *text*."""
     started: dict[str, None] = {}
     failed: dict[str, None] = {}
+    state: dict[str, str] = {}
     fatal: list[str] = []
     for line in clean_console(text).splitlines():
         for match in _STARTED.finditer(line):
             started.setdefault(match[1])
+            if state.get(match[1]) != "done":
+                state[match[1]] = "running"
+        for match in _FINISHED.finditer(line):
+            state[match[1]] = "done"
+        for match in _STOPPED.finditer(line):
+            unit = match[1] or match[2]
+            if state.get(unit) == "running":
+                state[unit] = "exited"
         for match in _FAILED.finditer(line):
-            failed.setdefault(match[1])
+            unit = match[1] or match[2]
+            failed.setdefault(unit)
+            state[unit] = "failed"
         if any(marker in line for marker in FATAL):
             fatal.append(line.strip())
-    return ConsoleScan(tuple(started), tuple(failed), tuple(fatal))
+    exited = tuple(unit for unit, last in state.items() if last == "exited")
+    return ConsoleScan(tuple(started), tuple(failed), tuple(fatal), exited)
+
+
+def unit_lines(text: str, unit: str, limit: int = 20) -> list[str]:
+    """The last *limit* console lines about *unit*: those naming it and the forwarded journal
+    lines of a process named like it (``nft[155]:`` for ``nftables.service``)."""
+    stem = unit.rsplit(".", 1)[0]
+    found = []
+    for line in clean_console(text).splitlines():
+        source = _SOURCE.match(line)
+        name = source[1] if source else ""
+        related = len(name) >= 3 and name not in ("systemd", "kernel")
+        related = related and (stem.startswith(name) or name.startswith(stem))
+        if related or re.search(rf"(?<![\w@.-]){re.escape(unit)}(?![\w@-])", line):
+            found.append(line.strip())
+    return found[-limit:]
 
 
 def unit_name(name: str) -> str:
@@ -107,8 +147,9 @@ def missing_from(
 class BootResult:
     """One boot: the console, what it reached, what failed, how long it took.
 
-    ``missing`` lists the markers not seen and the expected units not started;
-    ``returncode`` is QEMU's own exit status, ``None`` when the harness stopped it.
+    ``missing`` lists the markers not seen and the expected units not started, ``exited``
+    the expected units that started and then stopped; ``returncode`` is QEMU's own exit
+    status, ``None`` when the harness stopped it.
     """
 
     console: str
@@ -122,21 +163,28 @@ class BootResult:
     timed_out: bool
     returncode: int | None
     stderr: str = ""
+    exited: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
-        """Every marker and expected unit seen, no unit failed, nothing fatal, in time."""
-        return not (self.missing or self.failed or self.fatal or self.timed_out)
+        """Every marker and expected unit seen and still running, no unit failed, nothing
+        fatal, in time, and QEMU did not exit with an error."""
+        qemu_failed = self.returncode not in (None, 0)
+        problems = (self.missing, self.failed, self.exited, self.fatal)
+        return not (any(problems) or self.timed_out or qemu_failed)
 
     def summary(self, tail: int = 60) -> str:
         """A failure report: what went wrong, QEMU's stderr, the console's last lines."""
         lines = [f"boot {'ok' if self.ok else 'failed'} after {self.duration:.1f}s ({self.log})"]
         lines += [f"  missing: {', '.join(self.missing)}"] if self.missing else []
         lines += [f"  failed units: {', '.join(self.failed)}"] if self.failed else []
+        lines += [f"  exited units: {', '.join(self.exited)}"] if self.exited else []
         lines += [f"  fatal: {line}" for line in self.fatal]
         lines += ["  timed out"] if self.timed_out else []
         if self.returncode is not None:
-            lines.append(f"  qemu exited {self.returncode}")
+            lines.append(f"  qemu exited {self.returncode} before the boot finished")
+        for unit in (*self.failed, *self.exited):
+            lines += [f"--- {unit} ---", *unit_lines(self.console, unit)]
         if self.stderr.strip():
             lines += ["--- qemu stderr ---", self.stderr.strip()]
         lines += [f"--- console (last {tail} lines) ---", *self.console.splitlines()[-tail:]]
@@ -358,6 +406,7 @@ def boot(
         timed_out=timed_out,
         returncode=returncode,
         stderr=_read(stderr_path),
+        exited=tuple(unit for unit in map(unit_name, expect_units) if unit in scan.exited),
     )
 
 

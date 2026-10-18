@@ -252,7 +252,7 @@ def evidence(
     ``ArtifactError``; *allow_unbound* includes them with a note and makes the
     verdict ``incomplete``.
 
-    *attestations* are ``tundravm.attestation/1`` records (``attest --record``), each
+    *attestations* are ``tundravm.attestation/2`` records (``attest --record``), each
     bundled verbatim as ``variants/<variant>/attestation-<n>.json`` of the variant
     holding the artifact its policy measured (``ValidationError`` when no selected
     variant holds it) and re-derived against that variant's policy
@@ -831,7 +831,8 @@ def _policy(
 def policy_facts(payload: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """What a valid policy *payload* says about a variant's artifact *rows*: ``placeholder``,
     ``scheme``, ``registers`` (those with accepted values), ``unverifiable`` (register:
-    reason), ``artifact_matches`` (its artifact is one of them or the UKI one boots;
+    reason; a register the policy's ``platform_approval`` approves is not one),
+    ``artifact_matches`` (its artifact is one of them or the UKI one boots;
     ``None`` when it names no sha256) and ``measures``: the ``target`` whose artifact it
     names, that ``sha256`` and, when the policy records it, the sha256 of the UKI it
     measured (``boot_payload``)."""
@@ -846,11 +847,15 @@ def policy_facts(payload: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) 
     boot = payload.get("boot_payload")
     if isinstance(boot, dict) and boot.get("sha256"):
         measures["boot_payload"] = boot["sha256"]
+    approval = payload.get("platform_approval")
+    approved = set(approval) if isinstance(approval, dict) else set()
     return {
         "placeholder": is_placeholder(payload),
         "scheme": payload.get("scheme"),
         "registers": sorted(dict(payload.get("registers") or {})),
-        "unverifiable": unverifiable(payload),
+        "unverifiable": {
+            name: why for name, why in unverifiable(payload).items() if name not in approved
+        },
         "artifact_matches": (sha in shas) if sha else None,
         "measures": measures,
     }
@@ -1232,6 +1237,10 @@ def _attested_reasons(
             "bundled policy (another policy sha256 or artifact)",
             "untrusted": f"no attestation record of {subject} is trusted (verdicts: {verdicts}); "
             "a trusted one needs `attest --validator`",
+            "partial": f"the attestation records of {subject} are partial (verdicts: "
+            f"{verdicts}): nothing disagreed, but MRTD/RTMR0 (the platform) or RTMR1/RTMR2 "
+            "(the image) had no accepted value; approve the platform with `measure "
+            "--export-policy FILE --approve-mrtd HEX --approve-rtmr0 HEX`",
             "stale": f"no trusted attestation record of {subject} was observed within "
             f"{_duration(window)} of the evaluation ({block.get('evaluated_at')})",
         }[best]
@@ -1242,12 +1251,14 @@ def _attested_reasons(
 def _attestation_state(
     entry: Mapping[str, Any], measured: object, evaluated: datetime | None, window: int
 ) -> str:
-    """One record: ``inconsistent``, ``policy-mismatch``, ``untrusted``, ``stale`` or
-    ``trusted``, the first that applies."""
+    """One record: ``inconsistent``, ``policy-mismatch``, ``partial``, ``untrusted``,
+    ``stale`` or ``trusted``, the first that applies."""
     if entry["inconsistencies"]:
         return "inconsistent"
     if entry["artifact_sha256"] != measured or entry["policy_matches"] is not True:
         return "policy-mismatch"
+    if entry["verdict"] == "partial":
+        return "partial"
     if entry["verdict"] != "trusted":
         return "untrusted"
     observed = parse_time(str(entry["observed_at"]))
@@ -1278,9 +1289,17 @@ def parse_duration(text: str) -> int:
     return int(digits) * size
 
 
-_ATTESTED_BEST = ("trusted", "stale", "untrusted", "policy-mismatch", "inconsistent")
+_ATTESTED_BEST = ("trusted", "stale", "partial", "untrusted", "policy-mismatch", "inconsistent")
 """A variant's attestation state is that of its best record, in this order."""
-_ATTESTED_ORDER = ("inconsistent", "policy-mismatch", "untrusted", "stale", "missing", "trusted")
+_ATTESTED_ORDER = (
+    "inconsistent",
+    "policy-mismatch",
+    "untrusted",
+    "partial",
+    "stale",
+    "missing",
+    "trusted",
+)
 _REPRODUCED_ORDER = ("different", "error", "interrupted", "running", "not checked", "matched")
 _POLICY_ORDER = ("invalid", "placeholder", "mismatch", "unbound", "missing", "verified")
 _SBOM_ORDER = ("material-missing", "unbound", "declared", "installed")

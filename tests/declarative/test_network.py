@@ -19,6 +19,7 @@ from tundravm.declarative import (
     compile,
     resolve,
 )
+from tundravm.declarative._network import NETWORKD_FIREWALL_DROPIN
 from tundravm.declarative.resolve import lint
 from tundravm.declarative.utils import NETWORK_FILE, Network, StaticAddress
 from tundravm.errors import ValidationError
@@ -165,6 +166,20 @@ def test_a_firewall_keeps_the_nftables_kernel_modules() -> None:
     assert "nf_tables" not in kept()
     conf = kept(Firewall())
     assert all(module in conf for module in FIREWALL_MODULES)
+
+
+def test_a_firewall_holds_networkd_until_its_ruleset_loads() -> None:
+    def dropin(*items: object) -> str | None:
+        tree = compile(_recipe(*items))
+        path = "default/mkosi.extra" + NETWORKD_FIREWALL_DROPIN
+        found = [e for e in tree.entries if e.path == path]
+        return (found[0].content or b"").decode() if found else None
+
+    text = dropin(Network(), Firewall())
+    assert text is not None
+    assert "Requires=nftables.service\n" in text and "After=nftables.service\n" in text
+    # Without networkd (another network manager) there is nothing to hold back.
+    assert dropin(Firewall(), Package("ifupdown")) is None
 
 
 def test_a_variant_opens_the_ports_it_adds_and_edits_the_firewall() -> None:

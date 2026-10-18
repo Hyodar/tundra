@@ -81,6 +81,7 @@ from tundravm.observability import Event, Progress, Reporter, TextReporter, disp
 from tundravm.toolchain import TOOLCHAIN_UPDATE, NixpkgsResolver, lock_toolchain
 
 from . import _bake, _compile
+from ._initrd import installed_digests
 from ._lowered import LOCK_FILENAME, Lowered
 from .lower import lower
 from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
@@ -248,6 +249,9 @@ class Artifact:
     """The UKI this disk artifact boots, as the bake recorded it; ``None`` when unknown."""
     boot_payload_sha256: str | None = None
     """The sha256 of ``boot_payload`` at bake time."""
+    installed: Mapping[str, str] | None = field(default=None, hash=False)
+    """``{image path: sha256}`` of each source build's installed file, read from the UKI's
+    initrd at bake time; ``None`` when the bake could not read it (nothing recorded)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,11 +294,18 @@ class Measurements:
             **dict(self.extra),
         }
 
-    def to_policy(self, *, allow_placeholder: bool = False) -> dict[str, object]:
+    def to_policy(
+        self,
+        *,
+        allow_placeholder: bool = False,
+        platform_approval: Mapping[str, Sequence[str]] | None = None,
+    ) -> dict[str, object]:
         """The verifier policy ``measure --export-policy`` writes and ``Tdxs.from_policy`` reads.
 
         Placeholder values are refused (``MeasurementError``) unless
-        *allow_placeholder*, and then carry a note saying so.
+        *allow_placeholder*, and then carry a note saying so. *platform_approval* maps
+        ``MRTD``/``RTMR0`` to values the operator approves for the platform (``measure
+        --approve-mrtd/--approve-rtmr0``); ``attest`` trusts a quote only when both match.
         """
         return policy_payload(
             scheme=self.scheme,
@@ -306,6 +317,7 @@ class Measurements:
             artifact_sha256=self.artifact_digest,
             boot_payload=self._boot_payload(),
             allow_placeholder=allow_placeholder,
+            platform_approval=platform_approval,
         )
 
     def _boot_payload(self) -> dict[str, str] | None:
@@ -1240,6 +1252,7 @@ def bake_image(
                 "tree_digest": tree.digest,
                 "ports": list(secret_ports(baking, name)),
                 "reproducibility": None,
+                **_installed_record(baking, name, result.profiles[name]),
             }
         for name, entry in kept.items():
             if name in img.state.profiles:  # a variant the recipe dropped goes
@@ -1590,9 +1603,39 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
                     build=base,
                     boot_payload=ref.boot_payload,
                     boot_payload_sha256=ref.boot_payload_digest,
+                    installed=_recorded_installed(own.get("installed")),
                 )
             )
     return tuple(artifacts)
+
+
+def _installed_record(img: Lowered, name: str, built: ProfileBuildResult) -> dict[str, object]:
+    """``{"installed": {path: sha256}}`` for *name*'s source-build files read from its UKI's
+    initrd; empty when it builds none or no UKI could be read (nothing is recorded)."""
+    dests = sorted(
+        {
+            step.dest
+            for build in img.source_builds(profile=name).values()
+            for step in build.install
+            if step.kind != "tree"
+        }
+    )
+    ukis = [
+        ref.path if ref.path.suffix == ".efi" else ref.boot_payload
+        for ref in built.artifacts.values()
+    ]
+    uki = next((path for path in ukis if path is not None and path.is_file()), None)
+    if not dests or uki is None:
+        return {}
+    found = installed_digests(uki, dests)
+    return {} if found is None else {"installed": found}
+
+
+def _recorded_installed(value: object) -> dict[str, str] | None:
+    """A bake record's ``installed`` map, ``None`` when it holds none."""
+    if not isinstance(value, Mapping):
+        return None
+    return {str(path): str(sha) for path, sha in value.items()}
 
 
 def select_artifact(

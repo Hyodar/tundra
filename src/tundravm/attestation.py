@@ -15,9 +15,13 @@ job of a ``tdxs`` validator: ``{"method": "validate", "data": {"document":
 HEX, "nonce": HEX}}`` answers ``{"data": {"userData": HEX, "valid": true},
 "error": null}`` for a document it accepts and an ``error`` for one it
 rejects. Without a validator the verdict says only whether the measurements
-match; it is never ``trusted``.
+match; it is never ``trusted``. A positive verdict also needs coverage: MRTD and
+RTMR0 (the platform firmware, from the scheme or the policy's ``platform_approval``)
+and RTMR1 and RTMR2 (the image) must each match an accepted value; otherwise nothing
+disagreed but trust is not established and the verdict is ``partial``. Azure policies
+are refused: their image measurements are vTPM PCRs, which this path cannot verify.
 
-:meth:`Attestation.save` keeps what was observed as a ``tundravm.attestation/1``
+:meth:`Attestation.save` keeps what was observed as a ``tundravm.attestation/2``
 record: the document as received, the nonce, the policy's sha256 and artifact, the
 validator's whole reply and the verdict. :func:`read_attestation` re-derives the
 quote's registers, the nonce binding and the verdict from that record offline. The
@@ -43,35 +47,48 @@ from typing import Any, Literal, cast
 
 from .errors import AttestationError, MeasurementError, ValidationError
 from .formats import md_cell, md_table
-from .measure.policy import is_placeholder, match_registers, read_policy
+from .measure.policy import (
+    IMAGE_REGISTERS,
+    PLATFORM_REGISTERS,
+    approved_registers,
+    is_placeholder,
+    match_registers,
+    read_policy,
+)
 
 Transport = Callable[[Mapping[str, object]], Mapping[str, object]]
 """Sends one tdxs request envelope (``{"method", "data"}``) and returns the reply envelope."""
 RegisterVerdict = Literal["match", "mismatch", "unchecked"]
 Verdict = Literal[
-    "trusted", "untrusted", "measurements-match", "measurements-mismatch", "simulated"
+    "trusted", "partial", "untrusted", "measurements-match", "measurements-mismatch", "simulated"
 ]
-"""``trusted``/``untrusted`` need a validator; without one the verdict is ``measurements-*``."""
+"""``trusted``/``untrusted`` need a validator; without one the verdict is ``measurements-*``.
+``partial``: nothing disagreed, but the platform (MRTD/RTMR0) or the image (RTMR1/RTMR2) was
+not checked against an approved value, so trust is not established."""
 SignatureStatus = Literal["valid", "invalid", "unchecked"]
 
 REGISTERS = ("MRTD", "RTMR0", "RTMR1", "RTMR2", "RTMR3")
 """The registers :func:`attest` reports, in order."""
 VERDICTS: tuple[Verdict, ...] = (
     "trusted",
+    "partial",
     "untrusted",
     "measurements-match",
     "measurements-mismatch",
     "simulated",
 )
-"""Every verdict :func:`attest` returns; ``trusted`` and ``measurements-match`` pass."""
+"""Every verdict :func:`attest` returns; ``trusted`` and ``measurements-match`` pass,
+``partial`` only with ``accept_partial``."""
 CHECKS_NOTE = (
     "the quote's signature, certificate chain and collateral are checked only by a "
     "tdxs validator (--validator); without one only measurements and the nonce are checked"
 )
 TIMEOUT_S = 30.0
 SIMULATOR = "simulator"
-ATTESTATION_SCHEMA = "tundravm.attestation/1"
-"""The ``schema`` of the record :meth:`Attestation.save` (``attest --record``) writes."""
+ATTESTATION_SCHEMA = "tundravm.attestation/2"
+"""The ``schema`` of the record :meth:`Attestation.save` (``attest --record``) writes.
+Version 2 adds the ``partial`` verdict: a version 1 record could say ``trusted`` without the
+platform registers approved, so it is no longer read."""
 TRUST_NOTE = (
     "offline re-checking covers the quote's measurements and its nonce binding; the "
     "quote's signature, certificate chain and collateral are only as trusted as the "
@@ -79,6 +96,12 @@ TRUST_NOTE = (
 )
 """What re-reading a record (:func:`read_attestation`) proves, and what it takes on trust."""
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+PARTIAL_NOTE = (
+    "partial: trusted needs MRTD and RTMR0 (the platform firmware) and RTMR1 and RTMR2 (the "
+    "image) each matched; approve the platform values from a quote of a host you trust with "
+    "`tundravm measure --export-policy FILE --approve-mrtd HEX --approve-rtmr0 HEX`"
+)
+"""What a ``partial`` verdict lacks and how to close it."""
 
 TDX_TEE_TYPE = 0x81
 QUOTE_HEADER_SIZE = 48
@@ -211,8 +234,11 @@ class Attestation:
     ``metadata`` reply. ``signature_status`` is ``valid`` or ``invalid`` when a
     validator judged the document and ``unchecked`` without one.
     :attr:`verdict` is ``trusted`` only when the validator accepted the document,
-    the full 64-byte ``report_data`` binds the nonce and every register the
-    policy holds matched; a simulator issuer's quote is never trusted.
+    the full 64-byte ``report_data`` binds the nonce, every register the policy
+    holds matched, and MRTD, RTMR0 (the platform: the scheme's values or the
+    policy's ``platform_approval``), RTMR1 and RTMR2 (the image) each matched an
+    accepted value. Nothing disagreeing but one of those unchecked is ``partial``;
+    a simulator issuer's quote is never trusted.
     """
 
     issuer: str
@@ -228,6 +254,8 @@ class Attestation:
     validator_error: str | None = None
     policy: str | None = None
     allow_simulated: bool = False
+    accept_partial: bool = False
+    """``partial`` passes (``attest --accept-partial``); it is still never ``trusted``."""
     document: str = field(default="", repr=False)
     """The tdxs attestation document exactly as the issuer sent it: the hex of its JSON."""
     user_data: str = ""
@@ -240,6 +268,8 @@ class Attestation:
     """The sha256 of the policy file (of its sorted JSON for a dict policy)."""
     policy_artifact: Mapping[str, object] | None = field(default=None, hash=False)
     """The policy's ``artifact`` (``path``, ``sha256``): what it measured."""
+    policy_scheme: str | None = None
+    """The policy's ``scheme``; an ``azure`` one is never trusted (its image is in the vTPM)."""
     observed_at: str = ""
     """When the quote was requested: ISO 8601 UTC, to the second."""
 
@@ -256,7 +286,9 @@ class Attestation:
     def reasons(self) -> tuple[str, ...]:
         """Why the verdict is not positive, in order.
 
-        ``validator-rejected``, ``nonce-mismatch``, ``register-mismatch``, ``simulated``.
+        ``validator-rejected``, ``nonce-mismatch``, ``register-mismatch``, ``simulated``,
+        ``platform-unverified`` (MRTD or RTMR0 unchecked: no approved value),
+        ``image-unverified`` (RTMR1 or RTMR2 unchecked).
         """
         found: list[str] = []
         if self.signature_status == "invalid":
@@ -267,7 +299,22 @@ class Attestation:
             found.append("register-mismatch")
         if self.simulated:
             found.append("simulated")
+        unchecked = {r.name for r in self.registers if r.verdict == "unchecked"}
+        if unchecked & set(PLATFORM_REGISTERS):
+            found.append("platform-unverified")
+        if unchecked & set(IMAGE_REGISTERS):
+            found.append("image-unverified")
+        if self.policy_scheme == "azure":
+            found.append("vtpm-unverified")
         return tuple(found)
+
+    @property
+    def covered(self) -> bool:
+        """MRTD, RTMR0, RTMR1 and RTMR2 are each checked: the quote holds them and so does
+        the policy (its registers or ``platform_approval``)."""
+        checked = {r.name for r in self.registers if r.verdict != "unchecked"}
+        full = checked >= {*PLATFORM_REGISTERS, *IMAGE_REGISTERS}
+        return full and self.policy_scheme != "azure"
 
     @property
     def verdict(self) -> Verdict:
@@ -278,6 +325,8 @@ class Attestation:
             return "untrusted" if self.signature_status == "valid" else "measurements-mismatch"
         if self.simulated:
             return "simulated"
+        if not self.covered:
+            return "partial"
         return "trusted" if self.signature_status == "valid" else "measurements-match"
 
     @property
@@ -286,10 +335,13 @@ class Attestation:
 
     @property
     def passed(self) -> bool:
-        """``trusted`` or ``measurements-match``; ``simulated`` too with ``allow_simulated``."""
+        """``trusted`` or ``measurements-match``; ``simulated`` too with ``allow_simulated``,
+        ``partial`` with ``accept_partial``."""
         verdict = self.verdict
-        return verdict in ("trusted", "measurements-match") or (
-            verdict == "simulated" and self.allow_simulated
+        return (
+            verdict in ("trusted", "measurements-match")
+            or (verdict == "simulated" and self.allow_simulated)
+            or (verdict == "partial" and self.accept_partial)
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -318,13 +370,13 @@ class Attestation:
         }
 
     def record(self) -> dict[str, object]:
-        """The ``tundravm.attestation/1`` record :meth:`save` writes (``attest --record``).
+        """The ``tundravm.attestation/2`` record :meth:`save` writes (``attest --record``).
 
         It keeps what a later offline check needs: the ``document`` as received,
         ``user_data`` and ``nonce``, ``report_data`` (``expected``, ``actual``,
         ``verdict``), ``platform``, ``source``, ``quote_version``, the simulator's
         ``metadata`` reply, ``registers``, the ``policy`` (``path``, ``sha256``,
-        ``artifact``), the ``validator`` (``endpoint`` and its whole ``reply``, or
+        ``artifact``, ``scheme``), the ``validator`` (``endpoint`` and its whole ``reply``, or
         ``null``), ``signature_status``, ``verdict``, ``reasons``, ``observed_at``,
         the ``tundravm`` version and the ``trust`` note.
         """
@@ -353,6 +405,7 @@ class Attestation:
                 "path": self.policy,
                 "sha256": self.policy_sha256,
                 "artifact": None if self.policy_artifact is None else dict(self.policy_artifact),
+                "scheme": self.policy_scheme,
             },
             "validator": None
             if self.validator is None
@@ -380,6 +433,7 @@ def attest(
     validator: str | None = None,
     nonce: str | bytes | None = None,
     allow_simulated: bool = False,
+    accept_partial: bool = False,
     transport: Transport | None = None,
     validator_transport: Transport | None = None,
     clock: Callable[[], datetime] | None = None,
@@ -393,7 +447,11 @@ def attest(
     the quote's full 64-byte ``report_data``. With *validator* the document and
     nonce go to that tdxs validator, whose answer decides authenticity
     (``trusted``/``untrusted``); without it the verdict is
-    ``measurements-match`` or ``measurements-mismatch``. A simulator issuer's
+    ``measurements-match`` or ``measurements-mismatch``. Either needs MRTD, RTMR0,
+    RTMR1 and RTMR2 each checked: a policy that cannot predict the platform registers
+    (qemu, portable) needs its ``platform_approval``, else the verdict is ``partial``
+    (*accept_partial* lets it pass). An azure policy is refused: its image measurements
+    are vTPM PCRs, which this path does not verify. A simulator issuer's
     verdict is ``simulated`` at best; *allow_simulated* lets it pass.
     *transport* and *validator_transport* replace the network and *clock* the wall
     clock ``observed_at`` reads (tests; ``SOURCE_DATE_EPOCH`` is not honoured, since a
@@ -410,8 +468,17 @@ def attest(
             "`tundravm measure --scheme SCHEME --export-policy FILE` on a real bake.",
             context={"policy": "dict" if isinstance(policy, Mapping) else str(policy)},
         )
-    expected = data["registers"]
-    assert isinstance(expected, dict)
+    if data.get("scheme") == "azure":
+        raise AttestationError(
+            "Refusing to attest against an azure policy: Azure's paravisor owns the TD, so "
+            "the TDX quote measures Azure's firmware and the image is measured into the vTPM "
+            "(the policy's vtpm_pcrs), which this check does not verify.",
+            hint="Azure TDX trust needs vTPM evidence (a TPM quote bound to the TD and its "
+            "PCR4/9/11), which tundravm does not support yet; verify vtpm_pcrs with a vTPM "
+            "verifier, or attest a qemu, gcp or portable image.",
+            context={"policy": "dict" if isinstance(policy, Mapping) else str(policy)},
+        )
+    expected = approved_registers(data)
     challenge = _nonce_bytes(nonce)
     observed = (clock or _now)().astimezone(UTC).strftime(TIME_FORMAT)
     send = transport if transport is not None else connect(issuer)
@@ -447,12 +514,14 @@ def attest(
         validator_error=rejection,
         policy=None if isinstance(policy, Mapping) else str(policy),
         allow_simulated=allow_simulated,
+        accept_partial=accept_partial,
         document=encoded,
         user_data="",
         metadata=None if meta is None else dict(meta),
         validator_reply=answer,
         policy_sha256=hashlib.sha256(policy_bytes).hexdigest(),
         policy_artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
+        policy_scheme=str(data.get("scheme")),
         observed_at=observed,
     )
 
@@ -636,7 +705,7 @@ def _metadata_registers(meta: Mapping[str, object], endpoint: str) -> dict[str, 
 
 @dataclass(frozen=True, slots=True)
 class AttestationRecord:
-    """A ``tundravm.attestation/1`` record, re-derived offline by :func:`read_attestation`.
+    """A ``tundravm.attestation/2`` record, re-derived offline by :func:`read_attestation`.
 
     ``attestation`` is rebuilt from the record's ``document`` (the quote parsed again),
     its nonce and user data, the registers it was checked against (the given policy's
@@ -685,7 +754,7 @@ def read_attestation(
     *,
     policy: str | Path | bytes | Mapping[str, object] | None = None,
 ) -> AttestationRecord:
-    """Read the ``tundravm.attestation/1`` record *source* (a path, its bytes or its dict)
+    """Read the ``tundravm.attestation/2`` record *source* (a path, its bytes or its dict)
     and re-derive it offline.
 
     The document is decoded and its quote parsed again (:func:`parse_quote`; a
@@ -706,9 +775,11 @@ def read_attestation(
     """
     where, data, raw_bytes = _load_record(source)
     if data.get("schema") != ATTESTATION_SCHEMA:
+        legacy = data.get("schema") == "tundravm.attestation/1"
         raise ValidationError(
-            f"{where} has schema {data.get('schema')!r}, not {ATTESTATION_SCHEMA}.",
-            hint=_RECORD_HINT,
+            f"{where} has schema {data.get('schema')!r}, not {ATTESTATION_SCHEMA}"
+            + (" (its trusted verdict did not require the platform approved)." if legacy else "."),
+            hint=("Attest again with this tundravm. " if legacy else "") + _RECORD_HINT,
         )
     encoded = str(data.get("document") or "")
     meta = data.get("metadata")
@@ -736,13 +807,15 @@ def read_attestation(
         if isinstance(stored_registers.get(name), Mapping)
     }
     artifact = stored_policy.get("artifact")
+    scheme = stored_policy.get("scheme")
     matches: bool | None = None
     if policy is not None:
         given, given_bytes = _given_policy(policy)
         matches = hashlib.sha256(given_bytes).hexdigest() == stored_policy.get("sha256")
         if matches:
-            expected = dict(given["registers"])  # type: ignore[call-overload]
+            expected = dict(approved_registers(given))
             artifact = given.get("artifact")
+            scheme = given.get("scheme")
     status, why, endpoint, reply, problems = _recorded_judgement(data.get("validator"))
     checks = _checks(expected, actual)
     derived = Attestation(
@@ -766,6 +839,7 @@ def read_attestation(
         if stored_policy.get("sha256") is None
         else str(stored_policy.get("sha256")),
         policy_artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
+        policy_scheme=None if scheme is None else str(scheme),
         observed_at=str(data.get("observed_at") or ""),
     )
     problems.extend(_disagreements(data, derived.record()))
@@ -894,6 +968,7 @@ def _disagreements(stored: Mapping[str, Any], derived: Mapping[str, Any]) -> lis
     got_policy = derived["policy"]
     assert isinstance(got_policy, Mapping)
     compare("policy.artifact", said_policy.get("artifact"), got_policy["artifact"])
+    compare("policy.scheme", said_policy.get("scheme"), got_policy["scheme"])
     return found
 
 
@@ -1050,6 +1125,8 @@ def render_attestation(result: Attestation, fmt: str) -> str:
             lines.append(f"{'':<6} {'policy':<9}  {shown}")
     if result.validator is None:
         lines.append(f"note: {CHECKS_NOTE}")
+    if result.verdict == "partial":
+        lines.append(f"note: {PARTIAL_NOTE}")
     if reasons:
         lines.append(f"reasons: {reasons}")
     lines.append(f"verdict: {result.verdict}")

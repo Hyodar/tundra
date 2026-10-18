@@ -380,6 +380,7 @@ def _rule_debloat_removes_needed_unit(
     if not (config.enabled and config.systemd_minimize):
         return
     keep = set(debloat_units_keep(state)) | {"minimal.target"}
+    current = image.mkosi_for(profile_name).dialect != "nethermind-v1"
     own_units = {unit_name(s.name) for s in state.services}
     own_units.update(posixpath.basename(p) for p in _declared_paths(state))
 
@@ -403,8 +404,8 @@ def _rule_debloat_removes_needed_unit(
                 subject=svc.name,
             )
         for dep in (*svc.requires, *svc.wants):
-            if not masked(dep):
-                continue
+            if not masked(dep) or (current and svc.enabled and dep.endswith(".target")):
+                continue  # the current dialect keeps the targets enabled units reference
             yield Diagnostic(
                 severity="warning",
                 code="debloat-removes-needed-unit",

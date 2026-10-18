@@ -9,7 +9,10 @@ value. ``unverifiable`` maps each of ``MRTD``/``RTMR0``..``RTMR2`` the scheme ca
 predict offline to the reason; every one of them is either accepted or unverifiable.
 ``scheme``, ``tool``/``tool_version``, ``artifact``/``boot_payload`` (``path``,
 ``sha256``), ``sources`` (where firmware values come from) and, for placeholders, a
-``note`` complete it. Schema 1 files (one value per register) are refused.
+``note`` complete it. ``platform_approval`` (optional) maps ``MRTD``/``RTMR0`` to values
+the operator approves for the platform when the scheme cannot predict them (qemu,
+portable): ``attest`` trusts a quote only when MRTD, RTMR0, RTMR1 and RTMR2 all match.
+Schema 1 files (one value per register) are refused.
 """
 
 from __future__ import annotations
@@ -28,6 +31,13 @@ SCHEMES = ("qemu", "gcp", "azure", "portable")
 REGISTERS = ("MRTD", "RTMR0", "RTMR1", "RTMR2", "RTMR3")
 COVERED = ("MRTD", "RTMR0", "RTMR1", "RTMR2")
 """Registers a policy must either accept values for or declare unverifiable."""
+PLATFORM_REGISTERS = ("MRTD", "RTMR0")
+"""The TD firmware (TDVF) and its configuration: approved by the scheme (gcp) or the operator
+(``platform_approval``); a quote is trusted only when both match an approved value."""
+IMAGE_REGISTERS = ("RTMR1", "RTMR2")
+"""The image's boot path; a quote is trusted only when both match a measured value."""
+APPROVED_LABEL = "operator-approved"
+"""The ``label`` an unlabelled ``platform_approval`` value carries once merged."""
 PLACEHOLDER_TOOL = "placeholder"
 PLACEHOLDER_NOTE = (
     "PLACEHOLDER: these registers are derived from artifact digests, not measured; "
@@ -121,11 +131,15 @@ def policy_payload(
     boot_payload: Mapping[str, str] | None = None,
     extra: Mapping[str, object] | None = None,
     allow_placeholder: bool = False,
+    platform_approval: Mapping[str, Sequence[str | Mapping[str, str]]] | None = None,
 ) -> dict[str, object]:
     """The normalised policy for one measured artifact; raises on placeholders or gaps.
 
     *tool* is ``Measurements.tool`` (``"tundravm 0.9"``: name, then version).
     *extra* adds scheme fields (``sources``, ``firmware_table``, ``vtpm_pcrs``).
+    *platform_approval* maps ``MRTD``/``RTMR0`` to the values the operator approves for
+    the platform (taken from a quote of a host they trust): kept apart from the measured
+    ``registers`` as ``platform_approval``.
     """
     name, _, version = tool.partition(" ")
     placeholder = name == PLACEHOLDER_TOOL
@@ -146,6 +160,8 @@ def policy_payload(
         "registers": {k: list(v) for k, v in registers.items()},
         "unverifiable": dict(unverifiable or {}),
     }
+    if platform_approval:
+        payload["platform_approval"] = {k: list(v) for k, v in platform_approval.items()}
     if boot_payload is not None:
         payload["boot_payload"] = {"path": boot_payload["path"], "sha256": boot_payload["sha256"]}
     if placeholder:
@@ -232,7 +248,51 @@ def _checked(data: dict[str, object], *, where: str) -> dict[str, object]:
         )
     data["registers"] = dict(sorted(registers.items()))
     data["unverifiable"] = dict(sorted(reasons.items()))
+    if "platform_approval" in data:
+        data["platform_approval"] = _approval(data["platform_approval"], where=where)
     return data
+
+
+def _approval(raw: object, *, where: str) -> dict[str, list[str | dict[str, str]]]:
+    """A ``platform_approval`` checked: ``MRTD``/``RTMR0`` to non-empty lists of values."""
+    hint = (
+        "platform_approval maps MRTD and/or RTMR0 to the values you approve, e.g. "
+        "`tundravm measure --export-policy FILE --approve-mrtd HEX --approve-rtmr0 HEX`."
+    )
+    if not isinstance(raw, dict) or not raw:
+        raise ValidationError(f"{where}: platform_approval is not a non-empty object.", hint=hint)
+    unknown = sorted(str(k) for k in raw if str(k).upper() not in PLATFORM_REGISTERS)
+    if unknown:
+        raise ValidationError(
+            f"{where}: platform_approval names {', '.join(unknown)}; it approves only "
+            f"{' and '.join(PLATFORM_REGISTERS)}.",
+            hint=hint,
+        )
+    return {
+        str(k).upper(): _entries(str(k).upper(), v, placeholder=False, where=where)
+        for k, v in sorted(raw.items())
+    }
+
+
+def approved_registers(policy: Mapping[str, object]) -> dict[str, list[str | dict[str, str]]]:
+    """A checked policy's ``registers`` with its ``platform_approval`` values added: what a
+    quote is matched against. An unlabelled approved value is labelled
+    :data:`APPROVED_LABEL`."""
+    raw = policy.get("registers")
+    merged: dict[str, list[str | dict[str, str]]] = (
+        {str(k): list(v) for k, v in raw.items()} if isinstance(raw, Mapping) else {}
+    )
+    approval = policy.get("platform_approval")
+    if isinstance(approval, Mapping):
+        for name, entries in approval.items():
+            extra = [
+                {"value": e, "label": APPROVED_LABEL}
+                if isinstance(e, str)
+                else {**e, "label": e.get("label") or APPROVED_LABEL}
+                for e in entries
+            ]
+            merged[str(name)] = [*merged.get(str(name), []), *extra]
+    return merged
 
 
 def _entries(
@@ -310,14 +370,18 @@ def validator_measurements(
 
 
 __all__ = [
+    "APPROVED_LABEL",
     "COVERED",
+    "IMAGE_REGISTERS",
     "PLACEHOLDER_NOTE",
+    "PLATFORM_REGISTERS",
     "POLICY_SCHEMA",
     "POLICY_SCHEMA_VERSION",
     "REGISTERS",
     "SCHEMES",
     "Accepted",
     "accepted",
+    "approved_registers",
     "is_placeholder",
     "match_registers",
     "policy_payload",

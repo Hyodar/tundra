@@ -252,3 +252,17 @@ def test_the_committed_example_policy_is_a_marked_placeholder() -> None:
     assert policy["tool"] == "placeholder" and policy["note"] == PLACEHOLDER_NOTE
     with pytest.raises(MeasurementError):
         Tdxs.from_policy(REPO_ROOT / "examples" / "peer.policy.json")
+
+
+def test_export_keeps_the_operator_platform_approval(manifest: Path, tmp_path: Path) -> None:
+    target = tmp_path / "peer.json"
+    base = ("measure", "--build", str(manifest), "--allow-placeholder")
+    approve = ("--approve-mrtd", MRTD.upper(), "--approve-rtmr0", R0)
+    code, _ = run_main(*base, "--export-policy", str(target), *approve)
+    assert code == EXIT_OK
+    policy = json.loads(target.read_text(encoding="utf-8"))
+    assert policy["platform_approval"] == {"MRTD": [MRTD], "RTMR0": [R0]}
+    assert read_policy(target)["platform_approval"] == {"MRTD": [MRTD], "RTMR0": [R0]}
+    assert run_main(*base, *approve)[0] == EXIT_SDK_ERROR  # no --export-policy to keep it in
+    code, _ = run_main(*base, "--export-policy", str(target), "--approve-mrtd", "zz")
+    assert code == EXIT_SDK_ERROR

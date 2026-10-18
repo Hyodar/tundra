@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from tundravm._location import display_location
 from tundravm.declarative import (
     RUNTIME_INIT,
     BootStep,
     Diagnostic,
     Disk,
+    Every,
     File,
     Fragment,
     Hook,
@@ -19,6 +21,7 @@ from tundravm.declarative import (
     Resolved,
     Secrets,
     Service,
+    Task,
     Unit,
     Variant,
     identity,
@@ -235,6 +238,32 @@ def test_identity_collisions_fail_and_equal_repeats_dedupe() -> None:
         ("identity-collision", "other"),
     ]
     assert identity(File("/etc//motd", "x")) == ("File", "extra", "/etc/motd")
+
+
+def test_a_service_and_a_unit_writing_one_unit_file_collide() -> None:
+    """The Service's unit file would replace the Unit's text without a word."""
+    service = Service("app", "/usr/bin/app")
+    unit = Unit("app.service", "[Service]\nExecStart=/usr/bin/other\n")
+    [found] = lint(Recipe("r", items=(service, unit)))
+    assert found.code == "unit-collision" and found.severity == "error"
+    assert found.subject == "app.service"
+    assert "Unit(app.service) and Service(app.service)" in found.message
+    first, second = (display_location(item.declared_at) for item in (service, unit))
+    assert f"(declared at {first})" in found.message and found.location == second
+    # A Unit that only controls the packaged unit (no text) writes no file.
+    assert "unit-collision" not in codes(
+        lint(Recipe("r", items=(service, Unit("app.service", masked=False))))
+    )
+
+
+def test_a_task_and_a_service_with_one_name_are_a_diagnostic() -> None:
+    """lint reports the clash instead of raising ``Duplicate service name``."""
+    recipe = Recipe("r", items=(Task("job", "/usr/bin/job"), Service("job", "/usr/bin/job")))
+    assert codes(lint(recipe)) == ["unit-collision"]
+    timer = Task("job", "/usr/bin/job", schedule=Every("1h"))
+    assert codes(lint(Recipe("r", items=(timer, Unit("job.timer", "[Timer]\n"))))) == [
+        "unit-collision"
+    ]
 
 
 # ── reference checks ─────────────────────────────────────────────────────

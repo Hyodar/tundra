@@ -91,7 +91,13 @@ def policy(**registers: bytes | list[bytes | Mapping[str, object]]) -> dict[str,
     }
 
 
-PEER = policy(RTMR0=R0, RTMR1=R1, RTMR2=R2)
+PEER = {
+    **policy(RTMR1=R1, RTMR2=R2),
+    "platform_approval": {"MRTD": [MRTD.hex()], "RTMR0": [R0.hex()]},
+}
+"""A qemu policy whose platform registers the operator approved: fully covered."""
+UNAPPROVED = policy(RTMR1=R1, RTMR2=R2)
+"""The same policy as ``measure --export-policy`` writes it for qemu: no platform approval."""
 
 
 class FakeIssuer:
@@ -197,7 +203,7 @@ def test_without_a_validator_matching_registers_are_measurements_match_never_tru
     assert result.nonce_matches and result.reasons == ()
     verdicts = {check.name: check.verdict for check in result.registers}
     assert verdicts == {
-        "MRTD": "unchecked",
+        "MRTD": "match",
         "RTMR0": "match",
         "RTMR1": "match",
         "RTMR2": "match",
@@ -309,7 +315,7 @@ def test_a_simulator_is_never_trusted() -> None:
     assert result.source == "metadata" and result.quote_version is None
     assert result.platform == "simulator" and result.nonce_matches
     assert result.verdict == "simulated" and not result.trusted and not result.passed
-    assert result.reasons == ("simulated",)
+    assert result.reasons == ("simulated", "platform-unverified")
     allowed = attest("tcp://h:1", peer, transport=FakeIssuer("simulator"), allow_simulated=True)
     assert allowed.verdict == "simulated" and allowed.passed and not allowed.trusted
     mismatched = attest("tcp://h:1", PEER, transport=FakeIssuer("simulator"))
@@ -344,9 +350,9 @@ def test_issuer_and_validator_failures_are_attestation_errors() -> None:
 
 def test_placeholder_policies_and_bad_nonces_are_refused() -> None:
     placeholder = {
-        **PEER,
+        **UNAPPROVED,
         "tool": "placeholder",
-        "registers": {f"RTMR{i}": ["a" * 64] for i in (0, 1, 2)},
+        "registers": {f"RTMR{i}": ["a" * 64] for i in (1, 2)},
     }
     with pytest.raises(MeasurementError, match="placeholder policy"):
         attest("tcp://h:1", placeholder, transport=FakeIssuer())
@@ -378,8 +384,8 @@ def test_to_dict_is_the_stable_json_shape() -> None:
     assert payload["verdict"] in VERDICTS
     assert payload["registers"]["RTMR0"] == {  # type: ignore[index]
         "actual": R0.hex(),
-        "expected": [R0.hex()],
-        "matched": None,
+        "expected": [{"label": "operator-approved", "value": R0.hex()}],
+        "matched": "operator-approved",
         "verdict": "match",
     }
 
@@ -463,8 +469,8 @@ def test_cli_attest_without_a_validator_is_measurements_match(
     assert lines[1] == f"policy: {peer_file}"
     assert lines[2] == "signature unchecked (no --validator)"
     assert lines[3] == f"nonce  match      {NONCE.hex()}"
-    assert lines[4] == f"MRTD   unchecked  {MRTD.hex()}"
-    assert lines[5] == f"RTMR0  match      {R0.hex()}"
+    assert lines[4] == f"MRTD   match      {MRTD.hex()}  (operator-approved)"
+    assert lines[5] == f"RTMR0  match      {R0.hex()}  (operator-approved)"
     assert lines[-2] == f"note: {CHECKS_NOTE}"
     assert lines[-1] == "verdict: measurements-match"
     assert [r["method"] for r in issuer.requests] == ["issue"]
@@ -526,7 +532,7 @@ def test_cli_attest_json_and_markdown(
     code, out = run_main("attest", "--issuer", url, "--policy", str(peer_file), "--format", "json")
     assert code == EXIT_OK
     payload = json.loads(out)
-    assert payload["schema"] == "tundravm.attest/1"
+    assert payload["schema"] == "tundravm.attest/2"
     assert payload["verdict"] == "measurements-match" and payload["trusted"] is False
     assert payload["passed"] is True and payload["signature_status"] == "unchecked"
     assert payload["policy"] == str(peer_file) and payload["issuer"] == url
@@ -543,7 +549,7 @@ def test_cli_attest_json_and_markdown(
     assert out.startswith(f"# tundravm attest: `{url}`")
     assert "**Verdict:** `measurements-match`" in out
     assert "| Register | Verdict | Quote | Policy |" in out
-    assert f"| RTMR0 | match | `{R0.hex()}` | `{R0.hex()[:12]}` |" in out
+    assert f"| RTMR0 | match | `{R0.hex()}` | `operator-approved` |" in out
 
 
 def test_cli_attest_exits_2_when_the_issuer_is_unreachable(
@@ -635,6 +641,7 @@ def test_a_record_keeps_the_document_the_policy_and_the_validator_reply(tmp_path
         "path": None,
         "sha256": hashlib.sha256(canonical).hexdigest(),
         "artifact": PEER["artifact"],
+        "scheme": "qemu",
     }
     assert record["validator"] == {
         "endpoint": "tcp://verifier:7001",
