@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from tundravm._units.render import service_unit
-from tundravm.declarative import Dynamic, Hardening, SecretFile, Service, Unit
+from tundravm.declarative import Dynamic, Hardening, Root, SecretFile, Service, Unit
 from tundravm.declarative.state import _service
 from tundravm.errors import ValidationError
 from tundravm.models import ProfileState
@@ -193,3 +193,33 @@ def test_unset_fields_stay_out_of_the_digest_payload() -> None:
     assert profile.services[0].extras() == {"hardening": []}
     _service(profile, Service("b", "/usr/bin/b", security="strict", restart_sec=None))
     assert profile.services[1].extras() == {"type": "exec", "restart_sec": ""}
+
+
+def _on_disk(service: Service) -> str:
+    profile = ProfileState(name="default")
+    _service(profile, service, mounts=("/persistent", "/var/cache/app"))
+    return service_unit(profile.services[0])
+
+
+def test_write_paths_on_a_declared_mount_are_created_after_the_mount() -> None:
+    text = _on_disk(
+        Service(
+            "app",
+            "/usr/bin/app",
+            working_dir="/persistent/app/run",
+            write_paths=("/persistent/app", "-/sys/kernel/config/tsm/report", "/srv"),
+        )
+    )
+    assert "RequiresMountsFor=/persistent/app\n" in text
+    assert text.count("ExecStartPre=") == 1
+    assert "ExecStartPre=+/usr/bin/install -d -o app -g app -m 0750 /persistent/app\n" in text
+    assert "WorkingDirectory=-/persistent/app/run\n" in text  # created by the pre-start step
+    assert "ReadWritePaths=/persistent/app -/sys/kernel/config/tsm/report /srv\n" in text
+    root = _on_disk(Service("app", "/usr/bin/app", user=Root(), write_paths=("/persistent",)))
+    assert "install -d -o root -g root -m 0750 /persistent\n" in root
+    assert "User=" not in root
+
+
+def test_write_paths_on_a_mount_refuse_a_dynamic_user() -> None:
+    with pytest.raises(ValidationError, match="Dynamic"):
+        _on_disk(Service("app", "/usr/bin/app", user=Dynamic(), write_paths=("/persistent/a",)))

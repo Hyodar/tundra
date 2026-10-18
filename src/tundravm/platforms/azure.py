@@ -8,7 +8,12 @@ VHD postoutput script the compiler generates when
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from tundravm._units import v1
+
+if TYPE_CHECKING:
+    from tundravm.declarative.model import Task
 
 # ---------------------------------------------------------------------------
 # Azure provisioning completion script
@@ -118,3 +123,24 @@ AZURE_PROVISIONING_SERVICE = v1.AZURE_PROVISIONING
 
 AZURE_PROVISIONING_SERVICE_ONLINE = v1.AZURE_PROVISIONING_ONLINE
 """The unit for any other profile: it waits for ``network-online.target``, as runtime-init does."""
+
+
+def provisioning_task(network_setup: bool) -> Task:
+    """The provisioning unit as a typed ``Task`` (current dialect): a root boot oneshot
+    (no ``User=``: it reads DMI and posts to the wireserver) under
+    ``Hardening.relaxed()``, after ``network-setup.service`` when the profile ships it,
+    else ``network-online.target``; it does not wait for runtime-init."""
+    from tundravm.declarative.model import Task
+    from tundravm.declarative.systemd import Hardening, Root
+
+    return Task(
+        "azure-complete-provisioning",
+        "/usr/bin/azure-complete-provisioning",
+        description="Azure Provisioning Completion",
+        user=Root(),
+        after=("network.target",) if network_setup else (),
+        requires=("network-setup.service",) if network_setup else (),
+        wants=() if network_setup else ("network-online.target",),
+        needs=(),
+        hardening=Hardening.relaxed(),
+    )

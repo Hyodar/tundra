@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from .errors import StateError, ValidationError
+from .toolchain import Toolchain
 
 if TYPE_CHECKING:
     from ._source import SourceBuild
@@ -226,6 +227,8 @@ class ServiceSpec:
     timeout_start: str | None = None
     hardening: tuple[tuple[str, str], ...] | None = None
     """Rendered ``Hardening`` directives; ``None`` falls back to ``security_profile``."""
+    mounts_for: tuple[str, ...] = ()
+    """``RequiresMountsFor=`` paths: ``write_paths`` on a declared mount point."""
 
     def extras(self) -> dict[str, object]:
         """Optional unit fields that are set, keyed by name (empty for a plain service)."""
@@ -260,6 +263,7 @@ class ServiceSpec:
             "runtime": self.runtime,
             "cache": self.cache,
             "write_paths": list(self.write_paths),
+            "mounts_for": list(self.mounts_for),
             "timeout_start": self.timeout_start,
             "extra": {
                 section: {k: v if isinstance(v, str) else list(v) for k, v in sorted(keys.items())}
@@ -632,6 +636,9 @@ class BakeRequest:
     ``$SRCDIR/tundravm-sources``; ``None`` when the build fetches nothing on the host."""
     network: bool = True
     """``False`` for an offline bake: mkosi runs the build scripts with ``--with-network=no``."""
+    toolchain: Toolchain | None = None
+    """The lockfile's toolchain: the nix and lima backends pin nixpkgs (and so mkosi) to it;
+    ``None`` without a lockfile."""
 
     def notice(self, level: str, message: str) -> None:
         """Pass *message* to ``on_notice``, if set."""
@@ -696,6 +703,8 @@ class BakeResult:
     duration_s: float | None = field(default=None, compare=False)
     lock_sha256: str | None = None
     """The sha256 of the lockfile bytes the bake read; ``None`` when it read none."""
+    toolchain: Toolchain | None = None
+    """The toolchain the bake ran (``toolchain`` in bake-result.json); ``None``: not recorded."""
 
     def save(self, build_dir: str | Path) -> Path:
         """Write ``<build_dir>/bake-result.json``; paths inside build_dir are stored relative."""
@@ -731,6 +740,8 @@ class BakeResult:
             "variants": profiles,
             "variants_baked": sorted(self.profiles),
         }
+        if self.toolchain is not None:
+            payload["toolchain"] = self.toolchain.payload()
         path = base / BAKE_RESULT_FILENAME
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
@@ -792,6 +803,9 @@ class BakeResult:
             backend=payload.get("backend"),
             created_at=payload.get("created_at"),
             lock_sha256=payload.get("lock_sha256"),
+            toolchain=None
+            if payload.get("toolchain") is None
+            else Toolchain.from_payload(payload["toolchain"]),
         )
 
 

@@ -69,6 +69,7 @@ from .lockfile import lock_variants
 from .measure.policy import is_placeholder, read_policy
 from .measure.rtmr import MEASURABLE_SUFFIXES, measurable
 from .models import BAKE_RESULT_FILENAME
+from .toolchain import Toolchain
 
 INDEX_NAME = "evidence.json"
 SIGNATURE_NAME = "evidence.json.sig"
@@ -327,6 +328,12 @@ def evidence(
     digests = _recipe_digests(img, names, locked)
     reproduced = recorded_reproducibility(extra)
     payload = _manifest_payload(manifest)
+    toolchain = recorded_toolchain(payload)
+    if toolchain is not None and toolchain.reproducible:
+        notes.append(
+            f"reproducible: {toolchain.reproducible}: the bake ran x86-64 tools under "
+            "Lima's Rosetta translation; bake with LimaMkosiBackend(rosetta=False) to compare"
+        )
     records = {
         name: _variant(
             name,
@@ -368,6 +375,7 @@ def evidence(
             "backend": _manifest_field(manifest, "backend"),
             "simulated": bake_simulated(_manifest_payload(manifest)),
             "reproducibility": reproduced,
+            "toolchain": None if toolchain is None else toolchain.payload(),
         },
         "lockfile": lock_entry,
         "lint": lint_entry(lint_rows),
@@ -388,6 +396,41 @@ def evidence(
 
 
 # ── gathering ────────────────────────────────────────────────────────────
+
+
+def recorded_toolchain(payload: Mapping[str, Any]) -> Toolchain | None:
+    """The toolchain a ``bake-result.json`` (or witness) payload records; ``None``: not recorded."""
+    raw = payload.get("toolchain")
+    if raw is None:
+        return None
+    try:
+        return Toolchain.from_payload(raw)
+    except TdxError:
+        return None
+
+
+def toolchain_summary(raw: object) -> str:
+    """``mkosi 25.3 (nix @abc…), systemd 257, nixpkgs <rev12>, tundravm 0.1.0+…`` from a payload.
+
+    ``not recorded`` without one; a Rosetta toolchain ends ``reproducible: not guaranteed
+    (rosetta)``.
+    """
+    if raw is None:
+        return "not recorded"
+    try:
+        toolchain = Toolchain.from_payload(raw)
+    except TdxError:
+        return "not recorded (unreadable)"
+    fields = toolchain.fields()
+    fields.pop("rosetta", None)
+    order = ["mkosi", "systemd", "nixpkgs"]
+    names = [n for n in order if n in fields]
+    names += sorted(n for n in fields if n not in order and n != "tundravm")
+    names.append("tundravm")
+    text = ", ".join(f"{name} {fields[name]}" for name in names)
+    if toolchain.reproducible:
+        text += f"  reproducible: {toolchain.reproducible}"
+    return text
 
 
 def demands(required: Iterable[str], need: str) -> str | None:
@@ -1294,6 +1337,7 @@ def _text(index: Mapping[str, Any]) -> str:
         f"  integrity  {verdict['integrity']}",
         f"  lock       {verdict['lock']}",
         f"  reproduce  {verdict['reproducible']}",
+        f"  toolchain  {toolchain_summary(index['bake'].get('toolchain'))}",
         f"  policy     {verdict['policy']}",
         f"  measured   {verdict['measured']}",
         f"  sbom       {verdict['sbom']}",

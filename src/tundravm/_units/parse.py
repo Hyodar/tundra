@@ -348,6 +348,7 @@ def _exec(values: list[str], out: _Candidate, *, reset: bool = False) -> Any:
 
 def _service(name: str, text: UnitText, mode: Mode, init: bool) -> _Candidate:
     from tundravm.declarative.model import Service
+    from tundravm.declarative.systemd import Root
 
     out = _Candidate(Service)
     f = _fields(text)
@@ -355,7 +356,7 @@ def _service(name: str, text: UnitText, mode: Mode, init: bool) -> _Candidate:
     kw["exec_start"] = _exec(f.exec_start, out)
     profile = hardening_of(f.hardening)
     kw.update({"security": "strict"} if profile == "strict" else {"hardening": profile})
-    for key, value in (("type", None), ("restart", "no"), ("restart_sec", None), ("user", None)):
+    for key, value in (("type", None), ("restart", "no"), ("restart_sec", None), ("user", Root())):
         if key not in kw:
             kw[key] = value
             out.absent.add(key)
@@ -444,6 +445,7 @@ _TASK_FIELDS = {"description", "user", "group", "state", "after", "requires", "w
 
 def _task(name: str, texts: Mapping[str, str], timer: str | None, init: bool) -> _Candidate:
     from tundravm.declarative.model import Task
+    from tundravm.declarative.systemd import Root
 
     out = _Candidate(Task)
     f = _fields(UnitText.parse(texts[name]))
@@ -460,7 +462,7 @@ def _task(name: str, texts: Mapping[str, str], timer: str | None, init: bool) ->
     if got.pop("working_dir", None) != (f"/var/lib/{state}" if state else None):
         out.blockers.append("Service.WorkingDirectory")
     if "user" not in got:
-        out.blockers.append("Service.User")
+        got["user"] = Root()
     kw["timeout"] = got.pop("timeout_start", None)
     if kw["timeout"] is None:
         out.absent.add("timeout")

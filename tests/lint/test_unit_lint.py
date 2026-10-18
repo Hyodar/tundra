@@ -163,12 +163,10 @@ UNIT_CODES = frozenset(
         "unit-as-file",
     }
 )
-EXPECTED_UNIT_FINDINGS = {
-    "06_attestation": {"requires-without-after", "socket-service-started"},
-    "init-prover": {"requires-without-after", "socket-service-started"},
-}
-"""What the repository's own recipes report until the typed units land; every other
-recipe (surge included: its style codes are off under ``nethermind-v1``) reports none."""
+EXPECTED_UNIT_FINDINGS: dict[str, set[str]] = {}
+"""What the repository's own recipes report: nothing since ``Tdxs`` emits typed units (the
+surge recipe keeps the historical texts, whose style codes are off under
+``nethermind-v1``)."""
 
 
 def test_repository_recipes_report_only_the_expected_unit_findings(

@@ -34,6 +34,7 @@ from .systemd import (
     Dynamic,
     Extra,
     Hardening,
+    Root,
     UnitTarget,
     mount_unit,
     require_extra,
@@ -1037,7 +1038,8 @@ class Service(Declared):
     opinionated: ``Type=exec``, ``Restart=on-failure`` with ``RestartSec=5s``, the
     ``Hardening.strict()`` sandbox (``hardening=None``) and a dedicated system user named
     after the service, declared for you unless the variant declares it (``user="root"``
-    opts out, linted ``service-runs-as-root``). ``type=None``/``restart_sec=None`` omit the
+    renders ``User=root``, ``user=Root()`` no ``User=`` line; both linted
+    ``service-runs-as-root``). ``type=None``/``restart_sec=None`` omit the
     line; ``remain_after_exit`` renders ``RemainAfterExit=yes`` (a ``Task`` is the usual
     spelling of a oneshot). ``security`` is
     the deprecated spelling of ``hardening`` (``"strict"``: the historical nine lines;
@@ -1055,7 +1057,7 @@ class Service(Declared):
     exec_start: str | tuple[str, ...]
     _: KW_ONLY
     description: str | None = None
-    user: str | Dynamic | None = None
+    user: str | Dynamic | Root | None = None
     group: str | None = None
     working_dir: str | None = None
     env: Mapping[str, str] = field(default_factory=FrozenMap)
@@ -1179,7 +1181,7 @@ def _require_unit_fields(owner: Service | DropIn) -> None:
     if isinstance(owner.env_file, list):
         object.__setattr__(owner, "env_file", tuple(owner.env_file))
     require_targets(owner, *_RELATIONS)
-    if owner.user is not None and not isinstance(owner.user, Dynamic):
+    if owner.user is not None and not isinstance(owner.user, (Dynamic, Root)):
         _require_name(owner, owner.user, "user")
     if owner.group is not None:
         _require_name(owner, owner.group, "group")
@@ -1210,7 +1212,8 @@ def _require_unit_fields(owner: Service | DropIn) -> None:
             if any(ch.isspace() for ch in value):
                 raise _fail(owner, f"{what} {value!r} must be one directory name.")
     for path in owner.write_paths:
-        _require_absolute(owner, path, "write_paths entry")
+        optional = isinstance(path, str) and path.startswith("-")
+        _require_absolute(owner, path[1:] if optional else path, "write_paths entry")
     for what, key in (("restart_sec", "RestartSec"), ("timeout_start", "TimeoutStartSec")):
         value = getattr(owner, what)
         if value is not None and (
@@ -1285,6 +1288,8 @@ class DropIn:
             _require_name(self, self.timeout_stop, "timeout_stop")
         if self.restart is not None:
             _require_choice(self, self.restart, _RESTARTS, "restart")
+        if isinstance(self.user, Root):
+            raise _fail(self, "a drop-in cannot remove User=.", hint="Use user='root'.")
         _require_unit_fields(self)
         sections = ("Unit", "Service", "Socket", "Timer", "Mount", "Install")
         require_extra(self, sections, SERVICE_OWNED)
@@ -2190,7 +2195,8 @@ class Task(Declared):
     ``schedule=Every("1h")`` or ``Calendar("daily")`` it also renders ``<name>.timer``
     (enabled into ``timers.target``) and the service is left for the timer to start.
     *user* ``None`` runs it as a system user named after the task (declared unless the
-    variant declares it), ``Dynamic()`` as a transient user; *state* is its
+    variant declares it), ``Dynamic()`` as a transient user, ``Root()`` as root with no
+    ``User=`` line (root plumbing); *state* is its
     ``StateDirectory=`` (and working directory); *timeout* bounds each run
     (``TimeoutStartSec=``, ``None``: systemd's unbounded oneshot default); *hardening*
     defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps, as on
@@ -2202,7 +2208,7 @@ class Task(Declared):
     _: KW_ONLY
     schedule: Every | Calendar | None = None
     description: str | None = None
-    user: str | Dynamic | None = None
+    user: str | Dynamic | Root | None = None
     group: str | None = None
     state: str | None = None
     timeout: str | None = "5min"
@@ -2223,7 +2229,7 @@ class Task(Declared):
             raise _fail(
                 self, f"schedule must be Every(...) or Calendar(...), got {self.schedule!r}."
             )
-        if self.user is not None and not isinstance(self.user, Dynamic):
+        if self.user is not None and not isinstance(self.user, (Dynamic, Root)):
             if not isinstance(self.user, str) or not _GROUP_NAME.fullmatch(self.user):
                 raise _fail(self, f"invalid user name {self.user!r}.")
         stem = unit_name(self.name).removesuffix(".service")

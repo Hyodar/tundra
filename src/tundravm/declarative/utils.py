@@ -278,7 +278,10 @@ class Tdxs(Composite):
     """The ``tdxs`` attestation service: source build, config, socket-activated units, account.
 
     Declares the ``tdx`` group (other services join it for ``/dev/tdx_guest``) and
-    the ``tdxs`` user. *needs* lists the runtime-init steps both units wait for.
+    the ``tdxs`` user. *needs* lists the runtime-init steps the service waits for. The
+    service is a typed ``Service(socket=Listen(...))``, hardened for its job
+    (``_modules/tdxs.py`` ``Tdxs.service`` gives the reasoning); ``legacy_units=True``
+    ships the historical ``nethermind-v1`` unit texts instead.
     Fragment name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
     (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
@@ -292,6 +295,7 @@ class Tdxs(Composite):
     verify_imds: bool = False
     verify_identity_token: bool = False
     needs: Sequence[Ready] = ()
+    legacy_units: bool = False
     policy_file: Path | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
@@ -382,21 +386,17 @@ class Tdxs(Composite):
                     install=(Install("build/tdxs", "/usr/bin/tdxs"),),
                 ),
                 File(spec.config_path, spec.render_config()),
-                Unit(
-                    spec.service_name,
-                    spec.render_service_unit(),
-                    enabled=True,
-                    needs=self.needs,
-                ),
-                Unit(
-                    spec.socket_name,
-                    spec.render_socket_unit(),
-                    enabled=True,
-                    needs=self.needs,
-                ),
+                *(self._legacy_units(spec) if self.legacy_units else (spec.service(self.needs),)),
                 Group(spec.group),
                 User(spec.user, home=f"/home/{spec.user}", primary_group=spec.group),
             ),
+        )
+
+    def _legacy_units(self, spec: _tdxs.Tdxs) -> tuple[Unit, Unit]:
+        """The historical ``tdxs.service``/``tdxs.socket`` texts (``_units/v1.py``)."""
+        return (
+            Unit(spec.service_name, spec.render_service_unit(), enabled=True, needs=self.needs),
+            Unit(spec.socket_name, spec.render_socket_unit(), enabled=True, needs=self.needs),
         )
 
 
@@ -408,8 +408,10 @@ class DevTools(Composite):
     The root password is hashed with a fixed salt, so a second build of the variant
     matches the first: *salt* (1 to 16 of ``[A-Za-z0-9./]``), or by default the first 16
     hex digits of ``sha256("tundravm-devtools:<variant name>")``, computed in the
-    postinst script from mkosi's ``$IMAGE_ID``. ``reproducible=False`` keeps the
-    historical random salt (``nethermind-v1`` trees). Fragment name: ``devtools``.
+    postinst script from mkosi's ``$IMAGE_ID``. The serial getty on ``ttyS0`` is enabled
+    at build time. ``reproducible=False`` keeps the historical random salt and the
+    ``serial-console.service`` that enables the getty at boot (``nethermind-v1`` trees).
+    Fragment name: ``devtools``.
     """
 
     root_password: str = _DEFAULT_ROOT_PASSWORD
@@ -444,13 +446,21 @@ class DevTools(Composite):
             "devtools",
             items=(
                 *(Package(name) for name in _devtools.DEVTOOLS_PACKAGES),
-                Unit("serial-console.service", _devtools.SERIAL_CONSOLE_SERVICE),
-                Hook(
-                    "devtools-serial-console",
-                    "postinst",
-                    "mkosi-chroot systemctl enable serial-console.service",
-                ),
+                *(self._serial_console() if not self.reproducible else ()),
+                *((Unit(_devtools.SERIAL_GETTY, enabled=True),) if self.reproducible else ()),
                 Hook("devtools-root-login", "postinst", login),
+            ),
+        )
+
+    @staticmethod
+    def _serial_console() -> tuple[Unit, Hook]:
+        """The historical ``serial-console.service``, which enables the getty at boot."""
+        return (
+            Unit("serial-console.service", _devtools.SERIAL_CONSOLE_SERVICE),
+            Hook(
+                "devtools-serial-console",
+                "postinst",
+                "mkosi-chroot systemctl enable serial-console.service",
             ),
         )
 

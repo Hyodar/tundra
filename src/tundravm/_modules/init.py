@@ -13,9 +13,9 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 
 from tundravm._units import v1
-from tundravm._units.render import render
+from tundravm._units.render import service_unit
 from tundravm.errors import ValidationError
-from tundravm.models import ALL_STEPS, FileEntry, InitScriptEntry, ProfileState
+from tundravm.models import ALL_STEPS, FileEntry, InitScriptEntry, ProfileState, ServiceSpec
 
 
 def order_steps(nodes: Sequence[tuple[str, Iterable[str], Iterable[str]]]) -> list[str]:
@@ -196,21 +196,29 @@ def _direct_deps(
 
 
 def _step_unit_text(step: str, network: str, deps: Sequence[str]) -> str:
-    """``runtime-init-<step>.service``: *network* plus *deps* in ``After=``/``Requires=``."""
-    unit = [(key, value) for key, _, value in (line.partition("=") for line in network.split("\n"))]
-    for directive in ("After", "Requires"):
-        index = next((i for i, (key, _) in enumerate(unit) if key == directive), None)
-        if deps and index is None:
-            unit.append((directive, " ".join(deps)))
-        elif deps and index is not None:
-            unit[index] = (directive, " ".join([unit[index][1], *deps]))
-    service = [("Type", "oneshot"), ("ExecStart", f"{STEP_DIRECTORY}/{step}")]
-    return render(
-        [
-            ("Unit", [("Description", f"Runtime Init: {step}"), *unit]),
-            ("Service", [*service, ("RemainAfterExit", "yes")]),
-        ]
+    """``runtime-init-<step>.service``: *network* plus *deps* in ``After=``/``Requires=``.
+
+    Rendered through the typed table as root plumbing: ``Type=oneshot`` +
+    ``RemainAfterExit=yes``, no ``User=`` (root), explicitly ``Hardening.none()`` (a step
+    formats disks, mounts them and writes secrets), no timeout (a step may wait for a key
+    at boot) and no ``[Install]`` (``runtime-init.service`` requires it)."""
+    from tundravm.declarative.systemd import Hardening
+
+    lines = dict(line.partition("=")[::2] for line in network.split("\n"))
+    words = {key: tuple(value.split()) for key, value in lines.items()}
+    spec = ServiceSpec(
+        name=step_unit(step),
+        command=(f"{STEP_DIRECTORY}/{step}",),
+        description=f"Runtime Init: {step}",
+        after=(*words.get("After", ()), *deps),
+        requires=(*words.get("Requires", ()), *deps),
+        wants=words.get("Wants", ()),
+        type="oneshot",
+        remain_after_exit=True,
+        enabled=False,
+        hardening=Hardening.none().entries(),
     )
+    return service_unit(spec)
 
 
 def _aggregate(ordering: str, exec_start: str) -> str:

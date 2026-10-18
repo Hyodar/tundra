@@ -51,6 +51,7 @@ from .evidence import (
     coverage,
     lint_entry,
     policy_facts,
+    recorded_toolchain,
     tree_rows_digest,
 )
 from .measure.policy import read_policy
@@ -551,7 +552,13 @@ def _index_checks(
     extra = _mapping(bake.get(MANIFEST_KEY))
     recorded = recorded_reproducibility(extra)
     simulated = bake_simulated(bake)
-    facts = {"backend": bake.get("backend"), "simulated": simulated, "reproducibility": recorded}
+    toolchain = recorded_toolchain(bake)
+    facts = {
+        "backend": bake.get("backend"),
+        "simulated": simulated,
+        "reproducibility": recorded,
+        "toolchain": None if toolchain is None else toolchain.payload(),
+    }
     checks.extend(_facts("bake", index["bake"], facts, BAKE_RESULT_FILENAME))
     derived["bake"] = {**index["bake"], **facts}
     baked_digest = extra.get("recipe_digest") or None

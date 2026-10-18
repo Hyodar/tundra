@@ -104,7 +104,7 @@ def test_index_records_every_member_with_its_sha256(tmp_path: Path, epoch: None)
     assert any("artifacts are simulated" in n for n in found.notes)
     assert index["tools"]["mkosi"] == "mkosi 26"
     assert index["recipe"]["matches_bake"] is True
-    assert index["lockfile"]["version"] == 4
+    assert index["lockfile"]["version"] == 5
     assert found.members["tundravm.lock"] == (out / "tundravm.lock").read_bytes()
     assert found.members["bake-result.json"] == (out / "bake-result.json").read_bytes()
     assert sorted(index["members"]) == sorted(found.members)

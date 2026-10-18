@@ -49,7 +49,7 @@ The [`surge-tdx-prover`](../examples/surge-tdx-prover/) recipe is held to this s
 
 ## The lockfile
 
-`tundravm lock RECIPE` writes `build/tundravm.lock` (JSON, version 4):
+`tundravm lock RECIPE` writes `build/tundravm.lock` (JSON, version 5):
 
 | Key | Holds |
 |---|---|
@@ -73,19 +73,7 @@ Version 4 covers every input that defines the image:
 
 The recipe-wide `base` and `arch` sections of version 3 are gone (they live in `distribution`). File entries (`files`, `skeleton_files`) record each path's `kind` (`file`, `symlink` or `directory`), mode and content sha256. Because `compiler` records the tundravm version, the recipe digest changes with it: lock again after upgrading tundravm.
 
-A version 3 lockfile still loads. `lock --check` reports it until you lock again, and a frozen bake refuses it with `E_LOCKFILE` (`Frozen bake needs a version 4 lockfile`):
-
-```console
-$ tundravm lock node.py --check
-~ version: 3 -> 4: lock again to record the distribution, compiler and kernel sections
-- arch
-- base
-+ compiler
-+ distribution
-+ variants.default.kernel
-+ variants.dev.kernel
-[exit 1]
-```
+The lockfile is version 5 (it adds the build `toolchain`; see [reproducibility](reproducibility.md#pinned-toolchain)). An older lockfile does not load: every command that reads it fails with `E_LOCKFILE` (`Lockfile version 4 is not supported; this tundravm reads version 5.`) and the hint to run `tundravm lock RECIPE` again.
 
 Version 2 lockfiles named the per-variant sections `profiles.<variant>.<section>`; they load with the names mapped.
 
@@ -101,6 +89,26 @@ $ tundravm lock node.py --check
 A lock of every variant covers any subset: `lock --check --variant NAME`, a frozen `bake --variant NAME` and `lock_status(recipe, locked, variants=(NAME,))` compare only the selected variants' sections and the recipe-wide ones, and skip the whole-recipe digest. A lock written with `lock --variant NAME` covers only that variant.
 
 `~` changed, `+` only in the recipe, `-` only in the lockfile. In Python, `lock_status(recipe, read_lock(path))` returns the same drift as `lock-changed`/`lock-added`/`lock-removed` diagnostics (`lock-stale` when only the whole-recipe digest differs), and `lint(recipe, lock=locked)` includes them. `lock_status(..., resolver=...)` also reports git refs that moved since the lock.
+
+## Pinned toolchain
+
+Pinned inputs are not enough: two builders with the same lockfile must also run the same tools. `tundravm lock` records the build toolchain beside the recipe (lockfile version 5; an older lockfile fails with `E_LOCKFILE`: lock again). The `toolchain` section is not part of the recipe digest:
+
+```json
+"toolchain": {
+  "tundravm": "0.1.0+aa9d9dcd0516",
+  "mkosi": {"version": "25.3", "source": "nix", "rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188"},
+  "systemd": "257",
+  "nixpkgs": {"rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188", "narHash": "sha256-...", "lastModified": 1787498568},
+  "measure": {"measured-boot": "1.2.0"}
+}
+```
+
+- **nix and lima backends: the lock decides.** `lock` resolves `nixos-unstable` to a rev and narHash (keeping the previous lock's pin unless `--update toolchain`) and reads that nixpkgs' mkosi and systemd versions. The generated flake takes nixpkgs from `github:NixOS/nixpkgs/<rev>` with a `flake.lock` holding the narHash, refuses to evaluate when that nixpkgs' mkosi is not the locked version, and runs mkosi with a `PATH` of Nix tools only (no host passthrough). When nixpkgs cannot be resolved (`--offline`, no `nix` on this host) the lock says why in `unpinned` and `lock` warns `toolchain not pinned: ...`; the build then follows `nixos-unstable`.
+- **local backend: the lock records, tundravm compares.** `mkosi` comes from tundravm's Python environment (`source: "pip"`, with the commit of a git install) or from `PATH` (`"host"`); systemd is `ukify --version`.
+- **Drift.** `lock --check` and `lint --lockfile` report `toolchain-drift`, one finding per field the running toolchain differs on (`toolchain mkosi: locked 25.3 (host), running 26 (host)`). It is a warning; `--strict`, or `strict_toolchain = true` in `[tool.tundravm]`, makes it an error.
+- **Rosetta.** The Lima VM runs without Rosetta: x86-64 builds under Rosetta on Apple silicon are not reproducible. `LimaMkosiBackend(rosetta=True)` opts in; `doctor` warns, and the bake, its evidence and the lock record `reproducible: not guaranteed (rosetta)`.
+- **Bake, evidence, witness.** A bake records the toolchain it ran in `bake-result.json`; `evidence` shows it; `witness` records its own and prints `toolchain: same` or `toolchain: different (mkosi 26 (nix) vs 25 (nix), ...)`. A witness that matches on a different toolchain strengthens the release. `verify --min-witnesses N` counts witnesses on the release's toolchain by default (`--same-toolchain`: what the lockfile claims), or one per distinct toolchain with `--distinct-toolchains`.
 
 ## Pinned sources
 
@@ -160,7 +168,7 @@ The checks above pin the inputs; `tundravm bake --verify-reproducible` checks th
 
 ## mkosi
 
-The `local` backend needs mkosi v25 or newer (v26 recommended) on `PATH` and checks the version before building. The `lima` and `nix` backends bring their own.
+The `local` backend needs mkosi v25 or newer (v26 recommended) on `PATH` and checks the version before building. The `lima` and `nix` backends bring their own, from the nixpkgs the lockfile pins (see [Pinned toolchain](#pinned-toolchain)).
 
 ```bash
 pip install 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'

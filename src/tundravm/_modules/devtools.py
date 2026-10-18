@@ -36,6 +36,9 @@ DEVTOOLS_PACKAGES: tuple[str, ...] = (
 
 SERIAL_CONSOLE_SERVICE = v1.SERIAL_CONSOLE
 
+SERIAL_GETTY = "serial-getty@ttyS0.service"
+"""The getty ``DevTools`` enables at build time (systemd's ``serial-getty@.service``)."""
+
 # ---------------------------------------------------------------------------
 # PostInst script — root password, dropbear/openssh auth configuration
 # ---------------------------------------------------------------------------

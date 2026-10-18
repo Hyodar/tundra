@@ -282,7 +282,7 @@ compiled mkosi
 [exit 0]
 ```
 
-The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports each of its sections as a `lock-added` error (`variants.debug.packages is not in the lock`, ...). The lockfile (version 4) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest) and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` holds one directory per variant (`mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Commit it: it is the reviewable form of the image.
+The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports each of its sections as a `lock-added` error (`variants.debug.packages is not in the lock`, ...). The lockfile (version 5) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest) and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` holds one directory per variant (`mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Commit it: it is the reviewable form of the image.
 
 ## 6. Iterate with watch
 

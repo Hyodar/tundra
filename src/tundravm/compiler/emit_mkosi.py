@@ -460,6 +460,17 @@ def _image_packages(profile: ProfileState) -> list[str]:
     return sorted(packages)
 
 
+def _enabled_templates(profile: ProfileState) -> set[str]:
+    """Templates of the packaged instances *profile* enables (``serial-getty@.service`` for
+    ``Unit("serial-getty@ttyS0.service", enabled=True)``): debloat must not mask them, or
+    the enabled instance is masked too."""
+    return {
+        svc.name.partition("@")[0] + "@.service"
+        for svc in profile.services
+        if svc.enabled and not svc.command and "@" in svc.name and "@." not in svc.name
+    }
+
+
 def _useradd_command(user: UserSpec) -> str:
     """Generate a useradd shell command from a UserSpec."""
     parts: list[str] = ["mkosi-chroot useradd"]
@@ -1183,7 +1194,7 @@ class DeterministicMkosiEmitter:
         config = profile.debloat
         if config.enabled and config.systemd_minimize:
             bins_keep = sorted(config.systemd_bins_keep)
-            units_keep = sorted(config.effective_units_keep)
+            units_keep = sorted({*config.effective_units_keep, *_enabled_templates(profile)})
 
             # Binary cleanup via mkosi-chroot dpkg-query
             lines.append("")

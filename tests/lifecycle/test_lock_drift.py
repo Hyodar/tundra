@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -167,14 +166,13 @@ def test_lock_status_missing_lockfile_raises(tmp_path: Path) -> None:
     assert "lock" in excinfo.value.hint
 
 
-def test_old_format_lockfile_reports_all_sections_added_and_refuses_frozen_bakes(
-    tmp_path: Path,
-) -> None:
+@pytest.mark.parametrize("version", [1, 2, 4])
+def test_older_lockfile_versions_ask_to_lock_again(tmp_path: Path, version: int) -> None:
     recipe = _recipe()
     payload = _payload(recipe)
     lock_path = tmp_path / "legacy.lock"
     legacy = {
-        "version": 1,
+        "version": version,
         "recipe_digest": recipe_digest(payload),
         "recipe": payload,
         "dependencies": {"default": ["curl", "jq"]},
@@ -182,22 +180,20 @@ def test_old_format_lockfile_reports_all_sections_added_and_refuses_frozen_bakes
     }
     lock_path.write_text(json.dumps(legacy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    locked = read_lock(lock_path)
-    assert locked.lockfile.sections == {}
-    with pytest.raises(LockfileError, match="needs a version 4 lockfile") as raised:
-        bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path / "out")
-    assert raised.value.hint is not None and "tundravm lock RECIPE" in raised.value.hint
+    with pytest.raises(LockfileError, match=f"version {version} is not supported") as raised:
+        read_lock(lock_path)
 
-    found = lock_status(recipe, locked)
-    assert {d.code for d in found} == {"lock-added", "lock-changed"}
-    assert {d.subject for d in found if d.code == "lock-added"} == set(section_digests(payload))
-    assert [d.subject for d in found if d.code == "lock-changed"] == ["version"]
-    drift = compare_lock(locked.lockfile, payload)
-    assert drift.digest_matches
-    assert drift.changed == ()
-    first, *rest = drift.render().splitlines()
-    assert first.startswith("~ version: 1 -> 4: lock again")
-    assert rest and all(line.startswith("+ ") for line in rest)
+    assert raised.value.code == "E_LOCKFILE"
+    assert raised.value.hint is not None and "tundravm lock RECIPE" in raised.value.hint
+    assert "toolchain" in raised.value.hint
+
+
+def test_lockfile_without_toolchain_section_is_invalid() -> None:
+    raw = json.loads(serialize_lockfile(build_lockfile(recipe={"base": "debian/trixie"})))
+    del raw["toolchain"]
+
+    with pytest.raises(LockfileError, match="no `toolchain` section"):
+        parse_lockfile(json.dumps(raw))
 
 
 def test_removed_profile_sections_and_scalar_detail() -> None:
@@ -334,24 +330,14 @@ def test_partial_comparison_checks_the_digest_for_the_locks_full_set() -> None:
     assert not compare_lock(forged, _two_variants({"a": {"packages": []}}), partial=True).is_clean
 
 
-def test_version_2_lockfile_sections_load_as_variants() -> None:
+def test_lockfile_round_trips_its_toolchain() -> None:
     current = build_lockfile(recipe=_two_variants({"a": {"packages": ["curl"]}}))
-    old = json.loads(serialize_lockfile(current))
-    old["version"] = 2
-    old["sections"] = {
-        name.replace("variants.", "profiles.", 1): digest
-        for name, digest in old["sections"].items()
-    }
-    assert "profiles.a.packages" in old["sections"]
 
-    parsed = parse_lockfile(json.dumps(old))
+    parsed = parse_lockfile(serialize_lockfile(current))
 
-    assert parsed == replace(current, version=3)
-    assert LOCKFILE_VERSION == 4
-    drift = compare_lock(parsed, current.recipe)
-    assert drift.sections == ()
-    assert drift.lock_version == 3
-    assert drift.render().startswith("~ version: 3 -> 4")
+    assert parsed == current
+    assert LOCKFILE_VERSION == 5
+    assert parsed.toolchain is not None and parsed.toolchain.tundravm
 
 
 def test_cli_lock_check_of_one_variant_against_a_full_lock(tmp_path: Path) -> None:

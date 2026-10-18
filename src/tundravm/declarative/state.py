@@ -108,7 +108,7 @@ from .model import (
     User,
 )
 from .resolve import CLOUD_TARGETS, builtin_steps, order_hooks, step_nodes
-from .systemd import UNIT_REF_KINDS, Dynamic, UnitTarget, target_unit
+from .systemd import UNIT_REF_KINDS, Dynamic, Root, UnitTarget, target_unit
 
 HISTORICAL = "nethermind-v1"
 """The dialect that reproduces the historical nethermind-tdx tree byte for byte."""
@@ -248,6 +248,8 @@ class StateBuilder:
         hooks = iter(order_hooks([item for item in items if isinstance(item, Hook)]))
         units = declared_units(full)
         users = {item.name for item in full if isinstance(item, User)}
+        mounts = {item.mount for item in full if isinstance(item, Disk)}
+        mounts |= {item.where for item in full if isinstance(item, Mount)}
         runtime_done = False
         for item in items:
             match item:
@@ -270,7 +272,14 @@ class StateBuilder:
                 case Unit():
                     _unit(profile, item, steps=steps, per_step=not self.historical, units=units)
                 case Service():
-                    _service(profile, item, units, users=users, historical=self.historical)
+                    _service(
+                        profile,
+                        item,
+                        units,
+                        users=users,
+                        historical=self.historical,
+                        mounts=mounts,
+                    )
                     _finish_service(profile, item)
                 case Task():
                     _task(profile, item, users=users, historical=self.historical, units=units)
@@ -314,7 +323,7 @@ class StateBuilder:
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
             if isinstance(unit, Service):
-                _service(profile, unit, units, users={unit.default_user})
+                _service(profile, unit, units, users={unit.default_user}, mounts=mounts)
                 _finish_service(profile, unit)
                 continue
             if isinstance(unit, Task):
@@ -433,14 +442,12 @@ class StateBuilder:
         network_setup = self.historical or ships_unit(
             self.state.effective_profile(profile.name), NETWORK_SETUP_UNIT
         )
-        unit = (
-            azure.AZURE_PROVISIONING_SERVICE
-            if network_setup
-            else azure.AZURE_PROVISIONING_SERVICE_ONLINE
-        )
-        _add_file(profile, _AZURE_UNIT, unit)
-        for line in _AZURE_POSTINST:
-            _shell(profile, line, phase="postinst")
+        if self.historical:
+            _add_file(profile, _AZURE_UNIT, azure.AZURE_PROVISIONING_SERVICE)
+            for line in _AZURE_POSTINST:
+                _shell(profile, line, phase="postinst")
+        else:
+            _task(profile, azure.provisioning_task(network_setup), users=(), historical=False)
         _set_targets(profile, ("azure",))
 
 
@@ -853,12 +860,19 @@ def _unit(
 
 def declared_units(items: Sequence[Declaration]) -> frozenset[str]:
     """The unit names the declarations in *items* render or control (relation refs resolve
-    against them)."""
-    return frozenset(
+    against them), with the ``.socket`` of a socket-activated ``Service`` and the
+    ``.timer`` of a scheduled ``Task``."""
+    names = {
         target_unit(item.ref)
         for item in items
         if isinstance(item, Declared) and item.ref.kind in UNIT_REF_KINDS
-    )
+    }
+    for item in items:
+        if isinstance(item, Service) and item.socket is not None:
+            names.add(unit_name(item.name).removesuffix(".service").removesuffix("@") + ".socket")
+        elif isinstance(item, Task) and item.schedule is not None:
+            names.add(item.unit.removesuffix(".service") + ".timer")
+    return frozenset(names)
 
 
 def _unit_state(profile: ProfileState, action: UnitAction, unit: str) -> None:
@@ -874,8 +888,11 @@ def _service(
     *,
     users: Collection[str] = (),
     historical: bool = False,
+    mounts: Collection[str] = (),
 ) -> None:
-    """Lower *service*; ``user=None`` declares its system user unless *users* has it."""
+    """Lower *service*; ``user=None`` declares its system user unless *users* has it.
+    A ``write_paths`` entry on one of *mounts* (declared mount points) is created before
+    start and ordered after its mount (:func:`_mounted_paths`)."""
     name = service.name
     for key, value in service.env.items():
         if not _ENV_KEY.fullmatch(key):
@@ -900,6 +917,23 @@ def _service(
         fields["user"] = _system_user(profile, service.default_user, users, historical)
     if service.state and not service.working_dir:
         fields["working_dir"] = f"/var/lib/{service.state}"
+    on_mounts = _mounted_paths(service, mounts)
+    if on_mounts:
+        owner = fields["user"]
+        if service.user is not None and not isinstance(service.user, (str, Root)):
+            raise ValidationError(
+                f"Service {name!r} writes {on_mounts[0]} on a disk as a Dynamic() user, "
+                "whose uid changes between boots.",
+                hint="Run it as a system user (drop user=), or keep its state in state=.",
+            )
+        user = "root" if owner is None else str(owner)
+        group = service.group or user
+        made = tuple(f"+/usr/bin/install -d -o {user} -g {group} -m 0750 {p}" for p in on_mounts)
+        fields["exec_start_pre"] = (*made, *fields["exec_start_pre"])  # type: ignore[misc]
+        fields["mounts_for"] = on_mounts
+        cwd = fields["working_dir"]
+        if isinstance(cwd, str) and any(cwd == p or cwd.startswith(p + "/") for p in on_mounts):
+            fields["working_dir"] = f"-{cwd}"  # the pre-start step runs before it exists
     sandbox = service.sandbox
     fields["hardening"] = None if sandbox is None else sandbox.entries()
     restart_sec = service.restart_sec
@@ -916,6 +950,20 @@ def _service(
             restart_sec=None if restart_sec == "5" else restart_sec or "",
             **fields,  # type: ignore[arg-type]
         )
+    )
+
+
+def _mounted_paths(service: Service, mounts: Collection[str]) -> tuple[str, ...]:
+    """*service*'s ``write_paths`` that live on a declared mount point (a ``Disk`` or a
+    ``Mount``), in order. Those directories cannot ship in the image: the mount hides
+    them, and a ``Disk`` is mounted by runtime-init after ``systemd-tmpfiles-setup``, so
+    a tmpfiles.d line would create them under the mount point. ``-``-prefixed (optional)
+    entries are never created."""
+    return tuple(
+        path
+        for path in service.write_paths
+        if not path.startswith("-")
+        and any(path == point or path.startswith(point.rstrip("/") + "/") for point in mounts)
     )
 
 
@@ -948,7 +996,7 @@ def _unit_fields(
     return {
         **rel,
         "description": decl.description or None,
-        "user": None if isinstance(decl.user, Dynamic) else decl.user,
+        "user": None if isinstance(decl.user, (Dynamic, Root)) else decl.user,
         "dynamic_user": isinstance(decl.user, Dynamic),
         "group": decl.group or None,
         "groups": tuple(decl.groups),
@@ -1321,7 +1369,7 @@ def _task(
         ServiceSpec(
             name=task.name,
             command=tuple(shlex.split(command)) if isinstance(command, str) else command,
-            user=None if isinstance(user, Dynamic) else user,
+            user=None if isinstance(user, (Dynamic, Root)) else user,
             dynamic_user=isinstance(user, Dynamic),
             group=task.group,
             after=_merged(requires, _targets(name, "after", task.after, units), wants),

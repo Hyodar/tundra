@@ -38,6 +38,22 @@ def _no_network_resolution(request: pytest.FixtureRequest, monkeypatch: pytest.M
         )
 
     monkeypatch.setattr(source_module, "default_resolver", _refuse)
+    import tundravm.toolchain as toolchain_module
+
+    monkeypatch.setattr(toolchain_module, "resolve_nixpkgs", fake_nixpkgs)
+
+
+FAKE_NIXPKGS_REV = "1" * 40
+
+
+def fake_nixpkgs() -> object:
+    """The nixpkgs pin every non-integration test locks the nix backends to (no network)."""
+    from tundravm.toolchain import NixpkgsPin, NixpkgsResolution
+
+    pin = NixpkgsPin(
+        FAKE_NIXPKGS_REV, "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", 1700000000
+    )
+    return NixpkgsResolution(pin, "25.3", "257")
 
 
 @pytest.fixture

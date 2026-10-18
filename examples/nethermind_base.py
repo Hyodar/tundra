@@ -147,7 +147,7 @@ class NethermindBase(Composite):
                     stage="skeleton",
                 ),
                 Debloat(),
-                Tdxs(),
+                Tdxs(legacy_units=True),
             ),
         )
 

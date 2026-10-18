@@ -60,6 +60,13 @@ from .release import (
     recorded_keys,
     signing_key,
 )
+from .toolchain import (
+    Toolchain,
+    ToolchainChange,
+    compare_toolchains,
+    describe_changes,
+    running_toolchain,
+)
 
 WITNESS_SCHEMA = "tundravm.witness/1"
 """The ``schema`` of a witness file, which ``witness --format json`` prints."""
@@ -81,10 +88,19 @@ WITNESS_CODES: tuple[str, ...] = (
     "witness-unsigned",
     "witness-self",
     "witness-simulated",
+    "witness-toolchain-different",
+    "witness-toolchain-unknown",
+    "witness-toolchain-repeated",
 )
 """Every reason code of :func:`verify_witnesses`."""
+ToolchainRequirement = Literal["same", "distinct"]
+"""What ``verify --min-witnesses`` asks of the witnesses' toolchains (default ``same``)."""
 _BUILDER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}")
 _MEMBER_LIMIT = 64 * 1024 * 1024
+STRENGTHENS_NOTE = (
+    "note: matched with a different toolchain: this strengthens the release "
+    "(independent toolchains agree)"
+)
 """The largest lockfile member read from an evidence bundle."""
 
 
@@ -127,6 +143,31 @@ class Witness:
     kept: bool = True
     built: Mapping[str, str] = field(default_factory=dict)
     """The witness build's file of each artifact, by ``<variant>/<target>``."""
+    toolchain: Toolchain | None = None
+    """The toolchain the witness built with; ``None`` when unknown."""
+    release_toolchain: Toolchain | None = None
+    """The toolchain the release's bake recorded (its evidence); ``None`` when it records none."""
+
+    @property
+    def toolchain_changes(self) -> tuple[ToolchainChange, ...] | None:
+        """The fields the witness's toolchain differs on from the release's; ``None``: unknown."""
+        if self.toolchain is None or self.release_toolchain is None:
+            return None
+        return compare_toolchains(self.release_toolchain, self.toolchain)
+
+    def toolchain_text(self) -> str:
+        """``same``, ``different (mkosi 26 (nix) vs 25 (nix), …)`` or why it is unknown."""
+        changes = self.toolchain_changes
+        if changes is not None:
+            return describe_changes(changes)
+        if self.release_toolchain is None:
+            return "unknown (the release records no toolchain)"
+        return "unknown (the witness recorded no toolchain)"
+
+    @property
+    def strengthens(self) -> bool:
+        """A match on a different toolchain: independent toolchains agree on the release."""
+        return self.matched and bool(self.toolchain_changes)
 
     @property
     def matched(self) -> bool:
@@ -153,6 +194,10 @@ class Witness:
             "error": None if self.error is None else dict(self.error),
             "created": self.created,
             "tundravm": __version__,
+            "toolchain": None if self.toolchain is None else self.toolchain.payload(),
+            "toolchain_comparison": None
+            if (changes := self.toolchain_changes) is None
+            else [{"field": c.field, "left": c.left, "right": c.right} for c in changes],
         }
 
     def json(self) -> str:
@@ -167,6 +212,7 @@ class Witness:
         lines = [
             f"witness {self.release_path}  builder {self.builder}  verdict {self.verdict}{tag}",
             f"  backend   {self.backend.get('name')}",
+            f"  toolchain {self.toolchain_text()}",
         ]
         header = ("variant", "target", "expected", "actual", "match")
         rows = [
@@ -187,6 +233,8 @@ class Witness:
             lines.append(f"  error     {self.error.get('code')}: {self.error.get('message')}")
         if self.verdict == "different":
             lines.extend(self._compare_hint())
+        if self.strengthens:
+            lines.append(STRENGTHENS_NOTE)
         return "\n".join(lines) + "\n"
 
     def _compare_hint(self) -> list[str]:
@@ -320,10 +368,12 @@ def witness_image(
     error: dict[str, str] | None = None
     found: dict[tuple[str, str], tuple[str, str]] = {}
     simulated = img.backend.name == INPROCESS
+    recorded: Toolchain | None = None
     try:
-        _, artifacts = bake_image(
+        baked, artifacts = bake_image(
             img, names, locked=locked, backend=img.backend, build=work, reporter=reporter
         )
+        recorded = baked.toolchain
         for artifact in artifacts:
             if artifact.variant in names:
                 found[(artifact.variant, artifact.target)] = (
@@ -335,6 +385,8 @@ def witness_image(
         message = str(exc.args[0]) if exc.args else str(exc)
         error = {"code": exc.code, "message": message}
         say(f"bake       failed: {exc.code}: {message}")
+    toolchain = recorded or running_toolchain(img.backend, locked=locked.lockfile.toolchain)
+    release_toolchain = _bundled_toolchain(root)
     rows = _compare(index, found)
     verdict: WitnessVerdict = "matched" if all(row["match"] for row in rows) else "different"
     if error is not None:
@@ -358,7 +410,10 @@ def witness_image(
         path=target,
         build=work,
         built={f"{v}/{t}": path for (v, t), (_, path) in found.items()},
+        toolchain=toolchain,
+        release_toolchain=release_toolchain,
     )
+    say(f"toolchain  {result.toolchain_text()}")
     signature = _write(result, target, sign)
     kept = True
     if result.matched and default_build:
@@ -501,6 +556,21 @@ def _bundled_lock(root: Path) -> bytes:
     return data
 
 
+def _bundled_toolchain(root: Path) -> Toolchain | None:
+    """The toolchain the release's evidence records for its bake; ``None`` when none."""
+    try:
+        with tarfile.open(root / BUNDLE_NAME, mode="r:*") as archive:
+            index = json.loads(_member(archive, EVIDENCE_INDEX) or b"null")
+    except (tarfile.TarError, OSError, EOFError, ValueError):
+        return None
+    bake = index.get("bake") if isinstance(index, dict) else None
+    raw = bake.get("toolchain") if isinstance(bake, dict) else None
+    try:
+        return None if raw is None else Toolchain.from_payload(raw)
+    except TdxError:
+        return None
+
+
 def _member(archive: tarfile.TarFile, name: str) -> bytes | None:
     """The bytes of the plain-file member ``evidence/<name>``, else ``None``."""
     try:
@@ -589,9 +659,13 @@ class WitnessCheck:
     code: str | None = None
     principal: str | None = None
     simulated: bool = False
+    toolchain: str | None = None
+    """Its toolchain against the release's: ``same``, ``different (…)`` or ``unknown (…)``."""
+    toolchain_key: str | None = field(default=None, compare=False, repr=False)
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "toolchain": self.toolchain,
             "file": self.file,
             "builder": self.builder,
             "principal": self.principal,
@@ -614,6 +688,7 @@ class WitnessVerification:
     allow_simulated: bool = False
     manifest_sha256: str | None = None
     notes: tuple[Mapping[str, str], ...] = ()
+    toolchains: ToolchainRequirement = "same"
 
     @property
     def counted(self) -> tuple[str, ...]:
@@ -643,7 +718,7 @@ class WitnessVerification:
                     "code": "witness-insufficient",
                     "subject": self.witnesses,
                     "message": f"{len(self.counted)} distinct witness(es) count, "
-                    f"{self.min_witnesses} required",
+                    f"{self.min_witnesses} required ({self._toolchain_label})",
                 }
             )
         return tuple(found)
@@ -658,6 +733,7 @@ class WitnessVerification:
             "manifest_sha256": self.manifest_sha256,
             "min_witnesses": self.min_witnesses,
             "allow_simulated": self.allow_simulated,
+            "toolchains": self.toolchains,
             "verdict": self.verdict,
             "passed": self.passed,
             "counted": list(self.counted),
@@ -666,13 +742,20 @@ class WitnessVerification:
             "notes": [dict(note) for note in self.notes],
         }
 
+    @property
+    def _toolchain_label(self) -> str:
+        if self.toolchains == "distinct":
+            return "one per distinct toolchain"
+        return "on the release's toolchain"
+
     def render(self, format: WitnessFormat = "text") -> str:
         """``json`` (:meth:`to_dict`) or ``text``: a line per witness, then the problems."""
         if format == "json":
             return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
         lines = [
             f"witnesses {self.witnesses}  verdict {self.verdict}  "
-            f"({len(self.counted)} counted, {self.min_witnesses} required)"
+            f"({len(self.counted)} counted, {self.min_witnesses} required, "
+            f"{self._toolchain_label})"
         ]
         for check in self.checks:
             state = "counted" if check.counted else "excluded"
@@ -692,6 +775,7 @@ def verify_witnesses(
     min_witnesses: int = 1,
     allowed_signers: Path | None = None,
     allow_simulated: bool = False,
+    toolchains: ToolchainRequirement = "same",
 ) -> WitnessVerification:
     """Apply the witness trust policy to the ``*.json`` files in *witnesses_dir*.
 
@@ -708,6 +792,17 @@ def verify_witnesses(
     principals count once, and so does a key listed under two. The policy passes when
     at least *min_witnesses* count (``witness-insufficient`` otherwise). A failed policy
     is a value; a *release_dir* without ``release.json`` raises ``ValidationError``.
+
+    *toolchains* is what the policy asks of each witness's toolchain against the one the
+    release's evidence records. ``same`` (the default): the lockfile pins the toolchain,
+    so the claim ``--min-witnesses`` tests is "anyone with this lockfile reproduces it",
+    and a witness on the locked toolchain tests exactly that; a witness that matched on a
+    different toolchain is noted as strengthening the release but not counted
+    (``witness-toolchain-different``), and one recording no toolchain is not counted
+    (``witness-toolchain-unknown``). ``distinct`` counts the distinct toolchains among
+    the matching witnesses instead (a second witness on a toolchain already counted is
+    ``witness-toolchain-repeated``): the stronger claim that independent toolchains
+    agree. A release recording no toolchain is noted, and its witnesses are not compared.
     """
     root = Path(release_dir)
     if not is_release(root):
@@ -741,10 +836,18 @@ def verify_witnesses(
         publisher=publisher,
         allowed=None if allowed_signers is None else Path(allowed_signers),
         allow_simulated=allow_simulated,
+        release_toolchain=_bundled_toolchain(root),
+        toolchains=toolchains,
     )
+    if context.release_toolchain is None and files:
+        message = (
+            "the release's evidence records no toolchain: witnesses' toolchains are not compared"
+        )
+        notes.append({"code": "toolchain-unknown", "message": message})
     checks: list[WitnessCheck] = []
     principals: dict[str, str] = {}
     keys: dict[str, str] = {}
+    seen: dict[str, str] = {}
     for path in files:
         check, key = _judge(path, context)
         principal = check.principal
@@ -757,6 +860,22 @@ def verify_witnesses(
                 principals[principal] = path.name
                 if key:
                     keys[key] = path.name
+        tool_key = check.toolchain_key
+        if check.counted and toolchains == "distinct" and tool_key is not None:
+            earlier = seen.get(tool_key)
+            if earlier is not None:
+                message = f"{check.builder}: the same toolchain as {earlier} (counted once)"
+                check = replace(
+                    check, counted=False, code="witness-toolchain-repeated", message=message
+                )
+            else:
+                seen[tool_key] = path.name
+        diverse = (check.toolchain or "").startswith("different")
+        if diverse and check.code in (None, "witness-toolchain-different"):
+            message = (
+                f"{path.name} matched with a different toolchain: this strengthens the release"
+            )
+            notes.append({"code": "toolchain-diverse", "message": message})
         checks.append(check)
     return WitnessVerification(
         release=str(root),
@@ -766,6 +885,7 @@ def verify_witnesses(
         allow_simulated=allow_simulated,
         manifest_sha256=manifest_sha,
         notes=tuple(notes),
+        toolchains=toolchains,
     )
 
 
@@ -776,6 +896,8 @@ class _Policy:
     publisher: tuple[str | None, frozenset[str]]
     allowed: Path | None
     allow_simulated: bool
+    release_toolchain: Toolchain | None = None
+    toolchains: ToolchainRequirement = "same"
 
 
 def _publisher(
@@ -852,7 +974,42 @@ def _judge(path: Path, policy: _Policy) -> tuple[WitnessCheck, str | None]:
     tag = ", simulated" if simulated else ""
     message = f"{who}: matched {total}/{total} artifacts, signed by {who}{tag}"
     check = WitnessCheck(path.name, who, True, message, principal=who, simulated=simulated)
-    return check, key
+    return _toolchain_policy(check, payload, policy), key
+
+
+def _toolchain_policy(
+    check: WitnessCheck, payload: Mapping[str, Any], policy: _Policy
+) -> WitnessCheck:
+    """*check* (a matching witness) under the policy's toolchain requirement."""
+    raw = payload.get("toolchain")
+    try:
+        own = None if raw is None else Toolchain.from_payload(raw)
+    except TdxError:
+        own = None
+    who = check.builder
+    if own is None:
+        message = f"{who}: records no toolchain: it cannot show which tools reproduced the release"
+        return replace(
+            check,
+            counted=False,
+            code="witness-toolchain-unknown",
+            message=message,
+            toolchain="unknown (the witness recorded no toolchain)",
+        )
+    key = json.dumps(own.fields(), sort_keys=True)
+    if policy.release_toolchain is None:
+        return replace(
+            check, toolchain="unknown (the release records no toolchain)", toolchain_key=key
+        )
+    text = describe_changes(compare_toolchains(policy.release_toolchain, own))
+    check = replace(check, toolchain=text, toolchain_key=key)
+    if text != "same" and policy.toolchains == "same":
+        message = (
+            f"{who}: matched on a {text} toolchain: it strengthens the release, but only "
+            "--distinct-toolchains counts it"
+        )
+        return replace(check, counted=False, code="witness-toolchain-different", message=message)
+    return check
 
 
 def _excluded(

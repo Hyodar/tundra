@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
+from tundravm._units.parse import rendered
 from tundravm.declarative import Fragment, Mkosi, Recipe, Unit, Variant, compile, resolve
 from tundravm.platforms.azure import (
     AZURE_PROVISIONING_SCRIPT,
     AZURE_PROVISIONING_SERVICE,
-    AZURE_PROVISIONING_SERVICE_ONLINE,
+    provisioning_task,
 )
 from tundravm.testing import CompiledTree, compile_tree
 
@@ -51,9 +52,12 @@ def test_azure_provisioning_script_content() -> None:
 def test_azure_variant_emits_service_unit(tree: CompiledTree) -> None:
     """Without network-setup.service the unit waits for network-online.target."""
     unit = tree.unit(SERVICE, variant="azure")
-    assert unit == AZURE_PROVISIONING_SERVICE_ONLINE
+    assert unit == rendered(provisioning_task(False))[SERVICE]
     assert "After=network-online.target\nWants=network-online.target\n" in unit
     assert "network-setup" not in unit
+    # A typed root oneshot: no User= line, relaxed sandbox, bounded, not waiting for init.
+    assert "User=" not in unit and "runtime-init" not in unit
+    assert "ProtectSystem=full\n" in unit and "TimeoutStartSec=5min\n" in unit
 
 
 def test_azure_unit_requires_network_setup_when_the_variant_ships_it(tmp_path: Path) -> None:
@@ -64,7 +68,8 @@ def test_azure_unit_requires_network_setup_when_the_variant_ships_it(tmp_path: P
         variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     tree = compile_tree(recipe, path=tmp_path / "tree")
-    assert tree.unit(SERVICE, variant="azure") == AZURE_PROVISIONING_SERVICE
+    unit = tree.unit(SERVICE, variant="azure")
+    assert "After=network-setup.service network.target\nRequires=network-setup.service\n" in unit
 
 
 def test_azure_unit_is_historical_under_nethermind_v1(tmp_path: Path) -> None:
@@ -96,9 +101,8 @@ def test_azure_variant_enables_service_in_postinst(tree: CompiledTree) -> None:
 def test_azure_variant_symlinks_to_minimal_target(tree: CompiledTree) -> None:
     postinst = tree.script("postinst", variant="azure").splitlines()
 
-    link_cmds = [line for line in postinst if line.startswith("mkosi-chroot ln ")]
+    link_cmds = [line for line in postinst if "minimal.target.wants" in line and SERVICE in line]
     assert len(link_cmds) == 1
-    assert f"minimal.target.wants/{SERVICE}" in link_cmds[0]
 
 
 def test_azure_variant_sets_output_target(tree: CompiledTree) -> None:

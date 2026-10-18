@@ -15,7 +15,7 @@ import subprocess
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import NoReturn
+from typing import ClassVar, NoReturn
 
 from tundravm.backends.base import (
     MountSpec,
@@ -47,8 +47,8 @@ LIMA_YAML_TEMPLATE = textwrap.dedent("""\
       uid: 1000
       home: /home/debian
     rosetta:
-      enabled: true
-      binfmt: true
+      enabled: {rosetta}
+      binfmt: {rosetta}
     containerd:
       user: false
     mountTypesUnsupported: [9p]
@@ -72,11 +72,28 @@ LIMA_YAML_TEMPLATE = textwrap.dedent("""\
           set -euo pipefail
           mkdir -p ~/.config/nix
           echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf
-          echo 'extra-platforms = x86_64-linux' >> ~/.config/nix/nix.conf
+          {extra_platforms}
           sh <(curl -L https://nixos.org/nix/install) --no-daemon \\
             --nix-extra-conf-file ~/.config/nix/nix.conf
           grep nix .profile >> .bashrc
 """)
+
+EXTRA_PLATFORMS_LINE = "echo 'extra-platforms = x86_64-linux' >> ~/.config/nix/nix.conf"
+"""The nix.conf line letting nix build x86-64 under Rosetta (only with ``rosetta=True``)."""
+NO_EXTRA_PLATFORMS = "# no extra-platforms: Rosetta is off (reproducibility first)"
+
+
+def lima_yaml(backend: LimaMkosiBackend, mount_source: str) -> str:
+    """The Lima VM config for *backend*, mounting *mount_source*; Rosetta only when opted in."""
+    return LIMA_YAML_TEMPLATE.format(
+        cpus=backend.cpus,
+        memory=backend.memory,
+        disk=backend.disk,
+        mount_source=mount_source,
+        rosetta="true" if backend.rosetta else "false",
+        extra_platforms=EXTRA_PLATFORMS_LINE if backend.rosetta else NO_EXTRA_PLATFORMS,
+    )
+
 
 VM_MOUNT = "/home/debian/mnt"
 """Where the VM sees the host build directory."""
@@ -100,6 +117,11 @@ class LimaMkosiBackend:
     name: str = "lima_mkosi"
     instance_name: str | None = None
     mkosi_args: list[str] = field(default_factory=list)
+    rosetta: bool = False
+    """Translate x86-64 with Rosetta on Apple silicon. Off by default: builds under Rosetta
+    are not reproducible, so a bake with it records ``reproducible: not guaranteed (rosetta)``."""
+    toolchain_source: ClassVar[str] = "nix"
+    """mkosi comes from the flake's nixpkgs inside the VM, pinned to the lockfile's toolchain."""
     _last_instance: str | None = field(init=False, default=None, repr=False)
 
     def requirements(self) -> tuple[Requirement, ...]:
@@ -120,6 +142,7 @@ class LimaMkosiBackend:
             "disk": self.disk,
             "instance": self.instance_name,
             "mkosi_args": list(self.mkosi_args),
+            "rosetta": self.rosetta,
         }
 
     def mount_plan(self, request: BakeRequest) -> tuple[MountSpec, ...]:
@@ -132,7 +155,7 @@ class LimaMkosiBackend:
         request.emit_dir.mkdir(parents=True, exist_ok=True)
 
         # Write flake.nix so nix develop works inside the VM
-        write_flake_nix(request.emit_dir)
+        write_flake_nix(request.emit_dir, request.toolchain)
 
         instance = self._resolve_instance_name(request)
         self._last_instance = instance
@@ -211,7 +234,7 @@ class LimaMkosiBackend:
         if self.instance_name is not None:
             return self.instance_name
         h = hashlib.sha256(str(request.emit_dir.resolve()).encode()).hexdigest()[:8]
-        return f"tdx-builder-{h}"
+        return f"tdx-builder-{h}-rosetta" if self.rosetta else f"tdx-builder-{h}"
 
     def _build_mkosi_command(self, request: BakeRequest) -> str:
         """Build the mkosi command string for execution inside the VM (absolute VM paths)."""
@@ -299,12 +322,7 @@ class LimaMkosiBackend:
         """Create and start a Lima instance."""
         mount_source = str(request.build_dir.resolve())
 
-        lima_config = LIMA_YAML_TEMPLATE.format(
-            cpus=self.cpus,
-            memory=self.memory,
-            disk=self.disk,
-            mount_source=mount_source,
-        )
+        lima_config = lima_yaml(self, mount_source)
 
         config_path = request.build_dir / "lima.yaml"
         config_path.parent.mkdir(parents=True, exist_ok=True)

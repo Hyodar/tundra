@@ -187,6 +187,7 @@ from .templates import (
     render_test_module,
     render_workflow,
 )
+from .toolchain import running_toolchain, toolchain_drift
 from .verify import VERIFY_FORMATS, verify_evidence
 from .watch import Sources, Watch, lint_failure, tree_verdict, verdict
 from .witness import WITNESS_FORMATS, verify_witnesses, witness_image, witnesses_dir
@@ -477,7 +478,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="SOURCE",
-        help="Resolve this source build again even if it is pinned (repeatable).",
+        help="Resolve this source build again even if it is pinned (repeatable); "
+        "`--update toolchain` records the running toolchain (and resolves nixpkgs again).",
+    )
+    lock.add_argument(
+        "--strict",
+        action="store_true",
+        help="With --check, toolchain drift fails too (as [tool.tundravm] strict_toolchain = "
+        "true); without it, it is a warning.",
     )
     lock_mode = lock.add_mutually_exclusive_group()
     lock_mode.add_argument(
@@ -1575,6 +1583,26 @@ def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         help="Require N distinct signed witnesses that rebuilt every artifact of the release "
         "(the publisher excluded); signatures are checked with --allowed-signers.",
     )
+    toolchains = cmd.add_mutually_exclusive_group()
+    toolchains.add_argument(
+        "--same-toolchain",
+        dest="toolchains",
+        action="store_const",
+        const="same",
+        default="same",
+        help="Count only witnesses that built with the release's toolchain (the default): "
+        "the lockfile pins the toolchain, so --min-witnesses tests that anyone with this "
+        "lockfile reproduces the release; a match on another toolchain is noted as "
+        "strengthening it, not counted.",
+    )
+    toolchains.add_argument(
+        "--distinct-toolchains",
+        dest="toolchains",
+        action="store_const",
+        const="distinct",
+        help="Count the distinct toolchains among the matching witnesses instead: the "
+        "stronger claim that independent toolchains agree.",
+    )
     cmd.add_argument(
         "--allow-simulated",
         action="store_true",
@@ -2288,6 +2316,8 @@ def _lint_findings(
     diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=selected)
     if isinstance(selected, Lock) and not any(d.severity == "error" for d in diagnostics):
         diagnostics.extend(lock_status(loaded.recipe, selected, variants=names))
+    if isinstance(selected, Lock):
+        diagnostics.extend(_toolchain_findings(loaded.backend, selected, args))
     return diagnostics
 
 
@@ -2372,7 +2402,11 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     if args.check:
         drift = img.select(names).lock_status(path)
         print(render_drift(drift, resolve_format(args.format), path), file=out)
-        return EXIT_OK if drift.is_clean else EXIT_FAILURE
+        toolchain = _toolchain_findings(img.backend, read_lock(path), args)
+        for finding in toolchain:
+            print(f"{finding.severity}: {finding.code}: {finding.message}", file=out)
+        failed = not drift.is_clean or any(d.severity == "error" for d in toolchain)
+        return EXIT_FAILURE if failed else EXIT_OK
     previous = read_lock(path) if path.exists() else None
     if args.explain:
         if previous is not None:
@@ -2381,7 +2415,12 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
             print(f"no lockfile at {path}; every section is new", file=out)
     try:
         locked = lock_image(
-            img, names, previous=previous, update=tuple(args.update or ()), offline=args.offline
+            img,
+            names,
+            previous=previous,
+            update=tuple(args.update or ()),
+            offline=args.offline,
+            runner=args.runner,
         )
     except LockfileError as exc:
         if exc.failures and resolve_format(args.format) == "github":
@@ -2389,7 +2428,30 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
         raise
     write_lock(locked, path)
     print(f"locked {path}", file=out)
+    recorded = locked.lockfile.toolchain
+    if recorded is not None and recorded.mkosi is not None:
+        print(f"  toolchain: {recorded.summary()}", file=out)
+        if recorded.unpinned:
+            print(f"warning: toolchain not pinned: {recorded.unpinned}", file=sys.stderr)
     return EXIT_OK
+
+
+def _toolchain_findings(
+    backend: BuildBackend | None, locked: Lock, args: argparse.Namespace
+) -> tuple[Diagnostic, ...]:
+    """``toolchain-drift`` between *locked*'s toolchain and the one *backend* runs here.
+
+    A warning, or an error with ``--strict`` or ``[tool.tundravm] strict_toolchain``.
+    """
+    recorded = locked.lockfile.toolchain
+    if recorded is None:
+        return ()
+    running = running_toolchain(backend, runner=args.runner, locked=recorded)
+    project: ProjectConfig | None = getattr(args, "project", None)
+    strict = bool(getattr(args, "strict", False)) or (
+        project is not None and project.strict_toolchain
+    )
+    return toolchain_drift(recorded, running, strict=strict)
 
 
 def _failure_annotations(exc: LockfileError, recipe: str | Path) -> str:
@@ -2780,6 +2842,14 @@ def doctor(
         ready = False
     else:
         ready = _probe_backend(chosen, run, out)
+        if getattr(chosen, "rosetta", False):
+            from .toolchain import ROSETTA
+
+            print(
+                f"  warning: rosetta is on: builds are reproducible: {ROSETTA}; "
+                "use LimaMkosiBackend(rosetta=False)",
+                file=out,
+            )
         if loaded is not None:
             _probe_cloud_tools(loaded, chosen, run, out)
     _probe_measurement_tools(run, out)
@@ -2939,6 +3009,7 @@ def _verify_release(args: argparse.Namespace, out: TextIO) -> int:
         min_witnesses=1 if args.min_witnesses is None else args.min_witnesses,
         allowed_signers=args.allowed_signers,
         allow_simulated=args.allow_simulated,
+        toolchains=args.toolchains,
     )
     if args.format == "json":
         report = json.loads(found.render("json"))

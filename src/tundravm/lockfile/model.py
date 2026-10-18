@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-LOCKFILE_VERSION = 4
+from tundravm.toolchain import Toolchain
+
+LOCKFILE_VERSION = 5
 """Current lockfile schema version.
 
 Version 2 added per-section digests (``sections``); version 3 names the
@@ -15,8 +17,9 @@ covers every image-defining input: the ``distribution`` and ``compiler``
 sections, ``variants.<name>.kernel`` and the complete ``variants.<name>.debloat``
 (``base`` and ``arch`` moved into ``distribution``), and pins a source build
 whose source differs between variants once per variant (``<variant>/<name>``).
-Older lockfiles still load; they drift until locked again, and frozen bakes
-refuse them.
+Version 5 records the build ``toolchain`` (mkosi, systemd, nixpkgs, tundravm,
+measurement tools; see :class:`~tundravm.toolchain.Toolchain`). Older lockfiles
+do not load: :func:`~tundravm.lockfile.parse_lockfile` asks to lock again.
 """
 
 
@@ -43,8 +46,8 @@ class Lockfile:
     ``recipe_digest`` is the sha256 of the whole canonical recipe payload (what
     frozen bakes enforce). ``sections`` maps dotted payload paths such as
     ``base`` or ``variants.default.packages`` to the sha256 of that sub-payload,
-    so drift can be reported section by section. Version 1 lockfiles have no
-    ``sections`` and parse with an empty mapping.
+    so drift can be reported section by section. ``toolchain`` is the build
+    toolchain recorded at lock time; it is not part of the recipe digest.
     """
 
     version: int
@@ -53,3 +56,4 @@ class Lockfile:
     dependencies: dict[str, list[str]]
     fetches: list[LockedFetch] = field(default_factory=list)
     sections: dict[str, str] = field(default_factory=dict)
+    toolchain: Toolchain | None = None

@@ -109,6 +109,7 @@ _AZURE_POSTINST = (
     "/usr/lib/systemd/system/azure-complete-provisioning.service "
     "/etc/systemd/system/minimal.target.wants/azure-complete-provisioning.service",
 )
+_AZURE_UNIT = "azure-complete-provisioning.service"
 _AZURE_FILES = {
     "usr/bin/azure-complete-provisioning": (azure.AZURE_PROVISIONING_SCRIPT,),
     f"{UNIT_DIR}/azure-complete-provisioning.service": (
@@ -116,6 +117,20 @@ _AZURE_FILES = {
         azure.AZURE_PROVISIONING_SERVICE_ONLINE,
     ),
 }
+
+
+def _azure_files() -> dict[str, tuple[str, ...]]:
+    """:data:`_AZURE_FILES` plus the provisioning ``Task`` the current dialect renders."""
+    from tundravm._units.parse import rendered
+
+    unit = f"{UNIT_DIR}/azure-complete-provisioning.service"
+    typed = tuple(
+        rendered(azure.provisioning_task(network))["azure-complete-provisioning.service"]
+        for network in (True, False)
+    )
+    return {**_AZURE_FILES, unit: (*_AZURE_FILES[unit], *typed)}
+
+
 _GCP_FILES = {
     "etc/hosts": (gcp.GCP_HOSTS,),
     "etc/resolv.conf": (gcp.GCP_RESOLV_CONF,),
@@ -470,6 +485,8 @@ class _VariantReader:
         kernel, build_hooks = self._kernel(conf, scripts, paths)
         composites = self._backports(settings, scripts)
         postinst = self._postinst(scripts)
+        if "azure" in targets and _AZURE_UNIT in postinst.enabled and not self.historical:
+            postinst.enabled.remove(_AZURE_UNIT)  # the azure target's provisioning Task
         debloat = self._debloat(postinst, scripts)
         if debloat is None or debloat.minimize_systemd:
             if skeleton.get("etc/systemd/system/minimal.target") == MINIMAL_TARGET_UNIT:
@@ -714,7 +731,7 @@ class _VariantReader:
     ) -> tuple[Target, ...]:
         targets: list[Target] = []
         cloud: tuple[tuple[Target, Mapping[str, tuple[str, ...]], str], ...] = (
-            ("azure", _AZURE_FILES, AZURE_POSTOUTPUT_SCRIPT),
+            ("azure", _azure_files(), AZURE_POSTOUTPUT_SCRIPT),
             ("gcp", _GCP_FILES, GCP_POSTOUTPUT_SCRIPT),
         )
         for target, files, base in cloud:

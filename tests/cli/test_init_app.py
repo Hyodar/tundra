@@ -80,6 +80,12 @@ def test_disk_and_external_secret(tmp_path: Path) -> None:
     unit = image.service("hello")
     assert unit.values("Service", "LoadCredential") == (f"api-token:{token}",)
     assert unit.values("Service", "ReadWritePaths") == ("/persistent/hello",)
+    # write_paths on the disk: created, owned by the app, after the mount (no hand-written step).
+    assert unit.values("Service", "ExecStartPre") == (
+        "+/usr/bin/install -d -o hello -g hello -m 0750 /persistent/hello",
+    )
+    assert unit.values("Unit", "RequiresMountsFor") == ("/persistent/hello",)
+    assert "install -d" not in (tmp_path / "hello.py").read_text(encoding="utf-8")
     assert "DISK_DEVICE = " in (tmp_path / "hello.py").read_text(encoding="utf-8")
     assert "8 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)

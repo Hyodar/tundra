@@ -1,9 +1,13 @@
+import io
+import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import bake_request
-from tundravm.backends.lima import LimaMkosiBackend
+from tundravm.backends.lima import LimaMkosiBackend, lima_yaml
+from tundravm.cli import EXIT_OK, doctor
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest
 
@@ -142,3 +146,56 @@ def test_lima_resources_are_configurable() -> None:
     assert backend.cpus == 4
     assert backend.memory == "8GiB"
     assert backend.disk == "50GiB"
+
+
+def test_lima_disables_rosetta_by_default() -> None:
+    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
+
+    config = lima_yaml(backend, "/build")
+
+    assert backend.rosetta is False
+    assert "rosetta:\n  enabled: false\n  binfmt: false\n" in config
+    assert "extra-platforms" not in config.replace("no extra-platforms", "")
+    assert backend.fingerprint()["rosetta"] is False
+
+
+def test_lima_rosetta_is_an_explicit_opt_in(tmp_path: Path) -> None:
+    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB", rosetta=True)
+
+    config = lima_yaml(backend, "/build")
+
+    assert "rosetta:\n  enabled: true\n  binfmt: true\n" in config
+    assert "echo 'extra-platforms = x86_64-linux' >> ~/.config/nix/nix.conf" in config
+    assert backend.fingerprint()["rosetta"] is True
+    plain = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
+    request = bake_request(tmp_path)
+    rosetta_vm = backend._resolve_instance_name(request)
+    assert rosetta_vm == plain._resolve_instance_name(request) + "-rosetta"
+
+
+def test_doctor_warns_when_lima_rosetta_is_on() -> None:
+    out = io.StringIO()
+    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB", rosetta=True)
+
+    code = doctor(None, out, runner=_limactl, backend=backend)
+
+    assert code == EXIT_OK
+    assert (
+        "  warning: rosetta is on: builds are reproducible: not guaranteed (rosetta); "
+        "use LimaMkosiBackend(rosetta=False)"
+    ) in out.getvalue().splitlines()
+
+
+def test_doctor_is_quiet_about_rosetta_by_default() -> None:
+    out = io.StringIO()
+    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
+
+    doctor(None, out, runner=_limactl, backend=backend)
+
+    assert "rosetta" not in out.getvalue()
+
+
+def _limactl(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    if argv[0] == "limactl":
+        return subprocess.CompletedProcess(list(argv), 0, stdout="limactl version 1.0.0\n")
+    raise FileNotFoundError(argv[0])

@@ -19,6 +19,7 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 from tundravm.backends.base import (
     MountSpec,
@@ -41,6 +42,8 @@ class NixMkosiBackend:
 
     name: str = "nix_mkosi"
     mkosi_args: list[str] = field(default_factory=list)
+    toolchain_source: ClassVar[str] = "nix"
+    """mkosi comes from the flake's nixpkgs, pinned to the lockfile's toolchain."""
 
     def requirements(self) -> tuple[Requirement, ...]:
         return (
@@ -62,7 +65,7 @@ class NixMkosiBackend:
         self._ensure_prerequisites()
         request.build_dir.mkdir(parents=True, exist_ok=True)
         request.emit_dir.mkdir(parents=True, exist_ok=True)
-        write_flake_nix(request.emit_dir)
+        write_flake_nix(request.emit_dir, request.toolchain)
 
     def execute(self, request: BakeRequest) -> BakeResult:
         self._ensure_prerequisites()

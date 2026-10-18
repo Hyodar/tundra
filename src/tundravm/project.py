@@ -46,7 +46,9 @@ RESOLUTION_HELP = (
     "(bake and doctor --backend) and require (a list of evidence checks, such as "
     '["reproducible", "lock"]: what status judges release readiness against and what '
     "evidence and release require when --require is omitted; default reproducible and "
-    "lock; --require '' requires none), with paths relative to the pyproject.toml. They apply "
+    "lock; --require '' requires none) and strict_toolchain (true: `toolchain-drift`, the "
+    "running build toolchain differing from the lockfile's, is an error in lint and lock "
+    "--check, not a warning), with paths relative to the pyproject.toml. They apply "
     "to every command when RECIPE is omitted or names the table's recipe; commands "
     "without RECIPE (measure, deploy, sbom) always apply them. An explicit RECIPE or flag "
     "always wins; then the table; then the built-in default. A configured lockfile is "
@@ -70,6 +72,8 @@ class ProjectConfig:
     values: Mapping[str, str] = field(default_factory=dict)
     require: tuple[str, ...] | None = None
     """``require``: the checks a release must hold, in the order given; ``None`` when unset."""
+    strict_toolchain: bool = False
+    """``strict_toolchain = true``: ``toolchain-drift`` is an error, not a warning."""
 
     @property
     def root(self) -> Path:
@@ -108,12 +112,16 @@ def find_project(start: Path | None = None) -> ProjectConfig | None:
         if candidate.is_file():
             table = _table(candidate)
             if table is not None:
-                values, require = table
-                return ProjectConfig(candidate, values, require)
+                values, require, strict = table
+                return ProjectConfig(candidate, values, require, strict)
     return None
 
 
-def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None] | None:
+STRICT_TOOLCHAIN_KEY = "strict_toolchain"
+"""The table's one boolean: ``toolchain-drift`` is an error when true."""
+
+
+def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None, bool] | None:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -141,14 +149,22 @@ def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None] | None:
             + f' (e.g. {RENAMED_KEYS[renamed[0]]} = "build").',
             context={"path": str(path)},
         )
-    unknown = sorted(set(table) - {*CONFIG_KEYS, REQUIRE_KEY})
+    unknown = sorted(set(table) - {*CONFIG_KEYS, REQUIRE_KEY, STRICT_TOOLCHAIN_KEY})
     if unknown:
         raise ValidationError(
             f"Unknown [{TABLE}] key(s) in {path}: {', '.join(unknown)}.",
-            hint=f"[{TABLE}] accepts: {', '.join((*CONFIG_KEYS, REQUIRE_KEY))}",
+            hint=f"[{TABLE}] accepts: "
+            + ", ".join((*CONFIG_KEYS, REQUIRE_KEY, STRICT_TOOLCHAIN_KEY)),
             context={"path": str(path)},
         )
     require = _require(table.pop(REQUIRE_KEY), path) if REQUIRE_KEY in table else None
+    strict = table.pop(STRICT_TOOLCHAIN_KEY, False)
+    if not isinstance(strict, bool):
+        raise ValidationError(
+            f"[{TABLE}] {STRICT_TOOLCHAIN_KEY} in {path} must be true or false.",
+            hint=f"Write it as {STRICT_TOOLCHAIN_KEY} = true",
+            context={"path": str(path)},
+        )
     values: dict[str, str] = {}
     for key, value in table.items():
         if not isinstance(value, str) or not value:
@@ -158,7 +174,7 @@ def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None] | None:
                 context={"path": str(path)},
             )
         values[key] = value
-    return values, require
+    return values, require, strict
 
 
 def _require(value: object, path: Path) -> tuple[str, ...]:

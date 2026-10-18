@@ -8,6 +8,7 @@ import pytest
 
 from tests.helpers import conf_list
 from tundravm._source import GitSource
+from tundravm._units import v1
 from tundravm.declarative import (
     RUNTIME_INIT,
     Declaration,
@@ -98,12 +99,17 @@ def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
     assert "Type=notify" in svc_content
     assert "ExecStart=/usr/bin/tdxs" in svc_content
     assert "--log-level info" in svc_content
-    assert "Requires=tdxs.socket" in svc_content
+    assert "After=tdxs.socket\nRequires=tdxs.socket\n" in svc_content
+    assert "[Install]" not in svc_content  # the socket starts it
+    assert "DevicePolicy=closed\nDeviceAllow=/dev/tdx_guest rw\n" in svc_content
+    assert "ReadWritePaths=-/sys/kernel/config/tsm/report\n" in svc_content
+    assert "RestrictAddressFamilies=AF_UNIX\n" in svc_content
+    assert "WorkingDirectory" not in svc_content  # ProtectHome=yes hides /home
 
     sock_content = tree.unit("tdxs.socket")
     assert "ListenStream=/var/tdxs.sock" in sock_content
     assert "SocketMode=0660" in sock_content
-    assert "SocketUser=root" in sock_content
+    assert "SocketUser" not in sock_content  # systemd's default, root
     assert "SocketGroup=tdx" in sock_content
 
     postinst = tree.script("postinst").splitlines()
@@ -113,7 +119,7 @@ def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
     assert useradd.endswith(" tdxs")
     assert postinst.index("mkosi-chroot groupadd --system tdx") < postinst.index(useradd)
 
-    assert "mkosi-chroot systemctl enable tdxs.service" in postinst
+    assert "mkosi-chroot systemctl enable tdxs.service" not in postinst
     assert "mkosi-chroot systemctl enable tdxs.socket" in postinst
 
 
@@ -125,16 +131,15 @@ def test_tdxs_waits_for_the_steps_it_needs(tmp_path: Path) -> None:
     assert "After=runtime-init-keys.service" in svc_content
     assert "Requires=runtime-init-keys.service tdxs.socket" in svc_content
 
-    sock_content = tree.unit("tdxs.socket")
-    assert "After=runtime-init-keys.service" in sock_content
-    assert "Requires=runtime-init-keys.service" in sock_content
+    # The socket listens from boot; a connection starts the service once the key is ready.
+    assert "runtime-init" not in tree.unit("tdxs.socket")
 
 
 def test_tdxs_needing_all_of_runtime_init_waits_for_runtime_init(tmp_path: Path) -> None:
     tree = _compile(tmp_path, Key("key_persistent"), Tdxs(needs=(RUNTIME_INIT,)))
 
     assert "Requires=runtime-init.service tdxs.socket" in tree.unit("tdxs.service")
-    assert "Requires=runtime-init.service" in tree.unit("tdxs.socket")
+    assert "runtime-init" not in tree.unit("tdxs.socket")
 
 
 def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
@@ -143,7 +148,8 @@ def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
 
     assert "runtime-init" not in tree.unit("tdxs.service")
     assert "runtime-init" not in tree.unit("tdxs.socket")
-    codes = {d.code for d in lint(recipe)}
+    # The legacy unit texts wait for runtime-init through needs=, which lint reports.
+    codes = {d.code for d in lint(_recipe(Tdxs(needs=(RUNTIME_INIT,), legacy_units=True)))}
     assert "needs-without-init" in codes
 
 
@@ -216,3 +222,30 @@ def test_build_sources_setting_mounts_build_source(tmp_path: Path) -> None:
     tree = _compile(tmp_path, Setting("Build", "BuildSources", ("../services/tdxs:tdxs",)))
 
     assert "BuildSources=../services/tdxs:tdxs" in tree.conf().splitlines()
+
+
+@pytest.mark.parametrize(
+    ("tdxs", "families"),
+    [
+        (Tdxs(), "AF_UNIX"),
+        (Tdxs(issuer=None, validator="tdx"), "AF_UNIX"),
+        (Tdxs(issuer="azure"), "AF_UNIX AF_INET AF_INET6"),  # IMDS over HTTP
+        (Tdxs(validator="tdx", get_collateral=True), "AF_UNIX AF_INET AF_INET6"),  # Intel PCS
+    ],
+)
+def test_tdxs_reaches_the_network_only_when_its_config_does(
+    tmp_path: Path, tdxs: Tdxs, families: str
+) -> None:
+    assert f"RestrictAddressFamilies={families}\n" in _compile(tmp_path, tdxs).unit("tdxs.service")
+
+
+def test_tdxs_legacy_units_keep_the_historical_text(tmp_path: Path) -> None:
+    tree = _compile(tmp_path, Tdxs(legacy_units=True))
+    assert tree.unit("tdxs.service") == v1.tdxs_service(
+        socket="tdxs.socket",
+        user="tdxs",
+        group="tdx",
+        config="/etc/tdxs/config.yaml",
+        log_level="info",
+    )
+    assert "Accept=false" in tree.unit("tdxs.socket")

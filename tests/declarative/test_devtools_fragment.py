@@ -5,11 +5,13 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
+from tundravm._units import v1
 from tundravm.declarative import Debloat, Package, Recipe, Unit, Variant
 from tundravm.declarative.utils import DevTools
 from tundravm.testing import CompiledTree, compile_tree
 
 SERIAL_UNIT = "serial-console.service"
+GETTY = "serial-getty@ttyS0.service"
 BASH_COMPLETION = "/usr/share/bash-completion"
 EXPECTED_PACKAGES = {
     "apt",
@@ -53,27 +55,26 @@ def test_devtools_variant_includes_expected_packages() -> None:
     assert declared == EXPECTED_PACKAGES
 
 
-def test_devtools_variant_emits_serial_console_service(tree: CompiledTree) -> None:
+def test_devtools_enables_the_serial_getty_at_build_time(tree: CompiledTree) -> None:
     (unit,) = [item for item in DevTools().items if isinstance(item, Unit)]
-
-    assert unit.name == SERIAL_UNIT
-    assert tree.unit(SERIAL_UNIT, variant="devtools") == unit.content
-
-
-def test_serial_console_service_content(tree: CompiledTree) -> None:
-    """Verify the serial console service enables serial-getty@ttyS0."""
-    service = tree.unit(SERIAL_UNIT, variant="devtools")
-    assert "serial-getty@ttyS0.service" in service
-    assert "Type=oneshot" in service
-    assert "RemainAfterExit=yes" in service
-    assert "WantedBy=minimal.target" in service
-
-
-def test_devtools_variant_enables_serial_console_in_postinst(tree: CompiledTree) -> None:
+    assert (unit.name, unit.content, unit.enabled) == (GETTY, None, True)
+    assert f"mkosi.extra/usr/lib/systemd/system/{SERIAL_UNIT}" not in tree.files(variant="devtools")
     postinst = tree.script("postinst", variant="devtools").splitlines()
+    assert f"mkosi-chroot systemctl enable {GETTY}" in postinst
+    assert any("minimal.target.wants" in line and GETTY in line for line in postinst)
+    # Debloat masks systemd's units outside its keep list: the getty's template stays.
+    (keep,) = [line for line in postinst if line.startswith("systemd_svc_whitelist=")]
+    assert '"serial-getty@.service"' in keep
 
-    enable_cmds = [line for line in postinst if "systemctl" in line and "enable" in line]
-    assert any(SERIAL_UNIT in line for line in enable_cmds)
+
+def test_unreproducible_devtools_keep_the_boot_time_serial_console(tmp_path: Path) -> None:
+    recipe = Recipe("debug", variants=(Variant("devtools", add=DevTools(reproducible=False)),))
+    tree = compile_tree(recipe, path=tmp_path / "tree")
+    service = tree.unit(SERIAL_UNIT, variant="devtools")
+    assert service == v1.SERIAL_CONSOLE
+    postinst = tree.script("postinst", variant="devtools")
+    enable = postinst.index(f"mkosi-chroot systemctl enable {SERIAL_UNIT}")
+    assert enable < postinst.index("openssl passwd")  # the hook keeps its historical place
 
 
 def test_devtools_postinst_sets_root_password(tree: CompiledTree) -> None:
@@ -99,11 +100,7 @@ def test_devtools_postinst_configures_openssh(tree: CompiledTree) -> None:
 
 
 def test_devtools_variant_registers_postinst_password_hook(tree: CompiledTree) -> None:
-    postinst = tree.script("postinst", variant="devtools")
-
-    # The serial console enable line runs before the password/auth setup
-    enable = postinst.index(f"mkosi-chroot systemctl enable {SERIAL_UNIT}")
-    assert enable < postinst.index("openssl passwd")
+    assert "openssl passwd" in tree.script("postinst", variant="devtools")
 
 
 def test_devtools_variant_does_not_affect_default_variant(tree: CompiledTree) -> None:

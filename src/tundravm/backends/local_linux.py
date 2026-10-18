@@ -15,7 +15,7 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from tundravm.backends.base import (
     TOOLS_TREE_NAMES,
@@ -222,6 +222,8 @@ class LocalLinuxBackend:
     name: str = "local_linux"
     privilege: Literal["sudo", "unshare", "none"] = "sudo"
     mkosi_args: list[str] = field(default_factory=list)
+    toolchain_source: ClassVar[str] = "host"
+    """mkosi and ukify come from this host (or tundravm's Python environment), not a pin."""
 
     def requirements(self) -> tuple[Requirement, ...]:
         mkosi = Requirement(

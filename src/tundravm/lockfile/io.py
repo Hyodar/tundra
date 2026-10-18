@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from tundravm.errors import LockfileError
-from tundravm.lockfile.model import LockedFetch, Lockfile
-from tundravm.lockfile.resolve import VARIANTS_SECTION
+from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
+from tundravm.toolchain import Toolchain
 
 _REGENERATE = "The lockfile is generated: run `tundravm lock RECIPE` to rewrite it."
 
@@ -21,6 +21,7 @@ def serialize_lockfile(lockfile: Lockfile) -> str:
         "dependencies": lockfile.dependencies,
         "fetches": [_fetch_payload(item) for item in lockfile.fetches],
         "sections": lockfile.sections,
+        "toolchain": None if lockfile.toolchain is None else lockfile.toolchain.payload(),
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -35,6 +36,14 @@ def parse_lockfile(raw: str) -> Lockfile:
         raise LockfileError("Invalid lockfile payload type.", hint=_REGENERATE)
 
     version = _required_int(payload, "version")
+    if version != LOCKFILE_VERSION:
+        raise LockfileError(
+            f"Lockfile version {version} is not supported; this tundravm reads version "
+            f"{LOCKFILE_VERSION}.",
+            hint="Run `tundravm lock RECIPE` to lock again: version 5 records the build "
+            "toolchain (mkosi, systemd, nixpkgs, tundravm) so builders run identical tools.",
+            context={"version": str(version)},
+        )
     recipe_digest = _required_str(payload, "recipe_digest")
     recipe = _required_dict(payload, "recipe")
     dependencies = _required_dependencies(payload, "dependencies")
@@ -43,9 +52,10 @@ def parse_lockfile(raw: str) -> Lockfile:
         raise LockfileError("Invalid lockfile `fetches` value.", hint=_REGENERATE)
     fetches = [_parse_locked_fetch(item) for item in fetches_raw]
     sections = _optional_sections(payload, "sections")
-    if version == _PROFILE_SECTIONS_VERSION:
-        version = _VARIANT_SECTIONS_VERSION
-        sections = {_variant_section(name): digest for name, digest in sections.items()}
+    if "toolchain" not in payload:
+        raise LockfileError("Lockfile has no `toolchain` section.", hint=_REGENERATE)
+    raw_toolchain = payload["toolchain"]
+    toolchain = None if raw_toolchain is None else Toolchain.from_payload(raw_toolchain)
     return Lockfile(
         version=version,
         recipe_digest=recipe_digest,
@@ -53,18 +63,8 @@ def parse_lockfile(raw: str) -> Lockfile:
         dependencies=dependencies,
         fetches=fetches,
         sections=sections,
+        toolchain=toolchain,
     )
-
-
-_PROFILE_SECTIONS_VERSION = 2
-"""The lockfile version whose per-variant sections are named ``profiles.<name>.<key>``."""
-_VARIANT_SECTIONS_VERSION = 3
-"""The first lockfile version naming them ``variants.<name>.<key>``."""
-
-
-def _variant_section(name: str) -> str:
-    old = "profiles."
-    return VARIANTS_SECTION + name[len(old) - 1 :] if name.startswith(old) else name
 
 
 def read_lockfile(path: str | Path) -> Lockfile:

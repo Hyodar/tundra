@@ -78,6 +78,7 @@ from tundravm.models import (
     ProfileBuildResult,
 )
 from tundravm.observability import Event, Progress, Reporter, TextReporter, display_path
+from tundravm.toolchain import TOOLCHAIN_UPDATE, NixpkgsResolver, lock_toolchain
 
 from . import _bake, _compile
 from ._lowered import LOCK_FILENAME, Lowered
@@ -681,16 +682,30 @@ def lock_image(
     update: Sequence[str] = (),
     offline: bool = False,
     resolver: Resolver | None = None,
+    runner: ProbeRunner | None = None,
+    nixpkgs: NixpkgsResolver | None = None,
 ) -> Lock:
     """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
 
     The sources are the source builds and, outside ``nethermind-v1``, the built
     kernels' sources (``kernel``, or ``kernel-<variant>``; see ``Lowered.lock_sources``).
+    The build toolchain is recorded too (:func:`~tundravm.toolchain.lock_toolchain`:
+    *runner* probes host tools, *nixpkgs* resolves the nix backends' nixpkgs); naming
+    ``toolchain`` in *update* resolves it again instead of keeping *previous*'s.
     """
     offline = offline or img.policy.network_mode == "offline"
     scoped = img.select(profiles)
     payload = scoped.payload()
     builds = scoped.lock_sources()
+    toolchain = lock_toolchain(
+        img.backend,
+        previous=None if previous is None else previous.lockfile.toolchain,
+        update=TOOLCHAIN_UPDATE in update,
+        offline=offline,
+        runner=runner,
+        resolver=nixpkgs,
+    )
+    update = [name for name in update if name != TOOLCHAIN_UPDATE]
     unknown = [
         name
         for name in update
@@ -713,7 +728,7 @@ def lock_image(
             kept.append(build.locked(pin))
     fetches = resolve_pins(pending, prior, resolver=resolver, offline=offline, kept=kept)
     fetches.sort(key=lambda fetch: fetch.name or fetch.source)
-    return Lock.of(build_lockfile(recipe=payload, fetches=fetches))
+    return Lock.of(build_lockfile(recipe=payload, fetches=fetches, toolchain=toolchain))
 
 
 def _named_pins(locked: Lock) -> dict[str, LockedFetch]:
@@ -728,8 +743,9 @@ def lock(
     offline: bool = False,
     resolver: Resolver | None = None,
     variants: Sequence[str] | None = None,
+    nixpkgs: NixpkgsResolver | None = None,
 ) -> Lock:
-    """Lock every variant (or *variants*): section digests plus a pin per source build.
+    """Lock every variant (or *variants*): section digests, a pin per source build, the toolchain.
 
     Pins in *previous* that still match their source are kept; sources named in
     *update* are resolved again (a build whose source differs between variants is
@@ -748,6 +764,7 @@ def lock(
         update=update,
         offline=offline,
         resolver=resolver,
+        nixpkgs=nixpkgs,
     )
 
 

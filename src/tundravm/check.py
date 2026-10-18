@@ -795,14 +795,15 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
     ``Service``/``Task``."""
     from ._units.render import STRICT_HARDENING
     from .declarative.model import Service as TypedService
-    from .declarative.systemd import Hardening
+    from .declarative.systemd import Hardening, Root
 
     name = unit_name(item.name)
-    if item.user == "root":
+    if item.user == "root" or isinstance(item.user, Root):
+        spelled = "user='root'" if item.user == "root" else "user=Root()"
         yield Diagnostic(
             code="service-runs-as-root",
             severity="info",
-            message=f"unit {name!r} runs as root (user='root')",
+            message=f"unit {name!r} runs as root ({spelled})",
             subject=name,
             variant=variant,
             hint="Drop user= to run as a system user named after the unit (declared for you); "

@@ -170,7 +170,7 @@ def test_provenance_records_every_step(recipe: Path) -> None:
     assert trace[("Package", "curl", "runtime")][-1] == removed
     declared = Origin("declared", "common", (), location=f"{recipe}:16")
     assert trace[("Package", "systemd", "runtime")] == (declared,)
-    assert trace[("Unit", "tdxs.service")][0].fragments == (("tdxs", "Tdxs"),)
+    assert trace[("Service", "tdxs.service")][0].fragments == (("tdxs", "Tdxs"),)
 
 
 def test_why_under_a_directory_needs_an_emitted_path(

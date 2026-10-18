@@ -124,3 +124,17 @@ def test_historical_texts_keep_their_bytes(name: str) -> None:
     text, digest = HISTORICAL[name]
     assert hashlib.sha256(text.encode()).hexdigest()[:16] == digest
     assert UnitText.parse(text).text == text
+
+
+def test_runtime_init_step_unit_renders_through_the_typed_table() -> None:
+    """A current-dialect step unit: root plumbing (no ``User=``), explicitly unhardened,
+    no timeout, no ``[Install]`` (``runtime-init.service`` requires it)."""
+    from tundravm._modules.init import _step_unit_text
+
+    text = _step_unit_text("disks", v1.network_ordering(False), ["runtime-init-keys.service"])
+    assert text == (
+        "[Unit]\nDescription=Runtime Init: disks\n"
+        "After=network-online.target runtime-init-keys.service\n"
+        "Requires=runtime-init-keys.service\nWants=network-online.target\n\n"
+        "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/lib/runtime-init/disks\n"
+    )

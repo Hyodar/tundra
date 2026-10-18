@@ -46,6 +46,7 @@ from tundravm.observability import (
     format_size,
 )
 from tundravm.policy import ensure_bake_policy
+from tundravm.toolchain import Toolchain, running_toolchain
 
 from ._compile import emit
 from ._lowered import Lowered
@@ -85,6 +86,7 @@ def bake(
         destination.mkdir(parents=True, exist_ok=True)
         lock_digest = _lock_digest(lowered)
         lock_sha256 = _lock_sha256(lowered)
+        locked_toolchain = _locked_toolchain(lowered)
         emission_root = destination / "mkosi"
         with progress.phase("compile", "compile", profile=scope):
             _, emission = emit(lowered, emission_root)
@@ -116,6 +118,7 @@ def bake(
                 or lowered.deb_file(name)
                 else None,
                 network=not offline,
+                toolchain=locked_toolchain,
             )
             logger.log(
                 operation="bake_profile_start",
@@ -166,10 +169,20 @@ def bake(
             lock_digest=lock_digest,
             lock_sha256=lock_sha256,
             backend=backend.name,
+            toolchain=running_toolchain(backend, locked=locked_toolchain),
             created_at=datetime.now(UTC).isoformat(timespec="seconds"),
             duration_s=total,
         )
         baked.save(destination)
+        if baked.toolchain is not None and baked.toolchain.reproducible is not None:
+            progress.emit(
+                "warning",
+                scope,
+                f"reproducible: {baked.toolchain.reproducible}; LimaMkosiBackend(rosetta=False) "
+                "builds without it",
+                level="warning",
+                source="backend",
+            )
         noun = "variant" if len(profiles) == 1 else "variants"
         progress.emit(
             "done",
@@ -311,6 +324,17 @@ def _lock_sha256(lowered: Lowered) -> str | None:
     """The sha256 of the lockfile the bake reads, ``None`` when there is none."""
     path = lowered.lock_path
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def _locked_toolchain(lowered: Lowered) -> Toolchain | None:
+    """The toolchain the lockfile the bake reads records; ``None`` without a readable one."""
+    path = lowered.lock_path
+    if not path.is_file():
+        return None
+    try:
+        return read_lockfile(path).toolchain
+    except LockfileError:
+        return None
 
 
 def _fetched_sources(

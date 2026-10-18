@@ -482,7 +482,12 @@ and `examples/06_attestation.py` something typed to require. Open question for t
 run: tdxs writes configfs-tsm reports under `/sys/kernel/config/tsm`, which
 `ProtectKernelTunables=yes` makes read-only; the preset override is either
 `kernel=False` or `write_paths=("/sys/kernel/config/tsm",)`, decided on a real TDX guest before
-step 8 lands.
+step 8 lands. Step 8 shipped `write_paths=("-/sys/kernel/config/tsm/report",)` (optional, so a
+guest without configfs-tsm still starts) with `kernel=True`, from tundra-tools' source:
+go-tdx-guest v0.3.1 uses configfs-tsm when `/sys/kernel/config/tsm/report` exists and falls back
+to `/dev/tdx_guest` otherwise. Still open for the hardware run: configfs-tsm entries are
+root-owned (`inblob` is mode 0200), so the `tdxs` user needs `CAP_DAC_OVERRIDE` or uid 0 to
+issue through it.
 
 **Health check (timer) and hello (boot oneshot).** Before, `examples/03_fragments.py:43,117-118`:
 

@@ -161,8 +161,6 @@ disk = Disk(
     mapper="$disk",
     directories=(),
 )
-# Runs before the service, as root (the `+`): creates STATE_DIR, owned by APP.
-MAKE_STATE_DIR = f"+/usr/bin/install -d -o {APP} -g {APP} -m 0750 {STATE_DIR}"
 """
 
 _SECRET = r"""
@@ -267,9 +265,9 @@ _STATE = {
     "            # $STATE_DIRECTORY and makes it the working directory.\n"
     "            state=APP,",
     True: "\n            # STATE_DIR is on the disk, not under /var/lib: the sandbox may write it\n"
-    "            # (write_paths) and a pre-start step run as root (the `+`) creates it.\n"
-    "            write_paths=(STATE_DIR,),\n"
-    "            exec_start_pre=(MAKE_STATE_DIR,),",
+    "            # (write_paths); because it is on the disk, the unit also waits for the\n"
+    "            # mount and creates it, owned by APP, before the service starts.\n"
+    "            write_paths=(STATE_DIR,),",
 }
 """The service's state directory fields, by disk: ``StateDirectory=`` or a disk path."""
 

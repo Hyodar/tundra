@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -10,9 +11,12 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from tundravm.models import ArtifactRef, BakeRequest, BakeResult, OutputTarget
+
+if TYPE_CHECKING:
+    from tundravm.toolchain import NixpkgsPin, Toolchain
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +152,7 @@ def _terminate(process: subprocess.Popen[str]) -> None:
 
 FLAKE_NIX_TEMPLATE = textwrap.dedent("""\
     {
-      inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+      inputs.nixpkgs.url = "@NIXPKGS_URL@";
 
       outputs = {
         self,
@@ -156,35 +160,49 @@ FLAKE_NIX_TEMPLATE = textwrap.dedent("""\
       }: let
         mkosi = system: let
           pkgs = import nixpkgs {inherit system;};
-          mkosi-unwrapped = pkgs.mkosi.override {
-            extraDeps = with pkgs; [
-              apt
-              dpkg
-              gnupg
-              debootstrap
-              squashfsTools
-              dosfstools
-              e2fsprogs
-              mtools
-              cryptsetup
-              gptfdisk
-              util-linux
-              zstd
-              which
-              qemu-utils
-              parted
-              unzip
-              jq
-            ];
+          mkosiTools = with pkgs; [
+            apt
+            dpkg
+            gnupg
+            debootstrap
+            squashfsTools
+            dosfstools
+            e2fsprogs
+            mtools
+            cryptsetup
+            gptfdisk
+            util-linux
+            zstd
+            which
+            qemu-utils
+            parted
+            unzip
+            jq
+            bash
+            coreutils
+            findutils
+            gnused
+            gnugrep
+            gawk
+            gnutar
+            gzip
+            xz
+            systemd
+          ];
+          # mkosi sees the Nix tools only: no host PATH passthrough.
+          toolsEnv = pkgs.buildEnv {
+            name = "mkosi-tools";
+            paths = mkosiTools;
           };
+          mkosi-unwrapped = @MKOSI_GUARD@pkgs.mkosi.override {extraDeps = mkosiTools;};
         in
           pkgs.writeShellScriptBin "mkosi" ''
-            exec ${"$"}{pkgs.util-linux}/bin/unshare \\
+            exec ${pkgs.util-linux}/bin/unshare \\
               --map-auto --map-current-user \\
               --setuid=0 --setgid=0 \\
               -- \\
-              env PATH="$PATH" \\
-              ${"$"}{mkosi-unwrapped}/bin/mkosi "$@"
+              env PATH="${toolsEnv}/bin" \\
+              ${mkosi-unwrapped}/bin/mkosi "$@"
           '';
       in {
         devShells = builtins.listToAttrs (map (system: {
@@ -199,12 +217,65 @@ FLAKE_NIX_TEMPLATE = textwrap.dedent("""\
       };
     }
 """)
+"""The mkosi flake; ``@NIXPKGS_URL@`` and ``@MKOSI_GUARD@`` are filled by :func:`flake_nix`."""
+
+UNPINNED_NIXPKGS = "github:NixOS/nixpkgs/nixos-unstable"
+"""The nixpkgs the flake follows when the lockfile pins none."""
 
 
-def write_flake_nix(target_dir: Path) -> Path:
-    """Write the mkosi Nix flake to *target_dir* and return its path."""
+def flake_nix(toolchain: Toolchain | None = None) -> str:
+    """The mkosi flake: nixpkgs pinned to *toolchain*'s rev, and its mkosi version guarded.
+
+    Without a pinned nixpkgs it follows ``nixos-unstable``. A locked nix mkosi
+    version makes evaluation fail, naming both versions, when the nixpkgs differs.
+    """
+    pin = None if toolchain is None else toolchain.nixpkgs
+    url = UNPINNED_NIXPKGS if pin is None else f"github:NixOS/nixpkgs/{pin.rev}"
+    guard = ""
+    tool = None if toolchain is None else toolchain.mkosi
+    if tool is not None and tool.source == "nix" and tool.version and pin is not None:
+        guard = (
+            f'if pkgs.mkosi.version != "{tool.version}"\n'
+            f'        then throw "tundravm.lock pins mkosi {tool.version}, but nixpkgs '
+            f"{pin.rev[:12]} provides mkosi ${{pkgs.mkosi.version}}: run "
+            f'`tundravm lock --update toolchain`"\n'
+            "        else "
+        )
+    return FLAKE_NIX_TEMPLATE.replace("@NIXPKGS_URL@", url).replace("@MKOSI_GUARD@", guard)
+
+
+def flake_lock(pin: NixpkgsPin) -> str:
+    """A ``flake.lock`` pinning the flake's nixpkgs input to *pin* (rev + narHash)."""
+    locked: dict[str, object] = {"narHash": pin.nar_hash, "owner": "NixOS", "repo": "nixpkgs"}
+    if pin.last_modified:
+        locked["lastModified"] = pin.last_modified
+    locked.update({"rev": pin.rev, "type": "github"})
+    original = {"owner": "NixOS", "repo": "nixpkgs", "rev": pin.rev, "type": "github"}
+    payload = {
+        "nodes": {
+            "nixpkgs": {"locked": locked, "original": original},
+            "root": {"inputs": {"nixpkgs": "nixpkgs"}},
+        },
+        "root": "root",
+        "version": 7,
+    }
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def write_flake_nix(target_dir: Path, toolchain: Toolchain | None = None) -> Path:
+    """Write the mkosi flake (and, with a pinned nixpkgs, its flake.lock) to *target_dir*.
+
+    Without a pinned nixpkgs a stale ``flake.lock`` is removed, so the flake
+    follows ``nixos-unstable`` rather than an old pin.
+    """
     flake_path = target_dir / "flake.nix"
-    flake_path.write_text(FLAKE_NIX_TEMPLATE, encoding="utf-8")
+    flake_path.write_text(flake_nix(toolchain), encoding="utf-8")
+    lock_path = target_dir / "flake.lock"
+    pin = None if toolchain is None else toolchain.nixpkgs
+    if pin is None:
+        lock_path.unlink(missing_ok=True)
+    else:
+        lock_path.write_text(flake_lock(pin), encoding="utf-8")
     return flake_path
 
 

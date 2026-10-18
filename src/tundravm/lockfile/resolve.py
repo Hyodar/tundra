@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
+from tundravm.toolchain import Toolchain, tundravm_identity
 
 VARIANTS_KEY = "profiles"
 """The payload key holding one entry per variant (kept so recipe digests do not move)."""
@@ -59,7 +60,9 @@ def build_lockfile(
     *,
     recipe: dict[str, Any],
     fetches: list[LockedFetch] | None = None,
+    toolchain: Toolchain | None = None,
 ) -> Lockfile:
+    """The lockfile for *recipe*; *toolchain* defaults to this tundravm alone (nothing probed)."""
     dependencies: dict[str, list[str]] = {}
     profiles = recipe.get("profiles", {})
     if isinstance(profiles, dict):
@@ -77,4 +80,5 @@ def build_lockfile(
         dependencies=dependencies,
         fetches=list(fetches or []),
         sections=section_digests(recipe),
+        toolchain=toolchain if toolchain is not None else Toolchain(tundravm_identity()),
     )

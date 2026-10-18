@@ -81,6 +81,7 @@ EXPECTED_TOP_LEVEL = [
     "ReproducibilityError",
     "Resolved",
     "Resources",
+    "Root",
     "RuntimeTools",
     "Sbom",
     "Schema",

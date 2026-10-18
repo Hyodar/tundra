@@ -73,7 +73,7 @@ def _files(tree: Tree, variant: str = "default") -> dict[str, bytes]:
     ("fragment", "variant", "paths"),
     [
         (
-            Tdxs(),
+            Tdxs(legacy_units=True),
             "default",
             (
                 "mkosi.extra/etc/tdxs/config.yaml",
@@ -81,7 +81,11 @@ def _files(tree: Tree, variant: str = "default") -> dict[str, bytes]:
                 "mkosi.extra/usr/lib/systemd/system/tdxs.socket",
             ),
         ),
-        (DevTools(), "devtools", ("mkosi.extra/usr/lib/systemd/system/serial-console.service",)),
+        (
+            DevTools(reproducible=False),
+            "devtools",
+            ("mkosi.extra/usr/lib/systemd/system/serial-console.service",),
+        ),
         (Backports(), "default", ("scripts/01-sync.sh",)),
     ],
     ids=["tdxs", "devtools", "backports"],
@@ -148,13 +152,15 @@ def test_tdxs_needs_orders_its_units_after_those_steps() -> None:
     tree = compile(_recipe(Tdxs(needs=(key.ready,)), Fragment("keys", items=(key,))))
     units = "default/mkosi.extra/usr/lib/systemd/system"
     service = _text(tree, f"{units}/tdxs.service")
-    socket = _text(tree, f"{units}/tdxs.socket")
-    assert "After=runtime-init.service\nRequires=runtime-init.service tdxs.socket\n" in service
-    assert "After=runtime-init.service\nRequires=runtime-init.service\n" in socket
+    waits = "runtime-init.service tdxs.socket"
+    assert f"After={waits}\nRequires={waits}\n" in service
     plain = compile(_recipe(Tdxs(), Fragment("keys", items=(key,))))
     assert "runtime-init" not in _text(plain, f"{units}/tdxs.service")
     current = Recipe("module", items=(key, Tdxs(needs=(key.ready,))))
-    socket = _text(compile(current), f"{units}/tdxs.socket")
+    service = _text(compile(current), f"{units}/tdxs.service")
+    assert "Requires=runtime-init-keys.service tdxs.socket\n" in service
+    legacy = Recipe("module", items=(key, Tdxs(needs=(key.ready,), legacy_units=True)))
+    socket = _text(compile(legacy), f"{units}/tdxs.socket")
     assert "After=runtime-init-keys.service\nRequires=runtime-init-keys.service\n" in socket
 
 

@@ -9,7 +9,17 @@ import pytest
 from tests.unit_corpus import constant_units, emitted_units, golden_units
 from tundravm._modules.tdxs import Tdxs
 from tundravm._units.parse import Conversion, Mode, convert, rendered, semantic
-from tundravm.declarative import Calendar, DropIn, Every, Hardening, Mount, Service, Task, Unit
+from tundravm.declarative import (
+    Calendar,
+    DropIn,
+    Every,
+    Hardening,
+    Mount,
+    Root,
+    Service,
+    Task,
+    Unit,
+)
 
 
 def _name(label: str) -> str:
@@ -74,6 +84,8 @@ def test_emitted_units_round_trip(tmp_path_factory: pytest.TempPathFactory, mode
         Task("backup", "/usr/bin/backup", schedule=Every("1h"), user="backup"),
         Task("rotate", "/usr/bin/rotate", schedule=Calendar("daily"), user="rotate"),
         Task("migrate", "/usr/bin/migrate", user="migrate", timeout=None),
+        Task("glue", "/usr/bin/glue", user=Root(), hardening=Hardening.none(), timeout=None),
+        Service("plumb", "/usr/bin/plumb", user=Root(), hardening=Hardening.none()),
         Mount("/var/lib/app/cache", "tmpfs", type="tmpfs", options=("size=1G",)),
         Unit("ssh.service", dropin=DropIn(restart="always", limits={"NOFILE": "4096"})),
     ],
@@ -87,6 +99,16 @@ def test_canonical_renderings_parse_back(decl: object, init: bool, mode: Mode) -
     assert conversion.typed, conversion.blockers
     assert rendered(conversion.declaration, init=init) == texts
     assert type(conversion.declaration) is type(decl)
+
+
+def test_unit_without_user_converts_to_root() -> None:
+    text = "[Unit]\nDescription=glue\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\n"
+    text += "ExecStart=/usr/bin/glue\n\n[Install]\nWantedBy=minimal.target\n"
+    [conversion] = convert({"glue.service": text})
+    assert conversion.declaration == Task(
+        "glue", "/usr/bin/glue", user=Root(), hardening=Hardening.none(), timeout=None
+    ), conversion.blockers
+    assert "User=" not in rendered(conversion.declaration)["glue.service"]
 
 
 def test_timer_pair_converts_to_a_scheduled_task() -> None:

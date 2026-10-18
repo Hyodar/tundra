@@ -238,6 +238,7 @@ def _relations(svc: ServiceSpec) -> list[tuple[str, Sequence[str]]]:
         ("PartOf", svc.part_of),
         ("BindsTo", svc.binds_to),
         ("Conflicts", svc.conflicts),
+        ("RequiresMountsFor", svc.mounts_for),
     ]
 
 

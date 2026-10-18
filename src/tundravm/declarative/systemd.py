@@ -216,6 +216,13 @@ class Dynamic:
     services; ``state=``/``logs=``/``cache=`` directories still persist."""
 
 
+@dataclass(frozen=True, slots=True)
+class Root:
+    """``user=Root()``: root plumbing that renders no ``User=`` line (systemd's default
+    user), as runtime-init steps and platform glue do; linted ``service-runs-as-root``.
+    ``user="root"`` spells ``User=root``."""
+
+
 # ── relations ────────────────────────────────────────────────────────────
 
 UNIT_REF_KINDS: tuple[str, ...] = ("Unit", "Service", "Task", "Mount")
