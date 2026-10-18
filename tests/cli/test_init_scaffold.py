@@ -19,6 +19,7 @@ import tundravm
 from tests.helpers import REPO_ROOT, run_main
 from tundravm import templates
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.declarative.lifecycle import data_disk_serials
 from tundravm.templates import (
     EXPECTED_FINDINGS,
     TEMPLATE_VARIANTS,
@@ -130,6 +131,42 @@ def test_service_app_fragment_carries_its_lint_rule(tmp_path: Path) -> None:
     items = (*recipe.items[:-1], privileged)
     found = tundravm.lint(dataclasses.replace(recipe, items=items))
     assert {d.code for d in found} == {"app-privileged-port"}
+
+
+def test_service_app_serves_its_page_over_http(tmp_path: Path) -> None:
+    """The unchanged starter runs a real server: busybox httpd on the app port, the page it
+    serves, the package that ships it, and the firewall opening for it."""
+    scaffold(tmp_path)
+    recipe = tundravm.load_recipe(tmp_path / f"{NAME}.py")
+    tree = {e.path: e.content for e in tundravm.compile(recipe, variants=["default"]).entries}
+    files = {
+        path.removeprefix("default/mkosi.extra"): (content or b"").decode()
+        for path, content in tree.items()
+    }
+    unit = files["/usr/lib/systemd/system/app.service"]
+    assert "ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www\n" in unit
+    assert "ProtectSystem=strict\n" in unit and "User=app\n" in unit
+    page = f"<!doctype html>\n<title>{NAME}</title>\n<h1>{NAME} 0.1.0</h1>\n"
+    assert files["/srv/www/index.html"] == page
+    assert "    busybox\n" in files["default/mkosi.conf"]
+    assert 'tcp dport 8080 accept comment "app.service"' in files["/etc/nftables.conf"]
+
+
+def test_prover_template_wires_ssh_and_a_stable_data_disk(tmp_path: Path) -> None:
+    """The prover's SSH is an SshAccess (deploy forwards it) and its disk a named virtio
+    disk that deploy attaches, formatted on the first boot only."""
+    path = tmp_path / "prover.py"
+    text = render_recipe_template(
+        title="p", filename=path.name, release="trixie", backend="inprocess", template="prover"
+    )
+    path.write_text(text, encoding="utf-8")
+    img = tundravm.declarative.lower(tundravm.load_recipe(path))
+    assert img.ssh_ports == {"default": 22, "dev": 22}
+    assert data_disk_serials(img, "default") == ("tundra-data",)
+    files = {f.path: f.content for f in img.state.profiles["default"].files}
+    config = str(files["/etc/tdx/disk-setup.yaml"])
+    assert 'pattern: "/dev/disk/by-id/virtio-tundra-data"' in config
+    assert 'format: "on_initialize"' in config
 
 
 def test_scaffold_writes_the_project_files_and_lists_next_steps(

@@ -189,10 +189,29 @@ FLAKE_NIX_TEMPLATE = textwrap.dedent("""\
             xz
             systemd
           ];
+          # What a built Kernel's build script runs outside mkosi-chroot (patch,
+          # merge_config.sh, make, the compiler, host tools linking libelf/libcrypto).
+          kernelTools = with pkgs; [
+            gnumake
+            gcc
+            binutils
+            bc
+            bison
+            flex
+            perl
+            gnupatch
+            diffutils
+            kmod
+            pahole
+            elfutils
+            openssl
+            pkg-config
+          ];
           # mkosi sees the Nix tools only: no host PATH passthrough.
           toolsEnv = pkgs.buildEnv {
             name = "mkosi-tools";
-            paths = mkosiTools;
+            paths = mkosiTools ++ kernelTools;
+            extraOutputsToInstall = ["dev"];
           };
           mkosi-unwrapped = @MKOSI_GUARD@pkgs.mkosi.override {extraDeps = mkosiTools;};
         in
@@ -202,6 +221,7 @@ FLAKE_NIX_TEMPLATE = textwrap.dedent("""\
               --setuid=0 --setgid=0 \\
               -- \\
               env PATH="${toolsEnv}/bin" \\
+              PKG_CONFIG_PATH="${toolsEnv}/lib/pkgconfig" \\
               ${mkosi-unwrapped}/bin/mkosi "$@"
           '';
       in {

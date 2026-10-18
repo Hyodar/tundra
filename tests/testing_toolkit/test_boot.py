@@ -6,8 +6,11 @@ The real boot (QEMU + OVMF booting a baked UKI) runs in CI's ``boot`` job:
 
 from __future__ import annotations
 
+import http.server
 import json
+import socket
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -262,3 +265,41 @@ def test_boot_fixture_logs_under_tmp_path(fake: Fake, boot: BootRunner, tmp_path
     fake.monkeypatch.setenv("FAKE_QEMU_HANG", "30")
     result = boot(fake.image, qemu=str(fake.qemu), firmware=fake.code, settle=0, kvm=False)
     assert result.ok and result.log == tmp_path / "boot-0" / "console.log"
+
+
+class _Page(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802 - the http.server hook name
+        body = b"<h1>node 0.1.0</h1>\n"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+def test_boot_waits_for_each_http_url_and_keeps_the_answer(fake: Fake) -> None:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Page)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    try:
+        result = fake.run(*BOOTED, forward={18080: 8080, 2222: 22}, wait_http=(url,))
+    finally:
+        server.shutdown()
+    result.assert_booted()
+    assert result.http_get(url) == "<h1>node 0.1.0</h1>\n"
+    argv = fake.command()
+    assert argv[argv.index("-nic") + 1] == (
+        "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:18080-:8080,hostfwd=tcp:127.0.0.1:2222-:22"
+    )
+
+
+def test_an_http_url_that_never_answers_fails_the_boot(fake: Fake) -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        url = f"http://127.0.0.1:{probe.getsockname()[1]}/"
+    result = fake.run(*BOOTED, wait_http=(url,), timeout=3)
+    assert not result.ok and result.timed_out and result.missing == (url,)
+    with pytest.raises(AssertionError, match="did not answer"):
+        result.http_get(url)

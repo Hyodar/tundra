@@ -72,7 +72,9 @@ PROFILES = ("default", "azure")
 
 def declarative_recipe() -> Recipe:
     key = Key("key_persistent", output="/tmp/key_persistent")
-    disk = Disk("disk_persistent", mount="/persistent", key=key, mapper="cryptroot")
+    disk = Disk(
+        "disk_persistent", mount="/persistent", key=key, mapper="cryptroot", format="on_fail"
+    )
     common = Fragment(
         "app",
         items=(
@@ -155,8 +157,8 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     assert lowered.select(PROFILES).digest() == EQUIVALENCE_RECIPE
     assert compile(declarative_recipe()).digest == EQUIVALENCE_TREE
     assert [(d.severity, d.code, d.variant, d.subject) for d in check(lowered)] == [
+        ("error", "disk-device-guessed", "default", "disk_persistent"),
         ("error", "kernel-missing", "default", ""),
-        ("warning", "disk-auto-format", "default", "disk_persistent"),
         ("warning", "source-unpinned", "default", "app"),
         ("warning", "source-unpinned", "default", "disk-encryption"),
         ("warning", "source-unpinned", "default", "key-generation"),

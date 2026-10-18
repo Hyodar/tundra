@@ -18,13 +18,15 @@ class Policy:
 
     ``network_mode="offline"`` keeps ``lock`` and ``fetch`` off the network and
     bakes with no network in the build sandbox (``bake --offline``).
-    ``storage_safety="error"`` makes ``disk-auto-format`` an error.
+    ``storage_safety="error"`` (the default) makes ``disk-device-guessed`` (a ``Disk``
+    formatted with no device) an error; ``"warn"`` reports it as a warning, for a
+    historical recipe that relies on boot-time disk selection.
     """
 
     require_frozen_lock: bool = False
     mutable_ref_policy: MutableRefPolicy = "warn"
     network_mode: NetworkMode = "online"
-    storage_safety: StorageSafety = "warn"
+    storage_safety: StorageSafety = "error"
 
 
 def ensure_bake_policy(*, policy: Policy, frozen: bool) -> None:

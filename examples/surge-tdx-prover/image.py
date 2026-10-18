@@ -19,6 +19,7 @@ from tundravm.declarative import (
     Fragment,
     Key,
     Package,
+    Policy,
     Recipe,
     Resources,
     Secrets,
@@ -89,9 +90,10 @@ key = Key("key_persistent", output="/tmp/key_persistent")
 disk = Disk(
     "disk_persistent",
     mount="/persistent",
-    device=None,  # the largest unpartitioned disk
+    device=None,  # the largest unpartitioned disk: Policy(storage_safety="warn") below
     key=key,
     mapper="cryptroot",
+    format="on_fail",
 )
 
 prover_stack = Fragment(
@@ -125,6 +127,8 @@ recipe = Recipe(
     name="surge-tdx-prover",
     platform=NethermindPlatform(),
     mkosi=NETHERMIND_V1,
+    # The historical image formats the disk disk-setup picks at boot (disk-device-guessed)
+    policy=Policy(storage_safety="warn"),
     items=(
         NethermindBase(),
         *(Package(name) for name in RUNTIME_PACKAGES),

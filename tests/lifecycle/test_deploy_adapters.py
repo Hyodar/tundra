@@ -228,7 +228,9 @@ def test_qemu_deploy_parameters_leave_an_unset_firmware_out() -> None:
 
 def test_qemu_forwards_every_port_besides_ssh(tmp_path: Path, firmware: dict[str, str]) -> None:
     run = Recorder()
-    request = _qemu_request(tmp_path, ssh_port="2200", forward="8080:8080,9443:443")
+    request = _qemu_request(
+        tmp_path, ssh_port="2200", ssh_guest_port="22", forward="8080:8080,9443:443"
+    )
     result = QemuDeployAdapter(runner=run).deploy(request)
 
     (cmd,) = run.calls
@@ -236,6 +238,33 @@ def test_qemu_forwards_every_port_besides_ssh(tmp_path: Path, firmware: dict[str
         "user,id=net0,hostfwd=tcp::2200-:22,hostfwd=tcp::8080-:8080,hostfwd=tcp::9443-:443"
     )
     assert result.metadata["forward"] == "8080:8080,9443:443"
+    assert result.endpoint == "ssh://localhost:2200"
+
+
+def test_qemu_forwards_no_ssh_to_an_image_without_it(
+    tmp_path: Path, firmware: dict[str, str]
+) -> None:
+    run = Recorder()
+    result = QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path, forward="8080:8080"))
+    (cmd,) = run.calls
+    assert cmd[cmd.index("-netdev") + 1] == "user,id=net0,hostfwd=tcp::8080-:8080"
+    assert result.endpoint is None and "ssh_port" not in result.metadata
+
+
+def test_qemu_attaches_a_data_disk_per_serial(tmp_path: Path, firmware: dict[str, str]) -> None:
+    run = Recorder()
+    request = _qemu_request(tmp_path, data_disks="tundra-data", data_disk_size="1G")
+    result = QemuDeployAdapter(runner=run).deploy(request)
+    (cmd,) = run.calls
+    disk = tmp_path / "build" / "dev" / "data-tundra-data.img"
+    assert disk.stat().st_size == 1 << 30
+    assert f"file={disk},if=none,id=data0,format=raw" in cmd
+    assert "virtio-blk-pci,drive=data0,serial=tundra-data" in cmd
+    assert result.metadata["data_disks"] == f"tundra-data={disk}"
+    with pytest.raises(DeploymentError, match="data disk serial"):
+        QemuDeployAdapter(runner=run).deploy(
+            DeployRequest("dev", "qemu", request.artifact_path, {"data_disks": "a b"})
+        )
 
 
 @pytest.mark.parametrize("forward", ["8080", "x:1", "8080:0", "2222:8080"])
@@ -243,7 +272,9 @@ def test_qemu_rejects_a_bad_or_clashing_forward(
     tmp_path: Path, firmware: dict[str, str], forward: str
 ) -> None:
     with pytest.raises(DeploymentError, match="port forward|same host port"):
-        QemuDeployAdapter(runner=Recorder()).deploy(_qemu_request(tmp_path, forward=forward))
+        QemuDeployAdapter(runner=Recorder()).deploy(
+            _qemu_request(tmp_path, forward=forward, ssh_guest_port="22")
+        )
 
 
 def test_qemu_launch_failure_carries_the_command(tmp_path: Path, firmware: dict[str, str]) -> None:

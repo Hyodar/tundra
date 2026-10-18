@@ -16,7 +16,9 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Sequence
+import urllib.error
+import urllib.request
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -144,6 +146,31 @@ def missing_from(
 
 
 @dataclass(frozen=True, slots=True)
+class HttpResponse:
+    """What one ``wait_http`` URL answered while the VM ran: ``status`` ``None`` when it never
+    answered with a 2xx before the boot ended (``body`` then holds the last error)."""
+
+    url: str
+    status: int | None
+    body: str
+
+    @property
+    def ok(self) -> bool:
+        return self.status is not None and 200 <= self.status < 300
+
+
+def _fetch(url: str, timeout: float = 3.0) -> HttpResponse:
+    """GET *url* once; an error or a non-2xx answer is an ``HttpResponse`` with no status."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as reply:  # noqa: S310 - test harness
+            return HttpResponse(url, reply.status, reply.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        return HttpResponse(url, None, f"HTTP {exc.code}")
+    except (OSError, ValueError) as exc:
+        return HttpResponse(url, None, str(exc))
+
+
+@dataclass(frozen=True, slots=True)
 class BootResult:
     """One boot: the console, what it reached, what failed, how long it took.
 
@@ -164,6 +191,17 @@ class BootResult:
     returncode: int | None
     stderr: str = ""
     exited: tuple[str, ...] = ()
+    http: tuple[HttpResponse, ...] = ()
+    """The ``wait_http`` URLs' answers, in order; one that never answered is in ``missing``."""
+
+    def http_get(self, url: str) -> str:
+        """The body *url* (a ``wait_http`` URL) answered with; ``AssertionError`` when it
+        never answered with a 2xx."""
+        reply = next((r for r in self.http if r.url == url), None)
+        if reply is None or not reply.ok:
+            why = "was not requested" if reply is None else f"did not answer: {reply.body}"
+            raise AssertionError(f"{url} {why}\n{self.summary()}")
+        return reply.body
 
     @property
     def ok(self) -> bool:
@@ -271,8 +309,10 @@ def qemu_command(
     network: bool = True,
     qemu: str = QEMU,
     extra_args: Sequence[str] = (),
+    forward: Mapping[int, int] | None = None,
 ) -> list[str]:
-    """The QEMU command :func:`boot` runs: serial console to *log*, no display, no reboot."""
+    """The QEMU command :func:`boot` runs: serial console to *log*, no display, no reboot;
+    *forward* maps host ports (on 127.0.0.1) to guest TCP ports."""
     cmd = [qemu, "-machine", f"q35,accel={'kvm' if kvm else 'tcg'}"]
     cmd += ["-cpu", "host" if kvm else "max", "-m", memory, "-smp", str(cpus)]
     cmd += ["-no-reboot", "-display", "none", "-monitor", "none", "-serial", f"file:{log}"]
@@ -289,7 +329,10 @@ def qemu_command(
     if cmdline:
         extra = " ".join(cmdline).replace(",", ",,")
         cmd += ["-smbios", f"type=11,value=io.systemd.stub.kernel-cmdline-extra={extra}"]
-    cmd += ["-nic", "user,model=virtio-net-pci" if network else "none"]
+    hostfwd = "".join(
+        f",hostfwd=tcp:127.0.0.1:{host}-:{guest}" for host, guest in (forward or {}).items()
+    )
+    cmd += ["-nic", f"user,model=virtio-net-pci{hostfwd}" if network else "none"]
     return [*cmd, *extra_args]
 
 
@@ -326,6 +369,8 @@ def boot(
     network: bool = True,
     qemu: str = QEMU,
     extra_args: Sequence[str] = (),
+    forward: Mapping[int, int] | None = None,
+    wait_http: Sequence[str] = (),
 ) -> BootResult:
     """Boot *artifact* under QEMU with OVMF and wait for *markers* and *expect_units*.
 
@@ -333,7 +378,10 @@ def boot(
     when every marker is on the console and every expected unit started or failed (then
     *settle* more seconds, for a unit that fails just after), on a fatal line (panic, emergency
     mode), when QEMU exits, or after *timeout* seconds; QEMU is then stopped. *kvm*
-    ``"auto"`` uses KVM when ``/dev/kvm`` is usable, else TCG. Raises
+    ``"auto"`` uses KVM when ``/dev/kvm`` is usable, else TCG. *forward* maps host ports
+    (``127.0.0.1``) to guest ports; once the markers and units are in, the boot also waits
+    until each *wait_http* URL (``http://127.0.0.1:HOST/``) answers with a 2xx, so the
+    answers (:meth:`BootResult.http_get`) prove the network, firewall and service. Raises
     :class:`BootUnavailable` when QEMU or OVMF is missing.
     """
     if shutil.which(qemu) is None:
@@ -361,6 +409,7 @@ def boot(
         network=network,
         qemu=qemu,
         extra_args=extra_args,
+        forward=forward,
     )
     stderr_path = log_path.with_name(f"{log_path.stem}.qemu-stderr.log")
     start = time.monotonic()
@@ -369,6 +418,8 @@ def boot(
     returncode: int | None = None
     timed_out = False
     done_at: float | None = None
+    replies: dict[str, HttpResponse] = {url: HttpResponse(url, None, "") for url in wait_http}
+    polled = 0.0
     try:
         while True:
             text = _read(log_path)
@@ -378,7 +429,12 @@ def boot(
                 break
             # An expected unit that failed will not start: stop waiting for it
             waiting = set(missing_from(text, scan, markers, expect_units)) - set(scan.failed)
-            if not waiting:
+            pending = [url for url, reply in replies.items() if not reply.ok]
+            if not waiting and pending and now - polled >= 1.0:
+                polled = now
+                replies.update((url, _fetch(url)) for url in pending)
+                pending = [url for url, reply in replies.items() if not reply.ok]
+            if not waiting and not pending:
                 done_at = now if done_at is None else done_at
                 if now - done_at >= settle:
                     break
@@ -402,11 +458,15 @@ def boot(
         started=scan.started,
         failed=scan.failed,
         fatal=scan.fatal,
-        missing=missing_from(text, scan, markers, expect_units),
+        missing=(
+            *missing_from(text, scan, markers, expect_units),
+            *(url for url, reply in replies.items() if not reply.ok),
+        ),
         timed_out=timed_out,
         returncode=returncode,
         stderr=_read(stderr_path),
         exited=tuple(unit for unit in map(unit_name, expect_units) if unit in scan.exited),
+        http=tuple(replies.values()),
     )
 
 

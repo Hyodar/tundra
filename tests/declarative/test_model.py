@@ -57,7 +57,7 @@ def test_design_defaults() -> None:
     assert recipe.platform.epoch == 0 and recipe.mkosi == Mkosi("directories", "current")
     assert Variant("v").inherits == "base" and Variant("v").add == Fragment("empty")
     assert User("u").system is True and Group("g").system is True
-    assert Disk("d", "/data").device is None and Disk("d", "/data").format == "on_fail"
+    assert Disk("d", "/data").device is None and Disk("d", "/data").format == "never"
     assert Secrets().store is None and Secrets().name == "secrets"
     assert Install("a", "/usr/bin/a").mode == 0o755
 

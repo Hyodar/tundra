@@ -36,12 +36,12 @@ TemplateName = Literal["minimal", "service", "cloud", "prover"]
 
 TEMPLATES: dict[str, str] = {
     "minimal": "packages, one file and one verbatim unit; a single qemu variant",
-    "service": "an App fragment (generated service, config, first-boot step, lint rule) "
-    "plus a dev variant",
+    "service": "an App fragment (a web page busybox httpd serves from a sandboxed service, "
+    "a lint rule) plus a dev variant",
     "cloud": "service with one UKI for qemu, azure and gcp, backports and an EFI stub "
     "pinned to a Debian snapshot",
-    "prover": "cloud plus a TPM-sealed key, an encrypted disk, SSH key delivery and the tdxs "
-    "attestation service",
+    "prover": "cloud plus a TPM-sealed key, an encrypted data disk, key-only root SSH and the "
+    "tdxs attestation service",
 }
 """Template name -> one-line description, in ``init --list-templates`` order."""
 
@@ -83,6 +83,7 @@ _APP_IMPORTS = {
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
+        "    File,\n"
         "    Package,\n"
         "    Recipe,\n"
         "    Resolved,\n"
@@ -93,7 +94,6 @@ _APP_IMPORTS = {
         "$backend_import\n"
         "from tundravm.declarative.utils import (\n"
         "    Composite,\n"
-        "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
         "    TeeBase,\n"
@@ -104,6 +104,7 @@ _APP_IMPORTS = {
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
+        "    File,\n"
         "    Package,\n"
         "    Recipe,\n"
         "    Resolved,\n"
@@ -115,7 +116,6 @@ _APP_IMPORTS = {
         "from tundravm.declarative.utils import (\n"
         "    Backports,\n"
         "    Composite,\n"
-        "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
         "    TeeBase,\n"
@@ -126,6 +126,7 @@ _APP_IMPORTS = {
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
+        "    File,\n"
         "    Disk,\n"
         "    Key,\n"
         "    Package,\n"
@@ -142,9 +143,9 @@ _APP_IMPORTS = {
         "    TUNDRA_TOOLS,\n"
         "    Backports,\n"
         "    Composite,\n"
-        "    ConfigFile,\n"
         "    DevTools,\n"
         "    HttpEndpoint,\n"
+        "    SshAccess,\n"
         "    Tdxs,\n"
         "    TeeBase,\n"
         ")\n"
@@ -154,13 +155,15 @@ _APP_IMPORTS = {
 _APP = r'''
 APP_VERSION = "0.1.0"
 APP_PORT = 8080
+WWW = "/srv/www"
 $constants
 
 @component
 class App(Composite):
-    """The app: its config file, the service and a lint rule.
+    """The app: a web page served over HTTP by busybox httpd, sandboxed, and a lint rule.
 
-    Ship ``/usr/bin/app`` with a ``GoBinary``, a ``Build`` or a ``Package``. Fragment name: ``app``.
+    Swap in your program: ship it with a ``GoBinary``, a ``Build`` or a ``Package`` and
+    point the service at it. Fragment name: ``app``.
     """
 
     version: str
@@ -172,19 +175,23 @@ class App(Composite):
         return HttpEndpoint("127.0.0.1", self.port, provider=self)
 
     def compose(self) -> Iterator[Declaration]:
-        config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
-        yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
-        # Runs as system user "app" (declared for you), sandboxed by Hardening.strict(),
-        # restarted on failure; state="app" is /var/lib/app, made by systemd, owned by
-        # app and its working directory. It waits for every runtime-init step (needs=).
-        # ports= is where it listens: TeeBase's firewall opens it.
+        # Debian's busybox has the httpd applet: a real server with nothing to download.
+        yield Package("busybox")
+        yield File.text(f"{WWW}/index.html", self.page())
+        # Runs as system user "app" (declared for you), sandboxed by Hardening.strict()
+        # (the system read-only, WWW too; unix and IP sockets only), restarted on failure.
+        # It waits for every runtime-init step (needs=). ports= is where it listens:
+        # TeeBase's firewall opens it.
         yield Service(
             "app",
-            "/usr/bin/app --config /etc/app/app.conf",
+            f"/usr/bin/busybox httpd -f -p {self.port} -h {WWW}",
             description=f"app {self.version}",
-            state="app",
             ports=(self.port,),
         )
+
+    def page(self) -> str:
+        """The index page: ``curl http://VM:PORT/`` answers with it."""
+        return f"<!doctype html>\n<title>$title</title>\n<h1>$title {self.version}</h1>\n"
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""
@@ -248,13 +255,15 @@ recipe = Recipe(
 _PROVER_RECIPE = r"""
 # Boot-time init: TPM-sealed key -> encrypted /persistent -> root's SSH key over HTTP.
 key = Key("key_persistent", output="/tmp/key_persistent")
-# device=None picks the largest whole /dev/sd* disk, boot disk included: name the device and
-# pick format="never" or "on_initialize" for production (lint: disk-auto-format).
+# The data disk, by a stable name: `tundravm deploy qemu` attaches one with serial
+# tundra-data. On a cloud, name its data-disk link (/dev/disk/by-id/...). The first
+# boot formats it (on_initialize); a disk with no device is refused (disk-device-guessed).
+DATA_DISK = "/dev/disk/by-id/virtio-tundra-data"
 disk = Disk(
     "disk_persistent",
     mount="/persistent",
-    device=None,
-    format="on_fail",
+    device=DATA_DISK,
+    format="on_initialize",
     key=key,
     mapper="cryptroot",
 )
@@ -272,8 +281,10 @@ recipe = Recipe(
         TeeBase(),
         Package("ca-certificates"),
         Package("cryptsetup"),
-        # Root logs in over SSH with the key Secrets delivers; socat relays /var/tdxs.sock.
-        Package("openssh-server"),
+        # Root logs in over SSH with the key Secrets delivers, by key only: sshd waits for
+        # it, host keys are made at boot, the firewall opens port 22. socat relays
+        # /var/tdxs.sock.
+        SshAccess(from_secrets=True),
         Package("socat"),
         Package("curl", role="build"),
         Backports(),
@@ -623,17 +634,16 @@ EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
     "minimal": (),
     "service": (),
     "cloud": ("source-unpinned",),
-    "prover": ("disk-auto-format", "source-unpinned"),
+    "prover": ("source-unpinned",),
 }
 """Lint codes a freshly generated template reports by design: ``tundravm lock`` clears
-``source-unpinned``, naming the disk's device clears ``disk-auto-format``."""
+``source-unpinned``."""
 
 _ALLOW_COMMENTS: dict[str, str] = {
     "cloud": "    # The EfiStub package stays unpinned until `tundravm lock` pins its sha256.\n",
     "prover": (
         "    # The tundra-tools builds and the EfiStub package stay unpinned until\n"
-        "    # `tundravm lock` pins them; the disk picks its device at boot until the\n"
-        "    # recipe names one.\n"
+        "    # `tundravm lock` pins them.\n"
     ),
 }
 """The comment above ``allow=`` in the test module of a template with :data:`EXPECTED_FINDINGS`."""

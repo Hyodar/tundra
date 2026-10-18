@@ -306,18 +306,19 @@ def test_watch_reports_a_stale_tree(tmp_path, monkeypatch):
 
 ## Booting an image in tests
 
-`boot(artifact, *, timeout=300, memory="2G", cpus=2, firmware=None, kvm="auto", markers=DEFAULT_MARKERS, expect_units=(), cmdline=CONSOLE_CMDLINE, settle=3.0, log=None, network=True, qemu="qemu-system-x86_64", extra_args=()) -> BootResult` boots a baked image under QEMU with OVMF and reads its serial console. It boots the way `tundravm deploy --target qemu` boots without TDX: OVMF from pflash (a writable copy of the variable store beside the log) and the UKI through `-kernel`; a `.raw`, `.qcow2` or `.vhd` disk goes on a virtio drive with `snapshot=on`, so the artifact is never written. `artifact` is an `Artifact` from `bake_image`, a path, or a directory holding exactly one `.efi`.
+`boot(artifact, *, timeout=300, memory="2G", cpus=2, firmware=None, kvm="auto", markers=DEFAULT_MARKERS, expect_units=(), cmdline=CONSOLE_CMDLINE, settle=3.0, log=None, network=True, qemu="qemu-system-x86_64", extra_args=(), forward=None, wait_http=()) -> BootResult` boots a baked image under QEMU with OVMF and reads its serial console. It boots the way `tundravm deploy --target qemu` boots without TDX: OVMF from pflash (a writable copy of the variable store beside the log) and the UKI through `-kernel`; a `.raw`, `.qcow2` or `.vhd` disk goes on a virtio drive with `snapshot=on`, so the artifact is never written. `artifact` is an `Artifact` from `bake_image`, a path, or a directory holding exactly one `.efi`.
 
 Nothing is added to the image. The console settings reach the kernel through SMBIOS (`io.systemd.stub.kernel-cmdline-extra`, the way `mkosi vm` passes them), which systemd-stub appends to the UKI's own command line when Secure Boot is off: `CONSOLE_CMDLINE` is `console=ttyS0 systemd.show_status=yes systemd.status_unit_format=name systemd.log_color=no panic=-1`. QEMU runs with `-no-reboot`, no display and no monitor, a user-mode virtio NIC (`network=False` for none), and KVM when `/dev/kvm` is usable (`kvm="auto"`), TCG otherwise.
 
-The boot ends when every marker (by default `Reached target minimal.target`, the target every tundravm image boots into) is on the console and every unit in `expect_units` (`"app"` means `app.service`) started or failed, plus `settle` seconds for a unit that fails just after; on a fatal line (`Kernel panic`, emergency or rescue mode, a dead PID 1); when QEMU exits; or after `timeout` seconds. QEMU is then stopped. The `BootResult` holds:
+The boot ends when every marker (by default `Reached target minimal.target`, the target every tundravm image boots into) is on the console and every unit in `expect_units` (`"app"` means `app.service`) started or failed, plus `settle` seconds for a unit that fails just after; on a fatal line (`Kernel panic`, emergency or rescue mode, a dead PID 1); when QEMU exits; or after `timeout` seconds. `forward` maps host ports (on `127.0.0.1`) to guest TCP ports; with `wait_http`, the boot also waits, once the markers and units are in, until each URL answers with a 2xx. QEMU is then stopped. The `BootResult` holds:
 
 | Field | |
 |---|---|
 | `console` | The serial console, ANSI escapes stripped; `log` is the file it was written to |
 | `started`, `failed` | Units from systemd's status lines: `Started`/`Finished`/`Reached target`/`Listening on`/`Mounted`, and `Failed to start`/`Failed to mount`/`Dependency failed for` |
 | `fatal` | Console lines that ended the boot |
-| `missing` | Markers not seen and expected units not started |
+| `missing` | Markers not seen, expected units not started and `wait_http` URLs that never answered |
+| `http` | One `HttpResponse(url, status, body)` per `wait_http` URL; `http_get(url)` returns its body, or raises `AssertionError` when it never answered with a 2xx |
 | `duration`, `timed_out`, `returncode`, `stderr`, `command` | Seconds taken, whether the timeout hit, QEMU's exit status (`None` when the harness stopped it), its output, and the command line |
 
 `ok` is true when nothing is missing, failed or fatal and the boot did not time out; `assert_booted()` raises an `AssertionError` carrying `summary()` (the problems, QEMU's stderr and the console's last lines) otherwise. `boot` raises `BootUnavailable` when QEMU or OVMF is missing, and `boot_unavailable()` returns the reason (or `None`) for a `skipif`. The `boot` fixture wraps it: the log goes under `tmp_path` and a missing QEMU or OVMF skips the test.
@@ -370,7 +371,7 @@ uv run pytest tests/unit/test_public_surface.py    # tundravm.__all__ against th
 
 `tests/integration/test_templates_bake.py` (marker `integration`) bakes two `init` templates for real with `LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"])`, so it needs mkosi 25+ and non-interactive `sudo` and is skipped without them. The directory format skips the UKI and the disk image but still runs every build script and installs the kernel, which is why the CI workflow installs `python3-pefile` next to mkosi and `uv run pytest` runs both bakes on every push.
 
-- **`service`**: the generated `app.service` (its `ExecStart`, `User=app`, `Requires=runtime-init.service`) is linked into `minimal.target.wants`, the runtime-init step creates `/var/lib/app`, and `/etc/app/app.conf` and the `app` user are in the tree.
+- **`service`**: the generated `app.service` (`ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www`, `User=app`, the strict sandbox) is linked into `minimal.target.wants`, Debian's busybox has its `httpd` applet, and `/srv/www/index.html` and the `app` user are in the tree.
 - **`cloud`** (the `default` variant, plus two extra `Repository` declarations, one with `in_image=False`): `mkosi.conf` sets `Snapshot=20251113T083151Z` and no `Mirror=` or `SandboxTrees=`; `Backports` writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and pins sid to 100, and the image still runs trixie's 6.12 kernel; `EfiStub` installs its pinned `systemd-boot-efi` from the image root and leaves no `.deb` behind; only the `in_image=True` repository is listed in the image's `/etc/apt`; `runtime-init.service` waits for `network-online.target` because the variant ships no `network-setup.service`.
 
 ```bash
@@ -380,7 +381,7 @@ uv run pytest -m "not integration"                                      # everyt
 
 ### Template boots
 
-`tests/integration/test_templates_boot.py` (markers `integration` and `boot`) bakes the `minimal` and `service` templates' `default` variants as UKIs with `LocalLinuxBackend(privilege="sudo")` and boots each with `boot()` (4G of memory: the UKI unpacks the whole image into RAM). The service image also ships a stub `/usr/bin/app` (a shell script that sleeps), since the template leaves the real binary to the user. It needs mkosi 25+, non-interactive `sudo`, `qemu-system-x86_64` and OVMF, and is skipped without them; `TUNDRAVM_BOOT_REQUIRED=1` turns the skip into a failure.
+`tests/integration/test_templates_boot.py` (markers `integration` and `boot`) bakes the `minimal` and `service` templates' `default` variants as UKIs with `LocalLinuxBackend(privilege="sudo")` and boots each with `boot()` (4G of memory: the UKI unpacks the whole image into RAM). The service template boots unchanged: `boot(forward={HOST: 8080}, wait_http=("http://127.0.0.1:HOST/",))` forwards a free host port to its busybox httpd and the test asserts the page it serves, so DHCP, the nftables opening and the sandboxed service are proven end to end. It needs mkosi 25+, non-interactive `sudo`, `qemu-system-x86_64` and OVMF, and is skipped without them; `TUNDRAVM_BOOT_REQUIRED=1` turns the skip into a failure.
 
 - **`minimal`**: reaches `minimal.target`, the `hello` task finishes, no unit fails.
 - **`service`**: TeeBase, debloat, the curated kernel modules and the strict sandbox still reach `minimal.target`, `app.service` starts, no unit fails; `tdx_guest` ships but the VM has no TDX, so it stays unloaded and no console line reports a TDX failure.

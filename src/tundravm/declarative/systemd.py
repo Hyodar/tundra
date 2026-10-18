@@ -48,6 +48,27 @@ _UMASK = re.compile(r"0?[0-7]{3}")
 _WORD = re.compile(r"~?@?[A-Za-z0-9_:-]+")
 
 
+_UNSET: Any = type("_Unset", (), {"__slots__": (), "__repr__": lambda self: "<strict>"})()
+"""A :class:`Hardening` field's default: the :data:`_STRICT` value, not passed."""
+_STRICT: dict[str, object] = {
+    "protect_system": "strict",
+    "protect_home": True,
+    "private_tmp": True,
+    "private_devices": True,
+    "devices": (),
+    "no_new_privileges": True,
+    "capabilities": (),
+    "jit": False,
+    "network": "inet",
+    "syscalls": ("@system-service",),
+    "deny_syscalls": ("@privileged", "@resources"),
+    "kernel": True,
+    "sandbox": True,
+    "umask": "0077",
+}
+"""The strict profile: every :class:`Hardening` field's default."""
+
+
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
     return ValidationError(f"{type(owner).__name__}: {message}", hint=hint)
 
@@ -66,24 +87,34 @@ class Hardening:
     ``ProtectKernel{Modules,Tunables,Logs}=``, ``ProtectControlGroups=`` and
     ``ProtectClock=``; ``sandbox`` covers ``ProtectHostname=``, ``RestrictRealtime=``,
     ``RestrictNamespaces=``, ``LockPersonality=`` and ``SystemCallArchitectures=native``.
+    A unit renders :meth:`entries`; a ``DropIn`` renders :meth:`patch_entries`, only the
+    fields passed (:attr:`explicit`; a preset passes them all).
     """
 
-    protect_system: ProtectSystem = "strict"
-    protect_home: bool = True
-    private_tmp: bool = True
-    private_devices: bool = True
-    devices: tuple[str, ...] = ()
-    no_new_privileges: bool = True
-    capabilities: tuple[str, ...] | None = ()
-    jit: bool = False
-    network: Network = "inet"
-    syscalls: tuple[str, ...] = ("@system-service",)
-    deny_syscalls: tuple[str, ...] = ("@privileged", "@resources")
-    kernel: bool = True
-    sandbox: bool = True
-    umask: str | None = "0077"
+    protect_system: ProtectSystem = _UNSET
+    protect_home: bool = _UNSET
+    private_tmp: bool = _UNSET
+    private_devices: bool = _UNSET
+    devices: tuple[str, ...] = _UNSET
+    no_new_privileges: bool = _UNSET
+    capabilities: tuple[str, ...] | None = _UNSET
+    jit: bool = _UNSET
+    network: Network = _UNSET
+    syscalls: tuple[str, ...] = _UNSET
+    deny_syscalls: tuple[str, ...] = _UNSET
+    kernel: bool = _UNSET
+    sandbox: bool = _UNSET
+    umask: str | None = _UNSET
+    explicit: frozenset[str] = dataclasses.field(
+        default=frozenset(), init=False, repr=False, compare=False
+    )
+    """The fields the caller passed (every field for a preset): what a drop-in patches."""
 
     def __post_init__(self) -> None:
+        given = frozenset(name for name in _STRICT if getattr(self, name) is not _UNSET)
+        for name in _STRICT.keys() - given:
+            object.__setattr__(self, name, _STRICT[name])
+        object.__setattr__(self, "explicit", given)
         for name in ("devices", "capabilities", "syscalls", "deny_syscalls"):
             value = getattr(self, name)
             if isinstance(value, list):
@@ -119,7 +150,7 @@ class Hardening:
     @classmethod
     def strict(cls, **overrides: Any) -> Hardening:
         """The default, reviewed profile (the field defaults), with *overrides*."""
-        return cls(**overrides)
+        return cls(**{**_STRICT, **overrides})
 
     @classmethod
     def relaxed(cls, **overrides: Any) -> Hardening:
@@ -129,7 +160,7 @@ class Hardening:
 
     @classmethod
     def none(cls) -> Hardening:
-        """No sandbox at all: renders nothing."""
+        """No sandbox at all: renders nothing in a unit (a drop-in turns every knob off)."""
         return _NONE
 
     def entries(self) -> tuple[tuple[str, str], ...]:
@@ -177,13 +208,76 @@ class Hardening:
             add(("UMask", self.umask))
         return tuple(out)
 
+    def patch_entries(self) -> tuple[tuple[str, str], ...]:
+        """The directives a drop-in writes to make the :attr:`explicit` fields hold over
+        whatever the unit it extends sets: switches render ``yes`` or ``no``, and each list
+        starts with its empty reset (``SystemCallFilter=``, ``DeviceAllow=``...), so the
+        patch replaces it instead of adding to it. Unset fields render nothing."""
+        on = {True: "yes", False: "no"}
+        given = self.explicit
+        out: list[tuple[str, str]] = []
+        if "protect_system" in given:
+            out.append(("ProtectSystem", self.protect_system))
+        switches = (
+            ("protect_home", ("ProtectHome",), self.protect_home),
+            ("private_tmp", ("PrivateTmp",), self.private_tmp),
+            ("no_new_privileges", ("NoNewPrivileges", "RestrictSUIDSGID"), self.no_new_privileges),
+            ("jit", ("MemoryDenyWriteExecute",), not self.jit),
+            ("kernel", _KERNEL_KEYS, self.kernel),
+            ("sandbox", _SANDBOX_KEYS, self.sandbox),
+        )
+        for name, keys, value in switches:
+            if name in given:
+                out += [(key, on[value]) for key in keys]
+        if given & {"devices", "private_devices"}:
+            out.append(("PrivateDevices", on[self.private_devices and not self.devices]))
+            out.append(("DevicePolicy", "closed" if self.devices else "auto"))
+            out.append(("DeviceAllow", ""))
+            out += [("DeviceAllow", f"{device} rw") for device in self.devices]
+        if "sandbox" in given:
+            out.append(("SystemCallArchitectures", ""))
+            if self.sandbox:
+                out.append(("SystemCallArchitectures", "native"))
+        if "network" in given:
+            out.append(("RestrictAddressFamilies", ""))
+            if self.network != "any":
+                out.append(("RestrictAddressFamilies", _FAMILIES[self.network]))
+        if given & {"syscalls", "deny_syscalls"}:
+            out.append(("SystemCallFilter", ""))
+            if self.syscalls:
+                out.append(("SystemCallFilter", " ".join(self.syscalls)))
+            if self.deny_syscalls:
+                out.append(("SystemCallFilter", "~" + " ".join(self.deny_syscalls)))
+        if "capabilities" in given:
+            out.append(("CapabilityBoundingSet", ""))  # the empty set
+            if self.capabilities is None:
+                out.append(("CapabilityBoundingSet", "~"))  # every capability
+            elif self.capabilities:
+                out.append(("CapabilityBoundingSet", " ".join(self.capabilities)))
+            out.append(("AmbientCapabilities", ""))
+            if self.capabilities:
+                out.append(("AmbientCapabilities", " ".join(self.capabilities)))
+        if "umask" in given:
+            out.append(("UMask", self.umask or "0022"))  # None: systemd's default
+        return tuple(out)
+
+
+_KERNEL_KEYS = (
+    "ProtectKernelModules",
+    "ProtectKernelTunables",
+    "ProtectControlGroups",
+    "ProtectKernelLogs",
+    "ProtectClock",
+)
+_SANDBOX_KEYS = ("ProtectHostname", "RestrictRealtime", "RestrictNamespaces", "LockPersonality")
+
 
 def _require_flag(owner: object, name: str) -> None:
     if not isinstance(getattr(owner, name), bool):
         raise _fail(owner, f"{name} must be True or False, got {getattr(owner, name)!r}.")
 
 
-_RELAXED = Hardening(
+_RELAXED = Hardening.strict(
     protect_system="full",
     protect_home=False,
     private_devices=False,
@@ -195,7 +289,7 @@ _RELAXED = Hardening(
     sandbox=False,
     umask=None,
 )
-_NONE = Hardening(
+_NONE = Hardening.strict(
     protect_system="no",
     protect_home=False,
     private_tmp=False,

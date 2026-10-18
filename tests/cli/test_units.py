@@ -84,7 +84,7 @@ def test_render_prints_the_generated_unit(tmp_path: Path) -> None:
     )
     out = _run(["units", "render", str(recipe), "--variant", "default", "--unit", "app.service"])
     assert out.startswith("# default/mkosi.extra/usr/lib/systemd/system/app.service\n[Unit]\n")
-    assert "ExecStart=/usr/bin/app --config /etc/app/app.conf\n" in out
+    assert "ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www\n" in out
 
 
 def test_render_names_a_missing_unit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

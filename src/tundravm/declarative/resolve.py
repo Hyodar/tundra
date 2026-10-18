@@ -524,7 +524,9 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
         state.report("hook-order", str(exc), subject=late.name if late else "", at=late)
 
     if not nodes:
-        for unit in (i for i in items if isinstance(i, Unit) and i.needs):
+        # a task.ready handle waits for a unit, not for runtime-init
+        waiting = (i for i in items if isinstance(i, Unit) and i.needs)
+        for unit in (u for u in waiting if not all(isinstance(n, UnitReady) for n in u.needs)):
             state.report(
                 "needs-without-init",
                 f"unit {unit.name!r} waits for runtime-init, but this variant declares no "

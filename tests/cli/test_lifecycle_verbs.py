@@ -130,9 +130,20 @@ def test_measure_needs_a_variant_when_several_are_baked(
     assert "pass --variant NAME" in capsys.readouterr().err
 
 
+SSH_RECIPE = RECIPE.replace(
+    'items=(Package("curl"),',
+    'items=(SshAccess(authorized_keys=("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA me",)), '
+    'Package("curl"),',
+).replace(
+    "from tundravm import", "from tundravm.declarative.utils import SshAccess\nfrom tundravm import"
+)
+"""``RECIPE`` with ``SshAccess``: its artifacts record the SSH port deploy forwards."""
+
+
 def test_deploy_qemu_after_bake_in_separate_invocation(
-    recipe: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    recipe = write_recipe_file(tmp_path, SSH_RECIPE, monkeypatch)
     assert run_main("bake", str(recipe), *BOTH)[0] == EXIT_OK
     launched: list[list[str]] = []
 

@@ -1763,8 +1763,15 @@ def _require_profile(recipe: RecipeState, name: str) -> None:
 
 
 def _module_selection(profile: ProfileState, config: EmitConfig) -> ModuleSelection:
-    """*profile*'s kernel modules under *config* (a built kernel selects none)."""
-    return module_selection(profile, config.kernel_modules, built_kernel=config.kernel is not None)
+    """*profile*'s kernel modules under *config* (a built kernel selects none, and keeps
+    its own when it builds loadable ones)."""
+    kernel = config.kernel
+    return module_selection(
+        profile,
+        config.kernel_modules,
+        built_kernel=kernel is not None,
+        loadable=kernel is not None and kernel.composed and kernel.modules,
+    )
 
 
 _GLOB = re.compile(r"[*?]|\[[^]/]*\]")

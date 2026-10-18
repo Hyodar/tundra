@@ -28,6 +28,7 @@ from tundravm.errors import ValidationError
 from tundravm.testing import CompiledTree, compile_tree
 
 TDXS_CONFIG = "mkosi.extra/etc/tdxs/config.yaml"
+UDEV_RULE = "mkosi.extra/usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules"
 
 
 def _recipe(*items: Declaration | Fragment) -> Recipe:
@@ -103,6 +104,12 @@ def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
     assert "[Install]" not in svc_content  # the socket starts it
     assert "DevicePolicy=closed\nDeviceAllow=/dev/tdx_guest rw\n" in svc_content
     assert "ReadWritePaths=-/sys/kernel/config/tsm/report\n" in svc_content
+    # configfs-tsm entries are root:root and created per quote: the one capability
+    assert "CapabilityBoundingSet=CAP_DAC_OVERRIDE\n" in svc_content
+    assert "AmbientCapabilities=CAP_DAC_OVERRIDE\n" in svc_content
+    assert tree.read(UDEV_RULE).splitlines()[-1] == (
+        'KERNEL=="tdx_guest", GROUP="tdx", MODE="0660"'
+    )
     assert "RestrictAddressFamilies=AF_UNIX\n" in svc_content
     assert "WorkingDirectory" not in svc_content  # ProtectHome=yes hides /home
 
@@ -239,8 +246,18 @@ def test_tdxs_reaches_the_network_only_when_its_config_does(
     assert f"RestrictAddressFamilies={families}\n" in _compile(tmp_path, tdxs).unit("tdxs.service")
 
 
+@pytest.mark.parametrize("tdxs", [Tdxs(issuer=None, validator="tdx"), Tdxs(issuer="simulator")])
+def test_tdxs_without_a_quoting_issuer_gets_no_quote_access(tmp_path: Path, tdxs: Tdxs) -> None:
+    svc = _compile(tmp_path, tdxs).unit("tdxs.service")
+    assert "PrivateDevices=yes\n" in svc
+    assert "CapabilityBoundingSet=\n" in svc
+    assert "DeviceAllow" not in svc
+    assert "ReadWritePaths" not in svc
+
+
 def test_tdxs_legacy_units_keep_the_historical_text(tmp_path: Path) -> None:
     tree = _compile(tmp_path, Tdxs(legacy_units=True))
+    assert not tree.exists(UDEV_RULE)
     assert tree.unit("tdxs.service") == v1.tdxs_service(
         socket="tdxs.socket",
         user="tdxs",

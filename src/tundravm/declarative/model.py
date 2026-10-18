@@ -986,6 +986,9 @@ class Unit(Declared):
     ``dropin`` changes a packaged unit the Debian way, through a typed :class:`DropIn`
     (``<name>.d/<dropin.name>.conf``); a unit that ships text is edited in its text.
     ``allow_secret`` silences ``secret-in-env`` for the shipped unit file.
+    ``ports`` names the ports the unit's program binds beyond loopback (a packaged
+    ``ssh.service`` listening on 22): the variant's ``Firewall`` opens them like a
+    ``Service``'s.
     """
 
     name: str
@@ -995,8 +998,10 @@ class Unit(Declared):
     needs: Sequence[Ready] = ()
     allow_secret: bool = False
     dropin: DropIn | None = None
+    ports: tuple[Port | int, ...] = ()
 
     def __post_init__(self) -> None:
+        _require_ports(self, "ports")
         _require_steps(self, "needs", sentinel=True)
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid unit name {self.name!r}.")
@@ -1281,7 +1286,11 @@ class DropIn:
     Renders ``/usr/lib/systemd/system/<unit>.d/<name>.conf`` with the fields that are set
     (each defaults to "unchanged"); the field meanings are ``Service``'s. ``exec_start``
     writes the ``ExecStart=`` reset line first. ``hardening`` is opt-in here: hardening a
-    unit someone else wrote can break it.
+    unit someone else wrote can break it. It is a patch over the packaged unit's sandbox:
+    ``Hardening(jit=True)`` writes only ``MemoryDenyWriteExecute=no``; a preset
+    (``Hardening.strict()``, ``.relaxed()``, ``.none()``) sets every field, so it replaces
+    the sandbox outright. Set switches render ``yes`` or ``no`` and set lists start with
+    their empty reset (``Hardening.patch_entries``).
     """
 
     name: str = "20-tundravm"
@@ -1571,13 +1580,22 @@ class Key(Declared):
 
 @dataclass(frozen=True, slots=True)
 class Disk(Declared):
+    """A data disk ``disk-setup`` opens (with *key*: LUKS) and mounts at *mount* each boot.
+
+    *format* defaults to ``"never"``: the disk must be prepared beforehand. A *format* that
+    can format needs an explicit, stable *device* (``/dev/disk/by-id/virtio-SERIAL``, a
+    ``/dev/disk/by-path/`` path): ``device=None`` lets ``disk-setup`` pick the largest whole
+    ``/dev/sd*`` disk, the boot disk included (lint: ``disk-device-guessed``), and a
+    kernel name such as ``/dev/sdb`` can change between boots (``disk-device-unstable``).
+    """
+
     name: str
     mount: str
     device: str | None = None
     key: Key | Ref | Path | None = None
     """The disk's key: a ``Key`` (stored as its ref, bound to the variant's key), or a key file."""
     mapper: str | None = None
-    format: Literal["always", "on_initialize", "on_fail", "never"] = "on_fail"
+    format: Literal["always", "on_initialize", "on_fail", "never"] = "never"
     directories: tuple[str, ...] = ("ssh", "data", "logs")
 
     def __post_init__(self) -> None:
@@ -2117,6 +2135,19 @@ class KernelConfig(Declared):
         )
 
 
+KERNEL_BUILD_PACKAGES = (
+    "build-essential",
+    "bc",
+    "bison",
+    "flex",
+    "libelf-dev",
+    "libssl-dev",
+    "xz-utils",
+    "patch",
+)
+"""What every composed :class:`Kernel` build runs: compiler, Kconfig, objtool, sign-file."""
+
+
 @dataclass(frozen=True, slots=True)
 class Kernel(Declared):
     """A kernel the build compiles: ``Kernel(version, Git(...), base=DebianConfig(...))``.
@@ -2175,6 +2206,29 @@ class Kernel(Declared):
     def built(self) -> bool:
         """Whether the build compiles this kernel (it has a config or a base)."""
         return self.config is not None or self.base is not None
+
+    @property
+    def build_packages(self) -> tuple[str, ...]:
+        """The Debian packages a composed kernel's build needs (``config=``: none, the
+        recipe brings its own): :data:`KERNEL_BUILD_PACKAGES`, ``dpkg-dev`` to unpack a
+        :class:`DebianConfig`, ``dwarves`` (pahole) when the config keeps BTF, ``kmod``
+        for modules. Lowering adds them to the variant's build packages."""
+        if self.base is None:
+            return ()
+        if isinstance(self.base, DebianConfig):
+            btf = True  # Debian's configs build BTF
+        else:
+            btf = self.base.is_file() and "CONFIG_DEBUG_INFO_BTF=y" in self.base.read_text(
+                encoding="utf-8", errors="replace"
+            )
+        for fragment in self.fragments:
+            btf = fragment.options.get("CONFIG_DEBUG_INFO_BTF", "y" if btf else "n") == "y"
+        extra = (
+            ("dpkg-dev",) * isinstance(self.base, DebianConfig)
+            + ("dwarves",) * btf
+            + ("kmod",) * self.modules
+        )
+        return (*KERNEL_BUILD_PACKAGES, *extra)
 
 
 # ── Tasks, schedules, sockets and mounts (docs/design/systemd-units.md 2.4-2.6) ──

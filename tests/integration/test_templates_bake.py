@@ -91,12 +91,18 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 
 
 def test_service_template_bakes_with_its_app(service_build: Path) -> None:
-    """The service template builds; its unit, state directory, config and user are in the tree."""
+    """The service template builds; its unit, server, page and user are in the tree."""
     root = service_build / "default" / "output" / "default"
     unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
-    assert "ExecStart=/usr/bin/app --config /etc/app/app.conf" in unit
-    assert "User=app\n" in unit and "StateDirectory=app\n" in unit
-    assert "ProtectSystem=strict\n" in unit
+    assert "ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www" in unit
+    assert "User=app\n" in unit and "ProtectSystem=strict\n" in unit
+    applets = subprocess.run(
+        ["sudo", "chroot", str(root), "/usr/bin/busybox", "--list"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert "httpd" in applets  # Debian's busybox build has the applet the app runs
 
     wants = root / "etc/systemd/system/minimal.target.wants"
     assert _sudo_test("-L", wants / "app.service"), f"app.service is not linked into {wants}"
@@ -105,7 +111,8 @@ def test_service_template_bakes_with_its_app(service_build: Path) -> None:
     for target in ("sockets.target", "timers.target"):
         assert not _sudo_test("-L", root / "etc/systemd/system" / target), target
 
-    assert _sudo_read(root / "etc/app/app.conf") == "version=0.1.0\nlisten=0.0.0.0:8080\n"
+    page = "<!doctype html>\n<title>node</title>\n<h1>node 0.1.0</h1>\n"
+    assert _sudo_read(root / "srv/www/index.html") == page
     passwd = _sudo_read(root / "etc/passwd").splitlines()
     assert any(line.startswith("app:") and "/usr/sbin/nologin" in line for line in passwd)
 
@@ -135,8 +142,6 @@ def test_service_template_units_verify_and_are_sandboxed(service_build: Path) ->
     generated = service_build / "mkosi" / "default" / "mkosi.extra" / "usr/lib/systemd/system"
     units = sorted(p.name for p in generated.iterdir() if p.is_file())
     assert "app.service" in units
-    # The template leaves shipping /usr/bin/app to the user; verify checks the command exists.
-    subprocess.run(["sudo", "install", "-m", "0755", "/bin/true", str(root / "usr/bin/app")])
     verify = subprocess.run(
         ["sudo", "systemd-analyze", "verify", f"--root={root}", *units],
         capture_output=True,
@@ -378,9 +383,9 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         assert "trixie-updates" in _sudo_read(listed / "debian-updates.sources")
         assert not _sudo_test("-e", listed / "bookworm-security.sources")
         assert not _sudo_test("-e", listed / "debian-backports.sources")
-        # No boot steps: the app's state directory is its StateDirectory=.
+        # No boot steps: the app waits for no runtime-init chain.
         unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
-        assert "StateDirectory=app\n" in unit and "runtime-init" not in unit
+        assert "busybox httpd" in unit and "runtime-init" not in unit
         assert not _sudo_test("-e", root / "usr/lib/systemd/system/runtime-init.service")
     finally:
         subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)

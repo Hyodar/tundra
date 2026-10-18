@@ -98,13 +98,18 @@ def service_ports(service: Service) -> tuple[Port, ...]:
 
 
 def listening(items: Iterable[Declaration]) -> dict[Port, list[str]]:
-    """Port -> what in *items* listens on it, in declaration order: services, and ``Secrets``,
-    whose boot step takes root's SSH key over HTTP whatever delivers the other secrets."""
+    """Port -> what in *items* listens on it, in declaration order: services, enabled units
+    naming ``ports``, and ``Secrets``, whose boot step takes root's SSH key over HTTP whatever
+    delivers the other secrets."""
     found: dict[Port, list[str]] = {}
     for item in items:
         if isinstance(item, Service):
             for port in service_ports(item):
                 found.setdefault(port, []).append(unit_name(item.name))
+        elif isinstance(item, Unit) and item.enabled and not item.masked:
+            for opened in item.ports:
+                if isinstance(opened, Port):
+                    found.setdefault(opened, []).append(unit_name(item.name))
         elif isinstance(item, Secrets) and not _loopback(item.host):
             found.setdefault(Port(item.port), []).append(f"{item.name} SSH key")
     return found

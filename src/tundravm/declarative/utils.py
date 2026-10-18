@@ -55,9 +55,11 @@ from .model import (
     Port,
     Ready,
     Setting,
+    Task,
     Unit,
     User,
 )
+from .systemd import Condition, Hardening, Root
 
 if TYPE_CHECKING:
     from .lifecycle import Measurements
@@ -285,11 +287,13 @@ _STUB_COPY = (
 class Tdxs(Composite):
     """The ``tdxs`` attestation service: source build, config, socket-activated units, account.
 
-    Declares the ``tdx`` group (other services join it for ``/dev/tdx_guest``) and
-    the ``tdxs`` user. *needs* lists the runtime-init steps the service waits for. The
-    service is a typed ``Service(socket=Listen(...))``, hardened for its job
-    (``_modules/tdxs.py`` ``Tdxs.service`` gives the reasoning); ``legacy_units=True``
-    ships the historical ``nethermind-v1`` unit texts instead.
+    Declares the ``tdx`` group (other services join it for ``/dev/tdx_guest``, which the
+    typed units' udev rule makes ``root:tdx 0660``) and the ``tdxs`` user. *needs* lists
+    the runtime-init steps the service waits for. The service is a typed
+    ``Service(socket=Listen(...))``, hardened for its job (``_modules/tdxs.py``
+    ``Tdxs.service`` gives the reasoning: ``CAP_DAC_OVERRIDE`` for configfs-tsm, unverified
+    on TDX hardware); ``legacy_units=True`` ships the historical ``nethermind-v1`` unit
+    texts instead, without the udev rule.
     Fragment name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
     (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
@@ -414,10 +418,17 @@ class Tdxs(Composite):
                     install=(Install("build/tdxs", "/usr/bin/tdxs"),),
                 ),
                 File(spec.config_path, spec.render_config()),
-                *(self._legacy_units(spec) if self.legacy_units else (spec.service(self.needs),)),
+                *(self._legacy_units(spec) if self.legacy_units else self._typed_units(spec)),
                 Group(spec.group),
                 User(spec.user, home=f"/home/{spec.user}", primary_group=spec.group),
             ),
+        )
+
+    def _typed_units(self, spec: _tdxs.Tdxs) -> tuple[Declaration, ...]:
+        """The typed service and the udev rule handing ``/dev/tdx_guest`` to ``tdx``."""
+        return (
+            spec.service(self.needs),
+            File(_tdxs.TDX_GUEST_UDEV_RULE, spec.render_udev_rule()),
         )
 
     def _legacy_units(self, spec: _tdxs.Tdxs) -> tuple[Unit, Unit]:
@@ -877,6 +888,102 @@ class TeeBase(Composite):
         )
 
 
+SSH_CONFIG = "/etc/ssh/sshd_config.d/50-tundravm.conf"
+"""The sshd drop-in :class:`SshAccess` ships; ``sshd_config`` includes it before its own lines."""
+SSH_AUTHORIZED_KEYS_DIR = "/etc/ssh/authorized_keys.d"
+"""Where :class:`SshAccess` bakes ``authorized_keys=``, one file per user (``root``)."""
+SSH_HOST_KEY = "/etc/ssh/ssh_host_ed25519_key"
+_SSH_PUBLIC_KEY = re.compile(
+    r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com"
+    r"|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [^\n]*)?"
+)
+
+
+@component
+class SshAccess(Composite):
+    """Root logs in over SSH with a public key, and with nothing else.
+
+    Installs ``openssh-server`` and enables Debian's ``ssh.service`` under the boot target,
+    listening on *port*: the variant's ``Firewall`` opens it and ``deploy --target qemu``
+    forwards ``ssh_port`` to it (an image without ``SshAccess`` gets no SSH forward).
+    The image carries no host keys (the build removes them): the ``ssh-host-keys`` task
+    generates this instance's at boot (``ssh-keygen -A``, skipped when they exist) and sshd
+    starts after it. ``sshd_config.d/50-tundravm.conf`` allows public-key authentication
+    only and root by key only (``PermitRootLogin prohibit-password``): root is the account
+    tundra-tools delivers a key for, and the image has no other login account, so refusing
+    root would refuse everyone, while a password is never accepted.
+    *authorized_keys* are public keys baked into the image
+    (``/etc/ssh/authorized_keys.d/root``); *from_secrets* accepts the key the variant's
+    ``Secrets`` delivers at boot (``/root/.ssh/authorized_keys``) and makes sshd wait for
+    that step (``secrets.ready``). One of them is required. Fragment name: ``ssh-access``.
+    """
+
+    port: int = 22
+    authorized_keys: tuple[str, ...] = ()
+    from_secrets: bool = False
+
+    def compose(self) -> Iterator[Declaration]:
+        if isinstance(self.port, bool) or not isinstance(self.port, int):
+            raise ValidationError(
+                f"SshAccess: port must be an int, got {self.port!r}.", hint="Pass port=22."
+            )
+        Port(self.port)  # range check
+        if isinstance(self.authorized_keys, str):
+            raise ValidationError(
+                "SshAccess: authorized_keys= takes a tuple of public keys, not one string.",
+                hint="Pass authorized_keys=('ssh-ed25519 AAAA... me@host',).",
+            )
+        for key in self.authorized_keys:
+            if not isinstance(key, str) or not _SSH_PUBLIC_KEY.fullmatch(key.strip()):
+                raise ValidationError(
+                    f"SshAccess: {key!r} is not one OpenSSH public key line.",
+                    hint="Paste the .pub file's line: 'ssh-ed25519 AAAA... comment'.",
+                )
+        if not self.authorized_keys and not self.from_secrets:
+            raise ValidationError(
+                "SshAccess has no key to accept, so nobody could log in.",
+                hint="Pass authorized_keys=(...), or from_secrets=True with a Secrets(...).",
+            )
+        yield Package("openssh-server")
+        yield File.text(SSH_CONFIG, self.config())
+        if self.authorized_keys:
+            keys = "".join(f"{key.strip()}\n" for key in self.authorized_keys)
+            yield File.text(f"{SSH_AUTHORIZED_KEYS_DIR}/root", keys, mode=0o644)
+        host_keys = Task(
+            "ssh-host-keys",
+            "/usr/bin/ssh-keygen -A",
+            description="Generate this instance's SSH host keys",
+            user=Root(),
+            needs=(),
+            # /etc must be writable for the keys; /usr and /boot stay read-only
+            hardening=Hardening.strict(protect_system="yes", network="none"),
+            conditions=(Condition.path_exists(SSH_HOST_KEY, negate=True),),
+        )
+        yield host_keys
+        needs: tuple[Ready, ...] = (host_keys.ready,)
+        if self.from_secrets:
+            needs += (Ready("secrets"),)
+        yield Unit("ssh.service", enabled=True, needs=needs, ports=(self.port,))
+
+    def config(self) -> str:
+        """The ``sshd_config.d`` drop-in: keys only, root by key only."""
+        return (
+            "# tundravm SshAccess: public keys only; root logs in by key, never by password\n"
+            f"Port {self.port}\n"
+            "AuthenticationMethods publickey\n"
+            "PubkeyAuthentication yes\n"
+            "PasswordAuthentication no\n"
+            "KbdInteractiveAuthentication no\n"
+            "PermitEmptyPasswords no\n"
+            "PermitRootLogin prohibit-password\n"
+            f"AuthorizedKeysFile .ssh/authorized_keys {SSH_AUTHORIZED_KEYS_DIR}/%u\n"
+            "X11Forwarding no\n"
+            "PermitTunnel no\n"
+            "MaxAuthTries 3\n"
+            "LoginGraceTime 30\n"
+        )
+
+
 def RuntimeDirectory(  # noqa: N802 - a declaration factory, spelled like the declarations
     path: str,
     *,
@@ -1063,6 +1170,9 @@ __all__ = [
     "RunStage",
     "RuntimeDirectory",
     "RuntimeFile",
+    "SSH_AUTHORIZED_KEYS_DIR",
+    "SSH_CONFIG",
+    "SshAccess",
     "StaticAddress",
     "TEE_HYPERVISOR_CLOCKS",
     "TEE_MASKED_UNITS",

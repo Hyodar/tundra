@@ -101,6 +101,10 @@ class Lowered:
     secret_allowed: Mapping[str, frozenset[str]] = field(default_factory=dict, repr=False)
     """Per profile, what declares ``allow_secret=True``: file paths, ``FileTree`` paths
     ending in ``/`` and service unit names. Outside the recipe digest."""
+    ssh_ports: Mapping[str, int] = field(default_factory=dict, repr=False)
+    """Per profile, the guest port its enabled ``ssh.service`` listens on (``SshAccess``);
+    a profile without one is absent. ``deploy --target qemu`` forwards SSH only to these.
+    Outside the recipe digest."""
     unreleased: frozenset[str] = frozenset()
     """Profiles of variants marked ``Variant(release=False)``: their payload carries
     ``"release": false`` (an eligible variant's carries nothing, so its digest is unchanged)."""

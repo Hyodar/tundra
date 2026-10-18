@@ -485,9 +485,20 @@ run: tdxs writes configfs-tsm reports under `/sys/kernel/config/tsm`, which
 step 8 lands. Step 8 shipped `write_paths=("-/sys/kernel/config/tsm/report",)` (optional, so a
 guest without configfs-tsm still starts) with `kernel=True`, from tundra-tools' source:
 go-tdx-guest v0.3.1 uses configfs-tsm when `/sys/kernel/config/tsm/report` exists and falls back
-to `/dev/tdx_guest` otherwise. Still open for the hardware run: configfs-tsm entries are
-root-owned (`inblob` is mode 0200), so the `tdxs` user needs `CAP_DAC_OVERRIDE` or uid 0 to
-issue through it.
+to `/dev/tdx_guest` otherwise (no fallback when the configfs request fails).
+go-configfs-tsm v0.2.2 `mkdir`s a fresh report entry per quote, and the kernel creates the
+directory and the entry's attributes `root:root` (`inblob` 0200), so a root `ExecStartPre=+`
+that re-owns a pre-created entry cannot help. The quoting issuers (`tdx`, `azure`, `gcp`)
+therefore get `CAP_DAC_OVERRIDE` as their only capability (`AmbientCapabilities=` and the whole
+`CapabilityBoundingSet=`), bounded by the sandbox: everything outside the optional report
+directory stays read-only or hidden (DAC override does not lift a read-only mount; remounting
+needs `CAP_SYS_ADMIN`), and `DevicePolicy=closed` admits only the guest device. It does widen
+reads to every file the namespace shows. `/dev/tdx_guest` gets `root:tdx 0660` from
+`/usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules`, which the typed units ship; `Group=tdx`
+already makes `tdx` the service's primary group. Validator-only and `simulator` services keep
+`PrivateDevices=yes`, an empty bounding set and no write path. Offline
+`systemd-analyze security` (systemd 255) moves from 1.3 to 1.6 (ambient capability 0.1,
+`CAP_DAC_*` 0.2). Unverified on TDX hardware: a real quote request decides it.
 
 **Health check (timer) and hello (boot oneshot).** Before, `examples/03_fragments.py:43,117-118`:
 

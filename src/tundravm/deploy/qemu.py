@@ -4,12 +4,15 @@ Launches a QEMU VM with the baked artifact, supporting:
 - OVMF firmware for UEFI boot (TDVF via ``-bios`` for a TDX guest), or ``firmware=PATH``
 - UKI (Unified Kernel Image) via -kernel flag
 - TDX confidential computing support
-- Port forwarding for SSH and every declared ``Secrets`` port
+- Port forwarding for every declared ``Secrets`` port, and for SSH when the image declares
+  it (``ssh_guest_port``, from ``SshAccess``)
+- A sparse raw data disk per ``data_disks`` serial (``/dev/disk/by-id/virtio-SERIAL``)
 - A detached VM with a serial log and a monitor socket, or one attached to the terminal
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -47,6 +50,10 @@ SERIAL_LOG = "qemu-serial.log"
 MONITOR_SOCKET = "qemu.monitor"
 PIDFILE = "qemu.pid"
 VARS_COPY = "qemu-ovmf-vars.fd"
+
+DATA_DISK_SIZE = "16G"
+"""The size of a data disk the adapter creates (sparse); ``data_disk_size=`` changes it."""
+_SERIAL = re.compile(r"[A-Za-z0-9_.-]{1,20}")
 
 # sockaddr_un.sun_path holds 108 bytes, the terminating NUL included.
 _UNIX_PATH_MAX = 107
@@ -96,11 +103,14 @@ class QemuDeployAdapter:
         memory = params.pop("memory", "2G")
         cpus = params.pop("cpus", "2")
         ssh_port = params.pop("ssh_port", "2222")
+        ssh_guest = params.pop("ssh_guest_port", "")
+        data_disks = [serial for serial in params.pop("data_disks", "").split(",") if serial]
+        data_disk_size = _disk_bytes(params.pop("data_disk_size", DATA_DISK_SIZE))
         enable_tdx = params.pop("tdx", "false").lower() == "true"
         daemonize = params.pop("daemonize", "true").lower() == "true"
         firmware = _given_firmware(params.pop("firmware", ""), tdx=enable_tdx)
         forwards = parse_forwards(params.pop("forward", ""))
-        hosts = [ssh_port, *(str(host) for host, _ in forwards)]
+        hosts = [*([ssh_port] if ssh_guest else []), *(str(host) for host, _ in forwards)]
         if len(set(hosts)) != len(hosts):
             raise DeploymentError(
                 "Two QEMU port forwards use the same host port.",
@@ -162,12 +172,30 @@ class QemuDeployAdapter:
             disk_format = _disk_format_for_path(artifact_path)
             cmd.extend(["-drive", f"file={artifact_path},format={disk_format},if=virtio"])
 
-        # User-mode networking: ssh_port to 22, then every other forward
+        # Data disks: one sparse raw file per serial, kept beside the artifact across deploys
+        disk_files: list[str] = []
+        for index, serial in enumerate(data_disks):
+            if not _SERIAL.fullmatch(serial):
+                raise DeploymentError(
+                    f"Invalid data disk serial {serial!r}.",
+                    hint="A virtio serial is 1-20 letters, digits, '.', '_' or '-'.",
+                    context={"data_disks": ",".join(data_disks)},
+                )
+            path = _run_dir(artifact_path.absolute(), request.profile) / f"data-{serial}.img"
+            if not path.exists():
+                with path.open("wb") as handle:
+                    handle.truncate(data_disk_size)
+            cmd.extend(["-drive", f"file={path},if=none,id=data{index},format=raw"])
+            cmd.extend(["-device", f"virtio-blk-pci,drive=data{index},serial={serial}"])
+            disk_files.append(f"{serial}={path}")
+
+        # User-mode networking: ssh_port to SSH when the image has it, then every forward
+        ssh = f",hostfwd=tcp::{ssh_port}-:{ssh_guest}" if ssh_guest else ""
         hostfwd = "".join(f",hostfwd=tcp::{host}-:{guest}" for host, guest in forwards)
         cmd.extend(
             [
                 "-netdev",
-                f"user,id=net0,hostfwd=tcp::{ssh_port}-:22{hostfwd}",
+                f"user,id=net0{ssh}{hostfwd}",
                 "-device",
                 "virtio-net-pci,netdev=net0",
             ]
@@ -230,11 +258,12 @@ class QemuDeployAdapter:
             "artifact_path": str(artifact_path),
             "memory": memory,
             "cpus": cpus,
-            "ssh_port": ssh_port,
+            **({"ssh_port": ssh_port} if ssh_guest else {}),
             "tdx": str(enable_tdx).lower(),
             "is_uki": str(is_uki).lower(),
             **({"firmware": firmware} if firmware else {}),
             **({"forward": format_forwards(forwards)} if forwards else {}),
+            **({"data_disks": ",".join(disk_files)} if disk_files else {}),
             **state,
             **params,
         }
@@ -242,7 +271,7 @@ class QemuDeployAdapter:
         return DeployResult(
             target="qemu",
             deployment_id=deployment_id,
-            endpoint=f"ssh://localhost:{ssh_port}",
+            endpoint=f"ssh://localhost:{ssh_port}" if ssh_guest else None,
             metadata=metadata,
         )
 
@@ -269,6 +298,21 @@ def parse_forwards(text: str) -> tuple[tuple[int, int], ...]:
 def format_forwards(pairs: tuple[tuple[int, int], ...]) -> str:
     """*pairs* as ``HOST:GUEST,...``, the form :func:`parse_forwards` reads."""
     return ",".join(f"{host}:{guest}" for host, guest in pairs)
+
+
+def _disk_bytes(size: str) -> int:
+    """``16G``/``512M``/``1T`` or a byte count as bytes."""
+    units = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40}
+    text = size.strip().upper().removesuffix("IB").removesuffix("B")
+    scale = units.get(text[-1:], 1)
+    digits = text[:-1] if text[-1:] in units else text
+    if not digits.isdigit() or int(digits) == 0:
+        raise DeploymentError(
+            f"Invalid data disk size {size!r}.",
+            hint="Pass --param data_disk_size= a size such as 16G or 512M.",
+            context={"data_disk_size": size},
+        )
+    return int(digits) * scale
 
 
 def _run_dir(artifact_path: Path, variant: str) -> Path:

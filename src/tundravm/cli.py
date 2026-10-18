@@ -712,7 +712,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help=(
             "Target setting (repeatable). qemu: memory, cpus, ssh_port, tdx, daemonize, "
-            "forward (HOST:GUEST[,HOST:GUEST...]), firmware (a TDVF or OVMF image path); "
+            "forward (HOST:GUEST[,HOST:GUEST...]), firmware (a TDVF or OVMF image path), "
+            "data_disk_size (each data disk the image's Disk serials get, e.g. 16G); "
             "azure: storage_account, resource_group, location, vm_size, gallery, secure_boot "
             "(needs signed=true), signed; "
             "gcp: project, bucket, zone, machine_type."

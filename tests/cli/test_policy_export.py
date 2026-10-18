@@ -25,6 +25,7 @@ recipe = Recipe("peer", items=BOOT)
 
 R0, R1, R2, R3, MRTD = ("a" * 96, "b" * 96, "c" * 96, "d" * 96, "e" * 96)
 QEMU_GAPS = {"MRTD": "host firmware"}
+CONFIG = "/etc/tdxs/config.yaml"
 
 
 def _policy(unverifiable: dict[str, str] | None = None, **registers: object) -> dict[str, object]:
@@ -167,7 +168,7 @@ def test_from_policy_normalises_registers_for_the_validator() -> None:
         "rtmr2": R2,
         "rtmr3": R3,
     }
-    (config,) = [item for item in tdxs.items if isinstance(item, File)]
+    (config,) = [item for item in tdxs.items if isinstance(item, File) and item.path == CONFIG]
     assert config.content == (
         "transport:\n  type: socket\n  config:\n    systemd: true\n"
         "issuer:\n  type: tdx\n"
@@ -189,7 +190,7 @@ def test_from_policy_picks_one_value_per_register() -> None:
     tdxs = Tdxs.from_policy(policy, firmware="fw-b")
     assert tdxs.expected_measurements["mrtd"] == R3
     assert tdxs.expected_measurements["rtmr0"] == R0
-    (config,) = [item for item in tdxs.items if isinstance(item, File)]
+    (config,) = [item for item in tdxs.items if isinstance(item, File) and item.path == CONFIG]
     assert f'      mrtd: "{R3}"\n' in str(config.content)
 
 

@@ -25,9 +25,14 @@ def test_dropin_renders_next_to_the_packaged_unit() -> None:
     assert image.file(DROPIN).text == (
         "[Unit]\nAfter=network-online.target\nRequires=network-online.target\n\n[Service]\n"
         'ExecStart=\nExecStart=/usr/sbin/nginx -g "daemon off;"\nRestart=always\n'
-        "LimitNOFILE=65536\nProtectSystem=full\nPrivateTmp=yes\nNoNewPrivileges=yes\n"
-        "ProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectControlGroups=yes\n"
-        "RestrictSUIDSGID=yes\nProtectKernelLogs=yes\nProtectClock=yes\n"
+        "LimitNOFILE=65536\nProtectSystem=full\nProtectHome=no\nPrivateTmp=yes\n"
+        "NoNewPrivileges=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\n"
+        "ProtectControlGroups=yes\nRestrictSUIDSGID=yes\nMemoryDenyWriteExecute=no\n"
+        "PrivateDevices=no\nDevicePolicy=auto\nDeviceAllow=\nProtectKernelLogs=yes\n"
+        "ProtectClock=yes\nProtectHostname=no\nRestrictRealtime=no\nRestrictNamespaces=no\n"
+        "LockPersonality=no\nRestrictAddressFamilies=\nSystemCallArchitectures=\n"
+        "SystemCallFilter=\nCapabilityBoundingSet=\nCapabilityBoundingSet=~\n"
+        "AmbientCapabilities=\nUMask=0022\n"
     )
 
 

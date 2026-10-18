@@ -165,9 +165,9 @@ pyproject: /home/me/node/pyproject.toml
 ```console
 $ tundravm init --list-templates
 minimal  packages, one file and one verbatim unit; a single qemu variant
-service  an App fragment (generated service, config, first-boot step, lint rule) plus a dev variant (default)
+service  an App fragment (a web page busybox httpd serves from a sandboxed service, a lint rule) plus a dev variant (default)
 cloud    service with one UKI for qemu, azure and gcp, backports and an EFI stub pinned to a Debian snapshot
-prover   cloud plus a TPM-sealed key, an encrypted disk, SSH key delivery and the tdxs attestation service
+prover   cloud plus a TPM-sealed key, an encrypted data disk, key-only root SSH and the tdxs attestation service
 ```
 
 Every template builds on `Debian(release)`, whose `boot="systemd"` set installs the Debian kernel and the packages a UKI boots with (`linux-image-amd64`, `systemd`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`), so it bakes a bootable UKI as written and passes `kernel-missing` (see [Lint](#lint)).
@@ -978,7 +978,7 @@ qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4G -smp 4 -no-reboot
   -daemonize -pidfile /work/build/default/qemu.pid
 ```
 
-- The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's port 22. Every port a `Secrets` of the variant listens on (recorded by the bake in `bake-result.json`) is forwarded from the same host port, so the host can deliver secrets to `localhost:8080`; `--param forward=HOST:GUEST,...` adds forwards, and one naming a `Secrets` port as its guest port replaces that default (`forward=18080:8080`). Two forwards on one host port are refused.
+- The endpoint is user-mode networking: host port `ssh_port` (default `2222`) to the guest's SSH port, only when the variant declares `SshAccess` (the bake records its port in `bake-result.json`; an image without it gets no SSH forward and no endpoint). Each `Disk` whose device is `/dev/disk/by-id/virtio-SERIAL` gets a sparse raw data disk `BUILD/<variant>/data-SERIAL.img` (kept across deploys, `--param data_disk_size=16G`) attached with that serial. Every port a `Secrets` of the variant listens on (recorded by the bake in `bake-result.json`) is forwarded from the same host port, so the host can deliver secrets to `localhost:8080`; `--param forward=HOST:GUEST,...` adds forwards, and one naming a `Secrets` port as its guest port replaces that default (`forward=18080:8080`). Two forwards on one host port are refused.
 - QEMU detaches by default (`daemonize=true`): the serial console goes to `serial_log` (`tail -f build/default/qemu-serial.log`), the monitor listens on the `monitor` socket (`socat - UNIX-CONNECT:build/default/qemu.monitor`, then `info status` or `quit`) and the pid to `pidfile` (`kill "$(cat build/default/qemu.pid)"`). The three live in `BUILD/<variant>`, so a second `deploy` of a variant that is still running fails on its pid file. The socket path must fit a unix socket (107 bytes), or `deploy` fails before starting QEMU. `--attach` keeps QEMU in the foreground instead, with `-nographic -serial mon:stdio` and no log, socket or pid file.
 - `tdx=true` boots TDVF, OVMF built with TDX support, through `-bios` (a TDX guest cannot run firmware from pflash): `/usr/share/ovmf/OVMF.fd`, `/usr/share/edk2/ovmf/OVMF.inteltdx.fd`, `/usr/share/OVMF/OVMF.fd` or `/usr/share/qemu/OVMF.fd`, the first found. It replaces the two pflash drives above with `-bios /usr/share/ovmf/OVMF.fd` and passes `-machine q35,accel=kvm,kernel-irqchip=split,confidential-guest-support=tdx0 -object tdx-guest,id=tdx0`, which needs a TDX host (kernel, KVM and QEMU with TDX support; see [Real TDX](#real-tdx)).
 - `firmware=PATH` boots that image instead of the first one found: the TDVF through `-bios` with `tdx=true`, else the OVMF code through the read-only pflash drive of a UKI (the VARS copy stays) or through `-bios` for a disk image. A path that is not a file fails before QEMU starts with `QEMU firmware not found: PATH`; the result lists it as `firmware`.

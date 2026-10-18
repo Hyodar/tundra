@@ -171,14 +171,18 @@ def curated_modules(
 
 
 def module_selection(
-    profile: ProfileState, spec: KernelModules, *, built_kernel: bool
+    profile: ProfileState, spec: KernelModules, *, built_kernel: bool, loadable: bool = False
 ) -> ModuleSelection:
     """*profile*'s selection under ``Debian(kernel_modules=spec)``.
 
     A built ``Kernel`` (*built_kernel*) installs only its ``vmlinuz`` and a variant without a
-    distribution kernel package has no modules: both select nothing.
+    distribution kernel package has no modules: both select nothing. A built kernel that
+    installs its own loadable modules (*loadable*: ``Kernel(modules=True)``) keeps all of
+    ``/usr/lib/modules`` instead, so the implicit debloat leaves them.
     """
-    if built_kernel or not installs_kernel_package(profile.packages):
+    if built_kernel:
+        return ModuleSelection(modular=True) if loadable else NO_MODULES
+    if not installs_kernel_package(profile.packages):
         return NO_MODULES
     if spec == "all":
         return ModuleSelection(modular=True)

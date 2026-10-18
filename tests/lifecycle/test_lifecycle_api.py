@@ -371,7 +371,13 @@ def test_deploy_with_fake_qemu_runner(tmp_path: Path) -> None:
         artifact, using=Qemu(memory="4G", ssh_port=2223), allow_simulated=True, adapter=adapter
     )
     assert found.target == "qemu" and found.id.startswith("qemu-default-")
-    assert seen and "4G" in " ".join(seen[0]) and "2223" in " ".join(seen[0])
+    assert seen and "4G" in " ".join(seen[0]) and "2223" not in " ".join(seen[0])
+    assert found.endpoint is None  # the recipe declares no SshAccess: no SSH forward
+    with_ssh = replace(artifact, ssh_port=22, data_disks=("tundra-data",))
+    found = deploy(with_ssh, using=Qemu(ssh_port=2223), allow_simulated=True, adapter=adapter)
+    assert "user,id=net0,hostfwd=tcp::2223-:22" in seen[-1]
+    assert "virtio-blk-pci,drive=data0,serial=tundra-data" in seen[-1]
+    assert found.endpoint == "ssh://localhost:2223"
 
 
 def test_doctor_with_fake_probe_runner() -> None:

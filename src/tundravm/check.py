@@ -27,6 +27,7 @@ from .diagnostics import Diagnostic, Severity
 from .formats import annotation_path, md_cell, md_table, workflow_command
 from .kernel_modules import (
     NO_MODULES,
+    ModuleSelection,
     debloat_paths_remove,
     installs_kernel_package,
     module_selection,
@@ -561,7 +562,9 @@ def _rule_built_kernel_modules(
         )
     config = state.debloat
     if loadable and config.enabled and config.keep_modules is not True:
-        pattern = _removes(config.effective_paths_remove, MODULES_PATH)
+        # The implicit debloat keeps them (module_selection); a declared list may not.
+        kept = ModuleSelection(modular=True)
+        pattern = _removes(debloat_paths_remove(config, kept), MODULES_PATH)
         if pattern is not None and config.keep_modules is None:
             yield Diagnostic(
                 severity="error",

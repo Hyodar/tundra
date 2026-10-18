@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.key_generation import KeyGeneration, KeySpec, validate_entry_name
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
-from tundravm.diagnostics import Diagnostic, Severity
+from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -25,6 +26,8 @@ DISK_ENCRYPTION_BUILD_PACKAGES = (
 
 DISK_ENCRYPTION_DEFAULT_CONFIG_PATH = "/etc/tdx/disk-setup.yaml"
 DEFAULT_DISK_DIRS = ("ssh", "data", "logs")
+_KERNEL_NAME = re.compile(r"/dev/sd[a-z]+[0-9]*")
+"""A SCSI/SATA kernel disk name: assigned in probe order, so not stable across boots."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,27 +207,44 @@ class DiskEncryption(Module):
                 )
 
     def _check_auto_format(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
-        """``disk-auto-format`` for each disk that is both picked automatically and formatted."""
-        level: Severity = "error" if image.policy.storage_safety == "error" else "warning"
+        """``disk-device-guessed`` for each disk formatted without a device, and
+        ``disk-device-unstable`` for one formatted through a kernel name (``/dev/sdb``)."""
+        lenient = image.policy.storage_safety == "warn"
         for disk in self.disks:
-            if disk.device is not None or disk.format_policy == "never":
+            if disk.format_policy == "never":
                 continue
-            yield Diagnostic(
-                severity=level,
-                code="disk-auto-format",
-                message=(
-                    f"disk {disk.name!r} sets no device and format={disk.format_policy!r}: "
-                    "automatic device selection can pick the boot disk and format it"
-                ),
-                hint=(
-                    "device=None takes the largest whole /dev/sd* disk, boot disk included. "
-                    "For production set an explicit device= (e.g. '/dev/sdb'), or "
-                    "format='never' for a disk prepared beforehand; "
-                    "Policy(storage_safety='error') makes this an error."
-                ),
-                variant=profile,
-                subject=disk.name,
-            )
+            if disk.device is None:
+                yield Diagnostic(
+                    severity="warning" if lenient else "error",
+                    code="disk-device-guessed",
+                    message=(
+                        f"disk {disk.name!r} sets no device and format={disk.format_policy!r}: "
+                        "automatic device selection can pick the boot disk and format it"
+                    ),
+                    hint=(
+                        "device=None takes the largest whole /dev/sd* disk, boot disk included. "
+                        "Name a stable device (device='/dev/disk/by-id/virtio-SERIAL'), or "
+                        "format='never' for a disk prepared beforehand; "
+                        "Policy(storage_safety='warn') makes this a warning."
+                    ),
+                    variant=profile,
+                    subject=disk.name,
+                )
+            elif _KERNEL_NAME.fullmatch(disk.device):
+                yield Diagnostic(
+                    severity="warning",
+                    code="disk-device-unstable",
+                    message=(
+                        f"disk {disk.name!r} formats {disk.device}, a kernel name that can "
+                        "point at another disk on the next boot"
+                    ),
+                    hint=(
+                        "Kernel names follow probe order; name the disk by a stable link: "
+                        "/dev/disk/by-id/ (a virtio serial, a SCSI WWN) or /dev/disk/by-path/."
+                    ),
+                    variant=profile,
+                    subject=disk.name,
+                )
 
     def source_spec(self) -> SourceBuild:
         """The ``disk-setup`` source build from ``source``.

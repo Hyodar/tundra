@@ -325,9 +325,11 @@ class StateBuilder:
                         runtime_done = True
                 case Build():
                     self._build_from(profile, source_build(item, mark_unpinned=not self.historical))
-                case Kernel(source=Http()) if self.historical:
-                    profile.build_packages.add("curl")  # the build hook downloads the archive
-                case BootStep() | Setting() | Kernel() | KernelConfig() | RuntimeTools():
+                case Kernel():
+                    if self.historical and isinstance(item.source, Http):
+                        profile.build_packages.add("curl")  # the build hook downloads it
+                    profile.build_packages.update(item.build_packages)
+                case BootStep() | Setting() | KernelConfig() | RuntimeTools():
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
             if isinstance(unit, Service):
@@ -997,6 +999,7 @@ def _unit_fields(
 
     Relation refs become unit names (one no declaration in the variant renders is
     ``unit-ref-undefined``); ``requires``/``wants``/``binds_to`` also order ``After=``.
+    A drop-in's hardening is a patch over the unit it extends (``Hardening.patch_entries``).
     """
     rel: dict[str, tuple[str, ...]] = {}
     for what in ("after", "requires", "wants", "before", "part_of", "binds_to", "conflicts"):
@@ -1042,7 +1045,13 @@ def _unit_fields(
         "limits": _limits(name, decl.limits),
         "timeout_start": decl.timeout_start,
         "timeout_stop": decl.timeout_stop or None,
-        "hardening": None if decl.hardening is None else decl.hardening.entries(),
+        "hardening": (
+            None
+            if decl.hardening is None
+            else decl.hardening.patch_entries()
+            if isinstance(decl, DropIn)
+            else decl.hardening.entries()
+        ),
         "extra_unit": {section: dict(keys) for section, keys in decl.extra.items()},
         "kill_mode": getattr(decl, "kill_mode", None),
         "needs": tuple(ref.step for ref in getattr(decl, "needs", ())),

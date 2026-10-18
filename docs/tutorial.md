@@ -42,13 +42,15 @@ The recipe is named after the directory (`--name` overrides it). `init` writes t
 ```python
 APP_VERSION = "0.1.0"
 APP_PORT = 8080
+WWW = "/srv/www"
 
 
 @component
 class App(Composite):
-    """The app: its config file, the service and a lint rule.
+    """The app: a web page served over HTTP by busybox httpd, sandboxed, and a lint rule.
 
-    Ship ``/usr/bin/app`` with a ``GoBinary``, a ``Build`` or a ``Package``. Fragment name: ``app``.
+    Swap in your program: ship it with a ``GoBinary``, a ``Build`` or a ``Package`` and
+    point the service at it. Fragment name: ``app``.
     """
 
     version: str
@@ -60,19 +62,23 @@ class App(Composite):
         return HttpEndpoint("127.0.0.1", self.port, provider=self)
 
     def compose(self) -> Iterator[Declaration]:
-        config = {"version": self.version, "listen": f"0.0.0.0:{self.port}"}
-        yield ConfigFile.env("/etc/app/app.conf", config, sort_keys=False)
-        # Runs as system user "app" (declared for you), sandboxed by Hardening.strict(),
-        # restarted on failure; state="app" is /var/lib/app, made by systemd, owned by
-        # app and its working directory. It waits for every runtime-init step (needs=).
-        # ports= is where it listens: TeeBase's firewall opens it.
+        # Debian's busybox has the httpd applet: a real server with nothing to download.
+        yield Package("busybox")
+        yield File.text(f"{WWW}/index.html", self.page())
+        # Runs as system user "app" (declared for you), sandboxed by Hardening.strict()
+        # (the system read-only, WWW too; unix and IP sockets only), restarted on failure.
+        # It waits for every runtime-init step (needs=). ports= is where it listens:
+        # TeeBase's firewall opens it.
         yield Service(
             "app",
-            "/usr/bin/app --config /etc/app/app.conf",
+            f"/usr/bin/busybox httpd -f -p {self.port} -h {WWW}",
             description=f"app {self.version}",
-            state="app",
             ports=(self.port,),
         )
+
+    def page(self) -> str:
+        """The index page: ``curl http://VM:PORT/`` answers with it."""
+        return f"<!doctype html>\n<title>node</title>\n<h1>node {self.version}</h1>\n"
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""

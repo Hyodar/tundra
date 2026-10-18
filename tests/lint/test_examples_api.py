@@ -14,9 +14,9 @@ from tundravm.recipe import load_image, load_recipe
 
 INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source")
 
-INHERENT_WARNINGS = frozenset({"source-unpinned", "disk-auto-format"})
-"""Warning codes an example may report: unpinned refs clear with ``tundravm lock``; a
-``Disk`` that picks its device at boot stays a warning until the recipe names one."""
+INHERENT_WARNINGS = frozenset({"source-unpinned", "disk-device-guessed"})
+"""Warning codes an example may report: unpinned refs clear with ``tundravm lock``; the
+historical surge ``Disk`` picks its device at boot under ``Policy(storage_safety="warn")``."""
 
 KNOWN_WARNINGS: dict[str, frozenset[str]] = {}
 """Per-example warnings the typed API removes later (none left: 03's health check became a

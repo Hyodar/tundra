@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import conf_list
 from tundravm.declarative import (
     Debian,
     DebianConfig,
+    Debloat,
     Git,
     Http,
     Kernel,
@@ -24,6 +26,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative._kernel_hardening import ATTACK_SURFACE, HARDENING
 from tundravm.declarative._lowered import kernel_payload
+from tundravm.declarative.model import KERNEL_BUILD_PACKAGES
 from tundravm.declarative.utils import KernelHardening
 from tundravm.errors import ValidationError
 
@@ -221,3 +224,36 @@ def test_lint_flags_kernel_modules_a_monolithic_kernel_cannot_have(base: Path) -
     assert "kernel-modules-ignored" in {d.code for d in found}
     clean = lint(_recipe(Kernel("6.12.48", SOURCE, base=base, modules=True)))
     assert "kernel-modules-ignored" not in {d.code for d in clean}
+
+
+def test_a_composed_kernel_brings_its_build_packages(base: Path, tmp_path: Path) -> None:
+    def packages(kernel: Kernel, out: str) -> set[str]:
+        compile(_recipe(kernel)).write(tmp_path / out)
+        conf = (tmp_path / out / "default" / "mkosi.conf").read_text(encoding="utf-8")
+        return set(conf_list(conf, "BuildPackages"))
+
+    debian = packages(Kernel("6.12.48", SOURCE, base=DebianConfig("6.12.48-1"), modules=True), "d")
+    assert set(KERNEL_BUILD_PACKAGES) | {"dpkg-dev", "dwarves", "kmod"} <= debian
+    local = packages(Kernel("6.12.48", SOURCE, base=base), "l")  # no BTF, no modules
+    assert set(KERNEL_BUILD_PACKAGES) <= local
+    assert not local & {"dpkg-dev", "dwarves", "kmod"}
+    no_btf = KernelConfig({"CONFIG_DEBUG_INFO_BTF": "n"})
+    plain = Kernel("6.12.48", SOURCE, base=DebianConfig("6.12.48-1"), fragments=(no_btf,))
+    assert "dwarves" not in plain.build_packages
+    whole = Kernel("6.12.48", SOURCE, config=base)
+    assert whole.build_packages == ()  # config=: the recipe brings its own
+
+
+def test_loadable_modules_survive_the_default_debloat(base: Path, tmp_path: Path) -> None:
+    recipe = _recipe(Kernel("6.12.48", SOURCE, base=base, modules=True))
+    assert "debloat-removes-modules" not in {d.code for d in lint(recipe)}
+    compile(recipe).write(tmp_path / "tree")
+    finalize = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "tree" / "default" / "scripts").glob("*finalize*")
+    )
+    assert "/usr/lib/modules" not in finalize
+    declared = _recipe(
+        Kernel("6.12.48", SOURCE, base=base, modules=True), Debloat(remove=("/usr/lib/modules",))
+    )
+    assert "debloat-removes-modules" in {d.code for d in lint(declared)}

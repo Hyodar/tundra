@@ -14,6 +14,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -26,7 +27,7 @@ from typing import Any, Final, Literal, get_args
 
 from tundravm import check as _check
 from tundravm._hashes import artifact_sha256
-from tundravm._modules import SecretDelivery
+from tundravm._modules import DiskEncryption, SecretDelivery
 from tundravm._source import (
     SOURCES_DIRNAME,
     GitSource,
@@ -238,6 +239,12 @@ class Artifact:
     simulated: bool = False
     ports: tuple[int, ...] = ()
     """Guest ports the variant's ``Secrets`` deliveries listen on; ``deploy`` forwards them."""
+    ssh_port: int | None = None
+    """The guest port the variant's ``SshAccess`` listens on; ``None``: no SSH, and QEMU
+    ``deploy`` forwards none."""
+    data_disks: tuple[str, ...] = ()
+    """Serials of the virtio data disks the variant's ``Disk`` devices name
+    (``/dev/disk/by-id/virtio-SERIAL``); QEMU ``deploy`` attaches one disk each."""
     lock_sha256: str | None = None
     """The sha256 of the lockfile the bake read; ``None`` when it read none."""
     manifest_sha256: str | None = None
@@ -341,6 +348,7 @@ class Qemu:
     memory: str = "2G"
     cpus: int = 2
     ssh_port: int = 2222
+    """The host port forwarded to the image's SSH port, when the image declares ``SshAccess``."""
     tdx: bool = False
     daemonize: bool = True
     """``False`` runs QEMU in the foreground with its console on this terminal."""
@@ -349,6 +357,8 @@ class Qemu:
     firmware: str | None = None
     """The firmware image to boot instead of the first one installed: TDVF with ``tdx``
     (``-bios``), else OVMF (the code pflash of a UKI, ``-bios`` for a disk image)."""
+    data_disk_size: str = "16G"
+    """The size of each data disk created for the image's ``Disk`` serials (sparse, kept)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1251,6 +1261,8 @@ def bake_image(
                 "lock_sha256": payload.get("lock_sha256"),
                 "tree_digest": tree.digest,
                 "ports": list(secret_ports(baking, name)),
+                "ssh_port": baking.ssh_ports.get(name),
+                "data_disks": list(data_disk_serials(baking, name)),
                 "reproducibility": None,
                 **_installed_record(baking, name, result.profiles[name]),
             }
@@ -1481,6 +1493,18 @@ def _report_reproducibility(
     )
 
 
+_VIRTIO_BY_ID = re.compile(r"/dev/disk/by-id/virtio-([A-Za-z0-9_.-]{1,20})")
+"""A virtio disk's udev link: QEMU's ``serial=`` (at most 20 bytes) names it."""
+
+
+def data_disk_serials(img: Lowered, variant: str) -> tuple[str, ...]:
+    """The virtio serials *variant*'s ``Disk`` devices name, in declaration order."""
+    modules = img.applied_modules(variant, inherited=True)
+    devices = [d.device for m in modules if isinstance(m, DiskEncryption) for d in m.disks]
+    found = (_VIRTIO_BY_ID.fullmatch(device or "") for device in devices)
+    return tuple(dict.fromkeys(match[1] for match in found if match))
+
+
 def secret_ports(img: Lowered, variant: str) -> tuple[int, ...]:
     """The guest ports *variant*'s ``Secrets`` deliveries listen on, sorted."""
     modules = img.applied_modules(variant, inherited=True)
@@ -1598,6 +1622,8 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
                     tree_digest=str(own.get("tree_digest") or ""),
                     simulated=simulated,
                     ports=tuple(int(port) for port in own.get("ports") or ()),
+                    ssh_port=None if own.get("ssh_port") is None else int(own["ssh_port"]),
+                    data_disks=tuple(str(serial) for serial in own.get("data_disks") or ()),
                     lock_sha256=None if lock_sha256 is None else str(lock_sha256),
                     manifest_sha256=ref.manifest_digest,
                     build=base,
@@ -1787,6 +1813,17 @@ def with_secret_ports(using: DeployTarget, ports: Sequence[int]) -> DeployTarget
     return replace(using, forward=using.forward + added) if added else using
 
 
+def qemu_image_parameters(artifact: Artifact) -> dict[str, str]:
+    """What the QEMU adapter reads from the image itself: ``ssh_guest_port`` (forward
+    ``ssh_port`` there; absent: no SSH forward) and ``data_disks`` (serials to attach)."""
+    params: dict[str, str] = {}
+    if artifact.ssh_port is not None:
+        params["ssh_guest_port"] = str(artifact.ssh_port)
+    if artifact.data_disks:
+        params["data_disks"] = ",".join(artifact.data_disks)
+    return params
+
+
 def target_of(using: DeployTarget) -> Target:
     return next(name for name, kind in DEPLOY_TARGETS.items() if isinstance(using, kind))
 
@@ -1804,7 +1841,9 @@ def deploy(
     (``verify_artifact``). Simulated artifacts are refused unless
     *allow_simulated*. *adapter* replaces the target's default adapter (tests).
     On QEMU every port in ``artifact.ports`` that ``using.forward`` does not
-    forward is forwarded from the same host port.
+    forward is forwarded from the same host port, ``ssh_port`` reaches SSH only when the
+    variant declares it (``SshAccess``), and each ``artifact.data_disks`` serial gets a
+    data disk.
     """
     verify_artifact(artifact)
     target = target_of(using)
@@ -1820,11 +1859,14 @@ def deploy(
             hint=f"Deploy the variant's {target} artifact.",
             context={"variant": artifact.variant},
         )
+    parameters = deploy_parameters(with_secret_ports(using, artifact.ports))
+    if isinstance(using, Qemu):
+        parameters.update(qemu_image_parameters(artifact))
     request = DeployRequest(
         profile=artifact.variant,
         target=target,
         artifact_path=artifact.path,
-        parameters=deploy_parameters(with_secret_ports(using, artifact.ports)),
+        parameters=parameters,
     )
     result = (adapter if adapter is not None else get_adapter(target)).deploy(request)
     return Deployment(

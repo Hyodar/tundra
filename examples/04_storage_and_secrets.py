@@ -14,12 +14,13 @@ Its ``unit=`` adds a ``delivery-app-secret-fetch`` step that starts that unit an
 waits for it: the app ``needs`` the disk and ``delivery.ready``, so its unit waits
 for exactly those step units (``external-delivery-unwired`` warns when nothing can).
 ``RuntimeTools`` names the source of the helper binaries those steps run; ``Partition``
-is a plain partition baked into the image instead. ``Disk`` without ``device=`` lets
-``disk-setup`` pick the largest whole ``/dev/sd*`` disk, so lint warns
-``disk-auto-format``.
+is a plain partition baked into the image instead. A ``Disk`` that may be formatted
+names a stable device (a ``/dev/disk/by-id/`` link: QEMU's ``serial=`` makes
+``virtio-SERIAL``); without one lint refuses it (``disk-device-guessed``), since
+``disk-setup`` would pick the largest whole ``/dev/sd*`` disk, boot disk included.
 
     tundravm inspect examples/04_storage_and_secrets.py
-    tundravm lint examples/04_storage_and_secrets.py   # disk-auto-format, source-unpinned
+    tundravm lint examples/04_storage_and_secrets.py   # source-unpinned
     tundravm compile examples/04_storage_and_secrets.py --tree build/storage/mkosi
 """
 
@@ -44,7 +45,14 @@ from tundravm.declarative import (
 from tundravm.declarative.utils import TUNDRA_TOOLS, Network
 
 key = Key("key_persistent", output="/run/keys/persistent")
-disk = Disk("disk_persistent", mount="/persistent", key=key, mapper="cryptpersistent")
+disk = Disk(
+    "disk_persistent",
+    mount="/persistent",
+    device="/dev/disk/by-id/virtio-tundra-data",
+    format="on_initialize",  # the first boot formats it; later boots open it
+    key=key,
+    mapper="cryptpersistent",
+)
 
 # tundra-tools delivers only the SSH key: a oneshot unit of yours (ship it, e.g. with a
 # Unit(...)) fetches these from your secret store and writes the files and

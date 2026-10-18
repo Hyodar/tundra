@@ -83,21 +83,21 @@ def test_a_known_file_carries_its_declaration_and_provenance(tmp_path: Path) -> 
     found = explore(load(_template(tmp_path, "service")))
     page = found.html()
     record = next(
-        f for f in found.to_dict()["trees"]["default"]["files"] if f["path"].endswith("app.conf")
+        f for f in found.to_dict()["trees"]["default"]["files"] if f["path"].endswith("index.html")
     )
-    assert record["declarations"] == ["File(extra, /etc/app/app.conf)"]
-    assert record["image_path"] == "/etc/app/app.conf"
+    assert record["declarations"] == ["File(extra, /srv/www/index.html)"]
+    assert record["image_path"] == "/srv/www/index.html"
     assert re.search(r"declared at \S+/service\.py:\d+ in common via app \(App\)", page)
-    anchor = re.search(r'<tr class="decl" id="(d\d+)"[^>]*File\(extra, /etc/app/app.conf\)', page)
+    anchor = re.search(r'<tr class="decl" id="(d\d+)"[^>]*File\(extra, /srv/www/index.html\)', page)
     assert anchor is not None
     assert f'declared by <a href="#{anchor.group(1)}">' in page
     row = next(
         r
         for r in found.to_dict()["declarations"]
-        if r["declaration"].endswith("/etc/app/app.conf)")
+        if r["declaration"].endswith("/srv/www/index.html)")
     )
     assert row["variants"]["dev"]["files"] == [
-        {"group": "dev", "path": "mkosi.extra/etc/app/app.conf"}
+        {"group": "dev", "path": "mkosi.extra/srv/www/index.html"}
     ]
 
 
