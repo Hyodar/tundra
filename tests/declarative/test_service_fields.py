@@ -136,6 +136,8 @@ STRICT = [
     ("SystemCallArchitectures", "native"),
     ("SystemCallFilter", "@system-service"),
     ("SystemCallFilter", "~@privileged @resources"),
+    ("SystemCallFilter", "@setuid"),
+    ("SystemCallErrorNumber", "EPERM"),
     ("CapabilityBoundingSet", ""),
     ("UMask", "0077"),
 ]
@@ -223,3 +225,16 @@ def test_write_paths_on_a_declared_mount_are_created_after_the_mount() -> None:
 def test_write_paths_on_a_mount_refuse_a_dynamic_user() -> None:
     with pytest.raises(ValidationError, match="Dynamic"):
         _on_disk(Service("app", "/usr/bin/app", user=Dynamic(), write_paths=("/persistent/a",)))
+
+
+def test_setuid_is_allowed_back_only_without_setuid_capabilities() -> None:
+    """Without CAP_SETUID/CAP_SETGID the setuid family can only drop to the caller's own
+    ids, so the strict profile allows it back (busybox calls setuid at every start)."""
+    from tundravm.declarative.systemd import Hardening
+
+    strict = dict.fromkeys(Hardening.strict().entries(), True)
+    assert ("SystemCallFilter", "@setuid") in strict
+    assert ("SystemCallErrorNumber", "EPERM") in strict
+    with_setuid = Hardening.strict(capabilities=("CAP_SETUID",)).entries()
+    assert ("SystemCallFilter", "@setuid") not in with_setuid
+    assert ("SystemCallErrorNumber", "EPERM") in with_setuid

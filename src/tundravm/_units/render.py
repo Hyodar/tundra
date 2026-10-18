@@ -37,7 +37,8 @@ HARDENING_KEYS = (
     *(key for key, _ in STRICT_HARDENING),
     *"PrivateDevices DevicePolicy DeviceAllow ProtectKernelLogs ProtectClock ProtectHostname"
     " RestrictRealtime RestrictNamespaces LockPersonality RestrictAddressFamilies"
-    " SystemCallArchitectures SystemCallFilter CapabilityBoundingSet AmbientCapabilities"
+    " SystemCallArchitectures SystemCallFilter SystemCallErrorNumber CapabilityBoundingSet"
+    " AmbientCapabilities"
     " UMask".split(),
 )
 

@@ -196,10 +196,8 @@ class Hardening:
             add(("RestrictAddressFamilies", _FAMILIES[self.network]))
         if self.sandbox:
             add(("SystemCallArchitectures", "native"))
-        if self.syscalls:
-            add(("SystemCallFilter", " ".join(self.syscalls)))
-        if self.deny_syscalls:
-            add(("SystemCallFilter", "~" + " ".join(self.deny_syscalls)))
+        for entry in self._syscall_entries():
+            add(entry)
         if self.capabilities is not None:
             add(("CapabilityBoundingSet", " ".join(self.capabilities)))
             if self.capabilities:
@@ -207,6 +205,31 @@ class Hardening:
         if self.umask is not None:
             add(("UMask", self.umask))
         return tuple(out)
+
+    def _syscall_entries(self) -> list[tuple[str, str]]:
+        """The ``SystemCallFilter=`` lines, then the error number and the setuid re-allow.
+
+        A denied call fails with ``EPERM`` instead of killing the process, so a program
+        that probes an optional call logs an error rather than dying of ``SIGSYS``.
+        ``@privileged`` holds the ``setuid`` family, which many programs call to drop to
+        their own ids (busybox does at every start); without ``CAP_SETUID``/``CAP_SETGID``
+        in the bounding set those calls cannot change identity, so they are allowed back.
+        """
+        out: list[tuple[str, str]] = []
+        if self.syscalls:
+            out.append(("SystemCallFilter", " ".join(self.syscalls)))
+        if self.deny_syscalls:
+            out.append(("SystemCallFilter", "~" + " ".join(self.deny_syscalls)))
+            caps = self.capabilities
+            if (
+                "@privileged" in self.deny_syscalls
+                and self.syscalls
+                and caps is not None
+                and not {"CAP_SETUID", "CAP_SETGID"} & set(caps)
+            ):
+                out.append(("SystemCallFilter", "@setuid"))
+            out.append(("SystemCallErrorNumber", "EPERM"))
+        return out
 
     def patch_entries(self) -> tuple[tuple[str, str], ...]:
         """The directives a drop-in writes to make the :attr:`explicit` fields hold over
@@ -244,10 +267,7 @@ class Hardening:
                 out.append(("RestrictAddressFamilies", _FAMILIES[self.network]))
         if given & {"syscalls", "deny_syscalls"}:
             out.append(("SystemCallFilter", ""))
-            if self.syscalls:
-                out.append(("SystemCallFilter", " ".join(self.syscalls)))
-            if self.deny_syscalls:
-                out.append(("SystemCallFilter", "~" + " ".join(self.deny_syscalls)))
+            out.extend(self._syscall_entries())
         if "capabilities" in given:
             out.append(("CapabilityBoundingSet", ""))  # the empty set
             if self.capabilities is None:

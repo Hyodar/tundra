@@ -31,6 +31,7 @@ STRICT_LINES = (
     "RestrictNamespaces=yes\nLockPersonality=yes\n"
     "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nSystemCallArchitectures=native\n"
     "SystemCallFilter=@system-service\nSystemCallFilter=~@privileged @resources\n"
+    "SystemCallFilter=@setuid\nSystemCallErrorNumber=EPERM\n"
     "CapabilityBoundingSet=\nUMask=0077\n"
 )
 

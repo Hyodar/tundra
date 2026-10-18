@@ -86,7 +86,7 @@ def test_jit_cancels_an_inherited_memory_deny_write_execute() -> None:
     sandbox = effective(merged(Hardening.strict(), Hardening(jit=True)))
     assert sandbox == effective(base(Hardening.strict(jit=True)))
     assert sandbox["MemoryDenyWriteExecute"] == "no"
-    assert sandbox["SystemCallFilter"] == ("@system-service", "~@privileged @resources")
+    assert sandbox["SystemCallFilter"] == ("@system-service", "~@privileged @resources", "@setuid")
 
 
 def test_allowing_a_device_cancels_private_devices() -> None:

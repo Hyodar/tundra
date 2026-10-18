@@ -237,6 +237,8 @@ This release replaces the SDK's public API. An image is now an immutable value, 
 - `DropIn(hardening=...)` is a patch: only the fields passed render, switches as `yes`/`no`, list settings after an empty reset, presets replace the inherited sandbox (`Hardening.patch_entries`, `Hardening.explicit`).
 - A composed `Kernel` adds its Debian build packages and the nix tools env gains a kernel toolchain; `Kernel(modules=True)` keeps `/usr/lib/modules` under the default debloat. `needs-without-init` no longer fires for task-only needs.
 
+- Fixed (found by the boot test fetching the starter page): the strict hardening profile killed busybox `httpd` with `SIGSYS`, because `~@privileged` denies `setuid` and busybox calls `setuid(getuid())` at every start. Without `CAP_SETUID`/`CAP_SETGID` in the bounding set the setuid family can only drop to the caller's own ids, so the strict profile now allows `@setuid` back after the `@privileged` deny, and denied calls fail with `SystemCallErrorNumber=EPERM` instead of killing the process. The boot harness also strips systemd's colon-separated colour codes from unit names.
+
 ### Changed
 
 - The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.

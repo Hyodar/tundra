@@ -202,7 +202,9 @@ def hardening_of(entries: list[tuple[str, str]]) -> Any:
         return got.get(key, [""])[0] == "yes"
 
     filters = got.get("SystemCallFilter", [])
-    allow = [v for v in filters if not v.startswith("~")]
+    # The renderer re-allows the setuid family after a @privileged deny (and adds
+    # SystemCallErrorNumber=EPERM); both follow from the profile, not from a field.
+    allow = [v for v in filters if not v.startswith("~")][:1]
     deny = [v[1:] for v in filters if v.startswith("~")]
     caps = got.get("CapabilityBoundingSet")
     return Hardening(

@@ -110,6 +110,10 @@ def test_testing_queries_over_the_new_fields() -> None:
     assert unit.credentials == {"tok": "/run/secrets/tok"}
     assert unit.hardening["ProtectSystem"] == ("strict",)
     assert "MemoryDenyWriteExecute" not in unit.hardening
-    assert unit.hardening["SystemCallFilter"] == ("@system-service", "~@privileged @resources")
+    assert unit.hardening["SystemCallFilter"] == (
+        "@system-service",
+        "~@privileged @resources",
+        "@setuid",
+    )
     assert unit.before("b.service") and unit.part_of("p.target")
     assert unit.binds_to("d.device") and unit.conflicts("c.service")

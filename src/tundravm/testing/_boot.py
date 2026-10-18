@@ -54,7 +54,7 @@ FATAL = (
 )
 """Console text that ends the boot at once: a panic, emergency mode, a dead PID 1."""
 
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\r")
+_ANSI = re.compile(r"\x1b\[[0-9;:?]*[A-Za-z]|\r")
 _UNIT = r"(\S+?\.(?:service|socket|target|mount|timer|path|swap|automount|slice|scope|device))"
 _END = r"(?=[\s.]|$)"
 _STARTED = re.compile(rf"\b(?:Started|Finished|Reached target|Listening on|Mounted) {_UNIT}{_END}")
