@@ -50,8 +50,45 @@ That is the whole image. `app.service` runs as the generated system user `app`, 
 tested `static` hardening preset, restarting on failure; the firewall opens `8080` because
 the service exposed it, and the management ingress on `:8745` because every image reserves
 it. `Image`'s docstring lists each implied item with its one escape hatch, and
-`tundravm inspect` prints the resolved result. A `backend = LimaMkosiBackend(...)` line in
-the same file names where it bakes.
+`tundravm inspect` prints the resolved result. The file names no build backend: Linux
+x86-64 bakes locally and every other host in Lima, unless `TUNDRAVM_BACKEND` or the project
+file's `backend` says otherwise.
+
+## A confidential prover
+
+```python
+# prover.py
+from tundravm import AttestedTLS, DevAccess, Image, OperatorKey, RootFS, Secret, Volume
+from tundravm.components import Raiko
+
+data = Volume("data", mount="/persistent", unlock=OperatorKey())
+config = Secret("raiko-config", rotation="restart")
+raiko = Raiko(config=config, state=data.directory("raiko"), listen="127.0.0.1:8080")
+
+image = Image(
+    "prover",
+    components=[raiko],
+    volumes=[data],
+    secrets=[config],
+    ingress=[AttestedTLS(443, upstream=raiko.http)],
+    rootfs=RootFS.verity(),
+    dev=DevAccess(password="tdx"),
+)
+```
+
+`data` is a LUKS2 volume found by its attachment name (`tundravm-data`) whose passphrase an
+operator supplies after attesting the instance, so Raiko's state never opens on a machine
+nobody checked; `TpmSeal(platform=, pcrs=, recovery=)` seals it to a stated vTPM instead.
+`config` is a secret delivered after attestation and read by Raiko as a systemd credential:
+nothing is written into the image. `Raiko` is a component of the shipped library
+(`tundravm.components`) that pins its revision and Cargo toolchain, runs in the `tdx` group
+after the evidence service, and exports `raiko.http` with its readiness.
+`AttestedTLS(443, upstream=raiko.http)` is the only way requests reach it: Raiko listens on
+the loopback, and an ingress fronting a port some service also exposes is refused.
+`RootFS.verity()` puts the large payload on a dm-verity erofs root. `DevAccess` lives only in
+the non-production `dev` profile. The caller never names a unit, a port or a key file inside
+any of it; `docs/api.md` has every slot and what it lowers onto, and the attested channel that
+delivers the passphrase and the secret is tundra-tools' next step (plan gate 3).
 
 ```bash
 tundravm init . --name node --ci github                 # or scaffold: starter recipe, [tool.tundravm], tests, CI
@@ -76,7 +113,7 @@ Run the commands with `uv run` in the project (or with its `.venv` activated); `
 
 Moving from the simulator to a TDX host takes `--param tdx=true` (TDVF firmware through `-bios`), a host kernel, KVM and QEMU with TDX support, a tdxs validator running on the verifying side, and a way to reach the image's `/var/tdxs.sock`: the key `Secrets` delivers is installed with `no-port-forwarding`, so `ssh -L` with it is refused. [CLI: Real TDX](docs/cli.md#real-tdx) has the sequence; it has not been run on TDX hardware.
 
-`init --template minimal|service|cloud|prover` picks the starter recipe (default `service`; `init --list-templates` describes them). `init --app go --source URL@REF` (or `--path DIR`) instead writes a recipe that builds one Go program with `GoBinary` and runs it as a service under its own user, with optional `--port`, `--disk NAME` (an encrypted state disk) and `--secret NAME --delivery external:AGENT`, plus tests over the planned image ([CLI: A Go app](docs/cli.md#a-go-app)). `init` also writes a `[tool.tundravm]` table (`recipe`, `tree`, `build`, `lockfile`, `backend`) into `pyproject.toml` that every command reads, so in a scaffolded project `RECIPE` is optional (`tundravm status` with no arguments reports on `node.py`) and `measure`, `deploy` and `sbom` find the bake in the configured `build` directory. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
+`init --template minimal|service|cloud|prover` picks the starter image (default `service`; `init --list-templates` describes them; `prover` is the app behind an `AttestedTLS` ingress with its state on an operator-unlocked volume and a delivered token). `init --app go --source URL@REF` (or `--path DIR`) instead writes an image that builds one Go program with `GoBinary` and runs it as a service under its own user, with optional `--port`, `--disk NAME` (its state on a volume an operator unlocks) and `--secret NAME` (a secret delivered after attestation, read as a credential), plus tests over the planned image ([CLI: A Go app](docs/cli.md#a-go-app)). `init` also writes a `[tool.tundravm]` table (`recipe`, `tree`, `build`, `lockfile`, and `backend` when `--backend` names one) into `pyproject.toml` that every command reads, so in a scaffolded project `RECIPE` is optional (`tundravm status` with no arguments reports on `node.py`) and `measure`, `deploy` and `sbom` find the bake in the configured `build` directory. Commands run on every declared variant unless you pass `--variant NAME` (repeatable). The [tutorial](docs/tutorial.md) runs every step with real output on the in-process backend, which needs no build tools.
 
 `init --ci github` writes `.github/workflows/tundravm.yml` with two jobs. `check` runs on every push to `main` and every pull request: it posts `inspect --format markdown` to the job summary and runs `tundravm ci`, which fails on lint findings or a stale committed tree or lockfile. Both install the project with `uv sync`, `uv sync --frozen` once `uv.lock` is committed. `bake` is opt-in: it runs after `check` only when the repository variable `TUNDRAVM_BAKE_BACKEND` names a backend (`local` or `inprocess`; `lima` and `nix` need tools `ubuntu-latest` lacks), then installs mkosi `v26`, fetches, bakes with `--verify-reproducible`, and uploads the `evidence --bundle --html` output with the built images as the `tundravm-bake` artifact.
 
@@ -94,7 +131,7 @@ Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and
 - **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the toolchain, the measurements policy, SBOMs, including the Go modules and Rust crates embedded in built binaries, lint) into an `evidence.json` index with a pass, fail or incomplete verdict and stable reason codes (`--require` makes missing checks count), a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
 - **Secrets lint.** `secret-in-file` and `secret-in-env` refuse private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments, naming the kind and line but never the value; credentials go in `Secrets` and arrive at boot, written by the provider `Secrets(delivery=)` names (`secret-target-unsupported` refuses a target nobody writes: the built-in delivery writes only the SSH key).
 
-The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image as one declarative recipe. It compiles byte-for-byte to its committed mkosi-native tree (`examples/surge-tdx-prover/mkosi`): one payload with the Azure and GCP glue, the QEMU disk, the `azure` and `gcp` wrappers and the `devtools` profile.
+The [`surge-tdx-prover`](examples/surge-tdx-prover/) example is the [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) prover stack as a 33-line `Image` over `tundravm.components` (`Nethermind`, `TaikoClient`, `Raiko`): their state on an operator-unlocked volume, the Engine API JWT and both configurations delivered, Raiko behind `AttestedTLS`. It compiles byte-for-byte to its committed mkosi-native tree (`examples/surge-tdx-prover/mkosi`): one verity-rooted payload with the Azure and GCP glue, the QEMU disk, the `azure` and `gcp` wrappers and the `dev` profile.
 
 ## Concepts in one screen
 
@@ -218,7 +255,7 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `LimaMkosiBackend` | macOS (and non-x86-64 Linux). Runs the same mkosi in an x86-64 Debian Lima guest; on Apple Silicon the guest is emulated (QEMU TCG): same bytes, several times slower. |
 | `InProcessBackend` | Tests and tutorials. Writes simulated artifacts, needs no tools. |
 
-A recipe file binds its backend to a module-level `backend`; `tundravm bake --backend lima|local|inprocess` overrides it, and the Python `bake()` takes `Backend(kind)`. `inspect`, `lint`, `compile` and `lock` never need one. `tundravm doctor` prints what this host can build, run, deploy and verify, one row per capability, each failure naming its fix (`tundravm doctor --for build`).
+An image file names no backend: the loader picks `LocalLinuxBackend` on Linux x86-64 and `LimaMkosiBackend` everywhere else, `TUNDRAVM_BACKEND=local|lima|inprocess` or the project file's `backend` overrides that, `tundravm bake --backend` overrides both, and a file that still binds a module-level `backend` keeps it. The Python `bake()` takes `Backend(kind)`. A build never switches backend on failure. `inspect`, `lint`, `compile` and `lock` never need one. `tundravm doctor` prints what this host can build, run, deploy and verify, one row per capability, each failure naming its fix (`tundravm doctor --for build`).
 
 ## Examples
 
@@ -227,12 +264,11 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 | [`01_minimal.py`](examples/01_minimal.py) | The smallest recipe: a base, packages and a file as the recipe's `items`; no variants means one QEMU `default` |
 | [`02_variants.py`](examples/02_variants.py) | `Variant`s as additions to one payload: `add`, `changes` that edit by identity (refs), `outputs=("azure", "gcp")` wrappers around the same UKI, `packages()` |
 | [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment`, `@component` classes with `ConfigFile`-rendered config, `requires=`, a lint `check` and an exported `HttpEndpoint` consumed by a health check |
-| [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | TPM-sealed `Key`, encrypted `Disk`, `Secrets` with `Schema`s and file/env targets an `ExternalDelivery` writes, `RuntimeTools`, `Partition` |
+| [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | `Volume` with `OperatorKey()` and `TpmSeal(...)` (and why the seal limits the targets), `volume.directory()` as a service's state, required and optional `Secret`s read as credentials |
 | [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball `using` the `Go` toolchain and from a `Git` tag with a script; file and directory installs; `cache_namespace` |
-| [`06_attestation.py`](examples/06_attestation.py) | `Tdxs.from_policy()` as attester and verifier, built from `peer.policy.json` (a placeholder export of `measure --export-policy`), in a QEMU and an Azure disk, plus `Policy(require_frozen_lock=True)` |
-| [`nethermind_base.py`](examples/nethermind_base.py) | The nethermind-tdx base layer as one `Composite`: TDX kernel, EFI stub, backports, debloat, `Tdxs()` |
-| [`fragments/`](examples/fragments/) | `Raiko()`, `TaikoClient()`, `Nethermind()`: each with a `Build`, a user, a unit and an env file |
-| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The flagship: the full nethermind-tdx image, byte-identical to its committed tree, whole and per variant |
+| [`06_attestation.py`](examples/06_attestation.py) | The evidence service replaced by `Tdxs.from_policy()` (attester and verifier of `peer.policy.json`), a service that requires `EVIDENCE`, and an `AttestedTLS` ingress |
+| [`nethermind_base.py`](examples/nethermind_base.py) | The nethermind-tdx base layer as an `Image`: snapshot, EFI stub, the TDX kernel built from source |
+| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The flagship: Nethermind, the taiko driver and Raiko from `tundravm.components`, byte-identical to its committed tree |
 
 Every example loads, lints without errors and compiles deterministically; `tests/lint/test_examples_api.py` enforces it. Check the flagship against its golden tree with `tundravm compile examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi --check`.
 

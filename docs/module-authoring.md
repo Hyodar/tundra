@@ -38,7 +38,7 @@ Debugging(gdb=True)
 True
 ```
 
-The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are components whose `compose()` returns a whole `Fragment`, and `Raiko`, `TaikoClient` and `Nethermind` in [`examples/fragments/`](../examples/fragments/) and `NethermindBase` in [`examples/nethermind_base.py`](../examples/nethermind_base.py) are `Composite` subclasses written as plain dataclasses, which still works.
+The shipped `Tdxs`, `DevTools`, `EfiStub` and `Backports` (in `tundravm.declarative.utils`) are components whose `compose()` returns a whole `Fragment`, and `Raiko`, `TaikoClient` and `Nethermind` are `tundravm.components` classes, `Component` subclasses with typed exports (see [the component library](api.md#the-component-library)).
 
 What every image of a family builds on (its kernel, EFI stub, backports and `Setting` lines) belongs in a platform rather than a fragment: subclass `Debian` with other defaults (`items=` for the declarations), as `NethermindPlatform` does next to `NethermindBase`, and recipes pass `platform=NethermindPlatform()`. Its declarations reach every variant, standalone ones included, with provenance `platform`.
 
