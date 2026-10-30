@@ -27,11 +27,13 @@ if TYPE_CHECKING:
     from ._service import Service
 
 __all__ = [
+    "BootReady",
     "Component",
     "ComponentReady",
     "Endpoint",
     "ServiceReady",
     "ServiceRef",
+    "builds_with_network",
     "component_name",
     "composed",
     "export_providers",
@@ -60,11 +62,38 @@ class ServiceReady:
 
 
 @dataclass(frozen=True, slots=True)
+class BootReady:
+    """ "That boot step has finished": ``volume.ready``, ``secret.ready``.
+
+    *unit* is a oneshot the image generates (the volume's unlock-and-prepare step, the
+    wait for a delivered credential); its start job finishing is what proves it, so a
+    dependent unit gets ``Requires=`` and ``After=`` on it and nothing else.
+    """
+
+    unit: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.unit, str) or not self.unit.endswith(".service"):
+            raise ValidationError(
+                f"BootReady: {self.unit!r} is not a .service unit.",
+                hint="Use volume.ready or secret.ready.",
+            )
+
+    def __str__(self) -> str:
+        return self.unit
+
+
+type Readied = ServiceReady | BootReady
+"""What proves one thing ready: a service's readiness, or a boot step finishing."""
+
+
+@dataclass(frozen=True, slots=True)
 class ComponentReady:
     """ "That component is up": ``component.ready``.
 
-    It stands for the readiness of every service the component composes that declares
-    one; a component whose services declare none cannot be waited for.
+    It stands for :meth:`Component.readiness`: by default the readiness of every service
+    the component composes that declares one; a component whose services declare none,
+    and that names no other readiness, cannot be waited for.
     """
 
     component: Component = field(repr=False)
@@ -73,6 +102,10 @@ class ComponentReady:
     def name(self) -> str:
         """The component's name."""
         return self.component.name
+
+    def handles(self) -> tuple[Readied, ...]:
+        """What proves the component ready, one handle per unit."""
+        return self.component.readiness()
 
     def __str__(self) -> str:
         return self.name
@@ -98,6 +131,7 @@ class Endpoint:
     def __post_init__(self) -> None:
         if isinstance(self.provider, Component):
             object.__setattr__(self, "provider", self.provider.name)
+        schemes = ("http", "https", "ws", "wss")
         problem = None
         if not isinstance(self.host, str) or not self.host or any(c in self.host for c in "/ "):
             problem = f"host must be a host name or address, got {self.host!r}"
@@ -107,8 +141,8 @@ class Endpoint:
             problem = f"port must be in 1..65535, got {self.port}"
         elif not isinstance(self.path, str) or not self.path.startswith("/"):
             problem = f"path must start with '/', got {self.path!r}"
-        elif self.scheme not in ("http", "https"):
-            problem = f"scheme must be 'http' or 'https', got {self.scheme!r}"
+        elif self.scheme not in schemes:
+            problem = f"scheme must be one of {', '.join(schemes)}, got {self.scheme!r}"
         if problem is not None:
             raise ValidationError(f"Endpoint: {problem}.", hint="Pass Endpoint('127.0.0.1', 80).")
 
@@ -122,6 +156,18 @@ class Endpoint:
     def url(self) -> str:
         """``scheme://host:port/path``."""
         return f"{self.scheme}://{self.address}{self.path}"
+
+    @property
+    def loopback(self) -> bool:
+        """Whether only the image itself can reach it (``127.0.0.0/8``, ``::1``,
+        ``localhost``)."""
+        return self.host in ("localhost", "::1") or self.host.startswith("127.")
+
+    def with_scheme(self, scheme: str) -> Endpoint:
+        """The same address under *scheme* (``ws`` for a JSON-RPC server's WebSocket)."""
+        return Endpoint(
+            self.host, self.port, self.path, scheme, ready=self.ready, provider=self.provider
+        )
 
     def __str__(self) -> str:
         return self.url
@@ -173,6 +219,7 @@ class _ComponentMeta(type):
         *,
         fragment: str | None = None,
         requires: tuple[str, ...] = (),
+        build_network: bool = False,
         **kwargs: Any,
     ) -> Any:
         if namespace.pop(_BUILT, False) or not any(
@@ -193,6 +240,7 @@ class _ComponentMeta(type):
         namespace[_BUILT] = True
         namespace["__fragment_name__"] = fragment
         namespace["__fragment_requires__"] = tuple(requires)
+        namespace["__build_network__"] = bool(build_network)
         for attribute in namespace.get("__annotations__", {}):
             default = namespace.get(attribute)
             if isinstance(default, list):
@@ -216,7 +264,10 @@ class Component(Located, metaclass=_ComponentMeta):
 
     The fragment it lowers to is named after the class (``TaikoClient`` is
     ``taiko-client``), after an ``id`` or ``name`` field when it has one, or after
-    ``class X(Component, fragment="x")``.
+    ``class X(Component, fragment="x")``. ``class X(Component, build_network=True)``
+    says its builds fetch dependencies while the image is built (``cargo fetch``,
+    ``dotnet restore``), so an image holding it builds with the network on, which the
+    tree records (``WithNetwork=yes``).
 
     Exports are properties returning :class:`Endpoint`, :class:`ServiceRef` or
     :class:`ServiceReady`, so a caller wires ``requires=[db.ready]`` or
@@ -236,6 +287,7 @@ class Component(Located, metaclass=_ComponentMeta):
 
     __fragment_name__: str | None = None
     __fragment_requires__: tuple[str, ...] = ()
+    __build_network__: bool = False
 
     def compose(self) -> Iterable[object]:
         """The declarations and nested components this component stands for."""
@@ -250,6 +302,12 @@ class Component(Located, metaclass=_ComponentMeta):
     def ready(self) -> ComponentReady:
         """ "Every service this component declares readiness for is ready"."""
         return ComponentReady(self)
+
+    def readiness(self) -> tuple[Readied, ...]:
+        """What :attr:`ready` waits for: the readiness of each service it composes that
+        declares one. A component whose readiness is not a service of its own (one that
+        wraps a packaged or internal unit) overrides this."""
+        return tuple(service.ready for service in self.services() if service.readiness is not None)
 
     def service(self, name: str) -> ServiceRef:
         """The service called *name*, for ``requires=`` and for a profile's ``changes=``.
@@ -310,6 +368,13 @@ def component_name(owner: Component) -> str:
                     )
                 return value
     return _CAMEL_BOUNDARY.sub("-", type(owner).__name__).lower()
+
+
+def builds_with_network(owner: Component) -> bool:
+    """Whether *owner*, or a component it composes, builds with the network on."""
+    if type(owner).__build_network__:
+        return True
+    return any(builds_with_network(item) for item in composed(owner) if isinstance(item, Component))
 
 
 def export_providers(owner: Component) -> Iterator[str]:

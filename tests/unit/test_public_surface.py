@@ -7,13 +7,15 @@ import importlib
 import pytest
 
 import tundravm
-from tundravm import declarative, image
+from tundravm import components, declarative, image
 
 # Changing this list changes the public API: update it deliberately, in review.
 EXPECTED_TOP_LEVEL = [
     "ArtifactError",
     "AttestationError",
+    "AttestedTLS",
     "BackendExecutionError",
+    "BrokerKey",
     "Build",
     "Calendar",
     "CargoBinary",
@@ -38,6 +40,7 @@ EXPECTED_TOP_LEVEL = [
     "IMAGE_OBJECT_NAMES",
     "Image",
     "Install",
+    "JournalExport",
     "Kernel",
     "LintError",
     "Listen",
@@ -46,12 +49,17 @@ EXPECTED_TOP_LEVEL = [
     "Mkosi",
     "Network",
     "Notify",
+    "Observability",
+    "OperatorKey",
     "Package",
     "PolicyError",
     "Profile",
+    "PrometheusRemoteWrite",
     "ReproducibilityError",
     "Resolved",
     "Resources",
+    "RootFS",
+    "Secret",
     "Service",
     "ServiceReady",
     "ServiceRef",
@@ -60,12 +68,16 @@ EXPECTED_TOP_LEVEL = [
     "StateError",
     "StaticAddress",
     "TCP",
+    "TLS",
     "TcpProbe",
     "TdxError",
+    "TpmSeal",
     "Tree",
     "UDP",
     "User",
     "ValidationError",
+    "Volume",
+    "VolumeDirectory",
     "__version__",
     "bake",
     "compile",
@@ -99,26 +111,43 @@ Everything else a recipe writes is a new value in :mod:`tundravm.image`; the int
 """
 
 NEW_IN_IMAGE = [
+    "AttestedTLS",
+    "BrokerKey",
     "Component",
     "Debian",
-    "DevAccess",
     "Egress",
     "Endpoint",
     "File",
     "Image",
     "Kernel",
     "Mkosi",
-    "Network",
     "Notify",
+    "OperatorKey",
     "Package",
     "Profile",
     "Resources",
+    "RootFS",
+    "Secret",
     "Service",
     "Shutdown",
     "TCP",
+    "TLS",
+    "TpmSeal",
     "Tree",
     "UDP",
+    "Volume",
+    "VolumeDirectory",
 ]
+
+FROM_COMPONENTS = [
+    "DevAccess",
+    "JournalExport",
+    "Network",
+    "Observability",
+    "PrometheusRemoteWrite",
+]
+"""Values an image slot takes that are components of the shipped library: the same objects
+as :mod:`tundravm.components` exports (``network=``, ``dev=``, ``observability=``)."""
 
 
 def test_top_level_all_is_frozen() -> None:
@@ -128,7 +157,13 @@ def test_top_level_all_is_frozen() -> None:
 
 @pytest.mark.parametrize(
     "module",
-    ["tundravm", "tundravm.image", "tundravm.declarative", "tundravm.declarative.utils"],
+    [
+        "tundravm",
+        "tundravm.image",
+        "tundravm.components",
+        "tundravm.declarative",
+        "tundravm.declarative.utils",
+    ],
 )
 def test_every_exported_name_imports(module: str) -> None:
     imported = importlib.import_module(module)
@@ -154,6 +189,37 @@ def test_the_new_values_come_from_the_image_package() -> None:
         value = getattr(tundravm, name)
         assert value is getattr(image, name), name
         assert value.__module__.startswith("tundravm.image"), name
+
+
+def test_the_slot_components_come_from_the_component_library() -> None:
+    for name in FROM_COMPONENTS:
+        value = getattr(tundravm, name)
+        assert value is getattr(components, name), name
+        assert value.__module__.startswith("tundravm.components"), name
+
+
+def test_the_component_library_is_components() -> None:
+    assert sorted(components.__all__) == sorted(
+        [
+            "DevAccess",
+            "EVIDENCE",
+            "Firewall",
+            "JournalExport",
+            "Nethermind",
+            "Network",
+            "Observability",
+            "PrometheusRemoteWrite",
+            "Raiko",
+            "SshAccess",
+            "TaikoClient",
+            "Tdxs",
+            "TeeBase",
+        ]
+    )
+    for name in components.__all__:
+        value = getattr(components, name)
+        if isinstance(value, type) and name not in ("JournalExport", "PrometheusRemoteWrite"):
+            assert issubclass(value, tundravm.Component), name
 
 
 def test_the_internal_model_is_not_exported() -> None:

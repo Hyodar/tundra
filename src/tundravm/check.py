@@ -1173,13 +1173,14 @@ def declaration_check(recipe: Recipe, *, variants: Sequence[str] | None = None) 
 
 
 def _own_declarations(items: Iterable[object]) -> Iterator[object]:
-    """*items* flattened through fragments, but not into tundravm's shipped composites."""
-    from .declarative._component import Composite
+    """*items* flattened through fragments, but not into tundravm's shipped composites and
+    components (a component's fragment type lives in the component's module)."""
     from .declarative.model import Fragment
 
     for item in items:
         if isinstance(item, Fragment):
-            if not (isinstance(item, Composite) and type(item).__module__.startswith("tundravm.")):
+            shipped = type(item) is not Fragment and type(item).__module__.startswith("tundravm.")
+            if not shipped:
                 yield from _own_declarations(item.items)
         else:
             yield item

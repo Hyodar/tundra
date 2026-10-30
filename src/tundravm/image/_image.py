@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
+from typing import TYPE_CHECKING
 
 from tundravm._location import Located
 from tundravm._source import FrozenMap
@@ -11,8 +12,15 @@ from tundravm.declarative.model import TARGETS, Edit, Group, Remove, Target, Use
 from tundravm.errors import ValidationError
 
 from ._component import Component
+from ._ingress import TLS, AttestedTLS, Ingress
+from ._rootfs import RootFS
+from ._secrets import Secret
 from ._service import Service
-from ._values import Debian, DevAccess, File, Kernel, Mkosi, Network, Package, Tree
+from ._storage import TpmSeal, Volume
+from ._values import MANAGEMENT_PORT, Debian, File, Kernel, Mkosi, Package, Tree
+
+if TYPE_CHECKING:
+    from tundravm.components import DevAccess, Network, Observability
 
 __all__ = ["Content", "Image", "Profile"]
 
@@ -108,13 +116,36 @@ class Image(Located):
       ``network=Network(egress=Egress(...))`` to filter outbound too.
     - *One generated system user per service*, the preset sandbox and ``Restart=on-failure``.
       Escape: ``Service(user=...)``, ``hardening=``, ``unit=DropIn(...)``.
-    - *The evidence service* on ``/run/tdx/quote.sock``, which produces the quote an
-      attestation is checked against. Escape: a ``Profile`` change removing it by reference,
-      for an image that is deliberately not attestable.
+    - *The evidence service* (``tdxs`` from tundra-tools, socket-activated), which
+      produces the quote an attestation is checked against. Escape:
+      ``components=[Tdxs(source=Git(mirror, ref))]`` to build it from a mirror or a
+      vendored checkout, or to validate peers too; a ``Profile`` change removing it by
+      reference, for an image that is deliberately not attestable.
+    - *The baseline components* ``TeeBase()``, ``Network()``, ``Firewall()`` and ``Tdxs()``
+      (:mod:`tundravm.components`): passing one in ``components=`` replaces the default.
     - *The Azure and GCP provisioning glue*, inert off-platform
       (``ConditionVirtualization=``), so one measured payload boots on either cloud.
       Escape: ``targets=``.
     - *A raw bootable disk for QEMU* as the default artifact. Escape: ``targets=``.
+
+    **The runtime contracts**, each a slot:
+
+    - ``volumes=[Volume(name, mount=, unlock=...)]``: LUKS2 volumes that unlock at boot
+      (``OperatorKey()``, ``TpmSeal(...)`` or ``BrokerKey(...)``); a service binds a
+      directory on one with ``state=volume.directory("x")`` and waits for it.
+    - ``secrets=[Secret(name)]``: values delivered after attestation and read as systemd
+      credentials (``Service(credentials=[jwt])``); nothing is written into the image.
+    - ``ingress=[AttestedTLS(port, upstream=...)]`` (or ``TLS``): the only path from
+      outside to a service that listens on the loopback.
+    - ``rootfs=RootFS.verity()``: a dm-verity erofs root instead of the initrd.
+    - ``observability=Observability(logs=..., metrics=...)``: the authenticated export path.
+
+    An image with an ``OperatorKey`` or ``BrokerKey`` volume, or with secrets, also gets
+    today's control-plane bootstrap: ``secret-delivery`` takes the operator's SSH public
+    key on the management port, root SSH accepts only that key, and the operator writes
+    the passphrase and the secrets over it. Gate 3's attested endpoint replaces the write
+    path on the same port; the image's runtime manifest
+    (``/etc/tundravm/runtime.json``) records every volume, secret and ingress it needs.
 
     The starter is the whole contract::
 
@@ -139,17 +170,33 @@ class Image(Located):
     files: Sequence[File | Tree] = ()
     services: Sequence[Service] = ()
     components: Sequence[Component] = ()
+    volumes: Sequence[Volume] = ()
+    secrets: Sequence[Secret] = ()
+    ingress: Sequence[Ingress] = ()
     network: Network | None = None
     users: Sequence[User] = ()
     groups: Sequence[Group] = ()
     kernel: Kernel = field(default_factory=Kernel.default)
+    rootfs: RootFS = field(default_factory=RootFS.initramfs)
+    observability: Observability | None = None
     targets: Sequence[Target] = ("qemu",)
     dev: DevAccess | None = None
     profiles: Mapping[str, Profile] = field(default_factory=FrozenMap)
     mkosi: Mkosi | None = None
 
     def __post_init__(self) -> None:
-        for name in ("packages", "files", "services", "components", "users", "groups", "targets"):
+        for name in (
+            "packages",
+            "files",
+            "services",
+            "components",
+            "volumes",
+            "secrets",
+            "ingress",
+            "users",
+            "groups",
+            "targets",
+        ):
             object.__setattr__(self, name, _tuple(self, name, getattr(self, name)))
         object.__setattr__(self, "profiles", FrozenMap(dict(self.profiles)))
         if (
@@ -160,7 +207,11 @@ class Image(Located):
             raise _fail(self, f"{self.name!r} is not an image name.")
         self._check_slots()
         self._check_services()
+        self._check_runtime()
         self._check_profiles()
+        from ._runtime import check_bindings
+
+        check_bindings(self)
 
     def _check_slots(self) -> None:
         slots: tuple[tuple[str, Sequence[object], type | tuple[type, ...], str], ...] = (
@@ -177,10 +228,20 @@ class Image(Located):
             raise _fail(self, f"base= holds {self.base!r}, not a Debian.")
         if not isinstance(self.kernel, Kernel):
             raise _fail(self, f"kernel= holds {self.kernel!r}, not a Kernel.")
+        from tundravm.components import DevAccess, Network, Observability
+
         if self.network is not None and not isinstance(self.network, Network):
             raise _fail(self, f"network= holds {self.network!r}, not a Network.")
         if self.dev is not None and not isinstance(self.dev, DevAccess):
             raise _fail(self, f"dev= holds {self.dev!r}, not a DevAccess.")
+        if self.observability is not None and not isinstance(self.observability, Observability):
+            raise _fail(self, f"observability= holds {self.observability!r}, not Observability.")
+        if not isinstance(self.rootfs, RootFS):
+            raise _fail(
+                self,
+                f"rootfs= holds {self.rootfs!r}, not a RootFS.",
+                hint="Pass RootFS.initramfs() or RootFS.verity().",
+            )
         if self.mkosi is not None and not isinstance(self.mkosi, Mkosi):
             raise _fail(self, f"mkosi= holds {self.mkosi!r}, not a Mkosi.")
         if not self.targets:
@@ -213,6 +274,67 @@ class Image(Located):
                     f"components= holds {entry!r}, not a Component.",
                     hint="Subclass Component and give it a compose() method.",
                 )
+
+    def _check_runtime(self) -> None:
+        """Volumes, secrets and ingress: types, unique names, and what the targets allow."""
+        from tundravm.components import DevAccess
+
+        for entry in self.components:
+            if isinstance(entry, DevAccess):
+                raise _fail(
+                    self,
+                    "components= holds DevAccess, which would put debug access in production.",
+                    hint="Pass it as dev=DevAccess(...): it then lives in the non-production "
+                    "'dev' profile.",
+                )
+        mounts: dict[str, str] = {}
+        for volume in self.volumes:
+            if not isinstance(volume, Volume):
+                raise _fail(self, f"volumes= holds {volume!r}, not a Volume.")
+            if volume.name in mounts.values():
+                raise _fail(self, f"volume {volume.name!r} is declared twice.")
+            for other, name in mounts.items():
+                if (
+                    volume.mount == other
+                    or volume.mount.startswith(other + "/")
+                    or other.startswith(volume.mount + "/")
+                ):
+                    raise _fail(
+                        self,
+                        f"volumes {name!r} and {volume.name!r} mount at {other} and "
+                        f"{volume.mount}, one inside the other.",
+                    )
+            mounts[volume.mount] = volume.name
+            if isinstance(volume.unlock, TpmSeal):
+                refusal = volume.unlock.refusal(tuple(self.targets))
+                if refusal is not None:
+                    raise _fail(
+                        self,
+                        f"volume {volume.name!r} cannot be TPM-sealed for targets "
+                        f"{', '.join(self.targets)}: {refusal}.",
+                        hint="One payload boots on every target, so seal to the vTPM of the "
+                        "only target you trust, or use unlock=OperatorKey().",
+                    )
+        names: set[str] = set()
+        for secret in self.secrets:
+            if not isinstance(secret, Secret):
+                raise _fail(self, f"secrets= holds {secret!r}, not a Secret.")
+            if secret.name in names:
+                raise _fail(self, f"secret {secret.name!r} is declared twice.")
+            names.add(secret.name)
+        ports: set[int] = set()
+        for way in self.ingress:
+            if not isinstance(way, (AttestedTLS, TLS)):
+                raise _fail(
+                    self,
+                    f"ingress= holds {way!r}, not AttestedTLS or TLS.",
+                    hint="Plain TCP exposure is Service(expose=[TCP(port)]).",
+                )
+            if way.port in ports:
+                raise _fail(self, f"ingress port {way.port} is declared twice.")
+            if way.port == MANAGEMENT_PORT:
+                raise _fail(self, f"ingress port {way.port} is the management ingress.")
+            ports.add(way.port)
 
     def _check_profiles(self) -> None:
         for name, profile in self.profiles.items():

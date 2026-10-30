@@ -1479,8 +1479,9 @@ def _report_reproducibility(
     )
 
 
-_VIRTIO_BY_ID = re.compile(r"/dev/disk/by-id/virtio-([A-Za-z0-9_.-]{1,20})")
-"""A virtio disk's udev link: QEMU's ``serial=`` (at most 20 bytes) names it."""
+_VIRTIO_BY_ID = re.compile(r"/dev/disk/by-id/(?:virtio|\*)-([A-Za-z0-9_.-]{1,20})")
+"""A virtio disk's udev link: QEMU's ``serial=`` (at most 20 bytes) names it. A
+``Volume``'s ``/dev/disk/by-id/*-SERIAL`` glob names it on every target, QEMU included."""
 
 
 def data_disk_serials(img: Lowered, variant: str) -> tuple[str, ...]:

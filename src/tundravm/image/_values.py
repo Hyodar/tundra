@@ -3,8 +3,7 @@
 Each one stands for one concern and lowers onto the internal declarations in
 :mod:`tundravm.image._lower`: ports (:class:`TCP`, :class:`UDP`), content
 (:class:`Package`, :class:`File`, :class:`Tree`), the machine around the services
-(:class:`Debian`, :class:`Kernel`, :class:`Network`, :class:`Egress`,
-:class:`DevAccess`, :class:`Mkosi`) and the grouped service options
+(:class:`Debian`, :class:`Kernel`, :class:`Egress`, :class:`Mkosi`) and the grouped service options
 (:class:`Resources`, :class:`Shutdown`, :class:`HttpProbe`, :class:`TcpProbe`,
 :class:`Notify`, :class:`Credential`).
 """
@@ -28,13 +27,11 @@ __all__ = [
     "MANAGEMENT_PORT",
     "Credential",
     "Debian",
-    "DevAccess",
     "Egress",
     "File",
     "HttpProbe",
     "Kernel",
     "Mkosi",
-    "Network",
     "Notify",
     "Package",
     "Resources",
@@ -54,7 +51,9 @@ MANAGEMENT_PORT = 8745
 """The attested management endpoint every image reserves inbound (plan section 6.3).
 
 The port is declared and opened in the firewall from the start, so an image's inbound
-surface never changes when the listener lands; nothing listens on it yet.
+surface never changes when the attested endpoint lands (gate 3). Until then an image
+with volumes or secrets runs today's bootstrap on it: ``secret-delivery`` takes the
+operator's SSH public key there, once per boot.
 """
 
 _OWNER = re.compile(r"[a-z_][a-z0-9_-]{0,31}(:[a-z_][a-z0-9_-]{0,31})?")
@@ -371,96 +370,6 @@ class Egress:
         for host in self.hosts:
             if not isinstance(host, str) or not host:
                 raise _fail(self, f"hosts= entry {host!r} is not an address or a CIDR block.")
-
-
-@dataclass(frozen=True, slots=True)
-class Network:
-    """How the image reaches the network: ``Network(dhcp=True)``, the implied default.
-
-    *static* replaces DHCP with a fixed address
-    (``Network(dhcp=False, static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1"))``);
-    *egress* filters what the image may send.
-    """
-
-    _: KW_ONLY
-    dhcp: bool = True
-    static: StaticAddress | None = None
-    egress: Egress | None = None
-    interfaces: Sequence[str] = ("en*", "eth*")
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.dhcp, bool):
-            raise _fail(self, "dhcp= must be True or False.")
-        if self.static is not None and not isinstance(self.static, StaticAddress):
-            raise _fail(
-                self,
-                "static= must be a StaticAddress or None.",
-                hint="Pass static=StaticAddress('10.0.0.5/24', gateway='10.0.0.1').",
-            )
-        if self.egress is not None and not isinstance(self.egress, Egress):
-            raise _fail(self, "egress= must be an Egress or None.")
-        object.__setattr__(self, "interfaces", tuple(self.interfaces))
-        if self.dhcp == (self.static is not None):
-            raise _fail(
-                self,
-                "a network takes DHCP or a static address: "
-                + ("both are set." if self.dhcp else "neither is set."),
-                hint="Network() for DHCP, Network(dhcp=False, static=StaticAddress(...)).",
-            )
-
-
-@dataclass(frozen=True, slots=True)
-class DevAccess:
-    """Debug access to a development build: ``dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])``.
-
-    It is sugar for a non-production ``Profile``: the image gains a ``dev`` profile whose
-    artifacts are marked non-production, with root SSH by public key only, the debugging
-    tools and a serial console. Each entry of *ssh_keys* is a public key, or the path of
-    a ``.pub`` file, read when the image lowers; a private key is refused. *password* is a
-    root console password for the serial console, never a login over the network.
-    """
-
-    _: KW_ONLY
-    ssh_keys: Sequence[str] = ()
-    password: str | None = None
-
-    def __post_init__(self) -> None:
-        if isinstance(self.ssh_keys, str):
-            raise _fail(
-                self,
-                "ssh_keys= takes a list of public keys, not one string.",
-                hint="Pass ssh_keys=['~/.ssh/id_ed25519.pub'].",
-            )
-        object.__setattr__(self, "ssh_keys", tuple(self.ssh_keys))
-        for key in self.ssh_keys:
-            if not isinstance(key, str) or not key.strip():
-                raise _fail(self, f"ssh_keys= entry {key!r} is not a public key or a path.")
-            if "PRIVATE KEY" in key:
-                raise _fail(
-                    self,
-                    "ssh_keys= holds a private key.",
-                    hint="Pass the .pub file or its contents.",
-                )
-        if self.password is not None and (not isinstance(self.password, str) or not self.password):
-            raise _fail(self, "password= must be a non-empty string or None.")
-        if not self.ssh_keys and self.password is None:
-            raise _fail(
-                self,
-                "DevAccess grants nothing: no SSH key and no password.",
-                hint="Pass ssh_keys=['~/.ssh/id_ed25519.pub'].",
-            )
-
-    def public_keys(self) -> tuple[str, ...]:
-        """The public key lines, reading every entry that names a ``.pub`` file."""
-        found: list[str] = []
-        for entry in self.ssh_keys:
-            candidate = Path(entry).expanduser()
-            if "\n" not in entry and candidate.is_file():
-                text = candidate.read_text(encoding="utf-8")
-                found.extend(line.strip() for line in text.splitlines() if line.strip())
-            else:
-                found.extend(line.strip() for line in entry.splitlines() if line.strip())
-        return tuple(dict.fromkeys(found))
 
 
 @dataclass(frozen=True, slots=True)

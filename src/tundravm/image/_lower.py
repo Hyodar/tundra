@@ -19,22 +19,27 @@ from typing import cast
 from tundravm._location import anchored, declared_at
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
-from tundravm.declarative.utils import Backports, DevTools, Network, SshAccess, Tdxs, TeeBase
+from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
 from tundravm.errors import ValidationError
 
 from ._component import (
+    BootReady,
     Component,
     ComponentReady,
     Endpoint,
+    Readied,
     ServiceReady,
     ServiceRef,
+    builds_with_network,
     composed,
     export_providers,
 )
 from ._image import BASE_PROFILE, DEV_PROFILE, Image, Profile
-from ._service import Service
+from ._runtime import RUNTIME_FRAGMENT, Runtime, RuntimeFragment, services_of
+from ._secrets import Secret
+from ._service import Binding, Service
+from ._storage import VolumeDirectory
 from ._values import (
-    MANAGEMENT_PORT,
     Credential,
     File,
     Notify,
@@ -63,6 +68,7 @@ def recipe_of(image: Image) -> dm.Recipe:
         items=items,
         variants=state.variants(),
         platform=state.platform(),
+        mkosi=dm.Mkosi(root=image.rootfs.layout, build_network=state.build_network()),
     )
 
 
@@ -74,6 +80,54 @@ class _Lowering:
     owned: list[tuple[str, str]] = field(default_factory=list)
     curl: bool = False
     backports: bool = False
+    runtime: Runtime = field(init=False)
+    baseline_types: tuple[type, ...] = field(init=False)
+
+    def __post_init__(self) -> None:
+        from tundravm.components import Firewall, Network, Tdxs, TeeBase
+
+        self.baseline_types = (TeeBase, Network, Firewall, Tdxs)
+        image = self.image
+        evidence = self.explicit(Tdxs)
+        self.runtime = Runtime(
+            volumes=tuple(image.volumes),
+            secrets=tuple(image.secrets),
+            ingress=tuple(image.ingress),
+            # A profile's services too: the volume step makes their directories in
+            # every profile, which is harmless where the profile is not selected.
+            services=tuple(
+                services_of(
+                    (*self.workload(), *(i for p in image.profiles.values() for i in p.add))
+                )
+            ),
+            tools=Tdxs().source if evidence is None else evidence.source,
+            rootfs=image.rootfs.layout,
+        )
+
+    def workload(self) -> tuple[object, ...]:
+        """What the image runs beyond its baseline: services, components, observability."""
+        image = self.image
+        found: list[object] = [*image.services, *image.components]
+        if image.observability is not None:
+            found.append(image.observability)
+        return tuple(found)
+
+    def explicit[T](self, kind: type[T]) -> T | None:
+        """The baseline component of *kind* the image passed in ``components=``."""
+        found = [item for item in self.image.components if isinstance(item, kind)]
+        if len(found) > 1:
+            raise ValidationError(
+                f"Image: components= holds {len(found)} {kind.__name__} components.",
+                hint=f"Pass one {kind.__name__}(...): it replaces the image's default.",
+            )
+        return found[0] if found else None
+
+    def build_network(self) -> bool:
+        """Whether a component's builds fetch dependencies while the image is built."""
+        components = [item for item in self.workload() if isinstance(item, Component)]
+        for profile in self.image.profiles.values():
+            components.extend(item for item in profile.add if isinstance(item, Component))
+        return any(builds_with_network(item) for item in components)
 
     # ── The image ───────────────────────────────────────────────────
 
@@ -96,48 +150,69 @@ class _Lowering:
         for item in (*image.packages, *image.files, *image.users, *image.groups):
             body.extend(self.content(item))
         for component in image.components:
-            body.append(self.component(component))
+            if not isinstance(component, self.baseline_types):
+                body.append(self.component(component))
+        if image.observability is not None:
+            body.append(self.component(image.observability))
         for service in image.services:
             body.extend(self.service(service))
+        for group in self.shared_groups():
+            body.append(dm.Group(group))
+        runtime = [
+            lowered
+            for declaration in self.runtime.declarations()
+            for lowered in self.content(declaration)
+        ]
+        if runtime:
+            body.append(RuntimeFragment(RUNTIME_FRAGMENT, items=tuple(runtime)))
         if image.kernel.built:
             body.append(self.kernel())
         body.extend(self.mkosi())
         return (*self.baseline(), *body, *self.owned_files())
 
     def baseline(self) -> tuple[dm.Declaration | dm.Fragment, ...]:
-        """What every image gets: the TEE baseline, the firewall and the evidence service."""
+        """What every image gets: the TEE baseline, the network, the firewall and the
+        evidence service, each the image's own when it passed one in ``components=``."""
+        from tundravm.components import Firewall, Network, Tdxs, TeeBase
+
         network = self.image.network
-        found: list[dm.Declaration | dm.Fragment] = [
-            TeeBase(network=network is None, firewall=False),
-            self.firewall(),
-            Tdxs(),
-        ]
-        if network is not None:
-            found.append(
-                Network(
-                    dhcp=network.dhcp,
-                    interfaces=tuple(network.interfaces),
-                    static=network.static,
-                )
+        if network is not None and self.explicit(Network) is not None:
+            raise ValidationError(
+                "Image: network= and components= both hold a Network.",
+                hint="Keep network=Network(...).",
             )
+        network = network or self.explicit(Network) or Network()
+        firewall = self.explicit(Firewall)
+        if firewall is not None and network.egress is not None and firewall.egress is not None:
+            raise ValidationError(
+                "Image: the Network and the Firewall both set egress=.",
+                hint="Set it once: network=Network(egress=Egress(...)).",
+            )
+        if firewall is None:
+            firewall = Firewall(egress=network.egress)
+        elif firewall.egress is None and network.egress is not None:
+            firewall = Firewall(allow=firewall.allow, egress=network.egress)
+        found: list[dm.Declaration | dm.Fragment] = [
+            self.component(self.explicit(TeeBase) or TeeBase()),
+            self.component(firewall),
+            self.component(self.explicit(Tdxs) or Tdxs()),
+            self.component(network),
+        ]
         if self.backports:
             found.append(Backports())
         if self.curl:
             found.append(dm.Package("curl"))
         return tuple(found)
 
-    def firewall(self) -> dm.Firewall:
-        """Inbound: the management ingress plus whatever a service exposed. Outbound:
-        unfiltered, unless the image's network names an ``Egress``."""
-        egress = self.image.network.egress if self.image.network is not None else None
-        if egress is None:
-            return dm.Firewall(allow=(MANAGEMENT_PORT,))
-        return dm.Firewall(
-            allow=(MANAGEMENT_PORT,),
-            egress="filter",
-            egress_ports=tuple(dm.Port(p.port, p.protocol) for p in egress.ports),
-            egress_hosts=tuple(egress.hosts),
-        )
+    def shared_groups(self) -> tuple[str, ...]:
+        """The groups shared volume directories name, declared once each."""
+        groups = {
+            service.state.group
+            for service in self.runtime.services
+            if isinstance(service.state, VolumeDirectory) and service.state.group is not None
+        }
+        declared = {group.name for group in self.image.groups}
+        return tuple(sorted(groups - declared))
 
     def kernel(self) -> dm.Kernel:
         """The kernel the build compiles, with every driver built in."""
@@ -202,15 +277,23 @@ class _Lowering:
         )
 
     def dev_variant(self) -> dm.Variant:
-        """``dev=DevAccess(...)`` as a non-production profile."""
+        """``dev=DevAccess(...)`` as a non-production profile.
+
+        When the image already runs SSH for its control plane, the dev keys join it
+        (``authorized_keys.d/root``) instead of a second ``sshd``."""
         dev = self.image.dev
         assert dev is not None
         items: list[dm.Declaration | dm.Fragment] = []
-        keys = dev.public_keys()
-        if keys:
-            items.append(SshAccess(authorized_keys=keys))
-        if dev.password is not None:
-            items.append(DevTools(root_password=dev.password))
+        if self.runtime.control_plane:
+            keys = dev.public_keys()
+            if keys:
+                text = "".join(f"{key}\n" for key in keys)
+                items.append(dm.File.text(f"{SSH_AUTHORIZED_KEYS_DIR}/root", text))
+            for tool in dev.tools():
+                assert isinstance(tool, dm.Fragment)
+                items.append(tool)
+        else:
+            items.append(self.component(dev))
         return dm.Variant(
             DEV_PROFILE,
             inherits=BASE_PROFILE,
@@ -301,18 +384,34 @@ class _Lowering:
             extra.update(dict(item.resources.entries()))
         if item.shutdown is not None:
             extra.update(dict(item.shutdown.entries()))
-        requires = self.required_units(item)
+        optional = self.runtime.optional(item)
+        if optional:
+            extra["SetCredential"] = optional
+        requires = (*self.required_units(item), *self.runtime.waits(item))
         shutdown = item.shutdown
+        state = item.state
+        environment = dict(item.environment)
+        groups = list(item.groups)
+        working = item.working_directory
+        write: tuple[str, ...] = ()
+        if isinstance(state, VolumeDirectory):
+            environment.setdefault("STATE_DIRECTORY", state.path)
+            working = working or state.path
+            write = (f"-{state.path}",)
+            if state.group is not None and state.group not in groups:
+                groups.append(state.group)
         return dm.Service(
             item.unit_name,
             item.command(),
             type="notify" if isinstance(item.readiness, Notify) else "exec",
             user=item.user,
-            groups=tuple(item.groups),
-            working_dir=item.working_directory,
-            env=dict(item.environment),
+            groups=tuple(groups),
+            working_dir=working,
+            env=environment,
             credentials=_credentials(tuple(item.credentials)),
-            state=item.state,
+            state=None if isinstance(state, VolumeDirectory) else state,
+            write_paths=write,
+            needs=(),
             logs=item.logs,
             runtime=item.runtime,
             ports=tuple(dm.Port(port.port, port.protocol) for port in item.expose),
@@ -327,6 +426,12 @@ class _Lowering:
 
     def timer_task(self, item: Service) -> dm.Task:
         """A ``Service(timer=...)`` as the scheduled oneshot it is."""
+        if isinstance(item.state, VolumeDirectory) or item.credentials:
+            raise ValidationError(
+                f"Service {item.name!r} runs on a timer and binds a volume or credentials.",
+                hint="Give the timer a /var/lib state and no credentials, or run it as a "
+                "long-lived service.",
+            )
         requires = self.required_units(item)
         return dm.Task(
             item.unit_name,
@@ -336,6 +441,7 @@ class _Lowering:
             state=item.state,
             after=requires,
             requires=requires,
+            needs=(),
             hardening=item.hardening,
         )
 
@@ -355,6 +461,7 @@ class _Lowering:
             requires=(item.unit_name,),
             after=(item.unit_name,),
             timeout=readiness.timeout,
+            needs=(),
             hardening=Hardening.preset("static"),
         )
 
@@ -367,9 +474,9 @@ class _Lowering:
         return tuple(dict.fromkeys(units))
 
 
-def _handles(requirement: object) -> tuple[ServiceReady, ...]:
+def _handles(requirement: object) -> tuple[Readied, ...]:
     """The readiness handles one ``requires=`` entry stands for."""
-    if isinstance(requirement, ServiceReady):
+    if isinstance(requirement, (ServiceReady, BootReady)):
         return (requirement,)
     if isinstance(requirement, ServiceRef):
         return (requirement.ready,)
@@ -377,11 +484,7 @@ def _handles(requirement: object) -> tuple[ServiceReady, ...]:
         assert requirement.ready is not None
         return (requirement.ready,)
     if isinstance(requirement, ComponentReady):
-        found = tuple(
-            service.ready
-            for service in requirement.component.services()
-            if service.readiness is not None
-        )
+        found = requirement.handles()
         if not found:
             raise ValidationError(
                 f"Component {requirement.name!r} declares no readiness, so nothing can "
@@ -396,8 +499,11 @@ def _handles(requirement: object) -> tuple[ServiceReady, ...]:
     )
 
 
-def _ready_unit(owner: Service, handle: ServiceReady) -> str:
-    """The unit that proves *handle* ready: the service itself, or its probe."""
+def _ready_unit(owner: Service, handle: Readied) -> str:
+    """The unit that proves *handle* ready: the service itself, its probe, or the boot
+    step."""
+    if isinstance(handle, BootReady):
+        return handle.unit
     if handle.probe is None:
         raise ValidationError(
             f"Service {owner.name!r} requires {handle.unit!r}, which declares no readiness.",
@@ -409,9 +515,12 @@ def _ready_unit(owner: Service, handle: ServiceReady) -> str:
     return f"{handle.unit.removesuffix('.service')}-ready.service"
 
 
-def _credentials(credentials: tuple[Credential, ...]) -> dict[str, str]:
+def _credentials(bindings: tuple[Binding, ...]) -> dict[str, str]:
     """``credentials=`` as systemd's ``LoadCredential=`` mapping."""
     found: dict[str, str] = {}
+    credentials: tuple[Credential, ...] = tuple(
+        item.credential if isinstance(item, Secret) else item for item in bindings
+    )
     for credential in credentials:
         if credential.name in found:
             raise ValidationError(
@@ -429,11 +538,12 @@ def _fragment_type(cls: type) -> type[dm.Fragment]:
     """A ``Fragment`` subclass named after the component class, so provenance keeps it.
 
     ``explore`` and ``why`` print "via app (App)": the fragment's name and the class that
-    composed it. One subclass per component class, made once.
+    composed it. It lives in the component's module, so lint tells the shipped
+    :mod:`tundravm.components` from the image's own. One subclass per component class.
     """
     found = _FRAGMENT_TYPES.get(cls)
     if found is None:
-        found = type(cls.__name__, (dm.Fragment,), {"__slots__": ()})
+        found = type(cls.__name__, (dm.Fragment,), {"__slots__": (), "__module__": cls.__module__})
         _FRAGMENT_TYPES[cls] = found
     return found
 

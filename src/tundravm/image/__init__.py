@@ -3,9 +3,10 @@ groups and :class:`Profile` variations.
 
 Everything a recipe author writes lives here; :mod:`tundravm.declarative` is the
 internal model the image lowers onto. The package is named after its one entry point:
-an image is what you declare, and the slots this gate does not fill yet (volumes,
-secrets, attested ingress, the root layout, observability) are further modules beside
-:mod:`tundravm.image._values`, not changes to the ones here.
+an image is what you declare. The runtime contracts are values here too
+(:class:`Volume`, :class:`Secret`, :class:`AttestedTLS`, :class:`TLS`, :class:`RootFS`);
+the components an image holds by default, and the shipped workloads, are in
+:mod:`tundravm.components`.
 """
 
 from __future__ import annotations
@@ -28,22 +29,31 @@ from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import CargoBinary, GoBinary
 
 from ._api import bake, compile, load, lower
-from ._component import Component, ComponentReady, Endpoint, ServiceReady, ServiceRef
+from ._component import (
+    BootReady,
+    Component,
+    ComponentReady,
+    Endpoint,
+    ServiceReady,
+    ServiceRef,
+)
 from ._image import Image, Profile
+from ._ingress import TLS, AttestedTLS
 from ._lower import recipe_of
+from ._rootfs import RootFS
+from ._secrets import BrokerKey, Secret
 from ._service import Service
+from ._storage import OperatorKey, TpmSeal, Volume, VolumeDirectory
 from ._values import (
     TCP,
     UDP,
     Credential,
     Debian,
-    DevAccess,
     Egress,
     File,
     HttpProbe,
     Kernel,
     Mkosi,
-    Network,
     Notify,
     Package,
     Resources,
@@ -55,7 +65,11 @@ from ._values import (
 
 __all__ = [
     "TCP",
+    "TLS",
     "UDP",
+    "AttestedTLS",
+    "BootReady",
+    "BrokerKey",
     "Build",
     "Calendar",
     "CargoBinary",
@@ -63,7 +77,6 @@ __all__ = [
     "ComponentReady",
     "Credential",
     "Debian",
-    "DevAccess",
     "Diagnostic",
     "DropIn",
     "Egress",
@@ -81,20 +94,25 @@ __all__ = [
     "Kernel",
     "Listen",
     "Mkosi",
-    "Network",
     "Notify",
+    "OperatorKey",
     "Package",
     "Profile",
     "Resolved",
     "Resources",
+    "RootFS",
+    "Secret",
     "Service",
     "ServiceReady",
     "ServiceRef",
     "Shutdown",
     "StaticAddress",
     "TcpProbe",
+    "TpmSeal",
     "Tree",
     "User",
+    "Volume",
+    "VolumeDirectory",
     "bake",
     "compile",
     "load",

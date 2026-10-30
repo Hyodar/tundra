@@ -31,8 +31,9 @@ image = Image(
 ### `Image`
 
 `Image(name, *, base=Debian("trixie"), packages=[], files=[], services=[], components=[],
-network=None, users=[], groups=[], kernel=Kernel.default(), targets=("qemu",), dev=None,
-profiles={}, mkosi=None)`
+volumes=[], secrets=[], ingress=[], network=None, users=[], groups=[],
+kernel=Kernel.default(), rootfs=RootFS.initramfs(), observability=None, targets=("qemu",),
+dev=None, profiles={}, mkosi=None)`
 
 | Slot | Values |
 |---|---|
@@ -40,21 +41,164 @@ profiles={}, mkosi=None)`
 | `packages` | `str` or `Package(name, backports=True)`: runtime packages only |
 | `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst)` |
 | `services` | `Service` only; a `Component` in this slot is refused by name |
-| `components` | `Component` instances, resolved before validation |
+| `components` | `Component` instances, resolved before validation; a `TeeBase`, `Network`, `Firewall` or `Tdxs` here replaces the image's default one |
+| `volumes` | `Volume(name, mount=, unlock=OperatorKey() \| TpmSeal(...) \| BrokerKey(...), filesystem="ext4")` |
+| `secrets` | `Secret(name, required=True, rotation="restart" \| "none", source=None \| BrokerKey(...))` |
+| `ingress` | `AttestedTLS(port, upstream=endpoint)`, `TLS(port, upstream=, certificate=secret)` |
 | `network` | `Network(dhcp=True, static=StaticAddress(...), egress=Egress(...))` |
 | `users`, `groups` | `User`, `Group` for shared resources; service users are generated |
 | `kernel` | `Kernel.default()` or `Kernel.build(version, source, config=, patches=)` |
+| `rootfs` | `RootFS.initramfs()` (the OS in the UKI's initrd) or `RootFS.verity(filesystem="erofs")` |
+| `observability` | `Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))` |
 | `targets` | the default set for `build --target`; `("qemu",)` |
 | `dev` | `DevAccess(ssh_keys=[...], password=None)`: a non-production `dev` profile |
 | `profiles` | `{"name": Profile(extends=, add=, changes=[...], production=False)}` |
 | `mkosi` | `Mkosi(settings={...}, scripts=[...])`, refused when it contradicts an invariant |
 
 What an image implies with no further words, and the one escape hatch for each, is the
-`Image` docstring; `tundravm inspect` prints the resolved result.
+`Image` docstring; `tundravm inspect` prints the resolved result. The prover of plan section
+3.1, whole:
 
-Volumes, secrets, attested ingress, the root layout and observability are the slots gate 4
-part B adds; until then they are the internal `Key`, `Disk`, `Secrets` and `Tdxs`
-declarations a `Component` may still yield.
+```python
+from tundravm import AttestedTLS, DevAccess, Image, OperatorKey, RootFS, Secret, Volume
+from tundravm.components import Raiko
+
+data = Volume("data", mount="/persistent", unlock=OperatorKey())
+config = Secret("raiko-config", rotation="restart")
+raiko = Raiko(config=config, state=data.directory("raiko"), listen="127.0.0.1:8080")
+
+image = Image(
+    "prover",
+    components=[raiko],
+    volumes=[data],
+    secrets=[config],
+    ingress=[AttestedTLS(443, upstream=raiko.http)],
+    rootfs=RootFS.verity(),
+    dev=DevAccess(password="tdx"),
+)
+```
+
+### Volumes
+
+`Volume(name, *, mount, unlock, filesystem="ext4")` is a persistent LUKS2 volume with a
+stable identity: the deployment attaches a disk named `tundravm-<name>` (QEMU's `serial=`,
+GCP's device name), which the image finds through `/dev/disk/by-id/*-tundravm-<name>`, never
+by probe order. Names are 1 to 11 of `a-z0-9-`; the mount may not be inside the measured
+system (`/usr`, `/etc`, `/run`...). It is formatted only while it carries no initialisation
+token, so an unlock failure is never permission to format; backup, resize and rollback
+protection are not provided.
+
+| `unlock=` | What happens at boot | Lowers onto |
+|---|---|---|
+| `OperatorKey()` | the volume waits for a passphrase an operator sends after attesting the instance (`tundravm secrets unlock INSTANCE VOLUME`) | `Key(strategy="pipe")`: `key-gen` blocks on the FIFO `/run/tundravm/unlock/<name>` |
+| `TpmSeal(platform=, pcrs=, recovery=)` | a random key sealed to the stated vTPM: `"azure"` (the paravisor's), `"gcp"` (the hypervisor's) or `"swtpm"` (local, development only); `recovery="none"` is the only method | `Key(persist_in_tpm=True)` and `tpm2-tools`; `pcrs` is recorded, and today's `key-gen` keeps the key in NV storage without a PCR policy |
+| `BrokerKey(url, audience=)` | a key broker releases the key after attestation | the same FIFO as `OperatorKey`, written by the broker's pull client (gate 3) |
+
+A `TpmSeal` is refused for any target that boots with another vTPM (one payload boots on
+every target, so `TpmSeal(platform="azure", ...)` needs `targets=("azure",)`). Each volume is a
+`Disk` (`disk-setup`, LUKS2, ext4) plus a `volume-<name>` boot step that creates the
+directories services bind.
+
+`volume.directory(name, *, mode=0o750, group=None)` (a `VolumeDirectory`) is a directory on
+it. `Service(state=volume.directory("app"))` makes it the service's working directory and
+`$STATE_DIRECTORY`, `ReadWritePaths=` under the strict sandbox, and orders the service after
+the volume is open and the directory exists, owned by the service's user. Several services
+share one only through `group=` (`root:<group>`, each of them in the group). `volume.ready`
+is the readiness handle (`BootReady`).
+
+### Secrets
+
+`Secret(name, *, required=True, rotation="restart", source=None)` is a value the image needs
+at run time and never contains. It is delivered after attestation, by an operator
+(`tundravm secrets deliver INSTANCE name=@file`) or a broker (`source=BrokerKey(...)`), into
+`/run/tundravm/credentials/<name>` (root-owned tmpfs, mode 0600), and recorded in the image's
+`secret-delivery` manifest (`/etc/tdx/secrets.json`).
+
+- `Service(credentials=[secret])` renders `LoadCredential=<name>:/run/tundravm/credentials/<name>`:
+  systemd copies the value into the unit's `$CREDENTIALS_DIRECTORY` at start, and
+  `secret.path` (`${CREDENTIALS_DIRECTORY}/<name>`) is where the program reads it, as an argv
+  word. An argv naming a credential the service does not bind is refused.
+- A required secret holds every bound service until it arrives (the boot unit
+  `credential-<name>.service`, which is `secret.ready`); an optional one starts the service
+  with an empty credential (`SetCredential=<name>:`).
+- `rotation="restart"` restarts the bound units on re-delivery, the only way a new value
+  reaches a credential; `"none"` leaves them on the old value. There is no `reload`.
+- A secret a service binds must be in the image's `secrets=`, the same value.
+
+An image with a secret, or a volume an operator or broker unlocks, also gets today's
+control-plane bootstrap: `secret-delivery` takes the operator's SSH public key on the
+management port (`:8745`), root SSH accepts only that key (`SshAccess(from_delivery=True)`),
+and the operator writes the passphrase and the secrets over it. The evidence service waits
+for none of it. Gate 3's attested endpoint replaces that write path on the same port and
+binds the channel to the quote.
+
+### Ingress
+
+`AttestedTLS(port, *, upstream)` and `TLS(port, *, upstream, certificate)` are the ways in to
+a service that listens on the loopback. The upstream is an `Endpoint` on `127.0.0.1`,
+`localhost` or `::1`, over HTTP; a service that exposes the upstream's port, or the ingress
+port, is refused, so the ingress is the only path. Each lowers onto a `socat` OpenSSL listener
+unit (`attested-tls-<port>.service`, `tls-<port>.service`) running as its own user with only
+`CAP_NET_BIND_SERVICE`, and the firewall rule for its port.
+
+- `AttestedTLS` generates its key pair in the guest at every start and never stores it.
+  Gate 3 binds the key into the quote's `report_data` through the attested endpoint, with the
+  client verifier policy, client authorisation and renewal; until then the certificate is
+  self-signed per boot and a client pins it on first contact.
+- `TLS` reads its PEM key and chain from `certificate`, a delivered `Secret`.
+
+`/etc/tundravm/runtime.json` records every volume (attachment name, unlock policy, its
+directories), secret (rotation, the units bound to it) and ingress (port, upstream) for the
+tools that deliver.
+
+### The root layout
+
+`RootFS.initramfs()` (the default) puts the OS in the UKI's `.initrd`. `RootFS.verity()`
+makes a read-only erofs root with a dm-verity hash partition beside the ESP, booted by
+mkosi's initrd with the root hash on the command line, for payloads too large for an initrd.
+The choice is explicit and recorded (`Mkosi(root=...)` internally, `rootfs` in the runtime
+manifest).
+
+### The component library
+
+`tundravm.components` ships `Component` subclasses. Each has configuration fields, typed
+exports and a `check()` lint rule.
+
+| Component | Exports | `check()` |
+|---|---|---|
+| `TeeBase(time=, nts_servers=, journal=, journal_max_use=, sysctl=, dns=, nameservers=, mask=)` | none | `tee-base-clock` |
+| `Network(dhcp=, static=, egress=, interfaces=)` (also `image.network`) | `online` | `network-no-route` |
+| `Firewall(allow=[TCP(...)], egress=)` | none | `firewall-ssh-open` |
+| `Tdxs(source=, issuer=, validator=, expected_measurements=, ...)`, `Tdxs.from_policy(...)` | `ready` (`EVIDENCE`), `socket`, `group` | `tdxs-validator-unchecked` |
+| `SshAccess(keys=, from_delivery=, listen_port=)` | `port` | `ssh-keys-baked` |
+| `DevAccess(ssh_keys=, password=)` (only as `image.dev`) | none | `dev-access-rsa-key` |
+| `Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(...))` | `service("journal-export")`, `service("metrics-export")` | `observability-plaintext` |
+| `Nethermind(jwt=, state=, config="surge-hoodi", source=, rpc_port=, engine_port=, resources=)` | `rpc`, `ws`, `engine_api` | `nethermind-volatile-state` |
+| `TaikoClient(engine=, rpc=, jwt=, chain=, source=)` | `service("taiko-client")` | none |
+| `Raiko(config=, state=, listen=, l2_rpc=, source=)` | `http` | `raiko-listens-publicly` |
+
+Every image holds `TeeBase()`, `Network()`, `Firewall()` and `Tdxs()`; one passed in
+`components=` replaces the default. `Tdxs(source=Git(url, ref))` is the one input that names
+tundra-tools: the evidence service and, when the image has volumes or secrets, `key-gen`,
+`disk-setup` and `secret-delivery` are built from it, so a mirror or a vendored checkout
+replaces the default `https://github.com/Hyodar/tundra-tools.git` everywhere (`tundravm lock`
+pins it).
+
+`Nethermind`, `TaikoClient` and `Raiko` pin their sources and toolchains (a deterministic
+`dotnet publish` of Nethermind 1.32.3, a `go build` of the Surge `taiko-client`, a `cargo`
+build of Raiko with the `tdx` feature), read their secrets as credentials (the Engine API
+JWT, the driver's L1 configuration as an environment file, Raiko's configuration), keep
+their state on volume directories, and wire to each other through exports with readiness:
+
+```python
+execution = Nethermind(jwt=jwt, state=data.directory("nethermind"))
+driver = TaikoClient(engine=execution.engine_api, rpc=execution.rpc, jwt=jwt, chain=chain)
+prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"))
+```
+
+`class X(Component, build_network=True)` marks a component whose builds fetch dependencies
+(`cargo fetch`, `dotnet restore`); an image holding one builds with the network on
+(`WithNetwork=yes`). `EVIDENCE` is the evidence service's readiness.
 
 ### `Service`
 
@@ -80,7 +224,9 @@ renders as its URL.
   cgroup and stop directives; `timer=Every("15m")` or `Calendar("daily")` makes it a scheduled
   oneshot; `socket=Listen(...)` makes it socket-activated; `unit=DropIn(...)` carries anything
   else systemd knows.
-- `credentials=[Credential("jwt", "/etc/app/jwt")]` renders `LoadCredential=`.
+- `state=` is a `StateDirectory=` name under `/var/lib`, or `volume.directory("x")`.
+- `credentials=[secret]` (a delivered `Secret`) or `[Credential("jwt", "/etc/app/jwt")]` (a
+  fixed path) renders `LoadCredential=`.
 - `service.ready` is the export another service requires, and `service.ref` is what a
   `Profile` change targets.
 
@@ -95,7 +241,8 @@ Its **exports** are the typed values a caller references without knowing any of 
 
 | Export | What it is |
 |---|---|
-| `component.ready` (`ComponentReady`) | the readiness of every service it declares one for |
+| `component.ready` (`ComponentReady`) | what `component.readiness()` returns: by default the readiness of every service it declares one for; `Tdxs` returns the evidence service's |
+| `volume.ready`, `secret.ready` (`BootReady`) | a boot unit that has finished: the volume is open, the secret delivered |
 | `component.service("app")` (`ServiceRef`) | that service, with `.ready` and `.ref` |
 | `Endpoint(host, port, path, scheme, ready=, provider=self)` | where it answers, with its readiness; holding one in a field requires its provider |
 | `service.ready` (`ServiceReady`) | one service's readiness |
@@ -116,8 +263,13 @@ string-keyed `set`. `production=False` marks the artifacts as never shipped;
 | `Package` | a runtime package, with `backports=True` |
 | `File`, `Tree` | a file (text or copied, with `mode=` and `owner=`) and a host directory |
 | `Debian`, `Kernel` | the distribution and its archive, the kernel |
-| `Network`, `StaticAddress`, `Egress` | how the image reaches the network, and what it may send |
-| `DevAccess` | debug access in a non-production profile |
+| `Network`, `StaticAddress`, `Egress` | how the image reaches the network, and what it may send (`Network` is a component) |
+| `DevAccess` | debug access in a non-production profile (a component) |
+| `Volume`, `VolumeDirectory`, `OperatorKey`, `TpmSeal`, `BrokerKey` | a persistent volume, a directory on it, and how it unlocks |
+| `Secret` | a value delivered after attestation and read as a credential |
+| `AttestedTLS`, `TLS` | the ways in to a loopback service |
+| `RootFS` | the root-filesystem layout |
+| `Observability`, `JournalExport`, `PrometheusRemoteWrite` | the authenticated export path (components) |
 | `Mkosi` | mkosi settings and scripts, recorded and linted |
 | `Resources`, `Shutdown` | a service's cgroup limits and how it is stopped |
 | `HttpProbe`, `TcpProbe`, `Notify` | the three readiness mechanisms |
@@ -727,7 +879,7 @@ class Debugging(Composite):
 | `ini` | a mapping of sections to mappings | `[section]` blocks of `key = value`, a blank line apart; a list value repeats the key, `None` leaves it out |
 | `env` | a mapping | `KEY=value` lines; a value of letters, digits and `_./:@%+,-` is bare, others double-quoted with `"`, `\`, `$` and backticks escaped |
 
-The examples ship more: `NethermindBase(*, snapshot=PINNED_MIRROR)` in [`examples/nethermind_base.py`](../examples/nethermind_base.py), and `Raiko(*, source)`, `TaikoClient(*, source)`, `Nethermind(*, source)` in [`examples/fragments/`](../examples/fragments/).
+The workloads the Surge prover composes, `Nethermind`, `TaikoClient` and `Raiko`, are components of `tundravm.components` ([The component library](#the-component-library)).
 
 ## Errors
 
@@ -773,6 +925,20 @@ Resolution and references (from `resolve`):
 | `export-stale` | error / warning | An export built with `provider=self` comes from another configuration of the provider's fragment than the variant includes (error), or the variant edits or removes a declaration that fragment composed (warning) |
 | `external-delivery-unwired` | warning | An `ExternalDelivery` with neither `unit=` nor `ready_path=`: nothing in the image can wait for it |
 | `executable-stale` | error | A `Service` command names a path a `Build` installed (`GoBinary(...).executable`) until a variant edited its `install` or removed it |
+
+The component library's `check()` rules (from `tundravm.components`):
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `tee-base-clock` | warning | `TeeBase(time=False)`: the guest clock is the host's |
+| `network-no-route` | warning | A static address without a gateway reaches its subnet only |
+| `firewall-ssh-open` | warning | `Firewall(allow=[TCP(22)])` opens SSH by hand instead of `SshAccess` |
+| `ssh-keys-baked` | warning | SSH keys baked into a cloud image let their holders into every instance |
+| `dev-access-rsa-key` | info | The dev profile accepts an RSA key |
+| `tdxs-validator-unchecked` | warning | A `Tdxs` validator with no expected measurements accepts any genuine TD |
+| `observability-plaintext` | warning | Logs or metrics go to an `http://` sink |
+| `nethermind-volatile-state` | warning | Nethermind's database is on the volatile root, so it resyncs every boot |
+| `raiko-listens-publicly` | warning | Raiko listens on a non-loopback address, around its attested ingress |
 
 Compiler rules (on the lowered recipe, when resolution found no error):
 

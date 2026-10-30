@@ -6,7 +6,9 @@ confidential image needs and no one wants to repeat is implied: Debian trixie fr
 locked snapshot, a measured UKI, NTS time, a volatile journal, a firewall that opens
 only what a service exposed, one hardened system user per service, and the evidence
 service the attestation reads. ``Image``'s docstring lists each implied item with its
-one escape hatch.
+one escape hatch. The runtime contracts are slots of their own: :class:`Volume`,
+:class:`Secret`, :class:`AttestedTLS` (or :class:`TLS`), :class:`RootFS` and
+:class:`Observability`; :mod:`tundravm.components` is the shipped component library.
 
 ``load`` reads an image file, ``lower`` hands it to the compiler, ``compile`` writes
 the mkosi tree, ``bake`` builds the artifacts and ``doctor`` checks the host.
@@ -15,6 +17,7 @@ the mkosi tree, ``bake`` builds the artifacts and ``doctor`` checks the host.
 
 __version__ = "0.1.0"
 
+from .components import DevAccess, JournalExport, Network, Observability, PrometheusRemoteWrite
 from .declarative.lifecycle import doctor
 from .errors import (
     ArtifactError,
@@ -33,7 +36,10 @@ from .errors import (
 )
 from .image import (
     TCP,
+    TLS,
     UDP,
+    AttestedTLS,
+    BrokerKey,
     Build,
     Calendar,
     CargoBinary,
@@ -41,7 +47,6 @@ from .image import (
     ComponentReady,
     Credential,
     Debian,
-    DevAccess,
     Diagnostic,
     DropIn,
     Egress,
@@ -59,20 +64,25 @@ from .image import (
     Kernel,
     Listen,
     Mkosi,
-    Network,
     Notify,
+    OperatorKey,
     Package,
     Profile,
     Resolved,
     Resources,
+    RootFS,
+    Secret,
     Service,
     ServiceReady,
     ServiceRef,
     Shutdown,
     StaticAddress,
     TcpProbe,
+    TpmSeal,
     Tree,
     User,
+    Volume,
+    VolumeDirectory,
     bake,
     compile,
     load,
@@ -83,10 +93,13 @@ from .image._api import IMAGE_OBJECT_NAMES
 __all__ = [
     "IMAGE_OBJECT_NAMES",
     "TCP",
+    "TLS",
     "UDP",
     "ArtifactError",
+    "AttestedTLS",
     "AttestationError",
     "BackendExecutionError",
+    "BrokerKey",
     "Build",
     "Calendar",
     "CargoBinary",
@@ -110,6 +123,7 @@ __all__ = [
     "HttpProbe",
     "Image",
     "Install",
+    "JournalExport",
     "Kernel",
     "LintError",
     "Listen",
@@ -118,12 +132,17 @@ __all__ = [
     "Mkosi",
     "Network",
     "Notify",
+    "Observability",
+    "OperatorKey",
     "Package",
     "PolicyError",
     "Profile",
+    "PrometheusRemoteWrite",
     "ReproducibilityError",
     "Resolved",
     "Resources",
+    "RootFS",
+    "Secret",
     "Service",
     "ServiceReady",
     "ServiceRef",
@@ -133,9 +152,12 @@ __all__ = [
     "StaticAddress",
     "TcpProbe",
     "TdxError",
+    "TpmSeal",
     "Tree",
     "User",
     "ValidationError",
+    "Volume",
+    "VolumeDirectory",
     "__version__",
     "bake",
     "compile",

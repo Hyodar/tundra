@@ -19,7 +19,9 @@ from tundravm.declarative.model import Calendar, DropIn, Every, Listen, Ref
 from tundravm.declarative.systemd import Hardening
 from tundravm.errors import ValidationError
 
-from ._component import Component, ComponentReady, Endpoint, ServiceReady, ServiceRef
+from ._component import BootReady, Component, ComponentReady, Endpoint, ServiceReady, ServiceRef
+from ._secrets import CREDENTIAL_REFERENCE, Secret
+from ._storage import VolumeDirectory
 from ._values import (
     TCP,
     UDP,
@@ -53,8 +55,13 @@ type Argument = str | Endpoint | Built
 """What an argv element may be: a word, an :class:`Endpoint` rendered as its URL, or
 a built binary as the first element."""
 
-type Requirement = ServiceReady | ComponentReady | Endpoint | ServiceRef
+type Requirement = ServiceReady | ComponentReady | BootReady | Endpoint | ServiceRef
 """What ``requires=`` takes: a readiness handle, or an export that carries one."""
+
+type Binding = Credential | Secret
+"""What ``credentials=`` takes: a delivered :class:`Secret`, or a fixed-path credential."""
+
+_REQUIREMENTS: tuple[type, ...] = (ServiceReady, ComponentReady, BootReady, Endpoint, ServiceRef)
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
@@ -91,6 +98,12 @@ class Service(Located):
     ``requires=[other.ready]`` is a real dependency: ``Requires=`` and ``After=`` on
     whatever proves the other service ready (its ``Type=notify``, or its probe unit).
     ``expose=[TCP(8080)]`` opens that port in the image's firewall and nothing else does.
+
+    ``state=`` is a ``StateDirectory=`` name under ``/var/lib`` (volatile, like the rest
+    of the root) or a directory on a persistent volume (``data.directory("app")``), which
+    the service then waits for. ``credentials=[jwt]`` binds delivered secrets: the service
+    waits for each required one and reads it at ``jwt.path``; an argv word naming a
+    credential the service does not bind is refused.
     """
 
     name: str
@@ -98,9 +111,10 @@ class Service(Located):
     _: KW_ONLY
     requires: Sequence[Requirement] = ()
     readiness: Readiness | None = None
-    state: str | None = None
-    """A ``StateDirectory=`` under ``/var/lib``, also the default working directory."""
-    credentials: Sequence[Credential] = ()
+    state: str | VolumeDirectory | None = None
+    """A ``StateDirectory=`` under ``/var/lib``, or a directory on a :class:`Volume`; also
+    the default working directory."""
+    credentials: Sequence[Binding] = ()
     expose: Sequence[PortValue] = ()
     resources: Resources | None = None
     shutdown: Shutdown | None = None
@@ -158,6 +172,17 @@ class Service(Located):
                 )
             if isinstance(argument, str) and "\n" in argument:
                 raise _fail(self, f"{self.name!r} argv holds a multi-line argument.")
+        bound = {binding.name for binding in self.credentials}
+        for argument in self.argv:
+            if not isinstance(argument, str):
+                continue
+            for name in CREDENTIAL_REFERENCE.findall(argument):
+                if name not in bound:
+                    raise _fail(
+                        self,
+                        f"{self.name!r} reads credential {name!r} it does not bind.",
+                        hint=f"Pass credentials=[{name}] (the Secret) alongside its path.",
+                    )
 
     def _check_requires(self) -> None:
         for item in self.requires:
@@ -173,7 +198,7 @@ class Service(Located):
                     f"{self.name!r} requires a Component value; it needs its readiness.",
                     hint="Pass requires=[component.ready].",
                 )
-            if not isinstance(item, (ServiceReady, ComponentReady, Endpoint, ServiceRef)):
+            if not isinstance(item, _REQUIREMENTS):
                 raise _fail(
                     self,
                     f"{self.name!r} requires {item!r}, which is not a readiness handle.",
@@ -189,14 +214,10 @@ class Service(Located):
 
     def _check_readiness(self, item: Requirement) -> None:
         """A dependency must prove it is ready; ``After=`` alone is never what was meant."""
-        handles: tuple[ServiceReady, ...]
+        if isinstance(item, BootReady):
+            return
         if isinstance(item, ComponentReady):
-            handles = tuple(
-                service.ready
-                for service in item.component.services()
-                if service.readiness is not None
-            )
-            if not handles:
+            if not item.handles():
                 raise _fail(
                     self,
                     f"{self.name!r} requires component {item.name!r}, which declares no readiness.",
@@ -231,9 +252,17 @@ class Service(Located):
                 f"hardening= holds {self.hardening!r}, not a Hardening.",
                 hint="Use Hardening.preset('static') or another runtime class.",
             )
+        names: set[str] = set()
         for credential in self.credentials:
-            if not isinstance(credential, Credential):
-                raise _fail(self, f"credentials= holds {credential!r}, not a Credential.")
+            if not isinstance(credential, (Credential, Secret)):
+                raise _fail(
+                    self,
+                    f"credentials= holds {credential!r}, not a Secret or a Credential.",
+                    hint="Pass the Secret the image declares: credentials=[jwt].",
+                )
+            if credential.name in names:
+                raise _fail(self, f"{self.name!r} binds credential {credential.name!r} twice.")
+            names.add(credential.name)
         for port in self.expose:
             if not isinstance(port, (TCP, UDP)):
                 raise _fail(
@@ -241,8 +270,16 @@ class Service(Located):
                     f"expose= holds {port!r}, not a port.",
                     hint="Pass expose=[TCP(8080)].",
                 )
+        if self.state is not None and not isinstance(self.state, (str, VolumeDirectory)):
+            raise _fail(
+                self,
+                f"state= holds {self.state!r}.",
+                hint="Pass a directory name under /var/lib, or volume.directory('name').",
+            )
         for name in ("state", "logs", "runtime"):
             value = getattr(self, name)
+            if isinstance(value, VolumeDirectory):
+                continue
             if value is not None and (
                 not isinstance(value, str) or not _DIRECTORY.fullmatch(value)
             ):
@@ -313,4 +350,11 @@ class Service(Located):
         """The working directory a ``state=`` implies."""
         if self.state is None:
             return None
+        if isinstance(self.state, VolumeDirectory):
+            return self.state.path
         return posixpath.join("/var/lib", self.state)
+
+    @property
+    def secrets(self) -> tuple[Secret, ...]:
+        """The delivered secrets this service binds."""
+        return tuple(item for item in self.credentials if isinstance(item, Secret))

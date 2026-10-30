@@ -1,0 +1,227 @@
+"""``tundravm.components``: the baseline an image implies, replaced by passing one, and the
+workloads whose exports wire into each other."""
+
+from __future__ import annotations
+
+import pytest
+
+from tundravm import (
+    TCP,
+    Endpoint,
+    Git,
+    Image,
+    JournalExport,
+    Network,
+    Observability,
+    OperatorKey,
+    PrometheusRemoteWrite,
+    Secret,
+    Service,
+    ValidationError,
+    Volume,
+)
+from tundravm.components import (
+    EVIDENCE,
+    DevAccess,
+    Firewall,
+    Nethermind,
+    Raiko,
+    SshAccess,
+    TaikoClient,
+    Tdxs,
+    TeeBase,
+)
+from tundravm.image import lower, recipe_of
+from tundravm.testing import PlannedImage, plan
+
+pytestmark = pytest.mark.usefixtures("isolated_cwd")
+
+MIRROR = Git("https://mirror.example/tundra-tools.git", "v1.2.0")
+
+data = Volume("data", mount="/persistent", unlock=OperatorKey())
+jwt = Secret("jwt")
+chain = Secret("taiko-chain")
+config = Secret("raiko-config")
+execution = Nethermind(jwt=jwt, state=data.directory("nethermind"))
+driver = TaikoClient(engine=execution.engine_api, rpc=execution.rpc, jwt=jwt, chain=chain)
+prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"))
+
+
+def stack(**changes: object) -> Image:
+    fields: dict[str, object] = {
+        "components": [execution, driver, prover],
+        "volumes": [data],
+        "secrets": [jwt, chain, config],
+    }
+    fields.update(changes)
+    return Image("stack", **fields)  # type: ignore[arg-type]
+
+
+@pytest.fixture(scope="module")
+def planned() -> PlannedImage:
+    return plan(stack(), "production")
+
+
+def _after(planned: PlannedImage, unit: str) -> list[str]:
+    return " ".join(planned.unit(unit).values("Unit", "After")).split()
+
+
+# ── Exports across components ───────────────────────────────────────────
+
+
+def test_endpoints_carry_their_readiness_across_components(planned: PlannedImage) -> None:
+    assert execution.engine_api.url == "http://127.0.0.1:8551/"
+    assert execution.ws.url == "ws://127.0.0.1:8545/"
+    assert execution.rpc.ready == execution.service("nethermind").ready
+    # The driver waits for what proves Nethermind ready (its probe), not for its exec.
+    assert "nethermind-ready.service" in _after(planned, "taiko-client.service")
+    assert planned.unit("nethermind-ready.service").get("Service", "Type") == "oneshot"
+    # Raiko waits for the evidence service and the execution client it proves.
+    raiko = _after(planned, "raiko.service")
+    assert "tdxs.service" in raiko and "nethermind-ready.service" in raiko
+    assert planned.service("raiko").values("Service", "SupplementaryGroups") == ("tdx",)
+
+
+def test_component_readiness_names_what_proves_it() -> None:
+    assert Tdxs().readiness() == (EVIDENCE,)
+    assert prover.readiness() == (prover.service("raiko").ready,)
+    assert Network().readiness() == (Network().online,)
+    service = Service("x", ["/usr/bin/x"], requires=[Tdxs().ready])
+    planned = plan(Image("x", services=[service]), "production")
+    assert "tdxs.service" in _after(planned, "x.service")
+
+
+def test_the_workloads_pin_their_sources_and_read_their_secrets(planned: PlannedImage) -> None:
+    builds = lower(stack()).source_builds()
+    assert {"nethermind", "taiko-client", "raiko"} <= set(builds)
+    nethermind = planned.service("nethermind")
+    assert "--JsonRpc.JwtSecretFile=${CREDENTIALS_DIRECTORY}/jwt" in (nethermind.exec_start or "")
+    assert nethermind.get("Service", "WorkingDirectory") == "/persistent/nethermind"
+    assert nethermind.get("Service", "MemoryDenyWriteExecute") is None  # the dotnet preset
+    driver_unit = planned.service("taiko-client")
+    assert driver_unit.values("Service", "LoadCredential") == (
+        "jwt:/run/tundravm/credentials/jwt",
+        "taiko-chain:/run/tundravm/credentials/taiko-chain",
+    )
+    assert "--l2.auth=http://127.0.0.1:8551/" in (driver_unit.exec_start or "")
+    raiko = planned.service("raiko")
+    assert raiko.values("Service", "DeviceAllow") == ("/dev/tdx_guest rw",)
+    # Their builds fetch crates, modules and NuGet packages: the tree says so.
+    assert recipe_of(stack()).mkosi.build_network
+
+
+def test_component_checks_report_what_the_contract_warns_about() -> None:
+    volatile = Image("x", components=[Nethermind(jwt=jwt)], secrets=[jwt])
+    found = {d.code for d in plan(volatile, "production").lint()}
+    assert "nethermind-volatile-state" in found
+    public = Raiko(config=config, listen="0.0.0.0:8080")
+    found = {d.code for d in plan(Image("x", components=[public], secrets=[config])).lint()}
+    assert "raiko-listens-publicly" in found
+    clockless = Image("x", components=[TeeBase(time=False)])
+    assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
+    unchecked = Image("x", components=[Tdxs(validator="tdx")])
+    assert "tdxs-validator-unchecked" in {d.code for d in plan(unchecked).lint()}
+
+
+@pytest.mark.parametrize(
+    ("make", "message"),
+    [
+        (lambda: Nethermind(jwt="jwt"), "Secret the image declares"),  # type: ignore[arg-type]
+        (
+            lambda: TaikoClient(
+                engine=Endpoint("127.0.0.1", 1), rpc=execution.rpc, jwt=jwt, chain=chain
+            ),
+            "readiness",
+        ),
+        (lambda: Raiko(config=config, listen="8080"), "HOST:PORT"),
+        (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
+        (lambda: stack(secrets=[jwt, config]), "taiko-chain"),
+    ],
+)
+def test_component_configuration_is_checked(make: object, message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        make()  # type: ignore[operator]
+
+
+# ── The baseline, replaced by passing one ───────────────────────────────
+
+
+def test_an_explicit_tdxs_builds_the_evidence_and_the_volume_tools_from_its_source() -> None:
+    image = stack(components=[execution, driver, prover, Tdxs(source=MIRROR)])
+    builds = lower(image).source_builds()
+    for name in ("tdxs", "key-generation", "disk-encryption", "secret-delivery"):
+        assert builds[name].source.url == MIRROR.url, name
+    assert len([c for c in image.components if isinstance(c, Tdxs)]) == 1
+    with pytest.raises(ValidationError, match="2 Tdxs components"):
+        recipe_of(stack(components=[Tdxs(), Tdxs(source=MIRROR)]))
+
+
+def test_an_explicit_firewall_and_network_replace_the_defaults() -> None:
+    from tundravm import Egress
+
+    image = Image(
+        "x",
+        components=[Firewall(allow=[TCP(9100)]), TeeBase(journal_max_use="64M")],
+        network=Network(egress=Egress(ports=[TCP(443)])),
+    )
+    rules = plan(image, "production").file("/etc/nftables.conf").text
+    assert "tcp dport 9100 accept" in rules
+    assert "hook output priority filter; policy drop" in rules  # the network's egress
+    journal = plan(image, "production").file("/etc/systemd/journald.conf.d/50-tundravm-tee.conf")
+    assert "RuntimeMaxUse = 64M" in journal.text
+    with pytest.raises(ValidationError, match="network= and components= both"):
+        recipe_of(Image("x", network=Network(), components=[Network()]))
+
+
+def test_ssh_access_lets_in_only_keys() -> None:
+    with pytest.raises(ValidationError, match="no key to accept"):
+        SshAccess()
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@host"
+    image = Image("x", components=[SshAccess(keys=[key])], targets=("gcp",))
+    found = {d.code for d in plan(image, "production").lint()}
+    assert "ssh-keys-baked" in found
+
+
+def test_dev_access_joins_the_control_plane_sshd_instead_of_a_second_one() -> None:
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@host"
+    image = stack(dev=DevAccess(ssh_keys=[key]))
+    dev = plan(image, "dev")
+    assert key in dev.file("/etc/ssh/authorized_keys.d/root").text
+    assert "/etc/ssh/authorized_keys.d/root" not in plan(image, "production").files
+    with pytest.raises(ValidationError, match="does not exist"):
+        DevAccess(ssh_keys=["missing.pub"]).public_keys()
+
+
+# ── Observability ───────────────────────────────────────────────────────
+
+
+def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
+    logs_key = Secret("logs-key")
+    token = Secret("metrics-token")
+    observability = Observability(
+        logs=JournalExport("https://logs.example:19532", credential=logs_key),
+        metrics=PrometheusRemoteWrite("https://metrics.example/api/v1/write", credential=token),
+    )
+    image = Image("x", observability=observability, secrets=[logs_key, token])
+    planned = plan(image, "production")
+    upload = planned.service("journal-export")
+    assert "--url=https://logs.example:19532" in (upload.exec_start or "")
+    assert upload.values("Service", "SupplementaryGroups") == ("systemd-journal",)
+    assert "credential-logs-key.service" in _after(planned, "journal-export.service")
+    agent = planned.service("metrics-export")
+    assert "--enable-feature=agent" in (agent.exec_start or "")
+    config_text = planned.file("/etc/tundravm/metrics-export.yml").text
+    assert "/run/credentials/metrics-export.service/metrics-token" in config_text
+    assert "127.0.0.1:9100" in planned.file("/etc/default/prometheus-node-exporter").text
+    assert {"systemd-journal-remote", "prometheus", "prometheus-node-exporter"} <= set(
+        planned.packages
+    )
+    # Nothing waits for the exporters: an unreachable sink never holds an application back.
+    units = [path for path in planned.files if path.startswith("/usr/lib/systemd/system/")]
+    for unit in ("journal-export.service", "metrics-export.service"):
+        dependents = [path for path in units if unit in planned.file(path).text]
+        assert dependents == [f"/usr/lib/systemd/system/{unit}"], unit
+    plaintext = Image("x", observability=Observability(logs=JournalExport("http://logs:19532")))
+    assert "observability-plaintext" in {d.code for d in plan(plaintext).lint()}
+    with pytest.raises(ValidationError, match="exports nothing"):
+        Observability()
