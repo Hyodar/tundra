@@ -150,6 +150,20 @@ def test_invoke_runs_the_verb_in_a_child_and_logs_everything(
         assert any(line in shown for shown in seen)
 
 
+def test_the_child_gives_scripts_a_real_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mkosi runs scripts with ``stdin=sys.stdin``; pytest's capture object has no fileno()."""
+
+    def run_verb(args: Any, tools: Any, images: Any, *, resources: Path) -> None:
+        subprocess.run(["cat"], stdin=sys.stdin, check=True)
+        assert sys.stdin.read() == ""
+
+    _patch(monkeypatch, run_verb)
+
+    _mkosi.invoke(["build"], cwd=tmp_path, log=tmp_path / "log", on_output=lambda _line: None)
+
+
 def test_invoke_returns_stdout_bigger_than_a_pipe_buffer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

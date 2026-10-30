@@ -265,6 +265,9 @@ def _child(
         # a GUI): mkosi's prints and log records must reach the descriptors redirected above.
         sys.stdout = open(1, "w", encoding="utf-8", errors="replace", closefd=False)
         sys.stderr = open(2, "w", encoding="utf-8", errors="replace", buffering=1, closefd=False)
+        # mkosi hands ``sys.stdin`` to every script it runs (``stdin=sys.stdin``); pytest's
+        # capture object has no ``fileno()``, and a redirected build has no terminal anyway.
+        sys.stdin = open(os.devnull, encoding="utf-8")
     os.chdir(cwd)
     logging.getLogger().handlers.clear()  # the embedding program's handlers are not mkosi's
     log_setup()
