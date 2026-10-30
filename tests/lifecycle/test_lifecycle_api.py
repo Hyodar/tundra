@@ -104,7 +104,8 @@ def test_compile_tree_round_trip_matches_lowered_compile(tmp_path: Path) -> None
     recipe = _recipe()
     tree = compile(recipe)
     assert isinstance(tree, Tree) and tree.variants == ("default", "azure")
-    assert any(e.path == "default/mkosi.conf" for e in tree.entries)
+    paths = {e.path for e in tree.entries}
+    assert {"mkosi.conf", "payload/mkosi.conf", "mkosi.images/azure/mkosi.conf"} <= paths
     assert compile(recipe).digest == tree.digest
 
     expected = tmp_path / "image"
@@ -121,7 +122,9 @@ def test_compile_tree_round_trip_matches_lowered_compile(tmp_path: Path) -> None
 def test_compile_selected_variants_and_diff(tmp_path: Path) -> None:
     only = compile(_recipe(), variants=("default",))
     assert only.variants == ("default",)
-    assert not any(e.path.startswith("azure/") for e in only.entries)
+    # without profile overlays a variant's tree is the whole tree: the payload and every
+    # wrapper are shared, whichever variants compile
+    assert only.digest == compile(_recipe()).digest
     with pytest.raises(ValidationError, match="Unknown variant"):
         compile(_recipe(), variants=("gcp",))
 
@@ -232,6 +235,7 @@ def _baked(tmp_path: Path, lines: list[str] | None = None) -> tuple[Artifact, ..
 def test_bake_in_process_writes_simulated_artifacts(tmp_path: Path) -> None:
     lines: list[str] = []
     artifacts = _baked(tmp_path, lines)
+    # each variant's artifacts are its declared outputs
     assert {(a.variant, a.target) for a in artifacts} == {("default", "qemu"), ("azure", "azure")}
     assert all(a.simulated and a.path.is_file() and len(a.sha256) == 64 for a in artifacts)
     assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)

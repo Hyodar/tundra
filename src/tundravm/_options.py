@@ -6,30 +6,32 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from typing import Literal
 
-EmitMode = Literal["per_directory", "native_profiles"]
-Dialect = Literal["current", "nethermind-v1"]
+RootLayout = Literal["initramfs", "verity"]
+"""Where the payload's root filesystem lives: the UKI's ``.initrd`` (``initramfs``), or an
+erofs root and its dm-verity hash partition beside the ESP (``verity``)."""
 
 
 @dataclass(frozen=True, slots=True)
 class MkosiOptions:
     """Knobs for the emitted mkosi tree; none of them enter the recipe digest.
 
-    ``declarative.lower`` builds them from the recipe's ``Setting`` items.
+    ``declarative.lower`` builds them from ``Recipe.mkosi``, the platform and the
+    recipe's ``Setting`` items.
     """
 
-    with_network: bool = True
-    """``WithNetwork=`` for build scripts."""
+    with_network: bool = False
+    """``WithNetwork=`` for build scripts: ``no`` unless ``Mkosi(build_network=True)``."""
     clean_package_metadata: bool = True
     """``CleanPackageMetadata=``."""
     kernel_modules: tuple[str, ...] | Literal["all"] = ()
-    """``Debian(kernel_modules=...)``: names added to each variant's curated module set
+    """``Debian(kernel_modules=...)``: names added to the curated module set
     (``KernelModules=``), or ``"all"``."""
     manifest_format: str = "json"
     """``ManifestFormat=``."""
     compress_output: str | None = None
     """``CompressOutput=``; ``None`` leaves mkosi's default."""
     output_directory: str | None = None
-    """``OutputDirectory=``; ``None`` leaves mkosi's default."""
+    """``OutputDirectory=``; ``None`` writes ``mkosi.output``, which ``%O`` needs set."""
     seed: str | None = None
     """``Seed=`` for partition UUIDs; ``None`` uses the SDK's fixed seed."""
     sandbox_trees: tuple[str, ...] = ()
@@ -39,32 +41,23 @@ class MkosiOptions:
     package-manager sandbox (not the image)."""
     package_cache_directory: str | None = None
     """``PackageCacheDirectory=``."""
-    init_script: str | None = None
-    """Written to ``mkosi.skeleton/init`` (mode 0755)."""
     environment: Mapping[str, str] = field(default_factory=dict)
-    """``Environment=`` key/value pairs."""
-    environment_passthrough: tuple[str, ...] | None = None
-    """Host variables passed through ``Environment=``."""
-    emit_mode: EmitMode = "per_directory"
-    """One mkosi tree per profile, or one tree with ``mkosi.profiles/``."""
+    """``Environment=`` key/value pairs of the payload's scripts (never host pass-through)."""
     generate_version_script: bool = False
     """Emit ``mkosi.version``."""
-    generate_cloud_postoutput: bool = True
-    """Emit the Azure/GCP disk conversion postoutput scripts."""
     settings: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
-    """``(section, key, values)`` written verbatim to ``mkosi.conf``, one line per value."""
+    """``(section, key, values)`` written verbatim, one line per value: to the root
+    ``mkosi.conf`` for a key mkosi reads in the main image only, else to the payload's."""
     bootable: bool = True
-    """``False`` writes ``Bootable=no`` and a plain disk image instead of a UKI."""
-    dialect: Dialect = "current"
-    """``nethermind-v1`` keeps the historical cloud postoutput scripts and runtime-init unit."""
+    """``False`` writes ``Bootable=no`` and a plain disk payload instead of a UKI."""
+    root: RootLayout = "initramfs"
+    """The payload's root filesystem layout (``Mkosi(root=...)``)."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sandbox_trees", tuple(self.sandbox_trees))
         object.__setattr__(self, "sandbox_files", tuple(self.sandbox_files))
         object.__setattr__(self, "settings", tuple(self.settings))
         object.__setattr__(self, "environment", dict(self.environment))
-        if self.environment_passthrough is not None:
-            object.__setattr__(self, "environment_passthrough", tuple(self.environment_passthrough))
 
     def non_defaults(self) -> dict[str, object]:
         """The options that differ from ``MkosiOptions()``, in declaration order."""
@@ -76,4 +69,4 @@ class MkosiOptions:
         }
 
 
-__all__ = ["Dialect", "EmitMode", "MkosiOptions"]
+__all__ = ["MkosiOptions", "RootLayout"]

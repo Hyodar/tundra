@@ -83,7 +83,7 @@ def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
     image = lower(recipe)
     assert image.state.profiles["default"].files[0].content == blob
     compile(recipe).write(tmp_path / "tree")
-    emitted = tmp_path / "tree" / "default" / "mkosi.extra" / "lib" / "firmware" / "firmware.bin"
+    emitted = tmp_path / "tree" / "payload" / "mkosi.extra" / "lib" / "firmware" / "firmware.bin"
     assert emitted.read_bytes() == blob
 
 
@@ -134,7 +134,7 @@ def test_keeps_modes_symlinks_and_empty_directories(tmp_path: Path) -> None:
     assert entries["/etc/app/spool"] == FileEntry("/etc/app/spool", b"", "0700", "directory")
 
     tree = {
-        e.path.removeprefix("default/mkosi.extra"): e
+        e.path.removeprefix("payload/mkosi.extra"): e
         for e in compile(_recipe(FileTree("/etc/app", src))).entries
     }
     assert tree["/etc/app/token"].mode == 0o600

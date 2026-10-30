@@ -267,17 +267,12 @@ class SecretDelivery(Module):
         return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
 
     def source_spec(self) -> SourceBuild:
-        """The ``secret-delivery`` source build from ``source``.
-
-        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
-        hand-written one this module emitted before source builds existed.
-        """
+        """The ``secret-delivery`` source build from ``source``."""
         return SourceBuild(
             name="secret-delivery",
             source=self.source,
             build=GoBuild(package="./cmd/secret-delivery", output="secret-delivery"),
             install=(Install.artifact("/usr/bin/secret-delivery"),),
-            mark_unpinned=False,
         )
 
     def render_manifest(self) -> str:

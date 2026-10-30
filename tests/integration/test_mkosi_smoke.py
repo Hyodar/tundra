@@ -46,7 +46,7 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
 
     unit_path = (
         emit_dir
-        / "default"
+        / "payload"
         / "mkosi.extra"
         / "usr"
         / "lib"
@@ -78,20 +78,21 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     emit_dir = tmp_path / "mkosi"
     compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40)).write(emit_dir)
 
-    conf_text = (emit_dir / "default" / "mkosi.conf").read_text()
+    payload = emit_dir / "payload"
+    conf_text = "".join(
+        path.read_text()
+        for path in (payload / "mkosi.conf", *sorted(payload.glob("mkosi.conf.d/*")))
+    )
     assert "BuildPackages=" in conf_text
     assert "golang" in conf_text
-    assert "git" in conf_text
 
-    config_yaml = emit_dir / "default" / "mkosi.extra" / "etc" / "tdxs" / "config.yaml"
+    config_yaml = payload / "mkosi.extra" / "etc" / "tdxs" / "config.yaml"
     assert config_yaml.exists(), "config.yaml not emitted"
     config_content = config_yaml.read_text()
     assert "type: tdx" in config_content
     assert "systemd: true" in config_content
 
-    svc_unit = (
-        emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.service"
-    )
+    svc_unit = payload / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.service"
     assert svc_unit.exists(), "tdxs.service not emitted"
     svc_text = svc_unit.read_text()
     assert "User=tdxs" in svc_text
@@ -100,15 +101,13 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     assert "ExecStart=/usr/bin/tdxs" in svc_text
     assert "--log-level info" in svc_text
 
-    sock_unit = (
-        emit_dir / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.socket"
-    )
+    sock_unit = payload / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "tdxs.socket"
     assert sock_unit.exists(), "tdxs.socket not emitted"
     sock_text = sock_unit.read_text()
     assert "ListenStream=/var/tdxs.sock" in sock_text
     assert "SocketGroup=tdx" in sock_text
 
-    build_scripts = list((emit_dir / "default" / "scripts").glob("*build*"))
+    build_scripts = sorted((payload / "mkosi.build.d").glob("*.sh"))
     assert build_scripts, "No build script emitted"
     build_text = build_scripts[0].read_text()
     assert "go build" in build_text
@@ -117,7 +116,7 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     assert "sync-constellation" not in build_text
     assert "-trimpath" in build_text
 
-    postinst = emit_dir / "default" / "scripts" / "06-postinst.sh"
+    postinst = payload / "mkosi.postinst.d" / "50-postinst.sh"
     assert postinst.exists(), "postinst not emitted"
     postinst_text = postinst.read_text()
     assert "groupadd --system tdx" in postinst_text

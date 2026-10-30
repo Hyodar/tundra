@@ -79,7 +79,7 @@ def test_load_image_lowers_and_wires_the_backend(recipe_file: Path) -> None:
     img = load_image(recipe_file)
     assert img.profile_names == ("azure", "default")
     assert img.backend is not None and img.backend.name == "inprocess"
-    assert img.state.effective_profile("azure").output_targets == ("azure",)
+    assert img.targets["azure"] == ("azure",) and img.clouds("azure") == ("azure",)
 
 
 def test_cli_inspect_and_compile_a_declarative_recipe(recipe_file: Path, tmp_path: Path) -> None:
@@ -94,7 +94,7 @@ def test_cli_inspect_and_compile_a_declarative_recipe(recipe_file: Path, tmp_pat
 
     code, _ = run_main("compile", str(recipe_file), "--tree", str(tmp_path / "tree"))
     assert code == EXIT_OK
-    motd = tmp_path / "tree" / "default" / "mkosi.extra" / "etc" / "motd"
+    motd = tmp_path / "tree" / "payload" / "mkosi.extra" / "etc" / "motd"
     assert motd.read_text() == "hello\n"
 
 

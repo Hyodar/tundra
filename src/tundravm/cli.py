@@ -66,7 +66,6 @@ from .completion import SHELLS, Shell, render_completion
 from .declarative._compile import emit
 from .declarative._lowered import Lowered
 from .declarative.bom import SBOM_FORMATS, sbom
-from .declarative.importer import import_tree
 from .declarative.inputs import recipe_inputs
 from .declarative.lifecycle import (
     DEPLOY_TARGETS,
@@ -94,7 +93,6 @@ from .declarative.lifecycle import (
     read_variant_tree,
     run_probe,
     select_artifact,
-    tree_layout,
     using_lock,
     variant_provenance,
     write_lock,
@@ -807,7 +805,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_status(sub)
     _add_clean(sub)
     _add_config(sub)
-    _add_import(sub)
     _add_units(sub)
 
     completion = sub.add_parser(
@@ -982,51 +979,6 @@ def _add_units(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         "--variant", default=None, metavar="NAME", help="Variant (default: the only one)."
     )
     render.add_argument("--unit", required=True, metavar="NAME", help="Unit name (app.service).")
-
-
-def _add_import(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Generate a recipe module from an existing mkosi tree."
-    cmd = sub.add_parser(
-        "import",
-        help=help_text,
-        description=(
-            help_text + " TREE is one variant directory (it holds mkosi.conf) or a "
-            "directory of them as `compile` writes them; the first (default first) becomes "
-            "Recipe.items and every other one a Variant holding what differs. "
-            "mkosi.conf, mkosi.extra, mkosi.skeleton, the phase scripts and the lines the "
-            "compiler generates map back to declarations; what has none is kept verbatim "
-            "(File, Unit, Hook, Setting); what cannot be kept is listed as a note."
-        ),
-        epilog=(
-            "Without --output the module goes to stdout and the report to stderr. The report "
-            "ends with a round-trip line: whether the recipe compiles back to TREE."
-        ),
-    )
-    cmd.set_defaults(handler=_cmd_import)
-    cmd.add_argument("tree", type=Path, help="The mkosi tree to read.")
-    cmd.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Write the recipe module to FILE (default: print it).",
-    )
-    cmd.add_argument(
-        "--name", default=None, help="Recipe name (default: the tree's directory name)."
-    )
-    cmd.add_argument(
-        "--dialect",
-        choices=("current", "nethermind-v1"),
-        default=None,
-        help="Emission dialect TREE was written with (default: guessed from the tree).",
-    )
-    cmd.add_argument(
-        "--format",
-        choices=("text", "json"),
-        default="text",
-        help="Report format (default: %(default)s); json prints the Imported fields.",
-    )
-    cmd.add_argument("--force", action="store_true", help="Overwrite --output FILE if it exists.")
 
 
 def _interval(raw: str) -> float:
@@ -2433,7 +2385,7 @@ def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
     names = _variants(loaded, args)
     selected = _with_lockfile(img, args).select(names)
     result, _ = emit(selected, destination)
-    tree = read_variant_tree(destination, result.profiles, layout=tree_layout(selected))
+    tree = read_variant_tree(destination, result.profiles)
     print(f"compiled {result.path}", file=out)
     print(f"  variants:      {', '.join(result.profiles)}", file=out)
     print(f"  recipe_digest: {selected.digest()}", file=out)
@@ -3715,7 +3667,7 @@ def _unit_file_name(path: Path) -> str:
 
 def _cmd_units_convert(args: argparse.Namespace, out: TextIO) -> int:
     from tundravm._units.parse import convert
-    from tundravm.declarative.importer import declarations_source
+    from tundravm.declarative._writer import declarations_source
 
     if args.name is not None and len(args.files) != 1:
         raise ValidationError("--name names one FILE.", hint="Drop --name, or pass one FILE.")
@@ -3750,7 +3702,7 @@ def _adopt_defaults(conversion: Conversion, out: TextIO) -> None:
     import difflib
 
     from tundravm._units.parse import rendered, with_defaults
-    from tundravm.declarative.importer import declarations_source
+    from tundravm.declarative._writer import declarations_source
 
     decl = conversion.declaration
     if not conversion.typed or not conversion.absent:
@@ -3802,41 +3754,6 @@ def _cmd_units_render(args: argparse.Namespace, out: TextIO) -> int:
     for index, entry in enumerate(found):
         print(("\n" if index else "") + f"# {entry.path}", file=out)
         out.write(entry.content.decode("utf-8") if entry.content else "")
-    return EXIT_OK
-
-
-def _cmd_import(args: argparse.Namespace, out: TextIO) -> int:
-    target: Path | None = args.output
-    if target is not None and target.exists() and not args.force:
-        raise ValidationError(
-            f"{target} exists.",
-            hint="Pass --force to overwrite it, or another --output.",
-            context={"output": str(target)},
-        )
-    found = import_tree(args.tree, name=args.name, dialect=args.dialect, output=target)
-    if target is not None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(found.recipe_source, encoding="utf-8")
-    if args.format == "json":
-        print(json_report("import", found.to_json()), file=out)
-        if target is not None:
-            print(f"wrote {target}", file=sys.stderr)
-        return EXIT_OK
-    report = out if target is not None else sys.stderr
-    if target is None:
-        out.write(found.recipe_source)
-    else:
-        print(f"wrote {target}", file=report)
-    coverage = found.coverage
-    print(
-        f"coverage: {coverage['declared']} declared, {coverage['verbatim']} verbatim, "
-        f"{coverage['lost']} lost",
-        file=report,
-    )
-    for reason, notes in found.grouped_notes().items():
-        print(f"{reason} ({len(notes)}):", file=report)
-        for note in notes:
-            print(f"  note: {note}", file=report)
     return EXIT_OK
 
 

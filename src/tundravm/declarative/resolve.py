@@ -31,6 +31,7 @@ from .model import (
     BASE_VARIANT,
     EMPTY_FRAGMENT,
     PHASES,
+    TARGETS,
     BootStep,
     Build,
     Declaration,
@@ -311,6 +312,22 @@ def _targets(chain: Sequence[Variant]) -> tuple[Target, ...]:
         if variant.outputs:
             targets = variant.outputs
     return targets
+
+
+def recipe_targets(recipe: Recipe) -> tuple[Target, ...]:
+    """Every target any variant of *recipe* builds, ``qemu`` first, in ``TARGETS`` order.
+
+    The payload carries the glue of each (inert off its platform), so it is the same
+    whichever variants a build selects; a variant whose ``inherits`` does not resolve adds
+    nothing (resolving it reports why).
+    """
+    found: set[str] = {DEFAULT_TARGET}
+    for variant in recipe.variants:
+        try:
+            found.update(_targets(ancestry(recipe, variant.name)))
+        except ValidationError:
+            continue
+    return tuple(target for target in TARGETS if target in found)  # type: ignore[misc]
 
 
 def _check_targets(state: _Resolution, chain: Sequence[Variant]) -> None:
@@ -893,6 +910,7 @@ def lint(recipe: Recipe, *, variants: Sequence[str] | None = None) -> tuple[Diag
 
 __all__ = [
     "CLOUD_TARGETS",
+    "recipe_targets",
     "COMMON_LEVEL",
     "PLATFORM_LEVEL",
     "Action",

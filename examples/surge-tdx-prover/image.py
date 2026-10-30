@@ -2,21 +2,23 @@
 
 ``recipe`` is the nethermind-tdx platform and base layer plus the prover stack (Raiko, the Taiko
 client and Nethermind, all built from source), a TPM-sealed key, an encrypted
-``/persistent`` disk and secrets delivered over HTTP. ``default`` targets QEMU;
-``azure`` and ``gcp`` add their platform glue; ``devtools`` adds debugging access.
+``/persistent`` disk and secrets delivered over HTTP. One payload carries the Azure and GCP
+glue (inert elsewhere): ``default`` builds the QEMU disk, ``azure`` and ``gcp`` add their
+wrapper images, and ``devtools`` is a profile that adds debugging access.
 See the result with ``tundravm inspect examples/surge-tdx-prover/image.py --variant azure``.
 """
 
 from __future__ import annotations
 
 from examples.fragments import Nethermind, Raiko, TaikoClient
-from examples.nethermind_base import NETHERMIND_V1, NethermindBase, NethermindPlatform
+from examples.nethermind_base import MKOSI, NethermindBase, NethermindPlatform
 
 from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import (
     Disk,
     File,
     Fragment,
+    Group,
     Key,
     Package,
     Policy,
@@ -99,8 +101,7 @@ disk = Disk(
 prover_stack = Fragment(
     "prover-stack",
     items=(
-        # The historical tree runs groupadd itself; a new recipe declares Group("eth").
-        Run("groupadd -r eth", name="eth-group"),
+        Group("eth"),
         Raiko(),
         TaikoClient(),
         Nethermind(),
@@ -126,7 +127,7 @@ system = Fragment(
 recipe = Recipe(
     name="surge-tdx-prover",
     platform=NethermindPlatform(),
-    mkosi=NETHERMIND_V1,
+    mkosi=MKOSI,
     # The historical image formats the disk disk-setup picks at boot (disk-device-guessed)
     policy=Policy(storage_safety="warn"),
     items=(

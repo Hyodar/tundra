@@ -38,8 +38,13 @@ def _recipe(*items: object, mkosi: Mkosi = DEFAULT_MKOSI, clean: bool = True) ->
 
 
 def _conf(recipe: Recipe, tmp_path: Path) -> list[str]:
+    """The root ``mkosi.conf`` and the payload's, as lines."""
     compile(recipe).write(tmp_path)
-    return (tmp_path / "default" / "mkosi.conf").read_text(encoding="utf-8").splitlines()
+    return [
+        line
+        for path in ("mkosi.conf", "payload/mkosi.conf")
+        for line in (tmp_path / path).read_text(encoding="utf-8").splitlines()
+    ]
 
 
 def test_typed_fields_write_the_tree_the_settings_wrote() -> None:
@@ -56,16 +61,18 @@ def test_typed_fields_write_their_mkosi_keys(tmp_path: Path) -> None:
         "PackageCacheDirectory=mkosi.cache",
         "CompressOutput=zstd",
         "ManifestFormat=changelog",
-        "WithNetwork=false",
-        "CleanPackageMetadata=false",
+        "WithNetwork=no",
+        "CleanPackageMetadata=no",
     ):
         assert line in conf
 
 
 def test_defaults_write_the_opinionated_keys(tmp_path: Path) -> None:
     conf = _conf(_recipe(), tmp_path)
-    assert {"ManifestFormat=json", "WithNetwork=true", "CleanPackageMetadata=true"} <= set(conf)
-    assert not any(line.startswith(("OutputDirectory=", "CompressOutput=")) for line in conf)
+    assert {"ManifestFormat=json", "WithNetwork=no", "CleanPackageMetadata=yes"} <= set(conf)
+    # %O must name a directory when the root mkosi.conf is parsed
+    assert "OutputDirectory=mkosi.output" in conf
+    assert not any(line.startswith("CompressOutput=") for line in conf)
 
 
 def test_a_setting_overrides_the_typed_field(tmp_path: Path) -> None:
@@ -86,10 +93,10 @@ def test_every_compiler_mapped_setting_names_its_typed_field() -> None:
     assert set(_SINGLE_SETTINGS) | set(_BOOL_SETTINGS) == set(TYPED_SETTINGS)
 
 
-def test_a_kernel_with_a_config_passes_its_variables_through_unasked(tmp_path: Path) -> None:
-    # examples/nethermind_base.py dropped Setting("Build", "Environment", ("KERNEL_IMAGE",
-    # "KERNEL_VERSION")): the compiler writes both for a Kernel(config=...) on its own.
+def test_a_kernel_with_a_config_passes_no_host_variable(tmp_path: Path) -> None:
+    """The kernel build script sets KERNEL_IMAGE and KERNEL_VERSION itself: nothing of the
+    host's environment enters the build (no ``Environment=NAME`` pass-through)."""
     conf = _conf(nethermind_base, tmp_path)
-    assert conf.count("Environment=KERNEL_IMAGE") == 1
-    assert conf.count("Environment=KERNEL_VERSION") == 1
-    assert f"Seed={SEED}" in conf and "OutputDirectory=build" in conf
+    assert not any(line.startswith("Environment=") and "=" not in line[12:] for line in conf)
+    assert "Environment=KERNEL_IMAGE" not in conf and "Environment=KERNEL_VERSION" not in conf
+    assert f"Seed={SEED}" in conf and "WithNetwork=yes" in conf

@@ -40,7 +40,6 @@ from tundravm._source import Install as SourceInstall
 from tundravm._units.render import activation_unit, dropin_unit, render
 from tundravm.errors import ValidationError
 from tundravm.models import (
-    LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP,
     MODULES_PATH,
     NETWORK_SETUP_UNIT,
     VALID_PHASES,
@@ -85,7 +84,6 @@ from .model import (
     Git,
     Group,
     Hook,
-    Http,
     Kernel,
     KernelConfig,
     Key,
@@ -112,8 +110,6 @@ from .model import (
 from .resolve import CLOUD_TARGETS, builtin_steps, order_hooks, step_nodes
 from .systemd import UNIT_REF_KINDS, Dynamic, Root, UnitTarget, target_unit
 
-HISTORICAL = "nethermind-v1"
-"""The dialect that reproduces the historical nethermind-tdx tree byte for byte."""
 INIT_SERVICE = "runtime-init.service"
 UNIT_DIRECTORY = "/usr/lib/systemd/system"
 NEEDS_DROPIN = "10-tundravm-needs.conf"
@@ -145,28 +141,17 @@ _LIMIT_RESOURCES = frozenset(
         "STACK",
     }
 )
-_AZURE_UNIT = f"{UNIT_DIRECTORY}/azure-complete-provisioning.service"
-_AZURE_POSTINST = (
-    "mkosi-chroot systemctl enable azure-complete-provisioning.service",
-    "mkosi-chroot mkdir -p /etc/systemd/system/minimal.target.wants",
-    "mkosi-chroot ln -sf "
-    "/usr/lib/systemd/system/azure-complete-provisioning.service "
-    "/etc/systemd/system/minimal.target.wants/azure-complete-provisioning.service",
-)
 
 
 @dataclass(slots=True)
 class StateBuilder:
     """Writes resolved declarations into :attr:`state`, one profile at a time.
 
-    *historical* selects the ``nethermind-v1`` spelling: groups and users as
-    postinst lines, source builds fetched in the build sandbox.
     :attr:`modules` holds the runtime-tool configurations applied to each
     profile, which ``check()`` inspects.
     """
 
     state: RecipeState
-    historical: bool = False
     modules: dict[str, list[Module]] = field(default_factory=dict)
 
     # ── profiles ────────────────────────────────────────────────────────
@@ -199,8 +184,7 @@ class StateBuilder:
 
     def default_debloat(self, name: str) -> None:
         """Give standalone profile *name* the default debloat configuration."""
-        keep = LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP if self.historical else None
-        _set_debloat(self.state.ensure_profile(name), _debloat_config(systemd_units_keep=keep))
+        _set_debloat(self.state.ensure_profile(name), _debloat_config())
 
     def targets(
         self, name: str, targets: Sequence[Target], *, inherited: Sequence[Target] | None
@@ -236,22 +220,13 @@ class StateBuilder:
         *,
         full: Sequence[Declaration],
         reemit: Sequence[Unit | Service | Task | Mount] = (),
-        skip: Collection[Declaration] = (),
-        scripts: Mapping[Declaration, str] | None = None,
     ) -> None:
         """Write *items* into profile *name*'s own state, in declaration order.
 
-        *full* is the whole resolved variant: it decides runtime-init wiring.
-        Under ``nethermind-v1`` groups and users are postinst lines at their
-        declaration position, spelled as the historical tree spells them. Hooks
-        in *skip* keep their place in the hook order but are not emitted; hooks
-        in *scripts* run the script they map to instead of their own. *reemit*
+        *full* is the whole resolved variant: it decides runtime-init wiring. *reemit*
         units are written again so they wait for runtime-init.
         """
         profile = self.state.ensure_profile(name)
-        if self.historical and not profile.debloat_explicit:  # the pinned nethermind-v1 list
-            keep = LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP
-            profile.debloat = replace(profile.debloat, systemd_units_keep=keep)
         steps = {step for step, _, _ in step_nodes(full)}
         hooks = iter(order_hooks([item for item in items if isinstance(item, Hook)]))
         units = declared_units(full)
@@ -269,30 +244,25 @@ class StateBuilder:
                     _file(profile, item)
                 case FileTree():
                     _directory(profile, item)
-                case Group() if self.historical:
-                    _shell(profile, groupadd_line(item), phase="postinst")
-                case User() if self.historical:
-                    _shell(profile, useradd_line(item), phase="postinst")
                 case Group():
                     _group(profile, item)
                 case User():
                     _user(profile, item)
                 case Unit():
-                    _unit(profile, item, steps=steps, per_step=not self.historical, units=units)
+                    _unit(profile, item, steps=steps, units=units)
                 case Service():
                     _service(
                         profile,
                         item,
                         units,
                         users=users,
-                        historical=self.historical,
                         mounts=mounts,
                     )
                     _finish_service(profile, item)
                 case Task():
-                    _task(profile, item, users=users, historical=self.historical, units=units)
+                    _task(profile, item, users=users, units=units)
                 case Mount():
-                    _mount(profile, item, steps=steps, per_step=not self.historical, units=units)
+                    _mount(profile, item, steps=steps, units=units)
                 case Template():
                     _template(profile, item)
                 case Setting() if (item.section, item.key) == BUILD_SOURCES:
@@ -306,9 +276,7 @@ class StateBuilder:
                         profile.build_sources.append((source, dest))
                 case Hook():
                     hook = next(hooks)
-                    if hook not in skip:
-                        script = (scripts or {}).get(hook, hook.script)
-                        _shell(profile, script, phase=hook.phase, env=dict(hook.env), cwd=hook.cwd)
+                    _shell(profile, hook.script, phase=hook.phase, env=dict(hook.env), cwd=hook.cwd)
                 case Repository():
                     profile.repositories.append(_repository(item))
                 case Partition():
@@ -318,16 +286,14 @@ class StateBuilder:
                         )
                     )
                 case Debloat():
-                    _set_debloat(profile, _debloat(item, historical=self.historical))
+                    _set_debloat(profile, _debloat(item))
                 case Key() | Disk() | Secrets():
                     if not runtime_done:
                         self._runtime_tools(name, profile, items, dict(builtin_steps(full)))
                         runtime_done = True
                 case Build():
-                    self._build_from(profile, source_build(item, mark_unpinned=not self.historical))
+                    self._build_from(profile, source_build(item))
                 case Kernel():
-                    if self.historical and isinstance(item.source, Http):
-                        profile.build_packages.add("curl")  # the build hook downloads it
                     profile.build_packages.update(item.build_packages)
                 case BootStep() | Setting() | KernelConfig() | RuntimeTools():
                     pass  # boot steps register below; the rest is per-tree configuration
@@ -337,14 +303,12 @@ class StateBuilder:
                 _finish_service(profile, unit)
                 continue
             if isinstance(unit, Task):
-                _task(profile, unit, users={unit.unit[: -len(".service")]}, historical=False)
+                _task(profile, unit, users={unit.unit[: -len(".service")]})
                 continue
             if isinstance(unit, Mount):
-                _mount(profile, unit, steps=steps, per_step=not self.historical, states=False)
+                _mount(profile, unit, steps=steps, states=False)
                 continue
-            _unit(
-                profile, unit, steps=steps, per_step=not self.historical, states=False, units=units
-            )
+            _unit(profile, unit, steps=steps, states=False, units=units)
         for step in (item for item in items if isinstance(item, BootStep)):
             profile.init_scripts.append(
                 InitScriptEntry(
@@ -365,9 +329,9 @@ class StateBuilder:
                 hint="Give each source build a unique name.",
                 context={"profile": profile.name, "build_from": spec.name},
             )
-        profile.build_packages.update(spec.build_packages(mounted=not self.historical))
+        profile.build_packages.update(spec.build_packages())
         profile.source_builds[spec.name] = spec
-        _shell(profile, spec.render(mounted=not self.historical), phase="build")
+        _shell(profile, spec.render(), phase="build")
 
     def _runtime_tools(
         self,
@@ -449,29 +413,19 @@ class StateBuilder:
         _add_file(
             profile, "/usr/bin/azure-complete-provisioning", azure.AZURE_PROVISIONING_SCRIPT, "0755"
         )
-        network_setup = self.historical or ships_unit(
-            self.state.effective_profile(profile.name), NETWORK_SETUP_UNIT
-        )
-        if self.historical:
-            _add_file(profile, _AZURE_UNIT, azure.AZURE_PROVISIONING_SERVICE)
-            for line in _AZURE_POSTINST:
-                _shell(profile, line, phase="postinst")
-        else:
-            _task(profile, azure.provisioning_task(network_setup), users=(), historical=False)
+        network_setup = ships_unit(self.state.effective_profile(profile.name), NETWORK_SETUP_UNIT)
+        _task(profile, azure.provisioning_task(network_setup), users=())
         _set_targets(profile, ("azure",))
 
     def _gcp(self, profile: ProfileState) -> None:
         """The GCP integration: udev, metadata DNS, disk naming rules and their helper.
 
-        ``nethermind-v1`` ships a static ``/etc/resolv.conf``; the current dialect ships it
-        under ``/usr/lib`` and copies it into place at boot on Compute Engine only."""
+        The metadata resolver ships under ``/usr/lib`` and is copied into place at boot on
+        Compute Engine only."""
         profile.packages.add("udev")
         _add_file(profile, "/etc/hosts", gcp.GCP_HOSTS)
-        if self.historical:
-            _add_file(profile, "/etc/resolv.conf", gcp.GCP_RESOLV_CONF)
-        else:
-            _add_file(profile, gcp.GCP_RESOLV_CONF_PATH, gcp.GCP_RESOLV_CONF)
-            _service(profile, gcp.metadata_dns_service(), users=(), historical=False)
+        _add_file(profile, gcp.GCP_RESOLV_CONF_PATH, gcp.GCP_RESOLV_CONF)
+        _service(profile, gcp.metadata_dns_service(), users=())
         _add_file(
             profile, "/usr/lib/udev/rules.d/65-gce-disk-naming.rules", gcp.GCE_DISK_NAMING_RULES
         )
@@ -566,18 +520,17 @@ def _debloat_config(
     )
 
 
-def _debloat(item: Debloat, *, historical: bool = False) -> DebloatConfig:
-    """*item*'s config; ``nethermind-v1`` keeps its pinned unit list by default."""
+def _debloat(item: Debloat) -> DebloatConfig:
+    """*item*'s config."""
     if not item.enabled:
         return DebloatConfig(enabled=False)
-    legacy = LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP if historical else None
     return _debloat_config(
         paths_remove=item.remove,
         paths_skip=item.keep_paths,
         extra_remove_paths=item.extra_remove,
         paths_skip_for_profiles={k: tuple(v) for k, v in item.keep_paths_by_variant.items()},
         systemd_minimize=item.minimize_systemd,
-        systemd_units_keep=item.keep_units or legacy,
+        systemd_units_keep=item.keep_units or None,
         extra_keep_units=item.keep_units_extra,
         systemd_bins_keep=item.keep_binaries,
         keep_modules=item.keep_modules,
@@ -625,30 +578,6 @@ def _user(profile: ProfileState, user: User) -> None:
             groups=tuple(user.groups),
         )
     )
-
-
-def groupadd_line(group: Group) -> str:
-    """The ``nethermind-v1`` postinst line that creates *group*."""
-    gid = "" if group.gid is None else f" --gid {group.gid}"
-    return f"mkosi-chroot groupadd{' --system' if group.system else ''}{gid} {group.name}"
-
-
-def useradd_line(user: User) -> str:
-    """The ``nethermind-v1`` postinst line that creates *user* (no ``--create-home``)."""
-    parts = ["mkosi-chroot useradd"]
-    if user.system:
-        parts.append("--system")
-    if user.home is not None:
-        parts.extend(("--home-dir", user.home))
-    parts.extend(("--shell", user.shell))
-    if user.uid is not None:
-        parts.extend(("--uid", str(user.uid)))
-    if user.primary_group is not None:
-        parts.extend(("--gid", str(user.primary_group)))
-    if user.groups:
-        parts.extend(("--groups", ",".join(user.groups)))
-    parts.append(user.name)
-    return " ".join(parts)
 
 
 # ── files ────────────────────────────────────────────────────────────────
@@ -842,7 +771,6 @@ def _unit(
     unit: Unit,
     *,
     steps: Collection[str],
-    per_step: bool,
     states: bool = True,
     units: Collection[str] | None = None,
 ) -> None:
@@ -852,7 +780,7 @@ def _unit(
     through the :data:`NEEDS_DROPIN` drop-in. Without *states* its enable,
     disable and mask lines are left to the profile it extends.
     """
-    waits = wait_units(_steps(unit.needs), steps=steps, per_step=per_step)
+    waits = wait_units(_steps(unit.needs), steps=steps)
     waits = (*waits, *ready_units(unit.needs))
     if unit.content is not None:
         content = unit.content
@@ -911,7 +839,6 @@ def _service(
     units: Collection[str] | None = None,
     *,
     users: Collection[str] = (),
-    historical: bool = False,
     mounts: Collection[str] = (),
 ) -> None:
     """Lower *service*; ``user=None`` declares its system user unless *users* has it.
@@ -938,7 +865,7 @@ def _service(
     command = service.exec_start
     fields = _unit_fields(name, service, units)
     if service.user is None:
-        fields["user"] = _system_user(profile, service.default_user, users, historical)
+        fields["user"] = _system_user(profile, service.default_user, users)
     if service.state and not service.working_dir:
         fields["working_dir"] = f"/var/lib/{service.state}"
     on_mounts = _mounted_paths(service, mounts)
@@ -1148,7 +1075,7 @@ def _git(source: Git) -> GitSource:
     return GitSource(source.url, source.ref, subdir=source.subdir, submodules=source.submodules)
 
 
-def source_build(build: Build, *, mark_unpinned: bool = True) -> SourceBuild:
+def source_build(build: Build) -> SourceBuild:
     """The compiler's source build for *build*."""
     source: GitSource | HttpSource
     if isinstance(build.source, Git):
@@ -1183,7 +1110,6 @@ def source_build(build: Build, *, mark_unpinned: bool = True) -> SourceBuild:
         build=recipe,
         install=steps,
         cache_key=build.cache_namespace,
-        mark_unpinned=mark_unpinned,
     )
 
 
@@ -1361,15 +1287,11 @@ def _finish_service(profile: ProfileState, service: Service) -> None:
     profile.services[profile.services.index(spec)] = replace(spec, **changes)  # type: ignore[arg-type]
 
 
-def _system_user(profile: ProfileState, name: str, users: Collection[str], historical: bool) -> str:
+def _system_user(profile: ProfileState, name: str, users: Collection[str]) -> str:
     """*name*, declared as a system user (``User(name)``) unless *users* or the profile
     already has it: what a ``Service``/``Task`` without ``user=`` runs as."""
     if name not in users and not any(u.name == name for u in profile.users):
-        declared = User(name)
-        if historical:
-            _shell(profile, useradd_line(declared), phase="postinst")
-        else:
-            _user(profile, declared)
+        _user(profile, User(name))
     return name
 
 
@@ -1378,7 +1300,6 @@ def _task(
     task: Task,
     *,
     users: Collection[str],
-    historical: bool,
     units: Collection[str] | None = None,
 ) -> None:
     """Lower *task*: a oneshot ``ServiceSpec``, plus an enabled ``.timer`` when scheduled."""
@@ -1392,7 +1313,7 @@ def _task(
         )
     user = task.user
     if user is None:
-        user = _system_user(profile, stem, users, historical)
+        user = _system_user(profile, stem, users)
     command = task.command
     boot = task.schedule is None
     wants = _targets(name, "wants", task.wants, units)
@@ -1437,14 +1358,11 @@ def _mount(
     mount: Mount,
     *,
     steps: Collection[str],
-    per_step: bool,
     states: bool = True,
     units: Collection[str] | None = None,
 ) -> None:
     """Lower *mount* to ``<escaped where>.mount``, enabled through the usual mechanism."""
-    waits = _merged(
-        wait_units(_steps(mount.needs), steps=steps, per_step=per_step), ready_units(mount.needs)
-    )
+    waits = _merged(wait_units(_steps(mount.needs), steps=steps), ready_units(mount.needs))
     requires = _merged(waits, _targets(mount.unit, "requires", mount.requires, units))
     after = _merged(requires, _targets(mount.unit, "after", mount.after, units))
     options = mount.options
@@ -1465,14 +1383,11 @@ def _mount(
 
 
 __all__ = [
-    "HISTORICAL",
     "INIT_SERVICE",
     "StateBuilder",
-    "groupadd_line",
     "inject_after_init",
     "read_source",
     "source_build",
-    "useradd_line",
     "walk_directory",
     "walk_tree",
 ]

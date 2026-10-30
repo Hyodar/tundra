@@ -90,7 +90,7 @@ def test_compile_defaults_to_build_dir(recipe: Path, tmp_path: Path) -> None:
     assert code == EXIT_OK
     assert f"compiled {Path('build') / 'mkosi'}\n" in out
     assert "variants:      default\n" in out
-    assert (tmp_path / "build" / "mkosi" / "default" / "mkosi.conf").is_file()
+    assert (tmp_path / "build" / "mkosi" / "payload" / "mkosi.conf").is_file()
 
 
 def test_lock_then_frozen_bake(recipe: Path, tmp_path: Path) -> None:

@@ -62,7 +62,7 @@ TEXT_LIMIT = 64 * 1024
 TEXT_BUDGET = 4 * 1024 * 1024
 """Content shown on one page in all; past it a file's content is left out, with a note."""
 SHARED = "(shared)"
-"""The tree group of paths outside every variant directory (``Mkosi(layout="native")``)."""
+"""The tree group of the paths every variant builds (outside the variants' profiles)."""
 STATES = ("present", "added", "edited", "removed", "absent")
 """A declaration's state in one variant, as the matrix shows it."""
 _SHORT = 120
@@ -240,8 +240,7 @@ def _recipe_entry(
             "arch": recipe.platform.arch,
             "snapshot": recipe.platform.snapshot,
             "mirror": recipe.platform.mirror,
-            "dialect": recipe.mkosi.dialect,
-            "layout": recipe.mkosi.layout,
+            "root": recipe.mkosi.root,
             "digest": None,
             "variants": list(names),
         }
@@ -252,8 +251,7 @@ def _recipe_entry(
         "arch": subject.arch,
         "snapshot": subject.snapshot,
         "mirror": subject.mirror,
-        "dialect": subject.mkosi.dialect,
-        "layout": "native" if subject.mkosi.emit_mode == "native_profiles" else "directories",
+        "root": subject.mkosi.root,
         "digest": None,
         "variants": list(names),
     }
@@ -361,22 +359,24 @@ def _variant_entries(
 
 
 def _group(entries: Sequence[Entry], variants: Sequence[str]) -> dict[str, list[tuple[str, Entry]]]:
-    """Tree entries by variant directory (paths relative to it); the rest under :data:`SHARED`."""
-    tops = set(variants)
+    """Tree entries by the variant whose profile holds them; the rest under :data:`SHARED`."""
+    from .declarative.lifecycle import _layer_of
+
     groups: dict[str, list[tuple[str, Entry]]] = {name: [] for name in variants}
     for entry in entries:
-        top, _, rest = entry.path.partition("/")
-        if top in tops:
-            if rest:
-                groups[top].append((rest, entry))
-        else:
+        layer = _layer_of(entry.path)
+        if layer in groups:
+            groups[layer].append((entry.path, entry))
+        elif layer == "":
             groups.setdefault(SHARED, []).append((entry.path, entry))
     return groups
 
 
 def _file_record(rel: str, entry: Entry, budget: list[int]) -> dict[str, Any]:
+    from .explain import _layer_path
+
     record: dict[str, Any] = {"path": rel, "mode": f"{entry.mode:04o}"}
-    stage, _, rest = rel.partition("/")
+    stage, _, rest = _layer_path(rel).partition("/")
     if stage in ("mkosi.extra", "mkosi.skeleton") and rest:
         record["image_path"] = f"/{rest}"
     if entry.symlink is not None:
@@ -468,8 +468,13 @@ def _declarations(
                         files.append(rel)
                         group = view[rel][0]
                         record = records[group].get(rel)
-                        if record is not None and "declarations" in record:
-                            record["declarations"].append(describe_identity(key))
+                        described = describe_identity(key)
+                        if (
+                            record is not None
+                            and "declarations" in record
+                            and described not in record["declarations"]
+                        ):
+                            record["declarations"].append(described)
             changed = (
                 list(_changed_fields(first, item))
                 if item is not None and first is not None and item != first
@@ -553,7 +558,7 @@ def _clip_script(script: str) -> tuple[str, bool]:
 def _scripts(img: Lowered, name: str, resolutions: Mapping[str, _Resolution]) -> dict[str, Any]:
     """*name*'s hooks in stage order, its runtime-init steps in order and its sources."""
     pins = img.build_pins()
-    profile = img.pinned_state(pins, variant=name).effective_profile(name)
+    profile = img.pinned_state(pins).effective_profile(name)
     items = resolutions[name].items.values() if name in resolutions else ()
     hooks_by_script = {
         hook.script.strip(): describe_identity(identity(hook))
@@ -605,7 +610,7 @@ def _scripts(img: Lowered, name: str, resolutions: Mapping[str, _Resolution]) ->
                 "install": [install.dest for install in spec.install],
             }
         )
-    kernel = img.kernel_for(name)
+    kernel = img.kernel
     kernel_source = img.kernel_source(name)
     return {
         "hooks": hooks,

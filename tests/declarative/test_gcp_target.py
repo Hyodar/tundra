@@ -1,10 +1,11 @@
-"""A ``gcp`` target variant gets the GCP platform integration."""
+"""A ``gcp`` target: the GCP glue in the payload, inert off GCE, and the tar.gz wrapper."""
 
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import conf_list
+from tundravm.compiler import GCP_CONVERTER
 from tundravm.declarative import Recipe, Variant, compile, resolve
 from tundravm.platforms.gcp import (
     GCE_DISK_NAMING_RULES,
@@ -86,7 +87,7 @@ def test_gce_disk_naming_rules_content() -> None:
 def test_gcp_variant_emits_nvme_id_script(tree: CompiledTree) -> None:
     assert NVME_ID in tree.files(variant="gcp")
     modes = {entry.path: entry.mode for entry in compile(RECIPE, variants=["gcp"]).entries}
-    assert modes[f"gcp/{NVME_ID}"] == 0o755
+    assert modes[f"payload/{NVME_ID}"] == 0o755
     assert tree.read(NVME_ID, variant="gcp") == GOOGLE_NVME_ID
 
 
@@ -97,14 +98,26 @@ def test_google_nvme_id_content() -> None:
     assert "serial" in GOOGLE_NVME_ID
 
 
-def test_gcp_variant_sets_output_target(tree: CompiledTree) -> None:
+def test_gcp_variant_builds_the_tar_wrapper(tree: CompiledTree) -> None:
     assert resolve(RECIPE, variant="gcp").outputs == ("gcp",)
-    assert "PostOutputScripts=scripts/gcp-postoutput.sh" in tree.conf(variant="gcp").splitlines()
-    assert tree.exists("scripts/gcp-postoutput.sh", variant="gcp")
+    wrapper = tree.root / "mkosi.images/gcp"
+    conf = (wrapper / "mkosi.conf").read_text()
+    assert "Dependencies=payload\n" in conf and "Output=gcp\n" in conf
+    assert (wrapper / "mkosi.postoutput.d/tar").read_text() == GCP_CONVERTER
+    assert "--format=oldgnu" in GCP_CONVERTER and "gzip -n" in GCP_CONVERTER
+    # gcp only adds the wrapper: no profile overlay
+    assert tree.layers("gcp") == tree.layers("default")
 
 
-def test_gcp_variant_does_not_affect_default_variant(tree: CompiledTree) -> None:
-    assert "udev" not in conf_list(tree.conf(variant="default"), "Packages")
+def test_the_default_variant_boots_the_same_payload_with_the_glue(tree: CompiledTree) -> None:
+    """The glue is inert off GCE, so the QEMU disk carries the same UKI as the GCP image."""
+    assert "udev" in conf_list(tree.conf(variant="default"), "Packages")
     default_files = tree.files(variant="default")
-    assert HOSTS not in default_files
+    assert HOSTS in default_files and DNS_UNIT in default_files
     assert RESOLV_CONF not in default_files
+
+
+def test_a_recipe_without_the_gcp_target_carries_no_gcp_glue(tmp_path: Path) -> None:
+    tree = compile_tree(Recipe("plain"), path=tmp_path / "tree")
+    assert DNS_UNIT not in tree.files() and HOSTS not in tree.files()
+    assert not (tree.root / "mkosi.images/gcp").exists()

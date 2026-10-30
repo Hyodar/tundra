@@ -19,13 +19,13 @@ An `Image` is one variant. It compiles in memory, with no temporary directory to
 
 | Query | Returns |
 |---|---|
-| `image.packages` | `{name: "runtime" or "build"}`, from the compiled `mkosi.conf`, including packages the compiler adds (`passwd`, the runtime tools' packages) |
+| `image.packages` | `{name: "runtime" or "build"}`, from the compiled payload configuration (`payload/mkosi.conf`, its `mkosi.conf.d/*.conf` and the variant's profile overlay), including packages the compiler adds (`passwd`, the runtime tools' packages) |
 | `image.file(path)`, `image.files` | `ImageFile`: `content` (bytes), `text`, `mode`, `stage` (`extra` or `skeleton`), `owner` (always `root`), `origin` (its provenance, empty for files the compiler writes) and `fragment` (the innermost fragment that declared it); `files` maps every absolute path to one |
 | `image.unit(name)`, `image.service(name)` | `UnitView` of a shipped unit (`.service` is optional): `get(section, key)`, `values(section, key)`, `requires(unit)`, `wants(unit)`, `after(unit)`, `wanted_by`, `exec_start`, `user`, `environment` (a dict), `enabled`, `text` |
 | `image.users`, `image.groups`, `image.builds` | The declared `User`, `Group` and `Build` values, by name |
 | `image.init_steps` | `InitStep(name, after, script, builtin)` in the order runtime-init runs them (the steps' topological order; `after` is every step it waits for, its `before=` edges included); the built-in `keys`, `disks` and `secrets` steps have `builtin=True` and no script |
 | `image.hooks(stage)` | The `Hook`s of one stage (`postinst`, `finalize`...), in run order |
-| `image.settings(section)` | `{key: values}` of one `mkosi.conf` section |
+| `image.settings(section)` | `{key: values}` of one section as mkosi reads it for the payload: the root `mkosi.conf`, `payload/mkosi.conf` and `mkosi.conf.d/*.conf`, then the variant's overlay (list settings accumulate) |
 | `image.lint()` | The variant's findings, as `lint(recipe, variants=[variant])` reports them |
 | `image.tree`, `image.resolved`, `image.recipe` | The raw `Tree` (for golden comparisons), the `Resolved` variant, the planned recipe |
 
@@ -117,7 +117,7 @@ def test_service_needs_its_user():
 compile_tree(recipe, *, variants=None, path=None) -> CompiledTree
 ```
 
-For a test that needs real files (a CLI run, a tool reading the tree), `compile_tree` writes the recipe (every variant, or the names in `variants`) into `path` or a fresh temporary directory, without a lockfile. `CompiledTree` has `root`, `variants` and `default_variant`; `variant(name)` is a variant's directory, and `files`, `read`, `exists`, `path`, `conf`, `unit`, `script` and `runtime_init` take an optional `variant=` (default: the first compiled variant). Prefer `fragment_plan` and `plan` for assertions: they need no disk and answer typed questions.
+For a test that needs real files (a CLI run, a tool reading the tree), `compile_tree` writes the recipe (every variant, or the names in `variants`) into `path` or a fresh temporary directory, without a lockfile. `CompiledTree` has `root`, `variants` and `default_variant`; `layers(name)` are the configuration directories a variant builds from (`payload/`, then its `payload/mkosi.profiles/<name>/` when it adds content) and `variant(name)` the last of them; `files`, `read`, `exists`, `path` (the overlay's file wins), `conf` (the payload's `mkosi.conf`, `mkosi.conf.d/*.conf` and the overlay's, as one text), `unit`, `script(phase)` and `scripts(phase)` (the `mkosi.<phase>.d/` scripts of every layer, in run order) and `runtime_init` take an optional `variant=` (default: the first compiled variant); `main_conf()` is the root `mkosi.conf`. Prefer `fragment_plan` and `plan` for assertions: they need no disk and answer typed questions.
 
 ## Golden trees
 
@@ -140,7 +140,7 @@ def test_committed_tree_is_current():
 
 `compile(recipe)` without `lock=` ignores any lockfile and builds sources from their refs, while `tundravm compile` applies `build/tundravm.lock` when it exists. Compare like with like: pass the lock when the committed tree was compiled with one.
 
-To pin one variant of a fragment's output, compare its plan's tree: `assert_tree(fragment_plan(APP).tree, Path("tests/golden/app"))` (the tree's top directory is the variant, `default`).
+To pin one variant of a fragment's output, compare its plan's tree: `assert_tree(fragment_plan(APP).tree, Path("tests/golden/app"))` (the whole tree: root `mkosi.conf`, `mkosi.images/`, `payload/`).
 
 ```bash
 TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests/test_recipe.py   # accept the new tree, then review the git diff
@@ -390,7 +390,7 @@ uv run pytest tests/unit/test_public_surface.py    # tundravm.__all__ against th
 `tests/integration/test_templates_bake.py` (marker `integration`) bakes two `init` templates for real with `LocalLinuxBackend(mkosi_args=["--format=directory"])`, so it needs a host the Linux backend builds on and non-interactive `sudo` (the checks read the built tree as root), and is skipped without them. The directory format skips the UKI and the disk image but still runs every build script and installs the kernel; `uv run pytest` runs both bakes in CI on every push.
 
 - **`service`**: the generated `app.service` (`ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www`, `User=app`, the strict sandbox) is linked into `minimal.target.wants`, Debian's busybox has its `httpd` applet, and `/srv/www/index.html` and the `app` user are in the tree.
-- **`cloud`** (the `default` variant, plus two extra `Repository` declarations, one with `in_image=False`): `mkosi.conf` sets `Snapshot=20251113T083151Z` and no `Mirror=` or `SandboxTrees=`; `Backports` writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and pins sid to 100, and the image still runs trixie's 6.12 kernel; `EfiStub` installs its pinned `systemd-boot-efi` from the image root and leaves no `.deb` behind; only the `in_image=True` repository is listed in the image's `/etc/apt`; `runtime-init.service` waits for `network-online.target` because the variant ships no `network-setup.service`.
+- **`cloud`** (the `default` variant, plus two extra `Repository` declarations, one with `in_image=False`): the root `mkosi.conf` sets `Snapshot=20251113T083151Z` and `ToolsTreeSnapshot=20251113T083151Z` and no `Mirror=` or `SandboxTrees=`; `Backports` writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and pins sid to 100, and the image still runs trixie's 6.12 kernel; `EfiStub` installs its pinned `systemd-boot-efi` from the image root and leaves no `.deb` behind; only the `in_image=True` repository is listed in the image's `/etc/apt`; `runtime-init.service` waits for `network-online.target` because the variant ships no `network-setup.service`.
 
 ```bash
 uv run pytest tests/integration/test_templates_bake.py -m integration   # the template bakes alone

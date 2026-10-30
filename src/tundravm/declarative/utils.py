@@ -4,10 +4,7 @@ Each is a :class:`Composite`: a :class:`Fragment` whose configuration is its own
 dataclass fields, so ``EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1")`` reads like a
 declaration and goes wherever a ``Fragment`` does.
 
-The committed ``examples/surge-tdx-prover/mkosi`` trees pin their output. Under
-``Mkosi(dialect="nethermind-v1")`` the account lines and build hooks are the
-historical ones; the ``current`` dialect lowers the ``Group``/``User``
-declarations through the compiler's account prelude instead.
+The committed ``examples/surge-tdx-prover/mkosi`` tree pins their output.
 """
 
 from __future__ import annotations
@@ -54,7 +51,6 @@ from .model import (
     Package,
     Port,
     Ready,
-    Setting,
     Task,
     Unit,
     User,
@@ -69,10 +65,6 @@ TdxsType = Literal["tdx", "azure", "gcp", "simulator"]
 TUNDRA_TOOLS = Git("https://github.com/Hyodar/tundra-tools.git", "master")
 """The ``tundra-tools`` repository :class:`Tdxs` builds from by default."""
 
-BACKPORTS_TREE = (
-    "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
-)
-"""The ``nethermind-v1`` ``SandboxTrees=`` entry that exposes the generated sources to apt."""
 DEFAULT_DEBIAN_MIRROR = "http://deb.debian.org/debian"
 """The mirror :class:`Backports` uses when neither it nor the recipe sets one."""
 _SNAPSHOT_ROOT = "https://snapshot.debian.org"
@@ -97,8 +89,8 @@ _UNSAFE_PASSWORD = frozenset('"$`\\\n')
 class Backports(Composite):
     """Debian backports (and, with *include_sid*, sid) sources for apt during the build.
 
-    Neither lands in the image. The ``current`` dialect writes them at compile time
-    to the variant's ``mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources``
+    Neither lands in the image. The compiler writes them to the tree's
+    ``mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources``
     (see :meth:`render_sources`), with ``preferences.d/debian-backports.pref`` pinning
     backports to 200 and sid to 100 (see :meth:`render_preferences`): packages
     come from the release unless it lacks them, then from backports, then from
@@ -107,9 +99,8 @@ class Backports(Composite):
     unstable. *archive_url* is the apt URI used
     verbatim; without it the sources follow the platform's ``mirror`` (a mirror root)
     and ``snapshot`` the way mkosi does, else ``deb.debian.org``. Without
-    *release*, the platform's release. Under ``nethermind-v1`` a sync hook
-    generates them into ``mkosi.builddir``, reading the build's mirror and
-    ``$RELEASE``, with no pins. Fragment name: ``backports``.
+    *release*, the platform's release. Fragment name: ``backports`` (it declares nothing
+    itself: lowering writes its files).
     """
 
     archive_url: str | None = None
@@ -122,42 +113,12 @@ class Backports(Composite):
                 f"Backports: include_sid must be True or False, got {self.include_sid!r}.",
                 hint="Pass include_sid=False to leave sid out of the build's apt sources.",
             )
-        lines: list[str] = []
-        if self.archive_url is not None:
-            lines.append(f'MIRROR="{self.archive_url}"')
-        else:
-            lines.extend(
-                (
-                    'MIRROR=$(jq -r .Mirror "$BUILDDIR/config.json" 2>/dev/null || echo "")',
-                    'if [ -z "$MIRROR" ] || [ "$MIRROR" = "null" ]; then',
-                    '    MIRROR="http://deb.debian.org/debian"',
-                    "fi",
-                )
-            )
-        if self.release is not None:
-            lines.append(f'RELEASE="{self.release}"')
-        lines.append(
-            'cat > "$BUILDDIR/debian-backports.sources" <<EOF\n'
-            + _SOURCES_STANZA.format(mirror="$MIRROR", suite="${RELEASE}-backports")
-            + (
-                "\n" + _SOURCES_STANZA.format(mirror="$MIRROR", suite="sid")
-                if self.include_sid
-                else ""
-            )
-            + "EOF"
-        )
-        return Fragment(
-            "backports",
-            items=(
-                Hook("backports", "sync", "\n".join(lines)),
-                Setting("Build", "SandboxTrees", (BACKPORTS_TREE,)),
-            ),
-        )
+        return Fragment("backports", items=())
 
     def render_sources(
         self, *, mirror: str | None, release: str, snapshot: str | None = None
     ) -> str:
-        """The deb822 sources file the ``current`` dialect writes into the build sandbox.
+        """The deb822 sources file the compiler writes into the build sandbox.
 
         *mirror* (a mirror root), *release* and *snapshot* are the recipe's; the
         fragment's own fields win.
@@ -182,7 +143,7 @@ class Backports(Composite):
         return backports + "\n" + _SOURCES_STANZA.format(mirror=uri, suite="sid")
 
     def render_preferences(self, *, release: str) -> str:
-        """The apt pins the ``current`` dialect writes next to :meth:`render_sources`' file.
+        """The apt pins the compiler writes next to :meth:`render_sources`' file.
 
         sid has no ``NotAutomatic`` flag, so unpinned it would outrank the release
         wherever its versions are newer.
@@ -213,7 +174,7 @@ class EfiStub(Composite):
     *snapshot* is a snapshot ID (``20251113T083151Z``, read from
     ``snapshot.debian.org``) or the URL of a snapshot archive. The snapshot must
     carry *version*: the pool keeps only what some suite listed at that time, so
-    pick the version a suite of that snapshot ships. Outside ``nethermind-v1`` the
+    pick the version a suite of that snapshot ships. The
     package (:attr:`deb_url`) is a source named ``efi-stub``: ``tundravm lock`` pins
     its sha256, ``tundravm fetch`` downloads it on the host and the postinst hook
     installs the mounted copy with ``dpkg -i``, so the build sandbox downloads
@@ -232,19 +193,7 @@ class EfiStub(Composite):
                 hint="Pass snapshot= a snapshot ID such as '20251113T083151Z' and version= "
                 "the systemd-boot-efi version it ships, e.g. '257.8-1~deb13u1'.",
             )
-        script = (
-            f'EFI_SNAPSHOT_URL="{_snapshot_archive(self.snapshot)}"\n'
-            f'EFI_PACKAGE_VERSION="{self.version}"\n'
-            'DEB_URL="${EFI_SNAPSHOT_URL}/pool/main/s/systemd/'
-            'systemd-boot-efi_${EFI_PACKAGE_VERSION}_amd64.deb"\n'
-            "WORK_DIR=$(mktemp -d)\n"
-            'curl -sSfL -o "$WORK_DIR/systemd-boot-efi.deb" "$DEB_URL"\n'
-            'cp "$WORK_DIR/systemd-boot-efi.deb" "$BUILDROOT/tmp/"\n'
-            "mkosi-chroot dpkg -i /tmp/systemd-boot-efi.deb\n"
-            + _STUB_COPY
-            + 'rm -rf "$WORK_DIR" "$BUILDROOT/tmp/systemd-boot-efi.deb"'
-        )
-        return Fragment("efi-stub", items=(Hook("efi-stub", "postinst", script),))
+        return Fragment("efi-stub", items=(Hook("efi-stub", "postinst", self.render_script()),))
 
     @property
     def deb_url(self) -> str:
@@ -255,12 +204,13 @@ class EfiStub(Composite):
         )
 
     def render_script(self) -> str:
-        """The postinst script the ``current`` dialect runs in place of the composed hook's.
+        """The postinst hook's script, unpinned: it downloads the package (a pinned compile
+        installs the mounted copy instead, ``DebFile.render``).
 
         mkosi-chroot mounts its own ``/tmp``, so the package goes to the image root;
-        a failed download names the version and snapshot. Unlike ``nethermind-v1``,
-        it leaves ``linuxx64.efi.stub`` alone: copying ``systemd-bootx64.efi`` over
-        it makes the UKI a systemd-boot binary.
+        a failed download names the version and snapshot. It leaves
+        ``linuxx64.efi.stub`` alone: copying ``systemd-bootx64.efi`` over it makes the
+        UKI a systemd-boot binary.
         """
         return (
             f'EFI_SNAPSHOT_URL="{_snapshot_archive(self.snapshot)}"\n'
@@ -277,12 +227,6 @@ class EfiStub(Composite):
         )
 
 
-_STUB_COPY = (
-    'cp "$BUILDROOT/usr/lib/systemd/boot/efi/systemd-bootx64.efi" '
-    '"$BUILDROOT/usr/lib/systemd/boot/efi/linuxx64.efi.stub" 2>/dev/null || true\n'
-)
-
-
 @component
 class Tdxs(Composite):
     """The ``tdxs`` attestation service: source build, config, socket-activated units, account.
@@ -292,8 +236,7 @@ class Tdxs(Composite):
     the runtime-init steps the service waits for. The service is a typed
     ``Service(socket=Listen(...))``, hardened for its job (``_modules/tdxs.py``
     ``Tdxs.service`` gives the reasoning: ``CAP_DAC_OVERRIDE`` for configfs-tsm, unverified
-    on TDX hardware); ``legacy_units=True`` ships the historical ``nethermind-v1`` unit
-    texts instead, without the udev rule.
+    on TDX hardware).
     Fragment name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
     (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
@@ -307,7 +250,6 @@ class Tdxs(Composite):
     verify_imds: bool = False
     verify_identity_token: bool = False
     needs: Sequence[Ready] = ()
-    legacy_units: bool = False
     policy_file: Path | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
@@ -418,7 +360,7 @@ class Tdxs(Composite):
                     install=(Install("build/tdxs", "/usr/bin/tdxs"),),
                 ),
                 File(spec.config_path, spec.render_config()),
-                *(self._legacy_units(spec) if self.legacy_units else self._typed_units(spec)),
+                *self._typed_units(spec),
                 Group(spec.group),
                 User(spec.user, home=f"/home/{spec.user}", primary_group=spec.group),
             ),
@@ -429,13 +371,6 @@ class Tdxs(Composite):
         return (
             spec.service(self.needs),
             File(_tdxs.TDX_GUEST_UDEV_RULE, spec.render_udev_rule()),
-        )
-
-    def _legacy_units(self, spec: _tdxs.Tdxs) -> tuple[Unit, Unit]:
-        """The historical ``tdxs.service``/``tdxs.socket`` texts (``_units/v1.py``)."""
-        return (
-            Unit(spec.service_name, spec.render_service_unit(), enabled=True, needs=self.needs),
-            Unit(spec.socket_name, spec.render_socket_unit(), enabled=True, needs=self.needs),
         )
 
 
@@ -449,7 +384,7 @@ class DevTools(Composite):
     hex digits of ``sha256("tundravm-devtools:<variant name>")``, computed in the
     postinst script from mkosi's ``$IMAGE_ID``. The serial getty on ``ttyS0`` is enabled
     at build time. ``reproducible=False`` keeps the historical random salt and the
-    ``serial-console.service`` that enables the getty at boot (``nethermind-v1`` trees).
+    ``serial-console.service`` that enables the getty at boot.
     Fragment name: ``devtools``.
     """
 
@@ -1149,7 +1084,6 @@ def _step_name(prefix: str, path: str) -> str:
 
 
 __all__ = [
-    "BACKPORTS_TREE",
     "TUNDRA_TOOLS",
     "Backports",
     "CargoBinary",

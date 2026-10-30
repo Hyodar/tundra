@@ -20,7 +20,6 @@ from tundravm.declarative import (
     Http,
     Kernel,
     Key,
-    Mkosi,
     Package,
     Recipe,
     RuntimeTools,
@@ -33,6 +32,7 @@ from tundravm.declarative import (
     compile,
     lock,
     lower,
+    mkosi_argv,
 )
 from tundravm.errors import ValidationError
 from tundravm.explain import describe, render
@@ -41,22 +41,21 @@ LINUX = "https://github.com/gregkh/linux"
 SHA = "a" * 64
 
 
-NATIVE = Mkosi(layout="native")
-HISTORICAL = Mkosi(dialect="nethermind-v1")
-"""The dialect whose kernel script still fetches in the sandbox (see tests/lifecycle)."""
+KERNEL_SCRIPT = "payload/mkosi.build.d/10-kernel.sh"
+BUILD_SCRIPT = "payload/mkosi.build.d/50-build.sh"
 
 
 def _recipe(
     *items: object,
     variants: Sequence[Variant] = (Variant("default"),),
-    mkosi: Mkosi | None = None,
 ) -> Recipe:
     common = Fragment("c", items=items)  # type: ignore[arg-type]
-    return Recipe("r", items=(common,), variants=tuple(variants), mkosi=mkosi or Mkosi())
+    return Recipe("r", items=(common,), variants=tuple(variants))
 
 
-def _tree(recipe: Recipe, out: Path) -> Path:
-    compile(recipe).write(out)
+def _tree(recipe: Recipe, out: Path, *, pinned: bool = False) -> Path:
+    locked = lock(recipe, resolver=lambda source: "a" * 40) if pinned else None
+    compile(recipe, lock=locked).write(out)
     return out
 
 
@@ -78,53 +77,41 @@ def config(tmp_path: Path) -> Path:
 # ── 1. Kernel sources ───────────────────────────────────────────────────
 
 
-def test_tagged_kernel_keeps_the_historical_clone(tmp_path: Path, config: Path) -> None:
-    kernel = Kernel("6.13.12", Git(LINUX, "v6.13.12"), config=config)
-    build = _read(
-        _tree(_recipe(kernel, mkosi=HISTORICAL), tmp_path / "t"), "default/scripts/04-build.sh"
-    )
-    assert (
-        '    git clone --depth 1 --branch "v${KERNEL_VERSION}" \\\n'
-        f'        {LINUX} "$KERNEL_CACHE/src"\n'
-    ) in build
-
-
-def test_kernel_from_a_branch(tmp_path: Path, config: Path) -> None:
+def test_kernel_sources_key_the_build_cache(tmp_path: Path, config: Path) -> None:
     tagged = Kernel("6.13.12", Git(LINUX, "v6.13.12"), config=config)
     branch = Kernel("6.13.12", Git(LINUX, "linux-6.13.y"), config=config)
-    out = _tree(_recipe(branch, mkosi=HISTORICAL), tmp_path / "b")
-    build = _read(out, "default/scripts/04-build.sh")
-    clone = 'git clone --depth 1 --branch linux-6.13.y \\\n        {} "$KERNEL_CACHE/src"'
-    assert clone.format(LINUX) in build
-    cache = build.split("\n")[3]
-    tagged_tree = _tree(_recipe(tagged, mkosi=HISTORICAL), tmp_path / "t")
-    tagged_build = _read(tagged_tree, "default/scripts/04-build.sh")
-    assert cache.startswith("KERNEL_CACHE=") and cache != tagged_build.split("\n")[3]
+    caches = [
+        _read(_tree(_recipe(kernel), tmp_path / name), KERNEL_SCRIPT).split("\n")[3]
+        for name, kernel in (("t", tagged), ("b", branch))
+    ]
+    assert all(cache.startswith("KERNEL_CACHE=") for cache in caches)
+    assert caches[0] != caches[1]
+    # unpinned, the script only names the fix: the build sandbox never fetches a kernel
+    unpinned = _read(tmp_path / "b", KERNEL_SCRIPT)
+    assert "kernel 6.13.12 is not pinned: run tundravm lock" in unpinned
+    assert "git clone" not in unpinned
 
 
 def test_kernel_from_a_commit_subdirectory_with_submodules(tmp_path: Path, config: Path) -> None:
     commit = "0123456789abcdef0123456789abcdef01234567"
     kernel = Kernel("6.13", Git(LINUX, commit, subdir="linux", submodules=True), config=config)
-    build = _read(
-        _tree(_recipe(kernel, mkosi=HISTORICAL), tmp_path / "c"), "default/scripts/04-build.sh"
-    )
-    assert f'git -C "$KERNEL_CACHE/repo" fetch --depth 1 {LINUX} {commit}' in build
-    assert 'git -C "$KERNEL_CACHE/repo" checkout -q FETCH_HEAD' in build
-    assert "submodule update --init --recursive --depth 1" in build
+    build = _read(_tree(_recipe(kernel), tmp_path / "c", pinned=True), KERNEL_SCRIPT)
+    assert '"$SRCDIR/tundravm-sources/kernel-0123456789ab-' in build
+    assert '-exec cp -a --no-preserve=ownership -t "$KERNEL_CACHE/repo" {} +' in build
     assert 'ln -s repo/linux "$KERNEL_CACHE/src"' in build
+    assert "cp payload/kernel/kernel.config" in build
+    assert "git clone" not in build and "git -C" not in build
 
 
 def test_kernel_from_a_checked_tarball(tmp_path: Path, config: Path) -> None:
     url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.13.12.tar.xz"
     kernel = Kernel("6.13.12", Http(url, sha256=SHA), config=config, cmdline="console=ttyS0")
-    out = _tree(_recipe(kernel, mkosi=HISTORICAL), tmp_path / "h")
-    build = _read(out, "default/scripts/04-build.sh")
-    assert f'curl -fsSL {url} -o "$KERNEL_CACHE/linux.tar"' in build
-    assert f'echo "{SHA}  $KERNEL_CACHE/linux.tar" | sha256sum -c -' in build
-    assert 'tar -xf "$KERNEL_CACHE/linux.tar" -C "$KERNEL_CACHE/src" --strip-components=1' in build
-    assert "git clone" not in build
-    conf = _read(out, "default/mkosi.conf")
-    assert "    curl\n" in conf and "KernelCommandLine=console=ttyS0" in conf
+    out = _tree(_recipe(kernel), tmp_path / "h")
+    build = _read(out, KERNEL_SCRIPT)
+    assert f'"$SRCDIR/tundravm-sources/kernel-{SHA[:12]}-' in build
+    assert "! -name linux-6.13.12.tar.xz" in build  # the archive's unpacked tree is copied
+    assert "curl" not in build and "git clone" not in build
+    assert "KernelCommandLine=console=ttyS0\n" in _read(out, "payload/mkosi.conf")
     info = describe(lower(_recipe(kernel)), profile="default")
     assert info["kernel"]["source"] == {"sha256": SHA, "url": url}  # type: ignore[index]
 
@@ -136,65 +123,55 @@ def test_unpinned_kernel_tarball_names_the_fix() -> None:
     assert "sha256=" in (err.value.hint or "") and "Git(url, ref)" in (err.value.hint or "")
 
 
-# ── 2. Per-variant settings and kernels ─────────────────────────────────
+# ── 2. Variants are additions to the payload ─────────────────────────────
 
 
-def test_variant_settings_lower_into_its_own_conf(tmp_path: Path) -> None:
+def test_variants_with_their_own_settings_or_kernel_are_refused(config: Path) -> None:
     seed = Setting("Output", "Seed", ("11111111-1111-1111-1111-111111111111",))
-    plain = _recipe(Package("curl"), seed)
     zstd = Setting("Output", "CompressOutput", ("zstd",))
-    variants = (
-        Variant("default"),
-        Variant("small", add=Fragment("s", items=(zstd,))),
-        Variant("unseeded", changes=(seed.ref.remove(),)),
-        Variant("dev", add=Fragment("d", items=(Package("vim"),))),
-    )
-    out = _tree(_recipe(Package("curl"), seed, variants=variants), tmp_path / "v")
-    assert "CompressOutput=zstd" in _read(out, "small/mkosi.conf")
-    assert "CompressOutput" not in _read(out, "default/mkosi.conf")
-    assert "Seed=1111" not in _read(out, "unseeded/mkosi.conf")
-    assert "Seed=1111" in _read(out, "dev/mkosi.conf")
-    img = lower(_recipe(Package("curl"), seed, variants=variants))
-    assert img.state.profiles["dev"].extends == "default"  # same settings: still an overlay
-    assert img.state.profiles["small"].extends is None
-    # The default variant's bytes do not depend on its siblings
-    assert _files(out / "default") == _files(_tree(plain, tmp_path / "p") / "default")
-
-
-def test_variant_kernels(tmp_path: Path, config: Path) -> None:
     lts = Kernel("6.6.80", Git(LINUX, "v6.6.80"), config=config, cmdline="quiet")
     main = Kernel("6.13.12", Git(LINUX, "v6.13.12"), config=config)
     variants = (
         Variant("default"),
+        Variant("small", add=Fragment("s", items=(zstd,))),
+        Variant("unseeded", changes=(seed.ref.remove(),)),
         Variant(
             "lts",
             changes=(main.ref.edit(version=lts.version, source=lts.source, cmdline=lts.cmdline),),
         ),
         Variant("bare", changes=(main.ref.remove(),)),
+        Variant("dev", add=Fragment("d", items=(Package("vim"),))),
     )
-    recipe = _recipe(Package("curl"), main, variants=variants)
-    out = _tree(recipe, tmp_path / "k")
-    assert 'KERNEL_VERSION="6.6.80"' in _read(out, "lts/scripts/04-build.sh")
-    assert "KernelCommandLine=quiet" in _read(out, "lts/mkosi.conf")
-    assert 'KERNEL_VERSION="6.13.12"' in _read(out, "default/scripts/04-build.sh")
-    assert "KernelCommandLine" not in _read(out, "default/mkosi.conf")
-    assert (out / "lts/kernel/kernel.config").is_file()
-    assert not (out / "bare/kernel").exists() and "Bootable" not in _read(out, "bare/mkosi.conf")
-    img = lower(recipe)
-    assert describe(img, profile="lts")["kernel"]["version"] == "6.6.80"  # type: ignore[index]
-    assert describe(img, profile="bare")["kernel"] is None
-    plain = _tree(_recipe(Package("curl"), main), tmp_path / "p")
-    assert _files(out / "default") == _files(plain / "default")
+    with pytest.raises(ValidationError) as err:
+        lower(_recipe(Package("curl"), seed, main, variants=variants))
+    message = str(err.value)
+    assert "'small' (it has its own Setting(Output, CompressOutput))" in message
+    assert "'unseeded' (it has its own Setting(Output, Seed))" in message
+    for name in ("lts", "bare"):
+        assert f"'{name}' (it has its own Kernel" in message
+    assert "'dev'" not in message
+    assert "pure addition" in (err.value.hint or "")
 
 
-def test_explain_shows_the_variants_own_build_options() -> None:
-    variants = (
-        Variant("default"),
-        Variant("offline", add=Fragment("o", items=(Setting("Build", "WithNetwork", ("no",)),))),
-    )
+def test_an_overlay_variant_leaves_the_payload_alone(tmp_path: Path) -> None:
+    variants = (Variant("default"), Variant("dev", add=Fragment("d", items=(Package("vim"),))))
+    out = _tree(_recipe(Package("curl"), variants=variants), tmp_path / "v")
+    assert "    curl\n" in _read(out, "payload/mkosi.conf.d/10-c.conf")
+    overlay = _read(out, "payload/mkosi.profiles/dev/mkosi.conf")
+    assert "    vim\n" in overlay and "    curl\n" not in overlay
+    assert "ImageId=%i-dev\n" in overlay
     img = lower(_recipe(Package("curl"), variants=variants))
-    assert describe(img, profile="offline")["build_options"] == {"with_network": False}
-    assert describe(img, profile="default")["build_options"] == {}
+    assert img.state.profiles["dev"].extends == "default" and img.overlays == ("dev",)
+    # The payload's bytes do not depend on its overlays
+    plain = _tree(_recipe(Package("curl")), tmp_path / "p")
+    payload = {k: v for k, v in _files(out).items() if not k.startswith("payload/mkosi.profiles")}
+    assert payload == _files(plain)
+
+
+def test_explain_shows_the_recipes_build_options() -> None:
+    online = _recipe(Package("curl"), Setting("Build", "WithNetwork", ("yes",)))
+    assert describe(lower(online), profile="default")["build_options"] == {"with_network": True}
+    assert describe(lower(_recipe(Package("curl"))), profile="default")["build_options"] == {}
 
 
 # ── 3. Several Secrets per variant ──────────────────────────────────────
@@ -208,7 +185,7 @@ def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> N
     recipe = _recipe(_secrets("app", "/run/app"), _secrets("ops", "/run/ops"))
     out = tmp_path / "s"
     compile(recipe, lock=lock(recipe, resolver=lambda source: "a" * 40)).write(out)
-    extra = out / "default/mkosi.extra/etc/tdx"
+    extra = out / "payload/mkosi.extra/etc/tdx"
     assert sorted(p.name for p in extra.iterdir()) == [
         "secrets-app.json",
         "secrets-app.yaml",
@@ -216,16 +193,16 @@ def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> N
         "secrets-ops.yaml",
     ]
     assert '"app_token"' in (extra / "secrets-app.json").read_text()
-    init = _read(out, "default/mkosi.extra/usr/lib/runtime-init/secrets")
+    init = _read(out, "payload/mkosi.extra/usr/lib/runtime-init/secrets")
     assert "secret-delivery setup /etc/tdx/secrets-app.yaml" in init
     assert "secret-delivery setup /etc/tdx/secrets-ops.yaml" in init
-    build = _read(out, "default/scripts/04-build.sh")
+    build = _read(out, BUILD_SCRIPT)
     assert build.count("go build") == 1  # one binary serves both
 
 
 def test_one_secrets_keeps_the_runtime_tools_paths(tmp_path: Path) -> None:
     out = _tree(_recipe(_secrets("app", "/run/app")), tmp_path / "s")
-    assert (out / "default/mkosi.extra/etc/tdx/secrets.yaml").is_file()
+    assert (out / "payload/mkosi.extra/etc/tdx/secrets.yaml").is_file()
 
 
 @pytest.mark.parametrize(
@@ -259,18 +236,10 @@ def test_env_targets_may_repeat_across_secrets() -> None:
     lower(_recipe(a, b))
 
 
-# ── 4. The native layout ────────────────────────────────────────────────
+# ── 4. Variants the payload cannot carry ─────────────────────────────
 
 
-def test_native_layout_emits_extending_variants(tmp_path: Path) -> None:
-    variants = (Variant("default"), Variant("dev", add=Fragment("d", items=(Package("vim"),))))
-    out = _tree(_recipe(Package("curl"), variants=variants, mkosi=NATIVE), tmp_path)
-    assert "    curl\n" in _read(out, "mkosi.conf")
-    overlay = _read(out, "mkosi.profiles/dev/mkosi.conf")
-    assert "    vim\n" in overlay and "    curl\n" not in overlay
-
-
-def test_native_layout_lists_every_variant_it_cannot_emit() -> None:
+def test_every_variant_a_profile_cannot_express_is_listed() -> None:
     seed = Setting("Output", "Seed", ("x",))
     variants = (
         Variant("default"),
@@ -280,13 +249,13 @@ def test_native_layout_lists_every_variant_it_cannot_emit() -> None:
         Variant("ok", add=Fragment("o", items=(Package("vim"),))),
     )
     with pytest.raises(ValidationError) as err:
-        lower(_recipe(Package("curl"), variants=variants, mkosi=NATIVE))
+        lower(_recipe(Package("curl"), variants=variants))
     message = str(err.value)
     assert "'slim' (it removes Package(curl, runtime))" in message
     assert "'seeded' (it has its own Setting(Output, Seed))" in message
     assert "'rescue' (it is standalone)" in message
     assert "'ok'" not in message
-    assert "layout='directories'" in (err.value.hint or "")
+    assert "make it its own recipe" in (err.value.hint or "")
 
 
 # ── 5. A default variant inheriting another ───────────────────────────
@@ -297,13 +266,19 @@ def test_default_variant_may_extend_another_variant(tmp_path: Path) -> None:
         Variant("hardened", add=Fragment("h", items=(Package("apparmor"),))),
         Variant("default", inherits="hardened", add=Fragment("d", items=(Package("vim"),))),
     )
-    img = lower(_recipe(Package("curl"), variants=variants))
+    recipe = _recipe(Package("curl"), variants=variants)
+    img = lower(recipe, variants=("default",))
     assert img.default_profile == "default"
     assert img.state.effective_profile("default").packages >= {"curl", "apparmor", "vim"}
-    hardened = img.state.effective_profile("hardened")
-    assert img.state.profiles["hardened"].extends is None and "vim" not in hardened.packages
-    out = _tree(_recipe(Package("curl"), variants=variants), tmp_path)
-    assert "    apparmor\n" in _read(out, "default/mkosi.conf")
+    out = tmp_path / "t"
+    compile(recipe, variants=["default"]).write(out)
+    conf = "".join(
+        _read(out, f"payload/mkosi.conf.d/{name}") for name in ("10-c.conf", "20-h.conf")
+    )
+    assert "    apparmor\n" in conf
+    # hardened lacks the default's vim: as a profile overlay it could only add
+    with pytest.raises(ValidationError, match="'hardened' \\(it removes Package\\(vim"):
+        lower(recipe)
 
 
 # ── 6. Policy ───────────────────────────────────────────────────────────
@@ -333,11 +308,22 @@ def test_unmapped_settings_are_written_verbatim(tmp_path: Path) -> None:
         ),
         tmp_path,
     )
-    conf = _read(out, "default/mkosi.conf")
+    conf = _read(out, "payload/mkosi.conf")
     content = conf.split("[Content]\n", 1)[1]
-    assert "WithDocs=no\nRemoveFiles=/usr/share/doc\nRemoveFiles=/usr/share/man\n" in content
-    assert content.index("RemoveFiles") < content.index("ExtraTrees=")
-    assert conf.endswith("\n[Validation]\nChecksum=yes\n")
+    assert content.endswith(
+        "WithDocs=no\nRemoveFiles=/usr/share/doc\nRemoveFiles=/usr/share/man\n\n"
+        "[Validation]\nChecksum=yes\n"
+    )
+
+
+def test_settings_mkosi_reads_in_the_main_image_only_go_to_the_root(tmp_path: Path) -> None:
+    out = _tree(
+        _recipe(Setting("Runtime", "RAM", ("4G",)), Setting("Content", "WithDocs", ("no",))),
+        tmp_path,
+    )
+    assert "\n[Runtime]\nFirmware=uefi\nRAM=4G\n" in _read(out, "mkosi.conf")
+    assert "RAM" not in _read(out, "payload/mkosi.conf")
+    assert "WithDocs=no" in _read(out, "payload/mkosi.conf")
 
 
 @pytest.mark.parametrize(
@@ -357,13 +343,20 @@ def test_settings_the_compiler_writes_name_their_declaration(
     assert alternative in (err.value.hint or "")
 
 
-def test_variant_leaving_a_cloud_target_lowers_standalone(tmp_path: Path) -> None:
+def test_variant_leaving_a_cloud_target_is_the_qemu_disk_alone(tmp_path: Path) -> None:
     variants = (Variant("default", outputs=("azure",)), Variant("local", outputs=("qemu",)))
     img = lower(_recipe(Package("curl"), variants=variants))
-    assert img.state.profiles["local"].extends is None
-    assert img.state.effective_profile("local").output_targets == ("qemu",)
-    out = _tree(_recipe(Package("curl"), variants=variants), tmp_path)
-    assert not (out / "local/scripts/azure-postoutput.sh").exists()
+    assert img.targets["local"] == ("qemu",) and img.clouds("local") == ()
+    assert img.overlays == ()
+    # the payload carries the azure glue for every variant: one UKI for both
+    assert "dmidecode" in img.state.effective_profile("default").packages
+    out = tmp_path / "t"
+    compile(_recipe(Package("curl"), variants=variants), variants=["local"]).write(out)
+    # the tree is the recipe's whatever the selection; mkosi_argv builds no wrapper for local
+    assert (out / "mkosi.images/azure/mkosi.conf").is_file()
+    assert (out / "payload/mkosi.extra/usr/bin/azure-complete-provisioning").is_file()
+    argv = mkosi_argv(img, "local")
+    assert not any(arg.startswith("--dependency") for arg in argv)
 
 
 def test_build_recipe_hint_names_the_public_alias() -> None:

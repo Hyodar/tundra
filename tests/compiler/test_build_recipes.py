@@ -46,13 +46,13 @@ def _pinned(recipe: Recipe) -> Tree:
 
 
 def _hooks(tree: Tree) -> str:
-    entry = next(e for e in tree.entries if e.path == "default/scripts/04-build.sh")
+    entry = next(e for e in tree.entries if e.path == "payload/mkosi.build.d/50-build.sh")
     assert entry.content is not None
     return entry.content.decode().split("\n\n", 1)[1].rstrip("\n")
 
 
 def _conf(tree: Tree) -> str:
-    entry = next(e for e in tree.entries if e.path == "default/mkosi.conf")
+    entry = next(e for e in tree.entries if e.path == "payload/mkosi.conf")
     assert entry.content is not None
     return entry.content.decode()
 
@@ -77,7 +77,7 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
     tree = _pinned(_recipe(build))
     hooks = _hooks(tree)
     distribution = lowered.build_distribution("default")
-    assert hooks == spec.render(SHA_A, mounted=True, distribution=distribution)
+    assert hooks == spec.render(SHA_A, distribution=distribution)
     assert (
         "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/go ]; then export "
         "GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod && "
@@ -92,7 +92,7 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
         '{ mkdir -p "$BUILDROOT/build/.tundravm-deps" && cp -a --no-preserve=ownership '
         '"$SRCDIR/tundravm-sources/deps/go" "$BUILDROOT/build/.tundravm-deps/go"; }; }'
     ) in hooks
-    assert "BuildPackages=\n    git\n    golang\n" in _conf(tree)
+    assert "BuildPackages=\n    golang\n" in _conf(tree)  # the host fetches the source
 
 
 def test_go_recipe_renders_like_the_equivalent_script() -> None:
@@ -140,7 +140,7 @@ def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
         "cargo auditable build --release --frozen --features tdx --bin tool'"
     ) in hooks
     assert '"$BUILDROOT/build/tool/target/release/tool"' in hooks
-    assert "BuildPackages=\n    cargo\n    cargo-auditable\n    git\n" in _conf(tree)
+    assert "BuildPackages=\n    cargo\n    cargo-auditable\n" in _conf(tree)
 
 
 def test_cargo_recipe_merges_its_rustflags_with_the_project_config() -> None:
@@ -157,9 +157,9 @@ def test_cargo_recipe_merges_its_rustflags_with_the_project_config() -> None:
     assert " cargo build --release --frozen --config " in plain
 
 
-def test_go_recipe_cgo_and_dialect_defaults() -> None:
+def test_go_recipe_cgo_and_reproducible_defaults() -> None:
     go = Go(package="./cmd/tool", output="tool")
-    assert "-buildvcs" not in go.command("/build/tool")  # None: nethermind-v1 renders it so
+    assert "-buildvcs" not in go.command("/build/tool")  # None: the hook decides it (on)
     assert "CGO_ENABLED" not in Go(
         package="./cmd/tool", output="tool", reproducible=True, cgo=True
     ).command("/build/tool")
@@ -341,7 +341,7 @@ def test_mounted_cache_key_fingerprints_the_distribution() -> None:
             Repository("extra", "https://repo.example.com/debian", "trixie", ("main", "contrib"))
         ),
         with_(Package("gcc-14", role="build")),
-        with_(Setting("Build", "ToolsTree", ("default",))),
+        with_(Setting("Build", "ToolsTreePackages", ("clang",))),
         with_(Setting("Build", "Environment", ("CC=clang",))),
     ]
     assert key not in changed and len(set(changed)) == len(changed)

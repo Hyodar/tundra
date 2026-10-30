@@ -22,8 +22,9 @@ from tundravm import (
 )
 from tundravm.cli import EXIT_OK
 from tundravm.declarative import File, Fragment, Package, Recipe, Variant
+from tundravm.declarative.lifecycle import _layer_of
 from tundravm.declarative.lower import lower
-from tundravm.explore import EXPLORE_SCHEMA, TEXT_LIMIT
+from tundravm.explore import EXPLORE_SCHEMA, SHARED, TEXT_LIMIT
 from tundravm.templates import render_recipe_template
 
 EXTERNAL_ASSET = re.compile(
@@ -52,12 +53,14 @@ def _template(tmp_path: Path, template: str) -> Path:
 
 
 def _emitted(recipe: Recipe) -> dict[str, list[str]]:
-    """Every compiled tree path by variant, relative to the variant's directory."""
+    """Every compiled tree path by the layer that holds it: a variant's own profile
+    directories, else :data:`SHARED` (what every variant builds)."""
     tree = compile(recipe)
-    found: dict[str, list[str]] = {name: [] for name in tree.variants}
+    found: dict[str, list[str]] = {}
     for entry in tree.entries:
-        top, _, rest = entry.path.partition("/")
-        found[top].append(rest)
+        layer = _layer_of(entry.path)
+        if layer is not None:
+            found.setdefault(layer or SHARED, []).append(entry.path)
     return found
 
 
@@ -83,7 +86,7 @@ def test_a_known_file_carries_its_declaration_and_provenance(tmp_path: Path) -> 
     found = explore(load(_template(tmp_path, "service")))
     page = found.html()
     record = next(
-        f for f in found.to_dict()["trees"]["default"]["files"] if f["path"].endswith("index.html")
+        f for f in found.to_dict()["trees"][SHARED]["files"] if f["path"].endswith("index.html")
     )
     assert record["declarations"] == ["File(extra, /srv/www/index.html)"]
     assert record["image_path"] == "/srv/www/index.html"
@@ -96,8 +99,9 @@ def test_a_known_file_carries_its_declaration_and_provenance(tmp_path: Path) -> 
         for r in found.to_dict()["declarations"]
         if r["declaration"].endswith("/srv/www/index.html)")
     )
+    # dev builds the payload's file: it lives in the shared tree, not in dev's overlay
     assert row["variants"]["dev"]["files"] == [
-        {"group": "dev", "path": "mkosi.extra/srv/www/index.html"}
+        {"group": SHARED, "path": "payload/mkosi.extra/srv/www/index.html"}
     ]
 
 
@@ -111,16 +115,13 @@ def test_matrix_states_follow_the_overlays() -> None:
                 "prod",
                 inherits="dev",
                 add=Fragment("extras", items=(Package("jq"),)),
-                changes=(
-                    File.ref("/etc/app.conf").edit(content="mode=prod\n"),
-                    Package.ref("curl").remove(),
-                ),
+                changes=(File.ref("/etc/app.conf").edit(content="mode=prod\n"),),
             ),
         ),
     )
     rows = {r["declaration"]: r["variants"] for r in explore(recipe).to_dict()["declarations"]}
     assert rows["Package(curl, runtime)"]["dev"]["state"] == "present"
-    assert rows["Package(curl, runtime)"]["prod"]["state"] == "removed"
+    assert rows["Package(curl, runtime)"]["prod"]["state"] == "present"
     assert rows["Package(jq, runtime)"]["dev"]["state"] == "absent"
     assert rows["Package(jq, runtime)"]["prod"]["state"] == "added"
     edited = rows["File(extra, /etc/app.conf)"]["prod"]
@@ -181,7 +182,8 @@ def test_a_lowered_recipe_has_a_tree_but_no_declarations(tmp_path: Path) -> None
     data = found.to_dict()
     assert data["declarations"] == []
     assert data["recipe"]["name"] is None
-    assert data["trees"]["default"]["files"]
+    assert data["trees"]["default"]["files"] == []  # default adds no profile overlay
+    assert data["trees"][SHARED]["files"]
     assert "No declarations" in found.html()
 
 

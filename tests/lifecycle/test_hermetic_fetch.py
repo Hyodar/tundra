@@ -27,7 +27,6 @@ from tundravm.declarative import (
     Go,
     Install,
     Lock,
-    Mkosi,
     Package,
     Policy,
     Recipe,
@@ -39,7 +38,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.lifecycle import bake_image, check_report, compile_image, fetch
 from tundravm.declarative.utils import EfiStub
-from tundravm.errors import ErrorCode, PolicyError, StateError
+from tundravm.errors import ErrorCode, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
@@ -153,11 +152,10 @@ RECIPES: dict[str, Go | Cargo | Dotnet] = {
 CACHES = {"go": "go", "cargo": "cargo", "dotnet": "nuget"}
 
 
-def _recipe(*items: object, dialect: str = "current", policy: Policy | None = None) -> Recipe:
+def _recipe(*items: object, policy: Policy | None = None) -> Recipe:
     return Recipe(
         "tool",
         items=(Package("linux-image-amd64"), *items),  # type: ignore[arg-type]
-        mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
         policy=policy,
     )
 
@@ -501,7 +499,9 @@ def test_offline_bake_after_fetch_builds_without_network(
     )
     (request,) = backend.requests
     assert request.network is False and request.sources_dir == out / ".sources"
-    hooks = (out / "mkosi" / "default" / "scripts" / "04-build.sh").read_text(encoding="utf-8")
+    hooks = (out / "mkosi" / "payload" / "mkosi.build.d" / "50-build.sh").read_text(
+        encoding="utf-8"
+    )
     assert '"$SRCDIR/tundravm-sources/deps/go"' in hooks
     assert "export GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod" in hooks
     assert '[ "$WITH_NETWORK" != 0 ] || export GOPROXY=off' in hooks
@@ -513,24 +513,6 @@ def test_online_bake_keeps_the_network(tmp_path: Path, repo: tuple[str, str]) ->
     backend = _Recording()
     bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, build=tmp_path)
     assert backend.requests[0].network is True
-
-
-def test_offline_bake_refuses_nethermind_v1_source_builds(
-    tmp_path: Path, repo: tuple[str, str]
-) -> None:
-    url, first = repo
-    recipe = _recipe(_build(url, "go"), dialect="nethermind-v1")
-    backend = _Recording()
-    with pytest.raises(PolicyError, match="fetch their sources in the sandbox"):
-        bake_image(
-            lower(recipe),
-            None,
-            locked=_locked(recipe, first),
-            backend=backend,
-            build=tmp_path,
-            offline=True,
-        )
-    assert backend.requests == []
 
 
 def test_backends_pass_with_network_no_for_an_offline_bake(tmp_path: Path) -> None:
@@ -603,7 +585,7 @@ def test_unpinned_efi_stub_still_compiles_to_the_download(snapshot: tuple[str, s
     )
 
 
-def test_efi_stub_drifts_until_locked_and_stays_out_of_nethermind_v1(
+def test_efi_stub_drifts_until_locked(
     snapshot: tuple[str, str],
 ) -> None:
     archive, digest = snapshot
@@ -613,7 +595,6 @@ def test_efi_stub_drifts_until_locked_and_stays_out_of_nethermind_v1(
     drift = {(d.code, d.subject) for d in lock_status(recipe, Lock.of(old.lockfile))}
     assert ("lock-added", "sources.efi-stub") in drift
     assert lock_status(recipe, stale) == ()
-    assert lower(_recipe(_stub(archive), dialect="nethermind-v1")).lock_sources() == {}
 
 
 def test_unpinned_efi_stub_is_reported_until_locked() -> None:

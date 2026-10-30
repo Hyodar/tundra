@@ -44,7 +44,6 @@ from .declarative.lifecycle import (
     Lock,
     ProbeRunner,
     Tree,
-    TreeLayout,
     _digest_mode,
     check_report,
     compile_image,
@@ -566,16 +565,13 @@ def _compiled_tree(img: Lowered, artifacts: Sequence[Artifact], locked: Lock | N
 
 
 def tree_rows(tree: Tree, variant: str) -> list[dict[str, Any]]:
-    """*variant*'s effective entries of *tree* (``variant_entries``): ``path`` (relative
-    to its directory; in the native layout the tree path, the root it
-    inherits and its ``mkosi.profiles/<variant>/``), ``type`` (``file``, ``symlink``,
-    ``directory``), ``mode`` (as the tree digest sees it, octal) and ``sha256`` and
-    ``size`` for a file, ``target`` for a symlink."""
-    prefix = _row_prefix(variant, tree.layout)
+    """*variant*'s effective entries of *tree* (``variant_entries``): ``path`` (the tree
+    path), ``type`` (``file``, ``symlink``, ``directory``), ``mode`` (as the tree digest
+    sees it, octal) and ``sha256`` and ``size`` for a file, ``target`` for a symlink."""
     rows: list[dict[str, Any]] = []
     for entry in variant_entries(tree, variant):
         row: dict[str, Any] = {
-            "path": entry.path.removeprefix(prefix),
+            "path": entry.path,
             "mode": f"{_digest_mode(entry):04o}",
         }
         if entry.symlink is not None:
@@ -592,24 +588,16 @@ def tree_rows(tree: Tree, variant: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _row_prefix(variant: str, layout: object) -> str:
-    """What :func:`tree_rows` strips from a tree path: the variant's directory, or nothing
-    in the native layout."""
-    return "" if layout == "native" else f"{variant}/"
-
-
-def tree_rows_digest(
-    rows: Iterable[tuple[str, Mapping[str, Any]]], layout: TreeLayout = "directories"
-) -> str:
-    """The :attr:`Tree.digest <tundravm.Tree>` of ``(variant, row)`` pairs from :func:`tree_rows`
-    of a tree in *layout*.
+def tree_rows_digest(rows: Iterable[tuple[str, Mapping[str, Any]]]) -> str:
+    """The :attr:`Tree.digest <tundravm.Tree>` of ``(variant, row)`` pairs from
+    :func:`tree_rows`.
 
     Rows must come in tree order (sorted by tree path), as ``tree.json`` holds them.
     """
     digest = hashlib.sha256()
-    for variant, row in rows:
+    for _, row in rows:
         mode = int(str(row["mode"]), 8)
-        path = _row_prefix(variant, layout) + str(row["path"])
+        path = str(row["path"])
         digest.update(path.encode() + b"\0" + f"{mode:o}".encode() + b"\0")
         if row["type"] == "symlink":
             digest.update(b"L" + str(row["target"]).encode())
@@ -625,18 +613,16 @@ def _tree_manifest(variant: str, tree: Tree) -> bytes:
     """``variants/<variant>/tree.json``: every file the variant's compiled tree emits.
 
     ``tree_digest`` is the digest of the whole tree compiled for ``compiled_variants``;
-    ``variant_digest`` covers this variant's rows alone, what a bake records for it;
-    ``layout`` is the tree's (``native``: rows are tree paths, the root's shared).
+    ``variant_digest`` covers this variant's rows alone, what a bake records for it.
     """
     rows = tree_rows(tree, variant)
     return _json_bytes(
         {
             "schema": TREE_SCHEMA,
             "variant": variant,
-            "layout": tree.layout,
             "compiled_variants": list(tree.variants),
             "tree_digest": tree.digest,
-            "variant_digest": tree_rows_digest(((variant, row) for row in rows), tree.layout),
+            "variant_digest": tree_rows_digest((variant, row) for row in rows),
             "files": rows,
         }
     )

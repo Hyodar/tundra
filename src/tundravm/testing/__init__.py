@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Literal
 
 from tundravm.check import render
+from tundravm.compiler import PAYLOAD
 from tundravm.declarative import lifecycle
 from tundravm.declarative.lifecycle import (
     INPROCESS,
@@ -91,8 +92,10 @@ Variants = str | Sequence[str] | None
 class CompiledTree:
     """A compiled mkosi tree on disk, with readers for the files tests inspect.
 
-    ``variants`` are the compiled variant directories. Every ``variant``
-    argument names one of them and defaults to the first.
+    ``variants`` are the compiled variants. Every ``variant`` argument names one of
+    them and defaults to the first. A variant reads the payload (``payload/``) with
+    its profile overlay (``payload/mkosi.profiles/<variant>/``) over it, as mkosi
+    merges them: a path in the overlay wins, scripts and configuration accumulate.
     """
 
     __slots__ = ("default_variant", "root", "variants")
@@ -110,16 +113,28 @@ class CompiledTree:
     def __repr__(self) -> str:
         return f"CompiledTree({str(self.root)!r}, variants={self.variants!r})"
 
-    def variant(self, name: str | None = None) -> Path:
-        """Directory holding variant *name*'s mkosi.conf, extra, skeleton and scripts."""
+    def layers(self, name: str | None = None) -> tuple[Path, ...]:
+        """The configuration directories variant *name* builds from: the payload, then its
+        profile overlay when it has one."""
         name = name or self.default_variant
         if name not in self.variants:
             raise KeyError(f"variant {name!r} was not compiled; compiled: {list(self.variants)}")
-        native = self.root / "mkosi.profiles" / name
-        return native if native.is_dir() and not (self.root / name).is_dir() else self.root / name
+        payload = self.root / PAYLOAD
+        overlay = payload / "mkosi.profiles" / name
+        return (payload, overlay) if overlay.is_dir() else (payload,)
+
+    def variant(self, name: str | None = None) -> Path:
+        """The directory holding what variant *name* adds: its profile overlay, else the
+        payload."""
+        return self.layers(name)[-1]
 
     def path(self, relpath: str, variant: str | None = None) -> Path:
-        return self.variant(variant) / relpath.lstrip("/")
+        """*relpath* in the variant's overlay when it is there, else in the payload."""
+        for layer in reversed(self.layers(variant)):
+            found = layer / relpath.lstrip("/")
+            if found.exists() or found.is_symlink():
+                return found
+        return self.layers(variant)[0] / relpath.lstrip("/")
 
     def read(self, relpath: str, variant: str | None = None) -> str:
         return self.path(relpath, variant).read_text(encoding="utf-8")
@@ -128,9 +143,15 @@ class CompiledTree:
         return self.path(relpath, variant).exists()
 
     def files(self, variant: str | None = None) -> list[str]:
-        """Sorted POSIX paths of every file in the variant, relative to its directory."""
-        base = self.variant(variant)
-        return sorted(p.relative_to(base).as_posix() for p in base.rglob("*") if not p.is_dir())
+        """Sorted POSIX paths of every file the variant reads, relative to its layer (the
+        payload's own profile overlays left out)."""
+        found: set[str] = set()
+        for layer in self.layers(variant):
+            for path in layer.rglob("*"):
+                rel = path.relative_to(layer).as_posix()
+                if not path.is_dir() and not rel.startswith("mkosi.profiles/"):
+                    found.add(rel)
+        return sorted(found)
 
     def unit(self, name: str, variant: str | None = None) -> str:
         """Systemd unit text; a bare name such as ``"app"`` means ``app.service``."""
@@ -141,26 +162,36 @@ class CompiledTree:
             raise FileNotFoundError(f"no unit {unit!r} in {path.parent}; found: {found}")
         return path.read_text(encoding="utf-8")
 
+    def scripts(self, phase: str, variant: str | None = None) -> list[Path]:
+        """The variant's ``mkosi.<phase>.d/`` scripts in the order mkosi runs them."""
+        return [
+            script
+            for layer in self.layers(variant)
+            for script in sorted((layer / f"mkosi.{phase}.d").glob("*"))
+        ]
+
     def script(self, phase: str, variant: str | None = None) -> str:
-        """Text of ``scripts/NN-<phase>.sh``."""
-        scripts = self.variant(variant) / "scripts"
-        matches = sorted(scripts.glob(f"[0-9][0-9]-{phase}.sh"))
-        if not matches:
-            found = sorted(p.name for p in scripts.glob("*.sh")) if scripts.is_dir() else []
-            raise FileNotFoundError(f"no {phase!r} script in {scripts}; found: {found}")
-        return matches[0].read_text(encoding="utf-8")
+        """The text of the variant's *phase* scripts, in the order mkosi runs them."""
+        found = self.scripts(phase, variant)
+        if not found:
+            phases = sorted(
+                {
+                    path.name.removeprefix("mkosi.").removesuffix(".d")
+                    for layer in self.layers(variant)
+                    for path in layer.glob("mkosi.*.d")
+                    if any(path.iterdir())
+                }
+            )
+            raise FileNotFoundError(
+                f"no {phase!r} script for variant {variant!r}; scripts: {', '.join(phases)}"
+            )
+        return "\n".join(path.read_text(encoding="utf-8") for path in found)
 
     def runtime_init(self, variant: str | None = None, *, step: str | None = None) -> str:
-        """The runtime-init script text: one *step*'s script, or every step in run order.
-
-        Under ``nethermind-v1`` that is ``/usr/bin/runtime-init``; the current
-        dialect writes ``/usr/lib/runtime-init/<step>`` per step, joined here in
-        the order ``runtime-init.service`` lists them.
-        """
+        """The runtime-init script text: one *step*'s script, or every step in the order
+        ``runtime-init.service`` lists them (``/usr/lib/runtime-init/<step>``)."""
         if step is not None:
             return self.read(f"mkosi.extra/usr/lib/runtime-init/{step}", variant)
-        if self.exists("mkosi.extra/usr/bin/runtime-init", variant):
-            return self.read("mkosi.extra/usr/bin/runtime-init", variant)
         aggregate = self.unit("runtime-init.service", variant)
         after = next(line for line in aggregate.splitlines() if line.startswith("After="))
         steps = [
@@ -170,7 +201,17 @@ class CompiledTree:
         return "".join(self.runtime_init(variant, step=name) for name in steps)
 
     def conf(self, variant: str | None = None) -> str:
-        return self.read("mkosi.conf", variant)
+        """The variant's payload configuration as mkosi reads it, one text: the payload's
+        ``mkosi.conf``, its ``mkosi.conf.d/*.conf`` and the overlay's ``mkosi.conf``."""
+        texts: list[str] = []
+        for layer in self.layers(variant):
+            texts.append((layer / "mkosi.conf").read_text(encoding="utf-8"))
+            texts += [p.read_text(encoding="utf-8") for p in sorted(layer.glob("mkosi.conf.d/*"))]
+        return "\n".join(texts)
+
+    def main_conf(self) -> str:
+        """The root ``mkosi.conf``: the settings every image shares and the QEMU disk."""
+        return (self.root / "mkosi.conf").read_text(encoding="utf-8")
 
 
 def _names(variants: Variants) -> list[str] | None:
@@ -326,7 +367,7 @@ def assert_tree_matches(
 
     Unlike :func:`assert_tree`, a mismatch shows a unified diff. *update*
     defaults to ``TUNDRAVM_UPDATE_GOLDEN=1`` in the environment. Variant
-    directories in *golden_dir* that were not compiled are neither compared nor
+    overlays in *golden_dir* that were not compiled are neither compared nor
     touched. Returns the diff from the golden tree to the compiled one.
     """
     golden = Path(golden_dir)

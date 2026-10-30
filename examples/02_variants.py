@@ -1,11 +1,12 @@
-"""Variants: one recipe, several images, each an overlay on the variant it inherits.
+"""Variants: one recipe, one payload, each variant an addition to it.
 
-Teaches ``Variant``: ``add`` a fragment; ``changes`` that edit or remove an inherited
-declaration by its identity (its type plus natural key), through its ref: ``motd.ref`` for
-a value you hold, ``Package.ref("jq")`` for one you do not; ``inherits`` chains (the
-default ``"base"`` is ``Recipe.items``, ``None`` starts from the platform alone); ``outputs``
-for the targets it builds. Every variant, standalone ones too, gets the platform's boot
-set. ``packages()`` bundles ``Package`` declarations without inventing a fragment name.
+Teaches ``Variant``: ``outputs`` for the targets it builds (a cloud wrapper around the same
+UKI), ``add`` a fragment and ``changes`` that edit an inherited declaration by its identity
+(its type plus natural key) through its ref: ``motd.ref`` for a value you hold. A variant
+that adds or edits content compiles to an mkosi profile overlay under
+``payload/mkosi.profiles/<name>/``, so it can add, and replace files, repositories and the
+debloat; removing what the payload declares is a different image, i.e. another recipe.
+``packages()`` bundles ``Package`` declarations without inventing a fragment name.
 
     tundravm inspect examples/02_variants.py --diff-variants default dev
     tundravm compile examples/02_variants.py --tree build/variants/mkosi
@@ -13,7 +14,7 @@ set. ``packages()`` bundles ``Package`` declarations without inventing a fragmen
 """
 
 from tundravm.backends import InProcessBackend
-from tundravm.declarative import Debian, Debloat, File, Package, Recipe, Variant, packages
+from tundravm.declarative import Debian, Debloat, File, Recipe, Variant, packages
 
 motd = File("/etc/motd", "production\n")
 debloat = Debloat(keep_modules=True)  # Debian's kernel loads its drivers from /usr/lib/modules
@@ -41,15 +42,6 @@ recipe = Recipe(
                 motd.ref.edit(content="development build\n"),
                 debloat.ref.edit(enabled=False),
             ),
-        ),
-        # default minus jq: a ref names a declaration you hold no value for.
-        Variant("slim", inherits="default", changes=(Package.ref("jq").remove(),)),
-        # Standalone: the platform without Recipe.items, e.g. a rescue image.
-        Variant(
-            "rescue",
-            inherits=None,
-            outputs=("qemu",),
-            add=packages("busybox", "e2fsprogs"),
         ),
     ),
 )

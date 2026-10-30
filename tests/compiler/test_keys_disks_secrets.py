@@ -69,7 +69,7 @@ def _probes(step: Ready) -> tuple[BootStep, BootStep]:
 
 
 def _step(tree: CompiledTree, step: str) -> str:
-    """The script of runtime-init step *step* (the current dialect runs one per step)."""
+    """The script of runtime-init step *step*."""
     return tree.read(f"mkosi.extra/usr/lib/runtime-init/{step}")
 
 

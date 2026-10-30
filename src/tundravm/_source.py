@@ -8,15 +8,12 @@ the recipe's own output, :meth:`Install.file` and :meth:`Install.tree` copy furt
 paths of the source tree.
 
 ``tundravm.lock()`` resolves each source to a pin (``LockedFetch`` entries in
-``tundravm.lock``) and the cache key carries it. Under ``nethermind-v1`` the build
-hook fetches in the build sandbox: it clones the symbolic ref until the source is
-pinned, then fetches exactly that commit. Every other dialect renders the hook
-*mounted*: :func:`fetch_source` checks the pinned source out on the host as the
-invoking user, into ``<out>/.sources/<name>-<pin[:12]>``, the backend mounts that
-directory at ``$SRCDIR/tundravm-sources`` and the hook copies the checkout into the
-build tree, so the sandbox never fetches a source. A built kernel's source joins
-them as a :class:`KernelSource` named ``kernel`` (``kernel-<variant>`` for a variant
-whose kernel source differs): locked, fetched and mounted the same way.
+``tundravm.lock``) and the cache key carries it. The hook is *mounted*:
+:func:`fetch_source` checks the pinned source out on the host as the invoking user,
+into ``<out>/.sources/<name>-<pin[:12]>``, the backend mounts that directory at
+``$SRCDIR/tundravm-sources`` and the hook copies the checkout into the build tree, so
+the sandbox never fetches a source. A built kernel's source joins them as a
+:class:`KernelSource` named ``kernel``: locked, fetched and mounted the same way.
 """
 
 from __future__ import annotations
@@ -224,8 +221,7 @@ class GoBuild:
     build; ``go build -o`` creates it too, so turning it off only drops the step.
     ``reproducible`` adds ``-buildvcs=false``, ``CGO_ENABLED=0`` (unless ``cgo``
     or ``env`` sets it) and ``SOURCE_DATE_EPOCH`` (the build's, else ``0``); ``None``
-    (the default) is on, except under the ``nethermind-v1`` dialect, whose historical
-    hooks render without them.
+    (the default) is on.
     """
 
     output: str
@@ -305,8 +301,7 @@ class CargoBuild:
     reads. ``reproducible`` adds :data:`CARGO_RUSTFLAGS` and the path remap to the
     project's ``build.rustflags`` (``--config``; prepended to an ``env`` ``RUSTFLAGS``,
     which would replace them), one codegen unit, no incremental build and
-    ``SOURCE_DATE_EPOCH`` (the build's, else ``0``). ``None`` (the default) is on,
-    except under the ``nethermind-v1`` dialect, whose historical hooks render without.
+    ``SOURCE_DATE_EPOCH`` (the build's, else ``0``). ``None`` (the default) is on.
     """
 
     output: str
@@ -482,16 +477,15 @@ LanguageBuild = GoBuild | CargoBuild | DotnetBuild
 """The build recipes whose dependencies ``tundravm fetch`` prefetches on the host."""
 
 
-def resolve_recipe(build: BuildRecipe, *, mounted: bool) -> BuildRecipe:
-    """*build* with its dialect defaults decided: a ``None`` ``reproducible`` or ``auditable``
-    is *mounted* (on for the current dialect's mounted hooks, off for ``nethermind-v1``)."""
+def resolve_recipe(build: BuildRecipe) -> BuildRecipe:
+    """*build* with its defaults decided: a ``None`` ``reproducible`` or ``auditable`` is on."""
     if isinstance(build, GoBuild) and build.reproducible is None:
-        return replace(build, reproducible=mounted)
+        return replace(build, reproducible=True)
     if isinstance(build, CargoBuild) and None in (build.reproducible, build.auditable):
         return replace(
             build,
-            reproducible=mounted if build.reproducible is None else build.reproducible,
-            auditable=mounted if build.auditable is None else build.auditable,
+            reproducible=True if build.reproducible is None else build.reproducible,
+            auditable=True if build.auditable is None else build.auditable,
         )
     return build
 
@@ -649,8 +643,8 @@ class NamedSource:
 class KernelSource(NamedSource):
     """The source of a built kernel (one with a config), named ``kernel`` or ``kernel-<variant>``.
 
-    Outside ``nethermind-v1`` the kernel build script copies its host-fetched
-    checkout from ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``.
+    The kernel build script copies its host-fetched checkout from
+    ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``.
     """
 
     name: str
@@ -708,7 +702,7 @@ class KernelFile(NamedSource):
 class DebFile(NamedSource):
     """A ``.deb`` a postinst hook installs with ``dpkg -i``: :class:`EfiStub`'s package.
 
-    Outside ``nethermind-v1`` it is a source like the others: ``lock`` pins its
+    It is a source like the others: ``lock`` pins its
     sha256 as ``fetches[name]``, ``fetch`` downloads it on the host into
     ``.sources/<name>-<pin[:12]>-<id[:8]>`` and the backend mounts it. *script* is
     the hook compiled without a pin, which downloads it in the build sandbox;
@@ -745,16 +739,11 @@ class SourceBuild(NamedSource):
     *install* lists the :class:`Install` steps; artifacts are cached under their
     destination's file name and installed in that order.
 
-    A mounted (current-dialect) hook caches under ``<namespace>-<fingerprint>``:
-    the namespace is ``cache_key`` (default: the build name) and the
-    fingerprint (:meth:`cache_fingerprint`) covers the pin, the build and install
-    specs, the toolchain and the distribution it comes from, so changing any of
+    The hook copies the host-fetched checkout and caches under
+    ``<namespace>-<fingerprint>``: the namespace is ``cache_key`` (default: the build
+    name) and the fingerprint (:meth:`cache_fingerprint`) covers the pin, the build and
+    install specs, the toolchain and the distribution it comes from, so changing any of
     them rebuilds.
-    Under ``nethermind-v1`` ``cache_key`` replaces the default
-    ``<name>-<url sha256[:12]>-<ref>`` key and a lockfile pin appends
-    ``-<pin[:12]>`` to it (default key: replaces the ref). ``mark_unpinned``
-    prefixes the unpinned hook with ``# unpinned: <ref>``; modules that must keep
-    the exact hook bytes they emitted before source builds existed turn it off.
     """
 
     name: str
@@ -762,7 +751,6 @@ class SourceBuild(NamedSource):
     build: BuildRecipe
     install: tuple[Install, ...] = ()
     cache_key: str | None = None
-    mark_unpinned: bool = True
     lock_name: str | None = field(default=None, compare=False, repr=False, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -811,14 +799,12 @@ class SourceBuild(NamedSource):
 
     @property
     def packages(self) -> tuple[str, ...]:
-        """Build packages the source fetch and the build recipe need."""
-        return self.build_packages(mounted=False)
+        """Build packages the build recipe needs, its defaults decided (``cargo-auditable``)."""
+        return self.build_packages()
 
-    def build_packages(self, *, mounted: bool) -> tuple[str, ...]:
-        """:attr:`packages` with the recipe's dialect defaults decided (``cargo-auditable``)."""
-        fetch = ("git",) if isinstance(self.source, GitSource) else ("curl",)
-        recipe = resolve_recipe(self.build, mounted=mounted)
-        return tuple(dict.fromkeys((*fetch, *recipe.packages)))
+    def build_packages(self) -> tuple[str, ...]:
+        """:attr:`packages`: the recipe's own (the checkout is fetched on the host)."""
+        return tuple(dict.fromkeys(resolve_recipe(self.build).packages))
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -830,35 +816,30 @@ class SourceBuild(NamedSource):
                 for step in self.install
             ],
             "cache_key": self.cache_key,
-            "mark_unpinned": self.mark_unpinned,
         }
 
     def render(
         self,
         pin: str | None = None,
         *,
-        mounted: bool = False,
         distribution: Mapping[str, object] | None = None,
     ) -> str:
-        """The build-phase hook: fetch, build, cache, install.
+        """The build-phase hook: copy the checkout, build, cache, install.
 
-        *pin* is a lockfile pin; an inline pin (commit ref, ``sha256=``) wins.
-        *mounted* copies the host-fetched checkout ``$SRCDIR/tundravm-sources/
-        <name>-<pin[:12]>`` instead of fetching in the sandbox; unpinned, the
-        mounted hook only fails, naming ``tundravm lock`` and ``tundravm fetch``.
-        *distribution* (the variant's ``Lowered.build_distribution``) enters the
-        mounted hook's cache fingerprint.
+        *pin* is a lockfile pin; an inline pin (commit ref, ``sha256=``) wins. The hook
+        copies the host-fetched checkout ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``;
+        unpinned, it only fails, naming ``tundravm lock`` and ``tundravm fetch``.
+        *distribution* (the variant's ``Lowered.build_distribution``) enters the cache
+        fingerprint.
         """
-        if mounted:
-            return f"{self.marker()}\n{self._render(pin, True, distribution)}"
-        return self._render(pin, False, distribution)
+        return f"{self.marker()}\n{self._render(pin, distribution)}"
 
     def marker(self) -> str:
         """``# tundravm build: <json>``: the declaration a mounted hook is rendered from.
 
-        The JSON is :meth:`to_payload` without ``mark_unpinned`` and ``None``
-        values, keys sorted and no spaces: what ``tundravm import`` reads the
-        build back from. It holds no lockfile pin, so a pinned hook names the same.
+        The JSON is :meth:`to_payload` without ``None`` values, keys sorted and no
+        spaces: what ``tundravm import`` reads the build back from. It holds no lockfile
+        pin, so a pinned hook names the same.
         """
         payload = _compact(
             {
@@ -874,39 +855,25 @@ class SourceBuild(NamedSource):
         )
         return BUILD_MARKER + json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-    def _render(
-        self, pin: str | None, mounted: bool, distribution: Mapping[str, object] | None
-    ) -> str:
+    def _render(self, pin: str | None, distribution: Mapping[str, object] | None) -> str:
         effective = self.source.inline_pin or pin
         workdir = Build.chroot_path(self.name).rel
         if isinstance(self.source, GitSource) and self.source.subdir:
             workdir = f"{workdir}/{self.source.subdir.strip('/')}"
-        recipe = resolve_recipe(self.build, mounted=mounted)
-        build = recipe.command(f"/build/{workdir}")
-        inner = build.replace("'", "'\\''")
-        if mounted:
-            if effective is None:
-                message = (
-                    f"tundravm: source build {self.name} is not pinned: "
-                    "run tundravm lock, then tundravm fetch"
-                )
-                return (
-                    f"# unpinned: {self.source.requested}\n"
-                    f"echo {shlex.quote(message)} >&2 && exit 1"
-                )
-            copy_deps, uses_deps = self._deps()
-            inner = f"{uses_deps}{build}".replace("'", "'\\''")
-            command = f"{self._copy(effective)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
-            fingerprint = self.cache_fingerprint(effective, distribution=distribution or {})
-            key = f"{self.cache_key or self.name}-{fingerprint}"
-            return self._cache(key, workdir).wrap(
-                command, root=MOUNTED_CACHE_ROOT, exact_trees=True
+        build = resolve_recipe(self.build).command(f"/build/{workdir}")
+        if effective is None:
+            message = (
+                f"tundravm: source build {self.name} is not pinned: "
+                "run tundravm lock, then tundravm fetch"
             )
-        command = f"{self._fetch(effective)} && mkosi-chroot bash -c '{inner}'"
-        hook = self._cache(self._historical_key(effective), workdir).wrap(command)
-        if effective is None and self.mark_unpinned:
-            return f"# unpinned: {self.source.requested}\n{hook}"
-        return hook
+            unpinned = f"# unpinned: {self.source.requested}\n"
+            return f"{unpinned}echo {shlex.quote(message)} >&2 && exit 1"
+        copy_deps, uses_deps = self._deps()
+        inner = f"{uses_deps}{build}".replace("'", "'\\''")
+        command = f"{self._copy(effective)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
+        fingerprint = self.cache_fingerprint(effective, distribution=distribution or {})
+        key = f"{self.cache_key or self.name}-{fingerprint}"
+        return self._cache(key, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
 
     def _copy(self, pin: str) -> str:
         """Copy the mounted checkout of *pin* to the build tree, without its marker."""
@@ -966,7 +933,7 @@ class SourceBuild(NamedSource):
         """The first 16 hex of the sha256 over what a mounted build produces.
 
         Canonical JSON of the source pin (with git's ``subdir`` and
-        ``submodules``), the build recipe (dialect defaults decided, see
+        ``submodules``), the build recipe (defaults decided, see
         :func:`resolve_recipe`) and install steps, the toolchain (recipe kind and packages) and the
         *distribution* it comes from: base, architecture, mirror, snapshot,
         repositories, build packages and build settings
@@ -977,7 +944,7 @@ class SourceBuild(NamedSource):
             source.update(subdir=self.source.subdir, submodules=self.source.submodules)
         spec = {
             "source": source,
-            "build": _recipe_payload(resolve_recipe(self.build, mounted=True)),
+            "build": _recipe_payload(resolve_recipe(self.build)),
             "install": [
                 {"kind": step.kind, "path": step.path, "dest": step.dest, "mode": step.mode}
                 for step in self.install
@@ -985,23 +952,10 @@ class SourceBuild(NamedSource):
             "distribution": dict(distribution),
             "toolchain": {
                 "kind": self.build.kind,
-                "packages": list(self.build_packages(mounted=True)),
+                "packages": list(self.build_packages()),
             },
         }
         return fingerprint(spec)
-
-    def _historical_key(self, pin: str | None) -> str:
-        """The ``nethermind-v1`` cache key: ``cache_key`` or name, url digest and ref, + pin."""
-        if self.cache_key is not None:
-            return self.cache_key if pin is None else f"{self.cache_key}-{pin[:12]}"
-        url_hash = hashlib.sha256(self.source.url.encode("utf-8")).hexdigest()[:12]
-        if pin is not None:
-            version = pin[:12]
-        elif isinstance(self.source, GitSource):
-            version = self.source.ref
-        else:
-            version = "unpinned"
-        return f"{self.name}-{url_hash}-{version}"
 
     def _cache(self, key: str, workdir: str) -> CacheDecl:
         artifacts: list[CacheFile | CacheDir] = []
@@ -1015,43 +969,12 @@ class SourceBuild(NamedSource):
                 artifacts.append(Cache.file(src=src, dest=target, name=name, mode=mode))
         return Cache.declare(key, tuple(artifacts))
 
-    def _fetch(self, pin: str | None) -> str:
-        target = f'"{Build.build_path(self.name)}"'
-        if isinstance(self.source, HttpSource):
-            return self._fetch_http(pin, target)
-        repo = shlex.quote(self.source.url)
-        if pin is None:
-            ref = shlex.quote(self.source.ref)
-            if self.source.submodules:
-                return (
-                    "git clone --depth=1 --recurse-submodules --shallow-submodules "
-                    f"-b {ref} {repo} {target}"
-                )
-            return f"git clone --depth=1 -b {ref} {repo} {target}"
-        command = (
-            f"git init -q {target} && git -C {target} fetch -q --depth=1 {repo} {pin} && "
-            f"git -C {target} checkout -q FETCH_HEAD"
-        )
-        if self.source.submodules:
-            command += f" && git -C {target} submodule update -q --init --recursive --depth=1"
-        return command
-
-    def _fetch_http(self, pin: str | None, target: str) -> str:
-        assert isinstance(self.source, HttpSource)
-        file = f'"{Build.build_path(f"{self.name}/{self.source.filename}")}"'
-        command = f"mkdir -p {target} && curl -fsSL {shlex.quote(self.source.url)} -o {file}"
-        if pin is not None:
-            command += f' && echo "{pin}  "{file} | sha256sum -c -'
-        if self.source.filename.endswith(_ARCHIVE_SUFFIXES):
-            command += f" && tar -xf {file} -C {target} --strip-components=1"
-        return command
-
 
 def fingerprint(spec: Mapping[str, object]) -> str:
     """The first 16 hex of the sha256 over the canonical JSON of *spec*.
 
     :meth:`SourceBuild.cache_fingerprint` hashes a build this way, and the
-    current-dialect kernel cache key a variant's ``Lowered.build_distribution``.
+    kernel cache key a variant's ``Lowered.build_distribution``.
     """
     canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]

@@ -36,10 +36,7 @@ recipe = Recipe(
             "prod",
             inherits="dev",
             add=Tdxs(issuer="tdx"),
-            changes=(
-                File.ref("/etc/app.conf").edit(content="mode=prod\\n"),
-                Package.ref("curl").remove(),
-            ),
+            changes=(File.ref("/etc/app.conf").edit(content="mode=prod\\n"),),
         ),
     ),
 )
@@ -58,9 +55,9 @@ def test_why_an_edited_file_shows_both_steps_and_its_destination(recipe: Path) -
         "why /etc/app.conf (variant prod)",
         "  File(extra, /etc/app.conf)",
         "    declared at recipe.py:9 in common via app",
-        "    content edited at recipe.py:24 in variant prod",
-        "files (in prod/):",
-        "  mkosi.extra/etc/app.conf",
+        "    content edited at recipe.py:23 in variant prod",
+        "files:",
+        "  payload/mkosi.profiles/prod/mkosi.extra/etc/app.conf",
     ]
     dev = run_main("inspect", str(recipe), "--variant", "dev", "--why", "/etc/app.conf")[1]
     assert "edited" not in dev
@@ -71,12 +68,13 @@ def test_why_a_service_lists_the_generated_dependencies(recipe: Path) -> None:
     code, out = run_main("inspect", str(recipe), "--variant", "prod", "--why", subject)
     assert code == EXIT_OK
     assert "  Service(app.service)\n    declared at recipe.py:10 in common via app\n" in out
-    assert "  mkosi.extra/usr/lib/systemd/system/app.service\n" in out
+    assert "  payload/mkosi.extra/usr/lib/systemd/system/app.service\n" in out
     generated = out.split("generated:\n", 1)[1].splitlines()
     assert "  After=runtime-init.service (needs RUNTIME_INIT)" in generated
     assert "  Requires=runtime-init.service (needs RUNTIME_INIT)" in generated
-    assert "  scripts/06-postinst.sh: mkosi-chroot systemctl enable app.service" in generated
-    assert "  scripts/06-postinst.sh: minimal.target.wants/app.service link" in generated
+    script = "payload/mkosi.postinst.d/50-postinst.sh"
+    assert f"  {script}: mkosi-chroot systemctl enable app.service" in generated
+    assert f"  {script}: minimal.target.wants/app.service link" in generated
     by_unit = run_main("inspect", str(recipe), "--variant", "prod", "--why", "unit:app")[1]
     assert by_unit.split("\n", 1)[1] == out.split("\n", 1)[1]
 
@@ -84,10 +82,10 @@ def test_why_a_service_lists_the_generated_dependencies(recipe: Path) -> None:
 def test_why_names_the_composite_class_in_the_fragment_chain(recipe: Path) -> None:
     out = run_main("inspect", str(recipe), "--variant", "prod", "--why", "/etc/tdxs/config.yaml")[1]
     assert "    added at recipe.py:22 in variant prod via tdxs (Tdxs)\n" in out
-    assert "  mkosi.extra/etc/tdxs/config.yaml\n" in out
+    assert "  payload/mkosi.profiles/prod/mkosi.extra/etc/tdxs/config.yaml\n" in out
 
 
-def test_why_json_reports_a_removed_package_without_files(recipe: Path) -> None:
+def test_why_json_reports_the_concern_file_that_lists_a_package(recipe: Path) -> None:
     code, out = run_main(
         "inspect", str(recipe), "--variant", "prod", "--why", "package:curl", "--format", "json"
     )
@@ -95,18 +93,19 @@ def test_why_json_reports_a_removed_package_without_files(recipe: Path) -> None:
     payload = json.loads(out)
     (entry,) = payload["declarations"]
     assert entry["declaration"] == "Package(curl, runtime)"
-    assert entry["present"] is False
-    assert [o["action"] for o in entry["origins"]] == ["declared", "removed"]
+    assert entry["present"] is True
+    assert [o["action"] for o in entry["origins"]] == ["declared"]
     assert entry["origins"][0]["fragments"] == [
         {"name": "app", "class": "Fragment"},
     ]
-    assert payload["files"] == []
+    # The app fragment's packages are one concern of the payload, inherited by prod.
+    assert payload["files"] == ["payload/mkosi.conf.d/10-app.conf (Packages=)"]
     dev = json.loads(
         run_main(
             "inspect", str(recipe), "--variant", "dev", "--why", "package:curl", "--format", "json"
         )[1]
     )
-    assert dev["files"] == ["mkosi.conf (Packages=)"]
+    assert dev["files"] == payload["files"]
     assert dev["fragments"] == ["app"]
 
 
@@ -129,7 +128,7 @@ def test_why_markdown_is_a_table_of_steps(recipe: Path) -> None:
 def test_why_a_boot_step_points_at_its_script(recipe: Path) -> None:
     out = run_main("inspect", str(recipe), "--variant", "dev", "--why", "init:prepare")[1]
     assert "  BootStep(prepare)\n" in out
-    assert "  mkosi.extra/usr/lib/runtime-init/prepare\n" in out
+    assert "  payload/mkosi.extra/usr/lib/runtime-init/prepare\n" in out
 
 
 def test_why_unknown_subject_suggests_close_matches(
@@ -154,11 +153,11 @@ def test_why_needs_one_variant(recipe: Path, capsys: pytest.CaptureFixture[str])
 def test_explain_why_is_the_python_form(recipe: Path) -> None:
     loaded = load_recipe(recipe)
     why = explain_why(loaded, "prod", "/etc/app.conf")
-    assert why.files == ("mkosi.extra/etc/app.conf",)
+    assert why.files == ("payload/mkosi.profiles/prod/mkosi.extra/etc/app.conf",)
     (entry,) = why.declarations
     assert entry.origins == (
         Origin("declared", "common", (("app", "Fragment"),), location=f"{recipe}:9"),
-        Origin("edited", "prod", fields=("content",), location=f"{recipe}:24"),
+        Origin("edited", "prod", fields=("content",), location=f"{recipe}:23"),
     )
     with pytest.raises(ValidationError, match="Nothing in the variant matches"):
         explain_why(loaded, "prod", "hook:missing")
@@ -166,8 +165,8 @@ def test_explain_why_is_the_python_form(recipe: Path) -> None:
 
 def test_provenance_records_every_step(recipe: Path) -> None:
     trace = provenance(load_recipe(recipe), variant="prod")
-    removed = Origin("removed", "prod", location=f"{recipe}:25")
-    assert trace[("Package", "curl", "runtime")][-1] == removed
+    edited = Origin("edited", "prod", fields=("content",), location=f"{recipe}:23")
+    assert trace[("File", "extra", "/etc/app.conf")][-1] == edited
     declared = Origin("declared", "common", (), location=f"{recipe}:16")
     assert trace[("Package", "systemd", "runtime")] == (declared,)
     assert trace[("Service", "tdxs.service")][0].fragments == (("tdxs", "Tdxs"),)
@@ -188,9 +187,9 @@ def test_why_under_a_directory_needs_an_emitted_path(
     )
     why = explain_why(recipe, "dev", "/etc/app/app.conf")
     assert [entry.declaration for entry in why.declarations] == ["FileTree(extra, /etc/app)"]
-    assert why.files == ("mkosi.extra/etc/app/app.conf",)
+    assert why.files == ("payload/mkosi.extra/etc/app/app.conf",)
     nested = explain_why(recipe, "dev", "/etc/app/conf.d")
-    assert nested.files == ("mkosi.extra/etc/app/conf.d/10-net.conf",)
+    assert nested.files == ("payload/mkosi.extra/etc/app/conf.d/10-net.conf",)
     assert explain_why(recipe, "dev", "/etc/app/empty").declarations == why.declarations
     whole = explain_why(recipe, "dev", "/etc/app")
     assert len(whole.files) == 2

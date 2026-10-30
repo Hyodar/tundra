@@ -51,8 +51,7 @@ class Variant:
 
 @dataclass(frozen=True)
 class Mkosi:
-    layout: Literal["directories", "native"] = "directories"
-    dialect: Literal["current", "nethermind-v1"] = "current"
+    root: Literal["initramfs", "verity"] = "initramfs"
 
 @dataclass(frozen=True)
 class Recipe:
@@ -525,7 +524,7 @@ recipe = Recipe(
     mirror=MIRROR,
     tools_mirror=MIRROR,
     epoch=0,
-    mkosi=Mkosi(dialect="nethermind-v1"),
+    mkosi=Mkosi(seed="630b5f72-a36a-4e83-b23d-6ef47c82fd9c", build_network=True),
     common=Fragment(
         "surge",
         items=(
@@ -539,11 +538,6 @@ recipe = Recipe(
                     "spec_store_bypass_disable=on nospectre_v2"
                 ),
             ),
-            Setting("Output", "Seed",
-                    ("630b5f72-a36a-4e83-b23d-6ef47c82fd9c",)),
-            Setting("Output", "OutputDirectory", ("build",)),
-            Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
-            Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
             File("/init", TDX_INIT, mode=0o755, stage="skeleton"),
             efi_stub(snapshot=MIRROR, version="255.4-1"),
             backports(),
@@ -939,3 +933,10 @@ Stage 6 (2026-10-04): the compiler lowers the whole model.
 - `bake --lockfile X` no longer replaces a different `<out>/tundravm.lock`: the lock is copied there only when that file is absent or identical; otherwise the bake reads `X` (`Image.lock_file`) and `bake-result.json` records it under `declarative.lockfile` (`bake_image(..., lock_source=)`).
 - `Build(recipe=Go(...), packages=...)` hints `Go(...)`/`Cargo(...)`/`Dotnet(...)`, not the internal class names.
 - Remaining lowering errors are genuine: unreadable/non-UTF-8 files, empty `Directory` sources, missing template placeholders, malformed `Setting` values, compiler-written mkosi keys, unpinned kernel archives, overlapping `Secrets`, and standalone variants under the native layout.
+
+Stage 7 (2026-10-30): one mkosi-native tree (plan v2, section 3.6). Supersedes the layout, dialect and standalone-variant notes above.
+
+- `Mkosi(layout=, dialect=, init_script=, cloud_postoutput=)` are removed, with `nethermind-v1`, the per-variant directories and `lowering_parity.json`; `Mkosi(root="initramfs"|"verity")` picks the payload's root layout and `build_network` defaults to `False`.
+- The compiler writes one tree: the root `mkosi.conf` is the QEMU raw disk around `payload.efi` and carries every shared and reproducibility setting; `mkosi.images/payload/` includes `payload/` (one `mkosi.conf.d/NN-<concern>.conf` per fragment, scripts in `mkosi.<phase>.d/`, a `mkosi.profiles/<variant>/` overlay per content variant); `mkosi.images/{azure,gcp}/` wrap the same UKI and convert it at postoutput. The payload carries every target's cloud glue, gated at boot.
+- A variant must add to the default one (or replace a `File`, `Repository` or `Debloat`); standalone, chained, removing, own-settings and own-kernel variants raise. `tundravm.declarative.mkosi_argv` selects one variant's `--profile`/`--dependency` options.
+- `tundravm import` and `import_tree` are removed (they reverse-compiled the old layout); `declarations_source` moved to `tundravm.declarative._writer` for `units convert`.

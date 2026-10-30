@@ -20,7 +20,6 @@ from tundravm import (
     ExternalDelivery,
     File,
     Fragment,
-    Mkosi,
     Package,
     Recipe,
     Secret,
@@ -515,12 +514,14 @@ def test_a_subset_of_the_baked_variants_matches_its_tree(
         build=out,
         lock=out / "tundravm.lock",
     )
-    assert released.passed and released.variants == ("default",)
+    assert released.passed and released.variants == ("default",), released.reasons
     # the release's bake of default keeps azure's entry, with its own tree digest
     assert sorted(a.variant for a in read_artifacts(out)) == ["azure", "default"]
     payload = json.loads((out / "bake-result.json").read_text(encoding="utf-8"))
     assert payload["variants_baked"] == ["default"]
-    assert (out / "mkosi" / "azure").is_dir()  # the full bake's tree is still there
+    assert (
+        out / "mkosi" / "mkosi.images" / "azure"
+    ).is_dir()  # the full bake's tree is still there
     again = _evidence(recipe, out)
     assert again.passed, again.index["verdict"]["reasons"]
     assert again.index["variants"]["default"]["tree_matches"] is True
@@ -630,7 +631,7 @@ def test_a_disk_booting_another_uki_is_unmeasured(
     assert _codes(found) == [("incomplete", "artifact-unmeasured", "default/azure")]
 
 
-def _layered(layout: str, motd: str = "hi\n") -> Recipe:
+def _layered(motd: str = "hi\n") -> Recipe:
     return Recipe(
         "node",
         items=(Package("curl"), Package("linux-image-amd64"), File("/etc/motd", motd)),
@@ -642,15 +643,11 @@ def _layered(layout: str, motd: str = "hi\n") -> Recipe:
                 add=Fragment("azure-bits", (Package("htop"), File("/etc/b", "b\n"))),
             ),
         ),
-        mkosi=Mkosi(layout=layout),  # type: ignore[arg-type]
     )
 
 
-@pytest.mark.parametrize("layout", ["directories", "native"])
-def test_tree_provenance_round_trips_in_both_layouts(
-    tmp_path: Path, epoch: None, layout: str
-) -> None:
-    recipe = _layered(layout)
+def test_tree_provenance_round_trips_with_a_profile_overlay(tmp_path: Path, epoch: None) -> None:
+    recipe = _layered()
     out = _baked(tmp_path, recipe)
     found = _evidence(recipe, out)
     assert found.passed, found.reasons
@@ -661,15 +658,14 @@ def test_tree_provenance_round_trips_in_both_layouts(
         }
         for name in ("default", "azure")
     }
-    inherited = "mkosi.extra/etc/motd" if layout == "native" else None
-    if inherited is not None:  # the root is the default variant, and the child inherits it
-        assert inherited in rows["default"] and inherited in rows["azure"]
-        assert "mkosi.profiles/azure/mkosi.extra/etc/b" in rows["azure"]
-        assert not any(path.startswith("mkosi.profiles/azure/") for path in rows["default"])
-    assert all(rows.values())
+    # the payload is every variant's, the overlay the azure variant's alone
+    inherited = "payload/mkosi.extra/etc/motd"
+    assert inherited in rows["default"] and inherited in rows["azure"]
+    assert "payload/mkosi.profiles/azure/mkosi.extra/etc/b" in rows["azure"]
+    assert not any(path.startswith("payload/mkosi.profiles/azure/") for path in rows["default"])
     result = verify_evidence(found.write(tmp_path / "evidence"), build=out)
     assert result.passed, result.problems
-    other = _evidence(_layered(layout, motd="changed\n"), out, allow_unbound=True)
+    other = _evidence(_layered(motd="changed\n"), out, allow_unbound=True)
     changed = {r["code"]: r["subject"] for r in other.reasons}
     assert changed.get("tree-mismatch") in ("default", "azure")
     assert other.index["variants"]["azure"]["tree_matches"] is False  # it inherits /etc/motd

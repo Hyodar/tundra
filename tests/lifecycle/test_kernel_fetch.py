@@ -9,7 +9,6 @@ import subprocess
 import tarfile
 import threading
 from collections.abc import Iterator
-from dataclasses import replace
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -27,7 +26,6 @@ from tundravm.declarative import (
     Install,
     Kernel,
     Lock,
-    Mkosi,
     Package,
     Recipe,
     Variant,
@@ -44,7 +42,7 @@ from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
-SCRIPT = "default/scripts/04-build.sh"
+SCRIPT = "payload/mkosi.build.d/10-kernel.sh"
 
 
 def _git(*args: str, cwd: Path) -> str:
@@ -114,7 +112,6 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 def _recipe(
     kernel: Kernel,
     *,
-    dialect: str = "current",
     variants: tuple[Variant, ...] = (Variant("default"),),
     builds: tuple[Build, ...] = (),
 ) -> Recipe:
@@ -122,7 +119,6 @@ def _recipe(
         "k",
         items=(kernel, *builds),
         variants=variants,
-        mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
     )
 
 
@@ -156,15 +152,12 @@ def test_lock_pins_the_kernel_ref(config: Path) -> None:
     assert calls == [GitSource("https://k.example/linux", "v6.1")]
 
 
-def test_kernels_without_a_config_or_under_nethermind_v1_are_not_locked(config: Path) -> None:
+def test_kernels_without_a_config_are_not_locked() -> None:
     kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"))
     assert lock(_recipe(kernel), resolver=lambda s: "c" * 40).lockfile.fetches == []
-    built = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
-    historical = _recipe(built, dialect="nethermind-v1")
-    assert lock(historical, resolver=lambda s: "c" * 40).lockfile.fetches == []
 
 
-def test_a_variant_whose_kernel_source_differs_gets_its_own_pin(config: Path) -> None:
+def test_a_variant_cannot_build_another_kernel(config: Path) -> None:
     shared = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
     other = Kernel("6.2", Git("https://k.example/linux", "v6.2"), config=config)
     same_source = Kernel(
@@ -176,12 +169,14 @@ def test_a_variant_whose_kernel_source_differs_gets_its_own_pin(config: Path) ->
         Variant("gcp", changes=(shared.ref.edit(cmdline=same_source.cmdline),)),
     )
     recipe = _recipe(shared, variants=variants)
-    locked = lock(recipe, resolver=lambda s: "c" * 40)
-    assert lock_status(recipe, locked, variants=("gcp",)) == ()  # kernel-azure is not "removed"
-    assert [(f.name, f.ref) for f in locked.lockfile.fetches] == [
-        ("kernel", "v6.1"),
-        ("kernel-azure", "v6.2"),
-    ]
+    # every variant boots the payload's one kernel: a variant with its own is refused
+    with pytest.raises(ValidationError, match="'azure' \\(it has its own") as error:
+        lower(recipe)
+    assert "'gcp' (it has its own" in str(error.value)
+    alone = _recipe(shared, variants=(Variant("default"), Variant("azure", outputs=("azure",))))
+    locked = lock(alone, resolver=lambda s: "c" * 40)
+    assert [(f.name, f.ref) for f in locked.lockfile.fetches] == [("kernel", "v6.1")]
+    assert lock_status(alone, locked, variants=("azure",)) == ()
 
 
 def test_a_build_named_kernel_collides_with_the_kernels_pin(config: Path) -> None:
@@ -300,34 +295,19 @@ def test_a_subdirectory_kernel_links_its_copy(tmp_path: Path, config: Path) -> N
     assert 'ln -s repo/linux "$KERNEL_CACHE/src"' in script
 
 
-def test_nethermind_v1_keeps_the_sandbox_clone(tmp_path: Path, config: Path) -> None:
-    recipe = _recipe(
-        Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config),
-        dialect="nethermind-v1",
-    )
-    script = _script(recipe, tmp_path / "tree", lock(recipe, resolver=lambda s: "c" * 40))
-    assert 'git clone --depth 1 --branch "v${KERNEL_VERSION}" \\' in script
-    assert 'KERNEL_CACHE="${BUILDDIR}/kernel-6.1-' in script
-    assert "tundravm-sources" not in script
-
-
-def test_the_kernel_cache_key_covers_the_distribution_outside_nethermind_v1(
-    tmp_path: Path, config: Path
-) -> None:
-    def keyed(dialect: str, snapshot: str | None) -> tuple[str, Recipe]:
+def test_the_kernel_cache_key_covers_the_distribution(tmp_path: Path, config: Path) -> None:
+    def keyed(snapshot: str | None) -> tuple[str, Recipe]:
         kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
-        recipe = on_platform(_recipe(kernel, dialect=dialect), snapshot=snapshot)
+        recipe = on_platform(_recipe(kernel), snapshot=snapshot)
         locked = lock(recipe, resolver=lambda s: "c" * 40)
-        script = _script(recipe, tmp_path / f"{dialect}-{snapshot}", locked)
+        script = _script(recipe, tmp_path / f"tree-{snapshot}", locked)
         return script.split("\n")[3], recipe
 
-    current, recipe = keyed("current", None)
+    current, recipe = keyed(None)
     fingerprint = lower(recipe).distribution_fingerprint("default")
     assert current.endswith(f'-{"c" * 12}-{fingerprint}"')
-    snapshots = [keyed("current", s)[0] for s in ("20260101T000000Z", "20260201T000000Z")]
+    snapshots = [keyed(s)[0] for s in ("20260101T000000Z", "20260201T000000Z")]
     assert current not in snapshots and len(set(snapshots)) == 2
-    historical = [keyed("nethermind-v1", s)[0] for s in (None, "20260101T000000Z")]
-    assert historical[0] == historical[1]
 
 
 TOOL = Build(
@@ -342,47 +322,25 @@ def _cache_keys(script: Path) -> set[str]:
     return set(re.findall(r'build\}/([^"/]+)"', script.read_text(encoding="utf-8")))
 
 
-def test_each_variant_directory_keys_its_inherited_builds_by_its_distribution(
+def test_the_payload_builds_the_kernel_and_the_builds_once_for_every_variant(
     tmp_path: Path, config: Path
 ) -> None:
     kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
-    variants = (Variant("default"), BUILD_PACKAGE, IMAGE_PACKAGE)
-    recipe = _recipe(kernel, variants=variants, builds=(TOOL,))
+    recipe = _recipe(kernel, variants=(Variant("default"), IMAGE_PACKAGE), builds=(TOOL,))
     compile(recipe, lock=lock(recipe, resolver=lambda s: "c" * 40)).write(tmp_path)
-    default, dev, slim = (
-        _cache_keys(tmp_path / name / "scripts" / "04-build.sh")
-        for name in ("default", "dev", "slim")
-    )
-    assert len(default) == 2 and slim == default  # an image package is not the toolchain
-    assert len(dev) == 2 and dev.isdisjoint(default)
+    build = tmp_path / "payload" / "mkosi.build.d"
+    keys = _cache_keys(build / "10-kernel.sh") | _cache_keys(build / "50-build.sh")
     lowered = lower(recipe)
-    assert {key.rsplit("-", 1)[1] for key in dev if key.startswith("kernel-")} == {
-        lowered.distribution_fingerprint("dev")
-    }
+    fingerprint = lowered.distribution_fingerprint("default")
+    (kernel_key,) = (key for key in keys if key.startswith("kernel-"))
+    assert len(keys) == 2 and kernel_key.endswith(fingerprint)
+    # an image package is not the toolchain: the overlay builds nothing of its own
+    overlay = tmp_path / "payload" / "mkosi.profiles" / "slim"
+    assert (overlay / "mkosi.conf").is_file() and not (overlay / "mkosi.build.d").exists()
     hook = lowered.source_builds()["tool"].render(
-        "c" * 40, mounted=True, distribution=lowered.build_distribution("dev")
+        "c" * 40, distribution=lowered.build_distribution("default")
     )
-    assert hook in (tmp_path / "dev" / "scripts" / "04-build.sh").read_text(encoding="utf-8")
-
-
-def test_the_native_layout_refuses_a_variant_with_another_distribution(
-    tmp_path: Path, config: Path
-) -> None:
-    kernel = Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config)
-
-    def native(*variants: Variant) -> Recipe:
-        recipe = _recipe(kernel, variants=(Variant("default"), *variants), builds=(TOOL,))
-        return replace(recipe, mkosi=Mkosi(layout="native"))
-
-    refused = native(BUILD_PACKAGE, IMAGE_PACKAGE)
-    with pytest.raises(ValidationError, match="cannot build variant 'dev'") as error:
-        compile(refused, lock=lock(refused, resolver=lambda s: "c" * 40))
-    assert error.value.context["profile"] == "dev"
-    assert "emit_mode='per_directory'" in str(error.value.hint)
-    shared = native(IMAGE_PACKAGE)
-    compile(shared, lock=lock(shared, resolver=lambda s: "c" * 40)).write(tmp_path)
-    assert len(_cache_keys(tmp_path / "scripts" / "04-build.sh")) == 2
-    assert not (tmp_path / "mkosi.profiles" / "slim" / "scripts" / "04-build.sh").exists()
+    assert hook in (build / "50-build.sh").read_text(encoding="utf-8")
 
 
 # ── bake ─────────────────────────────────────────────────────────────
@@ -452,8 +410,3 @@ def test_inspect_and_lint_report_the_kernel_pin(tmp_path: Path, config: Path) ->
     assert info["kernel"]["pinned"] == "ccccccc"  # type: ignore[index]
     assert "Kernel: 6.1  tdx=yes  pinned=ccccccc" in render(info)
     assert not [d for d in lint(recipe) if d.code == "source-unpinned"]
-    historical = _recipe(
-        Kernel("6.1", Git("https://k.example/linux", "v6.2"), config=config),
-        dialect="nethermind-v1",
-    )
-    assert not [d for d in lint(historical) if d.code == "source-unpinned"]

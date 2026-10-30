@@ -152,17 +152,17 @@ def test_diff_reports_new_package(tmp_path: Path) -> None:
 
     changed = make_recipe(Package("extra"))
     diff = diff_against(lower(changed), tree)
-    assert [(c.path, c.status) for c in diff.changes] == [("default/mkosi.conf", "modified")]
+    assert [(c.path, c.status) for c in diff.changes] == [("payload/mkosi.conf", "modified")]
     assert "+    extra\n" in diff.unified()
     assert tv.diff(tv.compile(changed), tree) == diff.unified()
-    assert "    extra\n" not in (tree / "default" / "mkosi.conf").read_text(encoding="utf-8")
+    assert "    extra\n" not in (tree / "payload" / "mkosi.conf").read_text(encoding="utf-8")
 
 
 def test_diff_against_missing_tree_is_all_added(tmp_path: Path) -> None:
     diff = diff_against(lower(make_recipe()), tmp_path / "missing")
     assert diff.changes
     assert {c.status for c in diff.changes} == {"added"}
-    assert "default/mkosi.conf" in {c.path for c in diff.changes}
+    assert {"mkosi.conf", "payload/mkosi.conf"} <= {c.path for c in diff.changes}
 
 
 def test_diff_ignores_variants_that_were_not_compiled(tmp_path: Path) -> None:
@@ -170,7 +170,7 @@ def test_diff_ignores_variants_that_were_not_compiled(tmp_path: Path) -> None:
     recipe = make_recipe(variants=(other,))
     tree = tmp_path / "tree"
     tv.compile(recipe).write(tree)
-    assert (tree / "other" / "mkosi.conf").is_file()
+    assert (tree / "payload" / "mkosi.profiles" / "other" / "mkosi.conf").is_file()
     assert tv.diff(tv.compile(recipe, variants=["default"]), tree) == ""
     assert diff_against(lower(recipe), tree, profiles=["default"]).is_clean
 
@@ -179,11 +179,11 @@ def test_diff_leaves_the_tree_alone_until_written(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     first = tv.compile(make_recipe())
     first.write(tree)
-    conf = tree / "default" / "mkosi.conf"
+    conf = tree / "payload" / "mkosi.conf"
     conf.write_text("hand edit\n", encoding="utf-8")
 
     assert [c.path for c in diff_against(lower(make_recipe()), tree).changes] == [
-        "default/mkosi.conf"
+        "payload/mkosi.conf"
     ]
     assert "-hand edit\n" in tv.diff(first, tree)
     assert conf.read_text(encoding="utf-8") == "hand edit\n"  # diffing never writes
@@ -207,7 +207,7 @@ def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_compile_check_detects_stale_tree(recipe: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     code, out = run_main("compile", str(recipe), "--check", "--tree", str(tree))
-    assert code == EXIT_FAILURE and "A  default/mkosi.conf" in out
+    assert code == EXIT_FAILURE and "A  payload/mkosi.conf" in out
     assert not tree.exists()
 
     assert run_main("compile", str(recipe), "--tree", str(tree))[0] == EXIT_OK
@@ -220,11 +220,13 @@ def test_compile_check_detects_stale_tree(recipe: Path, tmp_path: Path) -> None:
     )
     code, out = run_main("compile", str(recipe), "--tree", str(tree), "--check")
     assert code == EXIT_FAILURE
-    assert out == "M  azure/mkosi.conf\nM  default/mkosi.conf\n2 files changed\n"
+    # every variant boots the one payload: one file changes for all of them
+    assert out == "M  payload/mkosi.conf\n1 file changed\n"
     code, out = run_main(
         "compile", str(recipe), "--tree", str(tree), "--check", "--variant", "default"
     )
-    assert out == "M  default/mkosi.conf\n1 file changed\n"
+    # what every variant shares does not depend on the variants compiled
+    assert out == "M  payload/mkosi.conf\n1 file changed\n"
 
 
 def test_diff_command(recipe: Path, tmp_path: Path) -> None:
@@ -238,11 +240,8 @@ def test_diff_command(recipe: Path, tmp_path: Path) -> None:
 
     recipe.write_text(recipe.read_text().replace("hello", "goodbye"))
     code, out = run_main("diff", str(recipe), "--tree", str(tree), "--stat", *both)
-    assert (tree / "azure" / "mkosi.conf").is_file()
-    assert (code, out) == (
-        EXIT_FAILURE,
-        "M  azure/mkosi.extra/etc/motd\nM  default/mkosi.extra/etc/motd\n2 files changed\n",
-    )
+    assert (tree / "mkosi.images" / "azure" / "mkosi.conf").is_file()
+    assert (code, out) == (EXIT_FAILURE, "M  payload/mkosi.extra/etc/motd\n1 file changed\n")
 
     code, out = run_main("diff", str(recipe), "--tree", str(tree), "--color", "never")
     assert code == EXIT_FAILURE
@@ -253,6 +252,6 @@ def test_diff_command(recipe: Path, tmp_path: Path) -> None:
 
 def test_diff_command_defaults_to_build_dir(recipe: Path) -> None:
     code, out = run_main("diff", str(recipe), "--stat")
-    assert code == EXIT_FAILURE and "A  default/mkosi.conf" in out
+    assert code == EXIT_FAILURE and "A  payload/mkosi.conf" in out
     run_main("compile", str(recipe))
     assert run_main("diff", str(recipe))[0] == EXIT_OK

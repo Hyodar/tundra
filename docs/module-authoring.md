@@ -229,11 +229,11 @@ A check receives the `Resolved` variant: `variant`, `outputs` (never empty), eve
 
 **Runtime init.** `BootStep(name, script, after=[...], before=[...])` adds a step that runs at boot. There are no priorities: steps form a graph, and `after`/`before` take readiness handles. `key.ready`, `disk.ready` and `secrets.ready` are the built-in steps `keys`, `disks` and `secrets`, present when the variant declares a `Key`, `Disk` or `Secrets`. `disks` runs after `keys`, and `secrets` runs after `disks` when a `Secrets` has `store=`. A step's own `.ready` is its handle. A step name string works too, for a step declared in another fragment. The steps run in a deterministic topological order: when several are ready, the built-ins go first, then yours in declaration order. A cycle (`step-cycle`) or a reference to a step the variant does not declare (`step-undefined`) is an error that names the steps. `RuntimeDirectory(path, owner=, group=, mode=, after=)` and `RuntimeFile(path, text, owner=, group=, mode=, after=)` from `tundravm.declarative.utils` are `BootStep`s that create a directory or write a file.
 
-In the current dialect each step is its own oneshot unit, `runtime-init-<step>.service`, running `/usr/lib/runtime-init/<step>`, with `After=`/`Requires=` on the steps it runs after. `runtime-init.service` requires all of them. Steps that do not depend on each other can run in parallel. Under `nethermind-v1`, one `/usr/bin/runtime-init` runs every step in the topological order.
+Each step is its own oneshot unit, `runtime-init-<step>.service`, running `/usr/lib/runtime-init/<step>`, with `After=`/`Requires=` on the steps it runs after. `runtime-init.service` requires all of them. Steps that do not depend on each other can run in parallel.
 
 **Units.** `Unit(..., needs=[disk.ready, step.ready])` and `Service(..., needs=[...])` make a unit wait for exactly those steps (`After=` and `Requires=` on their units). `needs=[RUNTIME_INIT]` waits for every step (`runtime-init.service`). A `Service` waits for every step by default, and `needs=()` starts it without waiting. A `needs` naming a step the variant does not declare is an error (`needs-undefined`).
 
-**Build hooks.** `Hook(name, phase, script, after=())` runs a script in an mkosi phase (`build`, `postinst`, `finalize`, ...). Hooks keep declaration order inside a phase; `after` names hooks of the same phase that must run first.
+**Build hooks.** `Hook(name, phase, script, after=())` runs a script in an mkosi phase (`sync`, `prepare`, `build`, `postinst`, `finalize`, `postoutput`, `clean`; it lands in the payload's `mkosi.<phase>.d/50-<phase>.sh`). Hooks keep declaration order inside a phase; `after` names hooks of the same phase that must run first.
 
 ## Building from source
 
@@ -361,6 +361,6 @@ $ uv run pytest -q test_exporter.py
 
 - Keep `compose()` a pure function of the fields; never keep module-level mutable state.
 - Take dependencies as fields (the storage fragment, a source, a port) rather than constructing another fragment inside `compose()` with hidden defaults.
-- Declare everything the fragment needs (packages, users, groups, files) so it works in a standalone variant, and use `requires` for what must come from elsewhere.
+- Declare everything the fragment needs (packages, users, groups, files) so it works in any recipe, and use `requires` for what must come from elsewhere.
 - Use `Service` for an ordinary service (it renders the unit and waits for runtime-init by default) and `Unit(name, content)` when you need exact bytes; tundravm does not edit `Unit` text beyond the `After=`/`Requires=` lines `needs=` adds.
 - Keep hook and init names unique to the fragment (`exporter-...`): they are identities.

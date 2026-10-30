@@ -1,10 +1,10 @@
-"""Curated kernel modules: ``Debian(kernel_modules=...)``, ``KernelModules=``, debloat, import."""
+"""Curated kernel modules: ``Debian(kernel_modules=...)``, ``KernelModules=``, debloat."""
 
 from pathlib import Path
 
 import pytest
 
-from tundravm.declarative import Debian, Git, Kernel, Recipe, Variant, compile, import_tree
+from tundravm.declarative import Debian, Git, Kernel, Recipe, Variant
 from tundravm.declarative.model import Target
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
@@ -97,13 +97,15 @@ def test_modules_without_a_distribution_kernel_are_rejected() -> None:
         Debian("trixie", kernel_package=None, kernel_modules=("vsock",))
 
 
-@pytest.mark.parametrize("spec", [(), ("vsock",), "all"])
-def test_import_maps_the_selection_back(tmp_path: Path, spec: object) -> None:
-    recipe = _recipe(*CLOUDS, kernel_modules=spec)
-    tree = tmp_path / "tree"
-    compile(recipe).write(tree)
-    imported = import_tree(tree, name="mods")
-    platform = imported.recipe.platform
-    assert isinstance(platform, Debian)
-    assert platform.kernel_modules == spec
-    assert "round trip: the recipe compiles back to this tree" in imported.notes
+def test_the_payload_keeps_the_modules_of_every_target_whatever_is_compiled(
+    tmp_path: Path,
+) -> None:
+    """One UKI boots every output, so a cloud variant's modules are in the default's too."""
+    recipe = Recipe(
+        "mods",
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
+        platform=Debian("trixie"),
+    )
+    listed = _listed(compile_tree(recipe, variants="default", path=tmp_path).conf())
+    assert listed == list(curated_modules(("qemu", "azure")))
+    assert set(AZURE_MODULES) <= set(listed)

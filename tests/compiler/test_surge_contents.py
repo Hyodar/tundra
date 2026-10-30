@@ -1,4 +1,4 @@
-"""``examples/surge-tdx-prover/contents.py`` matches the committed surge tree byte for byte."""
+"""``examples/surge-tdx-prover/contents.py`` matches the committed surge payload byte for byte."""
 
 from __future__ import annotations
 
@@ -10,10 +10,9 @@ from types import ModuleType
 import pytest
 
 from tests.helpers import SURGE_EXAMPLE
-from tundravm.compiler.emit_mkosi import DEFAULT_TDX_INIT_SCRIPT
 
 SURGE = SURGE_EXAMPLE
-GOLDEN = SURGE / "mkosi" / "default"
+GOLDEN = SURGE / "mkosi" / "payload"
 INIT_SERVICE = "runtime-init.service"
 
 
@@ -58,10 +57,24 @@ GENERATED = frozenset(
         "mkosi.extra/etc/tdx/secrets.json",
         "mkosi.extra/etc/tdx/secrets.yaml",
         "mkosi.extra/etc/tdxs/config.yaml",
-        "mkosi.extra/usr/bin/runtime-init",
+        "mkosi.extra/etc/machine-id",
+        *(f"mkosi.extra/usr/lib/runtime-init/{step}" for step in ("keys", "disks", "secrets")),
+        *(
+            f"mkosi.extra/usr/lib/systemd/system/runtime-init-{step}.service"
+            for step in ("keys", "disks", "secrets")
+        ),
         "mkosi.extra/usr/lib/systemd/system/runtime-init.service",
         "mkosi.extra/usr/lib/systemd/system/tdxs.service",
         "mkosi.extra/usr/lib/systemd/system/tdxs.socket",
+        "mkosi.extra/usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules",
+        # the cloud glue every payload carries, gated at boot
+        "mkosi.extra/etc/hosts",
+        "mkosi.extra/usr/bin/azure-complete-provisioning",
+        "mkosi.extra/usr/lib/systemd/system/azure-complete-provisioning.service",
+        "mkosi.extra/usr/lib/systemd/system/gcp-metadata-dns.service",
+        "mkosi.extra/usr/lib/tundravm/gcp/resolv.conf",
+        "mkosi.extra/usr/lib/udev/google_nvme_id",
+        "mkosi.extra/usr/lib/udev/rules.d/65-gce-disk-naming.rules",
     }
 )
 
@@ -73,7 +86,7 @@ def _const(name: str) -> str:
 
 
 def needs_runtime_init(body: str) -> str:
-    """The ``needs=[RUNTIME_INIT]`` injection the committed (``nethermind-v1``) units carry.
+    """The ``needs=[RUNTIME_INIT]`` injection the committed units carry.
 
     ``runtime-init.service`` becomes the first value of the ``[Unit]`` section's
     ``After=`` and ``Requires=`` lines; a missing line is appended to the end of
@@ -111,7 +124,3 @@ def test_every_shipped_literal_file_is_covered() -> None:
     }
     covered = {path for _, path in (*VERBATIM, *UNITS)}
     assert shipped - GENERATED == covered
-
-
-def test_skeleton_init_matches_the_compiler_default() -> None:
-    assert DEFAULT_TDX_INIT_SCRIPT == _const("TDX_INIT")

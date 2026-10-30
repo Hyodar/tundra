@@ -1,4 +1,9 @@
-"""The surge recipe compiles byte for byte to its committed golden tree, whole and per variant."""
+"""The surge recipe compiles byte for byte to its committed tree, whole and per variant.
+
+The tree is the mkosi-native one: ``devtools`` is the only profile overlay, ``azure`` and
+``gcp`` the only wrappers, and a variant compiled alone writes the shared payload, the
+QEMU disk and its own overlay or wrapper (the rest of the committed tree is ignored).
+"""
 
 from __future__ import annotations
 
@@ -19,7 +24,19 @@ def surge() -> Recipe:
 
 def test_surge_recipe_declares_the_golden_variants(surge: Recipe) -> None:
     assert tuple(v.name for v in surge.variants) == SURGE_VARIANTS
-    assert sorted(p.name for p in GOLDEN.iterdir()) == sorted(SURGE_VARIANTS)
+    assert sorted(p.name for p in GOLDEN.iterdir()) == [
+        "mkosi.conf",
+        "mkosi.images",
+        "mkosi.repart",
+        "mkosi.sandbox",
+        "payload",
+    ]
+    assert sorted(p.name for p in (GOLDEN / "mkosi.images").iterdir()) == [
+        "azure",
+        "gcp",
+        "payload",
+    ]
+    assert sorted(p.name for p in (GOLDEN / "payload" / "mkosi.profiles").iterdir()) == ["devtools"]
 
 
 def test_surge_recipe_matches_the_committed_tree(surge: Recipe) -> None:

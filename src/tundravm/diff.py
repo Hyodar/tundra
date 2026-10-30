@@ -165,8 +165,8 @@ def diff_against(
 
     ``None`` compiles the image's active profiles.
 
-    Profile directories on disk that were not compiled are left out, so a tree
-    holding more profiles than are active is not reported as removed.
+    Profile overlays on disk that were not compiled are left out, so a tree holding more
+    variants than are active is not reported as removed.
     """
     from .declarative._compile import emit
 
@@ -174,7 +174,8 @@ def diff_against(
     scoped = image.select(profiles)
     with tempfile.TemporaryDirectory(prefix="tundravm-diff-") as tmp:
         emit(scoped, Path(tmp))
-        return diff_trees(root, Path(tmp), ignore=_foreign_profile_globs(root, scoped.active))
+        ignore = _foreign_profile_globs(root, scoped.active)
+        return diff_trees(root, Path(tmp), ignore=ignore)
 
 
 def cmd_diff(
@@ -294,26 +295,19 @@ def _paint(kind: str, line: str, color: bool) -> str:
 
 
 def _foreign_profile_globs(root: Path, compiled: Sequence[str]) -> list[str]:
-    """Ignore globs for profile directories under *root* that were not compiled."""
+    """Ignore globs for the profile overlays *root* holds of variants that were not
+    *compiled* (``payload/mkosi.profiles/<x>/``, ``mkosi.profiles/<x>/``)."""
     keep = set(compiled)
-    candidates: list[tuple[str, Path]] = []
-    if root.is_dir():
-        candidates += [
-            ("", child)
-            for child in root.iterdir()
-            if child.is_dir() and (child / "mkosi.conf").is_file()
-        ]
-    if (root / "mkosi.profiles").is_dir():
-        candidates += [
-            ("mkosi.profiles/", child)
-            for child in (root / "mkosi.profiles").iterdir()
-            if child.is_dir()
-        ]
-    return sorted(
-        f"{prefix}{glob.escape(child.name)}/*"
-        for prefix, child in candidates
-        if child.name not in keep
-    )
+    globs: list[str] = []
+    for prefix in ("payload/mkosi.profiles/", "mkosi.profiles/"):
+        directory = root / prefix
+        if directory.is_dir():
+            globs += [
+                f"{prefix}{glob.escape(child.name)}/*"
+                for child in directory.iterdir()
+                if child.is_dir() and child.name not in keep
+            ]
+    return sorted(globs)
 
 
 def _wants_color(mode: str, out: TextIO) -> bool:

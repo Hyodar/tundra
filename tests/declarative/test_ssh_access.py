@@ -27,7 +27,7 @@ TOOLS = RuntimeTools(Git("https://github.com/Hyodar/tundra-tools", "a" * 40))
 def _files(*items: object) -> dict[str, str]:
     recipe = Recipe("ssh", platform=Debian("trixie"), items=(TeeBase(), *items))  # type: ignore[arg-type]
     tree = compile(recipe, variants=["default"])
-    prefix = "default/mkosi.extra"
+    prefix = "payload/mkosi.extra"
     return {
         e.path.removeprefix(prefix): (e.content or b"").decode()
         for e in tree.entries

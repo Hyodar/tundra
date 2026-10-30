@@ -60,11 +60,14 @@ def test_service_and_task_render_conditions_after_the_relations(tmp_path: Path) 
 def test_one_variant_builds_one_uki_for_three_outputs(tmp_path: Path) -> None:
     tree = compile_tree(CLOUDS, path=tmp_path / "tree")
     conf = tree.conf(variant="default").splitlines()
-    assert "Format=uki" in conf
-    assert [line for line in conf if line.startswith("PostOutputScripts=")] == [
-        "PostOutputScripts=scripts/gcp-postoutput.sh",
-        "PostOutputScripts=scripts/azure-postoutput.sh",
-    ]
+    assert "Format=uki" in conf and "Output=payload" in conf
+    images = tree.root / "mkosi.images"
+    assert sorted(p.name for p in images.iterdir()) == ["azure", "gcp", "payload"]
+    for target in ("azure", "gcp"):
+        wrapper = (images / target / "mkosi.conf").read_text()
+        assert "ExtraTrees=%O/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI\n" in wrapper
+    # the QEMU disk is the main image around the same UKI
+    assert "Output=qemu\n" in tree.main_conf()
     azure = tree.read(f"{UNITS}/azure-complete-provisioning.service")
     gcp = tree.read(f"{UNITS}/gcp-metadata-dns.service")
     assert "ConditionVirtualization=microsoft" in azure
@@ -88,7 +91,8 @@ GATED = UNGATED.replace(
     [
         (("qemu", "azure"), UNGATED, True),
         (("qemu", "azure"), GATED, False),
-        (("azure",), UNGATED, False),
+        # every tree also builds the QEMU disk around the payload: the agent boots there too
+        (("azure",), UNGATED, True),
     ],
 )
 def test_cloud_glue_unconditional(outputs: tuple[str, ...], text: str, found: bool) -> None:

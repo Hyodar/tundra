@@ -59,7 +59,7 @@ backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 ```bash
 tundravm init . --name node --ci github                 # or scaffold: starter recipe, [tool.tundravm], tests, CI
 tundravm lock                                           # build/tundravm.lock: section digests + source pins
-tundravm compile --tree mkosi                           # emit the mkosi tree, one directory per variant; commit it
+tundravm compile --tree mkosi                           # emit the mkosi-native tree (payload, QEMU disk, wrappers); commit it
 tundravm watch                                          # one lint + tree-check line per save; Ctrl-C stops
 tundravm bake --verify-reproducible                     # build every variant twice, frozen against the lock
 tundravm measure --variant default --export-policy build/default/policy.json  # expected RTMRs, where evidence looks
@@ -97,7 +97,7 @@ Hand-maintained mkosi trees for TDX images are hard to review, drift easily, and
 - **Auditor evidence.** `tundravm evidence` packs one bake's record (digests, the lockfile and its drift, every artifact re-hashed, the reproducibility outcome, the toolchain, the measurements policy, SBOMs, including the Go modules and Rust crates embedded in built binaries, lint) into an `evidence.json` index with a pass, fail or incomplete verdict and stable reason codes (`--require` makes missing checks count), a byte-reproducible `tar.gz` under `SOURCE_DATE_EPOCH` and a one-page HTML report.
 - **Secrets lint.** `secret-in-file` and `secret-in-env` refuse private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments, naming the kind and line but never the value; credentials go in `Secrets` and arrive at boot, written by the provider `Secrets(delivery=)` names (`secret-target-unsupported` refuses a target nobody writes: the built-in delivery writes only the SSH key).
 
-The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image as one declarative recipe. It compiles byte-for-byte to the committed upstream tree, all four variants (`default`, `azure`, `gcp`, `devtools`).
+The [`surge-tdx-prover`](examples/surge-tdx-prover/) example reproduces the full [NethermindEth/nethermind-tdx](https://github.com/NethermindEth/nethermind-tdx) image as one declarative recipe. It compiles byte-for-byte to its committed mkosi-native tree (`examples/surge-tdx-prover/mkosi`): one payload with the Azure and GCP glue, the QEMU disk, the `azure` and `gcp` wrappers and the `devtools` profile.
 
 ## Concepts in one screen
 
@@ -155,21 +155,19 @@ storage = Fragment("secure-storage", items=(key, disk, Secrets(store=disk)))
 
 ```python
 variants=(
-    Variant("default", outputs=("qemu", "azure", "gcp")),  # one UKI, three disk images
+    Variant("default", outputs=("qemu",)),  # the payload, in the QEMU raw disk
+    Variant("cloud", outputs=("azure", "gcp")),  # the same UKI in an Azure VHD and a GCE tar.gz
     Variant("debug", inherits="default", add=DevTools(), release=False),  # never released
-    Variant("debug-strace", inherits="debug", add=packages("strace")),  # chained
     Variant("prod", changes=(motd.ref.edit(content="prod\n"),)),  # motd = File.text("/etc/motd", ...)
-    Variant("slim", changes=(Package.ref("jq").remove(),)),
-    Variant("bare", inherits=None, add=packages("curl")),
 )
 ```
 
-- `inherits` is `"base"` (the default, meaning `Recipe.items`), another variant's name, or `None` for a standalone variant that inherits nothing.
+- `inherits` is `"base"` (the default, meaning `Recipe.items`) or the default variant's name. Every variant boots the default variant's payload plus what it adds: one that adds content compiles to an mkosi profile overlay (`payload/mkosi.profiles/<name>/`, selected with `--profile`), one that only names outputs to their wrapper images (`--dependency`).
 - `add` is a fragment; `packages("strace", "gdb")` bundles packages without inventing a fragment name. Adding a declaration whose identity the variant already inherits with a different value is an `identity-collision` error.
-- `changes` edits or drops inherited declarations by identity: `value.ref.edit(field=...)` sets fields (`edit-missing` if the variant inherits no such identity), `value.ref.remove()` drops one (`remove-missing`), and `Type.ref(key)` (`Unit.ref("ssh.service")`) names one you hold no value for. `Disk(key=key)` and `Secrets(store=disk)` hold refs too, so `key.ref.edit(size=32)` is the whole change for a smaller key.
-- `outputs` names the targets the variant builds (`qemu`, `azure`, `gcp`), inherited from the variant it inherits when empty; cloud targets add their platform integration, gated at boot by `ConditionVirtualization=` so it is inert elsewhere. All of a variant's outputs wrap the same UKI: one sha256 and one set of measurements. A child cannot drop a cloud target it inherits (`target-inconsistent`).
+- `changes` edits inherited declarations by identity: `value.ref.edit(field=...)` sets fields (`edit-missing` if the variant inherits no such identity), and `Type.ref(key)` (`File.ref("/etc/motd")`) names one you hold no value for. A profile can only add to the payload, so a variant compiles when it replaces nothing but a `File`, `Repository` or `Debloat` and removes nothing; a different image (another key size, a removed package, a standalone `inherits=None`) is another recipe.
+- `outputs` names the targets the variant builds (`qemu`, `azure`, `gcp`), inherited from the variant it inherits when empty. The payload carries the integration of every cloud the recipe names, gated at boot by `ConditionVirtualization=` so it is inert elsewhere, and every output wraps the same UKI: one sha256 and one set of measurements. A child cannot drop a cloud target it inherits (`target-inconsistent`).
 
-`Setting`s and the `Kernel` belong to the variant that declares them; declare them in `Recipe.items` to share them. A variant with its own settings or kernel lowers standalone. See [Variants and targets](docs/concepts.md#variants-and-targets).
+`Setting`s and the `Kernel` are the payload's: declare them in `Recipe.items`; a variant with its own does not compile. See [Variants and targets](docs/concepts.md#variants-and-targets) and [the compiled tree](docs/concepts.md#the-compiled-tree).
 
 ## Reproducibility
 
@@ -208,7 +206,6 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 | `watch [RECIPE]` | Lint the recipe and compare it with its committed tree (`--tree`, else `[tool.tundravm]` `tree`, else `BUILD/mkosi`) at start and whenever the recipe or a `.py` beside it changes, one line per check; never writes unless `--write`; `--interval SECONDS`; Ctrl-C exits 0 |
 | `preview [RECIPE]` | Serve the `explore` page on `127.0.0.1:8765` (`--host`, `--port`, `--open`) and re-render it whenever the recipe or anything `watch` polls changes; the page reloads itself and shows an error banner over the last good rendering while the recipe does not load; a non-loopback `--host` needs `--allow-remote`; Ctrl-C exits 0 |
 | `units convert FILE...` | Print the typed declarations (`Service`, `Task`, `Mount`, `Unit(dropin=)`) existing unit files convert to; `units render RECIPE --unit NAME` prints the unit text one `--variant` generates |
-| `import TREE` | Generate a recipe module from an existing mkosi tree; prints coverage, notes and whether it compiles back (`--output FILE`, `--name`, `--dialect`) |
 | `status [RECIPE]` | Read-only report of each lifecycle step and the next command to run (`--verify` hashes the artifacts) |
 | `clean [RECIPE]` | Remove output of the build directory (`--build DIR`) by part (`--what sources,tree,artifacts,evidence,state,reproduce` or `--what all`); without `--what` it lists what `all` would remove |
 | `config [RECIPE]` | The `recipe`, `tree`, `build`, `lockfile` and `backend` the commands resolve, whether each came from a flag, `[tool.tundravm]`, the default or (the backend) the recipe file, and whether the recipe and lockfile exist |
@@ -231,14 +228,14 @@ A recipe file binds its backend to a module-level `backend`; `tundravm bake --ba
 | Example | What it teaches |
 |---|---|
 | [`01_minimal.py`](examples/01_minimal.py) | The smallest recipe: a base, packages and a file as the recipe's `items`; no variants means one QEMU `default` |
-| [`02_variants.py`](examples/02_variants.py) | `Variant` overlays: `add`, `changes` that edit/remove by identity (refs), `inherits` chains, a standalone `inherits=None` variant, `outputs=("azure", "gcp")`, `packages()` |
+| [`02_variants.py`](examples/02_variants.py) | `Variant`s as additions to one payload: `add`, `changes` that edit by identity (refs), `outputs=("azure", "gcp")` wrappers around the same UKI, `packages()` |
 | [`03_fragments.py`](examples/03_fragments.py) | A reusable plain `Fragment`, `@component` classes with `ConfigFile`-rendered config, `requires=`, a lint `check` and an exported `HttpEndpoint` consumed by a health check |
 | [`04_storage_and_secrets.py`](examples/04_storage_and_secrets.py) | TPM-sealed `Key`, encrypted `Disk`, `Secrets` with `Schema`s and file/env targets an `ExternalDelivery` writes, `RuntimeTools`, `Partition` |
 | [`05_source_builds.py`](examples/05_source_builds.py) | `Build` from an `Http` tarball `using` the `Go` toolchain and from a `Git` tag with a script; file and directory installs; `cache_namespace` |
-| [`06_attestation.py`](examples/06_attestation.py) | `Tdxs()` as attester and as verifier built with `Tdxs.from_policy()` from `peer.policy.json` (a placeholder export of `measure --export-policy`), plus `Policy(require_frozen_lock=True)` |
+| [`06_attestation.py`](examples/06_attestation.py) | `Tdxs.from_policy()` as attester and verifier, built from `peer.policy.json` (a placeholder export of `measure --export-policy`), in a QEMU and an Azure disk, plus `Policy(require_frozen_lock=True)` |
 | [`nethermind_base.py`](examples/nethermind_base.py) | The nethermind-tdx base layer as one `Composite`: TDX kernel, EFI stub, backports, debloat, `Tdxs()` |
 | [`fragments/`](examples/fragments/) | `Raiko()`, `TaikoClient()`, `Nethermind()`: each with a `Build`, a user, a unit and an env file |
-| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The flagship: the full nethermind-tdx image, byte-identical to the committed tree for all four variants |
+| [`surge-tdx-prover/`](examples/surge-tdx-prover/) | The flagship: the full nethermind-tdx image, byte-identical to its committed tree, whole and per variant |
 
 Every example loads, lints without errors and compiles deterministically; `tests/lint/test_examples_api.py` enforces it. Check the flagship against its golden tree with `tundravm compile examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi --check`.
 

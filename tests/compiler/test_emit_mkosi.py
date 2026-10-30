@@ -1,12 +1,20 @@
+"""The emitter's output for one recipe at a time, read back from the mkosi-native tree.
+
+The root ``mkosi.conf`` holds what every image shares (distribution, snapshot, tools
+tree, network, source date, build mounts); ``payload/mkosi.conf`` and its
+``mkosi.conf.d/`` the OS; ``payload/mkosi.<phase>.d/`` its scripts; a variant that adds
+content is ``payload/mkosi.profiles/<variant>/``; a cloud target is a wrapper under
+``mkosi.images/<target>/``.
+"""
+
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, cast
 
 import pytest
 
-from tests.helpers import on_platform
-from tundravm.compiler import DEFAULT_TDX_INIT_SCRIPT
-from tundravm.compiler.emit_mkosi import ARCH_TO_MKOSI
+from tests.helpers import conf_list, on_platform
+from tundravm.compiler.emit_mkosi import ARCH_TO_MKOSI, AZURE_CONVERTER, GCP_CONVERTER
 from tundravm.declarative import (
     BootStep,
     Debian,
@@ -32,14 +40,13 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.declarative._compile import emit
-from tundravm.declarative.utils import BACKPORTS_TREE, Backports, EfiStub
+from tundravm.declarative.utils import Backports, EfiStub
 from tundravm.errors import ValidationError
 from tundravm.models import Phase
 
 Arch = Literal["x86_64", "aarch64"]
 LINUX = "https://github.com/gregkh/linux"
-UNIT_DIR = Path("default") / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
-HISTORICAL = Mkosi(dialect="nethermind-v1")
+UNIT_DIR = Path("payload") / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
 
 
 def _recipe(
@@ -63,12 +70,23 @@ def _compile(recipe: Recipe, out: Path, *, variants: Sequence[str] | None = None
     return out
 
 
-def _conf(out: Path, variant: str = "default") -> str:
-    return (out / variant / "mkosi.conf").read_text(encoding="utf-8")
+def _conf(out: Path, profile: str | None = None) -> str:
+    """The payload's configuration as mkosi reads it: ``mkosi.conf``, ``mkosi.conf.d/*``,
+    then *profile*'s overlay ``mkosi.conf``."""
+    payload = out / "payload"
+    texts = [(payload / "mkosi.conf").read_text(encoding="utf-8")]
+    texts += [p.read_text(encoding="utf-8") for p in sorted(payload.glob("mkosi.conf.d/*"))]
+    if profile is not None:
+        texts.append((payload / "mkosi.profiles" / profile / "mkosi.conf").read_text())
+    return "\n".join(texts)
 
 
-def _script(out: Path, name: str, variant: str = "default") -> Path:
-    return out / variant / "scripts" / name
+def _main(out: Path) -> str:
+    return (out / "mkosi.conf").read_text(encoding="utf-8")
+
+
+def _script(out: Path, phase: str, name: str | None = None) -> Path:
+    return out / "payload" / f"mkosi.{phase}.d" / (name or f"50-{phase}.sh")
 
 
 def _phase_scripts(recipe: Recipe, phase: Phase) -> list[str]:
@@ -90,41 +108,25 @@ def test_compile_golden_output(tmp_path: Path) -> None:
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
+    main = _main(output_dir)
+    assert "[Distribution]\nDistribution=debian\nRelease=bookworm\nArchitecture=x86-64\n" in main
+    assert "\nSourceDateEpoch=0\n" in main
+    assert "\nSeed=" in main
+    assert "\nWithNetwork=no\n" in main
+
     conf_text = _conf(output_dir)
-    prepare_script = _script(output_dir, "03-prepare.sh")
-    build_script = _script(output_dir, "04-build.sh")
-
-    # Verify key sections exist in the mkosi.conf
-    assert "[Distribution]" in conf_text
-    assert "Distribution=debian" in conf_text
-    assert "Release=bookworm" in conf_text
-    assert "Architecture=x86-64" in conf_text
-    assert "[Output]" in conf_text
-    assert "Format=uki" in conf_text
-    assert "ImageId=default" in conf_text
+    assert "[Output]\nFormat=uki\nOutput=payload\n" in conf_text
     assert "ManifestFormat=json" in conf_text
-    # No @ prefix on Format or ImageId
-    assert "@Format" not in conf_text
-    assert "@ImageId" not in conf_text
-    assert "[Content]" in conf_text
-    assert "CleanPackageMetadata=true" in conf_text
-    assert "curl" in conf_text
-    assert "jq" in conf_text
-    # Script references are in [Content] section (no separate [Scripts] section in mkosi v20+)
-    assert "PrepareScripts=scripts/03-prepare.sh" in conf_text
-    assert "BuildScripts=scripts/04-build.sh" in conf_text
+    assert "@Format" not in conf_text and "@ImageId" not in conf_text
+    assert "CleanPackageMetadata=yes" in conf_text
+    assert conf_list(conf_text, "Packages") == ["curl", "jq"]
+    # mkosi finds the scripts in mkosi.<phase>.d/: no *Scripts= key is written
+    assert "Scripts=" not in conf_text
 
-    # Verify reproducibility settings
-    assert "SourceDateEpoch=0" in conf_text
-    assert "Seed=" in conf_text
-
-    # Verify build settings
-    assert "WithNetwork=true" in conf_text
-
-    assert prepare_script.read_text(encoding="utf-8") == (
+    assert _script(output_dir, "prepare").read_text(encoding="utf-8") == (
         "#!/usr/bin/env bash\nset -euo pipefail\n\n(cd /work && A=1 B=2 echo prep)\n"
     )
-    assert build_script.read_text(encoding="utf-8") == (
+    assert _script(output_dir, "build").read_text(encoding="utf-8") == (
         "#!/usr/bin/env bash\nset -euo pipefail\n\necho build\n"
     )
 
@@ -139,9 +141,10 @@ def test_compile_is_deterministic(tmp_path: Path) -> None:
     assert compile(recipe).digest == compile(recipe).digest
 
 
-def test_compile_rejects_invalid_phase(tmp_path: Path) -> None:
+@pytest.mark.parametrize("phase", ["invalid-phase", "boot", "skeleton"])
+def test_compile_rejects_a_phase_mkosi_runs_no_scripts_for(tmp_path: Path, phase: str) -> None:
     image = lower(_recipe())
-    image.state.profiles["default"].phases[cast(Phase, "invalid-phase")] = []
+    image.state.profiles["default"].phases[cast(Phase, phase)] = []
 
     with pytest.raises(ValidationError) as excinfo:
         emit(image, tmp_path / "mkosi")
@@ -161,11 +164,12 @@ def test_compile_generates_extra_tree(tmp_path: Path) -> None:
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
-    extra_dir = output_dir / "default" / "mkosi.extra"
+    extra_dir = output_dir / "payload" / "mkosi.extra"
     assert (extra_dir / "etc" / "motd").read_text(encoding="utf-8") == "TDX VM\n"
     assert (extra_dir / "etc" / "app" / "config.toml").read_text(
         encoding="utf-8"
     ) == "network=mainnet\n"
+    assert (extra_dir / "etc" / "machine-id").read_text(encoding="utf-8") == "uninitialized\n"
 
 
 def test_compile_generates_service_units(tmp_path: Path) -> None:
@@ -256,8 +260,7 @@ def test_compile_generates_postinst_with_users(tmp_path: Path) -> None:
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
-    # Check that postinst script exists and has user creation via mkosi-chroot
-    postinst = _script(output_dir, "06-postinst.sh")
+    postinst = _script(output_dir, "postinst")
     assert postinst.exists()
     content = postinst.read_text(encoding="utf-8")
     assert "mkosi-chroot useradd" in content
@@ -269,7 +272,7 @@ def test_compile_generates_postinst_with_users(tmp_path: Path) -> None:
 def test_users_pull_in_the_account_tools_package(tmp_path: Path) -> None:
     """``mkosi-chroot useradd`` exits 127 unless the image installs ``passwd``."""
     with_user = _compile(_recipe(Package("systemd"), User("app")), tmp_path / "user")
-    assert "    passwd\n" in _conf(with_user)
+    assert "passwd" in conf_list(_conf(with_user), "Packages")
 
     without = _compile(_recipe(Package("systemd")), tmp_path / "none")
     assert "passwd" not in _conf(without)
@@ -280,64 +283,76 @@ def test_compile_generates_debloat_finalize(tmp_path: Path) -> None:
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
-    # Finalize has path removal
-    finalize = _script(output_dir, "07-finalize.sh")
-    assert finalize.exists()
-    content = finalize.read_text(encoding="utf-8")
+    content = _script(output_dir, "finalize").read_text(encoding="utf-8")
     assert "rm -rf" in content
     assert "/usr/share/doc" in content
     assert "/usr/share/fonts" in content
 
-    # Systemd binary cleanup is now in postinst (via dpkg-query), not finalize
-    postinst = _script(output_dir, "06-postinst.sh")
-    assert postinst.exists()
-    postinst_content = postinst.read_text(encoding="utf-8")
+    # Systemd binary cleanup is in postinst (via dpkg-query), not finalize
+    postinst_content = _script(output_dir, "postinst").read_text(encoding="utf-8")
     assert "mkosi-chroot dpkg-query -L systemd" in postinst_content
     assert "default.target" in postinst_content
 
 
 def test_compile_architecture_field(tmp_path: Path) -> None:
-    """Architecture is mapped correctly from Arch type to mkosi value."""
+    """Architecture is mapped from the Arch type to mkosi's value, in the root mkosi.conf."""
     for py_arch, mkosi_arch in ARCH_TO_MKOSI.items():
         recipe = _recipe(Package("curl"), arch=cast(Arch, py_arch))
         output_dir = _compile(recipe, tmp_path / f"mkosi-{py_arch}")
-        assert f"Architecture={mkosi_arch}" in _conf(output_dir)
+        assert f"\nArchitecture={mkosi_arch}\n" in _main(output_dir)
+        assert "Architecture=" not in _conf(output_dir)
 
 
 def test_compile_with_network_configurable(tmp_path: Path) -> None:
-    """WithNetwork can be set to True or False."""
-    for with_net, expected in [("true", "WithNetwork=true"), ("false", "WithNetwork=false")]:
+    """WithNetwork= (a main-image setting) follows the Setting, off by default."""
+    for with_net, expected in [("true", "WithNetwork=yes"), ("false", "WithNetwork=no")]:
         recipe = _recipe(Package("curl"), Setting("Build", "WithNetwork", (with_net,)))
         output_dir = _compile(recipe, tmp_path / f"mkosi-net-{with_net}")
-        assert expected in _conf(output_dir)
-
-
-def test_compile_no_at_prefix(tmp_path: Path) -> None:
-    """Format and ImageId do not have @ prefix in mkosi v26 output."""
-    output_dir = _compile(_recipe(Package("curl")), tmp_path / "mkosi")
-    conf_text = _conf(output_dir)
-    assert "@Format=" not in conf_text
-    assert "@ImageId=" not in conf_text
-    assert "Format=uki" in conf_text
-    assert "ImageId=default" in conf_text
+        assert f"\n{expected}\n" in _main(output_dir)
+    on = _compile(_recipe(Package("curl"), mkosi=Mkosi(build_network=True)), tmp_path / "on")
+    assert "\nWithNetwork=yes\n" in _main(on)
+    off = _compile(_recipe(Package("curl")), tmp_path / "off")
+    assert "\nWithNetwork=no\n" in _main(off)
 
 
 def test_compile_not_bootable_writes_a_disk_without_uki(tmp_path: Path) -> None:
-    """Bootable=no swaps the UKI for a plain disk; mkosi needs a kernel for a UKI."""
+    """Bootable=no swaps the UKI for a plain disk payload, with no disk around it."""
     off = Setting("Content", "Bootable", ("no",))
-    conf_text = _conf(_compile(_recipe(Package("curl"), off), tmp_path / "off"))
+    output = _compile(_recipe(Package("curl"), off), tmp_path / "off")
+    conf_text = _conf(output)
     assert "Format=disk" in conf_text.splitlines()
     assert "Bootable=no" in conf_text.splitlines()
     assert "Format=uki" not in conf_text
     assert "Bootable=yes" not in conf_text
+    main = _main(output)
+    assert "\nFormat=none\n" in main
+    assert "ExtraTrees=" not in main
+    assert not (output / "mkosi.repart").exists()
     with_kernel = _compile(_recipe(_kernel("6.1.2"), off), tmp_path / "kernel")
     assert "Bootable=yes" not in _conf(with_kernel)
     assert "Bootable=no" in _conf(with_kernel).splitlines()
-    plain = _conf(_compile(_recipe(Package("curl")), tmp_path / "plain"))
+    plain_out = _compile(_recipe(Package("curl")), tmp_path / "plain")
+    plain = _conf(plain_out)
     assert "Format=uki" in plain
     assert "Bootable" not in plain
+    assert "\nFormat=disk\n" in _main(plain_out)
+    assert (plain_out / "mkosi.repart" / "00-esp.conf").is_file()
     with pytest.raises(ValidationError, match="writes Bootable= itself"):
         compile(_recipe(Package("curl"), Setting("Content", "Bootable", ("yes",))))
+
+
+def test_not_bootable_emits_no_cloud_wrappers(tmp_path: Path) -> None:
+    off = Setting("Content", "Bootable", ("no",))
+    recipe = _recipe(
+        Package("curl"),
+        off,
+        variants=(
+            Variant("default", outputs=("qemu",)),
+            Variant("azure", outputs=("azure",)),
+        ),
+    )
+    output = _compile(recipe, tmp_path / "mkosi")
+    assert sorted(p.name for p in (output / "mkosi.images").iterdir()) == ["payload"]
 
 
 def test_compile_service_enablement_uses_mkosi_chroot(tmp_path: Path) -> None:
@@ -345,50 +360,39 @@ def test_compile_service_enablement_uses_mkosi_chroot(tmp_path: Path) -> None:
     recipe = _recipe(Service("myapp", "/usr/bin/myapp"))
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
-    content = _script(output_dir, "06-postinst.sh").read_text(encoding="utf-8")
+    content = _script(output_dir, "postinst").read_text(encoding="utf-8")
     assert "mkosi-chroot systemctl enable myapp.service" in content
 
 
 def test_compile_debloat_uses_dpkg_query(tmp_path: Path) -> None:
     """Debloat uses mkosi-chroot dpkg-query for binary and unit enumeration."""
     output_dir = _compile(_recipe(Debloat(enabled=True)), tmp_path / "mkosi")
-    content = _script(output_dir, "06-postinst.sh").read_text(encoding="utf-8")
+    content = _script(output_dir, "postinst").read_text(encoding="utf-8")
 
     # Binary cleanup via dpkg-query
     assert "mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/'" in content
     # Unit masking via dpkg-query: paths and automounts too, and the triggers of masked units
     assert "grep -E '\\.(service|socket|timer|target|mount|path|automount)$'" in content
     assert "grep -E '/systemd/system/[^/]+\\.(socket|timer|path|automount)$'" in content
-    # nethermind-v1 keeps the historical masking, which leaves paths and automounts alone.
-    historical = _compile(_recipe(Debloat(enabled=True), mkosi=HISTORICAL), tmp_path / "v1")
-    content = _script(historical, "06-postinst.sh").read_text(encoding="utf-8")
-    assert (
-        "mkosi-chroot dpkg-query -L systemd | "
-        "grep -E '\\.service$|\\.socket$|\\.timer$|\\.target$|\\.mount$'"
-    ) in content
-    assert "automount" not in content
 
 
 def test_compile_default_target(tmp_path: Path) -> None:
     """Default systemd target is set to minimal.target when debloat is enabled."""
     output_dir = _compile(_recipe(Debloat(enabled=True)), tmp_path / "mkosi")
-    content = _script(output_dir, "06-postinst.sh").read_text(encoding="utf-8")
+    content = _script(output_dir, "postinst").read_text(encoding="utf-8")
     assert 'ln -sf minimal.target "$BUILDROOT/etc/systemd/system/default.target"' in content
+    minimal = output_dir / "payload/mkosi.skeleton/etc/systemd/system/minimal.target"
+    assert minimal.is_file()
 
 
-def test_compile_skeleton_init_script(tmp_path: Path) -> None:
-    """Custom init script is written to mkosi.skeleton/init when configured."""
-    recipe = _recipe(Package("systemd"), mkosi=Mkosi(init_script=DEFAULT_TDX_INIT_SCRIPT))
+def test_compile_skeleton_file_keeps_its_mode(tmp_path: Path) -> None:
+    """A skeleton file (a custom /init) lands in payload/mkosi.skeleton with its mode."""
+    recipe = _recipe(File("/init", "#!/bin/sh\nexec /sbin/init\n", mode=0o755, stage="skeleton"))
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
-    init_path = output_dir / "default" / "mkosi.skeleton" / "init"
-    assert init_path.exists()
-    content = init_path.read_text(encoding="utf-8")
-    assert "mount -t proc none /proc" in content
-    assert "unshare --mount" in content
-    assert "minimal.target" in content
-    # Executable
-    assert init_path.stat().st_mode & 0o755 == 0o755
+    init_path = output_dir / "payload" / "mkosi.skeleton" / "init"
+    assert init_path.read_text(encoding="utf-8") == "#!/bin/sh\nexec /sbin/init\n"
+    assert init_path.stat().st_mode & 0o777 == 0o755
 
 
 def test_compile_version_script(tmp_path: Path) -> None:
@@ -403,55 +407,56 @@ def test_compile_version_script(tmp_path: Path) -> None:
     assert version_path.stat().st_mode & 0o755 == 0o755
 
 
-def test_compile_gcp_postoutput(tmp_path: Path) -> None:
-    """GCP postoutput script is emitted when the variant targets gcp."""
-    recipe = _recipe(Package("curl"), variants=(Variant("default", outputs=("gcp",)),))
+@pytest.mark.parametrize(
+    ("target", "name", "converter"),
+    [("gcp", "tar", GCP_CONVERTER), ("azure", "vhd", AZURE_CONVERTER)],
+)
+def test_compile_cloud_wrapper(tmp_path: Path, target: str, name: str, converter: str) -> None:
+    """A cloud target is a wrapper subimage: the payload in a disk, converted at postoutput."""
+    recipe = _recipe(
+        Package("curl"),
+        variants=(
+            Variant("default", outputs=("qemu",)),
+            Variant(target, outputs=(cast(Literal["azure", "gcp"], target),)),
+        ),
+    )
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
-    gcp_script = _script(output_dir, "gcp-postoutput.sh")
-    assert gcp_script.exists()
-    content = gcp_script.read_text(encoding="utf-8")
-    assert "sgdisk" in content
-    assert "tar.gz" in content
-    assert gcp_script.stat().st_mode & 0o755 == 0o755
+    wrapper = output_dir / "mkosi.images" / target
+    script = wrapper / "mkosi.postoutput.d" / name
+    assert script.read_text(encoding="utf-8") == converter
+    assert script.stat().st_mode & 0o755 == 0o755
+    conf = (wrapper / "mkosi.conf").read_text(encoding="utf-8")
+    assert "Dependencies=payload\n" in conf
+    assert f"Format=disk\nOutput={target}\n" in conf
+    assert "ExtraTrees=%O/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI\n" in conf
+    assert (wrapper / "mkosi.repart" / "00-esp.conf").is_file()
+    # A variant that only adds outputs gets no profile overlay
+    assert not (output_dir / "payload" / "mkosi.profiles").exists()
 
 
-def test_compile_azure_postoutput(tmp_path: Path) -> None:
-    """Azure postoutput script is emitted when the variant targets azure."""
-    recipe = _recipe(Package("curl"), variants=(Variant("default", outputs=("azure",)),))
-
-    output_dir = _compile(recipe, tmp_path / "mkosi")
-    azure_script = _script(output_dir, "azure-postoutput.sh")
-    assert azure_script.exists()
-    content = azure_script.read_text(encoding="utf-8")
-    assert "qemu-img convert" in content
-    assert ".vhd" in content
-
-
-def test_compile_native_profiles_mode(tmp_path: Path) -> None:
-    """Native layout creates root mkosi.conf + mkosi.profiles/<name>/."""
+def test_compile_overlay_variant_is_a_profile(tmp_path: Path) -> None:
+    """A variant adding content is payload/mkosi.profiles/<name>/ with only its additions."""
     recipe = _recipe(
         Package("curl"),
         variants=(
             Variant("default", outputs=("qemu",)),
             Variant("prod", add=Fragment("prod", items=(Package("nginx"),))),
         ),
-        mkosi=Mkosi(layout="native"),
     )
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
-    # Root mkosi.conf
-    assert (output_dir / "mkosi.conf").exists()
-    # Root skeleton/extra
-    assert (output_dir / "mkosi.skeleton").is_dir()
-    # Profile-specific override
-    assert (output_dir / "mkosi.profiles" / "default" / "mkosi.conf").exists()
-    assert (output_dir / "mkosi.profiles" / "prod" / "mkosi.conf").exists()
+    profile = output_dir / "payload" / "mkosi.profiles" / "prod" / "mkosi.conf"
+    assert profile.read_text(encoding="utf-8") == (
+        "[Output]\nImageId=%i-prod\n\n[Content]\nPackages=\n    nginx\n"
+    )
+    assert "nginx" not in _conf(output_dir)
+    assert conf_list(_conf(output_dir, "prod"), "Packages") == ["curl", "nginx"]
 
 
 def test_compile_environment_key_value(tmp_path: Path) -> None:
-    """Environment=KEY=VALUE pairs are emitted in [Build] section."""
+    """Environment=KEY=VALUE pairs are emitted in the payload's [Build] section."""
     recipe = _recipe(
         Package("curl"),
         Setting("Build", "Environment", ("MY_VAR=hello", "OTHER=world")),
@@ -460,107 +465,70 @@ def test_compile_environment_key_value(tmp_path: Path) -> None:
 
     conf_text = _conf(_compile(recipe, tmp_path / "mkosi"))
 
-    assert "Environment=MY_VAR=hello" in conf_text
-    assert "Environment=OTHER=world" in conf_text
+    assert "[Build]\nEnvironment=MY_VAR=hello\nEnvironment=OTHER=world\n" in conf_text
 
 
-def test_compile_environment_passthrough(tmp_path: Path) -> None:
-    """Environment=KEY (passthrough without value) is emitted in [Build] section."""
-    recipe = _recipe(
-        Package("curl"),
-        Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION")),
-        epoch=None,
-    )
-
-    conf_text = _conf(_compile(recipe, tmp_path / "mkosi"))
-
-    assert "Environment=KERNEL_IMAGE\n" in conf_text
-    assert "Environment=KERNEL_VERSION\n" in conf_text
+@pytest.mark.parametrize(
+    "values", [("KERNEL_IMAGE", "KERNEL_VERSION"), ("SOURCE_DATE_EPOCH=0", "KERNEL_IMAGE")]
+)
+def test_compile_refuses_environment_passthrough(values: tuple[str, ...]) -> None:
+    """Environment=KEY (the host's value) never enters the build."""
+    recipe = _recipe(Package("curl"), Setting("Build", "Environment", values), epoch=None)
+    with pytest.raises(ValidationError, match="mkosi-environment-passthrough"):
+        compile(recipe)
 
 
-def test_compile_environment_both_forms(tmp_path: Path) -> None:
-    """Both key=value and passthrough forms coexist in [Build] section."""
-    recipe = _recipe(
-        Package("curl"),
-        Setting("Build", "Environment", ("SOURCE_DATE_EPOCH=0", "KERNEL_IMAGE")),
-    )
-
-    conf_text = _conf(_compile(recipe, tmp_path / "mkosi"))
-
-    assert "Environment=SOURCE_DATE_EPOCH=0" in conf_text
-    assert "Environment=KERNEL_IMAGE\n" in conf_text
-
-
-def test_compile_reproducible_auto_adds_source_date_epoch(tmp_path: Path) -> None:
-    """With an epoch, SOURCE_DATE_EPOCH=0 is auto-added to environment."""
-    recipe = _recipe(
-        Package("curl"),
-        Setting("Build", "Environment", ("MY_VAR=test",)),
-        epoch=0,
-    )
-
-    conf_text = _conf(_compile(recipe, tmp_path / "mkosi"))
-
-    # Both the user env and the auto-added SOURCE_DATE_EPOCH
-    assert "Environment=SOURCE_DATE_EPOCH=0" in conf_text
-    assert "Environment=MY_VAR=test" in conf_text
-
-
-def test_compile_reproducible_no_override_user_epoch(tmp_path: Path) -> None:
-    """A user-provided SOURCE_DATE_EPOCH is not overridden by the default epoch."""
+def test_compile_user_epoch_variable_does_not_change_the_source_date(tmp_path: Path) -> None:
+    """A user SOURCE_DATE_EPOCH reaches the payload's scripts; SourceDateEpoch= is the
+    platform's."""
     recipe = _recipe(
         Package("curl"),
         Setting("Build", "Environment", ("SOURCE_DATE_EPOCH=1234",)),
         epoch=0,
     )
 
-    conf_text = _conf(_compile(recipe, tmp_path / "mkosi"))
+    out = _compile(recipe, tmp_path / "mkosi")
 
-    assert "Environment=SOURCE_DATE_EPOCH=1234" in conf_text
-    assert "Environment=SOURCE_DATE_EPOCH=0" not in conf_text
-    assert "SourceDateEpoch=1234\n" in conf_text
+    assert "Environment=SOURCE_DATE_EPOCH=1234" in _conf(out)
+    assert "\nSourceDateEpoch=0\n" in _main(out)
 
 
-@pytest.mark.parametrize(
-    ("epoch", "lines"),
-    [
-        (1700000000, ["Environment=SOURCE_DATE_EPOCH=1700000000", "SourceDateEpoch=1700000000"]),
-        (0, ["Environment=SOURCE_DATE_EPOCH=0", "SourceDateEpoch=0"]),
-        (None, []),
-    ],
-)
+@pytest.mark.parametrize(("epoch", "written"), [(1700000000, "1700000000"), (0, "0"), (None, "0")])
 def test_compile_epoch_sets_source_date_epoch_consistently(
-    tmp_path: Path, epoch: int | None, lines: list[str]
+    tmp_path: Path, epoch: int | None, written: str
 ) -> None:
-    conf_text = _conf(_compile(_recipe(Package("curl"), epoch=epoch), tmp_path / "mkosi"))
+    """SourceDateEpoch= is always written, once, in the root mkosi.conf (mkosi exports it to
+    every script): the platform's epoch, 0 without one."""
+    out = _compile(_recipe(Package("curl"), epoch=epoch), tmp_path / "mkosi")
 
     found = [
         line
-        for line in conf_text.splitlines()
+        for path in sorted(out.rglob("*.conf"))
+        for line in path.read_text(encoding="utf-8").splitlines()
         if "SOURCE_DATE_EPOCH" in line or line.startswith("SourceDateEpoch=")
     ]
-    assert found == lines
+    assert found == [f"SourceDateEpoch={written}"]
+    assert f"\nSourceDateEpoch={written}\n" in _main(out)
 
 
 def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
-    """When kernel has config_file, a real build script is emitted."""
-    # Create a fake kernel config file
+    """When kernel has config_file, a build script copies the fetched checkout and builds it."""
     config_file = tmp_path / "kernel-yocto.config"
     config_file.write_text("# CONFIG_LOCALVERSION is not set\n", encoding="utf-8")
 
-    recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None, mkosi=HISTORICAL)
+    recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None)
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
-    build_script = _script(output_dir, "04-build.sh")
+    build_script = _script(output_dir, "build", "10-kernel.sh")
 
     assert build_script.exists()
     script_text = build_script.read_text(encoding="utf-8")
 
-    # Verify key build steps
-    assert "git clone --depth 1 --branch" in script_text
     assert 'KERNEL_VERSION="6.13.12"' in script_text
-    assert "v${KERNEL_VERSION}" in script_text
-    assert "https://github.com/gregkh/linux" in script_text
+    # Unpinned: the script fails naming lock and fetch; it never clones in the sandbox
+    assert "kernel 6.13.12 is not pinned: run tundravm lock, then tundravm fetch" in script_text
+    assert "git clone" not in script_text
+    assert 'cp payload/kernel/kernel.config "$KERNEL_CACHE/src/.config"' in script_text
     assert "make olddefconfig" in script_text
     assert "make -j" in script_text
     assert "bzImage ARCH=x86_64" in script_text
@@ -569,34 +537,32 @@ def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
     assert "KBUILD_BUILD_HOST" in script_text
     assert "${DESTDIR}/usr/lib/modules/" in script_text
     assert "vmlinuz" in script_text
-    assert "kernel/kernel.config" in script_text
 
 
 def test_compile_kernel_config_file_copied(tmp_path: Path) -> None:
-    """Kernel config file is copied into the output tree."""
+    """Kernel config file is copied into the payload's kernel/ directory."""
     config_file = tmp_path / "my.config"
     config_file.write_text("CONFIG_TDX_GUEST=y\n", encoding="utf-8")
 
     recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None)
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
-    kernel_config = output_dir / "default" / "kernel" / "kernel.config"
+    kernel_config = output_dir / "payload" / "kernel" / "kernel.config"
 
     assert kernel_config.exists()
     assert "CONFIG_TDX_GUEST=y" in kernel_config.read_text(encoding="utf-8")
 
 
-def test_compile_kernel_config_auto_adds_env_passthrough(tmp_path: Path) -> None:
-    """When kernel has config_file, KERNEL_IMAGE and KERNEL_VERSION are auto-added."""
+def test_compile_kernel_passes_no_host_environment(tmp_path: Path) -> None:
+    """The kernel build passes nothing through from the host (no Environment=KERNEL_*)."""
     config_file = tmp_path / "my.config"
     config_file.write_text("# kernel config\n", encoding="utf-8")
 
     recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None)
 
-    conf_text = _conf(_compile(recipe, tmp_path / "mkosi"))
-
-    assert "Environment=KERNEL_IMAGE\n" in conf_text
-    assert "Environment=KERNEL_VERSION\n" in conf_text
+    out = _compile(recipe, tmp_path / "mkosi")
+    assert "Environment=" not in _conf(out)
+    assert "Environment=" not in _main(out)
 
 
 def test_compile_kernel_without_config_no_build_script(tmp_path: Path) -> None:
@@ -605,18 +571,13 @@ def test_compile_kernel_without_config_no_build_script(tmp_path: Path) -> None:
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
-    # No build script should exist (no build hooks registered)
-    assert not _script(output_dir, "04-build.sh").exists()
-
-    # No kernel dir should be created
-    assert not (output_dir / "default" / "kernel").exists()
-
-    # mkosi.conf should still have comment-only kernel config
-    assert "# KernelVersion=6.8" in _conf(output_dir)
+    assert not (output_dir / "payload" / "mkosi.build.d").exists()
+    assert not (output_dir / "payload" / "kernel").exists()
+    assert "Bootable=yes" in _conf(output_dir).splitlines()
 
 
 def test_compile_kernel_build_script_with_user_hooks(tmp_path: Path) -> None:
-    """Kernel build script is combined with user-defined build hooks (in-sandbox clone)."""
+    """The kernel build and the user's build hooks are two scripts, the kernel's first."""
     config_file = tmp_path / "my.config"
     config_file.write_text("# config\n", encoding="utf-8")
 
@@ -625,57 +586,43 @@ def test_compile_kernel_build_script_with_user_hooks(tmp_path: Path) -> None:
         _kernel("6.13.12", config_file),
         Hook("custom", "build", "echo custom-build-step"),
         epoch=None,
-        mkosi=HISTORICAL,
     )
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
-    build_script = _script(output_dir, "04-build.sh")
-
-    assert build_script.exists()
-    script_text = build_script.read_text(encoding="utf-8")
-
-    # Both kernel build and user hook should be present
-    assert "git clone" in script_text
-    assert "custom-build-step" in script_text
+    scripts = sorted(p.name for p in (output_dir / "payload" / "mkosi.build.d").iterdir())
+    assert scripts == ["10-kernel.sh", "50-build.sh"]
+    assert "make olddefconfig" in _script(output_dir, "build", "10-kernel.sh").read_text()
+    assert "custom-build-step" in _script(output_dir, "build").read_text()
 
 
-def test_compile_kernel_custom_source_repo(tmp_path: Path) -> None:
-    """Kernel build script uses the custom source repo."""
-    config_file = tmp_path / "my.config"
-    config_file.write_text("# config\n", encoding="utf-8")
-
+def test_compile_kernel_custom_source_repo() -> None:
+    """The kernel source (locked, fetched on the host) is the custom repository."""
     recipe = _recipe(
         Package("curl"),
-        _kernel("6.13.12", config_file, repo="https://github.com/custom/linux"),
+        _kernel("6.13.12", Path("unused.config"), repo="https://github.com/custom/linux"),
         epoch=None,
-        mkosi=HISTORICAL,
     )
 
-    output_dir = _compile(recipe, tmp_path / "mkosi")
-    script_text = _script(output_dir, "04-build.sh").read_text(encoding="utf-8")
-    assert "https://github.com/custom/linux" in script_text
+    source = lower(recipe).kernel_source("default")
+    assert source is not None
+    assert source.name == "kernel"
+    assert source.source.url == "https://github.com/custom/linux"
 
 
 def test_compile_efi_stub_postinst_hook(tmp_path: Path) -> None:
-    """EfiStub() declares a postinst hook that downloads and installs pinned EFI stub."""
-    recipe = _recipe(
-        Package("systemd"),
-        EfiStub(
-            snapshot="https://snapshot.debian.org/archive/debian/20251113T083151Z",
-            version="255.4-1",
-        ),
+    """EfiStub() declares a postinst hook that downloads and installs the pinned EFI stub."""
+    stub = EfiStub(
+        snapshot="https://snapshot.debian.org/archive/debian/20251113T083151Z",
+        version="255.4-1",
     )
+    recipe = _recipe(Package("systemd"), stub)
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
-    postinst = _script(output_dir, "06-postinst.sh")
+    content = _script(output_dir, "postinst").read_text(encoding="utf-8")
 
-    assert postinst.exists()
-    content = postinst.read_text(encoding="utf-8")
-
-    # Verify script contains the snapshot URL and package version
+    assert stub.render_script() in content
     assert "https://snapshot.debian.org/archive/debian/20251113T083151Z" in content
     assert "255.4-1" in content
-    # Verify it downloads and installs the .deb
     assert "systemd-boot-efi" in content
     assert "dpkg -i" in content
     # The package's own stub stays: nothing is copied over linuxx64.efi.stub
@@ -683,27 +630,20 @@ def test_compile_efi_stub_postinst_hook(tmp_path: Path) -> None:
 
 
 def test_compile_efi_stub_registered_in_postinst_phase() -> None:
-    """EfiStub() lowers to a hook in the postinst phase of the profile state."""
-    recipe = _recipe(EfiStub(snapshot="https://snapshot.example.com", version="255.4-1"))
+    """EfiStub() lowers to a hook in the postinst phase running its render_script()."""
+    stub = EfiStub(snapshot="https://snapshot.example.com", version="255.4-1")
 
-    scripts = _phase_scripts(recipe, "postinst")
-    assert len(scripts) >= 1
-    # The hook should contain the EFI stub script as a shell command
-    script = scripts[-1]
-    assert "snapshot.example.com" in script
-    assert "255.4-1" in script
+    scripts = _phase_scripts(_recipe(stub), "postinst")
+    assert scripts[-1] == stub.render_script()
+    assert "snapshot.example.com" in scripts[-1]
+    assert "255.4-1" in scripts[-1]
 
 
 def test_compile_strip_image_version_finalize_hook(tmp_path: Path) -> None:
     """A reproducible recipe strips IMAGE_VERSION in a finalize hook."""
-    # epoch=0 by default, so the os-release strip is on
     output_dir = _compile(_recipe(Package("systemd")), tmp_path / "mkosi")
-    finalize = _script(output_dir, "07-finalize.sh")
+    content = _script(output_dir, "finalize").read_text(encoding="utf-8")
 
-    assert finalize.exists()
-    content = finalize.read_text(encoding="utf-8")
-
-    # Verify script strips IMAGE_VERSION from os-release
     assert "IMAGE_VERSION" in content
     assert "$BUILDROOT/usr/lib/os-release" in content
     assert "sed -i" in content
@@ -735,97 +675,20 @@ def test_compile_strip_image_version_can_be_disabled() -> None:
     assert not any("IMAGE_VERSION" in script for script in scripts)
 
 
-def test_compile_backports_sync_hook(tmp_path: Path) -> None:
-    """nethermind-v1: Backports() declares a sync hook that generates debian-backports.sources."""
-    recipe = _recipe(
-        Package("systemd"),
-        Backports(archive_url="https://snapshot.debian.org/archive/debian/20251113T083151Z"),
-        epoch=None,
-        mkosi=HISTORICAL,
-    )
-
-    output_dir = _compile(recipe, tmp_path / "mkosi")
-    sync_script = _script(output_dir, "01-sync.sh")
-
-    assert sync_script.exists()
-    content = sync_script.read_text(encoding="utf-8")
-    assert "debian-backports.sources" in content
-    assert "snapshot.debian.org" in content
-    assert "${RELEASE}-backports" in content
-    assert "sid" in content
-    assert "debian-archive-keyring.gpg" in content
-
-
-def test_compile_backports_registered_in_sync_phase() -> None:
-    """nethermind-v1: Backports() lowers to a hook in the sync phase of the profile state."""
-    recipe = _recipe(
-        Backports(archive_url="https://example.com/debian"), epoch=None, mkosi=HISTORICAL
-    )
-
-    scripts = _phase_scripts(recipe, "sync")
-    assert len(scripts) >= 1
-    assert "example.com/debian" in scripts[0]
-    assert "debian-backports.sources" in scripts[0]
-
-
-def test_compile_backports_auto_adds_sandbox_trees() -> None:
-    """nethermind-v1: Backports() adds the sandbox_trees entry for the generated file."""
-    image = lower(_recipe(Backports(), epoch=None, mkosi=HISTORICAL))
-
-    expected_entry = (
-        "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
-    )
-    assert expected_entry in image.mkosi.sandbox_trees
-
-
-def test_compile_backports_no_duplicate_sandbox_trees() -> None:
-    """nethermind-v1: Backports() does not duplicate a sandbox_trees entry already set."""
-    recipe = _recipe(
-        Setting("Build", "SandboxTrees", (BACKPORTS_TREE,)),
-        Backports(),
-        epoch=None,
-        mkosi=HISTORICAL,
-    )
-    image = lower(recipe)
-
-    expected_entry = (
-        "mkosi.builddir/debian-backports.sources:/etc/apt/sources.list.d/debian-backports.sources"
-    )
-    assert image.mkosi.sandbox_trees.count(expected_entry) == 1
-
-
-def test_compile_backports_jq_fallback_when_no_mirror() -> None:
-    """nethermind-v1: without a mirror the script reads $BUILDDIR/config.json via jq."""
-    script = _phase_scripts(_recipe(Backports(), epoch=None, mkosi=HISTORICAL), "sync")[0]
-    assert 'jq -r .Mirror "$BUILDDIR/config.json"' in script
-    assert 'MIRROR="http://deb.debian.org/debian"' in script
-
-
-def test_compile_backports_custom_release() -> None:
-    """nethermind-v1: Backports() accepts a custom release parameter."""
-    script = _phase_scripts(
-        _recipe(Backports(release="trixie"), epoch=None, mkosi=HISTORICAL), "sync"
-    )[0]
-    assert 'RELEASE="trixie"' in script
-
-
-def test_compile_backports_sandbox_trees_in_mkosi_conf(tmp_path: Path) -> None:
-    """nethermind-v1: the Backports() sandbox_trees entry appears in emitted mkosi.conf."""
-    recipe = _recipe(Package("systemd"), Backports(), epoch=None, mkosi=HISTORICAL)
-
-    conf = _conf(_compile(recipe, tmp_path / "mkosi"))
-    assert "SandboxTrees=" in conf
-    assert "debian-backports.sources" in conf
+def test_backports_composes_no_declarations() -> None:
+    """Backports() is a marker: lowering writes its sandbox files, it declares nothing."""
+    assert Backports().items == ()
+    assert Backports(include_sid=False, release="trixie").items == ()
 
 
 def test_compile_backports_writes_static_sandbox_sources(tmp_path: Path) -> None:
-    """current: Backports() is a compile-time mkosi.sandbox file, with no hook or builddir tree."""
+    """Backports() is a compile-time root mkosi.sandbox file, with no hook or SandboxTrees."""
     recipe = _recipe(Package("systemd"), Backports(), epoch=None)
     recipe = on_platform(recipe, snapshot="20251113T083151Z")
 
     output_dir = _compile(recipe, tmp_path / "mkosi")
 
-    sources = output_dir / "default/mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
+    sources = output_dir / "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
     stanza = (
         "Types: deb deb-src\n"
         "URIs: https://snapshot.debian.org/archive/debian/20251113T083151Z\n"
@@ -835,19 +698,20 @@ def test_compile_backports_writes_static_sandbox_sources(tmp_path: Path) -> None
         "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
     )
     assert sources.read_text() == stanza.format("bookworm-backports") + "\n" + stanza.format("sid")
-    pins = output_dir / "default/mkosi.sandbox/etc/apt/preferences.d/debian-backports.pref"
+    pins = output_dir / "mkosi.sandbox/etc/apt/preferences.d/debian-backports.pref"
     assert pins.read_text() == (
         "Package: *\nPin: release n=bookworm-backports\nPin-Priority: 200\n\n"
         "Package: *\nPin: release n=sid\nPin-Priority: 100\n"
     )
-    assert not _script(output_dir, "01-sync.sh").exists()
-    conf = _conf(output_dir)
-    assert "SandboxTrees=" not in conf and "mkosi.builddir" not in conf
+    assert not (output_dir / "payload" / "mkosi.sync.d").exists()
+    assert not (output_dir / "payload" / "mkosi.sandbox").exists()
+    for text in (_conf(output_dir), _main(output_dir)):
+        assert "SandboxTrees=" not in text and "mkosi.builddir" not in text
     assert lower(recipe).mkosi.sandbox_trees == ()
 
 
 def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
-    """current: Backports' mirror/release win; without either, deb.debian.org and the base."""
+    """Backports' mirror/release win; without either, deb.debian.org and the base."""
     pinned = lower(_recipe(Backports(archive_url="http://m", release="trixie"), epoch=None))
     ((path, text), (pins_path, pins)) = pinned.mkosi.sandbox_files
     assert path == "/etc/apt/sources.list.d/debian-backports.sources"
@@ -861,6 +725,8 @@ def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
         in (plain.mkosi.sandbox_files[0][1])
     )
     assert not _phase_scripts(_recipe(Backports(), epoch=None), "sync")
+    no_sid = lower(_recipe(Backports(include_sid=False), epoch=None))
+    assert "Suites: sid" not in no_sid.mkosi.sandbox_files[0][1]
     rooted = lower(on_platform(_recipe(Backports(), epoch=None), mirror="https://m.example/"))
     assert "URIs: https://m.example/debian\n" in rooted.mkosi.sandbox_files[0][1]
     snap = on_platform(
@@ -872,15 +738,17 @@ def test_compile_backports_sandbox_sources_take_the_fragments_fields() -> None:
     )
 
 
-def test_compile_snapshot_writes_the_snapshot_line(tmp_path: Path) -> None:
-    """Recipe.snapshot is mkosi's Snapshot=; the mirror stays a root."""
+def test_compile_snapshot_writes_the_snapshot_lines(tmp_path: Path) -> None:
+    """Debian(snapshot=) is mkosi's Snapshot= and the tools tree's ToolsTreeSnapshot=; the
+    mirror stays a root."""
     recipe = on_platform(
         _recipe(Package("systemd")),
         mirror="https://snapshot.debian.org",
         snapshot="20251113T083151Z",
     )
-    conf = _conf(_compile(recipe, tmp_path / "mkosi"))
-    assert "Mirror=https://snapshot.debian.org\nSnapshot=20251113T083151Z\n" in conf
+    main = _main(_compile(recipe, tmp_path / "mkosi"))
+    assert "Mirror=https://snapshot.debian.org\nSnapshot=20251113T083151Z\n" in main
+    assert "\nToolsTreeSnapshot=20251113T083151Z\n" in main
 
 
 @pytest.mark.parametrize(
@@ -892,7 +760,7 @@ def test_compile_snapshot_writes_the_snapshot_line(tmp_path: Path) -> None:
     ],
 )
 def test_compile_rejects_an_archive_url_as_the_mirror(field: str, url: str) -> None:
-    """current: mkosi appends the archive path to Mirror=, so a full archive URL is refused."""
+    """mkosi appends the archive path to Mirror=, so a full archive URL is refused."""
     with pytest.raises(ValidationError, match=f"Debian\\({field}=...\\) .* names an archive"):
         recipe = _recipe(Package("systemd"))
         if field == "mirror":
@@ -901,17 +769,8 @@ def test_compile_rejects_an_archive_url_as_the_mirror(field: str, url: str) -> N
             lower(on_platform(recipe, tools_mirror=url))
 
 
-def test_compile_historical_dialect_keeps_an_archive_mirror(tmp_path: Path) -> None:
-    """nethermind-v1 writes the historical full archive URL unchanged."""
-    url = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
-    recipe = on_platform(
-        _recipe(Package("systemd"), mkosi=Mkosi(dialect="nethermind-v1")), mirror=url
-    )
-    assert f"Mirror={url}\n" in _conf(_compile(recipe, tmp_path / "mkosi"))
-
-
-def test_compile_efi_stub_current_script_installs_from_the_image_root() -> None:
-    """current: the .deb goes to $BUILDROOT/ (mkosi-chroot has its own /tmp); IDs expand."""
+def test_compile_efi_stub_script_installs_from_the_image_root() -> None:
+    """The .deb goes to $BUILDROOT/ (mkosi-chroot has its own /tmp); IDs expand."""
     (script,) = [
         cmd
         for cmd in _phase_scripts(
@@ -930,16 +789,17 @@ def test_compile_efi_stub_current_script_installs_from_the_image_root() -> None:
 
 
 def test_compile_repository_reaches_the_build_and_the_image(tmp_path: Path) -> None:
-    """current: a Repository goes to mkosi.sandbox (with its declared keyring) and the image."""
+    """A Repository goes to the root mkosi.sandbox (with its declared keyring) and, unless
+    ``in_image=False``, to the payload's skeleton."""
     keyring = "/etc/apt/keyrings/extra.asc"
     recipe = _recipe(
         Repository("extra", "https://repo.example/debian", "stable", keyring=keyring, priority=10),
         Repository("tools", "https://tools.example/apt", "stable", in_image=False),
         File(keyring, "KEY\n"),
     )
-    out = _compile(recipe, tmp_path / "mkosi") / "default"
+    out = _compile(recipe, tmp_path / "mkosi")
     sandbox = out / "mkosi.sandbox/etc/apt"
-    skeleton = out / "mkosi.skeleton/etc/apt"
+    skeleton = out / "payload/mkosi.skeleton/etc/apt"
     assert (sandbox / "sources.list.d/extra.sources").read_text() == (
         "Types: deb\nURIs: https://repo.example/debian\nSuites: stable\nComponents: main\n"
         f"Enabled: yes\nSigned-By: {keyring}\n"
@@ -953,19 +813,30 @@ def test_compile_repository_reaches_the_build_and_the_image(tmp_path: Path) -> N
     assert not (skeleton / "sources.list.d/tools.sources").exists()
 
 
-def test_compile_historical_repository_stays_in_the_skeleton(tmp_path: Path) -> None:
-    """nethermind-v1: repositories are image-only skeleton files, as before."""
+def test_compile_overlay_repository_is_only_in_its_profiles_sandbox(tmp_path: Path) -> None:
+    """A variant's own repository reaches apt only when that profile is selected."""
     recipe = _recipe(
-        Repository("extra", "https://repo.example/debian", "stable"),
-        mkosi=Mkosi(dialect="nethermind-v1"),
+        Package("systemd"),
+        variants=(
+            Variant("default", outputs=("qemu",)),
+            Variant(
+                "extra",
+                add=Fragment(
+                    "extra-repo",
+                    items=(Repository("extra", "https://repo.example/debian", "stable"),),
+                ),
+            ),
+        ),
+        epoch=None,
     )
-    out = _compile(recipe, tmp_path / "mkosi") / "default"
-    assert (out / "mkosi.skeleton/etc/apt/sources.list.d/extra.sources").is_file()
-    assert not (out / "mkosi.sandbox").exists()
+    out = _compile(recipe, tmp_path / "mkosi")
+    path = "mkosi.sandbox/etc/apt/sources.list.d/extra.sources"
+    assert (out / "mkosi.profiles" / "extra" / path).is_file()
+    assert not (out / path).exists()
 
 
 def test_compile_backports_only_in_the_variant_that_adds_it(tmp_path: Path) -> None:
-    """current: a variant adding Backports gets the sandbox file; the default does not."""
+    """A variant adding Backports gets the sandbox file; the default build does not."""
     recipe = _recipe(
         Package("systemd"),
         variants=(
@@ -976,8 +847,8 @@ def test_compile_backports_only_in_the_variant_that_adds_it(tmp_path: Path) -> N
     )
     output_dir = _compile(recipe, tmp_path / "mkosi")
     path = "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
-    assert (output_dir / "bp" / path).is_file()
-    assert not (output_dir / "default" / path).exists()
+    assert (output_dir / "mkosi.profiles" / "bp" / path).is_file()
+    assert not (output_dir / path).exists()
 
 
 def _devtools_debloat_recipe() -> Recipe:
@@ -992,21 +863,14 @@ def _devtools_debloat_recipe() -> Recipe:
 
 
 def test_compile_debloat_profile_conditional_paths(tmp_path: Path) -> None:
-    """Variant-conditional debloat emits an if-guard in the finalize script."""
+    """Variant-conditional debloat emits a word-matching $PROFILES guard in finalize."""
     output_dir = _compile(_devtools_debloat_recipe(), tmp_path / "mkosi", variants=("default",))
-    finalize = _script(output_dir, "07-finalize.sh")
-    assert finalize.exists()
-    content = finalize.read_text(encoding="utf-8")
+    content = _script(output_dir, "finalize").read_text(encoding="utf-8")
 
-    # /usr/share/bash-completion should NOT appear in unconditional rm -rf section
     unconditional_section = content.split("# Debloat: profile-conditional")[0]
     assert "/usr/share/bash-completion" not in unconditional_section
-
-    # It should appear in the conditional section with profile guard
-    assert "${PROFILES:-}" in content
-    assert '"devtools"' in content
+    assert 'if [[ " ${PROFILES:-} " != *" devtools "* ]]; then' in content
     assert "/usr/share/bash-completion" in content
-    assert 'if [[ ! "${PROFILES:-}" == *"devtools"* ]]; then' in content
 
 
 def test_compile_debloat_profile_conditional_unconditional_coexist(
@@ -1014,12 +878,37 @@ def test_compile_debloat_profile_conditional_unconditional_coexist(
 ) -> None:
     """Unconditional paths are still removed alongside conditional ones."""
     output_dir = _compile(_devtools_debloat_recipe(), tmp_path / "mkosi", variants=("default",))
-    content = _script(output_dir, "07-finalize.sh").read_text(encoding="utf-8")
+    content = _script(output_dir, "finalize").read_text(encoding="utf-8")
 
-    # Unconditional paths still present (e.g. /usr/share/doc)
     assert 'rm -rf "$BUILDROOT/usr/share/doc"' in content
-    # Conditional path is guarded
     assert 'rm -rf "$BUILDROOT/usr/share/bash-completion"' in content
+
+
+def test_compile_overlay_debloat_makes_the_payloads_stand_aside(tmp_path: Path) -> None:
+    """A profile with its own Debloat runs it instead of the payload's: the payload's
+    debloat lines are guarded off for that profile."""
+    debloat = Debloat(enabled=True)
+    recipe = _recipe(
+        Package("curl"),
+        debloat,
+        variants=(
+            Variant("default", outputs=("qemu",)),
+            Variant("dev", changes=(debloat.ref.edit(enabled=False),)),
+        ),
+        epoch=None,
+    )
+    out = _compile(recipe, tmp_path / "mkosi")
+    guard = 'if [[ " ${PROFILES:-} " != *" dev "* ]]; then'
+    postinst = _script(out, "postinst").read_text(encoding="utf-8")
+    finalize = _script(out, "finalize").read_text(encoding="utf-8")
+    for text in (postinst, finalize):
+        assert guard in text
+    head, _, guarded = postinst.partition(guard)
+    assert "dpkg-query" not in head and "dpkg-query" in guarded
+    assert 'rm -rf "$BUILDROOT/usr/share/doc"' in finalize.partition(guard)[2]
+    dev = out / "payload/mkosi.profiles/dev"
+    assert not (dev / "mkosi.postinst.d").exists()
+    assert not (dev / "mkosi.finalize.d").exists()
 
 
 def _snapshot_tree(root: Path) -> dict[str, str]:
@@ -1030,51 +919,12 @@ def _snapshot_tree(root: Path) -> dict[str, str]:
     return snapshot
 
 
-# ── current-dialect output names and runtime-init dependencies ──────────
+# ── runtime-init dependencies ───────────────────────────────────────────
 
 
-@pytest.mark.parametrize(("target", "script"), [("azure", "azure"), ("gcp", "gcp")])
-def test_cloud_postoutput_reads_the_output_with_or_without_a_version(
-    tmp_path: Path, target: Literal["azure", "gcp"], script: str
-) -> None:
-    """current: ${IMAGE_ID}.efi without ImageVersion=; nethermind-v1 keeps ${IMAGE_ID}_${...}."""
-    variants = (
-        Variant("default", outputs=("qemu",)),
-        Variant(target, inherits="default", outputs=(target,)),
-    )
-    current = _compile(_recipe(variants=variants), tmp_path / "current")
-    text = _script(current, f"{script}-postoutput.sh", target).read_text()
-    assert '"${OUTPUTDIR}/${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}.efi"' in text
-    assert "${IMAGE_ID}_${IMAGE_VERSION}" not in text
-    old = _compile(_recipe(variants=variants, mkosi=HISTORICAL), tmp_path / "old")
-    old_text = _script(old, f"{script}-postoutput.sh", target).read_text()
-    assert '"${OUTPUTDIR}/${IMAGE_ID}_${IMAGE_VERSION}.efi"' in old_text
-
-
-@pytest.mark.parametrize("version", [None, "1.2"])
-def test_current_postoutput_output_name_runs_under_set_u(version: str | None) -> None:
-    import subprocess
-
-    from tundravm.compiler.emit_mkosi import OUTPUT_NAME
-
-    env = {"IMAGE_ID": "node", "PATH": "/usr/bin:/bin"}
-    if version is not None:
-        env["IMAGE_VERSION"] = version
-    result = subprocess.run(
-        ["bash", "-c", f'set -euo pipefail; echo "{OUTPUT_NAME}.efi"'],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert result.stdout.strip() == ("node.efi" if version is None else "node_1.2.efi")
-
-
-def _runtime_init_unit(
-    out: Path, variant: str = "default", unit: str = "runtime-init-hello"
-) -> str:
+def _runtime_init_unit(out: Path, layer: str = "payload", unit: str = "runtime-init-hello") -> str:
     """The unit that orders runtime-init after the network: the ``hello`` step's by default."""
-    path = out / variant / f"mkosi.extra/usr/lib/systemd/system/{unit}.service"
+    path = out / layer / f"mkosi.extra/usr/lib/systemd/system/{unit}.service"
     return path.read_text(encoding="utf-8")
 
 
@@ -1120,10 +970,5 @@ def test_runtime_init_follows_a_variants_own_network_setup(tmp_path: Path) -> No
     )
     out = _compile(recipe, tmp_path / "mkosi")
     assert "Wants=network-online.target" in _runtime_init_unit(out)
-    assert "Requires=network-setup.service" in _runtime_init_unit(out, "net")
-
-
-def test_runtime_init_keeps_network_setup_under_nethermind_v1(tmp_path: Path) -> None:
-    out = _compile(_recipe(HELLO, mkosi=HISTORICAL), tmp_path / "mkosi")
-    unit = _runtime_init_unit(out, unit="runtime-init")
-    assert "After=network.target network-setup.service\nRequires=network-setup.service\n" in unit
+    overlay = _runtime_init_unit(out, "payload/mkosi.profiles/net")
+    assert "Requires=network-setup.service" in overlay

@@ -1,6 +1,6 @@
 """The opinionated ``Service`` defaults (systemd-units design, migration step 7): the exact
 unit a bare ``Service`` renders, the system user it declares, the lints on opt-outs, and the
-debloat keep list that leaves ``timers.target`` alone outside ``nethermind-v1``."""
+debloat keep list that leaves ``timers.target`` alone."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from tundravm._units.render import service_unit
 from tundravm.declarative import (
     Debian,
     Hardening,
-    Mkosi,
     Recipe,
     Service,
     Task,
@@ -17,11 +16,7 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.declarative.state import _service
-from tundravm.models import (
-    DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP,
-    LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP,
-    ProfileState,
-)
+from tundravm.models import DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP, ProfileState
 
 STRICT_LINES = (
     "ProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nNoNewPrivileges=yes\n"
@@ -108,11 +103,8 @@ def test_opt_outs_are_linted() -> None:
     }
 
 
-def test_debloat_keeps_timers_target_except_in_the_historical_dialect() -> None:
+def test_debloat_keeps_timers_target() -> None:
     assert "timers.target" in DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP
-    assert "timers.target" not in LEGACY_DEBLOAT_SYSTEMD_UNITS_KEEP
-    items = (User("app"),)
-    for mkosi, expected in ((Mkosi(), True), (Mkosi(dialect="nethermind-v1"), False)):
-        recipe = Recipe(name="t", platform=Debian("trixie"), items=items, mkosi=mkosi)
-        debloat = lower(recipe).state.profiles["default"].debloat
-        assert ("timers.target" in debloat.effective_units_keep) is expected
+    recipe = Recipe(name="t", platform=Debian("trixie"), items=(User("app"),))
+    debloat = lower(recipe).state.profiles["default"].debloat
+    assert "timers.target" in debloat.effective_units_keep

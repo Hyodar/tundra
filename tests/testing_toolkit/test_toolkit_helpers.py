@@ -126,7 +126,8 @@ def test_compile_tree_selects_variants(tmp_path: Path) -> None:
     recipe = _recipe()
     tree = compile_tree(recipe, variants=["default", "azure"], path=tmp_path / "all")
     assert tree.variants == ("default", "azure")
-    assert tree.variant("azure") == tmp_path / "all" / "azure"
+    assert tree.variant("azure") == tmp_path / "all" / "payload" / "mkosi.profiles" / "azure"
+    assert tree.variant("default") == tmp_path / "all" / "payload"
     assert "jq" in tree.conf(variant="azure")
     assert "jq" not in tree.conf()
 
@@ -255,27 +256,27 @@ def test_assert_tree_round_trip_reports_each_path(tmp_path: Path) -> None:
     assert_tree(compile(_recipe()), golden)
 
     changed = compile(_recipe(File("/etc/new", "new\n")))
-    (golden / "default" / "mkosi.extra" / "etc" / "stale").write_text("old\n", encoding="utf-8")
+    (golden / "payload" / "mkosi.extra" / "etc" / "stale").write_text("old\n", encoding="utf-8")
     with pytest.raises(AssertionError) as excinfo:
         assert_tree(changed, golden)
     message = str(excinfo.value)
-    assert "+ default/mkosi.extra/etc/stale" in message
-    assert "- default/mkosi.extra/etc/new" in message
+    assert "+ payload/mkosi.extra/etc/stale" in message
+    assert "- payload/mkosi.extra/etc/new" in message
     assert "TUNDRAVM_UPDATE_GOLDEN=1" in message
 
 
 def test_golden_round_trip(tmp_path: Path) -> None:
     golden = tmp_path / "golden"
     assert_tree_matches(_recipe(), golden, update=True)
-    assert (golden / "default" / "mkosi.conf").is_file()
+    assert (golden / "payload" / "mkosi.conf").is_file()
     assert assert_tree_matches(_recipe(), golden).is_clean
 
     changed = _recipe(Package("htop"), File("/etc/new", "new\n"))
     with pytest.raises(AssertionError) as excinfo:
         assert_tree_matches(changed, golden)
     message = str(excinfo.value)
-    assert "M  default/mkosi.conf" in message
-    assert "A  default/mkosi.extra/etc/new" in message
+    assert "M  payload/mkosi.conf" in message
+    assert "A  payload/mkosi.extra/etc/new" in message
     assert "+htop" in message or "htop" in message
     assert "TUNDRAVM_UPDATE_GOLDEN=1" in message
 
@@ -285,9 +286,9 @@ def test_golden_update_from_env_rewrites_and_prunes(
 ) -> None:
     golden = tmp_path / "golden"
     assert_tree_matches(_recipe(), golden, update=True)
-    stale = golden / "default" / "mkosi.extra" / "etc" / "stale"
+    stale = golden / "payload" / "mkosi.extra" / "etc" / "stale"
     stale.write_text("old\n", encoding="utf-8")
-    with pytest.raises(AssertionError, match="D  default/mkosi.extra/etc/stale"):
+    with pytest.raises(AssertionError, match="D  payload/mkosi.extra/etc/stale"):
         assert_tree_matches(_recipe(), golden)
 
     monkeypatch.setenv("TUNDRAVM_UPDATE_GOLDEN", "1")
@@ -302,14 +303,16 @@ def test_golden_update_from_env_rewrites_and_prunes(
 def test_golden_ignores_and_keeps_variants_not_compiled(tmp_path: Path) -> None:
     golden = tmp_path / "golden"
     assert_tree_matches(_recipe(), golden, variants=["default", "azure"], update=True)
-    azure_conf = (golden / "azure" / "mkosi.conf").read_text(encoding="utf-8")
+    overlay = golden / "payload" / "mkosi.profiles" / "azure" / "mkosi.conf"
+    wrapper = golden / "mkosi.images" / "azure" / "mkosi.conf"
+    kept = (overlay.read_text(encoding="utf-8"), wrapper.read_text(encoding="utf-8"))
 
     changed = _recipe(Package("htop"))
     assert_tree_matches(changed, golden, variants="default", update=True)
-    assert (golden / "azure" / "mkosi.conf").read_text(encoding="utf-8") == azure_conf
+    assert (overlay.read_text(encoding="utf-8"), wrapper.read_text(encoding="utf-8")) == kept
     assert_tree_matches(changed, golden, variants="default")
-    with pytest.raises(AssertionError, match="azure/mkosi.conf"):
-        assert_tree_matches(changed, golden, variants=["azure"])
+    with pytest.raises(AssertionError, match="payload/mkosi.conf"):
+        assert_tree_matches(_recipe(), golden, variants=["azure"])
 
 
 def test_golden_truncates_long_diffs(tmp_path: Path) -> None:
@@ -469,7 +472,7 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
 
     code, out, _ = run_cli("compile", path, "--tree", tmp_path / "tree")
     assert code == 0, out
-    assert (tmp_path / "tree" / "default" / "mkosi.conf").is_file()
+    assert (tmp_path / "tree" / "payload" / "mkosi.conf").is_file()
 
 
 def test_run_cli_captures_usage_errors_and_sdk_errors(tmp_path: Path) -> None:

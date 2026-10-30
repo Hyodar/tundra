@@ -247,17 +247,12 @@ class DiskEncryption(Module):
                 )
 
     def source_spec(self) -> SourceBuild:
-        """The ``disk-setup`` source build from ``source``.
-
-        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
-        hand-written one this module emitted before source builds existed.
-        """
+        """The ``disk-setup`` source build from ``source``."""
         return SourceBuild(
             name="disk-encryption",
             source=self.source,
             build=GoBuild(package="./cmd/disk-setup", output="disk-setup"),
             install=(Install.artifact("/usr/bin/disk-setup"),),
-            mark_unpinned=False,
         )
 
     def render_config(self) -> str:

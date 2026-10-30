@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._modules.init import is_init_path
 from ._modules.secret_delivery import SecretDelivery
@@ -181,7 +181,6 @@ def _rule_service_user_missing(
 ) -> Iterator[Diagnostic]:
     declared = {u.name for u in state.users}
     commands = _command_text(state)
-    default = image.state.profiles.get(image.default_profile)
     for svc in state.services:
         user = svc.user
         if user is None or user in declared or user in _BASE_USERS:
@@ -192,16 +191,6 @@ def _rule_service_user_missing(
             f"Declare User({user!r}) in variant {profile_name!r}, or drop user= to run as "
             "a system user named after the service."
         )
-        if (
-            default is not None
-            and profile_name != default.name
-            and any(u.name == user for u in default.users)
-        ):
-            hint = (
-                f"{user!r} is declared in variant {default.name!r}, but {profile_name!r} "
-                "is lowered standalone and does not inherit it; declare it in "
-                f"{profile_name!r} too, or have the variant inherit {default.name!r}."
-            )
         yield Diagnostic(
             severity="error",
             code="service-user-missing",
@@ -331,6 +320,8 @@ def _rule_variant_empty(
 ) -> Iterator[Diagnostic]:
     if profile_name == image.default_profile:
         return
+    if image.targets.get(profile_name) != image.targets.get(image.default_profile):
+        return  # it builds other wrappers around the payload
     state = image.state.ensure_profile(profile_name)
     own: Iterable[object] = (
         state.packages,
@@ -352,19 +343,8 @@ def _rule_variant_empty(
     )
     if any(own) or state.output_targets_explicit or state.debloat_explicit:
         return
-    if state.extends is None:
-        message = "variant declares nothing of its own and builds a bare base image"
-        hint = (
-            f"Standalone variants (inherits=None) do not inherit from "
-            f"{image.default_profile!r}. Declare its contents in its add= fragment, "
-            "or remove the variant."
-        )
-    else:
-        message = f"variant declares nothing of its own and builds the {state.extends!r} image"
-        hint = (
-            f"Declare what it adds to {state.extends!r} in its add= fragment, "
-            "or remove the variant."
-        )
+    message = f"variant declares nothing of its own and builds the {state.extends!r} image"
+    hint = f"Declare what it adds to {state.extends!r} in its add= fragment, or remove the variant."
     yield Diagnostic(
         severity="info",
         code="variant-empty",
@@ -381,7 +361,6 @@ def _rule_debloat_removes_needed_unit(
     if not (config.enabled and config.systemd_minimize):
         return
     keep = set(debloat_units_keep(state)) | {"minimal.target"}
-    current = image.mkosi_for(profile_name).dialect != "nethermind-v1"
     own_units = {unit_name(s.name) for s in state.services}
     own_units.update(posixpath.basename(p) for p in _declared_paths(state))
 
@@ -405,8 +384,8 @@ def _rule_debloat_removes_needed_unit(
                 subject=svc.name,
             )
         for dep in (*svc.requires, *svc.wants):
-            if not masked(dep) or (current and svc.enabled and dep.endswith(".target")):
-                continue  # the current dialect keeps the targets enabled units reference
+            if not masked(dep) or (svc.enabled and dep.endswith(".target")):
+                continue  # the debloat keeps the targets enabled units reference
             yield Diagnostic(
                 severity="warning",
                 code="debloat-removes-needed-unit",
@@ -457,7 +436,7 @@ def _rule_source_unpinned(
     for spec in sources.values():
         if spec.pin_from(pins) is not None:
             continue
-        message, hint = _unpinned_advice(spec, fetches=image.fetches_sources)
+        message, hint = _unpinned_advice(spec)
         yield Diagnostic(
             severity=severity,
             code="source-unpinned",
@@ -468,14 +447,10 @@ def _rule_source_unpinned(
         )
 
 
-def _unpinned_advice(spec: NamedSource, *, fetches: bool) -> tuple[str, str]:
+def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
     """The ``source-unpinned`` message and hint for the unpinned lockable source *spec*."""
     source = spec.source
-    fetch = (
-        " and `tundravm fetch RECIPE` to check it out on the host (`bake` fetches too)"
-        if fetches
-        else ""
-    )
+    fetch = " and `tundravm fetch RECIPE` to check it out on the host (`bake` fetches too)"
     if isinstance(spec, KernelSource):
         return (
             f"kernel {spec.version} ({source.kind} {source.url} @ {source.requested}) "
@@ -508,7 +483,7 @@ def _unpinned_advice(spec: NamedSource, *, fetches: bool) -> tuple[str, str]:
 def _rule_kernel_missing(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    if not image.mkosi_for(profile_name).bootable or image.kernel_for(profile_name) is not None:
+    if not image.mkosi.bootable or image.kernel is not None:
         return
     if installs_kernel_package(state.packages):
         return
@@ -542,11 +517,11 @@ def _rule_built_kernel_modules(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     """A built kernel's modules: ``kernel_modules`` it cannot have, or a debloat deleting them."""
-    kernel = image.kernel_for(profile_name)
+    kernel = image.kernel
     if kernel is None or not kernel.built:
         return
     loadable = kernel.composed and kernel.modules
-    selected = image.mkosi_for(profile_name).kernel_modules
+    selected = image.mkosi.kernel_modules
     if selected and not loadable:
         yield Diagnostic(
             severity="warning",
@@ -589,8 +564,8 @@ def _rule_debloat_removes_modules(
     # A built Kernel installs only its vmlinuz: nothing under /usr/lib/modules loads.
     selection = module_selection(
         state,
-        image.mkosi_for(profile_name).kernel_modules,
-        built_kernel=image.kernel_for(profile_name) is not None,
+        image.mkosi.kernel_modules,
+        built_kernel=image.kernel is not None,
     )
     if not selection.modular:
         return
@@ -838,7 +813,7 @@ def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> I
         has_user=lambda name: made(name, users, "useradd|adduser"),
         has_group=lambda name: made(name, groups, "groupadd|addgroup"),
         packages=bool(state.packages),
-        style=image.mkosi_for(profile_name).dialect != "nethermind-v1",
+        style=True,
         outputs=frozenset(state.output_targets),
     )
     yield from unit_findings(units, facts)
@@ -850,12 +825,10 @@ def unit_declaration_check(
     """``unit-raw``, ``unit-as-file``, ``unit-extra``, ``hardening-*`` and
     ``service-runs-as-root`` findings of *recipe*'s own declarations.
 
-    The first two are style codes, so a ``nethermind-v1`` recipe (historical unit bytes) has
-    none; the others describe typed units and are always reported.
+    The first two are style codes; the others describe typed units.
     """
     from .declarative.model import File, Service, Task, Unit
 
-    style = recipe.mkosi.dialect != "nethermind-v1"
     selected = set(variants) if variants is not None else {v.name for v in recipe.variants}
     groups = [("", (*recipe.platform.contribution(), *recipe.items))]
     groups += [(v.name, (v.add,)) for v in recipe.variants if v.name in selected]
@@ -869,8 +842,6 @@ def unit_declaration_check(
             elif isinstance(item, Unit) and item.dropin is not None and item.dropin.extra:
                 extra = _unit_extra(unit_name(item.name), item.dropin.extra, variant)
                 found.append(_located(extra, item))
-            if not style:
-                continue
             if isinstance(item, Unit) and item.content is not None:
                 if unit_name(item.name).endswith(".service"):
                     found.append(_located(_unit_raw(item.name, variant), item))
@@ -1153,8 +1124,7 @@ _GITHUB_COMMANDS: dict[str, str] = {"error": "error", "warning": "warning", "inf
 # ``declaration_check`` reads the recipe's own declarations rather than the lowered
 # state: a typed field and the ``Setting`` it replaces lower to the same options.
 # Declarations composed by tundravm's shipped fragments are skipped (the recipe
-# cannot change them), and the ``nethermind-v1`` dialect reports nothing: its raw
-# spellings reproduce a historical tree.
+# cannot change them).
 
 TYPED_SETTINGS: dict[tuple[str, str], str] = {
     ("Output", "Seed"): "Mkosi(seed=...)",
@@ -1167,7 +1137,6 @@ TYPED_SETTINGS: dict[tuple[str, str], str] = {
 }
 """mkosi keys a typed field sets, and that field (lint ``setting-raw``)."""
 _VARIANT_SETTING = " The field is recipe-wide: keep the Setting when only this variant needs it."
-_KERNEL_PASSTHROUGH = frozenset({"KERNEL_IMAGE", "KERNEL_VERSION"})
 _CHROOT = "mkosi-chroot "
 _COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"groupadd\b.*?(?P<name>[a-z_][a-z0-9_-]*)$"), 'Group("{name}")'),
@@ -1191,19 +1160,15 @@ def declaration_check(recipe: Recipe, *, variants: Sequence[str] | None = None) 
     Declarations of ``Recipe.items`` and the platform report with variant ``""``,
     a variant's ``add`` with its name (only when *variants* selects it).
     """
-    from .declarative.model import Kernel
 
-    if recipe.mkosi.dialect == "nethermind-v1":
-        return []
     selected = set(variants) if variants is not None else {v.name for v in recipe.variants}
     groups = [("", (*recipe.platform.contribution(), *recipe.items))]
     groups += [(v.name, (v.add,)) for v in recipe.variants if v.name in selected]
     found: list[Diagnostic] = []
     for variant, items in groups:
         own = list(_own_declarations(items))
-        kernel = any(isinstance(item, Kernel) and item.built for item in own)
         for item in own:
-            found.extend(_declaration_findings(item, variant, kernel=kernel))
+            found.extend(_declaration_findings(item, variant))
     return found
 
 
@@ -1220,14 +1185,40 @@ def _own_declarations(items: Iterable[object]) -> Iterator[object]:
             yield item
 
 
-def _declaration_findings(item: object, variant: str, *, kernel: bool) -> Iterator[Diagnostic]:
+def _unreproducible_setting(setting: Any, variant: str) -> Iterator[Diagnostic]:
+    """``mkosi-configure-script`` and ``mkosi-environment-passthrough``: a ``Setting`` the
+    compiler refuses, since ``mkosi summary`` would not describe the build, or the host's
+    environment would enter it."""
+    subject = f"{setting.section}.{setting.key}"
+    if setting.key == "ConfigureScripts":
+        yield Diagnostic(
+            code="mkosi-configure-script",
+            severity="error",
+            message=f"Setting {subject} rewrites the configuration after `mkosi summary` "
+            "resolved it",
+            subject=subject,
+            variant=variant,
+            hint="Declare what the script would set as typed declarations or Settings.",
+        )
+    passed = [v for v in setting.values if "=" not in v]
+    if setting.key == "PassEnvironment" or (setting.key == "Environment" and passed):
+        yield Diagnostic(
+            code="mkosi-environment-passthrough",
+            severity="error",
+            message=f"Setting {subject} passes the host's {', '.join(passed or setting.values)} "
+            "into the build",
+            subject=subject,
+            variant=variant,
+            hint="Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)).",
+        )
+
+
+def _declaration_findings(item: object, variant: str) -> Iterator[Diagnostic]:
     from .declarative.model import BootStep, Hook, Setting
 
     if isinstance(item, Setting):
+        yield from (_located(d, item) for d in _unreproducible_setting(item, variant))
         typed = TYPED_SETTINGS.get((item.section, item.key))
-        if typed is None and (item.section, item.key) == ("Build", "Environment"):
-            if kernel and set(item.values) <= _KERNEL_PASSTHROUGH:
-                typed = "nothing: Kernel(config=...) passes KERNEL_IMAGE and KERNEL_VERSION"
         if typed is not None:
             yield _located(
                 Diagnostic(

@@ -61,14 +61,17 @@ def write_recipe_file(
 
 
 def conf_list(conf: str, key: str) -> list[str]:
-    """The values of a multi-line ``key=`` list in an mkosi.conf."""
-    lines = conf.splitlines()
-    start = lines.index(f"{key}=") + 1 if f"{key}=" in lines else len(lines)
+    """The values of every multi-line ``key=`` list in *conf*, in order (an mkosi.conf, or
+    several joined, as ``CompiledTree.conf`` returns the payload's)."""
     values: list[str] = []
-    for line in lines[start:]:
-        if not line.startswith("    "):
-            break
-        values.append(line.strip())
+    collecting = False
+    for line in conf.splitlines():
+        if line == f"{key}=":
+            collecting = True
+        elif collecting and line.startswith("    "):
+            values.append(line.strip())
+        else:
+            collecting = False
     return values
 
 

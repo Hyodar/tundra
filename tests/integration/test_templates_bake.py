@@ -141,7 +141,7 @@ def test_service_template_units_verify_and_are_sandboxed(service_build: Path) ->
     strict sandbox keeps ``app.service`` at exposure level OK (1.4 with systemd 255; the
     pre-step-7 unit scored 9.0 UNSAFE)."""
     root = service_build / "default" / "output" / "default"
-    generated = service_build / "mkosi" / "default" / "mkosi.extra" / "usr/lib/systemd/system"
+    generated = service_build / "mkosi" / "payload" / "mkosi.extra" / "usr/lib/systemd/system"
     units = sorted(p.name for p in generated.iterdir() if p.is_file())
     assert "app.service" in units
     verify = subprocess.run(
@@ -350,9 +350,10 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             print("\n".join(backend.lines[-80:]))  # pytest shows it with the failure
             raise
 
-        tree = out / "mkosi" / "default"
+        tree = out / "mkosi"
         conf = (tree / "mkosi.conf").read_text(encoding="utf-8")
         assert "Snapshot=20251113T083151Z\n" in conf
+        assert "ToolsTreeSnapshot=20251113T083151Z\n" in conf
         assert "Mirror=" not in conf and "SandboxTrees=" not in conf
         sandbox = tree / "mkosi.sandbox/etc/apt"
         sources = (sandbox / "sources.list.d/debian-backports.sources").read_text(encoding="utf-8")

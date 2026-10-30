@@ -25,7 +25,6 @@ from tundravm.declarative import (
     Git,
     Hook,
     Kernel,
-    Mkosi,
     Package,
     Recipe,
     Repository,
@@ -66,7 +65,7 @@ def emit_all(recipe: Recipe, out: Path) -> None:
     emit(lower(recipe, variants=names).select(names), out)
 
 
-def rich_recipe(kernel_config: Path, *, layout: str = "per_directory") -> Recipe:
+def rich_recipe(kernel_config: Path) -> Recipe:
     """A recipe that makes the emitter write every kind of path it writes."""
     return Recipe(
         "modes",
@@ -87,7 +86,6 @@ def rich_recipe(kernel_config: Path, *, layout: str = "per_directory") -> Recipe
             Variant("gcp", outputs=("gcp",), add=Fragment("gcp", items=(Package("jq"),))),
         ),
         platform=Debian("bookworm", boot=None),
-        mkosi=Mkosi(layout="native") if layout == "native" else Mkosi(),
     )
 
 
@@ -98,11 +96,8 @@ def kernel_config(tmp_path: Path) -> Path:
     return path
 
 
-@pytest.mark.parametrize("layout", ["per_directory", "native"])
-def test_emitted_tree_is_identical_under_every_umask(
-    tmp_path: Path, kernel_config: Path, layout: str
-) -> None:
-    recipe = rich_recipe(kernel_config, layout=layout)
+def test_emitted_tree_is_identical_under_every_umask(tmp_path: Path, kernel_config: Path) -> None:
+    recipe = rich_recipe(kernel_config)
     seen = set()
     for mask in UMASKS:
         out = tmp_path / f"out-{mask:03o}"
@@ -122,19 +117,26 @@ def test_emitted_paths_get_explicit_modes(tmp_path: Path, kernel_config: Path) -
 
     assert {mode for path, mode in found.items() if (out / path).is_dir()} == {0o755}
     expected = {
-        "default/mkosi.conf": 0o644,
-        "default/mkosi.extra/etc/motd": 0o644,
-        "default/mkosi.extra/etc/app/secret.key": 0o600,
-        "default/mkosi.extra/usr/bin/start": 0o755,
-        "default/mkosi.extra/etc/app/app.toml": 0o644,
-        "default/mkosi.extra/usr/lib/systemd/system/app.service": 0o644,
-        "default/mkosi.skeleton/etc/systemd/system/minimal.target": 0o644,
-        "default/mkosi.skeleton/etc/apt/preferences.d/extra.pref": 0o644,
-        "default/mkosi.sandbox/etc/apt/sources.list.d/extra.sources": 0o644,
-        "default/kernel/kernel.config": 0o644,
-        "default/scripts/03-prepare.sh": 0o755,
-        "default/scripts/04-build.sh": 0o755,
-        "gcp/scripts/gcp-postoutput.sh": 0o755,
+        "mkosi.conf": 0o644,
+        "mkosi.repart/00-esp.conf": 0o644,
+        "mkosi.images/payload/mkosi.conf": 0o644,
+        "mkosi.images/gcp/mkosi.conf": 0o644,
+        "mkosi.images/gcp/mkosi.repart/00-esp.conf": 0o644,
+        "mkosi.images/gcp/mkosi.postoutput.d/tar": 0o755,
+        "mkosi.sandbox/etc/apt/sources.list.d/extra.sources": 0o644,
+        "mkosi.sandbox/etc/apt/preferences.d/extra.pref": 0o644,
+        "payload/mkosi.conf": 0o644,
+        "payload/mkosi.extra/etc/machine-id": 0o444,
+        "payload/mkosi.extra/etc/motd": 0o644,
+        "payload/mkosi.extra/etc/app/secret.key": 0o600,
+        "payload/mkosi.extra/usr/bin/start": 0o755,
+        "payload/mkosi.extra/etc/app/app.toml": 0o644,
+        "payload/mkosi.extra/usr/lib/systemd/system/app.service": 0o644,
+        "payload/mkosi.skeleton/etc/systemd/system/minimal.target": 0o644,
+        "payload/kernel/kernel.config": 0o644,
+        "payload/mkosi.prepare.d/50-prepare.sh": 0o755,
+        "payload/mkosi.build.d/10-kernel.sh": 0o755,
+        "payload/mkosi.profiles/gcp/mkosi.conf": 0o644,
     }
     assert {path: found.get(path) for path in expected} == expected
 

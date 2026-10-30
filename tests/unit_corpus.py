@@ -1,7 +1,7 @@
 """Every systemd unit text in the repository, for the unit text and unit lint tests.
 
-Sources: the committed surge golden tree, the unit constants of modules, examples and
-templates, and the emitted tree of every example, surge variant and ``init`` template.
+Sources: the committed surge tree, the unit constants of modules, examples and templates,
+and the emitted tree of every example, surge variant and ``init`` template.
 """
 
 from __future__ import annotations
@@ -11,8 +11,7 @@ from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
 
-from tests.compiler.test_lowering_parity import recipe_paths
-from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
+from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
 
 _UNIT_PATH = re.compile(r"(^|/)(usr/lib|etc)/systemd/system/")
 _UNIT_SUFFIX = re.compile(r"\.(service|socket|target|timer|mount|path|conf)$")
@@ -36,28 +35,44 @@ def constant_units() -> Iterator[tuple[str, str]]:
     """``(name, text)`` for the unit text constants written in Python."""
     from examples.fragments import nethermind, raiko, taiko_client
 
-    from tundravm._modules import devtools, init
-    from tundravm._modules.tdxs import Tdxs
+    from tundravm._modules import devtools
     from tundravm.compiler.emit_mkosi import MINIMAL_TARGET_UNIT
-    from tundravm.platforms import azure
 
     yield "MINIMAL_TARGET_UNIT", MINIMAL_TARGET_UNIT
     yield "NETHERMIND_UNIT", nethermind.NETHERMIND_UNIT
     yield "RAIKO_UNIT", raiko.RAIKO_UNIT
     yield "TAIKO_CLIENT_UNIT", taiko_client.TAIKO_CLIENT_UNIT
     yield "SERIAL_CONSOLE_SERVICE", devtools.SERIAL_CONSOLE_SERVICE
-    yield "AZURE_PROVISIONING_SERVICE", azure.AZURE_PROVISIONING_SERVICE
-    yield "AZURE_PROVISIONING_SERVICE_ONLINE", azure.AZURE_PROVISIONING_SERVICE_ONLINE
-    yield "tdxs.service", Tdxs().render_service_unit()
-    yield "tdxs.socket", Tdxs().render_socket_unit()
-    yield "runtime-init.service", init.render_service_unit()
-    yield "runtime-init.service (online)", init.render_service_unit(network_setup=False)
     yield (
         "network-setup.service",
         (REPO_ROOT / "examples" / "nethermind-base" / "network-setup.service").read_text(
             encoding="utf-8"
         ),
     )
+
+
+def recipe_paths(scratch: Path) -> dict[str, Path]:
+    """Every example recipe, the surge recipe and every ``init`` template, by name; the
+    templates are rendered into *scratch*."""
+    from tundravm.templates import TEMPLATES, render_recipe_template
+
+    paths = {path.stem: path for path in EXAMPLE_RECIPES}
+    paths["surge"] = SURGE_EXAMPLE / "image.py"
+    for template in TEMPLATES:
+        path = scratch / template / f"{template}.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            render_recipe_template(
+                title=template,
+                filename=path.name,
+                release="trixie",
+                backend="inprocess",
+                template=template,
+            ),
+            encoding="utf-8",
+        )
+        paths[f"init-{template}"] = path
+    return paths
 
 
 @cache

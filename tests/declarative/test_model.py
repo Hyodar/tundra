@@ -54,7 +54,8 @@ def test_design_defaults() -> None:
     assert recipe.platform == Debian("trixie", boot=None)
     assert recipe.platform.name == "debian/trixie" and recipe.platform.packages == ()
     assert recipe.variants == (Variant("default", outputs=("qemu",)),)
-    assert recipe.platform.epoch == 0 and recipe.mkosi == Mkosi("directories", "current")
+    assert recipe.platform.epoch == 0 and recipe.mkosi == Mkosi("initramfs")
+    assert not recipe.mkosi.build_network  # release builds run without network
     assert Variant("v").inherits == "base" and Variant("v").add == Fragment("empty")
     assert User("u").system is True and Group("g").system is True
     assert Disk("d", "/data").device is None and Disk("d", "/data").format == "never"
@@ -88,7 +89,7 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("no variants", lambda: Recipe("r", variants=())),
     ("duplicate variants", lambda: Recipe("r", variants=(Variant("a"),) * 2)),
     ("negative epoch", lambda: Recipe("r", platform=Debian("trixie", epoch=-1, boot=None))),
-    ("bad layout", lambda: Mkosi(layout="flat")),  # type: ignore[arg-type]
+    ("bad root", lambda: Mkosi(root="flat")),  # type: ignore[arg-type]
     ("empty package", lambda: Package("")),
     ("package role", lambda: Package("a", role="dev")),  # type: ignore[arg-type]
     ("relative file", lambda: File("etc/motd", "x")),

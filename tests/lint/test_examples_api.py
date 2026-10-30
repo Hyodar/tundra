@@ -18,9 +18,11 @@ INHERENT_WARNINGS = frozenset({"source-unpinned", "disk-device-guessed"})
 """Warning codes an example may report: unpinned refs clear with ``tundravm lock``; the
 historical surge ``Disk`` picks its device at boot under ``Policy(storage_safety="warn")``."""
 
-KNOWN_WARNINGS: dict[str, frozenset[str]] = {}
-"""Per-example warnings the typed API removes later (none left: 03's health check became a
-``Task(schedule=...)``, so it is no longer also enabled at boot)."""
+KNOWN_WARNINGS: dict[str, frozenset[str]] = {
+    "nethermind_base.py": frozenset({"unit-exec-relative"}),
+}
+"""Per-example warnings the typed API removes later: the nethermind-tdx base ships its
+historical ``network-setup.service`` text (a relative ``ExecStart=``)."""
 
 COMMAND = re.compile(r"^\s+tundravm (\w+) (\S+)", re.MULTILINE)
 

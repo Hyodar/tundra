@@ -1,4 +1,5 @@
 import json
+import re
 from copy import deepcopy
 
 import pytest
@@ -84,7 +85,8 @@ def test_explain_structure() -> None:
     assert info["reproducible"] is True
     assert info["mirror"] == "https://deb.example"
     assert info["kernel"] is None
-    assert info["packages"] == ["curl", "jq", "systemd"]
+    # The payload carries the glue of every cloud target the recipe names.
+    assert info["packages"] == ["curl", "dmidecode", "jq", "systemd", "udev"]
     assert info["build_packages"] == ["gcc"]
     assert info["targets"] == ["qemu"]
     assert info["policy"] == {
@@ -101,7 +103,9 @@ def test_explain_structure() -> None:
 
     files = info["files"]
     assert isinstance(files, list)
-    assert files == [{"bytes": 12, "mode": "0644", "path": "/etc/motd", "sha256": "a948904f2f0f"}]
+    assert {"bytes": 12, "mode": "0644", "path": "/etc/motd", "sha256": "a948904f2f0f"} in files
+    # the payload carries the recipe's cloud glue (azure and gcp targets), inert on qemu
+    assert {f["path"] for f in files} >= {"/etc/hosts", "/usr/bin/azure-complete-provisioning"}
     assert "content" not in files[0]
 
     templates = info["templates"]
@@ -166,7 +170,7 @@ def test_explain_per_variant() -> None:
 
     assert azure["variant"] == "azure"
     assert azure["inherits"] == "default"
-    assert azure["packages"] == ["curl", "dmidecode", "jq", "systemd", "waagent"]
+    assert azure["packages"] == ["curl", "dmidecode", "jq", "systemd", "udev", "waagent"]
     assert "modules" not in azure and "profile" not in azure
     lineage = describe(image, profile="azure", inherits="base", fragments=("common", "azure"))
     assert (lineage["inherits"], lineage["fragments"]) == ("base", ["common", "azure"])
@@ -205,15 +209,16 @@ def test_summary_contains_key_strings() -> None:
 
     assert text.startswith("Image: debian/trixie (x86_64)  variant=default  reproducible=yes\n")
     assert "Mirror: https://deb.example" in text
-    assert "Packages (3): curl jq systemd" in text
+    assert "Packages (5): curl dmidecode jq systemd udev" in text
     assert "Build packages (1): gcc" in text
     assert "debian-security  https://deb.example/security  trixie-security  main  prio=10" in text
-    assert "/etc/motd  0644  12B  sha256:a948904f2f0f" in text
+    assert re.search(r"\n  /etc/motd +0644  12B  sha256:a948904f2f0f\n", text)
     assert "/etc/app/env  0644  vars=a,b" in text
     assert "app  uid=1000  gid=1000  shell=/bin/bash  groups=video" in text
-    assert (
-        "app  /usr/bin/app --flag  restart=always  type=exec  user=app  after=network-online.target"
-        in text
+    assert re.search(
+        r"\n  app +/usr/bin/app --flag  restart=always  type=exec  user=app  "
+        r"after=network-online\.target\n",
+        text,
     )
     assert "data  4G  /data  ext4" in text
     assert "Hooks:\n" in text
@@ -226,7 +231,7 @@ def test_summary_contains_key_strings() -> None:
     azure_text = render(describe(image, profile="azure"))
     assert "variant=azure" in azure_text
     assert "Inherits: default\n" in azure_text
-    assert "Packages (5): curl dmidecode jq systemd waagent" in azure_text
+    assert "Packages (6): curl dmidecode jq systemd udev waagent" in azure_text
     assert "Inherits" not in text
     assert azure_text.endswith("Targets: azure\n")
     assert render(describe(image, profile="cloud")).endswith("Targets: qemu gcp\n")

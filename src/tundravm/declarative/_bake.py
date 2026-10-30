@@ -28,7 +28,7 @@ from tundravm._source import (
 from tundravm.backends.base import BuildBackend
 from tundravm.check import check
 from tundravm.compiler import PHASE_ORDER, MkosiEmission
-from tundravm.errors import LintError, LockfileError, PolicyError, StateError, ValidationError
+from tundravm.errors import LintError, LockfileError, StateError, ValidationError
 from tundravm.lockfile import LOCKFILE_VERSION, compare_lock, read_lockfile, recipe_digest
 from tundravm.models import (
     ArtifactRef,
@@ -110,7 +110,7 @@ def bake(
                 profile=name,
                 build_dir=destination,
                 emit_dir=emission_root,
-                output_targets=lowered.state.effective_profile(name).output_targets,
+                output_targets=lowered.targets.get(name, ("qemu",)),
                 on_output=None if reporter is None else progress.output(name),
                 on_notice=None if reporter is None else progress.notice(name),
                 sources_dir=sources_dir
@@ -334,27 +334,12 @@ def _fetched_sources(
 ) -> Path | None:
     """``<destination>/.sources`` when the build mounts it; fails if a checkout is missing.
 
-    ``None`` under ``nethermind-v1``, without source builds, a built kernel or an
-    ``EfiStub`` package, and for the in-process backend, which builds nothing.
-    *offline* (no network in the build sandbox) also requires every language
-    build's prefetched dependencies, and refuses ``nethermind-v1`` source builds,
-    which fetch in the sandbox.
+    ``None`` without source builds, a built kernel or an ``EfiStub`` package, and for the
+    in-process backend, which builds nothing. *offline* (no network in the build sandbox)
+    also requires every language build's prefetched dependencies.
     """
     builds = lowered.lock_sources()
     if backend.name == "inprocess" or not builds:
-        return None
-    if not lowered.fetches_sources:
-        if offline:
-            raise PolicyError(
-                f"An offline bake cannot build {', '.join(builds)}: under "
-                f"{lowered.mkosi.dialect} the build hooks fetch their sources in the sandbox.",
-                hint=(
-                    "Bake with network (drop --offline, or Policy(network_mode='online')), "
-                    "or move the recipe to the current dialect, whose sources "
-                    "`tundravm fetch` checks out on the host."
-                ),
-                context={"operation": "bake", "dialect": lowered.mkosi.dialect},
-            )
         return None
     root = destination / SOURCES_DIRNAME
     pins = lowered.build_pins()

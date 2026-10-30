@@ -61,8 +61,8 @@ def test_file_copy_keeps_only_the_execute_bit(tmp_path: Path) -> None:
     data.chmod(0o664)
     tree = tundravm.compile(_recipe(File.copy("/usr/bin/run", script), File.copy("/d", data)))
     modes = {entry.path: entry.mode for entry in tree.entries}
-    assert modes["default/mkosi.extra/usr/bin/run"] == 0o755
-    assert modes["default/mkosi.extra/d"] == 0o644
+    assert modes["payload/mkosi.extra/usr/bin/run"] == 0o755
+    assert modes["payload/mkosi.extra/d"] == 0o644
 
 
 @pytest.mark.parametrize(

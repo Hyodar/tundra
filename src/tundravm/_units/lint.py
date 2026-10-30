@@ -17,7 +17,7 @@ from .directives import FALSE, TRUE, UNIT_SUFFIXES, check_value, is_known, kind_
 from .text import UnitText
 
 STYLE_CODES = frozenset({"unit-exec-relative", "requires-without-after", "socket-service-started"})
-"""Codes left out under the ``nethermind-v1`` dialect: its units are historical bytes."""
+"""The style codes: what a unit text could say better, not what breaks it."""
 
 _INSTALL_KEYS = ("WantedBy", "RequiredBy", "UpheldBy", "Alias", "Also")
 _EXEC_PREFIX = "@-:+!|"

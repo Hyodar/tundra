@@ -33,7 +33,7 @@ from tundravm.errors import ValidationError
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
 SNAPSHOT = "20251113T083151Z"
-SCRIPT = "default/scripts/04-build.sh"
+SCRIPT = "payload/mkosi.build.d/10-kernel.sh"
 DEB = (
     f"https://snapshot.debian.org/archive/debian/{SNAPSHOT}/pool/main/l/linux/"
     "linux-config-6.12_6.12.48-1_amd64.deb"
@@ -128,12 +128,12 @@ def test_the_script_patches_in_order_merges_and_checks(base: Path, tmp_path: Pat
     recipe = _recipe(kernel)
     out = tmp_path / "out"
     script = _script(recipe, out, lock=lock(recipe, resolver=_resolve))
-    assert (out / "default/kernel/base.config").read_text() == "CONFIG_MODULES=y\n"
-    assert (out / "default/kernel/fragment.config").read_text() == (
+    assert (out / "payload/kernel/base.config").read_text() == "CONFIG_MODULES=y\n"
+    assert (out / "payload/kernel/fragment.config").read_text() == (
         '# CONFIG_MODULES is not set\nCONFIG_CMDLINE="quiet"\n# CONFIG_XFS_FS is not set\n'
     )
-    assert (out / "default/kernel/patches/01-b.diff").read_text() == "b\n"
-    assert (out / "default/kernel/patches/03-0001-a.patch").read_text() == "a\n"
+    assert (out / "payload/kernel/patches/01-b.diff").read_text() == "b\n"
+    assert (out / "payload/kernel/patches/03-0001-a.patch").read_text() == "a\n"
     order = [script.index(name) for name in ("01-b.diff", "fix.patch does not apply", "03-0001")]
     assert order == sorted(order)
     assert "sha256sum -c --quiet -" in script
@@ -229,7 +229,11 @@ def test_lint_flags_kernel_modules_a_monolithic_kernel_cannot_have(base: Path) -
 def test_a_composed_kernel_brings_its_build_packages(base: Path, tmp_path: Path) -> None:
     def packages(kernel: Kernel, out: str) -> set[str]:
         compile(_recipe(kernel)).write(tmp_path / out)
-        conf = (tmp_path / out / "default" / "mkosi.conf").read_text(encoding="utf-8")
+        payload = tmp_path / out / "payload"
+        conf = "".join(
+            p.read_text(encoding="utf-8")
+            for p in (payload / "mkosi.conf", *sorted(payload.glob("mkosi.conf.d/*")))
+        )
         return set(conf_list(conf, "BuildPackages"))
 
     debian = packages(Kernel("6.12.48", SOURCE, base=DebianConfig("6.12.48-1"), modules=True), "d")
@@ -250,7 +254,7 @@ def test_loadable_modules_survive_the_default_debloat(base: Path, tmp_path: Path
     compile(recipe).write(tmp_path / "tree")
     finalize = "".join(
         path.read_text(encoding="utf-8")
-        for path in (tmp_path / "tree" / "default" / "scripts").glob("*finalize*")
+        for path in (tmp_path / "tree" / "payload" / "mkosi.finalize.d").glob("*")
     )
     assert "/usr/lib/modules" not in finalize
     declared = _recipe(

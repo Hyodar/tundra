@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Callable
-from typing import Literal
 
 import pytest
 from examples.fragments import Nethermind, Raiko, TaikoClient
@@ -20,7 +18,6 @@ from tundravm.declarative import (
     Go,
     Install,
     Key,
-    Mkosi,
     Package,
     Recipe,
     Secrets,
@@ -36,53 +33,11 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 REPO = "https://example.com/acme/tool.git"
 SHA_A = "a" * 40
 
-# The hook TaikoClient wrote by hand before source builds existed (default arguments).
-TAIKO_CLIENT_LEGACY_HOOK = (
-    'if ! ([ -d "$BUILDDIR/taiko-client-feat_tdx-proving" ] && '
-    '[ "$(ls -A "$BUILDDIR/taiko-client-feat_tdx-proving" 2>/dev/null)" ]); then '
-    "git clone --depth=1 -b feat/tdx-proving https://github.com/NethermindEth/surge-taiko-mono "
-    '"$BUILDROOT/build/taiko-client" && mkosi-chroot bash -c '
-    "'cd /build/taiko-client/packages/taiko-client && GO111MODULE=on "
-    'CGO_CFLAGS="-O -D__BLST_PORTABLE__" CGO_CFLAGS_ALLOW="-O -D__BLST_PORTABLE__" '
-    'go build -trimpath -ldflags "-s -w -buildid=" -o bin/taiko-client cmd/main.go\' && '
-    'mkdir -p "$BUILDDIR/taiko-client-feat_tdx-proving" && install -D -m 0755 '
-    '"$BUILDROOT/build/taiko-client/packages/taiko-client/bin/taiko-client" '
-    '"$BUILDDIR/taiko-client-feat_tdx-proving"/taiko-client; fi && '
-    'install -D -m 0755 "$BUILDDIR/taiko-client-feat_tdx-proving"/taiko-client '
-    '"$DESTDIR/usr/bin/taiko-client"'
-)
-
-# The hook Nethermind wrote by hand before source builds existed (default arguments).
-_NM_KEY = "$BUILDDIR/nethermind-1.32.3-linux-x64"
-NETHERMIND_LEGACY_HOOK = (
-    f'if ! ([ -d "{_NM_KEY}" ] && [ "$(ls -A "{_NM_KEY}" 2>/dev/null)" ]); then '
-    "git clone --depth=1 -b 1.32.3 https://github.com/NethermindEth/nethermind.git "
-    '"$BUILDROOT/build/nethermind" && mkosi-chroot bash -c \'export '
-    "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 "
-    "DOTNET_CLI_HOME=/tmp/dotnet NUGET_PACKAGES=/tmp/nuget && cd /build/nethermind && "
-    "dotnet restore src/Nethermind/Nethermind.Runner --runtime linux-x64 "
-    "--disable-parallel --force && dotnet publish src/Nethermind/Nethermind.Runner "
-    "--configuration Release --runtime linux-x64 --self-contained true "
-    "--output /build/nethermind/publish -p:Deterministic=true "
-    "-p:ContinuousIntegrationBuild=true -p:PublishSingleFile=true -p:BuildTimestamp=0 "
-    "-p:Commit=0000000000000000000000000000000000000000 -p:PublishReadyToRun=false "
-    "-p:DebugType=none -p:IncludeAllContentForSelfExtract=true "
-    "-p:IncludePackageReferencesDuringMarkupCompilation=true -p:EmbedUntrackedSources=true "
-    f'-p:PublishRepositoryUrl=true\' && mkdir -p "{_NM_KEY}" && '
-    f'install -D -m 0755 "$BUILDROOT/build/nethermind/publish/nethermind" "{_NM_KEY}"/nethermind'
-    f' && install -D -m 0644 "$BUILDROOT/build/nethermind/publish/NLog.config" '
-    f'"{_NM_KEY}"/NLog.config && mkdir -p "{_NM_KEY}"/plugins && '
-    f'cp -r "$BUILDROOT/build/nethermind/publish/plugins"/* "{_NM_KEY}"/plugins/; fi && '
-    f'install -D -m 0755 "{_NM_KEY}"/nethermind "$DESTDIR/usr/bin/nethermind" && '
-    f'install -D -m 0644 "{_NM_KEY}"/NLog.config "$DESTDIR/etc/nethermind-surge/NLog.config" && '
-    'mkdir -p "$DESTDIR/etc/nethermind-surge/plugins" && '
-    f'cp -r "{_NM_KEY}"/plugins/* "$DESTDIR/etc/nethermind-surge/plugins"/'
-)
-
 
 def _hooks(tree: Tree) -> str:
-    """The build hooks of the default variant's ``04-build.sh``, after its shebang header."""
-    content = next(e.content for e in tree.entries if e.path == "default/scripts/04-build.sh")
+    """The build hooks of the payload's ``mkosi.build.d/50-build.sh``, after its header."""
+    path = "payload/mkosi.build.d/50-build.sh"
+    content = next(e.content for e in tree.entries if e.path == path)
     assert content is not None
     return content.decode().split("\n\n", 1)[1].rstrip("\n")
 
@@ -101,64 +56,36 @@ def _source_builds(recipe: Recipe) -> dict[str, dict[str, object]]:
 # ── Example modules ─────────────────────────────────────────────────
 
 
-def _surge_stack(dialect: Literal["current", "nethermind-v1"] = "nethermind-v1") -> Recipe:
+def _surge_stack() -> Recipe:
     return Recipe(
         name="stack",
-        mkosi=Mkosi(dialect=dialect),
         items=(Tdxs(), Package("git", role="build"), Raiko(), TaikoClient(), Nethermind()),
     )
 
 
-def test_taiko_client_hook_is_byte_identical_to_legacy_bash() -> None:
-    assert TAIKO_CLIENT_LEGACY_HOOK in _hooks(compile(_surge_stack())).splitlines()
-
-
-def test_nethermind_hook_is_byte_identical_to_legacy_bash() -> None:
-    assert NETHERMIND_LEGACY_HOOK in _hooks(compile(_surge_stack())).splitlines()
-
-
-def test_current_dialect_marks_unpinned_app_builds() -> None:
-    hooks = _hooks(compile(_surge_stack("current")))
+def test_unpinned_app_builds_fail_naming_lock_and_fetch() -> None:
+    hooks = _hooks(compile(_surge_stack()))
     assert (
         "\n# unpinned: feat/tdx-proving\necho 'tundravm: source build taiko-client is not "
         "pinned: run tundravm lock, then tundravm fetch' >&2 && exit 1\n"
     ) in hooks
 
 
-def test_current_dialect_builds_copy_the_fetched_checkouts() -> None:
-    recipe = _surge_stack("current")
-    pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
-    assert "git clone" not in pinned and "fetch -q" not in pinned
-    (hook,) = (line for line in pinned.splitlines() if '"$BUILDROOT/build/taiko-client"' in line)
-    assert re.search(
-        rf'"\$SRCDIR/tundravm-sources/taiko-client-{SHA_A[:12]}-[0-9a-f]{{8}}"/. ', hook
-    )
-    # cache_namespace="taiko-client-feat/tdx-proving" is the namespace of the fingerprinted key
-    assert re.search(r'build\}/taiko-client-feat_tdx-proving-[0-9a-f]{16}"', hook)
-
-
 @pytest.mark.parametrize(
-    ("name", "url", "cache_dir"),
+    ("name", "cache_namespace"),
     [
-        (
-            "taiko-client",
-            "https://github.com/NethermindEth/surge-taiko-mono",
-            "taiko-client-feat_tdx-proving",
-        ),
-        (
-            "nethermind",
-            "https://github.com/NethermindEth/nethermind.git",
-            "nethermind-1.32.3-linux-x64",
-        ),
+        ("taiko-client", "taiko-client-feat_tdx-proving"),
+        ("nethermind", "nethermind-1.32.3-linux-x64"),
     ],
 )
-def test_surge_stack_builds_pin_through_the_lockfile(name: str, url: str, cache_dir: str) -> None:
+def test_surge_stack_builds_copy_the_fetched_checkouts(name: str, cache_namespace: str) -> None:
     recipe = _surge_stack()
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
-    assert "git clone" not in pinned
+    assert "git clone" not in pinned and "fetch -q" not in pinned
     (hook,) = (line for line in pinned.splitlines() if f'"$BUILDROOT/build/{name}"' in line)
-    assert f'git -C "$BUILDROOT/build/{name}" fetch -q --depth=1 {url} {SHA_A}' in hook
-    assert f'"$BUILDDIR/{cache_dir}-{SHA_A[:12]}"' in hook
+    assert re.search(rf'"\$SRCDIR/tundravm-sources/{name}-{SHA_A[:12]}-[0-9a-f]{{8}}"/. ', hook)
+    # the declared cache_namespace names the fingerprinted cache key
+    assert re.search(rf'build\}}/{cache_namespace}-[0-9a-f]{{16}}"', hook)
 
 
 def test_every_declaration_that_builds_from_source_is_a_source_build() -> None:
@@ -262,12 +189,13 @@ def _one() -> tuple[Install, ...]:
 
 
 def _single(build: Build) -> Recipe:
-    return Recipe("app", items=(build,), mkosi=Mkosi(dialect="nethermind-v1"))
+    return Recipe("app", items=(build,))
 
 
 def _hook(build: Build) -> str:
-    """The unpinned build hook *build* compiles to."""
-    return _hooks(compile(_single(build)))
+    """The build hook *build* compiles to, pinned (an unpinned hook only fails)."""
+    recipe = _single(build)
+    return _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all))).split("\n", 1)[1]
 
 
 def _payload(build: Build) -> dict[str, object]:
@@ -286,21 +214,27 @@ def test_install_steps_render_files_modes_and_directories() -> None:
         Install("share", "/usr/share/app-data/", mode=None, directory=True),
         Install("out/helper", "/usr/libexec/helper"),
     )
-    url_hash = hashlib.sha256(REPO.encode()).hexdigest()[:12]
-    key = f'"$BUILDDIR/app-{url_hash}-main"'
-    assert _hook(build) == (
+    hook = _hook(build)
+    found = re.search(r'"\$\{BUILDDIR:-\$BUILDROOT/build\}/app-[0-9a-f]{16}"', hook)
+    assert found is not None
+    key = found.group()
+    checkout = '"$SRCDIR/tundravm-sources/app-aaaaaaaaaaaa-26961656"'
+    assert hook == (
         f'if ! ([ -d {key} ] && [ "$(ls -A {key} 2>/dev/null)" ]); then '
-        f'git clone --depth=1 -b main {REPO} "$BUILDROOT/build/app" && '
+        f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: "
+        "app-aaaaaaaaaaaa-26961656 is not fetched: run tundravm fetch RECIPE' >&2; exit 1; } && "
+        f'mkdir -p "$BUILDROOT/build/app" && cp -a --no-preserve=ownership {checkout}/. '
+        '"$BUILDROOT/build/app"/ && rm -f "$BUILDROOT/build/app"/.tundravm-complete && '
         "mkosi-chroot bash -c 'cd /build/app && make' && "
         f"mkdir -p {key} && "
         f'install -D -m 0755 "$BUILDROOT/build/app/out/app" {key}/app && '
         f'install -D -m 0600 "$BUILDROOT/build/app/conf/app.toml" {key}/app.toml && '
-        f'mkdir -p {key}/app-data && cp -r "$BUILDROOT/build/app/share"/* {key}/app-data/ && '
+        f'mkdir -p {key}/app-data && cp -a "$BUILDROOT/build/app/share/." {key}/app-data/ && '
         f'install -D -m 0755 "$BUILDROOT/build/app/out/helper" {key}/helper; fi && '
         f'install -D -m 0755 {key}/app "$DESTDIR/usr/bin/app" && '
         f'install -D -m 0600 {key}/app.toml "$DESTDIR/etc/app/app.toml" && '
         f'mkdir -p "$DESTDIR/usr/share/app-data" && '
-        f'cp -r {key}/app-data/* "$DESTDIR/usr/share/app-data"/ && '
+        f'cp -a {key}/app-data/. "$DESTDIR/usr/share/app-data/" && '
         f'install -D -m 0755 {key}/helper "$DESTDIR/usr/libexec/helper"'
     )
 
@@ -314,8 +248,8 @@ def test_install_modes_directories_and_payload() -> None:
     hook = _hook(build)
     assert 'install -D -m 0750 "$BUILDROOT/build/app/out/app"' in hook
     assert 'install -D -m 0600 "$BUILDROOT/build/app/conf/app.toml"' in hook
-    assert 'cp -r "$BUILDROOT/build/app/share"/* ' in hook
-    assert hook.endswith('/app-data/* "$DESTDIR/usr/share/app-data"/')
+    assert 'cp -a "$BUILDROOT/build/app/share/." ' in hook
+    assert hook.endswith('/app-data/. "$DESTDIR/usr/share/app-data/"')
     assert _payload(build)["install"] == [
         {"kind": "file", "path": "out/app", "dest": "/usr/bin/app", "mode": "0750"},
         {"kind": "file", "path": "conf/app.toml", "dest": "/etc/app/app.toml", "mode": "0600"},

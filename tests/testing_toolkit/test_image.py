@@ -15,7 +15,6 @@ from tundravm import (
     Hook,
     Install,
     Key,
-    Mkosi,
     Package,
     Recipe,
     Secrets,
@@ -213,7 +212,7 @@ def test_plan_takes_a_variant_and_matches_compile() -> None:
         plan(recipe, "gcp")
 
 
-def _layered(layout: str) -> Recipe:
+def _layered() -> Recipe:
     """A default variant and an ``azure`` child that adds a package and a file and edits one."""
     return Recipe(
         name="demo",
@@ -232,17 +231,14 @@ def _layered(layout: str) -> Recipe:
                 changes=(File.ref("/etc/a").edit(content="azure\n"),),
             ),
         ),
-        mkosi=Mkosi(layout=layout),  # type: ignore[arg-type]
     )
 
 
-@pytest.mark.parametrize("layout", ["directories", "native"])
-def test_image_queries_see_inherited_and_overridden_contents_in_both_layouts(
-    layout: str,
-) -> None:
-    recipe = _layered(layout)
+def test_image_queries_see_the_payload_under_a_profile_overlay() -> None:
+    recipe = _layered()
     default, azure = plan(recipe), plan(recipe, "azure")
-    assert default.tree.layout == layout
+    assert not any(e.path.startswith("payload/mkosi.profiles/") for e in default.tree.entries)
+    assert any(e.path.startswith("payload/mkosi.profiles/azure/") for e in azure.tree.entries)
     assert default.file("/etc/motd").text == "hi\n" and default.file("/etc/a").text == "base\n"
     assert "curl" in default.packages and "htop" not in default.packages
     assert azure.file("/etc/motd").text == "hi\n"  # inherited from the root

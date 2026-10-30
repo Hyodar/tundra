@@ -213,8 +213,9 @@ def test_status_variant_selects_items_and_next(recipe: Path) -> None:
     assert run_main("bake", str(recipe), "--variant", "default", "-q")[0] == EXIT_OK
     whole = _status(str(recipe))
     assert [item["verdict"] for item in _items(whole, "artifacts")] == ["ok", "missing"]
-    assert _verdict(whole, "tree") == "stale"  # the bake wrote only default's tree
-    assert whole["next"] == f"tundravm compile {recipe} --tree {BUILD / 'mkosi'}"
+    # azure only adds its wrapper image, which every tree of the recipe holds
+    assert _verdict(whole, "tree") == "ok"
+    assert whole["next"] == f"tundravm bake {recipe}"  # azure is not baked yet
 
     one = _status(str(recipe), "--variant", "default")
     recipe_entry = one["recipe"]
@@ -224,7 +225,7 @@ def test_status_variant_selects_items_and_next(recipe: Path) -> None:
     assert one["next"] == _second_build(recipe, " --variant default")
 
     azure = _status(str(recipe), "--variant", "azure")
-    assert azure["next"] == f"tundravm compile {recipe} --variant azure --tree {BUILD / 'mkosi'}"
+    assert azure["next"] == f"tundravm bake {recipe} --variant azure"
 
 
 def test_status_flags_artifacts_stale_after_editing_the_recipe(recipe: Path) -> None:
@@ -396,7 +397,7 @@ def baked(recipe: Path) -> Path:
     assert run_main("lock", str(recipe))[0] == EXIT_OK
     assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
     (BUILD / ".mkosi" / "mkosi.tools").mkdir(parents=True)
-    (BUILD / "mkosi" / "default" / "mkosi.cache").mkdir()
+    (BUILD / "mkosi" / "mkosi.cache").mkdir()
     (BUILD / ".sources" / "tool-0123456789ab").mkdir(parents=True)
     (BUILD / ".reproduce").mkdir()
     assert run_main("evidence", str(recipe))[0] in (EXIT_OK, EXIT_FAILURE)
@@ -431,7 +432,7 @@ def test_clean_dry_run_then_real(baked: Path) -> None:
     code, out = run_main("clean", "--build", "build", "--what", "artifacts,state", "--dry-run")
     assert code == EXIT_OK
     assert "would remove build/default" in out.splitlines()
-    assert f"would remove {BUILD / 'mkosi' / 'default' / 'mkosi.cache'}" in out.splitlines()
+    assert f"would remove {BUILD / 'mkosi' / 'mkosi.cache'}" in out.splitlines()
     assert (BUILD / "default").is_dir()
 
     code, out = run_main("clean", "--build", "build", "--what", "state,artifacts")
@@ -441,10 +442,10 @@ def test_clean_dry_run_then_real(baked: Path) -> None:
         f"removed {BUILD / 'default'}",
         f"removed {BUILD / 'bake-result.json'}",
         f"removed {BUILD / '.mkosi'}",
-        f"removed {BUILD / 'mkosi' / 'default' / 'mkosi.cache'}",
+        f"removed {BUILD / 'mkosi' / 'mkosi.cache'}",
     ]
     assert _listing(BUILD) == [".reproduce", ".sources", "evidence", "mkosi", "tundravm.lock"]
-    assert (BUILD / "mkosi" / "default" / "mkosi.conf").is_file()
+    assert (BUILD / "mkosi" / "payload" / "mkosi.conf").is_file()
 
 
 def test_clean_all_keeps_the_lockfile_unless_named(baked: Path) -> None:

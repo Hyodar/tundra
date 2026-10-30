@@ -8,11 +8,10 @@ import re
 import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
 
 import pytest
 
-from tests.helpers import source_dir, write_recipe_file
+from tests.helpers import conf_list, source_dir, write_recipe_file
 from tundravm._source import (
     GitSource,
     ScriptBuild,
@@ -34,7 +33,6 @@ from tundravm.declarative import (
     Install,
     Key,
     Lock,
-    Mkosi,
     Package,
     Pin,
     Policy,
@@ -61,7 +59,8 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 REPO = "https://example.com/acme/tool.git"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-# The former examples/qemu_basic.py, on a platform: its digest predates source builds.
+# The former examples/qemu_basic.py, on a platform: a recipe without source builds, whose
+# payload (and so digest) source builds must not touch.
 QEMU_BASIC = '''\
 """Minimal QEMU-focused recipe.
 
@@ -80,29 +79,17 @@ recipe = Recipe(
 
 backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 '''
-QEMU_BASIC_DIGEST = "1f7045885417743551a5665de536fc4c8bbea5525cc98863994706f2550b95ab"
+QEMU_BASIC_DIGEST = "39e894f9e1205ab631f2c6692d819f823f99eac9652696c964615bcf441699c5"
 GO_SCRIPT = (
     'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
 )
-# The first line of _build()'s current-dialect hook: its declaration, for `tundravm import`.
+# The first line of _build()'s hook: the declaration it is rendered from.
 TOOL_MARKER = (
     '# tundravm build: {"build":{"kind":"script","output":"build/tool","packages":["golang"],'
     '"script":"mkdir -p ./build && go build -trimpath -ldflags \\"-s -w -buildid=\\" '
     '-o ./build/tool ./cmd/tool"},"install":[{"dest":"/usr/bin/tool","kind":"file",'
     '"mode":"0755","path":"build/tool"}],"name":"tool","source":{"kind":"git","ref":"main",'
     '"submodules":false,"url":"https://example.com/acme/tool.git"}}'
-)
-
-# The hook Tdxs wrote by hand before source builds existed (default repo and branch).
-TDXS_LEGACY_HOOK = (
-    'if ! ([ -d "$BUILDDIR/tdxs-2bddc6a617e7-master" ] && '
-    '[ "$(ls -A "$BUILDDIR/tdxs-2bddc6a617e7-master" 2>/dev/null)" ]); then '
-    "git clone --depth=1 -b master https://github.com/Hyodar/tundra-tools.git "
-    '"$BUILDROOT/build/tdxs" && mkosi-chroot bash -c \'cd /build/tdxs && mkdir -p ./build && '
-    'go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tdxs ./cmd/tdxs\' && '
-    'mkdir -p "$BUILDDIR/tdxs-2bddc6a617e7-master" && install -D -m 0755 '
-    '"$BUILDROOT/build/tdxs/build/tdxs" "$BUILDDIR/tdxs-2bddc6a617e7-master"/tdxs; fi && '
-    'install -D -m 0755 "$BUILDDIR/tdxs-2bddc6a617e7-master"/tdxs "$DESTDIR/usr/bin/tdxs"'
 )
 
 RECIPE_FILE = """
@@ -120,20 +107,6 @@ recipe = Recipe(
     ),
 )
 """
-
-
-def _legacy_go_hook(name: str, binary: str) -> str:
-    """The hook KeyGeneration/DiskEncryption/SecretDelivery wrote by hand (default repo)."""
-    key = f"$BUILDDIR/{name}-2bddc6a617e7-master"
-    return (
-        f'if ! ([ -d "{key}" ] && [ "$(ls -A "{key}" 2>/dev/null)" ]); then '
-        "git clone --depth=1 -b master https://github.com/Hyodar/tundra-tools.git "
-        f'"$BUILDROOT/build/{name}" && mkosi-chroot bash -c \'cd /build/{name} && '
-        'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" '
-        f"-o ./build/{binary} ./cmd/{binary}' && "
-        f'mkdir -p "{key}" && install -D -m 0755 "$BUILDROOT/build/{name}/build/{binary}" '
-        f'"{key}"/{binary}; fi && install -D -m 0755 "{key}"/{binary} "$DESTDIR/usr/bin/{binary}"'
-    )
 
 
 def _build(ref: str = "main") -> Build:
@@ -160,15 +133,8 @@ def _recipe(
     *items: Declaration | Fragment,
     policy: Policy | None = None,
     variants: tuple[Variant, ...] = (Variant("default", outputs=("qemu",)),),
-    dialect: Literal["current", "nethermind-v1"] = "current",
 ) -> Recipe:
-    return Recipe(
-        "tool",
-        items=items,
-        variants=variants,
-        mkosi=Mkosi(dialect=dialect),
-        policy=policy,
-    )
+    return Recipe("tool", items=items, variants=variants, policy=policy)
 
 
 class _Fixed:
@@ -189,9 +155,10 @@ def _read(tree: Tree, path: str) -> str:
     return content.decode()
 
 
-def _hooks(tree: Tree, variant: str = "default") -> str:
-    """The build hooks of *variant*'s ``04-build.sh``, after its shebang header."""
-    return _read(tree, f"{variant}/scripts/04-build.sh").split("\n\n", 1)[1].rstrip("\n")
+def _hooks(tree: Tree) -> str:
+    """The build hooks of the payload's ``mkosi.build.d/50-build.sh``, after its header."""
+    script = _read(tree, "payload/mkosi.build.d/50-build.sh")
+    return script.split("\n\n", 1)[1].rstrip("\n")
 
 
 # ── Declaration and payload ─────────────────────────────────────────
@@ -201,9 +168,10 @@ def test_build_lowers_to_source_build_packages_and_hook() -> None:
     recipe = _recipe(_build())
     assert lower(recipe).source_builds() == {"tool": _spec()}
     tree = compile(recipe)
-    assert "BuildPackages=\n    git\n    golang\n" in _read(tree, "default/mkosi.conf")
+    # the checkout is fetched on the host: the build needs the toolchain alone
+    assert conf_list(_read(tree, "payload/mkosi.conf"), "BuildPackages") == ["golang"]
     hooks = _hooks(tree)
-    assert hooks == _spec().render(mounted=True)
+    assert hooks == _spec().render()
     assert hooks.startswith(f"{TOOL_MARKER}\n# unpinned: main\n")
     assert _spec().marker() == TOOL_MARKER
 
@@ -242,7 +210,10 @@ def test_variant_inherits_common_source_builds() -> None:
     variants = (Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",)))
     recipe = _recipe(_build(), variants=variants)
     assert "tool" in lower(recipe).source_builds(profile="azure")
-    assert _hooks(compile(recipe), "azure") == _spec().render(mounted=True)
+    tree = compile(recipe)
+    # azure only adds its wrapper: it builds the payload's hooks, with no overlay of its own
+    assert not any(e.path.startswith("payload/mkosi.profiles/") for e in tree.entries)
+    assert _hooks(tree) == _spec().render()
 
 
 # ── Rendering ───────────────────────────────────────────────────────
@@ -251,17 +222,16 @@ def test_variant_inherits_common_source_builds() -> None:
 def test_unpinned_and_pinned_rendering() -> None:
     spec = _spec()
     unpinned = spec.render()
-    assert f"git clone --depth=1 -b main {REPO}" in unpinned
-    assert "tool-" in unpinned and "-main" in unpinned
+    assert unpinned.startswith(f"{TOOL_MARKER}\n# unpinned: main\n")
+    assert "git" not in unpinned.split("\n", 1)[1]  # the sandbox never fetches
     pinned = spec.render(SHA_A)
     assert "unpinned" not in pinned
-    assert "git clone" not in pinned
-    assert f"fetch -q --depth=1 {REPO} {SHA_A}" in pinned
-    assert "checkout -q FETCH_HEAD" in pinned
-    assert f"-{SHA_A[:12]}" in pinned  # the cache key carries the pin
+    assert "git clone" not in pinned and "git -C" not in pinned
+    assert f"$SRCDIR/tundravm-sources/{source_dir('tool', SHA_A, REPO)}" in pinned
+    assert spec.render(SHA_B) != pinned  # the cache key fingerprints the pin
 
 
-def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
+def test_hooks_copy_the_fetched_checkout() -> None:
     recipe = _recipe(_build())
     unpinned = _hooks(compile(recipe))
     assert unpinned == (
@@ -273,7 +243,7 @@ def test_current_dialect_hooks_copy_the_fetched_checkout() -> None:
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
     directory = source_dir("tool", SHA_A, REPO)
     checkout = f'"$SRCDIR/tundravm-sources/{directory}"'
-    cache = '"${BUILDDIR:-$BUILDROOT/build}/tool-4e1ad77c7e3da2b6"'
+    cache = '"${BUILDDIR:-$BUILDROOT/build}/tool-8d01ae807e60c913"'
     assert pinned == (
         f"{TOOL_MARKER}\n"
         f'if ! ([ -d {cache} ] && [ "$(ls -A {cache} 2>/dev/null)" ]); then '
@@ -310,15 +280,14 @@ def test_subdir_submodules_env_and_quoting() -> None:
     )
     recipe = _recipe(build)
     spec = lower(recipe).source_builds()["tool"]
-    hook = spec.render()
-    assert "--recurse-submodules --shallow-submodules" in hook
+    hook = spec.render(SHA_A)
     command = (
         '\'export CGO_CFLAGS="-O -D__X__" GO111MODULE=on && cd /build/tool/pkg/tool && '
         "mkdir -p ./build && go build -o ./build/tool '\\''./cmd/tool'\\'''"
     )
     assert command in hook
     assert '"$BUILDROOT/build/tool/pkg/tool/build/tool"' in hook
-    assert "submodule update" in spec.render(SHA_A)
+    assert "submodule update" not in hook  # the host checkout has them
     mounted = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
     assert command in mounted  # the whole checkout is copied; the build enters the subdir
     assert '"$BUILDROOT/build/tool/pkg/tool/build/tool"' in mounted
@@ -335,57 +304,53 @@ def test_http_source_rendering() -> None:
     )
     recipe = _recipe(build)
     spec = lower(recipe).source_builds()["prover"]
-    assert spec.packages == ("curl", "cargo")
+    assert spec.packages == ("cargo",)  # the archive is downloaded on the host
     assert _hooks(compile(recipe)).split("\n", 1)[1].startswith(f"# unpinned: {url}\n")
-    hook = spec.render()
-    assert hook.startswith(f"# unpinned: {url}\n")
-    assert "cargo build --release --frozen --features a,b --bin prover" in hook
-    assert "sha256sum" not in hook
     pinned = spec.render("c" * 64)
-    assert f'echo "{"c" * 64}  "' in pinned
-    assert "--strip-components=1" in pinned
+    assert "cargo build --release --frozen --features a,b --bin prover" in pinned
+    assert f"$SRCDIR/tundravm-sources/{source_dir('prover', 'c' * 64, url, http=True)}" in pinned
+    assert "curl" not in pinned.split("\n", 1)[1] and "sha256sum" not in pinned
     inline = _hooks(compile(_recipe(replace(build, source=Http(url, sha256="c" * 64)))))
     assert f'"$SRCDIR/tundravm-sources/{source_dir("prover", "c" * 64, url, http=True)}"' in inline
     assert "curl" not in inline.split("\n", 1)[1] and "sha256sum" not in inline
 
 
-def test_tdxs_hook_is_byte_identical_to_legacy_bash() -> None:
-    historical = _recipe(Tdxs(), dialect="nethermind-v1")
-    assert TDXS_LEGACY_HOOK in _hooks(compile(historical)).splitlines()
-    assert lower(historical).source_builds()["tdxs"].render() == TDXS_LEGACY_HOOK
-    current = _hooks(compile(_recipe(Tdxs())))
+def test_tdxs_hook_copies_the_fetched_checkout() -> None:
+    recipe = _recipe(Tdxs())
+    current = _hooks(compile(recipe))
+    assert current == lower(recipe).source_builds()["tdxs"].render()
     assert current.startswith('# tundravm build: {"build":{"kind":"script"')
     assert current.split("\n", 1)[1].startswith("# unpinned: master\n")
     assert "run tundravm lock, then tundravm fetch" in current
 
 
-def _runtime_recipe(dialect: Literal["current", "nethermind-v1"] = "current") -> Recipe:
+def _runtime_recipe() -> Recipe:
     key = Key("key_persistent", output="/tmp/key_persistent")
     disk = Disk("disk_persistent", "/persistent", key=key)
-    return _recipe(Package("linux-image-amd64"), key, disk, Secrets(store=disk), dialect=dialect)
+    return _recipe(Package("linux-image-amd64"), key, disk, Secrets(store=disk))
 
 
 def _assert_runtime_tool_hook(name: str, binary: str) -> None:
-    legacy = _legacy_go_hook(name, binary)
-    assert legacy in _hooks(compile(_runtime_recipe("nethermind-v1"))).splitlines()
     recipe = _runtime_recipe()
     tree = compile(recipe)
-    assert lower(recipe).source_builds()[name].render() == legacy
+    spec = lower(recipe).source_builds()[name]
+    assert spec.render() in _hooks(tree)
+    assert f'"$DESTDIR/usr/bin/{binary}"' in spec.render(SHA_A)
     step = {"key-gen": "keys", "disk-setup": "disks", "secret-delivery": "secrets"}[binary]
-    runtime_init = _read(tree, f"default/mkosi.extra/usr/lib/runtime-init/{step}")
+    runtime_init = _read(tree, f"payload/mkosi.extra/usr/lib/runtime-init/{step}")
     assert runtime_init.count(f"/usr/bin/{binary} setup ") == 1
     assert not [d for d in lint(recipe) if d.severity == "error"]
 
 
-def test_key_generation_hook_is_byte_identical_to_legacy_bash() -> None:
+def test_key_generation_hook_is_a_source_build() -> None:
     _assert_runtime_tool_hook("key-generation", "key-gen")
 
 
-def test_disk_encryption_hook_is_byte_identical_to_legacy_bash() -> None:
+def test_disk_encryption_hook_is_a_source_build() -> None:
     _assert_runtime_tool_hook("disk-encryption", "disk-setup")
 
 
-def test_secret_delivery_hook_is_byte_identical_to_legacy_bash() -> None:
+def test_secret_delivery_hook_is_a_source_build() -> None:
     _assert_runtime_tool_hook("secret-delivery", "secret-delivery")
 
 
@@ -402,7 +367,7 @@ def test_lock_records_fetches_and_compile_uses_pin() -> None:
     ]
     assert locked.pins == (Pin("tool", Git(REPO, "main"), SHA_A),)
     script = _hooks(compile(recipe, lock=locked))
-    assert f"tool-{SHA_A[:12]}" in script
+    assert source_dir("tool", SHA_A, REPO) in script
     assert "unpinned" not in script
     # The recipe payload keeps the symbolic declaration: the lock stays fresh.
     assert lock_status(recipe, locked) == ()
@@ -412,7 +377,7 @@ def test_unpinned_compile_emits_marker() -> None:
     script = _hooks(compile(_recipe(_build())))
     assert "# unpinned: main" in script
     assert "tundravm fetch" in script
-    assert "git clone --depth=1 -b main" in _spec().render()
+    assert script == _spec().render()
 
 
 def test_pin_for_another_ref_is_ignored() -> None:

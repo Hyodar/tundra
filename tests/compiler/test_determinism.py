@@ -1,7 +1,9 @@
-"""What the current dialect normalizes for reproducible images (docs/reproducibility.md).
+"""What the tree normalizes for reproducible images (docs/reproducibility.md).
 
-Finalize ends with the deterministic accounts step; the azure and gcp postoutput scripts
-build their ESP, disk and wrapper reproducibly. ``nethermind-v1`` keeps its pinned scripts.
+The payload's finalize ends with the deterministic accounts step; repart builds every
+disk from the tree's fixed ``Seed=``; the azure and gcp wrappers' postoutput converters
+grow the GPT disk to the size the cloud wants and pin what their tools stamp (the VHD
+footer's clock and id, the tarball's owners, dates and gzip header).
 """
 
 from __future__ import annotations
@@ -9,28 +11,24 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import struct
 import subprocess
 import textwrap
+import zlib
 from pathlib import Path
 
 import pytest
 
-from tundravm.compiler.emit_mkosi import (
-    ACCOUNTS_FINALIZE,
-    AZURE_POSTOUTPUT_SCRIPT,
-    AZURE_POSTOUTPUT_SCRIPT_CURRENT,
-    GCP_POSTOUTPUT_SCRIPT,
-    GCP_POSTOUTPUT_SCRIPT_CURRENT,
-    cloud_postoutput_script,
-)
+from tundravm.compiler.emit_mkosi import ACCOUNTS_FINALIZE, AZURE_CONVERTER, GCP_CONVERTER
 from tundravm.declarative import Debian, Package, Recipe, Variant, compile
 
 PINNED = {
     "accounts": "9175aea9c4328f7e086be2ebaadc30fc167993f0d4db5292ab410f2115121e41",
-    "azure": "e5ba67a792382a9f4484ff13a1cb30aefaa01cf8baa6c940b8e553de0c998344",
-    "gcp": "8f077eea746bf296f268b208c8530f0def8b14dd4a9ea4a6a69b0c647a8cf6cc",
+    "azure": "18cd4a45a189c2ecf1bf427626ce4da22b8cab66714d753b8a537ac3ed8cdf61",
+    "gcp": "8d4a20c9383a20ab6b58016068f132f06084c031bacaa13b99f41a2ed148a437",
 }
 """sha256 of each emitted script: a change to one is deliberate (re-record it here)."""
+SECTOR = 512
 
 
 def _sha(text: str) -> str:
@@ -54,51 +52,48 @@ def _tree(tmp_path: Path, **platform: object) -> Path:
 
 def test_the_emitted_scripts_are_pinned() -> None:
     assert _sha(ACCOUNTS_FINALIZE) == PINNED["accounts"]
-    assert _sha(AZURE_POSTOUTPUT_SCRIPT_CURRENT) == PINNED["azure"]
-    assert _sha(GCP_POSTOUTPUT_SCRIPT_CURRENT) == PINNED["gcp"]
+    assert _sha(AZURE_CONVERTER) == PINNED["azure"]
+    assert _sha(GCP_CONVERTER) == PINNED["gcp"]
 
 
-def test_current_dialect_finalize_ends_with_the_accounts_step(tmp_path: Path) -> None:
+def test_finalize_ends_with_the_accounts_step_and_wrappers_convert(tmp_path: Path) -> None:
     tree = _tree(tmp_path)
-    for variant in ("default", "azure", "gcp"):
-        finalize = (tree / variant / "scripts/07-finalize.sh").read_text()
-        assert finalize.endswith("\n\n" + ACCOUNTS_FINALIZE), variant
-        assert finalize.count("tundravm_sort_by_field passwd 3") == 1
-    assert (tree / "azure/scripts/azure-postoutput.sh").read_text() == (
-        AZURE_POSTOUTPUT_SCRIPT_CURRENT
-    )
-    assert (tree / "gcp/scripts/gcp-postoutput.sh").read_text() == GCP_POSTOUTPUT_SCRIPT_CURRENT
+    finalize = (tree / "payload/mkosi.finalize.d/50-finalize.sh").read_text()
+    assert finalize.endswith("\n\n" + ACCOUNTS_FINALIZE)
+    assert finalize.count("tundravm_sort_by_field passwd 3") == 1
+    assert (tree / "mkosi.images/azure/mkosi.postoutput.d/vhd").read_text() == AZURE_CONVERTER
+    assert (tree / "mkosi.images/gcp/mkosi.postoutput.d/tar").read_text() == GCP_CONVERTER
+    seeds = {
+        line
+        for conf in (
+            "mkosi.conf",
+            "payload/mkosi.conf",
+            *(f"mkosi.images/{t}/mkosi.conf" for t in ("azure", "gcp")),
+        )
+        for line in (tree / conf).read_text().splitlines()
+        if line.startswith("Seed=")
+    }
+    assert len(seeds) == 1  # every image partitions from the same fixed seed
 
 
 def test_a_non_reproducible_build_skips_the_accounts_step(tmp_path: Path) -> None:
     tree = _tree(tmp_path, epoch=None)
-    finalize = (tree / "default/scripts/07-finalize.sh").read_text()
+    finalize = (tree / "payload/mkosi.finalize.d/50-finalize.sh").read_text()
     assert "tundravm_sort" not in finalize
+    assert "\nSourceDateEpoch=0\n" in (tree / "mkosi.conf").read_text()
 
 
-def test_nethermind_v1_keeps_its_pinned_cloud_scripts() -> None:
-    assert cloud_postoutput_script(AZURE_POSTOUTPUT_SCRIPT, "nethermind-v1") == (
-        AZURE_POSTOUTPUT_SCRIPT
-    )
-    assert cloud_postoutput_script(GCP_POSTOUTPUT_SCRIPT, "nethermind-v1") == GCP_POSTOUTPUT_SCRIPT
-    assert cloud_postoutput_script(AZURE_POSTOUTPUT_SCRIPT) == AZURE_POSTOUTPUT_SCRIPT_CURRENT
-    assert cloud_postoutput_script(GCP_POSTOUTPUT_SCRIPT) == GCP_POSTOUTPUT_SCRIPT_CURRENT
-
-
-def test_the_cloud_scripts_spell_their_normalizations() -> None:
-    for script in (AZURE_POSTOUTPUT_SCRIPT_CURRENT, GCP_POSTOUTPUT_SCRIPT_CURRENT):
-        assert "${IMAGE_ID}_${IMAGE_VERSION}" not in script  # nethermind-v1's name only
-        assert 'mkfs.vfat -F 32 -n ESP -i "${UKI_SHA:0:8}" --invariant' in script
-        assert 'mcopy -b -s -p -Q -m -i "$TMP/esp.img" "$TMP/esp/EFI" ::' in script
-        assert 'touch -h -d "@$SOURCE_DATE_EPOCH"' in script
-        assert "export TZ=UTC" in script
-        assert 'sgdisk --disk-guid="$DISK_GUID"' in script
-        assert "parted" not in script
-    assert "--sort=name" in GCP_POSTOUTPUT_SCRIPT_CURRENT
-    assert "--owner=0 --group=0 --numeric-owner" in GCP_POSTOUTPUT_SCRIPT_CURRENT
-    assert "--hole-detection=raw" in GCP_POSTOUTPUT_SCRIPT_CURRENT
-    assert '| gzip -n >"$TAR"' in GCP_POSTOUTPUT_SCRIPT_CURRENT
-    assert "footer[68:84] = unique" in AZURE_POSTOUTPUT_SCRIPT_CURRENT
+def test_the_converters_spell_their_normalizations() -> None:
+    for script in (AZURE_CONVERTER, GCP_CONVERTER):
+        assert "EFI PART" in script  # the GPT grow helper
+        assert "sgdisk" not in script and "mkfs.vfat" not in script and "parted" not in script
+    assert "--sort=name" in GCP_CONVERTER
+    assert "--owner=0 --group=0 --numeric-owner --mode=0644" in GCP_CONVERTER
+    assert "--hole-detection=raw" in GCP_CONVERTER
+    assert '| gzip -n >"$OUTPUTDIR/gcp.tar.gz"' in GCP_CONVERTER
+    assert '"$TMP/disk.raw" 1073741824' in GCP_CONVERTER
+    assert '"$DISK" 1048576' in AZURE_CONVERTER
+    assert "footer[68:84] = unique" in AZURE_CONVERTER
 
 
 @pytest.mark.skipif(shutil.which("awk") is None, reason="needs awk")
@@ -148,7 +143,6 @@ def test_the_accounts_step_sorts_and_drops_backups(tmp_path: Path) -> None:
     ]
 
 
-FAKE_MCOPY = "#!/bin/bash\nexit 0\n"
 FAKE_QEMU_IMG = textwrap.dedent("""\
     #!/usr/bin/env python3
     # Like qemu-img convert -O vpc: the raw disk plus a footer with a clock and a random id.
@@ -164,35 +158,69 @@ FAKE_QEMU_IMG = textwrap.dedent("""\
 """)
 
 
-@pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("mkfs.vfat", "sgdisk", "python3")),
-    reason="needs mkfs.vfat and sgdisk",
-)
-def test_the_cloud_scripts_reproduce_their_outputs(tmp_path: Path) -> None:
-    """mtools and qemu-img are faked: the footer patch, mkfs, GPT and tar.gz are real."""
+def _disk(path: Path) -> None:
+    """A small GPT disk with one ESP, sized like repart leaves it (not a whole MiB)."""
+    path.write_bytes(bytes(3 * 1024 * 1024 + 17 * SECTOR))
+    subprocess.run(
+        ["sgdisk", "--disk-guid=12345678-1234-5678-1234-567812345678", "-n", "1:2048:+1M",
+         "-t", "1:ef00", "-u", "1:87654321-4321-8765-4321-876543218765", str(path)],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
+
+
+def _check_gpt(path: Path) -> None:
+    """Both GPT headers are where their fields say, with valid CRCs, at the new end."""
+    data = path.read_bytes()
+    last = len(data) // SECTOR - 1
+    for lba, other in ((1, last), (last, 1)):
+        header = bytearray(data[lba * SECTOR : lba * SECTOR + 92])
+        assert header[:8] == b"EFI PART"
+        mine, alternate = struct.unpack_from("<QQ", header, 24)
+        assert (mine, alternate) == (lba, other)
+        crc = struct.unpack_from("<I", header, 16)[0]
+        header[16:20] = bytes(4)
+        assert zlib.crc32(header) == crc
+        entries = struct.unpack_from("<Q", header, 72)[0]
+        count, size = struct.unpack_from("<II", header, 80)
+        table = data[entries * SECTOR : entries * SECTOR + count * size]
+        assert zlib.crc32(table) == struct.unpack_from("<I", header, 88)[0]
+    verified = subprocess.run(["sgdisk", "-v", str(path)], capture_output=True, text=True)
+    assert "No problems found" in verified.stdout
+
+
+@pytest.mark.skipif(not shutil.which("sgdisk"), reason="needs sgdisk to make the test disk")
+def test_the_converters_reproduce_their_outputs(tmp_path: Path) -> None:
+    """qemu-img is faked (a random footer): the GPT grow, footer patch and tar.gz are real."""
     tools = tmp_path / "bin"
     tools.mkdir()
-    for name, text in (("mcopy", FAKE_MCOPY), ("qemu-img", FAKE_QEMU_IMG)):
-        (tools / name).write_text(text)
-        (tools / name).chmod(0o755)
-    uki = os.urandom(1 << 20)
+    (tools / "qemu-img").write_text(FAKE_QEMU_IMG)
+    (tools / "qemu-img").chmod(0o755)
     digests = []
     for run in ("one", "two"):
         out = tmp_path / run
         out.mkdir()
-        (out / "img.efi").write_bytes(uki)
+        _disk(out / "azure.raw")
+        _disk(out / "gcp.raw")
         env = {
             **os.environ,
             "PATH": f"{tools}:{os.environ['PATH']}",
             "OUTPUTDIR": str(out),
-            "IMAGE_ID": "img",
-            "IMAGE_VERSION": "",
             "SOURCE_DATE_EPOCH": "0",
         }
-        for script in (AZURE_POSTOUTPUT_SCRIPT_CURRENT, GCP_POSTOUTPUT_SCRIPT_CURRENT):
+        for script in (AZURE_CONVERTER, GCP_CONVERTER):
             subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True)
-        digests.append([_sha_file(out / name) for name in ("img.vhd", "img.tar.gz")])
-        assert not (out / "azure-tmp").exists() and not (out / "gcp-tmp").exists()
+        assert sorted(p.name for p in out.iterdir()) == ["azure.vhd", "gcp.tar.gz"]
+        digests.append([_sha_file(out / name) for name in ("azure.vhd", "gcp.tar.gz")])
+        vhd = (out / "azure.vhd").read_bytes()
+        assert (len(vhd) - 512) % (1024 * 1024) == 0
+        raw = tmp_path / f"{run}.raw"
+        raw.write_bytes(vhd[:-512])
+        _check_gpt(raw)
+        listing = subprocess.run(
+            ["tar", "-tvzf", str(out / "gcp.tar.gz")], capture_output=True, text=True, check=True
+        )
+        assert listing.stdout.split()[:3] == ["-rw-r--r--", "0/0", "1073741824"]
     assert digests[0] == digests[1]
 
 

@@ -397,14 +397,14 @@ def test_diff_github_and_markdown_on_mutated_recipe(recipe: Path, tmp_path: Path
     assert code == EXIT_FAILURE
     [(level, props, message)] = parse_annotations(out)
     assert level == "warning"
-    assert props == {"file": "tree/default/mkosi.conf", "title": "compiled tree drift"}
+    assert props == {"file": "tree/payload/mkosi.conf", "title": "compiled tree drift"}
     assert "modified" in message
     assert "::group::unified diff\n::stop-commands::tundravm-" in out
     assert "+    htop\n" in out and out.endswith("::endgroup::\n")
 
     code, out = run_main("diff", str(recipe), "--tree", str(tree), "--format", "markdown", *DEFAULT)
     assert code == EXIT_FAILURE
-    assert "| Status | File |\n|---|---|\n| modified | `default/mkosi.conf` |" in out
+    assert "| Status | File |\n|---|---|\n| modified | `payload/mkosi.conf` |" in out
     assert "**1 file changed**" in out
     assert "```diff\n" in out and "+    htop\n" in out and out.endswith("```\n")
 
@@ -429,10 +429,8 @@ def test_compile_check_github_annotates_stale_files(recipe: Path, tmp_path: Path
         "compile", str(recipe), "--tree", str(tree), "--check", "--format", "github"
     )
     assert code == EXIT_FAILURE
-    assert [props["file"] for _, props, _ in parse_annotations(out)] == [
-        "tree/azure/mkosi.conf",
-        "tree/default/mkosi.conf",
-    ]
+    # one payload serves both variants: the package lands in one file
+    assert [props["file"] for _, props, _ in parse_annotations(out)] == ["tree/payload/mkosi.conf"]
 
 
 def test_markdown_helpers_escape() -> None:
@@ -527,7 +525,7 @@ def test_ci_after_compile_and_lock_is_clean_with_runtime_init(
     code, out = run_main("ci", str(recipe), "--tree", str(tree))
 
     assert (code, out.splitlines()[-1]) == (EXIT_OK, f"ok lock: {LOCKFILE} is up to date")
-    units = tree / "default" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
+    units = tree / "payload" / "mkosi.extra" / "usr" / "lib" / "systemd" / "system"
     assert (units / "runtime-init.service").is_file()
 
 
@@ -540,9 +538,8 @@ def test_ci_stops_at_first_failing_step(recipe: Path, tmp_path: Path) -> None:
     assert code == EXIT_FAILURE
     lines = out.splitlines()
     assert lines[0] == "ok lint: no findings"
-    assert "M  default/mkosi.conf" in lines
-    assert "M  azure/mkosi.conf" in lines
-    assert lines[-2].startswith(f"FAIL compile: 2 files stale in {tree}; run `tundravm compile")
+    assert "M  payload/mkosi.conf" in lines
+    assert lines[-2].startswith(f"FAIL compile: 1 file stale in {tree}; run `tundravm compile")
     assert lines[-1] == "skip lock"
     assert not any(line.startswith("ok lock") for line in lines)
 
@@ -590,5 +587,5 @@ def test_auto_resolves_to_github_under_github_actions(
         "~ variants.default.packages: +htop",
     ]
     code, out = run_main("diff", str(recipe), "--tree", str(tmp_path / "none"), "--stat")
-    assert out.startswith("A  azure/mkosi.conf")
-    assert "\nA  default/mkosi.conf\n" in out
+    assert out.startswith("A  mkosi.conf\nA  mkosi.images/azure/mkosi.conf\n")
+    assert "\nA  payload/mkosi.conf\n" in out

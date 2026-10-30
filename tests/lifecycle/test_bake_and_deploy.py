@@ -8,7 +8,6 @@ from tundravm.declarative import (
     Artifact,
     Azure,
     Backend,
-    Fragment,
     Package,
     Qemu,
     Recipe,
@@ -169,16 +168,16 @@ def test_deploy_forwards_the_secrets_ports_the_bake_recorded(tmp_path: Path) -> 
     recipe = Recipe(
         "deploy",
         items=(kernel, Secrets(port=8443)),
-        variants=(
-            Variant("default", outputs=("qemu",)),
-            Variant("plain", inherits=None, add=Fragment("k", items=(kernel,)), outputs=("qemu",)),
-        ),
+        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     locked = lock(recipe, resolver=lambda source: "a" * 40)
     artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path / "build")
     ports = {a.variant: a.ports for a in artifacts}
-    assert ports == {"default": (8443,), "plain": ()}
+    assert ports == {"default": (8443,), "azure": (8443,)}  # one payload: the same secrets
     assert read_artifacts(tmp_path / "build") == artifacts
+    plain = Recipe("plain", items=(kernel,), variants=(Variant("default", outputs=("qemu",)),))
+    (bare,) = bake(plain, lock=lock(plain), backend=Backend("inprocess"), build=tmp_path / "plain")
+    assert bare.ports == ()
 
     calls: list[DeployRequest] = []
 

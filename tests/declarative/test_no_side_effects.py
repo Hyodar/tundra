@@ -55,7 +55,7 @@ def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     assert lock_path.exists()
 
     compile(recipe).write(emit_dir)
-    assert (emit_dir / "default" / "mkosi.conf").exists()
+    assert (emit_dir / "payload" / "mkosi.conf").exists()
 
     artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), build=build_dir)
     assert {(a.variant, a.target) for a in artifacts} == {

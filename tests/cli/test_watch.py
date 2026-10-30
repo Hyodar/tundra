@@ -157,7 +157,7 @@ def test_watch_counts_lockfile_drift_as_lint_does(project: Path) -> None:
     _, lines = _watch(ticks=iter(()))
 
     assert _lint_summary() == "4 errors, 0 warnings, 0 infos"  # lock-changed, one per section
-    assert lines == ["lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (4 files)"]
+    assert lines == ["lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (2 files)"]
 
 
 def test_watch_names_the_first_error_a_fragment_check_raises(project: Path) -> None:
@@ -311,8 +311,8 @@ def test_watch_rechecks_when_lock_rewrites_the_lockfile(project: Path) -> None:
     _, lines = _watch(ticks=_then_idle(lambda: run_main("lock")))
 
     assert lines == [
-        "lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (4 files)",
-        "lint 0 errors 0 warnings; tree stale (4 files)",
+        "lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (2 files)",
+        "lint 0 errors 0 warnings; tree stale (2 files)",
     ]
 
 

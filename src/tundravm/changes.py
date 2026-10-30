@@ -639,7 +639,7 @@ def _file_changes(
     new = {str(row["path"]): row for row in rows}
     found: list[Change] = []
     old_digest = manifest.get("variant_digest")
-    new_digest = tree_rows_digest(((name, row) for row in rows), tree.layout)
+    new_digest = tree_rows_digest((name, row) for row in rows)
     if old_digest != new_digest:
         found.append(
             Change(
@@ -695,7 +695,8 @@ def _file_detail(before: Mapping[str, Any], after: Mapping[str, Any]) -> str | N
 def _origins(
     name: str, path: str, recipe: Recipe | None, img: Lowered, budget: list[int]
 ) -> tuple[str, ...]:
-    stage, _, rest = path.partition("/")
+    layer = path.removeprefix(f"payload/mkosi.profiles/{name}/").removeprefix("payload/")
+    stage, _, rest = layer.partition("/")
     if stage not in STAGE_DIRS or not rest:
         return ()
     if recipe is None:

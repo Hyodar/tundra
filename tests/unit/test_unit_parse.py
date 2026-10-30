@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from tests.unit_corpus import constant_units, emitted_units, golden_units
-from tundravm._modules.tdxs import Tdxs
 from tundravm._units.parse import Conversion, Mode, convert, rendered, semantic
 from tundravm.declarative import (
     Calendar,
@@ -133,18 +132,6 @@ def test_mount_and_dropin_convert() -> None:
         dropin=DropIn("30-oom", restart="always", extra={"Service": {"OOMScoreAdjust": "-500"}}),
     )
     assert loose.extra == ("Service.OOMScoreAdjust",)
-
-
-def test_tdxs_pair_stays_text_and_names_its_blockers() -> None:
-    texts = {
-        "tdxs.service": Tdxs().render_service_unit(),
-        "tdxs.socket": Tdxs().render_socket_unit(),
-    }
-    for mode in ("exact", "semantic"):
-        conversions = convert(texts, mode=mode)
-        assert [c.typed for c in conversions] == [False, False]
-        assert all(c.blockers for c in conversions)
-        assert {c.declaration for c in conversions} == {Unit(n, t) for n, t in texts.items()}
 
 
 def test_unit_parse_and_opt_outs() -> None:

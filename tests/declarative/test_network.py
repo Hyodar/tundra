@@ -160,7 +160,7 @@ def test_network_missing_for_listeners_and_time_sync_without_an_interface() -> N
 def test_a_firewall_keeps_the_nftables_kernel_modules() -> None:
     def kept(*items: object) -> str:
         tree = compile(_recipe(Network(), *items))
-        [conf] = [e for e in tree.entries if e.path == "default/mkosi.conf"]
+        [conf] = [e for e in tree.entries if e.path == "payload/mkosi.conf"]
         return (conf.content or b"").decode()
 
     assert "nf_tables" not in kept()
@@ -171,7 +171,7 @@ def test_a_firewall_keeps_the_nftables_kernel_modules() -> None:
 def test_a_firewall_holds_networkd_until_its_ruleset_loads() -> None:
     def dropin(*items: object) -> str | None:
         tree = compile(_recipe(*items))
-        path = "default/mkosi.extra" + NETWORKD_FIREWALL_DROPIN
+        path = "payload/mkosi.extra" + NETWORKD_FIREWALL_DROPIN
         found = [e for e in tree.entries if e.path == path]
         return (found[0].content or b"").decode() if found else None
 
@@ -191,7 +191,8 @@ def test_a_variant_opens_the_ports_it_adds_and_edits_the_firewall() -> None:
         variants=(Variant("default", outputs=("qemu",)), dev),
     )
     tree = {e.path: (e.content or b"").decode() for e in compile(recipe).entries}
-    assert " dport 9999 " not in tree["default/mkosi.extra/etc/nftables.conf"]
-    rules = tree["dev/mkosi.extra/etc/nftables.conf"]
+    assert " dport 9999 " not in tree["payload/mkosi.extra/etc/nftables.conf"]
+    # the ruleset is a file: the dev profile overlay replaces it
+    rules = tree["payload/mkosi.profiles/dev/mkosi.extra/etc/nftables.conf"]
     assert 'tcp dport 22 accept comment "ssh"' in rules
     assert 'tcp dport 9999 accept comment "dbg.service"' in rules

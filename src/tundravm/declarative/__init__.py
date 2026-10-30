@@ -12,9 +12,9 @@ a recipe and explicit inputs and returns explicit results.
 from tundravm.policy import Policy
 from tundravm.recipe import load
 
+from ._compile import mkosi_argv
 from ._component import component
 from .bom import Sbom, sbom
-from .importer import Imported, import_tree
 from .lifecycle import (
     Artifact,
     Azure,
@@ -143,7 +143,6 @@ __all__ = [
     "Group",
     "Hook",
     "Http",
-    "Imported",
     "BootStep",
     "Ready",
     "RUNTIME_INIT",
@@ -203,7 +202,6 @@ __all__ = [
     "diff",
     "doctor",
     "fetch",
-    "import_tree",
     "identity",
     "lint",
     "load",
@@ -211,6 +209,7 @@ __all__ = [
     "lock_status",
     "lower",
     "measure",
+    "mkosi_argv",
     "packages",
     "read_artifacts",
     "read_lock",

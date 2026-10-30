@@ -90,9 +90,6 @@ from .resolve import locate, resolve
 
 Scheme = Literal["qemu", "gcp", "azure", "portable"]
 BackendKind = Literal["lima", "local", "inprocess"]
-TreeLayout = Literal["directories", "native"]
-"""How a :class:`Tree` lays its variants out: a directory each, or ``Mkosi(layout="native")``:
-the default variant at the root and every variant's additions in ``mkosi.profiles/<name>/``."""
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 INPROCESS = "inprocess"
@@ -161,7 +158,7 @@ class Entry:
 
 @dataclass(frozen=True, slots=True)
 class Tree:
-    """A compiled mkosi project held in memory; ``variants`` are its top-level directories.
+    """A compiled mkosi project held in memory; ``variants`` are the variants it builds.
 
     ``digest`` covers each path, its bytes or symlink target and, for files, the
     exec bit alone: the umask and git keep nothing more, so the same tree hashes
@@ -171,10 +168,10 @@ class Tree:
     entries: tuple[Entry, ...]
     digest: str
     variants: tuple[str, ...] = ()
-    layout: TreeLayout = "directories"
 
     def write(self, path: Path) -> None:
-        """Write the tree to *path*, replacing its variant directories and dropping stale ones."""
+        """Write the tree to *path*, replacing what it holds and dropping stale mkosi
+        directories (a directory holding an ``mkosi.conf`` the tree does not write)."""
         root = Path(path)
         root.mkdir(parents=True, exist_ok=True)
         tops = {entry.path.split("/", 1)[0] for entry in self.entries}
@@ -432,12 +429,7 @@ def compile_image(img: Lowered, profiles: Sequence[str] | None, *, locked: Lock 
         using_lock(img.select(profiles), locked) as pinned,
     ):
         _compile.emit(pinned, Path(tmp))
-        return read_tree(Path(tmp), variants=pinned.active, layout=tree_layout(pinned))
-
-
-def tree_layout(img: Lowered) -> TreeLayout:
-    """The layout *img* compiles to: ``native`` for ``Mkosi(layout="native")``."""
-    return "native" if img.mkosi.emit_mode == "native_profiles" else "directories"
+        return read_tree(Path(tmp), variants=pinned.active)
 
 
 def read_tree(
@@ -445,7 +437,6 @@ def read_tree(
     *,
     variants: Sequence[str] = (),
     warn: Callable[[str], None] | None = None,
-    layout: TreeLayout = "directories",
 ) -> Tree:
     """Load the tree at *root* into memory.
 
@@ -489,7 +480,6 @@ def read_tree(
         entries=tuple(entries),
         digest=_tree_digest(entries),
         variants=tuple(variants),
-        layout=layout,
     )
 
 
@@ -498,45 +488,54 @@ def read_variant_tree(
     variants: Sequence[str],
     *,
     warn: Callable[[str], None] | None = None,
-    layout: TreeLayout = "directories",
 ) -> Tree:
     """The tree of *variants* under *root*, as :func:`compile` returns it; another variant's
-    directory (or native overlay) a previous bake left there is not part of it."""
-    whole = read_tree(root, variants=variants, warn=warn, layout=layout)
+    profile overlay a previous bake left there is not part of it."""
+    whole = read_tree(root, variants=variants, warn=warn)
     owners = {"", *variants}
-    entries = [e for e in whole.entries if _layer_of(e.path, layout) in owners]
+    entries = [e for e in whole.entries if _layer_of(e.path) in owners]
     return replace(whole, entries=tuple(entries), digest=_tree_digest(entries))
 
 
-def _layer_of(path: str, layout: TreeLayout) -> str | None:
-    """The layer tree *path* belongs to: its variant's directory (``directories``); in the
-    native layout ``""`` for the root, which every variant inherits, the variant of
-    ``mkosi.profiles/<variant>/``, and ``None`` for ``mkosi.profiles`` itself."""
-    top, _, rest = path.partition("/")
-    if layout == "directories":
-        return top
-    if top != "mkosi.profiles":
-        return ""
-    return rest.partition("/")[0] or None
+PROFILE_DIRECTORIES = ("payload/mkosi.profiles/", "mkosi.profiles/")
+"""Where a variant's own layers live: its payload overlay and its build-sandbox additions."""
+
+
+def _layer_of(path: str) -> str | None:
+    """The variant tree *path* belongs to: ``""`` for what every variant builds, the variant
+    of ``payload/mkosi.profiles/<variant>/`` and ``mkosi.profiles/<variant>/``, and ``None``
+    for those two directories themselves."""
+    for prefix in PROFILE_DIRECTORIES:
+        if f"{path}/" == prefix:
+            return None
+        if path.startswith(prefix):
+            return path.removeprefix(prefix).partition("/")[0]
+    return ""
 
 
 def variant_layers(tree: Tree, variant: str) -> tuple[dict[str, Entry], ...]:
-    """*variant*'s effective contents of *tree* as layers, base first, each by path relative
-    to the layer: its directory (``directories``), or the root (the default variant) and
-    then ``mkosi.profiles/<variant>/`` over it (``native``), as mkosi merges them."""
-    own = f"mkosi.profiles/{variant}/" if tree.layout == "native" else f"{variant}/"
+    """*variant*'s payload in *tree* as mkosi reads it, by path relative to each layer: the
+    root (``mkosi.conf``, the settings every image shares), ``payload/`` and the variant's
+    ``payload/mkosi.profiles/<variant>/`` over it."""
+    own = f"payload/mkosi.profiles/{variant}/"
+    root = {
+        e.path: e
+        for e in tree.entries
+        if not e.path.startswith(("payload/", "mkosi.images/", "mkosi.profiles/"))
+    }
+    payload = {
+        e.path.removeprefix("payload/"): e
+        for e in tree.entries
+        if e.path.startswith("payload/") and _layer_of(e.path) == ""
+    }
     overlay = {e.path.removeprefix(own): e for e in tree.entries if e.path.startswith(own)}
-    if tree.layout != "native":
-        return (overlay,)
-    root = {e.path: e for e in tree.entries if _layer_of(e.path, "native") == ""}
-    return (root, overlay)
+    return (root, payload, overlay)
 
 
 def variant_entries(tree: Tree, variant: str) -> list[Entry]:
-    """The entries of *tree* that make up *variant*, by their tree path, in tree order: its
-    directory, or (``native``) the root it inherits and its ``mkosi.profiles/<variant>/``."""
-    owners = {variant, ""} if tree.layout == "native" else {variant}
-    return [e for e in tree.entries if _layer_of(e.path, tree.layout) in owners]
+    """The entries of *tree* that make up *variant*, by their tree path, in tree order: what
+    every variant builds and the variant's own profile directories."""
+    return [e for e in tree.entries if _layer_of(e.path) in ("", variant)]
 
 
 def variant_tree_digest(tree: Tree, variant: str) -> str:
@@ -716,8 +715,8 @@ def lock_image(
 ) -> Lock:
     """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
 
-    The sources are the source builds and, outside ``nethermind-v1``, the built
-    kernels' sources (``kernel``, or ``kernel-<variant>``; see ``Lowered.lock_sources``).
+    The sources are the source builds and the built kernel's source (``kernel``; see
+    ``Lowered.lock_sources``).
     The build toolchain is recorded too (:func:`~tundravm.toolchain.lock_toolchain`);
     naming ``toolchain`` in *update* records it again instead of keeping *previous*'s.
     """
@@ -915,8 +914,8 @@ def fetch_image(
 ) -> tuple[FetchedSource, ...]:
     """Check out every source of *img*'s *profiles* under ``<build>/.sources``.
 
-    The sources are the source builds and, outside ``nethermind-v1``, the built
-    kernels' sources and ``EfiStub`` packages (``Lowered.lock_sources``). Each Go,
+    The sources are the source builds, the built kernel's source and the ``EfiStub``
+    packages (``Lowered.lock_sources``). Each Go,
     Cargo and .NET build's dependencies are then prefetched into
     ``<build>/.sources/deps`` with the host's toolchain (``prefetch_deps``); without
     it the build downloads them as before. *force* also refills the dependency
@@ -1094,10 +1093,9 @@ def fetch(
 ) -> tuple[FetchedSource, ...]:
     """Check out the sources of *variants* (default: all) under ``<build>/.sources``.
 
-    The sources are the source builds and, outside ``nethermind-v1``, each built
-    kernel's source (git ref or commit with its submodules, or the sha256-checked
-    tarball), named ``kernel`` (``kernel-<variant>`` where a variant's kernel
-    source differs). Each lands in ``<build>/.sources/<name>-<pin[:12]>-<id[:8]>`` (*id*
+    The sources are the source builds and the built kernel's source (git ref or
+    commit with its submodules, or the sha256-checked tarball), named ``kernel``. Each
+    lands in ``<build>/.sources/<name>-<pin[:12]>-<id[:8]>`` (*id*
     the source's url, subdirectory and submodules), fetched
     on this host as the invoking user (git credentials and SSH agent apply) at
     *lock*'s pin. Sources *lock* does not pin (or every source, without
@@ -1107,7 +1105,7 @@ def fetch(
     a clean tree (and initialised submodules when asked for), an http checkout
     must match the file manifest written when it was fetched. A checkout that
     changed raises ``SourceError``; *force* checks every source out again.
-    Outside ``nethermind-v1`` the bake mounts ``<build>/.sources`` into the build
+    The bake mounts ``<build>/.sources`` into the build
     and the build hooks and kernel build script copy their checkout from it;
     :func:`bake` fetches first. Each Go, Cargo and .NET build's dependencies are
     prefetched with the host's ``go``, ``cargo`` or ``dotnet`` into
@@ -1174,7 +1172,7 @@ def bake_image(
     scratch copy of *locked*) instead, and ``bake-result.json`` records which
     lockfile it used. ``None`` bakes unfrozen with whatever lockfile ``build`` holds.
 
-    Outside ``nethermind-v1``, *fetch* first checks the source builds out under
+    *fetch* first checks the source builds out under
     ``build/.sources`` (:func:`fetch_image`, at the pins the bake builds; an
     unfrozen bake builds the pins it resolves). Without *fetch* the checkouts
     must already be there, or the bake fails with ``E_STATE``. The in-process
@@ -1209,7 +1207,7 @@ def bake_image(
             backend=img.backend if backend is None else backend,
         )
         simulated = baking.backend is not None and baking.backend.name == INPROCESS
-        if fetch and baking.fetches_sources and not simulated:
+        if fetch and not simulated:
             pinned = locked if locked is not None else _lock_at(lock_path)
             fetched = fetch_image(
                 baking,
@@ -1239,9 +1237,7 @@ def bake_image(
             payload[MANIFEST_KEY]["lockfile"] = lockfile
         warn = _tree_warning(reporter)
         for name in sorted(result.profiles):
-            tree = read_variant_tree(
-                destination / "mkosi", [name], warn=warn, layout=tree_layout(baking)
-            )
+            tree = read_variant_tree(destination / "mkosi", [name], warn=warn)
             payload["variants"][name][MANIFEST_KEY] = {
                 **payload[MANIFEST_KEY],
                 "baked_at": payload.get("created_at"),
@@ -1548,8 +1544,8 @@ def bake(
     """Build *variants* (default: all) with *backend* into *build*, frozen against *lock*.
 
     Fails before building when the recipe has error diagnostics or drifted
-    from *lock*. Outside ``nethermind-v1`` the source builds are fetched
-    first (:func:`fetch`); ``fetch=False`` builds from the checkouts already in
+    from *lock*. The source builds are fetched first (:func:`fetch`); ``fetch=False``
+    builds from the checkouts already in
     ``build/.sources`` and fails with ``E_STATE`` when one is missing.
     ``offline=True`` (or ``Policy(network_mode="offline")``) gives the build
     sandbox no network: :func:`fetch` must have checked out every source and

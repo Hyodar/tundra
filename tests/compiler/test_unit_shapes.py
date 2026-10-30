@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tundravm.declarative import (
     BootStep,
     Calendar,
     Debian,
     Every,
+    Fragment,
     Listen,
     Mount,
     Recipe,
@@ -16,6 +19,7 @@ from tundravm.declarative import (
     Variant,
 )
 from tundravm.declarative.systemd import Dynamic, Hardening
+from tundravm.errors import ValidationError
 from tundravm.testing import CompiledTree, assert_clean, compile_tree
 
 OFF = Hardening.none()
@@ -31,7 +35,7 @@ def _recipe(*items: object) -> Recipe:
 
 
 def _postinst(tree: CompiledTree) -> str:
-    return tree.read("scripts/06-postinst.sh")
+    return tree.script("postinst")
 
 
 def test_boot_task_is_an_enabled_oneshot() -> None:
@@ -157,28 +161,24 @@ def test_generated_units_lint_clean() -> None:
     )
 
 
-def test_variants_edit_and_remove_shapes() -> None:
+def test_variant_overlay_adds_shapes_and_refuses_edits_and_removals() -> None:
     base = (Task("tick", "/usr/bin/true", schedule=Every("1h")), Mount("/var/x", "tmpfs"))
-    recipe = Recipe(
-        name="shapes",
-        platform=Debian("bookworm"),
-        items=base,
-        variants=(
-            Variant("default", outputs=("qemu",)),
-            Variant(
-                "slow",
-                outputs=("qemu",),
-                changes=(
-                    Task.ref("tick").edit(schedule=Calendar("daily")),
-                    Mount.ref("/var/x").remove(),
-                ),
-            ),
-        ),
-    )
-    tree = compile_tree(recipe)
-    assert "OnCalendar=daily" in tree.unit("tick.timer", "slow")
-    assert "OnUnitActiveSec=1h" in tree.unit("tick.timer", "default")
-    assert not tree.exists("mkosi.extra/usr/lib/systemd/system/var-x.mount", "slow")
+
+    def recipe(variant: Variant) -> Recipe:
+        variants = (Variant("default", outputs=("qemu",)), variant)
+        return Recipe(name="shapes", platform=Debian("bookworm"), items=base, variants=variants)
+
+    tock = Task("tock", "/usr/bin/true", schedule=Calendar("daily"))
+    tree = compile_tree(recipe(Variant("slow", add=Fragment("slow", (tock,)))))
+    assert "OnCalendar=daily" in tree.unit("tock.timer", "slow")
+    assert tree.exists("mkosi.extra/usr/lib/systemd/system/tock.timer", "slow")
+    assert not tree.exists("mkosi.extra/usr/lib/systemd/system/tock.timer", "default")
+    assert "OnUnitActiveSec=1h" in tree.unit("tick.timer", "slow")  # the payload's
+    assert tree.exists("mkosi.extra/usr/lib/systemd/system/var-x.mount", "slow")
+    # a profile overlay can only add to the payload: an edit or a removal is another image
+    for change in (Task.ref("tick").edit(schedule=Calendar("daily")), Mount.ref("/var/x").remove()):
+        with pytest.raises(ValidationError, match="slow"):
+            compile_tree(recipe(Variant("slow", changes=(change,))))
 
 
 def test_example_03_health_check_runs_only_from_its_timer() -> None:

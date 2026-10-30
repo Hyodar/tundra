@@ -1,18 +1,15 @@
 """``Run`` renders build commands; ``setting-raw`` and ``hook-covered`` name the typed spelling."""
 
-from pathlib import Path
-
 import pytest
 
 from tests.helpers import REPO_ROOT
+from tundravm.check import declaration_check
 from tundravm.declarative import (
     BootStep,
     Debian,
     Declaration,
     Fragment,
-    Git,
     Hook,
-    Kernel,
     Mkosi,
     Package,
     Recipe,
@@ -20,6 +17,7 @@ from tundravm.declarative import (
     Variant,
 )
 from tundravm.declarative.lifecycle import check_report
+from tundravm.declarative.lower import lower
 from tundravm.declarative.utils import DevTools, Run
 from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
@@ -84,29 +82,24 @@ def test_run_rejects_what_it_cannot_run(bad: dict[str, object]) -> None:
 
 
 def test_setting_raw_names_the_typed_field() -> None:
-    [common, dev] = _findings(
+    [clean, seed] = _findings(
         Setting("Output", "Seed", ("630b5f72-a36a-4e83-b23d-6ef47c82fd9c",)),
-        Setting("Build", "ToolsTree", ("default",)),
-        add=(Setting("Content", "CleanPackageMetadata", ("no",)),),
+        Setting("Content", "CleanPackageMetadata", ("no",)),
     )
-    assert (common.code, common.severity, common.variant, common.subject) == (
+    assert (seed.code, seed.severity, seed.variant, seed.subject) == (
         "setting-raw",
         "info",
         "",
         "Output.Seed",
     )
-    assert "Mkosi(seed=...)" in common.message and common.location
-    assert (dev.variant, dev.subject) == ("dev", "Content.CleanPackageMetadata")
-    assert "Debian(clean_package_metadata=...)" in dev.message and "recipe-wide" in (dev.hint or "")
+    assert "Mkosi(seed=...)" in seed.message and seed.location
+    assert clean.subject == "Content.CleanPackageMetadata"
+    assert "Debian(clean_package_metadata=...)" in clean.message
 
 
-def test_setting_raw_reports_a_redundant_kernel_passthrough() -> None:
-    source = Git("https://github.com/gregkh/linux", "v6.13.12")
-    kernel = Kernel("6.13.12", source, config=Path(__file__))
-    [finding] = _findings(
-        kernel, Setting("Build", "Environment", ("KERNEL_IMAGE", "KERNEL_VERSION"))
-    )
-    assert "Kernel(config=...)" in finding.message
+def test_settings_the_tree_writes_itself_are_refused() -> None:
+    with pytest.raises(ValidationError, match="ToolsTree= itself"):
+        lower(Recipe("r", items=(Setting("Build", "ToolsTree", ("default",)),)))
 
 
 @pytest.mark.parametrize(
@@ -126,14 +119,37 @@ def test_hook_covered_names_the_declaration(item: Declaration, declaration: str)
     assert declaration in finding.message
 
 
-def test_host_commands_shipped_fragments_and_nethermind_v1_report_nothing() -> None:
+def test_host_commands_and_shipped_fragments_report_nothing() -> None:
     assert (
         _findings(Hook("host", "postinst", "systemctl enable foo.service"), add=(DevTools(),)) == []
     )
-    nethermind = Mkosi(dialect="nethermind-v1")
-    assert (
-        _findings(Run("groupadd -r eth"), Setting("Output", "Seed", ("x",)), mkosi=nethermind) == []
+
+
+@pytest.mark.parametrize(
+    ("setting", "code"),
+    [
+        (Setting("Config", "ConfigureScripts", ("configure.sh",)), "mkosi-configure-script"),
+        (Setting("Build", "Environment", ("HOME",)), "mkosi-environment-passthrough"),
+        (Setting("Config", "PassEnvironment", ("TERM",)), "mkosi-environment-passthrough"),
+    ],
+)
+def test_settings_that_lie_to_summary_or_leak_the_host_are_errors(
+    setting: Setting, code: str
+) -> None:
+    recipe = Recipe("r", items=(Package("jq"), setting), platform=Debian("trixie"))
+    findings = [d for d in declaration_check(recipe) if d.code == code]
+    assert [d.severity for d in findings] == ["error"]
+    with pytest.raises(ValidationError, match=code):
+        lower(recipe)
+
+
+def test_environment_with_values_passes() -> None:
+    recipe = Recipe(
+        "r", items=(Setting("Build", "Environment", ("A=1",)),), platform=Debian("trixie")
     )
+    codes = {"mkosi-environment-passthrough", "mkosi-configure-script"}
+    assert [d for d in declaration_check(recipe) if d.code in codes] == []
+    assert lower(recipe).mkosi.environment == {"A": "1"}
 
 
 def test_examples_and_templates_never_spell_the_chroot_prefix() -> None:

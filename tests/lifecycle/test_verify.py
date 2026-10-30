@@ -113,15 +113,14 @@ def test_tree_json_lists_every_emitted_file_and_its_digests(tmp_path: Path) -> N
     manifest = json.loads(found.members["variants/default/tree.json"])
     assert manifest["schema"] == "tundravm.tree/1"
     assert manifest["compiled_variants"] == ["azure", "default"]
-    motd = next(row for row in manifest["files"] if row["path"] == "mkosi.extra/etc/motd")
+    motd = next(row for row in manifest["files"] if row["path"] == "payload/mkosi.extra/etc/motd")
     assert motd["mode"] == "0644" and motd["size"] == 3 and motd["type"] == "file"
     tree = compile(_recipe(), lock=lock(_recipe()))
     assert manifest["tree_digest"] == tree.digest
-    both = sorted(
-        ((v, row) for v in ("azure", "default") for row in tree_rows(tree, v)),
-        key=lambda pair: f"{pair[0]}/{pair[1]['path']}",
-    )
-    assert tree_rows_digest(both) == tree.digest
+    # no profile overlays: each variant's rows are the whole tree, by tree path
+    rows = tree_rows(tree, "default")
+    assert rows == tree_rows(tree, "azure")
+    assert tree_rows_digest(("default", row) for row in rows) == tree.digest
     alone = compile(_recipe(), variants=["default"], lock=lock(_recipe()))
     assert manifest["variant_digest"] == alone.digest
 

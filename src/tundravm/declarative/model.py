@@ -283,44 +283,44 @@ def _check_changes(variant: Variant) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Mkosi:
-    """Compiler configuration: tree layout, emission dialect and generated helper files.
+    """Compiler configuration: the payload's root layout and the generated helper files.
 
-    ``init_script`` is written to ``mkosi.skeleton/init`` (mode 0755);
-    ``version_script`` emits ``mkosi.version``; ``cloud_postoutput`` emits the
-    Azure/GCP disk conversion postoutput scripts; ``strip_os_release`` strips
-    ``IMAGE_VERSION`` from ``os-release`` (``None``: when ``Platform.epoch`` is set).
+    The tree is always mkosi-native: the OS is the ``payload`` subimage (a UKI), the main
+    image is the QEMU raw disk around it, each cloud target a wrapper subimage, and each
+    content variant a profile under ``payload/mkosi.profiles/``.
+
+    ``root`` picks the payload's root filesystem: ``initramfs`` (the OS in the UKI's
+    ``.initrd``) or ``verity`` (an erofs root and its dm-verity hash partition beside the
+    ESP, the root hash on the UKI's command line). ``version_script`` emits
+    ``mkosi.version``; ``strip_os_release`` strips ``IMAGE_VERSION`` from ``os-release``
+    (``None``: when ``Platform.epoch`` is set).
 
     The build mechanics below have defaults a recipe rarely changes; each is one
     mkosi key, which ``Setting`` must not repeat (lint ``setting-raw``).
     """
 
-    layout: Literal["directories", "native"] = "directories"
-    dialect: Literal["current", "nethermind-v1"] = "current"
-    init_script: str | None = None
+    root: Literal["initramfs", "verity"] = "initramfs"
     version_script: bool = False
-    cloud_postoutput: bool = True
     strip_os_release: bool | None = None
     seed: str | None = None
     """The seed of the image's partition UUIDs (mkosi ``Seed=``, a UUID). ``None``: the
     compiler's fixed seed; set it only to reproduce a tree built with another one."""
     output_dir: str | None = None
-    """Where mkosi writes the image, relative to the tree (``OutputDirectory=``). ``None``:
-    mkosi's default, which ``tundravm bake`` collects from."""
+    """Where mkosi writes the images, relative to the tree (``OutputDirectory=``). ``None``:
+    ``mkosi.output``, which ``tundravm bake`` overrides with its build directory."""
     package_cache: str | None = None
     """mkosi's package cache directory, relative to the tree (``PackageCacheDirectory=``).
     ``None``: mkosi's default."""
     compress: Literal["zstd", "xz", "gz"] | None = None
-    """Compress the image file (``CompressOutput=``). ``None``: uncompressed."""
+    """Compress the payload image (``CompressOutput=``). ``None``: uncompressed."""
     manifest: Literal["json", "changelog"] = "json"
-    """The package manifest written next to the image (``ManifestFormat=``)."""
-    build_network: bool = True
-    """Whether build scripts and source builds reach the network (``WithNetwork=``)."""
+    """The package manifest written next to the payload (``ManifestFormat=``)."""
+    build_network: bool = False
+    """Whether build scripts and source builds reach the network (``WithNetwork=``). Off by
+    default: source builds compile host-fetched checkouts."""
 
     def __post_init__(self) -> None:
-        _require_choice(self, self.layout, ("directories", "native"), "layout")
-        _require_choice(self, self.dialect, ("current", "nethermind-v1"), "dialect")
-        if self.init_script is not None:
-            _require_name(self, self.init_script, "init_script")
+        _require_choice(self, self.root, ("initramfs", "verity"), "root")
         for what in ("seed", "output_dir", "package_cache"):
             if (value := getattr(self, what)) is not None:
                 _require_name(self, value, what)
@@ -494,18 +494,12 @@ class Debian(Platform):
 
     @property
     def efi_archive(self) -> str | None:
-        """Where :attr:`efi_stub` comes from: the snapshot (under ``mirror`` when set).
-
-        Without a snapshot, a ``mirror`` that is itself a snapshot archive URL
-        (``.../archive/debian/<snapshot>/``, the ``nethermind-v1`` spelling).
-        """
-        if self.snapshot is not None:
-            if self.mirror is None:
-                return self.snapshot
-            return f"{self.mirror.rstrip('/')}/archive/debian/{self.snapshot}"
-        if self.mirror is not None and "/archive/" in self.mirror:
-            return self.mirror
-        return None
+        """Where :attr:`efi_stub` comes from: the snapshot (under ``mirror`` when set)."""
+        if self.snapshot is None:
+            return None
+        if self.mirror is None:
+            return self.snapshot
+        return f"{self.mirror.rstrip('/')}/archive/debian/{self.snapshot}"
 
     def contribution(self) -> tuple[Declaration | Fragment, ...]:
         """:attr:`packages`, the pinned EFI stub, then ``items``."""
@@ -1935,11 +1929,9 @@ class Build(Declared):
     ``packages``). ``install`` paths are relative to the source tree; a toolchain's
     output is at its ``artifact`` path, e.g. ``build/<output>`` for ``Go``.
     ``cache_namespace`` names the build cache entry (default: ``name``); the key
-    itself is fingerprinted: the ``current`` dialect caches under
-    ``<namespace>-<fingerprint>``, a digest of the source pin, the build and
-    install specs, the architecture and the toolchain, so changing any of them
-    rebuilds. ``nethermind-v1`` keeps its ``<namespace>-<pin>`` (default
-    ``<name>-<url digest>-<ref>``) keys.
+    itself is fingerprinted: the build caches under ``<namespace>-<fingerprint>``, a
+    digest of the source pin, the build and install specs, the architecture and the
+    toolchain, so changing any of them rebuilds.
     """
 
     name: str

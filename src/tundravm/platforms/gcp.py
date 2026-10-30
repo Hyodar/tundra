@@ -2,11 +2,9 @@
 
 ``tundravm.declarative.state`` installs ``udev``, ships the metadata DNS
 files, the disk naming rules and their NVMe helper, and sets the ``gcp``
-target. The current dialect applies the metadata DNS at boot through
-:func:`metadata_dns_service` (on Compute Engine only); the disk rules match GCE
-disk models only, so the glue is inert on other clouds. The ``gcp`` target's
-tar.gz postoutput script is generated when ``MkosiOptions.generate_cloud_postoutput``
-is true (the default).
+target. The metadata DNS is applied at boot through :func:`metadata_dns_service` (on
+Compute Engine only); the disk rules match GCE disk models only, so the glue is inert on
+other clouds. The ``gcp`` wrapper image converts the disk to the ``tar.gz`` GCE imports.
 """
 
 from __future__ import annotations
@@ -84,11 +82,11 @@ echo "${SERIAL}" | sed 's/[[:space:]]*$//'
 """
 
 # ---------------------------------------------------------------------------
-# Metadata DNS, applied at boot on GCP only (current dialect)
+# Metadata DNS, applied at boot on GCP only
 # ---------------------------------------------------------------------------
 
 GCP_RESOLV_CONF_PATH = "/usr/lib/tundravm/gcp/resolv.conf"
-"""Where the current dialect ships :data:`GCP_RESOLV_CONF`; ``gcp-metadata-dns.service``
+"""Where the payload ships :data:`GCP_RESOLV_CONF`; ``gcp-metadata-dns.service``
 copies it over ``/etc/resolv.conf`` on Compute Engine only."""
 
 

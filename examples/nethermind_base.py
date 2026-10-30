@@ -3,7 +3,7 @@
 Teaches building a real base image as a ``Platform`` plus one ``Composite``.
 ``NethermindPlatform`` is what every nethermind-tdx image builds on:
 
-- Debian trixie from the pinned snapshot mirror, ``SOURCE_DATE_EPOCH=0``
+- Debian trixie from a pinned snapshot, ``SOURCE_DATE_EPOCH=0``
 - a UKI with its own ``/init`` (``boot="uki"``) and the EFI stub pinned from that mirror
 - a TDX kernel built from source with the repository's config and a hardened command line
 - Debian backports generated at sync time
@@ -15,9 +15,8 @@ Teaches building a real base image as a ``Platform`` plus one ``Composite``.
 - full systemd debloat (binary stripping, unit masking, path removal)
 - the ``tdxs`` attestation service
 
-Recipes built on them (``surge-tdx-prover/image.py``) set ``mkosi=NETHERMIND_V1`` to emit
-the historical tree byte for byte: its dialect, partition UUID seed and build directories.
-``recipe`` below is the base layer on its own.
+Recipes built on them (``surge-tdx-prover/image.py``) set ``mkosi=MKOSI``: the historical
+tree's partition UUID seed. ``recipe`` below is the base layer on its own.
 
     tundravm inspect examples/nethermind_base.py
     tundravm lint examples/nethermind_base.py   # source-unpinned until locked
@@ -46,7 +45,7 @@ from tundravm.declarative.utils import Backports, Composite, Tdxs
 
 ASSETS = Resources.from_module(__name__)
 
-PINNED_MIRROR = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
+SNAPSHOT = "20251113T083151Z"
 EFI_STUB_VERSION = "255.4-1"
 KERNEL_VERSION = "6.13.12"
 KERNEL_CONFIG = ASSETS.file("nethermind-base/kernel/kernel-yocto.config")
@@ -58,13 +57,8 @@ KERNEL_CMDLINE = (
 )
 SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
 
-NETHERMIND_V1 = Mkosi(
-    dialect="nethermind-v1",
-    seed=SEED,
-    output_dir="build",
-    package_cache="mkosi.cache",
-)
-"""Compiler dialect, seed and build layout that reproduce the historical nethermind-tdx tree."""
+MKOSI = Mkosi(seed=SEED, build_network=True)
+"""The historical nethermind-tdx partition UUID seed; its build scripts reach the network."""
 
 # NethermindPlatform's boot="uki" set brings kmod, systemd and systemd-boot-efi.
 RUNTIME_PACKAGES = (
@@ -106,15 +100,13 @@ NETWORK_SETUP_SERVICE = ASSETS.text("nethermind-base/network-setup.service")
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NethermindPlatform(Debian):
-    """Debian trixie from *mirror*, with the TDX kernel, pinned EFI stub and build settings.
+    """Debian trixie from *snapshot*, with the TDX kernel, pinned EFI stub and build settings.
 
-    *mirror* is a snapshot archive, so the EFI stub comes from the same snapshot as
-    every package.
+    The EFI stub comes from the same snapshot as every package and the tools tree.
     """
 
     release: str = "trixie"
-    mirror: str | None = PINNED_MIRROR
-    tools_mirror: str | None = PINNED_MIRROR
+    snapshot: str | None = SNAPSHOT
     boot: Boot | None = "uki"
     kernel_package: str | None = None
     efi_stub: str | None = EFI_STUB_VERSION
@@ -147,7 +139,7 @@ class NethermindBase(Composite):
                     stage="skeleton",
                 ),
                 Debloat(),
-                Tdxs(legacy_units=True),
+                Tdxs(),
             ),
         )
 
@@ -156,5 +148,5 @@ recipe = Recipe(
     name="nethermind-tdx",
     platform=NethermindPlatform(),
     items=(NethermindBase(),),
-    mkosi=NETHERMIND_V1,
+    mkosi=MKOSI,
 )

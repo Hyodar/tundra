@@ -198,16 +198,10 @@ def _tree_decl() -> CacheDecl:
 
 
 def test_exact_trees_copy_the_whole_directory() -> None:
-    script = _tree_decl().wrap("true", root="$CACHE", exact_trees=True)
+    script = _tree_decl().wrap("true", root="$CACHE")
     assert 'cp -a "$BUILDROOT/build/app/out/." "$CACHE/app"/app/' in script
     assert 'mkdir -p "$DESTDIR/opt/app" && cp -a "$CACHE/app"/app/. "$DESTDIR/opt/app/"' in script
     assert "cp -r" not in script and "/*" not in script
-
-
-def test_historical_trees_keep_the_glob_copy() -> None:
-    script = _tree_decl().wrap("true", root="$CACHE")
-    assert 'cp -r "$BUILDROOT/build/app/out"/* "$CACHE/app"/app/' in script
-    assert 'cp -r "$CACHE/app"/app/* "$DESTDIR/opt/app"/' in script
 
 
 def _listing(root: Path) -> list[tuple[str, str]]:
@@ -242,7 +236,7 @@ def test_exact_trees_store_and_restore_dotfiles_links_modes_and_empty_dirs(
         "DESTDIR": str(tmp_path / "dest"),
         "CACHE": str(tmp_path / "cache"),
     }
-    script = _tree_decl().wrap("true", root="$CACHE", exact_trees=True)
+    script = _tree_decl().wrap("true", root="$CACHE")
     subprocess.run(["bash", "-c", f"set -euo pipefail; {script}"], env=env, check=True)
     assert _listing(tmp_path / "dest" / "opt" / "app") == _listing(out)
     assert _listing(tmp_path / "cache" / "app" / "app") == _listing(out)
@@ -254,7 +248,7 @@ def test_exact_trees_store_and_restore_dotfiles_links_modes_and_empty_dirs(
         [
             "bash",
             "-c",
-            f"set -euo pipefail; {_tree_decl().wrap('false', root='$CACHE', exact_trees=True)}",
+            f"set -euo pipefail; {_tree_decl().wrap('false', root='$CACHE')}",
         ],
         env=env,
         check=True,

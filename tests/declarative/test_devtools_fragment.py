@@ -1,4 +1,4 @@
-"""A variant that adds the ``DevTools()`` fragment."""
+"""A variant that adds the ``DevTools()`` fragment: a profile overlay on the payload."""
 
 from pathlib import Path
 
@@ -62,9 +62,12 @@ def test_devtools_enables_the_serial_getty_at_build_time(tree: CompiledTree) -> 
     postinst = tree.script("postinst", variant="devtools").splitlines()
     assert f"mkosi-chroot systemctl enable {GETTY}" in postinst
     assert any("minimal.target.wants" in line and GETTY in line for line in postinst)
-    # Debloat masks systemd's units outside its keep list: the getty's template stays.
-    (keep,) = [line for line in postinst if line.startswith("systemd_svc_whitelist=")]
-    assert '"serial-getty@.service"' in keep
+    # Debloat masks systemd's units outside its keep list: every keep list the devtools
+    # build runs (the payload's included) keeps the getty's template.
+    keeps = [line for line in postinst if line.strip().startswith("systemd_svc_whitelist=")]
+    assert keeps and all('"serial-getty@.service"' in keep for keep in keeps)
+    overlay = tree.root / "payload/mkosi.profiles/devtools"
+    assert (overlay / "mkosi.postinst.d/50-postinst.sh").is_file()
 
 
 def test_unreproducible_devtools_keep_the_boot_time_serial_console(tmp_path: Path) -> None:
@@ -120,7 +123,7 @@ def test_devtools_variant_bash_completion_in_debloat_skip(tmp_path: Path) -> Non
     assert finalize.count(f'rm -rf "$BUILDROOT{BASH_COMPLETION}"') == 1
     conditional = finalize[finalize.index("# Debloat: profile-conditional path removal") :]
     assert conditional.splitlines()[1:4] == [
-        'if [[ ! "${PROFILES:-}" == *"devtools"* ]]; then',
+        'if [[ " ${PROFILES:-} " != *" devtools "* ]]; then',
         f'    rm -rf "$BUILDROOT{BASH_COMPLETION}"',
         "fi",
     ]

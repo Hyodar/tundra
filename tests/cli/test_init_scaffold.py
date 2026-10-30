@@ -140,7 +140,7 @@ def test_service_app_serves_its_page_over_http(tmp_path: Path) -> None:
     recipe = tundravm.load_recipe(tmp_path / f"{NAME}.py")
     tree = {e.path: e.content for e in tundravm.compile(recipe, variants=["default"]).entries}
     files = {
-        path.removeprefix("default/mkosi.extra"): (content or b"").decode()
+        path.removeprefix("payload/mkosi.extra"): (content or b"").decode()
         for path, content in tree.items()
     }
     unit = files["/usr/lib/systemd/system/app.service"]
@@ -148,7 +148,10 @@ def test_service_app_serves_its_page_over_http(tmp_path: Path) -> None:
     assert "ProtectSystem=strict\n" in unit and "User=app\n" in unit
     page = f"<!doctype html>\n<title>{NAME}</title>\n<h1>{NAME} 0.1.0</h1>\n"
     assert files["/srv/www/index.html"] == page
-    assert "    busybox\n" in files["default/mkosi.conf"]
+    payload_conf = "".join(
+        text for path, text in sorted(files.items()) if path.startswith("payload/mkosi.conf")
+    )
+    assert "    busybox\n" in payload_conf
     assert 'tcp dport 8080 accept comment "app.service"' in files["/etc/nftables.conf"]
 
 

@@ -1,4 +1,4 @@
-"""The one unit renderer (``_units.render``), systemd command quoting, and the historical
+"""The one unit renderer (``_units.render``), systemd command quoting, and the literal
 texts of ``_units.v1`` pinned byte for byte."""
 
 from __future__ import annotations
@@ -7,7 +7,6 @@ import hashlib
 
 import pytest
 
-from tundravm._modules.tdxs import Tdxs
 from tundravm._units import UnitText, v1
 from tundravm._units.render import canonical, command_line, render, service_unit
 from tundravm.models import ServiceSpec
@@ -102,32 +101,23 @@ def test_render_writes_sections_in_order_and_skips_empty_ones() -> None:
     assert UnitText.parse(text).text == text
 
 
-HISTORICAL = {
+LITERALS = {
     "minimal.target": (v1.MINIMAL_TARGET, "63aec6aa0cb073e8"),
     "serial-console.service": (v1.SERIAL_CONSOLE, "016dd361c7172e6c"),
-    "azure-complete-provisioning.service": (v1.AZURE_PROVISIONING, "0085597d020c01bc"),
-    "azure-complete-provisioning.service (online)": (
-        v1.AZURE_PROVISIONING_ONLINE,
-        "31b8f487face9da0",
-    ),
-    "runtime-init.service": (v1.runtime_init(), "a2cc9dd7c55d79f2"),
-    "runtime-init.service (online)": (v1.runtime_init(network_setup=False), "e06ae5b08b14a8fe"),
-    "tdxs.service": (Tdxs().render_service_unit(), "2456316154d84ccb"),
-    "tdxs.socket": (Tdxs().render_socket_unit(), "26a94aee3e913541"),
 }
-"""Each historical text and the first 16 hex digits of its sha256, recorded from the
-literals these replaced; the golden tree and the parity digests pin them too."""
+"""Each literal text and the first 16 hex digits of its sha256, recorded from the literals
+these replaced."""
 
 
-@pytest.mark.parametrize("name", sorted(HISTORICAL))
-def test_historical_texts_keep_their_bytes(name: str) -> None:
-    text, digest = HISTORICAL[name]
+@pytest.mark.parametrize("name", sorted(LITERALS))
+def test_literal_texts_keep_their_bytes(name: str) -> None:
+    text, digest = LITERALS[name]
     assert hashlib.sha256(text.encode()).hexdigest()[:16] == digest
     assert UnitText.parse(text).text == text
 
 
 def test_runtime_init_step_unit_renders_through_the_typed_table() -> None:
-    """A current-dialect step unit: root plumbing (no ``User=``), explicitly unhardened,
+    """A step unit: root plumbing (no ``User=``), explicitly unhardened,
     no timeout, no ``[Install]`` (``runtime-init.service`` requires it)."""
     from tundravm._modules.init import _step_unit_text
 

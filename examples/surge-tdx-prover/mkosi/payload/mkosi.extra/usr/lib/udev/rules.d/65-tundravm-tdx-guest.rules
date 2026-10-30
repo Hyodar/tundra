@@ -1,0 +1,2 @@
+# tundravm: TDX guest quotes for the tdxs group
+KERNEL=="tdx_guest", GROUP="tdx", MODE="0660"

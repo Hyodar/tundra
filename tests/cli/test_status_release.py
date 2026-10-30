@@ -96,11 +96,12 @@ def test_readiness_follows_a_second_build_then_release(recipe: Path) -> None:
     assert _release(released)["default"]["released"] == str(Path("releases") / "node-1.0")
     assert released["releases_in_progress"] == []
     assert released["next"] == UP_TO_DATE
-    # the release baked only what it ships; dev keeps the entry of the bake before it
+    # the release baked only what it ships; dev keeps the entry of the bake before it, but
+    # the tree the release wrote has no dev profile overlay, so the whole recipe recompiles
     after = _status(str(recipe))
     dev = [item for item in _items(after) if item["variant"] == "dev"]
     assert [item["verdict"] for item in dev] == ["ok"]
-    assert after["next"] == UP_TO_DATE
+    assert after["next"] == f"tundravm compile {recipe} --tree {Path('build') / 'mkosi'}"
 
 
 def test_release_lines_in_text(recipe: Path) -> None:

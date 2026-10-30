@@ -1,4 +1,4 @@
-"""The ``tundravm.declarative.utils`` fragments, file by file against the surge golden tree."""
+"""The ``tundravm.declarative.utils`` fragments, file by file against the committed surge tree."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ import inspect
 from dataclasses import dataclass
 
 import pytest
-from examples.nethermind_base import EFI_STUB_VERSION, PINNED_MIRROR
+from examples.nethermind_base import EFI_STUB_VERSION
+from examples.nethermind_base import SNAPSHOT as SURGE_SNAPSHOT
 
 from tests.helpers import SURGE_EXAMPLE
 from tundravm.declarative import (
     BootStep,
     Build,
+    Debian,
     Disk,
     Fragment,
     Git,
@@ -19,7 +21,6 @@ from tundravm.declarative import (
     Hook,
     Install,
     Key,
-    Mkosi,
     Package,
     Ready,
     Recipe,
@@ -42,12 +43,16 @@ from tundravm.errors import ValidationError
 
 GOLDEN = SURGE_EXAMPLE / "mkosi"
 SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
-HISTORICAL = Mkosi(dialect="nethermind-v1")
+PLATFORM = Debian("trixie", snapshot=SURGE_SNAPSHOT, boot=None)
+"""The surge platform's archive, without its packages: the files the fragments render
+depend on the snapshot (backports sources, the EFI stub URL)."""
+GENERIC = ("payload/mkosi.conf", "payload/mkosi.conf.d/", "payload/mkosi.build.d/")
+"""What every fragment touches (its packages, its build hooks): not the fragment's own files."""
 
 
 def _recipe(*items: Fragment, variants: tuple[Variant, ...] = (Variant("default"),)) -> Recipe:
     common = Fragment("module", items=items)
-    return Recipe(name="module", items=(common,), variants=variants, mkosi=HISTORICAL)
+    return Recipe(name="module", platform=PLATFORM, items=(common,), variants=variants)
 
 
 def _text(tree: Tree, path: str) -> str:
@@ -56,57 +61,73 @@ def _text(tree: Tree, path: str) -> str:
     return content.decode()
 
 
-def _files(tree: Tree, variant: str = "default") -> dict[str, bytes]:
-    """The variant's files, keyed by their path inside the variant directory."""
-    prefix = f"{variant}/"
-    return {
-        e.path.removeprefix(prefix): e.content
+def _files(tree: Tree) -> dict[str, bytes]:
+    """The tree's files by tree path."""
+    return {e.path: e.content for e in tree.entries if e.content is not None}
+
+
+def _conf(tree: Tree) -> str:
+    """The payload's configuration: ``mkosi.conf`` and its ``mkosi.conf.d`` files."""
+    return "\n".join(
+        e.content.decode()
         for e in tree.entries
-        if e.path.startswith(prefix) and e.content is not None
-    }
+        if e.content is not None
+        and (e.path == "payload/mkosi.conf" or e.path.startswith("payload/mkosi.conf.d/"))
+    )
 
 
 # ── The utils fragments ─────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
-    ("fragment", "variant", "paths"),
+    ("fragment", "golden", "paths"),
     [
         (
-            Tdxs(legacy_units=True),
-            "default",
+            Tdxs(),
+            "payload/",
             (
-                "mkosi.extra/etc/tdxs/config.yaml",
-                "mkosi.extra/usr/lib/systemd/system/tdxs.service",
-                "mkosi.extra/usr/lib/systemd/system/tdxs.socket",
+                "payload/mkosi.extra/etc/tdxs/config.yaml",
+                "payload/mkosi.extra/usr/lib/systemd/system/tdxs.service",
+                "payload/mkosi.extra/usr/lib/systemd/system/tdxs.socket",
+                "payload/mkosi.extra/usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules",
             ),
         ),
         (
             DevTools(reproducible=False),
-            "devtools",
-            ("mkosi.extra/usr/lib/systemd/system/serial-console.service",),
+            "payload/mkosi.profiles/devtools/",
+            ("payload/mkosi.extra/usr/lib/systemd/system/serial-console.service",),
         ),
-        (Backports(), "default", ("scripts/01-sync.sh",)),
+        (
+            Backports(),
+            "",
+            (
+                "mkosi.sandbox/etc/apt/preferences.d/debian-backports.pref",
+                "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources",
+            ),
+        ),
     ],
     ids=["tdxs", "devtools", "backports"],
 )
-def test_fragment_files_match_the_surge_golden_tree(
-    fragment: Fragment, variant: str, paths: tuple[str, ...]
+def test_fragment_files_match_the_committed_surge_tree(
+    fragment: Fragment, golden: str, paths: tuple[str, ...]
 ) -> None:
     files = _files(compile(_recipe(fragment)))
     base = _files(compile(_recipe()))
-    assert sorted(set(files) - set(base) - {"scripts/04-build.sh"}) == sorted(paths)
+    added = {path for path in set(files) - set(base) if not path.startswith(GENERIC)}
+    assert sorted(added) == sorted(paths)
     for path in paths:
-        assert files[path] == (GOLDEN / variant / path).read_bytes(), path
+        rel = path.removeprefix("payload/") if golden else path
+        assert files[path] == (GOLDEN / golden / rel).read_bytes(), path
 
 
-def test_efi_stub_hook_matches_the_surge_golden_tree() -> None:
-    (hook,) = EfiStub(snapshot=PINNED_MIRROR, version=EFI_STUB_VERSION).items
-    assert isinstance(hook, Hook)
-    postinst = (GOLDEN / "default" / "scripts" / "06-postinst.sh").read_text()
+def test_efi_stub_hook_matches_the_committed_surge_tree() -> None:
+    stub = EfiStub(snapshot=SURGE_SNAPSHOT, version=EFI_STUB_VERSION)
+    (hook,) = stub.items
+    assert isinstance(hook, Hook) and hook.script == stub.render_script()
+    postinst = (GOLDEN / "payload/mkosi.postinst.d/50-postinst.sh").read_text()
     assert hook.script.strip() + "\n" in postinst
-    tree = compile(_recipe(EfiStub(snapshot=PINNED_MIRROR, version=EFI_STUB_VERSION)))
-    assert hook.script.strip() + "\n" in _text(tree, "default/scripts/06-postinst.sh")
+    tree = compile(_recipe(stub))
+    assert hook.script.strip() + "\n" in _text(tree, "payload/mkosi.postinst.d/50-postinst.sh")
 
 
 def test_tdxs_issuer_and_validator_render_the_config() -> None:
@@ -117,7 +138,7 @@ def test_tdxs_issuer_and_validator_render_the_config() -> None:
         check_revocations=True,
         verify_imds=True,
     )
-    config = _text(compile(_recipe(tdxs)), "default/mkosi.extra/etc/tdxs/config.yaml")
+    config = _text(compile(_recipe(tdxs)), "payload/mkosi.extra/etc/tdxs/config.yaml")
     assert config == (
         "transport:\n"
         "  type: socket\n"
@@ -136,32 +157,26 @@ def test_tdxs_issuer_and_validator_render_the_config() -> None:
 
 
 def test_backports_pins_mirror_and_release() -> None:
-    default = _text(compile(_recipe(Backports())), "default/scripts/01-sync.sh")
-    assert 'jq -r .Mirror "$BUILDDIR/config.json"' in default
-    pinned = _text(
-        compile(_recipe(Backports(archive_url="http://m", release="trixie"))),
-        "default/scripts/01-sync.sh",
-    )
-    assert 'MIRROR="http://m"\nRELEASE="trixie"\n' in pinned
-    assert "jq" not in pinned
-    assert pinned.split("cat > ", 1)[1] == default.split("cat > ", 1)[1]
+    sources = "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
+    default = _text(compile(_recipe(Backports())), sources)
+    assert f"URIs: {SNAPSHOT.rstrip('/')}\n" in default
+    assert "Suites: trixie-backports\n" in default and "Suites: sid\n" in default
+    pinned = compile(_recipe(Backports(archive_url="http://m", release="bookworm")))
+    assert "URIs: http://m\nSuites: bookworm-backports\n" in _text(pinned, sources)
+    pins = _text(pinned, "mkosi.sandbox/etc/apt/preferences.d/debian-backports.pref")
+    assert "Pin: release n=bookworm-backports\nPin-Priority: 200\n" in pins
+    assert not any(e.path.startswith("payload/mkosi.sync.d/") for e in pinned.entries)
 
 
 def test_tdxs_needs_orders_its_units_after_those_steps() -> None:
     key = Key("k")
     tree = compile(_recipe(Tdxs(needs=(key.ready,)), Fragment("keys", items=(key,))))
-    units = "default/mkosi.extra/usr/lib/systemd/system"
+    units = "payload/mkosi.extra/usr/lib/systemd/system"
     service = _text(tree, f"{units}/tdxs.service")
-    waits = "runtime-init.service tdxs.socket"
+    waits = "runtime-init-keys.service tdxs.socket"
     assert f"After={waits}\nRequires={waits}\n" in service
     plain = compile(_recipe(Tdxs(), Fragment("keys", items=(key,))))
     assert "runtime-init" not in _text(plain, f"{units}/tdxs.service")
-    current = Recipe("module", items=(key, Tdxs(needs=(key.ready,))))
-    service = _text(compile(current), f"{units}/tdxs.service")
-    assert "Requires=runtime-init-keys.service tdxs.socket\n" in service
-    legacy = Recipe("module", items=(key, Tdxs(needs=(key.ready,), legacy_units=True)))
-    socket = _text(compile(legacy), f"{units}/tdxs.socket")
-    assert "After=runtime-init-keys.service\nRequires=runtime-init-keys.service\n" in socket
 
 
 def test_runtime_directory_is_a_boot_step_that_installs_the_directory() -> None:
@@ -269,13 +284,13 @@ def test_composite_subclass_works_as_a_fragment() -> None:
     tools = Tools(packages=("strace", "gdb"))
     assert repr(tools).endswith(".Tools(packages=('strace', 'gdb'))")
     recipe = Recipe(name="m", items=(tools, tools))
-    conf = _text(compile(recipe), "default/mkosi.conf").splitlines()
+    conf = _conf(compile(recipe)).splitlines()
     assert {"    strace", "    gdb"} <= set(conf)
     variant = Recipe(name="m", variants=(Variant("v", add=Tools()),))
-    assert "    strace" in _text(compile(variant), "v/mkosi.conf").splitlines()
+    assert "    strace" in _conf(compile(variant)).splitlines()
 
 
-def test_historical_dialect_spells_accounts_as_postinst_lines() -> None:
+def test_accounts_are_the_postinst_prelude_groups_first() -> None:
     accounts = Fragment(
         "accounts",
         items=(
@@ -285,24 +300,24 @@ def test_historical_dialect_spells_accounts_as_postinst_lines() -> None:
             User("svc", home="/home/svc", uid=9, primary_group="tdx", groups=("eth", "x")),
         ),
     )
-    postinst = _text(compile(_recipe(accounts)), "default/scripts/06-postinst.sh")
+    postinst = _text(compile(_recipe(accounts)), "payload/mkosi.postinst.d/50-postinst.sh")
     assert postinst.splitlines()[3:7] == [
         "mkosi-chroot groupadd --system tdx",
         "mkosi-chroot groupadd --gid 7 x",
         "mkosi-chroot groupadd --system eth",
-        "mkosi-chroot useradd --system --home-dir /home/svc --shell /usr/sbin/nologin "
-        "--uid 9 --gid tdx --groups eth,x svc",
+        "mkosi-chroot useradd --system --home-dir /home/svc --create-home "
+        "--shell /usr/sbin/nologin --uid 9 --gid tdx --groups eth,x svc",
     ]
 
 
-def test_current_dialect_uses_the_account_prelude() -> None:
+def test_tdxs_accounts_use_the_account_prelude() -> None:
     recipe = Recipe(name="m", items=(Tdxs(),))
-    lines = _text(compile(recipe), "default/scripts/06-postinst.sh").splitlines()
+    lines = _text(compile(recipe), "payload/mkosi.postinst.d/50-postinst.sh").splitlines()
     assert lines[3] == "mkosi-chroot groupadd --system tdx"
     assert lines[4].startswith("mkosi-chroot useradd --system --home-dir /home/tdxs --create-home")
 
 
-def test_historical_dialect_lowers_account_replacement_standalone() -> None:
+def test_a_variant_cannot_replace_an_account_the_payload_creates() -> None:
     recipe = _recipe(
         Fragment("users", items=(User("svc"),)),
         variants=(
@@ -310,14 +325,8 @@ def test_historical_dialect_lowers_account_replacement_standalone() -> None:
             Variant("other", inherits="default", changes=(User.ref("svc").edit(uid=5),)),
         ),
     )
-    tree = compile(recipe)
-    useradds = [
-        line
-        for line in _text(tree, "other/scripts/06-postinst.sh").splitlines()
-        if "useradd" in line
-    ]
-    assert useradds == ["mkosi-chroot useradd --system --shell /usr/sbin/nologin --uid 5 svc"]
-    assert "--uid" not in _text(tree, "default/scripts/06-postinst.sh")
+    with pytest.raises(ValidationError, match="Cannot emit variant 'other'.*replaces User"):
+        compile(recipe)
 
 
 def test_build_cache_namespace_and_unpinned_marker() -> None:
@@ -328,13 +337,10 @@ def test_build_cache_namespace_and_unpinned_marker() -> None:
         install=(Install("tool", "/usr/bin/tool"),),
         cache_namespace="tool-feat/x",
     )
-    historical = _text(
-        compile(_recipe(Fragment("b", items=(build,)))), "default/scripts/04-build.sh"
-    )
-    assert "# unpinned" not in historical
-    assert '"$BUILDDIR/tool-feat_x"' in historical
     current = Recipe(name="m", items=(build,))
-    assert "\n# unpinned: feat/x\n" in _text(compile(current), "default/scripts/04-build.sh")
+    script = _text(compile(current), "payload/mkosi.build.d/50-build.sh")
+    assert "\n# unpinned: feat/x\n" in script
+    assert "tundravm: source build tool is not pinned" in script
     with pytest.raises(ValidationError, match="cache_namespace"):
         Build("t", build.source, script="make", install=build.install, cache_namespace="a b")
 
@@ -346,7 +352,6 @@ def test_backports_include_sid_false_drops_the_sid_source_and_pin() -> None:
     assert "Suites: trixie-backports" in sources and "sid" not in sources
     assert "sid" in with_sid.render_sources(mirror=None, release="trixie")
     assert "sid" not in without.render_preferences(release="trixie")
-    (hook,) = [item for item in without.items if isinstance(item, Hook)]
-    assert "Suites: sid" not in hook.script and "Suites: ${RELEASE}-backports" in hook.script
+    assert without.items == ()  # lowering writes the sandbox files; the fragment runs nothing
     with pytest.raises(ValidationError, match="include_sid"):
         Backports(include_sid="no")  # type: ignore[arg-type]

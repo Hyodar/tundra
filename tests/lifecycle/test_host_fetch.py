@@ -26,7 +26,6 @@ from tundravm.declarative import (
     Http,
     Install,
     Lock,
-    Mkosi,
     Package,
     Policy,
     Recipe,
@@ -96,13 +95,8 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
-def _recipe(*builds: Build, dialect: str = "current", policy: Policy | None = None) -> Recipe:
-    return Recipe(
-        "tool",
-        items=(Package("linux-image-amd64"), *builds),
-        mkosi=Mkosi(dialect=dialect),  # type: ignore[arg-type]
-        policy=policy,
-    )
+def _recipe(*builds: Build, policy: Policy | None = None) -> Recipe:
+    return Recipe("tool", items=(Package("linux-image-amd64"), *builds), policy=policy)
 
 
 def _git_build(url: str, ref: str = "main") -> Build:
@@ -250,7 +244,9 @@ def test_bake_fetches_then_hands_the_backend_the_sources(
     (request,) = backend.requests
     assert request.sources_dir == out / ".sources"
     assert (out / ".sources" / source_dir("tool", first, url) / "main.go").is_file()
-    hooks = (out / "mkosi" / "default" / "scripts" / "04-build.sh").read_text(encoding="utf-8")
+    hooks = (out / "mkosi" / "payload" / "mkosi.build.d" / "50-build.sh").read_text(
+        encoding="utf-8"
+    )
     assert f'"$SRCDIR/tundravm-sources/{source_dir("tool", first, url)}"' in hooks
 
 
@@ -262,7 +258,9 @@ def test_unlocked_bake_builds_the_pins_its_fetch_resolved(
     out = tmp_path / "out"
     img = lower(_recipe(_git_build(url)))
     bake_image(img, None, locked=None, backend=backend, build=out, resolver=lambda source: first)
-    hooks = (out / "mkosi" / "default" / "scripts" / "04-build.sh").read_text(encoding="utf-8")
+    hooks = (out / "mkosi" / "payload" / "mkosi.build.d" / "50-build.sh").read_text(
+        encoding="utf-8"
+    )
     assert f"tool-{first[:12]}" in hooks and "unpinned" not in hooks
     assert img.fetched_pins == {}  # restored after the bake
 
@@ -295,17 +293,6 @@ def test_bake_without_fetch_fails_fast_naming_tundravm_fetch(
         fetch=False,
     )
     assert [r.sources_dir for r in backend.requests] == [tmp_path / "out" / ".sources"]
-
-
-def test_nethermind_v1_bakes_fetch_nothing(tmp_path: Path, repo: tuple[str, str]) -> None:
-    url, first = repo
-    recipe = _recipe(_git_build(url), dialect="nethermind-v1")
-    backend = _Recording()
-    bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, build=tmp_path)
-    assert backend.requests[0].sources_dir is None
-    assert not (tmp_path / ".sources").exists()
-    hooks = (tmp_path / "mkosi" / "default" / "scripts" / "04-build.sh").read_text()
-    assert f"fetch -q --depth=1 {url} {first}" in hooks
 
 
 # ── backend mounts ───────────────────────────────────────────────────

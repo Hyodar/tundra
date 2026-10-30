@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The mkosi-native tree (v2 gate 1, breaking)
+
+- `compile` writes one mkosi 27.1 project: the root `mkosi.conf` is the QEMU raw disk (`qemu.raw`, an ESP around `payload.efi`), `mkosi.images/payload/` includes `payload/` (the OS: `mkosi.conf`, one `mkosi.conf.d/NN-<concern>.conf` per fragment, trees, `mkosi.<phase>.d/` scripts), `mkosi.images/{azure,gcp}/` wrap the same payload and convert it at postoutput (`azure.vhd`, `gcp.tar.gz`), and a variant that adds content is `payload/mkosi.profiles/<variant>/`. Per-variant directories are gone.
+- The tree always writes `MinimumVersion=27.1`, `Snapshot=`/`ToolsTreeSnapshot=`, `ToolsTree=default` with its distribution and release, `SourceDateEpoch=`, `Seed=` per image, `History=no`, `WithNetwork=` (`no` unless `Mkosi(build_network=True)`, now the default) and ships `/etc/machine-id` as `uninitialized`.
+- The payload carries the glue of every cloud target the recipe names, gated at boot; a variant that only names outputs selects wrappers. `tundravm.declarative.mkosi_argv(lowered, variant)` gives the `--profile=`/`--dependency=` options that select it.
+- `Mkosi(root="verity")`: an erofs root and its dm-verity hash partition, copied beside the ESP in every disk.
+- Removed: `Mkosi(layout=, dialect=, init_script=, cloud_postoutput=)`, the `nethermind-v1` dialect, standalone variants and variants that remove or replace declarations other than `File`, `Repository` and `Debloat`, per-variant settings and kernels, `Tdxs(legacy_units=)`, `tundravm import`.
+- Lint: `mkosi-configure-script` and `mkosi-environment-passthrough` (errors; lowering refuses both).
+- `docs/design/evidence/gate1-tree.md`: the fixture tree and its resolved `mkosi summary`.
+
 This release replaces the SDK's public API. An image is now an immutable value, a `Recipe`, and every lifecycle step is a function over it. The fluent `Image`/`Profile`/`Module` builder is gone from the public surface.
 
 ### Added

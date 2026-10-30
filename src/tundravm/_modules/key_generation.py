@@ -137,17 +137,12 @@ class KeyGeneration(Module):
             )
 
     def source_spec(self) -> SourceBuild:
-        """The ``key-gen`` source build from ``source``.
-
-        ``mark_unpinned=False`` keeps the unpinned hook byte-identical to the
-        hand-written one this module emitted before source builds existed.
-        """
+        """The ``key-gen`` source build from ``source``."""
         return SourceBuild(
             name="key-generation",
             source=self.source,
             build=GoBuild(package="./cmd/key-gen", output="key-gen"),
             install=(Install.artifact("/usr/bin/key-gen"),),
-            mark_unpinned=False,
         )
 
     def init_script(self) -> str:

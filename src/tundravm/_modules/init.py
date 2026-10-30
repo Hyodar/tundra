@@ -75,27 +75,26 @@ def runtime_init_order(entries: Iterable[InitScriptEntry]) -> list[InitScriptEnt
 
 SCRIPT_HEADER = "#!/bin/bash\nset -euo pipefail\n"
 STEP_DIRECTORY = "/usr/lib/runtime-init"
-"""Where the per-step scripts live (one executable per step, current dialect)."""
+"""Where the per-step scripts live (one executable per step)."""
 INIT_SERVICE = "runtime-init.service"
 UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
 
 def step_unit(step: str) -> str:
-    """The oneshot unit that runs runtime-init step *step* (current dialect)."""
+    """The oneshot unit that runs runtime-init step *step*."""
     return f"runtime-init-{step}.service"
 
 
-def wait_units(needs: Iterable[str], *, steps: Collection[str], per_step: bool) -> tuple[str, ...]:
+def wait_units(needs: Iterable[str], *, steps: Collection[str]) -> tuple[str, ...]:
     """The units something needing *needs* (step names, ``"*"`` for all) waits for.
 
     Nothing without runtime-init steps; ``runtime-init.service`` for the whole
-    chain or under ``nethermind-v1`` (one unit runs every step); else each needed
-    step's own unit.
+    chain; else each needed step's own unit.
     """
     needs = [step for step in needs if step == ALL_STEPS or step in steps]
     if not steps or not needs:
         return ()
-    if not per_step or ALL_STEPS in needs:
+    if ALL_STEPS in needs:
         return (INIT_SERVICE,)
     return tuple(step_unit(step) for step in needs)
 
@@ -113,12 +112,10 @@ def is_init_path(path: str) -> bool:
 class Init:
     """Default runtime-init generator.
 
-    Holds no fragments itself; ``apply()`` renders the ones it is given. With
-    ``per_step`` (the current dialect) each step is its own oneshot unit
-    (``runtime-init-<step>.service`` running ``/usr/lib/runtime-init/<step>``,
-    ``After=``/``Requires=`` the steps it runs after) and ``runtime-init.service``
-    requires them all; otherwise (``nethermind-v1``) ``/usr/bin/runtime-init``
-    runs every step in order from the one ``runtime-init.service``.
+    Holds no fragments itself; ``apply()`` renders the ones it is given: each step is
+    its own oneshot unit (``runtime-init-<step>.service`` running
+    ``/usr/lib/runtime-init/<step>``, ``After=``/``Requires=`` the steps it runs after)
+    and ``runtime-init.service`` requires them all.
     """
 
     @property
@@ -131,7 +128,6 @@ class Init:
         *,
         scripts: Sequence[InitScriptEntry] | None = None,
         network_setup: bool = True,
-        per_step: bool = False,
     ) -> None:
         """Generate the runtime-init scripts and units into *profile*.files.
 
@@ -145,12 +141,6 @@ class Init:
             return
         profile.files = [f for f in profile.files if not is_init_path(f.path)]
         network = _network(network_setup)
-        if not per_step:
-            content = "\n".join([SCRIPT_HEADER, *(entry.script for entry in ordered)])
-            self._add(profile, "/usr/bin/runtime-init", content, "0755")
-            unit = render_service_unit(network_setup=network_setup)
-            self._add(profile, f"{UNIT_DIRECTORY}/{INIT_SERVICE}", unit, "0644")
-            return
         steps: dict[str, list[InitScriptEntry]] = {}
         for entry in ordered:
             steps.setdefault(entry.name, []).append(entry)
@@ -170,11 +160,6 @@ class Init:
     @staticmethod
     def _add(profile: ProfileState, path: str, content: str, mode: str) -> None:
         profile.files.append(FileEntry(path=path, content=content, mode=mode))
-
-
-def render_service_unit(*, network_setup: bool = True) -> str:
-    """The ``nethermind-v1`` ``runtime-init.service``, which runs ``/usr/bin/runtime-init``."""
-    return v1.runtime_init(network_setup=network_setup)
 
 
 def _network(network_setup: bool) -> str:

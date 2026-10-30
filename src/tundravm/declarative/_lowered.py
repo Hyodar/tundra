@@ -44,6 +44,7 @@ from tundravm.models import (
     FileEntry,
     InitScriptEntry,
     Kernel,
+    OutputTarget,
     ProfileState,
     RecipeState,
 )
@@ -61,22 +62,33 @@ variant's differs from the default variant's)."""
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Lowered:
-    """A recipe lowered onto the compiler: per-profile state, mkosi options, kernels and tools.
+    """A recipe lowered onto the compiler: per-profile state, mkosi options, kernel and tools.
 
-    Recipe-wide mkosi options and the kernel apply to every profile but those in
-    :attr:`profile_mkosi` and :attr:`profile_kernels`. Operations run on
-    :attr:`active`, the :meth:`select`-ed profiles.
+    The default profile is the payload; every other profile extends it, as a profile
+    overlay (:attr:`overlays`) or only through the outputs it selects (:attr:`targets`).
+    The mkosi options and the kernel are the payload's, so every profile's. Operations
+    run on :attr:`active`, the :meth:`select`-ed profiles.
     """
 
     state: RecipeState
     modules: Mapping[str, Sequence[Module]] = field(default_factory=dict, repr=False)
     """The runtime tools configured on each profile, which the checks inspect."""
+    image_id: str = "image"
+    """The tree's ``ImageId=``: the recipe name."""
     mkosi: MkosiOptions = field(default_factory=MkosiOptions)
-    profile_mkosi: Mapping[str, MkosiOptions] = field(default_factory=dict)
-    """Profiles whose mkosi options differ from ``mkosi``."""
     kernel: Kernel | None = None
-    profile_kernels: Mapping[str, Kernel | None] = field(default_factory=dict)
-    """Profiles whose kernel differs from ``kernel`` (``None``: no kernel)."""
+    targets: Mapping[str, tuple[OutputTarget, ...]] = field(default_factory=dict)
+    """Each lowered profile's outputs (``qemu``, ``azure``, ``gcp``); the payload carries the
+    glue of every target of the recipe."""
+    overlays: tuple[str, ...] = ()
+    """The profiles emitted as ``payload/mkosi.profiles/<name>/`` (they add content)."""
+    overlay_sandbox_files: Mapping[str, tuple[tuple[str, str], ...]] = field(
+        default_factory=dict, repr=False
+    )
+    """Per overlay, the build-sandbox files only it adds (a variant's ``Backports``)."""
+    concerns: Mapping[tuple[str, str], str] = field(default_factory=dict, repr=False)
+    """The payload's packages by ``(name, role)``: the concern whose ``mkosi.conf.d`` file
+    lists each (absent: the payload's own ``mkosi.conf``)."""
     mirror: str | None = None
     tools_tree_mirror: str | None = None
     snapshot: str | None = None
@@ -92,12 +104,11 @@ class Lowered:
     """Pins ``fetch`` resolved for sources the lockfile does not pin (unlocked bakes)."""
     selected: tuple[str, ...] = ()
     """The profiles operations run on; empty: the default profile."""
-    local_sources: frozenset[str] = frozenset()
     """Source builds whose source differs between the recipe's variants (every variant,
     selected or not): each variant's is pinned on its own, as ``<variant>/<name>``."""
     deb_files: tuple[DebFile, ...] = ()
-    """The packages the recipe's ``EfiStub`` hooks install, outside ``nethermind-v1``:
-    sources :meth:`deb_file` names per profile."""
+    """The packages the recipe's ``EfiStub`` hooks install: sources :meth:`deb_file` names
+    per profile."""
     secret_allowed: Mapping[str, frozenset[str]] = field(default_factory=dict, repr=False)
     """Per profile, what declares ``allow_secret=True``: file paths, ``FileTree`` paths
     ending in ``/`` and service unit names. Outside the recipe digest."""
@@ -161,13 +172,13 @@ class Lowered:
             context={"operation": "resolve_profile"},
         )
 
-    def mkosi_for(self, profile: str) -> MkosiOptions:
-        """The mkosi options *profile* is emitted with."""
-        return self.profile_mkosi.get(profile, self.mkosi)
+    def clouds(self, profile: str) -> tuple[str, ...]:
+        """The cloud wrappers *profile* builds beside the QEMU disk (its outputs but qemu)."""
+        return tuple(t for t in self.targets.get(profile, ()) if t != "qemu")
 
-    def kernel_for(self, profile: str) -> Kernel | None:
-        """The kernel *profile* builds."""
-        return self.profile_kernels.get(profile, self.kernel)
+    def mkosi_profiles(self, profile: str) -> tuple[str, ...]:
+        """The mkosi profiles *profile* is built with: itself when it is an overlay."""
+        return (profile,) if profile in self.overlays else ()
 
     def applied_modules(
         self, profile: str | None = None, *, inherited: bool = False
@@ -210,9 +221,8 @@ class Lowered:
 
         :func:`recipe_payload` of the state, plus what lies outside it: the
         ``distribution`` (base, arch, mirrors, snapshot, epoch), the ``compiler``
-        (tundravm version, dialect, the default variant's mkosi options) and per
-        variant its ``kernel`` (version, source, cmdline, tdx, sha256 of the config
-        bytes) and, where they differ from the default variant's, its ``mkosi`` options.
+        (tundravm version, the mkosi options) and per variant its ``kernel`` (version,
+        source, cmdline, tdx, sha256 of the config bytes) and its ``outputs``.
         """
         from tundravm import __version__
 
@@ -220,9 +230,8 @@ class Lowered:
         profiles = payload["profiles"]
         assert isinstance(profiles, dict)
         for name, entry in profiles.items():
-            entry["kernel"] = kernel_payload(self.kernel_for(name))
-            if name in self.profile_mkosi:
-                entry["mkosi"] = mkosi_payload(self.profile_mkosi[name])
+            entry["kernel"] = kernel_payload(self.kernel)
+            entry["outputs"] = list(self.targets.get(name, ("qemu",)))
             if name in self.unreleased:
                 entry["release"] = False
         return {
@@ -236,7 +245,6 @@ class Lowered:
             },
             "compiler": {
                 "tundravm": __version__,
-                "dialect": self.mkosi.dialect,
                 "mkosi": mkosi_payload(self.mkosi),
             },
             **payload,
@@ -248,22 +256,11 @@ class Lowered:
 
     # ── sources and pins ────────────────────────────────────────────────
 
-    @property
-    def fetches_sources(self) -> bool:
-        """Whether source builds build host-fetched checkouts (every dialect but nethermind-v1).
-
-        Their hooks, and the kernel build script, copy
-        ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``, which ``tundravm fetch``
-        writes to ``<build_dir>/.sources`` and the backend mounts; under
-        ``nethermind-v1`` the hooks and the kernel script fetch in the build sandbox.
-        """
-        return self.mkosi.dialect != "nethermind-v1"
-
     def source_builds(self, *, profile: str | None = None) -> dict[str, SourceBuild]:
         """Source builds declared for *profile* (default: every active profile), by lock key.
 
-        The key is the build's name, or ``<variant>/<name>`` for a build in
-        :attr:`local_sources` (:meth:`keyed`).
+        The key is the build's name: every variant builds the payload's builds, and a
+        variant that would replace one is refused.
         """
         builds: dict[str, SourceBuild] = {}
         for name in (profile,) if profile is not None else self.active:
@@ -272,41 +269,21 @@ class Lowered:
                 builds[spec.key] = spec
         return dict(sorted(builds.items()))
 
-    def source_key(self, profile: str, name: str) -> str:
-        """The lockfile key of *profile*'s source build *name*.
-
-        *name* itself, unless the build's source differs between variants: then
-        ``<variant>/<name>``, the variant being the one whose hook builds it (the
-        default variant for a build an extending variant inherits).
-        """
-        if name not in self.local_sources:
-            return name
-        own = self.state.ensure_profile(profile)
-        if name not in own.source_builds and own.extends is not None:
-            profile = own.extends
-        return f"{profile}/{name}"
-
     def keyed(self, profile: str, build: SourceBuild) -> SourceBuild:
-        """*build* (declared for *profile*) under its lockfile key (:meth:`source_key`)."""
-        key = self.source_key(profile, build.name)
-        return build if key == build.name else replace(build, lock_name=key)
+        """*build* (declared for *profile*) under its lockfile key: its name."""
+        del profile
+        return build
 
     def kernel_source(self, profile: str) -> KernelSource | None:
         """The source of the kernel *profile* builds, under its lockfile name.
 
-        ``None`` when the profile builds no kernel (none, or one without a
-        config). The name is ``kernel``, or ``kernel-<profile>`` when the
-        profile's kernel source differs from the default profile's.
+        ``None`` when the recipe builds no kernel (none, or one without a config). Every
+        profile builds the payload's kernel, named ``kernel``.
         """
-        kernel = self.kernel_for(profile)
-        if kernel is None or not kernel.built:
+        del profile
+        if self.kernel is None or not self.kernel.built:
             return None
-        spec = KernelSource.of(kernel)
-        if profile in self.profile_kernels and (
-            self.kernel is None or KernelSource.of(self.kernel).source != spec.source
-        ):
-            return replace(spec, name=f"kernel-{profile}")
-        return spec
+        return KernelSource.of(self.kernel)
 
     def kernel_files(self, profile: str) -> tuple[KernelFile, ...]:
         """The downloads *profile*'s composed kernel reads, under their lockfile names.
@@ -324,7 +301,8 @@ class Lowered:
         )
 
     def _kernel_files(self, profile: str | None) -> dict[str, KernelFile]:
-        kernel = self.kernel if profile is None else self.kernel_for(profile)
+        del profile
+        kernel = self.kernel
         if kernel is None:
             return {}
         found: dict[str, KernelFile] = {}
@@ -340,7 +318,7 @@ class Lowered:
     def deb_file(self, profile: str) -> DebFile | None:
         """The ``EfiStub`` package *profile*'s postinst hooks install, under its lockfile name.
 
-        ``None`` when it installs none (or under ``nethermind-v1``). The name is
+        ``None`` when it installs none. The name is
         ``efi-stub``, or ``efi-stub-<profile>`` when the profile's package differs
         from the default profile's.
         """
@@ -365,14 +343,11 @@ class Lowered:
     def lock_sources(self) -> dict[str, NamedSource]:
         """What ``lock`` pins and ``fetch`` checks out for the active profiles, by name.
 
-        The source builds and, outside ``nethermind-v1`` (:attr:`fetches_sources`),
-        the built kernels' sources (:meth:`kernel_source`) and the ``EfiStub``
+        The source builds, the built kernel's source (:meth:`kernel_source`) and the ``EfiStub``
         packages (:meth:`deb_file`).
         """
         builds = self.source_builds()
         sources: dict[str, NamedSource] = dict(builds)
-        if not self.fetches_sources:
-            return sources
         for profile in self.active:
             files = [
                 (spec, f"the kernel's {spec.name}", "a kernel file's")
@@ -430,7 +405,7 @@ class Lowered:
         choose where packages come from, not which, and stay out.
         """
         effective = self.state.effective_profile(profile)
-        options = self.mkosi_for(profile)
+        options = self.mkosi
         return {
             "base": self.state.base,
             "arch": self.arch,
@@ -451,7 +426,6 @@ class Lowered:
             "build_packages": sorted(effective.build_packages),
             "build_settings": {
                 "environment": dict(sorted(options.environment.items())),
-                "environment_passthrough": list(options.environment_passthrough or ()),
                 "sandbox_trees": list(options.sandbox_trees),
                 "sandbox_files": [
                     {"path": path, "sha256": hashlib.sha256(text.encode()).hexdigest()}
@@ -469,34 +443,24 @@ class Lowered:
         """The :func:`~tundravm._source.fingerprint` of *profile*'s :meth:`build_distribution`."""
         return fingerprint(self.build_distribution(profile))
 
-    def pinned_state(
-        self, pins: Mapping[str, LockedFetch], *, variant: str | None = None
-    ) -> RecipeState:
+    def pinned_state(self, pins: Mapping[str, LockedFetch]) -> RecipeState:
         """The state with every pinned source build's hook rendered at its pin from *pins*.
 
-        A mounted hook's fingerprint takes the distribution of the profile that
-        declares the build, or with *variant* that of *variant* for every
-        profile, the builds *variant* inherits included: what its own tree runs.
+        A hook's fingerprint takes the distribution of the profile that declares the build.
         """
         profiles: dict[str, ProfileState] = {}
         changed = False
-        mounted = self.fetches_sources
-        shared = self.build_distribution(variant) if mounted and variant is not None else None
         for name, profile in self.state.profiles.items():
-            distribution = shared
-            if mounted and shared is None:
-                distribution = self.build_distribution(name)
+            distribution = self.build_distribution(name)
             swaps = {
-                spec.render(mounted=mounted): pinned
+                spec.render(): pinned
                 for spec in profile.source_builds.values()
                 if (
                     pinned := spec.render(
-                        self.keyed(name, spec).pin_from(pins),
-                        mounted=mounted,
-                        distribution=distribution,
+                        self.keyed(name, spec).pin_from(pins), distribution=distribution
                     )
                 )
-                != spec.render(mounted=mounted)
+                != spec.render()
             }
             deb = self.deb_file(name)
             if deb is not None and (pinned := deb.render(deb.pin_from(pins))) != deb.script:
@@ -626,14 +590,9 @@ def _composed_payload(kernel: Kernel) -> dict[str, object]:
 
 
 def mkosi_payload(options: MkosiOptions) -> dict[str, object]:
-    """*options* that differ from the defaults, JSON-ready; sandbox files by sha256.
-
-    The dialect is the ``compiler`` section's own key.
-    """
+    """*options* that differ from the defaults, JSON-ready; sandbox files by sha256."""
     found: dict[str, object] = {}
     for name, value in options.non_defaults().items():
-        if name == "dialect":
-            continue
         if name == "sandbox_files":
             found[name] = [
                 {"path": path, "sha256": hashlib.sha256(text.encode()).hexdigest()}

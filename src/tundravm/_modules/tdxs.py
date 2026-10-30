@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from tundravm._units import v1
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -112,15 +111,6 @@ class Tdxs:
             lines.append("verify_identity_token: true")
         return lines
 
-    def render_service_unit(self) -> str:
-        return v1.tdxs_service(
-            socket=self.socket_name,
-            user=self.user,
-            group=self.group,
-            config=self.config_path,
-            log_level=self.log_level,
-        )
-
     def render_udev_rule(self) -> str:
         """The rule handing ``/dev/tdx_guest`` to :attr:`group` (``root:<group> 0660``)."""
         return (
@@ -128,13 +118,8 @@ class Tdxs:
             f'KERNEL=="tdx_guest", GROUP="{self.group}", MODE="0660"\n'
         )
 
-    def render_socket_unit(self) -> str:
-        return v1.tdxs_socket(
-            path=self.socket_path, mode=self.socket_mode, user=self.socket_user, group=self.group
-        )
-
     def service(self, needs: Sequence[Ready]) -> Service:
-        """The typed socket-activated ``tdxs`` service (current dialect), waiting for *needs*.
+        """The typed socket-activated ``tdxs`` service, waiting for *needs*.
 
         Least privilege from tundra-tools' source (unverified on TDX hardware):
 

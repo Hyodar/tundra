@@ -198,15 +198,15 @@ $ tundravm inspect node.py --variant dev --why unit:app
 why unit:app (variant dev)
   Service(app.service)
     declared at node.py:58 in common via app (App)
-files (in dev/):
+files (in payload/):
   mkosi.extra/usr/lib/systemd/system/app.service
 generated:
-  scripts/06-postinst.sh: mkosi-chroot systemctl enable app.service
-  scripts/06-postinst.sh: minimal.target.wants/app.service link
+  mkosi.postinst.d/50-postinst.sh: mkosi-chroot systemctl enable app.service
+  mkosi.postinst.d/50-postinst.sh: minimal.target.wants/app.service link
 [exit 0]
 ```
 
-The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in `dev/mkosi.extra/`, and the compiler added the enablement into `minimal.target` (a variant with runtime-init steps would also get the ordering after `runtime-init.service`: `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)). `node.py:58` is the line in `App.compose()` that constructs the `Service`: every declaration records where it was written, and `lint` points at the same lines. A declaration a variant adds, edits or removes lists that step too, with the line of the edit (`content edited at FILE:LINE in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
+The service is declared in `common` (the recipe's own `items`), inside the `app` fragment that the `App` composite returns. Its unit file lands in the payload's `mkosi.extra/` (every variant boots the payload; `dev` only adds its `DevTools` overlay under `payload/mkosi.profiles/dev/`), and the compiler added the enablement into `minimal.target` (a variant with runtime-init steps would also get the ordering after `runtime-init.service`: `Service` waits for every step by default; see [Concepts: Runtime init](concepts.md#runtime-init)). `node.py:58` is the line in `App.compose()` that constructs the `Service`: every declaration records where it was written, and `lint` points at the same lines. A declaration a variant adds, edits or removes lists that step too, with the line of the edit (`content edited at FILE:LINE in variant prod`). `--why` compiles the variant into a scratch directory and writes nothing (see [CLI: Explaining one object](cli.md#explaining-one-object)).
 
 ## 3. Lint
 
@@ -301,7 +301,7 @@ compiled mkosi
 [exit 0]
 ```
 
-The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports each of its sections as a `lock-added` error (`variants.debug.packages is not in the lock`, ...). The lockfile (version 5) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest), the build `toolchain` (the tundravm and measurement tool versions, and with a real backend mkosi and systemd), and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` holds one directory per variant (`mkosi.conf`, `mkosi.extra/`, `mkosi.skeleton/`, `scripts/`). Commit it: it is the reviewable form of the image.
+The lock from step 1 has no `debug` variant: until this `lock`, `lint` reports each of its sections as a `lock-added` error (`variants.debug.packages is not in the lock`, ...). The lockfile (version 5) records a digest per recipe section (the distribution, the compiler, each variant's packages, files, kernel, debloat and the rest), the build `toolchain` (the tundravm and measurement tool versions, and with a real backend mkosi and systemd), and, for a recipe with source builds, the commit each one resolved to. `compile`, `diff` and `bake` read `build/tundravm.lock` when it exists, so lock before you compile: a recipe with source builds compiles its pins. `recipe_digest` is the digest the lockfile records and `tree_digest` the digest of the emitted tree. `mkosi/` is one mkosi project: the root `mkosi.conf` (the QEMU disk and the settings every image shares), `payload/` (the OS: `mkosi.conf`, one `mkosi.conf.d/NN-<fragment>.conf` per fragment, `mkosi.extra/`, `mkosi.skeleton/`, the `mkosi.<phase>.d/` scripts) with `payload/mkosi.profiles/dev/` and `payload/mkosi.profiles/debug/` for what those variants add, and `mkosi.images/` (the payload subimage, and a wrapper per cloud target). Commit it: it is the reviewable form of the image, and `mkosi build` and `mkosi vm` read it as is.
 
 ## 6. Iterate with watch
 
@@ -319,7 +319,7 @@ watching node.py every 1s (Ctrl-C stops)
 
 - The first line is the check at start: `mkosi/` (the table's `tree`) matches what step 5 compiled.
 - Port 80 trips `App`'s `app-privileged-port` check in all three variants. An error-level fragment check keeps the recipe from lowering, so the line names the first error instead of the counts and checks no tree; `watch` keeps polling.
-- Port 9090 passes the check. The three errors left are lockfile drift, one `variants.<variant>.files` section per variant (`lock drifted (3 sections)`), and six files of `mkosi/` are stale: per variant, `app.conf` and the firewall's `/etc/nftables.conf`, which now opens 9090 instead of 8080. `watch` never writes the tree or the lock; step 7 shows the diff, locks again and recompiles.
+- Port 9090 passes the check. The three errors left are lockfile drift, one `variants.<variant>.files` section per variant (`lock drifted (3 sections)`), and two files of `mkosi/` are stale: the payload's `app.conf` and the firewall's `/etc/nftables.conf`, which now opens 9090 instead of 8080. `watch` never writes the tree or the lock; step 7 shows the diff, locks again and recompiles.
 - Ctrl-C prints `stopped` and exits 0.
 
 `watch` polls `node.py` and every `.py` beside it, such as the `fragments.py` of step 14, the files the recipe reads, the lockfile, `pyproject.toml` and the tree, every second (`--interval` changes that), and re-imports the modules the recipe takes from its directory before each check. Its counts are `lint`'s, lockfile drift included, so a `tundravm lock` in another terminal clears them. `--write` recompiles a stale tree on each change instead of reporting it. See [CLI: Watch](cli.md#watch).
@@ -340,16 +340,16 @@ Step 6 left `APP_PORT = 9090` in the recipe. Ask what changed:
 
 ```console
 $ tundravm diff node.py --tree mkosi --variant default
-diff --git a/default/mkosi.extra/etc/app/app.conf b/default/mkosi.extra/etc/app/app.conf
---- a/default/mkosi.extra/etc/app/app.conf
-+++ b/default/mkosi.extra/etc/app/app.conf
+diff --git a/payload/mkosi.extra/etc/app/app.conf b/payload/mkosi.extra/etc/app/app.conf
+--- a/payload/mkosi.extra/etc/app/app.conf
++++ b/payload/mkosi.extra/etc/app/app.conf
 @@ -1,2 +1,2 @@
  version=0.1.0
 -listen=0.0.0.0:8080
 +listen=0.0.0.0:9090
-diff --git a/default/mkosi.extra/etc/nftables.conf b/default/mkosi.extra/etc/nftables.conf
---- a/default/mkosi.extra/etc/nftables.conf
-+++ b/default/mkosi.extra/etc/nftables.conf
+diff --git a/payload/mkosi.extra/etc/nftables.conf b/payload/mkosi.extra/etc/nftables.conf
+--- a/payload/mkosi.extra/etc/nftables.conf
++++ b/payload/mkosi.extra/etc/nftables.conf
 @@ -12,7 +12,7 @@
  		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
  		udp sport 67 udp dport 68 accept comment "DHCPv4 replies"
@@ -362,13 +362,9 @@ diff --git a/default/mkosi.extra/etc/nftables.conf b/default/mkosi.extra/etc/nft
 [exit 1]
 
 $ tundravm compile node.py --tree mkosi --check
-M  debug/mkosi.extra/etc/app/app.conf
-M  debug/mkosi.extra/etc/nftables.conf
-M  default/mkosi.extra/etc/app/app.conf
-M  default/mkosi.extra/etc/nftables.conf
-M  dev/mkosi.extra/etc/app/app.conf
-M  dev/mkosi.extra/etc/nftables.conf
-6 files changed
+M  payload/mkosi.extra/etc/app/app.conf
+M  payload/mkosi.extra/etc/nftables.conf
+2 files changed
 [exit 1]
 ```
 
@@ -620,7 +616,7 @@ note: no mkosi package manifest at default/default.manifest: listing the package
 [exit 0]
 ```
 
-`sbom` merges three records of one baked variant: mkosi's package manifest beside the artifact, the lockfile's source pins, and the recipe metadata and digests from `bake-result.json` (`tree digest` is the digest of the variant's own directory of the tree, which the bake records per variant, so it is not `compile`'s `tree_digest` of every variant). Paths are relative to the build directory, so moving `build/` gives the same document. `bound  yes` says the document describes this bake: the artifact still hashes to the sha256 the bake recorded, and the lockfile (and a manifest, when there is one) is the one the bake read; otherwise `sbom` fails with `E_ARTIFACT_CHANGED`. The in-process bake installed nothing, so there is no manifest: the notes say so, `installed  no` says the table lists the packages the recipe declares, without versions. After a real bake the table lists every installed package with the version and architecture from mkosi's manifest, `sources` lists each source build, built kernel and `EfiStub` package with its pin, and `snapshot` names the archive snapshot when the recipe pins one (the starter does not). Once the recipe ships `/usr/bin/app` as a `GoBinary` or a `Cargo` build, `--binaries DIR` (a directory holding the built binaries) adds the Go modules or `cargo auditable` crates embedded in each one as components of that build, provided the binary's sha256 is the one the bake recorded from the UKI; any other binary is listed as unbound and the document is marked incomplete. See [CLI: SBOM](cli.md#sbom).
+`sbom` merges three records of one baked variant: mkosi's package manifest beside the artifact, the lockfile's source pins, and the recipe metadata and digests from `bake-result.json` (`tree digest` is the digest of the tree the variant builds from: the shared payload and disks, and its own profile overlay, which the bake records per variant, so it is not `compile`'s `tree_digest` of every variant). Paths are relative to the build directory, so moving `build/` gives the same document. `bound  yes` says the document describes this bake: the artifact still hashes to the sha256 the bake recorded, and the lockfile (and a manifest, when there is one) is the one the bake read; otherwise `sbom` fails with `E_ARTIFACT_CHANGED`. The in-process bake installed nothing, so there is no manifest: the notes say so, `installed  no` says the table lists the packages the recipe declares, without versions. After a real bake the table lists every installed package with the version and architecture from mkosi's manifest, `sources` lists each source build, built kernel and `EfiStub` package with its pin, and `snapshot` names the archive snapshot when the recipe pins one (the starter does not). Once the recipe ships `/usr/bin/app` as a `GoBinary` or a `Cargo` build, `--binaries DIR` (a directory holding the built binaries) adds the Go modules or `cargo auditable` crates embedded in each one as components of that build, provided the binary's sha256 is the one the bake recorded from the UKI; any other binary is listed as unbound and the document is marked incomplete. See [CLI: SBOM](cli.md#sbom).
 
 The default format is SPDX 2.3 JSON, and `--output` writes it to a file to publish next to `peer.json`:
 
@@ -772,10 +768,10 @@ Units: enable chrony.service, systemd-networkd.service, systemd-networkd.socket,
   app-healthcheck  /usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/  restart=no  type=oneshot  user=app-healthcheck  disabled
 
 $ tundravm diff node.py --tree mkosi --variant default --stat
-M  default/mkosi.conf
-A  default/mkosi.extra/usr/lib/systemd/system/app-healthcheck.service
-A  default/mkosi.extra/usr/lib/systemd/system/app-healthcheck.timer
-M  default/scripts/06-postinst.sh
+A  payload/mkosi.conf.d/40-healthcheck.conf
+A  payload/mkosi.extra/usr/lib/systemd/system/app-healthcheck.service
+A  payload/mkosi.extra/usr/lib/systemd/system/app-healthcheck.timer
+M  payload/mkosi.postinst.d/50-postinst.sh
 4 files changed
 [exit 1]
 
@@ -795,7 +791,7 @@ compiled mkosi
 [exit 0]
 ```
 
-`mkosi.conf` gained `curl`, and `06-postinst.sh` creates the probe's system user and enables its timer. The recipe directory is importable while the recipe loads, so `fragments.py` needs no packaging. The [fragment guide](module-authoring.md) covers builds, units and ordering in depth.
+`payload/mkosi.conf.d/40-healthcheck.conf` lists the fragment's `curl` (one file per fragment), and `50-postinst.sh` creates the probe's system user and enables its timer. The recipe directory is importable while the recipe loads, so `fragments.py` needs no packaging. The [fragment guide](module-authoring.md) covers builds, units and ordering in depth.
 
 ## 15. Test it
 
@@ -1059,8 +1055,8 @@ Recipe `node`, variants `default`: 6 changes.
 
 | Change | Variant | File | What | Declared by |
 |---|---|---|---|---|
-| changed | `default` | `mkosi.extra/etc/app/app.conf` | content | File(extra, /etc/app/app.conf) (declared in app) |
-| changed | `default` | `mkosi.extra/usr/lib/systemd/system/app.service` | content | Service(app.service) (declared in app) |
+| changed | `default` | `payload/mkosi.extra/etc/app/app.conf` | content | File(extra, /etc/app/app.conf) (declared in app) |
+| changed | `default` | `payload/mkosi.extra/usr/lib/systemd/system/app.service` | content | Service(app.service) (declared in app) |
 
 ### Not compared (2)
 
@@ -1079,7 +1075,7 @@ Recipe `node`, variants `default`: 6 changes.
 
 ```console
 $ tundravm status
-recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  root initramfs  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
@@ -1124,7 +1120,7 @@ removed build/.tundravm-hashes.json
 [exit 0]
 
 $ tundravm status
-recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  root initramfs  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
@@ -1168,7 +1164,7 @@ release releases/node-1.0: fail (simulated)
 
 ```console
 $ tundravm status
-recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  root initramfs  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
@@ -1254,7 +1250,7 @@ The note says the release is unsigned: `release --sign KEY` signs `release-manif
 
 ```console
 $ tundravm status
-recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest 12c49c11c89d  variants default, dev, debug  root initramfs  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels
@@ -1271,7 +1267,7 @@ next: tundravm bake
 [exit 0]
 
 $ tundravm status --variant default --variant debug
-recipe    ok       node.py  digest f233478eac3e  variants default, debug  dialect current  base debian/trixie
+recipe    ok       node.py  digest f233478eac3e  variants default, debug  root initramfs  base debian/trixie
 lint      ok       0 errors, 0 warnings, 0 infos
 lock      ok       build/tundravm.lock  v5  up to date
 source    n/a      no source builds or kernels

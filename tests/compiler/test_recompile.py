@@ -1,4 +1,5 @@
-"""Recompiling: stale files drop, other variants stay, and runtime-init is generated once."""
+"""Recompiling: stale files drop, what the tree does not own stays, runtime-init is generated
+once."""
 
 from __future__ import annotations
 
@@ -36,32 +37,37 @@ def _recipe(*items: Declaration) -> Recipe:
 def test_recompile_removes_stale_variant_files(tmp_path: Path) -> None:
     dest = tmp_path / "mkosi"
     emit(lower(_recipe(File("/etc/old.conf", "old\n"))).select(VARIANTS), dest)
-    old_path = dest / "default" / "mkosi.extra" / "etc" / "old.conf"
+    old_path = dest / "payload" / "mkosi.extra" / "etc" / "old.conf"
     assert old_path.exists()
-    stray = dest / "default" / "stray.txt"
+    stray = dest / "payload" / "stray.txt"
     stray.write_text("left behind\n", encoding="utf-8")
     root_note = dest / "NOTES.md"
     root_note.write_text("kept\n", encoding="utf-8")
+    state = dest / "mkosi.tools"
+    state.mkdir()
+    old_layout = dest / "default"  # a per-variant directory an earlier tundravm wrote
+    old_layout.mkdir()
+    (old_layout / "mkosi.conf").write_text("[Output]\nFormat=uki\n", encoding="utf-8")
 
     emit(lower(_recipe()).select(VARIANTS), dest)
 
     assert not old_path.exists()
     assert not stray.exists()
-    assert root_note.exists()
-    assert (dest / "dev" / "mkosi.conf").exists()
+    assert not old_layout.exists()
+    assert root_note.exists() and state.is_dir()  # not the tree's, mkosi's state
+    assert (dest / "payload" / "mkosi.profiles" / "dev" / "mkosi.conf").exists()
 
 
-def test_compile_of_one_variant_leaves_other_variants_alone(tmp_path: Path) -> None:
+def test_compile_of_one_variant_writes_only_its_profile(tmp_path: Path) -> None:
     image = lower(_recipe())
     dest = tmp_path / "mkosi"
     emit(image.select(VARIANTS), dest)
-    marker = dest / "dev" / "marker"
-    marker.write_text("x", encoding="utf-8")
+    assert (dest / "payload" / "mkosi.profiles" / "dev").is_dir()
 
     emit(image.select(("default",)), dest)
 
-    assert marker.exists()
-    assert (dest / "default" / "mkosi.conf").exists()
+    assert not (dest / "payload" / "mkosi.profiles").exists()
+    assert (dest / "mkosi.conf").exists() and (dest / "payload" / "mkosi.conf").exists()
 
 
 def _init_recipe(extra: Variant) -> Recipe:
@@ -94,8 +100,10 @@ def test_recompile_with_more_variants_does_not_duplicate_runtime_init(tmp_path: 
     assert _init_service_count(img.state, "dev") == 0
     assert img.select(VARIANTS).payload() == payload
     for tree in ("first", "second", "third"):
-        assert (tmp_path / tree / "default/mkosi.extra/usr/lib/runtime-init/hello").is_file()
-    assert (tmp_path / "second/dev/mkosi.extra/usr/lib/runtime-init/hello").is_file()
+        assert (tmp_path / tree / "payload/mkosi.extra/usr/lib/runtime-init/hello").is_file()
+    # the dev profile inherits the payload's runtime-init: its overlay carries none
+    overlay = tmp_path / "second/payload/mkosi.profiles/dev"
+    assert overlay.is_dir() and not (overlay / "mkosi.extra/usr/lib/runtime-init").exists()
 
 
 def test_bake_after_compile_across_variants(

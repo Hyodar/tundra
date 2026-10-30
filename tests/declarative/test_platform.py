@@ -51,11 +51,10 @@ def test_the_efi_stub_comes_from_the_platform_archive() -> None:
     assert stub(rooted) == EfiStub(
         snapshot=f"https://m.example/archive/debian/{SNAPSHOT}", version="1"
     )
-    assert stub(Debian("trixie", mirror=ARCHIVE, efi_stub="1")) == EfiStub(
-        snapshot=ARCHIVE, version="1"
-    )
-    with pytest.raises(ValidationError, match="efi_stub needs the archive"):
-        Debian("trixie", efi_stub="1")
+    # a mirror that is itself a snapshot archive is no archive: the snapshot names it
+    for platform in ({}, {"mirror": ARCHIVE}):
+        with pytest.raises(ValidationError, match="efi_stub needs the archive"):
+            Debian("trixie", efi_stub="1", **platform)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -90,7 +89,10 @@ def test_every_variant_gets_the_platform_with_its_provenance() -> None:
     assert Package("udev") not in resolve(recipe, variant="no-udev").items
     origins = provenance(recipe, variant="default")[("Package", "systemd", "runtime")]
     assert [(o.action, o.variant) for o in origins] == [("declared", PLATFORM_LEVEL)]
-    assert origins[0].location == f"{__file__}:80"  # where the platform is written
+    assert origins[0].location == f"{__file__}:79"  # where the platform is written
     at = display_location(origins[0].location)
     assert origins[0].describe() == f"declared at {at} in the platform"
-    assert lower(recipe).base == "debian/trixie"
+    assert lower(recipe, variants=("default",)).base == "debian/trixie"
+    # resolved, they are other images; lowered, a profile overlay can only add to the payload
+    with pytest.raises(ValidationError, match="'rescue' \\(it is standalone\\)"):
+        lower(recipe)

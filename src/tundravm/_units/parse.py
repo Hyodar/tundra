@@ -236,9 +236,9 @@ def _lowered(decl: Declaration) -> ProfileState:
             state._service(profile, decl)
             state._finish_service(profile, decl)
         case Task():
-            state._task(profile, decl, users=(), historical=False)
+            state._task(profile, decl, users=())
         case Mount():
-            state._mount(profile, decl, steps=(), per_step=False)
+            state._mount(profile, decl, steps=())
         case _:
             raise TypeError(f"cannot render {type(decl).__name__}")
     return profile

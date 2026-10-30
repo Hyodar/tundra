@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from tests.lint.test_check_rules import recipe, report
-from tundravm import File, Mkosi, Package, Recipe, Service, Unit, Variant
+from tundravm import File, Package, Recipe, Service, Unit, Variant
 from tundravm._units.lint import Facts, ShippedUnit, unit_findings
 from tundravm.check import Diagnostic
 
@@ -132,16 +132,12 @@ def test_a_package_named_after_the_account_provides_it() -> None:
     assert found(*items, Package("prometheus-node-exporter"), code="service-user-missing") == []
 
 
-def test_the_historical_dialect_keeps_correctness_codes_only() -> None:
+def test_style_and_correctness_codes_are_reported() -> None:
     text = service("ExecStart=ip link\nRestart=onfailure", "[Unit]\nRequires=b.service\n")
     items = (*recipe().items, Unit("x.service", text, enabled=True))
     current = Recipe("c", items=items, variants=(Variant("default", outputs=("qemu",)),))
-    historical = Recipe(
-        "h", items=items, variants=current.variants, mkosi=Mkosi(dialect="nethermind-v1")
-    )
     unit_codes = {"unit-exec-relative", "requires-without-after", "unit-raw", "unit-value-invalid"}
     assert {d.code for d in report(current)} & unit_codes == unit_codes
-    assert {d.code for d in report(historical)} & unit_codes == {"unit-value-invalid"}
 
 
 UNIT_CODES = frozenset(
@@ -163,17 +159,20 @@ UNIT_CODES = frozenset(
         "unit-as-file",
     }
 )
-EXPECTED_UNIT_FINDINGS: dict[str, set[str]] = {}
-"""What the repository's own recipes report: nothing since ``Tdxs`` emits typed units (the
-surge recipe keeps the historical texts, whose style codes are off under
-``nethermind-v1``)."""
+EXPECTED_UNIT_FINDINGS: dict[str, set[str]] = {
+    "nethermind_base": {"unit-as-file", "unit-exec-relative"},
+    "surge": {"unit-as-file", "unit-exec-relative", "unit-raw"},
+}
+"""What the repository's own recipes report: the nethermind-tdx base and the surge stack keep
+their historical unit texts (raw units, a unit as a skeleton file, relative ``ExecStart=``);
+everything else emits typed units."""
 
 
 def test_repository_recipes_report_only_the_expected_unit_findings(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    from tests.compiler.test_lowering_parity import recipe_paths
     from tests.helpers import REPO_ROOT
+    from tests.unit_corpus import recipe_paths
     from tundravm.declarative import load
     from tundravm.declarative.lifecycle import check_report
 

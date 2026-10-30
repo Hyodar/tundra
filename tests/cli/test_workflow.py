@@ -104,7 +104,7 @@ def test_cli_compile_diff_lock_ci(cli_recipe: Path, tmp_path: Path) -> None:
     code, out, _ = run_cli("compile", cli_recipe, "--tree", "mkosi")
     assert code == 0 and "variants:      default, azure\n" in out
     assert "  recipe_digest: " in out and "  tree_digest:   " in out
-    assert (tmp_path / "mkosi" / "azure" / "mkosi.conf").is_file()
+    assert (tmp_path / "mkosi" / "mkosi.images" / "azure" / "mkosi.conf").is_file()
     code, out, _ = run_cli("compile", cli_recipe, "--tree", "mkosi", "--check")
     assert (code, out.strip()) == (0, "tree is up to date with the recipe")
     code, out, _ = run_cli("diff", cli_recipe, "--tree", "mkosi")

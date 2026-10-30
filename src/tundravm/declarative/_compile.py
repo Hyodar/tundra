@@ -2,9 +2,10 @@
 
 :func:`emit` generates runtime-init into a scratch copy of the state (so
 compiling never changes what lint, lock or a second compile see), renders each
-pinned source build's hook at its pin (per variant in the per-directory layout,
-whose trees each run their inherited builds), and hands the state with one
-``EmitConfig`` per profile to the emitter.
+pinned source build's hook at its pin and hands the state with its ``EmitConfig``
+to the emitter, which writes the one mkosi-native tree: the payload with a profile
+overlay per active content variant, the QEMU disk and a wrapper per active cloud target.
+:func:`mkosi_argv` is how a build selects one variant of that tree.
 """
 
 from __future__ import annotations
@@ -15,14 +16,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from tundravm._modules.init import Init, wait_units
-from tundravm._options import MkosiOptions
 from tundravm.compiler import EmitConfig, MkosiEmission, emit_mkosi_tree
-from tundravm.errors import PolicyError, ValidationError
+from tundravm.errors import PolicyError
 from tundravm.lockfile import LockedFetch
 from tundravm.models import (
     NETWORK_SETUP_UNIT,
     CompileResult,
-    Kernel,
     ProfileState,
     ServiceSpec,
     enable_unit,
@@ -40,61 +39,28 @@ def emit(lowered: Lowered, destination: Path) -> tuple[CompileResult, MkosiEmiss
     pins = lowered.build_pins()
     _enforce_source_policy(lowered, pins)
     initialized = _with_init(lowered)
-    config = _emit_config(lowered, pins)
-    if config.emit_mode == "native_profiles":
-        _require_shared_distribution(lowered)
-        groups = [(initialized.pinned_state(pins), lowered.active)]
-    else:
-        # Each variant's directory runs its inherited builds too, keyed by its own distribution.
-        groups = [
-            (initialized.pinned_state(pins, variant=name), (name,)) for name in lowered.active
-        ]
-    emissions = [
-        emit_mkosi_tree(
-            recipe=state,
-            destination=Path(destination),
-            profile_names=names,
-            base=lowered.base,
-            config=config,
-        )
-        for state, names in groups
-    ]
-    emission = MkosiEmission(
-        root=emissions[0].root,
-        profile_paths={k: v for each in emissions for k, v in each.profile_paths.items()},
-        script_paths={k: v for each in emissions for k, v in each.script_paths.items()},
+    emission = emit_mkosi_tree(
+        recipe=initialized.pinned_state(pins),
+        destination=Path(destination),
+        config=_emit_config(lowered, pins),
     )
     digest = initialized.digest()
     return CompileResult(path=Path(destination), profiles=lowered.active, digest=digest), emission
 
 
-def _require_shared_distribution(lowered: Lowered) -> None:
-    """Refuse a native layout whose root builds run in a variant with another distribution.
+def mkosi_argv(lowered: Lowered, variant: str) -> list[str]:
+    """The mkosi options that select *variant* in the tree (run with ``--directory`` at its root).
 
-    The root tree's kernel script and source build hooks run in every variant
-    and are keyed by the default variant's :meth:`~Lowered.build_distribution`;
-    a variant that builds against another distribution would restore, or cache
-    under the default variant's key, a build from its own toolchain.
+    The main image (the QEMU disk, which needs the payload) is always built; a content
+    variant adds ``--profile=<variant>`` (its ``payload/mkosi.profiles/<variant>/``
+    overlay) and each cloud target ``--dependency=<target>`` (its wrapper subimage).
+    The directory, output directory, verb and ``--force`` are the caller's.
     """
-    default = lowered.default_profile
-    if not lowered.fetches_sources or not (
-        lowered.kernel_source(default) is not None
-        or lowered.state.effective_profile(default).source_builds
-    ):
-        return
-    expected = lowered.distribution_fingerprint(default)
-    for name in lowered.active:
-        if name != default and lowered.distribution_fingerprint(name) != expected:
-            raise ValidationError(
-                f"native_profiles mode cannot build variant {name!r}: it builds against "
-                f"another distribution than the default variant {default!r}, whose kernel "
-                "and source builds the root tree runs (and caches) for every variant.",
-                hint=(
-                    "Give the variant the default variant's repositories, build packages "
-                    "and Build settings, or use emit_mode='per_directory'."
-                ),
-                context={"profile": name, "operation": "emit_mkosi"},
-            )
+    profile = lowered.select([variant]).profile()
+    return [
+        *(f"--profile={name}" for name in lowered.mkosi_profiles(profile)),
+        *(f"--dependency={target}" for target in lowered.clouds(profile)),
+    ]
 
 
 def _with_init(lowered: Lowered) -> Lowered:
@@ -117,22 +83,20 @@ def _with_init(lowered: Lowered) -> Lowered:
         if not merged:
             continue
         network_setup = _needs_network_setup(copied, profile.name)
-        per_step = _per_step(copied, profile.name)
         if profile.extends is not None and not profile.init_scripts:
             # inherits the default profile's runtime-init files and enablement,
             # unless its own network-setup.service changes the units
             if network_setup != _needs_network_setup(copied, profile.extends):
-                init.apply(profile, scripts=merged, network_setup=network_setup, per_step=per_step)
+                init.apply(profile, scripts=merged, network_setup=network_setup)
             continue
-        init.apply(profile, scripts=merged, network_setup=network_setup, per_step=per_step)
+        init.apply(profile, scripts=merged, network_setup=network_setup)
         generators.append(profile)
     service = init.service_name
     for profile in targets:
         steps = {entry.name for entry in copied.init_scripts(profile.name)}
-        per_step = _per_step(copied, profile.name)
         patched: list[ServiceSpec] = []
         for svc in profile.services:
-            waits = wait_units(svc.needs, steps=steps, per_step=per_step)
+            waits = wait_units(svc.needs, steps=steps)
             if svc.name == service or svc.name.endswith(".target") or not waits:
                 patched.append(svc)
                 continue
@@ -147,19 +111,9 @@ def _with_init(lowered: Lowered) -> Lowered:
     return copied
 
 
-def _per_step(lowered: Lowered, profile: str) -> bool:
-    """Whether *profile* runs each runtime-init step as its own unit (all but ``nethermind-v1``)."""
-    return lowered.mkosi_for(profile).dialect != "nethermind-v1"
-
-
 def _needs_network_setup(lowered: Lowered, profile: str) -> bool:
-    """Whether runtime-init requires ``network-setup.service`` in *profile*.
-
-    Always under ``nethermind-v1``; otherwise only when the profile declares
-    that unit (else runtime-init waits for ``network-online.target``).
-    """
-    if lowered.mkosi_for(profile).dialect == "nethermind-v1":
-        return True
+    """Whether runtime-init requires ``network-setup.service`` in *profile*: only when the
+    profile declares that unit (else runtime-init waits for ``network-online.target``)."""
     return ships_unit(lowered.state.effective_profile(profile), NETWORK_SETUP_UNIT)
 
 
@@ -183,58 +137,19 @@ def _enforce_source_policy(lowered: Lowered, pins: Mapping[str, LockedFetch]) ->
 
 
 def _emit_config(lowered: Lowered, pins: Mapping[str, LockedFetch]) -> EmitConfig:
-    """The emitter's configuration: recipe-wide, plus one per profile with its own.
-
-    Profiles with their own mkosi options or kernel get their own. Outside
-    ``nethermind-v1`` each built kernel carries its pin from *pins*.
-    """
-
-    def config(profile: str) -> EmitConfig:
-        return _emit_config_for(
-            lowered,
-            lowered.mkosi_for(profile),
-            lowered.kernel_for(profile),
-            _kernel_pin(lowered, profile, pins),
-        )
-
-    default = _kernel_pin(lowered, lowered.default_profile, pins)
-    own = set(lowered.profile_mkosi) | set(lowered.profile_kernels)
-    own.update(name for name in lowered.active if _kernel_pin(lowered, name, pins) != default)
-    return replace(
-        _emit_config_for(lowered, lowered.mkosi, lowered.kernel, default),
-        profiles={name: config(name) for name in sorted(own)},
-    )
-
-
-def _kernel_pin(
-    lowered: Lowered, profile: str, pins: Mapping[str, LockedFetch]
-) -> dict[str, object]:
-    """``EmitConfig`` fields for *profile*'s kernel: pin, checkout and distribution fingerprint."""
-    spec = lowered.kernel_source(profile)
-    pin = None if spec is None or not lowered.fetches_sources else spec.pin_from(pins)
-    files = tuple(
-        (file.source.url, *file.mounted(file.pin_from(pins) if lowered.fetches_sources else None))
-        for file in lowered.kernel_files(profile)
-    )
-    found: dict[str, object] = {"kernel_files": files} if files else {}
-    if spec is None or pin is None:
-        return found
-    return {
-        **found,
-        "kernel_pin": pin,
-        "kernel_checkout": spec.pin_dir(pin),
-        "kernel_distribution": lowered.distribution_fingerprint(profile),
-    }
-
-
-def _emit_config_for(
-    lowered: Lowered, options: MkosiOptions, kernel: Kernel | None, pinned: Mapping[str, object]
-) -> EmitConfig:
+    """The emitter's configuration: the payload's options and kernel, the active overlays
+    and a wrapper for every cloud target of the recipe (the payload carries their glue
+    whichever variants are selected; :func:`mkosi_argv` picks the wrappers to build)."""
+    options = lowered.mkosi
+    payload = lowered.state.ensure_profile(lowered.default_profile)
+    targets = [t for t in payload.output_targets if t != "qemu"]
     emit_kwargs: dict[str, object] = {
         "base": lowered.base,
         "arch": lowered.arch,
+        "image_id": lowered.image_id,
         "reproducible": lowered.reproducible,
-        "kernel": kernel,
+        "epoch": lowered.epoch or 0,
+        "kernel": lowered.kernel,
         "mirror": lowered.mirror,
         "tools_tree_mirror": lowered.tools_tree_mirror,
         "snapshot": lowered.snapshot,
@@ -247,20 +162,45 @@ def _emit_config_for(
         "sandbox_trees": options.sandbox_trees,
         "sandbox_files": options.sandbox_files,
         "package_cache_directory": options.package_cache_directory,
-        "init_script": options.init_script,
         "generate_version_script": options.generate_version_script,
-        "generate_cloud_postoutput": options.generate_cloud_postoutput,
-        "emit_mode": options.emit_mode,
-        "environment": dict(options.environment) or None,
-        "environment_passthrough": options.environment_passthrough,
+        "environment": dict(options.environment),
         "settings": options.settings,
         "bootable": options.bootable,
-        "dialect": options.dialect,
+        "root": options.root,
+        "targets": tuple(targets),
+        "overlays": tuple(name for name in lowered.overlays if name in lowered.active),
+        "payload_overlays": lowered.overlays,
+        "concerns": dict(lowered.concerns),
+        "overlay_sandbox_files": {
+            name: files
+            for name, files in lowered.overlay_sandbox_files.items()
+            if name in lowered.active
+        },
+        **_kernel_pin(lowered, pins),
     }
     if options.seed is not None:
         emit_kwargs["seed"] = options.seed
-    emit_kwargs.update(pinned)
     return EmitConfig(**emit_kwargs)  # type: ignore[arg-type]
 
 
-__all__ = ["emit"]
+def _kernel_pin(lowered: Lowered, pins: Mapping[str, LockedFetch]) -> dict[str, object]:
+    """``EmitConfig`` fields for the kernel: pin, checkout and distribution fingerprint."""
+    default = lowered.default_profile
+    spec = lowered.kernel_source(default)
+    pin = None if spec is None else spec.pin_from(pins)
+    files = tuple(
+        (file.source.url, *file.mounted(file.pin_from(pins)))
+        for file in lowered.kernel_files(default)
+    )
+    found: dict[str, object] = {"kernel_files": files} if files else {}
+    if spec is None or pin is None:
+        return found
+    return {
+        **found,
+        "kernel_pin": pin,
+        "kernel_checkout": spec.pin_dir(pin),
+        "kernel_distribution": lowered.distribution_fingerprint(default),
+    }
+
+
+__all__ = ["emit", "mkosi_argv"]

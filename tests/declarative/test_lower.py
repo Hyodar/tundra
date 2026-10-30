@@ -1,4 +1,5 @@
-"""Lowering: a declarative Recipe as the compiler's RecipeState, variants as profiles."""
+"""Lowering: a declarative Recipe as the compiler's RecipeState, variants as additions to the
+payload (profile overlays or cloud wrappers)."""
 
 from __future__ import annotations
 
@@ -136,19 +137,11 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "86f8db6d09f04659a43dcb04ffb2e37252cc84fb72b83138a5b2a0f0c17a068d"
-EQUIVALENCE_RECIPE = "e650653c311025468325f44534964be348eef12f66437c0af9dbaef97c63b680"
-"""The tree and recipe digests :func:`declarative_recipe` lowered to through the retired
-fluent ``Image`` calls, recorded when lowering started writing ``RecipeState`` directly
-(re-recorded when current-dialect build hooks gained their ``# tundravm build:`` line, and
-when runtime-init became a graph of boot steps, one unit per step, locked by step name, and
-when debloat's default keep list gained ``timers.target``, and when the azure provisioning
-unit became a typed ``Task`` and runtime-init step units render through the typed table, and
-when reproducible current-dialect finalize scripts gained the deterministic accounts step, and
-when the azure provisioning unit gained ``ConditionVirtualization=microsoft`` and cloud glue
-units moved first in a profile's unit order, and when current-dialect debloat started masking
-packaged triggers with their units, keeping the targets enabled units reference, and expanding
-removal globs)."""
+EQUIVALENCE_TREE = "19ac76421381bbf79aa31f0745d16275ea78833abce73f9b879106b0bddecaf8"
+EQUIVALENCE_RECIPE = "51394ca2d4424ed7676cf241e482572587f1322435922ff13ae2ac21f062c9a6"
+"""The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
+became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
+overlay)."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
@@ -166,7 +159,7 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     ]
 
     emit(lowered.select(PROFILES), tmp_path / "lowered")
-    extra = tmp_path / "lowered/default/mkosi.extra"
+    extra = tmp_path / "lowered/payload/mkosi.extra"
     assert not (extra / "usr/bin/runtime-init").exists()
     units = extra / "usr/lib/systemd/system"
     check_unit = (units / "runtime-init-mount-check.service").read_text()
@@ -179,6 +172,12 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     assert (units / "app.service").read_text() == UNIT_AFTER_INIT
     order = [entry.name for entry in runtime_init_order(lowered.init_scripts("default"))]
     assert order == ["keys", "disks", "secrets", "mount-check", "announce"]
+    # azure adds a package and edits a file: a profile overlay, built with its wrapper
+    overlay = tmp_path / "lowered/payload/mkosi.profiles/azure"
+    assert (overlay / "mkosi.extra/etc/motd").read_text() == "azure\n"
+    assert "    waagent\n" in (overlay / "mkosi.conf").read_text()
+    assert (tmp_path / "lowered/mkosi.images/azure/mkosi.conf").is_file()
+    assert (lowered.overlays, lowered.clouds("azure")) == (("azure",), ("azure",))
 
 
 def test_runtime_init_order_follows_after_and_enters_the_recipe_digest(tmp_path: Path) -> None:
@@ -189,29 +188,30 @@ def test_runtime_init_order_follows_after_and_enters_the_recipe_digest(tmp_path:
                 BootStep(second, f"echo {second}\n", after=(Ready(first),)),
                 BootStep(first, f"echo {first}\n"),
             ),
-            mkosi=Mkosi(dialect="nethermind-v1"),
         )
 
     a_first, b_first = ordered("a", "b"), ordered("b", "a")
-    scripts = []
+    afters = []
     for name, recipe in (("a", a_first), ("b", b_first)):
         emit(lower(recipe), tmp_path / name)
-        scripts.append((tmp_path / name / "default/mkosi.extra/usr/bin/runtime-init").read_text())
-    assert scripts[0].index("echo a") < scripts[0].index("echo b")
-    assert scripts[1].index("echo b") < scripts[1].index("echo a")
+        units = tmp_path / name / "payload/mkosi.extra/usr/lib/systemd/system"
+        aggregate = (units / "runtime-init.service").read_text()
+        afters.append(next(line for line in aggregate.splitlines() if line.startswith("After=")))
+    assert afters[0] == "After=runtime-init-a.service runtime-init-b.service"
+    assert afters[1] == "After=runtime-init-b.service runtime-init-a.service"
     assert lower(a_first).digest() != lower(b_first).digest()
     sections = [lock(r).lockfile.sections["init_scripts"] for r in (a_first, b_first)]
     assert sections[0] != sections[1]
 
 
-def test_current_dialect_runs_each_step_as_its_own_unit(tmp_path: Path) -> None:
+def test_runtime_init_runs_each_step_as_its_own_unit(tmp_path: Path) -> None:
     first = BootStep("first", "echo first\n")
     recipe = Recipe(
         "inits",
         items=(BootStep("second", "echo second\n", after=(first.ready,)), first),
     )
     emit(lower(recipe), tmp_path)
-    extra = tmp_path / "default/mkosi.extra"
+    extra = tmp_path / "payload/mkosi.extra"
     units = extra / "usr/lib/systemd/system"
     assert (extra / "usr/lib/runtime-init/first").read_text() == (
         "#!/bin/bash\nset -euo pipefail\n\necho first\n"
@@ -235,14 +235,14 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
             Setting("Output", "Seed", ("seed-1",)),
             Setting("Output", "OutputDirectory", ("build",)),
             Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
-            Setting("Build", "Environment", ("KERNEL_IMAGE", "FOO=bar")),
+            Setting("Build", "Environment", ("FOO=bar",)),
             Setting("Build", "WithNetwork", ("no",)),
             Setting("Build", "SandboxTrees", ("a:/b", "c:/d")),
         ),
         platform=Debian(
             "trixie", mirror="https://mirror/", tools_mirror="https://tools/", epoch=7, boot=None
         ),
-        mkosi=Mkosi(layout="native", dialect="nethermind-v1"),
+        mkosi=Mkosi(root="verity", build_network=True),
     )
     img = lower(recipe)
     assert (img.base, img.mirror, img.tools_tree_mirror) == (
@@ -257,13 +257,12 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
         seed="seed-1",
         output_directory="build",
         package_cache_directory="mkosi.cache",
-        environment={"FOO": "bar", "SOURCE_DATE_EPOCH": "7"},
-        environment_passthrough=("KERNEL_IMAGE",),
+        environment={"FOO": "bar"},
         with_network=False,
         sandbox_trees=("a:/b", "c:/d"),
-        emit_mode="native_profiles",
-        dialect="nethermind-v1",
+        root="verity",
     )
+    assert img.epoch == 7 and img.image_id == "wide"
     assert img.reproducible
     assert not lower(Recipe("r", platform=Debian("trixie", epoch=None, boot=None))).reproducible
 
@@ -282,20 +281,17 @@ def test_lowering_rejects_inexpressible_settings_and_kernels(item: Setting | Ker
         lower(Recipe("r", items=(item,)))
 
 
-def test_standalone_variant_gets_only_its_own_declarations() -> None:
-    recipe = Recipe(
-        "r",
-        items=(Package("curl"), Debloat(enabled=False)),
-        variants=(
-            Variant("default"),
-            Variant("rescue", inherits=None, add=Fragment("r", items=(Package("busybox"),))),
-        ),
-    )
-    img = lower(recipe)
-    rescue = img.state.effective_profile("rescue")
-    assert img.state.profiles["rescue"].extends is None
-    assert rescue.packages == {"busybox"}
-    assert rescue.debloat.enabled  # not the default profile's disabled debloat
+@pytest.mark.parametrize(
+    ("setting", "code"),
+    [
+        (Setting("Config", "ConfigureScripts", ("configure.sh",)), "mkosi-configure-script"),
+        (Setting("Build", "Environment", ("HOME",)), "mkosi-environment-passthrough"),
+        (Setting("Config", "PassEnvironment", ("HOME",)), "mkosi-environment-passthrough"),
+    ],
+)
+def test_lowering_refuses_settings_summary_cannot_describe(setting: Setting, code: str) -> None:
+    with pytest.raises(ValidationError, match=code):
+        lower(Recipe("r", items=(setting,)))
 
 
 @pytest.mark.parametrize(
@@ -306,43 +302,61 @@ def test_standalone_variant_gets_only_its_own_declarations() -> None:
         (Variant("default"), Variant("slim", changes=(Package.ref("curl").remove(),))),
         (Variant("default"), Variant("v", changes=(Hook.ref("h").edit(script="other"),))),
         (Variant("default"), Variant("v", add=Fragment("k", items=(Key("k2"),)))),
+        (Variant("default"), Variant("rescue", inherits=None)),
+        (
+            Variant("default"),
+            Variant("v", add=Fragment("s", items=(Setting("Output", "Seed", ("x",)),))),
+        ),
     ],
-    ids=["chain", "sibling-of-base", "remove", "edit-hook", "child-keys"],
+    ids=["chain", "sibling-of-base", "remove", "edit-hook", "child-keys", "standalone", "settings"],
 )
-def test_shapes_the_profile_merge_cannot_express_lower_standalone(
+def test_variants_a_profile_overlay_cannot_express_are_refused(
     variants: tuple[Variant, ...],
 ) -> None:
     common = Fragment("c", items=(Package("curl"), Hook("h", "build", "make"), Key("k1")))
     recipe = Recipe("r", items=(common,), variants=variants)
-    name = variants[-1].name
-    img = lower(recipe)
-    assert img.state.profiles[name].extends is None
-    resolved = resolve(recipe, variant=name)
-    packages = {i.name for i in resolved.items if isinstance(i, Package) and i.role == "runtime"}
-    assert packages <= img.state.effective_profile(name).packages
-    if "curl" not in packages:
-        assert "curl" not in img.state.effective_profile(name).packages
+    with pytest.raises(ValidationError, match=f"Cannot emit variant '{variants[-1].name}'"):
+        lower(recipe)
 
 
-def test_chained_variant_inherits_its_parents_target() -> None:
+def test_a_variant_that_only_names_outputs_is_a_wrapper_not_an_overlay() -> None:
     recipe = Recipe(
         "r",
         items=(Package("curl"),),
-        variants=(Variant("default"), Variant("a", outputs=("azure",)), Variant("b", inherits="a")),
+        variants=(
+            Variant("default"),
+            Variant("a", outputs=("azure",)),
+            Variant("dev", add=Fragment("d", items=(Package("strace"),))),
+        ),
     )
     img = lower(recipe)
-    assert img.state.effective_profile("b").output_targets == ("azure",)
+    assert img.targets == {"default": ("qemu",), "a": ("azure",), "dev": ("qemu",)}
+    assert img.overlays == ("dev",)
+    assert (img.mkosi_profiles("a"), img.clouds("a")) == ((), ("azure",))
+    assert (img.mkosi_profiles("dev"), img.clouds("dev")) == (("dev",), ())
+    # the payload carries the glue of every target a variant names, whichever are selected
+    payload = lower(recipe, variants=("default",)).state.effective_profile("default")
+    assert payload.output_targets == ("qemu", "azure") and "dmidecode" in payload.packages
 
 
-def test_variant_with_its_own_settings_lowers_standalone() -> None:
-    common = Fragment("c", items=(Package("curl"),))
-    variants = (
-        Variant("default"),
-        Variant("v", add=Fragment("s", items=(Setting("Output", "Seed", ("x",)),))),
+def test_mkosi_argv_selects_profiles_and_wrappers(tmp_path: Path) -> None:
+    from tundravm.declarative import mkosi_argv
+
+    recipe = Recipe(
+        "r",
+        items=(Package("curl"),),
+        variants=(
+            Variant("default"),
+            Variant("cloud", outputs=("azure", "gcp")),
+            Variant("dev", add=Fragment("d", items=(Package("strace"),))),
+        ),
     )
-    img = lower(Recipe("r", items=(common,), variants=variants))
-    assert img.state.profiles["v"].extends is None
-    assert img.mkosi_for("v").seed == "x" and img.mkosi.seed is None
+    img = lower(recipe)
+    assert mkosi_argv(img, "default") == []
+    assert mkosi_argv(img, "cloud") == ["--dependency=azure", "--dependency=gcp"]
+    assert mkosi_argv(img, "dev") == ["--profile=dev"]
+    with pytest.raises(ValidationError, match="Unknown variant"):
+        mkosi_argv(img, "nope")
 
 
 def test_lowering_selected_variants_keeps_the_default() -> None:
@@ -483,22 +497,13 @@ def test_service_needs_picks_the_runtime_init_units_it_waits_for(tmp_path: Path)
         Service("late", "/usr/bin/late"),
         Service("data", "/usr/bin/data", needs=(disk.ready, ready.ready)),
     )
-    current, historical = (
-        _one(disk, ready, *services),
-        _one(disk, ready, *services, mkosi=Mkosi(dialect="nethermind-v1")),
-    )
-    for name, recipe in (("current", current), ("historical", historical)):
-        emit(lower(recipe), tmp_path / name)
-    units = Path("default/mkosi.extra/usr/lib/systemd/system")
-    tree = tmp_path / "current" / units
+    emit(lower(_one(disk, ready, *services)), tmp_path)
+    tree = tmp_path / "payload/mkosi.extra/usr/lib/systemd/system"
     assert "runtime-init" not in (tree / "early.service").read_text()
     assert "After=runtime-init.service\n" in (tree / "late.service").read_text()
     data = (tree / "data.service").read_text()
     assert "After=runtime-init-disks.service runtime-init-ready.service\n" in data
     assert "Requires=runtime-init-disks.service runtime-init-ready.service\n" in data
-    old = tmp_path / "historical" / units
-    assert "Requires=runtime-init.service\n" in (old / "data.service").read_text()
-    assert "runtime-init" not in (old / "early.service").read_text()
 
 
 def test_inherited_service_and_unit_wait_for_a_child_variants_first_step(
@@ -517,13 +522,16 @@ def test_inherited_service_and_unit_wait_for_a_child_variants_first_step(
     )
     emit(lower(recipe).select(("default", "boot")), tmp_path)
     units = Path("mkosi.extra/usr/lib/systemd/system")
-    default, boot = tmp_path / "default" / units, tmp_path / "boot" / units
+    payload = tmp_path / "payload"
+    default, boot = payload / units, payload / "mkosi.profiles/boot" / units
     assert "runtime-init" not in (default / "app.service").read_text()
     for unit in ("app.service", "worker.service"):
         assert "After=runtime-init.service" in (boot / unit).read_text()
         assert "Requires=runtime-init.service" in (boot / unit).read_text()
-    assert "runtime-init" not in (boot / "early.service").read_text()  # needs nothing
-    postinst = (tmp_path / "boot" / "scripts" / "06-postinst.sh").read_text()
+    # early needs nothing: the overlay leaves the payload's unit as it is
+    assert not (boot / "early.service").exists()
+    assert "runtime-init" not in (default / "early.service").read_text()
+    postinst = (payload / "mkosi.profiles/boot/mkosi.postinst.d/50-postinst.sh").read_text()
     assert postinst.count("systemctl enable app.service\n") == 1
 
 
@@ -564,7 +572,7 @@ def test_external_delivery_ready_waits_for_its_unit_or_path(tmp_path: Path) -> N
         assert [d.code for d in resolution_lint(recipe)] == ["network-missing"]
         out = tmp_path / delivery.step
         emit(lower(recipe), out)
-        root = out / "default" / "mkosi.extra"
+        root = out / "payload" / "mkosi.extra"
         assert (root / f"usr/lib/runtime-init/{delivery.step}").read_text().endswith(script)
         units = root / "usr/lib/systemd/system"
         waits = f"runtime-init-{delivery.step}.service"
@@ -637,12 +645,12 @@ def test_mkosi_fields_and_policy_reach_the_compiler() -> None:
     img = lower(
         _one(
             Package("curl"),
-            mkosi=Mkosi(init_script="#!/bin/sh\n", version_script=True, cloud_postoutput=False),
+            mkosi=Mkosi(version_script=True, root="verity"),
             policy=policy,
         )
     )
-    assert img.mkosi.init_script == "#!/bin/sh\n"
-    assert img.mkosi.generate_version_script and not img.mkosi.generate_cloud_postoutput
+    assert img.mkosi.generate_version_script and img.mkosi.root == "verity"
+    assert not img.mkosi.with_network  # build_network defaults to False
     assert img.policy == policy
 
 
@@ -667,44 +675,7 @@ def test_variant_with_several_targets() -> None:
     )
     assert resolve(recipe, variant="cloud").outputs == ("azure", "gcp")
     img = lower(recipe)
-    assert img.state.effective_profile("cloud").output_targets == ("azure", "gcp")
+    assert img.targets["cloud"] == ("azure", "gcp") and img.clouds("cloud") == ("azure", "gcp")
+    assert img.overlays == ()
     with pytest.raises(ValidationError, match="must be a sequence of targets"):
         Variant("x", outputs="qemu")  # type: ignore[arg-type]
-
-
-def _chained(layout: str) -> Recipe:
-    from tundravm.declarative import Mkosi
-
-    return Recipe(
-        "r",
-        items=(Package("curl"), File("/etc/motd", "base\n")),
-        variants=(
-            Variant("default"),
-            Variant("cloud", outputs=("azure",), add=Fragment("a", items=(Package("waagent"),))),
-            Variant(
-                "slim",
-                inherits="cloud",
-                changes=(
-                    Package.ref("curl").remove(),
-                    File.ref("/etc/motd").edit(content="slim\n"),
-                ),
-            ),
-        ),
-        mkosi=Mkosi(layout=layout),  # type: ignore[arg-type]
-    )
-
-
-def test_native_layout_rejects_standalone_variants() -> None:
-    with pytest.raises(ValidationError, match="layout='directories'"):
-        lower(_chained("native"))
-
-
-def test_chained_variant_compiles_its_resolved_declarations() -> None:
-    from tundravm.declarative import compile
-
-    recipe = _chained("directories")
-    tree = compile(recipe)
-    assert "slim" in tree.variants
-    slim = lower(recipe).state.effective_profile("slim")
-    assert "curl" not in slim.packages and "waagent" in slim.packages
-    assert slim.output_targets == ("azure",)

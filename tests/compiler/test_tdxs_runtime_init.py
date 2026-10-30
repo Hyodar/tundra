@@ -8,7 +8,6 @@ import pytest
 
 from tests.helpers import conf_list
 from tundravm._source import GitSource
-from tundravm._units import v1
 from tundravm.declarative import (
     RUNTIME_INIT,
     Declaration,
@@ -19,7 +18,6 @@ from tundravm.declarative import (
     Recipe,
     Setting,
     compile,
-    lint,
     lock,
     lower,
 )
@@ -78,7 +76,7 @@ def test_tdxs_custom_source(tmp_path: Path) -> None:
     source = Git("https://github.com/custom/tdxs-fork", "v2.0")
     spec = lower(_recipe(Tdxs(source=source))).source_builds()["tdxs"]
     assert spec.source == GitSource("https://github.com/custom/tdxs-fork", "v2.0")
-    assert "-b v2.0" in spec.render()
+    assert "# unpinned: v2.0\n" in spec.render()
     assert "tdxs-aaaaaaaaaaaa" in _pinned(tmp_path, Tdxs(source=source)).script("build")
 
 
@@ -155,9 +153,6 @@ def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
 
     assert "runtime-init" not in tree.unit("tdxs.service")
     assert "runtime-init" not in tree.unit("tdxs.socket")
-    # The legacy unit texts wait for runtime-init through needs=, which lint reports.
-    codes = {d.code for d in lint(_recipe(Tdxs(needs=(RUNTIME_INIT,), legacy_units=True)))}
-    assert "needs-without-init" in codes
 
 
 def test_tdxs_renders_issuer_and_validator_types(tmp_path: Path) -> None:
@@ -228,7 +223,10 @@ def test_build_packages_lower_to_build_packages(tmp_path: Path) -> None:
 def test_build_sources_setting_mounts_build_source(tmp_path: Path) -> None:
     tree = _compile(tmp_path, Setting("Build", "BuildSources", ("../services/tdxs:tdxs",)))
 
-    assert "BuildSources=../services/tdxs:tdxs" in tree.conf().splitlines()
+    # mounts are main-image settings: the root mkosi.conf, after the tree itself
+    lines = tree.main_conf().splitlines()
+    assert lines.index("BuildSources=.") < lines.index("BuildSources=../services/tdxs:tdxs")
+    assert "BuildSources" not in tree.conf()
 
 
 @pytest.mark.parametrize(
@@ -253,16 +251,3 @@ def test_tdxs_without_a_quoting_issuer_gets_no_quote_access(tmp_path: Path, tdxs
     assert "CapabilityBoundingSet=\n" in svc
     assert "DeviceAllow" not in svc
     assert "ReadWritePaths" not in svc
-
-
-def test_tdxs_legacy_units_keep_the_historical_text(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Tdxs(legacy_units=True))
-    assert not tree.exists(UDEV_RULE)
-    assert tree.unit("tdxs.service") == v1.tdxs_service(
-        socket="tdxs.socket",
-        user="tdxs",
-        group="tdx",
-        config="/etc/tdxs/config.yaml",
-        log_level="info",
-    )
-    assert "Accept=false" in tree.unit("tdxs.socket")

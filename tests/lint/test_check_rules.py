@@ -99,12 +99,11 @@ def test_service_user_inherited_from_default() -> None:
     assert report(recipe(variants=(DEFAULT, dev)), "dev") == []
 
 
-def test_service_user_not_inherited_by_standalone_variant() -> None:
+def test_a_standalone_variant_is_refused() -> None:
     items = (KERNEL, Package("curl"), Service("app", "/usr/bin/app", user="app"))
     dev = Variant("dev", inherits=None, add=Fragment("dev", items=items))
-    [diag] = report(recipe(variants=(DEFAULT, dev)), "dev")
-    assert diag.code == "service-user-missing"
-    assert "does not inherit" in (diag.hint or "")
+    with pytest.raises(ValidationError, match="'dev' \\(it is standalone\\)"):
+        lower(recipe(variants=(DEFAULT, dev)))
 
 
 def test_service_user_root_base_or_hook_created_is_fine() -> None:
@@ -408,7 +407,7 @@ def test_kernel_package_kernel_or_not_bootable_is_fine(boot: Declaration) -> Non
 
 
 def test_kernel_missing_is_per_variant() -> None:
-    booted = Variant("booted", inherits=None, add=Fragment("booted", items=(KERNEL,)))
+    booted = Variant("booted", add=Fragment("booted", items=(KERNEL,)))
     subject = Recipe("check", items=CLEAN[1:], variants=(DEFAULT, booted))
     assert [(d.variant, d.code) for d in report(subject, "default", "booted")] == [
         ("default", "kernel-missing")
@@ -433,7 +432,7 @@ def test_aarch64_with_efi_stub_is_unsupported() -> None:
     [diag] = [
         d
         for d in report(_arm(EfiStub(snapshot="20251113T083151Z", version="257")))
-        if d.code == "recipe-arch-unsupported"
+        if d.code == "recipe-arch-unsupported" and d.subject == "EfiStub"
     ]
     assert (diag.severity, diag.subject) == ("error", "EfiStub")
     assert "_amd64.deb" in (diag.hint or "")
@@ -445,11 +444,13 @@ def test_aarch64_qemu_target_is_unsupported() -> None:
     assert "qemu-system-x86_64" in (diag.hint or "")
 
 
-def test_x86_64_and_plain_aarch64_are_fine() -> None:
+def test_x86_64_is_fine_and_aarch64_always_builds_the_qemu_disk() -> None:
     efi = EfiStub(snapshot="20251113T083151Z", version="257")
     x86 = Recipe("check", items=(*CLEAN, efi), variants=(DEFAULT,))
     assert "recipe-arch-unsupported" not in codes(x86)
-    assert "recipe-arch-unsupported" not in codes(_arm())
+    # The tree's main image is the QEMU disk, whatever the variant's outputs.
+    found = [d.subject for d in report(_arm()) if d.code == "recipe-arch-unsupported"]
+    assert found == ["qemu"]
 
 
 def test_bootable_setting_takes_only_no() -> None:

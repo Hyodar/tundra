@@ -299,13 +299,13 @@ def _recipe(loaded: RecipeFile, img: Lowered, names: tuple[str, ...], shown: str
         "path": shown,
         "digest": digest,
         "variants": list(names),
-        "dialect": img.mkosi.dialect,
+        "root": img.mkosi.root,
         "base": recipe.platform.name,
         "snapshot": recipe.platform.snapshot,
     }
     detail = (
         f"{shown}  digest {digest[:12]}  variants {', '.join(names)}  "
-        f"dialect {img.mkosi.dialect}  base {recipe.platform.name}"
+        f"root {img.mkosi.root}  base {recipe.platform.name}"
         + (f"  snapshot {recipe.platform.snapshot}" if recipe.platform.snapshot else "")
     )
     return StatusItem("recipe", "ok", detail, data)
@@ -371,10 +371,6 @@ def _sources(
     for name, spec in builds.items():
         pin = spec.pin_from(pins)
         data: dict[str, object] = {"name": name, "pin": pin, "path": None, "fetched": False}
-        if not img.fetches_sources:
-            detail = f"{name}: fetched inside the build ({img.mkosi.dialect})"
-            items.append(StatusItem("source", "n/a", detail, data))
-            continue
         if pin is None:
             detail = f"{name}: not pinned, so no checkout to check"
             items.append(StatusItem("source", "n/a" if simulated else "missing", detail, data))

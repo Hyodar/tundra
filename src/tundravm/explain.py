@@ -79,15 +79,15 @@ def describe(
     """
     selected = image.profile(profile)
     pins = image.build_pins()
-    state = image.pinned_state(pins, variant=selected)
+    state = image.pinned_state(pins)
     profile_state = state.effective_profile(selected)
-    kernel = image.kernel_for(selected)
+    kernel = image.kernel
     kernel_source = image.kernel_source(selected)
     kernel_pin = None if kernel_source is None else kernel_source.pin_from(pins)
     return {
         "arch": state.arch,
         "base": state.base,
-        "build_options": _describe_build_options(image.mkosi_for(selected)),
+        "build_options": _describe_build_options(image.mkosi),
         "build_packages": sorted(profile_state.build_packages),
         "build_source_mounts": [
             {"dest": dest, "src": src} for src, dest in sorted(profile_state.build_sources)
@@ -160,7 +160,7 @@ def describe(
         ],
         "skeleton_files": _describe_files(profile_state.skeleton_files),
         "sources": _describe_sources(image, selected, profile_state, pins),
-        "targets": list(profile_state.output_targets),
+        "targets": list(image.targets.get(selected, profile_state.output_targets)),
         "units": _describe_units(profile_state),
         "templates": [
             {
@@ -788,8 +788,8 @@ class Why:
     """Why an emitted object exists in one variant: :func:`explain_why`'s answer.
 
     ``files`` are the compiled tree's files that hold it and ``generated`` the
-    lines the compiler added on its behalf, both relative to the variant's
-    directory in the tree (``mkosi.extra/...``, ``scripts/06-postinst.sh: ...``).
+    lines the compiler added on its behalf, both by tree path
+    (``payload/mkosi.extra/...``, ``payload/mkosi.postinst.d/50-postinst.sh: ...``).
     """
 
     variant: str
@@ -834,9 +834,8 @@ def explain_why(
     with tempfile.TemporaryDirectory(prefix="tundravm-why-") as scratch:
         root = Path(scratch)
         emit(img.select((variant,)), root)
-        variant_root = root / variant if (root / variant).is_dir() else root
-        tree = _read_tree(variant_root)
-        emitted = _emitted_paths(variant_root)
+        tree = _read_tree(root, variant)
+        emitted = _emitted_paths(root, variant)
     items = {identity(item): item for item in resolved.items}
     keys = _match_subject(subject, items, trace, emitted, tree)
     declarations = tuple(
@@ -871,11 +870,30 @@ def explain_why(
     )
 
 
-def _read_tree(root: Path) -> dict[str, str]:
-    """Every file under *root* (relative POSIX path -> text; a symlink is ``-> target``)."""
+_PAYLOAD = "payload/"
+_OVERLAYS = "payload/mkosi.profiles/"
+
+
+def _layer_path(rel: str) -> str:
+    """Tree path *rel* relative to its layer: the payload or the variant's profile overlay."""
+    if rel.startswith(_OVERLAYS):
+        return rel.removeprefix(_OVERLAYS).partition("/")[2]
+    return rel.removeprefix(_PAYLOAD)
+
+
+def _read_tree(root: Path, variant: str) -> dict[str, str]:
+    """*variant*'s files of the tree at *root* by tree path (text; a symlink is ``-> target``):
+    the payload and the variant's own profile overlay."""
     tree: dict[str, str] = {}
-    for path in sorted(root.rglob("*")):
+    own = f"{_OVERLAYS}{variant}/"
+    overlay = {p.relative_to(root / own).as_posix() for p in (root / own).rglob("*") if p.is_file()}
+    for path in sorted((root / "payload").rglob("*")):
         rel = path.relative_to(root).as_posix()
+        if rel.startswith(_OVERLAYS) and not rel.startswith(own):
+            continue
+        layer = _layer_path(rel)
+        if not rel.startswith(own) and layer in overlay and layer.split("/")[0] in STAGE_DIRS:
+            continue  # the overlay's copy is the one the variant ships (scripts accumulate)
         if path.is_symlink():
             tree[rel] = f"-> {os.readlink(path)}"
         elif path.is_file():
@@ -883,13 +901,15 @@ def _read_tree(root: Path) -> dict[str, str]:
     return tree
 
 
-def _emitted_paths(root: Path) -> frozenset[str]:
-    """Every image path the stage trees under *root* emit: files, symlinks and directories."""
+def _emitted_paths(root: Path, variant: str) -> frozenset[str]:
+    """Every image path *variant*'s stage trees under *root* emit: files, symlinks and
+    directories, from the payload and the variant's profile overlay."""
     found: set[str] = set()
-    for stage in STAGE_DIRS:
-        base = root / stage
-        if base.is_dir():
-            found.update(f"/{entry.relative_to(base).as_posix()}" for entry in base.rglob("*"))
+    for layer in (root / "payload", root / _OVERLAYS / variant):
+        for stage in STAGE_DIRS:
+            base = layer / stage
+            if base.is_dir():
+                found.update(f"/{entry.relative_to(base).as_posix()}" for entry in base.rglob("*"))
     return frozenset(found)
 
 
@@ -897,16 +917,17 @@ def _image_paths(tree: Mapping[str, str]) -> dict[str, str]:
     """Image path (``/etc/app.conf``) -> tree path, for the files the stage trees hold."""
     found: dict[str, str] = {}
     for rel in tree:
-        stage, _, rest = rel.partition("/")
+        stage, _, rest = _layer_path(rel).partition("/")
         if stage in STAGE_DIRS and rest:
-            found.setdefault(f"/{rest}", rel)
+            found[f"/{rest}"] = rel  # the overlay's, read last, wins
     return found
 
 
 def _stage_paths(tree: Mapping[str, str], path: str) -> list[str]:
     norm = posixpath.normpath(path)
-    return [rel for rel in tree if any(rel == f"{stage}{norm}" for stage in STAGE_DIRS)] or [
-        rel for rel in tree if any(rel.startswith(f"{stage}{norm}/") for stage in STAGE_DIRS)
+    exact = [rel for rel in tree if any(_layer_path(rel) == f"{s}{norm}" for s in STAGE_DIRS)]
+    return exact or [
+        rel for rel in tree if any(_layer_path(rel).startswith(f"{s}{norm}/") for s in STAGE_DIRS)
     ]
 
 
@@ -1045,11 +1066,15 @@ def _emitted_for(
             if path is not None and path.startswith(f"{norm}/"):
                 norm = path
             prefix = f"mkosi.{item.stage}{norm}"
-            files.extend(rel for rel in tree if rel == prefix or rel.startswith(f"{prefix}/"))
+            files.extend(
+                rel
+                for rel in tree
+                if _layer_path(rel) == prefix or _layer_path(rel).startswith(f"{prefix}/")
+            )
         case Unit() | Service():
             unit = unit_name(item.name)
             for rel, text in tree.items():
-                stage, _, rest = rel.partition("/")
+                stage, _, rest = _layer_path(rel).partition("/")
                 if stage not in STAGE_DIRS:
                     continue
                 if posixpath.basename(rel) == unit:
@@ -1100,7 +1125,7 @@ def _script_lines(tree: Mapping[str, str], unit: str) -> list[str]:
     word = re.compile(rf"(?<![\w.@-]){re.escape(unit)}(?![\w.@-])")
     lines: list[str] = []
     for rel, text in tree.items():
-        if not rel.startswith("scripts/"):
+        if not re.match(r"mkosi\.\w+\.d/", _layer_path(rel)):
             continue
         for line in text.splitlines():
             if not word.search(line):
@@ -1115,10 +1140,13 @@ def _script_lines(tree: Mapping[str, str], unit: str) -> list[str]:
 
 
 def _conf_lines(tree: Mapping[str, str], package: str) -> list[str]:
-    """``mkosi.conf (Packages=)`` for each config list that names *package*."""
+    """``payload/mkosi.conf.d/20-app.conf (Packages=)`` for each config list naming *package*."""
     found: list[str] = []
     for rel, text in tree.items():
-        if posixpath.basename(rel) != "mkosi.conf":
+        layer = _layer_path(rel)
+        if layer != "mkosi.conf" and not (
+            layer.startswith("mkosi.conf.d/") and layer.endswith(".conf")
+        ):
             continue
         key = ""
         for line in text.splitlines():
@@ -1146,7 +1174,7 @@ def render_why(why: Why) -> str:
         state = "" if entry.present else " (removed: not emitted)"
         lines.append(f"  {entry.declaration}{state}")
         lines.extend(f"    {origin.describe()}" for origin in entry.origins)
-    lines.append(f"files (in {why.variant}/):")
+    lines.append("files:")
     lines.extend(f"  {path}" for path in why.files)
     if not why.files:
         lines.append("  (none)")
@@ -1175,7 +1203,7 @@ def render_why_markdown(why: Why) -> str:
         lines.append(md_table(header, rows))
     else:
         lines.append("Generated by the compiler; no declaration names it.")
-    lines += ["", f"Files (in `{why.variant}/`):", ""]
+    lines += ["", "Files:", ""]
     lines.extend(f"- {md_cell(path, code=True)}" for path in why.files)
     if why.generated:
         lines += ["", "Generated:", ""]

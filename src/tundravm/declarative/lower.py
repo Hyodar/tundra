@@ -23,7 +23,7 @@ are read here.
 from __future__ import annotations
 
 import posixpath
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -34,27 +34,22 @@ from tundravm._source import DebFile, HttpSource
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.models import Kernel as FluentKernel
-from tundravm.models import KernelPatchSpec, RecipeState, unit_name
+from tundravm.models import KernelPatchSpec, OutputTarget, RecipeState, unit_name
 
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
     BASE_VARIANT,
-    Build,
     Debloat,
     Declaration,
     Disk,
     FileTree,
     Fragment,
-    Git,
-    Group,
-    Hook,
     Http,
     Kernel,
     KernelConfig,
     KernelPatch,
     Key,
     Mount,
-    Partition,
     Platform,
     Port,
     Recipe,
@@ -67,29 +62,35 @@ from .model import (
     Task,
     Template,
     Unit,
-    User,
     Variant,
 )
 from .model import File as FileDeclaration
-from .resolve import CLOUD_TARGETS, DEFAULT_TARGET, describe, has_init, identity, resolve
+from .resolve import (
+    DEFAULT_TARGET,
+    PLATFORM_LEVEL,
+    describe,
+    has_init,
+    identity,
+    provenance,
+    recipe_targets,
+    resolve,
+)
 from .state import (
     BUILD_SOURCES,
-    HISTORICAL,
     INIT_SERVICE,
     UNIT_DIRECTORY,
     StateBuilder,
-    groupadd_line,
     inject_after_init,
-    useradd_line,
 )
-from .utils import BACKPORTS_TREE, Backports, EfiStub, _snapshot_archive
+from .utils import Backports, EfiStub, _snapshot_archive
 
-BACKPORTS_SOURCES = BACKPORTS_TREE.partition(":")[2]
-"""Where :class:`Backports` sources go in the build sandbox (``current`` dialect)."""
+BACKPORTS_SOURCES = "/etc/apt/sources.list.d/debian-backports.sources"
+"""Where :class:`Backports` sources go in the build sandbox."""
 BACKPORTS_PINS = "/etc/apt/preferences.d/debian-backports.pref"
-"""Where :class:`Backports` pins go in the build sandbox (``current`` dialect)."""
-_OVERRIDABLE = (FileDeclaration, User, Group, Partition, Repository, Debloat)
-"""Types an extending profile can redeclare: the profile merge replaces them by identity."""
+"""Where :class:`Backports` pins go in the build sandbox."""
+_OVERRIDABLE = (FileDeclaration, Repository, Debloat)
+"""Types a profile overlay can redeclare: a later tree, sandbox file or debloat replaces them
+(an account or partition the payload already created cannot be created again)."""
 _RUNTIME = (Key, Disk, Secrets, RuntimeTools)
 
 _SINGLE_SETTINGS: dict[tuple[str, str], str] = {
@@ -110,8 +111,20 @@ _COMPILER_KEYS: dict[str, str] = {
     "Mirror": "Debian(mirror=...)",
     "ToolsTreeMirror": "Debian(tools_mirror=...)",
     "SourceDateEpoch": "Debian(epoch=...)",
-    "Format": "Variant targets (the compiler always builds a UKI)",
-    "ImageId": "the variant name",
+    "Format": "Variant outputs and Mkosi(root=...)",
+    "Output": "the tree's image names (payload, qemu and one per cloud target)",
+    "ImageId": "the recipe name",
+    "Snapshot": "Debian(snapshot=...)",
+    "ToolsTree": "nothing: the tree always builds mkosi's default tools tree",
+    "ToolsTreeDistribution": "Recipe.platform",
+    "ToolsTreeRelease": "Recipe.platform",
+    "ToolsTreeSnapshot": "Debian(snapshot=...)",
+    "History": "nothing: the tree is regenerated per build with History=no",
+    "MinimumVersion": "nothing: the tree requires the pinned mkosi",
+    "Dependencies": "Variant outputs",
+    "Profiles": "Variant(add=...)",
+    "SplitArtifacts": "Mkosi(root=...)",
+    "RepartDirectories": "Mkosi(root=...)",
     "Packages": "Package(name)",
     "BuildPackages": "Package(name, role='build')",
     "Bootable": "Kernel(...) or Package('linux-image-amd64'); only Bootable=no is accepted",
@@ -145,35 +158,27 @@ _FALSE = frozenset({"false", "no", "0"})
 def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     """Lower *recipe* onto the compiler, with *variants* (default: all).
 
-    The default variant is always lowered: the other profiles build on it.
-    Variants whose settings or kernel differ from the default variant's get
-    their own. Raises ``ValidationError`` for an unresolvable recipe, for
-    declarations the compiler cannot express, and for variants the native
-    layout cannot emit.
+    The default variant is always lowered: it is the payload every variant builds on.
+    Every other variant is an addition to it: a variant that only names other outputs
+    becomes the cloud wrappers it selects, one that adds content a profile overlay.
+    Raises ``ValidationError`` for an unresolvable recipe, for declarations the
+    compiler cannot express, and for variants that are not an addition to the default.
     """
     default = _default_variant(recipe)
     selected = _selected(recipe, variants, default)
     resolved = {variant.name: resolve(recipe, variant=variant.name) for variant in selected}
     base = resolved[default.name]
-    dialect = recipe.mkosi.dialect
-    if dialect != HISTORICAL:
-        _check_mirrors(recipe)
-    backports = {} if dialect == HISTORICAL else _backports_sources(recipe)
-    scripts = {} if dialect == HISTORICAL else _efi_stub_scripts(recipe)
-    options = {
-        name: _mkosi_options(
-            recipe,
-            [i for i in r.items if isinstance(i, Setting)],
-            sandbox_files=tuple(file for i in r.items if i in backports for file in backports[i]),
-        )
-        for name, r in resolved.items()
-    }
-    kernels = {name: _variant_kernel(r.items, recipe.platform) for name, r in resolved.items()}
+    _check_mirrors(recipe)
+    options = _mkosi_options(
+        recipe,
+        [i for i in base.items if isinstance(i, Setting)],
+        sandbox_files=_backports_sources(recipe) if "backports" in base.fragments else (),
+    )
+    kernel = _variant_kernel(base.items, recipe.platform)
     builder = StateBuilder(
         RecipeState.initialize(
             base=recipe.platform.name, arch=recipe.platform.arch, default_profile=default.name
-        ),
-        historical=dialect == HISTORICAL,
+        )
     )
     reproducible = recipe.platform.epoch is not None
     strip = recipe.mkosi.strip_os_release
@@ -182,14 +187,19 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     if strip is not None and strip != reproducible:
         builder.strip_image_version(enabled=strip)
 
-    builder.declare(default.name, base.items, full=base.items, skip=backports, scripts=scripts)
-    builder.targets(default.name, base.outputs, inherited=(DEFAULT_TARGET,))
+    builder.declare(default.name, base.items, full=base.items)
+    payload = builder.state.ensure_profile(default.name)
+    declared = set(payload.packages)
+    builder.targets(default.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
+    glue = set(payload.packages) - declared
 
-    profile_mkosi: dict[str, MkosiOptions] = {}
-    profile_kernels: dict[str, FluentKernel | None] = {}
+    targets: dict[str, tuple[OutputTarget, ...]] = {default.name: tuple(base.outputs)}
+    overlays: list[str] = []
+    overlay_sandbox: dict[str, tuple[tuple[str, str], ...]] = {}
     rejected: list[tuple[str, str]] = []
     for variant in selected[1:]:
         child = resolved[variant.name]
+        targets[variant.name] = tuple(child.outputs)
         try:
             if variant.inherits not in (BASE_VARIANT, default.name):
                 raise _Standalone(
@@ -197,64 +207,45 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
                     if variant.inherits is None
                     else f"inherits variant {variant.inherits!r}"
                 )
-            if any(t in CLOUD_TARGETS for t in base.outputs) and child.outputs != base.outputs:
-                raise _Standalone(
-                    f"outputs {', '.join(child.outputs)} without the default variant's "
-                    f"{', '.join(base.outputs)} integration"
-                )
             _same_configuration(base, child)
-            own, reemit = _overlay(base, child, dialect=dialect)
+            own, reemit = _overlay(base, child)
         except _Standalone as why:
-            if recipe.mkosi.layout == "native":
-                rejected.append((variant.name, str(why)))
-                continue
-            if options[variant.name] != options[default.name]:
-                profile_mkosi[variant.name] = options[variant.name]
-            if kernels[variant.name] != kernels[default.name]:
-                profile_kernels[variant.name] = kernels[variant.name]
-            builder.standalone(variant.name)
-            builder.declare(
-                variant.name, child.items, full=child.items, skip=backports, scripts=scripts
-            )
-            if not any(isinstance(i, Debloat) for i in child.items) and any(
-                isinstance(i, Debloat) for i in base.items
-            ):
-                builder.default_debloat(variant.name)  # else it falls back to the default's
-            builder.targets(variant.name, child.outputs, inherited=None)
+            rejected.append((variant.name, str(why)))
             continue
         builder.extending(variant.name)
-        builder.declare(
-            variant.name, own, full=child.items, reemit=reemit, skip=backports, scripts=scripts
-        )
-        builder.targets(variant.name, child.outputs, inherited=base.outputs)
+        if "backports" in child.fragments and "backports" not in base.fragments:
+            overlay_sandbox[variant.name] = _backports_sources(recipe)
+        if own or reemit or variant.name in overlay_sandbox:
+            overlays.append(variant.name)
+            builder.declare(variant.name, own, full=child.items, reemit=reemit)
     if rejected:
         plural = "s" if len(rejected) > 1 else ""
         listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)
         raise ValidationError(
-            f"Mkosi(layout='native') cannot emit variant{plural} {listed}: mkosi "
-            f"applies the root mkosi.conf (the default variant {default.name!r}) to every "
-            "profile, so a native profile can only add to it.",
-            hint=f"Use Mkosi(layout='directories'), or make each a pure addition to "
-            f"{default.name!r}: inherits {BASE_VARIANT!r} or {default.name!r}, nothing removed, "
-            f"{default.name!r}'s settings and kernel, and edits limited to File, User, "
-            "Group, Partition, Repository and Debloat.",
+            f"Cannot emit variant{plural} {listed}: a variant is a profile overlay on the "
+            f"default variant {default.name!r}'s payload, so it can only add to it.",
+            hint=f"Make each a pure addition to {default.name!r}: inherits {BASE_VARIANT!r} "
+            f"or {default.name!r}, nothing removed, {default.name!r}'s settings and kernel, "
+            "and edits limited to File, Repository and Debloat; or make it its own recipe.",
             context={"variants": ", ".join(name for name, _ in rejected)},
         )
     extra: dict[str, Any] = {} if recipe.policy is None else {"policy": recipe.policy}
-    return Lowered(
+    lowered = Lowered(
         state=builder.state,
         modules=builder.modules,
+        image_id=recipe.name,
         mirror=recipe.platform.mirror,
         tools_tree_mirror=recipe.platform.tools_mirror,
         snapshot=recipe.platform.snapshot,
         epoch=recipe.platform.epoch,
         reproducible=reproducible,
-        mkosi=options[default.name],
-        kernel=kernels[default.name],
-        profile_mkosi=profile_mkosi,
-        profile_kernels=profile_kernels,
-        local_sources=_local_sources(recipe, resolved),
-        deb_files=() if dialect == HISTORICAL else _efi_stub_debs(recipe),
+        mkosi=options,
+        kernel=kernel,
+        targets=targets,
+        overlays=tuple(overlays),
+        overlay_sandbox_files=overlay_sandbox,
+        concerns=_concerns(recipe, default.name, glue),
+        deb_files=_efi_stub_debs(recipe),
         secret_allowed={name: _secret_allowed(r.items) for name, r in resolved.items()},
         ssh_ports={
             name: port for name, r in resolved.items() if (port := _ssh_port(r.items)) is not None
@@ -262,25 +253,62 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         unreleased=frozenset(variant.name for variant in selected if not variant.release),
         **extra,
     )
+    _require_shared_distribution(lowered)
+    return lowered
 
 
-def _local_sources(recipe: Recipe, resolved: dict[str, Resolved]) -> frozenset[str]:
-    """Names of the builds whose source differs between *recipe*'s variants.
+def _require_shared_distribution(lowered: Lowered) -> None:
+    """Refuse an overlay that changes what the payload's builds compile against.
 
-    Every variant counts, lowered or not, so a lock of some variants keys a
-    build the same way as a lock of all; a variant that does not resolve is
-    left out (lowering it reports why).
+    The payload's kernel and source builds run in every profile's build and are keyed by
+    the default variant's :meth:`~Lowered.build_distribution`; an overlay adding build
+    packages or repositories would restore, or cache under that key, a build from its own
+    toolchain.
     """
-    sources: dict[str, set[Git | Http]] = {}
-    for variant in recipe.variants:
-        try:
-            items = (resolved.get(variant.name) or resolve(recipe, variant=variant.name)).items
-        except ValidationError:
+    default = lowered.default_profile
+    payload = lowered.state.effective_profile(default)
+    if lowered.kernel_source(default) is None and not payload.source_builds:
+        return
+    expected = lowered.distribution_fingerprint(default)
+    for name in lowered.overlays:
+        if lowered.distribution_fingerprint(name) != expected:
+            raise ValidationError(
+                f"Cannot emit variant {name!r}: it adds build packages or repositories, and "
+                f"the payload's kernel and source builds, which every variant runs, are "
+                f"cached for the default variant {default!r}'s toolchain.",
+                hint=f"Declare those build packages and repositories in {default!r} (or "
+                "Recipe.items), or make the variant its own recipe.",
+                context={"variant": name},
+            )
+
+
+CLOUD_GLUE = "cloud-glue"
+"""The concern of the packages the cloud targets' glue installs."""
+PLATFORM_CONCERN = "platform"
+"""The concern of the packages ``Recipe.platform`` declares outside any fragment."""
+
+
+def _concerns(recipe: Recipe, variant: str, glue: Collection[str]) -> dict[tuple[str, str], str]:
+    """The concern each of *variant*'s packages belongs to, by ``(name, role)``.
+
+    A package's concern is the outermost fragment that declared it (``platform`` for one
+    the platform declares bare, :data:`CLOUD_GLUE` for one only the cloud glue installs);
+    a package ``Recipe.items`` declares bare has none and stays in the payload's own
+    ``mkosi.conf``.
+    """
+    found: dict[tuple[str, str], str] = {(name, "runtime"): CLOUD_GLUE for name in sorted(glue)}
+    for key, origins in provenance(recipe, variant=variant).items():
+        if key[0] != "Package" or origins[-1].action == "removed":
             continue
-        for item in items:
-            if isinstance(item, Build):
-                sources.setdefault(item.name, set()).add(item.source)
-    return frozenset(name for name, found in sources.items() if len(found) > 1)
+        first = next((o for o in origins if o.action in ("declared", "added")), origins[0])
+        package = (str(key[1]), str(key[2]))
+        if first.fragments:
+            found[package] = first.fragments[0][0]
+        elif first.variant == PLATFORM_LEVEL:
+            found[package] = PLATFORM_CONCERN
+        else:
+            found.pop(package, None)
+    return found
 
 
 def _check_mirrors(recipe: Recipe) -> None:
@@ -325,28 +353,20 @@ def _fragments(recipe: Recipe) -> Iterator[Fragment]:
         yield from walk(variant.add)
 
 
-def _backports_sources(recipe: Recipe) -> dict[Declaration, tuple[tuple[str, str], ...]]:
-    """The sync hook of each :class:`Backports` in *recipe*, mapped to its sandbox files.
-
-    The ``current`` dialect writes those sources and pins into ``mkosi.sandbox`` in
-    place of the hook: mkosi 26 reads ``SandboxTrees=`` before any script runs and
-    gives sync scripts no ``$BUILDDIR``.
-    """
+def _backports_sources(recipe: Recipe) -> tuple[tuple[str, str], ...]:
+    """The sandbox files of the recipe's first :class:`Backports`: its sources and pins, which
+    the compiler writes into ``mkosi.sandbox`` (apt reads them there; the image never does)."""
     release = recipe.platform.release
-    found: dict[Declaration, tuple[tuple[str, str], ...]] = {}
-    for fragment in _fragments(recipe):
-        if isinstance(fragment, Backports):
-            hook = next(item for item in fragment.items if isinstance(item, Hook))
-            sources = fragment.render_sources(
-                mirror=recipe.platform.mirror, release=release, snapshot=recipe.platform.snapshot
-            )
-            pins = fragment.render_preferences(release=release)
-            found[hook] = ((BACKPORTS_SOURCES, sources), (BACKPORTS_PINS, pins))
-    return found
+    fragment = next(f for f in _fragments(recipe) if isinstance(f, Backports))
+    sources = fragment.render_sources(
+        mirror=recipe.platform.mirror, release=release, snapshot=recipe.platform.snapshot
+    )
+    pins = fragment.render_preferences(release=release)
+    return ((BACKPORTS_SOURCES, sources), (BACKPORTS_PINS, pins))
 
 
 def _efi_stub_debs(recipe: Recipe) -> tuple[DebFile, ...]:
-    """The package of each distinct :class:`EfiStub` in *recipe*, as a ``current`` source."""
+    """The package of each distinct :class:`EfiStub` in *recipe*, as a lockable source."""
     return tuple(
         dict.fromkeys(
             DebFile(EFI_STUB_SOURCE, HttpSource(fragment.deb_url), fragment.render_script())
@@ -354,15 +374,6 @@ def _efi_stub_debs(recipe: Recipe) -> tuple[DebFile, ...]:
             if isinstance(fragment, EfiStub)
         )
     )
-
-
-def _efi_stub_scripts(recipe: Recipe) -> dict[Declaration, str]:
-    """The postinst hook of each :class:`EfiStub` in *recipe*, mapped to its ``current`` script."""
-    return {
-        next(item for item in fragment.items if isinstance(item, Hook)): fragment.render_script()
-        for fragment in _fragments(recipe)
-        if isinstance(fragment, EfiStub)
-    }
 
 
 def _wide(items: Sequence[Declaration]) -> dict[tuple[str, ...], Declaration]:
@@ -403,7 +414,7 @@ def _selected(recipe: Recipe, names: Sequence[str] | None, default: Variant) -> 
 
 
 def _overlay(
-    base: Resolved, child: Resolved, *, dialect: str = "current"
+    base: Resolved, child: Resolved
 ) -> tuple[list[Declaration], list[Unit | Service | Task | Mount]]:
     """What *child* declares on top of *base* (its extended profile), plus units to re-emit.
 
@@ -421,9 +432,7 @@ def _overlay(
         if previous is None:
             own.append(item)
         elif previous != item:
-            if not isinstance(item, _OVERRIDABLE) or (
-                dialect == HISTORICAL and isinstance(item, (Group, User))
-            ):
+            if not isinstance(item, _OVERRIDABLE):
                 raise _Standalone(f"replaces {describe(identity(item))}")
             own.append(item)
     if any(isinstance(item, _RUNTIME) for item in own) and any(
@@ -599,6 +608,42 @@ def _setting_bool(setting: Setting, value: str) -> bool:
     )
 
 
+CONFIGURE_SCRIPTS = "ConfigureScripts"
+"""The setting ``Mkosi`` refuses (lint ``mkosi-configure-script``): configure scripts run
+after ``mkosi summary``, so the resolved configuration would not be what mkosi builds."""
+
+
+def _refuse_unreproducible(setting: Setting) -> None:
+    """Raise for a *setting* that makes the tree's resolved configuration lie or leak.
+
+    ``ConfigureScripts=`` rewrites the configuration after ``summary`` reads it; an
+    ``Environment=`` name without a value, and ``PassEnvironment=``, pass the host's
+    variables into the build.
+    """
+    if setting.key == CONFIGURE_SCRIPTS:
+        raise ValidationError(
+            f"mkosi-configure-script: Setting {setting.section}.{setting.key} runs scripts "
+            "that rewrite the configuration after `mkosi summary` resolved it.",
+            hint="Declare what the script would set as typed declarations or Settings.",
+            context={
+                "setting": f"{setting.section}.{setting.key}",
+                "code": "mkosi-configure-script",
+            },
+        )
+    passed = [v for v in setting.values if "=" not in v]
+    if setting.key == "PassEnvironment" or (setting.key == "Environment" and passed):
+        names = ", ".join(passed or setting.values)
+        raise ValidationError(
+            f"mkosi-environment-passthrough: Setting {setting.section}.{setting.key} passes "
+            f"the host's {names} into the build.",
+            hint="Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)).",
+            context={
+                "setting": f"{setting.section}.{setting.key}",
+                "code": "mkosi-environment-passthrough",
+            },
+        )
+
+
 def _typed_options(recipe: Recipe) -> dict[str, Any]:
     """The ``MkosiOptions`` fields set by ``Recipe.mkosi`` and ``Debian`` (each variant's
     ``Setting`` of the same key overrides them)."""
@@ -610,6 +655,7 @@ def _typed_options(recipe: Recipe) -> dict[str, Any]:
         "compress_output": config.compress,
         "manifest_format": config.manifest,
         "with_network": config.build_network,
+        "root": config.root,
         "clean_package_metadata": getattr(recipe.platform, "clean_package_metadata", True),
         "kernel_modules": getattr(recipe.platform, "kernel_modules", ()),
     }
@@ -626,41 +672,31 @@ def _mkosi_options(
     """``MkosiOptions`` for the recipe-wide fields and one variant's *settings*.
 
     Settings without a compiler field are written verbatim, unless the compiler
-    writes that key itself. *sandbox_files* replace the ``nethermind-v1``
-    backports sandbox tree.
+    writes that key itself, or the key would make ``mkosi summary`` disagree with the
+    build (``ConfigureScripts=``, lint ``mkosi-configure-script``) or let the host's
+    environment in (an ``Environment=`` name without a value, ``PassEnvironment=``,
+    lint ``mkosi-environment-passthrough``). *sandbox_files* are written under
+    ``mkosi.sandbox/``.
     """
     config = recipe.mkosi
-    changes: dict[str, Any] = {
-        "emit_mode": "native_profiles" if config.layout == "native" else "per_directory",
-        "init_script": config.init_script,
-        "generate_version_script": config.version_script,
-        "generate_cloud_postoutput": config.cloud_postoutput,
-        "dialect": config.dialect,
-    }
+    changes: dict[str, Any] = {"generate_version_script": config.version_script}
     changes.update(_typed_options(recipe))
     if sandbox_files:
         changes["sandbox_files"] = sandbox_files
     environment: dict[str, str] = {}
-    passthrough: list[str] = []
     verbatim: list[tuple[str, str, tuple[str, ...]]] = []
-    if recipe.platform.epoch:
-        environment["SOURCE_DATE_EPOCH"] = str(recipe.platform.epoch)
     for setting in settings:
         key = (setting.section, setting.key)
         if key == BUILD_SOURCES:
             continue  # per-profile mounts, declared by _declare
+        _refuse_unreproducible(setting)
         if key == ("Build", "Environment"):
             for value in setting.values:
-                name, sep, assigned = value.partition("=")
-                if sep:
-                    environment[name] = assigned
-                else:
-                    passthrough.append(name)
+                name, _, assigned = value.partition("=")
+                environment[name] = assigned
             continue
         if key == ("Build", "SandboxTrees"):
-            changes["sandbox_trees"] = tuple(
-                v for v in setting.values if not (sandbox_files and v == BACKPORTS_TREE)
-            )
+            changes["sandbox_trees"] = tuple(setting.values)
             continue
         if key == _BOOTABLE and len(setting.values) == 1 and setting.values[0].lower() in _FALSE:
             changes["bootable"] = False
@@ -691,18 +727,16 @@ def _mkosi_options(
         changes[field] = _setting_bool(setting, value) if key in _BOOL_SETTINGS else value
     if environment:
         changes["environment"] = environment
-    if passthrough:
-        changes["environment_passthrough"] = tuple(passthrough)
     if verbatim:
         changes["settings"] = tuple(verbatim)
     return MkosiOptions(**changes)
 
 
 __all__ = [
-    "HISTORICAL",
+    "CLOUD_GLUE",
+    "CONFIGURE_SCRIPTS",
     "INIT_SERVICE",
-    "groupadd_line",
+    "PLATFORM_CONCERN",
     "inject_after_init",
     "lower",
-    "useradd_line",
 ]

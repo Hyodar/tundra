@@ -181,8 +181,8 @@ class Image:
 
     @cached_property
     def _entries(self) -> dict[str, Entry]:
-        """The variant's effective files, by path relative to its layer: in the native
-        layout the root (the default variant) with ``mkosi.profiles/<variant>/`` over it."""
+        """The variant's effective files, by path relative to its layer: the root, the
+        payload and the variant's profile overlay over it."""
         merged: dict[str, Entry] = {}
         for layer in self._layers:
             merged.update(layer)
@@ -222,7 +222,7 @@ class Image:
     def _unit_states(self) -> dict[str, str]:
         states: dict[str, str] = {}
         for rel, entry in self._entries.items():
-            if rel.startswith("scripts/") and entry.content is not None:
+            if re.match(r"mkosi\.\w+\.d/", rel) and entry.content is not None:
                 for action, names in _ENABLE.findall(entry.content.decode("utf-8", "replace")):
                     states.update((n, action) for n in names.split() if not n.startswith("-"))
         return states
@@ -245,13 +245,17 @@ class Image:
         return self.unit(name)
 
     def settings(self, section: str) -> Mapping[str, tuple[str, ...]]:
-        """The compiled ``mkosi.conf`` section, ``{key: values}`` (empty when absent). In the
-        native layout the overlay's ``mkosi.conf`` merges over the root's as mkosi reads
-        them: list settings (``Packages``, scripts, trees) accumulate, the others override."""
+        """The compiled payload's ``mkosi.conf`` section, ``{key: values}`` (empty when
+        absent), merged as mkosi reads it: the root ``mkosi.conf``, the payload's
+        ``mkosi.conf`` and ``mkosi.conf.d/*.conf``, then the variant's profile overlay. List
+        settings (``Packages``, scripts, trees) accumulate, the others override."""
         merged: dict[str, tuple[str, ...]] = {}
         for layer in self._layers:
-            conf = layer.get("mkosi.conf")
-            text = conf.content.decode("utf-8") if conf is not None and conf.content else ""
+            confs = [layer.get("mkosi.conf")]
+            confs += [e for rel, e in sorted(layer.items()) if rel.startswith("mkosi.conf.d/")]
+            text = "\n".join(
+                conf.content.decode("utf-8") for conf in confs if conf is not None and conf.content
+            )
             for key, values in parse_conf(text).get(section, {}).items():
                 listed = key in _LIST_SETTINGS or key.endswith(("Scripts", "Trees"))
                 merged[key] = (*merged.get(key, ()), *values) if listed else values

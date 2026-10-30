@@ -1,16 +1,13 @@
 """The Azure integration's files: what lowering adds to an ``azure`` target variant.
 
 ``tundravm.declarative.state`` installs ``dmidecode``, ships the provisioning
-script and its unit, enables the unit, and sets the ``azure`` target, whose
-VHD postoutput script the compiler generates when
-``MkosiOptions.generate_cloud_postoutput`` is true (the default).
+script and its unit and enables the unit in every payload of a recipe that targets
+``azure`` (the unit is inert elsewhere); the ``azure`` wrapper image converts the disk.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
-from tundravm._units import v1
 
 if TYPE_CHECKING:
     from tundravm.declarative.model import Task
@@ -118,15 +115,9 @@ exit 1
 # Systemd service unit for azure-complete-provisioning
 # ---------------------------------------------------------------------------
 
-AZURE_PROVISIONING_SERVICE = v1.AZURE_PROVISIONING
-"""The unit for a profile that ships ``network-setup.service`` (always under ``nethermind-v1``)."""
-
-AZURE_PROVISIONING_SERVICE_ONLINE = v1.AZURE_PROVISIONING_ONLINE
-"""The unit for any other profile: it waits for ``network-online.target``, as runtime-init does."""
-
 
 def provisioning_task(network_setup: bool) -> Task:
-    """The provisioning unit as a typed ``Task`` (current dialect): a root boot oneshot
+    """The provisioning unit as a typed ``Task``: a root boot oneshot
     (no ``User=``: it reads DMI and posts to the wireserver) under
     ``Hardening.relaxed()``, after ``network-setup.service`` when the profile ships it,
     else ``network-online.target``; it does not wait for runtime-init. It is gated by

@@ -31,7 +31,6 @@ from . import _ssh_sig
 from .declarative.bom import parse_manifest, spdx_packages
 from .declarative.lifecycle import (
     MANIFEST_KEY,
-    TreeLayout,
     recorded_reproducibility,
     reproducibility_of,
 )
@@ -841,9 +840,8 @@ def _tree_check(
     if not isinstance(manifest, dict) or manifest.get("schema") != TREE_SCHEMA:
         return []
     rows = manifest.get("files") or []
-    layout: TreeLayout = "native" if manifest.get("layout") == "native" else "directories"
     try:
-        own = tree_rows_digest(((name, row) for row in rows), layout)
+        own = tree_rows_digest((name, row) for row in rows)
     except (KeyError, TypeError, ValueError):
         own = None
     problems: list[str] = []
@@ -856,7 +854,7 @@ def _tree_check(
     together = [_json(present.get(f"variants/{v}/tree.json")) for v in compiled]
     if compiled and all(isinstance(m, dict) for m in together):
         try:
-            union = tree_rows_digest(_union_rows(compiled, together, layout), layout)
+            union = tree_rows_digest(_union_rows(compiled, together))
         except (KeyError, TypeError, ValueError):
             union = None
         if union != whole:
@@ -876,15 +874,15 @@ def _tree_check(
 
 
 def _union_rows(
-    compiled: Sequence[str], manifests: Sequence[Any], layout: TreeLayout
+    compiled: Sequence[str], manifests: Sequence[Any]
 ) -> list[tuple[str, Mapping[str, Any]]]:
-    """Every compiled variant's ``tree.json`` rows as the whole tree, in tree order. Native
-    variants each list the root they share: a row they agree on counts once, so rows
-    that disagree on a path stay apart and fail the tree digest."""
+    """Every compiled variant's ``tree.json`` rows as the whole tree, in tree order. The
+    variants each list what they share: a row they agree on counts once, so rows that
+    disagree on a path stay apart and fail the tree digest."""
     pairs: dict[str, tuple[str, Mapping[str, Any]]] = {}
     for variant, manifest in zip(compiled, manifests, strict=True):
         for row in manifest.get("files") or []:
-            path = ("" if layout == "native" else f"{variant}/") + str(row.get("path"))
+            path = str(row.get("path"))
             pairs.setdefault(f"{path}\0{json.dumps(row, sort_keys=True)}", (variant, row))
     return [pairs[key] for key in sorted(pairs)]
 

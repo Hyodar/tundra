@@ -151,10 +151,11 @@ def test_a_package_a_file_and_a_pin_that_changed(tmp_path: Path, released: Path)
         ("measurements", "unknown"),
     }
     files = {c.subject: c for c in report.section("files")}
-    motd = files["mkosi.extra/etc/motd"]
+    motd = files["payload/mkosi.extra/etc/motd"]
     assert (motd.change, motd.detail) == ("changed", "content")
     assert motd.origins == ("File(extra, /etc/motd) (declared in common)",)
-    assert files["mkosi.conf"].change == "changed" and files["mkosi.conf"].origins == ()
+    assert files["payload/mkosi.conf"].change == "changed"
+    assert files["payload/mkosi.conf"].origins == ()
     assert report.counts()["measurements"] == 0
     payload = json.loads(report.render("json"))
     assert payload["schema"] == "tundravm.changes/2"
@@ -170,7 +171,7 @@ def test_markdown_groups_the_sections_with_counts(tmp_path: Path, released: Path
     assert "### Declared packages (2)" in markdown
     assert "| added | `default` | `htop` | — | — |" in markdown
     assert "| changed | `app` | ref main | `aaaaaaaaaaaa` | `bbbbbbbbbbbb` |" in markdown
-    assert "| changed | `default` | `mkosi.extra/etc/motd` | content |" in markdown
+    assert "| changed | `default` | `payload/mkosi.extra/etc/motd` | content |" in markdown
     text = report.render()
     assert "  pins          1" in text
     assert "  ~ app  aaaaaaaaaaaa -> bbbbbbbbbbbb  (ref main)" in text

@@ -35,7 +35,7 @@ def test_recipe_fixture_bakes_in_process(recipe: Recipe, tmp_path: Path) -> None
     assert (artifact.variant, artifact.target) == ("default", "qemu")
     assert artifact.simulated
     assert artifact.path.is_file()
-    assert (tmp_path / "build" / "mkosi" / "default" / "mkosi.conf").is_file()
+    assert (tmp_path / "build" / "mkosi" / "payload" / "mkosi.conf").is_file()
 
 
 def test_compiled_factory_uses_fresh_dirs(
