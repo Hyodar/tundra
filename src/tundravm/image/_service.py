@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from typing import Any, Protocol
 
+from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative.model import Calendar, DropIn, Every, Listen, Ref
 from tundravm.declarative.systemd import Hardening
@@ -74,7 +75,7 @@ def executable_of(value: object) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class Service:
+class Service(Located):
     """A program the image runs, as its own user, in a tested sandbox.
 
     *argv* is an argv, never a command line: the program's absolute path (or a built

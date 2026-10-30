@@ -48,10 +48,10 @@ def test_cli_init_inspect_and_lint(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     code, out, _ = run_cli("inspect", recipe, "--format", "json")
     payload = json.loads(out)
-    assert code == 0 and set(payload["variants"]) == {"default", "dev"}
+    assert code == 0 and set(payload["variants"]) == {"production", "dev"}
     assert len(payload["digest"]) == 64
-    code, one, _ = run_cli("inspect", recipe, "--format", "json", "--variant", "default")
-    assert set(json.loads(one)["variants"]) == {"default"}
+    code, one, _ = run_cli("inspect", recipe, "--format", "json", "--variant", "production")
+    assert set(json.loads(one)["variants"]) == {"production"}
     assert json.loads(one)["digest"] != payload["digest"]
     code, text, _ = run_cli("inspect", recipe, "--format", "markdown")
     assert code == 0 and text.startswith("# tundravm: `demo.py`")

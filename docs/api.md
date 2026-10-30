@@ -1,18 +1,161 @@
 # API reference
 
-The public API is the declarative one in `tundravm.declarative`. Most names are also exported from `tundravm`; the exceptions are listed under [Imports](#imports). Every record below is a frozen, slotted dataclass: lists passed for tuple fields are frozen into tuples, and `__post_init__` raises `ValidationError` for malformed values.
+The public API is `tundravm`: an [`Image`](#image) of [`Service`](#service) values,
+[`Component`](#component) groups and [`Profile`](#profile) variations. Everything below the
+first section is the internal model an image lowers onto, which keeps its own names under
+`tundravm.declarative` until gate 6 renames or deletes it; it is importable, documented here
+and not the API.
+
+Every record is a frozen, slotted dataclass: lists passed for sequence fields are frozen into
+tuples, and `__post_init__` raises `ValidationError` for malformed values.
+
+## The image
+
+```python
+from tundravm import TCP, File, Image, Service
+
+image = Image(
+    "demo",
+    packages=["busybox"],
+    files=[File.text("/srv/www/index.html", "<h1>demo</h1>\n")],
+    services=[
+        Service(
+            "app",
+            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
+            expose=[TCP(8080)],
+        ),
+    ],
+)
+```
+
+### `Image`
+
+`Image(name, *, base=Debian("trixie"), packages=[], files=[], services=[], components=[],
+network=None, users=[], groups=[], kernel=Kernel.default(), targets=("qemu",), dev=None,
+profiles={}, mkosi=None)`
+
+| Slot | Values |
+|---|---|
+| `base` | `Debian("trixie")`, the one tested baseline; `Debian(release, snapshot=, efi_stub=)` to move the archive |
+| `packages` | `str` or `Package(name, backports=True)`: runtime packages only |
+| `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst)` |
+| `services` | `Service` only; a `Component` in this slot is refused by name |
+| `components` | `Component` instances, resolved before validation |
+| `network` | `Network(dhcp=True, static=StaticAddress(...), egress=Egress(...))` |
+| `users`, `groups` | `User`, `Group` for shared resources; service users are generated |
+| `kernel` | `Kernel.default()` or `Kernel.build(version, source, config=, patches=)` |
+| `targets` | the default set for `build --target`; `("qemu",)` |
+| `dev` | `DevAccess(ssh_keys=[...], password=None)`: a non-production `dev` profile |
+| `profiles` | `{"name": Profile(extends=, add=, changes=[...], production=False)}` |
+| `mkosi` | `Mkosi(settings={...}, scripts=[...])`, refused when it contradicts an invariant |
+
+What an image implies with no further words, and the one escape hatch for each, is the
+`Image` docstring; `tundravm inspect` prints the resolved result.
+
+Volumes, secrets, attested ingress, the root layout and observability are the slots gate 4
+part B adds; until then they are the internal `Key`, `Disk`, `Secrets` and `Tdxs`
+declarations a `Component` may still yield.
+
+### `Service`
+
+`Service(name, argv, *, requires=[], readiness=None, state=None, credentials=[], expose=[],
+resources=None, shutdown=None, hardening=Hardening.preset("static"), timer=None, socket=None,
+unit=None, user=None, groups=[], working_directory=None, environment={}, logs=None,
+runtime=None)`
+
+`argv` is an argv, never a command line: the program's absolute path (or a built binary such
+as `GoBinary(...)`, which pulls its build and install in) and one element per argument. The
+shell escape is `["/bin/sh", "-eu", "-c", script]`. An `Endpoint` another component exported
+renders as its URL.
+
+- `requires=[other.ready]` renders `Requires=` and `After=` on whatever *proves* the other
+  service ready: its `Type=notify` for `readiness=Notify()`, else the bounded probe unit
+  `<stem>-ready.service` that `readiness=HttpProbe(url)` or `TcpProbe(port)` generates.
+  Requiring a service that declares no readiness is refused where it is written.
+- `expose=[TCP(8080), UDP(53)]` is the only thing that opens an inbound port.
+- `hardening=Hardening.preset("static" | "dotnet" | "jit" | "node" | "python")` names the
+  runtime class; a deviation is explicit (`Hardening.preset("jit", devices=["/dev/kvm"])`).
+- `resources=Resources(memory_max=, memory_high=, cpu_quota=, cpu_weight=, tasks_max=,
+  io_weight=)` and `shutdown=Shutdown(timeout=, signal=, kill_mode=, final_kill=)` group the
+  cgroup and stop directives; `timer=Every("15m")` or `Calendar("daily")` makes it a scheduled
+  oneshot; `socket=Listen(...)` makes it socket-activated; `unit=DropIn(...)` carries anything
+  else systemd knows.
+- `credentials=[Credential("jwt", "/etc/app/jwt")]` renders `LoadCredential=`.
+- `service.ready` is the export another service requires, and `service.ref` is what a
+  `Profile` change targets.
+
+### `Component`
+
+Subclass it: the subclass is a frozen keyword-only dataclass whose annotated attributes are
+configuration, `compose()` returns the declarations and nested components it stands for, and
+`check(self, resolved)` returning diagnostics becomes its lint rule. `class X(Component,
+fragment="x", requires=("y",))` names the fragment and what the profile must also hold.
+
+Its **exports** are the typed values a caller references without knowing any of that:
+
+| Export | What it is |
+|---|---|
+| `component.ready` (`ComponentReady`) | the readiness of every service it declares one for |
+| `component.service("app")` (`ServiceRef`) | that service, with `.ready` and `.ref` |
+| `Endpoint(host, port, path, scheme, ready=, provider=self)` | where it answers, with its readiness; holding one in a field requires its provider |
+| `service.ready` (`ServiceReady`) | one service's readiness |
+
+### `Profile`
+
+`Profile(extends=None, add=[], changes=[], production=True)`. `extends` names the profile it
+starts from (`None`: the image itself, which is the `production` profile). `changes` are typed
+against refs — `value.ref.edit(field=...)`, `value.ref.remove()` — and there is no
+string-keyed `set`. `production=False` marks the artifacts as never shipped;
+`dev=DevAccess(...)` is the sugar for one of those.
+
+### The small values
+
+| Value | What it is |
+|---|---|
+| `TCP`, `UDP` | an inbound port a service exposes |
+| `Package` | a runtime package, with `backports=True` |
+| `File`, `Tree` | a file (text or copied, with `mode=` and `owner=`) and a host directory |
+| `Debian`, `Kernel` | the distribution and its archive, the kernel |
+| `Network`, `StaticAddress`, `Egress` | how the image reaches the network, and what it may send |
+| `DevAccess` | debug access in a non-production profile |
+| `Mkosi` | mkosi settings and scripts, recorded and linted |
+| `Resources`, `Shutdown` | a service's cgroup limits and how it is stopped |
+| `HttpProbe`, `TcpProbe`, `Notify` | the three readiness mechanisms |
+| `Credential` | a systemd credential a service loads |
+| `Hardening` | the sandbox, through `Hardening.preset(name, **deviations)` |
+| `Every`, `Calendar`, `Listen`, `DropIn` | a schedule, a socket, and the systemd escape hatch |
+| `User`, `Group` | accounts for shared resources |
+
+### Functions and errors
+
+`load(path)` reads the `Image` a file binds to `image`; `lower(image)`, `compile(image)`,
+`bake(image, ...)` and `doctor(backend)` are the lifecycle. The errors are `TdxError` and its
+subclasses `ValidationError`, `LintError`, `LockfileError`, `SourceError`, `StateError`,
+`ArtifactError`, `MeasurementError`, `AttestationError`, `PolicyError`, `DeploymentError`,
+`BackendExecutionError`, `ReproducibilityError`. `Diagnostic` and `Resolved` are what a
+component's `check()` takes and returns. `IMAGE_OBJECT_NAMES` are the module-level names
+`load` looks for. `tundravm.__version__` is the package version `tundravm --version` prints.
+
+Also exported for the build declarations an argv names: `Build`, `Install`, `Git`, `Http`,
+`GoBinary`, `CargoBinary`.
+
+## The internal model
+
+The rest of this page documents `tundravm.declarative`.
+
+The public API is the declarative one in `tundravm.declarative`. Every record below is a frozen, slotted dataclass: lists passed for tuple fields are frozen into tuples, and `__post_init__` raises `ValidationError` for malformed values.
 
 For the model behind these types see [concepts](concepts.md); for writing reusable fragments see [writing fragments](module-authoring.md).
 
 ## Imports
 
 ```python
-from tundravm import Recipe, Fragment, Variant, Package, File, Service, compile, lint, lock, bake
+from tundravm.declarative import Recipe, Fragment, Variant, Package, File, Service, compile, lint, lock, bake
 from tundravm.declarative.utils import Composite, DevTools, Tdxs
 from tundravm.declarative import diff, measure, deploy
 ```
 
-`tundravm` exports the declarations and the `packages()` helper, the build toolchains `Go`, `Cargo` and `Dotnet`, [`Resources`](#resources), the recipe types, the lifecycle functions and result types, `release` and `Release` (from `tundravm.release`; the top-level `tundravm.release` is the function, so import the module as `import tundravm.release` or `from tundravm.release import STAGES`), `attest` and `Attestation` (from `tundravm.attestation`), `Policy`, the [errors](#errors), `load` and `load_recipe`. Only in `tundravm.declarative`: `diff`, `measure` and `deploy` (at the top level those names are the `tundravm.diff`, `tundravm.measure` and `tundravm.deploy` subpackages), `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub`, `Backports`, `GoBinary`, `CargoBinary`, `SshAccess` (with `SSH_CONFIG` and `SSH_AUTHORIZED_KEYS_DIR`) and `TeeBase` (with its `TEE_*` defaults), their base class `Composite`, `ConfigFile`, `Export` and `HttpEndpoint` live in `tundravm.declarative.utils`; the `component` decorator is in `tundravm` and `tundravm.declarative`. `tundravm.__version__` is the package version that `tundravm --version` prints.
+`tundravm.declarative` exports the declarations and the `packages()` helper, the build toolchains `Go`, `Cargo` and `Dotnet`, the recipe types, the lifecycle functions and result types, `identity`, and the type aliases `Check`, `Pairs`, `Phase` and `Target`. `release` and `Release` are in `tundravm.release`, `attest` and `Attestation` in `tundravm.attestation`, `evidence` in `tundravm.evidence`, `explore` in `tundravm.explore`, `changes` in `tundravm.changes`, `verify_evidence` in `tundravm.verify`, `witness` in `tundravm.witness`, and `load_recipe` in `tundravm.recipe`. The shipped fragments `Tdxs`, `DevTools`, `EfiStub`, `Backports`, `GoBinary`, `CargoBinary`, `SshAccess` (with `SSH_CONFIG` and `SSH_AUTHORIZED_KEYS_DIR`) and `TeeBase` (with its `TEE_*` defaults), their base class `Composite`, `ConfigFile`, `Export` and `HttpEndpoint` live in `tundravm.declarative.utils`; the `component` decorator is in `tundravm.declarative`.
 
 ## Recipe, variants, fragments
 
@@ -303,7 +446,7 @@ A `Build` sets exactly one of `script` and `recipe`. `script` is a shell script 
 | `Dotnet` | `dotnet restore`, then a deterministic self-contained `dotnet publish` into `publish/` | `publish/<output>` |
 
 ```python
-from tundravm import Build, Cargo, Git, Go, Install
+from tundravm.declarative import Build, Cargo, Git, Go, Install
 
 Build("app", Git("https://github.com/example/app.git", "v1.0.0"),
       using=Go(output="app", package="./cmd/app", env={"CGO_ENABLED": "0"}),
@@ -456,7 +599,7 @@ fetch(recipe, *, lock: Lock | None, build: Path, variants=None, resolver=None, f
 
 ```python
 from pathlib import Path
-from tundravm import Backend, bake, compile, lint, lock, read_artifacts, write_lock
+from tundravm.declarative import Backend, bake, compile, lint, lock, read_artifacts, write_lock
 from tundravm.declarative import measure
 
 assert not [d for d in lint(recipe) if d.severity == "error"]
@@ -478,7 +621,7 @@ Every file one step writes, the next step reads back with a checking reader, so 
 import json
 from pathlib import Path
 
-from tundravm import Backend, Diagnostic, bake, evidence, load_recipe, lock, verify_evidence
+from tundravm.declarative import Backend, Diagnostic, bake, evidence, load_recipe, lock, verify_evidence
 from tundravm.declarative import measure
 from tundravm.declarative.utils import Tdxs
 from tundravm.measure.policy import read_policy, write_policy
@@ -551,7 +694,7 @@ A lock of every variant covers any subset. When `variants` leaves out a declared
 ```python
 from collections.abc import Iterator
 
-from tundravm import Package, component
+from tundravm.declarative import Package, component
 from tundravm.declarative.utils import Composite
 
 

@@ -11,10 +11,12 @@ the whole answer to "what did I get".
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+from tundravm._location import anchored, declared_at
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import Backports, DevTools, Network, SshAccess, Tdxs, TeeBase
@@ -219,7 +221,12 @@ class _Lowering:
     # ── Content ─────────────────────────────────────────────────────
 
     def content(self, item: object) -> Iterator[dm.Declaration | dm.Fragment]:
-        """One public value as the declarations it stands for."""
+        """One public value as the declarations it stands for, located where it was written."""
+        with _at(item):
+            found = tuple(self._content(item))
+        yield from found
+
+    def _content(self, item: object) -> Iterator[dm.Declaration | dm.Fragment]:
         if isinstance(item, str):
             yield dm.Package(item)
         elif isinstance(item, Package):
@@ -265,7 +272,7 @@ class _Lowering:
             items.extend(self.content(child))
         check = getattr(item, "check", None)
         checks: tuple[dm.Check, ...] = () if check is None else (_collected(item),)
-        return dm.Fragment(
+        return _fragment_type(type(item))(
             item.name,
             items=tuple(items),
             requires=tuple(dict.fromkeys(export_providers(item))),
@@ -383,7 +390,10 @@ def _handles(requirement: object) -> tuple[ServiceReady, ...]:
                 "or Notify().",
             )
         return found
-    raise ValidationError(f"{requirement!r} is not a readiness handle.")
+    raise ValidationError(
+        f"{requirement!r} is not a readiness handle.",
+        hint="Pass other.ready, component.ready or an exported Endpoint.",
+    )
 
 
 def _ready_unit(owner: Service, handle: ServiceReady) -> str:
@@ -410,6 +420,33 @@ def _credentials(credentials: tuple[Credential, ...]) -> dict[str, str]:
             )
         found[credential.name] = credential.source
     return found
+
+
+_FRAGMENT_TYPES: dict[type, type[dm.Fragment]] = {}
+
+
+def _fragment_type(cls: type) -> type[dm.Fragment]:
+    """A ``Fragment`` subclass named after the component class, so provenance keeps it.
+
+    ``explore`` and ``why`` print "via app (App)": the fragment's name and the class that
+    composed it. One subclass per component class, made once.
+    """
+    found = _FRAGMENT_TYPES.get(cls)
+    if found is None:
+        found = type(cls.__name__, (dm.Fragment,), {"__slots__": ()})
+        _FRAGMENT_TYPES[cls] = found
+    return found
+
+
+@contextmanager
+def _at(item: object) -> Iterator[None]:
+    """Locate everything built from *item* at the line *item* was written on."""
+    location = declared_at(item)
+    if not location:
+        yield
+        return
+    with anchored(location):
+        yield
 
 
 def _collected(component: Component) -> dm.Check:

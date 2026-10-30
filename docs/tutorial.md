@@ -715,7 +715,7 @@ Say every image that runs the app should also probe it once a minute. Write that
 ```python
 from collections.abc import Iterator
 
-from tundravm import Declaration, Every, Package, Task, component
+from tundravm.declarative import Declaration, Every, Package, Task, component
 from tundravm.declarative.utils import Composite, HttpEndpoint
 
 
@@ -809,7 +809,7 @@ Add tests for the fragment in `tests/test_healthcheck.py`. `tundravm.testing` wo
 from fragments import HealthCheck
 from node import App
 
-from tundravm import Fragment, Package, Recipe, Task, lint
+from tundravm.declarative import Fragment, Package, Recipe, Task, lint
 from tundravm.declarative.utils import Network
 from tundravm.testing import assert_clean, assert_diagnostic
 

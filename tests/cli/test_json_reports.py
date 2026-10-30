@@ -21,7 +21,7 @@ REPORTS: dict[str, tuple[str, ...]] = {
     "config": ("config", "--format", "json"),
     "evidence": ("evidence", "--format", "json"),
     "explore": ("explore", "--format", "json"),
-    "measure": ("measure", "--variant", "default", "--allow-placeholder", "--format", "json"),
+    "measure": ("measure", "--variant", "production", "--allow-placeholder", "--format", "json"),
     "verify": ("verify", "build/evidence", "--format", "json"),
     "changes": ("changes", "--since", "build/evidence", "--format", "json"),
     "release": ("release", "--version", "1.0", "--format", "json"),
@@ -132,7 +132,7 @@ def test_the_unknown_variant_error_line(
         "schema": "tundravm.error/1",
         "code": "E_VALIDATION",
         "message": "Unknown variant(s): nope.",
-        "hint": "Declared variants: default, dev",
+        "hint": "Declared variants: production, dev",
         "context": {"recipe": "node.py"},
     }
 

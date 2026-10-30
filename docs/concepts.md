@@ -7,7 +7,7 @@ tundravm turns an immutable Python value, a `Recipe`, into a reproducible mkosi 
 A recipe says three things. Its **platform** is what every variant builds on: `Debian("trixie", snapshot=..., boot="systemd", efi_stub=...)` is the distribution release and archive, plus the packages a bootable image needs (the kernel and the systemd boot set, `recipe.platform.packages`). Its **items** are the declarations every variant starts from: typed facts (`Package`, `File`, `User`, `Service`, `Build`, `Disk`, ...) and fragments that group them. A reusable fragment is a **component**: a `@component` class whose fields are its configuration and whose `compose()` yields its contents (`GoBinary`, `DevTools`, `Tdxs` and `TeeBase` in `tundravm.declarative.utils` are components too). Its **variants** each describe one image as an addition to the default one: `add` a fragment, `changes` that edit an inherited file, repository or debloat through its ref (`motd.ref.edit(content=...)`), and the `outputs` it builds (`qemu`, `azure`, `gcp`).
 
 ```python
-from tundravm import Debian, File, Package, Recipe, Service, Variant
+from tundravm.declarative import Debian, File, Package, Recipe, Service, Variant
 from tundravm.declarative.utils import DevTools
 
 motd = File.text("/etc/motd", "node\n")
@@ -62,7 +62,7 @@ The platform is what every variant builds on, and every variant starts from its 
 A relative `Path` in a declaration (`File.copy(path, Path(...))`, `Unit.from_file(name, Path(...))`, `Template(path, Path(...))`, `FileTree(path, source)`, `Kernel(config=...)`) resolves against the working directory of the process that compiles, not against the recipe file. `tundravm compile image.py` inside the project works and `tundravm compile proj/image.py` from its parent fails with `E_VALIDATION` (`cannot read motd.txt`). The same holds for a policy file passed to `Tdxs.from_policy()`, which is read when the recipe loads. Name host files through `Resources.from_module(__name__)` instead: it resolves paths against the directory of the module that declares them, so they work from any working directory, after the recipe moves, and from an installed package (`importlib.resources`). The surge example's base layer (`examples/nethermind_base.py`) and image read their kernel config and system files this way:
 
 ```python
-from tundravm import File, FileTree, Kernel, Resources, Unit
+from tundravm.declarative import File, FileTree, Kernel, Resources, Unit
 
 assets = Resources.from_module(__name__)
 

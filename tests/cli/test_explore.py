@@ -180,11 +180,11 @@ def test_lock_state_missing_current_and_drifted(tmp_path: Path) -> None:
 
 
 def test_a_lowered_recipe_has_a_tree_but_no_declarations(tmp_path: Path) -> None:
-    found = explore(lower(load(_template(tmp_path, "service"))), variants=["default"])
+    found = explore(lower(load(_template(tmp_path, "service"))), variants=["production"])
     data = found.to_dict()
     assert data["declarations"] == []
     assert data["recipe"]["name"] is None
-    assert data["trees"]["default"]["files"] == []  # default adds no profile overlay
+    assert data["trees"]["production"]["files"] == []  # production adds no profile overlay
     assert data["trees"][SHARED]["files"]
     assert "No declarations" in found.html()
 
@@ -207,7 +207,7 @@ def test_cli_writes_the_page_into_the_build_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = write_recipe_file(tmp_path, _template(tmp_path, "service").read_text(), monkeypatch)
-    assert run_main("bake", str(path), "-q", "--variant", "default")[0] == EXIT_OK
+    assert run_main("bake", str(path), "-q", "--variant", "production")[0] == EXIT_OK
     code, out = run_main("explore", str(path))
     assert code == EXIT_OK
     page_path = Path(out.strip())

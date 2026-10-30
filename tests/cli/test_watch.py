@@ -134,12 +134,16 @@ def test_watch_reports_a_broken_recipe_and_keeps_watching(recipe: Path) -> None:
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """An ``init`` service project in *tmp_path* (the CWD), compiled and locked."""
+    """An ``init`` service project in *tmp_path* (the CWD), locked and compiled.
+
+    The lock comes first: the implied evidence service is a source build, so a tree
+    compiled before the lockfile exists is already stale.
+    """
     monkeypatch.chdir(tmp_path)
     init = ("init", ".", "--name", "node", "--backend", "inprocess", "--no-doctor")
     assert run_main(*init)[0] == EXIT_OK
-    assert run_main("compile")[0] == EXIT_OK
     assert run_main("lock")[0] == EXIT_OK
+    assert run_main("compile")[0] == EXIT_OK
     return tmp_path / "node.py"
 
 
@@ -156,8 +160,8 @@ def test_watch_counts_lockfile_drift_as_lint_does(project: Path) -> None:
 
     _, lines = _watch(ticks=iter(()))
 
-    assert _lint_summary() == "4 errors, 0 warnings, 0 infos"  # lock-changed, one per section
-    assert lines == ["lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (2 files)"]
+    assert _lint_summary() == "2 errors, 0 warnings, 0 infos"  # lock-changed, one per section
+    assert lines == ["lint 2 errors 0 warnings; lock drifted (2 sections); tree stale (1 file)"]
 
 
 def test_watch_names_the_first_error_a_fragment_check_raises(project: Path) -> None:
@@ -311,8 +315,8 @@ def test_watch_rechecks_when_lock_rewrites_the_lockfile(project: Path) -> None:
     _, lines = _watch(ticks=_then_idle(lambda: run_main("lock")))
 
     assert lines == [
-        "lint 4 errors 0 warnings; lock drifted (4 sections); tree stale (2 files)",
-        "lint 0 errors 0 warnings; tree stale (2 files)",
+        "lint 2 errors 0 warnings; lock drifted (2 sections); tree stale (1 file)",
+        "lint 0 errors 0 warnings; tree stale (1 file)",
     ]
 
 

@@ -11,7 +11,7 @@
 
 <br>
 
-Python SDK for building, measuring and deploying TDX-enabled VM images. An image is an immutable Python value: a `Recipe` of typed declarations, grouped into fragments and specialized by variants. tundravm resolves it, lints it, compiles it to a byte-reproducible [mkosi](https://github.com/systemd/mkosi) project tree, pins every source in a lockfile, and bakes the tree into a bootable disk for QEMU, Azure or GCP. Each lifecycle step is a plain function with explicit inputs and results, and the `tundravm` command runs the same steps.
+Python SDK for building, measuring and deploying TDX-enabled VM images. An image is an immutable Python value: an `Image` that names what it runs and nothing about how it is built. Everything a confidential image needs and no one wants to repeat is implied — Debian trixie from a locked snapshot, a measured UKI, NTS time, a RAM-only journal, a firewall that opens only what a service exposes, one hardened system user per service, and the evidence service an attestation reads. tundravm resolves it, lints it, compiles it to a byte-reproducible [mkosi](https://github.com/systemd/mkosi) project tree, pins every source in a lockfile, and bakes the tree into a bootable disk for QEMU, Azure or GCP. Each lifecycle step is a plain function with explicit inputs and results, and the `tundravm` command runs the same steps.
 
 ## Install
 
@@ -29,32 +29,29 @@ git add uv.lock      # committed, the generated workflow installs exactly it (`u
 ## Quickstart
 
 ```python
-# node.py
-from tundravm import Debian, File, Package, Recipe, Service, Unit, Variant
-from tundravm.backends import LimaMkosiBackend
-from tundravm.declarative.utils import TeeBase
+# demo.py
+from tundravm import TCP, File, Image, Service
 
-recipe = Recipe(
-    name="node",
-    platform=Debian("trixie"),  # the kernel and systemd boot set every variant needs
-    items=(
-        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal,
-        # sysctl hardening, a pinned resolver, no apt timers: one flag per piece.
-        TeeBase(),
-        Package("curl"),
-        File.text("/usr/bin/app", "#!/bin/sh\nexec sleep infinity\n", mode=0o755),
-        # Runs as system user "app", restarts on failure, sandboxed by Hardening.strict();
-        # ports= is where it listens, and the firewall opens exactly that.
-        Service("app", "/usr/bin/app", ports=(8080,)),
-        Unit("ssh.socket", enabled=False, masked=True),
-    ),
-    variants=(
-        # One UKI, three disks: the Azure/GCP glue is gated at boot (ConditionVirtualization=).
-        Variant("default", outputs=("qemu", "azure", "gcp")),
-    ),
+image = Image(
+    "demo",
+    packages=["busybox"],
+    files=[File.text("/srv/www/index.html", "<h1>demo</h1>\n")],
+    services=[
+        Service(
+            "app",
+            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
+            expose=[TCP(8080)],
+        ),
+    ],
 )
-backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 ```
+
+That is the whole image. `app.service` runs as the generated system user `app`, under the
+tested `static` hardening preset, restarting on failure; the firewall opens `8080` because
+the service exposed it, and the management ingress on `:8745` because every image reserves
+it. `Image`'s docstring lists each implied item with its one escape hatch, and
+`tundravm inspect` prints the resolved result. A `backend = LimaMkosiBackend(...)` line in
+the same file names where it bakes.
 
 ```bash
 tundravm init . --name node --ci github                 # or scaffold: starter recipe, [tool.tundravm], tests, CI

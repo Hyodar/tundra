@@ -82,7 +82,7 @@ def test_render_prints_the_generated_unit(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    out = _run(["units", "render", str(recipe), "--variant", "default", "--unit", "app.service"])
+    out = _run(["units", "render", str(recipe), "--variant", "production", "--unit", "app.service"])
     assert out.startswith("# payload/mkosi.extra/usr/lib/systemd/system/app.service\n[Unit]\n")
     assert "ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www\n" in out
 
@@ -95,6 +95,6 @@ def test_render_names_a_missing_unit(tmp_path: Path, capsys: pytest.CaptureFixtu
         ),
         encoding="utf-8",
     )
-    argv = ["units", "render", str(recipe), "--variant", "default", "--unit", "nope.service"]
+    argv = ["units", "render", str(recipe), "--variant", "production", "--unit", "nope.service"]
     assert main(argv, stdout=io.StringIO()) != EXIT_OK
     assert "generates no unit 'nope.service'" in capsys.readouterr().err

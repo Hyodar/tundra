@@ -167,19 +167,19 @@ def test_init_writes_loadable_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert code == EXIT_OK
     assert f"created {target}" in out
     source = target.read_text(encoding="utf-8")
-    assert 'platform=Debian("sid")' in source
+    assert 'base=Debian("sid")' in source
     assert "InProcessBackend()" in source
 
     code, out = run_main("inspect", str(target), "--format", "json")
     assert code == EXIT_OK
     payload = json.loads(out)["variants"]
-    assert set(payload) == {"default", "dev"}
-    assert payload["default"]["base"] == "debian/sid"
+    assert set(payload) == {"production", "dev"}
+    assert payload["production"]["base"] == "debian/sid"
 
     assert run_main("lock", str(target))[0] == EXIT_OK
     code, out = run_main("bake", str(target), "--build", str(tmp_path / "out"))
     assert code == EXIT_OK
-    assert re.search(r"^default\s+qemu\s", out, re.M)
+    assert re.search(r"^production\s+qemu\s", out, re.M)
 
 
 def test_init_refuses_overwrite_without_force(
@@ -192,7 +192,7 @@ def test_init_refuses_overwrite_without_force(
     assert "Refusing to overwrite" in capsys.readouterr().err
     code, _ = run_main("init", str(tmp_path), "--name", "r", "--force")
     assert code == EXIT_OK
-    assert "recipe = Recipe(" in target.read_text(encoding="utf-8")
+    assert "image = Image(" in target.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("backend", ["lima", "local", "inprocess"])

@@ -1,15 +1,16 @@
-"""Fragments: named, reusable groups of declarations, plain or parametrised.
+"""Components: named, reusable groups of declarations, written as classes.
 
 Teaches:
 
-- a plain ``Fragment`` is a value: define it once, nest it in any recipe or variant;
-- ``@component`` turns an annotated class into a fragment whose items ``compose()`` yields;
-- ``ConfigFile.yaml``/``ConfigFile.env`` render config files from data;
-- ``Run`` runs a command inside the image while it is built;
-- ``requires=`` names fragments the same variant must also hold (lint reports
-  ``fragment-requires-missing`` otherwise); a component holding another's export
-  (``HttpEndpoint``) requires that component without naming it;
-- a component's ``check()`` is a lint rule that sees each resolved variant.
+- a ``Component`` subclass is a frozen keyword-only dataclass: its fields are
+  configuration and ``compose()`` returns what it stands for;
+- exports: ``Endpoint(..., provider=self)`` is a typed fact another component consumes
+  without parsing this one's files, and holding it in a field requires this component;
+- ``requires=`` on the class names fragments the same profile must also hold (lint
+  reports ``fragment-requires-missing`` otherwise);
+- ``check()`` is a lint rule that sees each resolved profile;
+- ``compose()`` may still yield an internal declaration (``Repository``, ``Unit``,
+  ``Task``, ``ConfigFile``, ``Run``) while those concerns have no public spelling.
 
     tundravm inspect examples/03_fragments.py
     tundravm lint examples/03_fragments.py
@@ -20,54 +21,47 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tundravm.backends import InProcessBackend
-from tundravm.declarative import (
-    Debian,
-    Declaration,
+from tundravm import (
+    Component,
     Diagnostic,
+    Endpoint,
     Every,
     File,
-    Fragment,
+    Image,
     Package,
-    Recipe,
-    Repository,
     Resolved,
-    Task,
-    Unit,
-    Variant,
-    component,
 )
-from tundravm.declarative.utils import Composite, ConfigFile, HttpEndpoint, Run
+from tundravm.backends import InProcessBackend
+from tundravm.declarative import Repository, Task, Unit
+from tundravm.declarative.utils import ConfigFile, Run
 
 SYSCTL = "kernel.kptr_restrict=2\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1\n"
 
-# A plain fragment: security updates and kernel hardening, shared by every variant.
-hardening = Fragment(
-    "hardening",
-    items=(
-        Repository(
+
+class Hardening(Component):
+    """Security updates and a few extra sysctl knobs, on top of the implied baseline."""
+
+    def compose(self) -> Iterator[object]:
+        yield Repository(
             "debian-security",
             "https://deb.debian.org/debian-security",
-            suite="bookworm-security",
+            suite="trixie-security",
             priority=10,
-        ),
-        File("/etc/sysctl.d/90-hardening.conf", SYSCTL),
+        )
+        yield File.text("/etc/sysctl.d/90-hardening.conf", SYSCTL)
         # a command run inside the image as it is built (stage="postinst" by default)
-        Run("update-ca-certificates --fresh", name="ca-certificates"),
-    ),
-)
-
-node_exporter = Fragment(
-    "node-exporter",
-    items=(
-        Package("prometheus-node-exporter"),
-        Unit("prometheus-node-exporter.service", enabled=True),
-    ),
-)
+        yield Run("update-ca-certificates --fresh", name="ca-certificates")
 
 
-@component(requires=("node-exporter",))
-class Metrics(Composite):
+class NodeExporter(Component):
+    """Debian's Prometheus node exporter, enabled at boot."""
+
+    def compose(self) -> Iterator[object]:
+        yield Package("prometheus-node-exporter")
+        yield Unit("prometheus-node-exporter.service", enabled=True)
+
+
+class Metrics(Component, requires=("node-exporter",)):
     """Prometheus scraping the node exporter; *listen* is where its web UI and API bind.
 
     Fragment name: ``metrics``. Requires ``node-exporter``. Exports :attr:`health`.
@@ -78,11 +72,11 @@ class Metrics(Composite):
     scrape_interval: str = "15s"
 
     @property
-    def health(self) -> HttpEndpoint:
+    def health(self) -> Endpoint:
         """Prometheus's health endpoint, for a component that probes it."""
-        return HttpEndpoint(self.listen, self.port, "/-/healthy", provider=self)
+        return Endpoint(self.listen, self.port, "/-/healthy", provider=self)
 
-    def compose(self) -> Iterator[Declaration]:
+    def compose(self) -> Iterator[object]:
         yield Package("prometheus")
         yield ConfigFile.yaml(
             "/etc/prometheus/prometheus.yml",
@@ -93,8 +87,9 @@ class Metrics(Composite):
                 ],
             },
         )
-        args = {"ARGS": f"--web.listen-address={self.health.address}"}
-        yield ConfigFile.env("/etc/default/prometheus", args)
+        yield ConfigFile.env(
+            "/etc/default/prometheus", {"ARGS": f"--web.listen-address={self.health.address}"}
+        )
         yield Unit("prometheus.service", enabled=True)
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
@@ -105,39 +100,28 @@ class Metrics(Composite):
         return (Diagnostic("metrics-exposed", "warning", message),)
 
 
-@component
-class HealthCheck(Composite):
-    """A scheduled task probing *target* once a minute; requires the fragment that exports it."""
+class HealthCheck(Component):
+    """A scheduled task probing *target* once a minute; requires the component exporting it."""
 
-    target: HttpEndpoint
+    target: Endpoint
 
-    def compose(self) -> Iterator[Declaration]:
+    def compose(self) -> Iterator[object]:
         yield Package("curl")
-        probe = f"/usr/bin/curl -fsS -o /dev/null {self.target.url}"
         yield Task(
             "healthcheck",
-            probe,
+            f"/usr/bin/curl -fsS -o /dev/null {self.target.url}",
             description="Probe the service",
             schedule=Every("1min", first="1min"),
         )
 
 
-metrics = Metrics()  # Metrics(listen="0.0.0.0") makes lint warn for the gcp variant
+metrics = Metrics()  # Metrics(listen="0.0.0.0") makes lint warn for the cloud targets
 
-recipe = Recipe(
-    name="fragments",
-    platform=Debian("bookworm"),
-    items=(
-        Package("ca-certificates"),
-        hardening,
-        node_exporter,
-        metrics,
-        HealthCheck(target=metrics.health),
-    ),
-    variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("gcp", inherits="default", outputs=("gcp",)),
-    ),
+image = Image(
+    "fragments",
+    packages=["ca-certificates"],
+    components=[Hardening(), NodeExporter(), metrics, HealthCheck(target=metrics.health)],
+    targets=("qemu", "gcp"),
 )
 
 backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() bakes real images

@@ -230,7 +230,8 @@ def _imports(spec: AppSpec, backend_import: str) -> str:
         utils.insert(0, "TUNDRA_TOOLS")
     listed = "".join(f"    {name},\n" for name in sorted(set(names)))
     return (
-        f"from tundravm import (\n{listed})\n{backend_import}\n"
+        f"{backend_import}\n"
+        f"from tundravm.declarative import (\n{listed})\n"
         f"from tundravm.declarative.utils import {', '.join(utils)}\n"
     )
 
@@ -333,11 +334,11 @@ _TESTS = r'''"""Tests for $filename: what the image ships for $app, read from th
 
 from pathlib import Path
 
-import tundravm
+from tundravm.recipe import load_recipe
 from tundravm.testing import assert_clean, fragment_plan, plan
 
 PROJECT = Path(__file__).resolve().parent.parent
-RECIPE = tundravm.load_recipe(PROJECT / "$filename")
+RECIPE = load_recipe(PROJECT / "$filename")
 IMAGE = plan(RECIPE)  # the default variant, compiled in memory
 ITEMS = {getattr(item, "name", None): item for item in RECIPE.items}
 APP = "$app"

@@ -1,49 +1,45 @@
-"""Variants: one recipe, one payload, each variant an addition to it.
+"""Profiles: one image, one payload, each profile a variation on it.
 
-Teaches ``Variant``: ``outputs`` for the targets it builds (a cloud wrapper around the same
-UKI), ``add`` a fragment and ``changes`` that edit an inherited declaration by its identity
-(its type plus natural key) through its ref: ``motd.ref`` for a value you hold. A variant
-that adds or edits content compiles to an mkosi profile overlay under
-``payload/mkosi.profiles/<name>/``, so it can add, and replace files, repositories and the
-debloat; removing what the payload declares is a different image, i.e. another recipe.
-``packages()`` bundles ``Package`` declarations without inventing a fragment name.
+Teaches ``Profile``: ``extends`` the profile it starts from (``None``: the image itself,
+which is the ``production`` profile), ``add`` for more content, and ``changes`` that edit
+or remove what the image declares, by reference (``motd.ref`` for a value you hold).
+``production=False`` marks a profile's artifacts as never shipped, and
+``dev=DevAccess(...)`` is the sugar for one of those. ``targets=`` names the disks the
+image builds: one UKI wrapped for QEMU and for each cloud, whose glue is gated at boot
+(``ConditionVirtualization=``), so one set of measurements covers all three.
 
-    tundravm inspect examples/02_variants.py --diff-variants default dev
+    tundravm inspect examples/02_variants.py --diff-variants production staging
     tundravm compile examples/02_variants.py --tree build/variants/mkosi
-    tundravm bake examples/02_variants.py --variant cloud --build build/variants
+    tundravm bake examples/02_variants.py --variant production --build build/variants
 """
 
+from tundravm import TCP, DevAccess, File, Image, Profile, Resources, Service
 from tundravm.backends import InProcessBackend
-from tundravm.declarative import Debian, Debloat, File, Recipe, Variant, packages
 
-motd = File("/etc/motd", "production\n")
-debloat = Debloat(keep_modules=True)  # Debian's kernel loads its drivers from /usr/lib/modules
+motd = File.text("/etc/motd", "production\n")
 
-recipe = Recipe(
-    name="variants",
-    platform=Debian("bookworm"),
-    items=(
-        packages("ca-certificates", "curl", "jq"),
-        motd,
-        debloat,
-    ),
-    variants=(
-        # Recipe.items as is, built for QEMU.
-        Variant("default", outputs=("qemu",)),
-        # One UKI wrapped twice, an Azure VHD and a GCP image: its cloud glue is gated at
-        # boot (ConditionVirtualization=), so one set of measurements covers both.
-        Variant("cloud", inherits="default", outputs=("azure", "gcp")),
-        # Inherits default's outputs; adds tools, edits the motd and keeps systemd whole.
-        Variant(
-            "dev",
-            inherits="default",
-            add=packages("strace", "gdb"),
-            changes=(
-                motd.ref.edit(content="development build\n"),
-                debloat.ref.edit(enabled=False),
-            ),
+image = Image(
+    "variants",
+    packages=["ca-certificates", "busybox"],
+    files=[motd, File.text("/srv/www/index.html", "<h1>variants</h1>\n")],
+    services=[
+        Service(
+            "app",
+            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
+            expose=[TCP(8080)],
+            resources=Resources(memory_max="512M"),
         ),
-    ),
+    ],
+    # One UKI, one set of measurements, three disks.
+    targets=("qemu", "azure", "gcp"),
+    profiles={
+        # Same services, a different banner.
+        "staging": Profile(changes=[motd.ref.edit(content="staging\n")]),
+        # Adds a benchmark tool, and is never shipped by a release.
+        "bench": Profile(add=["fio"], production=False),
+    },
+    # Root over SSH, by public key only, in a non-production "dev" profile.
+    dev=DevAccess(ssh_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForTheDocs me@host"]),
 )
 
 backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() bakes real images

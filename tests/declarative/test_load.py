@@ -72,7 +72,7 @@ def test_load_discovers_like_the_cli_and_rejects_other_values(tmp_path: Path) ->
     assert load(upper).name == "u"
     nothing = tmp_path / "nothing.py"
     nothing.write_text("x = 1\n", encoding="utf-8")
-    with pytest.raises(ValidationError, match="does not define a Recipe"):
+    with pytest.raises(ValidationError, match="does not define an Image"):
         load(nothing, attribute=None)
 
 

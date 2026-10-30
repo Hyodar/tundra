@@ -23,7 +23,6 @@ DENYLIST = {
     "internal source class": re.compile(r"\b(?:Http|Git)Source\("),
     "removed init hook": re.compile(r"\badd_init_script\b"),
     "module application": re.compile(r"\.apply\("),
-    "fluent Image constructor": re.compile(r"\bImage\("),
     "internal module spec": re.compile(r"\b(?:Key|Disk|Secret)Spec\("),
     "internal secret target": re.compile(r"\bSecretTarget\."),
     "removed --out flag (--tree, --build, --output)": re.compile(r"--out\b"),

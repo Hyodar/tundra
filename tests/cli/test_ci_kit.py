@@ -84,7 +84,7 @@ def test_init_writes_recipe_and_gitignore_without_ci(tmp_path: Path) -> None:
     assert "tundravm ci my-node.py --tree mkosi" in out
 
     code, payload = run_main("inspect", str(recipe), "--format", "json")
-    assert code == EXIT_OK and set(json.loads(payload)["variants"]) == {"default", "dev"}
+    assert code == EXIT_OK and set(json.loads(payload)["variants"]) == {"production", "dev"}
 
 
 def _workflow_jobs(text: str) -> dict[str, tuple[dict[str, str], list[str]]]:
@@ -295,8 +295,8 @@ def test_init_project_passes_ci_once_compiled_and_locked(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     assert run_main("init", "--name", "node", "--backend", "inprocess")[0] == EXIT_OK
-    assert run_main("compile", "node.py", "--tree", "mkosi")[0] == EXIT_OK
     assert run_main("lock", "node.py")[0] == EXIT_OK
+    assert run_main("compile", "node.py", "--tree", "mkosi")[0] == EXIT_OK
     code, out = run_main("ci", "node.py", "--tree", "mkosi")
     assert code == EXIT_OK, out
 

@@ -118,7 +118,8 @@ SSH_RECIPE = RECIPE.replace(
     'items=(SshAccess(authorized_keys=("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA me",)), '
     'Package("curl"),',
 ).replace(
-    "from tundravm import", "from tundravm.declarative.utils import SshAccess\nfrom tundravm import"
+    "from tundravm.declarative import",
+    "from tundravm.declarative.utils import SshAccess\nfrom tundravm.declarative import",
 )
 """``RECIPE`` with ``SshAccess``: its artifacts record the SSH port deploy forwards."""
 

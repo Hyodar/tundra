@@ -486,4 +486,4 @@ def test_run_cli_captures_usage_errors_and_sdk_errors(tmp_path: Path) -> None:
     code, _, err = run_cli("lint", broken)
     assert code != 0
     assert "error [" in err
-    assert "does not define a Recipe" in err
+    assert "does not define an Image" in err

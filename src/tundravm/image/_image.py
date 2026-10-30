@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 
+from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative.model import TARGETS, Edit, Group, Remove, Target, User
 from tundravm.errors import ValidationError
@@ -42,7 +43,7 @@ def _check_content(owner: object, name: str, items: Sequence[object]) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class Profile:
+class Profile(Located):
     """A named variation on the image: what it adds, and what it changes.
 
     *extends* is the profile it starts from (``None``: the image itself, which is the
@@ -82,7 +83,7 @@ class Profile:
 
 
 @dataclass(frozen=True, slots=True)
-class Image:
+class Image(Located):
     """A confidential VM image: what it runs, and nothing about how it is built.
 
     Every slot is optional and holds small typed values; the slots are tuples after

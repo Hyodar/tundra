@@ -53,12 +53,14 @@ def test_status_lint_and_compile_check_run_without_recipe(project: Path) -> None
     assert out.startswith("recipe    ok       node.py  digest ")
     assert "tree      missing  mkosi: not compiled" in out
     assert out.rstrip().endswith("next: tundravm lock")
+    # The implied evidence service is a source build, so it is unpinned until `lock`.
+    assert run_main("lint")[0] == EXIT_OK
+    assert run_main("lock")[0] == EXIT_OK
+    assert (project / "build" / "tundravm.lock").is_file()
     assert run_main("lint") == (EXIT_OK, "no findings\n")
     assert run_main("compile")[0] == EXIT_OK
     assert (project / "mkosi").is_dir() and not (project / "build" / "mkosi").exists()
     assert run_main("compile", "--check") == (EXIT_OK, "tree is up to date with the recipe\n")
-    assert run_main("lock")[0] == EXIT_OK
-    assert (project / "build" / "tundravm.lock").is_file()
     assert run_main("ci")[0] == EXIT_OK
     status = json.loads(run_main("status", "--format", "json")[1])
     assert status["recipe"]["path"] == "node.py"
@@ -198,10 +200,10 @@ def test_a_configured_build_reaches_every_artifact_verb(
     assert (dist / "bake-result.json").is_file()
     assert not (project / "build" / "bake-result.json").exists()
 
-    code, out = run_main("sbom", "--variant", "default")
+    code, out = run_main("sbom", "--variant", "production")
     assert code == EXIT_OK and json.loads(out)["spdxVersion"]
     code, out = run_main(
-        "measure", "--variant", "default", "--allow-placeholder", "--format", "json"
+        "measure", "--variant", "production", "--allow-placeholder", "--format", "json"
     )
     assert code == EXIT_OK
     assert Path(json.loads(out)["artifact"]).resolve().is_relative_to(dist.resolve())
@@ -214,7 +216,7 @@ def test_a_configured_build_reaches_every_artifact_verb(
     assert f"would remove {dist / 'bake-result.json'}" in out.splitlines()
     assert f"would remove {dist / 'evidence'}" in out.splitlines()
     capsys.readouterr()
-    assert run_main("deploy", "qemu", "--variant", "default")[0] == EXIT_SDK_ERROR
+    assert run_main("deploy", "qemu", "--variant", "production")[0] == EXIT_SDK_ERROR
     assert "Refusing to deploy a simulated artifact." in capsys.readouterr().err
 
 

@@ -34,13 +34,13 @@ BACKEND_SNIPPETS: dict[str, tuple[str, str]] = {
 TemplateName = Literal["minimal", "service", "cloud", "prover"]
 
 TEMPLATES: dict[str, str] = {
-    "minimal": "packages, one file and one verbatim unit; a single qemu variant",
-    "service": "an App fragment (a web page busybox httpd serves from a sandboxed service, "
-    "a lint rule) plus a dev variant",
-    "cloud": "service with one UKI for qemu, azure and gcp, backports and an EFI stub "
-    "pinned to a Debian snapshot",
+    "minimal": "the starter: one package, one file, one service, one qemu target",
+    "service": "an App component (a web page busybox httpd serves from a sandboxed service, "
+    "its readiness and a lint rule) plus a dev profile",
+    "cloud": "service with one UKI for qemu, azure and gcp, and an EFI stub pinned to a "
+    "Debian snapshot",
     "prover": "cloud plus a TPM-sealed key, an encrypted data disk, key-only root SSH and the "
-    "tdxs attestation service",
+    "tdxs attestation service (the internal API until volumes and secrets land)",
 }
 """Template name -> one-line description, in ``init --list-templates`` order."""
 
@@ -57,76 +57,68 @@ Build:    tundravm bake $filename --build build
 
 '''
 
-_MINIMAL = r"""from tundravm import Debian, File, Package, Recipe, Task, Variant
+_MINIMAL = r"""from tundravm import TCP, File, Image, Service
 $backend_import
 
 backend = $backend_expr
 
-recipe = Recipe(
-    name="$title",
-    # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
-    platform=Debian("$release"),
-    items=(
-        Package("ca-certificates"),
-        File.text("/etc/motd", "$title\n"),
-        # A boot task: runs once per boot as its own system user, sandboxed.
-        Task("hello", "/usr/bin/cat /etc/motd", description="Print the $title banner"),
-    ),
-    variants=(Variant("default", outputs=("qemu",)),),
+image = Image(
+    "$title",
+    packages=["busybox"],
+    files=[File.text("/srv/www/index.html", "<h1>$title</h1>\n")],
+    services=[
+        Service(
+            "app",
+            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
+            expose=[TCP(8080)],
+        ),
+    ],
 )
 """
 
 _APP_IMPORTS = {
     "service": (
         "from tundravm import (\n"
+        "    TCP,\n"
+        "    Component,\n"
         "    Debian,\n"
-        "    Declaration,\n"
+        "    DevAccess,\n"
         "    Diagnostic,\n"
+        "    Endpoint,\n"
         "    File,\n"
+        "    Image,\n"
         "    Package,\n"
-        "    Recipe,\n"
         "    Resolved,\n"
         "    Service,\n"
-        "    Variant,\n"
-        "    component,\n"
+        "    TcpProbe,\n"
         ")\n"
         "$backend_import\n"
-        "from tundravm.declarative.utils import (\n"
-        "    Composite,\n"
-        "    DevTools,\n"
-        "    HttpEndpoint,\n"
-        "    TeeBase,\n"
-        ")\n"
     ),
     "cloud": (
         "from tundravm import (\n"
+        "    TCP,\n"
+        "    Component,\n"
         "    Debian,\n"
-        "    Declaration,\n"
+        "    DevAccess,\n"
         "    Diagnostic,\n"
+        "    Endpoint,\n"
         "    File,\n"
+        "    Image,\n"
         "    Package,\n"
-        "    Recipe,\n"
         "    Resolved,\n"
         "    Service,\n"
-        "    Variant,\n"
-        "    component,\n"
+        "    TcpProbe,\n"
         ")\n"
         "$backend_import\n"
-        "from tundravm.declarative.utils import (\n"
-        "    Backports,\n"
-        "    Composite,\n"
-        "    DevTools,\n"
-        "    HttpEndpoint,\n"
-        "    TeeBase,\n"
-        ")\n"
     ),
     "prover": (
-        "from tundravm import (\n"
+        "$backend_import\n"
+        "from tundravm.declarative import (\n"
         "    Debian,\n"
         "    Declaration,\n"
         "    Diagnostic,\n"
-        "    File,\n"
         "    Disk,\n"
+        "    File,\n"
         "    Key,\n"
         "    Package,\n"
         "    Recipe,\n"
@@ -137,7 +129,6 @@ _APP_IMPORTS = {
         "    Variant,\n"
         "    component,\n"
         ")\n"
-        "$backend_import\n"
         "from tundravm.declarative.utils import (\n"
         "    TUNDRA_TOOLS,\n"
         "    Backports,\n"
@@ -152,6 +143,89 @@ _APP_IMPORTS = {
 }
 
 _APP = r'''
+APP_VERSION = "0.1.0"
+APP_PORT = 8080
+WWW = "/srv/www"
+$constants
+
+class App(Component):
+    """The app: a web page busybox httpd serves, its readiness, and a lint rule.
+
+    Swap in your program: ship it with a GoBinary, a CargoBinary or a Package and point
+    the service at it. Fragment name: ``app``.
+    """
+
+    version: str
+    port: int
+
+    @property
+    def http(self) -> Endpoint:
+        """Where the app answers, with its readiness: what a caller wires to."""
+        return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
+
+    def compose(self) -> Iterator[Package | File | Service]:
+        # Debian's busybox has the httpd applet: a real server with nothing to download.
+        yield Package("busybox")
+        yield File.text(f"{WWW}/index.html", self.page())
+        # Runs as system user "app" (declared for you), sandboxed by the "static" preset,
+        # restarted on failure. expose= is what the image's firewall opens; readiness= is
+        # what another service's requires=[app.http] would wait for.
+        yield Service(
+            "app",
+            ["/usr/bin/busybox", "httpd", "-f", "-p", str(self.port), "-h", WWW],
+            expose=[TCP(self.port)],
+            readiness=TcpProbe(self.port),
+        )
+
+    def page(self) -> str:
+        """The index page: ``curl http://VM:PORT/`` answers with it."""
+        return f"<!doctype html>\n<title>$title</title>\n<h1>$title {self.version}</h1>\n"
+
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+        """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""
+        if self.port >= 1024:
+            return ()
+        message = f"app runs as user app and cannot bind port {self.port}"
+        return (Diagnostic("app-privileged-port", "error", message),)
+
+
+backend = $backend_expr
+'''
+
+_SERVICE_RECIPE = r"""
+image = Image(
+    "$title",
+    base=Debian("$release"),
+    # Implied with no further words: Debian from the locked snapshot, a measured
+    # UKI, NTS time, a RAM-only journal, sysctl hardening, DHCP, a firewall that opens only
+    # what a service exposes, one hardened user per service and the evidence service.
+    packages=[Package("ca-certificates")],
+    components=[App(version=APP_VERSION, port=APP_PORT)],
+    # A non-production "dev" profile: debugging tools and a serial console, never shipped.
+    dev=DevAccess(password="tdx"),
+)
+"""
+
+_CLOUD_CONSTANTS = r"""
+# Packages and the EFI stub come from this snapshot.debian.org snapshot, so rebuilds see the
+# same archive. The stub version is the systemd-boot-efi trixie ships in it.
+SNAPSHOT = "20251113T083151Z"
+EFI_STUB_VERSION = "257.8-1~deb13u1"
+"""
+
+_CLOUD_RECIPE = r"""
+image = Image(
+    "$title",
+    base=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
+    packages=[Package("ca-certificates")],
+    components=[App(version=APP_VERSION, port=APP_PORT)],
+    # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
+    targets=("qemu", "azure", "gcp"),
+    dev=DevAccess(password="tdx"),
+)
+"""
+
+_APP_INTERNAL = r'''
 APP_VERSION = "0.1.0"
 APP_PORT = 8080
 WWW = "/srv/www"
@@ -174,13 +248,8 @@ class App(Composite):
         return HttpEndpoint("127.0.0.1", self.port, provider=self)
 
     def compose(self) -> Iterator[Declaration]:
-        # Debian's busybox has the httpd applet: a real server with nothing to download.
         yield Package("busybox")
         yield File.text(f"{WWW}/index.html", self.page())
-        # Runs as system user "app" (declared for you), sandboxed by Hardening.strict()
-        # (the system read-only, WWW too; unix and IP sockets only), restarted on failure.
-        # It waits for every runtime-init step (needs=). ports= is where it listens:
-        # TeeBase's firewall opens it.
         yield Service(
             "app",
             f"/usr/bin/busybox httpd -f -p {self.port} -h {WWW}",
@@ -203,55 +272,10 @@ class App(Composite):
 backend = $backend_expr
 '''
 
-_SERVICE_RECIPE = r"""
-recipe = Recipe(
-    name="$title",
-    # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
-    platform=Debian("$release"),
-    items=(
-        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl
-        # hardening, DNS, no apt timers: opt out per flag.
-        TeeBase(),
-        Package("ca-certificates"),
-        App(version=APP_VERSION, port=APP_PORT),
-    ),
-    variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
-    ),
-)
-"""
-
-_CLOUD_CONSTANTS = r"""
-# Packages and the EFI stub come from this snapshot.debian.org snapshot, so rebuilds see the
-# same archive. The stub version is the systemd-boot-efi trixie ships in it.
-SNAPSHOT = "20251113T083151Z"
-EFI_STUB_VERSION = "257.8-1~deb13u1"
-"""
-
-_CLOUD_RECIPE = r"""
-recipe = Recipe(
-    name="$title",
-    # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
-    platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
-    items=(
-        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl
-        # hardening, DNS, no apt timers: opt out per flag.
-        TeeBase(),
-        Package("ca-certificates"),
-        Package("curl", role="build"),
-        Backports(),
-        App(version=APP_VERSION, port=APP_PORT),
-    ),
-    variants=(
-        # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
-        Variant("default", outputs=("qemu", "azure", "gcp")),
-        Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
-    ),
-)
-"""
-
 _PROVER_RECIPE = r"""
+# This template still writes the internal declarative API: its encrypted volume, its
+# delivered secrets and its attested endpoint are the Image slots gate 4 part B adds
+# (volumes=, secrets=, ingress=). It becomes an Image once those land.
 # Boot-time init: TPM-sealed key -> encrypted /persistent -> root's SSH key over HTTP.
 key = Key("key_persistent", output="/tmp/key_persistent")
 # The data disk, by a stable name: `tundravm deploy qemu` attaches one with serial
@@ -318,7 +342,7 @@ _SOURCES: dict[str, str] = {
     "prover": _HEADER
     + "from collections.abc import Iterator\n\n"
     + _APP_IMPORTS["prover"]
-    + _APP
+    + _APP_INTERNAL
     + _PROVER_RECIPE,
 }
 
@@ -330,11 +354,12 @@ TEST_TEMPLATE = r'''"""Tests for $filename: lint, compile and the committed mkos
 import os
 from pathlib import Path
 
-import tundravm
+from tundravm.declarative import compile, read_lock
+from tundravm.recipe import load_recipe
 from tundravm.testing import UPDATE_GOLDEN_ENV, assert_clean, assert_tree, compile_tree
 
 PROJECT = Path(__file__).resolve().parent.parent
-RECIPE = tundravm.load_recipe(PROJECT / "$filename")
+RECIPE = load_recipe(PROJECT / "$filename")
 GOLDEN = PROJECT / "mkosi"
 LOCKFILE = PROJECT / "build" / "tundravm.lock"
 
@@ -354,8 +379,8 @@ def test_matches_committed_tree() -> None:
     # intended recipe change, rewrite it with: TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests
     if not GOLDEN.is_dir() and os.environ.get(UPDATE_GOLDEN_ENV) != "1":
         raise AssertionError(f"{GOLDEN} is missing: run `tundravm compile $filename --tree mkosi`")
-    lock = tundravm.read_lock(LOCKFILE) if LOCKFILE.exists() else None
-    assert_tree(tundravm.compile(RECIPE, lock=lock), GOLDEN)
+    lock = read_lock(LOCKFILE) if LOCKFILE.exists() else None
+    assert_tree(compile(RECIPE, lock=lock), GOLDEN)
 '''
 
 EDITABLE_INSTALL = "uv add --editable PATH/TO/tundravm"
@@ -619,16 +644,16 @@ jobs:
 """
 
 TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {
-    "minimal": ("default",),
-    "service": ("default", "dev"),
-    "cloud": ("default", "dev"),
+    "minimal": ("production",),
+    "service": ("production", "dev"),
+    "cloud": ("production", "dev"),
     "prover": ("default", "dev"),
 }
-"""The variants each template declares."""
+"""The profiles (the prover: variants) each template declares."""
 
 EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
-    "minimal": (),
-    "service": (),
+    "minimal": ("source-unpinned",),
+    "service": ("source-unpinned",),
     "cloud": ("source-unpinned",),
     "prover": ("source-unpinned",),
 }
@@ -636,6 +661,8 @@ EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
 ``source-unpinned``."""
 
 _ALLOW_COMMENTS: dict[str, str] = {
+    "minimal": "    # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
+    "service": "    # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
     "cloud": "    # The EfiStub package stays unpinned until `tundravm lock` pins its sha256.\n",
     "prover": (
         "    # The tundra-tools builds and the EfiStub package stay unpinned until\n"

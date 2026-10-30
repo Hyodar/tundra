@@ -18,6 +18,7 @@ from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
 from typing import ClassVar, Literal
 
+from tundravm._location import Located
 from tundravm.declarative.model import Git, Http, Ref
 from tundravm.declarative.utils import StaticAddress
 from tundravm.errors import ValidationError
@@ -115,7 +116,7 @@ def _check_port(owner: object, port: object) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class Package:
+class Package(Located):
     """A runtime package: ``Package("curl")``, ``Package("nftables", backports=True)``.
 
     Build dependencies are not packages of the image: they belong to the build
@@ -140,7 +141,7 @@ class Package:
 
 
 @dataclass(frozen=True, slots=True)
-class File:
+class File(Located):
     """A file in the image: ``File.text(path, text)`` or ``File.copy(src, dst)``.
 
     *owner* (``"app"`` or ``"app:app"``) is applied at boot by systemd-tmpfiles, after the
@@ -208,7 +209,7 @@ class File:
 
 
 @dataclass(frozen=True, slots=True)
-class Tree:
+class Tree(Located):
     """The host directory *src* shipped at *dst*, keeping each file's permission bits."""
 
     src: str | Path

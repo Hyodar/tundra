@@ -278,7 +278,7 @@ On a fresh machine or a CI runner, `uv sync` installs the pinned tundravm and `p
 $ tundravm units convert backup.service backup.timer web.service
 # backup.service + backup.timer: Task (exact)
 # web.service: Service (exact)
-from tundravm import Calendar, Hardening, Service, Task
+from tundravm.declarative import Calendar, Hardening, Service, Task
 
 unit = Task(
     "backup",
@@ -308,7 +308,7 @@ unit_2 = Service(
 $ tundravm units convert web.service --adopt-defaults
 ...
 # web.service with the defaults (hardening, needs, restart, restart_sec):
-from tundravm import Service
+from tundravm.declarative import Service
 
 adopted = Service(
     "web",

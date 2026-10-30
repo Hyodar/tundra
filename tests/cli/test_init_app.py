@@ -9,21 +9,21 @@ from pathlib import Path
 
 import pytest
 
-import tundravm
 from tests.helpers import REPO_ROOT, run_main
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
-from tundravm.declarative import Disk, ExternalDelivery, Git, Secrets
+from tundravm.declarative import Disk, ExternalDelivery, Git, Recipe, Secrets
+from tundravm.recipe import load_recipe
 from tundravm.testing import UPDATE_GOLDEN_ENV, plan
 
 SOURCE = ("--source", "https://github.com/acme/hello@v1.4.0")
 NO_DOCTOR = ("--backend", "inprocess", "--no-doctor")
 
 
-def scaffold(project: Path, *flags: str) -> tundravm.Recipe:
+def scaffold(project: Path, *flags: str) -> Recipe:
     code, out = run_main("init", str(project), "--name", "hello", "--app", "go", *NO_DOCTOR, *flags)
     assert code == EXIT_OK, out
     assert "run test_hello.py on the planned image" in out
-    return tundravm.load_recipe(project / "hello.py")
+    return load_recipe(project / "hello.py")
 
 
 def generated_tests(project: Path) -> str:

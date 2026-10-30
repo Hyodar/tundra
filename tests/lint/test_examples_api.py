@@ -48,16 +48,10 @@ def test_examples_are_syntax_valid() -> None:
         ast.parse(source, filename=str(path))
 
 
-def test_examples_use_only_the_declarative_api() -> None:
+def test_examples_use_only_the_public_or_internal_api() -> None:
     for path in sorted(Path("examples").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module in (
-                "tundravm",
-                "tundravm.declarative",
-            ):
-                names = {alias.name for alias in node.names}
-                assert "Image" not in names, f"{path} imports the fluent Image"
             modules = (
                 [node.module or ""]
                 if isinstance(node, ast.ImportFrom)
@@ -80,7 +74,7 @@ def test_example_docstring_teaches_and_lists_three_commands(path: Path) -> None:
 
 
 @EXAMPLES
-def test_example_binds_a_recipe(path: Path) -> None:
+def test_example_binds_an_image_or_the_internal_recipe(path: Path) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     bound = {
         target.id
@@ -89,7 +83,7 @@ def test_example_binds_a_recipe(path: Path) -> None:
         for target in node.targets
         if isinstance(target, ast.Name)
     }
-    assert "recipe" in bound
+    assert bound & {"image", "recipe"}, f"{path.name}: bind `image` (or `recipe` internally)"
     assert isinstance(_recipe(path), Recipe)
 
 

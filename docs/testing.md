@@ -30,7 +30,7 @@ An `Image` is one variant. It compiles in memory, with no temporary directory to
 | `image.tree`, `image.resolved`, `image.recipe` | The raw `Tree` (for golden comparisons), the `Resolved` variant, the planned recipe |
 
 ```python
-from tundravm import BootStep, File, Fragment, Package, Service, User
+from tundravm.declarative import BootStep, File, Fragment, Package, Service, User
 from tundravm.testing import assert_clean, fragment_plan
 
 STATE = BootStep("app-state", "install -d -o app /var/lib/app")
@@ -65,7 +65,7 @@ def test_app_ships_and_wires_its_service():
 A whole recipe works the same way, one variant at a time:
 
 ```python
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.testing import plan
 
 RECIPE = Recipe(
@@ -96,7 +96,7 @@ Both take an `Image`, a `Recipe` (linted for `variants=`, default: all) or the d
 - `assert_diagnostic(image, "disk-key-undefined", variant="default")` returns the first diagnostic matching every field you give, or fails naming the fields it wanted (`no diagnostic with code='disk-key-undefined', variant='default'; found:`) and listing what was found. `variant` is the variant, `""` for the recipe as a whole (the common fragment, the lockfile, the host); `location` matches a finding's source position (`file:line`).
 
 ```python
-from tundravm import Disk, Key, Service
+from tundravm.declarative import Disk, Key, Service
 from tundravm.testing import assert_diagnostic, fragment_plan
 
 
@@ -130,7 +130,7 @@ Fails unless `golden` holds exactly `tree`: every file path, its bytes, its exec
 ```python
 from pathlib import Path
 
-from tundravm import compile, read_lock
+from tundravm.declarative import compile, read_lock
 
 
 def test_committed_tree_is_current():
@@ -155,7 +155,7 @@ fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) -> Art
 Writes a simulated disk file for one variant into the build directory `build` and records it in its `bake-result.json` (merging with one already there), so `read_artifacts()`, `tundravm measure` and `tundravm deploy` find it. The artifact is `simulated`: `measure` refuses it unless `allow_placeholder=True`, and `deploy` unless `allow_simulated=True` (`tundravm deploy --allow-simulated-artifact`). Both first check the file against the sha256 recorded in `bake-result.json` (`verify_artifact`), so a test that rewrites the disk file gets `ArtifactError`.
 
 ```python
-from tundravm import compile
+from tundravm.declarative import compile
 from tundravm.declarative import measure
 from tundravm.testing import fake_bake
 
@@ -189,7 +189,7 @@ def test_bakes_through_mkosi(fake_mkosi: FakeMkosi, request_for_default):
 The in-process backend is deterministic, so a test can bake twice and compare digests, or let `bake(..., verify_reproducible=True)` do it (it raises `ReproducibilityError` on a mismatch, as `tundravm bake --verify-reproducible` does). `sbom(artifact, lock=...)` returns the bill of materials as values: `Sbom.packages` and `Sbom.sources` are tuples of `Component` (`name`, `version`, `url`, `ref`, `commit`, `installs`, ...), and `Sbom.render(format)` gives the document `tundravm sbom` writes.
 
 ```python
-from tundravm import Backend, bake, lock, sbom
+from tundravm.declarative import Backend, bake, lock, sbom
 from tundravm.testing import bake_in_process
 
 
@@ -218,7 +218,7 @@ An in-process bake leaves no mkosi manifest, so its packages are the ones the re
 `evidence(recipe, build=tmp_path, lock=locked)` reads a bake back and returns its verdict as a value, so a test can assert that the bake would pass review: `Evidence.passed` (`Evidence.verdict` is `pass`, `fail` or `incomplete`, and `Evidence.reasons` says why), or `Evidence.index["verdict"]` for each check (`integrity`, `lock`, `reproducible`, `lint`). `require=("reproducible",)` makes an unchecked reproducibility `incomplete` instead of a pass, as `evidence --require` does. A bake never run with `verify_reproducible=True` reads `not checked`, which still passes; an artifact changed after the bake reads `mismatch` and fails. The `secret-in-file` and `secret-in-env` rules are tested like any lint rule: plant a key or token in a `File`, `Template` or `Service` (`env`, `exec_start`...) and assert the diagnostic, then check that `allow_secret=True` exempts it. The planted key needs a body after its PEM header: a header alone does not trigger the rule.
 
 ```python
-from tundravm import File, Fragment, Package, Recipe, evidence, lint, lock
+from tundravm.declarative import File, Fragment, Package, Recipe, evidence, lint, lock
 from tundravm.testing import assert_diagnostic, bake_in_process
 
 KEY = (

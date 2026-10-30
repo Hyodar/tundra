@@ -1,33 +1,39 @@
 """Source builds: compile software from Git or an HTTP tarball and install the results.
 
 Teaches ``GoBinary``: one Go program built from source and installed at its
-``executable`` path, which the ``Service`` command names, so the build output, the
-install path and the command cannot drift apart (``CargoBinary`` is the Rust one).
-Teaches ``Build`` for everything else: a ``Git`` or ``Http`` source; either the
-toolchain it is ``using`` (``Go``, ``Cargo``, ``Dotnet``) or a shell ``script``;
-``Install`` steps for files and, with ``directory=True``, whole trees;
-``cache_namespace`` naming the build-cache entry (its key is fingerprinted from the
-build) so a rebuild reuses it. Refs and tarballs are unpinned until ``tundravm lock``
-records their commit and sha256.
+``executable`` path. A built binary is a valid first element of a ``Service`` argv, so
+the build output, the install path and the command cannot drift apart (``CargoBinary``
+is the Rust one). Teaches ``Build`` for everything else: a ``Git`` or ``Http`` source;
+either the toolchain it is ``using`` or a shell ``script``; ``Install`` steps for files
+and, with ``directory=True``, whole trees; ``cache_namespace`` naming the build-cache
+entry (its key is fingerprinted from the build) so a rebuild reuses it. Build
+dependencies belong to the build, never to the image's ``packages``; a ``Build`` that is
+not a service's first argument reaches the image through the component that owns it.
+Refs and tarballs are unpinned until ``tundravm lock`` records their commit and sha256.
 
     tundravm inspect examples/05_source_builds.py
     tundravm lock examples/05_source_builds.py        # pin both sources (network)
     tundravm compile examples/05_source_builds.py --tree build/source-builds/mkosi
 """
 
-from tundravm.backends import InProcessBackend
-from tundravm.declarative import (
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+from tundravm import (
+    TCP,
     Build,
-    Debian,
-    Dynamic,
-    Git,
+    Component,
+    Endpoint,
+    GoBinary,
     Http,
+    Image,
     Install,
-    Package,
-    Recipe,
     Service,
+    TcpProbe,
 )
-from tundravm.declarative.utils import GoBinary
+from tundravm.backends import InProcessBackend
+from tundravm.declarative import Git
 
 NODE_EXPORTER = "1.8.2"
 PROMETHEUS = "v2.53.0"
@@ -43,40 +49,57 @@ node_exporter = GoBinary(
     cache_namespace=f"node-exporter-{NODE_EXPORTER}",
 )
 
-# A Git tag built with a script; the console templates are copied as a directory tree.
-prometheus = Build(
-    "prometheus",
-    Git("https://github.com/prometheus/prometheus", PROMETHEUS),
-    script="go build -trimpath -ldflags '-s -w -buildid=' -o prometheus ./cmd/prometheus",
-    packages=("golang",),
-    env={"CGO_ENABLED": "0"},
-    install=(
-        Install("prometheus", "/usr/bin/prometheus"),
-        Install("consoles", "/usr/share/prometheus/consoles", mode=None, directory=True),
-        Install(
-            "console_libraries",
-            "/usr/share/prometheus/console_libraries",
-            mode=None,
-            directory=True,
-        ),
-    ),
-    cache_namespace=f"prometheus-{PROMETHEUS}",
-)
 
-recipe = Recipe(
-    name="source-builds",
-    platform=Debian("bookworm"),
-    items=(
-        Package("ca-certificates"),
-        node_exporter,
-        prometheus,
-        # Stateless, so a transient user per run (DynamicUser=yes) instead of an account.
+class Prometheus(Component):
+    """Prometheus built from a Git tag with a script, and the service that runs it."""
+
+    port: int = 9090
+
+    @property
+    def http(self) -> Endpoint:
+        """Where it answers, with its readiness."""
+        return Endpoint("127.0.0.1", self.port, ready=self.service("prometheus").ready)
+
+    def compose(self) -> Iterator[object]:
+        yield Build(
+            "prometheus",
+            Git("https://github.com/prometheus/prometheus", PROMETHEUS),
+            script="go build -trimpath -ldflags '-s -w -buildid=' -o prometheus ./cmd/prometheus",
+            packages=("golang",),
+            env={"CGO_ENABLED": "0"},
+            install=(
+                Install("prometheus", "/usr/bin/prometheus"),
+                Install("consoles", "/usr/share/prometheus/consoles", mode=None, directory=True),
+                Install(
+                    "console_libraries",
+                    "/usr/share/prometheus/console_libraries",
+                    mode=None,
+                    directory=True,
+                ),
+            ),
+            cache_namespace=f"prometheus-{PROMETHEUS}",
+        )
+        yield Service(
+            "prometheus",
+            ["/usr/bin/prometheus", f"--web.listen-address=127.0.0.1:{self.port}"],
+            state="prometheus",
+            expose=[TCP(self.port)],
+            readiness=TcpProbe(self.port),
+        )
+
+
+image = Image(
+    "source-builds",
+    packages=["ca-certificates"],
+    services=[
+        # The built binary as the first argv element pulls its build and install in.
         Service(
             "node-exporter",
-            f"{node_exporter.executable} --web.listen-address=127.0.0.1:9100",
-            user=Dynamic(),
+            [node_exporter, "--web.listen-address=127.0.0.1:9100"],
+            readiness=TcpProbe(9100),
         ),
-    ),
+    ],
+    components=[Prometheus()],
 )
 
 backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() runs the builds

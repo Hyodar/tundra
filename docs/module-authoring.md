@@ -5,7 +5,7 @@ A reusable piece of an image (a service, a monitoring stack, a hardened SSH setu
 **A value**, for a one-off with nothing to configure: a `Fragment(...)` bound to a name.
 
 ```python
-from tundravm import Fragment, Package
+from tundravm.declarative import Fragment, Package
 
 DEBUGGING = Fragment("debugging", items=(Package("strace"), Package("gdb")))
 ```
@@ -15,7 +15,7 @@ DEBUGGING = Fragment("debugging", items=(Package("strace"), Package("gdb")))
 ```python
 from collections.abc import Iterator
 
-from tundravm import Package, component
+from tundravm.declarative import Package, component
 from tundravm.declarative.utils import Composite
 
 
@@ -104,7 +104,7 @@ A Prometheus node exporter that keeps its textfile collector directory on the en
 # exporter.py
 from collections.abc import Iterator
 
-from tundravm import (
+from tundravm.declarative import (
     Declaration,
     Diagnostic,
     Disk,
@@ -167,7 +167,7 @@ class PrometheusExporter(Composite):
 # monitored.py
 from exporter import PrometheusExporter
 
-from tundravm import Disk, Fragment, Key, Recipe, Secrets, Variant
+from tundravm.declarative import Disk, Fragment, Key, Recipe, Secrets, Variant
 
 key = Key("key_persistent")
 disk = Disk("disk_persistent", mount="/persistent", key=key, device="/dev/sdb")
@@ -242,7 +242,7 @@ A `Build` fetches a source, builds it during the mkosi build phase, and installs
 ```python
 from dataclasses import dataclass
 
-from tundravm import File, Fragment, Git, Resources, Service, User
+from tundravm.declarative import File, Fragment, Git, Resources, Service, User
 from tundravm.declarative.utils import Composite, GoBinary
 
 ASSETS = Resources.from_module(__name__)
@@ -307,7 +307,7 @@ Plan the fragment with `fragment_plan` and ask the result what it holds:
 ```python
 from exporter import PrometheusExporter
 
-from tundravm import Disk, Fragment, Key, Secrets
+from tundravm.declarative import Disk, Fragment, Key, Secrets
 from tundravm.testing import assert_clean, assert_diagnostic, fragment_plan
 
 key = Key("key_persistent")

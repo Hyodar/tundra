@@ -97,7 +97,7 @@ An artifact that is no UKI or disk (the in-process backend's simulated ones) is 
 
 
 ```python
-from tundravm import Fragment, Package, Policy, Recipe
+from tundravm.declarative import Fragment, Package, Policy, Recipe
 
 recipe = Recipe(
     name="node",

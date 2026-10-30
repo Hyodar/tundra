@@ -15,11 +15,13 @@ from typing import Any
 
 import pytest
 
-import tundravm
 from tests.helpers import REPO_ROOT, run_main
-from tundravm import templates
+from tundravm import load, templates
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.declarative import Debian, Package, compile, lint, lower, resolve
 from tundravm.declarative.lifecycle import data_disk_serials
+from tundravm.image import recipe_of
+from tundravm.recipe import load_recipe
 from tundravm.templates import (
     EXPECTED_FINDINGS,
     TEMPLATE_VARIANTS,
@@ -72,11 +74,11 @@ def test_template_loads_lints_and_compiles_deterministically(
     project = tmp_path / "project"
     out = scaffold(project, "--template", template)
     recipe_path = project / f"{NAME}.py"
-    recipe = tundravm.load_recipe(recipe_path)
+    recipe = load_recipe(recipe_path)
     assert tuple(v.name for v in recipe.variants) == TEMPLATE_VARIANTS[template]
 
     expected = set(EXPECTED_FINDINGS[template])
-    found = tundravm.lint(recipe)
+    found = lint(recipe)
     assert {d.code for d in found if d.severity != "info"} == expected
     assert {d.code for d in found if d.severity == "info"} == set()  # typed units only
     if not found:
@@ -100,16 +102,16 @@ def test_template_loads_lints_and_compiles_deterministically(
 @pytest.mark.parametrize("template", list(TEMPLATES))
 def test_every_template_installs_the_distribution_kernel(tmp_path: Path, template: str) -> None:
     scaffold(tmp_path, "--template", template)
-    recipe = tundravm.load_recipe(tmp_path / f"{NAME}.py")
-    kernel = tundravm.Package("linux-image-amd64")
+    recipe = load_recipe(tmp_path / f"{NAME}.py")
+    kernel = Package("linux-image-amd64")
     for variant in recipe.variants:
-        assert kernel in tundravm.resolve(recipe, variant=variant.name).items, variant.name
+        assert kernel in resolve(recipe, variant=variant.name).items, variant.name
 
     assert recipe.platform.packages[0] == kernel.name
-    assert isinstance(recipe.platform, tundravm.Debian)
+    assert isinstance(recipe.platform, Debian)
     platform = dataclasses.replace(recipe.platform, kernel_package=None)
     stripped = dataclasses.replace(recipe, platform=platform)
-    assert "kernel-missing" in {d.code for d in tundravm.lint(stripped)}
+    assert "kernel-missing" in {d.code for d in lint(stripped)}
 
 
 @pytest.mark.parametrize("template", list(TEMPLATES))
@@ -120,25 +122,24 @@ def test_render_is_a_pure_function_of_its_arguments(template: str) -> None:
     assert "$" not in first
 
 
-def test_service_app_fragment_carries_its_lint_rule(tmp_path: Path) -> None:
+def test_service_app_component_carries_its_lint_rule(tmp_path: Path) -> None:
     scaffold(tmp_path)
-    recipe = tundravm.load_recipe(tmp_path / f"{NAME}.py")
-    app: Any = recipe.items[-1]  # the template's App(...)
+    image = load(tmp_path / f"{NAME}.py")
+    app: Any = image.components[0]  # the template's App(...)
     assert type(app).__name__ == "App"
     config = {f.name: getattr(app, f.name) for f in dataclasses.fields(app) if f.init}
     assert config == {"version": "0.1.0", "port": 8080}
     privileged = dataclasses.replace(app, port=80)
-    items = (*recipe.items[:-1], privileged)
-    found = tundravm.lint(dataclasses.replace(recipe, items=items))
-    assert {d.code for d in found} == {"app-privileged-port"}
+    found = lint(recipe_of(dataclasses.replace(image, components=[privileged])))
+    assert {d.code for d in found if d.severity == "error"} == {"app-privileged-port"}
 
 
 def test_service_app_serves_its_page_over_http(tmp_path: Path) -> None:
     """The unchanged starter runs a real server: busybox httpd on the app port, the page it
     serves, the package that ships it, and the firewall opening for it."""
     scaffold(tmp_path)
-    recipe = tundravm.load_recipe(tmp_path / f"{NAME}.py")
-    tree = {e.path: e.content for e in tundravm.compile(recipe, variants=["default"]).entries}
+    recipe = load_recipe(tmp_path / f"{NAME}.py")
+    tree = {e.path: e.content for e in compile(recipe, variants=["production"]).entries}
     files = {
         path.removeprefix("payload/mkosi.extra"): (content or b"").decode()
         for path, content in tree.items()
@@ -163,7 +164,7 @@ def test_prover_template_wires_ssh_and_a_stable_data_disk(tmp_path: Path) -> Non
         title="p", filename=path.name, release="trixie", backend="inprocess", template="prover"
     )
     path.write_text(text, encoding="utf-8")
-    img = tundravm.declarative.lower(tundravm.load_recipe(path))
+    img = lower(load_recipe(path))
     assert img.ssh_ports == {"default": 22, "dev": 22}
     assert data_disk_serials(img, "default") == ("tundra-data",)
     files = {f.path: f.content for f in img.state.profiles["default"].files}

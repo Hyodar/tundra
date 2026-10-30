@@ -1,26 +1,31 @@
-"""The smallest useful recipe: a few packages and one file in a QEMU image.
+"""The smallest useful image: one package, one file, one service.
 
-Teaches: a ``Recipe`` is a name, a ``platform`` and its ``items``. The platform
-``Debian("bookworm")`` is the distribution plus its boot set (the kernel, systemd as
-init, udev and the UKI's EFI stub; ``recipe.platform.packages`` lists them); the
-items are the declarations every variant shares (``packages()`` bundles ``Package``
-declarations). With no ``variants`` it builds one ``default`` variant for QEMU.
+Teaches: an ``Image`` is a name and what it runs. Everything a confidential image
+needs is implied — Debian trixie from the locked snapshot, a measured UKI, NTS time, a
+RAM-only journal, a firewall that opens only what a service exposes, one hardened
+system user per service, and the evidence service. ``Image``'s docstring lists each
+implied item with its one escape hatch. With no ``profiles`` it builds one
+``production`` profile for QEMU.
 
     tundravm inspect examples/01_minimal.py
     tundravm compile examples/01_minimal.py --tree build/minimal/mkosi
     tundravm bake examples/01_minimal.py --build build/minimal
 """
 
+from tundravm import TCP, File, Image, Service
 from tundravm.backends import InProcessBackend
-from tundravm.declarative import Debian, File, Recipe, packages
 
-recipe = Recipe(
-    name="minimal",
-    platform=Debian("bookworm"),
-    items=(
-        packages("curl", "jq"),
-        File("/etc/motd", "Hello from tundravm\n"),
-    ),
+image = Image(
+    "minimal",
+    packages=["busybox"],
+    files=[File.text("/srv/www/index.html", "<h1>minimal</h1>\n")],
+    services=[
+        Service(
+            "app",
+            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
+            expose=[TCP(8080)],
+        ),
+    ],
 )
 
 backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() bakes a real image

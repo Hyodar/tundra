@@ -106,7 +106,7 @@ def test_no_recipe_error(tmp_path: Path) -> None:
         recipe = _write(tmp_path, "recipe.py", body)
         with pytest.raises(ValidationError) as excinfo:
             load_recipe(recipe)
-        assert "does not define a Recipe" in str(excinfo.value)
+        assert "does not define an Image" in str(excinfo.value)
 
 
 def test_factory_returning_none_is_explained(tmp_path: Path) -> None:

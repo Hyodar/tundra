@@ -16,6 +16,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, Any, dataclass_transform
 
+from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative.model import Ref
 from tundravm.errors import ValidationError
@@ -140,7 +141,10 @@ class ServiceRef:
 
     def __post_init__(self) -> None:
         if not isinstance(self.unit, str) or not self.unit:
-            raise ValidationError("ServiceRef: a service name is required.")
+            raise ValidationError(
+                "ServiceRef: a service name is required.",
+                hint="Use component.service('app').",
+            )
         if not self.unit.endswith(".service"):
             object.__setattr__(self, "unit", f"{self.unit}.service")
 
@@ -194,7 +198,7 @@ class _ComponentMeta(type):
 
 
 @dataclass_transform(kw_only_default=True, frozen_default=True)
-class Component(metaclass=_ComponentMeta):
+class Component(Located, metaclass=_ComponentMeta):
     """A named group of declarations, written as a class, with typed exports.
 
     Subclass it and annotate the configuration fields; the subclass becomes a frozen,
