@@ -164,6 +164,12 @@ SizeMinBytes=64M
 Minimize=guess
 """
 """The ESP of every disk around the payload: the UKI at ``/EFI/BOOT/BOOTX64.EFI``, sized to it."""
+ESP_MKFS_ENVIRONMENT = "Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512"
+"""Every disk image's ``[Build]``: repart formats the ESP FAT32 with 4096-byte sectors (one per
+cluster) and minimizes the file system to the UKI, not to the partition, so a 120M ESP held
+29158 clusters. UEFI firmware types a FAT by its cluster count, and under 65525 OVMF reads it
+as FAT16, finds no file system and boots nothing. mkfs.vfat takes the last ``-S``: 512-byte
+sectors, the disk's own, give the same file system eight times the clusters."""
 VERITY_DATA = "/payload/root.raw"
 """Where a disk image's root carries the verity payload's root partition (``CopyBlocks=``)."""
 VERITY_HASH = "/payload/root-verity.raw"
@@ -1131,6 +1137,7 @@ class DeterministicMkosiEmitter:
             "Runtime": ["Firmware=uefi"],
         }
         if config.bootable:
+            sections["Build"].append(ESP_MKFS_ENVIRONMENT)
             sections["Content"] += ["Bootable=no", *_payload_trees(config)]
         return _render_sections(sections, root)
 
@@ -1153,6 +1160,7 @@ class DeterministicMkosiEmitter:
         sections = {
             "Config": [f"Dependencies={PAYLOAD}"],
             "Output": ["Format=disk", f"Output={target}", f"Seed={config.seed}"],
+            "Build": [ESP_MKFS_ENVIRONMENT],
             "Content": ["Bootable=no", *_payload_trees(config)],
         }
         _write(directory / "mkosi.conf", _render_sections(sections), FILE_MODE)

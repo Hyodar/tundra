@@ -223,6 +223,7 @@ def test_main_image_is_the_qemu_disk_with_every_reproducibility_setting() -> Non
         "ToolsTreePackages=qemu-utils\n"
         "History=no\n"
         "WithNetwork=no\n"
+        "Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512\n"
         "\n"
         "[Content]\n"
         "SourceDateEpoch=0\n"
@@ -272,6 +273,7 @@ def test_wrappers_depend_on_the_payload_and_convert_it() -> None:
         assert (tree / f"mkosi.images/{target}/mkosi.conf").read_text(encoding="utf-8") == (
             "[Config]\nDependencies=payload\n\n"
             f"[Output]\nFormat=disk\nOutput={target}\nSeed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70\n\n"
+            "[Build]\nEnvironment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512\n\n"
             "[Content]\nBootable=no\nExtraTrees=%O/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI\n"
         )
         esp = (tree / f"mkosi.images/{target}/mkosi.repart/00-esp.conf").read_text(encoding="utf-8")

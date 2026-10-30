@@ -554,7 +554,8 @@ def test_compile_kernel_config_file_copied(tmp_path: Path) -> None:
 
 
 def test_compile_kernel_passes_no_host_environment(tmp_path: Path) -> None:
-    """The kernel build passes nothing through from the host (no Environment=KERNEL_*)."""
+    """The kernel build passes nothing through from the host (no Environment=KERNEL_*); the
+    QEMU disk's one environment variable is repart's ESP format option."""
     config_file = tmp_path / "my.config"
     config_file.write_text("# kernel config\n", encoding="utf-8")
 
@@ -562,7 +563,8 @@ def test_compile_kernel_passes_no_host_environment(tmp_path: Path) -> None:
 
     out = _compile(recipe, tmp_path / "mkosi")
     assert "Environment=" not in _conf(out)
-    assert "Environment=" not in _main(out)
+    environment = [line for line in _main(out).splitlines() if line.startswith("Environment=")]
+    assert environment == ["Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512"]
 
 
 def test_compile_kernel_without_config_no_build_script(tmp_path: Path) -> None:

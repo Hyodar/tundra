@@ -131,7 +131,9 @@
           "payload"
         ],
         "Distribution": "debian",
-        "Environment": {},
+        "Environment": {
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+        },
         "ExtraTrees": [
           {
             "Source": "<tree>/mkosi.output/payload.efi",
@@ -334,7 +336,9 @@
           "payload"
         ],
         "Distribution": "debian",
-        "Environment": {},
+        "Environment": {
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+        },
         "ExtraTrees": [
           {
             "Source": "<tree>/mkosi.output/payload.efi",
@@ -409,7 +413,9 @@
           "payload"
         ],
         "Distribution": "debian",
-        "Environment": {},
+        "Environment": {
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+        },
         "ExtraTrees": [
           {
             "Source": "<tree>/mkosi.output/payload.efi",
@@ -486,7 +492,9 @@
           "gcp"
         ],
         "Distribution": "debian",
-        "Environment": {},
+        "Environment": {
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+        },
         "ExtraTrees": [
           {
             "Source": "<tree>/mkosi.output/payload.efi",
