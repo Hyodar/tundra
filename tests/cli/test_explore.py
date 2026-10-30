@@ -46,7 +46,6 @@ def _template(tmp_path: Path, template: str) -> Path:
             title=template,
             filename=path.name,
             release="trixie",
-            backend="inprocess",
             template=template,
         ),
         encoding="utf-8",
@@ -148,11 +147,11 @@ def test_markup_in_names_and_contents_is_escaped() -> None:
 
 
 def test_json_round_trips(tmp_path: Path) -> None:
-    found = explore(load(_template(tmp_path, "prover")), variants=["default", "dev"])
+    found = explore(load(_template(tmp_path, "prover")), variants=["production", "dev"])
     data = json.loads(found.json())
     assert data == found.to_dict()
     assert data["schema"] == EXPLORE_SCHEMA
-    assert [v["name"] for v in data["variants"]] == ["default", "dev"]
+    assert [v["name"] for v in data["variants"]] == ["production", "dev"]
     again = Exploration.from_dict(data)
     assert again.html() == found.html()
     assert again.to_dict() == data
@@ -190,8 +189,10 @@ def test_a_lowered_recipe_has_a_tree_but_no_declarations(tmp_path: Path) -> None
 
 
 def test_surge_page_stays_small_and_truncates_large_files() -> None:
-    recipe = load(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT])
-    found = explore(recipe)
+    surge = explore(load(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT]))
+    assert len(surge.html().encode("utf-8")) < SURGE_PAGE_LIMIT
+    # The nethermind-tdx base carries the 120 KiB kernel config: the page truncates it.
+    found = explore(load(REPO_ROOT / "examples" / "nethermind_base.py", extra_paths=[REPO_ROOT]))
     page = found.html()
     assert len(page.encode("utf-8")) < SURGE_PAGE_LIMIT
     truncated = [

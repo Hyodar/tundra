@@ -49,7 +49,7 @@ from ._source import SOURCES_DIRNAME
 from .attestation import attest, parse_time, render_attestation
 from .backends import LimaMkosiBackend, LocalLinuxBackend
 from .backends.base import BuildBackend
-from .capabilities import AREAS, Area, BuildBackendKind, Host, capabilities, failed
+from .capabilities import AREAS, Area, BuildBackendKind, Host, capabilities, default_backend, failed
 from .changes import CHANGES_FORMATS, changes
 from .check import failing, render_as, render_summary
 from .clean import (
@@ -149,7 +149,7 @@ from .project import (
     find_project,
     render_table,
 )
-from .recipe import RecipeFile, load_file
+from .recipe import BACKEND_ENV, RecipeFile, load_file
 from .release import (
     RELEASE_FORMATS,
     STAGES,
@@ -168,7 +168,6 @@ from .status import (
     render_status,
 )
 from .templates import (
-    BACKEND_SNIPPETS,
     DEFAULT_TEMPLATE,
     GITIGNORE_BLOCK,
     GITIGNORE_MARKER,
@@ -881,19 +880,22 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         default=app_template.DEFAULT_PORT,
         help="Port the service listens on (default: %(default)s).",
     )
-    app.add_argument("--disk", metavar="NAME", help="Keep the state on encrypted disk NAME.")
-    app.add_argument("--secret", metavar="NAME", help="Deliver secret NAME to the service.")
     app.add_argument(
-        "--delivery",
-        metavar="external:NAME",
-        help="With --secret: what writes it at boot (the built-in runtime delivers only "
-        "root's SSH key).",
+        "--disk",
+        metavar="NAME",
+        help="Keep the state on volume NAME, which an operator unlocks after attestation.",
+    )
+    app.add_argument(
+        "--secret",
+        metavar="NAME",
+        help="The service reads secret NAME, delivered after attestation, as a credential.",
     )
     init.add_argument(
         "--backend",
-        choices=sorted(BACKEND_SNIPPETS),
-        default="lima",
-        help="Build backend to wire in (default: %(default)s).",
+        choices=sorted(BACKEND_KINDS),
+        default=None,
+        help="Build backend the project file names (default: none, so every command uses "
+        f"this host's: local on Linux x86-64, Lima elsewhere, unless {BACKEND_ENV} says).",
     )
     init.add_argument(
         "--ci",
@@ -2157,9 +2159,11 @@ def _config_values(args: argparse.Namespace) -> dict[str, dict[str, object]]:
     if args.backend is not None:
         values["backend"] = {"value": args.backend, "origin": origins.get("backend", "flag")}
     elif recipe is not None and recipe.is_file():
-        bound = _load(args).backend
+        loaded = _load(args)
+        bound = loaded.backend
         kind = None if bound is None else _backend_kind(bound)
-        values["backend"] = {"value": kind, "origin": "default" if bound is None else "recipe"}
+        origin = "recipe" if loaded.backend_origin == "recipe" else "default"
+        values["backend"] = {"value": kind, "origin": origin}
     else:
         values["backend"] = {"value": None, "origin": "default"}
     values["require"] = {"value": list(args.require), "origin": origins["require"]}
@@ -2190,10 +2194,10 @@ def _config_origin(key: str, entry: dict[str, object], loaded: bool) -> str:
     origin = str(entry["origin"])
     if key == "backend" and origin == "recipe":
         return "recipe (the recipe file's `backend`)"
-    if key == "backend" and entry["value"] is None:
+    if key == "backend" and origin == "default":
         if loaded:
-            return "default (the recipe file binds no `backend`; bake needs --backend)"
-        return "default (the recipe file's `backend`)"
+            return f"default (the recipe file binds no `backend`: {BACKEND_ENV}, else this host's)"
+        return "default (the recipe file's `backend`, else this host's)"
     if entry.get("exists") is False and entry["value"] is not None:
         origin += "; does not exist" + ("; run `tundravm lock`" if key == "lockfile" else "")
     return origin
@@ -3781,7 +3785,6 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
                 title=title,
                 filename=recipe.name,
                 release=args.release,
-                backend=BACKEND_SNIPPETS[args.backend],
             )
         }
         if args.tests:
@@ -3792,7 +3795,6 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
                 title=title,
                 filename=recipe.name,
                 release=args.release,
-                backend=args.backend,
                 template=template,
             )
         }
@@ -3845,7 +3847,7 @@ def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
     tested = tests if args.tests else None
     _init_next(root, recipe, tested, args.ci == "github", synced, out, golden=app is None)
     if not args.no_doctor:
-        _init_doctor(args.backend, args.runner, out)
+        _init_doctor(args.backend or default_backend(Host()), args.runner, out)
     return EXIT_OK
 
 
@@ -3856,7 +3858,6 @@ def _init_app(args: argparse.Namespace, title: str) -> app_template.AppSpec | No
         "--path": args.path,
         "--disk": args.disk,
         "--secret": args.secret,
-        "--delivery": args.delivery,
     }
     if args.app is None:
         flag = next((flag for flag, value in given.items() if value is not None), None)
@@ -3889,7 +3890,6 @@ def _init_app(args: argparse.Namespace, title: str) -> app_template.AppSpec | No
         port=args.port,
         disk=args.disk,
         secret=args.secret,
-        delivery=args.delivery,
         local=args.path is not None,
     )
     app_template.check_spec(spec)
@@ -4084,7 +4084,6 @@ def _init_gitignore(path: Path) -> str:
 
 __all__ = [
     "BACKEND_KINDS",
-    "BACKEND_SNIPPETS",
     "EXIT_FAILURE",
     "EXIT_OK",
     "ERROR_SCHEMA",

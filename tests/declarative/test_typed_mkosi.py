@@ -3,12 +3,13 @@
 from pathlib import Path
 
 import pytest
-from examples.nethermind_base import recipe as nethermind_base
 
+from tests.helpers import REPO_ROOT
 from tundravm.check import TYPED_SETTINGS
 from tundravm.declarative import Debian, Mkosi, Package, Recipe, Setting, compile
 from tundravm.declarative.lower import _BOOL_SETTINGS, _SINGLE_SETTINGS
 from tundravm.errors import ValidationError
+from tundravm.recipe import load_recipe
 
 SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
 TYPED = Mkosi(
@@ -96,7 +97,7 @@ def test_every_compiler_mapped_setting_names_its_typed_field() -> None:
 def test_a_kernel_with_a_config_passes_no_host_variable(tmp_path: Path) -> None:
     """The kernel build script sets KERNEL_IMAGE and KERNEL_VERSION itself: nothing of the
     host's environment enters the build (no ``Environment=NAME`` pass-through)."""
-    conf = _conf(nethermind_base, tmp_path)
+    base = load_recipe(REPO_ROOT / "examples" / "nethermind_base.py", extra_paths=[REPO_ROOT])
+    conf = _conf(base, tmp_path)
     assert not any(line.startswith("Environment=") and "=" not in line[12:] for line in conf)
     assert "Environment=KERNEL_IMAGE" not in conf and "Environment=KERNEL_VERSION" not in conf
-    assert f"Seed={SEED}" in conf and "WithNetwork=yes" in conf

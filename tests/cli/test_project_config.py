@@ -122,10 +122,35 @@ def test_config_text_names_each_origin(project: Path) -> None:
     assert "  lockfile  build/tundravm.lock  pyproject\n" in run_main("config")[1]
 
 
+def test_config_reports_the_backend_the_loader_picks(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An image file names no backend: without the table's, the loader's is reported."""
+    pyproject = project / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace('backend = "inprocess"\n', ""),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TUNDRAVM_BACKEND", "inprocess")
+    values = json.loads(run_main("config", "--format", "json")[1])["values"]
+    assert values["backend"] == {"value": "inprocess", "origin": "default"}
+    assert run_main("config")[1].splitlines()[-2] == (
+        "  backend   inprocess            default (the recipe file binds no `backend`: "
+        "TUNDRAVM_BACKEND, else this host's)"
+    )
+
+
 def test_config_reports_the_backend_the_recipe_file_binds(project: Path) -> None:
     pyproject = project / "pyproject.toml"
     pyproject.write_text(
         pyproject.read_text(encoding="utf-8").replace('backend = "inprocess"\n', ""),
+        encoding="utf-8",
+    )
+    recipe = project / "node.py"
+    recipe.write_text(
+        recipe.read_text(encoding="utf-8")
+        + "\nfrom tundravm.backends import InProcessBackend  # noqa: E402\n\n"
+        "backend = InProcessBackend()\n",
         encoding="utf-8",
     )
     values = json.loads(run_main("config", "--format", "json")[1])["values"]

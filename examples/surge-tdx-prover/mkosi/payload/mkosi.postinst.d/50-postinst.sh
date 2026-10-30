@@ -2,46 +2,57 @@
 set -euo pipefail
 
 mkosi-chroot groupadd --system tdx
-mkosi-chroot groupadd --system eth
 mkosi-chroot useradd --system --home-dir /home/tdxs --create-home --shell /usr/sbin/nologin --gid tdx tdxs
-mkosi-chroot useradd --system --home-dir /home/raiko --create-home --shell /usr/sbin/nologin --gid tdx raiko
-mkosi-chroot useradd --system --home-dir /home/taiko-client --create-home --shell /usr/sbin/nologin --groups eth taiko-client
-mkosi-chroot useradd --system --home-dir /home/nethermind-surge --create-home --shell /usr/sbin/nologin --groups eth nethermind-surge
+mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind
+mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind-ready
+mkosi-chroot useradd --system --shell /usr/sbin/nologin taiko-client
+mkosi-chroot useradd --system --shell /usr/sbin/nologin raiko
+mkosi-chroot useradd --system --shell /usr/sbin/nologin raiko-ready
+mkosi-chroot useradd --system --shell /usr/sbin/nologin attested-tls-443
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-metadata-dns.service
+mkosi-chroot systemctl enable chrony.service
 mkosi-chroot systemctl enable tdxs.socket
-mkosi-chroot systemctl enable raiko.service
+mkosi-chroot systemctl enable systemd-networkd.service
+mkosi-chroot systemctl enable systemd-networkd.socket
+mkosi-chroot systemctl enable systemd-networkd-wait-online.service
+mkosi-chroot systemctl enable nethermind.service
+mkosi-chroot systemctl enable nethermind-ready.service
 mkosi-chroot systemctl enable taiko-client.service
-mkosi-chroot systemctl enable nethermind-surge.service
-mkosi-chroot systemctl enable network-setup.service
-mkosi-chroot systemctl enable openntpd.service
-mkosi-chroot systemctl enable logrotate.service
-mkosi-chroot systemctl enable dropbear.service
+mkosi-chroot systemctl enable raiko.service
+mkosi-chroot systemctl enable raiko-ready.service
+mkosi-chroot systemctl enable ssh-host-keys.service
+mkosi-chroot systemctl enable ssh.service
+mkosi-chroot systemctl enable credential-jwt.service
+mkosi-chroot systemctl enable credential-taiko-chain.service
+mkosi-chroot systemctl enable credential-raiko-config.service
+mkosi-chroot systemctl enable tundravm-credentials.service
+mkosi-chroot systemctl enable attested-tls-443.service
+mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable runtime-init.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-metadata-dns.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/chrony.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdxs.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/raiko.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/systemd-networkd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/systemd-networkd.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/systemd-networkd-wait-online.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/nethermind.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/nethermind-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/taiko-client.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/nethermind-surge.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/network-setup.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/openntpd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/logrotate.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/dropbear.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/raiko.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/raiko-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/credential-jwt.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/credential-taiko-chain.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/credential-raiko-config.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-credentials.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/attested-tls-443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-EFI_SNAPSHOT_URL="https://snapshot.debian.org/archive/debian/20251113T083151Z"
-EFI_PACKAGE_VERSION="255.4-1"
-DEB_URL="${EFI_SNAPSHOT_URL}/pool/main/s/systemd/systemd-boot-efi_${EFI_PACKAGE_VERSION}_amd64.deb"
-if ! curl -sSfL -o "$BUILDROOT/systemd-boot-efi.deb" "$DEB_URL"; then
-    echo "EfiStub: no systemd-boot-efi ${EFI_PACKAGE_VERSION} in ${EFI_SNAPSHOT_URL}; pick the version a suite of that snapshot ships" >&2
-    exit 1
-fi
-mkosi-chroot dpkg -i /systemd-boot-efi.deb
-rm -f "$BUILDROOT/systemd-boot-efi.deb"
-mkosi-chroot usermod -a -G tdx nethermind-surge
-mkosi-chroot systemctl disable ssh.service ssh.socket
-mkosi-chroot systemctl mask ssh.service ssh.socket
+mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")
@@ -53,7 +64,7 @@ mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | while read -r bin_pa
 done
 
 # Debloat: mask unwanted systemd units
-systemd_svc_whitelist=("basic.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-remount-fs.service" "systemd-sysctl.service" "timers.target")
+systemd_svc_whitelist=("basic.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "serial-getty@.service" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-remount-fs.service" "systemd-sysctl.service" "timers.target")
 SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"
 mkdir -p "$SYSTEMD_DIR"
 # Keep the targets the enabled units order against or pull in: masking one drops the

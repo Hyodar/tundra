@@ -1,13 +1,44 @@
 [Unit]
-Description=Raiko
-After=runtime-init.service tdxs.service
-Requires=runtime-init.service tdxs.service
+Description=raiko.service
+After=tdxs.service nethermind-ready.service credential-raiko-config.service runtime-init-volume-data.service
+Requires=tdxs.service nethermind-ready.service credential-raiko-config.service runtime-init-volume-data.service
 
 [Service]
+Type=exec
+ExecStart=/usr/bin/raiko --address=127.0.0.1:8080 --config-path=${CREDENTIALS_DIRECTORY}/raiko-config
 User=raiko
-Group=tdx
+SupplementaryGroups=tdx
+WorkingDirectory=/persistent/raiko
+Environment=STATE_DIRECTORY=/persistent/raiko
+LoadCredential=raiko-config:/run/tundravm/credentials/raiko-config
+ReadWritePaths=-/persistent/raiko
 Restart=on-failure
-ExecStart=/usr/bin/raiko
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tdx_guest rw
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
 
 [Install]
-WantedBy=default.target
+WantedBy=minimal.target

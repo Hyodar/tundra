@@ -7,8 +7,8 @@ import re
 from collections.abc import Callable
 
 import pytest
-from examples.fragments import Nethermind, Raiko, TaikoClient
 
+from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
 from tundravm._source import BUILD_MARKER
 from tundravm.declarative import (
     Build,
@@ -18,7 +18,6 @@ from tundravm.declarative import (
     Go,
     Install,
     Key,
-    Package,
     Recipe,
     Secrets,
     Tree,
@@ -27,6 +26,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import ValidationError
+from tundravm.recipe import load_recipe
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
@@ -57,10 +57,8 @@ def _source_builds(recipe: Recipe) -> dict[str, dict[str, object]]:
 
 
 def _surge_stack() -> Recipe:
-    return Recipe(
-        name="stack",
-        items=(Tdxs(), Package("git", role="build"), Raiko(), TaikoClient(), Nethermind()),
-    )
+    """The surge image: Nethermind, the taiko driver and Raiko from tundravm.components."""
+    return load_recipe(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT])
 
 
 def test_unpinned_app_builds_fail_naming_lock_and_fetch() -> None:

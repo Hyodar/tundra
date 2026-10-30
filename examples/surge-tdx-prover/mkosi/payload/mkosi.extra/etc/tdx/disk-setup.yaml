@@ -1,7 +1,9 @@
 disks:
-  disk_persistent:
-    strategy: "largest"
-    format: "on_fail"
+  data:
+    strategy: "pathglob"
+    strategy_config:
+      pattern: "/dev/disk/by-id/*-tundravm-data"
+    format: "on_initialize"
     mount_at: "/persistent"
-    dirs: ["ssh", "data", "logs"]
-    encryption_key_path: "/tmp/key_persistent"
+    dirs: []
+    encryption_key_path: "/run/tundravm/keys/data"

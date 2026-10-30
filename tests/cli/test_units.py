@@ -77,9 +77,7 @@ def test_convert_adopt_defaults_shows_what_the_defaults_add(tmp_path: Path) -> N
 def test_render_prints_the_generated_unit(tmp_path: Path) -> None:
     recipe = tmp_path / "service.py"
     recipe.write_text(
-        render_recipe_template(
-            title="service", filename=recipe.name, release="trixie", backend="inprocess"
-        ),
+        render_recipe_template(title="service", filename=recipe.name, release="trixie"),
         encoding="utf-8",
     )
     out = _run(["units", "render", str(recipe), "--variant", "production", "--unit", "app.service"])
@@ -90,9 +88,7 @@ def test_render_prints_the_generated_unit(tmp_path: Path) -> None:
 def test_render_names_a_missing_unit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     recipe = tmp_path / "service.py"
     recipe.write_text(
-        render_recipe_template(
-            title="service", filename=recipe.name, release="trixie", backend="inprocess"
-        ),
+        render_recipe_template(title="service", filename=recipe.name, release="trixie"),
         encoding="utf-8",
     )
     argv = ["units", "render", str(recipe), "--variant", "production", "--unit", "nope.service"]

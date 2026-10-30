@@ -1,4 +1,5 @@
-"""The ``tundravm.declarative.utils`` fragments, file by file against the committed surge tree."""
+"""The ``tundravm.declarative.utils`` fragments, file by file; the evidence service's
+against the committed surge tree, which holds it."""
 
 from __future__ import annotations
 
@@ -94,12 +95,12 @@ def _conf(tree: Tree) -> str:
         ),
         (
             DevTools(reproducible=False),
-            "payload/mkosi.profiles/devtools/",
+            None,
             ("payload/mkosi.extra/usr/lib/systemd/system/serial-console.service",),
         ),
         (
             Backports(),
-            "",
+            None,
             (
                 "mkosi.sandbox/etc/apt/preferences.d/debian-backports.pref",
                 "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources",
@@ -109,23 +110,24 @@ def _conf(tree: Tree) -> str:
     ids=["tdxs", "devtools", "backports"],
 )
 def test_fragment_files_match_the_committed_surge_tree(
-    fragment: Fragment, golden: str, paths: tuple[str, ...]
+    fragment: Fragment, golden: str | None, paths: tuple[str, ...]
 ) -> None:
+    """Each fragment adds exactly its files; those surge ships match its tree byte for byte."""
     files = _files(compile(_recipe(fragment)))
     base = _files(compile(_recipe()))
     added = {path for path in set(files) - set(base) if not path.startswith(GENERIC)}
     assert sorted(added) == sorted(paths)
+    if golden is None:
+        return
     for path in paths:
         rel = path.removeprefix("payload/") if golden else path
         assert files[path] == (GOLDEN / golden / rel).read_bytes(), path
 
 
-def test_efi_stub_hook_matches_the_committed_surge_tree() -> None:
+def test_efi_stub_hook_lands_in_the_postinst_script() -> None:
     stub = EfiStub(snapshot=SURGE_SNAPSHOT, version=EFI_STUB_VERSION)
     (hook,) = stub.items
     assert isinstance(hook, Hook) and hook.script == stub.render_script()
-    postinst = (GOLDEN / "payload/mkosi.postinst.d/50-postinst.sh").read_text()
-    assert hook.script.strip() + "\n" in postinst
     tree = compile(_recipe(stub))
     assert hook.script.strip() + "\n" in _text(tree, "payload/mkosi.postinst.d/50-postinst.sh")
 

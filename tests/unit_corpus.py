@@ -33,22 +33,11 @@ def golden_units() -> Iterator[tuple[str, str]]:
 
 def constant_units() -> Iterator[tuple[str, str]]:
     """``(name, text)`` for the unit text constants written in Python."""
-    from examples.fragments import nethermind, raiko, taiko_client
-
     from tundravm._modules import devtools
     from tundravm.compiler.emit_mkosi import MINIMAL_TARGET_UNIT
 
     yield "MINIMAL_TARGET_UNIT", MINIMAL_TARGET_UNIT
-    yield "NETHERMIND_UNIT", nethermind.NETHERMIND_UNIT
-    yield "RAIKO_UNIT", raiko.RAIKO_UNIT
-    yield "TAIKO_CLIENT_UNIT", taiko_client.TAIKO_CLIENT_UNIT
     yield "SERIAL_CONSOLE_SERVICE", devtools.SERIAL_CONSOLE_SERVICE
-    yield (
-        "network-setup.service",
-        (REPO_ROOT / "examples" / "nethermind-base" / "network-setup.service").read_text(
-            encoding="utf-8"
-        ),
-    )
 
 
 def recipe_paths(scratch: Path) -> dict[str, Path]:
@@ -66,7 +55,6 @@ def recipe_paths(scratch: Path) -> dict[str, Path]:
                 title=template,
                 filename=path.name,
                 release="trixie",
-                backend="inprocess",
                 template=template,
             ),
             encoding="utf-8",

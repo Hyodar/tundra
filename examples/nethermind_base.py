@@ -1,22 +1,19 @@
-"""Nethermind TDX base layer: the NethermindEth/nethermind-tdx base image as a platform.
+"""Nethermind TDX base layer: the NethermindEth/nethermind-tdx base image as an ``Image``.
 
-Teaches building a real base image as a ``Platform`` plus one ``Composite``.
-``NethermindPlatform`` is what every nethermind-tdx image builds on:
+Teaches building a real base image from the slots alone:
 
-- Debian trixie from a pinned snapshot, ``SOURCE_DATE_EPOCH=0``
-- a UKI with its own ``/init`` (``boot="uki"``) and the EFI stub pinned from that mirror
-- a TDX kernel built from source with the repository's config and a hardened command line
-- Debian backports generated at sync time
+- ``base=Debian("trixie", snapshot=, efi_stub=)``: the archive snapshot every package and
+  the UKI's EFI stub come from, so two builds see the same bytes;
+- ``kernel=Kernel.build(version, Git(...), config=)``: the TDX kernel compiled from
+  source with the repository's config, every driver built in (``Kernel.default()`` is
+  Debian's, the tested one);
+- ``packages=``: the runtime set nethermind-tdx images share. Build toolchains belong to
+  the builds that need them (``tundravm.components.Nethermind`` and friends), never here.
 
-``NethermindBase`` declares what every image on it shares:
-
-- skeleton files: the custom ``/init``, static DNS and DHCP network setup, read from
-  ``nethermind-base/`` next to this module with ``Resources.from_module(__name__)``
-- full systemd debloat (binary stripping, unit masking, path removal)
-- the ``tdxs`` attestation service
-
-Recipes built on them (``surge-tdx-prover/image.py``) set ``mkosi=MKOSI``: the historical
-tree's partition UUID seed. ``recipe`` below is the base layer on its own.
+Everything else the historical base carried is implied by every image now: NTS time
+replaces openntpd, systemd-networkd and the firewall replace the custom ``/init`` and its
+network script, and the evidence service is ``Tdxs()``. The surge prover
+(``surge-tdx-prover/image.py``) builds on Debian's tested kernel instead.
 
     tundravm inspect examples/nethermind_base.py
     tundravm lint examples/nethermind_base.py   # source-unpinned until locked
@@ -25,23 +22,8 @@ tree's partition UUID seed. ``recipe`` below is the base layer on its own.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from tundravm.declarative import (
-    Boot,
-    Debian,
-    Debloat,
-    Declaration,
-    File,
-    Fragment,
-    Git,
-    Kernel,
-    Mkosi,
-    Package,
-    Recipe,
-    Resources,
-)
-from tundravm.declarative.utils import Backports, Composite, Tdxs
+from tundravm import Debian, Git, Image, Kernel
+from tundravm.declarative import Resources
 
 ASSETS = Resources.from_module(__name__)
 
@@ -49,104 +31,24 @@ SNAPSHOT = "20251113T083151Z"
 EFI_STUB_VERSION = "255.4-1"
 KERNEL_VERSION = "6.13.12"
 KERNEL_CONFIG = ASSETS.file("nethermind-base/kernel/kernel-yocto.config")
-KERNEL_CMDLINE = (
-    "console=tty0 console=ttyS0,115200n8 "
-    "mitigations=auto,nosmt "
-    "spec_store_bypass_disable=on "
-    "nospectre_v2"
-)
-SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
 
-MKOSI = Mkosi(seed=SEED, build_network=True)
-"""The historical nethermind-tdx partition UUID seed; its build scripts reach the network."""
-
-# NethermindPlatform's boot="uki" set brings kmod, systemd and systemd-boot-efi.
-RUNTIME_PACKAGES = (
+RUNTIME_PACKAGES = [
     "busybox",
     "util-linux",
     "procps",
     "ca-certificates",
     "openssl",
     "iproute2",
-    "udhcpc",
     "e2fsprogs",
-)
+]
 
-# Toolchains for the kernel and the services; stripped from the final image.
-BUILD_PACKAGES = (
-    "build-essential",
-    "git",
-    "curl",
-    "cmake",
-    "pkg-config",
-    "clang",
-    "cargo/sid",
-    "flex",
-    "bison",
-    "elfutils",
-    "bc",
-    "perl",
-    "gawk",
-    "zstd",
-    "libssl-dev",
-    "libelf-dev",
-)
-
-# Host files ship next to this module, found wherever it is imported from.
-TDX_INIT = ASSETS.text("nethermind-base/init")
-RESOLV_CONF = ASSETS.text("nethermind-base/resolv.conf")  # no trailing newline
-NETWORK_SETUP_SERVICE = ASSETS.text("nethermind-base/network-setup.service")
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class NethermindPlatform(Debian):
-    """Debian trixie from *snapshot*, with the TDX kernel, pinned EFI stub and build settings.
-
-    The EFI stub comes from the same snapshot as every package and the tools tree.
-    """
-
-    release: str = "trixie"
-    snapshot: str | None = SNAPSHOT
-    boot: Boot | None = "uki"
-    kernel_package: str | None = None
-    efi_stub: str | None = EFI_STUB_VERSION
-    items: tuple[Declaration | Fragment, ...] = (
-        Kernel(
-            KERNEL_VERSION,
-            Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
-            config=KERNEL_CONFIG,
-            cmdline=KERNEL_CMDLINE,
-        ),
-        Backports(),
-    )
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class NethermindBase(Composite):
-    """The nethermind-tdx base layer: /init, network setup, packages, debloat and tdxs."""
-
-    def compose(self) -> Fragment:
-        return Fragment(
-            "nethermind-base",
-            items=(
-                File.text("/init", TDX_INIT, mode=0o755, stage="skeleton"),
-                *(Package(name) for name in RUNTIME_PACKAGES),
-                *(Package(name, role="build") for name in BUILD_PACKAGES),
-                File.text("/etc/resolv.conf", RESOLV_CONF, stage="skeleton"),
-                File.text(
-                    "/etc/systemd/system/network-setup.service",
-                    NETWORK_SETUP_SERVICE,
-                    stage="skeleton",
-                ),
-                Debloat(),
-                Tdxs(),
-            ),
-        )
-
-
-recipe = Recipe(
-    name="nethermind-tdx",
-    platform=NethermindPlatform(),
-    items=(NethermindBase(),),
-    mkosi=MKOSI,
+image = Image(
+    "nethermind-tdx",
+    base=Debian("trixie", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
+    packages=RUNTIME_PACKAGES,
+    kernel=Kernel.build(
+        KERNEL_VERSION,
+        Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
+        config=KERNEL_CONFIG,
+    ),
 )

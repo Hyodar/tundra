@@ -32,7 +32,6 @@ from tundravm import (
     Service,
     TcpProbe,
 )
-from tundravm.backends import InProcessBackend
 from tundravm.declarative import Git
 
 NODE_EXPORTER = "1.8.2"
@@ -101,5 +100,3 @@ image = Image(
     ],
     components=[Prometheus()],
 )
-
-backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() runs the builds

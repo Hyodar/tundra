@@ -169,9 +169,9 @@ def test_surge_example_recipe_loads() -> None:
     recipe = SURGE_EXAMPLE / "image.py"
     loaded = load_recipe(recipe, extra_paths=[REPO_ROOT])
     assert isinstance(loaded, Recipe)
-    assert {v.name for v in loaded.variants} == {"default", "azure", "gcp", "devtools"}
+    assert {v.name for v in loaded.variants} == {"production", "dev"}
     img = load_image(recipe, extra_paths=[REPO_ROOT])
-    assert {"default", "azure", "gcp", "devtools"} == set(img.state.profiles)
+    assert {"production", "dev"} == set(img.state.profiles)
 
 
 @pytest.mark.parametrize("path", EXAMPLE_RECIPES, ids=lambda path: path.name)

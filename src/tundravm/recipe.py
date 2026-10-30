@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import inspect
+import os
 import sys
 import traceback
 from collections.abc import Callable, Iterator, Sequence
@@ -16,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from .backends.base import BuildBackend
 from .declarative.model import Recipe
@@ -33,7 +34,38 @@ RECIPE_OBJECT_NAMES: tuple[str, ...] = ("recipe", "RECIPE")
 """Module-level names checked first when looking for a ``Recipe``."""
 
 BACKEND_NAME = "backend"
-"""Module-level name of the build backend a declarative recipe file bakes with."""
+"""Module-level name of the build backend a recipe file bakes with; optional."""
+
+BACKEND_ENV = "TUNDRAVM_BACKEND"
+"""Names the backend kind (``local``, ``lima``, ``inprocess``) for a file that binds none."""
+
+BACKEND_KINDS: tuple[str, ...] = ("local", "lima", "inprocess")
+
+BackendOrigin = Literal["recipe", "env", "host"]
+"""Where a loaded file's backend came from: its own ``backend``, :data:`BACKEND_ENV`, or
+this host (Linux x86-64 builds locally, anything else in Lima)."""
+
+
+def default_backend() -> tuple[BuildBackend, BackendOrigin]:
+    """The backend a file that binds none bakes with, and where the choice came from.
+
+    :data:`BACKEND_ENV` wins; otherwise Linux x86-64 builds with the local backend and
+    every other host with Lima. ``--backend`` and the project file's ``backend`` override
+    both on the command line; a build never switches backend on failure.
+    """
+    from .capabilities import Host
+    from .capabilities import default_backend as host_default
+    from .declarative.lifecycle import Backend
+
+    kind = os.environ.get(BACKEND_ENV, "").strip()
+    if kind:
+        if kind not in BACKEND_KINDS:
+            raise ValidationError(
+                f"{BACKEND_ENV}={kind!r} is not a build backend.",
+                hint=f"Use one of: {', '.join(BACKEND_KINDS)}.",
+            )
+        return Backend(kind).build_backend(), "env"  # type: ignore[arg-type]
+    return Backend(host_default(Host())).build_backend(), "host"
 
 
 RECIPE_FACTORY_NAMES: tuple[str, ...] = ("build", "recipe")
@@ -351,12 +383,17 @@ def _public_names(module: ModuleType) -> list[str]:
 
 @dataclass(slots=True)
 class RecipeFile:
-    """A loaded recipe file: its ``recipe``, its ``backend`` and the lowered image once built."""
+    """A loaded recipe file: its ``recipe``, its ``backend`` and the lowered image once built.
+
+    *backend* is the file's own ``backend`` when it binds one, else :func:`default_backend`;
+    *backend_origin* says which.
+    """
 
     path: Path
     recipe: Recipe
     image: Lowered | None
     backend: BuildBackend | None
+    backend_origin: BackendOrigin = "recipe"
 
     @property
     def variants(self) -> tuple[str, ...]:
@@ -393,16 +430,22 @@ def load_file(
         else _discover(module, recipe_path)
     )
     raw = getattr(module, BACKEND_NAME, None)
-    backend = None if raw is None else _backend(raw, recipe_path)
-    return RecipeFile(recipe_path, found, None, backend)
+    if raw is not None:
+        return RecipeFile(recipe_path, found, None, _backend(raw, recipe_path))
+    backend, origin = default_backend()
+    return RecipeFile(recipe_path, found, None, backend, origin)
 
 
 __all__ = [
+    "BACKEND_ENV",
+    "BACKEND_KINDS",
     "BACKEND_NAME",
+    "BackendOrigin",
     "IMAGE_NAMES",
     "RECIPE_FACTORY_NAMES",
     "RECIPE_OBJECT_NAMES",
     "RecipeFile",
+    "default_backend",
     "load",
     "import_recipe_module",
     "load_file",

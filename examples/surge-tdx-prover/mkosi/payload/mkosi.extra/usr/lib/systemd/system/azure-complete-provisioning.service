@@ -1,7 +1,7 @@
 [Unit]
 Description=Azure Provisioning Completion
-After=network-setup.service network.target
-Requires=network-setup.service
+After=network-online.target
+Wants=network-online.target
 ConditionVirtualization=microsoft
 
 [Service]

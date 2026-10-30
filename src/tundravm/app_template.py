@@ -1,9 +1,10 @@
-"""The recipe and tests ``tundravm init --app go`` writes: one Go program as a service.
+"""The image and tests ``tundravm init --app go`` writes: one Go program as a service.
 
-The recipe builds the program with ``GoBinary``, runs it as its own system user
-with a state directory, and optionally keeps that state on an encrypted disk and
-expects a secret an external agent delivers. The tests read the planned image
-with :mod:`tundravm.testing`. Both are pure functions of :class:`AppSpec`.
+The image builds the program with ``GoBinary``, runs it as its own system user with a
+state directory, and optionally keeps that state on a :class:`~tundravm.Volume` an
+operator unlocks and reads a :class:`~tundravm.Secret` delivered after attestation. The
+tests read the planned image with :mod:`tundravm.testing`. Both are pure functions of
+:class:`AppSpec`.
 """
 
 from __future__ import annotations
@@ -21,9 +22,6 @@ APP_LANGUAGES = ("go",)
 
 DEFAULT_PORT = 8080
 DISK_MOUNT = "/persistent"
-DISK_DEVICE = "/dev/vdb"
-"""The device the generated recipe names for ``--disk``: qemu's second virtio disk."""
-EXTERNAL_PREFIX = "external:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,19 +35,13 @@ class AppSpec:
     port: int = DEFAULT_PORT
     disk: str | None = None
     secret: str | None = None
-    delivery: str | None = None
     local: bool = False
     """*url* is a local checkout (``--path``), not a remote repository."""
 
     @property
     def state_dir(self) -> str:
-        """Where the service keeps its state: on the disk when there is one."""
+        """Where the service keeps its state: on the volume when there is one."""
         return f"{DISK_MOUNT}/{self.name}" if self.disk else f"/var/lib/{self.name}"
-
-    @property
-    def key_port(self) -> int:
-        """The port ``Secrets`` takes root's SSH key on: never the app's."""
-        return 8081 if self.port == 8080 else 8080
 
 
 def parse_source(text: str) -> tuple[str, str]:
@@ -97,26 +89,20 @@ def check_spec(spec: AppSpec) -> None:
             f"--port {spec.port} is outside 1024-65535.",
             hint="The service runs as its own user, which cannot bind a port below 1024.",
         )
-    for flag, value in (("--disk", spec.disk), ("--secret", spec.secret)):
-        if value is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
-            raise ValidationError(
-                f"{flag} {value!r} is not a valid name.",
-                hint="Use letters, digits, `-`, `_` and `.`, starting with a letter or digit.",
-            )
-    if spec.secret is None and spec.delivery is not None:
-        raise ValidationError("--delivery needs --secret.", hint="Pass --secret NAME too.")
-    if spec.secret is not None:
-        if spec.delivery is None or not spec.delivery.startswith(EXTERNAL_PREFIX):
-            raise ValidationError(
-                f"--secret {spec.secret} needs --delivery external:NAME.",
-                hint="The built-in runtime delivers only root's SSH key; name what writes the "
-                "secret, e.g. --delivery external:vault-agent.",
-            )
-        if not spec.delivery.removeprefix(EXTERNAL_PREFIX):
-            raise ValidationError("--delivery external: names nothing.", hint="Pass external:NAME.")
+    if spec.disk is not None and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,10}", spec.disk):
+        raise ValidationError(
+            f"--disk {spec.disk!r} is not a valid volume name.",
+            hint="Use 1 to 11 of a-z, 0-9 and '-': it names the attachment tundravm-NAME.",
+        )
+    if spec.secret is not None and not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,62}", spec.secret):
+        raise ValidationError(
+            f"--secret {spec.secret!r} is not a valid secret name.",
+            hint="Use lower-case letters, digits, `-`, `_` and `.`, starting with a letter or "
+            "digit.",
+        )
 
 
-_HEADER = r'''"""$title image recipe (Go app: $app as a service).
+_HEADER = r'''"""$title image ($app as a service, built from its Go source).
 
 Inspect:  tundravm inspect $filename
 Lint:     tundravm lint $filename
@@ -130,7 +116,6 @@ Build:    tundravm bake $filename --build build
 _CONSTANTS = r"""
 APP = "$app"
 PORT = $port
-STATE_DIR = "$state_dir"
 $source_comment
 SOURCE = Git(
     "$url",
@@ -146,187 +131,80 @@ _LOCAL_COMMENT = (
 _REMOTE_COMMENT = "# The program's repository and ref; `tundravm lock` pins the ref to a commit."
 
 _DISK = r"""
-# The encrypted disk holding STATE_DIR. Its key is generated at first boot and kept in the
-# TPM; that boot formats the disk (format="on_initialize").
-# DISK_DEVICE is the device the platform attaches it as: /dev/vdb is qemu's second virtio
-# disk. Set yours (a /dev/disk/by-id/ path on a cloud) before building for that platform.
-DISK_DEVICE = "$disk_device"
-key = Key("${disk}_key", output="/tmp/${disk}_key")
-disk = Disk(
-    "$disk",
-    mount="$disk_mount",
-    device=DISK_DEVICE,
-    format="on_initialize",
-    key=key,
-    mapper="$disk",
-    directories=(),
-)
+# APP's state lives on an encrypted volume an operator unlocks on every boot, after
+# attesting the instance (`tundravm secrets unlock INSTANCE $disk`); deploy attaches it
+# as tundravm-$disk. The service waits until it is open.
+VOLUME = Volume("$disk", mount="$disk_mount", unlock=OperatorKey())
 """
 
 _SECRET = r"""
-# The secret reaches APP as a file only APP reads. tundra-tools delivers only root's
-# SSH key, so "$delivery_name" writes SECRET_FILE at boot. YOU PROVIDE IT: ship or
-# package what writes the file (its unit enabled), or this image waits at boot forever.
-# APP needs delivery.ready: a boot step waits until SECRET_FILE exists (ready_path=);
-# pass unit="NAME.service" instead to start that unit and wait for it. Secrets also
-# runs tundra-tools' SSH-key step (secrets.ready), which waits each boot for an
-# ed25519 key POSTed to port $key_port (docs/concepts.md: Secret delivery at boot).
-SECRET_FILE = f"/run/{APP}/$secret"
-# The service reads systemd's copy of it, in $$CREDENTIALS_DIRECTORY.
-CREDENTIAL_FILE = f"/run/credentials/{APP}.service/$secret"
-delivery = ExternalDelivery("$delivery_name", supports=("file",), ready_path=SECRET_FILE)
-secrets = Secrets(
-    entries=(Secret("$secret", targets=(SecretFile(SECRET_FILE, owner=APP),)),),$store
-    port=$key_port,
-    delivery=delivery,
-)
+# A secret delivered after attestation (`tundravm secrets deliver INSTANCE $secret=@FILE`)
+# and handed to APP as a systemd credential: nothing is written into the image, and the
+# service waits until it has arrived. APP reads it at SECRET.path.
+SECRET = Secret("$secret")
 """
 
 _APP = r"""
 binary = GoBinary(APP, SOURCE, package=PACKAGE)
 
-app = Fragment(
-    f"{APP}-service",
-    items=(
-        # Runs as system user APP (declared for you), restarts on failure, and is
-        # sandboxed by Hardening.strict(): it writes only to its state directory.
-        # ports= is where it listens: TeeBase's firewall opens it.
+image = Image(
+    "$title",
+    base=Debian("$release"),
+    packages=[Package("ca-certificates")],
+    services=[
+        # Runs as system user APP, restarts on failure, sandboxed by the "static" preset.
+        # expose= is what the firewall opens.
         Service(
             APP,
             # The flags are a guess: change them to the ones your program takes.
-            f"{binary.executable} --addr=:{PORT}",
-            description=APP,
-            ports=(PORT,),$state
-            env={$env},$needs
+            [binary, f"--addr=:{PORT}"$argv],
+            expose=[TCP(PORT)],
+            state=$state,$credentials
         ),
-    ),
-)
-
-backend = $backend_expr
-
-recipe = Recipe(
-    name="$title",
-    # Debian with its kernel and systemd boot set: recipe.platform.packages lists them.
-    platform=Debian("$release"),
-    items=(
-$items    ),
-    variants=(
-        Variant("default", outputs=("qemu",)),
-        # Dev tools and root login: release=False keeps it out of releases.
-        Variant("dev", inherits="default", add=DevTools(), release=False),
-    ),
+    ],$slots
+    # A non-production "dev" profile: debugging tools and a serial console, never shipped.
+    dev=DevAccess(password="tdx"),
 )
 """
 
 
-def _imports(spec: AppSpec, backend_import: str) -> str:
-    names = ["Debian", "Fragment", "Git", "Package", "Recipe", "Service", "Variant"]
-    utils = ["DevTools", "GoBinary", "TeeBase"]
+def _imports(spec: AppSpec) -> str:
+    names = ["TCP", "Debian", "DevAccess", "Git", "GoBinary", "Image", "Package", "Service"]
     if spec.disk:
-        names += ["Disk", "Key", "RuntimeTools"]
+        names += ["OperatorKey", "Volume"]
     if spec.secret:
-        names += ["ExternalDelivery", "RuntimeTools", "Secret", "SecretFile", "Secrets"]
-    if spec.disk or spec.secret:
-        utils.insert(0, "TUNDRA_TOOLS")
-    listed = "".join(f"    {name},\n" for name in sorted(set(names)))
-    return (
-        f"{backend_import}\n"
-        f"from tundravm.declarative import (\n{listed})\n"
-        f"from tundravm.declarative.utils import {', '.join(utils)}\n"
-    )
+        names += ["Secret"]
+    ordered = sorted(names, key=lambda name: (not name.isupper(), name))
+    listed = "".join(f"    {name},\n" for name in ordered)
+    return f"from tundravm import (\n{listed})\n"
 
 
-def secret_env(secret: str) -> str:
-    """The variable the service reads *secret*'s file path from: ``API_TOKEN_FILE``."""
-    return "".join(c if c.isalnum() else "_" for c in secret).upper() + "_FILE"
-
-
-_NEEDS = {
-    (False, False): "",
-    (True, False): "\n            # Starts once the disk is mounted at boot.\n"
-    "            needs=(disk.ready,),",
-    (
-        True,
-        True,
-    ): "\n            # Starts once the disk is mounted and the secret delivered, without\n"
-    "            # waiting for the SSH key.\n"
-    "            needs=(disk.ready, delivery.ready),",
-    (
-        False,
-        True,
-    ): "\n            # Starts once the secret is delivered, not waiting for the SSH key.\n"
-    "            needs=(delivery.ready,),",
-}
-"""The service's ``needs=``, by (disk, secret): what it waits for at boot."""
-
-_CREDENTIAL = (
-    "\n            # LoadCredential=: systemd hands SECRET_FILE over as CREDENTIAL_FILE.\n"
-    "            credentials={$secret_name: SECRET_FILE},"
-)
-_STATE = {
-    False: "\n            # StateDirectory=: systemd creates STATE_DIR, owned by APP, sets\n"
-    "            # $STATE_DIRECTORY and makes it the working directory.\n"
-    "            state=APP,",
-    True: "\n            # STATE_DIR is on the disk, not under /var/lib: the sandbox may write it\n"
-    "            # (write_paths); because it is on the disk, the unit also waits for the\n"
-    "            # mount and creates it, owned by APP, before the service starts.\n"
-    "            write_paths=(STATE_DIR,),",
-}
-"""The service's state directory fields, by disk: ``StateDirectory=`` or a disk path."""
-
-
-def render_app_recipe(
-    spec: AppSpec, *, title: str, filename: str, release: str, backend: tuple[str, str]
-) -> str:
-    """The recipe source ``tundravm init --app go`` writes for *spec*."""
-    backend_import, backend_expr = backend
-    env = ['"STATE_DIRECTORY": STATE_DIR'] if spec.disk else []
-    items = [
-        "# NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl",
-        "# hardening, DNS, no apt timers: opt out per flag.",
-        "TeeBase()",
-        'Package("ca-certificates")',
-    ]
-    sections = _CONSTANTS
+def render_app_recipe(spec: AppSpec, *, title: str, filename: str, release: str) -> str:
+    """The image source ``tundravm init --app go`` writes for *spec*."""
+    sections = _CONSTANTS + (_DISK if spec.disk else "") + (_SECRET if spec.secret else "")
+    slots = ""
     if spec.disk:
-        sections += _DISK
-        items += ['Package("cryptsetup")', "key", "disk"]
+        slots += "\n    volumes=[VOLUME],"
     if spec.secret:
-        sections += _SECRET
-        env.append(f'"{secret_env(spec.secret)}": CREDENTIAL_FILE')
-        items.append("secrets")
-    if spec.disk or spec.secret:
-        items.append("# The key, disk and secrets steps run the tundra-tools binaries.")
-        items.append("RuntimeTools(TUNDRA_TOOLS)")
-    items += ["binary", "app"]
-    delivery = (spec.delivery or "").removeprefix(EXTERNAL_PREFIX)
-    source = _HEADER + _imports(spec, backend_import) + sections + _APP
+        slots += "\n    secrets=[SECRET],"
+    source = _HEADER + _imports(spec) + sections + _APP
     return Template(source).substitute(
         title=title,
         filename=filename,
         release=release,
-        backend_expr=backend_expr,
         app=spec.name,
         port=spec.port,
-        state_dir=spec.state_dir,
         source_comment=_LOCAL_COMMENT if spec.local else _REMOTE_COMMENT,
         url=spec.url,
         ref=spec.ref,
         package=spec.package,
         disk=spec.disk or "",
-        disk_device=DISK_DEVICE,
         disk_mount=DISK_MOUNT,
         secret=spec.secret or "",
-        delivery_name=delivery,
-        key_port=spec.key_port,
-        store="\n    store=disk," if spec.disk else "",
-        needs=_NEEDS[bool(spec.disk), bool(spec.secret)],
-        state=_STATE[bool(spec.disk)]
-        + (_CREDENTIAL.replace("$secret_name", f'"{spec.secret}"') if spec.secret else ""),
-        env=", ".join(env),
-        items="".join(
-            f"        {item}\n" if item.startswith("#") else f"        {item},\n" for item in items
-        ),
+        argv=f', f"--{spec.secret}-file={{SECRET.path}}"' if spec.secret else "",
+        state="VOLUME.directory(APP)" if spec.disk else "APP",
+        credentials="\n            credentials=[SECRET]," if spec.secret else "",
+        slots=slots,
     )
 
 
@@ -335,12 +213,11 @@ _TESTS = r'''"""Tests for $filename: what the image ships for $app, read from th
 from pathlib import Path
 
 from tundravm.recipe import load_recipe
-from tundravm.testing import assert_clean, fragment_plan, plan
+from tundravm.testing import assert_clean, plan
 
 PROJECT = Path(__file__).resolve().parent.parent
 RECIPE = load_recipe(PROJECT / "$filename")
-IMAGE = plan(RECIPE)  # the default variant, compiled in memory
-ITEMS = {getattr(item, "name", None): item for item in RECIPE.items}
+IMAGE = plan(RECIPE)  # the production profile, compiled in memory
 APP = "$app"
 PORT = $port
 EXECUTABLE = "/usr/bin/$app"
@@ -348,7 +225,7 @@ EXECUTABLE = "/usr/bin/$app"
 
 def test_lints_clean() -> None:
     # `tundravm lock $filename` pins the source builds and clears source-unpinned.
-    assert_clean(RECIPE, allow=("source-unpinned",))
+    assert_clean(IMAGE, allow=("source-unpinned",))
 
 
 def test_binary_is_built_and_installed() -> None:
@@ -374,7 +251,7 @@ def test_service_is_enabled() -> None:
 
 
 def test_tee_baseline_is_in_the_image() -> None:
-    # TeeBase(): authenticated (NTS) time, a RAM-only journal, kernel sysctl hardening.
+    # Implied: authenticated (NTS) time, a RAM-only journal, kernel sysctl hardening.
     assert "chrony" in IMAGE.packages
     assert " nts\n" in IMAGE.file("/etc/chrony/chrony.conf").text
     journal = IMAGE.file("/etc/systemd/journald.conf.d/50-tundravm-tee.conf").text
@@ -383,48 +260,40 @@ def test_tee_baseline_is_in_the_image() -> None:
     # DHCP on every NIC, and a firewall that drops inbound traffic except APP's port.
     assert "DHCP=yes" in IMAGE.file("/etc/systemd/network/50-tundravm.network").text
     assert f"tcp dport {PORT} accept" in IMAGE.file("/etc/nftables.conf").text
-$extra
-
-def test_service_fragment_plans_on_its_own() -> None:
-    # The service with only what it needs under it, on a bare test platform.
-    needs = ($include)
-    image = fragment_plan(ITEMS[f"{APP}-service"], include=needs)
-    assert_clean(image, allow=("source-unpinned",))
-'''
+$extra'''
 
 _DISK_TEST = r"""
 
-def test_state_lives_on_the_encrypted_disk() -> None:
+def test_state_lives_on_the_volume() -> None:
     service = IMAGE.service(APP)
-    assert service.environment["STATE_DIRECTORY"].startswith("$disk_mount/")
-    # The unit is ordered after the boot step that mounts the disk.
-    assert "disks" in " ".join(service.values("Unit", "After"))
+    assert service.environment["STATE_DIRECTORY"] == "$disk_mount/$app"
+    # The unit waits until the volume is open and its directory exists.
+    after = " ".join(service.values("Unit", "After")).split()
+    assert "runtime-init-volume-$disk.service" in after
 """
 
 _SECRET_TEST = r"""
 
-def test_service_reads_the_secret_file() -> None:
-    environment = IMAGE.service(APP).environment
-    assert environment["$secret_env"] == "/run/credentials/$app.service/$secret"
+def test_service_reads_the_delivered_secret() -> None:
+    service = IMAGE.service(APP)
+    (binding,) = service.values("Service", "LoadCredential")
+    assert binding == "$secret:/run/tundravm/credentials/$secret"
+    # The unit waits until the secret has been delivered.
+    after = " ".join(service.values("Unit", "After")).split()
+    assert "credential-$secret.service" in after
 """
 
 
 def render_app_tests(spec: AppSpec, *, filename: str) -> str:
-    """``tests/test_<name>.py`` for the recipe :func:`render_app_recipe` writes."""
+    """``tests/test_<name>.py`` for the image :func:`render_app_recipe` writes."""
     extra = (_DISK_TEST if spec.disk else "") + (_SECRET_TEST if spec.secret else "")
     return Template(_TESTS.replace("$extra", extra)).substitute(
         filename=filename,
         app=spec.name,
         port=spec.port,
+        disk=spec.disk or "",
         disk_mount=DISK_MOUNT,
-        include=f'ITEMS[APP], ITEMS["{spec.disk}_key"], ITEMS["{spec.disk}"]'
-        + (', ITEMS["secrets"]' if spec.secret else "")
-        if spec.disk
-        else 'ITEMS[APP], ITEMS["secrets"]'
-        if spec.secret
-        else "ITEMS[APP],",
         secret=spec.secret or "",
-        secret_env=secret_env(spec.secret or "x"),
     )
 
 
@@ -436,5 +305,4 @@ __all__ = [
     "parse_source",
     "render_app_recipe",
     "render_app_tests",
-    "secret_env",
 ]

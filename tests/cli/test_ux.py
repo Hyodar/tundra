@@ -187,7 +187,7 @@ def test_init_ends_with_the_backend_probe(tmp_path: Path) -> None:
 
 
 def test_init_reports_a_missing_backend_tool_without_failing(tmp_path: Path) -> None:
-    code, out = run("init", str(tmp_path), "--name", "node", runner=_runner(1))
+    code, out = run("init", str(tmp_path), "--name", "node", "--backend", "lima", runner=_runner(1))
     assert code == EXIT_OK
     assert (tmp_path / "node.py").is_file()
     assert "build:x86-64     blocked: limactl not found: install Lima (lima-vm.io)" in out

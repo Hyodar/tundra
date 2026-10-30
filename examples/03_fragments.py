@@ -31,7 +31,6 @@ from tundravm import (
     Package,
     Resolved,
 )
-from tundravm.backends import InProcessBackend
 from tundravm.declarative import Repository, Task, Unit
 from tundravm.declarative.utils import ConfigFile, Run
 
@@ -123,5 +122,3 @@ image = Image(
     components=[Hardening(), NodeExporter(), metrics, HealthCheck(target=metrics.health)],
     targets=("qemu", "gcp"),
 )
-
-backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() bakes real images

@@ -10,19 +10,12 @@ from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, run_main
 from tundravm.backends import InProcessBackend
 from tundravm.backends.inprocess import TARGET_FILENAMES
 from tundravm.declarative import Recipe, compile, lint
-from tundravm.recipe import load_image, load_recipe
+from tundravm.recipe import load_file, load_recipe
 
 INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source")
 
-INHERENT_WARNINGS = frozenset({"source-unpinned", "disk-device-guessed"})
-"""Warning codes an example may report: unpinned refs clear with ``tundravm lock``; the
-historical surge ``Disk`` picks its device at boot under ``Policy(storage_safety="warn")``."""
-
-KNOWN_WARNINGS: dict[str, frozenset[str]] = {
-    "nethermind_base.py": frozenset({"unit-exec-relative"}),
-}
-"""Per-example warnings the typed API removes later: the nethermind-tdx base ships its
-historical ``network-setup.service`` text (a relative ``ExecStart=``)."""
+INHERENT_WARNINGS = frozenset({"source-unpinned"})
+"""Warning codes an example may report: unpinned refs clear with ``tundravm lock``."""
 
 COMMAND = re.compile(r"^\s+tundravm (\w+) (\S+)", re.MULTILINE)
 
@@ -91,8 +84,7 @@ def test_example_binds_an_image_or_the_internal_recipe(path: Path) -> None:
 def test_example_lints_without_errors(path: Path) -> None:
     found = lint(_recipe(path))
     assert [d for d in found if d.severity == "error"] == []
-    allowed = INHERENT_WARNINGS | KNOWN_WARNINGS.get(path.name, frozenset())
-    assert {d.code for d in found if d.severity == "warning"} <= allowed
+    assert {d.code for d in found if d.severity == "warning"} <= INHERENT_WARNINGS
 
 
 @EXAMPLES
@@ -104,12 +96,20 @@ def test_example_compiles_deterministically(path: Path) -> None:
 
 
 @EXAMPLES
-def test_teaching_examples_bake_in_process(path: Path) -> None:
-    backend = load_image(path, extra_paths=[REPO_ROOT]).backend
-    if path.name[0].isdigit():
-        assert isinstance(backend, InProcessBackend), f"{path.name} teaches on inprocess"
-    else:
-        assert backend is None or not isinstance(backend, InProcessBackend)
+def test_examples_name_no_backend(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The loader picks the backend: TUNDRAVM_BACKEND, else this host's."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    bound = {
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert "backend" not in bound, f"{path.name}: drop `backend = ...`"
+    monkeypatch.setenv("TUNDRAVM_BACKEND", "inprocess")
+    loaded = load_file(path, extra_paths=[REPO_ROOT])
+    assert isinstance(loaded.backend, InProcessBackend) and loaded.backend_origin == "env"
 
 
 @pytest.mark.parametrize(

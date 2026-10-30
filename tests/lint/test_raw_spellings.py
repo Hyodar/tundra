@@ -159,7 +159,6 @@ def test_examples_and_templates_never_spell_the_chroot_prefix() -> None:
             title=template,
             filename="node.py",
             release="trixie",
-            backend="inprocess",
             template=template,
         )
     assert [name for name, text in sources.items() if "mkosi-chroot" in text] == []

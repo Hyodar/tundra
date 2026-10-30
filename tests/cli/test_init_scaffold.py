@@ -17,11 +17,12 @@ import pytest
 
 from tests.helpers import REPO_ROOT, run_main
 from tundravm import load, templates
+from tundravm.backends import LocalLinuxBackend
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.declarative import Debian, Package, compile, lint, lower, resolve
 from tundravm.declarative.lifecycle import data_disk_serials
 from tundravm.image import recipe_of
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_file, load_recipe
 from tundravm.templates import (
     EXPECTED_FINDINGS,
     TEMPLATE_VARIANTS,
@@ -114,9 +115,22 @@ def test_every_template_installs_the_distribution_kernel(tmp_path: Path, templat
     assert "kernel-missing" in {d.code for d in lint(stripped)}
 
 
+def test_an_explicit_backend_is_bound_in_the_file(tmp_path: Path) -> None:
+    """A rendered file that must bake with one backend binds it; the loader keeps it."""
+    path = tmp_path / "n.py"
+    path.write_text(
+        render_recipe_template(title="n", filename="n.py", release="trixie", backend="local"),
+        encoding="utf-8",
+    )
+    loaded = load_file(path)
+    assert isinstance(loaded.backend, LocalLinuxBackend) and loaded.backend_origin == "recipe"
+    plain = render_recipe_template(title="n", filename="n.py", release="trixie")
+    assert "backend" not in plain
+
+
 @pytest.mark.parametrize("template", list(TEMPLATES))
 def test_render_is_a_pure_function_of_its_arguments(template: str) -> None:
-    args = {"title": "n", "filename": "n.py", "release": "trixie", "backend": "lima"}
+    args = {"title": "n", "filename": "n.py", "release": "trixie"}
     first = render_recipe_template(**args, template=template)
     assert first == render_recipe_template(**args, template=template)
     assert "$" not in first
@@ -156,21 +170,24 @@ def test_service_app_serves_its_page_over_http(tmp_path: Path) -> None:
     assert 'tcp dport 8080 accept comment "app.service"' in files["/etc/nftables.conf"]
 
 
-def test_prover_template_wires_ssh_and_a_stable_data_disk(tmp_path: Path) -> None:
-    """The prover's SSH is an SshAccess (deploy forwards it) and its disk a named virtio
-    disk that deploy attaches, formatted on the first boot only."""
+def test_prover_template_wires_its_volume_secret_and_ingress(tmp_path: Path) -> None:
+    """The prover's volume is found by its attachment name (deploy attaches it), formatted
+    only while uninitialised; the control-plane SSH is forwarded; the app is reachable
+    through the attested ingress only."""
     path = tmp_path / "prover.py"
     text = render_recipe_template(
-        title="p", filename=path.name, release="trixie", backend="inprocess", template="prover"
+        title="p", filename=path.name, release="trixie", template="prover"
     )
     path.write_text(text, encoding="utf-8")
     img = lower(load_recipe(path))
-    assert img.ssh_ports == {"default": 22, "dev": 22}
-    assert data_disk_serials(img, "default") == ("tundra-data",)
-    files = {f.path: f.content for f in img.state.profiles["default"].files}
+    assert img.ssh_ports == {"production": 22, "dev": 22}
+    assert data_disk_serials(img, "production") == ("tundravm-data",)
+    files = {f.path: f.content for f in img.state.profiles["production"].files}
     config = str(files["/etc/tdx/disk-setup.yaml"])
-    assert 'pattern: "/dev/disk/by-id/virtio-tundra-data"' in config
+    assert 'pattern: "/dev/disk/by-id/*-tundravm-data"' in config
     assert 'format: "on_initialize"' in config
+    nftables = str(files["/etc/nftables.conf"])
+    assert "tcp dport 443 accept" in nftables and "tcp dport 8080" not in nftables
 
 
 def test_scaffold_writes_the_project_files_and_lists_next_steps(

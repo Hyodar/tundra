@@ -168,7 +168,7 @@ def test_init_writes_loadable_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert f"created {target}" in out
     source = target.read_text(encoding="utf-8")
     assert 'base=Debian("sid")' in source
-    assert "InProcessBackend()" in source
+    assert "backend" not in source  # the project file names it
 
     code, out = run_main("inspect", str(target), "--format", "json")
     assert code == EXIT_OK

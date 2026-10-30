@@ -466,7 +466,7 @@ def test_every_template_pins_the_tools_tree_to_its_release_and_snapshot(
     path = tmp_path / "node.py"
     path.write_text(
         render_recipe_template(
-            title="node", filename="node.py", release="trixie", backend="local", template=template
+            title="node", filename="node.py", release="trixie", template=template
         ),
         encoding="utf-8",
     )
@@ -497,11 +497,13 @@ def test_the_lock_records_the_tools_tree_mkosi_resolves() -> None:
 
 def test_surge_tree_resolves_every_node() -> None:
     tree = SURGE_EXAMPLE / "mkosi"
-    summary = mkosi_summary(tree, "--profile=devtools", "--dependency=azure", "--dependency=gcp")
+    summary = mkosi_summary(tree, "--profile=dev", "--dependency=azure", "--dependency=gcp")
     images = by_image(summary)
-    assert list(images) == ["payload", "azure", "gcp", "main"]
-    assert images["payload"]["Format"] == "uki"
-    assert images["payload"]["ImageId"] == "surge-tdx-prover-devtools"
+    assert list(images) == ["default-initrd", "payload", "azure", "gcp", "main"]
+    # RootFS.verity(): the payload is a disk with an erofs root, booted by mkosi's initrd.
+    assert images["payload"]["Format"] == "disk"
+    assert images["payload"]["Dependencies"] == ["default-initrd"]
+    assert images["payload"]["ImageId"] == "surge-tdx-prover-dev"
     assert "openssh-server" in images["payload"]["Packages"]
     assert images["main"]["Dependencies"] == ["payload", "azure", "gcp"]
     for name in ("azure", "gcp"):

@@ -1,0 +1,39 @@
+[Unit]
+Description=Attested TLS on :443 to http://127.0.0.1:8080/
+
+[Service]
+Type=exec
+ExecStartPre=/usr/bin/openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj /CN=tundravm -keyout ${RUNTIME_DIRECTORY}/key.pem -out ${RUNTIME_DIRECTORY}/cert.pem
+ExecStart=/usr/bin/socat OPENSSL-LISTEN:443,reuseaddr,fork,verify=0,cert=${RUNTIME_DIRECTORY}/cert.pem,key=${RUNTIME_DIRECTORY}/key.pem TCP:127.0.0.1:8080
+User=attested-tls-443
+RuntimeDirectory=attested-tls-443
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+UMask=0077
+
+[Install]
+WantedBy=minimal.target

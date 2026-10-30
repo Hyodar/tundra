@@ -17,19 +17,16 @@ from string import Template
 from typing import Literal
 from urllib.parse import unquote, urlparse
 
+from .errors import ValidationError
 from .project import render_table
 
-BACKEND_SNIPPETS: dict[str, tuple[str, str]] = {
-    "lima": (
-        "from tundravm.backends import LimaMkosiBackend",
-        'LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")',
-    ),
-    "local": ("from tundravm.backends import LocalLinuxBackend", "LocalLinuxBackend()"),
-    "inprocess": (
-        "from tundravm.backends.inprocess import InProcessBackend",
-        "InProcessBackend()",
-    ),
+EXPLICIT_BACKENDS: dict[str, tuple[str, str]] = {
+    "lima": ("LimaMkosiBackend", 'LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")'),
+    "local": ("LocalLinuxBackend", "LocalLinuxBackend()"),
+    "inprocess": ("InProcessBackend", "InProcessBackend()"),
 }
+"""``render_recipe_template(backend=KIND)``: the class and the instance a file that must bake
+with one backend, whatever the host, binds to ``backend``."""
 
 TemplateName = Literal["minimal", "service", "cloud", "prover"]
 
@@ -39,8 +36,8 @@ TEMPLATES: dict[str, str] = {
     "its readiness and a lint rule) plus a dev profile",
     "cloud": "service with one UKI for qemu, azure and gcp, and an EFI stub pinned to a "
     "Debian snapshot",
-    "prover": "cloud plus a TPM-sealed key, an encrypted data disk, key-only root SSH and the "
-    "tdxs attestation service (the internal API until volumes and secrets land)",
+    "prover": "cloud with the app behind an attested TLS ingress, its state on a volume an "
+    "operator unlocks, and a token delivered after attestation",
 }
 """Template name -> one-line description, in ``init --list-templates`` order."""
 
@@ -58,9 +55,6 @@ Build:    tundravm bake $filename --build build
 '''
 
 _MINIMAL = r"""from tundravm import TCP, File, Image, Service
-$backend_import
-
-backend = $backend_expr
 
 image = Image(
     "$title",
@@ -92,7 +86,6 @@ _APP_IMPORTS = {
         "    Service,\n"
         "    TcpProbe,\n"
         ")\n"
-        "$backend_import\n"
     ),
     "cloud": (
         "from tundravm import (\n"
@@ -109,35 +102,25 @@ _APP_IMPORTS = {
         "    Service,\n"
         "    TcpProbe,\n"
         ")\n"
-        "$backend_import\n"
     ),
     "prover": (
-        "$backend_import\n"
-        "from tundravm.declarative import (\n"
+        "from tundravm import (\n"
+        "    AttestedTLS,\n"
+        "    Component,\n"
         "    Debian,\n"
-        "    Declaration,\n"
+        "    DevAccess,\n"
         "    Diagnostic,\n"
-        "    Disk,\n"
+        "    Endpoint,\n"
         "    File,\n"
-        "    Key,\n"
+        "    Image,\n"
+        "    OperatorKey,\n"
         "    Package,\n"
-        "    Recipe,\n"
         "    Resolved,\n"
-        "    RuntimeTools,\n"
-        "    Secrets,\n"
+        "    Secret,\n"
         "    Service,\n"
-        "    Variant,\n"
-        "    component,\n"
-        ")\n"
-        "from tundravm.declarative.utils import (\n"
-        "    TUNDRA_TOOLS,\n"
-        "    Backports,\n"
-        "    Composite,\n"
-        "    DevTools,\n"
-        "    HttpEndpoint,\n"
-        "    SshAccess,\n"
-        "    Tdxs,\n"
-        "    TeeBase,\n"
+        "    TcpProbe,\n"
+        "    Volume,\n"
+        "    VolumeDirectory,\n"
         ")\n"
     ),
 }
@@ -187,9 +170,6 @@ class App(Component):
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
         return (Diagnostic("app-privileged-port", "error", message),)
-
-
-backend = $backend_expr
 '''
 
 _SERVICE_RECIPE = r"""
@@ -225,40 +205,46 @@ image = Image(
 )
 """
 
-_APP_INTERNAL = r'''
+_PROVER_APP = r'''
 APP_VERSION = "0.1.0"
 APP_PORT = 8080
 WWW = "/srv/www"
 $constants
 
-@component
-class App(Composite):
-    """The app: a web page served over HTTP by busybox httpd, sandboxed, and a lint rule.
+class App(Component):
+    """The app: a page busybox httpd serves on the loopback, its state on an encrypted
+    volume and a token delivered after attestation.
 
-    Swap in your program: ship it with a ``GoBinary``, a ``Build`` or a ``Package`` and
-    point the service at it. Fragment name: ``app``.
+    Swap in your program: ship it with a GoBinary, a CargoBinary or a Package and point
+    the service at it; it reads the token at ``self.token.path``. Fragment name: ``app``.
     """
 
     version: str
     port: int
+    state: VolumeDirectory
+    token: Secret
 
     @property
-    def http(self) -> HttpEndpoint:
-        """Where the app answers HTTP inside the image, for a component that probes it."""
-        return HttpEndpoint("127.0.0.1", self.port, provider=self)
+    def http(self) -> Endpoint:
+        """Where the app answers on the loopback, with its readiness: what the ingress fronts."""
+        return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
 
-    def compose(self) -> Iterator[Declaration]:
+    def compose(self) -> Iterator[Package | File | Service]:
         yield Package("busybox")
         yield File.text(f"{WWW}/index.html", self.page())
+        # It listens on the loopback and exposes no port: the attested ingress is the way
+        # in. state= waits until the volume is unlocked, credentials= until the token is
+        # delivered; systemd hands the token over as a credential, never in the image.
         yield Service(
             "app",
-            f"/usr/bin/busybox httpd -f -p {self.port} -h {WWW}",
-            description=f"app {self.version}",
-            ports=(self.port,),
+            ["/usr/bin/busybox", "httpd", "-f", "-p", f"127.0.0.1:{self.port}", "-h", WWW],
+            readiness=TcpProbe(self.port),
+            state=self.state,
+            credentials=[self.token],
         )
 
     def page(self) -> str:
-        """The index page: ``curl http://VM:PORT/`` answers with it."""
+        """The index page the ingress serves."""
         return f"<!doctype html>\n<title>$title</title>\n<h1>$title {self.version}</h1>\n"
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
@@ -267,63 +253,30 @@ class App(Composite):
             return ()
         message = f"app runs as user app and cannot bind port {self.port}"
         return (Diagnostic("app-privileged-port", "error", message),)
-
-
-backend = $backend_expr
 '''
 
 _PROVER_RECIPE = r"""
-# This template still writes the internal declarative API: its encrypted volume, its
-# delivered secrets and its attested endpoint are the Image slots gate 4 part B adds
-# (volumes=, secrets=, ingress=). It becomes an Image once those land.
-# Boot-time init: TPM-sealed key -> encrypted /persistent -> root's SSH key over HTTP.
-key = Key("key_persistent", output="/tmp/key_persistent")
-# The data disk, by a stable name: `tundravm deploy qemu` attaches one with serial
-# tundra-data. On a cloud, name its data-disk link (/dev/disk/by-id/...). The first
-# boot formats it (on_initialize); a disk with no device is refused (disk-device-guessed).
-DATA_DISK = "/dev/disk/by-id/virtio-tundra-data"
-disk = Disk(
-    "disk_persistent",
-    mount="/persistent",
-    device=DATA_DISK,
-    format="on_initialize",
-    key=key,
-    mapper="cryptroot",
-)
-# tundra-tools delivers root's SSH key only. Deliver an app secret to a SecretFile or
-# SecretEnv with Secrets(entries=..., delivery=ExternalDelivery(...)) naming what writes it.
-secrets = Secrets(store=disk)
 
-recipe = Recipe(
-    name="$title",
-    # Debian with its kernel, systemd boot set and an EFI stub from the same snapshot.
-    platform=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
-    items=(
-        # NTS time, DHCP, a firewall opening only declared ports, RAM-only journal, sysctl
-        # hardening, DNS, no apt timers: opt out per flag.
-        TeeBase(),
-        Package("ca-certificates"),
-        Package("cryptsetup"),
-        # Root logs in over SSH with the key Secrets delivers, by key only: sshd waits for
-        # it, host keys are made at boot, the firewall opens port 22. socat relays
-        # /var/tdxs.sock.
-        SshAccess(from_secrets=True),
-        Package("socat"),
-        Package("curl", role="build"),
-        Backports(),
-        # The key, disk and secrets steps run the tundra-tools binaries Tdxs builds from.
-        key,
-        disk,
-        secrets,
-        RuntimeTools(TUNDRA_TOOLS),
-        Tdxs(source=TUNDRA_TOOLS, needs=[secrets.ready]),
-        App(version=APP_VERSION, port=APP_PORT),
-    ),
-    variants=(
-        # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
-        Variant("default", outputs=("qemu", "azure", "gcp")),
-        Variant("dev", inherits="default", add=DevTools(), release=False),  # never ship it
-    ),
+# An encrypted volume an operator unlocks on every boot, after attesting the instance
+# (`tundravm secrets unlock INSTANCE data`); deploy attaches it as tundravm-data.
+data = Volume("data", mount="/persistent", unlock=OperatorKey())
+# A secret delivered after attestation (`tundravm secrets deliver INSTANCE api-token=@f`)
+# and read as a systemd credential: nothing is written into the image.
+token = Secret("api-token", rotation="restart")
+app = App(version=APP_VERSION, port=APP_PORT, state=data.directory("app"), token=token)
+
+image = Image(
+    "$title",
+    base=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
+    packages=[Package("ca-certificates")],
+    components=[app],
+    volumes=[data],
+    secrets=[token],
+    # TLS on 443, relayed to the app on the loopback: the only way requests reach it.
+    ingress=[AttestedTLS(443, upstream=app.http)],
+    # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
+    targets=("qemu", "azure", "gcp"),
+    dev=DevAccess(password="tdx"),
 )
 """
 
@@ -342,7 +295,7 @@ _SOURCES: dict[str, str] = {
     "prover": _HEADER
     + "from collections.abc import Iterator\n\n"
     + _APP_IMPORTS["prover"]
-    + _APP_INTERNAL
+    + _PROVER_APP
     + _PROVER_RECIPE,
 }
 
@@ -647,9 +600,9 @@ TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {
     "minimal": ("production",),
     "service": ("production", "dev"),
     "cloud": ("production", "dev"),
-    "prover": ("default", "dev"),
+    "prover": ("production", "dev"),
 }
-"""The profiles (the prover: variants) each template declares."""
+"""The profiles each template declares."""
 
 EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
     "minimal": ("source-unpinned",),
@@ -665,8 +618,8 @@ _ALLOW_COMMENTS: dict[str, str] = {
     "service": "    # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
     "cloud": "    # The EfiStub package stays unpinned until `tundravm lock` pins its sha256.\n",
     "prover": (
-        "    # The tundra-tools builds and the EfiStub package stay unpinned until\n"
-        "    # `tundravm lock` pins them.\n"
+        "    # The tundra-tools builds (evidence, volume and delivery tools) and the EfiStub\n"
+        "    # package stay unpinned until `tundravm lock` pins them.\n"
     ),
 }
 """The comment above ``allow=`` in the test module of a template with :data:`EXPECTED_FINDINGS`."""
@@ -677,21 +630,33 @@ def render_recipe_template(
     title: str,
     filename: str,
     release: str,
-    backend: str,
     template: str = DEFAULT_TEMPLATE,
+    backend: str | None = None,
 ) -> str:
-    """Return the starter recipe source ``tundravm init --template TEMPLATE`` writes."""
-    backend_import, backend_expr = BACKEND_SNIPPETS[backend]
+    """Return the starter image source ``tundravm init --template TEMPLATE`` writes.
+
+    It names no build backend: the loader picks one for the host (``TUNDRAVM_BACKEND``
+    or the project file's ``backend`` override it). *backend* (a key of
+    :data:`EXPLICIT_BACKENDS`) appends an explicit ``backend = ...`` binding instead, for a
+    file that must bake with that one wherever it runs; ``init`` never passes it.
+    """
     constants = _CLOUD_CONSTANTS if template in ("cloud", "prover") else ""
-    return Template(_SOURCES[template]).substitute(
+    source = Template(_SOURCES[template]).substitute(
         title=title,
         template=template,
         filename=filename,
         release=release,
-        backend_import=backend_import,
-        backend_expr=backend_expr,
         constants=constants,
     )
+    if backend is None:
+        return source
+    if backend not in EXPLICIT_BACKENDS:
+        raise ValidationError(
+            f"{backend!r} is not a build backend.",
+            hint=f"Use one of: {', '.join(EXPLICIT_BACKENDS)}.",
+        )
+    name, instance = EXPLICIT_BACKENDS[backend]
+    return f"{source}\nfrom tundravm.backends import {name}  # noqa: E402\n\nbackend = {instance}\n"
 
 
 def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> str:
@@ -712,13 +677,14 @@ def render_pyproject(
     *,
     name: str,
     recipe: str = "image.py",
-    backend: str = "lima",
+    backend: str | None = None,
     source: TundravmSource | None = None,
 ) -> str:
     """Return the minimal ``pyproject.toml`` ``init`` writes when the project has none.
 
     Its dependency is tundravm from git at *source* (default :func:`tundravm_source`),
-    and it ends with the ``[tool.tundravm]`` table naming *recipe* and *backend*.
+    and it ends with the ``[tool.tundravm]`` table naming *recipe* and, when given,
+    *backend* (``None``: this host's, chosen when a command runs).
     """
     source = tundravm_source() if source is None else source
     if source.pinned:
@@ -760,8 +726,8 @@ def render_workflow(*, recipe: str, tree: str = "mkosi") -> str:
 
 
 __all__ = [
-    "BACKEND_SNIPPETS",
     "DEFAULT_TEMPLATE",
+    "EXPLICIT_BACKENDS",
     "EDITABLE_INSTALL",
     "EXPECTED_FINDINGS",
     "GITIGNORE_BLOCK",

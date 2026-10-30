@@ -13,7 +13,6 @@ implied item with its one escape hatch. With no ``profiles`` it builds one
 """
 
 from tundravm import TCP, File, Image, Service
-from tundravm.backends import InProcessBackend
 
 image = Image(
     "minimal",
@@ -27,5 +26,3 @@ image = Image(
         ),
     ],
 )
-
-backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() bakes a real image

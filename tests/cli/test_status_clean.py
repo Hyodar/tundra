@@ -295,6 +295,7 @@ def _git(*args: str, cwd: Path) -> str:
 
 
 def test_status_reports_source_checkouts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TUNDRAVM_BACKEND", "local")  # a real backend needs the checkouts
     upstream = tmp_path / "upstream"
     upstream.mkdir()
     _git("init", "-q", "-b", "main", cwd=upstream)
@@ -317,7 +318,7 @@ def test_status_reports_source_checkouts(tmp_path: Path, monkeypatch: pytest.Mon
     assert source["verdict"] == "missing"
     assert source["path"] == str(BUILD / ".sources" / source_dir("tool", pin, upstream.as_uri()))
     assert locked["next"] == f"tundravm fetch {path}"
-    assert _verdict(locked, "backend") == "n/a"
+    assert _verdict(locked, "backend") in ("ok", "missing")  # this host's tools
 
     assert main(["fetch", str(path)], stdout=io.StringIO()) == EXIT_OK
     fetched = _status(str(path))

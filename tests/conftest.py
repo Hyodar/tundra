@@ -15,6 +15,17 @@ def _plain_format_outside_github(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _simulated_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file that binds no ``backend`` bakes in process outside integration tests.
+
+    The loader picks this host's backend for such a file (local on Linux x86-64, Lima
+    elsewhere); a unit test never builds a real image by accident.
+    """
+    if request.node.get_closest_marker("integration") is None:
+        monkeypatch.setenv("TUNDRAVM_BACKEND", "inprocess")
+
+
 @pytest.fixture
 def inprocess_backend() -> InProcessBackend:
     """Provide an in-process backend for tests that call bake()."""

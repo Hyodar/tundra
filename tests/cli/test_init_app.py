@@ -11,7 +11,7 @@ import pytest
 
 from tests.helpers import REPO_ROOT, run_main
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
-from tundravm.declarative import Disk, ExternalDelivery, Git, Recipe, Secrets
+from tundravm.declarative import Disk, Git, Recipe, Secrets
 from tundravm.recipe import load_recipe
 from tundravm.testing import UPDATE_GOLDEN_ENV, plan
 
@@ -55,50 +55,46 @@ def test_app_recipe_builds_the_binary_and_runs_it_as_a_service(tmp_path: Path) -
     assert service.values("Service", "ExecStartPre") == ()
     assert service.values("Service", "ProtectSystem") == ("strict",)
     assert {d.code for d in image.lint() if d.severity != "info"} == {"source-unpinned"}
-    assert "7 passed" in generated_tests(tmp_path)
+    assert "6 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
 
 
-def test_disk_and_external_secret(tmp_path: Path) -> None:
-    flags = ("--disk", "data", "--secret", "api-token", "--delivery", "external:vault-agent")
-    recipe = scaffold(tmp_path, *SOURCE, *flags)
+def test_volume_and_secret(tmp_path: Path) -> None:
+    recipe = scaffold(tmp_path, *SOURCE, "--disk", "data", "--secret", "api-token")
     image = plan(recipe)
     (disk,) = [item for item in image.resolved.items if isinstance(item, Disk)]
-    assert (disk.name, disk.device, disk.mount) == ("data", "/dev/vdb", "/persistent")
-    (secrets,) = [item for item in image.resolved.items if isinstance(item, Secrets)]
-    token = "/run/hello/api-token"
-    assert secrets.delivery == ExternalDelivery("vault-agent", supports=("file",), ready_path=token)
-    after = " ".join(image.service("hello").values("Unit", "After"))
-    assert "runtime-init-delivery-vault-agent.service" in after
-    assert "runtime-init-secrets.service" not in after  # not the SSH-key step
-    assert secrets.port == 8081  # the app has 8080
-    environment = image.service("hello").environment
-    assert environment == {
-        "API_TOKEN_FILE": "/run/credentials/hello.service/api-token",
-        "STATE_DIRECTORY": "/persistent/hello",
-    }
-    unit = image.service("hello")
-    assert unit.values("Service", "LoadCredential") == (f"api-token:{token}",)
-    assert unit.values("Service", "ReadWritePaths") == ("/persistent/hello",)
-    # write_paths on the disk: created, owned by the app, after the mount (no hand-written step).
-    assert unit.values("Service", "ExecStartPre") == (
-        "+/usr/bin/install -d -o hello -g hello -m 0750 /persistent/hello",
+    assert (disk.name, disk.device, disk.mount) == (
+        "data",
+        "/dev/disk/by-id/*-tundravm-data",
+        "/persistent",
     )
-    assert unit.values("Unit", "RequiresMountsFor") == ("/persistent/hello",)
-    assert "install -d" not in (tmp_path / "hello.py").read_text(encoding="utf-8")
-    assert "DISK_DEVICE = " in (tmp_path / "hello.py").read_text(encoding="utf-8")
-    assert "9 passed" in generated_tests(tmp_path)
+    (secrets,) = [item for item in image.resolved.items if isinstance(item, Secrets)]
+    assert secrets.port == 8745  # today's control-plane bootstrap, on the management port
+    assert [entry.name for entry in secrets.entries] == ["api-token"]
+    unit = image.service("hello")
+    after = " ".join(unit.values("Unit", "After")).split()
+    assert "credential-api-token.service" in after
+    assert "runtime-init-volume-data.service" in after
+    assert "runtime-init-secrets.service" not in after  # not the SSH-key step
+    assert unit.environment == {"STATE_DIRECTORY": "/persistent/hello"}
+    assert unit.values("Service", "LoadCredential") == (
+        "api-token:/run/tundravm/credentials/api-token",
+    )
+    assert unit.values("Service", "ReadWritePaths") == ("-/persistent/hello",)
+    assert "${CREDENTIALS_DIRECTORY}/api-token" in (unit.exec_start or "")
+    text = (tmp_path / "hello.py").read_text(encoding="utf-8")
+    assert "install -d" not in text and " Key(" not in text and "Disk(" not in text
+    assert "8 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
 
 
-def test_external_secret_without_a_disk_waits_for_its_delivery(tmp_path: Path) -> None:
-    recipe = scaffold(tmp_path, *SOURCE, "--secret", "token", "--delivery", "external:writer")
+def test_secret_without_a_volume_waits_for_its_delivery(tmp_path: Path) -> None:
+    recipe = scaffold(tmp_path, *SOURCE, "--secret", "token")
     image = plan(recipe)
-    after = " ".join(image.service("hello").values("Unit", "After"))
-    assert after.startswith("runtime-init-delivery-writer.service")
-    text = (tmp_path / "hello.py").read_text(encoding="utf-8")
-    assert "YOU PROVIDE IT" in text and "needs=(delivery.ready,)" in text
-    assert "8 passed" in generated_tests(tmp_path)
+    after = " ".join(image.service("hello").values("Unit", "After")).split()
+    assert after == ["credential-token.service"]
+    assert image.service("hello").values("Service", "StateDirectory") == ("hello",)
+    assert "7 passed" in generated_tests(tmp_path)
     ruff_clean(tmp_path)
 
 
@@ -118,11 +114,10 @@ def test_path_builds_the_checkout_branch(tmp_path: Path) -> None:
         ((), "--app go needs the program's source"),
         (("--source", "https://github.com/acme/hello"), "names no ref"),
         (("--path", "."), "is not a git checkout"),
-        ((*SOURCE, "--secret", "token"), "needs --delivery external:NAME"),
-        ((*SOURCE, "--secret", "token", "--delivery", "tundra-tools"), "external:NAME"),
-        ((*SOURCE, "--delivery", "external:vault"), "--delivery needs --secret"),
+        ((*SOURCE, "--secret", "Token"), "is not a valid secret name"),
         ((*SOURCE, "--port", "80"), "outside 1024-65535"),
-        ((*SOURCE, "--disk", "bad name"), "is not a valid name"),
+        ((*SOURCE, "--disk", "bad name"), "is not a valid volume name"),
+        ((*SOURCE, "--disk", "much-too-long"), "is not a valid volume name"),
         ((*SOURCE, "--template", "minimal"), "choose different starter recipes"),
     ],
 )

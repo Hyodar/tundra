@@ -14,7 +14,6 @@ image builds: one UKI wrapped for QEMU and for each cloud, whose glue is gated a
 """
 
 from tundravm import TCP, DevAccess, File, Image, Profile, Resources, Service
-from tundravm.backends import InProcessBackend
 
 motd = File.text("/etc/motd", "production\n")
 
@@ -41,5 +40,3 @@ image = Image(
     # Root over SSH, by public key only, in a non-production "dev" profile.
     dev=DevAccess(ssh_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForTheDocs me@host"]),
 )
-
-backend = InProcessBackend()  # simulated artifacts; LimaMkosiBackend() bakes real images

@@ -196,15 +196,18 @@ def _require(value: object, path: Path) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value))
 
 
-def render_table(*, recipe: str, backend: str) -> str:
-    """The ``[tool.tundravm]`` table ``init`` writes (a TOML snippet, trailing newline)."""
+def render_table(*, recipe: str, backend: str | None = None) -> str:
+    """The ``[tool.tundravm]`` table ``init`` writes (a TOML snippet, trailing newline).
+
+    Without *backend* the table names none, and commands use this host's.
+    """
     return (
         f"[{TABLE}]\n"
         f'recipe = "{recipe}"\n'
         f'tree = "mkosi"\n'
         f'build = "build"\n'
         f'lockfile = "build/tundravm.lock"\n'
-        f'backend = "{backend}"\n'
+        + ("" if backend is None else f'backend = "{backend}"\n')
     )
 
 

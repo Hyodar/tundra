@@ -151,10 +151,9 @@ pyproject: /home/me/node/pyproject.toml
 | `--path DIR` | With `--app`, instead of `--source`: a local git checkout; the recipe builds its current branch (its commit when detached). |
 | `--package PKG` | With `--app`: the Go package to build, relative to the source (default `.`). |
 | `--port N` | With `--app`: the port the service listens on, 1024-65535 (default `8080`). |
-| `--disk NAME` | With `--app`: keep the state directory on encrypted disk `NAME`, mounted at `/persistent`. |
-| `--secret NAME` | With `--app`: a secret delivered to the service as a file; needs `--delivery`. |
-| `--delivery external:NAME` | With `--secret`: what writes the secret at boot (an `ExternalDelivery`); the built-in runtime delivers only root's SSH key. |
-| `--backend KIND` | Backend the recipe binds to `backend` (default `lima`). |
+| `--disk NAME` | With `--app`: keep the state directory on volume `NAME` (an `OperatorKey()` `Volume` mounted at `/persistent`). |
+| `--secret NAME` | With `--app`: a `Secret` delivered after attestation, which the service reads as a systemd credential. |
+| `--backend KIND` | The `backend` the project file's table names (default: none, so every command uses this host's: `local` on Linux x86-64, `lima` elsewhere, unless `TUNDRAVM_BACKEND` names one). The image file never names a backend. |
 | `--ci github\|none` | `github` also writes `.github/workflows/tundravm.yml` (default `none`); on an existing project, only the workflow (see below). |
 | `--recipe RECIPE` | With `--ci github`: the existing project's recipe, relative to `DIR`; only the workflow is written. |
 | `--with-tests` / `--no-tests` | Write `tests/test_NAME.py` (default) or skip it. |
@@ -207,16 +206,16 @@ next (from svc):
 
 ### A Go app
 
-`tundravm init --app go` writes a recipe for one Go program instead of a template: a `GoBinary` built from `--source` (or the `--path` checkout) at `/usr/bin/NAME`, a system user `NAME`, and a `Service` that runs `binary.executable --addr=:PORT` as that user, enabled under `minimal.target`. `NAME` is the recipe name, lowercased. Before it starts, the service creates its state directory (`/var/lib/NAME`, or `/persistent/NAME` with `--disk`) as root and passes it as `STATE_DIRECTORY`. The `--addr` flag is a guess the recipe marks: change it to the flags your program takes.
+`tundravm init --app go` writes an `Image` for one Go program instead of a template: a `GoBinary` built from `--source` (or the `--path` checkout) at `/usr/bin/NAME`, run by a `Service` as `binary --addr=:PORT` under the generated user `NAME`, enabled under `minimal.target`, with `state=APP` (`StateDirectory=`, `/var/lib/NAME`). `NAME` is the image name, lowercased. The `--addr` flag is a guess the file marks: change it to the flags your program takes.
 
-- `--disk NAME` adds a TPM-kept `Key`, an encrypted `Disk` mounted at `/persistent` and `RuntimeTools(TUNDRA_TOOLS)`; the service starts once the disk is mounted (`needs=(disk.ready,)`). The disk's device is the top-level `DISK_DEVICE = "/dev/vdb"` (qemu's second virtio disk): set it to the device your platform attaches before you build for it.
-- `--secret NAME --delivery external:AGENT` adds a `Secrets` block whose one entry is a `SecretFile` at `/run/NAME/SECRET` owned by the app, delivered by `ExternalDelivery("AGENT", supports=("file",))`; the service reads the path from `SECRET_FILE` (the secret's name in capitals, `API_TOKEN_FILE` for `api-token`). `Secrets` also runs tundra-tools' SSH-key step, which waits each boot for root's key (see [Concepts: Secret delivery at boot](concepts.md#secret-delivery-at-boot)) on `8081` when the app has `8080`; the service does not wait for it.
+- `--disk NAME` adds `VOLUME = Volume("NAME", mount="/persistent", unlock=OperatorKey())` and makes the state `VOLUME.directory(APP)`: the service starts once an operator has unlocked the volume and `/persistent/NAME` exists, owned by it. The deployment attaches the disk as `tundravm-NAME` (`NAME` is 1 to 11 of `a-z0-9-`).
+- `--secret NAME` adds `SECRET = Secret("NAME")`, binds it with `credentials=[SECRET]` and passes `--NAME-file=${CREDENTIALS_DIRECTORY}/NAME` (`SECRET.path`): the service waits until the secret is delivered after attestation, and systemd hands it over as a credential. Nothing is written into the image.
 - With `--path`, the checkout's absolute path is part of the compiled tree: point `SOURCE` at the pushed repository before sharing the project.
 
-`tests/test_NAME.py` reads the planned default variant with `tundravm.testing.plan` and the service's fragment with `fragment_plan`: the build installs the executable, `ExecStart` runs it on the port, the service runs as its user and is enabled, plus the disk and secret wiring when asked for. It passes before `tundravm lock` (it allows only `source-unpinned`) and does not compare `mkosi/`:
+`tests/test_NAME.py` reads the planned production profile with `tundravm.testing.plan`: the build installs the executable, `ExecStart` runs it on the port, the service runs as its user and is enabled, plus the disk and secret wiring when asked for. It passes before `tundravm lock` (it allows only `source-unpinned`) and does not compare `mkosi/`:
 
 ```console
-$ tundravm init hello --app go --source https://github.com/acme/hello@v1.4.0 --package ./cmd/hello --disk data --backend inprocess --no-doctor
+$ tundravm init hello --app go --source https://github.com/acme/hello@v1.4.0 --package ./cmd/hello --disk data --no-doctor
 created hello/hello.py
 created hello/tests/test_hello.py
 created hello/pyproject.toml
@@ -233,7 +232,7 @@ next (from hello):
   `uv sync` installs the pinned dependency, tundravm at 1111444654a1
 ```
 
-`--app` and `--template` are exclusive; an app option without `--app`, `--secret` without `--delivery external:NAME`, a port below 1024 (the service is not root) or a `--path` that is not a git checkout with a commit is `E_VALIDATION`, and nothing is written.
+`--app` and `--template` are exclusive; an app option without `--app`, an invalid `--disk` or `--secret` name, a port below 1024 (the service is not root) or a `--path` that is not a git checkout with a commit is `E_VALIDATION`, and nothing is written.
 
 To add CI to a project that already exists, run `tundravm init --ci github` in it. The project exists when `DIR/pyproject.toml` has a `[tool.tundravm]` table (its `recipe` names the recipe, its `tree` the `--tree` the workflow checks, default `mkosi`) or `--recipe RECIPE` names the recipe. Then `init` writes only `.github/workflows/tundravm.yml` and the `.gitignore` block when it is missing; the recipe, tests, `pyproject.toml` and `README.md` are never touched, and nothing is linted or probed. An existing workflow is refused with `E_VALIDATION`; `--force` overwrites the workflow only:
 

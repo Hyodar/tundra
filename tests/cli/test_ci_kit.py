@@ -75,7 +75,8 @@ def test_init_writes_recipe_and_gitignore_without_ci(tmp_path: Path) -> None:
     assert code == EXIT_OK
     recipe = project / "my-node.py"
     assert f"created {recipe}" in out
-    assert "InProcessBackend()" in recipe.read_text(encoding="utf-8")
+    assert "backend" not in recipe.read_text(encoding="utf-8")  # the loader picks it
+    assert 'backend = "inprocess"' in (project / "pyproject.toml").read_text()
     gitignore = (project / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "/build/*" in gitignore and "!/build/tundravm.lock" in gitignore
     assert not (project / ".github").exists()
