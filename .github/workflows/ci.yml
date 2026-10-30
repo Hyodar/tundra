@@ -111,3 +111,64 @@ jobs:
           name: boot-console-logs
           path: ${{ runner.temp }}/boot-logs
           if-no-files-found: ignore
+
+  reproduce:
+    # Gate 1 evidence: the fixture recipe built twice, in two independent build directories,
+    # through tundravm. The azure and gcp variants each build the payload, the QEMU disk and
+    # their wrapper (--dependency=azure, --dependency=gcp); every artifact must match.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Prepare the build host
+        # Same as the boot job without QEMU: mkosi builds in an unprivileged user namespace.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq debian-archive-keyring
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: mkosi and the host
+        run: |
+          uv run mkosi --version
+          uv run tundravm doctor --for build
+
+      - name: Build the fixture twice
+        run: |
+          for build in "$RUNNER_TEMP/build-a" "$RUNNER_TEMP/build-b"; do
+            uv run tundravm bake tests/fixtures/native-tree/recipe.py \
+              --variant azure --variant gcp --backend local --build "$build"
+          done
+
+      - name: Compare the digests
+        run: |
+          mkdir -p "$RUNNER_TEMP/reproduce-digests"
+          for build in build-a build-b; do
+            (
+              cd "$RUNNER_TEMP/$build"
+              sha256sum azure/output/payload.efi azure/output/qemu.raw azure/output/azure.vhd \
+                gcp/output/payload.efi gcp/output/qemu.raw gcp/output/gcp.tar.gz
+            ) >"$RUNNER_TEMP/reproduce-digests/$build.sha256"
+            echo "== $build"
+            cat "$RUNNER_TEMP/reproduce-digests/$build.sha256"
+          done
+          cd "$RUNNER_TEMP/build-b"
+          sha256sum --check "$RUNNER_TEMP/reproduce-digests/build-a.sha256"
+
+      - name: Upload the digests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproduce-digests
+          path: ${{ runner.temp }}/reproduce-digests
+          if-no-files-found: ignore

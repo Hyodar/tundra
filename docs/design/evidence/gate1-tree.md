@@ -777,3 +777,17 @@ The gate 1 row stays open until CI shows, for both root layouts:
    resize, `gcp.tar.gz` holds a sparse `disk.raw` of a whole number of GiB that GCE imports.
 7. `mkosi vm` boots `qemu.raw` (UEFI firmware from the tools tree) for the default and the
    `dev` profile.
+
+Which CI jobs cover them (`.github/workflows/ci.yml`):
+
+- `reproduce` covers items 1 and 2 for the fixture recipe with the `initramfs` root: it bakes
+  the `azure` and `gcp` variants (payload, QEMU disk and each wrapper) twice through
+  `tundravm bake --backend local`, into two independent build directories, and fails
+  unless the sha256 of `payload.efi`, `qemu.raw`, `azure.vhd` and `gcp.tar.gz` match; the
+  two digest sets are uploaded as `reproduce-digests`. A successful run also proves item 4
+  and the `qemu-img`, GPT-resize and tar steps of item 6 (not the GCE import). The verity
+  layout and the surge tree are not built by any job yet.
+- `test` runs `tests/integration/test_mkosi_smoke.py`, which builds the default and the
+  cloud selection once and checks each disk's GPT holds one ESP (item 3 for a small UKI).
+- `boot` bakes the `minimal` and `service` templates and boots their `payload.efi` under
+  QEMU with `-kernel`; booting `qemu.raw` itself through its ESP (item 7) is not run yet.
