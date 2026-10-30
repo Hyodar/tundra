@@ -1,0 +1,490 @@
+{
+  "default": {
+    "Images": [
+      {
+        "Architecture": "x86-64",
+        "Bootable": "auto",
+        "Bootloader": "systemd-boot",
+        "BuildPackages": [],
+        "BuildScripts": [],
+        "BuildSources": [
+          {
+            "Source": "<tree>",
+            "Target": null
+          }
+        ],
+        "CleanPackageMetadata": "enabled",
+        "CleanScripts": [],
+        "ConfigureScripts": [],
+        "Dependencies": [],
+        "Distribution": "debian",
+        "Environment": {},
+        "ExtraTrees": [
+          {
+            "Source": "<tree>/payload/mkosi.extra",
+            "Target": null
+          }
+        ],
+        "FinalizeScripts": [
+          "<tree>/payload/mkosi.finalize.d/50-finalize.sh"
+        ],
+        "Firmware": "auto",
+        "Format": "uki",
+        "History": false,
+        "Image": "payload",
+        "ImageId": "fixture",
+        "KernelCommandLine": [],
+        "KernelModules": [
+          "efivarfs",
+          "gve",
+          "hv_netvsc",
+          "hv_storvsc",
+          "hv_utils",
+          "hv_vmbus",
+          "mana",
+          "nvme",
+          "pci_hyperv",
+          "sd_mod",
+          "tdx_guest",
+          "virtio_blk",
+          "virtio_net",
+          "virtio_scsi"
+        ],
+        "MachineId": null,
+        "ManifestFormat": [
+          "json"
+        ],
+        "MinimumVersion": null,
+        "Mirror": null,
+        "Output": "payload",
+        "OutputDirectory": "<tree>/mkosi.output",
+        "Packages": [
+          "curl",
+          "dmidecode",
+          "kmod",
+          "linux-image-amd64",
+          "passwd",
+          "systemd",
+          "systemd-boot-efi",
+          "systemd-sysv",
+          "udev"
+        ],
+        "PostInstallationScripts": [
+          "<tree>/payload/mkosi.postinst.d/50-postinst.sh"
+        ],
+        "PostOutputScripts": [],
+        "PrepareScripts": [],
+        "Profiles": [],
+        "Release": "trixie",
+        "RepartDirectories": [],
+        "SandboxTrees": [],
+        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "SkeletonTrees": [
+          {
+            "Source": "<tree>/payload/mkosi.skeleton",
+            "Target": null
+          }
+        ],
+        "Snapshot": "20251113T083151Z",
+        "SourceDateEpoch": 0,
+        "SplitArtifacts": [
+          "uki",
+          "kernel",
+          "initrd"
+        ],
+        "SyncScripts": [],
+        "Verity": "auto",
+        "WithNetwork": false
+      },
+      {
+        "Architecture": "x86-64",
+        "Bootable": "disabled",
+        "Bootloader": "systemd-boot",
+        "BuildPackages": [],
+        "BuildScripts": [],
+        "BuildSources": [
+          {
+            "Source": "<tree>",
+            "Target": null
+          }
+        ],
+        "CleanPackageMetadata": "auto",
+        "CleanScripts": [],
+        "ConfigureScripts": [],
+        "Dependencies": [
+          "payload"
+        ],
+        "Distribution": "debian",
+        "Environment": {},
+        "ExtraTrees": [
+          {
+            "Source": "<tree>/mkosi.output/payload.efi",
+            "Target": "/efi/EFI/BOOT/BOOTX64.EFI"
+          }
+        ],
+        "FinalizeScripts": [],
+        "Firmware": "uefi",
+        "Format": "disk",
+        "History": false,
+        "Image": "main",
+        "ImageId": "fixture",
+        "KernelCommandLine": [],
+        "KernelModules": [],
+        "MachineId": null,
+        "ManifestFormat": [],
+        "MinimumVersion": "27.1",
+        "Mirror": null,
+        "Output": "qemu",
+        "OutputDirectory": "<tree>/mkosi.output",
+        "Packages": [],
+        "PostInstallationScripts": [],
+        "PostOutputScripts": [],
+        "PrepareScripts": [],
+        "Profiles": [],
+        "Release": "trixie",
+        "RepartDirectories": [
+          "<tree>/mkosi.repart"
+        ],
+        "SandboxTrees": [],
+        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "SkeletonTrees": [],
+        "Snapshot": "20251113T083151Z",
+        "SourceDateEpoch": 0,
+        "SplitArtifacts": [
+          "uki",
+          "kernel",
+          "initrd"
+        ],
+        "SyncScripts": [],
+        "Verity": "auto",
+        "WithNetwork": false
+      }
+    ],
+    "Tools": {
+      "Distribution": "debian",
+      "Format": "directory",
+      "Image": "tools",
+      "Mirror": null,
+      "Output": "mkosi.tools",
+      "Release": "trixie",
+      "Snapshot": "20251113T083151Z"
+    }
+  },
+  "every-node": {
+    "Images": [
+      {
+        "Architecture": "x86-64",
+        "Bootable": "auto",
+        "Bootloader": "systemd-boot",
+        "BuildPackages": [],
+        "BuildScripts": [],
+        "BuildSources": [
+          {
+            "Source": "<tree>",
+            "Target": null
+          }
+        ],
+        "CleanPackageMetadata": "enabled",
+        "CleanScripts": [],
+        "ConfigureScripts": [],
+        "Dependencies": [],
+        "Distribution": "debian",
+        "Environment": {},
+        "ExtraTrees": [
+          {
+            "Source": "<tree>/payload/mkosi.extra",
+            "Target": null
+          },
+          {
+            "Source": "<tree>/payload/mkosi.profiles/dev/mkosi.extra",
+            "Target": null
+          }
+        ],
+        "FinalizeScripts": [
+          "<tree>/payload/mkosi.finalize.d/50-finalize.sh"
+        ],
+        "Firmware": "auto",
+        "Format": "uki",
+        "History": false,
+        "Image": "payload",
+        "ImageId": "fixture-dev",
+        "KernelCommandLine": [],
+        "KernelModules": [
+          "efivarfs",
+          "gve",
+          "hv_netvsc",
+          "hv_storvsc",
+          "hv_utils",
+          "hv_vmbus",
+          "mana",
+          "nvme",
+          "pci_hyperv",
+          "sd_mod",
+          "tdx_guest",
+          "virtio_blk",
+          "virtio_net",
+          "virtio_scsi"
+        ],
+        "MachineId": null,
+        "ManifestFormat": [
+          "json"
+        ],
+        "MinimumVersion": null,
+        "Mirror": null,
+        "Output": "payload",
+        "OutputDirectory": "<tree>/mkosi.output",
+        "Packages": [
+          "curl",
+          "dmidecode",
+          "kmod",
+          "linux-image-amd64",
+          "openssh-server",
+          "passwd",
+          "systemd",
+          "systemd-boot-efi",
+          "systemd-sysv",
+          "udev"
+        ],
+        "PostInstallationScripts": [
+          "<tree>/payload/mkosi.postinst.d/50-postinst.sh",
+          "<tree>/payload/mkosi.profiles/dev/mkosi.postinst.d/50-postinst.sh"
+        ],
+        "PostOutputScripts": [],
+        "PrepareScripts": [],
+        "Profiles": [
+          "dev"
+        ],
+        "Release": "trixie",
+        "RepartDirectories": [],
+        "SandboxTrees": [],
+        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "SkeletonTrees": [
+          {
+            "Source": "<tree>/payload/mkosi.skeleton",
+            "Target": null
+          }
+        ],
+        "Snapshot": "20251113T083151Z",
+        "SourceDateEpoch": 0,
+        "SplitArtifacts": [
+          "uki",
+          "kernel",
+          "initrd"
+        ],
+        "SyncScripts": [],
+        "Verity": "auto",
+        "WithNetwork": false
+      },
+      {
+        "Architecture": "x86-64",
+        "Bootable": "disabled",
+        "Bootloader": "systemd-boot",
+        "BuildPackages": [],
+        "BuildScripts": [],
+        "BuildSources": [
+          {
+            "Source": "<tree>",
+            "Target": null
+          }
+        ],
+        "CleanPackageMetadata": "auto",
+        "CleanScripts": [],
+        "ConfigureScripts": [],
+        "Dependencies": [
+          "payload"
+        ],
+        "Distribution": "debian",
+        "Environment": {},
+        "ExtraTrees": [
+          {
+            "Source": "<tree>/mkosi.output/payload.efi",
+            "Target": "/efi/EFI/BOOT/BOOTX64.EFI"
+          }
+        ],
+        "FinalizeScripts": [],
+        "Firmware": "auto",
+        "Format": "disk",
+        "History": false,
+        "Image": "azure",
+        "ImageId": "fixture",
+        "KernelCommandLine": [],
+        "KernelModules": [],
+        "MachineId": null,
+        "ManifestFormat": [],
+        "MinimumVersion": null,
+        "Mirror": null,
+        "Output": "azure",
+        "OutputDirectory": "<tree>/mkosi.output",
+        "Packages": [],
+        "PostInstallationScripts": [],
+        "PostOutputScripts": [
+          "<tree>/mkosi.images/azure/mkosi.postoutput.d/vhd"
+        ],
+        "PrepareScripts": [],
+        "Profiles": [
+          "dev"
+        ],
+        "Release": "trixie",
+        "RepartDirectories": [
+          "<tree>/mkosi.images/azure/mkosi.repart"
+        ],
+        "SandboxTrees": [],
+        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "SkeletonTrees": [],
+        "Snapshot": "20251113T083151Z",
+        "SourceDateEpoch": 0,
+        "SplitArtifacts": [
+          "uki",
+          "kernel",
+          "initrd"
+        ],
+        "SyncScripts": [],
+        "Verity": "auto",
+        "WithNetwork": false
+      },
+      {
+        "Architecture": "x86-64",
+        "Bootable": "disabled",
+        "Bootloader": "systemd-boot",
+        "BuildPackages": [],
+        "BuildScripts": [],
+        "BuildSources": [
+          {
+            "Source": "<tree>",
+            "Target": null
+          }
+        ],
+        "CleanPackageMetadata": "auto",
+        "CleanScripts": [],
+        "ConfigureScripts": [],
+        "Dependencies": [
+          "payload"
+        ],
+        "Distribution": "debian",
+        "Environment": {},
+        "ExtraTrees": [
+          {
+            "Source": "<tree>/mkosi.output/payload.efi",
+            "Target": "/efi/EFI/BOOT/BOOTX64.EFI"
+          }
+        ],
+        "FinalizeScripts": [],
+        "Firmware": "auto",
+        "Format": "disk",
+        "History": false,
+        "Image": "gcp",
+        "ImageId": "fixture",
+        "KernelCommandLine": [],
+        "KernelModules": [],
+        "MachineId": null,
+        "ManifestFormat": [],
+        "MinimumVersion": null,
+        "Mirror": null,
+        "Output": "gcp",
+        "OutputDirectory": "<tree>/mkosi.output",
+        "Packages": [],
+        "PostInstallationScripts": [],
+        "PostOutputScripts": [
+          "<tree>/mkosi.images/gcp/mkosi.postoutput.d/tar"
+        ],
+        "PrepareScripts": [],
+        "Profiles": [
+          "dev"
+        ],
+        "Release": "trixie",
+        "RepartDirectories": [
+          "<tree>/mkosi.images/gcp/mkosi.repart"
+        ],
+        "SandboxTrees": [],
+        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "SkeletonTrees": [],
+        "Snapshot": "20251113T083151Z",
+        "SourceDateEpoch": 0,
+        "SplitArtifacts": [
+          "uki",
+          "kernel",
+          "initrd"
+        ],
+        "SyncScripts": [],
+        "Verity": "auto",
+        "WithNetwork": false
+      },
+      {
+        "Architecture": "x86-64",
+        "Bootable": "disabled",
+        "Bootloader": "systemd-boot",
+        "BuildPackages": [],
+        "BuildScripts": [],
+        "BuildSources": [
+          {
+            "Source": "<tree>",
+            "Target": null
+          }
+        ],
+        "CleanPackageMetadata": "auto",
+        "CleanScripts": [],
+        "ConfigureScripts": [],
+        "Dependencies": [
+          "payload",
+          "azure",
+          "gcp"
+        ],
+        "Distribution": "debian",
+        "Environment": {},
+        "ExtraTrees": [
+          {
+            "Source": "<tree>/mkosi.output/payload.efi",
+            "Target": "/efi/EFI/BOOT/BOOTX64.EFI"
+          }
+        ],
+        "FinalizeScripts": [],
+        "Firmware": "uefi",
+        "Format": "disk",
+        "History": false,
+        "Image": "main",
+        "ImageId": "fixture",
+        "KernelCommandLine": [],
+        "KernelModules": [],
+        "MachineId": null,
+        "ManifestFormat": [],
+        "MinimumVersion": "27.1",
+        "Mirror": null,
+        "Output": "qemu",
+        "OutputDirectory": "<tree>/mkosi.output",
+        "Packages": [],
+        "PostInstallationScripts": [],
+        "PostOutputScripts": [],
+        "PrepareScripts": [],
+        "Profiles": [
+          "dev"
+        ],
+        "Release": "trixie",
+        "RepartDirectories": [
+          "<tree>/mkosi.repart"
+        ],
+        "SandboxTrees": [],
+        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "SkeletonTrees": [],
+        "Snapshot": "20251113T083151Z",
+        "SourceDateEpoch": 0,
+        "SplitArtifacts": [
+          "uki",
+          "kernel",
+          "initrd"
+        ],
+        "SyncScripts": [],
+        "Verity": "auto",
+        "WithNetwork": false
+      }
+    ],
+    "Tools": {
+      "Distribution": "debian",
+      "Format": "directory",
+      "Image": "tools",
+      "Mirror": null,
+      "Output": "mkosi.tools",
+      "Release": "trixie",
+      "Snapshot": "20251113T083151Z"
+    }
+  }
+}
