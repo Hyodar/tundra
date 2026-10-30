@@ -791,3 +791,13 @@ Which CI jobs cover them (`.github/workflows/ci.yml`):
   cloud selection once and checks each disk's GPT holds one ESP (item 3 for a small UKI).
 - `boot` bakes the `minimal` and `service` templates and boots their `payload.efi` under
   QEMU with `-kernel`; booting `qemu.raw` itself through its ESP (item 7) is not run yet.
+
+## Acceptance
+
+Gate 1 was accepted on master `eebdcfa` (2026-10-30) with CI run 41126669505 green on all
+three jobs: `test` (unit suite plus the mkosi smoke and template bake integration tests
+through the in-process adapter), `boot` (the minimal and service templates baked and booted
+under QEMU from `payload.efi`) and `reproduce` (the fixture recipe built twice in
+independent build directories with identical `payload.efi`, `qemu.raw`, `azure.vhd` and
+`gcp.tar.gz` digests). Still unproven: the verity layout built end to end, `qemu.raw`
+booted through its ESP, and the GCE import of the archive.
