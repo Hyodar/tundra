@@ -33,6 +33,32 @@ ROSETTA = "not guaranteed (rosetta)"
 
 
 @dataclass(frozen=True, slots=True)
+class MkosiPin:
+    """The mkosi release tundravm depends on: a git tag of *repository* (mkosi is not on
+    PyPI) and the *commit* it resolves to, which ``uv.lock`` records too."""
+
+    version: str
+    repository: str
+    tag: str
+    commit: str
+
+    @property
+    def requirement(self) -> str:
+        """A pip requirement for exactly this commit."""
+        return f"mkosi @ git+{self.repository}@{self.commit}"
+
+
+MKOSI_PIN = MkosiPin(
+    version="27.1",
+    repository="https://github.com/systemd/mkosi",
+    tag="v27.1",
+    commit="ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b",
+)
+"""The mkosi every backend runs: the dependency in ``pyproject.toml`` locally, the same
+commit inside the Lima guest."""
+
+
+@dataclass(frozen=True, slots=True)
 class MkosiTool:
     """The mkosi that runs: its *version*, where it comes from and, if known, its *rev*.
 

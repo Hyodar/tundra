@@ -67,3 +67,8 @@ packages = ["src/tundravm"]
 
 [tool.uv.sources]
 mkosi = { git = "https://github.com/systemd/mkosi", rev = "v27.1" }
+
+[[tool.mypy.overrides]]
+# mkosi ships no py.typed; follow its annotated source so the adapter is checked against it
+module = ["mkosi", "mkosi.*"]
+follow_untyped_imports = true
