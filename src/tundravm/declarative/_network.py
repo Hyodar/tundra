@@ -152,11 +152,17 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
             "reject with icmpx type port-unreachable",
         ]
     body = "".join(f"\t\t{rule}\n" for rule in rules)
+    filtered = firewall.egress == "filter"
+    outbound = "".join(f"\t\t{rule}\n" for rule in _egress_rules(firewall))
     return (
         "#!/usr/sbin/nft -f\n"
         "# tundravm Firewall: inbound traffic is dropped unless a rule below accepts it;\n"
-        "# outbound traffic is not filtered.\n"
-        "flush ruleset\n\n"
+        + (
+            "# outbound traffic is dropped unless a rule in the output chain accepts it.\n"
+            if filtered
+            else "# outbound traffic is not filtered.\n"
+        )
+        + "flush ruleset\n\n"
         "table inet filter {\n"
         "\tchain input {\n"
         "\t\ttype filter hook input priority filter; policy drop;\n"
@@ -166,10 +172,32 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
         "\t\ttype filter hook forward priority filter; policy drop;\n"
         "\t}\n"
         "\tchain output {\n"
-        "\t\ttype filter hook output priority filter; policy accept;\n"
+        f"\t\ttype filter hook output priority filter; policy {'drop' if filtered else 'accept'};\n"
+        f"{outbound}"
         "\t}\n"
         "}\n"
     )
+
+
+def _egress_rules(firewall: Firewall) -> list[str]:
+    """The output-chain rules of a ``Firewall(egress="filter")``; none when it is unfiltered."""
+    if firewall.egress != "filter":
+        return []
+    rules = [
+        "ct state established,related accept",
+        "ct state invalid drop",
+        'oifname "lo" accept',
+        f"icmpv6 type {{ {', '.join(ICMPV6_ESSENTIAL)} }} accept",
+        'udp sport 68 udp dport 67 accept comment "DHCPv4 requests"',
+        'udp sport 546 udp dport 547 accept comment "DHCPv6 requests"',
+    ]
+    ports = [port for port in firewall.egress_ports if isinstance(port, Port)]
+    for port in sorted(ports, key=lambda p: (p.number, p.protocol)):
+        rules.append(f'{port.protocol} dport {port.number} accept comment "egress port"')
+    for host in firewall.egress_hosts:
+        family = "ip6" if ":" in host else "ip"
+        rules.append(f'{family} daddr {host} accept comment "egress host"')
+    return rules
 
 
 def expand_firewall(firewall: Firewall, items: Iterable[Declaration]) -> tuple[Declaration, ...]:

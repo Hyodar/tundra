@@ -2231,6 +2231,7 @@ _CALENDAR_WORDS = frozenset(
 _CALENDAR = re.compile(r"[A-Za-z0-9*:,./~+ -]+")
 _LISTEN_ADDRESS = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}")
 _FS_TYPE = re.compile(r"[a-z0-9][a-z0-9._+-]*")
+_EGRESS_HOST = re.compile(r"[0-9A-Fa-f.:]+(/\d{1,3})?")
 
 
 def _require_span(owner: object, value: object, what: str, key: str, section: str) -> None:
@@ -2448,6 +2449,11 @@ class Firewall(Declared):
     (``Service(ports=...)``, a ``socket=Listen(port)`` that is not loopback-only). The rest is
     dropped (*default* ``"drop"``) or answered with a TCP reset or ICMP unreachable
     (``"reject"``); nothing is forwarded.
+
+    Outbound traffic is unfiltered until *egress* is ``"filter"``: then the output chain
+    drops what no rule accepts, and *egress_ports* (destination ports) and *egress_hosts*
+    (destination addresses or CIDR blocks) are the rules, beside the replies to accepted
+    inbound traffic, loopback, the DHCP client and the ICMPv6 messages IPv6 needs.
     """
 
     allow: tuple[Port | int, ...] = ()
@@ -2455,12 +2461,32 @@ class Firewall(Declared):
     default: Literal["drop", "reject"] = "drop"
     ssh: bool = False
     collect: bool = True
+    egress: Literal["unfiltered", "filter"] = "unfiltered"
+    egress_ports: tuple[Port | int, ...] = ()
+    egress_hosts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_ports(self, "allow")
+        _require_ports(self, "egress_ports")
         _require_choice(self, self.default, ("drop", "reject"), "default")
+        _require_choice(self, self.egress, ("unfiltered", "filter"), "egress")
         _require_bool(self, self.ssh, "ssh")
         _require_bool(self, self.collect, "collect")
+        _freeze(self, "egress_hosts")
+        for host in self.egress_hosts:
+            if not isinstance(host, str) or not _EGRESS_HOST.fullmatch(host):
+                raise _fail(
+                    self,
+                    f"egress host {host!r} is not an address or a CIDR block.",
+                    hint="Pass '10.0.0.5' or '10.0.0.0/8'.",
+                )
+        if self.egress == "unfiltered" and (self.egress_ports or self.egress_hosts):
+            raise _fail(
+                self,
+                "egress_ports and egress_hosts need egress='filter'; nothing is filtered "
+                "outbound without it.",
+                hint="Pass egress='filter' to drop the outbound traffic no rule accepts.",
+            )
 
 
 @dataclass(frozen=True, slots=True)

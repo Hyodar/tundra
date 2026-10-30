@@ -24,12 +24,14 @@ if TYPE_CHECKING:
     from .model import Ref
 
 __all__ = [
+    "PRESETS",
     "SERVICE_OWNED",
     "UNIT_REF_KINDS",
     "Condition",
     "Dynamic",
     "Extra",
     "Hardening",
+    "PresetName",
     "UnitTarget",
     "condition_entries",
     "extra_entries",
@@ -67,6 +69,32 @@ _STRICT: dict[str, object] = {
     "umask": "0077",
 }
 """The strict profile: every :class:`Hardening` field's default."""
+
+PresetName = Literal["static", "dotnet", "jit", "node", "python"]
+"""The runtime classes :meth:`Hardening.preset` knows."""
+
+PRESETS: dict[str, dict[str, object]] = {
+    "static": {},
+    "dotnet": {"jit": True, "deny_syscalls": ("@privileged",)},
+    "jit": {"jit": True},
+    "node": {"jit": True},
+    "python": {"jit": True},
+}
+"""What each runtime class changes against :data:`_STRICT`, and why.
+
+``static``: nothing. A static binary (Go, Rust, busybox) runs under the strict sandbox.
+
+``jit``, ``node``, ``python``: ``MemoryDenyWriteExecute=`` goes. A JIT (V8, the JVM) maps
+its code pages writable and then executable; CPython needs the same the moment a module
+uses libffi closures (``ctypes`` callbacks, cffi), which ``cryptography`` and most database
+drivers do. The three render the same directives today and are separate names because the
+runtime class is what a reader of the recipe needs to know, and a deviation one of them
+later turns out to need belongs to that name alone, not to the other two.
+
+``dotnet``: ``MemoryDenyWriteExecute=`` goes for the same reason, and ``@resources`` comes
+back out of the deny list: the .NET GC and thread pool size themselves with
+``sched_setaffinity`` and ``setrlimit``, both of which that group covers.
+"""
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
@@ -162,6 +190,22 @@ class Hardening:
     def none(cls) -> Hardening:
         """No sandbox at all: renders nothing in a unit (a drop-in turns every knob off)."""
         return _NONE
+
+    @classmethod
+    def preset(cls, name: PresetName, **deviations: Any) -> Hardening:
+        """The sandbox for a runtime class (:data:`PRESETS`), with explicit *deviations*.
+
+        ``"static"`` is :meth:`strict`, what a static binary needs and nothing more.
+        The others relax exactly what their runtime cannot live without, so a service
+        states its runtime class instead of listing directives, and a further relaxation
+        stays visible at the call site: ``Hardening.preset("jit", devices=["/dev/kvm"])``.
+        """
+        if name not in PRESETS:
+            raise ValidationError(
+                f"Hardening.preset({name!r}) is not a runtime class.",
+                hint=f"Pass one of: {', '.join(PRESETS)}.",
+            )
+        return cls.strict(**{**PRESETS[name], **deviations})
 
     def entries(self) -> tuple[tuple[str, str], ...]:
         """The ``[Service]`` directives, in the canonical hardening order (design 2.3)."""
