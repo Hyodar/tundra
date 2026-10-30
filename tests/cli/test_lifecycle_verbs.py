@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
+from tests.helpers import fake_ovmf, run_main, write_recipe_file
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.deploy.qemu import QemuDeployAdapter
 
@@ -129,6 +129,7 @@ def test_deploy_qemu_after_bake_in_separate_invocation(
 ) -> None:
     recipe = write_recipe_file(tmp_path, SSH_RECIPE, monkeypatch)
     assert run_main("bake", str(recipe), *BOTH)[0] == EXIT_OK
+    fake_ovmf(tmp_path, monkeypatch)
     launched: list[list[str]] = []
 
     def fake_qemu(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -163,7 +164,7 @@ def test_deploy_qemu_after_bake_in_separate_invocation(
     disk = tmp_path / "build" / "default" / "disk.qcow2"
     assert argv[argv.index("-m") + 1] == "4GiB"
     assert argv[argv.index("-smp") + 1] == "3"
-    assert f"file={disk},format=qcow2,if=virtio" in argv
+    assert f"file={disk},format=qcow2,if=virtio,snapshot=on" in argv
     assert "user,id=net0,hostfwd=tcp::2299-:22" in argv
     lines = out.splitlines()
     assert lines[0] == "deployed default to qemu"

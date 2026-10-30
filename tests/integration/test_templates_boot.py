@@ -1,11 +1,17 @@
 """Bake the ``minimal`` and ``service`` templates and boot them under QEMU with OVMF.
 
-The payload's UKI (``payload.efi``, which ``qemu.raw`` carries on its ESP) boots through
-``-kernel``, on KVM when ``/dev/kvm`` is usable and on TCG otherwise. The ``service`` template
-boots unchanged and the host fetches its page through a QEMU port forward: network, firewall
-and app end to end.
+Two boot paths, on KVM when ``/dev/kvm`` is usable and on TCG otherwise: the payload's UKI
+(``payload.efi``) through ``-kernel``, and the bake result's ``qemu.raw`` attached as a
+virtio disk (no ``-kernel``) that OVMF boots from the same UKI on its ESP
+(``EFI/BOOT/BOOTX64.EFI``), the way ``deploy --target qemu`` boots it without TDX. The
+``service`` template is baked once, unchanged, and booted both ways; each time the host
+fetches its page through a QEMU port forward (network, firewall and app end to end), and
+each boot's kernel prints the command line the UKI carries plus the harness's console words.
+The templates are ``Image`` files: they lower to a ``production`` variant, and their
+evidence service builds tundra-tools from its source repository, which the bake fetches.
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
-``qemu-system-x86_64`` and OVMF; skipped otherwise.
+``qemu-system-x86_64`` and OVMF; skipped otherwise. ``test_fixture_boot.py`` boots the same
+two paths on the gate 1 fixture, which fetches no source.
 CI's ``boot`` job runs it.
 Run with: uv run pytest tests/integration/test_templates_boot.py -m boot
 """
@@ -13,20 +19,19 @@ Run with: uv run pytest tests/integration/test_templates_boot.py -m boot
 from __future__ import annotations
 
 import os
-import shutil
-import socket
-import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import lower
-from tundravm.declarative.lifecycle import bake_image
+from tundravm.declarative.lifecycle import Artifact, bake_image
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
-from tundravm.testing import BootResult, boot, boot_unavailable, build_unavailable
+from tundravm.testing import BootResult, boot
+from tundravm.testing._boot import BootPath, expected_cmdline
+
+from .support import ESP_TYPE, free_port, read_fat, read_gpt, remove_build, require_boot
 
 pytestmark = [pytest.mark.integration, pytest.mark.boot]
 
@@ -37,33 +42,13 @@ LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 
 APP_PORT = 8080
 """The port the ``service`` template's busybox httpd serves its page on."""
+PAGE = "<!doctype html>\n<title>node</title>\n<h1>node 0.1.0</h1>\n"
+"""What the unchanged ``service`` starter serves."""
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
-def _require_boot() -> None:
-    """Skip without a build host, QEMU or OVMF; fail instead under ``TUNDRAVM_BOOT_REQUIRED=1``
-    (CI's boot job), so a runner that lost a tool cannot pass by skipping."""
-    reason = build_unavailable() or boot_unavailable()
-    if reason is None:
-        return
-    if os.environ.get("TUNDRAVM_BOOT_REQUIRED") == "1":
-        pytest.fail(f"cannot boot here: {reason}")
-    pytest.skip(reason)
-
-
-def _bake_and_boot(
-    tmp: Path,
-    template: str,
-    expect_units: tuple[str, ...],
-    forward: Mapping[int, int] | None = None,
-    wait_http: Sequence[str] = (),
-) -> BootResult:
-    """Bake *template*'s ``default`` variant, unchanged, and boot its UKI (``payload.efi``)."""
+def _bake(tmp: Path, template: str) -> Iterator[Artifact]:
+    """Bake *template*'s ``production`` variant, unchanged: its ``qemu`` artifact
+    (``qemu.raw``, booting ``payload.efi``), removed with the build afterwards."""
     recipe_path = tmp / "node.py"
     recipe_path.write_text(
         render_recipe_template(
@@ -71,61 +56,102 @@ def _bake_and_boot(
         ),
         encoding="utf-8",
     )
-    recipe = load_file(recipe_path).recipe
+    lowered = load_file(recipe_path).lowered()
     out = tmp / "build"
     try:
         backend = LocalLinuxBackend()
-        _, artifacts = bake_image(
-            lower(recipe), ("default",), locked=None, backend=backend, build=out
-        )
+        _, artifacts = bake_image(lowered, ("production",), locked=None, backend=backend, build=out)
         (artifact,) = (artifact for artifact in artifacts if artifact.target == "qemu")
         assert artifact.path.name == "qemu.raw", artifact.path
         uki = artifact.boot_payload
         assert uki is not None and uki.name == "payload.efi", artifact
-        log = Path(LOG_DIR or tmp) / f"{template}.console.log"
-        result = boot(
-            uki,
-            timeout=BOOT_TIMEOUT,
-            memory="4G",
-            expect_units=expect_units,
-            log=log,
-            forward=forward,
-            wait_http=wait_http,
-        )
-        print(result.summary(tail=400))  # recorded in the test log
-        return result
+        yield artifact
     finally:
-        if shutil.which("sudo") is not None:
-            subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)
-        else:
-            shutil.rmtree(out, ignore_errors=True)
+        remove_build(out)
+
+
+def _boot(
+    artifact: Artifact,
+    logs: Path,
+    name: str,
+    via: BootPath,
+    expect_units: tuple[str, ...],
+    forward: Mapping[int, int] | None = None,
+    wait_http: Sequence[str] = (),
+) -> BootResult:
+    """Boot *artifact* through *via*, its console in ``<name>.console.log`` under
+    ``TUNDRAVM_BOOT_LOGS`` (else *logs*)."""
+    log = Path(LOG_DIR or logs) / f"{name}.console.log"
+    result = boot(
+        artifact,
+        via=via,
+        timeout=BOOT_TIMEOUT,
+        memory="4G",
+        expect_units=expect_units,
+        log=log,
+        forward=forward,
+        wait_http=wait_http,
+    )
+    print(" ".join(result.command))  # recorded in the test log
+    print(result.summary(tail=400))
+    return result
 
 
 @pytest.fixture(scope="module")
-def minimal_boot(tmp_path_factory: pytest.TempPathFactory) -> BootResult:
-    """The ``minimal`` template baked and booted once."""
-    _require_boot()
-    return _bake_and_boot(tmp_path_factory.mktemp("minimal"), "minimal", ("hello.service",))
+def minimal_artifact(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Artifact]:
+    """The ``minimal`` template baked once."""
+    require_boot()
+    yield from _bake(tmp_path_factory.mktemp("minimal"), "minimal")
+
+
+@pytest.fixture(scope="module")
+def minimal_boot(
+    minimal_artifact: Artifact, tmp_path_factory: pytest.TempPathFactory
+) -> BootResult:
+    """The ``minimal`` template's UKI booted through ``-kernel``."""
+    logs = tmp_path_factory.mktemp("minimal-logs")
+    return _boot(minimal_artifact, logs, "minimal", "kernel", ("hello.service",))
+
+
+@pytest.fixture(scope="module")
+def service_artifact(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Artifact]:
+    """The ``service`` template (TeeBase, strict sandbox, curated modules) baked once,
+    unchanged, for both boot paths."""
+    require_boot()
+    yield from _bake(tmp_path_factory.mktemp("service"), "service")
 
 
 SERVICE_URL: dict[str, str] = {}
-"""The URL the ``service`` boot fetched its page from (a free host port, per run)."""
+"""The URL each ``service`` boot fetched its page from (a free host port, per boot)."""
+
+
+def _service_boot(artifact: Artifact, logs: Path, via: BootPath) -> BootResult:
+    host = free_port()
+    SERVICE_URL[via] = url = f"http://127.0.0.1:{host}/"
+    name = "service" if via == "kernel" else "service-disk"
+    forward = {host: APP_PORT}
+    return _boot(artifact, logs, name, via, ("app",), forward=forward, wait_http=(url,))
 
 
 @pytest.fixture(scope="module")
-def service_boot(tmp_path_factory: pytest.TempPathFactory) -> BootResult:
-    """The ``service`` template (TeeBase, strict sandbox, curated modules) baked unchanged and
-    booted, its page fetched from the host through a forward to the app port."""
-    _require_boot()
-    host = _free_port()
-    SERVICE_URL["page"] = url = f"http://127.0.0.1:{host}/"
-    return _bake_and_boot(
-        tmp_path_factory.mktemp("service"),
-        "service",
-        ("app",),
-        forward={host: APP_PORT},
-        wait_http=(url,),
-    )
+def service_boot(
+    service_artifact: Artifact, tmp_path_factory: pytest.TempPathFactory
+) -> BootResult:
+    """The ``service`` template's UKI booted through ``-kernel``, its page fetched."""
+    return _service_boot(service_artifact, tmp_path_factory.mktemp("service-logs"), "kernel")
+
+
+@pytest.fixture(scope="module")
+def service_disk_boot(
+    service_artifact: Artifact, tmp_path_factory: pytest.TempPathFactory
+) -> BootResult:
+    """The ``service`` template's ``qemu.raw`` booted through its ESP, its page fetched."""
+    return _service_boot(service_artifact, tmp_path_factory.mktemp("service-logs"), "disk")
+
+
+def _uki(artifact: Artifact) -> Path:
+    assert artifact.boot_payload is not None
+    return artifact.boot_payload
 
 
 def test_minimal_template_boots_to_its_target(minimal_boot: BootResult) -> None:
@@ -133,6 +159,14 @@ def test_minimal_template_boots_to_its_target(minimal_boot: BootResult) -> None:
     minimal_boot.assert_booted()
     assert {"minimal.target", "hello.service"} <= set(minimal_boot.started)
     assert minimal_boot.failed == ()
+
+
+def test_minimal_template_boots_the_ukis_cmdline(
+    minimal_artifact: Artifact, minimal_boot: BootResult
+) -> None:
+    """The kernel's command line (``/proc/cmdline``) is the UKI's ``.cmdline`` with the
+    SMBIOS console words appended: ``-kernel`` passes no load options of its own."""
+    assert minimal_boot.kernel_cmdline == expected_cmdline(_uki(minimal_artifact))
 
 
 def test_service_template_boots_with_its_app_running(service_boot: BootResult) -> None:
@@ -145,8 +179,7 @@ def test_service_template_boots_with_its_app_running(service_boot: BootResult) -
 def test_service_template_serves_its_page_to_the_host(service_boot: BootResult) -> None:
     """busybox httpd answers through QEMU's forward, so DHCP, the nftables opening for the
     app port and the sandboxed service all work: the unchanged starter is reachable."""
-    page = service_boot.http_get(SERVICE_URL["page"])
-    assert page == "<!doctype html>\n<title>node</title>\n<h1>node 0.1.0</h1>\n"
+    assert service_boot.http_get(SERVICE_URL["kernel"]) == PAGE
 
 
 def test_service_template_boots_without_tdx(service_boot: BootResult) -> None:
@@ -160,3 +193,48 @@ def test_service_template_boots_without_tdx(service_boot: BootResult) -> None:
         if "tdx" in line.lower() and any(word in line.lower() for word in ("fail", "error"))
     ]
     assert complaints == [], complaints
+
+
+def test_service_template_boots_the_ukis_cmdline(
+    service_artifact: Artifact, service_boot: BootResult
+) -> None:
+    assert service_boot.kernel_cmdline == expected_cmdline(_uki(service_artifact))
+
+
+def test_service_disk_esp_is_a_fat32_the_firmware_reads(service_artifact: Artifact) -> None:
+    """``qemu.raw``'s ESP is FAT32 by cluster count (65525 or more), which is how UEFI
+    firmware types a FAT: a smaller one is not mounted and the disk does not boot."""
+    with service_artifact.path.open("rb") as disk:
+        (esp,) = [part for part in read_gpt(disk) if part.type == ESP_TYPE]
+        disk.seek(esp.offset)
+        fat = read_fat(disk.read(512))
+    print(f"ESP {esp.size} bytes: {fat}")
+    assert fat.uefi_fat32, f"ESP {esp.size} bytes: {fat}"
+
+
+def test_service_disk_boots_through_its_esp(
+    service_artifact: Artifact, service_disk_boot: BootResult
+) -> None:
+    """``qemu.raw`` attached as a virtio disk on a snapshot, no ``-kernel``: OVMF finds the
+    UKI at ``EFI/BOOT/BOOTX64.EFI`` on the ESP and the image boots to its target with the
+    app running and nothing failed, as through ``-kernel``."""
+    command = service_disk_boot.command
+    assert "-kernel" not in command
+    assert f"file={service_artifact.path},format=raw,if=virtio,snapshot=on" in command
+    assert any(arg.startswith("if=pflash,format=raw,readonly=on,") for arg in command)
+    service_disk_boot.assert_booted()
+    assert {"minimal.target", "app.service"} <= set(service_disk_boot.started)
+    assert service_disk_boot.failed == ()
+    assert service_disk_boot.fatal == ()
+
+
+def test_service_disk_serves_its_page_to_the_host(service_disk_boot: BootResult) -> None:
+    assert service_disk_boot.http_get(SERVICE_URL["disk"]) == PAGE
+
+
+def test_service_disk_boots_the_ukis_cmdline(
+    service_artifact: Artifact, service_disk_boot: BootResult
+) -> None:
+    """Booted from the ESP, systemd-stub still gives the kernel the UKI's own command line
+    (OVMF's fallback boot passes no load options that would replace it)."""
+    assert service_disk_boot.kernel_cmdline == expected_cmdline(_uki(service_artifact))

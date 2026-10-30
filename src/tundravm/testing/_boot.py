@@ -1,11 +1,12 @@
 """Boot a baked image under QEMU and read its serial console: :func:`boot`.
 
 The image is booted the way ``deploy --target qemu`` boots it without TDX: OVMF from
-pflash and the UKI through ``-kernel`` (a disk image through ``-drive``, on a
-throwaway snapshot). Nothing is added to the image: the console settings the harness
+pflash and either the UKI through ``-kernel`` or the disk (``qemu.raw``) through ``-drive``
+on a throwaway snapshot, which OVMF boots from the UKI on its ESP
+(``EFI/BOOT/BOOTX64.EFI``). Nothing is added to the image: the console settings the harness
 needs reach the kernel through SMBIOS (``io.systemd.stub.kernel-cmdline-extra``, the
 way ``mkosi vm`` passes them), which systemd-stub appends to the UKI's own command line
-when Secure Boot is off.
+when Secure Boot is off; :func:`expected_cmdline` is the line the kernel should then print.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from tundravm.deploy.qemu import OVMF_CODE_PATHS, OVMF_VARS_PATHS
+from tundravm.measure import pe
 
 QEMU = "qemu-system-x86_64"
 BOOT_TARGET = "minimal.target"
@@ -51,8 +53,10 @@ FATAL = (
     "Failed to execute /init",
     "No working init found",
     "Freezing execution.",
+    "UEFI Interactive Shell",
 )
-"""Console text that ends the boot at once: a panic, emergency mode, a dead PID 1."""
+"""Console text that ends the boot at once: a panic, emergency mode, a dead PID 1, or OVMF
+falling through to its shell (no boot option loaded: a disk whose ESP it cannot read)."""
 
 _ANSI = re.compile(r"\x1b\[[0-9;:?]*[A-Za-z]|\r")
 _UNIT = r"(\S+?\.(?:service|socket|target|mount|timer|path|swap|automount|slice|scope|device))"
@@ -66,11 +70,33 @@ _FINISHED = re.compile(rf"\bFinished {_UNIT}{_END}")
 _STOPPED = re.compile(rf"\bStopped {_UNIT}{_END}|(?<!\S){_UNIT}: Deactivated successfully")
 _SOURCE = re.compile(r"^\[\s*[0-9.]+\]\s+([^\s\[:]+)(?:\[[0-9]+\])?:\s")
 """The identifier of a journal line forwarded to the console (``nft[155]: ...``)."""
+_KERNEL_CMDLINE = re.compile(r"^\[\s*[0-9.]+\]\s+Kernel command line: (.*?)\s*$", re.MULTILINE)
+"""The command line the kernel booted with, as it prints it (the text of ``/proc/cmdline``)."""
 
 
 def clean_console(raw: str) -> str:
     """*raw* serial output without ANSI escapes and carriage returns."""
     return _ANSI.sub("", raw)
+
+
+def kernel_cmdline(text: str) -> str | None:
+    """The kernel's ``Kernel command line:`` in console *text* (the last one, should the
+    console hold two boots); ``None`` when the kernel printed none."""
+    found = _KERNEL_CMDLINE.findall(clean_console(text))
+    return found[-1] if found else None
+
+
+def uki_cmdline(uki: str | os.PathLike[str]) -> str:
+    """The command line *uki* carries in its ``.cmdline`` section (``""`` without one), as
+    systemd-stub reads it: up to the first NUL, surrounding whitespace dropped."""
+    section = pe.parse(Path(uki).read_bytes()).section(".cmdline") or b""
+    return section.split(b"\0", 1)[0].decode("utf-8").strip()
+
+
+def expected_cmdline(uki: str | os.PathLike[str], cmdline: Sequence[str] = CONSOLE_CMDLINE) -> str:
+    """The command line a boot of *uki* with *cmdline* through SMBIOS gives the kernel:
+    systemd-stub appends the SMBIOS words to the UKI's own line, after one space."""
+    return " ".join(part for part in (uki_cmdline(uki), " ".join(cmdline)) if part)
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +220,11 @@ class BootResult:
     http: tuple[HttpResponse, ...] = ()
     """The ``wait_http`` URLs' answers, in order; one that never answered is in ``missing``."""
 
+    @property
+    def kernel_cmdline(self) -> str | None:
+        """The command line the kernel printed (:func:`kernel_cmdline`)."""
+        return kernel_cmdline(self.console)
+
     def http_get(self, url: str) -> str:
         """The body *url* (a ``wait_http`` URL) answered with; ``AssertionError`` when it
         never answered with a 2xx."""
@@ -244,7 +275,13 @@ class _HasPath(Protocol):
 
 
 Bootable = str | os.PathLike[str] | _HasPath
-"""A UKI (``.efi``) or disk image path, or an :class:`~tundravm.declarative.lifecycle.Artifact`."""
+"""A UKI (``.efi``) or disk image path, the directory holding one, or an
+:class:`~tundravm.declarative.lifecycle.Artifact` (``path`` the disk, ``boot_payload`` its UKI)."""
+
+BootPath = Literal["auto", "kernel", "disk"]
+"""How :func:`boot` starts *artifact*: ``"kernel"`` passes the UKI to ``-kernel``, ``"disk"``
+attaches the disk image and lets OVMF boot its ESP, ``"auto"`` goes by the path's suffix
+(an artifact's ``path``, a directory's single ``.efi``)."""
 
 
 def find_ovmf(firmware: str | os.PathLike[str] | None = None) -> tuple[Path, Path | None]:
@@ -278,15 +315,33 @@ def boot_unavailable(
     return None
 
 
-def _image_path(artifact: Bootable) -> Path:
-    path = Path(artifact.path if hasattr(artifact, "path") else artifact)
+_DISK_SUFFIXES = (".raw", ".qcow2", ".vhd", ".img")
+
+
+def _image_path(artifact: Bootable, via: BootPath = "auto") -> Path:
+    """The file :func:`boot` starts: *artifact*'s UKI for ``"kernel"`` (an artifact's
+    ``boot_payload``), its disk for ``"disk"``, by suffix for ``"auto"``."""
+    payload = getattr(artifact, "boot_payload", None)
+    if via == "kernel" and payload is not None:
+        path = Path(payload)
+    else:
+        path = Path(artifact.path if hasattr(artifact, "path") else artifact)
     if path.is_dir():
-        found = sorted(path.glob("*.efi"))
+        if via == "disk":
+            found = sorted(p for p in path.iterdir() if p.suffix.lower() in _DISK_SUFFIXES)
+            kind = "disk image"
+        else:
+            found = sorted(path.glob("*.efi"))
+            kind = ".efi"
         if len(found) != 1:
-            raise ValueError(f"{path} holds {len(found)} .efi files: name the image to boot")
+            raise ValueError(f"{path} holds {len(found)} {kind} files: name the image to boot")
         path = found[0]
     if not path.is_file():
         raise FileNotFoundError(f"image to boot not found: {path}")
+    is_uki = path.suffix.lower() == ".efi"
+    if (via == "kernel" and not is_uki) or (via == "disk" and is_uki):
+        want = "a UKI (.efi)" if via == "kernel" else "a disk image"
+        raise ValueError(f"boot via {via!r} needs {want}, not {path}")
     return path
 
 
@@ -371,6 +426,7 @@ def boot(
     extra_args: Sequence[str] = (),
     forward: Mapping[int, int] | None = None,
     wait_http: Sequence[str] = (),
+    via: BootPath = "auto",
 ) -> BootResult:
     """Boot *artifact* under QEMU with OVMF and wait for *markers* and *expect_units*.
 
@@ -381,12 +437,14 @@ def boot(
     ``"auto"`` uses KVM when ``/dev/kvm`` is usable, else TCG. *forward* maps host ports
     (``127.0.0.1``) to guest ports; once the markers and units are in, the boot also waits
     until each *wait_http* URL (``http://127.0.0.1:HOST/``) answers with a 2xx, so the
-    answers (:meth:`BootResult.http_get`) prove the network, firewall and service. Raises
-    :class:`BootUnavailable` when QEMU or OVMF is missing.
+    answers (:meth:`BootResult.http_get`) prove the network, firewall and service. *via*
+    picks the boot path (:data:`BootPath`): ``"disk"`` boots a bake result's ``qemu.raw``
+    through its ESP with no ``-kernel``. Raises :class:`BootUnavailable` when QEMU or OVMF
+    is missing.
     """
     if shutil.which(qemu) is None:
         raise BootUnavailable(f"{qemu} is not installed")
-    image = _image_path(artifact)
+    image = _image_path(artifact, via)
     code, store = find_ovmf(firmware)
     log_path = (
         Path(log)

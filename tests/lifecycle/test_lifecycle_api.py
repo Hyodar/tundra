@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import tundravm
+from tests.helpers import fake_ovmf
 from tundravm._source import Source
 from tundravm.backends import Requirement
 from tundravm.declarative import (
@@ -358,8 +359,9 @@ def test_measure_rejects_simulated_unless_allowed(tmp_path: Path) -> None:
     assert found.artifact_digest == artifact.sha256 and found.values
 
 
-def test_deploy_with_fake_qemu_runner(tmp_path: Path) -> None:
+def test_deploy_with_fake_qemu_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     artifact = next(a for a in _baked(tmp_path) if a.target == "qemu")
+    fake_ovmf(tmp_path, monkeypatch)
     seen: list[Sequence[str]] = []
 
     def fake_qemu(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:

@@ -22,6 +22,18 @@ EXAMPLE_RECIPES = tuple(
 """The top-level example recipe files (the surge flagship lives in its own directory)."""
 
 
+def fake_ovmf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """An OVMF code image and variable store under *tmp_path* that the QEMU deploy adapter
+    finds instead of the host's (a test that deploys without TDX runs where none is installed)."""
+    code, store = tmp_path / "ovmf" / "OVMF_CODE.fd", tmp_path / "ovmf" / "OVMF_VARS.fd"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_bytes(b"code")
+    store.write_bytes(b"vars")
+    monkeypatch.setattr("tundravm.deploy.qemu.OVMF_CODE_PATHS", (str(code),))
+    monkeypatch.setattr("tundravm.deploy.qemu.OVMF_VARS_PATHS", (str(store),))
+    return code, store
+
+
 def source_dir(
     name: str,
     pin: str,

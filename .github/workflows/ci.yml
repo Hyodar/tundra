@@ -53,8 +53,11 @@ jobs:
         run: uv run tundravm compile examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi --check
 
   boot:
-    # Bakes the minimal and service templates into UKIs and boots them under QEMU with
-    # OVMF (KVM when the runner exposes /dev/kvm, TCG otherwise); no TDX here.
+    # Bakes the minimal and service templates and boots them under QEMU with OVMF (KVM when
+    # the runner exposes /dev/kvm, TCG otherwise; no TDX here): payload.efi through -kernel,
+    # and the service template's qemu.raw as a disk OVMF boots through its ESP. The
+    # templates are Image files whose evidence service builds tundra-tools from its source
+    # repository: the bake fetches it, so this job needs read access to that repository.
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -102,10 +105,10 @@ jobs:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/boot-logs
-        run: uv run pytest tests/integration/test_templates_boot.py -m boot -v -rs
+        run: uv run pytest tests/integration/test_templates_boot.py -m boot -v -rs -rP
 
       - name: Upload console logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: boot-console-logs

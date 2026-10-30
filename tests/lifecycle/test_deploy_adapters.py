@@ -203,8 +203,32 @@ def test_qemu_firmware_param_replaces_the_searched_image(
     disk = _qemu_request(tmp_path / "disk", name="disk.qcow2", firmware=str(own))
     QemuDeployAdapter(runner=run).deploy(disk)
     (raw,) = run.calls
-    assert raw[raw.index("-bios") + 1] == str(own)
-    assert not any("if=pflash" in arg for arg in raw)
+    assert f"file={own},if=pflash,format=raw,readonly=on" in raw and "-bios" not in raw
+    assert any(arg.endswith("qemu-ovmf-vars.fd,if=pflash,format=raw") for arg in raw)
+
+
+def test_qemu_boots_the_raw_disk_through_ovmf_on_a_snapshot(
+    tmp_path: Path, firmware: dict[str, str]
+) -> None:
+    """Without TDX, qemu.raw boots like the UKI does, from OVMF pflash, but through its ESP:
+    no -kernel, the disk attached read-only to the build (snapshot=on)."""
+    run = Recorder()
+    request = _qemu_request(tmp_path, name="qemu.raw")
+    result = QemuDeployAdapter(runner=run).deploy(request)
+
+    run_dir = tmp_path / "build" / "dev"
+    (cmd,) = run.calls
+    assert "-kernel" not in cmd and "-bios" not in cmd
+    assert f"file={firmware['OVMF_CODE.fd']},if=pflash,format=raw,readonly=on" in cmd
+    assert f"file={run_dir}/qemu-ovmf-vars.fd,if=pflash,format=raw" in cmd
+    assert f"file={request.artifact_path},format=raw,if=virtio,snapshot=on" in cmd
+    assert result.metadata["is_uki"] == "false"
+
+    run = Recorder()
+    QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path / "tdx", "qemu.raw", tdx="true"))
+    (tdx,) = run.calls
+    assert tdx[tdx.index("-bios") + 1] == firmware["OVMF.fd"]
+    assert not any("if=pflash" in arg or "snapshot=on" in arg for arg in tdx)
 
 
 def test_qemu_refuses_a_missing_firmware_before_launching(

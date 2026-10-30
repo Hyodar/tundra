@@ -2,7 +2,8 @@
 
 Launches a QEMU VM with the baked artifact, supporting:
 - OVMF firmware for UEFI boot (TDVF via ``-bios`` for a TDX guest), or ``firmware=PATH``
-- UKI (Unified Kernel Image) via -kernel flag
+- UKI (Unified Kernel Image) via -kernel flag, or the raw disk (``qemu.raw``) through
+  ``-drive`` on a snapshot, which OVMF boots from the UKI on its ESP
 - TDX confidential computing support
 - Port forwarding for every declared ``Secrets`` port, and for SSH when the image declares
   it (``ssh_guest_port``, from ``SshAccess``)
@@ -145,12 +146,12 @@ class QemuDeployAdapter:
             cmd.extend(["-object", "tdx-guest,id=tdx0"])
         cmd.extend(["-cpu", "host", "-m", memory, "-smp", cpus, "-no-reboot"])
 
-        # Firmware: TDVF through -bios for TDX (it cannot run from pflash), else OVMF pflash;
-        # a given firmware replaces the searched one (-bios for a disk image without TDX)
+        # Firmware: TDVF through -bios for TDX (it cannot run from pflash), else OVMF pflash
+        # for a UKI and a disk alike; a given firmware replaces the searched code image
         if enable_tdx:
             tdvf = firmware or _find_firmware(TDVF_PATHS, "TDVF (OVMF.fd with TDX support)")
             cmd.extend(["-bios", tdvf])
-        elif is_uki:
+        else:
             ovmf_code = firmware or _find_firmware(OVMF_CODE_PATHS, "OVMF_CODE")
             # The VARS store is written to: boot from a per-variant copy, not /usr/share
             ovmf_vars = _run_dir(artifact_path.absolute(), request.profile) / VARS_COPY
@@ -164,13 +165,14 @@ class QemuDeployAdapter:
                     f"file={ovmf_vars},if=pflash,format=raw",
                 ]
             )
-        elif firmware:
-            cmd.extend(["-bios", firmware])
         if is_uki:
             cmd.extend(["-kernel", str(artifact_path)])
         else:
+            # The disk is a build artifact: without TDX it boots on a snapshot, never written
             disk_format = _disk_format_for_path(artifact_path)
-            cmd.extend(["-drive", f"file={artifact_path},format={disk_format},if=virtio"])
+            snapshot = "" if enable_tdx else ",snapshot=on"
+            drive = f"file={artifact_path},format={disk_format},if=virtio{snapshot}"
+            cmd.extend(["-drive", drive])
 
         # Data disks: one sparse raw file per serial, kept beside the artifact across deploys
         disk_files: list[str] = []

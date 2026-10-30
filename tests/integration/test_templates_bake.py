@@ -94,7 +94,7 @@ def _sudo_readlink(path: Path) -> str:
 
 @pytest.fixture(scope="module")
 def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """The ``service`` template's ``default`` variant baked once, its payload unpacked into
+    """The ``service`` template's ``production`` variant baked once, its payload unpacked into
     ``<build>/root``."""
     if build_unavailable() is not None or not _sudo_works():
         pytest.skip("needs a Linux build host and non-interactive sudo")
@@ -114,8 +114,8 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     backend = LocalLinuxBackend()
     out = tmp_path / "build"
     try:
-        bake_image(loaded.lowered(), ("default",), locked=None, backend=backend, build=out)
-        output = out / "default" / "output"
+        bake_image(loaded.lowered(), ("production",), locked=None, backend=backend, build=out)
+        output = out / "production" / "output"
         assert (output / "qemu.raw").is_file(), sorted(p.name for p in output.iterdir())
         _unpack_payload(output, out / "root")
         yield out
@@ -369,13 +369,13 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             in_image=False,
         ),
     )
-    # The checks read the payload; the default variant declares all three disks.
+    # The checks read the payload; the production variant declares all three disks.
     recipe = replace(recipe, items=(*recipe.items, *repositories))
     backend = _Capturing(LocalLinuxBackend())
     out = tmp_path / "build"
     try:
         try:
-            bake_image(lower(recipe), ("default",), locked=None, backend=backend, build=out)
+            bake_image(lower(recipe), ("production",), locked=None, backend=backend, build=out)
         except BackendExecutionError:
             print("\n".join(backend.lines[-80:]))  # pytest shows it with the failure
             raise
@@ -398,7 +398,7 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         for suite in ("trixie-backports", "sid", "trixie-updates", "bookworm-security"):
             assert f" {suite} InRelease" in fetched, suite
 
-        output = out / "default" / "output"
+        output = out / "production" / "output"
         names = {p.name for p in output.iterdir()}
         assert {"payload.efi", "qemu.raw", "azure.vhd", "gcp.tar.gz"} <= names
         # the converters leave mkosi's raw wrappers in place; the bake drops them afterwards

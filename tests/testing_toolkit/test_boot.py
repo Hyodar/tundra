@@ -16,9 +16,17 @@ from typing import Any
 
 import pytest
 
+from tests.measure.test_replay import _pe
 from tundravm import testing
 from tundravm.testing import BootResult, BootUnavailable, boot, boot_unavailable, scan_console
-from tundravm.testing._boot import CONSOLE_CMDLINE, find_ovmf, qemu_command
+from tundravm.testing._boot import (
+    CONSOLE_CMDLINE,
+    expected_cmdline,
+    find_ovmf,
+    kernel_cmdline,
+    qemu_command,
+    uki_cmdline,
+)
 from tundravm.testing.pytest_plugin import BootRunner
 
 FAKE_QEMU = """\
@@ -245,6 +253,58 @@ def test_boot_takes_an_artifact_or_the_directory_holding_its_uki(fake: Fake) -> 
         boot(fake.image.parent, qemu=str(fake.qemu), firmware=fake.code)
     with pytest.raises(FileNotFoundError):
         boot(fake.image.parent / "missing.efi", qemu=str(fake.qemu), firmware=fake.code)
+
+
+def test_boot_via_disk_attaches_the_bake_results_disk_and_no_kernel(fake: Fake) -> None:
+    disk = fake.image.parent / "qemu.raw"
+    disk.write_bytes(bytes(512))
+
+    class Artifact:
+        path = disk
+        boot_payload = fake.image
+
+    def argv(artifact: object, via: str) -> tuple[str, ...]:
+        options: dict[str, Any] = {"qemu": str(fake.qemu), "firmware": fake.code, "timeout": 0}
+        return boot(artifact, via=via, **options).command  # type: ignore[arg-type]
+
+    for artifact in (Artifact(), disk, disk.parent):
+        command = argv(artifact, "disk")
+        assert "-kernel" not in command
+        assert f"file={disk},format=raw,if=virtio,snapshot=on" in command
+        assert f"if=pflash,format=raw,readonly=on,file={fake.code}" in command
+    kernel = argv(Artifact(), "kernel")
+    assert kernel[kernel.index("-kernel") + 1] == str(fake.image)
+    assert "-kernel" not in argv(Artifact(), "auto")  # an artifact's path is its disk
+    with pytest.raises(ValueError, match="needs a disk image"):
+        argv(fake.image, "disk")
+    with pytest.raises(ValueError, match="needs a UKI"):
+        argv(disk, "kernel")
+
+
+def test_the_kernel_cmdline_is_the_ukis_with_the_smbios_words(tmp_path: Path) -> None:
+    uki = tmp_path / "payload.efi"
+    cmdline = b"roothash=ab systemd.volatile=overlay\0"
+    uki.write_bytes(_pe({".linux": b"kernel", ".cmdline": cmdline}))
+    assert uki_cmdline(uki) == "roothash=ab systemd.volatile=overlay"
+    assert expected_cmdline(uki, ("console=ttyS0",)) == (
+        "roothash=ab systemd.volatile=overlay console=ttyS0"
+    )
+    bare = tmp_path / "bare.efi"
+    bare.write_bytes(_pe({".linux": b"kernel"}))
+    assert uki_cmdline(bare) == "" and expected_cmdline(bare) == " ".join(CONSOLE_CMDLINE)
+
+    console = (
+        "[    0.000000] Command line: early\r\n"
+        "[    0.000000] Kernel command line: console=ttyS0 panic=-1  \r\n"
+        "[    1.000000] Run /init as init process\r\n"
+    )
+    assert kernel_cmdline(console) == "console=ttyS0 panic=-1"
+    assert kernel_cmdline("Linux version 6.12\n") is None
+
+
+def test_boot_result_reads_the_kernel_cmdline_off_the_console(fake: Fake) -> None:
+    result = fake.run("[    0.000000] Kernel command line: a=1 b\r\n", *BOOTED, hang=0)
+    assert result.kernel_cmdline == "a=1 b"
 
 
 def test_boot_without_qemu_is_unavailable(fake: Fake, boot: BootRunner) -> None:

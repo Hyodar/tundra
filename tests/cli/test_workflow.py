@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import fake_ovmf
 from tundravm.declarative import read_artifacts
 from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.testing import recipe_file, run_cli
@@ -153,6 +154,7 @@ def test_cli_bake_measure_deploy_doctor(
     def fake_qemu(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(list(argv), 0, "", "")
 
+    fake_ovmf(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "tundravm.declarative.lifecycle.get_adapter",
         lambda target: QemuDeployAdapter(runner=fake_qemu),
