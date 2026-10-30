@@ -93,6 +93,8 @@ def test_cloud_selection_builds_the_vhd_and_the_gcp_archive(tmp_path: Path) -> N
     artifacts = result.profiles["cloud"].artifacts
     assert set(artifacts) == {"azure", "gcp"}
     assert {ref.boot_payload for ref in artifacts.values()} == {output / "payload.efi"}
+    # mkosi's own raw disks stay through its postoutput step; the bake drops them after
+    assert not (output / "azure.raw").exists() and not (output / "gcp.raw").exists()
 
     vhd = (output / "azure.vhd").read_bytes()
     assert vhd[-512:][:8] == b"conectix" and (len(vhd) - 512) % (1 << 20) == 0

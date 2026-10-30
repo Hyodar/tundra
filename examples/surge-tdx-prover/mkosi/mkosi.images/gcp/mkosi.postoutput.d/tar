@@ -1,11 +1,12 @@
 #!/bin/bash
 # gcp.raw as Compute Engine imports it: disk.raw of a whole number of GiB in an oldgnu tar.gz,
 # holes found by reading, owner and dates fixed and gzip without name or timestamp.
+# It archives a sparse copy: mkosi still reads gcp.raw after the postoutput scripts.
 set -euo pipefail
 TMP="$OUTPUTDIR/gcp-tmp"
 rm -rf "$TMP"
 mkdir -p "$TMP"
-mv "$OUTPUTDIR/gcp.raw" "$TMP/disk.raw"
+cp --sparse=always --reflink=auto "$OUTPUTDIR/gcp.raw" "$TMP/disk.raw"
 python3 - "$TMP/disk.raw" 1073741824 <<'PY'
 import struct, sys, zlib
 # Grow a GPT disk to a multiple of UNIT bytes: move the backup table and header to the new

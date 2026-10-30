@@ -25,7 +25,7 @@ from tundravm._source import (
     deps_problem,
     is_fetched,
 )
-from tundravm.backends.base import BuildBackend
+from tundravm.backends.base import BuildBackend, drop_intermediates
 from tundravm.check import check
 from tundravm.compiler import PHASE_ORDER, MkosiEmission
 from tundravm.errors import LintError, LockfileError, PolicyError, StateError, ValidationError
@@ -138,6 +138,7 @@ def bake(
                 message=f"Starting variant bake via {backend.name} backend.",
             )
             result = _build(backend, request, progress)
+            drop_intermediates(result.artifacts)  # azure.raw, gcp.raw: mkosi's, not artifacts
             digests = _hash_artifacts(result, request, progress)
             _hash_manifests(result)
             _hash_boot_payloads(result)

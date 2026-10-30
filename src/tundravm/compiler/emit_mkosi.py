@@ -265,9 +265,14 @@ AZURE_CONVERTER = f"""\
 #!/bin/bash
 # azure.raw as Azure takes it: a fixed VHD of a whole number of MiB, its footer's timestamp
 # pinned to SOURCE_DATE_EPOCH and its unique id derived from the disk, so it reproduces.
+# It converts a sparse copy: mkosi still reads azure.raw after the postoutput scripts.
 set -euo pipefail
-DISK="$OUTPUTDIR/azure.raw"
+TMP="$OUTPUTDIR/azure-tmp"
+DISK="$TMP/disk.raw"
 VHD="$OUTPUTDIR/azure.vhd"
+rm -rf "$TMP"
+mkdir -p "$TMP"
+cp --sparse=always --reflink=auto "$OUTPUTDIR/azure.raw" "$DISK"
 python3 - "$DISK" 1048576 <<'PY'
 {_GROW_GPT}PY
 qemu-img convert -O vpc -o subformat=fixed,force_size "$DISK" "$VHD"
@@ -285,7 +290,7 @@ with open(path, "r+b") as vhd:
     vhd.seek(-512, 2)
     vhd.write(footer)
 PY
-rm -f "$DISK"
+rm -rf "$TMP"
 """
 """``mkosi.images/azure/mkosi.postoutput.d/vhd``: the reproducible fixed-VHD converter."""
 
@@ -293,11 +298,12 @@ GCP_CONVERTER = f"""\
 #!/bin/bash
 # gcp.raw as Compute Engine imports it: disk.raw of a whole number of GiB in an oldgnu tar.gz,
 # holes found by reading, owner and dates fixed and gzip without name or timestamp.
+# It archives a sparse copy: mkosi still reads gcp.raw after the postoutput scripts.
 set -euo pipefail
 TMP="$OUTPUTDIR/gcp-tmp"
 rm -rf "$TMP"
 mkdir -p "$TMP"
-mv "$OUTPUTDIR/gcp.raw" "$TMP/disk.raw"
+cp --sparse=always --reflink=auto "$OUTPUTDIR/gcp.raw" "$TMP/disk.raw"
 python3 - "$TMP/disk.raw" 1073741824 <<'PY'
 {_GROW_GPT}PY
 EPOCH="${{SOURCE_DATE_EPOCH:-0}}"

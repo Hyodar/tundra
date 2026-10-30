@@ -1,9 +1,14 @@
 #!/bin/bash
 # azure.raw as Azure takes it: a fixed VHD of a whole number of MiB, its footer's timestamp
 # pinned to SOURCE_DATE_EPOCH and its unique id derived from the disk, so it reproduces.
+# It converts a sparse copy: mkosi still reads azure.raw after the postoutput scripts.
 set -euo pipefail
-DISK="$OUTPUTDIR/azure.raw"
+TMP="$OUTPUTDIR/azure-tmp"
+DISK="$TMP/disk.raw"
 VHD="$OUTPUTDIR/azure.vhd"
+rm -rf "$TMP"
+mkdir -p "$TMP"
+cp --sparse=always --reflink=auto "$OUTPUTDIR/azure.raw" "$DISK"
 python3 - "$DISK" 1048576 <<'PY'
 import struct, sys, zlib
 # Grow a GPT disk to a multiple of UNIT bytes: move the backup table and header to the new
@@ -60,4 +65,4 @@ with open(path, "r+b") as vhd:
     vhd.seek(-512, 2)
     vhd.write(footer)
 PY
-rm -f "$DISK"
+rm -rf "$TMP"

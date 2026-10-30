@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -236,6 +236,23 @@ ARTIFACT_NAMES: dict[OutputTarget, str] = {
 and the cloud wrappers' converted disks."""
 BOOT_PAYLOAD_NAME = "payload.efi"
 """The UKI every disk of the tree boots: the payload subimage's output."""
+INTERMEDIATE_NAMES: dict[OutputTarget, str] = {"azure": "azure.raw", "gcp": "gcp.raw"}
+"""The raw disk each cloud wrapper leaves beside its converted artifact (mkosi still reads it
+after the postoutput scripts, so they keep it); the bake removes it once collected."""
+
+
+def drop_intermediates(artifacts: Mapping[OutputTarget, ArtifactRef]) -> list[Path]:
+    """Remove the cloud wrappers' raw disks beside *artifacts* (:data:`INTERMEDIATE_NAMES`);
+    the published output keeps ``payload.efi``, ``qemu.raw`` and the converted disks.
+    Returns what was removed."""
+    removed: list[Path] = []
+    for target, ref in artifacts.items():
+        name = INTERMEDIATE_NAMES.get(target)
+        raw = None if name is None else ref.path.parent / name
+        if raw is not None and raw.is_file():
+            raw.unlink()
+            removed.append(raw)
+    return removed
 
 
 def collect_artifacts(

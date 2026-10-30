@@ -137,7 +137,7 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "19ac76421381bbf79aa31f0745d16275ea78833abce73f9b879106b0bddecaf8"
+EQUIVALENCE_TREE = "70239fedd23afdcd0ec490c94b43ff06e58165b0e249720833d489c1268339ad"
 EQUIVALENCE_RECIPE = "51394ca2d4424ed7676cf241e482572587f1322435922ff13ae2ac21f062c9a6"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile

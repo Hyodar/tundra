@@ -19,13 +19,14 @@ from pathlib import Path
 
 import pytest
 
+from tundravm.backends.base import collect_artifacts, drop_intermediates
 from tundravm.compiler.emit_mkosi import ACCOUNTS_FINALIZE, AZURE_CONVERTER, GCP_CONVERTER
 from tundravm.declarative import Debian, Package, Recipe, Variant, compile
 
 PINNED = {
     "accounts": "9175aea9c4328f7e086be2ebaadc30fc167993f0d4db5292ab410f2115121e41",
-    "azure": "18cd4a45a189c2ecf1bf427626ce4da22b8cab66714d753b8a537ac3ed8cdf61",
-    "gcp": "8d4a20c9383a20ab6b58016068f132f06084c031bacaa13b99f41a2ed148a437",
+    "azure": "2021b21fdcee1c2cfd271990eaefb29978ad24348854eb4c28fcc9afdf9525ce",
+    "gcp": "69cd5ad32d6f1befc294693de5a9f44c5faa98e030e18fd954e866e62d8d2530",
 }
 """sha256 of each emitted script: a change to one is deliberate (re-record it here)."""
 SECTOR = 512
@@ -191,7 +192,9 @@ def _check_gpt(path: Path) -> None:
 
 @pytest.mark.skipif(not shutil.which("sgdisk"), reason="needs sgdisk to make the test disk")
 def test_the_converters_reproduce_their_outputs(tmp_path: Path) -> None:
-    """qemu-img is faked (a random footer): the GPT grow, footer patch and tar.gz are real."""
+    """qemu-img is faked (a random footer): the GPT grow, footer patch and tar.gz are real.
+    mkosi stats its own ``azure.raw``/``gcp.raw`` after the postoutput scripts, so both stay
+    in place, byte for byte; the bake removes them once it collected the artifacts."""
     tools = tmp_path / "bin"
     tools.mkdir()
     (tools / "qemu-img").write_text(FAKE_QEMU_IMG)
@@ -202,6 +205,7 @@ def test_the_converters_reproduce_their_outputs(tmp_path: Path) -> None:
         out.mkdir()
         _disk(out / "azure.raw")
         _disk(out / "gcp.raw")
+        raws = {name: _sha_file(out / name) for name in ("azure.raw", "gcp.raw")}
         env = {
             **os.environ,
             "PATH": f"{tools}:{os.environ['PATH']}",
@@ -210,7 +214,13 @@ def test_the_converters_reproduce_their_outputs(tmp_path: Path) -> None:
         }
         for script in (AZURE_CONVERTER, GCP_CONVERTER):
             subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True)
-        assert sorted(p.name for p in out.iterdir()) == ["azure.vhd", "gcp.tar.gz"]
+        assert sorted(p.name for p in out.iterdir()) == [
+            "azure.raw",
+            "azure.vhd",
+            "gcp.raw",
+            "gcp.tar.gz",
+        ]
+        assert {name: _sha_file(out / name) for name in raws} == raws
         digests.append([_sha_file(out / name) for name in ("azure.vhd", "gcp.tar.gz")])
         vhd = (out / "azure.vhd").read_bytes()
         assert (len(vhd) - 512) % (1024 * 1024) == 0
@@ -222,6 +232,20 @@ def test_the_converters_reproduce_their_outputs(tmp_path: Path) -> None:
         )
         assert listing.stdout.split()[:3] == ["-rw-r--r--", "0/0", "1073741824"]
     assert digests[0] == digests[1]
+
+
+def test_the_bake_drops_the_wrappers_raw_disks(tmp_path: Path) -> None:
+    """After collecting, the published output keeps the artifacts and the UKI only."""
+    for name in ("payload.efi", "qemu.raw", "azure.raw", "azure.vhd", "gcp.raw", "gcp.tar.gz"):
+        (tmp_path / name).write_bytes(b"x")
+    artifacts = collect_artifacts(tmp_path, ("qemu", "azure", "gcp"))
+    assert drop_intermediates(artifacts) == [tmp_path / "azure.raw", tmp_path / "gcp.raw"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "azure.vhd",
+        "gcp.tar.gz",
+        "payload.efi",
+        "qemu.raw",
+    ]
 
 
 def _sha_file(path: Path) -> str:
