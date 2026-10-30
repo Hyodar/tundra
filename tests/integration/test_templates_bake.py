@@ -369,7 +369,7 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             in_image=False,
         ),
     )
-    # The checks read the payload; the default selection builds no Azure/GCP wrapper.
+    # The checks read the payload; the default variant declares all three disks.
     recipe = replace(recipe, items=(*recipe.items, *repositories))
     backend = _Capturing(LocalLinuxBackend())
     out = tmp_path / "build"
@@ -399,8 +399,10 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             assert f" {suite} InRelease" in fetched, suite
 
         output = out / "default" / "output"
-        assert {"payload.efi", "qemu.raw"} <= {p.name for p in output.iterdir()}
-        assert not (output / "azure.vhd").exists() and not (output / "gcp.tar.gz").exists()
+        names = {p.name for p in output.iterdir()}
+        assert {"payload.efi", "qemu.raw", "azure.vhd", "gcp.tar.gz"} <= names
+        # the converters leave mkosi's raw wrappers in place; the bake drops them afterwards
+        assert not names & {"azure.raw", "gcp.raw"}, names
         root = _unpack_payload(output, out / "root")
         # The image runs trixie's kernel (6.12): sid, pinned to 100, ships a newer one.
         kernels = re.findall(r"Unpacking (linux-image-\S+) \((\S+)\)", fetched)
