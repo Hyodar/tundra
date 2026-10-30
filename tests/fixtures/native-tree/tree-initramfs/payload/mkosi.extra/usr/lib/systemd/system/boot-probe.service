@@ -1,0 +1,11 @@
+[Unit]
+Description=Print where the root file system comes from
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/lib/tundravm/boot-probe
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=minimal.target

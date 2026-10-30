@@ -79,6 +79,7 @@
         "Output": "payload",
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
+          "busybox",
           "curl",
           "dmidecode",
           "kmod",
@@ -285,6 +286,7 @@
         "Output": "payload",
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
+          "busybox",
           "curl",
           "dmidecode",
           "kmod",

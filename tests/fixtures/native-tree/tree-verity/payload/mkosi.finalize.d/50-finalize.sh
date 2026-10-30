@@ -65,7 +65,6 @@ find "$BUILDROOT/var/log" -type f -delete
 rm -rf "$BUILDROOT/etc/credstore"
 rm -rf "$BUILDROOT/etc/machine-id"
 rm -rf "$BUILDROOT/etc/ssh/ssh_host_"*"_key"*
-rm -rf "$BUILDROOT/etc/systemd/network"
 rm -rf "$BUILDROOT/usr/lib/pcrlock.d"
 rm -rf "$BUILDROOT/usr/lib/systemd/catalog"
 rm -rf "$BUILDROOT/usr/lib/systemd/network"

@@ -182,7 +182,8 @@ def test_tree_has_the_native_shape() -> None:
         "payload/mkosi.conf",
         "payload/mkosi.conf.d/10-platform.conf",
         "payload/mkosi.conf.d/20-greeter.conf",
-        "payload/mkosi.conf.d/30-cloud-glue.conf",
+        "payload/mkosi.conf.d/30-web.conf",
+        "payload/mkosi.conf.d/40-cloud-glue.conf",
         "payload/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.postinst.d/50-postinst.sh",
         "payload/mkosi.profiles/dev/mkosi.conf",
@@ -248,7 +249,10 @@ def test_payload_subimage_includes_the_payload_directory() -> None:
     assert (tree / "payload/mkosi.conf.d/20-greeter.conf").read_text(encoding="utf-8") == (
         "[Content]\nPackages=\n    curl\n"
     )
-    assert (tree / "payload/mkosi.conf.d/30-cloud-glue.conf").read_text(encoding="utf-8") == (
+    assert (tree / "payload/mkosi.conf.d/30-web.conf").read_text(encoding="utf-8") == (
+        "[Content]\nPackages=\n    busybox\n"
+    )
+    assert (tree / "payload/mkosi.conf.d/40-cloud-glue.conf").read_text(encoding="utf-8") == (
         "[Content]\nPackages=\n    dmidecode\n"
     )
     machine_id = tree / "payload/mkosi.extra/etc/machine-id"
