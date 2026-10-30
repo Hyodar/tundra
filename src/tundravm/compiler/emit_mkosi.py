@@ -184,6 +184,22 @@ VerityMatchKey=root
 SplitName=root
 Minimize=best
 """
+VERITY_MODULES: tuple[str, ...] = (
+    # The initrd opens the root through dm-verity (pulls dm_mod, dm_bufio).
+    "dm_verity",
+    # The root file system.
+    "erofs",
+    # systemd.volatile=overlay: the initrd stacks a tmpfs over the read-only root.
+    "overlay",
+    # erofs pulls libcrc32c, whose init fails without a crc32c implementation: its softdep
+    # names the alias, which mkosi skips (as for nftables in the firewall set).
+    "crc32c_generic",
+)
+"""What the verity layout's initrd mounts the root with: Debian builds each as a module, and
+mkosi's kernel-modules initrd holds only the ``KernelModules=`` the payload keeps."""
+VERITY_ROOT_DEVICE = "/dev/mapper/root"
+"""The root the verity UKI names (``root=``): the device systemd-veritysetup-generator opens
+for ``roothash=``, so the initrd never waits on ``gpt-auto`` or mounts the bare partition."""
 VERITY_HASH_PARTITION = """\
 [Partition]
 Type=root-verity
@@ -1017,6 +1033,8 @@ class DeterministicMkosiEmitter:
         modules = _module_selection(payload_state, config)
         for name in every:
             modules = modules.union(_module_selection(recipe.effective_profile(name), config))
+        if config.root == "verity" and config.bootable and modules.modules:
+            modules = modules.union(ModuleSelection(modular=True, modules=VERITY_MODULES))
 
         if config.generate_version_script:
             _write(destination / "mkosi.version", MKOSI_VERSION_SCRIPT, EXEC_MODE)
@@ -1202,6 +1220,7 @@ class DeterministicMkosiEmitter:
                 part
                 for part in (
                     cmdline,
+                    f"root={VERITY_ROOT_DEVICE}",
                     f"systemd.verity_root_data=/dev/disk/by-partuuid/{data}",
                     f"systemd.verity_root_hash=/dev/disk/by-partuuid/{hashes}",
                     "systemd.volatile=overlay",

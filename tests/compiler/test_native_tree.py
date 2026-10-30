@@ -315,6 +315,9 @@ def test_verity_layout_splits_the_payload_and_copies_its_partitions() -> None:
     assert "[Validation]\nVerity=hash\n" in payload
     assert f"systemd.verity_root_data=/dev/disk/by-partuuid/{data}" in payload
     assert f"systemd.verity_root_hash=/dev/disk/by-partuuid/{hashes}" in payload
+    assert "KernelCommandLine=root=/dev/mapper/root " in payload
+    for module in ("dm_verity", "erofs", "overlay", "crc32c_generic"):
+        assert f"\n    {module}\n" in payload, module  # the initrd mounts the root with them
     root = (tree / "payload/mkosi.repart/10-root.conf").read_text(encoding="utf-8")
     assert "Format=erofs\n" in root and "Verity=data\n" in root and "SplitName=root\n" in root
     for disk in (

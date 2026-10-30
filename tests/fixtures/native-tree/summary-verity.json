@@ -45,12 +45,16 @@
         "Image": "payload",
         "ImageId": "fixture",
         "KernelCommandLine": [
+          "root=/dev/mapper/root",
           "systemd.verity_root_data=/dev/disk/by-partuuid/9a94e2e0-42d7-582e-baec-aa6600df7a19",
           "systemd.verity_root_hash=/dev/disk/by-partuuid/b79bc3b9-65fa-5287-852a-34759dffe29f",
           "systemd.volatile=overlay"
         ],
         "KernelModules": [
+          "crc32c_generic",
+          "dm_verity",
           "efivarfs",
+          "erofs",
           "gve",
           "hv_netvsc",
           "hv_storvsc",
@@ -58,6 +62,7 @@
           "hv_vmbus",
           "mana",
           "nvme",
+          "overlay",
           "pci_hyperv",
           "sd_mod",
           "tdx_guest",
@@ -246,12 +251,16 @@
         "Image": "payload",
         "ImageId": "fixture-dev",
         "KernelCommandLine": [
+          "root=/dev/mapper/root",
           "systemd.verity_root_data=/dev/disk/by-partuuid/9a94e2e0-42d7-582e-baec-aa6600df7a19",
           "systemd.verity_root_hash=/dev/disk/by-partuuid/b79bc3b9-65fa-5287-852a-34759dffe29f",
           "systemd.volatile=overlay"
         ],
         "KernelModules": [
+          "crc32c_generic",
+          "dm_verity",
           "efivarfs",
+          "erofs",
           "gve",
           "hv_netvsc",
           "hv_storvsc",
@@ -259,6 +268,7 @@
           "hv_vmbus",
           "mana",
           "nvme",
+          "overlay",
           "pci_hyperv",
           "sd_mod",
           "tdx_guest",
