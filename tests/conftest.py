@@ -30,6 +30,14 @@ def _no_network_resolution(request: pytest.FixtureRequest, monkeypatch: pytest.M
     """
     if request.node.get_closest_marker("integration") is not None:
         return
+    pin_tundra_tools_only(monkeypatch)
+
+
+def pin_tundra_tools_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve the implied evidence service's source to a fixed commit and refuse every
+    other network resolution. Module-scoped fixtures that run ``lock`` call this
+    themselves: the autouse guard above is function-scoped and is not active yet when
+    they are set up (tundra-tools is a private repository, so CI cannot reach it)."""
     import tundravm._source as source_module
     from tundravm.declarative.utils import TUNDRA_TOOLS
 

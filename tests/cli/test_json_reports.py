@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import pin_tundra_tools_only
 from tests.helpers import run_main
 from tundravm.check import SECRET_HINT
 from tundravm.cli import EXIT_SDK_ERROR, build_parser
@@ -53,6 +54,7 @@ def _json_verbs() -> set[str]:
 def project(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("project")
     with pytest.MonkeyPatch.context() as patch:
+        pin_tundra_tools_only(patch)  # every image implies the evidence service; `lock` resolves it
         patch.chdir(root)
         argv = ("init", ".", "--name", "node", "--backend", "inprocess", "--no-doctor")
         for command in (argv, ("lock",), ("compile",), ("bake", "-q"), ("evidence",)):
