@@ -199,10 +199,10 @@ def test_example_03_health_check_runs_only_from_its_timer() -> None:
 
 
 def test_image_queries_see_the_generated_units() -> None:
-    from tundravm.testing import Image
+    from tundravm.testing import PlannedImage
 
     hello = Task("hello", "/usr/bin/true")
-    image = Image(
+    image = PlannedImage(
         _recipe(
             hello,
             Task("tick", "/usr/bin/true", schedule=Every("1h")),

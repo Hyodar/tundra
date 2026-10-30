@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main
-from tundravm import lint
 from tundravm.check import SECRET_HINT
 from tundravm.cli import EXIT_SDK_ERROR, build_parser
+from tundravm.declarative import lint
 from tundravm.recipe import load_file
 
 REPORTS: dict[str, tuple[str, ...]] = {
@@ -150,7 +150,7 @@ def test_without_json_the_error_stays_a_text_block(
 
 SECRET_RECIPE = """\
 from pathlib import Path
-from tundravm import File, Fragment, Package, Recipe, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "leaky",

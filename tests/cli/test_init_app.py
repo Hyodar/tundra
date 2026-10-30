@@ -11,8 +11,8 @@ import pytest
 
 import tundravm
 from tests.helpers import REPO_ROOT, run_main
-from tundravm import Disk, ExternalDelivery, Git, Secrets
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.declarative import Disk, ExternalDelivery, Git, Secrets
 from tundravm.testing import UPDATE_GOLDEN_ENV, plan
 
 SOURCE = ("--source", "https://github.com/acme/hello@v1.4.0")

@@ -1,4 +1,4 @@
-"""One variant planned in memory and read as values: plan(), fragment_plan(), Image."""
+"""One variant planned in memory and read as values: plan(), fragment_plan(), PlannedImage."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ from tundravm.declarative.resolve import (
 )
 from tundravm.declarative.utils import Network
 from tundravm.diagnostics import Diagnostic
+from tundravm.image._image import Image as PublicImage
 from tundravm.models import unit_name
 
 from ._units import UnitView, parse_conf
@@ -144,7 +145,7 @@ _LIST_SETTINGS = frozenset(
 ``*Scripts`` and ``*Trees``)."""
 
 
-class Image:
+class PlannedImage:
     """One variant of a recipe, planned in memory: what its compiled tree holds, as values.
 
     Nothing compiles until a query reads the tree, so :meth:`lint` works on a
@@ -159,7 +160,7 @@ class Image:
         self.lock = lock
 
     def __repr__(self) -> str:
-        return f"<Image of {self.recipe.name!r}, variant {self.variant!r}>"
+        return f"<PlannedImage of {self.recipe.name!r}, variant {self.variant!r}>"
 
     @cached_property
     def tree(self) -> Tree:
@@ -316,13 +317,19 @@ class Image:
         return tuple(hook for hook in order_hooks(self._declared(Hook)) if hook.phase == stage)
 
 
-def plan(recipe: Recipe, variant: str | None = None, *, lock: Lock | None = None) -> Image:
-    """*variant* of *recipe* (default: its first variant) as an :class:`Image`.
+def plan(
+    subject: Recipe | PublicImage, variant: str | None = None, *, lock: Lock | None = None
+) -> PlannedImage:
+    """*variant* of *subject* (default: its first profile) as a :class:`PlannedImage`.
 
-    The tree compiles in memory on the first query that reads it; *lock*'s
-    source pins apply to the compile and to :meth:`Image.lint`.
+    *subject* is a public :class:`~tundravm.Image` or the internal recipe one lowers to.
+    The tree compiles in memory on the first query that reads it; *lock*'s source pins
+    apply to the compile and to :meth:`PlannedImage.lint`.
     """
-    return Image(recipe, variant or recipe.variants[0].name, lock=lock)
+    from tundravm.image import recipe_of
+
+    recipe = recipe_of(subject) if isinstance(subject, PublicImage) else subject
+    return PlannedImage(recipe, variant or recipe.variants[0].name, lock=lock)
 
 
 def fragment_plan(
@@ -331,7 +338,7 @@ def fragment_plan(
     base: Fragment | Recipe | None = None,
     variant: str = "default",
     lock: Lock | None = None,
-) -> Image:
+) -> PlannedImage:
     """*items* (a fragment, or declarations) planned on a minimal bootable test platform.
 
     *include* adds what the items need but are not under test (a storage
@@ -345,11 +352,11 @@ def fragment_plan(
         under_test = Fragment("under-test", tuple(items))
     if isinstance(base, Recipe):
         items = (*base.items, *include, under_test)
-        return Image(replace(base, items=items), variant, lock=lock)
+        return PlannedImage(replace(base, items=items), variant, lock=lock)
     platform = TEST_PLATFORM if base is None else base
     recipe = Recipe(
         name="fragment-plan",
         items=(platform, *include, under_test),
         variants=(Variant(variant, outputs=("qemu",)),),
     )
-    return Image(recipe, variant, lock=lock)
+    return PlannedImage(recipe, variant, lock=lock)

@@ -15,27 +15,25 @@ from typing import Any
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm import (
+from tundravm import _ssh_sig as ssh_sig
+from tundravm.backends import inprocess
+from tundravm.cli import EXIT_FAILURE, EXIT_OK
+from tundravm.declarative import (
     Backend,
-    Evidence,
-    EvidenceVerification,
     File,
     Package,
     Recipe,
     Variant,
     bake,
     compile,
-    evidence,
     lock,
-    verify_evidence,
+    read_artifacts,
+    write_lock,
 )
-from tundravm import _ssh_sig as ssh_sig
-from tundravm.backends import inprocess
-from tundravm.cli import EXIT_FAILURE, EXIT_OK
-from tundravm.declarative import read_artifacts, write_lock
 from tundravm.declarative.bom import manifest_path
 from tundravm.errors import StateError, ValidationError
-from tundravm.evidence import _verdict, tree_rows, tree_rows_digest
+from tundravm.evidence import Evidence, _verdict, evidence, tree_rows, tree_rows_digest
+from tundravm.verify import EvidenceVerification, verify_evidence
 
 EPOCH = "1700000000"
 NEEDS_SSH = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="needs ssh-keygen")
@@ -418,7 +416,7 @@ def test_a_missing_ssh_keygen_is_a_state_error_with_a_hint(
 
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

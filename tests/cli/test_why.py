@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm import ValidationError, explain_why
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.declarative import FileTree, Recipe, Variant
 from tundravm.declarative.resolve import Origin, provenance
+from tundravm.errors import ValidationError
+from tundravm.explain import explain_why
 from tundravm.recipe import load_recipe
 
 RECIPE = """

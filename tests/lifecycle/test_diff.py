@@ -8,14 +8,13 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm import Declaration, File, Fragment, Package, Recipe, Variant
 from tundravm import declarative as tv
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
-from tundravm.declarative import lower
+from tundravm.declarative import Declaration, File, Fragment, Package, Recipe, Variant, lower
 from tundravm.diff import FileChange, TreeDiff, diff_against, diff_trees
 
 RECIPE = """
-from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

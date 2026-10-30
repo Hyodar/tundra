@@ -1,4 +1,4 @@
-"""Parsed systemd units and mkosi.conf sections, for :class:`tundravm.testing.Image`."""
+"""Parsed systemd units and mkosi.conf sections, for :class:`tundravm.testing.PlannedImage`."""
 
 from __future__ import annotations
 

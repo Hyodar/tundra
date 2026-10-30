@@ -17,25 +17,21 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main
-from tundravm import (
-    Attestation,
-    AttestationError,
-    MeasurementError,
-    ValidationError,
-    attest,
-)
 from tundravm.attestation import (
     ATTESTATION_SCHEMA,
     CHECKS_NOTE,
     TRUST_NOTE,
     VERDICTS,
+    Attestation,
     AttestationRecord,
+    attest,
     parse_quote,
     read_attestation,
     render_attestation,
     report_data_for,
 )
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.errors import AttestationError, MeasurementError, ValidationError
 
 MRTD, R0, R1, R2, R3 = (bytes([n]) * 48 for n in (0x11, 0x20, 0x21, 0x22, 0x23))
 NONCE = bytes(range(32))

@@ -218,7 +218,7 @@ def test_doctor_verb_uses_the_injected_runner() -> None:
 # inspect --diff-variants
 
 TWO_VARIANTS = """
-from tundravm import File, Fragment, Package, Recipe, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
     "two",

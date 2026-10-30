@@ -16,7 +16,7 @@ from tundravm.cli import EXIT_OK, main
 from tundravm.watch import Sources, Watch, python_files, tree_verdict, verdict
 
 RECIPE = """
-from tundravm import File, Fragment, Package, Recipe, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 from pkgs import PACKAGES
 
@@ -248,7 +248,7 @@ def test_sources_skip_hidden_cache_and_build_directories(tmp_path: Path) -> None
 INPUTS_RECIPE = """
 from pathlib import Path
 
-from tundravm import FileTree, File, Fragment, Package, Recipe, Variant
+from tundravm.declarative import File, FileTree, Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

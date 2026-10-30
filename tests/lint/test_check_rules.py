@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import (
+from tundravm.check import Diagnostic, check, render, render_github, render_markdown
+from tundravm.cli import main
+from tundravm.declarative import (
     Backend,
     BootStep,
     Debian,
@@ -25,7 +27,6 @@ from tundravm import (
     Git,
     Hook,
     Kernel,
-    LintError,
     Package,
     Ready,
     Recipe,
@@ -38,17 +39,16 @@ from tundravm import (
     Template,
     Unit,
     User,
-    ValidationError,
     Variant,
     bake,
+    compile,
     lint,
     lock,
+    lower,
 )
-from tundravm.check import Diagnostic, check, render, render_github, render_markdown
-from tundravm.cli import main
-from tundravm.declarative import compile, lower
 from tundravm.declarative.lifecycle import check_report
 from tundravm.declarative.utils import EfiStub
+from tundravm.errors import LintError, ValidationError
 
 DEFAULT = Variant("default", outputs=("qemu",))
 KERNEL = Package("linux-image-amd64")
@@ -542,7 +542,16 @@ def test_a_source_location_is_rendered_where_it_is_known() -> None:
 # CLI
 
 RECIPE = """
-from tundravm import RUNTIME_INIT, Fragment, Package, Recipe, Service, Unit, User, Variant
+from tundravm.declarative import (
+    Fragment,
+    Package,
+    RUNTIME_INIT,
+    Recipe,
+    Service,
+    Unit,
+    User,
+    Variant,
+)
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

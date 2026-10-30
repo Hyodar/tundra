@@ -15,7 +15,7 @@ from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.testing import recipe_file, run_cli
 
 RECIPE_SOURCE = """
-from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -67,7 +67,7 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     source = """
-    from tundravm import Debloat, Diagnostic, File, Fragment, Package, Recipe
+    from tundravm.declarative import Debloat, Diagnostic, File, Fragment, Package, Recipe
 
     def warn(resolved):
         return (Diagnostic("custom-warning", "warning", "from a fragment"),)
@@ -91,7 +91,7 @@ def test_cli_lint_shows_declarative_and_fragment_diagnostics(
     broken = recipe_file(
         tmp_path,
         """
-        from tundravm import File, Fragment, Recipe
+        from tundravm.declarative import File, Fragment, Recipe
         recipe = Recipe("demo", items=(File("/etc/a", "1"), File("/etc//a", "2")))
         """,
         name="broken.py",

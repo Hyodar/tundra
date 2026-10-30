@@ -14,7 +14,7 @@ from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.deploy.qemu import QemuDeployAdapter
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from tundravm import (
+from tundravm.declarative import (
     BootStep,
     Debian,
     Debloat,
@@ -21,8 +21,8 @@ from tundravm import (
     Template,
     User,
     Variant,
+    lower,
 )
-from tundravm.declarative import lower
 from tundravm.errors import ValidationError
 from tundravm.explain import describe, render
 

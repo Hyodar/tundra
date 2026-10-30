@@ -26,6 +26,9 @@ from .observability import display_path
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
 
+IMAGE_NAMES: tuple[str, ...] = ("image", "IMAGE")
+"""Module-level names checked first: the public :class:`~tundravm.Image` a file binds."""
+
 RECIPE_OBJECT_NAMES: tuple[str, ...] = ("recipe", "RECIPE")
 """Module-level names checked first when looking for a ``Recipe``."""
 
@@ -89,7 +92,7 @@ def _backend(value: object, recipe_path: Path) -> BuildBackend:
 _BACKEND_METHODS = ("prepare", "execute", "cleanup")
 
 
-def _import_recipe_module(recipe_path: Path, *, extra_paths: Sequence[str | Path]) -> ModuleType:
+def import_recipe_module(recipe_path: Path, *, extra_paths: Sequence[str | Path]) -> ModuleType:
     digest = hashlib.sha256(str(recipe_path).encode("utf-8")).hexdigest()[:12]
     module_name = f"_tundravm_recipe_{digest}"
     spec = importlib.util.spec_from_file_location(module_name, recipe_path)
@@ -207,7 +210,35 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Recipe:
     )
 
 
+def _discover_image(module: ModuleType, recipe_path: Path) -> Recipe | None:
+    """The ``Image`` the file binds, as the internal recipe; ``None`` when it binds none."""
+    from tundravm.image import Image, recipe_of
+
+    for name in IMAGE_NAMES:
+        value = getattr(module, name, None)
+        if isinstance(value, Image):
+            return recipe_of(value)
+    images = {
+        name: value
+        for name, value in vars(module).items()
+        if isinstance(value, Image) and not name.startswith("_")
+    }
+    if len(images) > 1:
+        raise ValidationError(
+            f"File defines several images: {', '.join(sorted(images))}.",
+            hint="Name one of them `image`, or pass --attr NAME.",
+            context={"recipe": str(recipe_path)},
+        )
+    if images:
+        return recipe_of(next(iter(images.values())))
+    return None
+
+
 def _discover(module: ModuleType, recipe_path: Path) -> Recipe:
+    found = _discover_image(module, recipe_path)
+    if found is not None:
+        return found
+
     for name in RECIPE_OBJECT_NAMES:
         value = getattr(module, name, None)
         if isinstance(value, Recipe):
@@ -248,10 +279,10 @@ def _discover(module: ModuleType, recipe_path: Path) -> Recipe:
         )
 
     raise ValidationError(
-        "Recipe file does not define a Recipe.",
+        "File does not define an Image.",
         hint=(
-            "Bind a tundravm.Recipe to a module-level `recipe`, or define a zero-argument "
-            "`build() -> Recipe` function, or pass --attr NAME."
+            "Bind a tundravm.Image to a module-level `image`, or pass --attr NAME. "
+            "(The internal Recipe is still accepted, bound to `recipe`.)"
         ),
         context={"recipe": str(recipe_path)},
     )
@@ -355,7 +386,7 @@ def load_file(
             hint="Pass the path to a Python file that binds a Recipe.",
             context={"recipe": str(recipe_path)},
         )
-    module = _import_recipe_module(recipe_path, extra_paths=extra_paths)
+    module = import_recipe_module(recipe_path, extra_paths=extra_paths)
     found = (
         _resolve_attr(module, attribute, recipe_path)
         if attribute is not None
@@ -368,10 +399,12 @@ def load_file(
 
 __all__ = [
     "BACKEND_NAME",
+    "IMAGE_NAMES",
     "RECIPE_FACTORY_NAMES",
     "RECIPE_OBJECT_NAMES",
     "RecipeFile",
     "load",
+    "import_recipe_module",
     "load_file",
     "load_image",
     "load_recipe",

@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main
-from tundravm import Recipe, load, load_recipe
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.declarative import Recipe, load
 from tundravm.errors import ValidationError
-from tundravm.recipe import load_image
+from tundravm.recipe import load_image, load_recipe
 
 RECIPE = """
-from tundravm import Debian, File, Fragment, Package, Recipe, Unit, Variant
+from tundravm.declarative import Debian, File, Fragment, Package, Recipe, Unit, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -56,7 +56,8 @@ def test_load_is_load_recipe() -> None:
 def test_load_discovers_like_the_cli_and_rejects_other_values(tmp_path: Path) -> None:
     factory = tmp_path / "factory.py"
     factory.write_text(
-        "from tundravm import Fragment, Recipe\ndef build() -> Recipe:\n    return Recipe('f')\n",
+        "from tundravm.declarative import Fragment, Recipe\n"
+        "def build() -> Recipe:\n    return Recipe('f')\n",
         encoding="utf-8",
     )
     assert load(factory).name == "f"
@@ -65,7 +66,7 @@ def test_load_discovers_like_the_cli_and_rejects_other_values(tmp_path: Path) ->
         load(factory, attribute="recipe")
     upper = tmp_path / "upper.py"
     upper.write_text(
-        "from tundravm import Fragment, Recipe\nRECIPE = Recipe('u')\n",
+        "from tundravm.declarative import Fragment, Recipe\nRECIPE = Recipe('u')\n",
         encoding="utf-8",
     )
     assert load(upper).name == "u"
@@ -101,7 +102,7 @@ def test_cli_inspect_and_compile_a_declarative_recipe(recipe_file: Path, tmp_pat
 def test_cli_reports_resolution_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     broken = tmp_path / "broken.py"
     broken.write_text(
-        "from tundravm import Disk, Fragment, Key, Recipe\n"
+        "from tundravm.declarative import Disk, Fragment, Key, Recipe\n"
         "recipe = Recipe('b', items=(Disk('d', '/data', key=Key('k')),))\n",
         encoding="utf-8",
     )

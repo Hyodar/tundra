@@ -1,7 +1,7 @@
 """Helpers for testing recipes and fragments: plans, lint assertions, golden trees, CLI runs.
 
 :func:`fragment_plan` puts a fragment on a minimal bootable platform and
-:func:`plan` takes a whole recipe; both return an :class:`Image`, one variant
+:func:`plan` takes a whole recipe; both return a :class:`PlannedImage`, one variant
 compiled in memory and read as values (packages, files, units, users, init
 steps, hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint
 findings, :func:`assert_tree` and :func:`assert_tree_matches` compare against
@@ -73,9 +73,9 @@ from tundravm.testing._boot import (
 from tundravm.testing._fake_mkosi import FakeCall, FakeMkosi, build_unavailable
 from tundravm.testing._image import (
     TEST_PLATFORM,
-    Image,
     ImageFile,
     InitStep,
+    PlannedImage,
     fragment_plan,
     plan,
 )
@@ -234,8 +234,8 @@ def compile_tree(
     return CompiledTree(root, tree.variants, default_variant=tree.variants[0])
 
 
-Lintable = Recipe | Image | Sequence[Diagnostic]
-"""What the assertions check: a recipe or an :class:`Image` to lint, or ``lint()``'s findings."""
+Lintable = Recipe | PlannedImage | Sequence[Diagnostic]
+"""What the assertions check: a recipe, a :class:`PlannedImage` to lint, or findings."""
 
 
 def _findings(subject: Lintable, variants: Variants) -> Sequence[Diagnostic]:
@@ -243,7 +243,7 @@ def _findings(subject: Lintable, variants: Variants) -> Sequence[Diagnostic]:
         return check_report(subject, None, variants=_names(variants))
     if variants is not None:
         raise TypeError("variants= selects what a Recipe is linted for; this input already chose")
-    return subject.lint() if isinstance(subject, Image) else subject
+    return subject.lint() if isinstance(subject, PlannedImage) else subject
 
 
 def _render(diagnostics: Sequence[Diagnostic]) -> str:
@@ -261,7 +261,7 @@ def assert_clean(
     """Fail on every error and warning finding whose code is not in *allow*.
 
     *subject* is a ``Recipe`` (linted for *variants*, default: all), an
-    :class:`Image` (linted for its variant) or the diagnostics ``lint()``
+    :class:`PlannedImage` (linted for its variant) or the diagnostics ``lint()``
     returned. ``warnings="allow"`` fails on errors only. Returns every
     diagnostic, allowed or not: *subject* itself for diagnostics.
     """
@@ -289,7 +289,7 @@ def assert_diagnostic(
     """Return the first diagnostic matching every given field, else fail listing them all.
 
     *diagnostics* is a sequence of diagnostics (what ``tundravm.lint()``
-    returned), an :class:`Image` to lint, or a ``Recipe`` to lint for
+    returned), a :class:`PlannedImage` to lint, or a ``Recipe`` to lint for
     *variants* (default: *variant* alone when given, else all). *variant* is
     the variant, ``""`` for the recipe as a whole; *location* the source
     position (``file:line``).
@@ -536,7 +536,7 @@ __all__ = [
     "FakeCall",
     "FakeMkosi",
     "HttpResponse",
-    "Image",
+    "PlannedImage",
     "ImageFile",
     "InitStep",
     "Lintable",

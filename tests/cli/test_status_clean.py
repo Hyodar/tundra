@@ -20,7 +20,7 @@ from tundravm.declarative import lock, write_lock
 from tundravm.recipe import load_recipe
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -44,7 +44,7 @@ recipe = Recipe(
 """
 
 NIX_RECIPE = """
-from tundravm import Fragment, Package, Recipe
+from tundravm.declarative import Fragment, Package, Recipe
 from tundravm.backends import LimaMkosiBackend
 
 backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")

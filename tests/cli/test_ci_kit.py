@@ -18,7 +18,7 @@ from tundravm.formats import md_cell, resolve_format, workflow_command
 from tundravm.templates import render_workflow
 
 RECIPE = """
-from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -325,7 +325,7 @@ def test_inspect_markdown_collapses_long_package_lists(tmp_path: Path) -> None:
     recipe = tmp_path / "big.py"
     packages = ", ".join(f'Package("pkg{index:02d}")' for index in range(25))
     recipe.write_text(
-        "from tundravm import Fragment, Package, Recipe\n"
+        "from tundravm.declarative import Fragment, Package, Recipe\n"
         f"recipe = Recipe('big', items=({packages},))\n"
     )
     code, out = run_main("inspect", str(recipe), "--format", "markdown")
@@ -360,7 +360,7 @@ def test_lint_github_lines_parse(recipe: Path) -> None:
 def test_lint_github_strict_reports_warnings_as_errors(tmp_path: Path) -> None:
     recipe = tmp_path / "warn.py"
     recipe.write_text(
-        "from tundravm import RUNTIME_INIT, Package, Recipe, Unit\n"
+        "from tundravm.declarative import RUNTIME_INIT, Package, Recipe, Unit\n"
         "recipe = Recipe('warn', items=(\n"
         "    Package('curl'),\n"
         "    Package('linux-image-amd64'),\n"
@@ -481,9 +481,20 @@ def test_ci_pass_prints_three_ok_lines(recipe: Path, tmp_path: Path) -> None:
 
 
 RUNTIME_RECIPE = """
-from tundravm import (
-    Disk, ExternalDelivery, Fragment, Git, Key, Package, Recipe, RuntimeTools, Secret,
-    SecretFile, Secrets, Service, Variant,
+from tundravm.declarative import (
+    Disk,
+    ExternalDelivery,
+    Fragment,
+    Git,
+    Key,
+    Package,
+    Recipe,
+    RuntimeTools,
+    Secret,
+    SecretFile,
+    Secrets,
+    Service,
+    Variant,
 )
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.declarative.utils import Network

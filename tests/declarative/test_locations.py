@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import write_recipe_file
-from tundravm import explore
 from tundravm.check import render, render_github
 from tundravm.declarative import Diagnostic, Recipe, lint, lower
 from tundravm.declarative.resolve import provenance, resolve
 from tundravm.errors import ValidationError
+from tundravm.explore import explore
 from tundravm.recipe import load_recipe
 
 RECIPE = """

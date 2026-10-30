@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import (
+from tundravm.declarative import (
     BootStep,
     Diagnostic,
     File,
@@ -454,7 +454,7 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
     path = recipe_file(
         tmp_path,
         """
-        from tundravm import Fragment, Package, Recipe
+        from tundravm.declarative import Fragment, Package, Recipe
 
         recipe = Recipe(
             name="demo",
@@ -463,7 +463,7 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
         """,
     )
     assert path == tmp_path / "recipe.py"
-    assert path.read_text(encoding="utf-8").startswith("from tundravm import Fragment")
+    assert path.read_text(encoding="utf-8").startswith("from tundravm.declarative import Fragment")
 
     code, out, err = run_cli("lint", path)
     assert code == 0

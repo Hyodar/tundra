@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-import tundravm
+import tundravm.declarative
 from tundravm.declarative import (
     Build,
     Cargo,
@@ -39,7 +39,7 @@ def _recipe(*items: Declaration | Fragment) -> Recipe:
 
 def _same_lowering(first: Recipe, second: Recipe) -> None:
     assert lower(first).digest() == lower(second).digest()
-    assert tundravm.compile(first).digest == tundravm.compile(second).digest
+    assert tundravm.declarative.compile(first).digest == tundravm.declarative.compile(second).digest
 
 
 def test_file_text_and_copy_are_the_constructor(tmp_path: Path) -> None:
@@ -59,7 +59,9 @@ def test_file_copy_keeps_only_the_execute_bit(tmp_path: Path) -> None:
     data.write_text("x")
     script.chmod(0o775)
     data.chmod(0o664)
-    tree = tundravm.compile(_recipe(File.copy("/usr/bin/run", script), File.copy("/d", data)))
+    tree = tundravm.declarative.compile(
+        _recipe(File.copy("/usr/bin/run", script), File.copy("/d", data))
+    )
     modes = {entry.path: entry.mode for entry in tree.entries}
     assert modes["payload/mkosi.extra/usr/bin/run"] == 0o755
     assert modes["payload/mkosi.extra/d"] == 0o644

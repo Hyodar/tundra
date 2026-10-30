@@ -25,7 +25,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Final, Literal, get_args
 
-from tundravm import check as _check
 from tundravm._hashes import artifact_sha256
 from tundravm._modules import DiskEncryption, SecretDelivery
 from tundravm._source import (
@@ -48,6 +47,7 @@ from tundravm.backends import (
     Requirement,
 )
 from tundravm.backends.base import BuildBackend, is_mkosi_state
+from tundravm import check as _check
 from tundravm.deploy import DeployAdapter, get_adapter
 from tundravm.diff import diff_trees
 from tundravm.errors import (

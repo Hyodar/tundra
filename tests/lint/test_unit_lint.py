@@ -6,9 +6,9 @@ from __future__ import annotations
 import pytest
 
 from tests.lint.test_check_rules import recipe, report
-from tundravm import File, Package, Recipe, Service, Unit, Variant
 from tundravm._units.lint import Facts, ShippedUnit, unit_findings
 from tundravm.check import Diagnostic
+from tundravm.declarative import File, Package, Recipe, Service, Unit, Variant
 
 INSTALL = "\n[Install]\nWantedBy=minimal.target\n"
 

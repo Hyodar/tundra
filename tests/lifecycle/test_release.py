@@ -13,24 +13,13 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm import (
-    File,
-    Lock,
-    Package,
-    Recipe,
-    Release,
-    Variant,
-    lock,
-    release,
-    verify_release,
-)
 from tundravm.backends import InProcessBackend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
-from tundravm.declarative import write_lock
+from tundravm.declarative import File, Lock, Package, Recipe, Variant, lock, write_lock
 from tundravm.declarative.utils import DevTools
 from tundravm.errors import LockfileError, StateError, ValidationError
 from tundravm.models import BakeRequest, BakeResult
-from tundravm.release import STAGES, STATE_NAME
+from tundravm.release import STAGES, STATE_NAME, Release, release, verify_release
 
 release_module = importlib.import_module("tundravm.release")  # `tundravm.release` is the function
 NEEDS_SSH = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="needs ssh-keygen")
@@ -416,7 +405,7 @@ def test_a_signed_release_verifies_with_the_signers_public_key(project: Project)
 
 
 RECIPE = """\
-from tundravm import File, Fragment, Package, Recipe, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Variant
 from tundravm.backends import InProcessBackend
 
 backend = InProcessBackend()

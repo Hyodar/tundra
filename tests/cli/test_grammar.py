@@ -13,7 +13,7 @@ from tundravm import declarative
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 
 RECIPE = """
-from tundravm import File, Fragment, Package, Recipe, Service, User, Variant
+from tundravm.declarative import File, Fragment, Package, Recipe, Service, User, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -134,7 +134,7 @@ def test_unknown_variant_is_reported(recipe: Path, capsys: pytest.CaptureFixture
 def test_attr_flag_selects_factory(tmp_path: Path) -> None:
     recipe = tmp_path / "r.py"
     recipe.write_text(
-        "from tundravm import Fragment, Package, Recipe\n"
+        "from tundravm.declarative import Fragment, Package, Recipe\n"
         "def small():\n    return Recipe('r', items=(Package('a'),))\n"
         "def big():\n    return Recipe('r', items=(Package('b'),))\n",
         encoding="utf-8",

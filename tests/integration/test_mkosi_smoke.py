@@ -12,9 +12,19 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import File, Package, Recipe, Service, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import Debian, Variant, lock, lower
+from tundravm.declarative import (
+    Debian,
+    File,
+    Package,
+    Recipe,
+    Service,
+    User,
+    Variant,
+    compile,
+    lock,
+    lower,
+)
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.declarative.utils import Tdxs
 from tundravm.models import BakeResult

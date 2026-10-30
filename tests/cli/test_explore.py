@@ -10,21 +10,23 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE, run_main, write_recipe_file
-from tundravm import (
-    Exploration,
-    ValidationError,
+from tundravm.cli import EXIT_OK
+from tundravm.declarative import (
+    File,
+    Fragment,
+    Package,
+    Recipe,
+    Variant,
     compile,
-    explore,
     load,
     lock,
     read_artifacts,
     write_lock,
 )
-from tundravm.cli import EXIT_OK
-from tundravm.declarative import File, Fragment, Package, Recipe, Variant
 from tundravm.declarative.lifecycle import _layer_of
 from tundravm.declarative.lower import lower
-from tundravm.explore import EXPLORE_SCHEMA, SHARED, TEXT_LIMIT
+from tundravm.errors import ValidationError
+from tundravm.explore import EXPLORE_SCHEMA, SHARED, TEXT_LIMIT, Exploration, explore
 from tundravm.templates import render_recipe_template
 
 EXTERNAL_ASSET = re.compile(

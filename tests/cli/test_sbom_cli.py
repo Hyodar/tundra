@@ -23,7 +23,7 @@ from tundravm.declarative import (
 )
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

@@ -23,10 +23,10 @@ from tests.cli.test_attest import (
     policy,
 )
 from tests.helpers import run_main
-from tundravm import AttestationError, ValidationError, attest
-from tundravm.attestation import PARTIAL_NOTE, read_attestation
+from tundravm.attestation import PARTIAL_NOTE, attest, read_attestation
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative.utils import Tdxs
+from tundravm.errors import AttestationError, ValidationError
 
 
 def _judged(peer: dict[str, object], **kwargs: object):  # type: ignore[no-untyped-def]

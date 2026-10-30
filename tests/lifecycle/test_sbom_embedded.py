@@ -12,9 +12,19 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Artifact, Backend, bake, sbom
 from tundravm.backends.inprocess import UKI_FILENAME, InProcessBackend
-from tundravm.declarative import Lock, Package, Recipe, lock, lower, read_artifacts
+from tundravm.declarative import (
+    Artifact,
+    Backend,
+    Lock,
+    Package,
+    Recipe,
+    bake,
+    lock,
+    lower,
+    read_artifacts,
+    sbom,
+)
 from tundravm.declarative._embedded import cargo_crates, embedded_dependencies, go_modules
 from tundravm.declarative.bom import Sbom, UnboundBinary, purl
 from tundravm.models import BakeRequest, BakeResult

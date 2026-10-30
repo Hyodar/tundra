@@ -16,26 +16,22 @@ import pytest
 
 from tests.cli.test_attest import MRTD, NONCE, R0, R1, R2, R3, FakeIssuer, FakeValidator
 from tests.helpers import run_main
-from tundravm import (
-    Attestation,
+from tundravm.attestation import Attestation, attest
+from tundravm.declarative import (
     Backend,
-    Evidence,
     File,
     Package,
     Recipe,
-    ValidationError,
     Variant,
-    attest,
     bake,
-    evidence,
     lock,
-    release,
-    verify_evidence,
+    read_artifacts,
+    write_lock,
 )
-from tundravm.declarative import read_artifacts, write_lock
-from tundravm.errors import StateError
-from tundravm.release import STATE_NAME
-from tundravm.verify import EvidenceVerification
+from tundravm.errors import StateError, ValidationError
+from tundravm.evidence import Evidence, evidence
+from tundravm.release import STATE_NAME, release
+from tundravm.verify import EvidenceVerification, verify_evidence
 
 EPOCH = 1700000000
 CREATED = datetime.fromtimestamp(EPOCH, UTC)
@@ -335,7 +331,7 @@ def test_cli_evidence_bundles_records_and_verify_requires_attested(
     project = tmp_path / "project"
     project.mkdir()
     (project / "node.py").write_text(
-        "from tundravm import File, Fragment, Package, Recipe, Variant\n"
+        "from tundravm.declarative import File, Fragment, Package, Recipe, Variant\n"
         "recipe = Recipe('node', items=(Package('curl'), "
         "Package('linux-image-amd64'), File('/etc/motd', 'hi\\n')), "
         "variants=(Variant('default', outputs=('qemu',)), "

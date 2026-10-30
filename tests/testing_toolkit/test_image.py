@@ -1,10 +1,10 @@
-"""Tests for ``fragment_plan``, ``plan`` and the ``Image`` queries."""
+"""Tests for ``fragment_plan``, ``plan`` and the ``PlannedImage`` queries."""
 
 from __future__ import annotations
 
 import pytest
 
-from tundravm import (
+from tundravm.declarative import (
     BootStep,
     Build,
     Disk,
@@ -28,8 +28,8 @@ from tundravm import (
 from tundravm.errors import ValidationError
 from tundravm.testing import (
     TEST_PLATFORM,
-    Image,
     InitStep,
+    PlannedImage,
     assert_clean,
     assert_diagnostic,
     fragment_plan,
@@ -56,7 +56,7 @@ APP = Fragment(
 
 def test_fragment_plan_boots_on_the_test_platform() -> None:
     image = fragment_plan(APP)
-    assert isinstance(image, Image)
+    assert isinstance(image, PlannedImage)
     assert (image.recipe.name, image.variant) == ("fragment-plan", "default")
     assert image.packages["linux-image-amd64"] == "runtime"
     assert image.packages["curl"] == "runtime"

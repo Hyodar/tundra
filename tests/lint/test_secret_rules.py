@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from tests.lint.test_check_rules import recipe, report
-from tundravm import (
+from tundravm.check import SECRET_HINT
+from tundravm.declarative import (
     ExternalDelivery,
     File,
     FileTree,
@@ -20,9 +21,8 @@ from tundravm import (
     Unit,
     Variant,
     compile,
+    lock,
 )
-from tundravm.check import SECRET_HINT
-from tundravm.declarative import lock
 
 # Built at runtime so this file does not trip secret scanners itself.
 PEM = (

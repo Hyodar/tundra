@@ -13,12 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Backend, File, Package, Recipe, bake, lock
 from tundravm.backends.base import StreamResult, failure_message, run_streaming
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
-from tundravm.declarative import lower
+from tundravm.declarative import Backend, File, Package, Recipe, bake, lock, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.errors import BackendExecutionError, LintError
 from tundravm.models import ArtifactRef, BakeRequest, BakeResult, ProfileBuildResult
@@ -405,7 +404,7 @@ def test_render_bake_summary_aligns_columns(tmp_path: Path) -> None:
 # -- CLI ----------------------------------------------------------------------
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe
+from tundravm.declarative import Fragment, Package, Recipe
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()
@@ -413,7 +412,7 @@ recipe = Recipe("bake", items=(Package("curl"), Package("linux-image-amd64")))
 """
 
 FAILING_RECIPE = """
-from tundravm import Fragment, Package, Recipe
+from tundravm.declarative import Fragment, Package, Recipe
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.errors import BackendExecutionError
 

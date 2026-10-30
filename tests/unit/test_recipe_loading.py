@@ -9,10 +9,11 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
-from tundravm import Package, Recipe, ValidationError, load_recipe
-from tundravm.recipe import load_image
+from tundravm.declarative import Package, Recipe
+from tundravm.errors import ValidationError
+from tundravm.recipe import load_image, load_recipe
 
-HEADER = "from tundravm import Debian, Fragment, Package, Recipe\n"
+HEADER = "from tundravm.declarative import Debian, Fragment, Package, Recipe\n"
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:

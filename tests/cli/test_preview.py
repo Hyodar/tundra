@@ -21,7 +21,7 @@ from tundravm.explore import Exploration
 from tundravm.preview import Preview, is_loopback, serve, url_of
 
 RECIPE = """
-from tundravm import File, Package, Recipe, Variant
+from tundravm.declarative import File, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

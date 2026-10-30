@@ -173,7 +173,7 @@ def declarations_source(decls: Sequence[object], *, names: Sequence[str] = ()) -
 
     top = sorted(n for n in writer.imports if hasattr(tundravm, n))
     rest = sorted(n for n in writer.imports if not hasattr(tundravm, n))
-    lines = [f"from tundravm import {', '.join(top)}"] if top else []
+    lines = [f"from tundravm.declarative import {', '.join(top)}"] if top else []
     if rest:
         lines.append(f"from tundravm.declarative import {', '.join(rest)}")
     lines.append("")

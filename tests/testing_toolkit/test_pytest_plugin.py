@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Fragment, Package, Recipe, Variant, lint
+from tundravm.declarative import Fragment, Package, Recipe, Variant, lint
 from tundravm.testing import assert_clean, bake_in_process, fake_fragment, recipe_file
 from tundravm.testing.pytest_plugin import CliRunner, CompileFactory
 
@@ -62,7 +62,7 @@ def test_compiled_factory_uses_fresh_dirs(
 
 
 def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:
-    source = 'from tundravm import Fragment, Recipe\nrecipe = Recipe(name="t")\n'
+    source = 'from tundravm.declarative import Fragment, Recipe\nrecipe = Recipe(name="t")\n'
     path = recipe_file(tmp_path, source)
     code, out, err = run_cli("inspect", path, "--format", "json")
     assert code == 0

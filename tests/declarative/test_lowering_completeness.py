@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Policy
 from tundravm.declarative import (
     Build,
     Fragment,
@@ -21,6 +20,7 @@ from tundravm.declarative import (
     Kernel,
     Key,
     Package,
+    Policy,
     Recipe,
     RuntimeTools,
     Secret,

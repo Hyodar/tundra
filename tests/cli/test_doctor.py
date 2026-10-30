@@ -265,7 +265,7 @@ def test_doctor_checks_the_given_or_recipe_backend(tmp_path: Path) -> None:
     path = write_recipe_file(
         tmp_path,
         """
-from tundravm import Package, Recipe
+from tundravm.declarative import Package, Recipe
 from tundravm.backends import LimaMkosiBackend
 
 backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")

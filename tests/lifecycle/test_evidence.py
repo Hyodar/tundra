@@ -14,9 +14,10 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm import (
+from tundravm.backends import InProcessBackend, inprocess
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, covered_outputs, render_measurements
+from tundravm.declarative import (
     Backend,
-    Evidence,
     ExternalDelivery,
     File,
     Fragment,
@@ -28,19 +29,19 @@ from tundravm import (
     Secrets,
     Variant,
     bake,
-    evidence,
     lock,
-    release,
-    verify_evidence,
+    lower,
+    measure,
+    read_artifacts,
+    write_lock,
 )
-from tundravm.backends import InProcessBackend, inprocess
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, covered_outputs, render_measurements
-from tundravm.declarative import lower, measure, read_artifacts, write_lock
 from tundravm.declarative.bom import manifest_path
 from tundravm.declarative.lifecycle import select_artifact
 from tundravm.errors import ArtifactError, ValidationError
-from tundravm.evidence import _secrets
+from tundravm.evidence import Evidence, _secrets, evidence
 from tundravm.measure.policy import write_policy
+from tundravm.release import release
+from tundravm.verify import verify_evidence
 
 from .test_measure import build_uki
 
@@ -321,7 +322,7 @@ def test_changed_artifact_fails_integrity(tmp_path: Path) -> None:
 
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

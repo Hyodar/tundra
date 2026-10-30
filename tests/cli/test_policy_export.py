@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import REPO_ROOT, run_main, write_recipe_file
-from tundravm import MeasurementError, Measurements, ValidationError
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
-from tundravm.declarative import File
+from tundravm.declarative import File, Measurements
 from tundravm.declarative.utils import Tdxs
+from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import PLACEHOLDER_NOTE, policy_payload, read_policy
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

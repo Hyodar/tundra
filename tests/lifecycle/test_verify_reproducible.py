@@ -9,17 +9,24 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm import Backend, ReproducibilityError, bake, lock
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
-from tundravm.declarative import Package, Recipe, Variant, lower
+from tundravm.declarative import (
+    Backend,
+    Package,
+    Recipe,
+    Variant,
+    bake,
+    lock,
+    lower,
+)
 from tundravm.declarative.lifecycle import bake_image, read_artifacts
-from tundravm.errors import BackendExecutionError
+from tundravm.errors import BackendExecutionError, ReproducibilityError
 from tundravm.models import REPRODUCE_DIRNAME, BakeRequest, BakeResult
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

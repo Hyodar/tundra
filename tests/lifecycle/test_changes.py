@@ -12,10 +12,12 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm import (
+from tundravm._source import Source
+from tundravm.changes import ChangeReport, changes
+from tundravm.cli import EXIT_OK
+from tundravm.declarative import (
     Backend,
     Build,
-    ChangeReport,
     File,
     Git,
     Install,
@@ -24,16 +26,14 @@ from tundravm import (
     Recipe,
     Variant,
     bake,
-    changes,
-    evidence,
     lock,
+    lower,
     read_artifacts,
+    write_lock,
 )
-from tundravm._source import Source
-from tundravm.cli import EXIT_OK
-from tundravm.declarative import lower, write_lock
 from tundravm.declarative.bom import manifest_path
 from tundravm.errors import ValidationError
+from tundravm.evidence import evidence
 
 REPO = "https://example.com/app.git"
 FIRST = "a" * 40
@@ -283,7 +283,7 @@ def test_a_variant_that_was_not_baked_is_noted_not_added(
 
 
 RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
+from tundravm.declarative import Fragment, Package, Recipe, Variant
 from tundravm.backends.inprocess import InProcessBackend
 
 backend = InProcessBackend()

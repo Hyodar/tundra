@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Artifact, Backend, Sbom, bake, sbom
 from tundravm._source import Source
 from tundravm.declarative import (
+    Artifact,
+    Backend,
     Build,
     Debian,
     Git,
@@ -19,11 +20,14 @@ from tundravm.declarative import (
     Lock,
     Package,
     Recipe,
+    Sbom,
     Variant,
+    bake,
     lock,
     lower,
     read_artifacts,
     read_lock,
+    sbom,
 )
 from tundravm.declarative.bom import SBOM_FORMATS, manifest_path, purl, read_manifest
 from tundravm.declarative.utils import EfiStub

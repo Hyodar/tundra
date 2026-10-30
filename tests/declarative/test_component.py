@@ -7,8 +7,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from tundravm import component
-from tundravm.declarative import Diagnostic, File, Fragment, Package, Resolved
+from tundravm.declarative import Diagnostic, File, Fragment, Package, Resolved, component
 from tundravm.declarative.utils import Composite, ConfigFile, HttpEndpoint
 from tundravm.errors import ValidationError
 from tundravm.testing import assert_clean, assert_diagnostic, fragment_plan
