@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -27,6 +28,7 @@ from tundravm.declarative import (
     Go,
     Install,
     Lock,
+    Mkosi,
     Package,
     Policy,
     Recipe,
@@ -38,7 +40,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.lifecycle import bake_image, check_report, compile_image, fetch
 from tundravm.declarative.utils import EfiStub
-from tundravm.errors import ErrorCode, StateError
+from tundravm.errors import ErrorCode, PolicyError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
@@ -498,7 +500,10 @@ def test_offline_bake_after_fetch_builds_without_network(
         offline=how == "flag",
     )
     (request,) = backend.requests
-    assert request.network is False and request.sources_dir == out / ".sources"
+    assert request.sources_dir == out / ".sources"
+    # the tree owns the network: WithNetwork=no (Mkosi(build_network=False), the default)
+    assert "\nWithNetwork=no\n" in (out / "mkosi" / "mkosi.conf").read_text(encoding="utf-8")
+    assert not any(arg.startswith("--with-network") for arg in request.mkosi_args)
     hooks = (out / "mkosi" / "payload" / "mkosi.build.d" / "50-build.sh").read_text(
         encoding="utf-8"
     )
@@ -507,29 +512,36 @@ def test_offline_bake_after_fetch_builds_without_network(
     assert '[ "$WITH_NETWORK" != 0 ] || export GOPROXY=off' in hooks
 
 
-def test_online_bake_keeps_the_network(tmp_path: Path, repo: tuple[str, str]) -> None:
+def test_online_bake_keeps_the_trees_network(tmp_path: Path, repo: tuple[str, str]) -> None:
     url, first = repo
-    recipe = _recipe(_build(url, "go"))
+    recipe = replace(_recipe(_build(url, "go")), mkosi=Mkosi(build_network=True))
     backend = _Recording()
     bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, build=tmp_path)
-    assert backend.requests[0].network is True
+    assert "\nWithNetwork=yes\n" in (tmp_path / "mkosi" / "mkosi.conf").read_text(encoding="utf-8")
+    assert backend.requests[0].mkosi_args == ()
 
 
-def test_backends_pass_with_network_no_for_an_offline_bake(tmp_path: Path) -> None:
-    variant = tmp_path / "build" / "mkosi" / "default"
-    variant.mkdir(parents=True)
-    (variant / "mkosi.conf").write_text("[Build]\nWithNetwork=true\n", encoding="utf-8")
-    request = BakeRequest(
-        profile="default",
-        build_dir=tmp_path / "build",
-        emit_dir=tmp_path / "build" / "mkosi",
-        network=False,
+def test_an_offline_bake_refuses_a_tree_with_network(tmp_path: Path, repo: tuple[str, str]) -> None:
+    url, first = repo
+    recipe = replace(
+        _recipe(_build(url, "go"), policy=Policy(network_mode="offline")),
+        mkosi=Mkosi(build_network=True),
     )
-    assert "--with-network=no" in LocalLinuxBackend(privilege="none").arguments(request)
+    backend = _Recording()
+    locked = _locked(replace(recipe, policy=None), first)
+    with pytest.raises(PolicyError, match="offline bake cannot build a tree"):
+        bake_image(lower(recipe), None, locked=locked, backend=backend, build=tmp_path, fetch=False)
+    assert backend.requests == []
+
+
+def test_backends_pass_no_network_setting(tmp_path: Path) -> None:
+    (tmp_path / "build" / "mkosi").mkdir(parents=True)
+    request = BakeRequest(
+        profile="default", build_dir=tmp_path / "build", emit_dir=tmp_path / "build" / "mkosi"
+    )
+    local = LocalLinuxBackend(privilege="none").arguments(request)
     lima = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")._mkosi_args(request)
-    assert "--with-network=no" in lima
-    online = BakeRequest(profile="default", build_dir=request.build_dir, emit_dir=request.emit_dir)
-    assert "--with-network=no" not in LocalLinuxBackend(privilege="none").arguments(online)
+    assert not any(arg.startswith("--with-network") for arg in (*local, *lima))
 
 
 # ── EfiStub ──────────────────────────────────────────────────────────

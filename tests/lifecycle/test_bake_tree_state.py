@@ -82,10 +82,24 @@ def test_diff_ignores_mkosi_build_state(tmp_path: Path) -> None:
 
 
 def test_collect_artifacts_skips_directories_and_missing_output(tmp_path: Path) -> None:
-    assert collect_artifacts(tmp_path / "missing") == {}
-    (tmp_path / "default.efi.d").mkdir()
-    (tmp_path / "default.efi").write_bytes(b"MZ")
-    assert collect_artifacts(tmp_path)["qemu"].path == tmp_path / "default.efi"
+    assert collect_artifacts(tmp_path / "missing", ("qemu",)) == {}
+    (tmp_path / "qemu.raw.d").mkdir()
+    (tmp_path / "azure.vhd").mkdir()  # a directory is no artifact
+    (tmp_path / "qemu.raw").write_bytes(b"disk")
+    (tmp_path / "payload.efi").write_bytes(b"MZ")
+    found = collect_artifacts(tmp_path, ("qemu", "azure"))
+    assert list(found) == ["qemu"]
+    assert found["qemu"].path == tmp_path / "qemu.raw"
+    assert found["qemu"].boot_payload == tmp_path / "payload.efi"
+
+
+def test_collect_artifacts_takes_only_the_selected_targets(tmp_path: Path) -> None:
+    for name in ("payload.efi", "qemu.raw", "azure.vhd", "gcp.tar.gz"):
+        (tmp_path / name).write_bytes(b"x")
+    assert list(collect_artifacts(tmp_path, ("azure",))) == ["azure"]
+    both = collect_artifacts(tmp_path, ("azure", "gcp"))
+    assert {t: r.path.name for t, r in both.items()} == {"azure": "azure.vhd", "gcp": "gcp.tar.gz"}
+    assert {r.boot_payload for r in both.values()} == {tmp_path / "payload.efi"}
 
 
 def test_mkosi_setting_reads_every_conf_layer(tmp_path: Path) -> None:

@@ -169,7 +169,7 @@ For a full bake without tools, `bake_in_process(recipe, build=tmp_path)` runs th
 
 ## Faking mkosi
 
-`FakeMkosi` stands in for mkosi at the process boundary: it replaces `invoke` and `needs_sudo` of the adapter (`tundravm._mkosi`), so a real `LocalLinuxBackend` builds its command line, reads the resolved `summary --json`, collects artifacts and records its toolchain while nothing forks and nothing needs privileges. Every call is kept in `calls` (`FakeCall(argv, cwd, log, stdout)`, with `.verb` and `.option("--image-id")`); `summary --json` returns `summary` (a default with a pinned Debian trixie tools tree otherwise); `build` writes `outputs` (default `("{image_id}.efi",)`) into the `--output-directory` it was given; `fail=N` makes `fail_verb` (default `build`) raise `MkosiError` with `log` as its log; `sudo=True` makes the backend take its sudo path.
+`FakeMkosi` stands in for mkosi at the process boundary: it replaces `invoke` and `needs_sudo` of the adapter (`tundravm._mkosi`), so a real `LocalLinuxBackend` builds its command line, reads the resolved `summary --json`, collects artifacts and records its toolchain while nothing forks and nothing needs privileges. Every call is kept in `calls` (`FakeCall(argv, cwd, log, stdout)`, with `.verb`, `.option("--output-directory")` and `.options("--dependency")`); `summary --json` returns `summary` (by default a pinned Debian trixie tools tree and the images the call selects: `payload`, the wrappers its `--dependency=` options name, `main`); `build` writes `outputs` (default `("payload.efi", "qemu.raw")`, plus `azure.vhd`/`gcp.tar.gz` per `--dependency=`) into the `--output-directory` it was given; `fail=N` makes `fail_verb` (default `build`) raise `MkosiError` with `log` as its log; `sudo=True` makes the backend take its sudo path.
 
 ```python
 from tundravm.backends import LocalLinuxBackend
@@ -179,7 +179,7 @@ from tundravm.testing import FakeMkosi
 def test_bakes_through_mkosi(fake_mkosi: FakeMkosi, request_for_default):
     result = LocalLinuxBackend().execute(request_for_default)
     assert fake_mkosi.verbs() == ["summary", "build"]
-    assert result.profiles["default"].artifacts["qemu"].path.name == "default.efi"
+    assert result.profiles["default"].artifacts["qemu"].path.name == "qemu.raw"
 ```
 
 `FakeMkosi().install(monkeypatch.setattr)` does the same outside the fixture. `build_unavailable()` returns why this host cannot run a real Linux-backend build without a password prompt (not x86-64 Linux, no user namespaces and no non-interactive `sudo`), or `None`; the repository's integration tests skip on it.

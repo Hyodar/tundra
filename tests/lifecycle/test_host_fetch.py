@@ -299,9 +299,9 @@ def test_bake_without_fetch_fails_fast_naming_tundravm_fetch(
 
 
 def _project(tmp_path: Path, conf: str = "") -> BakeRequest:
-    variant = tmp_path / "build" / "mkosi" / "default"
-    variant.mkdir(parents=True)
-    (variant / "mkosi.conf").write_text("[Output]\nFormat=directory\n" + conf, encoding="utf-8")
+    tree = tmp_path / "build" / "mkosi"
+    tree.mkdir(parents=True)
+    (tree / "mkosi.conf").write_text("[Output]\nFormat=disk\n" + conf, encoding="utf-8")
     return BakeRequest(
         profile="default",
         build_dir=tmp_path / "build",
@@ -313,7 +313,7 @@ def _project(tmp_path: Path, conf: str = "") -> BakeRequest:
 def test_local_backend_mounts_the_sources_beside_the_config_directory(tmp_path: Path) -> None:
     request = _project(tmp_path)
     cmd = LocalLinuxBackend(privilege="none").arguments(request)
-    mkosi_dir = (tmp_path / "build" / "mkosi" / "default").resolve()
+    mkosi_dir = (tmp_path / "build" / "mkosi").resolve()
     sources = (tmp_path / "build" / ".sources").resolve()
     assert cmd[cmd.index(f"--build-sources={mkosi_dir}") :][:3] == [
         f"--build-sources={mkosi_dir}",
@@ -338,7 +338,7 @@ def test_local_backend_keeps_the_recipes_build_sources(tmp_path: Path) -> None:
 def test_lima_backend_mounts_the_sources(tmp_path: Path) -> None:
     request = _project(tmp_path)
     lima = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")._mkosi_args(request)
-    assert "--build-sources=/home/debian/mnt/mkosi/default" in lima
+    assert "--build-sources=/home/debian/mnt/mkosi" in lima
     assert "--build-sources=/home/debian/mnt/.sources:tundravm-sources" in lima
 
 

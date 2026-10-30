@@ -728,6 +728,7 @@ def lock_image(
         img.backend,
         previous=None if previous is None else previous.lockfile.toolchain,
         update=TOOLCHAIN_UPDATE in update,
+        tools_tree=img.tools_tree,
     )
     update = [name for name in update if name != TOOLCHAIN_UPDATE]
     unknown = [

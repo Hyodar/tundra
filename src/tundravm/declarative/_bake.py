@@ -28,7 +28,7 @@ from tundravm._source import (
 from tundravm.backends.base import BuildBackend
 from tundravm.check import check
 from tundravm.compiler import PHASE_ORDER, MkosiEmission
-from tundravm.errors import LintError, LockfileError, StateError, ValidationError
+from tundravm.errors import LintError, LockfileError, PolicyError, StateError, ValidationError
 from tundravm.lockfile import LOCKFILE_VERSION, compare_lock, read_lockfile, recipe_digest
 from tundravm.models import (
     ArtifactRef,
@@ -49,7 +49,7 @@ from tundravm.observability import (
 from tundravm.policy import ensure_bake_policy
 from tundravm.toolchain import Toolchain, running_toolchain
 
-from ._compile import emit
+from ._compile import emit, mkosi_argv
 from ._lowered import Lowered
 
 _DRIFT_MESSAGE_LINES = 15
@@ -95,12 +95,20 @@ def bake(
             raise ValidationError(
                 "No build backend configured.",
                 hint=(
-                    "Pass --backend (lima, nix or local), or bind "
+                    "Pass --backend (lima or local), or bind "
                     "`backend = LimaMkosiBackend()` in the recipe file."
                 ),
             )
         backend = lowered.backend
         offline = lowered.policy.network_mode == "offline"
+        if offline and lowered.mkosi.with_network:
+            raise PolicyError(
+                "An offline bake cannot build a tree whose build scripts reach the network "
+                "(Mkosi(build_network=True) writes WithNetwork=yes).",
+                hint="Drop build_network=True (the tree then writes WithNetwork=no), or bake "
+                "with network (Policy(network_mode='online')).",
+                context={"operation": "bake"},
+            )
         sources_dir = _fetched_sources(lowered, destination, backend, offline=offline)
         profiles: dict[str, ProfileBuildResult] = {}
         for name in sorted(active):
@@ -118,7 +126,7 @@ def bake(
                 or lowered.kernel_source(name)
                 or lowered.deb_file(name)
                 else None,
-                network=not offline,
+                mkosi_args=tuple(mkosi_argv(lowered, name)),
                 toolchain=locked_toolchain,
             )
             logger.log(

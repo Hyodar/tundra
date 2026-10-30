@@ -100,26 +100,28 @@ def test_lima_prepare_creates_directories_when_binary_exists(
     assert request.emit_dir.exists()
 
 
-def _bake_tree_request(tmp_path: Path) -> BakeRequest:
+def _bake_tree_request(tmp_path: Path, mkosi_args: tuple[str, ...] = ()) -> BakeRequest:
     """A request laid out like ``bake``: the mkosi tree under the build directory."""
     build = tmp_path / "build"
-    (build / "mkosi" / "default").mkdir(parents=True)
-    return BakeRequest(profile="default", build_dir=build, emit_dir=build / "mkosi")
+    (build / "mkosi" / "payload").mkdir(parents=True)
+    return BakeRequest(
+        profile="default", build_dir=build, emit_dir=build / "mkosi", mkosi_args=mkosi_args
+    )
 
 
-def test_lima_build_mkosi_command_per_directory(tmp_path: Path) -> None:
-    request = _bake_tree_request(tmp_path)
+def test_lima_build_mkosi_command_is_paths_and_the_selection(tmp_path: Path) -> None:
+    request = _bake_tree_request(tmp_path, ("--profile=dev", "--dependency=azure"))
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
     args = backend._mkosi_args(request)
 
     assert args == [
-        "--directory=/home/debian/mnt/mkosi/default",
+        "--directory=/home/debian/mnt/mkosi",
         "--force",
-        "--image-id=default",
         "--cache-directory=/home/debian/mkosi-cache",
         "--output-directory=/home/debian/mkosi-output",
-        "--tools-tree=default",
+        "--profile=dev",
+        "--dependency=azure",
     ]
     command = backend._in_state([*args, "build"])
     assert command.startswith(f"cd /home/debian/mkosi-state && {VM_MKOSI} ")

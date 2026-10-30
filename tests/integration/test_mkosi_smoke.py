@@ -1,70 +1,111 @@
-"""Integration smoke tests: emit + build via local_linux backend.
+"""Integration smoke tests: emit + build the mkosi-native tree via the local_linux backend.
 
 They need a host the Linux backend builds on: x86-64 Linux with user namespaces or sudo.
 Run with: uv run pytest tests/integration/test_mkosi_smoke.py -m integration
 """
 
-import json
 import re
+import struct
+import tarfile
+import uuid
 from pathlib import Path
 
 import pytest
 
-from tundravm import File, Package, Recipe, Service, Setting, User, compile
+from tundravm import File, Package, Recipe, Service, User, compile
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import Debian, lock, lower
+from tundravm.declarative import Debian, Variant, lock, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.declarative.utils import Tdxs
 from tundravm.models import BakeResult
 
+SNAPSHOT = "20251113T083151Z"
+ESP_TYPE = uuid.UUID("c12a7328-f81f-11d2-ba4b-00a0c93ec93b")
+"""The GPT partition type GUID of an EFI system partition."""
+SECTOR = 512
 
-def _bake(recipe: Recipe, backend: LocalLinuxBackend, output_dir: Path) -> BakeResult:
+
+def _bake(recipe: Recipe, variant: str, output_dir: Path) -> BakeResult:
     result, _ = bake_image(
-        lower(recipe), ("default",), locked=None, backend=backend, build=output_dir
+        lower(recipe), (variant,), locked=None, backend=LocalLinuxBackend(), build=output_dir
     )
     return result
 
 
-@pytest.mark.integration
-def test_directory_format_pipeline(tmp_path: Path) -> None:
-    """Emit + bake a minimal Debian image in directory format."""
-    recipe = Recipe(
+def _gpt_partitions(head: bytes) -> list[tuple[uuid.UUID, int, int]]:
+    """``(type, first LBA, last LBA)`` of each used GPT entry in a disk's first sectors,
+    read the way ``measure/`` reads the GPT."""
+    header = head[SECTOR : SECTOR + 92]
+    assert header[:8] == b"EFI PART", "no GPT header"
+    entries = struct.unpack_from("<Q", header, 72)[0]
+    count, size = struct.unpack_from("<II", header, 80)
+    table = head[entries * SECTOR : entries * SECTOR + count * size]
+    found = []
+    for offset in range(0, len(table), size):
+        entry = table[offset : offset + size]
+        if any(entry[:16]):
+            first, last = struct.unpack_from("<QQ", entry, 32)
+            found.append((uuid.UUID(bytes_le=entry[:16]), first, last))
+    return found
+
+
+def _recipe() -> Recipe:
+    return Recipe(
         "smoke",
         items=(
-            Package("systemd"),
-            Package("udev"),
             File("/etc/tdx-test", "integration-test\n"),
             Service("hello", "/bin/true", restart="no"),
             User("appuser", system=True, shell="/bin/false"),
-            Setting("Content", "Bootable", ("no",)),
         ),
-        platform=Debian("bookworm", boot=None),
+        platform=Debian("trixie", snapshot=SNAPSHOT),
+        variants=(
+            Variant("default", outputs=("qemu",)),
+            Variant("cloud", outputs=("azure", "gcp")),
+        ),
     )
 
-    emit_dir = tmp_path / "mkosi"
-    compile(recipe).write(emit_dir)
 
-    unit_path = (
-        emit_dir
-        / "payload"
-        / "mkosi.extra"
-        / "usr"
-        / "lib"
-        / "systemd"
-        / "system"
-        / "hello.service"
-    )
-    assert unit_path.exists(), "hello.service not emitted"
+@pytest.mark.integration
+def test_default_selection_builds_the_payload_and_the_qemu_disk(tmp_path: Path) -> None:
+    """The main image is a raw GPT disk with one ESP around ``payload.efi``."""
+    result = _bake(_recipe(), "default", tmp_path / "build")
 
-    backend = LocalLinuxBackend(
-        mkosi_args=["--format=directory", "--bootable=no"],
-    )
-    bake_result = _bake(recipe, backend, tmp_path / "output")
+    output = tmp_path / "build" / "default" / "output"
+    uki, disk = output / "payload.efi", output / "qemu.raw"
+    assert uki.read_bytes()[:2] == b"MZ"
+    assert not (output / "azure.vhd").exists() and not (output / "gcp.tar.gz").exists()
+    artifact = result.profiles["default"].artifacts["qemu"]
+    assert (artifact.path, artifact.boot_payload) == (disk, uki)
+    with disk.open("rb") as handle:
+        partitions = _gpt_partitions(handle.read(1 << 20))
+    assert [kind for kind, _, _ in partitions] == [ESP_TYPE]
+    ((_, first, last),) = partitions
+    assert (last - first + 1) * SECTOR >= uki.stat().st_size  # the ESP holds the UKI
 
-    for _pname, presult in bake_result.profiles.items():
-        if presult.report_path and presult.report_path.exists():
-            report = json.loads(presult.report_path.read_text())
-            assert "backend" in report
+
+@pytest.mark.integration
+def test_cloud_selection_builds_the_vhd_and_the_gcp_archive(tmp_path: Path) -> None:
+    """``--dependency=azure --dependency=gcp``: the wrappers' converted disks, whole MiB and
+    whole GiB, each a GPT with one ESP around the same payload."""
+    result = _bake(_recipe(), "cloud", tmp_path / "build")
+
+    output = tmp_path / "build" / "cloud" / "output"
+    artifacts = result.profiles["cloud"].artifacts
+    assert set(artifacts) == {"azure", "gcp"}
+    assert {ref.boot_payload for ref in artifacts.values()} == {output / "payload.efi"}
+
+    vhd = (output / "azure.vhd").read_bytes()
+    assert vhd[-512:][:8] == b"conectix" and (len(vhd) - 512) % (1 << 20) == 0
+    assert [kind for kind, _, _ in _gpt_partitions(vhd[: 1 << 20])] == [ESP_TYPE]
+
+    with tarfile.open(output / "gcp.tar.gz", "r:gz") as archive:
+        (member,) = archive.getmembers()
+        assert member.name == "disk.raw" and member.size % (1 << 30) == 0
+        assert (member.uid, member.gid, member.mode) == (0, 0, 0o644)
+        stream = archive.extractfile(member)
+        assert stream is not None
+        head = stream.read(1 << 20)
+    assert [kind for kind, _, _ in _gpt_partitions(head)] == [ESP_TYPE]
 
 
 def test_tdxs_fragment_emission(tmp_path: Path) -> None:
@@ -122,24 +163,3 @@ def test_tdxs_fragment_emission(tmp_path: Path) -> None:
     assert "groupadd --system tdx" in postinst_text
     assert "useradd --system" in postinst_text
     assert "systemctl enable tdxs.socket" in postinst_text
-
-
-@pytest.mark.integration
-def test_raw_disk_format(tmp_path: Path) -> None:
-    """Bake a raw disk image and verify artifact collection."""
-    recipe = Recipe(
-        "smoke",
-        items=(Package("systemd"), Setting("Content", "Bootable", ("no",))),
-        platform=Debian("bookworm", boot=None),
-    )
-
-    backend = LocalLinuxBackend(
-        mkosi_args=["--format=disk", "--bootable=no"],
-    )
-    bake_result = _bake(recipe, backend, tmp_path / "output")
-
-    for _pname, presult in bake_result.profiles.items():
-        for _target, artifact in presult.artifacts.items():
-            art_path = Path(artifact.path)
-            assert art_path.exists(), f"Artifact not found: {art_path}"
-            assert art_path.stat().st_size > 0, f"Empty artifact: {art_path}"

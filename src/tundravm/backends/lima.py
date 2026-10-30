@@ -36,10 +36,9 @@ from tundravm.backends.base import (
     collect_artifacts,
     failure_message,
     mkosi_project,
-    network_args,
     run_streaming,
 )
-from tundravm.backends.local_linux import SUMMARY_FILENAME, cloud_tools
+from tundravm.backends.local_linux import SUMMARY_FILENAME
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 from tundravm.toolchain import MKOSI_PIN, MkosiTool, ToolsTree, pinned_mkosi
@@ -241,7 +240,7 @@ class LimaMkosiBackend:
         )
 
         profile_result = ProfileBuildResult(profile=request.profile)
-        profile_result.artifacts = collect_artifacts(output_dir)
+        profile_result.artifacts = collect_artifacts(output_dir, request.output_targets)
         return BakeResult(profiles={request.profile: profile_result})
 
     def cleanup(self, request: BakeRequest) -> None:
@@ -264,20 +263,15 @@ class LimaMkosiBackend:
         return f"tdx-builder-{h}"
 
     def _mkosi_args(self, request: BakeRequest) -> list[str]:
-        """mkosi's arguments inside the VM, before the verb (absolute guest paths)."""
-        mkosi_dir, native = mkosi_project(request.emit_dir.resolve(), request.profile)
+        """mkosi's arguments inside the VM, before the verb (absolute guest paths): only
+        paths and the selection (``request.mkosi_args``); the tree carries every setting."""
+        mkosi_dir = mkosi_project(request.emit_dir.resolve())
         args = [
             f"--directory={self._vm_path(request, mkosi_dir)}",
             "--force",
-            f"--image-id={request.profile}",
             f"--cache-directory={MKOSI_CACHE_DIR}",
             f"--output-directory={MKOSI_OUTPUT_DIR}",
         ]
-        if not any(arg.startswith("--tools-tree") for arg in self.mkosi_args):
-            args.append("--tools-tree=default")
-            packages = cloud_tools(request.output_targets)
-            if packages:
-                args.append(f"--tools-tree-package={','.join(packages)}")
         if request.sources_dir is not None:
             # under the build directory, so the VM sees it through the same mount
             args.extend(
@@ -288,9 +282,7 @@ class LimaMkosiBackend:
                     mkosi_args=self.mkosi_args,
                 )
             )
-        args.extend(network_args(request))
-        if native:
-            args.append(f"--profile={request.profile}")
+        args.extend(request.mkosi_args)
         args.extend(self.mkosi_args)
         return args
 

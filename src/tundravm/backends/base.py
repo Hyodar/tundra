@@ -7,7 +7,7 @@ import re
 import subprocess
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -173,16 +173,10 @@ def is_mkosi_state(rel: str) -> bool:
     return len(parts) <= 2 and parts[-1] in MKOSI_STATE_NAMES
 
 
-def mkosi_project(emit_dir: Path, profile: str) -> tuple[Path, bool]:
-    """The directory mkosi builds *profile* from, and whether it needs ``--profile``.
-
-    Native profiles (``mkosi.profiles/<name>/``) build from *emit_dir*; per-directory
-    trees from ``<emit_dir>/<profile>/``, else *emit_dir* itself.
-    """
-    if (emit_dir / "mkosi.profiles" / profile).exists():
-        return emit_dir, True
-    per_dir = emit_dir / profile
-    return (per_dir if per_dir.exists() else emit_dir), False
+def mkosi_project(emit_dir: Path) -> Path:
+    """The directory mkosi builds every variant from: the tree root. The variant is selected
+    with ``BakeRequest.mkosi_args`` (``--profile=``, ``--dependency=``)."""
+    return emit_dir
 
 
 def mkosi_setting(project: Path, key: str) -> str | None:
@@ -233,54 +227,28 @@ def build_sources_args(
     return args
 
 
-OFFLINE_ARGS = ("--with-network=no",)
-"""The mkosi flag of an offline bake: build and postinst scripts get no network.
+ARTIFACT_NAMES: dict[OutputTarget, str] = {
+    "qemu": "qemu.raw",
+    "azure": "azure.vhd",
+    "gcp": "gcp.tar.gz",
+}
+"""What each target's image is called in the output directory: the main image's raw disk
+and the cloud wrappers' converted disks."""
+BOOT_PAYLOAD_NAME = "payload.efi"
+"""The UKI every disk of the tree boots: the payload subimage's output."""
 
-It overrides the emitted ``WithNetwork=``; mkosi itself still installs the
-distribution packages from the configured mirror."""
 
-
-def network_args(request: BakeRequest) -> list[str]:
-    """:data:`OFFLINE_ARGS` when *request* bakes offline, else nothing."""
-    return [] if request.network else list(OFFLINE_ARGS)
-
-
-def collect_artifacts(output_dir: Path) -> dict[OutputTarget, ArtifactRef]:
-    """Scan *output_dir* for mkosi build artifacts (files only; unreadable dirs yield none)."""
+def collect_artifacts(
+    output_dir: Path, targets: Sequence[OutputTarget]
+) -> dict[OutputTarget, ArtifactRef]:
+    """The artifacts of *targets* in *output_dir* (:data:`ARTIFACT_NAMES`), each with the
+    UKI it boots (:data:`BOOT_PAYLOAD_NAME`) as its boot payload; a target whose image is
+    missing has no artifact."""
+    uki = output_dir / BOOT_PAYLOAD_NAME
+    payload = uki if uki.is_file() else None
     artifacts: dict[OutputTarget, ArtifactRef] = {}
-    try:
-        names = sorted(p for p in output_dir.iterdir() if p.is_file())
-    except OSError:
-        return artifacts
-
-    def first(pattern: str) -> Path | None:
-        return next((p for p in names if p.match(pattern)), None)
-
-    if (efi := first("*.efi*")) is not None:
-        artifacts["qemu"] = ArtifactRef(target="qemu", path=efi)
-    if "qemu" not in artifacts and (raw := first("*.raw*")) is not None:
-        artifacts["qemu"] = ArtifactRef(target="qemu", path=raw)
-    if (qcow2 := first("*.qcow2*")) is not None:
-        artifacts["qemu"] = ArtifactRef(target="qemu", path=qcow2)
-    if (vhd := first("*.vhd*")) is not None:
-        artifacts["azure"] = ArtifactRef(target="azure", path=vhd)
-    if (tar_gz := first("*.tar.gz*")) is not None:
-        artifacts["gcp"] = ArtifactRef(target="gcp", path=tar_gz)
-    ukis = [p for p in names if p.suffix == ".efi"]
-    for target, ref in artifacts.items():
-        if ref.path.suffix != ".efi" and (uki := boot_payload_beside(ref.path, ukis)):
-            artifacts[target] = replace(ref, boot_payload=uki)
+    for target in targets:
+        path = output_dir / ARTIFACT_NAMES[target]
+        if path.is_file():
+            artifacts[target] = ArtifactRef(target=target, path=path, boot_payload=payload)
     return artifacts
-
-
-def boot_payload_beside(disk: Path, ukis: Sequence[Path]) -> Path | None:
-    """The UKI among *ukis* (mkosi's ``.efi`` outputs beside *disk*) that *disk* boots.
-
-    The compiled postoutput scripts wrap ``<image>.efi`` into ``<image>.vhd`` and
-    ``<image>.tar.gz``, so the UKI whose name minus ``.efi`` prefixes the disk's name
-    (the longest one) is it; else the only UKI there; else ``None``.
-    """
-    named = [uki for uki in ukis if disk.name.startswith(uki.name.removesuffix(".efi") + ".")]
-    if named:
-        return max(named, key=lambda uki: len(uki.name))
-    return ukis[0] if len(ukis) == 1 else None

@@ -687,7 +687,7 @@ class BakeRequest:
     """One profile build. ``on_output`` receives each backend output line as it
     arrives; when it is ``None`` a failing backend puts the output tail in its
     error message instead. ``on_notice`` receives what the backend decided on the
-    user's behalf (e.g. adding a tools tree), as ``(level, message)`` with level
+    user's behalf (e.g. running mkosi with sudo), as ``(level, message)`` with level
     ``info`` or ``warning``."""
 
     profile: str
@@ -699,8 +699,9 @@ class BakeRequest:
     sources_dir: Path | None = None
     """The host-fetched checkouts (``<build_dir>/.sources``) the backend mounts at
     ``$SRCDIR/tundravm-sources``; ``None`` when the build fetches nothing on the host."""
-    network: bool = True
-    """``False`` for an offline bake: mkosi runs the build scripts with ``--with-network=no``."""
+    mkosi_args: tuple[str, ...] = ()
+    """The mkosi options that select this variant of the tree (``declarative.mkosi_argv``:
+    ``--profile=``, ``--dependency=``); backends pass them before the verb."""
     toolchain: Toolchain | None = None
     """The lockfile's toolchain (mkosi, the tools tree); ``None`` without a lockfile."""
 

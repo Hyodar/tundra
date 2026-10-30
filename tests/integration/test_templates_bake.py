@@ -1,7 +1,9 @@
 """Bake the ``service`` and ``cloud`` starter templates for real and check what lands in the image.
 
-Needs a host the Linux backend builds on and non-interactive sudo (the checks read the
-built tree as root); skipped otherwise.
+Each bake builds the tree's default selection (``payload.efi`` and ``qemu.raw``); the checks
+read the payload's root, unpacked as root from the UKI's ``.initrd`` (the whole OS of an
+initramfs payload). Needs a host the Linux backend builds on and non-interactive sudo;
+skipped otherwise.
 Run with: uv run pytest tests/integration/test_templates_bake.py -m integration
 """
 
@@ -16,11 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.backends.base import MountSpec, Requirement
+from tundravm.backends.base import BOOT_PAYLOAD_NAME, MountSpec, Requirement
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Repository, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.errors import BackendExecutionError
+from tundravm.measure import pe
 from tundravm.models import BakeRequest, BakeResult
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
@@ -48,6 +51,30 @@ requires_mkosi = pytest.mark.skipif(
 )
 
 
+_DECOMPRESS = {
+    b"\x28\xb5\x2f\xfd": ["zstd", "-dc"],
+    b"\x1f\x8b": ["gzip", "-dc"],
+    b"\xfd7zXZ\x00": ["xz", "-dc"],
+}
+
+
+def _unpack_payload(output: Path, root: Path) -> Path:
+    """The payload's root: the first cpio archive of ``payload.efi``'s ``.initrd``, unpacked
+    as root (ownership, modes and device nodes as the image has them) into *root*."""
+    initrd = pe.parse((output / BOOT_PAYLOAD_NAME).read_bytes()).section(".initrd")
+    assert initrd, f"{output / BOOT_PAYLOAD_NAME} has no .initrd"
+    command = next((cmd for magic, cmd in _DECOMPRESS.items() if initrd.startswith(magic)), None)
+    if command is not None:
+        initrd = subprocess.run(command, input=initrd, capture_output=True, check=True).stdout
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["sudo", "cpio", "-idm", "--quiet", "--no-absolute-filenames", "-D", str(root)],
+        input=initrd,
+        check=True,
+    )
+    return root
+
+
 def _sudo_read(path: Path) -> str:
     """Read a root-owned file of the built tree."""
     return subprocess.run(
@@ -67,7 +94,8 @@ def _sudo_readlink(path: Path) -> str:
 
 @pytest.fixture(scope="module")
 def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """The ``service`` template's ``default`` variant baked once, in directory format."""
+    """The ``service`` template's ``default`` variant baked once, its payload unpacked into
+    ``<build>/root``."""
     if build_unavailable() is not None or not _sudo_works():
         pytest.skip("needs a Linux build host and non-interactive sudo")
     tmp_path = tmp_path_factory.mktemp("service")
@@ -83,10 +111,13 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         encoding="utf-8",
     )
     loaded = load_file(recipe_path)
-    backend = LocalLinuxBackend(mkosi_args=["--format=directory"])
+    backend = LocalLinuxBackend()
     out = tmp_path / "build"
     try:
         bake_image(loaded.lowered(), ("default",), locked=None, backend=backend, build=out)
+        output = out / "default" / "output"
+        assert (output / "qemu.raw").is_file(), sorted(p.name for p in output.iterdir())
+        _unpack_payload(output, out / "root")
         yield out
     finally:
         subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)
@@ -94,7 +125,7 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 
 def test_service_template_bakes_with_its_app(service_build: Path) -> None:
     """The service template builds; its unit, server, page and user are in the tree."""
-    root = service_build / "default" / "output" / "default"
+    root = service_build / "root"
     unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
     assert "ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www" in unit
     assert "User=app\n" in unit and "ProtectSystem=strict\n" in unit
@@ -121,7 +152,7 @@ def test_service_template_bakes_with_its_app(service_build: Path) -> None:
 
 def test_service_template_keeps_its_curated_kernel_modules(service_build: Path) -> None:
     """mkosi kept ``KernelModules=`` (the qemu set) and dropped the rest; debloat kept them."""
-    root = service_build / "default" / "output" / "default"
+    root = service_build / "root"
     found = subprocess.run(
         ["sudo", "find", str(root / "usr/lib/modules"), "-name", "*.ko*", "-printf", "%f\\n"],
         capture_output=True,
@@ -140,7 +171,7 @@ def test_service_template_units_verify_and_are_sandboxed(service_build: Path) ->
     """``systemd-analyze verify`` accepts every generated unit in the baked image, and the
     strict sandbox keeps ``app.service`` at exposure level OK (1.4 with systemd 255; the
     pre-step-7 unit scored 9.0 UNSAFE)."""
-    root = service_build / "default" / "output" / "default"
+    root = service_build / "root"
     generated = service_build / "mkosi" / "payload" / "mkosi.extra" / "usr/lib/systemd/system"
     units = sorted(p.name for p in generated.iterdir() if p.is_file())
     assert "app.service" in units
@@ -176,7 +207,7 @@ NETWORK_UNITS = (
 def test_service_template_brings_up_the_network_behind_a_firewall(service_build: Path) -> None:
     """TeeBase's ``Network`` and ``Firewall``: the ``.network`` file and the ruleset survive
     debloat, their units are enabled and unmasked, and the kernel keeps nftables' modules."""
-    root = service_build / "default" / "output" / "default"
+    root = service_build / "root"
     network = _sudo_read(root / "etc/systemd/network/50-tundravm.network")
     assert "Name=en* eth*\n" in network and "DHCP=yes\n" in network
     ruleset = _sudo_read(root / "etc/nftables.conf")
@@ -227,7 +258,7 @@ def test_service_template_loads_nftables_modules_with_their_dependencies(
     """Every module ``modules.dep`` names for nf_tables and nft_ct is in the image, libcrc32c's
     ``crc32c`` softdep has a provider (the first boots' nftables.service failed without one),
     and the index lists only kept modules (depmod ran after mkosi pruned them)."""
-    root = service_build / "default" / "output" / "default"
+    root = service_build / "root"
     kdir = _modules_dir(root)
     present = set(
         subprocess.run(
@@ -252,7 +283,7 @@ def test_service_template_debloat_masks_triggers_and_keeps_ordering(service_buil
     """A trigger whose unit debloat masks is masked too (systemd-ask-password-console.path
     failed the first boots), the targets enabled units order against stay, networkd waits for
     the firewall, and no SSH host private key is left in the image."""
-    root = service_build / "default" / "output" / "default"
+    root = service_build / "root"
     system = root / "etc/systemd/system"
     for unit in ("systemd-ask-password-console.path", "proc-sys-fs-binfmt_misc.automount"):
         assert _sudo_readlink(system / unit) == "/dev/null", unit
@@ -272,7 +303,7 @@ def test_service_template_debloat_masks_triggers_and_keeps_ordering(service_buil
 @pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
 def test_service_template_network_units_verify(service_build: Path) -> None:
     """``systemd-analyze verify`` accepts the networkd and nftables units with their drop-ins."""
-    root = service_build / "default" / "output" / "default"
+    root = service_build / "root"
     verify = subprocess.run(
         ["sudo", "systemd-analyze", "verify", f"--root={root}", *NETWORK_UNITS],
         capture_output=True,
@@ -338,10 +369,9 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             in_image=False,
         ),
     )
-    # A directory-format bake checks the image, not the Azure/GCP disks (they need qemu-img).
-    variants = tuple(replace(variant, outputs=("qemu",)) for variant in recipe.variants)
-    recipe = replace(recipe, items=(*recipe.items, *repositories), variants=variants)
-    backend = _Capturing(LocalLinuxBackend(mkosi_args=["--format=directory"]))
+    # The checks read the payload; the default selection builds no Azure/GCP wrapper.
+    recipe = replace(recipe, items=(*recipe.items, *repositories))
+    backend = _Capturing(LocalLinuxBackend())
     out = tmp_path / "build"
     try:
         try:
@@ -352,8 +382,11 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
 
         tree = out / "mkosi"
         conf = (tree / "mkosi.conf").read_text(encoding="utf-8")
-        assert "Snapshot=20251113T083151Z\n" in conf
-        assert "ToolsTreeSnapshot=20251113T083151Z\n" in conf
+        assert "\nSnapshot=20251113T083151Z\n" in conf
+        # the tools tree is the image's release at the image's snapshot (mkosi's default
+        # release is testing, whose package-manager profile wants a dnf5 trixie lacks)
+        assert "\nToolsTreeRelease=trixie\n" in conf
+        assert "\nToolsTreeSnapshot=20251113T083151Z\n" in conf
         assert "Mirror=" not in conf and "SandboxTrees=" not in conf
         sandbox = tree / "mkosi.sandbox/etc/apt"
         sources = (sandbox / "sources.list.d/debian-backports.sources").read_text(encoding="utf-8")
@@ -365,7 +398,10 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         for suite in ("trixie-backports", "sid", "trixie-updates", "bookworm-security"):
             assert f" {suite} InRelease" in fetched, suite
 
-        root = out / "default" / "output" / "default"
+        output = out / "default" / "output"
+        assert {"payload.efi", "qemu.raw"} <= {p.name for p in output.iterdir()}
+        assert not (output / "azure.vhd").exists() and not (output / "gcp.tar.gz").exists()
+        root = _unpack_payload(output, out / "root")
         # The image runs trixie's kernel (6.12): sid, pinned to 100, ships a newer one.
         kernels = re.findall(r"Unpacking (linux-image-\S+) \((\S+)\)", fetched)
         assert kernels, "\n".join(line for line in backend.lines if "linux-image" in line)

@@ -1,8 +1,9 @@
 """Bake the ``minimal`` and ``service`` templates and boot them under QEMU with OVMF.
 
-The UKI boots through ``-kernel`` as ``deploy --target qemu`` boots it without TDX, on KVM
-when ``/dev/kvm`` is usable and on TCG otherwise. The ``service`` template boots unchanged and
-the host fetches its page through a QEMU port forward: network, firewall and app end to end.
+The payload's UKI (``payload.efi``, which ``qemu.raw`` carries on its ESP) boots through
+``-kernel``, on KVM when ``/dev/kvm`` is usable and on TCG otherwise. The ``service`` template
+boots unchanged and the host fetches its page through a QEMU port forward: network, firewall
+and app end to end.
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
 ``qemu-system-x86_64`` and OVMF; skipped otherwise.
 CI's ``boot`` job runs it.
@@ -62,7 +63,7 @@ def _bake_and_boot(
     forward: Mapping[int, int] | None = None,
     wait_http: Sequence[str] = (),
 ) -> BootResult:
-    """Bake *template*'s ``default`` variant (a UKI), unchanged, and boot it."""
+    """Bake *template*'s ``default`` variant, unchanged, and boot its UKI (``payload.efi``)."""
     recipe_path = tmp / "node.py"
     recipe_path.write_text(
         render_recipe_template(
@@ -78,9 +79,12 @@ def _bake_and_boot(
             lower(recipe), ("default",), locked=None, backend=backend, build=out
         )
         (artifact,) = (artifact for artifact in artifacts if artifact.target == "qemu")
+        assert artifact.path.name == "qemu.raw", artifact.path
+        uki = artifact.boot_payload
+        assert uki is not None and uki.name == "payload.efi", artifact
         log = Path(LOG_DIR or tmp) / f"{template}.console.log"
         result = boot(
-            artifact,
+            uki,
             timeout=BOOT_TIMEOUT,
             memory="4G",
             expect_units=expect_units,

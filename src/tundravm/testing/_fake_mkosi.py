@@ -22,8 +22,11 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from tundravm._mkosi import MkosiResult
 
-DEFAULT_OUTPUTS = ("{image_id}.efi",)
-"""What a fake ``build`` writes: a UKI named after ``--image-id``."""
+DEFAULT_OUTPUTS = ("payload.efi", "qemu.raw")
+"""What a fake ``build`` writes for the tree's default selection: the payload's UKI and the
+QEMU disk; each ``--dependency=azure``/``gcp`` adds ``azure.vhd``/``gcp.tar.gz``."""
+WRAPPER_OUTPUTS = {"azure": "azure.vhd", "gcp": "gcp.tar.gz"}
+"""What each cloud wrapper subimage a ``--dependency=`` selects leaves in the output."""
 
 DEFAULT_TOOLS = {"Distribution": "debian", "Release": "trixie", "Snapshot": "20251020T000000Z"}
 """The tools tree a fake ``summary --json`` resolves."""
@@ -44,6 +47,10 @@ class FakeCall:
         words = [arg for arg in self.argv if not arg.startswith("-")]
         return words[-1] if words else ""
 
+    def options(self, name: str) -> list[str]:
+        """Every ``--name=value`` value in :attr:`argv`, in order."""
+        return [arg.split("=", 1)[1] for arg in self.argv if arg.startswith(f"{name}=")]
+
     def option(self, name: str) -> str | None:
         """The value of the last ``--name=value`` in :attr:`argv`."""
         found = None
@@ -57,11 +64,11 @@ class FakeCall:
 class FakeMkosi:
     """Records mkosi verbs instead of running them.
 
-    *summary* is the ``summary --json`` payload (``{"Tools": …, "Images": […]}``; a default
-    with :data:`DEFAULT_TOOLS` and one image per call otherwise). *outputs* are the file
-    names a ``build`` writes (``{image_id}`` is replaced). *fail* makes the verb named
-    *fail_verb* raise ``MkosiError`` with that exit status and *log* as its log. *sudo* is
-    what ``needs_sudo()`` answers.
+    *summary* is the ``summary --json`` payload (``{"Tools": …, "Images": […]}``; by default
+    :data:`DEFAULT_TOOLS` and the images the call selects). *outputs* are the file names a
+    ``build`` writes besides the selected wrappers' (:data:`WRAPPER_OUTPUTS`). *fail* makes
+    the verb named *fail_verb* raise ``MkosiError`` with that exit status and *log* as its
+    log. *sudo* is what ``needs_sudo()`` answers.
     """
 
     summary: dict[str, Any] | None = None
@@ -111,13 +118,15 @@ class FakeMkosi:
         output = call.option("--output-directory")
         if output is None:
             return
-        image_id = call.option("--image-id") or "image"
         directory = Path(output)
         directory.mkdir(parents=True, exist_ok=True)
-        for pattern in self.outputs:
-            name = pattern.format(image_id=image_id)
+        wrappers = [
+            WRAPPER_OUTPUTS[t] for t in call.options("--dependency") if t in WRAPPER_OUTPUTS
+        ]
+        for name in (*self.outputs, *wrappers):
             (directory / name).write_text(
-                f"fake mkosi build: image-id={image_id} output={name}\n", encoding="utf-8"
+                f"fake mkosi build: {' '.join(call.options('--profile'))} output={name}\n",
+                encoding="utf-8",
             )
 
     def install(self, setattr: Callable[[object, str, object], None]) -> FakeMkosi:
@@ -131,17 +140,30 @@ class FakeMkosi:
 
 
 def _summary(call: FakeCall) -> dict[str, Any]:
-    image_id = call.option("--image-id") or "image"
+    """The images the tree resolves for *call*'s selection: the payload, the wrappers its
+    ``--dependency=`` options name, then the main image (the QEMU disk)."""
+    profiles = call.options("--profile")
+    output = call.option("--output-directory")
+
+    def image(name: str, fmt: str, output_name: str, deps: list[str]) -> dict[str, Any]:
+        return {
+            "Image": name,
+            "Format": fmt,
+            "Output": output_name,
+            "Dependencies": deps,
+            "Profiles": profiles,
+            "Distribution": "debian",
+            "Release": "trixie",
+            "OutputDirectory": output,
+        }
+
+    wrappers = [t for t in call.options("--dependency") if t in WRAPPER_OUTPUTS]
     return {
         "Tools": dict(DEFAULT_TOOLS),
         "Images": [
-            {
-                "Image": "main",
-                "ImageId": image_id,
-                "Distribution": "debian",
-                "Release": "trixie",
-                "OutputDirectory": call.option("--output-directory"),
-            }
+            image("payload", "uki", "payload", []),
+            *(image(t, "disk", t, ["payload"]) for t in wrappers),
+            image("main", "disk", "qemu", ["payload", *wrappers]),
         ],
     }
 

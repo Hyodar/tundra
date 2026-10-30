@@ -49,6 +49,7 @@ from tundravm.models import (
     RecipeState,
 )
 from tundravm.policy import Policy
+from tundravm.toolchain import ToolsTree
 
 if TYPE_CHECKING:
     from tundravm._modules.base import Module
@@ -171,6 +172,13 @@ class Lowered:
             hint="Pass profile='name' to the operation.",
             context={"operation": "resolve_profile"},
         )
+
+    @property
+    def tools_tree(self) -> ToolsTree:
+        """The tools tree the tree pins (``ToolsTreeDistribution=``, ``ToolsTreeRelease=``,
+        ``ToolsTreeSnapshot=``): what ``mkosi summary --json`` resolves as ``Tools``."""
+        distribution, _, release = self.state.base.partition("/")
+        return ToolsTree(distribution=distribution, release=release, snapshot=self.snapshot)
 
     def clouds(self, profile: str) -> tuple[str, ...]:
         """The cloud wrappers *profile* builds beside the QEMU disk (its outputs but qemu)."""

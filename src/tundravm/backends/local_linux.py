@@ -3,9 +3,9 @@
 mkosi is a dependency of tundravm, so nothing is looked up on ``PATH``: every verb runs
 through the adapter, which forks with mkosi's own ``fork_and_wait`` and lets mkosi acquire
 a user namespace in the child. Every build tool besides mkosi comes from mkosi's tools tree
-(``--tools-tree=default``), so the host needs only Python, apt/dpkg with the Debian archive
-keyring (mkosi bootstraps the Debian tools tree with them) and either unprivileged user
-namespaces or ``sudo``.
+(the tree sets ``ToolsTree=default`` and pins it), so the host needs only Python, apt/dpkg
+with the Debian archive keyring (mkosi bootstraps the Debian tools tree with them) and
+either unprivileged user namespaces or ``sudo``.
 
 ``privilege="auto"`` (the default) runs mkosi unprivileged when this host can give it a user
 namespace and under ``sudo -E <python> -m tundravm._mkosi`` when it cannot (a kernel,
@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -39,7 +39,6 @@ from tundravm.backends.base import (
     build_sources_args,
     collect_artifacts,
     mkosi_project,
-    network_args,
     run_streaming,
 )
 from tundravm.errors import BackendExecutionError
@@ -84,16 +83,6 @@ HOST_BUILD_TOOLS: tuple[Requirement, ...] = (
 """What the host provides besides Python and its kernel; everything else is in the tools tree."""
 
 
-CLOUD_TOOLS_TREE_PACKAGES = ("qemu-utils", "gdisk", "parted")
-"""What the tools tree gets for the azure and gcp postoutput scripts, which run in it."""
-CLOUD_TARGETS = frozenset({"azure", "gcp"})
-
-
-def cloud_tools(targets: Iterable[str]) -> tuple[str, ...]:
-    """The tools-tree packages *targets* need: the cloud converters' tools for azure/gcp."""
-    return CLOUD_TOOLS_TREE_PACKAGES if CLOUD_TARGETS & set(targets) else ()
-
-
 @dataclass(slots=True)
 class LocalLinuxBackend:
     """Build on this Linux x86-64 host with the mkosi tundravm depends on."""
@@ -136,7 +125,6 @@ class LocalLinuxBackend:
     def execute(self, request: BakeRequest) -> BakeResult:
         self._ensure_linux()
         build_dir = request.build_dir.resolve()
-        mkosi_dir, _ = mkosi_project(request.emit_dir.resolve(), request.profile)
         profile_dir = build_dir / request.profile
         output_dir = profile_dir / "output"
         state_dir = build_dir / STATE_DIRNAME
@@ -170,33 +158,29 @@ class LocalLinuxBackend:
                 self._reclaim((output_dir, state_dir, profile_dir / LOG_FILENAME), request)
 
         profile_result = ProfileBuildResult(profile=request.profile)
-        profile_result.artifacts = collect_artifacts(output_dir)
+        profile_result.artifacts = collect_artifacts(output_dir, request.output_targets)
         return BakeResult(profiles={request.profile: profile_result})
 
     def arguments(self, request: BakeRequest) -> list[str]:
         """mkosi's arguments for *request*, before the verb; every path in them is absolute.
 
-        mkosi runs in ``<build_dir>/.mkosi`` (where ``ToolsTree=default`` puts the tools
-        tree, so later bakes reuse it), with its workspace and cache there too; the output
-        goes to ``<build_dir>/<variant>/output``. Host-fetched sources
-        (``request.sources_dir``) are mounted with :func:`build_sources_args`.
+        Only paths and the selection: the tree carries every mkosi setting. mkosi runs in
+        ``<build_dir>/.mkosi`` (where ``ToolsTree=default`` puts the tools tree, so later
+        bakes reuse it), with its workspace and cache there too; the output goes to
+        ``<build_dir>/<variant>/output``. Host-fetched sources (``request.sources_dir``)
+        are mounted with :func:`build_sources_args`; ``request.mkosi_args`` selects the
+        variant, then the backend's own ``mkosi_args`` follow.
         """
         build_dir = request.build_dir.resolve()
-        mkosi_dir, native = mkosi_project(request.emit_dir.resolve(), request.profile)
+        mkosi_dir = mkosi_project(request.emit_dir.resolve())
         state_dir = build_dir / STATE_DIRNAME
         argv = [
             f"--directory={mkosi_dir}",
             "--force",
-            f"--image-id={request.profile}",
             f"--output-directory={build_dir / request.profile / 'output'}",
             f"--workspace-directory={state_dir / 'workspace'}",
             f"--cache-directory={state_dir / 'cache'}",
         ]
-        if not any(arg.startswith("--tools-tree") for arg in self.mkosi_args):
-            argv.append("--tools-tree=default")
-            packages = cloud_tools(request.output_targets)
-            if packages:
-                argv.append(f"--tools-tree-package={','.join(packages)}")
         if request.sources_dir is not None:
             argv.extend(
                 build_sources_args(
@@ -206,9 +190,7 @@ class LocalLinuxBackend:
                     mkosi_args=self.mkosi_args,
                 )
             )
-        argv.extend(network_args(request))
-        if native:
-            argv.append(f"--profile={request.profile}")
+        argv.extend(request.mkosi_args)
         argv.extend(self.mkosi_args)
         return argv
 

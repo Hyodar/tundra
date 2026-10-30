@@ -22,19 +22,19 @@ linux_only = pytest.mark.skipif(
 )
 
 
-def _request(tmp_path: Path, *targets: OutputTarget, native: bool = False) -> BakeRequest:
+def _request(
+    tmp_path: Path, *targets: OutputTarget, mkosi_args: tuple[str, ...] = ()
+) -> BakeRequest:
     """A request laid out like ``bake``: the mkosi tree under the build directory."""
     build = tmp_path / "build"
-    if native:
-        (build / "mkosi" / "mkosi.profiles" / "default").mkdir(parents=True)
-    else:
-        (build / "mkosi" / "default").mkdir(parents=True)
-        (build / "mkosi" / "default" / "mkosi.conf").write_text("[Output]\nFormat=uki\n")
+    (build / "mkosi" / "payload").mkdir(parents=True)
+    (build / "mkosi" / "mkosi.conf").write_text("[Output]\nFormat=disk\nOutput=qemu\n")
     return BakeRequest(
         profile="default",
         build_dir=build,
         emit_dir=build / "mkosi",
         output_targets=targets or ("qemu",),
+        mkosi_args=mkosi_args,
     )
 
 
@@ -81,59 +81,40 @@ def test_local_backend_prepare_creates_directories(
     assert fake_mkosi.calls == []
 
 
-def test_local_arguments_are_absolute_and_pin_the_tools_tree(
+def test_local_arguments_are_absolute_paths_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The tree carries every mkosi setting: the backend passes paths and the selection."""
     monkeypatch.chdir(tmp_path)
     request = BakeRequest(
         profile="default", build_dir=Path("build"), emit_dir=Path("build") / "mkosi"
     )
-    (tmp_path / "build" / "mkosi" / "default").mkdir(parents=True)
+    (tmp_path / "build" / "mkosi").mkdir(parents=True)
 
     argv = LocalLinuxBackend().arguments(request)
 
     build = tmp_path / "build"
     assert argv == [
-        f"--directory={build / 'mkosi' / 'default'}",
+        f"--directory={build / 'mkosi'}",
         "--force",
-        "--image-id=default",
         f"--output-directory={build / 'default' / 'output'}",
         f"--workspace-directory={build / '.mkosi' / 'workspace'}",
         f"--cache-directory={build / '.mkosi' / 'cache'}",
-        "--tools-tree=default",
     ]
 
 
-def test_local_arguments_select_a_native_profile_and_pass_extra_args(tmp_path: Path) -> None:
-    request = _request(tmp_path, native=True)
-    backend = LocalLinuxBackend(mkosi_args=["--debug", "--tools-tree=/opt/tools"])
+def test_local_arguments_pass_the_selection_then_the_backends_args(tmp_path: Path) -> None:
+    request = _request(
+        tmp_path, "azure", "gcp", mkosi_args=("--dependency=azure", "--dependency=gcp")
+    )
+    backend = LocalLinuxBackend(mkosi_args=["--debug"])
 
     argv = backend.arguments(request)
 
-    assert f"--directory={tmp_path / 'build' / 'mkosi'}" in argv
-    assert argv[-3:] == ["--profile=default", "--debug", "--tools-tree=/opt/tools"]
-    assert "--tools-tree=default" not in argv
-
-
-def test_local_arguments_give_the_tools_tree_the_cloud_converters(tmp_path: Path) -> None:
-    cloud = LocalLinuxBackend().arguments(_request(tmp_path, "qemu", "gcp"))
-    plain = LocalLinuxBackend().arguments(_request(tmp_path / "q", "qemu"))
-
-    assert "--tools-tree-package=qemu-utils,gdisk,parted" in cloud
-    assert not any(arg.startswith("--tools-tree-package") for arg in plain)
-
-
-def test_local_arguments_turn_the_network_off_for_offline_bakes(tmp_path: Path) -> None:
-    request = _request(tmp_path)
-    offline = BakeRequest(
-        profile=request.profile,
-        build_dir=request.build_dir,
-        emit_dir=request.emit_dir,
-        network=False,
-    )
-
-    assert "--with-network=no" in LocalLinuxBackend().arguments(offline)
-    assert "--with-network=no" not in LocalLinuxBackend().arguments(request)
+    assert argv[0] == f"--directory={tmp_path / 'build' / 'mkosi'}"
+    assert argv[-3:] == ["--dependency=azure", "--dependency=gcp", "--debug"]
+    for setting in ("--image-id", "--tools-tree", "--with-network", "--profile"):
+        assert not any(arg.startswith(setting) for arg in argv), setting
 
 
 @linux_only
@@ -162,7 +143,8 @@ def test_local_execute_summarizes_then_builds_through_the_adapter(
     assert build_call.log == build / "default" / "mkosi.log"
     assert "fake mkosi build" in lines
     artifact = result.profiles["default"].artifacts["qemu"]
-    assert artifact.path == build / "default" / "output" / "default.efi"
+    assert artifact.path == build / "default" / "output" / "qemu.raw"
+    assert artifact.boot_payload == build / "default" / "output" / "payload.efi"
     resolved = json.loads((build / "default" / "mkosi-summary.json").read_text())
     assert resolved["Tools"]["Release"] == "trixie"
     assert backend.tools_tree == ToolsTree("debian", "trixie", "20251020T000000Z")
@@ -239,7 +221,7 @@ def test_local_execute_uses_sudo_without_user_namespaces_and_reclaims_the_output
     ]
     assert tuple(command[separator + 1 :]) == fake_mkosi.calls[-1].argv
     assert fake_mkosi.verbs() == ["summary", "build"]
-    assert result.profiles["default"].artifacts["qemu"].path.name == "default.efi"
+    assert result.profiles["default"].artifacts["qemu"].path.name == "qemu.raw"
     owned = [build / "default" / "output", build / ".mkosi", build / "default" / "mkosi.log"]
     assert chowned == [["sudo", "chown", "-R", "1000:1001", *map(str, owned)]]
     assert any("sudo" in text for _, text in notices)

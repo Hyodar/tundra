@@ -134,11 +134,20 @@ def test_lock_records_the_toolchain_and_lint_reports_drift(
 
     code, text = cli("lock", str(recipe), "--lockfile", str(lock))
     assert code == EXIT_OK
-    assert f"toolchain: mkosi {MKOSI_PIN.version} @{MKOSI_PIN.commit[:12]}, gcp-firmware" in text
+    # the tools tree is the one the tree pins: the platform's release (no snapshot here)
+    assert (
+        f"toolchain: mkosi {MKOSI_PIN.version} @{MKOSI_PIN.commit[:12]}, "
+        "tools debian/trixie (unpinned snapshot), gcp-firmware"
+    ) in text
     assert f"tundravm-measure {MEASURE_VERSION}" in text
     recorded = json.loads(lock.read_text(encoding="utf-8"))
     assert recorded["version"] == 5
     assert recorded["toolchain"]["mkosi"] == {"version": "27.1", "rev": MKOSI_PIN.commit}
+    assert recorded["toolchain"]["tools_tree"] == {
+        "distribution": "debian",
+        "release": "trixie",
+        "snapshot": None,
+    }
 
     _other_mkosi(monkeypatch)
     code, text = cli("lock", str(recipe), "--lockfile", str(lock), "--check")

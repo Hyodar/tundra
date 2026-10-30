@@ -30,11 +30,14 @@ from tundravm.declarative import (
     Setting,
     compile,
     load,
+    lock,
     lower,
     mkosi_argv,
 )
 from tundravm.errors import ValidationError
+from tundravm.templates import TEMPLATES, render_recipe_template
 from tundravm.testing import UPDATE_GOLDEN_ENV, assert_tree_matches
+from tundravm.toolchain import ToolsTree
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "native-tree"
 ROOTS = ("initramfs", "verity")
@@ -442,6 +445,45 @@ def test_every_tree_sets_the_reproducibility_knobs(path: Path, tmp_path: Path) -
             assert not line.startswith("PassEnvironment="), conf
             if line.startswith("Environment="):
                 assert "=" in line.removeprefix("Environment="), f"{conf}: {line}"
+
+
+@pytest.mark.parametrize("template", sorted(TEMPLATES))
+def test_every_template_pins_the_tools_tree_to_its_release_and_snapshot(
+    template: str, tmp_path: Path
+) -> None:
+    """``ToolsTreeRelease`` and ``ToolsTreeSnapshot`` equal the image's: mkosi's default tools
+    release is ``testing``, whose package-manager profile installs a dnf5 a trixie snapshot
+    lacks, so an unpinned release breaks the tools tree."""
+    path = tmp_path / "node.py"
+    path.write_text(
+        render_recipe_template(
+            title="node", filename="node.py", release="trixie", backend="local", template=template
+        ),
+        encoding="utf-8",
+    )
+    recipe = load(path)
+    compile(recipe).write(tmp_path / "tree")
+    main = (tmp_path / "tree" / "mkosi.conf").read_text(encoding="utf-8")
+    assert f"\nRelease={recipe.platform.release}\n" in main
+    assert f"\nToolsTreeRelease={recipe.platform.release}\n" in main
+    snapshot = recipe.platform.snapshot
+    if snapshot is not None:
+        assert f"\nSnapshot={snapshot}\n" in main
+        assert f"\nToolsTreeSnapshot={snapshot}\n" in main
+    else:
+        assert "Snapshot=" not in main
+
+
+def test_the_lock_records_the_tools_tree_mkosi_resolves() -> None:
+    """``lock`` records the tools tree the tree pins, and ``summary --json``'s ``Tools`` (what
+    a bake records) resolves to the same distribution, release and snapshot."""
+    tree = FIXTURE / "tree-initramfs"
+    resolved = ToolsTree.from_summary(mkosi_summary(tree)["Tools"])
+    lowered = lower(recipe_with())
+    assert resolved == lowered.tools_tree == ToolsTree("debian", "trixie", "20251113T083151Z")
+    locked = lock(recipe_with())
+    assert locked.lockfile.toolchain is not None
+    assert locked.lockfile.toolchain.tools_tree == resolved
 
 
 def test_surge_tree_resolves_every_node() -> None:
