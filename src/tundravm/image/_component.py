@@ -179,7 +179,13 @@ class _ComponentMeta(type):
             isinstance(base, _ComponentMeta) for base in bases
         ):
             return super().__new__(mcls, name, bases, namespace, **kwargs)
-        if not any("compose" in vars(base) for base in bases) and "compose" not in namespace:
+        inherited = any(
+            "compose" in vars(klass)
+            for base in bases
+            for klass in base.__mro__
+            if klass.__name__ != "Component"
+        )
+        if not inherited and "compose" not in namespace:
             raise ValidationError(
                 f"Component {name} has no compose() method.",
                 hint="Define compose(self) returning the declarations it stands for.",

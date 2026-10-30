@@ -185,6 +185,33 @@ class Service(Located):
                     f"{self.name!r} requires an endpoint that carries no readiness.",
                     hint="Export it as Endpoint(..., ready=service.ready).",
                 )
+            self._check_readiness(item)
+
+    def _check_readiness(self, item: Requirement) -> None:
+        """A dependency must prove it is ready; ``After=`` alone is never what was meant."""
+        handles: tuple[ServiceReady, ...]
+        if isinstance(item, ComponentReady):
+            handles = tuple(
+                service.ready
+                for service in item.component.services()
+                if service.readiness is not None
+            )
+            if not handles:
+                raise _fail(
+                    self,
+                    f"{self.name!r} requires component {item.name!r}, which declares no readiness.",
+                    hint="Give one of its services readiness=HttpProbe(...), TcpProbe(...) "
+                    "or Notify().",
+                )
+            return
+        handle = item if isinstance(item, ServiceReady) else item.ready
+        if handle is not None and handle.probe is None:
+            raise _fail(
+                self,
+                f"{self.name!r} requires {handle.unit!r}, which declares no readiness.",
+                hint="Give it readiness=HttpProbe(...), TcpProbe(...) or Notify(); After= "
+                "alone only waits for the exec, not for the program to serve.",
+            )
 
     def _check_values(self) -> None:
         checks: tuple[tuple[str, object, type | tuple[type, ...]], ...] = (
