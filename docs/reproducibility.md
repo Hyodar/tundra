@@ -111,20 +111,18 @@ Pinned inputs are not enough: two builders with the same lockfile must also run 
 ```json
 "toolchain": {
   "tundravm": "0.1.0+aa9d9dcd0516",
-  "mkosi": {"version": "25.3", "source": "nix", "rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188"},
-  "systemd": "257",
-  "nixpkgs": {"rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188", "narHash": "sha256-...", "lastModified": 1787498568},
+  "mkosi": {"version": "27.1", "rev": "ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b"},
+  "tools_tree": {"distribution": "debian", "release": "trixie", "snapshot": "20251020T000000Z"},
   "measure": {"gcp-firmware-table": "dstack-mr-gcp@b16e08b", "tundravm-measure": "1.0+attest-12f1e29.dstack-mr-gcp-b16e08b"}
 }
 ```
 
 `measure` is the offline register replay `tundravm measure` runs and the GCP firmware table it embeds ([policy](policy.md#sources)); both move only with the tundravm version.
 
-- **nix and lima backends: the lock decides.** `lock` resolves `nixos-unstable` to a rev and narHash (keeping the previous lock's pin unless `--update toolchain`) and reads that nixpkgs' mkosi and systemd versions. The generated flake takes nixpkgs from `github:NixOS/nixpkgs/<rev>` with a `flake.lock` holding the narHash, refuses to evaluate when that nixpkgs' mkosi is not the locked version, and runs mkosi with a `PATH` of Nix tools only (no host passthrough). The nix backend enters that flake even from inside another Nix shell; an ambient mkosi never runs. When nixpkgs cannot be resolved (`--offline`, no `nix` on this host) the lock says why in `unpinned` and `lock` warns `toolchain not pinned: ...`; the build then follows `nixos-unstable`.
-- **local backend: the lock records, tundravm compares.** `mkosi` comes from tundravm's Python environment (`source: "pip"`, with the commit of a git install) or from `PATH` (`"host"`); systemd is `ukify --version`.
-- **Drift.** `lock --check` and `lint --lockfile` report `toolchain-drift`, one finding per field the running toolchain differs on (`toolchain mkosi: locked 25.3 (host), running 26 (host)`). It is a warning; `--strict`, or `strict_toolchain = true` in `[tool.tundravm]`, makes it an error.
-- **Rosetta.** The Lima VM runs without Rosetta: x86-64 builds under Rosetta on Apple silicon are not reproducible. `LimaMkosiBackend(rosetta=True)` opts in; `doctor` warns, and the bake, its evidence and the lock record `reproducible: not guaranteed (rosetta)`.
-- **Bake, evidence, witness.** A bake records the toolchain it ran in `bake-result.json`; the nix and lima backends ask the pinned shell (on the host, in the VM) which mkosi it ran and records that (`mkosi.path`, the `/nix/store` executable, and the version it reports), failing the bake when the version is not the locked one; `evidence` shows it; `witness` records its own and prints `toolchain: same` or `toolchain: different (mkosi 26 (nix) vs 25 (nix), ...)`. A witness that matches on a different toolchain strengthens the release. `verify --min-witnesses N` counts witnesses on the release's toolchain by default (`--same-toolchain`: what the lockfile claims), or one per distinct toolchain with `--distinct-toolchains`.
+- **mkosi is a dependency.** tundravm depends on mkosi 27.1 from its git tag (`[tool.uv.sources]`; mkosi is not on PyPI), so `uv.lock` pins the commit and every backend runs that mkosi: the local backend imports it, and the Lima guest installs the same commit. Importing tundravm's mkosi adapter with any other version fails.
+- **The tools tree.** Every other build tool comes from mkosi's tools tree (`ToolsTree=default`); its distribution, release and snapshot are recorded as `tools_tree`, from the `mkosi summary --json` the backend runs before each build.
+- **Drift.** `lock --check` and `lint --lockfile` report `toolchain-drift`, one finding per field the running toolchain differs on (`toolchain mkosi: locked 27.1 @ecf7f5702bb2, running 28 @…`). It is a warning; `--strict`, or `strict_toolchain = true` in `[tool.tundravm]`, makes it an error.
+- **Bake, evidence, witness.** A bake records the toolchain it ran in `bake-result.json`; `evidence` shows it; `witness` records its own and prints `toolchain: same` or `toolchain: different (mkosi 27.1 @ecf7f5702bb2 vs 26, ...)`. A witness that matches on a different toolchain strengthens the release. `verify --min-witnesses N` counts witnesses on the release's toolchain by default (`--same-toolchain`: what the lockfile claims), or one per distinct toolchain with `--distinct-toolchains`.
 
 ## Pinned sources
 
@@ -194,11 +192,7 @@ The checks above pin the inputs; `tundravm bake --verify-reproducible` checks th
 
 ## mkosi
 
-The `local` backend needs mkosi v25 or newer (v26 recommended) on `PATH` and checks the version before building. The `lima` and `nix` backends bring their own, from the nixpkgs the lockfile pins (see [Pinned toolchain](#pinned-toolchain)).
-
-```bash
-pip install 'mkosi @ git+https://github.com/systemd/mkosi.git@v26'
-```
+mkosi comes with tundravm: `pip install` or `uv sync` installs mkosi 27.1 from its git tag as a dependency, and the `local` backend runs it in-process (the `lima` backend installs the same commit in its guest). There is no separate mkosi to install, and a mkosi on `PATH` is never used.
 
 ## CI
 

@@ -1,6 +1,6 @@
 """Integration smoke tests: emit + build via local_linux backend.
 
-These tests require mkosi >= 25 and sudo privileges.
+They need a host the Linux backend builds on: x86-64 Linux with user namespaces or sudo.
 Run with: uv run pytest tests/integration/test_mkosi_smoke.py -m integration
 """
 
@@ -57,7 +57,6 @@ def test_directory_format_pipeline(tmp_path: Path) -> None:
     assert unit_path.exists(), "hello.service not emitted"
 
     backend = LocalLinuxBackend(
-        privilege="sudo",
         mkosi_args=["--format=directory", "--bootable=no"],
     )
     bake_result = _bake(recipe, backend, tmp_path / "output")
@@ -136,7 +135,6 @@ def test_raw_disk_format(tmp_path: Path) -> None:
     )
 
     backend = LocalLinuxBackend(
-        privilege="sudo",
         mkosi_args=["--format=disk", "--bootable=no"],
     )
     bake_result = _bake(recipe, backend, tmp_path / "output")

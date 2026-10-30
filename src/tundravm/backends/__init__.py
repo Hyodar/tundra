@@ -11,7 +11,6 @@ from .base import (
 from .inprocess import InProcessBackend
 from .lima import LimaMkosiBackend
 from .local_linux import LocalLinuxBackend
-from .nix import NixMkosiBackend
 
 __all__ = [
     "BuildBackend",
@@ -20,7 +19,6 @@ __all__ = [
     "LimaMkosiBackend",
     "LocalLinuxBackend",
     "MountSpec",
-    "NixMkosiBackend",
     "Requirement",
     "backend_fingerprint",
     "collect_artifacts",

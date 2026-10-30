@@ -32,6 +32,7 @@ from tundravm.observability import (
     format_size,
     render_bake_summary,
 )
+from tundravm.testing import FakeMkosi
 
 
 @dataclass
@@ -210,13 +211,11 @@ def test_failure_message_includes_tail_only_when_not_streamed() -> None:
 
 
 def test_local_backend_maps_streamed_failure_to_backend_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_mkosi: FakeMkosi
 ) -> None:
-    def fake_run(argv: list[str], **kwargs: object) -> StreamResult:
-        return StreamResult(returncode=1, tail=("E: Unable to locate package nope",))
-
-    monkeypatch.setattr(LocalLinuxBackend, "_ensure_local_prerequisites", lambda self: None)
-    monkeypatch.setattr("tundravm.backends.local_linux.run_streaming", fake_run)
+    fake_mkosi.fail = 1
+    fake_mkosi.log = "E: Unable to locate package nope"
+    monkeypatch.setattr(LocalLinuxBackend, "_ensure_linux", lambda self: None)
     request = BakeRequest(profile="default", build_dir=tmp_path / "b", emit_dir=tmp_path / "e")
 
     with pytest.raises(BackendExecutionError) as excinfo:

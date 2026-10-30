@@ -7,6 +7,7 @@ steps, hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint
 findings, :func:`assert_tree` and :func:`assert_tree_matches` compare against
 a golden directory, :func:`compile_tree` writes a tree to disk,
 :func:`fake_bake` and :func:`bake_in_process` produce simulated artifacts,
+:class:`FakeMkosi` stands in for mkosi under a real backend,
 :func:`fake_fragment` builds a small :class:`~tundravm.Fragment` to compose with, and
 :func:`boot` boots a baked image under QEMU and reads its serial console.
 
@@ -68,6 +69,7 @@ from tundravm.testing._boot import (
     boot_unavailable,
     scan_console,
 )
+from tundravm.testing._fake_mkosi import FakeCall, FakeMkosi, build_unavailable
 from tundravm.testing._image import (
     TEST_PLATFORM,
     Image,
@@ -490,6 +492,8 @@ __all__ = [
     "BootUnavailable",
     "CompiledTree",
     "ConsoleScan",
+    "FakeCall",
+    "FakeMkosi",
     "HttpResponse",
     "Image",
     "ImageFile",
@@ -504,6 +508,7 @@ __all__ = [
     "bake_in_process",
     "boot",
     "boot_unavailable",
+    "build_unavailable",
     "compile_tree",
     "fake_bake",
     "fake_fragment",

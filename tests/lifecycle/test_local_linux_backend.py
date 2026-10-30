@@ -1,16 +1,41 @@
+"""The Linux backend: every mkosi verb through tundravm._mkosi (faked at that boundary)."""
+
+import json
 import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import bake_request
+from tundravm import _mkosi
 from tundravm.backends.base import StreamResult
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, OutputTarget
+from tundravm.testing import FakeMkosi
+from tundravm.toolchain import ToolsTree, running_toolchain
+
+linux_only = pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="the Linux backend and mkosi are Linux-only"
+)
+
+
+def _request(tmp_path: Path, *targets: OutputTarget, native: bool = False) -> BakeRequest:
+    """A request laid out like ``bake``: the mkosi tree under the build directory."""
+    build = tmp_path / "build"
+    if native:
+        (build / "mkosi" / "mkosi.profiles" / "default").mkdir(parents=True)
+    else:
+        (build / "mkosi" / "default").mkdir(parents=True)
+        (build / "mkosi" / "default" / "mkosi.conf").write_text("[Output]\nFormat=uki\n")
+    return BakeRequest(
+        profile="default",
+        build_dir=build,
+        emit_dir=build / "mkosi",
+        output_targets=targets or ("qemu",),
+    )
 
 
 def test_local_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
@@ -27,521 +52,254 @@ def test_local_backend_mount_plan_is_deterministic(tmp_path: Path) -> None:
     )
 
 
-def test_local_backend_fails_on_non_linux_host(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(("platform", "machine"), [("darwin", "arm64"), ("linux", "aarch64")])
+def test_local_backend_refuses_hosts_other_than_x86_64_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, machine: str
 ) -> None:
-    backend = LocalLinuxBackend()
-    request = bake_request(tmp_path)
-    monkeypatch.setattr("tundravm.backends.local_linux.sys.platform", "darwin")
-    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
+    monkeypatch.setattr("tundravm.backends.local_linux.sys.platform", platform)
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: machine)
 
     with pytest.raises(BackendExecutionError) as excinfo:
-        backend.prepare(request)
+        LocalLinuxBackend().prepare(bake_request(tmp_path))
 
-    assert "Linux host" in str(excinfo.value)
+    assert "x86-64 Linux host" in str(excinfo.value)
+    assert excinfo.value.hint is not None and "Lima" in excinfo.value.hint
     assert excinfo.value.code == "E_BACKEND_EXECUTION"
 
 
-def test_local_backend_fails_when_mkosi_missing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backend = LocalLinuxBackend()
-    request = bake_request(tmp_path)
-    monkeypatch.setattr("tundravm.backends.local_linux.sys.platform", "linux")
-    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: None)
-
-    with pytest.raises(BackendExecutionError) as excinfo:
-        backend.prepare(request)
-
-    assert "mkosi" in str(excinfo.value)
-    assert excinfo.value.hint is not None
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
+@linux_only
 def test_local_backend_prepare_creates_directories(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    backend = LocalLinuxBackend()
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
     request = bake_request(tmp_path)
-    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
-    # Patch version check to avoid hitting real mkosi binary
-    monkeypatch.setattr(
-        "tundravm.backends.local_linux.subprocess.run",
-        lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "mkosi 26.0", "stderr": ""})(),
-    )
 
-    backend.prepare(request)
+    LocalLinuxBackend().prepare(request)
 
     assert request.build_dir.exists()
     assert request.emit_dir.exists()
+    assert fake_mkosi.calls == []
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
-def test_local_backend_mkosi_version_check(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify that _check_mkosi_version rejects old mkosi versions."""
-    backend = LocalLinuxBackend()
-    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
-
-    # Mock subprocess.run to return an old version
-    class FakeResult:
-        returncode = 0
-        stdout = "mkosi 20.2"
-        stderr = ""
-
-    monkeypatch.setattr(
-        "tundravm.backends.local_linux.subprocess.run",
-        lambda *a, **kw: FakeResult(),
-    )
-
-    with pytest.raises(BackendExecutionError) as excinfo:
-        backend._check_mkosi_version()
-
-    assert "below minimum" in str(excinfo.value)
-    assert excinfo.value.context["version"] == "mkosi 20.2"
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
-def test_local_backend_mkosi_version_check_passes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify that _check_mkosi_version accepts valid mkosi versions."""
-    backend = LocalLinuxBackend()
-    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/mkosi")
-
-    class FakeResult:
-        returncode = 0
-        stdout = "mkosi 26.1"
-        stderr = ""
-
-    monkeypatch.setattr(
-        "tundravm.backends.local_linux.subprocess.run",
-        lambda *a, **kw: FakeResult(),
-    )
-
-    # Should not raise
-    backend._check_mkosi_version()
-
-
-# ── command line, tools tree, ownership ──────────────────────────────────
-
-
-def _relative_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str = "[Output]\nFormat=uki\n"
-) -> BakeRequest:
-    """A request with *relative* build/emit dirs, as the CLI's ``--build build`` gives."""
-    monkeypatch.chdir(tmp_path)
-    project = tmp_path / "build" / "mkosi" / "default"
-    project.mkdir(parents=True)
-    (project / "mkosi.conf").write_text(f"[Distribution]\nDistribution=debian\n{conf}")
-    monkeypatch.setattr(
-        "tundravm.backends.local_linux.shutil.which", lambda tool: f"/usr/bin/{tool}"
-    )
-    return BakeRequest(profile="default", build_dir=Path("build"), emit_dir=Path("build/mkosi"))
-
-
-def _flags(cmd: list[str]) -> dict[str, str]:
-    return dict(arg[2:].split("=", 1) for arg in cmd if arg.startswith("--") and "=" in arg)
-
-
-def test_local_command_passes_absolute_paths(
+def test_local_arguments_are_absolute_and_pin_the_tools_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    request = _relative_request(tmp_path, monkeypatch)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
-    monkeypatch.setattr("tundravm.backends.local_linux.os.getuid", lambda: 1000)
+    monkeypatch.chdir(tmp_path)
+    request = BakeRequest(
+        profile="default", build_dir=Path("build"), emit_dir=Path("build") / "mkosi"
+    )
+    (tmp_path / "build" / "mkosi" / "default").mkdir(parents=True)
 
-    cmd = LocalLinuxBackend().command(request)
+    argv = LocalLinuxBackend().arguments(request)
 
     build = tmp_path / "build"
-    assert cmd[:2] == ["sudo", "/usr/bin/mkosi"]
-    assert cmd[-1] == "build"
-    flags = _flags(cmd)
-    assert flags["directory"] == str(build / "mkosi" / "default")
-    assert flags["output-dir"] == str(build / "default" / "output")
-    assert flags["workspace-directory"] == str(build / ".mkosi" / "workspace")
-    assert flags["cache-directory"] == str(build / ".mkosi" / "cache")
-    assert all(Path(flags[k]).is_absolute() for k in flags if k not in ("image-id",))
-    assert "tools-tree" not in flags
+    assert argv == [
+        f"--directory={build / 'mkosi' / 'default'}",
+        "--force",
+        "--image-id=default",
+        f"--output-directory={build / 'default' / 'output'}",
+        f"--workspace-directory={build / '.mkosi' / 'workspace'}",
+        f"--cache-directory={build / '.mkosi' / 'cache'}",
+        "--tools-tree=default",
+    ]
 
 
-def test_local_command_adds_a_tools_tree_without_ukify_and_keeps_the_tree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    notices: list[tuple[str, str]] = []
-    request = replace(
-        _relative_request(tmp_path, monkeypatch),
-        on_notice=lambda level, message: notices.append((level, message)),
+def test_local_arguments_select_a_native_profile_and_pass_extra_args(tmp_path: Path) -> None:
+    request = _request(tmp_path, native=True)
+    backend = LocalLinuxBackend(mkosi_args=["--debug", "--tools-tree=/opt/tools"])
+
+    argv = backend.arguments(request)
+
+    assert f"--directory={tmp_path / 'build' / 'mkosi'}" in argv
+    assert argv[-3:] == ["--profile=default", "--debug", "--tools-tree=/opt/tools"]
+    assert "--tools-tree=default" not in argv
+
+
+def test_local_arguments_give_the_tools_tree_the_cloud_converters(tmp_path: Path) -> None:
+    cloud = LocalLinuxBackend().arguments(_request(tmp_path, "qemu", "gcp"))
+    plain = LocalLinuxBackend().arguments(_request(tmp_path / "q", "qemu"))
+
+    assert "--tools-tree-package=qemu-utils,gdisk,parted" in cloud
+    assert not any(arg.startswith("--tools-tree-package") for arg in plain)
+
+
+def test_local_arguments_turn_the_network_off_for_offline_bakes(tmp_path: Path) -> None:
+    request = _request(tmp_path)
+    offline = BakeRequest(
+        profile=request.profile,
+        build_dir=request.build_dir,
+        emit_dir=request.emit_dir,
+        network=False,
     )
-    conf = tmp_path / "build" / "mkosi" / "default" / "mkosi.conf"
-    before = conf.read_bytes()
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
 
-    cmd = LocalLinuxBackend(privilege="none").command(request)
-
-    assert "--tools-tree=default" in cmd
-    assert [level for level, _ in notices] == ["info"]
-    assert "ukify not found" in notices[0][1] and "--tools-tree=default" in notices[0][1]
-    assert conf.read_bytes() == before
-    assert sorted(p.name for p in conf.parent.iterdir()) == ["mkosi.conf"]
+    assert "--with-network=no" in LocalLinuxBackend().arguments(offline)
+    assert "--with-network=no" not in LocalLinuxBackend().arguments(request)
 
 
-@pytest.mark.parametrize(
-    ("conf", "mkosi_args"),
-    [
-        ("[Output]\nFormat=disk\n[Content]\nBootable=no\n", []),
-        ("[Output]\nFormat=disk\n", []),
-        ("[Output]\nFormat=uki\n", ["--format=directory", "--bootable=no"]),
-        ("[Output]\nFormat=uki\n", ["--format", "disk", "--bootable=no"]),
-    ],
-)
-def test_local_command_keeps_host_tools_for_builds_without_a_uki(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str, mkosi_args: list[str]
+@linux_only
+def test_local_execute_summarizes_then_builds_through_the_adapter(
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    request = _relative_request(tmp_path, monkeypatch, conf)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-
-    cmd = LocalLinuxBackend(privilege="none", mkosi_args=mkosi_args).command(request)
-
-    assert not any(arg.startswith("--tools-tree") for arg in cmd)
-
-
-@pytest.mark.parametrize(
-    "conf", ["[Output]\nFormat=uki\n", "[Output]\nFormat=disk\n[Content]\nBootable=yes\n"]
-)
-def test_local_command_adds_a_tools_tree_for_uki_builds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str
-) -> None:
-    request = _relative_request(tmp_path, monkeypatch, conf)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-
-    cmd = LocalLinuxBackend(privilege="none").command(request)
-
-    assert "--tools-tree=default" in cmd
-
-
-def test_local_command_respects_the_recipes_mkosi_settings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    conf = "[Build]\nToolsTree=/opt/tools\nCacheDirectory=/var/cache/mine\n"
-    request = _relative_request(tmp_path, monkeypatch, conf)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-
-    flags = _flags(LocalLinuxBackend(privilege="none").command(request))
-
-    assert "tools-tree" not in flags and "cache-directory" not in flags
-    assert "workspace-directory" in flags
-
-
-def test_local_command_reuses_a_stashed_default_tools_tree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = _relative_request(tmp_path, monkeypatch, "[Build]\nToolsTree=default\n")
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
-    backend = LocalLinuxBackend(privilege="none")
-    assert _flags(backend.command(request))["tools-tree"] == "default"
-
-    cached = tmp_path / "build" / ".mkosi" / "mkosi.tools"
-    cached.mkdir(parents=True)
-    assert _flags(backend.command(request))["tools-tree"] == str(cached)
-
-
-def test_local_execute_finds_the_artifact_and_moves_the_tools_tree_out(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = _relative_request(tmp_path, monkeypatch)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
-    seen: list[tuple[list[str], Path | None]] = []
-
-    def fake_mkosi(argv: Sequence[str], *, cwd: Path | None = None, **_: object) -> StreamResult:
-        seen.append((list(argv), cwd))
-        flags = _flags(list(argv))
-        (Path(flags["directory"]) / "mkosi.tools" / "usr").mkdir(parents=True)
-        (Path(flags["directory"]) / "mkosi.tools.manifest").write_text("{}")
-        (Path(flags["output-dir"]) / "default.efi").write_bytes(b"MZ")
-        return StreamResult(returncode=0, tail=())
-
-    monkeypatch.setattr("tundravm.backends.local_linux.run_streaming", fake_mkosi)
-    backend = LocalLinuxBackend(privilege="none")
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
+    request = _request(tmp_path)
+    lines: list[str] = []
+    request = BakeRequest(
+        profile="default",
+        build_dir=request.build_dir,
+        emit_dir=request.emit_dir,
+        on_output=lines.append,
+    )
+    backend = LocalLinuxBackend()
 
     result = backend.execute(request)
 
     build = tmp_path / "build"
+    summary, build_call = fake_mkosi.calls
+    assert fake_mkosi.verbs() == ["summary", "build"]
+    assert summary.argv[-3:] == ("--no-pager", "summary", "--json") and summary.stdout
+    assert build_call.argv == (*backend.arguments(request), "build")
+    assert {summary.cwd, build_call.cwd} == {build / ".mkosi"}
+    assert build_call.log == build / "default" / "mkosi.log"
+    assert "fake mkosi build" in lines
     artifact = result.profiles["default"].artifacts["qemu"]
     assert artifact.path == build / "default" / "output" / "default.efi"
-    assert seen[0][1] == build / "mkosi" / "default"
-    project = build / "mkosi" / "default"
-    assert sorted(p.name for p in project.iterdir()) == ["mkosi.conf"]
-    assert (build / ".mkosi" / "mkosi.tools" / "usr").is_dir()
-    assert (build / ".mkosi" / "mkosi.tools.manifest").is_file()
-    assert _flags(backend.command(request))["tools-tree"] == str(build / ".mkosi" / "mkosi.tools")
+    resolved = json.loads((build / "default" / "mkosi-summary.json").read_text())
+    assert resolved["Tools"]["Release"] == "trixie"
+    assert backend.tools_tree == ToolsTree("debian", "trixie", "20251020T000000Z")
+    toolchain = running_toolchain(backend)
+    assert toolchain.tools_tree == backend.tools_tree
+    assert toolchain.mkosi is not None and toolchain.mkosi.version == _mkosi.PINNED_VERSION
 
 
-def test_local_execute_hands_sudo_output_back_to_the_user(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@linux_only
+def test_local_execute_reports_mkosis_failure_with_the_log_tail(
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    request = _relative_request(tmp_path, monkeypatch)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
-    monkeypatch.setattr("tundravm.backends.local_linux.os.getuid", lambda: 1000)
-    monkeypatch.setattr("tundravm.backends.local_linux.os.getgid", lambda: 1001)
-    project = tmp_path / "build" / "mkosi" / "default"
-    events: list[str] = []
-
-    def failing_mkosi(argv: Sequence[str], **_: object) -> StreamResult:
-        (project / "mkosi.tools").mkdir()
-        return StreamResult(returncode=1, tail=("boom",))
-
-    def fake_run(argv: Sequence[str], **_: object) -> subprocess.CompletedProcess[str]:
-        assert (project / "mkosi.tools").is_dir()  # chown runs before the tools tree moves
-        events.append(" ".join(argv))
-        return subprocess.CompletedProcess(list(argv), 0, "", "")
-
-    monkeypatch.setattr("tundravm.backends.local_linux.run_streaming", failing_mkosi)
-    monkeypatch.setattr("tundravm.backends.local_linux.subprocess.run", fake_run)
-
-    with pytest.raises(BackendExecutionError):
-        LocalLinuxBackend().execute(request)
-
-    build = tmp_path / "build"
-    owned = [build / "default" / "output", build / ".mkosi", project / "mkosi.tools"]
-    assert events == ["sudo chown -R 1000:1001 " + " ".join(map(str, owned))]
-    assert (build / ".mkosi" / "mkosi.tools").is_dir()
-    assert not (project / "mkosi.tools").exists()
-
-
-def test_local_requirements_probe_the_tools_a_tools_tree_replaces() -> None:
-    by_tool = {r.tool: r for r in LocalLinuxBackend().requirements()}
-    for tool in ("ukify", "systemd-repart", "apt"):
-        assert by_tool[tool].optional
-        assert 'Setting("Build", "ToolsTree", ("default",))' in by_tool[tool].hint
-    assert by_tool["ukify"].hint.endswith("or install systemd-ukify")
-    assert not by_tool["mkosi"].optional
-
-
-# ── cloud postoutput tools ───────────────────────────────────────────────
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
-@pytest.mark.parametrize(("target", "tool"), [("azure", "qemu-img"), ("gcp", "sgdisk")])
-def test_local_prepare_fails_fast_when_a_cloud_tool_is_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: OutputTarget, tool: str
-) -> None:
-    """The azure/gcp postoutput scripts would exit 127 inside mkosi; say so before it runs."""
-    request = replace(bake_request(tmp_path), profile=target, output_targets=(target,))
-    monkeypatch.setattr(
-        "tundravm.backends.local_linux.shutil.which",
-        lambda name: None if name == tool else f"/usr/bin/{name}",
-    )
-    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
+    fake_mkosi.fail = 1
+    fake_mkosi.log = "‣ Installing packages\napt: E: Unable to locate package nope"
 
     with pytest.raises(BackendExecutionError) as excinfo:
-        LocalLinuxBackend().prepare(request)
+        LocalLinuxBackend().execute(_request(tmp_path))
 
-    assert excinfo.value.code == "E_BACKEND_EXECUTION"
-    assert f"`{tool}`" in str(excinfo.value)
-    assert excinfo.value.hint is not None
-    assert excinfo.value.hint.endswith("or bake --variant default")
-    assert excinfo.value.context["tool"] == tool
-    assert not request.build_dir.exists()
+    message = str(excinfo.value)
+    assert "mkosi build failed (exit 1)" in message
+    assert "| apt: E: Unable to locate package nope" in message
+    assert excinfo.value.context["returncode"] == "1"
+    assert excinfo.value.hint is not None and "mkosi.log" in excinfo.value.hint
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
-def test_local_prepare_needs_no_cloud_tool_for_qemu(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@linux_only
+def test_local_execute_uses_sudo_without_user_namespaces_and_reclaims_the_output(
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        "tundravm.backends.local_linux.shutil.which",
-        lambda name: "/usr/bin/mkosi" if name == "mkosi" else None,
-    )
-    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
+    """The build re-executes this interpreter under sudo; the summary stays unprivileged."""
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/sudo")
+    monkeypatch.setattr("tundravm.backends.local_linux.os.getuid", lambda: 1000)
+    monkeypatch.setattr("tundravm.backends.local_linux.os.getgid", lambda: 1001)
+    fake_mkosi.sudo = True
+    request = _request(tmp_path)
+    streamed: list[list[str]] = []
+    chowned: list[list[str]] = []
 
-    LocalLinuxBackend().prepare(bake_request(tmp_path))
+    def run_streaming(argv: Sequence[str], **_: object) -> StreamResult:
+        """Stand in for sudo: run the module entry in-process, as root would."""
+        streamed.append(list(argv))
+        assert list(argv[:5]) == ["sudo", "-E", sys.executable, "-m", "tundravm._mkosi"]
+        code = _mkosi.main(list(argv[5:]))
+        return StreamResult(code, ())
 
-    assert (tmp_path / "build").is_dir()
+    def run(argv: Sequence[str], **_: object) -> subprocess.CompletedProcess[str]:
+        chowned.append(list(argv))
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
 
-
-@pytest.mark.parametrize("target", ["azure", "gcp"])
-def test_local_command_gives_a_default_tools_tree_the_cloud_packages(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: OutputTarget
-) -> None:
-    """The cloud postoutput scripts run in the tools tree, which lacks qemu-img, sgdisk, parted."""
-    request = replace(_relative_request(tmp_path, monkeypatch), output_targets=(target,))
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-
-    flags = _flags(LocalLinuxBackend(privilege="none").command(request))
-
-    assert flags["tools-tree"] == "default"
-    assert flags["tools-tree-package"] == "qemu-utils,gdisk,parted"
-
-
-def test_local_command_adds_no_cloud_packages_for_qemu_or_host_tools(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = _relative_request(tmp_path, monkeypatch)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-    assert "tools-tree-package" not in _flags(LocalLinuxBackend(privilege="none").command(request))
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
-    cloud = replace(request, output_targets=("azure",))
-    assert not any(
-        arg.startswith("--tools-tree") for arg in LocalLinuxBackend(privilege="none").command(cloud)
-    )
-
-
-def test_local_command_reuses_a_stashed_tools_tree_only_with_the_cloud_tools(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = replace(_relative_request(tmp_path, monkeypatch), output_targets=("azure",))
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-    backend = LocalLinuxBackend(privilege="none")
-    cached = tmp_path / "build" / ".mkosi" / "mkosi.tools"
-    (cached / "usr" / "bin").mkdir(parents=True)
-
-    assert _flags(backend.command(request))["tools-tree"] == "default"
-
-    (cached / "usr" / "bin" / "qemu-img").touch()
-    (cached / "usr" / "sbin").mkdir()
-    (cached / "usr" / "sbin" / "sgdisk").touch()
-    (cached / "usr" / "sbin" / "parted").touch()
-    flags = _flags(backend.command(request))
-    assert flags["tools-tree"] == str(cached)
-    assert "tools-tree-package" not in flags
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Local backend is Linux-specific.")
-@pytest.mark.parametrize("conf", ["[Build]\nToolsTree=default\n", "[Output]\nFormat=uki\n"])
-def test_local_prepare_skips_the_host_cloud_check_in_a_tools_tree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str
-) -> None:
-    request = replace(_relative_request(tmp_path, monkeypatch, conf), output_targets=("azure",))
-    monkeypatch.setattr(
-        "tundravm.backends.local_linux.shutil.which",
-        lambda name: None if name in ("qemu-img", "ukify") else f"/usr/bin/{name}",
-    )
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-    monkeypatch.setattr(LocalLinuxBackend, "_check_mkosi_version", lambda self: None)
-
-    LocalLinuxBackend().prepare(request)
-
-    assert (tmp_path / "build").is_dir()
-
-
-# ── pefile ───────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    "conf",
-    [
-        "[Output]\nFormat=directory\n",
-        "[Output]\nFormat=disk\n",
-        "[Output]\nFormat=disk\n[Content]\nBootable=yes\n",
-    ],
-)
-def test_local_command_adds_a_tools_tree_without_pefile(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str
-) -> None:
-    """mkosi reads an installed kernel with pefile, even for a directory build."""
+    monkeypatch.setattr("tundravm.backends.local_linux.run_streaming", run_streaming)
+    monkeypatch.setattr("tundravm.backends.local_linux.subprocess.run", run)
     notices: list[tuple[str, str]] = []
-    request = replace(
-        _relative_request(tmp_path, monkeypatch, conf),
-        on_notice=lambda level, message: notices.append((level, message)),
+    request = BakeRequest(
+        profile="default",
+        build_dir=request.build_dir,
+        emit_dir=request.emit_dir,
+        on_notice=lambda level, text: notices.append((level, text)),
     )
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: True)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_pefile", lambda: False)
 
-    cmd = LocalLinuxBackend(privilege="none").command(request)
+    result = LocalLinuxBackend().execute(request)
 
-    assert "--tools-tree=default" in cmd
-    assert notices == [
-        (
-            "info",
-            "pefile not found on the host; building with mkosi's default tools tree "
-            "(--tools-tree=default). Install python3-pefile to use the host tools.",
-        )
+    build = tmp_path / "build"
+    (command,) = streamed
+    separator = command.index("--")
+    assert command[5:separator] == [
+        "--cwd",
+        str(build / ".mkosi"),
+        "--log",
+        str(build / "default" / "mkosi.log"),
+        "--result",
+        command[10],
     ]
+    assert tuple(command[separator + 1 :]) == fake_mkosi.calls[-1].argv
+    assert fake_mkosi.verbs() == ["summary", "build"]
+    assert result.profiles["default"].artifacts["qemu"].path.name == "default.efi"
+    owned = [build / "default" / "output", build / ".mkosi", build / "default" / "mkosi.log"]
+    assert chowned == [["sudo", "chown", "-R", "1000:1001", *map(str, owned)]]
+    assert any("sudo" in text for _, text in notices)
 
 
-@pytest.mark.parametrize(
-    ("conf", "mkosi_args"),
-    [
-        ("[Output]\nFormat=disk\n[Content]\nBootable=no\n", []),
-        ("[Output]\nFormat=directory\n", ["--bootable=no"]),
-    ],
-)
-def test_local_command_keeps_host_tools_without_pefile_for_unbootable_builds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conf: str, mkosi_args: list[str]
+@linux_only
+def test_local_execute_fails_when_sudo_runs_nothing(
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    request = _relative_request(tmp_path, monkeypatch, conf)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-    probed: list[bool] = []
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
+    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: "/usr/bin/sudo")
+    fake_mkosi.sudo = True
 
-    def no_pefile() -> bool:
-        probed.append(True)
-        return False
+    def refused(argv: Sequence[str], **_: object) -> StreamResult:
+        return StreamResult(1, ("sudo: a password is required",))
 
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_pefile", no_pefile)
-
-    cmd = LocalLinuxBackend(privilege="none", mkosi_args=mkosi_args).command(request)
-
-    assert not any(arg.startswith("--tools-tree") for arg in cmd)
-    assert probed == []
-
-
-def test_local_notice_names_every_missing_host_tool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    notices: list[str] = []
-    request = replace(
-        _relative_request(tmp_path, monkeypatch),
-        on_notice=lambda _level, message: notices.append(message),
-    )
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_ukify", lambda: False)
-    monkeypatch.setattr("tundravm.backends.local_linux.host_has_pefile", lambda: False)
-
-    LocalLinuxBackend(privilege="none").command(request)
-
-    assert notices[0].startswith("ukify and pefile not found on the host;")
-    assert notices[0].endswith("Install systemd-ukify and python3-pefile to use the host tools.")
-
-
-def test_local_requirements_probe_pefile_with_mkosis_python(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    script = tmp_path / "mkosi"
-    script.write_text("#!/opt/py/bin/python3.12 -s\nimport mkosi\n")
-    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: str(script))
-
-    by_tool = {r.tool: r for r in LocalLinuxBackend().requirements()}
-
-    pefile = by_tool["pefile"]
-    assert pefile.optional
-    assert pefile.probe[0] == "/opt/py/bin/python3.12"
-    assert pefile.probe[1:] == ("-c", "import pefile; print(pefile.__version__)")
-    assert pefile.hint == (
-        'install python3-pefile, or let mkosi use its tools tree (Setting("Build", "ToolsTree", '
-        '("default",)))'
+    monkeypatch.setattr("tundravm.backends.local_linux.run_streaming", refused)
+    monkeypatch.setattr(
+        "tundravm.backends.local_linux.subprocess.run",
+        lambda argv, **_: subprocess.CompletedProcess(argv, 0, "", ""),
     )
 
+    with pytest.raises(BackendExecutionError) as excinfo:
+        LocalLinuxBackend().execute(_request(tmp_path))
 
-@pytest.mark.parametrize(
-    ("shebang", "python"),
-    [("#!/usr/bin/env python3\n", "python3"), ("#!/bin/sh\n", "python3"), ("", "python3")],
-)
-def test_mkosi_python_falls_back_to_python3(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shebang: str, python: str
+    assert "sudo: a password is required" in str(excinfo.value)
+
+
+@linux_only
+def test_local_backend_without_sudo_or_user_namespaces_names_the_fix(
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tundravm.backends.local_linux import mkosi_python
-
-    script = tmp_path / "mkosi"
-    script.write_text(f"{shebang}exec mkosi\n")
-    monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: str(script))
-    assert mkosi_python() == python
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
     monkeypatch.setattr("tundravm.backends.local_linux.shutil.which", lambda _: None)
-    assert mkosi_python() == "python3"
+    fake_mkosi.sudo = True
+
+    with pytest.raises(BackendExecutionError) as excinfo:
+        LocalLinuxBackend().prepare(bake_request(tmp_path))
+
+    assert excinfo.value.hint is not None
+    assert "apparmor_restrict_unprivileged_userns=0" in excinfo.value.hint
+
+
+def test_privilege_none_never_uses_sudo(fake_mkosi: FakeMkosi) -> None:
+    fake_mkosi.sudo = True
+
+    assert LocalLinuxBackend(privilege="none").uses_sudo() is False
+    assert LocalLinuxBackend().uses_sudo() is True
+
+
+def test_local_requirements_are_what_the_tools_tree_does_not_provide() -> None:
+    tools = [requirement.tool for requirement in LocalLinuxBackend().requirements()]
+
+    assert tools == ["apt", "dpkg", "debian-archive-keyring"]
+
+
+def test_local_fingerprint_names_the_mkosi_it_runs() -> None:
+    found = LocalLinuxBackend(mkosi_args=["--debug"]).fingerprint()
+
+    assert found["name"] == "local_linux"
+    assert found["privilege"] == "auto"
+    assert found["mkosi_args"] == ["--debug"]
+    assert str(found["mkosi"]).startswith(_mkosi.PINNED_VERSION)

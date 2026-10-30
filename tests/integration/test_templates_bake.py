@@ -1,6 +1,7 @@
 """Bake the ``service`` and ``cloud`` starter templates for real and check what lands in the image.
 
-Needs mkosi >= 25 and non-interactive sudo; skipped otherwise.
+Needs a host the Linux backend builds on and non-interactive sudo (the checks read the
+built tree as root); skipped otherwise.
 Run with: uv run pytest tests/integration/test_templates_bake.py -m integration
 """
 
@@ -23,6 +24,7 @@ from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
+from tundravm.testing import build_unavailable
 
 pytestmark = pytest.mark.integration
 
@@ -41,8 +43,8 @@ def _sudo_works() -> bool:
 
 
 requires_mkosi = pytest.mark.skipif(
-    shutil.which("mkosi") is None or not _sudo_works(),
-    reason="needs mkosi and non-interactive sudo",
+    build_unavailable() is not None or not _sudo_works(),
+    reason="needs a Linux build host and non-interactive sudo",
 )
 
 
@@ -66,8 +68,8 @@ def _sudo_readlink(path: Path) -> str:
 @pytest.fixture(scope="module")
 def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """The ``service`` template's ``default`` variant baked once, in directory format."""
-    if shutil.which("mkosi") is None or not _sudo_works():
-        pytest.skip("needs mkosi and non-interactive sudo")
+    if build_unavailable() is not None or not _sudo_works():
+        pytest.skip("needs a Linux build host and non-interactive sudo")
     tmp_path = tmp_path_factory.mktemp("service")
     recipe_path = tmp_path / "node.py"
     recipe_path.write_text(
@@ -81,7 +83,7 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         encoding="utf-8",
     )
     loaded = load_file(recipe_path)
-    backend = LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"])
+    backend = LocalLinuxBackend(mkosi_args=["--format=directory"])
     out = tmp_path / "build"
     try:
         bake_image(loaded.lowered(), ("default",), locked=None, backend=backend, build=out)
@@ -339,7 +341,7 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
     # A directory-format bake checks the image, not the Azure/GCP disks (they need qemu-img).
     variants = tuple(replace(variant, outputs=("qemu",)) for variant in recipe.variants)
     recipe = replace(recipe, items=(*recipe.items, *repositories), variants=variants)
-    backend = _Capturing(LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"]))
+    backend = _Capturing(LocalLinuxBackend(mkosi_args=["--format=directory"]))
     out = tmp_path / "build"
     try:
         try:

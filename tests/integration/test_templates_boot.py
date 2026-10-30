@@ -3,7 +3,8 @@
 The UKI boots through ``-kernel`` as ``deploy --target qemu`` boots it without TDX, on KVM
 when ``/dev/kvm`` is usable and on TCG otherwise. The ``service`` template boots unchanged and
 the host fetches its page through a QEMU port forward: network, firewall and app end to end.
-Needs mkosi >= 25, non-interactive sudo, ``qemu-system-x86_64`` and OVMF; skipped otherwise.
+Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
+``qemu-system-x86_64`` and OVMF; skipped otherwise.
 CI's ``boot`` job runs it.
 Run with: uv run pytest tests/integration/test_templates_boot.py -m boot
 """
@@ -24,7 +25,7 @@ from tundravm.declarative import lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
-from tundravm.testing import BootResult, boot, boot_unavailable
+from tundravm.testing import BootResult, boot, boot_unavailable, build_unavailable
 
 pytestmark = [pytest.mark.integration, pytest.mark.boot]
 
@@ -43,25 +44,10 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _sudo_works() -> bool:
-    """Whether ``sudo`` runs without a password (``-n`` refuses some password-less setups)."""
-    if shutil.which("sudo") is None:
-        return False
-    try:
-        done = subprocess.run(
-            ["sudo", "true"], stdin=subprocess.DEVNULL, capture_output=True, timeout=10, check=False
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    return done.returncode == 0
-
-
 def _require_boot() -> None:
-    """Skip without mkosi, sudo, QEMU or OVMF; fail instead under ``TUNDRAVM_BOOT_REQUIRED=1``
+    """Skip without a build host, QEMU or OVMF; fail instead under ``TUNDRAVM_BOOT_REQUIRED=1``
     (CI's boot job), so a runner that lost a tool cannot pass by skipping."""
-    reason = boot_unavailable()
-    if shutil.which("mkosi") is None or not _sudo_works():
-        reason = "needs mkosi and non-interactive sudo"
+    reason = build_unavailable() or boot_unavailable()
     if reason is None:
         return
     if os.environ.get("TUNDRAVM_BOOT_REQUIRED") == "1":
@@ -87,7 +73,7 @@ def _bake_and_boot(
     recipe = load_file(recipe_path).recipe
     out = tmp / "build"
     try:
-        backend = LocalLinuxBackend(privilege="sudo")
+        backend = LocalLinuxBackend()
         _, artifacts = bake_image(
             lower(recipe), ("default",), locked=None, backend=backend, build=out
         )
@@ -105,7 +91,10 @@ def _bake_and_boot(
         print(result.summary(tail=400))  # recorded in the test log
         return result
     finally:
-        subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)
+        if shutil.which("sudo") is not None:
+            subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)
+        else:
+            shutil.rmtree(out, ignore_errors=True)
 
 
 @pytest.fixture(scope="module")

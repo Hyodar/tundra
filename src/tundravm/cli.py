@@ -32,7 +32,6 @@ import contextlib
 import difflib
 import json
 import os
-import platform
 import re
 import sys
 import traceback
@@ -48,9 +47,9 @@ from . import __version__, app_template
 from . import templates as scaffold
 from ._source import SOURCES_DIRNAME
 from .attestation import attest, parse_time, render_attestation
-from .backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend, Requirement
+from .backends import LimaMkosiBackend, LocalLinuxBackend
 from .backends.base import BuildBackend
-from .backends.local_linux import cloud_tools
+from .capabilities import AREAS, Area, BuildBackendKind, Host, capabilities, failed
 from .changes import CHANGES_FORMATS, changes
 from .check import failing, render_as, render_summary
 from .clean import (
@@ -90,11 +89,9 @@ from .declarative.lifecycle import (
     lock_image,
     lock_status,
     measure,
-    probe,
     read_artifacts,
     read_lock,
     read_variant_tree,
-    requirements_of,
     run_probe,
     select_artifact,
     tree_layout,
@@ -138,7 +135,7 @@ from .formats import (
     workflow_command,
 )
 from .lockfile import LockDrift
-from .measure import MEASURE_TOOL, MEASURE_VERSION, PlaceholderMeasurementWarning
+from .measure import PlaceholderMeasurementWarning
 from .measure.policy import write_policy
 from .models import BAKE_RESULT_FILENAME
 from .observability import Event, JsonReporter, TextReporter, render_bake_summary
@@ -479,7 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SOURCE",
         help="Resolve this source build again even if it is pinned (repeatable); "
-        "`--update toolchain` records the running toolchain (and resolves nixpkgs again).",
+        "`--update toolchain` records the running toolchain.",
     )
     lock.add_argument(
         "--strict",
@@ -751,11 +748,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_cmd = sub.add_parser(
         "doctor",
-        help="Check the host tools the build backends need.",
+        help="Report what this host can build, run, deploy and verify.",
         description=(
-            "Report Python/tundravm versions and probe backend tools. With --backend, "
-            "probe only that backend; with RECIPE, probe its backend and lint it. Exit 1 "
-            "if a required tool is missing."
+            "Print one row per capability (build:x86-64, run:simulated, run:tdx, "
+            "deploy:gcp, deploy:azure, verify:*): ready, blocked (with the fix), "
+            "unavailable or unsupported. --for limits the rows to one area; --backend "
+            "chooses the build backend (default: the recipe's, else local on x86-64 "
+            "Linux and lima elsewhere); with RECIPE, lint it too. Exit 1 if a build row "
+            "(or, with --for, a row of that area) is blocked."
         ),
     )
     doctor_cmd.set_defaults(handler=_cmd_doctor)
@@ -763,7 +763,14 @@ def build_parser() -> argparse.ArgumentParser:
         "recipe", type=Path, nargs="?", default=None, help="Optional recipe .py file."
     )
     doctor_cmd.add_argument(
-        "--backend", choices=BACKEND_KINDS, default=None, help="Backend to probe."
+        "--backend", choices=BACKEND_KINDS, default=None, help="Build backend to check."
+    )
+    doctor_cmd.add_argument(
+        "--for",
+        dest="areas",
+        choices=AREAS,
+        default=None,
+        help="Only this area's capabilities.",
     )
     _add_import_options(doctor_cmd)
 
@@ -2466,7 +2473,6 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
             previous=previous,
             update=tuple(args.update or ()),
             offline=args.offline,
-            runner=args.runner,
         )
     except LockfileError as exc:
         if exc.failures and resolve_format(args.format) == "github":
@@ -2477,8 +2483,6 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     recorded = locked.lockfile.toolchain
     if recorded is not None and recorded.mkosi is not None:
         print(f"  toolchain: {recorded.summary()}", file=out)
-        if recorded.unpinned:
-            print(f"warning: toolchain not pinned: {recorded.unpinned}", file=sys.stderr)
     return EXIT_OK
 
 
@@ -2492,7 +2496,7 @@ def _toolchain_findings(
     recorded = locked.lockfile.toolchain
     if recorded is None:
         return ()
-    running = running_toolchain(backend, runner=args.runner, locked=recorded)
+    running = running_toolchain(backend, locked=recorded)
     project: ProjectConfig | None = getattr(args, "project", None)
     strict = bool(getattr(args, "strict", False)) or (
         project is not None and project.strict_toolchain
@@ -2858,58 +2862,15 @@ def render_deployment(result: Deployment, *, variant: str) -> str:
     return "\n".join(lines)
 
 
-def probe_requirement(requirement: Requirement, runner: ProbeRunner) -> tuple[bool, str]:
-    """Run one probe; return ``(ok, report line)``."""
-    return probe(requirement, runner)
-
-
-def _probe_backend(backend: BuildBackend, runner: ProbeRunner, out: TextIO) -> bool:
-    """Print one backend's probe lines; return False if a required tool is missing."""
-    requirements = requirements_of(backend)
-    lines: list[str] = []
-    ready = True
-    for requirement in requirements:
-        ok, line = probe(requirement, runner)
-        ready = ready and (ok or requirement.optional)
-        lines.append(line)
-    status = "available" if ready else "unavailable"
-    print(f"backend {backend.name}: {status}", file=out)
-    if not requirements:
-        print("  no external tools required", file=out)
-    for line in lines:
-        print(f"  {line}", file=out)
-    return ready
-
-
-def default_doctor_backends() -> tuple[BuildBackend, ...]:
-    """The real backends ``doctor`` probes when no recipe or --backend is given."""
-    return (
-        LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB"),
-        NixMkosiBackend(),
-        LocalLinuxBackend(),
-    )
-
-
-def _probe_measurement_tools(runner: ProbeRunner, out: TextIO) -> None:
-    """Print the measurement implementation: built in, so it never fails ``doctor``."""
-    print("measurement tools:", file=out)
-    print(f"  ok {MEASURE_TOOL} {MEASURE_VERSION} (built in)", file=out)
-
-
-def _probe_cloud_tools(
-    loaded: RecipeFile, backend: BuildBackend, runner: ProbeRunner, out: TextIO
-) -> None:
-    """Print the optional host tools the recipe's azure/gcp variants bake with locally."""
-    if not isinstance(backend, LocalLinuxBackend):
-        return
-    targets = {t for v in loaded.recipe.variants for t in v.outputs}
-    requirements = cloud_tools(targets)
-    if not requirements:
-        return
-    print("cloud image tools:", file=out)
-    for requirement in requirements:
-        _, line = probe(requirement, runner)
-        print(f"  {line}", file=out)
+def _doctor_backend(backend: BuildBackend | None) -> BuildBackendKind | None:
+    """The doctor's name for *backend*'s kind; ``None`` to use this host's default."""
+    if isinstance(backend, LimaMkosiBackend):
+        return "lima"
+    if isinstance(backend, LocalLinuxBackend):
+        return "local"
+    if backend is not None and backend.name == "inprocess":
+        return "inprocess"
+    return None
 
 
 def doctor(
@@ -2918,41 +2879,28 @@ def doctor(
     *,
     runner: ProbeRunner | None = None,
     backend: BuildBackend | None = None,
+    areas: Sequence[Area] | None = None,
+    host: Host | None = None,
 ) -> int:
-    """Environment report. Exit 1 if the probed backend lacks a required tool, else 0.
+    """Print one row per capability of *areas* (all without); exit 1 when one is blocked.
 
-    *backend* (``--backend``) is probed alone; else the recipe's backend; else every
-    real backend. With a recipe, its lint summary follows.
+    Without *areas* only a blocked ``build`` row fails. The build row is for *backend*
+    (``--backend``), else the recipe's, else this host's default. *host* replaces every
+    host fact and *runner* the commands it runs (tests). With a recipe, its lint summary
+    follows.
     """
-    run = runner if runner is not None else run_probe
-    print(f"tundravm {__version__}", file=out)
-    print(f"python {platform.python_version()}", file=out)
-    if loaded is None and backend is None:
-        for candidate in default_doctor_backends():
-            _probe_backend(candidate, run, out)
-        _probe_measurement_tools(run, out)
-        return EXIT_OK
+    facts = host if host is not None else Host()
+    if runner is not None:
+        facts.runner = runner
     chosen = backend if backend is not None else (None if loaded is None else loaded.backend)
-    if chosen is None:
-        print("backend: none configured", file=out)
-        ready = False
-    else:
-        ready = _probe_backend(chosen, run, out)
-        if getattr(chosen, "rosetta", False):
-            from .toolchain import ROSETTA
-
-            print(
-                f"  warning: rosetta is on: builds are reproducible: {ROSETTA}; "
-                "use LimaMkosiBackend(rosetta=False)",
-                file=out,
-            )
-        if loaded is not None:
-            _probe_cloud_tools(loaded, chosen, run, out)
-    _probe_measurement_tools(run, out)
+    rows = capabilities(facts, backend=_doctor_backend(chosen), areas=areas or AREAS)
+    width = max(16, *(len(row.name) for row in rows))
+    for row in rows:
+        print(row.render(width), file=out)
     if loaded is not None:
         report = check_report(loaded.recipe, loaded.image, variants=loaded.variants)
         print(f"lint: {render_summary(report)}", file=out)
-    return EXIT_OK if ready else EXIT_FAILURE
+    return EXIT_FAILURE if failed(rows, areas=areas) else EXIT_OK
 
 
 def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
@@ -2974,7 +2922,8 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
 def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _load(args) if args.recipe is not None else None
     backend = None if args.backend is None else Backend(args.backend).build_backend()
-    return doctor(loaded, out, runner=args.runner, backend=backend)
+    areas = None if args.areas is None else [args.areas]
+    return doctor(loaded, out, runner=args.runner, backend=backend, areas=areas)
 
 
 def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
@@ -4162,9 +4111,13 @@ def _init_next(
 
 
 def _init_doctor(kind: BackendKind, runner: ProbeRunner | None, out: TextIO) -> None:
-    """Probe the backend ``init`` wired in; a missing tool is reported, never fatal."""
-    print(f"\nchecking the {kind} backend (tundravm doctor --backend {kind}):", file=out)
-    if doctor(None, out, runner=runner, backend=Backend(kind).build_backend()) != EXIT_OK:
+    """Check the backend ``init`` wired in can build; a blocked build is reported, never fatal."""
+    print(
+        f"\nchecking the {kind} backend (tundravm doctor --for build --backend {kind}):",
+        file=out,
+    )
+    backend = Backend(kind).build_backend()
+    if doctor(None, out, runner=runner, backend=backend, areas=["build"]) != EXIT_OK:
         print(
             f"the {kind} backend is not ready: install the missing tools above, or bake "
             "with --backend inprocess for a simulated build",
@@ -4223,13 +4176,11 @@ __all__ = [
     "PLACEHOLDER_BANNER",
     "ProbeRunner",
     "build_parser",
-    "default_doctor_backends",
     "doctor",
     "error_payload",
     "json_report",
     "main",
     "parse_deploy_target",
-    "probe_requirement",
     "render_deployment",
     "render_drift",
     "render_measurements",

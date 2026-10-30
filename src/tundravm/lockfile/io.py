@@ -41,7 +41,7 @@ def parse_lockfile(raw: str) -> Lockfile:
             f"Lockfile version {version} is not supported; this tundravm reads version "
             f"{LOCKFILE_VERSION}.",
             hint="Run `tundravm lock RECIPE` to lock again: version 5 records the build "
-            "toolchain (mkosi, systemd, nixpkgs, tundravm) so builders run identical tools.",
+            "toolchain (mkosi, the tools tree, tundravm) so builders run identical tools.",
             context={"version": str(version)},
         )
     recipe_digest = _required_str(payload, "recipe_digest")

@@ -329,11 +329,6 @@ def evidence(
     reproduced = recorded_reproducibility(extra)
     payload = _manifest_payload(manifest)
     toolchain = recorded_toolchain(payload)
-    if toolchain is not None and toolchain.reproducible:
-        notes.append(
-            f"reproducible: {toolchain.reproducible}: the bake ran x86-64 tools under "
-            "Lima's Rosetta translation; bake with LimaMkosiBackend(rosetta=False) to compare"
-        )
     records = {
         name: _variant(
             name,
@@ -410,11 +405,8 @@ def recorded_toolchain(payload: Mapping[str, Any]) -> Toolchain | None:
 
 
 def toolchain_summary(raw: object) -> str:
-    """``mkosi 25.3 (nix @abc…), systemd 257, nixpkgs <rev12>, tundravm 0.1.0+…`` from a payload.
-
-    ``not recorded`` without one; a Rosetta toolchain ends ``reproducible: not guaranteed
-    (rosetta)``.
-    """
+    """``mkosi 27.1 @ecf7f5702bb2, tools_tree debian/trixie@…, tundravm 0.1.0+…`` from a
+    payload; ``not recorded`` without one."""
     if raw is None:
         return "not recorded"
     try:
@@ -422,15 +414,11 @@ def toolchain_summary(raw: object) -> str:
     except TdxError:
         return "not recorded (unreadable)"
     fields = toolchain.fields()
-    fields.pop("rosetta", None)
-    order = ["mkosi", "systemd", "nixpkgs"]
+    order = ["mkosi", "tools_tree"]
     names = [n for n in order if n in fields]
     names += sorted(n for n in fields if n not in order and n != "tundravm")
     names.append("tundravm")
-    text = ", ".join(f"{name} {fields[name]}" for name in names)
-    if toolchain.reproducible:
-        text += f"  reproducible: {toolchain.reproducible}"
-    return text
+    return ", ".join(f"{name} {fields[name]}" for name in names)
 
 
 def demands(required: Iterable[str], need: str) -> str | None:

@@ -167,6 +167,23 @@ def test_measure_placeholder(recipe, tmp_path):  # `recipe` is the plugin's mini
 
 For a full bake without tools, `bake_in_process(recipe, build=tmp_path)` runs the real pipeline (lint, lock check, compile) on the in-process backend and returns simulated artifacts. Without `lock=` it locks offline first, which fails for a recipe with source builds: pass a `Lock` (for example `lock(recipe, resolver=...)`) for those.
 
+## Faking mkosi
+
+`FakeMkosi` stands in for mkosi at the process boundary: it replaces `invoke` and `needs_sudo` of the adapter (`tundravm._mkosi`), so a real `LocalLinuxBackend` builds its command line, reads the resolved `summary --json`, collects artifacts and records its toolchain while nothing forks and nothing needs privileges. Every call is kept in `calls` (`FakeCall(argv, cwd, log, stdout)`, with `.verb` and `.option("--image-id")`); `summary --json` returns `summary` (a default with a pinned Debian trixie tools tree otherwise); `build` writes `outputs` (default `("{image_id}.efi",)`) into the `--output-directory` it was given; `fail=N` makes `fail_verb` (default `build`) raise `MkosiError` with `log` as its log; `sudo=True` makes the backend take its sudo path.
+
+```python
+from tundravm.backends import LocalLinuxBackend
+from tundravm.testing import FakeMkosi
+
+
+def test_bakes_through_mkosi(fake_mkosi: FakeMkosi, request_for_default):
+    result = LocalLinuxBackend().execute(request_for_default)
+    assert fake_mkosi.verbs() == ["summary", "build"]
+    assert result.profiles["default"].artifacts["qemu"].path.name == "default.efi"
+```
+
+`FakeMkosi().install(monkeypatch.setattr)` does the same outside the fixture. `build_unavailable()` returns why this host cannot run a real Linux-backend build without a password prompt (not x86-64 Linux, no user namespaces and no non-interactive `sudo`), or `None`; the repository's integration tests skip on it.
+
 ## Reproducibility, SBOM and evidence in tests
 
 The in-process backend is deterministic, so a test can bake twice and compare digests, or let `bake(..., verify_reproducible=True)` do it (it raises `ReproducibilityError` on a mismatch, as `tundravm bake --verify-reproducible` does). `sbom(artifact, lock=...)` returns the bill of materials as values: `Sbom.packages` and `Sbom.sources` are tuples of `Component` (`name`, `version`, `url`, `ref`, `commit`, `installs`, ...), and `Sbom.render(format)` gives the document `tundravm sbom` writes.
@@ -334,7 +351,7 @@ from tundravm.recipe import load_file
 @pytest.mark.boot
 def test_image_boots(boot, tmp_path):
     lowered = load_file("image.py").lowered()
-    backend = LocalLinuxBackend(privilege="sudo")
+    backend = LocalLinuxBackend()
     _, artifacts = bake_image(lowered, ("default",), locked=None, backend=backend, build=tmp_path)
     (uki,) = [artifact for artifact in artifacts if artifact.target == "qemu"]
     result = boot(uki, expect_units=("app",), timeout=900)
@@ -342,7 +359,7 @@ def test_image_boots(boot, tmp_path):
     assert "app.service" in result.started
 ```
 
-`scan_console(text)` reads a transcript the same way (`ConsoleScan(started, failed, fatal)`) for a log captured elsewhere. A booted check needs a real bake (mkosi and root), QEMU and OVMF; `tests/testing_toolkit/test_boot.py` covers the harness itself with a fake QEMU that prints a console transcript.
+`scan_console(text)` reads a transcript the same way (`ConsoleScan(started, failed, fatal)`) for a log captured elsewhere. A booted check needs a real bake (a host the Linux backend builds on: user namespaces or non-interactive `sudo`; `build_unavailable()` says why not), QEMU and OVMF; `tests/testing_toolkit/test_boot.py` covers the harness itself with a fake QEMU that prints a console transcript.
 
 ## Pytest fixtures
 
@@ -354,6 +371,7 @@ The `tundravm` pytest plugin is registered through an entry point, so installing
 | `compiled` | `compiled(recipe, variants=None) -> CompiledTree`, compiled into a fresh directory under `tmp_path` |
 | `run_cli` | The `run_cli` helper |
 | `boot` | `boot(artifact, **kwargs) -> BootResult`: `tundravm.testing.boot` with the console log under `tmp_path`; skips the test when QEMU or OVMF is missing. The plugin also registers the `boot` marker |
+| `fake_mkosi` | A `FakeMkosi` in place of mkosi for the test (see [Faking mkosi](#faking-mkosi)) |
 
 A test module that defines its own `recipe` fixture overrides the plugin's.
 
@@ -369,7 +387,7 @@ uv run pytest tests/unit/test_public_surface.py    # tundravm.__all__ against th
 
 ### Template bakes
 
-`tests/integration/test_templates_bake.py` (marker `integration`) bakes two `init` templates for real with `LocalLinuxBackend(privilege="sudo", mkosi_args=["--format=directory"])`, so it needs mkosi 25+ and non-interactive `sudo` and is skipped without them. The directory format skips the UKI and the disk image but still runs every build script and installs the kernel, which is why the CI workflow installs `python3-pefile` next to mkosi and `uv run pytest` runs both bakes on every push.
+`tests/integration/test_templates_bake.py` (marker `integration`) bakes two `init` templates for real with `LocalLinuxBackend(mkosi_args=["--format=directory"])`, so it needs a host the Linux backend builds on and non-interactive `sudo` (the checks read the built tree as root), and is skipped without them. The directory format skips the UKI and the disk image but still runs every build script and installs the kernel; `uv run pytest` runs both bakes in CI on every push.
 
 - **`service`**: the generated `app.service` (`ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www`, `User=app`, the strict sandbox) is linked into `minimal.target.wants`, Debian's busybox has its `httpd` applet, and `/srv/www/index.html` and the `app` user are in the tree.
 - **`cloud`** (the `default` variant, plus two extra `Repository` declarations, one with `in_image=False`): `mkosi.conf` sets `Snapshot=20251113T083151Z` and no `Mirror=` or `SandboxTrees=`; `Backports` writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` and pins sid to 100, and the image still runs trixie's 6.12 kernel; `EfiStub` installs its pinned `systemd-boot-efi` from the image root and leaves no `.deb` behind; only the `in_image=True` repository is listed in the image's `/etc/apt`; `runtime-init.service` waits for `network-online.target` because the variant ships no `network-setup.service`.
@@ -381,12 +399,12 @@ uv run pytest -m "not integration"                                      # everyt
 
 ### Template boots
 
-`tests/integration/test_templates_boot.py` (markers `integration` and `boot`) bakes the `minimal` and `service` templates' `default` variants as UKIs with `LocalLinuxBackend(privilege="sudo")` and boots each with `boot()` (4G of memory: the UKI unpacks the whole image into RAM). The service template boots unchanged: `boot(forward={HOST: 8080}, wait_http=("http://127.0.0.1:HOST/",))` forwards a free host port to its busybox httpd and the test asserts the page it serves, so DHCP, the nftables opening and the sandboxed service are proven end to end. It needs mkosi 25+, non-interactive `sudo`, `qemu-system-x86_64` and OVMF, and is skipped without them; `TUNDRAVM_BOOT_REQUIRED=1` turns the skip into a failure.
+`tests/integration/test_templates_boot.py` (markers `integration` and `boot`) bakes the `minimal` and `service` templates' `default` variants as UKIs with `LocalLinuxBackend()` and boots each with `boot()` (4G of memory: the UKI unpacks the whole image into RAM). The service template boots unchanged: `boot(forward={HOST: 8080}, wait_http=("http://127.0.0.1:HOST/",))` forwards a free host port to its busybox httpd and the test asserts the page it serves, so DHCP, the nftables opening and the sandboxed service are proven end to end. It needs a host the Linux backend builds on (`build_unavailable()`), `qemu-system-x86_64` and OVMF, and is skipped without them; `TUNDRAVM_BOOT_REQUIRED=1` turns the skip into a failure.
 
 - **`minimal`**: reaches `minimal.target`, the `hello` task finishes, no unit fails.
 - **`service`**: TeeBase, debloat, the curated kernel modules and the strict sandbox still reach `minimal.target`, `app.service` starts, no unit fails; `tdx_guest` ships but the VM has no TDX, so it stays unloaded and no console line reports a TDX failure.
 
-CI's `boot` job installs mkosi, `qemu-system-x86` and `ovmf`, opens `/dev/kvm` to the runner user when the runner has it (the boots fall back to TCG otherwise), runs the file with `TUNDRAVM_BOOT_REQUIRED=1` and `TUNDRAVM_BOOT_TIMEOUT=1500`, and uploads the console logs (`TUNDRAVM_BOOT_LOGS`) when it fails. The `test` job leaves QEMU out, so there the boots skip.
+CI's `boot` job installs `debian-archive-keyring`, `qemu-system-x86` and `ovmf`, allows unprivileged user namespaces (`kernel.apparmor_restrict_unprivileged_userns=0`, so mkosi builds unprivileged), prints `tundravm doctor --for build` and `--for run`, opens `/dev/kvm` to the runner user when the runner has it (the boots fall back to TCG otherwise), runs the file with `TUNDRAVM_BOOT_REQUIRED=1` and `TUNDRAVM_BOOT_TIMEOUT=1500`, and uploads the console logs (`TUNDRAVM_BOOT_LOGS`) when it fails. The `test` job leaves QEMU out, so there the boots skip.
 
 ```bash
 uv run pytest tests/integration/test_templates_boot.py -m boot -v   # the template boots alone

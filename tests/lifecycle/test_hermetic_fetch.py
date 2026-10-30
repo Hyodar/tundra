@@ -16,7 +16,7 @@ import pytest
 
 from tests.helpers import source_dir, write_recipe_file
 from tundravm import _source
-from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend
+from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.cli import EXIT_OK, main
 from tundravm.declarative import (
@@ -543,13 +543,11 @@ def test_backends_pass_with_network_no_for_an_offline_bake(tmp_path: Path) -> No
         emit_dir=tmp_path / "build" / "mkosi",
         network=False,
     )
-    assert "--with-network=no" in LocalLinuxBackend(privilege="none").command(request)
-    output = tmp_path / "build" / "default" / "output"
-    assert "--with-network=no" in NixMkosiBackend()._build_mkosi_args(request, output)
-    lima = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")._build_mkosi_command(request)
-    assert " --with-network=no " in lima
+    assert "--with-network=no" in LocalLinuxBackend(privilege="none").arguments(request)
+    lima = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")._mkosi_args(request)
+    assert "--with-network=no" in lima
     online = BakeRequest(profile="default", build_dir=request.build_dir, emit_dir=request.emit_dir)
-    assert "--with-network=no" not in LocalLinuxBackend(privilege="none").command(online)
+    assert "--with-network=no" not in LocalLinuxBackend(privilege="none").arguments(online)
 
 
 # ── EfiStub ──────────────────────────────────────────────────────────

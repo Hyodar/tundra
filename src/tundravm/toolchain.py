@@ -1,11 +1,13 @@
 """The build toolchain: what ran mkosi, recorded in the lockfile and compared everywhere.
 
-Two builders with the same lockfile should run identical tools. ``tundravm lock``
-records the toolchain (:class:`Toolchain`) beside the recipe; ``lock --check`` and
-``lint`` report ``toolchain-drift`` when the running one differs; a bake records the
-toolchain it used in ``bake-result.json``, and ``evidence`` and ``witness`` compare
-theirs field by field. The nix and lima backends pin nixpkgs to the locked rev and
-run mkosi with a PATH of Nix tools only, so the lock decides the toolchain there.
+Two builders with the same lockfile should run identical tools. mkosi is a dependency of
+tundravm, pinned to a release tag (:data:`MKOSI_PIN`), and every build tool besides it
+(systemd, ukify, systemd-boot, kmod, qemu, OVMF, pefile) comes from mkosi's tools tree
+(``ToolsTree=default``), whose distribution, release and snapshot are pinned explicitly.
+``tundravm lock`` records the toolchain (:class:`Toolchain`) beside the recipe; ``lock
+--check`` and ``lint`` report ``toolchain-drift`` when the running one differs; a bake
+records the toolchain it used in ``bake-result.json``, and ``evidence`` and ``witness``
+compare theirs field by field.
 """
 
 from __future__ import annotations
@@ -13,23 +15,17 @@ from __future__ import annotations
 import functools
 import json
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any
 
 from .diagnostics import Diagnostic, Severity
 from .errors import LockfileError
 
-MkosiSource = Literal["pip", "nix", "host"]
-ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
-NIXPKGS_BRANCH = "nixos-unstable"
-"""The nixpkgs branch ``tundravm lock`` resolves to a rev for the nix and lima backends."""
 TOOLCHAIN_UPDATE = "toolchain"
-"""The ``lock --update`` name that resolves the toolchain again instead of keeping the lock's."""
-ROSETTA = "not guaranteed (rosetta)"
-"""What a bake under Lima's Rosetta translation records as ``reproducible``."""
+"""The ``lock --update`` name that records the running toolchain instead of keeping the lock's."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,85 +56,73 @@ commit inside the Lima guest."""
 
 @dataclass(frozen=True, slots=True)
 class MkosiTool:
-    """The mkosi that runs: its *version*, where it comes from and, if known, its *rev*.
-
-    *source* is ``nix`` (the pinned nixpkgs' mkosi), ``pip`` (installed in tundravm's
-    Python environment) or ``host`` (found on PATH). *rev* is the nixpkgs rev for
-    ``nix`` and the git commit of a pip install from git. *path* is the resolved
-    executable a bake observed running (a ``/nix/store`` path for ``nix``); a lock,
-    which records what should run, leaves it ``None``.
-    """
+    """The mkosi that runs: its *version* and, when installed from git, the commit (*rev*)."""
 
     version: str
-    source: MkosiSource
     rev: str | None = None
-    path: str | None = None
 
     def label(self) -> str:
         rev = f" @{self.rev[:12]}" if self.rev else ""
-        return f"{self.version} ({self.source}{rev})"
+        return f"{self.version}{rev}"
 
 
 @dataclass(frozen=True, slots=True)
-class NixpkgsPin:
-    """A nixpkgs revision and the ``narHash`` of its source tree (what a flake.lock holds)."""
+class ToolsTree:
+    """mkosi's tools tree: the *distribution*, *release* and *snapshot* every build tool
+    (systemd, ukify, kmod, qemu, OVMF, pefile) is installed from."""
 
-    rev: str
-    nar_hash: str
-    last_modified: int = 0
+    distribution: str
+    release: str
+    snapshot: str | None = None
+
+    def label(self) -> str:
+        at = f"@{self.snapshot}" if self.snapshot else " (unpinned snapshot)"
+        return f"{self.distribution}/{self.release}{at}"
+
+    @classmethod
+    def from_summary(cls, tools: Mapping[str, Any] | None) -> ToolsTree | None:
+        """The tools tree of ``mkosi summary --json``'s ``Tools`` config, if it has one."""
+        if not tools or not tools.get("Distribution"):
+            return None
+        snapshot = tools.get("Snapshot")
+        return cls(
+            distribution=str(tools["Distribution"]),
+            release=str(tools.get("Release") or ""),
+            snapshot=None if not snapshot else str(snapshot),
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Toolchain:
-    """What builds the image: tundravm, mkosi, systemd (ukify/systemd-boot), nixpkgs, measure tools.
+    """What builds the image: tundravm, mkosi, the tools tree and the measurement tools.
 
-    *tundravm* is ``<version>`` or ``<version>+<commit>``. *systemd* is the version
-    of the ukify/systemd-boot mkosi uses. *nixpkgs* is set for the nix and lima
-    backends. *measure* maps the built-in measurement replay and its GCP firmware table to
-    their versions.
-    *rosetta* is true for a Lima VM translating x86-64 with Rosetta, which makes the
-    bake ``reproducible: not guaranteed (rosetta)``.
+    *tundravm* is ``<version>`` or ``<version>+<commit>``. *tools_tree* is the tools tree
+    the build installs its tools from (``None`` when unknown: a lock written before the tree
+    was resolved). *measure* maps the built-in measurement replay and its GCP firmware table
+    to their versions.
     """
 
     tundravm: str
     mkosi: MkosiTool | None = None
-    systemd: str | None = None
-    nixpkgs: NixpkgsPin | None = None
+    tools_tree: ToolsTree | None = None
     measure: tuple[tuple[str, str], ...] = field(default=())
-    rosetta: bool = False
-    unpinned: str | None = None
-    """Why a nix-sourced toolchain has no nixpkgs pin (offline lock, no nix on this host)."""
-
-    @property
-    def reproducible(self) -> str | None:
-        """``not guaranteed (rosetta)`` under Rosetta, else ``None`` (nothing known against it)."""
-        return ROSETTA if self.rosetta else None
 
     def payload(self) -> dict[str, Any]:
         """The JSON form the lockfile, ``bake-result.json``, evidence and witnesses hold."""
         out: dict[str, Any] = {"tundravm": self.tundravm}
         if self.mkosi is not None:
-            mkosi: dict[str, Any] = {"version": self.mkosi.version, "source": self.mkosi.source}
+            mkosi: dict[str, Any] = {"version": self.mkosi.version}
             if self.mkosi.rev:
                 mkosi["rev"] = self.mkosi.rev
-            if self.mkosi.path:
-                mkosi["path"] = self.mkosi.path
             out["mkosi"] = mkosi
-        if self.systemd is not None:
-            out["systemd"] = self.systemd
-        if self.nixpkgs is not None:
-            out["nixpkgs"] = {
-                "rev": self.nixpkgs.rev,
-                "narHash": self.nixpkgs.nar_hash,
-                "lastModified": self.nixpkgs.last_modified,
+        if self.tools_tree is not None:
+            out["tools_tree"] = {
+                "distribution": self.tools_tree.distribution,
+                "release": self.tools_tree.release,
+                "snapshot": self.tools_tree.snapshot,
             }
         if self.measure:
             out["measure"] = dict(self.measure)
-        if self.rosetta:
-            out["rosetta"] = True
-            out["reproducible"] = ROSETTA
-        if self.unpinned:
-            out["unpinned"] = self.unpinned
         return out
 
     @classmethod
@@ -150,7 +134,7 @@ class Toolchain:
                 hint="The lockfile is generated: run `tundravm lock RECIPE` to rewrite it.",
             )
         mkosi = raw.get("mkosi")
-        nix = raw.get("nixpkgs")
+        tree = raw.get("tools_tree")
         measure = raw.get("measure") or {}
         return cls(
             tundravm=str(raw["tundravm"]),
@@ -158,48 +142,36 @@ class Toolchain:
             if not isinstance(mkosi, Mapping)
             else MkosiTool(
                 version=str(mkosi.get("version", "")),
-                source=cast(MkosiSource, str(mkosi.get("source", "host"))),
                 rev=None if mkosi.get("rev") is None else str(mkosi["rev"]),
-                path=None if mkosi.get("path") is None else str(mkosi["path"]),
             ),
-            systemd=None if raw.get("systemd") is None else str(raw["systemd"]),
-            nixpkgs=None
-            if not isinstance(nix, Mapping)
-            else NixpkgsPin(
-                rev=str(nix.get("rev", "")),
-                nar_hash=str(nix.get("narHash", "")),
-                last_modified=int(nix.get("lastModified", 0) or 0),
+            tools_tree=None
+            if not isinstance(tree, Mapping)
+            else ToolsTree(
+                distribution=str(tree.get("distribution", "")),
+                release=str(tree.get("release", "")),
+                snapshot=None if tree.get("snapshot") is None else str(tree["snapshot"]),
             ),
             measure=tuple(sorted((str(k), str(v)) for k, v in dict(measure).items())),
-            rosetta=bool(raw.get("rosetta", False)),
-            unpinned=None if raw.get("unpinned") is None else str(raw["unpinned"]),
         )
 
     def summary(self) -> str:
-        """One line: ``mkosi 25.3 (nix @…), systemd 257, nixpkgs <rev12>, tundravm 0.1.0+…``."""
+        """One line: ``mkosi 27.1 @ecf7f5702bb2, tools debian/trixie@…, tundravm 0.1.0+…``."""
         parts = [f"mkosi {self.mkosi.label() if self.mkosi else 'none'}"]
-        if self.systemd is not None:
-            parts.append(f"systemd {self.systemd}")
-        if self.nixpkgs is not None:
-            parts.append(f"nixpkgs {self.nixpkgs.rev[:12]}")
+        if self.tools_tree is not None:
+            parts.append(f"tools {self.tools_tree.label()}")
         parts.extend(f"{tool} {version}" for tool, version in self.measure)
         parts.append(f"tundravm {self.tundravm}")
-        if self.rosetta:
-            parts.append(f"reproducible: {ROSETTA}")
         return ", ".join(parts)
 
     def fields(self) -> dict[str, str]:
-        """One comparable label per recorded tool: ``mkosi``, ``systemd``, ``measure.<tool>``…"""
+        """One comparable label per recorded tool: ``mkosi``, ``tools_tree``, ``measure.<tool>``…"""
         out = {"tundravm": self.tundravm}
         if self.mkosi is not None:
             out["mkosi"] = self.mkosi.label()
-        if self.systemd is not None:
-            out["systemd"] = self.systemd
-        if self.nixpkgs is not None:
-            out["nixpkgs"] = self.nixpkgs.rev[:12]
+        if self.tools_tree is not None:
+            out["tools_tree"] = self.tools_tree.label()
         for tool, version in self.measure:
             out[f"measure.{tool}"] = version
-        out["rosetta"] = "on" if self.rosetta else "off"
         return out
 
 
@@ -226,7 +198,7 @@ def compare_toolchains(left: Toolchain, right: Toolchain) -> tuple[ToolchainChan
 
 
 def describe_changes(changes: Sequence[ToolchainChange]) -> str:
-    """``same`` or ``different (mkosi 26 (nix) vs 25 (host), …)``."""
+    """``same`` or ``different (mkosi 27.1 vs 26, …)``."""
     if not changes:
         return "same"
     return "different (" + ", ".join(change.render() for change in changes) + ")"
@@ -255,37 +227,26 @@ def toolchain_drift(
     )
 
 
-# ── probes ───────────────────────────────────────────────────────────────
+# ── what runs ────────────────────────────────────────────────────────────
 
 MEASURE_TOOLS = ("tundravm-measure", "gcp-firmware-table")
 """What ``toolchain.measure`` records: the built-in replay's version and the GCP firmware
 table it embeds (both ship with tundravm, so a different version means other values)."""
 
 
-def run_probe(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    """Run *argv* with a 10s timeout, capturing output (what ``doctor`` runs)."""
-    return subprocess.run(list(argv), capture_output=True, text=True, timeout=10, check=False)
-
-
-def _output(runner: ProbeRunner, argv: Sequence[str]) -> str | None:
+def _git_head(root: Path) -> str | None:
     try:
-        result = runner(argv)
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
-    if result.returncode != 0:
-        return None
-    return (result.stdout or result.stderr or "").strip() or None
-
-
-def version_token(text: str) -> str:
-    """The version in a ``--version`` line: ``mkosi 25.3`` → ``25.3``, ``systemd 257`` → ``257``."""
-    words = text.splitlines()[0].split() if text else []
-    for word in words:
-        token = word.strip("(),")
-        token = token[1:] if token[:1] == "v" and token[1:2].isdigit() else token
-        if token[:1].isdigit():
-            return token
-    return words[-1] if words else ""
+    head = result.stdout.strip() if result.returncode == 0 else ""
+    return head.splitlines()[0] if head else None
 
 
 def _vcs_commit(distribution: str) -> str | None:
@@ -310,8 +271,7 @@ def tundravm_identity() -> str:
     commit = _vcs_commit("tundravm")
     root = Path(__file__).resolve().parents[2]
     if commit is None and (root / ".git").exists():
-        head = _output(run_probe, ("git", "-C", str(root), "rev-parse", "HEAD"))
-        commit = head.splitlines()[0] if head else None
+        commit = _git_head(root)
     return f"{__version__}+{commit[:12]}" if commit else __version__
 
 
@@ -323,25 +283,18 @@ def installed_version(distribution: str) -> str | None:
         return None
 
 
-def probe_mkosi(runner: ProbeRunner) -> MkosiTool | None:
-    """mkosi from tundravm's Python environment (``pip``), else from PATH (``host``)."""
+def installed_mkosi() -> MkosiTool | None:
+    """The mkosi in tundravm's Python environment (the dependency), with its git commit."""
     version = installed_version("mkosi")
-    if version is None:
-        text = _output(runner, ("mkosi", "--version"))
-        return None if text is None else MkosiTool(version_token(text), "host")
-    return MkosiTool(version, "pip", _vcs_commit("mkosi"))
+    return None if version is None else MkosiTool(version, _vcs_commit("mkosi"))
 
 
-def probe_systemd(runner: ProbeRunner) -> str | None:
-    """The host's ukify (else systemctl) version, which mkosi's UKI and boot loader come from."""
-    for argv in (("ukify", "--version"), ("systemctl", "--version")):
-        text = _output(runner, argv)
-        if text is not None:
-            return version_token(text)
-    return None
+def pinned_mkosi() -> MkosiTool:
+    """:data:`MKOSI_PIN` as the :class:`MkosiTool` a backend that provisions it runs."""
+    return MkosiTool(MKOSI_PIN.version, MKOSI_PIN.commit)
 
 
-def probe_measure(runner: ProbeRunner | None = None) -> tuple[tuple[str, str], ...]:
+def probe_measure() -> tuple[tuple[str, str], ...]:
     """The measurement implementation: built into tundravm, so nothing is probed."""
     from .measure.gcp_firmware import TABLE_VERSION
     from .measure.model import MEASURE_VERSION
@@ -349,101 +302,25 @@ def probe_measure(runner: ProbeRunner | None = None) -> tuple[tuple[str, str], .
     return tuple(sorted(zip(MEASURE_TOOLS, (MEASURE_VERSION, TABLE_VERSION), strict=True)))
 
 
-# ── nixpkgs ──────────────────────────────────────────────────────────────
+def running_toolchain(backend: object, *, locked: Toolchain | None = None) -> Toolchain:
+    """The toolchain *backend* runs with.
 
-
-@dataclass(frozen=True, slots=True)
-class NixpkgsResolution:
-    """A resolved nixpkgs *pin* and the mkosi and systemd versions it provides."""
-
-    pin: NixpkgsPin
-    mkosi: str
-    systemd: str
-
-
-NixpkgsResolver = Callable[[], NixpkgsResolution]
-"""Resolves the current :data:`NIXPKGS_BRANCH` (tests inject one; the default runs nix)."""
-
-
-def _run_nix(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(argv), capture_output=True, text=True, timeout=600, check=False)
-
-
-def resolve_nixpkgs(runner: ProbeRunner = _run_nix) -> NixpkgsResolution:
-    """Resolve :data:`NIXPKGS_BRANCH` to a rev + narHash and read its mkosi and systemd versions.
-
-    Needs ``nix`` with flakes on this host and the network; raises ``LockfileError``
-    saying why otherwise.
+    mkosi is what the backend says it runs (``mkosi_tool``: the installed dependency
+    locally, the pinned commit in a Lima guest; a backend without one runs no mkosi). The
+    tools tree is the one the backend resolved before its last build (``tools_tree``, from
+    ``mkosi summary --json``), else *locked*'s. The measurement implementation ships with
+    tundravm.
     """
-    ref = f"github:NixOS/nixpkgs/{NIXPKGS_BRANCH}"
-    text = _output(runner, ("nix", "flake", "metadata", "--json", ref))
-    try:
-        locked = json.loads(text or "").get("locked", {})
-        pin = NixpkgsPin(str(locked["rev"]), str(locked["narHash"]), int(locked["lastModified"]))
-    except (ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise LockfileError(
-            f"Could not resolve nixpkgs {NIXPKGS_BRANCH} to pin the toolchain.",
-            hint="The nix and lima backends pin nixpkgs: run `tundravm lock` where `nix` "
-            "(with flakes) and the network are available, or keep the previous lock's pin.",
-        ) from exc
-    versions = []
-    for attr in ("mkosi", "systemd"):
-        out = _output(
-            runner, ("nix", "eval", "--raw", f"github:NixOS/nixpkgs/{pin.rev}#{attr}.version")
-        )
-        versions.append(out or "unknown")
-    return NixpkgsResolution(pin, versions[0], versions[1])
-
-
-def running_toolchain(
-    backend: object,
-    *,
-    runner: ProbeRunner | None = None,
-    locked: Toolchain | None = None,
-    resolver: NixpkgsResolver | None = None,
-) -> Toolchain:
-    """The toolchain *backend* runs with: observed, pinned from *locked*, resolved, or probed.
-
-    A backend whose ``toolchain_source`` is ``nix`` (nix, lima) always enters the flake
-    pinned to the lock's nixpkgs (whose mkosi version the flake guards), so *locked*'s
-    nixpkgs, mkosi and systemd are what it will run; without one, *resolver* resolves
-    nixpkgs now (``None``: unresolved, mkosi follows the branch). Once the backend has
-    run mkosi, the identity it observed (``executed_mkosi``: the resolved executable and
-    its ``--version``) replaces the expected mkosi, so a bake records what actually ran.
-    ``host`` probes mkosi and ukify on this host; a backend without one (in-process)
-    runs no mkosi. The measurement implementation ships with tundravm.
-    """
-    run = runner if runner is not None else run_probe
-    source = getattr(backend, "toolchain_source", None)
-    mkosi: MkosiTool | None = None
-    systemd: str | None = None
-    nixpkgs: NixpkgsPin | None = None
-    if source == "nix":
-        if locked is not None and locked.nixpkgs is not None:
-            nixpkgs, mkosi, systemd = locked.nixpkgs, locked.mkosi, locked.systemd
-        elif resolver is not None:
-            found = resolver()
-            nixpkgs, systemd = found.pin, found.systemd
-            mkosi = MkosiTool(found.mkosi, "nix", found.pin.rev)
-        else:
-            mkosi = MkosiTool(NIXPKGS_BRANCH, "nix")
-        observed = getattr(backend, "executed_mkosi", None)
-        if isinstance(observed, MkosiTool):
-            mkosi = observed
-    elif source == "host":
-        mkosi, systemd = probe_mkosi(run), probe_systemd(run)
+    mkosi = getattr(backend, "mkosi_tool", None)
+    tree = getattr(backend, "tools_tree", None)
+    if not isinstance(tree, ToolsTree):
+        tree = None if locked is None else locked.tools_tree
     return Toolchain(
         tundravm=tundravm_identity(),
-        mkosi=mkosi,
-        systemd=systemd,
-        nixpkgs=nixpkgs,
-        measure=probe_measure(run),
-        rosetta=bool(getattr(backend, "rosetta", False)),
+        mkosi=mkosi if isinstance(mkosi, MkosiTool) else None,
+        tools_tree=tree,
+        measure=probe_measure(),
     )
-
-
-def _default_resolver() -> NixpkgsResolution:
-    return resolve_nixpkgs()
 
 
 def lock_toolchain(
@@ -451,29 +328,15 @@ def lock_toolchain(
     *,
     previous: Toolchain | None = None,
     update: bool = False,
-    offline: bool = False,
-    runner: ProbeRunner | None = None,
-    resolver: NixpkgsResolver | None = None,
+    tools_tree: ToolsTree | None = None,
 ) -> Toolchain:
     """The toolchain ``tundravm lock`` records for *backend*.
 
-    A nix-sourced backend keeps *previous*'s nixpkgs pin unless *update*; else it
-    resolves :data:`NIXPKGS_BRANCH` now (*resolver*, default :func:`resolve_nixpkgs`).
-    When that is impossible (*offline*, no nix here) the toolchain records why it is
-    ``unpinned`` and the build follows the branch. Other backends probe this host.
+    *tools_tree* is the tools tree the image's mkosi tree pins; without one, *previous*'s
+    (unless *update*) is kept.
     """
     keep = None if update else previous
-    if getattr(backend, "toolchain_source", None) != "nix" or (
-        keep is not None and keep.nixpkgs is not None
-    ):
-        return running_toolchain(backend, runner=runner, locked=keep)
-    if offline:
-        reason = "offline lock: nixpkgs was not resolved"
-        return replace(running_toolchain(backend, runner=runner), unpinned=reason)
-    try:
-        return running_toolchain(
-            backend, runner=runner, resolver=resolver if resolver is not None else _default_resolver
-        )
-    except LockfileError as exc:
-        reason = f"{exc.args[0]} {exc.hint or ''}".strip()
-        return replace(running_toolchain(backend, runner=runner), unpinned=reason)
+    found = running_toolchain(backend, locked=keep)
+    if tools_tree is not None:
+        return Toolchain(found.tundravm, found.mkosi, tools_tree, found.measure)
+    return found

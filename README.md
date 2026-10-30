@@ -6,7 +6,7 @@
   <a href="https://github.com/Hyodar/tundravm/actions/workflows/ci.yml"><img src="https://github.com/Hyodar/tundravm/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue.svg" alt="Python 3.12+"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="https://github.com/systemd/mkosi"><img src="https://img.shields.io/badge/mkosi-v26-8b5cf6.svg" alt="mkosi v26"/></a>
+  <a href="https://github.com/systemd/mkosi"><img src="https://img.shields.io/badge/mkosi-v27.1-8b5cf6.svg" alt="mkosi v27.1"/></a>
 </p>
 
 <br>
@@ -15,7 +15,7 @@ Python SDK for building, measuring and deploying TDX-enabled VM images. An image
 
 ## Install
 
-tundravm is not on PyPI yet: install it from git. To start a project without installing anything first:
+tundravm is not on PyPI yet: install it from git with pip or uv. mkosi comes with it: tundravm depends on mkosi 27.1 (pinned to the release tag, since mkosi is not on PyPI either) and runs it in-process, so there is no separate mkosi to install. To start a project without installing anything first:
 
 ```bash
 uvx --from git+https://github.com/Hyodar/tundra tundravm init my-image --ci github
@@ -24,7 +24,7 @@ uv sync              # installs the pinned tundravm (and pytest) into .venv, wri
 git add uv.lock      # committed, the generated workflow installs exactly it (`uv sync --frozen`)
 ```
 
-`init` writes `dependencies = ["tundravm @ git+https://github.com/Hyodar/tundra@COMMIT"]` into `pyproject.toml`, pinned to the commit of the tundravm that ran it (read from its install metadata; when that is unknown the line follows `master` and the comment above it says so), so `uv sync` installs the same tundravm on a fresh machine or a CI runner. `git` must be on `PATH`. In a project that already has a `pyproject.toml`, add it yourself: `uv add "tundravm @ git+https://github.com/Hyodar/tundra@COMMIT"`. The generated workflow syncs with `--frozen` once `uv.lock` is committed and installs a pinned mkosi (`v26`) in its bake job. To work against a local checkout, `uv add --editable PATH/TO/tundravm` replaces the git dependency; in this repository, `uv sync` installs the `tundravm` command (see [Development](#development)). [Installing tundravm in the project](docs/cli.md#installing-tundravm-in-the-project) has the details.
+`init` writes `dependencies = ["tundravm @ git+https://github.com/Hyodar/tundra@COMMIT"]` into `pyproject.toml`, pinned to the commit of the tundravm that ran it (read from its install metadata; when that is unknown the line follows `master` and the comment above it says so), so `uv sync` installs the same tundravm on a fresh machine or a CI runner. `git` must be on `PATH`. In a project that already has a `pyproject.toml`, add it yourself: `uv add "tundravm @ git+https://github.com/Hyodar/tundra@COMMIT"`. The generated workflow syncs with `--frozen` once `uv.lock` is committed, which also pins mkosi. To work against a local checkout, `uv add --editable PATH/TO/tundravm` replaces the git dependency; in this repository, `uv sync` installs the `tundravm` command (see [Development](#development)). [Installing tundravm in the project](docs/cli.md#installing-tundravm-in-the-project) has the details.
 
 ## Quickstart
 
@@ -174,7 +174,7 @@ variants=(
 ## Reproducibility
 
 - **Byte-stable trees.** `Debian(..., epoch=0)` (the default) emits a fixed `SourceDateEpoch`/`SOURCE_DATE_EPOCH`, a stable `Seed` and strips `IMAGE_VERSION`. `tundravm compile --check` exits 1 when the committed tree differs from the recipe; `tundravm.testing.assert_tree` does the same in a test.
-- **Lock sections.** `tundravm lock` writes a version 5 lockfile with one digest per section: `distribution`, `compiler`, and per variant `packages`, `files`, `kernel`, `debloat`, ... (`variants.<variant>.packages`), plus the build `toolchain` (mkosi, systemd, nixpkgs, tundravm, the measurement tools) that `lint`, `evidence` and `witness` compare. The recipe digest includes the tundravm version. `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
+- **Lock sections.** `tundravm lock` writes a version 5 lockfile with one digest per section: `distribution`, `compiler`, and per variant `packages`, `files`, `kernel`, `debloat`, ... (`variants.<variant>.packages`), plus the build `toolchain` (mkosi and its commit, the tools tree's distribution, release and snapshot, tundravm, the measurement tools) that `lint`, `evidence` and `witness` compare. The recipe digest includes the tundravm version. `lock --check` prints the drift (`~ variants.default.packages: +htop`) and exits 1. A lock of every variant covers `--variant` subsets.
 - **Pinned archive.** `Debian("trixie", snapshot="20251113T083151Z")` builds packages and the tools tree from that snapshot.debian.org snapshot (mkosi's `Snapshot=`); `mirror` and `tools_mirror` are mirror roots mkosi completes. `Debian(..., efi_stub=version)` pins the EFI stub to a version that same snapshot carries.
 - **Pinned sources.** Every `Build` source, and a built kernel's, is resolved to a commit (`Git`) or a hash (`Http`) at lock time. `tundravm fetch` checks exactly those pins out on the host, as you, into `build/.sources/`; `bake` fetches first and mounts the checkouts into the build, so the build sandbox never fetches and an air-gapped bake needs `tundravm fetch` first (sources and, when the host has the toolchain, dependency caches), `bake --offline`, and a reachable local package mirror. Checkouts and dependency caches are verified before reuse, and `fetch --force` replaces a modified checkout and refills the caches. `lock --update NAME` re-resolves one source (`<variant>/<name>` for a build pinned per variant); `lock --offline` never touches the network. `fetch` also prefetches each Go, Cargo and .NET build's dependencies with the host toolchain into `build/.sources/deps/` and downloads the `EfiStub` package, so `bake --offline` (mkosi `--with-network=no`) builds with no network in the sandbox.
 - **Frozen bakes.** `bake` is frozen against `--lockfile`, the `lockfile` of `[tool.tundravm]` (which must exist), or `build/tundravm.lock` whenever it exists, and refuses a recipe that drifted (`E_LOCKFILE`).
@@ -220,12 +220,11 @@ See [`docs/reproducibility.md`](docs/reproducibility.md).
 
 | Backend | When to use |
 |---|---|
-| `LimaMkosiBackend` | Default. Runs mkosi inside a Lima VM with Nix. macOS and Linux. |
-| `NixMkosiBackend` | Linux with [Nix](https://nixos.org/download.html). Runs mkosi via `nix develop` on the host. |
-| `LocalLinuxBackend` | Linux with `mkosi` (v25+) on `PATH` and `sudo` or `unshare`. No Nix. |
+| `LocalLinuxBackend` | x86-64 Linux. Runs the pinned mkosi in-process; needs `apt`/`dpkg` with `debian-archive-keyring`, and unprivileged user namespaces or `sudo`. Every other build tool comes from mkosi's tools tree. |
+| `LimaMkosiBackend` | macOS (and non-x86-64 Linux). Runs the same mkosi in an x86-64 Debian Lima guest; on Apple Silicon the guest is emulated (QEMU TCG): same bytes, several times slower. |
 | `InProcessBackend` | Tests and tutorials. Writes simulated artifacts, needs no tools. |
 
-A recipe file binds its backend to a module-level `backend`; `tundravm bake --backend lima|nix|local|inprocess` overrides it, and the Python `bake()` takes `Backend(kind)`. `inspect`, `lint`, `compile` and `lock` never need one. `tundravm doctor` reports which backends your host can run.
+A recipe file binds its backend to a module-level `backend`; `tundravm bake --backend lima|local|inprocess` overrides it, and the Python `bake()` takes `Backend(kind)`. `inspect`, `lint`, `compile` and `lock` never need one. `tundravm doctor` prints what this host can build, run, deploy and verify, one row per capability, each failure naming its fix (`tundravm doctor --for build`).
 
 ## Examples
 
@@ -266,7 +265,7 @@ uv run mypy .
 uv run pytest
 ```
 
-`uv run pytest` skips the real bakes without mkosi and non-interactive `sudo`, and the boots (`tests/integration/test_templates_boot.py`, marker `boot`) without QEMU and OVMF too. `tundravm.testing.boot()` boots a baked UKI under QEMU with OVMF and reports the units its serial console shows started and failed; CI's `boot` job bakes and boots the `minimal` and `service` templates on every push ([docs/testing.md](docs/testing.md#booting-an-image-in-tests)).
+`uv run pytest` skips the real bakes on a host that gives mkosi neither user namespaces nor non-interactive `sudo`, and the boots (`tests/integration/test_templates_boot.py`, marker `boot`) without QEMU and OVMF too. `tundravm.testing.boot()` boots a baked UKI under QEMU with OVMF and reports the units its serial console shows started and failed; CI's `boot` job bakes and boots the `minimal` and `service` templates on every push ([docs/testing.md](docs/testing.md#booting-an-image-in-tests)).
 
 ## Troubleshooting
 
@@ -285,5 +284,5 @@ Every SDK error prints `error [E_CODE]: message`, an optional `Hint:` and contex
 | `E_ARTIFACT_CHANGED` | The artifact's bytes no longer match the sha256 the bake recorded (`measure`, `deploy`, `status --verify`). Bake again |
 | `E_SOURCE` | A source could not be resolved, or a checkout in `build/.sources` changed since the fetch: `tundravm fetch RECIPE --force` |
 | `E_POLICY` | A `Policy` setting refused the operation (frozen lock, offline network) |
-| `E_BACKEND_EXECUTION` | The build failed. Run `tundravm doctor RECIPE`; check the mkosi version (>= 25) and platform |
+| `E_BACKEND_EXECUTION` | The build failed. The error names mkosi's log (`build/<variant>/mkosi.log`); `tundravm doctor --for build` checks the host |
 | `E_REPRODUCIBILITY` | Two builds that should match did not |

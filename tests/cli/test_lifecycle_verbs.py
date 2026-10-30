@@ -1,8 +1,7 @@
-"""CLI lifecycle across processes: bake, then measure/deploy/doctor in fresh ``main`` calls."""
+"""CLI lifecycle across processes: bake, then measure/deploy in fresh ``main`` calls."""
 
 from __future__ import annotations
 
-import io
 import json
 import subprocess
 from collections.abc import Sequence
@@ -11,9 +10,8 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import run_main, write_recipe_file
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, ProbeRunner, doctor
+from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.deploy.qemu import QemuDeployAdapter
-from tundravm.recipe import load_file
 
 RECIPE = """
 from tundravm import Fragment, Package, Recipe, Variant
@@ -27,14 +25,6 @@ recipe = Recipe(
 )
 """
 
-NIX_RECIPE = """
-from tundravm import Fragment, Package, Recipe
-from tundravm.backends import NixMkosiBackend
-
-backend = NixMkosiBackend()
-recipe = Recipe("nix", items=(Package("curl"),))
-"""
-
 BUILD = Path("build")
 """Recipe files bake into ``build/`` under the working directory (the fixture's tmp_path)."""
 
@@ -43,13 +33,6 @@ BUILD = Path("build")
 def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The recipe file, run from *tmp_path* so its build dir is ``tmp_path / "build"``."""
     return write_recipe_file(tmp_path, RECIPE, monkeypatch)
-
-
-@pytest.fixture
-def nix_recipe(tmp_path: Path) -> Path:
-    path = tmp_path / "nix.py"
-    path.write_text(NIX_RECIPE, encoding="utf-8")
-    return path
 
 
 BOTH = ("--variant", "default", "--variant", "azure")
@@ -220,67 +203,6 @@ def test_deploy_refuses_a_firmware_param_that_is_not_a_file(
     assert f"QEMU firmware not found: {missing}" in capsys.readouterr().err
 
 
-def _runner(returncode: int) -> ProbeRunner:
-    def runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        stdout = f"{argv[0]} 9.9.9\nsecond line\n" if returncode == 0 else ""
-        return subprocess.CompletedProcess(list(argv), returncode, stdout, "boom")
-
-    return runner
-
-
-def _missing(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    raise FileNotFoundError(argv[0])
-
-
-def test_doctor_with_recipe_ok(nix_recipe: Path) -> None:
-    out = io.StringIO()
-    code = doctor(load_file(nix_recipe), out, runner=_runner(0))
-    lines = out.getvalue().splitlines()
-    assert code == EXIT_OK
-    assert lines[0].startswith("tundravm ")
-    assert lines[1].startswith("python 3.")
-    assert "backend nix_mkosi: available" in lines
-    assert "  ok nix nix 9.9.9" in lines
-    assert lines[-1].startswith("lint: ")
-
-
-@pytest.mark.parametrize("runner", [_runner(1), _missing])
-def test_doctor_with_recipe_missing_tool_exits_1(nix_recipe: Path, runner: ProbeRunner) -> None:
-    out = io.StringIO()
-    code = doctor(load_file(nix_recipe), out, runner=runner)
-    text = out.getvalue()
-    assert code == EXIT_FAILURE
-    assert "backend nix_mkosi: unavailable" in text
-    assert "  missing nix — Install Nix" in text
-
-
-def test_doctor_cli_inprocess_needs_nothing(recipe: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("tundravm.cli.run_probe", _missing)
-    code, out = run_main("doctor", str(recipe))
-    assert code == EXIT_OK
-    assert "backend inprocess: available" in out
-    assert "  no external tools required" in out
-
-
-def test_doctor_without_recipe_probes_every_real_backend(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def only_nix(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        if argv[0] != "nix":
-            raise FileNotFoundError(argv[0])
-        return subprocess.CompletedProcess(list(argv), 0, "nix (Nix) 2.24.0\n", "")
-
-    monkeypatch.setattr("tundravm.cli.run_probe", only_nix)
-    code, out = run_main("doctor")
-    assert code == EXIT_OK
-    assert "backend lima_mkosi: unavailable" in out
-    assert "backend nix_mkosi: available" in out
-    assert "  ok nix nix (Nix) 2.24.0" in out
-    assert "backend local_linux: unavailable" in out
-    assert "  missing mkosi — " in out
-    assert "lint:" not in out
-
-
 def test_measure_reads_the_build_dir_manifest(recipe: Path, tmp_path: Path) -> None:
     out_dir = tmp_path / "elsewhere"
     code, _ = run_main("bake", str(recipe), "--build", str(out_dir), *DEFAULT)
@@ -302,58 +224,3 @@ def test_measure_reads_the_build_dir_manifest(recipe: Path, tmp_path: Path) -> N
     )
     assert code == EXIT_OK
     assert json.loads(out)["scheme"] == "qemu"
-
-
-def test_doctor_local_marks_tools_tree_tools_optional_with_the_fix(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def no_ukify(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        if argv[0] in ("ukify", "systemd-repart"):
-            raise FileNotFoundError(argv[0])
-        return subprocess.CompletedProcess(list(argv), 0, f"{argv[0]} 26\n", "")
-
-    monkeypatch.setattr("tundravm.cli.run_probe", no_ukify)
-    code, out = run_main("doctor", "--backend", "local")
-    assert code == EXIT_OK
-    assert "backend local_linux: available" in out
-    fix = 'mkosi can use its own tools tree: add Setting("Build", "ToolsTree", ("default",))'
-    assert f"  missing (optional) ukify — {fix} to the recipe, or install systemd-ukify" in out
-    assert "  missing (optional) systemd-repart — " in out
-    assert "  ok apt apt 26" in out
-
-
-CLOUD_RECIPE = """
-from tundravm import Fragment, Package, Recipe, Variant
-from tundravm.backends import LocalLinuxBackend
-
-backend = LocalLinuxBackend()
-recipe = Recipe(
-    "cloud",
-    items=(Package("systemd"),),
-    variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("azure", inherits="default", outputs=("azure",)),
-    ),
-)
-"""
-
-
-def test_doctor_probes_the_cloud_tools_of_azure_variants(tmp_path: Path) -> None:
-    path = write_recipe_file(tmp_path, CLOUD_RECIPE)
-    out = io.StringIO()
-    code = doctor(load_file(path), out, runner=_missing)
-    text = out.getvalue()
-    assert "cloud image tools:\n  missing (optional) qemu-img — " in text
-    assert "install qemu-utils, or bake --variant default" in text
-    # The azure VHD's GPT is laid out with sgdisk (fixed GUIDs), as gcp's is.
-    assert "missing (optional) sgdisk — The azure variant partitions its disk" in text
-    assert code == EXIT_FAILURE  # mkosi itself is missing; the cloud tool stays optional
-
-
-def test_doctor_skips_cloud_tools_without_cloud_variants(tmp_path: Path) -> None:
-    source = CLOUD_RECIPE.replace(
-        '        Variant("azure", inherits="default", outputs=("azure",)),\n', ""
-    )
-    out = io.StringIO()
-    doctor(load_file(write_recipe_file(tmp_path, source)), out, runner=_runner(0))
-    assert "cloud image tools" not in out.getvalue()

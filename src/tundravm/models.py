@@ -706,8 +706,7 @@ class BakeRequest:
     network: bool = True
     """``False`` for an offline bake: mkosi runs the build scripts with ``--with-network=no``."""
     toolchain: Toolchain | None = None
-    """The lockfile's toolchain: the nix and lima backends pin nixpkgs (and so mkosi) to it;
-    ``None`` without a lockfile."""
+    """The lockfile's toolchain (mkosi, the tools tree); ``None`` without a lockfile."""
 
     def notice(self, level: str, message: str) -> None:
         """Pass *message* to ``on_notice``, if set."""

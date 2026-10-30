@@ -20,19 +20,18 @@ from tests.lifecycle.test_witness import (
 )
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.evidence import toolchain_summary
-from tundravm.toolchain import MkosiTool, NixpkgsPin, Toolchain
+from tundravm.toolchain import MkosiTool, Toolchain, ToolsTree
 from tundravm.witness import STRENGTHENS_NOTE, Witness
 
 LOCKED = Toolchain(
     tundravm="0.1.0+aa9d9dc",
-    mkosi=MkosiTool("25.3", "nix", "56c02bc00adcf003215cc4bd"),
-    systemd="257",
-    nixpkgs=NixpkgsPin("56c02bc00adcf003215cc4bd", "sha256-9i/VTd="),
+    mkosi=MkosiTool("27.1", "ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b"),
+    tools_tree=ToolsTree("debian", "trixie", "20251020T000000Z"),
 )
 OTHER = Toolchain(
     tundravm="0.1.0+aa9d9dc",
-    mkosi=MkosiTool("26", "host"),
-    systemd="258",
+    mkosi=MkosiTool("26"),
+    tools_tree=ToolsTree("debian", "trixie", "20250101T000000Z"),
 )
 
 
@@ -46,7 +45,7 @@ def _witness(toolchain: Toolchain | None, *, matched: bool = True) -> Witness:
         recipe_digest="r" * 64,
         lock_sha256="l" * 64,
         builder="alice",
-        backend={"name": "nix_mkosi"},
+        backend={"name": "local_linux"},
         simulated=False,
         artifacts=({**row, "actual": "a" * 64 if matched else "b" * 64, "match": matched},),
         verdict="matched" if matched else "different",
@@ -59,10 +58,8 @@ def _witness(toolchain: Toolchain | None, *, matched: bool = True) -> Witness:
 def test_toolchain_summary_names_each_tool() -> None:
     assert toolchain_summary(None) == "not recorded"
     text = toolchain_summary(LOCKED.payload())
-    assert text.startswith("mkosi 25.3 (nix @56c02bc00adc), systemd 257, nixpkgs 56c02bc00adc")
+    assert text.startswith("mkosi 27.1 @ecf7f5702bb2, tools_tree debian/trixie@20251020T000000Z")
     assert text.endswith("tundravm 0.1.0+aa9d9dc")
-    rosetta = Toolchain(tundravm="0.1.0", rosetta=True)
-    assert toolchain_summary(rosetta.payload()).endswith("reproducible: not guaranteed (rosetta)")
 
 
 def test_a_witness_reports_the_same_toolchain() -> None:
@@ -74,12 +71,12 @@ def test_a_witness_reports_the_same_toolchain() -> None:
 
 def test_a_match_on_another_toolchain_strengthens_the_release() -> None:
     text = _witness(OTHER).render()
-    assert "toolchain different (mkosi 25.3 (nix @56c02bc00adc) vs 26 (host)" in text
-    assert "nixpkgs 56c02bc00adc vs none" in text
+    assert "toolchain different (mkosi 27.1 @ecf7f5702bb2 vs 26" in text
+    assert "tools_tree debian/trixie@20251020T000000Z vs debian/trixie@20250101T000000Z" in text
     assert STRENGTHENS_NOTE in text
     assert STRENGTHENS_NOTE not in _witness(OTHER, matched=False).render()
     rows = _witness(OTHER).to_dict()["toolchain_comparison"]
-    assert {"field": "systemd", "left": "257", "right": "258"} in rows  # type: ignore[operator]
+    assert {"field": "mkosi", "left": "27.1 @ecf7f5702bb2", "right": "26"} in rows  # type: ignore[operator]
 
 
 def test_a_witness_without_a_toolchain_says_so() -> None:

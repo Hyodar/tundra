@@ -175,15 +175,6 @@ def bake(
             duration_s=total,
         )
         baked.save(destination)
-        if baked.toolchain is not None and baked.toolchain.reproducible is not None:
-            progress.emit(
-                "warning",
-                scope,
-                f"reproducible: {baked.toolchain.reproducible}; LimaMkosiBackend(rosetta=False) "
-                "builds without it",
-                level="warning",
-                source="backend",
-            )
         noun = "variant" if len(profiles) == 1 else "variants"
         progress.emit(
             "done",

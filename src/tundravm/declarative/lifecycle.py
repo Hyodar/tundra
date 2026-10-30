@@ -45,7 +45,6 @@ from tundravm.backends import (
     InProcessBackend,
     LimaMkosiBackend,
     LocalLinuxBackend,
-    NixMkosiBackend,
     Requirement,
 )
 from tundravm.backends.base import BuildBackend, is_mkosi_state
@@ -79,7 +78,7 @@ from tundravm.models import (
     ProfileBuildResult,
 )
 from tundravm.observability import Event, Progress, Reporter, TextReporter, display_path
-from tundravm.toolchain import TOOLCHAIN_UPDATE, NixpkgsResolver, lock_toolchain
+from tundravm.toolchain import TOOLCHAIN_UPDATE, lock_toolchain
 
 from . import _bake, _compile
 from ._initrd import installed_digests
@@ -90,7 +89,7 @@ from .resolve import lint as _resolution_lint
 from .resolve import locate, resolve
 
 Scheme = Literal["qemu", "gcp", "azure", "portable"]
-BackendKind = Literal["lima", "nix", "local", "inprocess"]
+BackendKind = Literal["lima", "local", "inprocess"]
 TreeLayout = Literal["directories", "native"]
 """How a :class:`Tree` lays its variants out: a directory each, or ``Mkosi(layout="native")``:
 the default variant at the root and every variant's additions in ``mkosi.profiles/<name>/``."""
@@ -220,8 +219,6 @@ class Backend:
         """The compiler's backend instance for this kind."""
         if self.kind == "lima":
             return LimaMkosiBackend(cpus=self.cpus, memory=self.memory, disk=self.disk)
-        if self.kind == "nix":
-            return NixMkosiBackend()
         if self.kind == "local":
             return LocalLinuxBackend()
         return InProcessBackend()
@@ -716,16 +713,13 @@ def lock_image(
     update: Sequence[str] = (),
     offline: bool = False,
     resolver: Resolver | None = None,
-    runner: ProbeRunner | None = None,
-    nixpkgs: NixpkgsResolver | None = None,
 ) -> Lock:
     """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
 
     The sources are the source builds and, outside ``nethermind-v1``, the built
     kernels' sources (``kernel``, or ``kernel-<variant>``; see ``Lowered.lock_sources``).
-    The build toolchain is recorded too (:func:`~tundravm.toolchain.lock_toolchain`:
-    *runner* probes host tools, *nixpkgs* resolves the nix backends' nixpkgs); naming
-    ``toolchain`` in *update* resolves it again instead of keeping *previous*'s.
+    The build toolchain is recorded too (:func:`~tundravm.toolchain.lock_toolchain`);
+    naming ``toolchain`` in *update* records it again instead of keeping *previous*'s.
     """
     offline = offline or img.policy.network_mode == "offline"
     scoped = img.select(profiles)
@@ -735,9 +729,6 @@ def lock_image(
         img.backend,
         previous=None if previous is None else previous.lockfile.toolchain,
         update=TOOLCHAIN_UPDATE in update,
-        offline=offline,
-        runner=runner,
-        resolver=nixpkgs,
     )
     update = [name for name in update if name != TOOLCHAIN_UPDATE]
     unknown = [
@@ -777,7 +768,6 @@ def lock(
     offline: bool = False,
     resolver: Resolver | None = None,
     variants: Sequence[str] | None = None,
-    nixpkgs: NixpkgsResolver | None = None,
 ) -> Lock:
     """Lock every variant (or *variants*): section digests, a pin per source build, the toolchain.
 
@@ -798,7 +788,6 @@ def lock(
         update=update,
         offline=offline,
         resolver=resolver,
-        nixpkgs=nixpkgs,
     )
 
 

@@ -46,7 +46,7 @@ def test_completion_lists_every_verb_and_format_choice(shell: Shell) -> None:
     assert FORMAT_CHOICES >= {"auto", "text", "json", "markdown", "github", "stat"}
     for choice in FORMAT_CHOICES:
         assert choice in script, choice
-    for choices in ("inprocess lima local nix", "qemu gcp azure portable", "qemu azure gcp"):
+    for choices in ("inprocess lima local", "qemu gcp azure portable", "qemu azure gcp"):
         assert choices in script
 
 
@@ -177,21 +177,20 @@ def _runner(returncode: int, calls: list[str] | None = None) -> ProbeRunner:
 
 
 def test_init_ends_with_the_backend_probe(tmp_path: Path) -> None:
-    code, out = run("init", str(tmp_path), "--name", "node", "--backend", "nix", runner=_runner(0))
+    code, out = run("init", str(tmp_path), "--name", "node", "--backend", "lima", runner=_runner(0))
     assert code == EXIT_OK
-    after = out.split("checking the nix backend (tundravm doctor --backend nix):\n", 1)[1]
+    heading = "checking the lima backend (tundravm doctor --for build --backend lima):\n"
+    after = out.split(heading, 1)[1]
     assert "next:" not in after
-    assert "backend nix_mkosi: available" in after
-    assert "  ok nix nix 9.9.9" in after
-    assert "not ready" not in after
+    assert after.startswith("build:x86-64     ready (Lima x86-64 guest")
+    assert "run:" not in after and "not ready" not in after
 
 
 def test_init_reports_a_missing_backend_tool_without_failing(tmp_path: Path) -> None:
     code, out = run("init", str(tmp_path), "--name", "node", runner=_runner(1))
     assert code == EXIT_OK
     assert (tmp_path / "node.py").is_file()
-    assert "backend lima_mkosi: unavailable" in out
-    assert "  missing limactl — " in out
+    assert "build:x86-64     blocked: limactl not found: install Lima (lima-vm.io)" in out
     assert out.rstrip().endswith(
         "the lima backend is not ready: install the missing tools above, or bake "
         "with --backend inprocess for a simulated build"
@@ -210,10 +209,10 @@ def test_init_no_doctor_skips_the_probe(tmp_path: Path) -> None:
 
 def test_doctor_verb_uses_the_injected_runner() -> None:
     calls: list[str] = []
-    code, out = run("doctor", "--backend", "nix", runner=_runner(0, calls))
+    code, out = run("doctor", "--for", "build", "--backend", "lima", runner=_runner(0, calls))
     assert code == EXIT_OK
-    assert "nix" in calls
-    assert "  ok nix nix 9.9.9" in out
+    assert calls == ["limactl"]
+    assert out.startswith("build:x86-64     ready (Lima x86-64 guest")
 
 
 # inspect --diff-variants

@@ -170,8 +170,8 @@ def test_cli_bake_measure_deploy_doctor(
     code, _, err = run_cli("deploy", "azure", "--build", manifest, "--variant", "azure")
     assert code == 2 and "storage_account" in err
 
-    code, out, _ = run_cli("doctor", "--backend", "inprocess")
-    assert code == 0 and "backend inprocess: available" in out
+    code, out, _ = run_cli("doctor", "--for", "build", "--backend", "inprocess")
+    assert code == 0 and "build:x86-64     ready (simulated" in out
     code, out, _ = run_cli("doctor", cli_recipe)
     assert code == 0 and "lint: no findings" in out
 

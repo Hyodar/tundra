@@ -219,11 +219,11 @@ def test_scaffold_lints_then_lists_next_steps_then_probes(tmp_path: Path) -> Non
         return subprocess.CompletedProcess(list(argv), 0, f"{argv[0]} 1.0\n", "")
 
     out = io.StringIO()
-    argv = ["init", str(tmp_path), "--name", NAME, "--backend", "nix"]
+    argv = ["init", str(tmp_path), "--name", NAME, "--backend", "lima"]
     code = main(argv, stdout=out, runner=runner)
     text = out.getvalue()
     assert code == EXIT_OK
-    assert text.index("lint node.py:") < text.index("next") < text.index("checking the nix")
+    assert text.index("lint node.py:") < text.index("next") < text.index("checking the lima")
 
 
 def test_scaffold_refuses_to_overwrite_and_never_replaces_project_files(tmp_path: Path) -> None:

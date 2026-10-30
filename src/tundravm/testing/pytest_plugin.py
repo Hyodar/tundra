@@ -16,7 +16,14 @@ from typing import Any, Protocol
 import pytest
 
 from tundravm.declarative.model import Package, Recipe
-from tundravm.testing import BootResult, BootUnavailable, CompiledTree, Variants, compile_tree
+from tundravm.testing import (
+    BootResult,
+    BootUnavailable,
+    CompiledTree,
+    FakeMkosi,
+    Variants,
+    compile_tree,
+)
 from tundravm.testing import boot as _boot
 from tundravm.testing import run_cli as _run_cli
 from tundravm.testing._boot import Bootable
@@ -82,4 +89,21 @@ def boot(tmp_path: Path) -> BootRunner:
     return runner
 
 
-__all__ = ["BootRunner", "CliRunner", "CompileFactory", "boot", "compiled", "recipe", "run_cli"]
+@pytest.fixture
+def fake_mkosi(monkeypatch: pytest.MonkeyPatch) -> FakeMkosi:
+    """A :class:`~tundravm.testing.FakeMkosi` in place of mkosi for this test: backends run
+    for real, nothing forks, ``build`` writes placeholder outputs. Configure it by setting
+    its fields (``summary``, ``outputs``, ``fail``, ``sudo``)."""
+    return FakeMkosi().install(monkeypatch.setattr)
+
+
+__all__ = [
+    "BootRunner",
+    "CliRunner",
+    "CompileFactory",
+    "boot",
+    "compiled",
+    "fake_mkosi",
+    "recipe",
+    "run_cli",
+]

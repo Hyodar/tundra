@@ -195,7 +195,7 @@ def test_init_refuses_overwrite_without_force(
     assert "recipe = Recipe(" in target.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("backend", ["lima", "nix", "local", "inprocess"])
+@pytest.mark.parametrize("backend", ["lima", "local", "inprocess"])
 def test_init_templates_compile_for_every_backend(tmp_path: Path, backend: str) -> None:
     target = tmp_path / f"{backend}.py"
     assert run_main("init", str(tmp_path), "--name", backend, "--backend", backend)[0] == EXIT_OK

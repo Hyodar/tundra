@@ -45,9 +45,9 @@ recipe = Recipe(
 
 NIX_RECIPE = """
 from tundravm import Fragment, Package, Recipe
-from tundravm.backends import NixMkosiBackend
+from tundravm.backends import LimaMkosiBackend
 
-backend = NixMkosiBackend()
+backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
 recipe = Recipe("nix", items=(Package("curl"),))
 """
 
@@ -346,7 +346,7 @@ def test_status_probes_the_backend_with_the_injected_runner(
     assert main(["status", str(path), "--format", "json"], stdout=out, runner=runner) == EXIT_OK
     backend = json.loads(out.getvalue())["backend"]
     assert backend["verdict"] == "missing"
-    assert backend["name"] == "nix_mkosi"
+    assert backend["name"] == "lima_mkosi"
     assert backend["missing"]
     assert calls
 

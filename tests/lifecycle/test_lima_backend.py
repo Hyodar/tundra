@@ -1,18 +1,16 @@
-import io
+import json
 import subprocess
 from collections.abc import Sequence
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import bake_request
 from tundravm.backends.base import StreamResult
-from tundravm.backends.lima import LimaMkosiBackend, lima_yaml
-from tundravm.cli import EXIT_OK, doctor
+from tundravm.backends.lima import VM_MKOSI, LimaMkosiBackend, lima_yaml
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest
-from tundravm.toolchain import MkosiTool, NixpkgsPin, Toolchain, running_toolchain
+from tundravm.toolchain import MKOSI_PIN, MkosiTool, ToolsTree, running_toolchain
 
 
 def test_lima_mount_plan_single_mount(tmp_path: Path) -> None:
@@ -113,14 +111,18 @@ def test_lima_build_mkosi_command_per_directory(tmp_path: Path) -> None:
     request = _bake_tree_request(tmp_path)
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
 
-    cmd = backend._build_mkosi_command(request)
+    args = backend._mkosi_args(request)
 
-    assert "--directory=/home/debian/mnt/mkosi/default" in cmd
-    assert "--force" in cmd
-    assert "--image-id=default" in cmd
-    assert "--cache-directory=/home/debian/mkosi-cache" in cmd
-    assert "--output-dir=/home/debian/mkosi-output" in cmd
-    assert cmd.endswith(" build")
+    assert args == [
+        "--directory=/home/debian/mnt/mkosi/default",
+        "--force",
+        "--image-id=default",
+        "--cache-directory=/home/debian/mkosi-cache",
+        "--output-directory=/home/debian/mkosi-output",
+        "--tools-tree=default",
+    ]
+    command = backend._in_state([*args, "build"])
+    assert command.startswith(f"cd /home/debian/mkosi-state && {VM_MKOSI} ")
 
 
 def test_lima_maps_host_paths_into_the_mount(tmp_path: Path) -> None:
@@ -138,9 +140,9 @@ def test_lima_build_mkosi_command_extra_args(tmp_path: Path) -> None:
     request = _bake_tree_request(tmp_path)
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", mkosi_args=["--debug"])
 
-    cmd = backend._build_mkosi_command(request)
+    args = backend._mkosi_args(request)
 
-    assert "--debug" in cmd
+    assert args[-1] == "--debug"
 
 
 def test_lima_resources_are_configurable() -> None:
@@ -151,85 +153,46 @@ def test_lima_resources_are_configurable() -> None:
     assert backend.disk == "50GiB"
 
 
-def test_lima_disables_rosetta_by_default() -> None:
+def test_lima_guest_is_x86_64_with_the_pinned_mkosi() -> None:
+    """One supported pair: an x86-64 Debian guest (TCG on Apple Silicon), mkosi at the pin."""
     backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
 
     config = lima_yaml(backend, "/build")
 
-    assert backend.rosetta is False
-    assert "rosetta:\n  enabled: false\n  binfmt: false\n" in config
-    assert "extra-platforms" not in config.replace("no extra-platforms", "")
-    assert backend.fingerprint()["rosetta"] is False
+    assert "vmType: qemu\narch: x86_64\n" in config
+    assert "amd64.qcow2" in config and "arm64" not in config
+    assert "rosetta" not in config and "nix" not in config
+    assert MKOSI_PIN.requirement in config
+    assert MKOSI_PIN.commit[:12] in VM_MKOSI
+    assert backend.mkosi_tool == MkosiTool(MKOSI_PIN.version, MKOSI_PIN.commit)
+    assert backend.fingerprint()["mkosi"] == backend.mkosi_tool.label()
 
 
-def test_lima_rosetta_is_an_explicit_opt_in(tmp_path: Path) -> None:
-    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB", rosetta=True)
-
-    config = lima_yaml(backend, "/build")
-
-    assert "rosetta:\n  enabled: true\n  binfmt: true\n" in config
-    assert "echo 'extra-platforms = x86_64-linux' >> ~/.config/nix/nix.conf" in config
-    assert backend.fingerprint()["rosetta"] is True
-    plain = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
-    request = bake_request(tmp_path)
-    rosetta_vm = backend._resolve_instance_name(request)
-    assert rosetta_vm == plain._resolve_instance_name(request) + "-rosetta"
-
-
-def test_doctor_warns_when_lima_rosetta_is_on() -> None:
-    out = io.StringIO()
-    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB", rosetta=True)
-
-    code = doctor(None, out, runner=_limactl, backend=backend)
-
-    assert code == EXIT_OK
-    assert (
-        "  warning: rosetta is on: builds are reproducible: not guaranteed (rosetta); "
-        "use LimaMkosiBackend(rosetta=False)"
-    ) in out.getvalue().splitlines()
-
-
-def test_doctor_is_quiet_about_rosetta_by_default() -> None:
-    out = io.StringIO()
-    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
-
-    doctor(None, out, runner=_limactl, backend=backend)
-
-    assert "rosetta" not in out.getvalue()
-
-
-def _limactl(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    if argv[0] == "limactl":
-        return subprocess.CompletedProcess(list(argv), 0, stdout="limactl version 1.0.0\n")
-    raise FileNotFoundError(argv[0])
-
-
-_PIN = NixpkgsPin(rev="56c02bc00adcf003215cc4bd996d6efaf4cff188", nar_hash="sha256-x")
-_PINNED = Toolchain(
-    tundravm="0.1.0", mkosi=MkosiTool("25.3", "nix", _PIN.rev), systemd="257", nixpkgs=_PIN
-)
-_STORE_MKOSI = "/nix/store/0abc-mkosi/bin/mkosi"
+_TOOLS = {"Distribution": "debian", "Release": "trixie", "Snapshot": "20251020T000000Z"}
 
 
 def _fake_vm(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity: str, returncode: int = 0
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    version: str = f"mkosi {MKOSI_PIN.version}",
+    summary: str | None = None,
 ) -> tuple[LimaMkosiBackend, BakeRequest, list[str]]:
-    """A Lima backend whose VM commands are recorded; the identity probe prints *identity*."""
+    """A Lima backend whose VM commands are recorded and answered."""
     ran: list[str] = []
     backend = LimaMkosiBackend(cpus=2, memory="4GiB", disk="20GiB", instance_name="t")
-    build = tmp_path / "build"
-    request = replace(
-        BakeRequest(profile="default", build_dir=build, emit_dir=build / "mkosi"),
-        toolchain=_PINNED,
-    )
+    request = _bake_tree_request(tmp_path)
+    resolved = json.dumps({"Tools": _TOOLS, "Images": [{"Image": "main"}]})
 
     def lima_exec(
         self: LimaMkosiBackend, instance: str, cmd: str
     ) -> subprocess.CompletedProcess[str]:
         ran.append(cmd)
-        out = identity if "command -v mkosi" in cmd else ""
-        code = returncode if "command -v mkosi" in cmd else 0
-        return subprocess.CompletedProcess(["ssh"], code, out, "nix: boom")
+        if cmd.endswith("--version"):
+            return subprocess.CompletedProcess(["ssh"], 0, version + "\n", "")
+        if cmd.endswith("summary --json"):
+            out = resolved if summary is None else summary
+            return subprocess.CompletedProcess(["ssh"], 0, out, "mkosi: bad tree")
+        return subprocess.CompletedProcess(["ssh"], 0, "", "")
 
     def streaming(argv: Sequence[str], **_: object) -> StreamResult:
         ran.append(argv[-1])
@@ -241,45 +204,43 @@ def _fake_vm(
     return backend, request, ran
 
 
-def test_lima_records_the_mkosi_the_pinned_vm_shell_ran(
+def test_lima_installs_checks_summarizes_then_builds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    backend, request, ran = _fake_vm(tmp_path, monkeypatch, f"{_STORE_MKOSI}\nmkosi 25.3\n")
+    backend, request, ran = _fake_vm(tmp_path, monkeypatch)
 
     backend.execute(request)
 
-    probe = next(cmd for cmd in ran if "command -v mkosi" in cmd)
-    assert "/home/debian/.nix-profile/bin/nix develop path:/home/debian/mnt/mkosi -c" in probe
-    assert backend.executed_mkosi == MkosiTool("25.3", "nix", _PIN.rev, path=_STORE_MKOSI)
-    found = running_toolchain(backend, locked=_PINNED)
-    assert found.mkosi == backend.executed_mkosi
-    assert found.payload()["mkosi"]["path"] == _STORE_MKOSI
+    install, version, summary, build, move = ran
+    assert f"test -x {VM_MKOSI}" in install
+    assert version == f"{VM_MKOSI} --version"
+    assert summary.endswith("--no-pager summary --json")
+    assert build.startswith(f"cd /home/debian/mkosi-state && {VM_MKOSI} ")
+    assert build.endswith(" build")
+    assert "mv /home/debian/mkosi-output/*" in move
+    assert backend.tools_tree == ToolsTree("debian", "trixie", "20251020T000000Z")
+    saved = json.loads((request.build_dir / "default" / "mkosi-summary.json").read_text())
+    assert saved["Tools"] == _TOOLS
+    found = running_toolchain(backend)
+    assert found.mkosi == MkosiTool(MKOSI_PIN.version, MKOSI_PIN.commit)
+    assert found.tools_tree == backend.tools_tree
 
 
-def test_lima_refuses_a_vm_shell_running_another_mkosi_version(
+def test_lima_refuses_a_guest_running_another_mkosi(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    identity = "/nix/store/9zzz-mkosi-99/bin/mkosi\nmkosi 99.0\n"
-    backend, request, _ = _fake_vm(tmp_path, monkeypatch, identity)
+    backend, request, ran = _fake_vm(tmp_path, monkeypatch, version="mkosi 26")
 
-    with pytest.raises(BackendExecutionError, match=r"ran mkosi 99\.0.*pins mkosi 25\.3"):
+    with pytest.raises(BackendExecutionError, match=r"is not mkosi 27\.1: mkosi 26") as excinfo:
         backend.execute(request)
-    assert backend.executed_mkosi is None
+    assert excinfo.value.hint is not None and "reinstall" in excinfo.value.hint
+    assert not any(cmd.endswith(" build") for cmd in ran)
 
 
-def test_lima_refuses_an_mkosi_outside_the_nix_store(
+def test_lima_reports_a_summary_that_is_not_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    backend, request, _ = _fake_vm(tmp_path, monkeypatch, "/usr/bin/mkosi\nmkosi 25.3\n")
+    backend, request, _ = _fake_vm(tmp_path, monkeypatch, summary="")
 
-    with pytest.raises(BackendExecutionError, match="outside the Nix store"):
-        backend.execute(request)
-
-
-def test_lima_fails_when_the_vm_shell_cannot_identify_mkosi(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    backend, request, _ = _fake_vm(tmp_path, monkeypatch, "", returncode=1)
-
-    with pytest.raises(BackendExecutionError, match="Could not identify.*boom"):
+    with pytest.raises(BackendExecutionError, match="summary --json failed.*bad tree"):
         backend.execute(request)

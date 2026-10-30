@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
-import textwrap
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from tundravm.models import ArtifactRef, BakeRequest, BakeResult, OutputTarget
-
-if TYPE_CHECKING:
-    from tundravm.toolchain import MkosiTool, NixpkgsPin, Toolchain
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,205 +144,6 @@ def _terminate(process: subprocess.Popen[str]) -> None:
 # ---------------------------------------------------------------------------
 # Shared utilities for backends that use mkosi
 # ---------------------------------------------------------------------------
-
-FLAKE_NIX_TEMPLATE = textwrap.dedent("""\
-    {
-      inputs.nixpkgs.url = "@NIXPKGS_URL@";
-
-      outputs = {
-        self,
-        nixpkgs,
-      }: let
-        mkosi = system: let
-          pkgs = import nixpkgs {inherit system;};
-          mkosiTools = with pkgs; [
-            apt
-            dpkg
-            gnupg
-            debootstrap
-            squashfsTools
-            dosfstools
-            e2fsprogs
-            mtools
-            cryptsetup
-            gptfdisk
-            util-linux
-            zstd
-            which
-            qemu-utils
-            parted
-            unzip
-            jq
-            bash
-            coreutils
-            findutils
-            gnused
-            gnugrep
-            gawk
-            gnutar
-            gzip
-            xz
-            systemd
-          ];
-          # What a built Kernel's build script runs outside mkosi-chroot (patch,
-          # merge_config.sh, make, the compiler, host tools linking libelf/libcrypto).
-          kernelTools = with pkgs; [
-            gnumake
-            gcc
-            binutils
-            bc
-            bison
-            flex
-            perl
-            gnupatch
-            diffutils
-            kmod
-            pahole
-            elfutils
-            openssl
-            pkg-config
-          ];
-          # mkosi sees the Nix tools only: no host PATH passthrough.
-          toolsEnv = pkgs.buildEnv {
-            name = "mkosi-tools";
-            paths = mkosiTools ++ kernelTools;
-            extraOutputsToInstall = ["dev"];
-          };
-          mkosi-unwrapped = @MKOSI_GUARD@pkgs.mkosi.override {extraDeps = mkosiTools;};
-        in
-          pkgs.writeShellScriptBin "mkosi" ''
-            exec ${pkgs.util-linux}/bin/unshare \\
-              --map-auto --map-current-user \\
-              --setuid=0 --setgid=0 \\
-              -- \\
-              env PATH="${toolsEnv}/bin" \\
-              PKG_CONFIG_PATH="${toolsEnv}/lib/pkgconfig" \\
-              ${mkosi-unwrapped}/bin/mkosi "$@"
-          '';
-      in {
-        devShells = builtins.listToAttrs (map (system: {
-          name = system;
-          value.default = (import nixpkgs {inherit system;}).mkShell {
-            nativeBuildInputs = [(mkosi system)];
-            shellHook = ''
-              mkdir -p mkosi.cache mkosi.builddir
-            '';
-          };
-        }) ["x86_64-linux" "aarch64-linux"]);
-      };
-    }
-""")
-"""The mkosi flake; ``@NIXPKGS_URL@`` and ``@MKOSI_GUARD@`` are filled by :func:`flake_nix`."""
-
-UNPINNED_NIXPKGS = "github:NixOS/nixpkgs/nixos-unstable"
-"""The nixpkgs the flake follows when the lockfile pins none."""
-
-
-def flake_nix(toolchain: Toolchain | None = None) -> str:
-    """The mkosi flake: nixpkgs pinned to *toolchain*'s rev, and its mkosi version guarded.
-
-    Without a pinned nixpkgs it follows ``nixos-unstable``. A locked nix mkosi
-    version makes evaluation fail, naming both versions, when the nixpkgs differs.
-    """
-    pin = None if toolchain is None else toolchain.nixpkgs
-    url = UNPINNED_NIXPKGS if pin is None else f"github:NixOS/nixpkgs/{pin.rev}"
-    guard = ""
-    tool = None if toolchain is None else toolchain.mkosi
-    if tool is not None and tool.source == "nix" and tool.version and pin is not None:
-        guard = (
-            f'if pkgs.mkosi.version != "{tool.version}"\n'
-            f'        then throw "tundravm.lock pins mkosi {tool.version}, but nixpkgs '
-            f"{pin.rev[:12]} provides mkosi ${{pkgs.mkosi.version}}: run "
-            f'`tundravm lock --update toolchain`"\n'
-            "        else "
-        )
-    return FLAKE_NIX_TEMPLATE.replace("@NIXPKGS_URL@", url).replace("@MKOSI_GUARD@", guard)
-
-
-def flake_lock(pin: NixpkgsPin) -> str:
-    """A ``flake.lock`` pinning the flake's nixpkgs input to *pin* (rev + narHash)."""
-    locked: dict[str, object] = {"narHash": pin.nar_hash, "owner": "NixOS", "repo": "nixpkgs"}
-    if pin.last_modified:
-        locked["lastModified"] = pin.last_modified
-    locked.update({"rev": pin.rev, "type": "github"})
-    original = {"owner": "NixOS", "repo": "nixpkgs", "rev": pin.rev, "type": "github"}
-    payload = {
-        "nodes": {
-            "nixpkgs": {"locked": locked, "original": original},
-            "root": {"inputs": {"nixpkgs": "nixpkgs"}},
-        },
-        "root": "root",
-        "version": 7,
-    }
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
-
-
-MKOSI_IDENTITY_SCRIPT = 'm=$(command -v mkosi) && readlink -f "$m" && mkosi --version'
-"""Run in a pinned nix shell: the resolved mkosi executable, then its version line."""
-NIX_STORE_PREFIX = "/nix/store/"
-
-
-def pinned_mkosi(
-    probe: subprocess.CompletedProcess[str],
-    request: BakeRequest,
-    *,
-    context: Mapping[str, str],
-    hint: str,
-) -> MkosiTool:
-    """The mkosi a pinned nix shell ran, from :data:`MKOSI_IDENTITY_SCRIPT`'s output *probe*.
-
-    ``BackendExecutionError`` when the shell said nothing, resolved mkosi outside the Nix
-    store, or runs a version other than the one *request*'s lockfile pins.
-    """
-    from tundravm.errors import BackendExecutionError
-    from tundravm.toolchain import MkosiTool, version_token
-
-    lines = [line.strip() for line in (probe.stdout or "").splitlines() if line.strip()]
-    if probe.returncode != 0 or len(lines) < 2:
-        detail = (probe.stderr or "").strip().splitlines()[-1:] or ["no output"]
-        raise BackendExecutionError(
-            f"Could not identify the mkosi the pinned Nix shell runs: {detail[0]}",
-            hint=hint,
-            context=dict(context),
-        )
-    path, version = lines[-2], version_token(lines[-1])
-    if not path.startswith(NIX_STORE_PREFIX):
-        raise BackendExecutionError(
-            f"The pinned Nix shell resolved mkosi outside the Nix store: {path}.",
-            hint="The flake's mkosi must come first on PATH; " + hint,
-            context=dict(context),
-        )
-    toolchain = request.toolchain
-    pin = None if toolchain is None else toolchain.nixpkgs
-    locked = None if toolchain is None else toolchain.mkosi
-    pinned = pin is not None and locked is not None and locked.source == "nix"
-    if pinned and locked is not None and locked.version != version:
-        raise BackendExecutionError(
-            f"The pinned Nix shell ran mkosi {version} ({path}), but tundravm.lock "
-            f"pins mkosi {locked.version}.",
-            hint="Run `tundravm lock --update toolchain` to pin the mkosi nixpkgs "
-            "provides, then bake again.",
-            context=dict(context),
-        )
-    return MkosiTool(version, "nix", None if pin is None else pin.rev, path=path)
-
-
-def write_flake_nix(target_dir: Path, toolchain: Toolchain | None = None) -> Path:
-    """Write the mkosi flake (and, with a pinned nixpkgs, its flake.lock) to *target_dir*.
-
-    Without a pinned nixpkgs a stale ``flake.lock`` is removed, so the flake
-    follows ``nixos-unstable`` rather than an old pin.
-    """
-    flake_path = target_dir / "flake.nix"
-    flake_path.write_text(flake_nix(toolchain), encoding="utf-8")
-    lock_path = target_dir / "flake.lock"
-    pin = None if toolchain is None else toolchain.nixpkgs
-    if pin is None:
-        lock_path.unlink(missing_ok=True)
-    else:
-        lock_path.write_text(flake_lock(pin), encoding="utf-8")
-    return flake_path
-
 
 MKOSI_STATE_NAMES: frozenset[str] = frozenset(
     {

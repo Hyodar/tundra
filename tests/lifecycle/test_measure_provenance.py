@@ -277,12 +277,11 @@ def _probe(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
 
 def test_doctor_lists_the_built_in_measurement() -> None:
     out = io.StringIO()
-    code = doctor(None, out, runner=_probe)
+    code = doctor(None, out, runner=_probe, areas=["verify"])
     lines = out.getvalue().splitlines()
 
     assert code == EXIT_OK
-    heading = lines.index("measurement tools:")
-    assert lines[heading + 1] == f"  ok {MEASURE_TOOL} {MEASURE_VERSION} (built in)"
+    assert f"verify:qemu      ready (built-in TDX replay {MEASURE_VERSION})" in lines
 
 
 def test_doctor_with_recipe_needs_no_measurement_tool(recipe: Path) -> None:
@@ -291,5 +290,5 @@ def test_doctor_with_recipe_needs_no_measurement_tool(recipe: Path) -> None:
     text = out.getvalue()
 
     assert code == EXIT_OK
-    assert f"measurement tools:\n  ok {MEASURE_TOOL} " in text
+    assert "verify:gcp       ready (built-in replay" in text
     assert text.splitlines()[-1].startswith("lint: ")

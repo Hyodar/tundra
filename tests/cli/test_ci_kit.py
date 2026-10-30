@@ -140,8 +140,8 @@ def test_init_with_github_ci_writes_workflow(tmp_path: Path) -> None:
     assert _in_order(
         bake,
         "uses: actions/checkout@v4",
-        "apt-get install -y -qq bubblewrap debian-archive-keyring python3-pefile",
-        "pipx install git+https://github.com/systemd/mkosi.git@v26",
+        "apt-get install -y -qq debian-archive-keyring",
+        "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
         "run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi",
         "uv run tundravm fetch node.py",
         "uv run tundravm bake node.py --backend ${{ vars.TUNDRAVM_BAKE_BACKEND }} "

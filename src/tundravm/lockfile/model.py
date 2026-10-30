@@ -17,8 +17,9 @@ covers every image-defining input: the ``distribution`` and ``compiler``
 sections, ``variants.<name>.kernel`` and the complete ``variants.<name>.debloat``
 (``base`` and ``arch`` moved into ``distribution``), and pins a source build
 whose source differs between variants once per variant (``<variant>/<name>``).
-Version 5 records the build ``toolchain`` (mkosi, systemd, nixpkgs, tundravm,
-measurement tools; see :class:`~tundravm.toolchain.Toolchain`). Older lockfiles
+Version 5 records the build ``toolchain`` (tundravm, mkosi and its commit, the tools
+tree's distribution, release and snapshot, measurement tools; see
+:class:`~tundravm.toolchain.Toolchain`). Older lockfiles
 do not load: :func:`~tundravm.lockfile.parse_lockfile` asks to lock again.
 """
 

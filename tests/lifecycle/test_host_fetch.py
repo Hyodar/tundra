@@ -17,7 +17,7 @@ import pytest
 
 from tests.helpers import source_dir, write_recipe_file
 from tundravm._source import GitSource, fetch_source
-from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend, NixMkosiBackend
+from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.declarative import (
@@ -325,7 +325,7 @@ def _project(tmp_path: Path, conf: str = "") -> BakeRequest:
 
 def test_local_backend_mounts_the_sources_beside_the_config_directory(tmp_path: Path) -> None:
     request = _project(tmp_path)
-    cmd = LocalLinuxBackend(privilege="none").command(request)
+    cmd = LocalLinuxBackend(privilege="none").arguments(request)
     mkosi_dir = (tmp_path / "build" / "mkosi" / "default").resolve()
     sources = (tmp_path / "build" / ".sources").resolve()
     assert cmd[cmd.index(f"--build-sources={mkosi_dir}") :][:3] == [
@@ -333,7 +333,7 @@ def test_local_backend_mounts_the_sources_beside_the_config_directory(tmp_path: 
         f"--build-sources={sources}:tundravm-sources",
         "--build-sources-ephemeral=yes",
     ]
-    plain = LocalLinuxBackend(privilege="none").command(
+    plain = LocalLinuxBackend(privilege="none").arguments(
         BakeRequest(profile="default", build_dir=request.build_dir, emit_dir=request.emit_dir)
     )
     assert not [arg for arg in plain if arg.startswith("--build-sources")]
@@ -341,20 +341,17 @@ def test_local_backend_mounts_the_sources_beside_the_config_directory(tmp_path: 
 
 def test_local_backend_keeps_the_recipes_build_sources(tmp_path: Path) -> None:
     request = _project(tmp_path, "[Build]\nBuildSources=../src\nBuildSourcesEphemeral=no\n")
-    cmd = LocalLinuxBackend(privilege="none").command(request)
+    cmd = LocalLinuxBackend(privilege="none").arguments(request)
     sources = (tmp_path / "build" / ".sources").resolve()
     assert [arg for arg in cmd if arg.startswith("--build-sources")] == [
         f"--build-sources={sources}:tundravm-sources"
     ]
 
 
-def test_nix_and_lima_backends_mount_the_sources(tmp_path: Path) -> None:
+def test_lima_backend_mounts_the_sources(tmp_path: Path) -> None:
     request = _project(tmp_path)
-    output = tmp_path / "build" / "default" / "output"
-    nix = NixMkosiBackend()._build_mkosi_args(request, output)
-    assert f"--build-sources={request.sources_dir.resolve()}:tundravm-sources" in nix  # type: ignore[union-attr]
-    lima = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")._build_mkosi_command(request)
-    assert "--build-sources=/home/debian/mnt/mkosi/default " in lima
+    lima = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")._mkosi_args(request)
+    assert "--build-sources=/home/debian/mnt/mkosi/default" in lima
     assert "--build-sources=/home/debian/mnt/.sources:tundravm-sources" in lima
 
 
