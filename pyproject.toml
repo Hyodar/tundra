@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "tundravm contributors" }]
-dependencies = []
+dependencies = [
+    "mkosi",
+]
 
 [project.scripts]
 tundravm = "tundravm.cli:main"
@@ -62,3 +64,6 @@ strict = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tundravm"]
+
+[tool.uv.sources]
+mkosi = { git = "https://github.com/systemd/mkosi", rev = "v27.1" }
