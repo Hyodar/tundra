@@ -19,15 +19,21 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      - name: Install mkosi
+      - name: Prepare the build host
+        # mkosi comes with tundravm (uv sync); the host needs the Debian keyring for the
+        # tools tree and the unprivileged user namespaces Ubuntu 24.04's AppArmor withholds.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap debian-archive-keyring python3-pefile
-          pipx install git+https://github.com/systemd/mkosi.git
-          mkosi --version
+          sudo apt-get install -y -qq debian-archive-keyring
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Sync dependencies
         run: uv sync
+
+      - name: mkosi and the host
+        run: |
+          uv run mkosi --version
+          uv run tundravm doctor --for build
 
       - name: Lint
         run: uv run ruff check .
@@ -61,13 +67,12 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      - name: Install mkosi, QEMU and OVMF
+      - name: Prepare the build host, QEMU and OVMF
+        # mkosi comes with tundravm (uv sync) and builds in an unprivileged user namespace.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap debian-archive-keyring python3-pefile \
-            qemu-system-x86 ovmf
-          pipx install git+https://github.com/systemd/mkosi.git
-          mkosi --version
+          sudo apt-get install -y -qq debian-archive-keyring qemu-system-x86 ovmf
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           qemu-system-x86_64 --version
           ls /usr/share/OVMF
 
@@ -85,6 +90,12 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync
+
+      - name: mkosi and the host
+        run: |
+          uv run mkosi --version
+          uv run tundravm doctor --for build
+          uv run tundravm doctor --for run
 
       - name: Bake and boot the templates
         env:
