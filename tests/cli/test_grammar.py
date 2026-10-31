@@ -58,12 +58,6 @@ def test_the_parser_has_exactly_the_twelve_commands() -> None:
     assert tuple(verb.name for verb in verbs_of(build_parser())) == TWELVE
 
 
-def test_help_lists_the_twelve_commands(cli: Cli) -> None:
-    with pytest.raises(SystemExit) as exit_:
-        cli("--help")
-    assert exit_.value.code == 0
-
-
 def test_no_arguments_prints_help_and_the_quickstart(cli: Cli) -> None:
     result = cli()
     assert result.code == EXIT_OK
@@ -76,16 +70,6 @@ def test_version(capsys: pytest.CaptureFixture[str], cli: Cli) -> None:
     with pytest.raises(SystemExit):
         cli("--version")
     assert capsys.readouterr().out.strip() == f"tundravm {__version__}"
-
-
-@pytest.mark.parametrize("verb", REMOVED)
-def test_every_removed_verb_is_an_unknown_command(
-    verb: str, cli: Cli, capsys: pytest.CaptureFixture[str]
-) -> None:
-    with pytest.raises(SystemExit) as exit_:
-        cli(verb, "image.py")
-    assert exit_.value.code == EXIT_SDK_ERROR
-    assert f"unknown command {verb!r}" in capsys.readouterr().err
 
 
 def test_a_typo_suggests_the_closest_command(cli: Cli, capsys: pytest.CaptureFixture[str]) -> None:

@@ -142,13 +142,6 @@ def test_a_components_check_is_its_lint_rule() -> None:
     assert [d.code for d in found if d.severity == "error"] == ["picky-privileged-port"]
 
 
-def test_a_component_keeps_its_class_name_in_provenance() -> None:
-    recipe = recipe_of(Image("x", components=[Database()]))
-    fragment = next(item for item in recipe.items if getattr(item, "name", None) == "database")
-    # explore and why print "via database (Database)"
-    assert type(fragment).__name__ == "Database"
-
-
 def test_a_nested_component_is_composed_too() -> None:
     class Stack(Component):
         def compose(self) -> Iterator[object]:

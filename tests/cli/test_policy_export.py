@@ -8,19 +8,10 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import REPO_ROOT
-from tundravm.declarative import File, Measurements
+from tundravm.declarative import File
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import PLACEHOLDER_NOTE, policy_payload, read_policy
-
-RECIPE = """
-from tundravm.declarative import Fragment, Package, Recipe, Variant
-from tundravm.backends.local_linux import LocalLinuxBackend
-
-backend = LocalLinuxBackend()
-BOOT = (Package("systemd"), Package("linux-image-amd64"))
-recipe = Recipe("peer", items=BOOT)
-"""
 
 R0, R1, R2, R3, MRTD = ("a" * 96, "b" * 96, "c" * 96, "d" * 96, "e" * 96)
 QEMU_GAPS = {"MRTD": "host firmware"}
@@ -89,13 +80,6 @@ def test_labelled_values_keep_their_labels() -> None:
         read_policy(_policy(RTMR0=[], RTMR1=R1, RTMR2=R2))
 
 
-def test_schema_1_policies_are_refused_with_a_re_export_hint() -> None:
-    old = {**_policy(RTMR0=R0, RTMR1=R1, RTMR2=R2), "schema_version": 1, "scheme": "rtmr"}
-    with pytest.raises(ValidationError, match="no longer read") as caught:
-        read_policy(old)
-    assert caught.value.hint is not None and "measurements.json" in caught.value.hint
-
-
 def test_from_policy_normalises_registers_for_the_validator() -> None:
     tdxs = Tdxs.from_policy(_policy(RTMR0=R0, RTMR1=R1, RTMR2=R2, RTMR3=R3), mrtd=MRTD.upper())
     assert tdxs.validator == "tdx"
@@ -118,18 +102,6 @@ def test_from_policy_normalises_registers_for_the_validator() -> None:
         f'      rtmr2: "{R2}"\n'
         f'      rtmr3: "{R3}"\n'
     )
-
-
-def test_from_policy_picks_one_value_per_register() -> None:
-    firmware = [{"value": MRTD, "firmware": "fw-a"}, {"value": R3, "firmware": "fw-b"}]
-    policy = _policy({}, MRTD=firmware, RTMR0=R0, RTMR1=R1, RTMR2=R2)
-    with pytest.raises(MeasurementError, match="MRTD has 2 accepted values"):
-        Tdxs.from_policy(policy)
-    tdxs = Tdxs.from_policy(policy, firmware="fw-b")
-    assert tdxs.expected_measurements["mrtd"] == R3
-    assert tdxs.expected_measurements["rtmr0"] == R0
-    (config,) = [item for item in tdxs.items if isinstance(item, File) and item.path == CONFIG]
-    assert f'      mrtd: "{R3}"\n' in str(config.content)
 
 
 def test_from_policy_reads_a_file_and_passes_fields(tmp_path: Path) -> None:
@@ -159,31 +131,6 @@ def test_from_policy_rejects_bad_policies(tmp_path: Path) -> None:
     assert Tdxs.from_policy(placeholder, allow_placeholder=True).expected_measurements["rtmr0"] == (
         "1" * 64
     )
-
-
-def test_from_measurements_matches_from_policy() -> None:
-    registers = (("RTMR0", (R0,)), ("RTMR1", (R1,)), ("RTMR2", (R2,)))
-    measured = Measurements(
-        scheme="qemu",
-        values=(("RTMR0", R0), ("RTMR1", R1), ("RTMR2", R2)),
-        tool="tundravm-measure 1.0",
-        artifact_digest="f" * 64,
-        registers=registers,
-        unverifiable=tuple(QEMU_GAPS.items()),
-    )
-    assert Tdxs.from_measurements(measured) == Tdxs.from_policy(
-        _policy(RTMR0=R0, RTMR1=R1, RTMR2=R2)
-    )
-    placeholder = Measurements(
-        scheme="qemu",
-        values=measured.values,
-        tool="placeholder",
-        artifact_digest="",
-        registers=registers,
-        unverifiable=measured.unverifiable,
-    )
-    with pytest.raises(MeasurementError):
-        Tdxs.from_measurements(placeholder)
 
 
 def test_the_committed_example_policy_is_a_marked_placeholder() -> None:

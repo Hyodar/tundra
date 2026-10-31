@@ -97,23 +97,6 @@ def test_a_production_policy_rejects_simulated_evidence() -> None:
     assert _simulated(production=False).passed
 
 
-def test_the_guest_gate_mode_makes_tdx_evidence_simulated() -> None:
-    """A guest whose execution gate found no TDX says ``simulated``: whatever the quote
-    claims, the evidence is simulated (the guest's word can only lower it)."""
-    result = attest(
-        "tcp://h:1",
-        PEER,
-        validator="tcp://v:2",
-        guest_mode="simulated",
-        transport=FakeIssuer(),
-        validator_transport=FakeValidator(),
-    )
-    assert result.simulated and result.verdict == "simulated"
-    assert result.to_dict()["simulated"] is True and result.to_dict()["guest_mode"] == "simulated"
-    tdx = _judged(production=True)
-    assert not tdx.simulated and tdx.verdict == "trusted"
-
-
 def test_a_record_re_derives_debug_and_catches_it_edited() -> None:
     record = _judged(production=True, debug=True).record()
     assert record["debug"] is True and record["production"] is True

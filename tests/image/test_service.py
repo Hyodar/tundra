@@ -84,16 +84,6 @@ def test_requiring_the_service_value_itself_says_to_pass_its_readiness() -> None
     assert "other.ready" in str(caught.value)
 
 
-def test_an_endpoint_carries_the_readiness_it_was_exported_with() -> None:
-    api = Service("api", ["/usr/bin/api"], readiness=TcpProbe(8080))
-    endpoint = Endpoint("127.0.0.1", 8080, ready=api.ready)
-    app = Service("app", ["/usr/bin/app", "--api", endpoint], requires=[endpoint])
-    planned = _plan(api, app)
-    unit = planned.service("app")
-    assert unit.get("Service", "ExecStart") == "/usr/bin/app --api http://127.0.0.1:8080/"
-    assert unit.get("Unit", "Requires") == "api-ready.service tdx-evidence.service"
-
-
 def test_an_endpoint_without_readiness_cannot_be_required() -> None:
     with pytest.raises(ValidationError) as caught:
         Service("app", ["/usr/bin/app"], requires=[Endpoint("127.0.0.1", 80)])

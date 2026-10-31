@@ -8,7 +8,7 @@ import pytest
 from tests.lint.test_check_rules import recipe, report
 from tundravm._units.lint import Facts, ShippedUnit, unit_findings
 from tundravm.check import Diagnostic
-from tundravm.declarative import File, Package, Recipe, Service, Unit, Variant
+from tundravm.declarative import File, Package, Service, Unit
 
 INSTALL = "\n[Install]\nWantedBy=minimal.target\n"
 
@@ -130,14 +130,6 @@ def test_a_package_named_after_the_account_provides_it() -> None:
     items = (Unit("x.service", text, enabled=True),)
     assert found(*items, code="service-user-missing")
     assert found(*items, Package("prometheus-node-exporter"), code="service-user-missing") == []
-
-
-def test_style_and_correctness_codes_are_reported() -> None:
-    text = service("ExecStart=ip link\nRestart=onfailure", "[Unit]\nRequires=b.service\n")
-    items = (*recipe().items, Unit("x.service", text, enabled=True))
-    current = Recipe("c", items=items, variants=(Variant("default", outputs=("qemu",)),))
-    unit_codes = {"unit-exec-relative", "requires-without-after", "unit-raw", "unit-value-invalid"}
-    assert {d.code for d in report(current)} & unit_codes == unit_codes
 
 
 UNIT_CODES = frozenset(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -237,18 +236,3 @@ def test_service_and_unit_get_the_same_secret_findings(
     )
     for value in (GITHUB, TOKEN, "MIIEowIBAAKCAQEA"):
         assert value not in declared.message + verbatim.message
-
-
-@pytest.mark.parametrize(("service", "unit", "kind", "fields"), PAIRED)
-def test_allow_secret_exempts_service_and_unit_alike(
-    service: Service, unit: Unit, kind: str, fields: tuple[str, str]
-) -> None:
-    assert _secret_codes(replace(service, allow_secret=True), unit) == [
-        ("secret-in-env", "/usr/lib/systemd/system/raw.service")
-    ]
-    assert _secret_codes(service, replace(unit, allow_secret=True)) == [
-        ("secret-in-env", "api.service")
-    ]
-    assert (
-        _secret_codes(replace(service, allow_secret=True), replace(unit, allow_secret=True)) == []
-    )

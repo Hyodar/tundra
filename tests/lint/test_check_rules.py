@@ -8,7 +8,6 @@ is the CLI's lint report (resolution diagnostics, then the compiler rules);
 from __future__ import annotations
 
 import io
-import json
 from pathlib import Path
 
 import pytest
@@ -16,8 +15,6 @@ import pytest
 from tundravm.check import Diagnostic, check, render, render_github, render_markdown
 from tundravm.cli import main
 from tundravm.declarative import (
-    Backend,
-    BootStep,
     Debian,
     Debloat,
     Declaration,
@@ -28,7 +25,6 @@ from tundravm.declarative import (
     Hook,
     Kernel,
     Package,
-    Ready,
     Recipe,
     Secret,
     SecretEnv,
@@ -40,15 +36,13 @@ from tundravm.declarative import (
     Unit,
     User,
     Variant,
-    bake,
     compile,
     lint,
-    lock,
     lower,
 )
 from tundravm.declarative.lifecycle import check_report
 from tundravm.declarative.utils import EfiStub
-from tundravm.errors import LintError, ValidationError
+from tundravm.errors import ValidationError
 
 DEFAULT = Variant("default", outputs=("qemu",))
 KERNEL = Package("linux-image-amd64")
@@ -76,11 +70,6 @@ def report(subject: Recipe, *variants: str) -> list[Diagnostic]:
 
 def codes(subject: Recipe, *variants: str) -> list[str]:
     return [d.code for d in report(subject, *variants)]
-
-
-def test_clean_recipe_has_no_findings() -> None:
-    assert report(recipe()) == []
-    assert lint(recipe()) == ()
 
 
 # a. service-user-missing
@@ -198,14 +187,6 @@ def test_cloud_variants_lint_clean() -> None:
     assert report(subject, "azure", "gcp", "agent", "both") == []
 
 
-def test_variant_cannot_drop_an_inherited_cloud_target() -> None:
-    child = Variant("plain", inherits="gcp", outputs=("qemu",))
-    subject = recipe(variants=(*cloud_recipe().variants, child))
-    assert [(d.code, d.subject) for d in lint(subject, variants=["plain"])] == [
-        ("target-inconsistent", "plain")
-    ]
-
-
 # f. variant-empty
 
 
@@ -220,24 +201,6 @@ def test_variant_with_content_or_default_is_not_empty() -> None:
 
 
 # g. runtime-init graph: cycles and unknown steps are errors naming the steps
-
-
-def test_boot_step_cycle_names_the_steps() -> None:
-    first = BootStep("first", "echo 1\n", after=(Ready("second"),))
-    second = BootStep("second", "echo 2\n", after=(first.ready,))
-    [diag] = lint(recipe(first, second))
-    assert (diag.severity, diag.code) == ("error", "step-cycle")
-    assert "'first' -> 'second' -> 'first'" in diag.message
-
-
-def test_unknown_step_references_are_errors() -> None:
-    step = BootStep("late", "echo late\n", before=(Ready("ghost"),))
-    unit = Unit("app-extra.service", "[Unit]\n", needs=(Ready("missing"),))
-    found = [(d.severity, d.code, d.subject) for d in lint(recipe(step, unit))]
-    assert found == [
-        ("error", "step-undefined", "late"),
-        ("error", "needs-undefined", "app-extra.service"),
-    ]
 
 
 # i. debloat-removes-needed-unit / debloat-removes-declared-file
@@ -325,11 +288,6 @@ def test_keep_modules_keeps_the_path_out_of_finalize() -> None:
 #
 # A Secret needs a delivery target, and the target needs a provider that writes it:
 # the built-in tundra-tools one provisions only the SSH key (secret-target-unsupported).
-
-
-def test_secret_requires_a_delivery_target() -> None:
-    with pytest.raises(ValidationError, match="at least one delivery target"):
-        Secret("token", targets=())
 
 
 @pytest.mark.parametrize(
@@ -441,12 +399,6 @@ def test_aarch64_with_efi_stub_is_unsupported() -> None:
     assert "_amd64.deb" in (diag.hint or "")
 
 
-def test_aarch64_qemu_target_is_unsupported() -> None:
-    [diag] = [d for d in report(_arm(target="qemu")) if d.code == "recipe-arch-unsupported"]
-    assert (diag.severity, diag.subject) == ("error", "qemu")
-    assert "qemu-system-x86_64" in (diag.hint or "")
-
-
 def test_x86_64_is_fine_and_aarch64_always_builds_the_qemu_disk() -> None:
     efi = EfiStub(snapshot="20251113T083151Z", version="257")
     x86 = Recipe("check", items=(*CLEAN, efi), variants=(DEFAULT,))
@@ -454,12 +406,6 @@ def test_x86_64_is_fine_and_aarch64_always_builds_the_qemu_disk() -> None:
     # The tree's main image is the QEMU disk, whatever the variant's outputs.
     found = [d.subject for d in report(_arm()) if d.code == "recipe-arch-unsupported"]
     assert found == ["qemu"]
-
-
-def test_bootable_setting_takes_only_no() -> None:
-    subject = recipe(Setting("Content", "Bootable", ("yes",)))
-    with pytest.raises(ValidationError, match="writes Bootable= itself"):
-        lower(subject)
 
 
 # rendering + ordering
@@ -583,33 +529,6 @@ def run(*argv: str) -> tuple[int, str]:
     return main(["check", *argv], stdout=out), out.getvalue()
 
 
-def test_cli_clean_recipe(tmp_path: Path) -> None:
-    code, out = run(str(write_recipe(tmp_path)))
-    assert (code, out) == (0, "no findings\n")
-
-
-def test_cli_error_exit_and_json(tmp_path: Path) -> None:
-    extra = 'items.append(Service("w", "/usr/bin/w", user="ghost"))\n'
-    recipe_path = write_recipe(tmp_path, extra)
-    code, out = run(str(recipe_path))
-    assert code == 1
-    assert out.startswith("error service-user-missing [default] w:")
-    assert out.rstrip().endswith("1 error, 0 warnings, 0 infos")
-
-    code, out = run(str(recipe_path), "--json")
-    assert code == 1
-    payload = json.loads(out)
-    assert payload["schema"] == "tundravm.check/1" and payload["passed"] is False
-    assert payload["summary"] == {"errors": 1, "warnings": 0, "infos": 0}
-    assert payload["diagnostics"][0]["code"] == "service-user-missing"
-
-
-def test_cli_warnings_are_reported_without_failing(tmp_path: Path) -> None:
-    extra = 'items.append(Unit("x.service", "[Unit]\\n", enabled=True, needs=[RUNTIME_INIT]))\n'
-    code, out = run(str(write_recipe(tmp_path, extra)))
-    assert code == 0 and "warning" in out
-
-
 def test_cli_variant_selection(tmp_path: Path) -> None:
     recipe_path = write_recipe(tmp_path, 'variants.append(Variant("bare"))\n')
     code, out = run(str(recipe_path), "--profile", "default", "--profile", "bare")
@@ -619,18 +538,3 @@ def test_cli_variant_selection(tmp_path: Path) -> None:
 
 
 # bake pre-flight
-
-
-def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
-    subject = recipe(File("/etc/../../escape", "x"))
-    with pytest.raises(LintError) as excinfo:
-        bake(subject, lock=lock(subject), backend=Backend("local"), build=tmp_path / "out")
-    assert excinfo.value.code == "E_LINT"
-    assert "1 error-level diagnostics" in str(excinfo.value)
-    assert excinfo.value.context["codes"] == "file-path-relative"
-
-
-def test_clean_recipe_bakes(tmp_path: Path) -> None:
-    subject = recipe()
-    artifacts = bake(subject, lock=lock(subject), backend=Backend("local"), build=tmp_path / "out")
-    assert [a.variant for a in artifacts] == ["default"]

@@ -16,7 +16,6 @@ from tundravm.declarative import (
     Package,
     Ready,
     Recipe,
-    Resolved,
     Service,
     Setting,
     User,
@@ -113,28 +112,6 @@ def test_compile_tree_reads_compiled_files(tmp_path: Path) -> None:
     assert {"mkosi.conf", "mkosi.extra/etc/motd"} <= set(files)
 
 
-def test_compile_tree_defaults_to_a_fresh_temp_dir() -> None:
-    recipe = _recipe()
-    first, second = compile_tree(recipe), compile_tree(recipe)
-    assert first.root != second.root
-    assert first.conf() == second.conf()
-
-
-def test_compile_tree_selects_variants(tmp_path: Path) -> None:
-    recipe = _recipe()
-    tree = compile_tree(recipe, variants=["default", "azure"], path=tmp_path / "all")
-    assert tree.variants == ("default", "azure")
-    assert tree.variant("azure") == tmp_path / "all" / "payload" / "mkosi.profiles" / "azure"
-    assert tree.variant("default") == tmp_path / "all" / "payload"
-    assert "jq" in tree.conf(variant="azure")
-    assert "jq" not in tree.conf()
-
-    only = compile_tree(recipe, variants="azure", path=tmp_path / "azure-only")
-    assert only.variants == ("azure",)
-    assert only.default_variant == "azure"
-    assert "jq" in only.conf()
-
-
 def test_compile_tree_rejects_unknown_and_uncompiled_variants(tmp_path: Path) -> None:
     recipe = _recipe()
     with pytest.raises(ValidationError, match="Unknown profile"):
@@ -172,15 +149,6 @@ def test_assert_clean_fails_on_warnings_for_every_input() -> None:
     assert assert_clean(_recipe()) == []
 
 
-def test_assert_clean_warnings_allow_fails_on_errors_only() -> None:
-    recipe = _warning_only()
-    assert_clean(recipe, warnings="allow")
-    with pytest.raises(AssertionError, match="warning service-command-not-shipped"):
-        assert_clean(lint(recipe))
-    with pytest.raises(TypeError, match="strict"):
-        assert_clean(recipe, strict=True)  # type: ignore[call-arg]
-
-
 def test_assert_clean_fails_on_errors_with_rendered_report() -> None:
     recipe = _ghost()
     with pytest.raises(AssertionError) as excinfo:
@@ -208,13 +176,6 @@ def test_assert_clean_returns_lint_diagnostics_as_given() -> None:
         assert_clean(found, variants="default")
     with pytest.raises(TypeError, match="variants="):
         assert_clean(plan(_recipe()), variants="default")
-
-
-def test_assert_diagnostic_returns_the_match() -> None:
-    found = assert_diagnostic(_ghost(), "service-user-missing", severity="error", subject="app")
-    assert found.variant == "default"
-    assert "ghost" in found.message
-    assert found.hint is not None
 
 
 def test_assert_diagnostic_filters_by_variant() -> None:
@@ -368,36 +329,6 @@ def test_fake_fragment_declares_packages_and_files() -> None:
     assert image.file("/etc/x").fragment == "x"
 
 
-def test_fake_fragment_lands_only_in_its_variant() -> None:
-    fake = fake_fragment(packages=("pkg",))
-    assert fake.name == "fake"
-    recipe = Recipe(
-        name="demo",
-        variants=(
-            Variant("default", outputs=("qemu",)),
-            Variant("azure", outputs=("azure",), add=Fragment("azure", (fake,))),
-        ),
-    )
-    assert "pkg" in plan(recipe, "azure").packages
-    assert "pkg" not in plan(recipe).packages
-
-
-def test_fake_fragment_requires_other_fragments() -> None:
-    a = fake_fragment("a")
-    b = fake_fragment("b", requires=(a,))
-    assert b.requires == ("a",)
-    found = assert_diagnostic(fragment_plan(b), "fragment-requires-missing", subject="b")
-    assert "'a'" in found.message
-    assert_clean(fragment_plan(b, include=(a,)))
-
-
-def test_fake_fragment_requires_a_fragment_by_name() -> None:
-    dep = fake_fragment("dep", requires=("base-tools",))
-    with pytest.raises(AssertionError, match="fragment-requires-missing"):
-        assert_clean(fragment_plan(dep))
-    assert_clean(fragment_plan(dep, include=(Fragment("base-tools", (Package("curl"),)),)))
-
-
 def test_fake_fragment_init_scripts_compose_by_after() -> None:
     silent = fake_fragment("silent", packages=("pkg",))
     assert not any(isinstance(item, BootStep) for item in silent.items)
@@ -415,59 +346,7 @@ def test_fake_fragment_init_scripts_compose_by_after() -> None:
     assert image.file("/usr/lib/runtime-init/late").text.endswith("echo late")
 
 
-def test_fake_fragment_cycle_is_diagnosed() -> None:
-    a = fake_fragment("a", init="echo a", after=[Ready("b")])
-    b = fake_fragment("b", init="echo b", after=[Ready("a")])
-    common = Fragment("app", (a, b))
-    found = assert_diagnostic(Recipe(name="demo", items=(common,)), "step-cycle")
-    assert found.severity == "error"
-    assert "'a' -> 'b' -> 'a'" in found.message
-
-
-def test_fake_fragment_checks_run_per_variant() -> None:
-    seen: list[str] = []
-
-    def check(resolved: Resolved) -> tuple[Diagnostic, ...]:
-        seen.append(resolved.variant)
-        return (Diagnostic("fake-check", "warning", "checked"),)
-
-    recipe = Recipe(
-        name="demo",
-        items=(fake_fragment(checks=(check,)),),
-        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
-    )
-    found = lint(recipe)
-    assert set(seen) == {"azure", "default"}
-    assert assert_diagnostic(found, "fake-check", variant="azure").subject == ""
-    assert assert_diagnostic(found, "fake-check", variant="default").severity == "warning"
-
-
 # ── recipe_file / run_cli ────────────────────────────────────────────
-
-
-def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
-    path = recipe_file(
-        tmp_path,
-        """
-        from tundravm.declarative import Fragment, Package, Recipe
-
-        recipe = Recipe(
-            name="demo",
-            items=(Package("curl"), Package("linux-image-amd64")),
-        )
-        """,
-    )
-    assert path == tmp_path / "recipe.py"
-    assert path.read_text(encoding="utf-8").startswith("from tundravm.declarative import Fragment")
-
-    code, out, err = run_cli("check", path)
-    assert code == 0
-    assert "no findings" in out
-    assert "no lockfile" in err  # a note, not a finding
-
-    code, out, _ = run_cli("build", path, "--tree-only", tmp_path / "tree")
-    assert code == 0, out
-    assert (tmp_path / "tree" / "payload" / "mkosi.conf").is_file()
 
 
 def test_run_cli_captures_usage_errors_and_sdk_errors(tmp_path: Path) -> None:

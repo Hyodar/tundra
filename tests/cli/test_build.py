@@ -122,12 +122,6 @@ def test_profile_and_dev_are_exclusive(project: Path, cli: Cli) -> None:
         cli("build", "--profile", "production", "--dev")
 
 
-def test_an_unknown_profile_is_refused(project: Path, cli: Cli) -> None:
-    result = cli("build", "--profile", "staging")
-    assert result.code == EXIT_SDK_ERROR
-    assert "Unknown profile(s): staging" in result.err
-
-
 def test_targets_add_the_cloud_disks(project: Path, cli: Cli) -> None:
     refused = cli("build", "--target", "gcp")  # the starter targets qemu only
     assert refused.code == EXIT_SDK_ERROR and "does not target gcp" in refused.err

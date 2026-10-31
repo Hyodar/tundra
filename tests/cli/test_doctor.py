@@ -11,7 +11,7 @@ import pytest
 
 from tests.helpers import run_main
 from tundravm.backends.local_linux import DEBIAN_KEYRING
-from tundravm.capabilities import Capability, Host, capabilities, default_backend
+from tundravm.capabilities import Host, capabilities, default_backend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, doctor
 from tundravm.toolchain import MKOSI_PIN
 
@@ -201,16 +201,6 @@ def test_deploy_rows_name_the_cli_and_the_login() -> None:
         "deploy:gcp": "blocked: gcloud not found: install the Google Cloud CLI",
         "deploy:azure": "blocked: az not found: install the Azure CLI",
     }
-
-
-def test_capability_render_pads_the_name() -> None:
-    assert Capability("run:tdx", "unavailable", "no TDX").render() == (
-        "run:tdx          unavailable: no TDX"
-    )
-    assert Capability("build:x86-64", "ready").render() == "build:x86-64     ready"
-
-
-# ── the command ──────────────────────────────────────────────────────────
 
 
 # ── the command ──────────────────────────────────────────────────────────

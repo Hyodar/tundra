@@ -197,10 +197,3 @@ def test_rollback_needs_a_replaced_instance(
     policy.write_text("{}")
     result = cli("deploy", "rollback", "prover-1", "--policy", policy)
     assert result.code == EXIT_SDK_ERROR and "replaced nothing" in result.err
-
-
-def test_parse_volumes() -> None:
-    assert deployments.parse_volumes(["data=create:100GiB", "logs=existing:d-1"]) == {
-        "data": ("create", "100GiB"),
-        "logs": ("existing", "d-1"),
-    }

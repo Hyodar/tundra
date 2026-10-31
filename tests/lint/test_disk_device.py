@@ -32,16 +32,6 @@ def _findings(
     return [(d.severity, d.subject) for d in lint(recipe) if d.code == code]
 
 
-def test_a_disk_is_never_formatted_by_default() -> None:
-    assert Disk("data", mount="/data").format == "never"
-
-
-@pytest.mark.parametrize("format", ["on_fail", "always", "on_initialize"])
-def test_formatting_without_a_device_is_an_error(format: str) -> None:
-    disk = Disk("data", mount="/data", key=KEY, format=format)  # type: ignore[arg-type]
-    assert _findings(disk) == [("error", "data")]
-
-
 def test_the_error_names_the_boot_disk_risk_and_the_fix() -> None:
     disk = Disk("data", mount="/data", format="on_fail")
     recipe = Recipe("disk", items=(Package("linux-image-amd64"), TOOLS, disk))

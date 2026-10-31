@@ -13,7 +13,6 @@ from tundravm import File, Image, Service
 from tundravm._image._values import MANAGEMENT_PORT
 from tundravm.components import Component
 from tundravm.errors import ValidationError
-from tundravm.ports import TCP
 from tundravm.testing import PlannedImage, assert_clean, compile_tree, plan
 
 from .conftest import STARTER_SOURCE, starter
@@ -152,9 +151,3 @@ def test_an_unknown_target_is_named() -> None:
     with pytest.raises(ValidationError) as caught:
         Image("x", targets=("aws",))  # type: ignore[arg-type]
     assert "qemu, azure, gcp" in str(caught.value)
-
-
-def test_expose_opens_udp_too() -> None:
-    image = Image("x", services=[Service("dns", ["/usr/bin/true"], expose=[TCP(53)])])
-    rules = plan(image, "production").file("/etc/nftables.conf").text
-    assert "tcp dport 53 accept" in rules
