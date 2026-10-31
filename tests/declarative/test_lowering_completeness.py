@@ -5,7 +5,7 @@ files; the remaining errors are genuine impossibilities with a named
 declaration and an alternative.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -123,7 +123,7 @@ def test_unpinned_kernel_tarball_names_the_fix() -> None:
 # ── 2. Variants are additions to the payload ─────────────────────────────
 
 
-def test_variants_with_their_own_settings_or_kernel_are_refused(config: Path) -> None:
+def _own_settings_and_kernels(config: Path) -> Recipe:
     seed = Setting("Output", "Seed", ("11111111-1111-1111-1111-111111111111",))
     zstd = Setting("Output", "CompressOutput", ("zstd",))
     lts = Kernel("6.6.80", Git(LINUX, "v6.6.80"), config=config, cmdline="quiet")
@@ -139,15 +139,61 @@ def test_variants_with_their_own_settings_or_kernel_are_refused(config: Path) ->
         Variant("bare", changes=(main.ref.remove(),)),
         Variant("dev", add=Fragment("d", items=(Package("vim"),))),
     )
+    return _recipe(Package("curl"), seed, main, variants=variants)
+
+
+def _own_setting_beside_removals_and_standalones(config: Path) -> Recipe:
+    """A removal or a standalone variant is lowered whole; a variant's own settings are the
+    one thing a tree cannot carry per profile."""
+    seed = Setting("Output", "Seed", ("x",))
+    variants = (
+        Variant("default"),
+        Variant("slim", changes=(Package.ref("curl").remove(),)),
+        Variant("seeded", add=Fragment("s", items=(seed,))),
+        Variant("rescue", inherits=None),
+        Variant("ok", add=Fragment("o", items=(Package("vim"),))),
+    )
+    return _recipe(Package("curl"), variants=variants)
+
+
+@pytest.mark.parametrize(
+    ("build", "listed", "unlisted", "hint"),
+    [
+        (
+            _own_settings_and_kernels,
+            (
+                "'small' (it has its own Setting(Output, CompressOutput))",
+                "'unseeded' (it has its own Setting(Output, Seed))",
+                "'lts' (it has its own Kernel",
+                "'bare' (it has its own Kernel",
+            ),
+            ("'dev'",),
+            "an image of its own",
+        ),
+        (
+            _own_setting_beside_removals_and_standalones,
+            ("'seeded' (it has its own Setting(Output, Seed))",),
+            ("'slim'", "'rescue'", "'ok'"),
+            "make the profile an image of its own",
+        ),
+    ],
+    ids=["settings-and-kernels", "removal-and-standalone-not-listed"],
+)
+def test_variants_with_their_own_settings_or_kernel_are_refused(
+    config: Path,
+    build: Callable[[Path], Recipe],
+    listed: tuple[str, ...],
+    unlisted: tuple[str, ...],
+    hint: str,
+) -> None:
     with pytest.raises(ValidationError) as err:
-        lower(_recipe(Package("curl"), seed, main, variants=variants))
+        lower(build(config))
     message = str(err.value)
-    assert "'small' (it has its own Setting(Output, CompressOutput))" in message
-    assert "'unseeded' (it has its own Setting(Output, Seed))" in message
-    for name in ("lts", "bare"):
-        assert f"'{name}' (it has its own Kernel" in message
-    assert "'dev'" not in message
-    assert "an image of its own" in (err.value.hint or "")
+    for text in listed:
+        assert text in message
+    for text in unlisted:
+        assert text not in message
+    assert hint in (err.value.hint or "")
 
 
 def test_an_overlay_variant_leaves_the_payload_alone(tmp_path: Path) -> None:
@@ -226,29 +272,6 @@ def test_env_targets_may_repeat_across_secrets() -> None:
     a = Secrets("a", entries=(Secret("x", env),))
     b = Secrets("b", entries=(Secret("y", env),))
     lower(_recipe(a, b))
-
-
-# ── 4. Variants the payload cannot carry ─────────────────────────────
-
-
-def test_only_variants_with_their_own_settings_are_listed() -> None:
-    """A removal or a standalone variant is lowered whole; a variant's own settings are the
-    one thing a tree cannot carry per profile."""
-    seed = Setting("Output", "Seed", ("x",))
-    variants = (
-        Variant("default"),
-        Variant("slim", changes=(Package.ref("curl").remove(),)),
-        Variant("seeded", add=Fragment("s", items=(seed,))),
-        Variant("rescue", inherits=None),
-        Variant("ok", add=Fragment("o", items=(Package("vim"),))),
-    )
-    with pytest.raises(ValidationError) as err:
-        lower(_recipe(Package("curl"), variants=variants))
-    message = str(err.value)
-    assert "'seeded' (it has its own Setting(Output, Seed))" in message
-    for name in ("slim", "rescue", "ok"):
-        assert f"'{name}'" not in message
-    assert "make the profile an image of its own" in (err.value.hint or "")
 
 
 # ── 5. A default variant inheriting another ───────────────────────────

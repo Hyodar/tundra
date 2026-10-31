@@ -6,6 +6,7 @@ equal recipe digests, equal compiled trees.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -42,15 +43,42 @@ def _same_lowering(first: Recipe, second: Recipe) -> None:
     assert tundravm.declarative.compile(first).digest == tundravm.declarative.compile(second).digest
 
 
-def test_file_text_and_copy_are_the_constructor(tmp_path: Path) -> None:
-    source = tmp_path / "app.conf"
-    source.write_text("port = 1\n")
-    assert File.text("/etc/motd", "hi\n", mode=0o600) == File("/etc/motd", "hi\n", mode=0o600)
-    assert File.copy("/etc/app.conf", source, mode=0o644) == File("/etc/app.conf", source)
-    _same_lowering(
-        _recipe(File.text("/etc/motd", "hi\n"), File.copy("/etc/a", source, mode=0o644)),
-        _recipe(File("/etc/motd", "hi\n"), File("/etc/a", source)),
-    )
+@pytest.mark.parametrize(
+    ("content", "spelled", "built"),
+    [
+        (
+            "port = 1\n",
+            lambda source: File.text("/etc/motd", "hi\n", mode=0o600),
+            lambda source: File("/etc/motd", "hi\n", mode=0o600),
+        ),
+        (
+            "port = 1\n",
+            lambda source: File.text("/etc/motd", "hi\n"),
+            lambda source: File("/etc/motd", "hi\n"),
+        ),
+        (
+            "port = 1\n",
+            lambda source: File.copy("/etc/a", source, mode=0o644),
+            lambda source: File("/etc/a", source),
+        ),
+        (
+            "[Service]\nExecStart=/bin/true\n",
+            lambda source: Unit.from_file("app.service", source, enabled=True),
+            lambda source: Unit("app.service", source, enabled=True),
+        ),
+    ],
+    ids=["file-text-mode", "file-text", "file-copy", "unit-from-file"],
+)
+def test_spellings_are_the_constructor(
+    tmp_path: Path,
+    content: str,
+    spelled: Callable[[Path], Declaration],
+    built: Callable[[Path], Declaration],
+) -> None:
+    source = tmp_path / "source"
+    source.write_text(content)
+    assert spelled(source) == built(source)
+    _same_lowering(_recipe(spelled(source)), _recipe(built(source)))
 
 
 def test_file_copy_keeps_only_the_execute_bit(tmp_path: Path) -> None:
@@ -79,14 +107,6 @@ def test_file_copy_keeps_only_the_execute_bit(tmp_path: Path) -> None:
 def test_misused_spellings_are_refused(build: object) -> None:
     with pytest.raises(ValidationError):
         build()  # type: ignore[operator]
-
-
-def test_unit_from_file_is_the_constructor(tmp_path: Path) -> None:
-    source = tmp_path / "app.service"
-    source.write_text("[Service]\nExecStart=/bin/true\n")
-    assert Unit.from_file("app.service", source, enabled=True) == Unit(
-        "app.service", source, enabled=True
-    )
 
 
 def test_go_binary_lowers_like_the_hand_written_build() -> None:

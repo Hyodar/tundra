@@ -7,7 +7,7 @@ import os
 import shutil
 import stat
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -127,54 +127,76 @@ def _failed(cli: Cli, path: Path) -> dict[str, str]:
     return {c["name"]: c["detail"] for c in report["checks"] if c["state"] == "failed"}
 
 
-def test_a_changed_artifact_fails(built: Build, cli: Cli, tmp_path: Path) -> None:
-    copy = _copy(built, tmp_path)
-    assert cli("verify", str(copy)).code == EXIT_OK
+def _append_to_the_disk(copy: Path) -> None:
     with (copy / "qemu.raw").open("ab") as handle:
         handle.write(b"x")
-    failed = _failed(cli, copy)
-    assert set(failed) == {"artifacts"} and "qemu.raw differs" in failed["artifacts"]
 
 
-def test_an_unexpected_file_fails(built: Build, cli: Cli, tmp_path: Path) -> None:
-    copy = _copy(built, tmp_path)
+def _add_a_file(copy: Path) -> None:
     (copy / "extra.bin").write_bytes(b"x")
-    assert "extra.bin is not in the manifest" in _failed(cli, copy)["artifacts"]
 
 
-def test_a_missing_file_fails(built: Build, cli: Cli, tmp_path: Path) -> None:
-    copy = _copy(built, tmp_path)
+def _remove_the_sbom(copy: Path) -> None:
     (copy / "sbom.spdx.json").unlink()
-    assert "sbom.spdx.json is missing" in _failed(cli, copy)["artifacts"]
 
 
-def test_an_edited_tree_file_fails(built: Build, cli: Cli, tmp_path: Path) -> None:
-    copy = _copy(built, tmp_path)
-    page = copy / "tree/payload/mkosi.extra/srv/www/index.html"
-    page.write_text("<h1>edited</h1>\n")
-    assert set(_failed(cli, copy)) == {"tree"}
+def _edit_a_tree_file(copy: Path) -> None:
+    (copy / "tree/payload/mkosi.extra/srv/www/index.html").write_text("<h1>edited</h1>\n")
 
 
-def test_a_changed_tree_mode_fails(built: Build, cli: Cli, tmp_path: Path) -> None:
-    copy = _copy(built, tmp_path)
+def _make_a_tree_file_executable(copy: Path) -> None:
     page = copy / "tree/payload/mkosi.extra/srv/www/index.html"
     page.chmod(page.stat().st_mode | stat.S_IXUSR)
-    assert set(_failed(cli, copy)) == {"tree"}
 
 
-def test_a_write_bit_alone_is_not_a_change(built: Build, cli: Cli, tmp_path: Path) -> None:
-    copy = _copy(built, tmp_path)  # every file made writable
-    assert cli("verify", str(copy)).code == EXIT_OK
-
-
-def test_a_changed_symlink_target_fails(built: Build, cli: Cli, tmp_path: Path) -> None:
-    copy = _copy(built, tmp_path)
+def _retarget_a_tree_symlink(copy: Path) -> None:
     links = [p for p in (copy / "tree").rglob("*") if p.is_symlink()]
     link = links[0] if links else copy / "tree" / "added-link"
     target = os.readlink(link) + ".moved" if links else "nowhere"
     link.unlink(missing_ok=True)
     link.symlink_to(target)
-    assert set(_failed(cli, copy)) == {"tree"}
+
+
+@pytest.mark.parametrize(
+    ("tamper", "check", "detail"),
+    [
+        (_append_to_the_disk, "artifacts", "qemu.raw differs"),
+        (_add_a_file, "artifacts", "extra.bin is not in the manifest"),
+        (_remove_the_sbom, "artifacts", "sbom.spdx.json is missing"),
+        (_edit_a_tree_file, "tree", "tree/ hashes to"),
+        (_make_a_tree_file_executable, "tree", "tree/ hashes to"),
+        (_retarget_a_tree_symlink, "tree", "tree/ hashes to"),
+    ],
+    ids=[
+        "changed-artifact",
+        "unexpected-file",
+        "missing-file",
+        "edited-tree-file",
+        "changed-tree-mode",
+        "changed-symlink-target",
+    ],
+)
+def test_tampering_fails_the_named_check(
+    built: Build,
+    cli: Cli,
+    tmp_path: Path,
+    tamper: Callable[[Path], None],
+    check: str,
+    detail: str,
+) -> None:
+    """A copy verifies until one change to it; then exactly the check that covers the change
+    fails, with the detail that names it."""
+    copy = _copy(built, tmp_path)
+    assert cli("verify", str(copy)).code == EXIT_OK
+    tamper(copy)
+    found = _failed(cli, copy)
+    assert set(found) == {check}
+    assert detail in found[check]
+
+
+def test_a_write_bit_alone_is_not_a_change(built: Build, cli: Cli, tmp_path: Path) -> None:
+    copy = _copy(built, tmp_path)  # every file made writable
+    assert cli("verify", str(copy)).code == EXIT_OK
 
 
 def test_an_edited_manifest_fails(built: Build, cli: Cli, tmp_path: Path) -> None:

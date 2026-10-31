@@ -144,24 +144,23 @@ def test_describe_structure() -> None:
     assert debloat == image.explain_debloat(profile="default")
 
 
-def test_describe_is_json_serializable_and_stable() -> None:
-    image = lower(_recipe())
-    payload = json.dumps(describe(image, profile="default"), sort_keys=True)
-    assert json.loads(payload)["variant"] == "default"
-    assert payload == json.dumps(describe(image, profile="default"), sort_keys=True)
-    assert payload == json.dumps(describe(lower(_recipe()), profile="default"), sort_keys=True)
-
-
-def test_describe_does_not_mutate_state() -> None:
+@pytest.mark.parametrize("profile", ["default", "azure", "cloud"])
+def test_describe_is_pure_and_serializable(profile: str) -> None:
+    """JSON-serializable, the same on one image twice and across lowerings, and the image's
+    state and digest are untouched."""
     image = lower(_recipe())
     digest_before = image.digest()
-    first = describe(image, profile="default")
+    first = describe(image, profile=profile)
     state_after_first = deepcopy(image.state)
-    second = describe(image, profile="default")
+    second = describe(image, profile=profile)
 
     assert first == second
     assert image.state == state_after_first
     assert image.digest() == digest_before
+    payload = json.dumps(first, sort_keys=True)
+    assert json.loads(payload)["variant"] == profile
+    assert payload == json.dumps(second, sort_keys=True)
+    assert payload == json.dumps(describe(lower(_recipe()), profile=profile), sort_keys=True)
 
 
 def test_describe_per_variant() -> None:

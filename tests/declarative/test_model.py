@@ -116,6 +116,7 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("disk format", lambda: Disk("d", "/data", format="sometimes")),  # type: ignore[arg-type]
     ("schema lengths", lambda: Schema(min_length=5, max_length=1)),
     ("secret without targets", lambda: Secret("s", ())),
+    ("secret empty name", lambda: Secret("", targets=(SecretFile("/run/secrets/x"),))),
     ("secret env name", lambda: SecretEnv("1BAD")),
     ("secrets store by name", lambda: Secrets(store="disk")),  # type: ignore[arg-type]
     ("secrets port", lambda: Secrets(port=0)),
@@ -146,9 +147,16 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
 ]
 
 
+MESSAGES = {
+    "secret without targets": "secret 's' requires at least one delivery target",
+    "secret empty name": "name must be a non-empty string",
+}
+"""The message a row of :data:`INVALID` must raise, where the row pins one."""
+
+
 @pytest.mark.parametrize(("label", "make"), INVALID, ids=[label for label, _ in INVALID])
 def test_invalid_declarations_raise(label: str, make: Callable[[], object]) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=MESSAGES.get(label)):
         make()
 
 

@@ -2,7 +2,8 @@
 production build in a simulated instance gets nothing, whatever it answers.
 
 The negative tests of the release predicate that need no TDX host are here: simulation,
-debug attributes and partial coverage (``test_production_delivery_refuses_*``). A replayed
+partial coverage and every mode, build kind and verdict (``test_release_predicate``), and
+debug attributes (``test_production_delivery_refuses_debug_attributes``). A replayed
 quote fails the nonce check (``test_attest.py``); the replay and wrong-recipient-key tests
 of plan 6.3 need the attested endpoint's channel binding, which is tundra-tools' gate 3
 protocol and does not exist yet.
@@ -31,7 +32,10 @@ from tundravm.attestation import (
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 
-VERDICTS = ("trusted", "measurements-match", "partial", "simulated")
+FAIL_CLOSED = (
+    "a production build in a simulated instance is fail-closed: its services never "
+    "start without TDX, and nothing is released to it"
+)
 
 
 def _judged(*, production: bool, debug: bool = False, peer: object = PEER) -> Attestation:
@@ -56,14 +60,17 @@ def _simulated(*, production: bool) -> Attestation:
     )
 
 
-def _result(verdict: str) -> Attestation:
+def _result(verdict: str, *, production: bool) -> Attestation:
     if verdict == "simulated":
-        return _simulated(production=False)
-    if verdict == "partial":
-        return _judged(production=False, peer=UNAPPROVED)
-    if verdict == "measurements-match":
-        return attest("tcp://h:1", PEER, transport=FakeIssuer())
-    return _judged(production=False)
+        found = _simulated(production=production)
+    elif verdict == "partial":
+        found = _judged(production=production, peer=UNAPPROVED)
+    elif verdict == "measurements-match":
+        found = attest("tcp://h:1", PEER, transport=FakeIssuer(), production=production)
+    else:
+        found = _judged(production=production)
+    assert found.verdict == verdict
+    return found
 
 
 def _instance(tmp_path: Path, mode: str, kind: str) -> instances.Instance:
@@ -111,11 +118,48 @@ def test_a_record_re_derives_debug_and_catches_it_edited() -> None:
 # ── the release predicate ────────────────────────────────────────────────
 
 
-def test_production_delivery_refuses_simulated_evidence(tmp_path: Path) -> None:
-    """A TDX instance of a production build answering with simulated evidence: refused."""
-    found = _instance(tmp_path, "tdx", "production")
-    refused = bootstrap.release_predicate(found, _simulated(production=True))
-    assert refused == "a TDX instance answered with simulated evidence"
+RELEASES: list[tuple[str, str, str, str | None]] = [
+    ("tdx", "production", "trusted", None),
+    (
+        "tdx",
+        "production",
+        "measurements-match",
+        "production delivery needs trusted, got measurements-match",
+    ),
+    ("tdx", "production", "partial", "production delivery needs trusted, got partial"),
+    ("tdx", "production", "simulated", "a TDX instance answered with simulated evidence"),
+    ("tdx", "development", "measurements-match", None),
+    ("tdx", "development", "partial", "verdict partial"),
+    ("simulated", "production", "trusted", FAIL_CLOSED),
+    ("simulated", "production", "measurements-match", FAIL_CLOSED),
+    ("simulated", "production", "partial", FAIL_CLOSED),
+    ("simulated", "production", "simulated", FAIL_CLOSED),
+    ("simulated", "development", "simulated", None),
+    ("simulated", "development", "trusted", "a simulated instance answered trusted"),
+    (
+        "simulated",
+        "development",
+        "measurements-match",
+        "a simulated instance answered measurements-match",
+    ),
+    ("simulated", "development", "partial", "a simulated instance answered partial"),
+]
+
+
+@pytest.mark.parametrize(
+    ("mode", "kind", "verdict", "refused"),
+    RELEASES,
+    ids=[f"{mode}-{kind}-{verdict}" for mode, kind, verdict, _ in RELEASES],
+)
+def test_release_predicate(
+    tmp_path: Path, mode: str, kind: str, verdict: str, refused: str | None
+) -> None:
+    """Each mode, build kind and verdict, released (``None``) or refused with the reason:
+    simulated evidence and partial coverage never release on TDX, a production build in a
+    simulated instance gets nothing whatever it answers, a development one simulated only."""
+    found = _instance(tmp_path, mode, kind)
+    evidence = _result(verdict, production=kind == "production")
+    assert bootstrap.release_predicate(found, evidence) == refused
 
 
 def test_production_delivery_refuses_debug_attributes(tmp_path: Path) -> None:
@@ -123,33 +167,6 @@ def test_production_delivery_refuses_debug_attributes(tmp_path: Path) -> None:
     refused = bootstrap.release_predicate(found, _judged(production=True, debug=True))
     assert refused is not None and "DEBUG attribute" in refused
     assert bootstrap.release_predicate(found, _judged(production=True)) is None
-
-
-def test_production_delivery_refuses_partial_coverage(tmp_path: Path) -> None:
-    """Unapproved platform registers leave the verdict ``partial``, which never releases,
-    for a production build or a development one."""
-    partial = _judged(production=True, peer=UNAPPROVED)
-    assert partial.verdict == "partial"
-    for kind in ("production", "development"):
-        assert bootstrap.release_predicate(_instance(tmp_path, "tdx", kind), partial) is not None
-
-
-@pytest.mark.parametrize("verdict", VERDICTS)
-def test_a_production_build_in_a_simulated_instance_gets_nothing_whatever_it_answers(
-    tmp_path: Path, verdict: str
-) -> None:
-    found = _instance(tmp_path, "simulated", "production")
-    refused = bootstrap.release_predicate(found, _result(verdict))
-    assert refused is not None and "fail-closed" in refused
-
-
-@pytest.mark.parametrize("verdict", VERDICTS)
-def test_a_development_build_in_a_simulated_instance_accepts_simulated_only(
-    tmp_path: Path, verdict: str
-) -> None:
-    found = _instance(tmp_path, "simulated", "development")
-    refused = bootstrap.release_predicate(found, _result(verdict))
-    assert (refused is None) == (verdict == "simulated"), refused
 
 
 # ── deliver and unlock, end to end ───────────────────────────────────────

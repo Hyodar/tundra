@@ -7,7 +7,7 @@ import json
 import shutil
 import subprocess
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -215,38 +215,41 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     assert len(tools.calls) == 1
 
 
-def test_fetch_without_the_host_toolchain_skips_the_deps_and_succeeds(
-    tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    url, first = repo
-    tools = _Toolchain(monkeypatch, [])
-    recipe = _recipe(_build(url, "go"))
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
-    assert fetched.deps == "skipped (no host go)"
-    assert tools.calls == []
-    assert not (tmp_path / ".sources" / "deps").exists()
+def _script_build(url: str) -> Build:
+    return Build("tool", Git(url, "main"), script="make", install=(Install("tool", "/t"),))
 
 
-def test_a_failing_prefetch_is_recorded_and_the_build_downloads_online(
-    tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("make", "present", "code", "deps", "calls", "deps_dir"),
+    [
+        (_build, [], 0, "skipped (no host go)", 0, False),
+        (_build, ["go"], 1, "failed (go mod: boom)", 1, True),
+        (_script_build, ["go"], 0, None, 0, False),
+    ],
+    ids=["no-host-go", "go-fails", "script-build"],
+)
+def test_a_prefetch_that_cannot_run_records_why(
+    tmp_path: Path,
+    repo: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    make: Callable[[str], Build],
+    present: list[str],
+    code: int,
+    deps: str | None,
+    calls: int,
+    deps_dir: bool,
 ) -> None:
+    """Without the host toolchain the deps are skipped, a failing prefetch is recorded and
+    leaves no marker (the build downloads online), and a script build (or a kernel) has no
+    dependency cache; the fetch succeeds either way."""
     url, first = repo
-    _Toolchain(monkeypatch, ["go"], code=1)
-    recipe = _recipe(_build(url, "go"))
+    tools = _Toolchain(monkeypatch, present, code=code)
+    recipe = _recipe(make(url))
     (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
-    assert fetched.deps == "failed (go mod: boom)"
+    assert fetched.deps == deps
+    assert len(tools.calls) == calls
+    assert (tmp_path / ".sources" / "deps").exists() == deps_dir
     assert list((tmp_path / ".sources" / "deps").glob("*.json")) == []
-
-
-def test_script_builds_and_kernels_have_no_dependency_cache(
-    tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    url, first = repo
-    tools = _Toolchain(monkeypatch, ["go"])
-    build = Build("tool", Git(url, "main"), script="make", install=(Install("tool", "/t"),))
-    recipe = _recipe(build)
-    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
-    assert fetched.deps is None and tools.calls == []
 
 
 MODULE = "example.com/Dep"

@@ -91,33 +91,30 @@ def test_lockfile_records_section_digests_and_keeps_whole_digest() -> None:
     assert compare_lock(locked.lockfile, payload).render() == "lock is up to date"
 
 
-def test_drift_after_install_names_packages_with_detail() -> None:
+@pytest.mark.parametrize(
+    ("extra", "section", "detail"),
+    [
+        (Package("htop"), "variants.default.packages", "+htop"),
+        (File("/etc/issue", "tundra\n"), "variants.default.files", "+/etc/issue"),
+    ],
+    ids=["package", "file"],
+)
+def test_drift_names_the_section_and_the_change(
+    extra: Package | File, section: str, detail: str
+) -> None:
+    """One more package or file changes exactly its section; the diagnostic and the drift
+    report name the section and what changed in it."""
     locked = lock(_recipe())
-    recipe = _recipe(Package("htop"))
+    recipe = _recipe(extra)
 
     assert lock_status(recipe, locked) == (
         Diagnostic(
-            "lock-changed",
-            "error",
-            "variants.default.packages changed since the lock: +htop",
-            subject="variants.default.packages",
+            "lock-changed", "error", f"{section} changed since the lock: {detail}", subject=section
         ),
     )
     drift = compare_lock(locked.lockfile, _payload(recipe))
-    assert drift.changed == ("variants.default.packages",)
-    assert drift.render() == "~ variants.default.packages: +htop"
-
-
-def test_drift_after_file_names_files_section_and_path() -> None:
-    locked = lock(_recipe())
-    recipe = _recipe(File("/etc/issue", "tundra\n"))
-
-    changed = {d.subject: d.message for d in lock_status(recipe, locked)}
-
-    assert "variants.default.files" in changed
-    assert changed["variants.default.files"].endswith(": +/etc/issue")
-    drift = compare_lock(locked.lockfile, _payload(recipe))
-    assert "~ variants.default.files: +/etc/issue" in drift.render().splitlines()
+    assert drift.changed == (section,)
+    assert drift.render() == f"~ {section}: {detail}"
 
 
 def test_frozen_bake_error_carries_drift(tmp_path: Path) -> None:

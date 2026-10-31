@@ -14,7 +14,7 @@ from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Package, Recipe, lower
 from tundravm.declarative.lifecycle import bake_image, read_tree
 from tundravm.diff import diff_trees
-from tundravm.models import BakeRequest, BakeResult
+from tundravm.models import BakeRequest, BakeResult, OutputTarget
 
 STATE = ("mkosi.tools", "mkosi.cache", "mkosi.builddir", ".mkosi-private")
 
@@ -80,25 +80,43 @@ def test_diff_ignores_mkosi_build_state(tmp_path: Path) -> None:
     assert diff_trees(old, new).is_clean
 
 
-def test_collect_artifacts_skips_directories_and_missing_output(tmp_path: Path) -> None:
-    assert collect_artifacts(tmp_path / "missing", ("qemu",)) == {}
-    (tmp_path / "qemu.raw.d").mkdir()
-    (tmp_path / "azure.vhd").mkdir()  # a directory is no artifact
-    (tmp_path / "qemu.raw").write_bytes(b"disk")
-    (tmp_path / "payload.efi").write_bytes(b"MZ")
-    found = collect_artifacts(tmp_path, ("qemu", "azure"))
-    assert list(found) == ["qemu"]
-    assert found["qemu"].path == tmp_path / "qemu.raw"
-    assert found["qemu"].boot_payload == tmp_path / "payload.efi"
+ARTIFACTS = ("payload.efi", "qemu.raw", "azure.vhd", "gcp.tar.gz")
 
 
-def test_collect_artifacts_takes_only_the_selected_targets(tmp_path: Path) -> None:
-    for name in ("payload.efi", "qemu.raw", "azure.vhd", "gcp.tar.gz"):
-        (tmp_path / name).write_bytes(b"x")
-    assert list(collect_artifacts(tmp_path, ("azure",))) == ["azure"]
-    both = collect_artifacts(tmp_path, ("azure", "gcp"))
-    assert {t: r.path.name for t, r in both.items()} == {"azure": "azure.vhd", "gcp": "gcp.tar.gz"}
-    assert {r.boot_payload for r in both.values()} == {tmp_path / "payload.efi"}
+@pytest.mark.parametrize(
+    ("files", "directories", "selection", "expected"),
+    [
+        ((), (), ("qemu",), {}),
+        (
+            ("qemu.raw", "payload.efi"),
+            ("qemu.raw.d", "azure.vhd"),
+            ("qemu", "azure"),
+            {"qemu": "qemu.raw"},
+        ),
+        (ARTIFACTS, (), ("azure",), {"azure": "azure.vhd"}),
+        (ARTIFACTS, (), ("azure", "gcp"), {"azure": "azure.vhd", "gcp": "gcp.tar.gz"}),
+    ],
+    ids=["missing-output", "directory-is-no-artifact", "azure-only", "azure-and-gcp"],
+)
+def test_collect_artifacts_takes_selected_files_only(
+    tmp_path: Path,
+    files: tuple[str, ...],
+    directories: tuple[str, ...],
+    selection: tuple[OutputTarget, ...],
+    expected: dict[str, str],
+) -> None:
+    """Each selected target whose output is a file, in selection order, with the shared boot
+    payload; a directory named like an artifact is skipped, and a missing output is ``{}``."""
+    output = tmp_path / "output"
+    for name in directories:
+        (output / name).mkdir(parents=True)
+    for name in files:
+        output.mkdir(exist_ok=True)
+        (output / name).write_bytes(b"x")
+    found = collect_artifacts(output, selection)
+    assert list(found) == list(expected)
+    assert {t: r.path for t, r in found.items()} == {t: output / n for t, n in expected.items()}
+    assert all(r.boot_payload == output / "payload.efi" for r in found.values())
 
 
 def test_mkosi_setting_reads_every_conf_layer(tmp_path: Path) -> None:

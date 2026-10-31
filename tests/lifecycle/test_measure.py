@@ -1,4 +1,4 @@
-"""``measure`` schemes on real (synthetic) UKIs and disks; an artifact that is neither."""
+"""``measure`` schemes on real (synthetic) UKIs and disks; an artifact that is no UKI."""
 
 import hashlib
 import struct
@@ -13,6 +13,7 @@ from tundravm.declarative import (
     Backend,
     Package,
     Recipe,
+    Variant,
     bake,
     lock,
     measure,
@@ -201,14 +202,38 @@ def test_measure_of_a_real_uki_round_trips_through_the_policy(tmp_path: Path, uk
     assert set(dict(Tdxs.from_policy(policy).expected_measurements)) == {"rtmr1", "rtmr2"}
 
 
-def test_an_artifact_that_is_no_uki_or_disk_is_refused_for_every_scheme(
-    tmp_path: Path,
-) -> None:
-    artifact = _baked(tmp_path)
+def _no_uki(tmp_path: Path, variant: str) -> Artifact:
+    """The *variant* artifact of a qemu ``default`` and a ``gcp`` variant built against the
+    fake mkosi (placeholder files, no UKI)."""
+    recipe = Recipe(
+        "measured",
+        items=(Package("curl"), Package("linux-image-amd64")),
+        variants=(Variant("default", outputs=("qemu",)), Variant("gcp", outputs=("gcp",))),
+    )
+    built = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "build")
+    return next(a for a in built if a.variant == variant)
 
-    for scheme in ALL_SCHEMES:
-        with pytest.raises(MeasurementError):
-            measure(artifact, scheme=scheme)
+
+@pytest.mark.parametrize(
+    ("variant", "scheme"),
+    [
+        *(("default", scheme) for scheme in ALL_SCHEMES),
+        *(("gcp", scheme) for scheme in ("gcp", "azure", "portable")),
+    ],
+    ids=lambda value: str(value),
+)
+def test_an_artifact_that_is_no_uki_is_refused_for_every_scheme(
+    tmp_path: Path, variant: str, scheme: MeasurementBackend
+) -> None:
+    """A qemu placeholder or a gcp disk artifact without a UKI: no scheme measures it, and
+    the error says the boot payload is no PE/EFI image and hints at a UKI."""
+    with pytest.raises(MeasurementError) as caught:
+        measure(_no_uki(tmp_path, variant), scheme=scheme)
+
+    error = caught.value
+    assert error.code == "E_MEASUREMENT"
+    assert "is not a PE/EFI image" in str(error)  # the fake build's boot payload is no UKI
+    assert error.hint is not None and "UKI (.efi)" in error.hint
 
 
 def test_measure_export_is_stable(tmp_path: Path, uki: Path) -> None:

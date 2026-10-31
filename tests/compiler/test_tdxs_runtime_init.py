@@ -1,5 +1,6 @@
 """The ``Tdxs()`` fragment: source build, config, socket-activated units and account."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -49,18 +50,24 @@ def test_tdxs_custom_source(tmp_path: Path) -> None:
     assert "tdxs-aaaaaaaaaaaa" in _pinned(tmp_path, Tdxs(source=source)).script("build")
 
 
-def test_tdxs_needing_all_of_runtime_init_waits_for_runtime_init(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Key("key_persistent"), Tdxs(needs=(RUNTIME_INIT,)))
+@pytest.mark.parametrize(
+    ("items", "requires"),
+    [
+        ((Key("key_persistent"),), "Requires=runtime-init.service tdxs.socket"),
+        ((), None),  # no runtime-init steps: nothing to wait for
+    ],
+    ids=["with-init-steps", "without-init-steps"],
+)
+def test_tdxs_needing_runtime_init_waits_only_when_steps_exist(
+    tmp_path: Path, items: tuple[Declaration, ...], requires: str | None
+) -> None:
+    tree = _compile(tmp_path, *items, Tdxs(needs=(RUNTIME_INIT,)))
 
-    assert "Requires=runtime-init.service tdxs.socket" in tree.unit("tdxs.service")
-    assert "runtime-init" not in tree.unit("tdxs.socket")
-
-
-def test_tdxs_no_init_dependency_when_no_init_scripts(tmp_path: Path) -> None:
-    recipe = _recipe(Tdxs(needs=(RUNTIME_INIT,)))
-    tree = compile_tree(recipe, path=tmp_path / "tree")
-
-    assert "runtime-init" not in tree.unit("tdxs.service")
+    service = tree.unit("tdxs.service")
+    if requires is None:
+        assert "runtime-init" not in service
+    else:
+        assert requires in service
     assert "runtime-init" not in tree.unit("tdxs.socket")
 
 
@@ -100,14 +107,20 @@ def test_tdxs_platform_validator_verification_flags(
     assert not any(line in config for line in other)
 
 
-def test_tdxs_rejects_invalid_issuer_type() -> None:
-    with pytest.raises(ValidationError, match="Unsupported tdxs type"):
-        Tdxs(issuer="invalid")  # type: ignore[arg-type]
-
-
-def test_tdxs_rejects_no_roles() -> None:
-    with pytest.raises(ValidationError, match="at least one of issuer_type or validator_type"):
-        Tdxs(issuer=None, validator=None)
+@pytest.mark.parametrize(
+    ("declare", "match"),
+    [
+        (lambda: Tdxs(issuer="invalid"), "Unsupported tdxs type"),  # type: ignore[arg-type]
+        (
+            lambda: Tdxs(issuer=None, validator=None),
+            "at least one of issuer_type or validator_type",
+        ),
+    ],
+    ids=["invalid-issuer-type", "no-roles"],
+)
+def test_tdxs_refuses_bad_roles(declare: Callable[[], Tdxs], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        declare()
 
 
 def test_build_sources_setting_mounts_build_source(tmp_path: Path) -> None:

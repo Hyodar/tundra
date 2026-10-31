@@ -1,6 +1,7 @@
 """Keys, disks and secrets lower to the tundra-tools builds, configs and runtime-init steps."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -131,13 +132,27 @@ def test_key_generation_pipe_strategy_renders_pipe_config(tmp_path: Path) -> Non
     assert "tpm2-tools" in conf_list(tree.conf(), "Packages")
 
 
-def test_key_generation_custom_repo_and_branch(tmp_path: Path) -> None:
-    tools = RuntimeTools(Git("https://github.com/custom/fork", "v2.0"))
-    tree = _compile(tmp_path, Key("key_persistent"), tools)
+@pytest.mark.parametrize(
+    ("item", "url", "ref", "build"),
+    [
+        (Key("key_persistent"), "https://github.com/custom/fork", "v2.0", "key-generation"),
+        (
+            Disk("disk_persistent", "/persistent"),
+            "https://github.com/custom/disk",
+            "v3",
+            "disk-encryption",
+        ),
+    ],
+    ids=["key-custom-repo-and-branch", "disk-custom-repo"],
+)
+def test_runtime_tools_override_the_tool_sources(
+    tmp_path: Path, item: Declaration, url: str, ref: str, build: str
+) -> None:
+    tools = RuntimeTools(Git(url, ref))
+    tree = _compile(tmp_path, item, tools)
 
     assert len(_builds(tree)) == 1
-    source = _source(Key("key_persistent"), tools, name="key-generation")
-    assert source == GitSource("https://github.com/custom/fork", "v2.0")
+    assert _source(item, tools, name=build) == GitSource(url, ref)
 
 
 def test_key_generation_supports_multiple_keys(tmp_path: Path) -> None:
@@ -165,14 +180,23 @@ def test_key_generation_supports_multiple_keys(tmp_path: Path) -> None:
     assert script.count("/usr/bin/key-gen setup /etc/tdx/key-gen.yaml") == 1
 
 
-def test_key_generation_pipe_strategy_requires_pipe_path() -> None:
-    with pytest.raises(ValidationError, match="the pipe strategy requires pipe="):
-        Key("bad", strategy="pipe")
-
-
-def test_key_generation_pipe_path_only_valid_with_pipe_strategy() -> None:
-    with pytest.raises(ValidationError, match="pipe= is only valid"):
-        Key("bad", pipe="/run/keys/x.pipe")
+@pytest.mark.parametrize(
+    ("declare", "match"),
+    [
+        (lambda: Key("bad", strategy="pipe"), "the pipe strategy requires pipe="),
+        (lambda: Key("bad", pipe="/run/keys/x.pipe"), "pipe= is only valid"),
+        (
+            lambda: Disk("disk_persistent", "/persistent", mapper="plain"),
+            "a plain disk cannot set mapper=",
+        ),
+    ],
+    ids=["pipe-strategy-without-pipe", "pipe-without-pipe-strategy", "plain-disk-mapper"],
+)
+def test_keys_and_disks_refuse_inconsistent_arguments(
+    declare: Callable[[], Declaration], match: str
+) -> None:
+    with pytest.raises(ValidationError, match=match):
+        declare()
 
 
 def test_key_generation_rejects_duplicate_and_shared_outputs(tmp_path: Path) -> None:
@@ -225,15 +249,6 @@ def test_disk_encryption_renders_custom_disk_config(tmp_path: Path) -> None:
     assert 'dirs: ["data", "cache"]' in content
 
 
-def test_disk_encryption_custom_repo(tmp_path: Path) -> None:
-    tools = RuntimeTools(Git("https://github.com/custom/disk", "v3"))
-    tree = _compile(tmp_path, Disk("disk_persistent", "/persistent"), tools)
-
-    assert len(_builds(tree)) == 1
-    source = _source(Disk("disk_persistent", "/persistent"), tools, name="disk-encryption")
-    assert source == GitSource("https://github.com/custom/disk", "v3")
-
-
 def test_disk_encryption_supports_multiple_disks(tmp_path: Path) -> None:
     data_key = Key("data_key")
     logs_key = Key("logs_key", output="/persistent/logs.key")
@@ -266,11 +281,6 @@ def test_disk_encryption_supports_multiple_disks(tmp_path: Path) -> None:
     script = _step(tree, "disks")
     assert script.count("/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml") == 1
     assert "cryptsetup rename crypt_disk_logs cryptlogs" in script
-
-
-def test_disk_encryption_rejects_mapper_name_for_plain_disks() -> None:
-    with pytest.raises(ValidationError, match="a plain disk cannot set mapper="):
-        Disk("disk_persistent", "/persistent", mapper="plain")
 
 
 def test_disk_encryption_rejects_conflicting_disks(tmp_path: Path) -> None:

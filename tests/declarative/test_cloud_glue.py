@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import conf_list
 from tundravm.declarative import (
     Condition,
     Recipe,
@@ -74,6 +75,25 @@ def test_one_variant_builds_one_uki_for_three_outputs(tmp_path: Path) -> None:
     assert "ConditionVirtualization=google" in gcp
     assert "mkosi.extra/etc/resolv.conf" not in tree.files()
     assert [d.code for d in lint(CLOUDS) if d.code == "cloud-glue-unconditional"] == []
+
+
+@pytest.mark.parametrize(
+    ("packages", "files", "image"),
+    [
+        (("dmidecode",), ("mkosi.extra/usr/bin/azure-complete-provisioning",), "azure"),
+        ((), (f"{UNITS}/gcp-metadata-dns.service", "mkosi.extra/etc/hosts"), "gcp"),
+    ],
+    ids=["azure", "gcp"],
+)
+def test_a_recipe_without_cloud_targets_carries_no_glue(
+    tmp_path: Path, packages: tuple[str, ...], files: tuple[str, ...], image: str
+) -> None:
+    tree = compile_tree(Recipe("plain"), path=tmp_path / "tree")
+    for package in packages:
+        assert package not in conf_list(tree.conf(), "Packages")
+    for path in files:
+        assert path not in tree.files()
+    assert not (tree.root / f"mkosi.images/{image}").exists()
 
 
 def _glue(text: str) -> Unit:

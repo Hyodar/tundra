@@ -321,22 +321,43 @@ def test_boot_step_references_and_cycles() -> None:
     assert "'a' -> 'b' -> 'a'" in found[2].message
 
 
-def test_order_boot_steps_follows_after_and_before() -> None:
-    key, disk = Key("k"), Disk("d", "/data")
-    late = BootStep("late", "echo late\n", after=(Ready("secrets"),))
-    second = BootStep("second", "echo 2\n", after=(Ready("first"),))
-    first = BootStep("first", "echo 1\n", after=(disk.ready,), before=(Ready("secrets"),))
-    items = (late, second, key, disk, Secrets(), first)
-    assert order_boot_steps(items) == ["keys", "disks", "first", "secrets", "late", "second"]
-    with pytest.raises(ValidationError, match="'x' -> 'y' -> 'x'"):
-        order_boot_steps(
-            (BootStep("x", "x\n", after=(Ready("y"),)), BootStep("y", "y\n", after=(Ready("x"),)))
-        )
+DATA_DISK = Disk("d", "/data")
 
 
-def test_unconstrained_steps_keep_builtins_first_then_declaration_order() -> None:
-    items = (BootStep("zeta", "z\n"), BootStep("alpha", "a\n"), Secrets(), Key("k"))
-    assert order_boot_steps(items) == ["keys", "secrets", "zeta", "alpha"]
+@pytest.mark.parametrize(
+    ("items", "expected"),
+    [
+        (
+            (
+                BootStep("late", "echo late\n", after=(Ready("secrets"),)),
+                BootStep("second", "echo 2\n", after=(Ready("first"),)),
+                Key("k"),
+                DATA_DISK,
+                Secrets(),
+                BootStep("first", "echo 1\n", after=(DATA_DISK.ready,), before=(Ready("secrets"),)),
+            ),
+            ["keys", "disks", "first", "secrets", "late", "second"],
+        ),
+        (
+            (BootStep("zeta", "z\n"), BootStep("alpha", "a\n"), Secrets(), Key("k")),
+            ["keys", "secrets", "zeta", "alpha"],
+        ),
+        (
+            (BootStep("x", "x\n", after=(Ready("y"),)), BootStep("y", "y\n", after=(Ready("x"),))),
+            "'x' -> 'y' -> 'x'",
+        ),
+    ],
+    ids=["after-and-before-chain", "unconstrained-builtins-first", "cycle-refused"],
+)
+def test_order_boot_steps_follows_after_and_before(
+    items: tuple[BootStep | Key | Disk | Secrets, ...], expected: list[str] | str
+) -> None:
+    """*expected* is the order, or the cycle the refusal names."""
+    if isinstance(expected, str):
+        with pytest.raises(ValidationError, match=expected):
+            order_boot_steps(items)
+    else:
+        assert order_boot_steps(items) == expected
 
 
 def test_needs_names_declared_steps() -> None:

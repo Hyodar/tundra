@@ -338,9 +338,12 @@ def test_compile_epoch_sets_source_date_epoch_consistently(
 
 
 def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
-    """When kernel has config_file, a build script copies the fetched checkout and builds it."""
-    config_file = tmp_path / "kernel-yocto.config"
-    config_file.write_text("# CONFIG_LOCALVERSION is not set\n", encoding="utf-8")
+    """When kernel has config_file, a build script copies the fetched checkout and builds it,
+    the config file is copied into the payload's kernel/ directory, and the build passes
+    nothing through from the host (no Environment=KERNEL_*): the QEMU disk's one environment
+    variable is repart's ESP format option."""
+    config_file = tmp_path / "my.config"
+    config_file.write_text("CONFIG_TDX_GUEST=y\n", encoding="utf-8")
 
     recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None)
 
@@ -364,32 +367,13 @@ def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
     assert "${DESTDIR}/usr/lib/modules/" in script_text
     assert "vmlinuz" in script_text
 
-
-def test_compile_kernel_config_file_copied(tmp_path: Path) -> None:
-    """Kernel config file is copied into the payload's kernel/ directory."""
-    config_file = tmp_path / "my.config"
-    config_file.write_text("CONFIG_TDX_GUEST=y\n", encoding="utf-8")
-
-    recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None)
-
-    output_dir = _compile(recipe, tmp_path / "mkosi")
     kernel_config = output_dir / "payload" / "kernel" / "kernel.config"
-
     assert kernel_config.exists()
     assert "CONFIG_TDX_GUEST=y" in kernel_config.read_text(encoding="utf-8")
 
-
-def test_compile_kernel_passes_no_host_environment(tmp_path: Path) -> None:
-    """The kernel build passes nothing through from the host (no Environment=KERNEL_*); the
-    QEMU disk's one environment variable is repart's ESP format option."""
-    config_file = tmp_path / "my.config"
-    config_file.write_text("# kernel config\n", encoding="utf-8")
-
-    recipe = _recipe(Package("curl"), _kernel("6.13.12", config_file), epoch=None)
-
-    out = _compile(recipe, tmp_path / "mkosi")
-    assert "Environment=" not in _conf(out)
-    environment = [line for line in _main(out).splitlines() if line.startswith("Environment=")]
+    assert "Environment=" not in _conf(output_dir)
+    main = _main(output_dir)
+    environment = [line for line in main.splitlines() if line.startswith("Environment=")]
     assert environment == [ESP_MKFS_ENVIRONMENT]
 
 
@@ -536,12 +520,10 @@ def test_compile_repository_reaches_the_build_and_the_image(tmp_path: Path) -> N
     assert not (skeleton / "sources.list.d/tools.sources").exists()
 
 
-def test_compile_overlay_repository_is_only_in_its_profiles_sandbox(tmp_path: Path) -> None:
-    """A variant's own repository reaches apt only when that profile is selected."""
-    recipe = _recipe(
-        Package("systemd"),
-        variants=(
-            Variant("default", outputs=("qemu",)),
+@pytest.mark.parametrize(
+    ("variant", "sources"),
+    [
+        (
             Variant(
                 "extra",
                 add=Fragment(
@@ -549,29 +531,26 @@ def test_compile_overlay_repository_is_only_in_its_profiles_sandbox(tmp_path: Pa
                     items=(Repository("extra", "https://repo.example/debian", "stable"),),
                 ),
             ),
+            "extra.sources",
         ),
+        (Variant("bp", inherits="default", add=Backports()), "debian-backports.sources"),
+    ],
+    ids=["overlay-repository", "backports"],
+)
+def test_a_variants_sandbox_file_is_only_in_its_profile(
+    tmp_path: Path, variant: Variant, sources: str
+) -> None:
+    """A variant's own repository (a Repository fragment, or Backports) reaches apt only
+    when that profile is selected; the default build does not get the sandbox file."""
+    recipe = _recipe(
+        Package("systemd"),
+        variants=(Variant("default", outputs=("qemu",)), variant),
         epoch=None,
     )
     out = _compile(recipe, tmp_path / "mkosi")
-    path = "mkosi.sandbox/etc/apt/sources.list.d/extra.sources"
-    assert (out / "mkosi.profiles" / "extra" / path).is_file()
+    path = f"mkosi.sandbox/etc/apt/sources.list.d/{sources}"
+    assert (out / "mkosi.profiles" / variant.name / path).is_file()
     assert not (out / path).exists()
-
-
-def test_compile_backports_only_in_the_variant_that_adds_it(tmp_path: Path) -> None:
-    """A variant adding Backports gets the sandbox file; the default build does not."""
-    recipe = _recipe(
-        Package("systemd"),
-        variants=(
-            Variant("default", outputs=("qemu",)),
-            Variant("bp", inherits="default", add=Backports()),
-        ),
-        epoch=None,
-    )
-    output_dir = _compile(recipe, tmp_path / "mkosi")
-    path = "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
-    assert (output_dir / "mkosi.profiles" / "bp" / path).is_file()
-    assert not (output_dir / path).exists()
 
 
 def _devtools_debloat_recipe() -> Recipe:

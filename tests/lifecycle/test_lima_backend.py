@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -24,39 +25,27 @@ def test_lima_mount_plan_single_mount(tmp_path: Path) -> None:
     assert mounts[0].target == "/home/debian/mnt"
 
 
-def test_lima_instance_name_is_hash_based(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("instance_name", "pattern", "per_path"),
+    [(None, r"tdx-builder-[0-9a-f]{8}", True), ("my-vm", "my-vm", False)],
+    ids=["hash-based", "override"],
+)
+def test_lima_instance_name(
+    tmp_path: Path, instance_name: str | None, pattern: str, per_path: bool
+) -> None:
+    """``tdx-builder-`` and 8 hex digits of the emit path, stable for one request and
+    different per build path; an ``instance_name`` override wins for every path."""
     request = bake_request(tmp_path)
-    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
+    other = BakeRequest(
+        profile="default", build_dir=tmp_path / "b", emit_dir=tmp_path / "b" / "emit"
+    )
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", instance_name=instance_name)
 
     name = backend._resolve_instance_name(request)
 
-    assert name.startswith("tdx-builder-")
-    assert len(name) == len("tdx-builder-") + 8
-
-
-def test_lima_instance_name_deterministic(tmp_path: Path) -> None:
-    request = bake_request(tmp_path)
-    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
-
-    first = backend._resolve_instance_name(request)
-    second = backend._resolve_instance_name(request)
-
-    assert first == second
-
-
-def test_lima_instance_name_differs_per_path(tmp_path: Path) -> None:
-    r1 = BakeRequest(profile="default", build_dir=tmp_path / "a", emit_dir=tmp_path / "a" / "emit")
-    r2 = BakeRequest(profile="default", build_dir=tmp_path / "b", emit_dir=tmp_path / "b" / "emit")
-    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
-
-    assert backend._resolve_instance_name(r1) != backend._resolve_instance_name(r2)
-
-
-def test_lima_instance_name_override(tmp_path: Path) -> None:
-    request = bake_request(tmp_path)
-    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", instance_name="my-vm")
-
-    assert backend._resolve_instance_name(request) == "my-vm"
+    assert re.fullmatch(pattern, name)
+    assert backend._resolve_instance_name(request) == name
+    assert (backend._resolve_instance_name(other) != name) == per_path
 
 
 def test_lima_prepare_fails_with_actionable_hint_when_missing_binary(
@@ -99,20 +88,37 @@ def _bake_tree_request(tmp_path: Path, mkosi_args: tuple[str, ...] = ()) -> Bake
     )
 
 
-def test_lima_build_mkosi_command_is_paths_and_the_selection(tmp_path: Path) -> None:
-    request = _bake_tree_request(tmp_path, ("--profile=dev", "--dependency=azure"))
-    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
+MKOSI_PATHS = [
+    "--directory=/home/debian/mnt/mkosi",
+    "--force",
+    "--cache-directory=/home/debian/mkosi-cache",
+    "--output-directory=/home/debian/mkosi-output",
+]
+
+
+@pytest.mark.parametrize(
+    ("selection", "extra", "expected"),
+    [
+        (
+            ("--profile=dev", "--dependency=azure"),
+            [],
+            [*MKOSI_PATHS, "--profile=dev", "--dependency=azure"],
+        ),
+        ((), ["--debug"], [*MKOSI_PATHS, "--debug"]),
+    ],
+    ids=["selection", "backend-mkosi-args"],
+)
+def test_lima_mkosi_args_are_paths_selection_then_extra(
+    tmp_path: Path, selection: tuple[str, ...], extra: list[str], expected: list[str]
+) -> None:
+    """Guest paths, cache and output first, then the request's selection in order, then the
+    backend's own ``mkosi_args``; the command runs the pinned mkosi in the state directory."""
+    request = _bake_tree_request(tmp_path, selection)
+    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", mkosi_args=extra)
 
     args = backend._mkosi_args(request)
 
-    assert args == [
-        "--directory=/home/debian/mnt/mkosi",
-        "--force",
-        "--cache-directory=/home/debian/mkosi-cache",
-        "--output-directory=/home/debian/mkosi-output",
-        "--profile=dev",
-        "--dependency=azure",
-    ]
+    assert args == expected
     command = backend._in_state([*args, "build"])
     assert command.startswith(f"cd /home/debian/mkosi-state && {VM_MKOSI} ")
 
@@ -128,29 +134,21 @@ def test_lima_maps_host_paths_into_the_mount(tmp_path: Path) -> None:
     assert excinfo.value.hint is not None
 
 
-def test_lima_build_mkosi_command_extra_args(tmp_path: Path) -> None:
-    request = _bake_tree_request(tmp_path)
-    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB", mkosi_args=["--debug"])
-
-    args = backend._mkosi_args(request)
-
-    assert args[-1] == "--debug"
-
-
-def test_lima_resources_are_configurable() -> None:
-    backend = LimaMkosiBackend(cpus=4, memory="8GiB", disk="50GiB")
-
-    assert backend.cpus == 4
-    assert backend.memory == "8GiB"
-    assert backend.disk == "50GiB"
-
-
-def test_lima_guest_is_x86_64_with_the_pinned_mkosi() -> None:
-    """One supported pair: an x86-64 Debian guest (TCG on Apple Silicon), mkosi at the pin."""
-    backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
+@pytest.mark.parametrize(
+    ("cpus", "memory", "disk"),
+    [(1, "1GiB", "10GiB"), (4, "8GiB", "50GiB")],
+    ids=["small", "large"],
+)
+def test_lima_guest_is_x86_64_with_the_pinned_mkosi(cpus: int, memory: str, disk: str) -> None:
+    """One supported pair: an x86-64 Debian guest (TCG on Apple Silicon), mkosi at the pin;
+    the configured resources are the backend's and the guest's."""
+    backend = LimaMkosiBackend(cpus=cpus, memory=memory, disk=disk)
 
     config = lima_yaml(backend, "/build")
 
+    assert (backend.cpus, backend.memory, backend.disk) == (cpus, memory, disk)
+    assert f"cpus: {cpus}\n" in config
+    assert f'memory: "{memory}"' in config and f'disk: "{disk}"' in config
     assert "vmType: qemu\narch: x86_64\n" in config
     assert "amd64.qcow2" in config and "arm64" not in config
     assert "rosetta" not in config and "nix" not in config

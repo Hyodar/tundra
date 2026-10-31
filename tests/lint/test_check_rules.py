@@ -224,10 +224,33 @@ def test_debloat_keeps_the_targets_an_enabled_service_pulls_in() -> None:
     assert report(recipe(online)) == []
 
 
-def test_debloat_keep_extra_or_disabled_is_fine() -> None:
-    kept = Debloat(keep_units_extra=("systemd-networkd.service",), keep_modules=True)
-    assert report(recipe(NEEDS_NETWORKD, kept)) == []
-    assert report(recipe(NEEDS_NETWORKD, Debloat(enabled=False))) == []
+@pytest.mark.parametrize(
+    "items",
+    [
+        (
+            NEEDS_NETWORKD,
+            Debloat(keep_units_extra=("systemd-networkd.service",), keep_modules=True),
+        ),
+        (NEEDS_NETWORKD, Debloat(enabled=False)),
+        (Debloat(keep_modules=True),),
+        (Debloat(keep_modules=False),),
+        (Debloat(keep_paths=("/usr/lib/modules",)),),
+        (Debloat(enabled=False),),
+        # The implicit default (no Debloat declared) keeps the modules mkosi selected.
+        (),
+    ],
+    ids=[
+        "keep-units-extra",
+        "disabled-with-needed-unit",
+        "keep-modules",
+        "modules-knowingly-removed",
+        "keep-paths-modules",
+        "disabled",
+        "implicit-default",
+    ],
+)
+def test_debloat_settings_that_report_nothing(items: tuple[Declaration, ...]) -> None:
+    assert report(recipe(*items)) == []
 
 
 def test_debloat_removes_declared_file() -> None:
@@ -264,15 +287,6 @@ def test_declared_debloat_removing_modules_of_a_modular_kernel_is_an_error() -> 
     # A parent path or a glob removes them too.
     custom = Debloat(remove=("/usr/lib/mod*",))
     assert codes(recipe(custom)) == ["debloat-removes-modules"]
-
-
-def test_kept_or_knowingly_removed_modules_are_fine() -> None:
-    assert report(recipe(Debloat(keep_modules=True))) == []
-    assert report(recipe(Debloat(keep_modules=False))) == []
-    assert report(recipe(Debloat(keep_paths=("/usr/lib/modules",)))) == []
-    assert report(recipe(Debloat(enabled=False))) == []
-    # The implicit default (no Debloat declared) keeps the modules mkosi selected.
-    assert report(recipe()) == []
 
 
 def test_keep_modules_keeps_the_path_out_of_finalize() -> None:

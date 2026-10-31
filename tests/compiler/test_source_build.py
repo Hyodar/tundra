@@ -364,27 +364,61 @@ def test_policy_warn_compiles_silently_and_error_refuses() -> None:
 # ── Drift, explain, check ───────────────────────────────────────────
 
 
-def test_drift_reports_new_and_moved_sources() -> None:
-    recipe = _recipe(Package("curl"), _build())
-    added = Diagnostic("lock-added", "error", "source tool is not pinned", subject="sources.tool")
-    assert added in lock_status(recipe, lock(_recipe(Package("curl"))))
-    locked = lock(recipe, resolver=_Fixed(SHA_A))
-    assert lock_status(recipe, locked) == ()
-    builds = lower(recipe).source_builds()
-    pins = {"tool": locked.lockfile.fetches[0]}
-    moved = source_drift(builds, pins, resolver=_Fixed(SHA_B))
-    assert moved == ([], ["sources.tool"], [], {"sources.tool": f"{SHA_A[:7]} -> {SHA_B[:7]}"})
-    retargeted = lock_status(_recipe(Package("curl"), _build("dev")), locked)
-    changed = f"sources.tool changed since the lock: {SHA_A[:7]} -> dev"
-    assert Diagnostic("lock-changed", "error", changed, subject="sources.tool") in retargeted
-
-
-def test_drift_reports_removed_sources() -> None:
-    locked = lock(_recipe(Package("curl"), _build()), resolver=_Fixed(SHA_A))
-    removed = Diagnostic(
-        "lock-removed", "error", "sources.tool is only in the lock", subject="sources.tool"
-    )
-    assert removed in lock_status(_recipe(Package("curl")), locked)
+@pytest.mark.parametrize(
+    ("current", "locked_items", "diagnostic", "drift"),
+    [
+        (
+            (Package("curl"), _build()),
+            (Package("curl"),),
+            Diagnostic("lock-added", "error", "source tool is not pinned", subject="sources.tool"),
+            None,
+        ),
+        # A fresh lock reports nothing; source_drift names its pin moving upstream.
+        (
+            (Package("curl"), _build()),
+            (Package("curl"), _build()),
+            None,
+            ([], ["sources.tool"], [], {"sources.tool": f"{SHA_A[:7]} -> {SHA_B[:7]}"}),
+        ),
+        (
+            (Package("curl"), _build("dev")),
+            (Package("curl"), _build()),
+            Diagnostic(
+                "lock-changed",
+                "error",
+                f"sources.tool changed since the lock: {SHA_A[:7]} -> dev",
+                subject="sources.tool",
+            ),
+            None,
+        ),
+        (
+            (Package("curl"),),
+            (Package("curl"), _build()),
+            Diagnostic(
+                "lock-removed", "error", "sources.tool is only in the lock", subject="sources.tool"
+            ),
+            None,
+        ),
+    ],
+    ids=["unlocked-source-added", "fresh-lock-pin-moved", "retargeted-ref-changed", "removed"],
+)
+def test_drift_reports_added_moved_changed_and_removed_sources(
+    current: tuple[Declaration, ...],
+    locked_items: tuple[Declaration, ...],
+    diagnostic: Diagnostic | None,
+    drift: tuple[list[str], list[str], list[str], dict[str, str]] | None,
+) -> None:
+    recipe = _recipe(*current)
+    locked = lock(_recipe(*locked_items), resolver=_Fixed(SHA_A))
+    status = lock_status(recipe, locked)
+    if diagnostic is None:
+        assert status == ()
+    else:
+        assert diagnostic in status
+    if drift is not None:
+        builds = lower(recipe).source_builds()
+        pins = {"tool": locked.lockfile.fetches[0]}
+        assert source_drift(builds, pins, resolver=_Fixed(SHA_B)) == drift
 
 
 def _inspect(recipe: Path, *flags: str) -> str:
@@ -393,12 +427,23 @@ def _inspect(recipe: Path, *flags: str) -> str:
     return out.getvalue()
 
 
-def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
+PINNED_HOOK = r"build\}/tool-[0-9a-f]{16}"
+"""A hook rendered at a pin copies the checkout keyed by it."""
+
+
+@pytest.mark.parametrize(
+    ("locked", "pinned", "column"),
+    [(False, None, "-"), (True, SHA_A[:7], SHA_A[:7])],
+    ids=["unlocked", "locked"],
+)
+def test_show_lists_sources_and_hooks_at_their_pins(
+    tmp_path: Path, locked: bool, pinned: str | None, column: str
+) -> None:
     path = tmp_path / "recipe.py"
     path.write_text(RECIPE_FILE.format(repo=REPO), encoding="utf-8")
-    assert f"tool  git {REPO}  ref=main  pinned=-" in _inspect(path)
-    locked = lock(load_recipe(path), resolver=_Fixed(SHA_A))
-    write_lock(locked, tmp_path / "build" / "tundravm.lock")  # where the CLI looks
+    if locked:
+        pins = lock(load_recipe(path), resolver=_Fixed(SHA_A))
+        write_lock(pins, tmp_path / "build" / "tundravm.lock")  # the one lockfile the CLI reads
     info = json.loads(_inspect(path, "--json"))["variants"]["default"]
     assert info["sources"] == [
         {
@@ -406,33 +451,18 @@ def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
             "install": ["/usr/bin/tool"],
             "kind": "git",
             "name": "tool",
-            "pinned": SHA_A[:7],
+            "pinned": pinned,
             "ref": "main",
             "url": REPO,
         }
     ]
-    summary = _inspect(path)
-    assert "Sources (1):" in summary
-    assert f"pinned={SHA_A[:7]}" in summary
-
-
-def test_inspect_renders_hooks_at_the_pins_it_shows(tmp_path: Path) -> None:
-    path = tmp_path / "recipe.py"
-    path.write_text(RECIPE_FILE.format(repo=REPO), encoding="utf-8")
-    pins = lock(load_recipe(path), resolver=_Fixed(SHA_A))
-
-    def shown() -> tuple[str, object]:
-        info = json.loads(_inspect(path, "--json"))["variants"]["default"]
-        return info["hooks"]["build"][0], info["sources"][0]["pinned"]
-
-    hook, pinned = shown()
-    assert "not pinned" in hook and pinned is None
-    write_lock(pins, tmp_path / "build" / "tundravm.lock")  # the one lockfile the CLI reads
-    hook, pinned = shown()
-    assert "not pinned" not in hook and pinned == SHA_A[:7]
-    assert re.search(r"build\}/tool-[0-9a-f]{16}", hook)
+    hook = info["hooks"]["build"][0]
+    assert ("not pinned" in hook) is (pinned is None)
+    assert bool(re.search(PINNED_HOOK, hook)) is locked
     text = _inspect(path)
-    assert f"pinned={SHA_A[:7]}" in text and re.search(r"build\}/tool-[0-9a-f]{16}", text)
+    assert "Sources (1):" in text
+    assert f"tool  git {REPO}  ref=main  pinned={column}" in text
+    assert bool(re.search(PINNED_HOOK, text)) is locked
 
 
 def test_check_rule_source_unpinned() -> None:

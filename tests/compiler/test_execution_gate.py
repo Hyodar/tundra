@@ -186,25 +186,41 @@ def _run(tmp_path: Path, execution: str, *, cpu_flag: bool, report: bool) -> tup
     return done.returncode, done.stdout, run / "mode"
 
 
-def test_without_tdx_a_production_profile_refuses(tmp_path: Path) -> None:
-    code, out, mode = _run(tmp_path, "production", cpu_flag=False, report=False)
-    assert (code, out.strip()) == (1, gate.REFUSED)
-    assert not mode.exists()
+QUOTE_PATH = "tdx-evidence: TDX quote path {report}"
+"""The script's line for a found quote path; ``{report}`` is the stand-in TSM report dir."""
 
 
-def test_a_tdx_cpu_flag_without_a_quote_path_is_still_refused(tmp_path: Path) -> None:
-    code, out, _ = _run(tmp_path, "production", cpu_flag=True, report=False)
-    assert (code, out.strip()) == (1, gate.REFUSED)
-
-
-def test_without_tdx_a_development_profile_records_simulated(tmp_path: Path) -> None:
-    code, out, mode = _run(tmp_path, "development", cpu_flag=False, report=False)
-    assert (code, out.strip()) == (0, gate.ALLOWED)
-    assert mode.read_text() == f"{gate.SIMULATED}\n"
-
-
-@pytest.mark.parametrize("execution", ["production", "development"])
-def test_with_a_quote_path_either_profile_records_tdx(tmp_path: Path, execution: str) -> None:
-    code, out, mode = _run(tmp_path, execution, cpu_flag=True, report=True)
-    assert code == 0 and "TDX quote path" in out
-    assert mode.read_text() == f"{gate.TDX}\n"
+@pytest.mark.parametrize(
+    ("execution", "cpu_flag", "report", "code", "stdout", "recorded"),
+    [
+        ("production", False, False, 1, gate.REFUSED, None),
+        # A tdx_guest CPU flag without a quote path is still refused.
+        ("production", True, False, 1, gate.REFUSED, None),
+        ("development", False, False, 0, gate.ALLOWED, gate.SIMULATED),
+        ("production", True, True, 0, QUOTE_PATH, gate.TDX),
+        ("development", True, True, 0, QUOTE_PATH, gate.TDX),
+    ],
+    ids=[
+        "production-without-tdx-refuses",
+        "production-cpu-flag-only-refuses",
+        "development-without-tdx-simulated",
+        "production-quote-path-tdx",
+        "development-quote-path-tdx",
+    ],
+)
+def test_the_gate_script_records_or_refuses_per_mode(
+    tmp_path: Path,
+    execution: str,
+    cpu_flag: bool,
+    report: bool,
+    code: int,
+    stdout: str,
+    recorded: str | None,
+) -> None:
+    returncode, out, mode = _run(tmp_path, execution, cpu_flag=cpu_flag, report=report)
+    expected = stdout.format(report=tmp_path / "tsm" / "report")
+    assert (returncode, out.strip()) == (code, expected)
+    if recorded is None:
+        assert not mode.exists()
+    else:
+        assert mode.read_text() == f"{recorded}\n"

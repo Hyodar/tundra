@@ -36,52 +36,60 @@ def _listed(conf: str) -> list[str]:
     return names
 
 
-def test_qemu_keeps_the_tdx_guest_set(tmp_path: Path) -> None:
-    tree = compile_tree(_recipe(), path=tmp_path)
-    assert _listed(tree.conf()) == sorted(TDX_GUEST_MODULES)
-    finalize = tree.script("finalize")
-    assert "for module in efivarfs nvme sd_mod tdx_guest" in finalize
-    assert RM_MODULES not in finalize
-
-
-def test_a_tuple_adds_to_the_curated_set(tmp_path: Path) -> None:
-    tree = compile_tree(_recipe(kernel_modules=("vsock", "tun")), path=tmp_path)
-    assert _listed(tree.conf()) == sorted({*TDX_GUEST_MODULES, "vsock", "tun"})
-
-
-def test_all_keeps_every_module(tmp_path: Path) -> None:
-    tree = compile_tree(_recipe(kernel_modules="all"), path=tmp_path)
-    assert _listed(tree.conf()) == []
-    finalize = tree.script("finalize")
-    assert "Kernel modules" not in finalize
-    assert RM_MODULES not in finalize
-
-
-def test_a_built_kernel_selects_nothing_and_debloat_removes_modules(tmp_path: Path) -> None:
-    recipe = Recipe(
-        "built",
-        items=(Kernel("6.12.1", Git("https://github.com/gregkh/linux", "v6.12.1")),),
-        variants=(Variant("default"),),
-        platform=Debian("trixie", kernel_package=None),
-    )
-    tree = compile_tree(recipe, path=tmp_path)
-    assert _listed(tree.conf()) == []
-    assert RM_MODULES in tree.script("finalize")
+BUILT_KERNEL = Recipe(
+    "built",
+    items=(Kernel("6.12.1", Git("https://github.com/gregkh/linux", "v6.12.1")),),
+    variants=(Variant("default"),),
+    platform=Debian("trixie", kernel_package=None),
+)
 
 
 @pytest.mark.parametrize(
-    ("value", "message"),
+    ("recipe", "listed", "in_finalize", "not_in_finalize"),
     [
-        (("virtio*",), "is not a module name"),
-        ("some", "must be 'all' or a tuple"),
-        (("x.ko",), "is not a module name"),
+        (
+            _recipe(),
+            sorted(TDX_GUEST_MODULES),
+            ("for module in efivarfs nvme sd_mod tdx_guest",),
+            (RM_MODULES,),
+        ),
+        (
+            _recipe(kernel_modules=("vsock", "tun")),
+            sorted({*TDX_GUEST_MODULES, "vsock", "tun"}),
+            (),
+            (),
+        ),
+        (_recipe(kernel_modules="all"), [], (), ("Kernel modules", RM_MODULES)),
+        (BUILT_KERNEL, [], (RM_MODULES,), ()),
     ],
+    ids=["qemu-default", "tuple-adds", "all", "built-kernel"],
 )
-def test_invalid_selections_are_rejected(value: object, message: str) -> None:
+def test_the_selection_lists_modules_and_debloat_follows(
+    tmp_path: Path,
+    recipe: Recipe,
+    listed: list[str],
+    in_finalize: tuple[str, ...],
+    not_in_finalize: tuple[str, ...],
+) -> None:
+    tree = compile_tree(recipe, path=tmp_path)
+    assert _listed(tree.conf()) == listed
+    finalize = tree.script("finalize")
+    for text in in_finalize:
+        assert text in finalize
+    for text in not_in_finalize:
+        assert text not in finalize
+
+
+@pytest.mark.parametrize(
+    ("platform", "message"),
+    [
+        ({"kernel_modules": ("virtio*",)}, "is not a module name"),
+        ({"kernel_modules": "some"}, "must be 'all' or a tuple"),
+        ({"kernel_modules": ("x.ko",)}, "is not a module name"),
+        ({"kernel_package": None, "kernel_modules": ("vsock",)}, "does not install"),
+    ],
+    ids=["glob", "word", "ko-suffix", "no-distribution-kernel"],
+)
+def test_invalid_selections_are_rejected(platform: dict[str, object], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
-        Debian("trixie", kernel_modules=value)  # type: ignore[arg-type]
-
-
-def test_modules_without_a_distribution_kernel_are_rejected() -> None:
-    with pytest.raises(ValidationError, match="does not install"):
-        Debian("trixie", kernel_package=None, kernel_modules=("vsock",))
+        Debian("trixie", **platform)  # type: ignore[arg-type]

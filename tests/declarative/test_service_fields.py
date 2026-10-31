@@ -31,10 +31,25 @@ def rendered(**fields: object) -> str:
     return text if "user" in fields else text.replace("User=app\n", "", 1)
 
 
-def test_historical_fields_render_the_historical_unit() -> None:
-    assert rendered() == BASE + INSTALL
-    expected = BASE + "Restart=on-failure\nRestartSec=5\n" + INSTALL
-    assert rendered(restart="on-failure", restart_sec="5") == expected
+@pytest.mark.parametrize(
+    ("fields", "unit"),
+    [
+        ({}, BASE + INSTALL),
+        (
+            {"restart": "on-failure", "restart_sec": "5"},
+            BASE + "Restart=on-failure\nRestartSec=5\n" + INSTALL,
+        ),
+        (
+            {"restart": "always", "restart_sec": "2s"},
+            BASE + "Restart=always\nRestartSec=2s\n" + INSTALL,
+        ),
+        ({"restart": "always", "restart_sec": None}, BASE + "Restart=always\n" + INSTALL),
+        ({"enabled": False}, BASE),
+    ],
+    ids=["defaults", "on-failure-5", "restart-sec-replaced", "restart-sec-dropped", "disabled"],
+)
+def test_historical_fields_render_the_historical_unit(fields: dict[str, object], unit: str) -> None:
+    assert rendered(**fields) == unit
 
 
 @pytest.mark.parametrize(
@@ -65,11 +80,6 @@ def test_each_service_field_renders_its_directive(fields: dict[str, object], lin
     assert rendered(**fields) == BASE + lines + INSTALL
 
 
-def test_restart_sec_replaces_or_drops_the_historical_line() -> None:
-    assert "Restart=always\nRestartSec=2s\n" in rendered(restart="always", restart_sec="2s")
-    assert "RestartSec" not in rendered(restart="always", restart_sec=None)
-
-
 @pytest.mark.parametrize(
     ("fields", "unit"),
     [
@@ -95,10 +105,6 @@ def test_relations_render_and_dependencies_order_after(
 def test_relation_refs_name_their_unit() -> None:
     text = rendered(requires=[Service.ref("tdxs"), Unit.ref("tdxs.socket")])
     assert "Requires=tdxs.service tdxs.socket\n" in text
-
-
-def test_disabled_service_has_no_install_section() -> None:
-    assert rendered(enabled=False) == BASE
 
 
 def test_hardening_profiles_render_in_canonical_order() -> None:
@@ -166,11 +172,41 @@ STRICT = [
         ({"extra": {"Service": {"LimitNPROC": "5"}}}, "typed field limits= renders"),
         ({"extra": {"Service": {"Restrat": "always"}}}, "unknown to systemd"),
         ({"extra": {"Service": {"Nice": "5\n"}}}, "must be one line"),
+        ({"restart": "sometimes"}, "restart"),
+        ({"limits": {"NOFILE": True}}, "limit"),
+        ({"limits": (("NOFILE", 1),)}, "limits= must be a mapping"),
+        ({"name": "x.socket"}, ".service"),
+    ],
+    ids=[
+        "type",
+        "restart-onfailure",
+        "restart-sec",
+        "timeout-start",
+        "state-absolute",
+        "logs-two-words",
+        "write-paths-relative",
+        "credential-name",
+        "credential-path-relative",
+        "group-name",
+        "requires-a-string",
+        "after-a-removal",
+        "hardening-a-string",
+        "hardening-and-security",
+        "wanted-by-when-disabled",
+        "extra-section",
+        "extra-typed-user",
+        "extra-typed-limits",
+        "extra-unknown-directive",
+        "extra-multiline",
+        "restart-sometimes",
+        "limit-a-bool",
+        "limits-as-pairs",
+        "name-not-a-service",
     ],
 )
 def test_service_validation(fields: dict[str, object], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
-        Service("app", "/usr/bin/app", **fields)  # type: ignore[arg-type]
+        Service(**{"name": "app", "exec_start": "/usr/bin/app", **fields})  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

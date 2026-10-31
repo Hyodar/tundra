@@ -38,14 +38,6 @@ def test_secret_values_are_not_persisted_in_lockfile() -> None:
     assert set(secret) == {"name", "required", "schema", "targets"}
 
 
-def test_secret_delivery_rejects_unnamed_or_targetless_secrets() -> None:
-    target = (SecretFile("/run/secrets/x"),)
-    with pytest.raises(ValidationError, match="name must be a non-empty string"):
-        Secret("", targets=target)
-    with pytest.raises(ValidationError, match="secret 'x' requires at least one delivery target"):
-        Secret("x", targets=())
-
-
 def test_external_delivery_validates_its_name_and_kinds() -> None:
     assert ExternalDelivery("vault-agent").supports == ("file", "env")
     listed = ExternalDelivery("vault-agent", ["file"])  # type: ignore[arg-type]

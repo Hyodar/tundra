@@ -13,9 +13,8 @@ from pathlib import Path
 import pytest
 
 from tests.cli.conftest import Cli
-from tests.cli.test_attest import PEER, UNAPPROVED, FakeIssuer, FakeValidator, _tcp, policy
+from tests.cli.test_attest import PEER, FakeIssuer, _tcp, policy
 from tundravm import bootstrap, instances
-from tundravm.attestation import Attestation, attest
 from tundravm.builds import Build
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 
@@ -270,57 +269,3 @@ def test_help_says_the_channel_is_unverified(cli: Cli, capsys: pytest.CaptureFix
         with pytest.raises(SystemExit):
             cli(*argv)
         assert "unverified first contact" in " ".join(capsys.readouterr().out.split())
-
-
-# ── the release predicate ────────────────────────────────────────────────
-
-
-def _instance(tmp_path: Path, mode: str, kind: str) -> instances.Instance:
-    return instances.Instance(tmp_path, {"id": "x-1", "mode": mode, "build": {"kind": kind}})
-
-
-def _result(verdict: str) -> Attestation:
-    if verdict == "trusted":
-        found = attest(
-            "tcp://h:1",
-            PEER,
-            validator="tcp://v:2",
-            transport=FakeIssuer(),
-            validator_transport=FakeValidator(),
-        )
-    elif verdict == "measurements-match":
-        found = attest("tcp://h:1", PEER, transport=FakeIssuer())
-    elif verdict == "partial":
-        found = attest(
-            "tcp://h:1",
-            UNAPPROVED,
-            validator="tcp://v:2",
-            transport=FakeIssuer(),
-            validator_transport=FakeValidator(),
-        )
-    else:
-        found = attest(
-            "tcp://h:1", SIMULATED, transport=FakeIssuer("simulator"), allow_simulated=True
-        )
-    assert found.verdict == verdict
-    return found
-
-
-@pytest.mark.parametrize(
-    ("mode", "kind", "verdict", "released"),
-    [
-        ("tdx", "production", "trusted", True),
-        ("tdx", "production", "measurements-match", False),
-        ("tdx", "production", "partial", False),
-        ("tdx", "production", "simulated", False),
-        ("tdx", "development", "measurements-match", True),
-        ("tdx", "development", "partial", False),
-        ("simulated", "development", "simulated", True),
-        ("simulated", "production", "trusted", False),
-    ],
-)
-def test_release_predicate(
-    tmp_path: Path, mode: str, kind: str, verdict: str, released: bool
-) -> None:
-    refused = bootstrap.release_predicate(_instance(tmp_path, mode, kind), _result(verdict))
-    assert (refused is None) == released, refused

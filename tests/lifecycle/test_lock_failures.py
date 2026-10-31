@@ -113,28 +113,42 @@ def test_other_resolver_errors_are_collected_too(recipe_file: Path) -> None:
     assert "2 of 3 sources resolved; nothing written." in str(caught.value)
 
 
-def test_cli_lock_failure_exits_2_and_writes_nothing(
-    recipe_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("existing", "update", "report"),
+    [
+        (
+            False,
+            (),
+            "Cannot lock: 2 sources could not be resolved:\n"
+            f"{RAIKO_LINE}\n{TOOL_LINE}\n1 of 3 sources resolved; nothing written.",
+        ),
+        (
+            True,
+            ("--update", "raiko"),
+            "Cannot lock: 1 source could not be resolved:\n"
+            f"{RAIKO_LINE}\n2 of 3 sources resolved; nothing written.",
+        ),
+    ],
+    ids=["no-lock", "existing-lock-update-raiko"],
+)
+def test_cli_lock_failure_exits_2_and_leaves_the_lockfile(
+    recipe_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    existing: bool,
+    update: tuple[str, ...],
+    report: str,
 ) -> None:
+    """A failed ``tundravm lock`` exits 2 with every failure and the hint on stderr, and
+    writes nothing: no lockfile appears, and an existing one keeps its bytes."""
     target = recipe_file.parent / "build" / "tundravm.lock"
-    code, out = _cli(monkeypatch, _Upstream(), str(recipe_file))
+    if existing:
+        write_lock(lock(load_recipe(recipe_file), resolver=_Upstream(broken=False)), target)
+    before = target.read_bytes() if existing else None
+    code, out = _cli(monkeypatch, _Upstream(), str(recipe_file), *update)
     assert (code, out) == (EXIT_SDK_ERROR, "")
-    assert not target.exists()
-    err = capsys.readouterr().err
-    assert err.startswith("error [E_LOCKFILE]: Cannot lock: 2 sources could not be resolved:\n")
-    assert f"{RAIKO_LINE}\n{TOOL_LINE}\n1 of 3 sources resolved; nothing written.\n" in err
-    assert f"Hint: {HINT}" in err
-
-
-def test_cli_lock_failure_keeps_the_existing_lockfile(
-    recipe_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = recipe_file.parent / "build" / "tundravm.lock"
-    write_lock(lock(load_recipe(recipe_file), resolver=_Upstream(broken=False)), target)
-    before = target.read_bytes()
-    argv = (str(recipe_file), "--update", "raiko")
-    assert _cli(monkeypatch, _Upstream(), *argv)[0] == EXIT_SDK_ERROR
-    assert target.read_bytes() == before
+    assert (target.read_bytes() if target.exists() else None) == before
+    assert capsys.readouterr().err == f"error [E_LOCKFILE]: {report}\nHint: {HINT}\n"
 
 
 def test_offline_lock_reports_every_unpinned_source_at_once(recipe_file: Path) -> None:

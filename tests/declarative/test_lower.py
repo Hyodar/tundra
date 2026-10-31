@@ -386,43 +386,54 @@ def test_directories_units_from_paths_and_reemitted_units(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    ("text", "expected"),
+    ("text", "services", "expected"),
     [
         (
             "[Unit]\nDescription=x\n\n[Service]\nExecStart=/x\n",
+            (),
             "[Unit]\nDescription=x\nAfter=runtime-init.service\nRequires=runtime-init.service\n"
             "\n[Service]\nExecStart=/x\n",
         ),
         (
             "[Unit]\nRequires=a.service\nAfter=a.service\n",
+            (),
             "[Unit]\nRequires=runtime-init.service a.service\n"
             "After=runtime-init.service a.service\n",
         ),
         (
             "[Unit]\nRequires=a.service\n",
+            (),
             "[Unit]\nAfter=runtime-init.service\nRequires=runtime-init.service a.service\n",
         ),
         (
             "[Unit]\nAfter=runtime-init.service\n",
+            (),
             "[Unit]\nAfter=runtime-init.service\nRequires=runtime-init.service\n",
         ),
         (
             "[Service]\nExecStart=/x\n",
+            (),
             "[Unit]\nAfter=runtime-init.service\nRequires=runtime-init.service\n\n"
             "[Service]\nExecStart=/x\n",
         ),
+        (
+            "[Unit]\nAfter=a.service\n",
+            (("runtime-init-x.service", "runtime-init-y.service"),),
+            "[Unit]\nAfter=runtime-init-x.service runtime-init-y.service a.service\n"
+            "Requires=runtime-init-x.service runtime-init-y.service\n",
+        ),
+    ],
+    ids=[
+        "no-relations",
+        "both-relations",
+        "requires-only",
+        "already-after",
+        "no-unit-section",
+        "several-units-in-order",
     ],
 )
-def test_inject_after_init(text: str, expected: str) -> None:
-    assert inject_after_init(text) == expected
-
-
-def test_inject_after_init_prepends_several_units_in_order() -> None:
-    text = "[Unit]\nAfter=a.service\n"
-    assert inject_after_init(text, ("runtime-init-x.service", "runtime-init-y.service")) == (
-        "[Unit]\nAfter=runtime-init-x.service runtime-init-y.service a.service\n"
-        "Requires=runtime-init-x.service runtime-init-y.service\n"
-    )
+def test_inject_after_init(text: str, services: tuple[tuple[str, ...], ...], expected: str) -> None:
+    assert inject_after_init(text, *services) == expected
 
 
 # ── Declarations added for the declarative-only API ─────────────────────
@@ -517,19 +528,6 @@ def test_external_delivery_ready_waits_for_its_unit_or_path(tmp_path: Path) -> N
     assert (finding.code, finding.severity) == ("external-delivery-unwired", "warning")
     with pytest.raises(ValidationError, match="not both"):
         ExternalDelivery("x", unit="a.service", ready_path="/run/x")
-
-
-def test_service_rejects_bad_fields() -> None:
-    from tundravm.declarative import Service
-
-    with pytest.raises(ValidationError, match="restart"):
-        Service("x", "/bin/x", restart="sometimes")  # type: ignore[arg-type]
-    with pytest.raises(ValidationError, match="limit"):
-        Service("x", "/bin/x", limits={"NOFILE": True})
-    with pytest.raises(ValidationError, match="limits= must be a mapping"):
-        Service("x", "/bin/x", limits=(("NOFILE", 1),))  # type: ignore[arg-type]
-    with pytest.raises(ValidationError, match=".service"):
-        Service("x.socket", "/bin/x")
 
 
 def test_template_renders_in_extra_and_skeleton() -> None:

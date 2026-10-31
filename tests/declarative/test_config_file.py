@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+from collections.abc import Callable
 
 import pytest
 
@@ -24,6 +25,12 @@ scrape_configs:
     static_configs:
       - targets: ["127.0.0.1:9100"]
 """
+AMBIGUOUS = ["yes", "On", "8080", "1e3", "0x1F", "2001-12-14", ".inf", "", "a b", "x:", "-v"]
+PLAIN = ["15s", "v1.2", "/usr/bin/app", "node", "localhost:9100"]
+UNIT = {"Unit": {"Description": "app", "After": ["a.service", "b.service"]}, "Install": {}}
+ENV = {"ARGS": "--listen=127.0.0.1:9090", "NOTE": 'say "hi" $USER', "N": 3, "ON": True}
+UNORDERED = {"b": 1, "a": 2}
+INSERTION_ORDER = {"sort_keys": False}
 
 
 def _recipe(item: File) -> Recipe:
@@ -42,36 +49,76 @@ def test_yaml_is_the_hand_written_file() -> None:
     assert lock(_recipe(rendered)).recipe_digest == lock(_recipe(by_hand)).recipe_digest
 
 
-def test_yaml_quotes_strings_another_type_would_claim() -> None:
-    words = ["yes", "On", "8080", "1e3", "0x1F", "2001-12-14", ".inf", "", "a b", "x:", "-v"]
-    plain = ["15s", "v1.2", "/usr/bin/app", "node", "localhost:9100"]
-    text = ConfigFile.yaml("/etc/a.yml", {"q": words, "p": plain}).content
-    quoted = ", ".join(json.dumps(word) for word in words)
-    assert text == f"p: [{', '.join(plain)}]\nq: [{quoted}]\n"
-
-
-def test_yaml_scalars_and_nesting() -> None:
-    data: dict[str, object] = {
-        "f": 1e-05,
-        "big": 1e16,
-        "t": True,
-        "nil": None,
-        "e": {},
-        "l": [],
-        "nested": [[1, 2], {}],
-    }
-    assert ConfigFile.yaml("/a.yml", data).content == (
-        "big: 1.0e+16\ne: {}\nf: 1.0e-05\nl: []\nnested:\n  - [1, 2]\n  - {}\nnil: null\nt: true\n"
-    )
-
-
-def test_insertion_order_on_request() -> None:
-    data = {"b": 1, "a": 2}
-    assert ConfigFile.yaml("/a.yml", data).content == "a: 2\nb: 1\n"
-    assert ConfigFile.yaml("/a.yml", data, sort_keys=False).content == "b: 1\na: 2\n"
-    assert (
-        ConfigFile.json("/a.json", data, sort_keys=False).content == '{\n  "b": 1,\n  "a": 2\n}\n'
-    )
+@pytest.mark.parametrize(
+    ("render", "path", "data", "options", "text"),
+    [
+        (
+            ConfigFile.yaml,
+            "/etc/a.yml",
+            {"q": AMBIGUOUS, "p": PLAIN},
+            {},
+            f"p: [{', '.join(PLAIN)}]\nq: [{', '.join(json.dumps(word) for word in AMBIGUOUS)}]\n",
+        ),
+        (
+            ConfigFile.yaml,
+            "/a.yml",
+            {
+                "f": 1e-05,
+                "big": 1e16,
+                "t": True,
+                "nil": None,
+                "e": {},
+                "l": [],
+                "nested": [[1, 2], {}],
+            },
+            {},
+            "big: 1.0e+16\ne: {}\nf: 1.0e-05\nl: []\n"
+            "nested:\n  - [1, 2]\n  - {}\nnil: null\nt: true\n",
+        ),
+        (ConfigFile.yaml, "/a.yml", UNORDERED, {}, "a: 2\nb: 1\n"),
+        (ConfigFile.yaml, "/a.yml", UNORDERED, INSERTION_ORDER, "b: 1\na: 2\n"),
+        (ConfigFile.json, "/a.json", UNORDERED, INSERTION_ORDER, '{\n  "b": 1,\n  "a": 2\n}\n'),
+        (
+            ConfigFile.json,
+            "/a.json",
+            {"b": [1.5, None], "a": "é"},
+            {},
+            '{\n  "a": "é",\n  "b": [\n    1.5,\n    null\n  ]\n}\n',
+        ),
+        (
+            ConfigFile.ini,
+            "/a.conf",
+            UNIT,
+            INSERTION_ORDER,
+            "[Unit]\nDescription = app\nAfter = a.service\nAfter = b.service\n\n[Install]\n",
+        ),
+        (
+            ConfigFile.env,
+            "/etc/default/app",
+            ENV,
+            INSERTION_ORDER,
+            'ARGS="--listen=127.0.0.1:9090"\nNOTE="say \\"hi\\" \\$USER"\nN=3\nON=true\n',
+        ),
+    ],
+    ids=[
+        "yaml-quotes-ambiguous-strings",
+        "yaml-scalars-and-nesting",
+        "yaml-sorted-keys",
+        "yaml-insertion-order",
+        "json-insertion-order",
+        "json-unicode-and-null",
+        "ini-repeated-keys",
+        "env-quoting",
+    ],
+)
+def test_each_format_renders_its_text(
+    render: Callable[..., File],
+    path: str,
+    data: object,
+    options: dict[str, bool],
+    text: str,
+) -> None:
+    assert render(path, data, **options).content == text
 
 
 def test_toml_tables_and_round_trip() -> None:
@@ -88,20 +135,6 @@ def test_toml_tables_and_round_trip() -> None:
         "[server]\nport = 8080\n\n[server.tls]\nenabled = false\n"
     )
     assert isinstance(text, str) and tomllib.loads(text) == data
-
-
-def test_json_ini_and_env() -> None:
-    assert ConfigFile.json("/a.json", {"b": [1.5, None], "a": "é"}).content == (
-        '{\n  "a": "é",\n  "b": [\n    1.5,\n    null\n  ]\n}\n'
-    )
-    unit = {"Unit": {"Description": "app", "After": ["a.service", "b.service"]}, "Install": {}}
-    assert ConfigFile.ini("/a.conf", unit, sort_keys=False).content == (
-        "[Unit]\nDescription = app\nAfter = a.service\nAfter = b.service\n\n[Install]\n"
-    )
-    env = {"ARGS": "--listen=127.0.0.1:9090", "NOTE": 'say "hi" $USER', "N": 3, "ON": True}
-    assert ConfigFile.env("/etc/default/app", env, sort_keys=False).content == (
-        'ARGS="--listen=127.0.0.1:9090"\nNOTE="say \\"hi\\" \\$USER"\nN=3\nON=true\n'
-    )
 
 
 def test_component_mappings_render_like_dicts() -> None:
