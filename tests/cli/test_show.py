@@ -14,6 +14,11 @@ def test_show_an_image_file(project: Path, cli: Cli) -> None:
     result = cli("show", "demo.py")
     assert result.code == EXIT_OK, result.err
     assert "/srv/www/index.html" in result.out and "busybox" in result.out
+    profiles = [line for line in result.out.splitlines() if line.startswith("Image: ")]
+    assert {line.split()[3] for line in profiles} == {"profile=production", "profile=dev"}
+    assert "Extends: production\n" in result.out and "Components (" in result.out
+    for internal in ("variant=", "Inherits", "Fragments", "Policy:", "Extends: base"):
+        assert internal not in result.out, internal
     payload = json.loads(cli("show", "demo.py", "--json").out)
     assert payload["schema"] == "tundravm.show/1" and payload["image"] == "demo"
     assert set(payload["variants"]) == {"production", "dev"}

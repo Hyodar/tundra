@@ -42,7 +42,7 @@ def image_report(
     img: Lowered, profiles: Sequence[str], described: Mapping[str, dict[str, object]] | None = None
 ) -> dict[str, object]:
     """The dry-run description of *profiles* (*described* holds the ones already made): the
-    recipe digest the lockfile records and one entry per profile."""
+    image digest the lockfile records and one entry per profile."""
     given = described or {}
     return {
         "image": img.image_id,
@@ -53,7 +53,7 @@ def image_report(
 
 def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[str, object]]]:
     """Per profile, every declaration its resolution touched, with each step that touched it
-    (declared, added, edited, removed), the fragment chain and the ``file:line``."""
+    (declared, added, edited, removed), the component chain and the ``file:line``."""
     found: dict[str, list[dict[str, object]]] = {}
     declared = {variant.name for variant in recipe.variants}
     for name in profiles:
@@ -148,7 +148,7 @@ def render_build(build: Build) -> str:
         lines.append(f"  uki           payload.efi {str(uki['sha256'])[:16]}")
     if m.get("root_hash"):
         lines.append(f"  root hash     {m['root_hash']}")
-    lines.append(f"  recipe        {str(m.get('recipe_digest'))[:16]}")
+    lines.append(f"  digest        {str(m.get('recipe_digest'))[:16]}")
     lock = m.get("lock") or {}
     tree = m.get("tree") or {}
     lines.append(f"  lock          {lock.get('path')} {str(lock.get('sha256'))[:16]}")

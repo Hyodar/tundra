@@ -155,10 +155,16 @@ def describe(
 
 
 def render(description: dict[str, object]) -> str:
-    """Render a ``describe()`` result as a compact plain-text summary."""
+    """Render a ``describe()`` result as a compact plain-text summary, one profile.
+
+    It speaks of profiles and components; the internal policy, which an image cannot set,
+    stays in the JSON form only.
+    """
+    from .declarative.model import BASE_VARIANT
+
     lines: list[str] = [
         f"Image: {description['base']} ({description['arch']})"
-        f"  variant={description['variant']}"
+        f"  profile={description['variant']}"
         f"  reproducible={_yes_no(description['reproducible'])}"
     ]
     if description.get("mirror"):
@@ -166,17 +172,14 @@ def render(description: dict[str, object]) -> str:
     kernel = description.get("kernel")
     if isinstance(kernel, dict):
         lines.append(_render_kernel(cast(dict[str, Any], kernel)))
-    policy = _as_dict(description.get("policy"))
-    if policy:
-        lines.append("Policy: " + " ".join(f"{k}={_fmt(v)}" for k, v in sorted(policy.items())))
     build_options = _as_dict(description.get("build_options"))
     if build_options:
         lines.append(
             "Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in build_options.items())
         )
-    if description.get("inherits"):
-        lines.append(f"Inherits: {description['inherits']}")
-    _append_inline_list(lines, "Fragments", _as_list(description.get("fragments")))
+    if description.get("inherits") not in (None, "", BASE_VARIANT):
+        lines.append(f"Extends: {description['inherits']}")
+    _append_inline_list(lines, "Components", _as_list(description.get("fragments")))
 
     _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
     _append_inline_list(lines, "Build packages", _as_list(description.get("build_packages")))

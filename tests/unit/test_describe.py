@@ -207,7 +207,7 @@ def test_summary_contains_key_strings() -> None:
     image = lower(_recipe())
     text = render(describe(image, profile="default"))
 
-    assert text.startswith("Image: debian/trixie (x86_64)  variant=default  reproducible=yes\n")
+    assert text.startswith("Image: debian/trixie (x86_64)  profile=default  reproducible=yes\n")
     assert "Mirror: https://deb.example" in text
     assert "Packages (5): curl dmidecode jq systemd udev" in text
     assert "Build packages (1): gcc" in text
@@ -229,10 +229,12 @@ def test_summary_contains_key_strings() -> None:
     assert "hello world" not in text
 
     azure_text = render(describe(image, profile="azure"))
-    assert "variant=azure" in azure_text
-    assert "Inherits: default\n" in azure_text
+    assert "profile=azure" in azure_text
+    assert "Extends: default\n" in azure_text
     assert "Packages (6): curl dmidecode jq systemd udev waagent" in azure_text
-    assert "Inherits" not in text
+    assert "Extends" not in text
+    for internal in ("variant=", "Inherits", "Fragments", "Policy:"):
+        assert internal not in text and internal not in azure_text
     assert azure_text.endswith("Targets: azure\n")
     assert render(describe(image, profile="cloud")).endswith("Targets: qemu gcp\n")
 

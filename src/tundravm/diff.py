@@ -28,10 +28,10 @@ _RED, _GREEN, _CYAN, _BOLD, _RESET = "\x1b[31m", "\x1b[32m", "\x1b[36m", "\x1b[1
 MARKDOWN_DIFF_LINES = 400
 """Unified-diff lines ``TreeDiff.markdown()`` keeps before truncating."""
 _GITHUB_CHANGES: dict[ChangeStatus, tuple[str, str]] = {
-    "added": ("notice", "added: the recipe now emits this file"),
-    "removed": ("warning", "removed: the recipe no longer emits this file"),
-    "modified": ("warning", "modified: differs from what the recipe compiles to"),
-    "mode": ("warning", "mode changed: the executable bit differs from the recipe"),
+    "added": ("notice", "added: the image now compiles to this file"),
+    "removed": ("warning", "removed: the image no longer compiles to this file"),
+    "modified": ("warning", "modified: differs from what the image compiles to"),
+    "mode": ("warning", "mode changed: the executable bit differs from what the image compiles to"),
 }
 
 
@@ -89,7 +89,7 @@ class TreeDiff:
         The diff is cut after *max_lines* lines with a note saying how many were kept.
         """
         if self.is_clean:
-            return "**Tree is up to date with the recipe.**\n"
+            return "**Tree is up to date with the image.**\n"
         rows = [
             (md_cell(change.status), md_cell(change.path, code=True)) for change in self.changes
         ]
