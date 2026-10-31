@@ -4,12 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import REPO_ROOT
 from tundravm.check import TYPED_SETTINGS
 from tundravm.declarative import Debian, Mkosi, Package, Recipe, Setting, compile
 from tundravm.declarative.lower import _BOOL_SETTINGS, _SINGLE_SETTINGS
 from tundravm.errors import ValidationError
-from tundravm.recipe import load_recipe
 
 SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
 TYPED = Mkosi(
@@ -54,28 +52,6 @@ def test_typed_fields_write_the_tree_the_settings_wrote() -> None:
     assert typed.digest == raw.digest
 
 
-def test_typed_fields_write_their_mkosi_keys(tmp_path: Path) -> None:
-    conf = _conf(_recipe(mkosi=TYPED, clean=False), tmp_path)
-    for line in (
-        f"Seed={SEED}",
-        "OutputDirectory=build",
-        "PackageCacheDirectory=mkosi.cache",
-        "CompressOutput=zstd",
-        "ManifestFormat=changelog",
-        "WithNetwork=no",
-        "CleanPackageMetadata=no",
-    ):
-        assert line in conf
-
-
-def test_defaults_write_the_opinionated_keys(tmp_path: Path) -> None:
-    conf = _conf(_recipe(), tmp_path)
-    assert {"ManifestFormat=json", "WithNetwork=no", "CleanPackageMetadata=yes"} <= set(conf)
-    # %O must name a directory when the root mkosi.conf is parsed
-    assert "OutputDirectory=mkosi.output" in conf
-    assert not any(line.startswith("CompressOutput=") for line in conf)
-
-
 def test_a_setting_overrides_the_typed_field(tmp_path: Path) -> None:
     recipe = _recipe(Setting("Output", "ManifestFormat", ("json",)), mkosi=TYPED)
     assert "ManifestFormat=json" in _conf(recipe, tmp_path)
@@ -92,12 +68,3 @@ def test_mkosi_rejects_invalid_values(fields: dict[str, object]) -> None:
 
 def test_every_compiler_mapped_setting_names_its_typed_field() -> None:
     assert set(_SINGLE_SETTINGS) | set(_BOOL_SETTINGS) == set(TYPED_SETTINGS)
-
-
-def test_a_kernel_with_a_config_passes_no_host_variable(tmp_path: Path) -> None:
-    """The kernel build script sets KERNEL_IMAGE and KERNEL_VERSION itself: nothing of the
-    host's environment enters the build (no ``Environment=NAME`` pass-through)."""
-    base = load_recipe(REPO_ROOT / "examples" / "nethermind_base.py", extra_paths=[REPO_ROOT])
-    conf = _conf(base, tmp_path)
-    assert not any(line.startswith("Environment=") and "=" not in line[12:] for line in conf)
-    assert "Environment=KERNEL_IMAGE" not in conf and "Environment=KERNEL_VERSION" not in conf

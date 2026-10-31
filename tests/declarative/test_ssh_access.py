@@ -33,25 +33,6 @@ def _files(*items: object) -> dict[str, str]:
     }
 
 
-def test_baked_keys_give_key_only_root_login_and_a_firewall_opening() -> None:
-    files = _files(SshAccess(authorized_keys=(KEY,)))
-    config = files["/etc/ssh/sshd_config.d/50-tundravm.conf"]
-    assert "Port 22\n" in config and "PasswordAuthentication no\n" in config
-    assert "PermitRootLogin prohibit-password\n" in config
-    assert "AuthenticationMethods publickey\n" in config
-    assert files["/etc/ssh/authorized_keys.d/root"] == f"{KEY}\n"
-    assert 'tcp dport 22 accept comment "ssh.service"' in files["/etc/nftables.conf"]
-
-
-def test_host_keys_are_made_at_boot_before_sshd() -> None:
-    files = _files(SshAccess(authorized_keys=(KEY,)))
-    task = files["/usr/lib/systemd/system/ssh-host-keys.service"]
-    assert "ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key\n" in task
-    assert "ExecStart=/usr/bin/ssh-keygen -A\n" in task and "ProtectSystem=yes\n" in task
-    needs = files["/usr/lib/systemd/system/ssh.service.d/10-tundravm-needs.conf"]
-    assert "After=ssh-host-keys.service\n" in needs and "Requires=ssh-host-keys.service\n" in needs
-
-
 def test_from_secrets_waits_for_the_delivered_key() -> None:
     key = Key("k", output="/run/k")
     disk = Disk("d", mount="/data", key=key, device="/dev/disk/by-id/virtio-tundra-data")

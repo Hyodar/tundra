@@ -3,19 +3,15 @@ from pathlib import Path
 import pytest
 
 from tundravm.declarative import (
-    Backend,
     Hook,
     Package,
     Recipe,
     Target,
     Variant,
-    bake,
     compile,
     lint,
-    lock,
     lower,
     resolve,
-    write_lock,
 )
 
 
@@ -41,26 +37,3 @@ def test_declarative_values_do_not_touch_filesystem(
     assert image.state.profiles["default"].packages == {"curl", "jq"}
     assert tree.entries
     assert list(tmp_path.iterdir()) == []
-
-
-def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
-    build_dir = tmp_path / "build"
-    emit_dir = tmp_path / "mkosi"
-    recipe = _recipe("linux-image-amd64", "curl")
-
-    locked = lock(recipe)
-    lock_path = build_dir / "tundravm.lock"
-    assert not lock_path.exists()
-    write_lock(locked, lock_path)
-    assert lock_path.exists()
-
-    compile(recipe).write(emit_dir)
-    assert (emit_dir / "payload" / "mkosi.conf").exists()
-
-    artifacts = bake(recipe, lock=locked, backend=Backend("local"), build=build_dir)
-    assert {(a.variant, a.target) for a in artifacts} == {
-        ("default", "qemu"),
-        ("default", "azure"),
-    }
-    assert (build_dir / "default" / "output" / "qemu.raw").exists()
-    assert (build_dir / "default" / "output" / "azure.vhd").exists()

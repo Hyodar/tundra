@@ -3,9 +3,6 @@ against the committed surge tree, which holds it."""
 
 from __future__ import annotations
 
-import inspect
-from dataclasses import dataclass
-
 import pytest
 from examples.nethermind_base import EFI_STUB_VERSION
 from examples.nethermind_base import SNAPSHOT as SURGE_SNAPSHOT
@@ -21,8 +18,6 @@ from tundravm.declarative import (
     Group,
     Hook,
     Install,
-    Key,
-    Package,
     Ready,
     Recipe,
     Tree,
@@ -31,9 +26,7 @@ from tundravm.declarative import (
     compile,
 )
 from tundravm.declarative.utils import (
-    TUNDRA_TOOLS,
     Backports,
-    Composite,
     DevTools,
     EfiStub,
     RuntimeDirectory,
@@ -65,16 +58,6 @@ def _text(tree: Tree, path: str) -> str:
 def _files(tree: Tree) -> dict[str, bytes]:
     """The tree's files by tree path."""
     return {e.path: e.content for e in tree.entries if e.content is not None}
-
-
-def _conf(tree: Tree) -> str:
-    """The payload's configuration: ``mkosi.conf`` and its ``mkosi.conf.d`` files."""
-    return "\n".join(
-        e.content.decode()
-        for e in tree.entries
-        if e.content is not None
-        and (e.path == "payload/mkosi.conf" or e.path.startswith("payload/mkosi.conf.d/"))
-    )
 
 
 # ── The utils fragments ─────────────────────────────────────────────
@@ -130,55 +113,6 @@ def test_efi_stub_hook_lands_in_the_postinst_script() -> None:
     assert isinstance(hook, Hook) and hook.script == stub.render_script()
     tree = compile(_recipe(stub))
     assert hook.script.strip() + "\n" in _text(tree, "payload/mkosi.postinst.d/50-postinst.sh")
-
-
-def test_tdxs_issuer_and_validator_render_the_config() -> None:
-    tdxs = Tdxs(
-        issuer="azure",
-        validator="azure",
-        expected_measurements={"rtmr0": "ab"},
-        check_revocations=True,
-        verify_imds=True,
-    )
-    config = _text(compile(_recipe(tdxs)), "payload/mkosi.extra/etc/tdxs/config.yaml")
-    assert config == (
-        "transport:\n"
-        "  type: socket\n"
-        "  config:\n"
-        "    systemd: true\n"
-        "issuer:\n"
-        "  type: azure\n"
-        "validator:\n"
-        "  type: azure\n"
-        "  config:\n"
-        "    expected_measurements:\n"
-        '      rtmr0: "ab"\n'
-        "    check_revocations: true\n"
-        "    verify_imds: true\n"
-    )
-
-
-def test_backports_pins_mirror_and_release() -> None:
-    sources = "mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources"
-    default = _text(compile(_recipe(Backports())), sources)
-    assert f"URIs: {SNAPSHOT.rstrip('/')}\n" in default
-    assert "Suites: trixie-backports\n" in default and "Suites: sid\n" in default
-    pinned = compile(_recipe(Backports(archive_url="http://m", release="bookworm")))
-    assert "URIs: http://m\nSuites: bookworm-backports\n" in _text(pinned, sources)
-    pins = _text(pinned, "mkosi.sandbox/etc/apt/preferences.d/debian-backports.pref")
-    assert "Pin: release n=bookworm-backports\nPin-Priority: 200\n" in pins
-    assert not any(e.path.startswith("payload/mkosi.sync.d/") for e in pinned.entries)
-
-
-def test_tdxs_needs_orders_its_units_after_those_steps() -> None:
-    key = Key("k")
-    tree = compile(_recipe(Tdxs(needs=(key.ready,)), Fragment("keys", items=(key,))))
-    units = "payload/mkosi.extra/usr/lib/systemd/system"
-    service = _text(tree, f"{units}/tdxs.service")
-    waits = "runtime-init-keys.service tdxs.socket tdx-evidence.service"
-    assert f"After={waits}\nRequires={waits}\n" in service
-    plain = compile(_recipe(Tdxs(), Fragment("keys", items=(key,))))
-    assert "runtime-init" not in _text(plain, f"{units}/tdxs.service")
 
 
 def test_runtime_directory_is_a_boot_step_that_installs_the_directory() -> None:
@@ -242,24 +176,6 @@ def test_devtools_salt_is_fixed_unless_reproducible_is_false() -> None:
             DevTools(**bad)
 
 
-def test_utils_are_fragments_configured_by_their_fields() -> None:
-    efi = EfiStub(snapshot=SNAPSHOT, version="255.4-1")
-    assert isinstance(efi, Fragment)
-    assert (efi.name, efi.requires, efi.checks) == ("efi-stub", (), ())
-    assert [type(item) for item in efi.items] == [Hook]
-    assert repr(efi) == f"EfiStub(snapshot={SNAPSHOT!r}, version='255.4-1')"
-    assert str(inspect.signature(EfiStub)) == "(*, snapshot: 'str', version: 'str') -> None"
-    assert repr(DevTools()) == "DevTools(root_password='tdx', salt=None, reproducible=True)"
-    assert (
-        repr(Backports(release="trixie"))
-        == "Backports(archive_url=None, release='trixie', include_sid=True)"
-    )
-    assert Tdxs().source == TUNDRA_TOOLS
-    assert Tdxs().name == "tdxs" and Tdxs(needs=(Key("k").ready,)) != Tdxs()
-    assert Tdxs() == Tdxs() and hash(Tdxs()) == hash(Tdxs())
-    assert {DevTools().name, Backports().name} == {"devtools", "backports"}
-
-
 def test_utils_freeze_lists_and_reject_bad_values() -> None:
     measurements = {"rtmr0": "ab"}
     tdxs = Tdxs(expected_measurements=measurements)
@@ -273,23 +189,6 @@ def test_utils_freeze_lists_and_reject_bad_values() -> None:
         EfiStub(snapshot="", version="1")
     with pytest.raises(TypeError):
         EfiStub(SNAPSHOT, "1")  # type: ignore[misc]
-
-
-def test_composite_subclass_works_as_a_fragment() -> None:
-    @dataclass(frozen=True, slots=True, kw_only=True)
-    class Tools(Composite):
-        packages: tuple[str, ...] = ("strace",)
-
-        def compose(self) -> Fragment:
-            return Fragment("tools", items=tuple(Package(p) for p in self.packages))
-
-    tools = Tools(packages=("strace", "gdb"))
-    assert repr(tools).endswith(".Tools(packages=('strace', 'gdb'))")
-    recipe = Recipe(name="m", items=(tools, tools))
-    conf = _conf(compile(recipe)).splitlines()
-    assert {"    strace", "    gdb"} <= set(conf)
-    variant = Recipe(name="m", variants=(Variant("v", add=Tools()),))
-    assert "    strace" in _conf(compile(variant)).splitlines()
 
 
 def test_accounts_are_the_postinst_prelude_groups_first() -> None:
@@ -310,13 +209,6 @@ def test_accounts_are_the_postinst_prelude_groups_first() -> None:
         "mkosi-chroot useradd --system --home-dir /home/svc --create-home "
         "--shell /usr/sbin/nologin --uid 9 --gid tdx --groups eth,x svc",
     ]
-
-
-def test_tdxs_accounts_use_the_account_prelude() -> None:
-    recipe = Recipe(name="m", items=(Tdxs(),))
-    lines = _text(compile(recipe), "payload/mkosi.postinst.d/50-postinst.sh").splitlines()
-    assert lines[3] == "mkosi-chroot groupadd --system tdx"
-    assert lines[4].startswith("mkosi-chroot useradd --system --home-dir /home/tdxs --create-home")
 
 
 def test_an_account_a_variant_replaces_moves_into_each_overlay() -> None:

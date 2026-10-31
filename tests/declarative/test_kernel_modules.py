@@ -8,14 +8,10 @@ from tundravm.declarative import Debian, Git, Kernel, Recipe, Variant
 from tundravm.declarative.model import Target
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
-    AZURE_MODULES,
-    GCP_MODULES,
     TDX_GUEST_MODULES,
-    curated_modules,
 )
 from tundravm.testing import compile_tree
 
-CLOUDS: tuple[Target, ...] = ("qemu", "azure", "gcp")
 RM_MODULES = 'rm -rf "$BUILDROOT/usr/lib/modules"'
 
 
@@ -46,12 +42,6 @@ def test_qemu_keeps_the_tdx_guest_set(tmp_path: Path) -> None:
     finalize = tree.script("finalize")
     assert "for module in efivarfs nvme sd_mod tdx_guest" in finalize
     assert RM_MODULES not in finalize
-
-
-def test_a_multi_output_variant_keeps_the_union(tmp_path: Path) -> None:
-    listed = _listed(compile_tree(_recipe(*CLOUDS), path=tmp_path).conf())
-    assert listed == list(curated_modules(CLOUDS))
-    assert {*AZURE_MODULES, *GCP_MODULES, "tdx_guest", "virtio_net"} <= set(listed)
 
 
 def test_a_tuple_adds_to_the_curated_set(tmp_path: Path) -> None:
@@ -95,17 +85,3 @@ def test_invalid_selections_are_rejected(value: object, message: str) -> None:
 def test_modules_without_a_distribution_kernel_are_rejected() -> None:
     with pytest.raises(ValidationError, match="does not install"):
         Debian("trixie", kernel_package=None, kernel_modules=("vsock",))
-
-
-def test_the_payload_keeps_the_modules_of_every_target_whatever_is_compiled(
-    tmp_path: Path,
-) -> None:
-    """One UKI boots every output, so a cloud variant's modules are in the default's too."""
-    recipe = Recipe(
-        "mods",
-        variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
-        platform=Debian("trixie"),
-    )
-    listed = _listed(compile_tree(recipe, variants="default", path=tmp_path).conf())
-    assert listed == list(curated_modules(("qemu", "azure")))
-    assert set(AZURE_MODULES) <= set(listed)

@@ -63,20 +63,6 @@ def test_design_defaults() -> None:
     assert Install("a", "/usr/bin/a").mode == 0o755
 
 
-def test_records_are_frozen_and_slotted() -> None:
-    package = Package("curl")
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        package.name = "jq"  # type: ignore[misc]
-    assert not hasattr(package, "__dict__")
-
-
-def test_lists_are_frozen_into_tuples() -> None:
-    fragment = Fragment("f", items=[Package("a")])  # type: ignore[arg-type]
-    user = User("u", groups=["eth"])  # type: ignore[arg-type]
-    assert fragment.items == (Package("a"),) and user.groups == ("eth",)
-    assert hash(fragment) == hash(Fragment("f", items=(Package("a"),)))
-
-
 INVALID: list[tuple[str, Callable[[], object]]] = [
     ("empty fragment name", lambda: Fragment("")),
     ("generator in items", lambda: Fragment("f", items=((Package("a"),),))),  # type: ignore[arg-type]

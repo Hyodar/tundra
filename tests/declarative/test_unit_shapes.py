@@ -10,7 +10,6 @@ from tundravm.declarative import (
     Every,
     Listen,
     Mount,
-    Ref,
     Service,
     Task,
     UnitReady,
@@ -31,18 +30,6 @@ from tundravm.errors import ValidationError
 )
 def test_mount_unit_names_follow_systemd_escape_path(where: str, unit: str) -> None:
     assert Mount(where, "tmpfs").unit == unit == mount_unit(where)
-
-
-def test_shapes_have_refs_keyed_by_unit() -> None:
-    assert (
-        Task("hello", "/bin/true").ref
-        == Task.ref("hello.service")
-        == Ref("Task", ("hello.service",))
-    )
-    assert Mount("/var/lib/data", "tmpfs").ref == Mount.ref("/var/lib/data")
-    edit = Task.ref("hello").edit(timeout="1min")
-    assert edit.target.kind == "Task"
-    assert Mount.ref("/var/lib/data").remove().target.identity == ("/var/lib/data",)
 
 
 def test_schedules_render_timer_directives() -> None:

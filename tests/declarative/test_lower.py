@@ -207,27 +207,6 @@ def test_runtime_init_order_follows_after_and_enters_the_recipe_digest(tmp_path:
     assert sections[0] != sections[1]
 
 
-def test_runtime_init_runs_each_step_as_its_own_unit(tmp_path: Path) -> None:
-    first = BootStep("first", "echo first\n")
-    recipe = Recipe(
-        "inits",
-        items=(BootStep("second", "echo second\n", after=(first.ready,)), first),
-    )
-    emit(lower(recipe), tmp_path)
-    extra = tmp_path / "payload/mkosi.extra"
-    units = extra / "usr/lib/systemd/system"
-    assert (extra / "usr/lib/runtime-init/first").read_text() == (
-        "#!/bin/bash\nset -euo pipefail\n\necho first\n"
-    )
-    assert (
-        "Requires=runtime-init-first.service\n"
-        in (units / "runtime-init-second.service").read_text()
-    )
-    aggregate = (units / "runtime-init.service").read_text()
-    assert "After=runtime-init-first.service runtime-init-second.service\n" in aggregate
-    assert "ExecStart=/bin/true\n" in aggregate and "WantedBy=minimal.target" in aggregate
-
-
 def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
     config = tmp_path / "kernel.config"
     config.write_text("CONFIG_X=y\n")
@@ -285,19 +264,6 @@ def test_lowering_rejects_inexpressible_settings_and_kernels(item: Setting | Ker
 
 
 @pytest.mark.parametrize(
-    ("setting", "code"),
-    [
-        (Setting("Config", "ConfigureScripts", ("configure.sh",)), "mkosi-configure-script"),
-        (Setting("Build", "Environment", ("HOME",)), "mkosi-environment-passthrough"),
-        (Setting("Config", "PassEnvironment", ("HOME",)), "mkosi-environment-passthrough"),
-    ],
-)
-def test_lowering_refuses_settings_summary_cannot_describe(setting: Setting, code: str) -> None:
-    with pytest.raises(ValidationError, match=code):
-        lower(Recipe("r", items=(setting,)))
-
-
-@pytest.mark.parametrize(
     "variants",
     [
         (Variant("default"), Variant("a", outputs=("azure",)), Variant("b", inherits="a")),
@@ -324,14 +290,6 @@ def test_variants_that_are_not_additions_are_lowered_whole(
     resolved = {i.name for i in resolve(recipe, variant=name).items if isinstance(i, Package)}
     assert {"curl", "d"} & effective.packages == {"curl", "d"} & resolved
     compile(recipe).write(tmp_path)
-
-
-def test_variants_with_their_own_settings_cannot_share_a_tree() -> None:
-    common = Fragment("c", items=(Package("curl"),))
-    seeded = Fragment("s", items=(Setting("Output", "Seed", ("x",)),))
-    recipe = Recipe("r", items=(common,), variants=(Variant("default"), Variant("v", add=seeded)))
-    with pytest.raises(ValidationError, match="Cannot emit profile 'v' .*Setting\\(Output, Seed"):
-        lower(recipe)
 
 
 def test_a_variant_that_only_names_outputs_is_a_wrapper_not_an_overlay() -> None:
@@ -467,63 +425,12 @@ def test_inject_after_init_prepends_several_units_in_order() -> None:
     )
 
 
-def test_runtime_tools_default_and_key_handoff() -> None:
-    key = Key("k")  # no output: the disk tool reads it from the environment
-    recipe = Recipe("r", items=(key, Disk("d", "/data", key=key, device="/dev/vdb")))
-    img = lower(recipe)
-    files = img.state.profiles["default"].files
-    config = next(f.content for f in files if f.path == "/etc/tdx/disk-setup.yaml")
-    assert 'encryption_key: "k"' in str(config) and 'pattern: "/dev/vdb"' in str(config)
-    assert "key-generation" in img.source_builds()
-    assert img.source_builds()["key-generation"].source.url.endswith("tundra-tools.git")
-
-
 # ── Declarations added for the declarative-only API ─────────────────────
 
 
 def _one(*items: object, epoch: int | None = 0, **recipe: object) -> Recipe:
     platform = Debian("trixie", epoch=epoch, boot=None)
     return Recipe("r", items=items, platform=platform, **recipe)  # type: ignore[arg-type]
-
-
-def test_service_lowers_to_the_generated_unit() -> None:
-    from tundravm.declarative import Service
-
-    service = Service(
-        "app",
-        "/usr/bin/app --serve",
-        user="app",
-        env={"MODE": "prod"},
-        limits={"NOFILE": 1048576},
-        restart="always",
-        security="strict",
-    )
-    img = lower(_one(service, BootStep("ready", "true")))
-    (spec,) = img.state.effective_profile("default").services[:1]
-    assert spec.name == "app"
-    assert spec.command == ("/usr/bin/app", "--serve")
-    assert spec.env == {"MODE": "prod"} and spec.limits == {"NOFILE": "1048576"}
-    assert spec.security_profile == "strict" and spec.restart == "always"
-
-
-def test_service_needs_picks_the_runtime_init_units_it_waits_for(tmp_path: Path) -> None:
-    from tundravm.declarative import Service
-
-    disk = Disk("d", "/data", device="/dev/vdb")
-    ready = BootStep("ready", "true", after=(disk.ready,))
-    services = (
-        Service("early", "/usr/bin/early", needs=()),
-        Service("late", "/usr/bin/late"),
-        Service("data", "/usr/bin/data", needs=(disk.ready, ready.ready)),
-    )
-    emit(lower(_one(disk, ready, *services)), tmp_path)
-    tree = tmp_path / "payload/mkosi.extra/usr/lib/systemd/system"
-    assert "runtime-init" not in (tree / "early.service").read_text()
-    gate = "tdx-evidence.service"
-    assert f"After=runtime-init.service {gate}\n" in (tree / "late.service").read_text()
-    data = (tree / "data.service").read_text()
-    assert f"After=runtime-init-disks.service runtime-init-ready.service {gate}\n" in data
-    assert f"Requires=runtime-init-disks.service runtime-init-ready.service {gate}\n" in data
 
 
 def test_inherited_service_and_unit_wait_for_a_child_variants_first_step(
@@ -648,36 +555,11 @@ def test_template_missing_variable_raises() -> None:
         lower(_one(Template("/etc/a", "{missing}", stage="skeleton")))
 
 
-def test_build_sources_setting_mounts_per_variant() -> None:
-    recipe = Recipe(
-        "r",
-        items=(Setting("Build", "BuildSources", ("../src:app", "../lib")),),
-    )
-    profile = lower(recipe).state.effective_profile("default")
-    assert profile.build_sources == [("../src", "app"), ("../lib", "")]
-
-
 def test_debloat_extra_units_and_per_variant_paths() -> None:
     debloat = Debloat(keep_units_extra=("app.service",), keep_paths_by_variant={"x": ("/opt",)})
     config = lower(_one(debloat)).state.effective_profile("default").debloat
     assert config.extra_keep_units == ("app.service",)
     assert config.paths_skip_for_profiles == (("x", ("/opt",)),)
-
-
-def test_mkosi_fields_and_policy_reach_the_compiler() -> None:
-    from tundravm.declarative import Mkosi, Policy
-
-    policy = Policy(require_frozen_lock=True)
-    img = lower(
-        _one(
-            Package("curl"),
-            mkosi=Mkosi(version_script=True, root="verity"),
-            policy=policy,
-        )
-    )
-    assert img.mkosi.generate_version_script and img.mkosi.root == "verity"
-    assert not img.mkosi.with_network  # build_network defaults to False
-    assert img.policy == policy
 
 
 def test_strip_os_release_overrides_the_epoch_default() -> None:

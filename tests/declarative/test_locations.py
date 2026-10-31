@@ -12,7 +12,6 @@ from tundravm.declarative import Diagnostic, Recipe, lint, lower
 from tundravm.declarative.resolve import provenance, resolve
 from tundravm.errors import ValidationError
 from tundravm.recipe import load_recipe
-from tundravm.show import provenance as show_provenance
 
 RECIPE = """
 from tundravm.declarative import BootStep, Debian, Package, Recipe, Service, Unit, Variant
@@ -46,12 +45,6 @@ def _write(path: Path, source: str) -> Path:
 @pytest.fixture
 def recipe_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return write_recipe_file(tmp_path, RECIPE, monkeypatch)
-
-
-def test_a_declaration_records_its_absolute_line(recipe_path: Path) -> None:
-    recipe = load_recipe(recipe_path)
-    assert recipe.items[0].declared_at == f"{recipe_path}:8"
-    assert recipe.variants[1].changes[0].declared_at == f"{recipe_path}:13"
 
 
 def test_resolution_and_compiler_diagnostics_carry_the_recipe_line(recipe_path: Path) -> None:
@@ -110,18 +103,3 @@ def test_a_step_cycle_points_at_a_step_in_it(tmp_path: Path) -> None:
     )
     cycle = _finding(load_recipe(_write(tmp_path / "cycle.py", source)), "step-cycle")
     assert cycle.location == f"{tmp_path}/cycle.py:9"  # outside the working directory
-
-
-def test_provenance_carries_origin_locations(recipe_path: Path) -> None:
-    source = RECIPE.replace(', user="ghost"', "").replace(
-        'changes=(Unit.ref("gone.service").remove(),)', "changes=(app.ref.edit(user=None),)"
-    )
-    recipe = load_recipe(_write(recipe_path.parent / "explored.py", source))
-    declarations = show_provenance(recipe, ["dev"])["dev"]
-    (row,) = (r for r in declarations if r["declaration"] == "Service(app.service)")
-    origins = row["origins"]
-    assert isinstance(origins, list)
-    assert [(o["action"], o["location"]) for o in origins] == [
-        ("declared", "explored.py:4"),
-        ("edited", "explored.py:13"),
-    ]

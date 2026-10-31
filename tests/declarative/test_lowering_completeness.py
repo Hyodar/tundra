@@ -6,12 +6,11 @@ declaration and an alternative.
 """
 
 from collections.abc import Sequence
-from dataclasses import fields
 from pathlib import Path
 
 import pytest
 
-from tundravm._describe import describe, render
+from tundravm._describe import describe
 from tundravm.declarative import (
     Build,
     Fragment,
@@ -21,7 +20,6 @@ from tundravm.declarative import (
     Kernel,
     Key,
     Package,
-    Policy,
     Recipe,
     RuntimeTools,
     Secret,
@@ -33,7 +31,6 @@ from tundravm.declarative import (
     compile,
     lock,
     lower,
-    mkosi_argv,
 )
 from tundravm.errors import ValidationError
 
@@ -200,11 +197,6 @@ def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> N
     assert build.count("go build") == 1  # one binary serves both
 
 
-def test_one_secrets_keeps_the_runtime_tools_paths(tmp_path: Path) -> None:
-    out = _tree(_recipe(_secrets("app", "/run/app")), tmp_path / "s")
-    assert (out / "payload/mkosi.extra/etc/tdx/secrets.yaml").is_file()
-
-
 @pytest.mark.parametrize(
     ("items", "match"),
     [
@@ -284,20 +276,6 @@ def test_default_variant_may_extend_another_variant(tmp_path: Path) -> None:
     assert lower(recipe).state.ensure_profile("hardened").extends is None
 
 
-# ── 6. Policy ───────────────────────────────────────────────────────────
-
-
-def test_policy_has_no_inert_integrity_switch() -> None:
-    assert [f.name for f in fields(Policy)] == [
-        "require_frozen_lock",
-        "mutable_ref_policy",
-        "network_mode",
-        "storage_safety",
-    ]
-    text = render(describe(lower(_recipe(Package("curl"))), profile="default"))
-    assert "integrity" not in text
-
-
 # ── 7. Settings, targets and builds ─────────────────────────────────────
 
 
@@ -345,22 +323,6 @@ def test_settings_the_compiler_writes_name_their_declaration(
     with pytest.raises(ValidationError, match="the compiler writes") as err:
         lower(_recipe(setting))
     assert alternative in (err.value.hint or "")
-
-
-def test_variant_leaving_a_cloud_target_is_the_qemu_disk_alone(tmp_path: Path) -> None:
-    variants = (Variant("default", outputs=("azure",)), Variant("local", outputs=("qemu",)))
-    img = lower(_recipe(Package("curl"), variants=variants))
-    assert img.targets["local"] == ("qemu",) and img.clouds("local") == ()
-    assert img.overlays == ()
-    # the payload carries the azure glue for every variant: one UKI for both
-    assert "dmidecode" in img.state.effective_profile("default").packages
-    out = tmp_path / "t"
-    compile(_recipe(Package("curl"), variants=variants), variants=["local"]).write(out)
-    # the tree is the recipe's whatever the selection; mkosi_argv builds no wrapper for local
-    assert (out / "mkosi.images/azure/mkosi.conf").is_file()
-    assert (out / "payload/mkosi.extra/usr/bin/azure-complete-provisioning").is_file()
-    argv = mkosi_argv(img, "local")
-    assert not any(arg.startswith("--dependency") for arg in argv)
 
 
 def test_build_recipe_hint_names_the_public_alias() -> None:

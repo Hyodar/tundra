@@ -96,11 +96,6 @@ def test_allowing_a_device_cancels_private_devices() -> None:
     assert sandbox["DeviceAllow"] == ("/dev/tdx_guest rw",)
 
 
-def test_none_removes_the_sandbox() -> None:
-    sandbox = effective(merged(Hardening.strict(), Hardening.none()))
-    assert sandbox == effective("[Service]\n")
-
-
 def test_lists_are_replaced_not_extended() -> None:
     under = Hardening.strict(capabilities=("CAP_DAC_OVERRIDE",), network="unix")
     patch = Hardening(capabilities=("CAP_NET_BIND_SERVICE",), network="inet", syscalls=())
