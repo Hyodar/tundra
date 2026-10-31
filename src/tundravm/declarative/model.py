@@ -1088,7 +1088,9 @@ class Service(Declared):
     directives no field covers (linted ``unit-extra``). ``Unit`` ships verbatim text.
     ``allow_secret`` silences ``secret-in-env`` for the rendered unit, every field.
     ``conditions`` renders ``Condition*=`` lines (``Condition.virtualization("microsoft")``):
-    systemd skips the unit, without failing, where one does not hold.
+    systemd skips the unit, without failing, where one does not hold. Every unit lowered
+    from a ``Service`` requires the execution gate, ``tdx-evidence.service``
+    (``tundravm._modules.execution``): a production profile without TDX starts none.
     """
 
     name: str
@@ -2542,6 +2544,8 @@ class Task(Declared):
     (``TimeoutStartSec=``, ``None``: systemd's unbounded oneshot default); *hardening*
     defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps and
     *conditions* gate it (``Condition.virtualization("google")``), as on :class:`Service`.
+    A scheduled task requires the execution gate as a ``Service`` does; a boot task does
+    not (probes and boot plumbing stay readable on a refused boot).
     """
 
     name: str

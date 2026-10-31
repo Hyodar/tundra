@@ -124,7 +124,7 @@ def test_describe_structure() -> None:
     assert services[0]["name"] == "app"
     assert services[0]["command"] == ["/usr/bin/app", "--flag"]
     assert services[0]["restart"] == "always"
-    assert services[0]["after"] == ["network-online.target"]
+    assert services[0]["after"] == ["network-online.target", "tdx-evidence.service"]
 
     partitions = info["partitions"]
     assert isinstance(partitions, list)
@@ -217,7 +217,7 @@ def test_summary_contains_key_strings() -> None:
     assert "app  uid=1000  gid=1000  shell=/bin/bash  groups=video" in text
     assert re.search(
         r"\n  app +/usr/bin/app --flag  restart=always  type=exec  user=app  "
-        r"after=network-online\.target\n",
+        r"after=network-online\.target,tdx-evidence\.service  requires=tdx-evidence\.service\n",
         text,
     )
     assert "data  4G  /data  ext4" in text
@@ -249,6 +249,8 @@ def test_summary_omits_empty_sections() -> None:
     text = render(describe(lower(recipe), profile="bare"))
 
     assert "Packages" not in text
-    assert "Files" not in text
+    # what every profile ships: the execution gate, its script and its unit
+    assert "Files (1):\n  /usr/lib/tundravm/tdx-evidence  0755" in text
+    assert "Services (1):\n  tdx-evidence.service  /usr/lib/tundravm/tdx-evidence" in text
     assert "Hooks" not in text
     assert "Debloat: disabled" in text

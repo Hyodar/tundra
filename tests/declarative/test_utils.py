@@ -175,7 +175,7 @@ def test_tdxs_needs_orders_its_units_after_those_steps() -> None:
     tree = compile(_recipe(Tdxs(needs=(key.ready,)), Fragment("keys", items=(key,))))
     units = "payload/mkosi.extra/usr/lib/systemd/system"
     service = _text(tree, f"{units}/tdxs.service")
-    waits = "runtime-init-keys.service tdxs.socket"
+    waits = "runtime-init-keys.service tdxs.socket tdx-evidence.service"
     assert f"After={waits}\nRequires={waits}\n" in service
     plain = compile(_recipe(Tdxs(), Fragment("keys", items=(key,))))
     assert "runtime-init" not in _text(plain, f"{units}/tdxs.service")

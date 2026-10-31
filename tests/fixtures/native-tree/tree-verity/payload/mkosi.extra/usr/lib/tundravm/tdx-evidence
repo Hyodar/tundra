@@ -1,0 +1,32 @@
+#!/bin/sh
+# tundravm execution gate (plan 6.1): the services require this unit. A production profile
+# without a TDX quote path fails it; a development profile records "simulated" instead.
+set -u
+execution=${TUNDRAVM_EXECUTION:-production}
+record() {
+    mkdir -p /run/tundravm
+    printf '%s\n' "$1" > /run/tundravm/mode.tmp && mv /run/tundravm/mode.tmp /run/tundravm/mode
+}
+quote_path() {
+    grep -qw tdx_guest /proc/cpuinfo || return 1
+    waited=0
+    while [ "$waited" -lt 30 ]; do
+        if [ -c /dev/tdx_guest ]; then echo /dev/tdx_guest; return 0; fi
+        if [ -d /sys/kernel/config/tsm/report ]; then echo /sys/kernel/config/tsm/report; return 0; fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 1
+}
+if found=$(quote_path); then
+    record tdx
+    echo "tdx-evidence: TDX quote path $found"
+    exit 0
+fi
+if [ "$execution" = development ]; then
+    record simulated
+    echo "tdx-evidence: no TDX quote path; development profile, running simulated"
+    exit 0
+fi
+echo "tdx-evidence: refused: no TDX quote path; a production profile starts no services"
+exit 1

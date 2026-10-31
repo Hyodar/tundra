@@ -234,8 +234,8 @@ def test_compile_generates_service_unit_all_sections(tmp_path: Path) -> None:
     assert content == (
         "[Unit]\n"
         "Description=App daemon\n"
-        "After=network-online.target\n"
-        "Requires=network-online.target\n"
+        "After=network-online.target tdx-evidence.service\n"
+        "Requires=network-online.target tdx-evidence.service\n"
         "Wants=network-online.target\n"
         "\n"
         "[Service]\n"

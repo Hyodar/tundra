@@ -1,5 +1,7 @@
 [Unit]
 Description=Attested TLS on :443 to http://127.0.0.1:8080/
+After=tdx-evidence.service
+Requires=tdx-evidence.service
 
 [Service]
 Type=exec

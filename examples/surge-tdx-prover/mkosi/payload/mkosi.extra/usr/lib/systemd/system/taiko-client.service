@@ -1,7 +1,7 @@
 [Unit]
 Description=taiko-client.service
-After=nethermind-ready.service credential-jwt.service credential-taiko-chain.service
-Requires=nethermind-ready.service credential-jwt.service credential-taiko-chain.service
+After=nethermind-ready.service credential-jwt.service credential-taiko-chain.service tdx-evidence.service
+Requires=nethermind-ready.service credential-jwt.service credential-taiko-chain.service tdx-evidence.service
 
 [Service]
 Type=exec

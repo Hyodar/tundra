@@ -1,7 +1,7 @@
 [Unit]
 Description=raiko.service
-After=tdxs.service nethermind-ready.service credential-raiko-config.service runtime-init-volume-data.service
-Requires=tdxs.service nethermind-ready.service credential-raiko-config.service runtime-init-volume-data.service
+After=tdxs.service nethermind-ready.service credential-raiko-config.service runtime-init-volume-data.service tdx-evidence.service
+Requires=tdxs.service nethermind-ready.service credential-raiko-config.service runtime-init-volume-data.service tdx-evidence.service
 
 [Service]
 Type=exec

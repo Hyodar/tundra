@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
+from tundravm._modules import execution as gate
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.disk_encryption import (
     DISK_ENCRYPTION_BUILD_PACKAGES,
@@ -259,8 +260,11 @@ class StateBuilder:
                         mounts=mounts,
                     )
                     _finish_service(profile, item)
+                    _gate(profile, item.name)
                 case Task():
                     _task(profile, item, users=users, units=units)
+                    if item.schedule is not None:
+                        _gate(profile, item.name)
                 case Mount():
                     _mount(profile, item, steps=steps, units=units)
                 case Template():
@@ -301,9 +305,12 @@ class StateBuilder:
             if isinstance(unit, Service):
                 _service(profile, unit, units, users={unit.default_user}, mounts=mounts)
                 _finish_service(profile, unit)
+                _gate(profile, unit.name)
                 continue
             if isinstance(unit, Task):
                 _task(profile, unit, users={unit.unit[: -len(".service")]})
+                if unit.schedule is not None:
+                    _gate(profile, unit.name)
                 continue
             if isinstance(unit, Mount):
                 _mount(profile, unit, steps=steps, states=False)
@@ -318,6 +325,20 @@ class StateBuilder:
                     before=tuple(ref.step for ref in step.before),
                 )
             )
+
+    def execution_gate(self, name: str, *, release: bool, default: bool, ships: bool) -> None:
+        """Give profile *name* the execution gate (``tundravm._modules.execution``).
+
+        *ships*: the profile writes the gate itself (the default profile, a standalone
+        one), in the default variant's mode (*default* is its ``release``), so every
+        profile shares one gate unit; a profile whose *release* differs sets its own mode
+        through the gate's drop-in."""
+        profile = self.state.ensure_profile(name)
+        if ships:
+            _add_file(profile, gate.GATE_SCRIPT, gate.SCRIPT, "0755")
+            profile.services.append(gate.service(gate.execution(default)))
+        if release != default:
+            _add_file(profile, gate.GATE_DROPIN, gate.dropin(gate.execution(release)))
 
     # ── source builds and runtime tools ─────────────────────────────────
 
@@ -1285,6 +1306,12 @@ def _finish_service(profile: ProfileState, service: Service) -> None:
     changes["after"] = _merged(first, spec.after)
     changes["requires"] = _merged(first, spec.requires)
     profile.services[profile.services.index(spec)] = replace(spec, **changes)  # type: ignore[arg-type]
+
+
+def _gate(profile: ProfileState, name: str) -> None:
+    """Make the unit of ``Service``/``Task`` *name* require the execution gate."""
+    index = next(i for i, s in enumerate(profile.services) if s.name == name)
+    profile.services[index] = gate.gated(profile.services[index])
 
 
 def _system_user(profile: ProfileState, name: str, users: Collection[str]) -> str:

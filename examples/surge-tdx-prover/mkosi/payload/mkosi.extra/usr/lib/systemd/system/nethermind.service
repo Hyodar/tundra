@@ -1,7 +1,7 @@
 [Unit]
 Description=nethermind.service
-After=credential-jwt.service runtime-init-volume-data.service
-Requires=credential-jwt.service runtime-init-volume-data.service
+After=credential-jwt.service runtime-init-volume-data.service tdx-evidence.service
+Requires=credential-jwt.service runtime-init-volume-data.service tdx-evidence.service
 
 [Service]
 Type=exec

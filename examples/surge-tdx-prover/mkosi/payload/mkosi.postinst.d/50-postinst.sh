@@ -29,6 +29,7 @@ mkosi-chroot systemctl enable credential-raiko-config.service
 mkosi-chroot systemctl enable tundravm-credentials.service
 mkosi-chroot systemctl enable attested-tls-443.service
 mkosi-chroot systemctl enable nftables.service
+mkosi-chroot systemctl enable tdx-evidence.service
 mkosi-chroot systemctl enable runtime-init.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -51,6 +52,7 @@ ln -sf "/etc/systemd/system/credential-raiko-config.service" "$BUILDROOT/etc/sys
 ln -sf "/etc/systemd/system/tundravm-credentials.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
 

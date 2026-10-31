@@ -112,7 +112,7 @@ def test_exports_resolve_to_the_units_behind_them() -> None:
     planned = plan(Image("stack", components=[database, Api(database=database.endpoint)]))
     unit = planned.service("api")
     assert unit.get("Service", "ExecStart") == "/usr/bin/api --db http://127.0.0.1:5432/"
-    assert unit.get("Unit", "Requires") == "db-ready.service"
+    assert unit.get("Unit", "Requires") == "db-ready.service tdx-evidence.service"
 
 
 def test_naming_a_service_the_component_does_not_compose_is_refused() -> None:
@@ -125,7 +125,7 @@ def test_component_ready_stands_for_every_service_that_declares_readiness() -> N
     database = Database()
     app = Service("app", ["/usr/bin/app"], requires=[database.ready])
     planned = plan(Image("stack", components=[database], services=[app]))
-    assert planned.service("app").get("Unit", "Requires") == "db-ready.service"
+    assert planned.service("app").get("Unit", "Requires") == "db-ready.service tdx-evidence.service"
 
 
 def test_a_component_with_no_readiness_cannot_be_waited_for() -> None:

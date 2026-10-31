@@ -1,5 +1,7 @@
 [Unit]
 Description=greeter
+After=tdx-evidence.service
+Requires=tdx-evidence.service
 
 [Service]
 Type=exec

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import own_files
 from tundravm._modules.init import runtime_init_order
 from tundravm._options import MkosiOptions
 from tundravm.check import check
@@ -137,12 +138,13 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "6260e23503411c60a5914dcd203ce0fd040cdb818e12f60d6e8129fd64438f65"
-EQUIVALENCE_RECIPE = "ba8275af7d1c1e31f0cc7f8d1aa2f0d28df9d948d3e1b8e4a6a531ec214e797d"
+EQUIVALENCE_TREE = "54bd2cd3dd8f3d2a75e6f3264e028adf6b611a69c181152f7706b3c3ba794621"
+EQUIVALENCE_RECIPE = "e2eaf17c42fe9a9c6335a4f3aaf2c6f809efe55e10754aa2ead1bba2d685f98c"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
 overlay), and re-recorded when the ESP became a fixed 128M FAT32 and when the unpinned
-build scripts' hint named ``tundravm build`` instead of the removed ``fetch``."""
+build scripts' hint named ``tundravm build`` instead of the removed ``fetch``, and when
+every profile gained the execution gate."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
@@ -407,7 +409,7 @@ def test_directories_units_from_paths_and_reemitted_units(tmp_path: Path) -> Non
     )
     img = lower(recipe)
     default = img.state.effective_profile("default")
-    assert [(f.path, f.mode) for f in default.files] == [
+    assert [(f.path, f.mode) for f in own_files(default.files)] == [
         ("/opt/tree/bin/tool", "0755"),
         ("/usr/lib/systemd/system/worker.service", "0644"),
     ]
@@ -517,10 +519,11 @@ def test_service_needs_picks_the_runtime_init_units_it_waits_for(tmp_path: Path)
     emit(lower(_one(disk, ready, *services)), tmp_path)
     tree = tmp_path / "payload/mkosi.extra/usr/lib/systemd/system"
     assert "runtime-init" not in (tree / "early.service").read_text()
-    assert "After=runtime-init.service\n" in (tree / "late.service").read_text()
+    gate = "tdx-evidence.service"
+    assert f"After=runtime-init.service {gate}\n" in (tree / "late.service").read_text()
     data = (tree / "data.service").read_text()
-    assert "After=runtime-init-disks.service runtime-init-ready.service\n" in data
-    assert "Requires=runtime-init-disks.service runtime-init-ready.service\n" in data
+    assert f"After=runtime-init-disks.service runtime-init-ready.service {gate}\n" in data
+    assert f"Requires=runtime-init-disks.service runtime-init-ready.service {gate}\n" in data
 
 
 def test_inherited_service_and_unit_wait_for_a_child_variants_first_step(
@@ -569,7 +572,8 @@ def test_packaged_unit_needs_become_an_ordering_dropin() -> None:
     cron = files["/usr/lib/systemd/system/cron.service.d/10-tundravm-needs.conf"]
     assert "After=runtime-init.service\n" in str(cron)
     alone = _one(Unit("database.service", enabled=True, needs=(RUNTIME_INIT,)))
-    assert not lower(alone).state.effective_profile("default").files  # no steps, no wait
+    # no steps, no wait
+    assert not own_files(lower(alone).state.effective_profile("default").files)
 
 
 def test_external_delivery_ready_waits_for_its_unit_or_path(tmp_path: Path) -> None:
@@ -596,8 +600,10 @@ def test_external_delivery_ready_waits_for_its_unit_or_path(tmp_path: Path) -> N
         assert (root / f"usr/lib/runtime-init/{delivery.step}").read_text().endswith(script)
         units = root / "usr/lib/systemd/system"
         waits = f"runtime-init-{delivery.step}.service"
-        assert f"After={waits}\n" in (units / "app.service").read_text()
-        assert "After=runtime-init-secrets.service\n" in (units / "ssh-user.service").read_text()
+        gate = "tdx-evidence.service"
+        assert f"After={waits} {gate}\n" in (units / "app.service").read_text()
+        user = (units / "ssh-user.service").read_text()
+        assert f"After=runtime-init-secrets.service {gate}\n" in user
     assert agent.step == "delivery-vault-agent"
     unwired = _one(Secrets(entries=(Secret("token", (entry,)),), delivery=ExternalDelivery("x")))
     (finding,) = [d for d in resolution_lint(unwired) if d.code != "network-missing"]

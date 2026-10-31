@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from tundravm._modules.execution import GATE_UNIT as GATE
 from tundravm.declarative import (
     RUNTIME_INIT,
     BootStep,
@@ -71,14 +72,14 @@ def test_service_needs_a_builtin_step(tmp_path: Path) -> None:
     service = Service("app", "/usr/bin/app", needs=(DISK.ready,))
     text = _tree(tmp_path, KEY, DISK, service).unit("app.service")
 
-    assert _lines(text, "After") == [f"After={wait}"]
-    assert _lines(text, "Requires") == [f"Requires={wait}"]
+    assert _lines(text, "After") == [f"After={wait} {GATE}"]
+    assert _lines(text, "Requires") == [f"Requires={wait} {GATE}"]
 
 
 def test_service_waits_for_all_of_runtime_init_by_default(tmp_path: Path) -> None:
     text = _tree(tmp_path, KEY, DISK, Service("app", "/usr/bin/app")).unit("app.service")
 
-    assert _lines(text, "Requires") == ["Requires=runtime-init.service"]
+    assert _lines(text, "Requires") == [f"Requires=runtime-init.service {GATE}"]
 
 
 def test_needs_nothing_adds_no_dependency(tmp_path: Path) -> None:

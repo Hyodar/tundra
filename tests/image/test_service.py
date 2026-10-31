@@ -48,8 +48,8 @@ def test_a_tcp_probe_becomes_a_bounded_unit_the_dependent_requires() -> None:
     assert probe.get("Unit", "After") == "db.service"
 
     unit = planned.service("app")
-    assert unit.get("Unit", "Requires") == "db-ready.service"
-    assert unit.get("Unit", "After") == "db-ready.service"
+    assert unit.get("Unit", "Requires") == "db-ready.service tdx-evidence.service"
+    assert unit.get("Unit", "After") == "db-ready.service tdx-evidence.service"
 
 
 def test_an_http_probe_polls_the_url_and_brings_curl_in() -> None:
@@ -66,8 +66,8 @@ def test_notify_needs_no_probe_and_the_dependent_waits_for_the_unit() -> None:
     assert planned.service("worker").get("Service", "Type") == "notify"
     assert "worker-ready.service" not in planned.files.get("", "") if False else True
     unit = planned.service("app")
-    assert unit.get("Unit", "Requires") == "worker.service"
-    assert unit.get("Unit", "After") == "worker.service"
+    assert unit.get("Unit", "Requires") == "worker.service tdx-evidence.service"
+    assert unit.get("Unit", "After") == "worker.service tdx-evidence.service"
 
 
 def test_requiring_a_service_without_readiness_is_refused_where_it_is_written() -> None:
@@ -92,7 +92,7 @@ def test_an_endpoint_carries_the_readiness_it_was_exported_with() -> None:
     planned = _plan(api, app)
     unit = planned.service("app")
     assert unit.get("Service", "ExecStart") == "/usr/bin/app --api http://127.0.0.1:8080/"
-    assert unit.get("Unit", "Requires") == "api-ready.service"
+    assert unit.get("Unit", "Requires") == "api-ready.service tdx-evidence.service"
 
 
 def test_an_endpoint_without_readiness_cannot_be_required() -> None:

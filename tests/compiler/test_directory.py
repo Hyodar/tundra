@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main
+from tests.helpers import own_files, run_main
 from tundravm.declarative import Debian, FileTree, Fragment, Recipe, Variant, compile, lower
 from tundravm.errors import ValidationError
 from tundravm.models import FileEntry
@@ -32,7 +32,7 @@ def _recipe(*directories: FileTree, epoch: int | None = 0) -> Recipe:
 
 
 def _files(recipe: Recipe, variant: str = "default") -> list[FileEntry]:
-    return lower(recipe).state.profiles[variant].files
+    return own_files(lower(recipe).state.profiles[variant].files)
 
 
 def test_imports_nested_tree_under_dest(tmp_path: Path) -> None:
@@ -100,8 +100,8 @@ def test_scoped_to_variant(tmp_path: Path) -> None:
         ),
     )
     image = lower(recipe)
-    assert image.state.profiles["default"].files == []
-    assert len(image.state.profiles["dev"].files) == 4
+    assert own_files(image.state.profiles["default"].files) == []
+    assert len(own_files(image.state.profiles["dev"].files)) == 4
 
 
 def test_rejects_missing_or_empty_src(tmp_path: Path) -> None:

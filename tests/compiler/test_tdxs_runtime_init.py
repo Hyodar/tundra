@@ -98,7 +98,8 @@ def test_tdxs_generates_config_yaml_and_units(tmp_path: Path) -> None:
     assert "Type=notify" in svc_content
     assert "ExecStart=/usr/bin/tdxs" in svc_content
     assert "--log-level info" in svc_content
-    assert "After=tdxs.socket\nRequires=tdxs.socket\n" in svc_content
+    gate = "tdx-evidence.service"
+    assert f"After=tdxs.socket {gate}\nRequires=tdxs.socket {gate}\n" in svc_content
     assert "[Install]" not in svc_content  # the socket starts it
     assert "DevicePolicy=closed\nDeviceAllow=/dev/tdx_guest rw\n" in svc_content
     assert "ReadWritePaths=-/sys/kernel/config/tsm/report\n" in svc_content

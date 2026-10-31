@@ -11,6 +11,7 @@ mkosi-chroot systemctl enable systemd-networkd.socket
 mkosi-chroot systemctl enable systemd-networkd-wait-online.service
 mkosi-chroot systemctl enable web.service
 mkosi-chroot systemctl enable boot-probe.service
+mkosi-chroot systemctl enable tdx-evidence.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-metadata-dns.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -20,6 +21,7 @@ ln -sf "/etc/systemd/system/systemd-networkd.socket" "$BUILDROOT/etc/systemd/sys
 ln -sf "/etc/systemd/system/systemd-networkd-wait-online.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/boot-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")

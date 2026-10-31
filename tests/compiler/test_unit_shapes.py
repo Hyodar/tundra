@@ -66,7 +66,8 @@ def test_scheduled_task_renders_a_timer_and_leaves_the_service_to_it() -> None:
     )
     tree = _tree(task)
     assert tree.unit("backup") == (
-        "[Unit]\nDescription=backup\n\n"
+        "[Unit]\nDescription=backup\nAfter=tdx-evidence.service\n"
+        "Requires=tdx-evidence.service\n\n"
         "[Service]\nType=oneshot\nExecStart=/usr/bin/backup --all\nDynamicUser=yes\n"
         "WorkingDirectory=/var/lib/backup\nStateDirectory=backup\nTimeoutStartSec=5min\n"
     )
@@ -106,7 +107,8 @@ def test_socket_activated_service() -> None:
         "[Install]\nWantedBy=sockets.target\n"
     )
     assert tree.unit("app") == (
-        "[Unit]\nDescription=app\nAfter=app.socket\nRequires=app.socket\n\n"
+        "[Unit]\nDescription=app\nAfter=app.socket tdx-evidence.service\n"
+        "Requires=app.socket tdx-evidence.service\n\n"
         "[Service]\nType=simple\nExecStart=/usr/bin/app\nUser=app\n"
     )
     script = _postinst(tree)
@@ -117,7 +119,9 @@ def test_socket_activated_service() -> None:
 def test_accepting_socket_starts_a_template() -> None:
     tree = _tree(Service("echo@", "/usr/bin/cat", socket=Listen(7777, accept=True)))
     assert "ListenStream=7777\nAccept=yes\n" in tree.unit("echo.socket")
-    assert tree.unit("echo@.service").startswith("[Unit]\nDescription=echo@\nAfter=echo.socket\n")
+    assert tree.unit("echo@.service").startswith(
+        "[Unit]\nDescription=echo@\nAfter=echo.socket tdx-evidence.service\n"
+    )
 
 
 def test_mount_unit_is_escaped_and_enabled() -> None:
@@ -139,7 +143,8 @@ def test_needs_wait_for_steps_and_boot_tasks() -> None:
     tree = _tree(seed, hello, app, bind)
     wait = "runtime-init-seed.service"
     assert f"After={wait}\nRequires={wait}\n" in tree.unit("hello")
-    assert "After=hello.service\nRequires=hello.service\n" in tree.unit("app")
+    gated = "hello.service tdx-evidence.service"
+    assert f"After={gated}\nRequires={gated}\n" in tree.unit("app")
     mount = tree.unit("var-lib-app.mount")
     assert f"After={wait}\nRequires={wait}\n" in mount
     assert "Options=bind,nofail\n" in mount and "WantedBy=minimal.target\n" in mount

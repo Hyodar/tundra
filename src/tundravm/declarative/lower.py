@@ -198,6 +198,9 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         builder.strip_image_version(enabled=strip)
 
     builder.declare(default.name, base.items, full=base.items)
+    builder.execution_gate(
+        default.name, release=default.release, default=default.release, ships=True
+    )
     payload = builder.state.ensure_profile(default.name)
     declared = set(payload.packages)
     builder.targets(default.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
@@ -227,13 +230,20 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             # every profile shares from what this one builds beyond it.
             builder.standalone(variant.name)
             builder.declare(variant.name, child.items, full=child.items)
+            builder.execution_gate(
+                variant.name, release=variant.release, default=default.release, ships=True
+            )
             builder.targets(variant.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
             overlays.append(variant.name)
             continue
         builder.extending(variant.name)
-        if own or reemit or variant.name in overlay_sandbox:
+        mode = variant.release != default.release
+        if own or reemit or variant.name in overlay_sandbox or mode:
             overlays.append(variant.name)
             builder.declare(variant.name, own, full=child.items, reemit=reemit)
+            builder.execution_gate(
+                variant.name, release=variant.release, default=default.release, ships=False
+            )
     if rejected:
         plural = "s" if len(rejected) > 1 else ""
         listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)

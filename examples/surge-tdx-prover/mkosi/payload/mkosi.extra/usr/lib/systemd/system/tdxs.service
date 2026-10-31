@@ -1,7 +1,7 @@
 [Unit]
 Description=TDXS
-After=tdxs.socket
-Requires=tdxs.socket
+After=tdxs.socket tdx-evidence.service
+Requires=tdxs.socket tdx-evidence.service
 
 [Service]
 Type=notify
