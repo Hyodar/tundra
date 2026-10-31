@@ -153,7 +153,7 @@ def test_frozen_bake_error_carries_drift(tmp_path: Path) -> None:
     error = excinfo.value
     assert "stale" in str(error)
     assert "~ variants.default.packages: +htop" in str(error)
-    assert error.hint == "Run tundravm lock RECIPE to accept these changes, or revert them."
+    assert error.hint == "Run `tundravm lock IMAGE` to accept these changes, or revert them."
     assert error.context["changed"] == "variants.default.packages"
     assert error.context["lock"].endswith("tundravm.lock")
 
@@ -183,7 +183,7 @@ def test_older_lockfile_versions_ask_to_lock_again(tmp_path: Path, version: int)
         read_lock(lock_path)
 
     assert raised.value.code == "E_LOCKFILE"
-    assert raised.value.hint is not None and "tundravm lock RECIPE" in raised.value.hint
+    assert raised.value.hint is not None and "tundravm lock IMAGE" in raised.value.hint
     assert "toolchain" in raised.value.hint
 
 

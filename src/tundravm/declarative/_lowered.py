@@ -150,14 +150,14 @@ class Lowered:
         names = tuple(dict.fromkeys((profiles,) if isinstance(profiles, str) else profiles))
         if not names or not all(names):
             raise ValidationError(
-                "Variant names must be non-empty, and at least one is required.",
-                hint="Name a declared variant, e.g. 'default'.",
+                "Profile names must be non-empty, and at least one is required.",
+                hint="Name a declared profile, e.g. 'production'.",
             )
         unknown = [name for name in names if name not in self.state.profiles]
         if unknown:
             raise ValidationError(
-                f"Unknown variant(s): {', '.join(unknown)}.",
-                hint=f"Declared variants: {', '.join(self.profile_names)}",
+                f"Unknown profile(s): {', '.join(unknown)}.",
+                hint=f"Declared profiles: {', '.join(self.profile_names)}",
             )
         return replace(self, selected=names)
 
@@ -363,7 +363,7 @@ class Lowered:
             ]
             for spec, what, owner in (
                 (self.kernel_source(profile), "the kernel's source", "the kernel's"),
-                (self.deb_file(profile), "the EfiStub package", "the EfiStub package's"),
+                (self.deb_file(profile), "the EFI stub package", "the EFI stub package's"),
                 *files,
             ):
                 if spec is None:

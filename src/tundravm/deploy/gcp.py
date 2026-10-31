@@ -66,7 +66,7 @@ class GcpDeployAdapter:
         if not request.artifact_path.exists():
             raise DeploymentError(
                 "Artifact path does not exist.",
-                hint="Run bake() successfully before deploy().",
+                hint="Run `tundravm build` first, then deploy the build.",
                 context={"artifact_path": str(request.artifact_path)},
             )
 

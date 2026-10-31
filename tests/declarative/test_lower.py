@@ -328,7 +328,7 @@ def test_variants_with_their_own_settings_cannot_share_a_tree() -> None:
     common = Fragment("c", items=(Package("curl"),))
     seeded = Fragment("s", items=(Setting("Output", "Seed", ("x",)),))
     recipe = Recipe("r", items=(common,), variants=(Variant("default"), Variant("v", add=seeded)))
-    with pytest.raises(ValidationError, match="Cannot emit variant 'v' .*Setting\\(Output, Seed"):
+    with pytest.raises(ValidationError, match="Cannot emit profile 'v' .*Setting\\(Output, Seed"):
         lower(recipe)
 
 
@@ -368,7 +368,7 @@ def test_mkosi_argv_selects_profiles_and_wrappers(tmp_path: Path) -> None:
     assert mkosi_argv(img, "default") == []
     assert mkosi_argv(img, "cloud") == ["--dependency=azure", "--dependency=gcp"]
     assert mkosi_argv(img, "dev") == ["--profile=dev"]
-    with pytest.raises(ValidationError, match="Unknown variant"):
+    with pytest.raises(ValidationError, match="Unknown profile"):
         mkosi_argv(img, "nope")
 
 

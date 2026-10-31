@@ -300,7 +300,7 @@ class LimaMkosiBackend:
             raise BackendExecutionError(
                 f"The Lima VM's {VM_MKOSI} is not mkosi {MKOSI_PIN.version}: {found}.",
                 hint=f"Remove {VM_MKOSI_VENV} in the VM (`limactl shell {instance}`) "
-                "and bake again to reinstall it.",
+                "and build again to reinstall it.",
                 context=context,
             )
 

@@ -150,7 +150,7 @@ def test_variants_with_their_own_settings_or_kernel_are_refused(config: Path) ->
     for name in ("lts", "bare"):
         assert f"'{name}' (it has its own Kernel" in message
     assert "'dev'" not in message
-    assert "its own recipe" in (err.value.hint or "")
+    assert "an image of its own" in (err.value.hint or "")
 
 
 def test_an_overlay_variant_leaves_the_payload_alone(tmp_path: Path) -> None:
@@ -256,7 +256,7 @@ def test_only_variants_with_their_own_settings_are_listed() -> None:
     assert "'seeded' (it has its own Setting(Output, Seed))" in message
     for name in ("slim", "rescue", "ok"):
         assert f"'{name}'" not in message
-    assert "make the variant its own recipe" in (err.value.hint or "")
+    assert "make the profile an image of its own" in (err.value.hint or "")
 
 
 # ── 5. A default variant inheriting another ───────────────────────────
@@ -334,7 +334,8 @@ def test_settings_mkosi_reads_in_the_main_image_only_go_to_the_root(tmp_path: Pa
     [
         (Setting("Content", "Packages", ("vim",)), "Package(name)"),
         (Setting("Distribution", "Mirror", ("https://x",)), "Debian(mirror=...)"),
-        (Setting("Content", "BuildScripts", ("x.sh",)), "Hook(name, phase, script)"),
+        (Setting("Content", "BuildScripts", ("x.sh",)), "Mkosi(scripts=[(stage, script)])"),
+        (Setting("Distribution", "Distribution", ("ubuntu",)), "base=Debian(release)"),
         (Setting("Build", "Seed", ("x",)), "Setting('Output', 'Seed', ...)"),
     ],
 )

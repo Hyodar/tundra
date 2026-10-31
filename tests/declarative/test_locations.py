@@ -98,8 +98,8 @@ def test_edits_keep_the_declaration_line_and_record_their_own(recipe_path: Path)
     (item,) = (i for i in resolve(recipe, variant="dev").items if i.ref.kind == "Service")
     assert item.declared_at == f"{edited_path}:4"
     declared, edited = provenance(recipe, variant="dev")[("Service", "app.service")]
-    assert declared.describe() == "declared at edited.py:4 in common"
-    assert edited.describe() == "user edited at edited.py:13 in variant dev"
+    assert declared.describe() == "declared at edited.py:4 in the image"
+    assert edited.describe() == "user edited at edited.py:13 in profile dev"
 
 
 def test_a_step_cycle_points_at_a_step_in_it(tmp_path: Path) -> None:

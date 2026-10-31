@@ -102,10 +102,10 @@ def bake(
         offline = lowered.policy.network_mode == "offline"
         if offline and lowered.mkosi.with_network:
             raise PolicyError(
-                "An offline bake cannot build a tree whose build scripts reach the network "
-                "(Mkosi(build_network=True) writes WithNetwork=yes).",
-                hint="Drop build_network=True (the tree then writes WithNetwork=no), or bake "
-                "with network (Policy(network_mode='online')).",
+                "An offline build cannot build a tree whose build scripts reach the network "
+                "(a component declared with build_network=True writes WithNetwork=yes).",
+                hint="Build without --offline, or drop build_network=True from the component "
+                "(the tree then writes WithNetwork=no).",
                 context={"operation": "bake"},
             )
         sources_dir = _fetched_sources(lowered, destination, backend, offline=offline)
@@ -134,7 +134,7 @@ def bake(
                 phase="build",
                 module="image",
                 builder=backend.name,
-                message=f"Starting variant bake via {backend.name} backend.",
+                message=f"Starting profile build via {backend.name} backend.",
             )
             result = _build(backend, request, progress)
             drop_intermediates(result.artifacts)  # azure.raw, gcp.raw: mkosi's, not artifacts
@@ -170,7 +170,7 @@ def bake(
                 phase="build",
                 module="image",
                 builder=backend.name,
-                message="Completed variant bake.",
+                message="Completed profile build.",
             )
         total = progress.elapsed()
         baked = BakeResult(
@@ -180,11 +180,11 @@ def bake(
             backend=backend.name,
             duration_s=total,
         )
-        noun = "variant" if len(profiles) == 1 else "variants"
+        noun = "profile" if len(profiles) == 1 else "profiles"
         progress.emit(
             "done",
             scope,
-            f"baked {len(profiles)} {noun} in {format_duration(total)}",
+            f"built {len(profiles)} {noun} in {format_duration(total)}",
             status="ok",
             duration_s=f"{total:.3f}",
         )
@@ -206,8 +206,8 @@ def _lint(lowered: Lowered, progress: Progress) -> None:
     errors = [d for d in diagnostics if d.severity == "error"]
     if errors:
         raise LintError(
-            f"Recipe has {len(errors)} error-level diagnostics.",
-            hint="Run `tundravm check RECIPE` to see them.",
+            f"The image has {len(errors)} error-level diagnostics.",
+            hint="Run `tundravm check IMAGE` to see them.",
             context={"codes": ", ".join(d.code for d in errors[:3])},
         )
 
@@ -352,7 +352,7 @@ def _fetched_sources(
         what = (
             "Kernel source"
             if isinstance(spec, KernelSource)
-            else "EfiStub package"
+            else "EFI stub package"
             if isinstance(spec, DebFile)
             else "Kernel file"
             if isinstance(spec, KernelFile)
@@ -363,7 +363,7 @@ def _fetched_sources(
             raise StateError(
                 f"{what} {name!r} is not pinned, so nothing is fetched to build it from.",
                 hint=(
-                    "Run `tundravm lock RECIPE`, then `tundravm build`: it fetches what the "
+                    "Run `tundravm lock IMAGE`, then `tundravm build`: it fetches what the "
                     "lock pins."
                 ),
                 context={"source": f"{spec.source.kind} {spec.source.url}"},
@@ -388,7 +388,7 @@ def _fetched_sources(
         if problem == NOT_PREFETCHED:
             raise StateError(
                 f"Source build {name!r} has no prefetched {recipe.kind} dependencies, "
-                "and an offline bake gives the build no network to download them.",
+                "and an offline build has no network to download them.",
                 hint=(
                     f"Run `tundravm build` once with the network on a host with "
                     f"`{recipe.tool}` on PATH (it fills {root / DEPS_DIRNAME / recipe.deps}), "
@@ -398,7 +398,7 @@ def _fetched_sources(
             )
         raise StateError(
             f"Source build {name!r} has an incomplete {recipe.kind} dependency cache: "
-            f"{problem}, and an offline bake gives the build no network to download it.",
+            f"{problem}, and an offline build has no network to download it.",
             hint=(
                 f"Run `tundravm build --clean-cache` with the network on a host with "
                 f"`{recipe.tool}` on PATH: it prefetches the dependencies again. Or build "
@@ -414,9 +414,9 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
     lock = read_lockfile(lock_path)
     if lock.version < LOCKFILE_VERSION:
         raise LockfileError(
-            f"Frozen bake needs a version {LOCKFILE_VERSION} lockfile; {lock_path} is version "
+            f"A frozen build needs a version {LOCKFILE_VERSION} lockfile; {lock_path} is version "
             f"{lock.version}, which does not cover the distribution, compiler and kernel inputs.",
-            hint="Run `tundravm lock RECIPE` to lock the recipe again, then commit the lockfile.",
+            hint="Run `tundravm lock IMAGE` to lock the image again, then commit the lockfile.",
             context={"lock": str(lock_path), "version": str(lock.version)},
         )
     current = lowered.payload()
@@ -427,9 +427,9 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
         unpinned = lowered.unpinned_sources(lock_path)
         if unpinned:
             raise LockfileError(
-                f"Frozen bake requires every source build to be pinned; unpinned: "
+                f"A frozen build requires every source build to be pinned; unpinned: "
                 f"{', '.join(unpinned)}.",
-                hint="run tundravm lock RECIPE to pin them.",
+                hint="Run `tundravm lock IMAGE` to pin them.",
                 context={"lock": str(lock_path), "sources": ", ".join(unpinned)},
             )
         return
@@ -438,16 +438,16 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
         hidden = len(lines) - _DRIFT_MESSAGE_LINES
         lines = [
             *lines[:_DRIFT_MESSAGE_LINES],
-            f"... {hidden} more; run `tundravm lock RECIPE --check` for the full list",
+            f"... {hidden} more; run `tundravm lock IMAGE --check` for the full list",
         ]
     sections = drift.sections
     changed = ", ".join(sections[:_DRIFT_MESSAGE_LINES])
     if len(sections) > _DRIFT_MESSAGE_LINES:
         changed += f", ... ({len(sections) - _DRIFT_MESSAGE_LINES} more)"
     raise LockfileError(
-        "Frozen bake lockfile is stale for current recipe state:\n"
+        "The lockfile of a frozen build is stale for the image as it is now:\n"
         + "\n".join(f"  {line}" for line in lines),
-        hint="Run tundravm lock RECIPE to accept these changes, or revert them.",
+        hint="Run `tundravm lock IMAGE` to accept these changes, or revert them.",
         context={"lock": str(lock_path), "changed": changed},
     )
 

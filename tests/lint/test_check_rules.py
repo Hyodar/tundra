@@ -534,9 +534,9 @@ def test_a_source_location_is_rendered_where_it_is_known() -> None:
         "    at: node.py:27",
     ]
     table = render_markdown([placed, plain])
-    assert table.startswith("| Severity | Code | Variant | Location | Subject | Message | Hint |")
+    assert table.startswith("| Severity | Code | Profile | Location | Subject | Message | Hint |")
     assert "| `default` | `node.py:27` |" in table
-    assert "| Variant | Subject |" in render_markdown([plain])
+    assert "| Profile | Subject |" in render_markdown([plain])
     lines = render_github([placed, plain], "recipe.py").splitlines()
     assert lines[0].startswith("::warning file=node.py,line=27,title=app-port::[default]")
     assert lines[1].startswith("::warning file=recipe.py,title=lock-stale::[common]")

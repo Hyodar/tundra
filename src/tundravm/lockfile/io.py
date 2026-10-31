@@ -10,7 +10,7 @@ from tundravm.errors import LockfileError
 from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
 from tundravm.toolchain import Toolchain
 
-_REGENERATE = "The lockfile is generated: run `tundravm lock RECIPE` to rewrite it."
+_REGENERATE = "The lockfile is generated: run `tundravm lock IMAGE` to rewrite it."
 
 
 def serialize_lockfile(lockfile: Lockfile) -> str:
@@ -40,7 +40,7 @@ def parse_lockfile(raw: str) -> Lockfile:
         raise LockfileError(
             f"Lockfile version {version} is not supported; this tundravm reads version "
             f"{LOCKFILE_VERSION}.",
-            hint="Run `tundravm lock RECIPE` to lock again: version 5 records the build "
+            hint="Run `tundravm lock IMAGE` to lock again: version 5 records the build "
             "toolchain (mkosi, the tools tree, tundravm) so builders run identical tools.",
             context={"version": str(version)},
         )
@@ -74,7 +74,7 @@ def read_lockfile(path: str | Path) -> Lockfile:
     except FileNotFoundError as exc:
         raise LockfileError(
             "Lockfile does not exist.",
-            hint="Run `tundravm lock RECIPE` (or tundravm.lock(recipe)) to create it.",
+            hint="Run `tundravm lock IMAGE` to create it.",
             context={"path": str(lock_path)},
         ) from exc
     return parse_lockfile(raw)
@@ -135,7 +135,7 @@ def _required_dependencies(payload: dict[str, Any], key: str) -> dict[str, list[
     parsed: dict[str, list[str]] = {}
     for profile, packages in value.items():
         if not isinstance(profile, str):
-            raise LockfileError("Invalid lockfile dependency variant key.", hint=_REGENERATE)
+            raise LockfileError("Invalid lockfile dependency profile key.", hint=_REGENERATE)
         if not isinstance(packages, list) or not all(isinstance(item, str) for item in packages):
             raise LockfileError("Invalid lockfile dependency package list.", hint=_REGENERATE)
         parsed[profile] = list(packages)

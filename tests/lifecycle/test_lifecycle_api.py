@@ -111,7 +111,7 @@ def test_compile_selected_variants(tmp_path: Path) -> None:
     # without profile overlays a variant's tree is the whole tree: the payload and every
     # wrapper are shared, whichever variants compile
     assert only.digest == compile(_recipe()).digest
-    with pytest.raises(ValidationError, match="Unknown variant"):
+    with pytest.raises(ValidationError, match="Unknown profile"):
         compile(_recipe(), variants=("gcp",))
 
     changed = compile(_recipe(motd="bye\n"), variants=("default",))
@@ -224,7 +224,7 @@ def test_bake_writes_the_outputs_each_variant_declares(tmp_path: Path) -> None:
     assert all(a.path.is_file() and len(a.sha256) == 64 for a in artifacts)
     assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)
     assert all(a.tree_digest and a.lock_digest for a in artifacts)
-    assert any("baked 2 variants" in line for line in lines)
+    assert any("built 2 profiles" in line for line in lines)
 
 
 def test_bake_refuses_a_stale_lock(tmp_path: Path) -> None:

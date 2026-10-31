@@ -246,7 +246,7 @@ def test_bake_emits_phases_output_artifacts_and_done(tmp_path: Path) -> None:
     assert kinds[-1] == "done"
     done = capture.events[-1]
     assert done.extra["status"] == "ok"
-    assert done.message.startswith("baked 1 variant in ")
+    assert done.message.startswith("built 1 profile in ")
     assert all(b.elapsed_s >= a.elapsed_s for a, b in pairwise(capture.events))
     ok_build = next(
         e

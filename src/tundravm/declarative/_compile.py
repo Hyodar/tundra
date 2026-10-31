@@ -129,7 +129,7 @@ def _enforce_source_policy(lowered: Lowered, pins: Mapping[str, LockedFetch]) ->
     names = ", ".join(f"{spec.name}@{spec.source.requested}" for spec in unpinned)
     raise PolicyError(
         f"Unpinned source builds are not allowed by policy: {names}.",
-        hint="Run `tundravm lock RECIPE` to pin them, or relax mutable_ref_policy.",
+        hint="Run `tundravm lock IMAGE` to pin them.",
         context={"operation": "compile", "sources": names},
     )
 

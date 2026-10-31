@@ -122,7 +122,7 @@ def test_factory_returning_none_is_explained(tmp_path: Path) -> None:
     _write(tmp_path, "recipe.py", HEADER + "def build():\n    return Fragment('c')\n")
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
-    assert "returned Fragment, expected Recipe" in str(excinfo.value)
+    assert "returned Fragment: a factory returns the internal model" in str(excinfo.value)
 
 
 def test_factory_with_required_args_is_rejected(tmp_path: Path) -> None:

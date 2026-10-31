@@ -188,7 +188,7 @@ def _rule_service_user_missing(
         if re.search(rf"\b(useradd|adduser)\b[^\n;&|]*\b{re.escape(user)}\b", commands):
             continue
         hint = (
-            f"Declare User({user!r}) in variant {profile_name!r}, or drop user= to run as "
+            f"Declare User({user!r}) in profile {profile_name!r}, or drop user= to run as "
             "a system user named after the service."
         )
         yield Diagnostic(
@@ -219,7 +219,7 @@ def _rule_user_group_undefined(
                 code="user-group-undefined",
                 message=f"user {user.name!r} joins group {group!r}, which is never created",
                 hint=(
-                    f"Declare Group({group!r}) in variant "
+                    f"Declare Group({group!r}) in profile "
                     f"{profile_name!r}, or drop it from groups=; useradd fails on an "
                     "unknown group."
                 ),
@@ -252,7 +252,7 @@ def _rule_file_path_duplicate(
                     f"({kinds}); only the last one ends up in the image"
                 ),
                 hint=(
-                    "Keep a single declaration. If two fragments write this path, drop "
+                    "Keep a single declaration. If two components write this path, drop "
                     "one of them or merge the content into one File."
                 ),
                 variant=profile_name,
@@ -303,11 +303,11 @@ def _rule_service_command_not_shipped(
         yield Diagnostic(
             severity="warning",
             code="service-command-not-shipped",
-            message=f"service {svc.name!r} runs {binary}, which nothing in this variant ships",
+            message=f"service {svc.name!r} runs {binary}, which nothing in this profile ships",
             hint=(
                 f"Ship it with File({binary!r}, Path(...), mode=0o755), a Build that "
                 "installs it, or the package that provides it. This heuristic only "
-                f"fires when the variant installs no packages and no file or hook mentions "
+                f"fires when the profile installs no packages and no file or hook mentions "
                 f"{name!r}; ignore it if the base image already has the binary."
             ),
             variant=profile_name,
@@ -343,8 +343,8 @@ def _rule_variant_empty(
     )
     if any(own) or state.output_targets_explicit or state.debloat_explicit:
         return
-    message = f"variant declares nothing of its own and builds the {state.extends!r} image"
-    hint = f"Declare what it adds to {state.extends!r} in its add= fragment, or remove the variant."
+    message = f"profile declares nothing of its own and builds the {state.extends!r} image"
+    hint = f"Declare what it adds to {state.extends!r} in its add= or changes=, or remove it."
     yield Diagnostic(
         severity="info",
         code="variant-empty",
@@ -455,25 +455,25 @@ def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
         return (
             f"kernel {spec.version} ({source.kind} {source.url} @ {source.requested}) "
             "is not pinned in the lockfile",
-            f"Run `tundravm lock RECIPE` to pin it as {spec.name!r}{fetch}, or give "
+            f"Run `tundravm lock IMAGE` to pin it as {spec.name!r}{fetch}, or give "
             "Kernel a Git source with a 40-hex commit ref.",
         )
     if isinstance(spec, KernelFile):
         return (
             f"the kernel's {spec.name} ({source.kind} {source.url}) is not pinned in the lockfile",
-            f"Run `tundravm lock RECIPE` to pin its sha256 as {spec.name!r}{fetch}.",
+            f"Run `tundravm lock IMAGE` to pin its sha256 as {spec.name!r}{fetch}.",
         )
     if isinstance(spec, DebFile):
         return (
-            f"EfiStub package ({source.kind} {source.url}) is not pinned in the lockfile",
-            f"Run `tundravm lock RECIPE` to pin its sha256 as {spec.name!r} "
+            f"the EFI stub package ({source.kind} {source.url}) is not pinned in the lockfile",
+            f"Run `tundravm lock IMAGE` to pin its sha256 as {spec.name!r} "
             "(`tundravm build` then downloads it on the host). "
             "Unpinned, the postinst hook downloads it in the build sandbox.",
         )
     return (
         f"source build {spec.name!r} ({source.kind} {source.url} @ {source.requested}) "
         "is not pinned in the lockfile",
-        f"Run `tundravm lock RECIPE` to pin it{fetch}, or declare an immutable source "
+        f"Run `tundravm lock IMAGE` to pin it{fetch}, or declare an immutable source "
         "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)). "
         "Locking reports a dead upstream ref, with every other source it cannot "
         "resolve, before anything is written.",
@@ -491,7 +491,7 @@ def _rule_kernel_missing(
         severity="error",
         code="kernel-missing",
         message=(
-            "variant builds a bootable UKI but installs no kernel, so mkosi stops with "
+            "profile builds a bootable UKI but installs no kernel, so mkosi stops with "
             "'A kernel must be installed in the image to build a UKI'"
         ),
         hint=(
@@ -577,7 +577,7 @@ def _rule_debloat_removes_modules(
         severity="error",
         code="debloat-removes-modules",
         message=(
-            f"debloat removes {pattern} but the variant boots the distribution's modular "
+            f"debloat removes {pattern} but the profile boots the distribution's modular "
             "kernel, whose drivers (virtio, tdx_guest, cloud NICs) then never load"
         ),
         hint=(
@@ -1084,7 +1084,7 @@ def render_markdown(diagnostics: Sequence[Diagnostic]) -> str:
         )
         for d in diagnostics
     ]
-    header = ("Severity", "Code", "Variant", *(("Location",) if located else ()), "Subject")
+    header = ("Severity", "Code", "Profile", *(("Location",) if located else ()), "Subject")
     table = md_table((*header, "Message", "Hint"), rows)
     return f"{table}\n\n**{render_summary(diagnostics)}**"
 
@@ -1136,7 +1136,7 @@ TYPED_SETTINGS: dict[tuple[str, str], str] = {
     ("Content", "CleanPackageMetadata"): "Debian(clean_package_metadata=...)",
 }
 """mkosi keys a typed field sets, and that field (lint ``setting-raw``)."""
-_VARIANT_SETTING = " The field is recipe-wide: keep the Setting when only this variant needs it."
+_VARIANT_SETTING = " The field is image-wide: keep the setting when only this profile needs it."
 _CHROOT = "mkosi-chroot "
 _COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"groupadd\b.*?(?P<name>[a-z_][a-z0-9_-]*)$"), 'Group("{name}")'),

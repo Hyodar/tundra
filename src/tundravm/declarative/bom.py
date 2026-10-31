@@ -119,11 +119,11 @@ class UnboundBinary:
     dependencies: tuple[Component, ...] = ()
 
     def describe(self) -> str:
-        """One sentence: which binary, its sha256, what the bake recorded."""
+        """One sentence: which binary, its sha256, what the build recorded."""
         baked = (
-            "the bake recorded no digest for it"
+            "the build recorded no digest for it"
             if self.recorded is None
-            else f"the bake recorded {self.recorded}"
+            else f"the build recorded {self.recorded}"
         )
         return f"{self.build}'s {self.dest} read from {self.path} hashes to {self.sha256}; {baked}"
 
@@ -251,7 +251,7 @@ class Sbom:
             "downloadLocation": "NOASSERTION",
             "filesAnalyzed": False,
             "primaryPackagePurpose": "OPERATING-SYSTEM",
-            "description": f"tundravm image, variant {self.variant}",
+            "description": f"tundravm image, profile {self.variant}",
             "comment": "; ".join(f"{key} {value}" for key, value in self.metadata()),
         }
         if self.artifact is not None:
@@ -326,12 +326,12 @@ class Sbom:
     def metadata(self) -> tuple[tuple[str, str], ...]:
         """``(key, value)`` recipe metadata rows, in a fixed order; unknown values are ``-``."""
         rows = (
-            ("variant", self.variant),
+            ("profile", self.variant),
             ("base", self.base),
             ("arch", self.arch),
             ("snapshot", self.snapshot or ""),
             ("mirror", self.mirror or ""),
-            ("recipe digest", self.recipe_digest),
+            ("image digest", self.recipe_digest),
             ("tree digest", self.tree_digest),
             ("artifact", "" if self.artifact is None else str(self.artifact)),
             ("artifact sha256", self.artifact_sha256),
@@ -492,7 +492,7 @@ def read_manifest(path: Path) -> tuple[dict[str, str], tuple[Component, ...]]:
     except (OSError, ValueError) as exc:
         raise ArtifactError(
             f"Unreadable mkosi manifest {path}: {exc}.",
-            hint="Bake the variant again to rewrite it.",
+            hint="Build the profile again (`tundravm build`) to rewrite it.",
             context={"path": str(path)},
         ) from exc
     return parse_manifest(payload, path)
@@ -536,11 +536,11 @@ def _of_artifact(
     unbound = _unbound(artifact, lock, path)
     if unbound and not allow_unbound:
         raise ArtifactError(
-            f"The SBOM of {artifact.variant}/{artifact.target} would not describe the bake: "
+            f"The SBOM of {artifact.variant}/{artifact.target} would not describe the build: "
             + "; ".join(unbound)
             + ".",
             hint=(
-                "Pass the lockfile the bake recorded and keep mkosi's manifest beside the "
+                "Pass the lockfile the build recorded and keep mkosi's manifest beside the "
                 "artifact, or build again. allow_unbound=True writes the document anyway, "
                 "marked incomplete."
             ),
@@ -557,7 +557,7 @@ def _of_artifact(
     shown = _relative(path, artifact.build)
     missing = ("manifest",) if artifact.manifest_sha256 is not None and not path.is_file() else ()
     if missing:
-        notes.append(f"the manifest the bake recorded at {shown} is gone: the document is unbound")
+        notes.append(f"the manifest the build recorded at {shown} is gone: the document is unbound")
     packages, config, found = _packages(path, declared, distribution.get("arch"), notes, shown)
     if lock is None:
         notes.append("no lockfile: source pins are not listed")
@@ -605,20 +605,20 @@ def _unbound(artifact: Artifact, lock: Lock | None, manifest: Path) -> list[str]
     if lock is not None:
         actual = _sha256(lock.text().encode())
         if artifact.lock_sha256 is None:
-            problems.append(f"the bake read no lockfile, but one is given (sha256 {actual[:12]})")
+            problems.append(f"the build read no lockfile, but one is given (sha256 {actual[:12]})")
         elif actual != artifact.lock_sha256:
             problems.append(
-                f"the lockfile hashes to {actual[:12]}, the bake recorded "
+                f"the lockfile hashes to {actual[:12]}, the build recorded "
                 f"{artifact.lock_sha256[:12]}"
             )
     if manifest.is_file():
         actual = _sha256(manifest.read_bytes())
         shown = _relative(manifest, artifact.build)
         if artifact.manifest_sha256 is None:
-            problems.append(f"the bake recorded no manifest, but {shown} exists")
+            problems.append(f"the build recorded no manifest, but {shown} exists")
         elif actual != artifact.manifest_sha256:
             problems.append(
-                f"{shown} hashes to {actual[:12]}, the bake recorded "
+                f"{shown} hashes to {actual[:12]}, the build recorded "
                 f"{artifact.manifest_sha256[:12]}"
             )
     return problems
@@ -671,7 +671,7 @@ def _packages(
         config, packages = read_manifest(path)
         return packages, config, True
     notes.append(
-        f"no mkosi package manifest at {shown}: listing the packages the recipe declares, "
+        f"no mkosi package manifest at {shown}: listing the packages the image declares, "
         "without versions"
     )
     deb_arch = _DEB_ARCH.get(str(arch or ""), "")
@@ -892,7 +892,7 @@ def _spdx_package(component: Component, ref: str, distro: tuple[str, str]) -> di
     if component.origin:
         comments.append(f"from repository {component.origin}")
     if component.declared:
-        comments.append("declared by the recipe; version unknown (no mkosi manifest)")
+        comments.append("declared by the image; version unknown (no mkosi manifest)")
     if component.kind != "package" and not component.version:
         comments.append("not pinned by a lockfile")
     if comments:

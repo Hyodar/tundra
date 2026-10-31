@@ -561,7 +561,7 @@ class Recipe:
             if variant.name == name:
                 return variant
         known = ", ".join(v.name for v in self.variants)
-        raise ValidationError(f"Unknown variant {name!r}.", hint=f"Declared variants: {known}.")
+        raise ValidationError(f"Unknown profile {name!r}.", hint=f"Declared profiles: {known}.")
 
 
 # ── References and changes ──────────────────────────────────────────────
@@ -1185,7 +1185,7 @@ class Service(Declared):
                 self,
                 f"service {self.name!r} would run as user {stem!r}, which is not a valid "
                 "user name.",
-                hint="Pass user= (a user the variant declares) or user=Dynamic().",
+                hint="Pass user= (a user the image declares) or user=Dynamic().",
             )
         if not self.enabled and self.wanted_by is not None:
             raise _fail(
@@ -2580,7 +2580,7 @@ class Task(Declared):
             raise _fail(
                 self,
                 f"task {self.name!r} would run as user {stem!r}, which is not a valid user name.",
-                hint="pass user= (a user the variant declares) or user=Dynamic().",
+                hint="Pass user= (a user the image declares) or user=Dynamic().",
             )
         for what in ("group", "description", "wanted_by"):
             if (value := getattr(self, what)) is not None:

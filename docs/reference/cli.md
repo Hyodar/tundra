@@ -43,9 +43,9 @@ options:
   -h, --help  show this help message and exit
   --version   show program's version number and exit
 
-IMAGE defaults to [tool.tundravm] image in the nearest pyproject.toml, or $TUNDRAVM_IMAGE; the
-build root to its `build` key or $TUNDRAVM_BUILD (default: build); the backend to
-$TUNDRAVM_BACKEND or its `backend` key (default: local on Linux x86-64, lima elsewhere).
+IMAGE defaults to $TUNDRAVM_IMAGE, else [tool.tundravm] image in the nearest pyproject.toml; the
+build root to $TUNDRAVM_BUILD, else its `build` key (default: build); the backend to
+$TUNDRAVM_BACKEND, else its `backend` key (default: local on Linux x86-64, lima elsewhere).
 ```
 
 ## tundravm new
@@ -89,7 +89,7 @@ Exit 1 on an error (or a drifted lock or tree); warnings are reported only.
 In GitHub Actions the findings are workflow annotations.
 
 positional arguments:
-  IMAGE             The image file (default: [tool.tundravm] image, or $TUNDRAVM_IMAGE).
+  IMAGE             The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
 
 options:
   -h, --help        show this help message and exit
@@ -120,7 +120,7 @@ the running toolchain). --check never writes and never touches the network: it
 prints the drift and exits 1 when the lock is stale. A build never changes the lock.
 
 positional arguments:
-  IMAGE                 The image file (default: [tool.tundravm] image, or $TUNDRAVM_IMAGE).
+  IMAGE                 The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
 
 options:
   -h, --help            show this help message and exit
@@ -154,7 +154,7 @@ newest. A stale lock is refused; a missing one is written first. --tree-only
 writes the standalone mkosi project instead and builds nothing.
 
 positional arguments:
-  IMAGE             The image file (default: [tool.tundravm] image, or $TUNDRAVM_IMAGE).
+  IMAGE             The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
 
 options:
   -h, --help        show this help message and exit

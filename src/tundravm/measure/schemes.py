@@ -62,7 +62,7 @@ def derive(
         if gpt is None:
             raise MeasurementError(
                 "GCP boots from a disk: measure the gcp artifact, not a bare UKI.",
-                hint="Add the gcp output target and bake again.",
+                hint='Add "gcp" to the image\'s targets= and build again.',
                 context={"artifact": str(artifact)},
             )
         registers |= _gcp_firmware_registers()
@@ -108,8 +108,8 @@ def _read_uki(artifact: Path, uki: Path | None) -> bytes:
         return artifact.read_bytes()
     if uki is None:
         raise MeasurementError(
-            f"{artifact.name} is not a UKI and its bake recorded no UKI it boots.",
-            hint="Measure the UKI target, or bake again so the disk records its boot payload.",
+            f"{artifact.name} is not a UKI and its build recorded no UKI it boots.",
+            hint="Measure payload.efi, or build again so the disk records its boot payload.",
         )
     return uki.read_bytes()
 

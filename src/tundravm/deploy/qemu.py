@@ -122,7 +122,7 @@ class QemuDeployAdapter:
         if not artifact_path.exists():
             raise DeploymentError(
                 "Artifact path does not exist.",
-                hint="Run bake() successfully before deploy().",
+                hint="Run `tundravm build` first, then run the build.",
                 context={"artifact_path": str(artifact_path)},
             )
 

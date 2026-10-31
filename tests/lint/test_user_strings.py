@@ -47,6 +47,20 @@ DENYLIST = {
         r"|changes|release|witness|explore|preview|watch|status|clean|config|ci|completion|units"
         r"|import)\b"
     ),
+    "RECIPE placeholder (IMAGE)": re.compile(r"\btundravm \w+ RECIPE\b"),
+    "bake for a build (build)": re.compile(
+        r"\bbake\(\)|\b(?:the|an?|its|offline|frozen) bake\b|\b[Bb]ake (?:again|the)\b|\bbaked \d"
+    ),
+    "Policy knob an Image cannot set (build --offline, tundravm lock)": re.compile(
+        r"\b(?:network_mode|mutable_ref_policy|require_frozen_lock)\b"
+    ),
+    "Recipe for the image file (image file, Image)": re.compile(
+        r"\bRecipe (?:file|has|factory|factories|attribute|defines)\b|\bbinds a Recipe\b"
+    ),
+    "variant for a profile (profile)": re.compile(
+        r"\b[Uu]nknown variant|\bDeclared variants\b|\bin variant\b|\bvariant=(?:\{|\s*$)"
+        r"|\bInherits: "
+    ),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 
@@ -190,6 +204,29 @@ def test_removed_verbs_are_caught(text: str) -> None:
     assert REMOVED_VERB in _hits(text)
 
 
+@pytest.mark.parametrize(
+    ("text", "what"),
+    [
+        ("Run `tundravm lock RECIPE` to pin them.", "RECIPE placeholder (IMAGE)"),
+        ("Run bake() successfully before deploy().", "bake for a build (build)"),
+        ("An offline bake cannot build a tree", "bake for a build (build)"),
+        ("Bake the variant again to rewrite it.", "bake for a build (build)"),
+        ("baked 2 variants in 3s", "bake for a build (build)"),
+        (
+            "or relax network_mode.",
+            "Policy knob an Image cannot set (build --offline, tundravm lock)",
+        ),
+        ("Recipe file not found: x.py", "Recipe for the image file (image file, Image)"),
+        ("Recipe factory build() returned None.", "Recipe for the image file (image file, Image)"),
+        ("Unknown variant(s): staging.", "variant for a profile (profile)"),
+        ("Duplicate user name 'a' in variant 'dev'.", "variant for a profile (profile)"),
+        ("  variant=", "variant for a profile (profile)"),
+    ],
+)
+def test_internal_names_are_caught(text: str, what: str) -> None:
+    assert what in _hits(text)
+
+
 def test_removed_docs_are_caught() -> None:
     assert _hits("keep the ones the program does not need (docs/api.md: Hardening)") == [
         "removed doc (docs/guide.md, docs/reference/)"
@@ -205,6 +242,10 @@ def test_removed_docs_are_caught() -> None:
         "tundravm check --tree mkosi",
         "tundravm convert ./units --from systemd",
         "echo 'tundravm: tool is not pinned: run tundravm lock, then tundravm build' >&2",
+        "Run `tundravm lock IMAGE` to pin them.",
+        "Deliver it at boot instead of baking it into the image",
+        "Unknown profile(s): staging.",
+        "Image: debian/trixie (x86_64)  profile=dev  reproducible=yes",
     ],
 )
 def test_the_twelve_commands_pass(text: str) -> None:

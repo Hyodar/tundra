@@ -130,7 +130,7 @@ class Toolchain:
         if not isinstance(raw, Mapping) or not isinstance(raw.get("tundravm"), str):
             raise LockfileError(
                 "Invalid lockfile `toolchain` value.",
-                hint="The lockfile is generated: run `tundravm lock RECIPE` to rewrite it.",
+                hint="The lockfile is generated: run `tundravm lock IMAGE` to rewrite it.",
             )
         mkosi = raw.get("mkosi")
         tree = raw.get("tools_tree")

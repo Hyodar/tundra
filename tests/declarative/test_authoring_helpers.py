@@ -143,8 +143,8 @@ def test_editing_the_build_behind_an_executable_is_reported() -> None:
     stale = {d.variant: d.message for d in lint(recipe) if d.code == "executable-stale"}
     assert set(stale) == {"moved", "gone"}
     assert "runs /usr/bin/tool, which Build 'tool' no longer installs" in stale["moved"]
-    assert "edited in variant 'moved'" in stale["moved"]
-    assert "removed in variant 'gone'" in stale["gone"]
+    assert "edited in profile 'moved'" in stale["moved"]
+    assert "removed in profile 'gone'" in stale["gone"]
 
 
 def test_cargo_binary_lowers_like_the_hand_written_build() -> None:

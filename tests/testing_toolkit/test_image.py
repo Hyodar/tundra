@@ -208,7 +208,7 @@ def test_plan_takes_a_variant_and_matches_compile() -> None:
     azure = plan(recipe, "azure")
     assert "jq" in azure.packages and "jq" not in plan(recipe).packages
     assert azure.tree.digest == compile(recipe, variants=["azure"]).digest
-    with pytest.raises(ValidationError, match="Unknown variant"):
+    with pytest.raises(ValidationError, match="Unknown profile"):
         plan(recipe, "gcp")
 
 

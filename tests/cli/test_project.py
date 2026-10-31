@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from tundravm.errors import ValidationError
-from tundravm.project import deployment_table, find_project, render_table, settings
+from tundravm.project import (
+    RESOLUTION_HELP,
+    deployment_table,
+    find_project,
+    render_table,
+    settings,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +62,13 @@ def test_the_environment_wins_over_the_table(
     assert found.build == Path("elsewhere")
     assert found.backend == "lima"
     assert set(found.origins.values()) == {"environment"}
+
+
+def test_the_help_lists_the_environment_before_the_table() -> None:
+    for key in ("image", "build", "backend"):
+        variable = f"$TUNDRAVM_{key.upper()}"
+        table = "[tool.tundravm] image" if key == "image" else f"`{key}` key"
+        assert RESOLUTION_HELP.index(variable) < RESOLUTION_HELP.index(table), key
 
 
 def test_an_argument_wins_over_everything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

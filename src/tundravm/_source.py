@@ -1458,7 +1458,7 @@ def _download(source: HttpSource, pin: str, dest: Path) -> None:
             f"Cannot fetch {described}: {reason}.",
             source=described,
             reason=reason,
-            hint="The file changed upstream: `tundravm lock RECIPE --update NAME` pins it again.",
+            hint="The file changed upstream: `tundravm lock IMAGE --update NAME` pins it again.",
         )
     if source.filename.endswith(_ARCHIVE_SUFFIXES):
         unpack = ["tar", "-xf", str(file), "-C", str(dest), "--strip-components=1"]
@@ -1644,7 +1644,7 @@ def _unresolved(failures: Mapping[str, SourceError], total: int, *, offline: boo
         verb = "needs" if count == 1 else "need"
         head = f"Cannot lock offline: {count} {noun} {verb} the network to resolve:"
         hint = (
-            "Run `tundravm lock RECIPE` without --offline, or pin the source inline "
+            "Run `tundravm lock IMAGE` without --offline, or pin the source inline "
             "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...))."
         )
     else:

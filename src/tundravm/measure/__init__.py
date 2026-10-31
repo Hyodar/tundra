@@ -27,7 +27,7 @@ def derive_measurements(
     if not profile_result.artifacts:
         raise MeasurementError(
             "No artifacts are available for measurement derivation.",
-            hint="Bake the variant before measuring it.",
+            hint="Build the profile (`tundravm build`) before measuring it.",
             context={"profile": profile, "backend": backend},
         )
     _, artifact = sorted(profile_result.artifacts.items())[0]

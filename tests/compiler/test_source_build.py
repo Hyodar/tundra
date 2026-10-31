@@ -433,7 +433,7 @@ def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
     with pytest.raises(LockfileError, match="unpinned: tool") as excinfo:
         bake(recipe, lock=unpinned, backend=Backend("local"), build=tmp_path / "out", fetch=False)
     assert excinfo.value.hint is not None
-    assert "run tundravm lock" in excinfo.value.hint
+    assert "tundravm lock IMAGE" in excinfo.value.hint
 
 
 # ── Policy ──────────────────────────────────────────────────────────

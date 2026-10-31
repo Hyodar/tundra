@@ -89,7 +89,7 @@ def test_listen_renders_socket_directives() -> None:
         (lambda: Task("job.timer", "/bin/true"), "must be a .service unit"),
         (lambda: Task("job", "/bin/true", timeout="forever"), "not a systemd time span"),
         (lambda: Task("job", "/bin/true", schedule="daily"), "schedule must be"),  # type: ignore[arg-type]
-        (lambda: Task("Job", "/bin/true"), "pass user="),
+        (lambda: Task("Job", "/bin/true"), "Pass user="),
         (lambda: Task("j", "/bin/true", schedule=Every("1h"), wanted_by="x.target"), "timer"),
         (lambda: Mount("data", "tmpfs"), "absolute"),
         (lambda: Mount("/", "tmpfs"), "normalized path other than /"),

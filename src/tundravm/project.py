@@ -53,11 +53,12 @@ INSTANCES = Path(".tundravm") / "instances"
 """Where ``run`` and ``deploy`` keep one directory per instance, under the project root."""
 
 RESOLUTION_HELP = (
-    "IMAGE defaults to [tool.tundravm] image in the nearest pyproject.toml, or "
-    "$TUNDRAVM_IMAGE; the build root to its `build` key or $TUNDRAVM_BUILD (default: "
-    "build); the backend to $TUNDRAVM_BACKEND or its `backend` key (default: local on "
+    "IMAGE defaults to $TUNDRAVM_IMAGE, else [tool.tundravm] image in the nearest "
+    "pyproject.toml; the build root to $TUNDRAVM_BUILD, else its `build` key (default: "
+    "build); the backend to $TUNDRAVM_BACKEND, else its `backend` key (default: local on "
     "Linux x86-64, lima elsewhere)."
 )
+"""The epilog of ``tundravm --help``: each setting in the order :func:`settings` resolves it."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -327,7 +327,7 @@ def test_text_and_markdown_tables(tmp_path: Path, locked: Lock) -> None:
 def test_a_changed_artifact_is_refused(tmp_path: Path, locked: Lock) -> None:
     artifact = _artifact(tmp_path, lock=locked)
     artifact.path.write_bytes(b"tampered")
-    with pytest.raises(ArtifactError, match="changed since the bake"):
+    with pytest.raises(ArtifactError, match="changed since it was built"):
         sbom(artifact, lock=locked)
 
 
@@ -338,11 +338,11 @@ def test_a_lockfile_the_bake_did_not_read_is_refused_unless_allowed(
     with pytest.raises(ArtifactError) as raised:
         sbom(artifact, lock=locked)
     assert raised.value.code == "E_ARTIFACT_CHANGED"
-    assert "the bake read no lockfile" in str(raised.value)
+    assert "the build read no lockfile" in str(raised.value)
     assert raised.value.hint is not None and "allow_unbound=True" in raised.value.hint
     document = sbom(artifact, lock=locked, allow_unbound=True)
     assert not document.bound
-    assert document.notes[0].startswith("unbound, the document is incomplete: the bake read")
+    assert document.notes[0].startswith("unbound, the document is incomplete: the build read")
     assert ("bound", "no (incomplete)") in document.metadata()
 
 

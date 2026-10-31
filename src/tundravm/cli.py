@@ -218,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         metavar="IMAGE",
-        help="The image file (default: [tool.tundravm] image, or $TUNDRAVM_IMAGE).",
+        help="The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).",
     )
     loading = image.add_argument_group("loading the image file")
     loading.add_argument(

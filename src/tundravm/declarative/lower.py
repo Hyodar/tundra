@@ -108,37 +108,37 @@ _BOOL_SETTINGS: dict[tuple[str, str], str] = {
     ("Content", "CleanPackageMetadata"): "clean_package_metadata",
 }
 _COMPILER_KEYS: dict[str, str] = {
-    "Distribution": "Recipe.platform (Debian(release))",
-    "Release": "Recipe.platform (Debian(release))",
+    "Distribution": "base=Debian(release)",
+    "Release": "base=Debian(release)",
     "Architecture": "Debian(arch=...)",
     "Mirror": "Debian(mirror=...)",
     "ToolsTreeMirror": "Debian(tools_mirror=...)",
     "SourceDateEpoch": "Debian(epoch=...)",
-    "Format": "Variant outputs and Mkosi(root=...)",
+    "Format": "the image's rootfs= and targets=",
     "Output": "the tree's image names (payload, qemu and one per cloud target)",
-    "ImageId": "the recipe name",
+    "ImageId": "the image's name",
     "Snapshot": "Debian(snapshot=...)",
     "ToolsTree": "nothing: the tree always builds mkosi's default tools tree",
-    "ToolsTreeDistribution": "Recipe.platform",
-    "ToolsTreeRelease": "Recipe.platform",
+    "ToolsTreeDistribution": "base=Debian(release)",
+    "ToolsTreeRelease": "base=Debian(release)",
     "ToolsTreeSnapshot": "Debian(snapshot=...)",
     "History": "nothing: the tree is regenerated per build with History=no",
     "MinimumVersion": "nothing: the tree requires the pinned mkosi",
-    "Dependencies": "Variant outputs",
-    "Profiles": "Variant(add=...)",
-    "SplitArtifacts": "Mkosi(root=...)",
-    "RepartDirectories": "Mkosi(root=...)",
+    "Dependencies": "the image's targets=",
+    "Profiles": "the image's profiles=",
+    "SplitArtifacts": "rootfs=RootFS.verity()",
+    "RepartDirectories": "rootfs=RootFS.verity()",
     "Packages": "Package(name)",
-    "BuildPackages": "Package(name, role='build')",
+    "BuildPackages": "the packages= of the Build, GoBinary or CargoBinary that needs them",
     "Bootable": "Kernel(...) or Package('linux-image-amd64'); only Bootable=no is accepted",
     "KernelCommandLine": "Kernel(cmdline=...)",
     **{
         key: "Debian(kernel_modules=...)"
         for key in ("KernelModules", "KernelModulesInclude", "KernelModulesExclude")
     },
-    "ExtraTrees": "File/FileTree/Template(stage='extra')",
-    "SkeletonTrees": "File/FileTree/Template(stage='skeleton')",
-    **{key: "Hook(name, phase, script)" for key in PHASE_TO_MKOSI_KEY.values()},
+    "ExtraTrees": "files=[File(...)] or files=[Tree(...)]",
+    "SkeletonTrees": "files=[File(...)] or files=[Tree(...)]",
+    **{key: "Mkosi(scripts=[(stage, script)])" for key in PHASE_TO_MKOSI_KEY.values()},
 }
 """mkosi keys the compiler writes itself, and the declaration that sets each."""
 _BOOTABLE = ("Content", "Bootable")
@@ -220,7 +220,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             overlay_sandbox[variant.name] = _backports_sources(recipe)
         try:
             if variant.inherits not in (BASE_VARIANT, default.name):
-                raise _Whole("extends another variant")
+                raise _Whole("extends another profile")
             own, reemit = _overlay(base, child)
         except _Whole:
             # Its whole resolved image, as the payload is lowered: the emitter splits what
@@ -238,10 +238,10 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         plural = "s" if len(rejected) > 1 else ""
         listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)
         raise ValidationError(
-            f"Cannot emit variant{plural} {listed}: every variant of a tree shares the default "
-            f"variant {default.name!r}'s mkosi settings, kernel and source builds.",
+            f"Cannot emit profile{plural} {listed}: every profile of a tree shares "
+            f"{default.name!r}'s mkosi settings, kernel and source builds.",
             hint=f"Declare those settings, the kernel and the builds once, for {default.name!r} "
-            "(or in Recipe.items); or make the variant its own recipe.",
+            "(in the image itself); or make the profile an image of its own.",
             context={"variants": ", ".join(name for name, _ in rejected)},
         )
     extra: dict[str, Any] = {} if recipe.policy is None else {"policy": recipe.policy}
@@ -286,11 +286,11 @@ def _require_shared_distribution(lowered: Lowered) -> None:
     for name in lowered.overlays:
         if lowered.distribution_fingerprint(name) != expected:
             raise ValidationError(
-                f"Cannot emit variant {name!r}: it changes the build packages or repositories, "
-                f"and the payload's kernel and source builds, which every variant runs, are "
-                f"cached for the default variant {default!r}'s toolchain.",
-                hint=f"Declare those build packages and repositories in {default!r} (or "
-                "Recipe.items), or make the variant its own recipe.",
+                f"Cannot emit profile {name!r}: it changes the build packages or repositories, "
+                f"and the payload's kernel and source builds, which every profile runs, are "
+                f"cached for {default!r}'s toolchain.",
+                hint=f"Declare those build packages and repositories in {default!r} (in the "
+                "image itself), or make the profile an image of its own.",
                 context={"variant": name},
             )
 
@@ -462,11 +462,11 @@ def _overlay(
         isinstance(item, (Key, Disk, Secrets)) for item in base.items
     ):
         # runtime tools are configured once per profile
-        raise _Whole("changes the keys, disks or secrets the default variant configures")
+        raise _Whole("changes the volumes or secrets the image configures")
     if any(isinstance(item, Setting) for item in own):
         raise _Whole("has its own Build.BuildSources")  # mounts merge per profile
     if any(isinstance(item, Debloat) and item.keep_paths_by_variant for item in own):
-        raise _Whole("declares per-variant debloat paths")
+        raise _Whole("declares per-profile debloat paths")
     reemit: list[Unit | Service | Task | Mount] = []
     if has_init(child.items) and not has_init(base.items):
         # inherited units and services written before any step existed wait for none
@@ -488,7 +488,7 @@ def _variant_kernel(
     if kernel is None:
         if configs:
             raise ValidationError(
-                f"KernelConfig {configs[0].name!r} configures a kernel, but the variant "
+                f"KernelConfig {configs[0].name!r} configures a kernel, but the profile "
                 "builds none.",
                 hint='Declare Kernel(version, source, base=DebianConfig("6.12.48-1")).',
             )
@@ -523,7 +523,7 @@ def merged_kernel_options(
                 raise ValidationError(
                     f"kernel-option-conflict: {option} is {seen[0]} in {seen[1]} "
                     f"and {value} in {label}.",
-                    hint="Drop one of them, or remove one declaration from the variant "
+                    hint="Drop one of them, or remove one declaration from the profile "
                     "(KernelConfig.ref(name).remove()).",
                     context={"option": option},
                 )

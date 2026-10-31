@@ -183,7 +183,7 @@ def _accounts(unit: ShippedUnit, parsed: UnitText, facts: Facts) -> Iterator[Dia
                     "service-user-missing",
                     "error",
                     f"{prefix}{key}={account} names a {kind.lower()} that is never created",
-                    f"Declare {kind}({account!r}) in variant {facts.variant!r}.",
+                    f"Declare {kind}({account!r}) in profile {facts.variant!r}.",
                 )
 
 
@@ -239,7 +239,7 @@ def _activation(
                 facts,
                 code,
                 severity,
-                f"activates {target}, which the variant neither ships nor enables",
+                f"activates {target}, which the profile neither ships nor enables",
                 f"Ship {target} next to {unit.name}, or name the unit it starts with "
                 f"{'Service' if own == 'Socket' else 'Unit'}=.",
             )
@@ -323,7 +323,7 @@ def _cloud_glue(
             "cloud-glue-unconditional",
             "warning",
             f"{unit.name} only works on {_GLUE_TARGET[kind]} but has no "
-            f"ConditionVirtualization={kind}; the variant's UKI also boots on "
+            f"ConditionVirtualization={kind}; the profile's UKI also boots on "
             f"{', '.join(others)}",
             f'Add conditions=(Condition.virtualization("{kind}"),) to the Service/Task (or '
             f"ConditionVirtualization={kind} to the unit text) so it stays inert elsewhere.",

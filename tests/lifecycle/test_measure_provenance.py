@@ -68,7 +68,7 @@ def test_a_changed_artifact_is_refused_before_measuring(tmp_path: Path) -> None:
     artifact = _default(tmp_path)
     artifact.path.write_bytes(build_uki())
 
-    with pytest.raises(Exception, match="changed since the bake"):
+    with pytest.raises(Exception, match="changed since it was built"):
         measure(artifact, scheme="qemu")
 
 

@@ -491,7 +491,7 @@ def test_an_offline_bake_refuses_a_tree_with_network(tmp_path: Path, repo: tuple
     )
     backend = _Recording()
     locked = _locked(replace(recipe, policy=None), first)
-    with pytest.raises(PolicyError, match="offline bake cannot build a tree"):
+    with pytest.raises(PolicyError, match="offline build cannot build a tree"):
         bake_image(lower(recipe), None, locked=locked, backend=backend, build=tmp_path, fetch=False)
     assert backend.requests == []
 
@@ -582,7 +582,7 @@ def test_unpinned_efi_stub_is_reported_until_locked() -> None:
     assert not [d for d in lint(recipe, lock=locked) if d.code == "source-unpinned"]
     report = check_report(recipe, None, variants=None)
     (unpinned,) = (d for d in report if d.code == "source-unpinned")
-    assert unpinned.hint is not None and "`tundravm lock RECIPE`" in unpinned.hint
+    assert unpinned.hint is not None and "`tundravm lock IMAGE`" in unpinned.hint
 
 
 def test_a_build_named_efi_stub_collides_with_the_package(
@@ -591,5 +591,5 @@ def test_a_build_named_efi_stub_collides_with_the_package(
     url, _ = repo
     archive, _ = snapshot
     build = Build("efi-stub", Git(url, "main"), script="make", install=(Install("t", "/t"),))
-    with pytest.raises(Exception, match="takes the name of the EfiStub package"):
+    with pytest.raises(Exception, match="takes the name of the EFI stub package"):
         lower(_recipe(build, _stub(archive))).lock_sources()

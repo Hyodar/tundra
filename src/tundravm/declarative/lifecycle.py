@@ -313,8 +313,8 @@ def variant_names(recipe: Recipe, variants: Sequence[str] | None) -> tuple[str, 
     unknown = [name for name in variants if name not in declared]
     if unknown:
         raise ValidationError(
-            f"Unknown variant(s): {', '.join(unknown)}.",
-            hint=f"Declared variants: {', '.join(declared)}",
+            f"Unknown profile(s): {', '.join(unknown)}.",
+            hint=f"Declared profiles: {', '.join(declared)}",
         )
     return tuple(dict.fromkeys(variants))
 
@@ -710,7 +710,7 @@ def image_lock_status(
 
     found = drift_diagnostics(lines())
     if not found and not drift.digest_matches:
-        found = (Diagnostic("lock-stale", "error", "the recipe digest differs from the lock"),)
+        found = (Diagnostic("lock-stale", "error", "the image digest differs from the lock"),)
     return found
 
 
@@ -873,7 +873,7 @@ def _resolve_for_fetch(
         names = ", ".join(f"{b.name}@{b.source.requested}" for b in pending.values())
         raise PolicyError(
             f"Unpinned source builds are not allowed by policy: {names}.",
-            hint="Run `tundravm lock RECIPE` to pin them, then fetch from that lockfile.",
+            hint="Run `tundravm lock IMAGE` to pin them, then build from that lockfile.",
             context={"operation": "fetch", "sources": names},
         )
     try:
@@ -882,7 +882,7 @@ def _resolve_for_fetch(
         message = str(exc.args[0]).replace("Cannot lock", "Cannot fetch", 1)
         raise LockfileError(
             message.replace("; nothing written.", "; nothing fetched."),
-            hint="Fix the sources above, or `tundravm lock RECIPE` and fetch from its lockfile.",
+            hint="Fix the sources above, or run `tundravm lock IMAGE` and build from its lockfile.",
             failures=exc.failures,
         ) from exc
     return {fetch.name: fetch.digest for fetch in resolved if fetch.name is not None}
@@ -912,8 +912,9 @@ def _checkout(
     donor = copies.get((build.source, pin))
     if offline and donor is None:
         raise PolicyError(
-            f"Cannot fetch {build.name!r}: policy network_mode is offline.",
-            hint=f"Populate {path} on a connected host (`tundravm build`), or relax network_mode.",
+            f"Cannot fetch {build.name!r}: the build is offline.",
+            hint=f"Populate {path} on a connected host (`tundravm build`), or build without "
+            "--offline.",
             context={"operation": "fetch", "source": build.source.describe()},
         )
     root.mkdir(parents=True, exist_ok=True)
@@ -1152,7 +1153,7 @@ def _installed(img: Lowered, name: str, built: ProfileBuildResult) -> dict[str, 
 def verify_artifact(artifact: Artifact) -> None:
     """Raise ``ArtifactError`` unless *artifact*'s file still hashes to its recorded sha256."""
     context = {"variant": artifact.variant, "target": artifact.target, "path": str(artifact.path)}
-    rebake = "Bake the variant again to record the artifact it should be."
+    rebake = "Build the profile again (`tundravm build`) to record the artifact it should be."
     if not artifact.sha256:
         raise ArtifactError(
             f"No sha256 recorded for {artifact.path}.",
@@ -1170,8 +1171,8 @@ def verify_artifact(artifact: Artifact) -> None:
         ) from exc
     if actual != artifact.sha256:
         raise ArtifactError(
-            f"Artifact {artifact.path} changed since the bake.",
-            hint=f"The bake recorded sha256 {artifact.sha256[:12]}; {rebake}",
+            f"Artifact {artifact.path} changed since it was built.",
+            hint=f"The build recorded sha256 {artifact.sha256[:12]}; {rebake}",
             context={**context, "recorded": artifact.sha256, "actual": actual},
         )
 

@@ -137,7 +137,7 @@ def test_compile_tree_selects_variants(tmp_path: Path) -> None:
 
 def test_compile_tree_rejects_unknown_and_uncompiled_variants(tmp_path: Path) -> None:
     recipe = _recipe()
-    with pytest.raises(ValidationError, match="Unknown variant"):
+    with pytest.raises(ValidationError, match="Unknown profile"):
         compile_tree(recipe, variants=["gpc"], path=tmp_path / "x")
     tree = compile_tree(recipe, variants="default", path=tmp_path / "y")
     with pytest.raises(KeyError, match="was not compiled"):

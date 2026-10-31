@@ -553,7 +553,7 @@ def _repository(item: Repository) -> RepositorySpec:
 def _group(profile: ProfileState, group: Group) -> None:
     if any(g.name == group.name for g in profile.groups):
         raise ValidationError(
-            f"Duplicate group name '{group.name}' in variant '{profile.name}'.",
+            f"Duplicate group name '{group.name}' in profile '{profile.name}'.",
             hint="Group names must be unique within a profile.",
             context={"group": group.name, "profile": profile.name},
         )
@@ -563,7 +563,7 @@ def _group(profile: ProfileState, group: Group) -> None:
 def _user(profile: ProfileState, user: User) -> None:
     if any(u.name == user.name for u in profile.users):
         raise ValidationError(
-            f"Duplicate user name '{user.name}' in variant '{profile.name}'.",
+            f"Duplicate user name '{user.name}' in profile '{profile.name}'.",
             hint="User names must be unique within a profile.",
             context={"user": user.name, "profile": profile.name},
         )
@@ -858,7 +858,7 @@ def _service(
             )
     if any(s.name == name for s in profile.services):
         raise ValidationError(
-            f"Duplicate service name '{name}' in variant '{profile.name}'.",
+            f"Duplicate service name '{name}' in profile '{profile.name}'.",
             hint="Service names must be unique within a profile.",
             context={"service": name, "profile": profile.name},
         )
@@ -935,7 +935,7 @@ def _unit_fields(
             unit = target_unit(target)
             if isinstance(target, Ref) and units is not None and unit not in units:
                 raise ValidationError(
-                    f"unit-ref-undefined: {name} {what}= names {target}, which the variant "
+                    f"unit-ref-undefined: {name} {what}= names {target}, which the profile "
                     "does not declare.",
                     hint="Declare the unit, or name a packaged unit by its unit name.",
                 )
@@ -1252,7 +1252,7 @@ def _targets(
         unit = target_unit(target)
         if isinstance(target, Ref) and units is not None and unit not in units:
             raise ValidationError(
-                f"unit-ref-undefined: {name} {what}= names {target}, which the variant "
+                f"unit-ref-undefined: {name} {what}= names {target}, which the profile "
                 "does not declare.",
                 hint="Declare the unit, or name a packaged unit by its unit name.",
             )
@@ -1307,7 +1307,7 @@ def _task(
     stem = name.removesuffix(".service")
     if any(unit_name(s.name) == name and s.command for s in profile.services):
         raise ValidationError(
-            f"Duplicate unit '{name}' in variant '{profile.name}'.",
+            f"Duplicate unit '{name}' in profile '{profile.name}'.",
             hint="A Task and a Service cannot share a name.",
             context={"unit": name, "profile": profile.name},
         )

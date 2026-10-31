@@ -93,7 +93,7 @@ class Origin:
     location: str = ""
 
     def describe(self) -> str:
-        """``size edited at recipe.py:30 in variant small-key``, ``added in common via base``."""
+        """``size edited at image.py:30 in profile small-key``, ``added in the image via base``."""
         where = level_name(self.variant)
         chain = " > ".join(
             name if kind in ("Fragment", "") else f"{name} ({kind})"
@@ -105,10 +105,10 @@ class Origin:
 
 
 def level_name(level: str) -> str:
-    """``in common``, ``in the platform`` or ``in variant <name>`` for an origin *level*."""
+    """``in the image``, ``in the platform`` or ``in profile <name>`` for an origin *level*."""
     if level == COMMON_LEVEL:
-        return "in common"
-    return "in the platform" if level == PLATFORM_LEVEL else f"in variant {level}"
+        return "in the image"
+    return "in the platform" if level == PLATFORM_LEVEL else f"in profile {level}"
 
 
 CLOUD_TARGETS: frozenset[str] = frozenset({"azure", "gcp"})
@@ -120,7 +120,7 @@ def identity(item: Declaration) -> Identity:
     if not isinstance(item, Declared):
         raise ValidationError(
             f"{item!r} is not a declaration.",
-            hint="Fragment items must be declarations such as Package(), File() or Unit().",
+            hint="Items must be declarations such as Package(), File() or a service.",
         )
     return ref_identity(item.ref)
 
@@ -204,7 +204,7 @@ class _Resolution:
             if seen != fragment:
                 self.report(
                     "fragment-conflict",
-                    f"two different fragments are named {fragment.name!r}",
+                    f"two different components are named {fragment.name!r}",
                     subject=fragment.name,
                     at=fragment,
                 )
@@ -256,7 +256,7 @@ class _Resolution:
             if current is None:
                 self.report(
                     "edit-missing" if isinstance(change, Edit) else "remove-missing",
-                    f"variant {variant.name!r} {verb} {change.target}, which it does not inherit",
+                    f"profile {variant.name!r} {verb} {change.target}, which it does not inherit",
                     subject=str(change.target),
                     at=change,
                 )
@@ -266,7 +266,7 @@ class _Resolution:
                 except ValidationError as exc:
                     self.report(
                         "edit-invalid",
-                        f"variant {variant.name!r} edits {change.target}: {exc.args[0]}",
+                        f"profile {variant.name!r} edits {change.target}: {exc.args[0]}",
                         subject=str(change.target),
                         at=change,
                     )
@@ -289,8 +289,8 @@ def ancestry(recipe: Recipe, name: str) -> tuple[Variant, ...]:
         if any(v.name == current.name for v in chain):
             names = " -> ".join(v.name for v in (*reversed(chain), current))
             raise ValidationError(
-                f"Variant inherits= form a cycle: {names}.",
-                hint="Point one variant's inherits= at a variant outside the loop, or drop it.",
+                f"Profiles extend each other in a cycle: {names}.",
+                hint="Point one profile's extends= at a profile outside the loop, or drop it.",
             )
         chain.append(current)
         inherits = current.inherits
@@ -300,8 +300,8 @@ def ancestry(recipe: Recipe, name: str) -> tuple[Variant, ...]:
             current = recipe.variant(inherits)
         except ValidationError as exc:
             raise ValidationError(
-                f"Variant {chain[-1].name!r} inherits unknown variant {inherits!r}.",
-                hint=f"Use {BASE_VARIANT!r}, None, or a declared variant.",
+                f"Profile {chain[-1].name!r} extends unknown profile {inherits!r}.",
+                hint="Extend None (the image itself) or a declared profile.",
             ) from exc
     return tuple(reversed(chain))
 
@@ -338,8 +338,8 @@ def _check_targets(state: _Resolution, chain: Sequence[Variant]) -> None:
         if own and clouds and not set(clouds) <= set(own):
             state.report(
                 "target-inconsistent",
-                f"variant {variant.name!r} targets {', '.join(own)} but inherits the "
-                f"{', '.join(clouds)} platform integration of the variant it inherits",
+                f"profile {variant.name!r} targets {', '.join(own)} but inherits the "
+                f"{', '.join(clouds)} platform integration of the profile it extends",
                 subject=variant.name,
                 at=variant,
             )
@@ -476,7 +476,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
             if ref_identity(ref) not in present:
                 state.report(
                     code,
-                    f"{describe(identity(item))} references {ref}, which variant "
+                    f"{describe(identity(item))} references {ref}, which profile "
                     f"{state.variant!r} does not declare",
                     subject=item.ref.identity[-1],
                     at=item,
@@ -490,7 +490,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                 if handle.step not in step_names:
                     state.report(
                         "step-undefined",
-                        f"boot step {step.name!r} runs {edge} {handle.step!r}, which this variant "
+                        f"boot step {step.name!r} runs {edge} {handle.step!r}, which this profile "
                         "does not declare",
                         subject=step.name,
                         at=step,
@@ -509,7 +509,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                     state.report(
                         "needs-undefined",
                         f"{type(unit).__name__.lower()} {unit_label(unit)!r} needs boot task "
-                        f"{handle.unit!r}, which this variant does not declare",
+                        f"{handle.unit!r}, which this profile does not declare",
                         subject=unit_label(unit),
                         at=unit,
                     )
@@ -518,7 +518,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
                 state.report(
                     "needs-undefined",
                     f"{type(unit).__name__.lower()} {unit_label(unit)!r} needs step "
-                    f"{handle.step!r}, which this variant does not declare",
+                    f"{handle.step!r}, which this profile does not declare",
                     subject=unit_label(unit),
                     at=unit,
                 )
@@ -530,7 +530,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
             if dep not in hook_names:
                 state.report(
                     "hook-after-undefined",
-                    f"hook {hook.name!r} runs after {dep!r}, which this variant does not declare",
+                    f"hook {hook.name!r} runs after {dep!r}, which this profile does not declare",
                     subject=hook.name,
                     at=hook,
                 )
@@ -546,7 +546,7 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
         for unit in (u for u in waiting if not all(isinstance(n, UnitReady) for n in u.needs)):
             state.report(
                 "needs-without-init",
-                f"unit {unit.name!r} waits for runtime-init, but this variant declares no "
+                f"unit {unit.name!r} waits for runtime-init, but this profile declares no "
                 "runtime-init step",
                 subject=unit.name,
                 at=unit,
@@ -573,7 +573,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
         state.apply_changes(variant)
         if variant.add != EMPTY_FRAGMENT:
             state.add_level(
-                state.expand(variant.add), where=f"variant {variant.name!r}", level=variant.name
+                state.expand(variant.add), where=f"profile {variant.name!r}", level=variant.name
             )
     _check_targets(state, chain)
     _expand_firewall(state)
@@ -595,8 +595,8 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
             if required not in state.fragments:
                 state.report(
                     "fragment-requires-missing",
-                    f"fragment {fragment.name!r} requires fragment {required!r}, which this "
-                    "variant does not include",
+                    f"component {fragment.name!r} requires component {required!r}, which this "
+                    "profile does not include",
                     subject=fragment.name,
                     at=fragment,
                 )
@@ -672,7 +672,7 @@ def _expand_firewall(state: _Resolution) -> None:
         if existing is not None and existing != rendered:
             state.report(
                 "identity-collision",
-                f"{describe(ident)} is declared, and the variant's Firewall renders another",
+                f"{describe(ident)} is declared, and the profile's Firewall renders another",
                 subject=describe(ident),
                 at=existing,
             )
@@ -715,7 +715,7 @@ def _check_network(state: _Resolution, items: Sequence[Declaration]) -> None:
     state.report(
         "network-missing",
         f"{needs[0]}{f' (and {len(needs) - 1} more)' if len(needs) > 1 else ''}, but the "
-        "variant configures no network interface",
+        "profile configures no network interface",
         subject=state.variant,
         severity="warning",
         hint="Add Network() (TeeBase(network=True) does), or ship a .network file.",
@@ -736,12 +736,12 @@ def _check_exports(state: _Resolution) -> None:
             if export.origin is None or not isinstance(provider, str):
                 continue
             actual = state.fragments.get(provider)
-            what = f"the {type(export).__name__} fragment {consumer.name!r} holds in {name}"
+            what = f"the {type(export).__name__} component {consumer.name!r} holds in {name}"
             if actual is not None and actual != export.origin:
                 state.report(
                     "export-stale",
-                    f"{what} comes from {export.origin!r}, but this variant includes "
-                    f"{actual!r} as fragment {provider!r}",
+                    f"{what} comes from {export.origin!r}, but this profile includes "
+                    f"{actual!r} as component {provider!r}",
                     subject=consumer.name,
                     at=consumer,
                 )
@@ -749,7 +749,7 @@ def _check_exports(state: _Resolution) -> None:
                 state.report(
                     "export-stale",
                     f"{what} was computed from the configuration of {provider!r}, but this "
-                    f"variant changes {', '.join(changed)} inside it",
+                    f"profile changes {', '.join(changed)} inside it",
                     subject=consumer.name,
                     severity="warning",
                     at=consumer,
@@ -785,7 +785,7 @@ def _check_executables(state: _Resolution, items: Sequence[Declaration]) -> None
             change = next(
                 (o for o in reversed(state.trace.get(key, [])) if o.action != "declared"), None
             )
-            how = f"{change.action} in variant {change.variant!r}" if change else "changed"
+            how = f"{change.action} in profile {change.variant!r}" if change else "changed"
             state.report(
                 "executable-stale",
                 f"service {service.name!r} runs {word}, which Build {build!r} no longer installs "
@@ -886,8 +886,8 @@ def resolve(recipe: Recipe, *, variant: str) -> Resolved:
         more = f" (and {len(errors) - 1} more)" if len(errors) > 1 else ""
         at = f" at {first.location}" if first.location else ""
         raise ValidationError(
-            f"variant {variant!r}: {first.code}: {first.message}{at}{more}",
-            hint="Run tundravm.declarative.lint(recipe) for every diagnostic.",
+            f"profile {variant!r}: {first.code}: {first.message}{at}{more}",
+            hint="Run `tundravm check IMAGE` for every diagnostic.",
             context={"variant": variant, "codes": ", ".join(d.code for d in errors[:5])},
         )
     return resolved

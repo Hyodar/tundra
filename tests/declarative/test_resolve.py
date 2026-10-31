@@ -112,12 +112,12 @@ def test_ancestry_parents_resolve_first_and_targets_inherit() -> None:
 
 def test_unknown_inherits_and_cycles_are_malformed() -> None:
     unknown = Recipe("r", variants=(Variant("a", inherits="ghost"),))
-    with pytest.raises(ValidationError, match="inherits unknown variant"):
+    with pytest.raises(ValidationError, match="extends unknown profile"):
         lint(unknown)
     cycle = Recipe("r", variants=(Variant("a", inherits="b"), Variant("b", inherits="a")))
     with pytest.raises(ValidationError, match="cycle"):
         resolve(cycle, variant="a")
-    with pytest.raises(ValidationError, match="Unknown variant"):
+    with pytest.raises(ValidationError, match="Unknown profile"):
         resolve(cycle, variant="nope")
 
 
@@ -159,7 +159,7 @@ def test_changes_need_an_inherited_identity_and_valid_values() -> None:
     found = lint(recipe)
     assert codes(found) == ["edit-missing", "remove-missing", "edit-invalid"]
     assert found[0].message == (
-        "variant 'default' edits Unit(jq.service), which it does not inherit"
+        "profile 'default' edits Unit(jq.service), which it does not inherit"
     )
     assert "size 0 must be positive" in found[2].message
 
@@ -279,7 +279,7 @@ def test_disk_and_secret_store_references() -> None:
     )
     found = tuple(d for d in lint(recipe) if d.code != "network-missing")  # the SSH key step
     assert codes(found) == ["disk-key-undefined", "secret-store-undefined"]
-    assert found[0].message == "Disk(d) references Key(k), which variant 'default' does not declare"
+    assert found[0].message == "Disk(d) references Key(k), which profile 'default' does not declare"
     # A ref names the identity: another Key("k") value is the one the disk uses.
     other = Recipe("r", items=(Key("k", output="/run/other"), disk, Secrets(store=disk)))
     resolved = resolve(other, variant="default")

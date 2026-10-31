@@ -125,7 +125,7 @@ def test_profile_and_dev_are_exclusive(project: Path, cli: Cli) -> None:
 def test_an_unknown_profile_is_refused(project: Path, cli: Cli) -> None:
     result = cli("build", "--profile", "staging")
     assert result.code == EXIT_SDK_ERROR
-    assert "Unknown variant(s): staging" in result.err
+    assert "Unknown profile(s): staging" in result.err
 
 
 def test_targets_add_the_cloud_disks(project: Path, cli: Cli) -> None:
@@ -235,7 +235,7 @@ def test_offline_builds_from_what_an_online_build_fetched(project: Path, cli: Cl
     assert cli("lock").code == EXIT_OK
     refused = cli("build", "--offline")
     assert refused.code == EXIT_SDK_ERROR
-    assert "Cannot fetch 'tdxs': policy network_mode is offline." in refused.err
+    assert "Cannot fetch 'tdxs': the build is offline." in refused.err
     assert cli("build").code == EXIT_OK
     result = cli("build", "--offline")
     assert result.code == EXIT_OK, result.err
