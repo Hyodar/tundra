@@ -23,15 +23,28 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 | LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, a key released to the wrong TD | implemented; unlock over today's channel only |
 | Secrets as credentials | values leaking through the image, the tree, the manifest, receipts or argv | a compromised service that binds the secret | implemented |
 | NTS time | the host setting the guest clock, which certificates and freshness depend on | the host delaying or blocking time traffic | implemented |
-| Fail-closed production profile | a production build starting its services where no TDX quote path exists | | design (plan 6.1): not in the image |
+| Fail-closed production profile | a production build starting its services where no TDX quote path exists | a host that offers TDX to a TD you did not approve: that is the verifier's call | proven: CI boots the production fixture without TDX and its services never start |
 
-Two consequences of the last row:
+How the last row works (plan 6.1):
 
-- A production build boots and starts its services on a VM without TDX. What keeps
-  production secrets from it is the release predicate: `secrets deliver` to a production
-  build needs a `trusted` verdict, which only a real, validated quote gives.
-- Nothing in the image refuses to run unattested. An image that needs no secrets and no
-  volume runs anywhere.
+- Every tree ships `tdx-evidence.service`, a root oneshot. It looks for the `tdx_guest`
+  CPU flag, then for `/dev/tdx_guest` or configfs-tsm's report directory, and records
+  `tdx` in `/run/tundravm/mode`. Every unit made from a `Service` (a timer's too, and
+  `tdxs.service`) has `Requires=` and `After=` on it. `ConditionSecurity=` is not used: it
+  knows `cvm`, not `tdx`, and a skipped condition does not stop a dependent unit.
+- In a production profile, no quote path fails the gate with
+  `tdx-evidence: refused: no TDX quote path` on the console, and systemd starts none of the
+  gated services. There is no fallback.
+- In a development profile (`dev=`, `Profile(production=False)`), no quote path records
+  `simulated` and the services run. `attest` reads the mode over the session: `simulated`
+  makes the evidence simulated, and never the other way round.
+- Not gated: boot tasks and probes, `Unit` declarations, mounts, `runtime-init` (keys,
+  disks, secret delivery: the control plane) and the cloud glue. The console stays readable
+  and the management port still answers on a refused boot.
+- The gate checks that a quote path exists, not that a quote verifies: `tdxs` makes the
+  first quote and the verifier judges it. The gate stops a production build serving where
+  TDX is missing by mistake. The release predicate is what keeps production secrets from a
+  host you do not trust.
 
 ### What the quote covers
 
@@ -51,7 +64,8 @@ an RTMR0 from different firmware never match together.
 
 `attest` says `trusted` only when a `tdxs` validator accepted the quote's signature, the
 quote binds the fresh nonce, and MRTD, RTMR0, RTMR1 and RTMR2 each matched an accepted
-value. Without a validator the best verdict is `measurements-match`: the registers match,
+value. For a production build, a TD with the `DEBUG` attribute is `untrusted` and simulated
+evidence never passes. Without a validator the best verdict is `measurements-match`: the registers match,
 but nobody checked that a TDX module signed them. With a register missing it is `partial`,
 which never releases a secret. For `qemu`, approve MRTD and RTMR0 in the policy's
 `platform_approval` from a quote of a host you trust, or the verdict stays `partial`.
@@ -85,7 +99,7 @@ Until it lands, treat delivery to a cloud instance as trusting the network path.
 
 | Platform | What works | What does not |
 |---|---|---|
-| Local QEMU, `--mode simulated` | boots `qemu.raw` through OVMF, KVM or TCG; CI fetches a page through it | no TDX; evidence is `simulated` |
+| Local QEMU, `--mode simulated` | boots `qemu.raw` through OVMF, KVM or TCG; a development build's services run, and CI fetches a page through one | no TDX; evidence is `simulated`; a production build boots fail-closed |
 | Local TDX host, `--mode tdx` | boots TDVF with a `tdx-guest` object where `doctor --for tdx` is ready | no real quote recorded; MRTD and RTMR0 need operator approval |
 | GCP | `deploy`, volumes as device `tundravm-NAME`, `deploy upgrade` and `rollback`, full register predictions | tested against a fake `gcloud` only; no GCP deployment or quote recorded; tundravm creates no firewall rules |
 | Azure | `deploy` of an image without volumes | volumes (data disks are named by LUN); `attest`, which is TDX-only and refuses Azure; `upgrade` |
@@ -93,10 +107,10 @@ Until it lands, treat delivery to a cloud instance as trusting the network path.
 
 More limits that are not platform-specific:
 
-- **Simulated instances and secrets.** `secrets deliver` to a simulated instance releases
-  on a `simulated` verdict. tundravm cannot tell a test value from a production one: never
-  deliver production values to a simulated instance. A simulated verdict never satisfies a
-  production build on TDX.
+- **Simulated instances and secrets.** `secrets deliver` and `secrets unlock` refuse a
+  production build in a simulated instance before they contact it. A development build in
+  a simulated instance releases on a `simulated` verdict only. tundravm cannot tell a test
+  value from a production one: never deliver production values to it.
 - **Volumes.** No backups, no resize, no rollback protection: a host can attach an older
   copy of a disk and the guest cannot tell. Local instances get a fresh sparse 16 GiB disk
   per volume, per instance; nothing reattaches them.

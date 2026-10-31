@@ -154,6 +154,31 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 
 - Evidence: `docs/design/evidence/gate5-cli.md`.
 
+### Execution modes
+
+- A production profile is fail-closed. Every tree ships `tdx-evidence.service`, a root
+  oneshot that looks for the `tdx_guest` CPU flag, then `/dev/tdx_guest` or configfs-tsm's
+  report directory. Every unit made from a `Service`, and every scheduled `Task`, has
+  `Requires=` and `After=` on it, `tdxs.service` included. Without a TDX quote path a
+  production profile's gate fails with `tdx-evidence: refused: no TDX quote path` on the
+  console, and none of its services start. There is no fallback.
+- A development profile (`Variant(release=False)`, `Profile(production=False)`, `dev=`)
+  sets the gate's mode through a drop-in. Without TDX it records `simulated` in
+  `/run/tundravm/mode` and its services run. Boot tasks, probes, `Unit` declarations,
+  mounts, `runtime-init` (the control plane) and the cloud glue are not gated.
+- `attest` reads the guest's mode over the session: `simulated` makes the evidence
+  simulated, never the reverse. For a production build, simulated evidence never passes,
+  and a TD with the `DEBUG` attribute is `untrusted`. The quote's `TDATTRIBUTES` is
+  parsed, and records carry `debug`, `simulated`, `production` and `guest_mode`.
+- `secrets deliver` and `secrets unlock` refuse a production build in a simulated
+  instance before they contact it. A development build in a simulated instance releases
+  on `simulated` only. A production build on TDX also needs no `DEBUG` attribute.
+- `run --mode simulated` of a production build still boots, so its console shows the
+  refusal. `run status` and `run mode` say `fail-closed`.
+- CI boots the production fixture without TDX and asserts the refusal. It builds the
+  fixture's dev profile and runs it with `run --mode simulated` until the host fetches its
+  page. Evidence: `docs/design/evidence/gate3-fail-closed.md`.
+
 ### Documentation
 
 - `README.md` is one screen: what tundravm is, install, the quickstart and its transcript.

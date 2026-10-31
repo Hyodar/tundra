@@ -13,8 +13,8 @@ This guide is task-ordered. The [command reference](reference/cli.md) and the
 
 ## What is proven today
 
-The work follows the gates of the v2 plan. Gates 1, 4 and 5 are implemented. Gates 2 and 3
-are not.
+The work follows the gates of the v2 plan. Gates 1, 4 and 5 are implemented, and so is
+gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 
 | Area | State |
 |---|---|
@@ -22,7 +22,8 @@ are not.
 | Building an `Image` in CI | blocked: every image builds tundra-tools, a private repository the CI token cannot read |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
 | The twelve commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
-| `run --mode simulated` | unit-tested against a fake QEMU; CI boots it |
+| `run --mode simulated` | unit-tested against a fake QEMU; CI runs the fixture's dev build with it and fetches its page |
+| The fail-closed production profile | CI boots the production fixture without TDX: `tdx-evidence.service` refuses and its services never start |
 | A real TDX quote, raw-disk measurements matched against it (gate 2) | not done |
 | The attested endpoint, channel-bound delivery, `OperatorKey` unlock over it, `BrokerKey` (gate 3) | not done in tundra-tools |
 | `deploy` to GCP or Azure, `attest` against a real quote | unit-tested against fake `gcloud`, `az` and SSH only |
@@ -151,6 +152,7 @@ declaration came from.
 | an nftables firewall that drops inbound traffic except exposed ports and the management port 8745 (`Firewall`) | `expose=` opens a port; `network=Network(egress=Egress(...))` filters outbound |
 | one generated system user per service, the `static` sandbox, `Restart=on-failure` | `Service(user=, hardening=, unit=DropIn(...))` |
 | the evidence service `tdxs` from tundra-tools, socket-activated on `/var/tdxs.sock` (`Tdxs`) | `components=[Tdxs(source=Git(url, ref))]` for a mirror |
+| `tdx-evidence.service`, which every service requires: without TDX a production profile starts none, a development one runs simulated ([trust](trust.md#threat-model)) | none: a dev profile is the way to run without TDX |
 | for each cloud in `targets=`, its provisioning glue, inert elsewhere through `ConditionVirtualization=`, so one payload boots on every target | `targets=` |
 | a raw bootable disk for QEMU | `targets=("qemu", "azure", "gcp")` adds the cloud disks |
 
@@ -671,7 +673,7 @@ hex digits of the sha256 of the document without `id`. It binds:
 | `sources`, `packages`, `sbom`, `summary` | the source pins, the package manifest, the SBOM, mkosi's resolved summary |
 | `measurements` | the state of each measurement record |
 | `toolchain` | the backend, mkosi, the tools tree, tundravm, the measurement tools |
-| `kind`, `profile`, `targets`, `ports`, `simulated` | what the build is |
+| `kind`, `profile`, `targets`, `ports` | what the build is |
 | `unchecked` | what the build could not check, by name |
 
 `observations.json` holds what is not identity: when, where, how long, and the reproduction.
@@ -726,6 +728,10 @@ port 8745, on the same port when it is free and unprivileged. `--mode` is requir
 | `simulated` | no TDX; KVM when `/dev/kvm` is usable, TCG otherwise | verdicts are `simulated` |
 | `tdx` | TDVF with a `tdx-guest` object | real quotes; refused unless `doctor --for tdx` is ready |
 
+A production build boots in `simulated` fail-closed: `tdx-evidence.service` finds no TDX
+and refuses, none of its services start, and `run status` says `fail-closed`. The console
+still shows the boot. Run the dev build (`--dev`) to use the services without TDX.
+
 The instance is `<image>-<n>` under `.tundravm/instances/`: `instance.json` (the build,
 mode, QEMU argv and forwarded ports), `events.jsonl` (one record per action, never a
 value) and `console.log`. Each declared volume gets a fresh sparse 16 GiB disk,
@@ -773,7 +779,7 @@ of a host they trust (`platform_approval`: MRTD, RTMR0) and commits it. The
 | `measurements-match` | the registers matched; no validator checked the signature |
 | `measurements-mismatch` | a register or the nonce did not match; no validator checked |
 | `simulated` | a simulated instance; accepted only for one |
-| `untrusted` | the validator rejected the quote, or a validated quote did not match |
+| `untrusted` | the validator rejected the quote, a validated quote did not match, or a production build's TD has the `DEBUG` attribute |
 
 An Azure policy is refused: the TDX quote on Azure measures its paravisor, and the image is
 measured into the vTPM.
@@ -793,9 +799,10 @@ receipt.
 
 | Instance | Releases on |
 |---|---|
-| production build on TDX | `trusted` only |
+| production build on TDX | `trusted` only, with no `DEBUG` attribute and no simulated evidence |
 | development build on TDX | `trusted` or `measurements-match` |
-| simulated | `simulated`; tundravm cannot tell a test value from a real one |
+| development build, simulated | `simulated` only; tundravm cannot tell a test value from a real one |
+| production build, simulated | nothing: refused before contact, since its services never start |
 
 ### Upgrade and rollback
 
