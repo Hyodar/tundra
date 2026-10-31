@@ -9,7 +9,7 @@ from pathlib import Path
 from tundravm.measure.model import MeasurementBackend, Measurements, PlaceholderMeasurementWarning
 
 ALLOW_PLACEHOLDER_HINT = (
-    "Pass allow_placeholder=True (CLI: --allow-placeholder) to get placeholder values "
+    "Pass allow_placeholder=True to get placeholder values "
     "for tests; never put them in an attestation policy."
 )
 

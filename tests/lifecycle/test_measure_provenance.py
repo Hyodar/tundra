@@ -6,16 +6,14 @@ import hashlib
 import io
 import json
 import subprocess
-import warnings
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
-from tundravm.backends import inprocess
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, PLACEHOLDER_BANNER, doctor
+from tests.helpers import write_recipe_file
+from tundravm.cli import doctor
 from tundravm.declarative import (
     Artifact,
     Backend,
@@ -29,13 +27,11 @@ from tundravm.declarative import (
 from tundravm.declarative.lifecycle import Scheme
 from tundravm.errors import MeasurementError
 from tundravm.measure import (
-    MEASURE_TOOL,
     MEASURE_VERSION,
     PlaceholderMeasurementWarning,
     derive_measurements,
 )
 from tundravm.models import ArtifactRef, ProfileBuildResult
-from tundravm.recipe import load_file
 
 from .test_measure import build_uki
 
@@ -143,10 +139,6 @@ def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return write_recipe_file(tmp_path, RECIPE, monkeypatch)
 
 
-def _bake(recipe: Path) -> int:
-    return run_main("bake", str(recipe))[0]
-
-
 def _manifest(recipe: Path) -> str:
     """The build directory holding ``bake-result.json``."""
     return str(recipe.parent / "build")
@@ -172,123 +164,19 @@ def _swap_artifact(build: str, artifact: Path, content: bytes) -> None:
     path.write_text(text.replace(old, hashlib.sha256(content).hexdigest()), encoding="utf-8")
 
 
-def test_cli_measure_without_a_uki_fails_with_hint(
-    recipe: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert _bake(recipe) == EXIT_OK
-    capsys.readouterr()
-
-    code, out = run_main("measure", "--build", _manifest(recipe), "--allow-placeholder")
-    assert code == EXIT_OK
-    capsys.readouterr()
-
-    code, out = run_main("measure", "--build", _real_manifest(recipe))
-
-    err = capsys.readouterr().err
-    assert code == EXIT_SDK_ERROR
-    assert out == ""
-    assert "error [E_MEASUREMENT]: the UKI is not a PE/EFI image" in err
-
-
-def test_cli_allow_placeholder_table_and_banner(
-    recipe: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert _bake(recipe) == EXIT_OK
-    capsys.readouterr()
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        code, out = run_main(
-            "measure", "--build", _manifest(recipe), "--scheme", "qemu", "--allow-placeholder"
-        )
-
-    lines = out.splitlines()
-    disk = recipe.parent / "build" / "default" / "disk.qcow2"
-    assert code == EXIT_OK
-    assert lines[:2] == ["measurements default (qemu)", f"source: placeholder ({disk})"]
-    assert [line.split()[0] for line in lines[2:]] == ["RTMR1", "RTMR2", "MRTD", "RTMR0"]
-    assert "unverifiable: QEMU" in lines[-1]
-    err = capsys.readouterr().err
-    assert PLACEHOLDER_BANNER in err
-    assert err.startswith("PLACEHOLDER: not real measurements")
-    assert not [w for w in caught if issubclass(w.category, PlaceholderMeasurementWarning)]
-
-
-def test_cli_allow_placeholder_json_carries_source(
-    recipe: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = recipe.read_text(encoding="utf-8")
-    recipe.write_text(source.replace('outputs=("qemu",)', 'outputs=("gcp",)'), "utf-8")
-    assert _bake(recipe) == EXIT_OK
-    capsys.readouterr()
-
-    code, out = run_main(
-        "measure",
-        "--build",
-        _manifest(recipe),
-        "--scheme",
-        "gcp",
-        "--format",
-        "json",
-        "--allow-placeholder",
-    )
-
-    payload = json.loads(out)
-    assert code == EXIT_OK
-    assert payload["tool"] == "placeholder"
-    assert payload["scheme"] == "gcp"
-    assert payload["variant"] == "default"
-    assert len(payload["registers"]["MRTD"]) == 3
-    assert "PLACEHOLDER" in capsys.readouterr().err
-
-
-def test_cli_measure_of_a_uki_prints_source(
-    recipe: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setitem(inprocess.TARGET_FILENAMES, "qemu", "linux.efi")
-    assert _bake(recipe) == EXIT_OK
-    capsys.readouterr()
-    uki = recipe.parent / "build" / "default" / "linux.efi"
-    build = _real_manifest(recipe)
-    _swap_artifact(build, uki, build_uki())
-
-    code, out = run_main("measure", "--build", build)
-
-    lines = out.splitlines()
-    assert code == EXIT_OK
-    assert lines[:2] == [
-        "measurements default (qemu)",
-        f"source: {MEASURE_TOOL} {MEASURE_VERSION} ({uki})",
-    ]
-    assert [line.split()[0] for line in lines[2:]] == ["RTMR1", "RTMR2", "MRTD", "RTMR0"]
-    assert "PLACEHOLDER" not in capsys.readouterr().err
-
-    code, out = run_main("measure", "--build", build, "--format", "json")
-    payload = json.loads(out)
-    assert payload["tool"] == f"{MEASURE_TOOL} {MEASURE_VERSION}"
-    assert payload["artifact"] == str(uki)
-    assert payload["artifact_digest"] == hashlib.sha256(uki.read_bytes()).hexdigest()
-    assert set(payload["unverifiable"]) == {"MRTD", "RTMR0"}
-
-
 def _probe(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
     raise FileNotFoundError(argv[0])
 
 
 def test_doctor_lists_the_built_in_measurement() -> None:
     out = io.StringIO()
-    code = doctor(None, out, runner=_probe, areas=["verify"])
+    doctor(out, runner=_probe)  # build rows are blocked without the probed tools
     lines = out.getvalue().splitlines()
 
-    assert code == EXIT_OK
     assert f"verify:qemu      ready (built-in TDX replay {MEASURE_VERSION})" in lines
 
 
-def test_doctor_with_recipe_needs_no_measurement_tool(recipe: Path) -> None:
+def test_doctor_for_gcp_needs_no_measurement_tool() -> None:
     out = io.StringIO()
-    code = doctor(load_file(recipe), out, runner=_probe)
-    text = out.getvalue()
-
-    assert code == EXIT_OK
-    assert "verify:gcp       ready (built-in replay" in text
-    assert text.splitlines()[-1].startswith("lint: ")
+    doctor(out, area="gcp", runner=_probe)
+    assert "verify:gcp       ready (built-in replay" in out.getvalue()

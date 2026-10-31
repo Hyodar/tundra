@@ -6,7 +6,7 @@ instance; the Engine API secret, the driver's L1 configuration and Raiko's confi
 are delivered the same way and never built in. Requests reach Raiko only through the
 attested TLS ingress. One verity-rooted payload boots on QEMU, Azure and GCP.
 
-    tundravm compile examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
+    tundravm build examples/surge-tdx-prover/image.py --tree-only examples/surge-tdx-prover/mkosi
 """
 
 from tundravm import AttestedTLS, DevAccess, Image, OperatorKey, RootFS, Secret, Volume

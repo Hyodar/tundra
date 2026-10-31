@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
-from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
+from tests.helpers import run_main
 from tundravm.backends.local_linux import DEBIAN_KEYRING
 from tundravm.capabilities import Capability, Host, capabilities, default_backend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, doctor
-from tundravm.recipe import load_file
 from tundravm.toolchain import MKOSI_PIN
 
 TOOLS = {
@@ -168,7 +166,7 @@ def test_macos_builds_in_lima_and_says_what_tcg_costs() -> None:
     )
     host, _ = _host(system="Darwin", machine="arm64")
     assert _rows(host, backend="local")["build:x86-64"] == (
-        "blocked: this is Darwin: build with the Lima backend (--backend lima)"
+        "blocked: this is Darwin: build with the Lima backend (TUNDRAVM_BACKEND=lima)"
     )
 
 
@@ -223,26 +221,41 @@ def test_capability_render_pads_the_name() -> None:
 # ── the command ──────────────────────────────────────────────────────────
 
 
-def test_doctor_for_prints_only_that_area_and_fails_on_a_blocked_row() -> None:
-    host, _ = _host(files=LINUX_FILES, accounts={})
+# ── the command ──────────────────────────────────────────────────────────
+
+
+def _names(out: io.StringIO) -> list[str]:
+    return [line.split()[0] for line in out.getvalue().splitlines()]
+
+
+@pytest.mark.parametrize(
+    ("area", "names"),
+    [
+        ("build", ["build:x86-64"]),
+        ("run", ["run:simulated"]),
+        ("tdx", ["run:tdx"]),
+        ("azure", ["deploy:azure", "verify:azure"]),
+        ("gcp", ["deploy:gcp", "verify:gcp"]),
+    ],
+)
+def test_doctor_for_one_capability(area: str, names: list[str]) -> None:
+    host, _ = _host(files=LINUX_FILES)
     out = io.StringIO()
+    doctor(out, area=area, host=host)
+    assert _names(out) == names
 
-    code = doctor(None, out, host=host, areas=["deploy"])
 
-    assert code == EXIT_FAILURE
-    assert [line.split()[0] for line in out.getvalue().splitlines()] == [
-        "deploy:gcp",
-        "deploy:azure",
-    ]
+def test_doctor_for_fails_on_a_blocked_row_of_that_area() -> None:
+    host, _ = _host(files=LINUX_FILES, accounts={})
+    assert doctor(io.StringIO(), area="gcp", host=host) == EXIT_FAILURE
+    assert doctor(io.StringIO(), area="build", host=host) == EXIT_OK
 
 
 def test_doctor_without_for_prints_every_row_and_fails_only_on_build() -> None:
     host, _ = _host(files=LINUX_FILES, accounts={})
     out = io.StringIO()
-
-    assert doctor(None, out, host=host) == EXIT_OK
-    names = [line.split()[0] for line in out.getvalue().splitlines()]
-    assert names == [
+    assert doctor(out, host=host) == EXIT_OK
+    assert _names(out) == [
         "build:x86-64",
         "run:simulated",
         "run:tdx",
@@ -253,41 +266,28 @@ def test_doctor_without_for_prints_every_row_and_fails_only_on_build() -> None:
         "verify:azure",
     ]
     blocked, _ = _host({}, files=())
-    assert doctor(None, io.StringIO(), host=blocked) == EXIT_FAILURE
+    assert doctor(io.StringIO(), host=blocked) == EXIT_FAILURE
 
 
-def test_doctor_checks_the_given_or_recipe_backend(tmp_path: Path) -> None:
-    host, _ = _host(system="Darwin", machine="arm64")
-    out = io.StringIO()
-    doctor(None, out, host=host, backend=LocalLinuxBackend(), areas=["build"])
-    assert "blocked: this is Darwin" in out.getvalue()
-
-    path = write_recipe_file(
-        tmp_path,
-        """
-from tundravm.declarative import Package, Recipe
-from tundravm.backends import LimaMkosiBackend
-
-backend = LimaMkosiBackend(cpus=1, memory="1GiB", disk="10GiB")
-recipe = Recipe("node", items=(Package("linux-image-amd64"),))
-""",
-    )
+def test_doctor_json() -> None:
     host, _ = _host(files=LINUX_FILES)
     out = io.StringIO()
-    assert doctor(load_file(path), out, host=host, areas=["build"]) == EXIT_OK
-    lines = out.getvalue().splitlines()
-    assert lines[0].startswith("build:x86-64     ready (Lima x86-64 guest")
-    assert lines[-1].startswith("lint: ")
-    assert isinstance(load_file(path).backend, LimaMkosiBackend)
+    doctor(out, area="tdx", host=host, as_json=True)
+    payload = json.loads(out.getvalue())
+    assert payload["schema"] == "tundravm.doctor/1"
+    assert payload["rows"] == [
+        {
+            "name": "run:tdx",
+            "verdict": "unavailable",
+            "detail": "no Intel TDX host (kvm_intel tdx is not enabled)",
+        }
+    ]
 
 
 def test_doctor_cli_takes_for_and_the_injected_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     host, ran = _host(files=LINUX_FILES)
     monkeypatch.setattr("tundravm.cli.Host", lambda: host)
-
     code, out = run_main("doctor", "--for", "run")
-
     assert code == EXIT_OK
     assert out.splitlines()[0].startswith("run:simulated    ready (qemu 9.2.0")
     assert ("qemu-system-x86_64", "--version") in ran
-    assert "build:" not in out and "lint:" not in out

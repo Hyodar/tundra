@@ -34,8 +34,8 @@ def ensure_bake_policy(*, policy: Policy, frozen: bool) -> None:
         raise PolicyError(
             "Frozen lock mode is required by policy.",
             hint=(
-                "Run `tundravm lock RECIPE` and bake against it (`tundravm bake --lockfile "
-                "PATH`, or bake(recipe, lock=...)), or set "
+                "Run `tundravm lock RECIPE` and build against it (`tundravm build` freezes "
+                "against BUILD/tundravm.lock, or bake(recipe, lock=...)), or set "
                 "Policy(require_frozen_lock=False)."
             ),
             context={"operation": "bake"},

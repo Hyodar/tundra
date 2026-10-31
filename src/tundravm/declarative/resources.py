@@ -9,7 +9,7 @@ from an installed package alike::
     Kernel("6.13.12", source, config=assets.file("kernel/kernel.config"))
     File.copy("/etc/app/app.conf", assets.file("app.conf"))
 
-The paths it returns are absolute, so ``tundravm watch`` notices edits to the
+The paths it returns are absolute, so a watcher notices edits to the
 files declarations name (:func:`~tundravm.declarative.inputs.recipe_inputs`) and
 to the files :meth:`Resources.text` read (:func:`resource_reads`).
 """

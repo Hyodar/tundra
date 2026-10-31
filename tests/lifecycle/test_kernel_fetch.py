@@ -382,7 +382,7 @@ def test_bake_refuses_a_missing_kernel_checkout_then_builds_the_fetched_one(
     with pytest.raises(StateError, match="Kernel source 'kernel' is not fetched") as missing:
         bake_image(lower(recipe), None, locked=locked, backend=backend, build=out, fetch=False)
     assert missing.value.code == ErrorCode.STATE
-    assert "tundravm fetch" in str(missing.value.hint)
+    assert "tundravm build" in str(missing.value.hint)
     assert backend.requests == []
     bake_image(lower(recipe), None, locked=locked, backend=backend, build=out)
     (request,) = backend.requests

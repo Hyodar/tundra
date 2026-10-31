@@ -8,9 +8,9 @@ or remove what the image declares, by reference (``motd.ref`` for a value you ho
 image builds: one UKI wrapped for QEMU and for each cloud, whose glue is gated at boot
 (``ConditionVirtualization=``), so one set of measurements covers all three.
 
-    tundravm inspect examples/02_variants.py --diff-variants production staging
-    tundravm compile examples/02_variants.py --tree build/variants/mkosi
-    tundravm bake examples/02_variants.py --variant production --build build/variants
+    tundravm show examples/02_variants.py --profile production --profile staging
+    tundravm build examples/02_variants.py --tree-only build/variants/mkosi
+    tundravm build examples/02_variants.py --profile production
 """
 
 from tundravm import TCP, DevAccess, File, Image, Profile, Resources, Service

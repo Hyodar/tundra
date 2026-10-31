@@ -1,6 +1,7 @@
 """Every example is a documented recipe that loads, lints clean and compiles deterministically."""
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -8,8 +9,7 @@ import pytest
 
 from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, run_main
 from tundravm.backends import InProcessBackend
-from tundravm.backends.inprocess import TARGET_FILENAMES
-from tundravm.declarative import Recipe, compile, lint
+from tundravm.declarative import Recipe, compile, lint, lock, write_lock
 from tundravm.recipe import load_file, load_recipe
 
 INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source")
@@ -117,24 +117,23 @@ def test_examples_name_no_backend(path: Path, monkeypatch: pytest.MonkeyPatch) -
     [path for path in EXAMPLE_RECIPES if path.name[0].isdigit()],
     ids=lambda path: path.name,
 )
-def test_teaching_example_bake_is_reproducible(
+def test_teaching_example_builds_the_same_identity_twice(
     path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    policy = _recipe(path).policy
-    if policy is not None and policy.require_frozen_lock:
-        code, _ = run_main("bake", str(path), "--pythonpath", str(REPO_ROOT), "-q")
-        assert code != 0, f"{path.name}: the policy must refuse an unlocked bake"
-        return
-    baked = []
-    for out in ("a", "b"):
-        code, _ = run_main("bake", str(path), "--pythonpath", str(REPO_ROOT), "--build", out, "-q")
+    pins = lock(_recipe(path), resolver=_fixed_pins)  # the build refuses no lock offline here
+    identities = []
+    for root in ("a", "b"):
+        monkeypatch.setenv("TUNDRAVM_BUILD", root)
+        write_lock(pins, Path(root) / "tundravm.lock")
+        code, _ = run_main("build", str(path), "--pythonpath", str(REPO_ROOT))
         assert code == 0
-        baked.append(
-            sorted(
-                (artifact.relative_to(out).as_posix(), artifact.read_bytes())
-                for artifact in Path(out).rglob("*")
-                if artifact.name in TARGET_FILENAMES.values()
-            )
-        )
-    assert baked[0] and baked[0] == baked[1]
+        (latest,) = Path(root).glob("*/latest-production")
+        manifest = json.loads((latest / "manifest.json").read_text(encoding="utf-8"))
+        identities.append((manifest["id"], manifest["artifacts"]["qemu.raw"]["sha256"]))
+    assert identities[0] == identities[1]
+
+
+def _fixed_pins(source: object) -> str:
+    """A pin for every source without the network: a commit for git, a sha256 for http."""
+    return "1" * 40 if hasattr(source, "ref") else "0" * 64

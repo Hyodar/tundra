@@ -98,8 +98,8 @@ TRUST_NOTE = (
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 PARTIAL_NOTE = (
     "partial: trusted needs MRTD and RTMR0 (the platform firmware) and RTMR1 and RTMR2 (the "
-    "image) each matched; approve the platform values from a quote of a host you trust with "
-    "`tundravm measure --export-policy FILE --approve-mrtd HEX --approve-rtmr0 HEX`"
+    "image) each matched; approve the platform values from a quote of a host you trust in "
+    "the policy's platform_approval (MRTD, RTMR0)"
 )
 """What a ``partial`` verdict lacks and how to close it."""
 
@@ -464,8 +464,8 @@ def attest(
     if is_placeholder(data):
         raise MeasurementError(
             "Refusing to attest against a placeholder policy.",
-            hint="Export the policy from a real measurement: "
-            "`tundravm measure --scheme SCHEME --export-policy FILE` on a real bake.",
+            hint="Take the policy from a real build: a record's `policy` in its "
+            "measurements.json (`tundravm build` with a real backend).",
             context={"policy": "dict" if isinstance(policy, Mapping) else str(policy)},
         )
     if data.get("scheme") == "azure":
@@ -911,7 +911,8 @@ def _given_policy(
     except ValueError as exc:
         raise ValidationError(
             "The policy to re-check the attestation against is not JSON.",
-            hint="Pass the file `tundravm measure --export-policy` wrote.",
+            hint="Pass the policy the attestation was checked against (a measurements.json "
+            "record).",
         ) from exc
     return read_policy(parsed if isinstance(parsed, dict) else {}), raw
 

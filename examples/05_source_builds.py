@@ -11,9 +11,9 @@ dependencies belong to the build, never to the image's ``packages``; a ``Build``
 not a service's first argument reaches the image through the component that owns it.
 Refs and tarballs are unpinned until ``tundravm lock`` records their commit and sha256.
 
-    tundravm inspect examples/05_source_builds.py
+    tundravm show examples/05_source_builds.py
     tundravm lock examples/05_source_builds.py        # pin both sources (network)
-    tundravm compile examples/05_source_builds.py --tree build/source-builds/mkosi
+    tundravm build examples/05_source_builds.py --tree-only build/source-builds/mkosi
 """
 
 from __future__ import annotations

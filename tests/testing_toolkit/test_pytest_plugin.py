@@ -64,7 +64,7 @@ def test_compiled_factory_uses_fresh_dirs(
 def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:
     source = 'from tundravm.declarative import Fragment, Recipe\nrecipe = Recipe(name="t")\n'
     path = recipe_file(tmp_path, source)
-    code, out, err = run_cli("inspect", path, "--format", "json")
+    code, out, err = run_cli("show", path, "--json")
     assert code == 0
     assert len(json.loads(out)["digest"]) == 64
     assert err == ""

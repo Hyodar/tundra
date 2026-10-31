@@ -78,21 +78,18 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
     assert lockfile.recipe_digest
 
 
-def test_bake_frozen_fails_when_lock_missing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_offline_build_fails_when_lock_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     recipe = tmp_path / "recipe.py"
     recipe.write_text(RECIPE_FILE, encoding="utf-8")
-    missing = tmp_path / "missing.lock"
 
-    code = main(
-        ["bake", str(recipe), "--lockfile", str(missing), "--build", str(tmp_path / "out")],
-        stdout=io.StringIO(),
-    )
+    code = main(["build", str(recipe), "--offline"], stdout=io.StringIO())
 
     assert code == EXIT_SDK_ERROR
     assert "error [E_LOCKFILE]" in capsys.readouterr().err
-    assert not (tmp_path / "out" / "bake-result.json").exists()
+    assert not (tmp_path / "build").exists()
 
 
 def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:

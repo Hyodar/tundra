@@ -153,14 +153,14 @@ def _linux_build(name: str, host: Host) -> Capability:
         return Capability(
             name,
             "blocked",
-            f"this is {host.system}: build with the Lima backend (--backend lima)",
+            f"this is {host.system}: build with the Lima backend (TUNDRAVM_BACKEND=lima)",
         )
     if not host.linux_x86_64:
         return Capability(
             name,
             "blocked",
             f"tundravm builds x86-64 images on x86-64 Linux; this is {host.machine}: "
-            "build with the Lima backend (--backend lima)",
+            "build with the Lima backend (TUNDRAVM_BACKEND=lima)",
         )
     version = host.mkosi_version()
     if version != MKOSI_PIN.version:

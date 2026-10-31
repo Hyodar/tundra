@@ -1,4 +1,4 @@
-"""User-facing strings must not cite the removed fluent API or CLI verbs."""
+"""User-facing strings must not cite the removed fluent API, CLI verbs or CLI flags."""
 
 from __future__ import annotations
 
@@ -15,10 +15,19 @@ from tests.helpers import REPO_ROOT
 PACKAGE = Path(tundravm.__file__).parent
 EXAMPLES = REPO_ROOT / "examples"
 
+REMOVED_VERB = "removed CLI verb (new, check, lock, build, show, run, deploy, attest, ...)"
+"""The verbs folded into the twelve commands (plan 3.4): no hint, template or doc names one."""
+
+TREE_EMBEDDED = (
+    "run tundravm lock, then tundravm fetch",
+    "is not fetched: run tundravm fetch RECIPE",
+)
+"""Messages the build scripts of emitted trees print: the committed trees and the compiler's
+golden tests pin their bytes, so they change together with the compiler, not here."""
+
 DENYLIST = {
     "fluent method call": re.compile(r"\bimg\.[a-z_]+\("),
     "fluent profile block": re.compile(r"\bwith img\b"),
-    "removed `check` verb": re.compile(r"\btundravm check\b"),
     "frozen bake flag": re.compile(r"\bbake\([^)]*\bfrozen=True\b"),
     "internal source class": re.compile(r"\b(?:Http|Git)Source\("),
     "removed init hook": re.compile(r"\badd_init_script\b"),
@@ -27,17 +36,21 @@ DENYLIST = {
     "internal secret target": re.compile(r"\bSecretTarget\."),
     "removed --out flag (--tree, --build, --output)": re.compile(r"--out\b"),
     "removed --against flag (--tree)": re.compile(r"--against\b"),
-    "removed deploy --target flag (TARGET)": re.compile(r"\bdeploy\b[^\n]*--target\b"),
+    "removed deploy --target flag (deploy azure|gcp)": re.compile(
+        r"\btundravm deploy\b[^\n`]*--target\b"
+    ),
     "removed MANIFEST positional (--build)": re.compile(r"\b(?:measure|deploy|sbom) MANIFEST\b"),
     "removed verify --artifacts flag (--build)": re.compile(r"\bverify\b[^\n]*--artifacts\b"),
     "removed clean part flags (--what)": re.compile(
         r"\bclean\b[^\n]*--(?:sources|tree|artifacts|state|all)\b"
     ),
-    "removed --json shorthand (--format json)": re.compile(
-        r"\b(?:inspect|lint)\b[^\n]*--json\b(?!-)"
-    ),
     "elided measure flags (--build, --variant)": re.compile(r"\bmeasure \.\.\."),
     "removed init --base flag (--release)": re.compile(r"\binit\b[^\n]*--base\b"),
+    REMOVED_VERB: re.compile(
+        r"(?<!from )\btundravm (?:init|inspect|lint|compile|diff|fetch|bake|measure|sbom|evidence"
+        r"|changes|release|witness|explore|preview|watch|status|clean|config|ci|completion|units"
+        r"|import)\b"
+    ),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 
@@ -87,6 +100,9 @@ RENAMED_KEYWORDS = {
 """Keyword arguments of these calls that no longer exist, with their replacement."""
 DOCS = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
 """The current docs; ``docs/design`` keeps the dated design records as written."""
+CLI_DOCS = [REPO_ROOT / "README.md", REPO_ROOT / "docs" / "cli.md"]
+"""The docs rewritten around the twelve commands (the guide, API and tutorial follow in
+gate 6)."""
 
 
 def _runtime_strings(tree: ast.Module) -> Iterator[tuple[int, str]]:
@@ -102,6 +118,8 @@ def _runtime_strings(tree: ast.Module) -> Iterator[tuple[int, str]]:
 
 
 def _hits(text: str) -> list[str]:
+    for phrase in TREE_EMBEDDED:
+        text = text.replace(phrase, "")
     return [what for what, pattern in DENYLIST.items() if pattern.search(text)]
 
 
@@ -148,13 +166,52 @@ def test_examples_cite_only_the_declarative_api() -> None:
     assert found == []
 
 
+@pytest.mark.parametrize("path", CLI_DOCS, ids=lambda path: str(path.relative_to(REPO_ROOT)))
+def test_cli_docs_cite_only_the_twelve_commands(path: Path) -> None:
+    found = [
+        f"{number}: {line.strip()[:80]}"
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if DENYLIST[REMOVED_VERB].search(line)
+    ]
+    assert found == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "run `tundravm bake RECIPE --build out`",
+        "`tundravm units convert x.service`",
+        "tundravm measure --export-policy FILE",
+        "uv run tundravm ci node.py",
+        "tundravm import ./tree",
+    ],
+)
+def test_removed_verbs_are_caught(text: str) -> None:
+    assert REMOVED_VERB in _hits(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from tundravm import Image",
+        "tundravm run status demo-1",
+        "tundravm show --diff OLD NEW",
+        "tundravm check --tree mkosi",
+        "tundravm convert ./units --from systemd",
+        "echo 'tundravm: tool is not pinned: run tundravm lock, then tundravm fetch' >&2",
+    ],
+)
+def test_the_twelve_commands_pass(text: str) -> None:
+    assert _hits(text) == []
+
+
 @pytest.mark.parametrize(
     "source",
     [
         'error(hint="Call bake(frozen=True) first.")',
         'error(hint=f"img.apply({theirs}(), {mine}())")',
         "error(hint='pin it with HttpSource(sha256=...)')",
-        "MESSAGE = 'see `tundravm check RECIPE`'",
+        "MESSAGE = 'see `tundravm lint RECIPE`'",
         "HINT = 'run tundravm init --base debian/sid'",
     ],
 )

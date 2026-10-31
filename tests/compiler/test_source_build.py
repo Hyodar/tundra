@@ -64,8 +64,8 @@ SHA_B = "b" * 40
 QEMU_BASIC = '''\
 """Minimal QEMU-focused recipe.
 
-tundravm inspect examples/qemu_basic.py
-tundravm bake examples/qemu_basic.py
+tundravm show examples/qemu_basic.py
+tundravm build examples/qemu_basic.py
 """
 
 from tundravm.backends import LimaMkosiBackend
@@ -194,7 +194,7 @@ def test_payload_has_source_builds_only_when_declared() -> None:
 def test_existing_digest_is_unchanged(tmp_path: Path) -> None:
     recipe = write_recipe_file(tmp_path, QEMU_BASIC)
     out = io.StringIO()
-    assert main(["inspect", str(recipe), "--format", "json"], stdout=out) == EXIT_OK
+    assert main(["show", str(recipe), "--json"], stdout=out) == EXIT_OK
     assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST
 
 
@@ -479,7 +479,7 @@ def test_drift_reports_removed_sources() -> None:
 
 def _inspect(recipe: Path, *flags: str) -> str:
     out = io.StringIO()
-    assert main(["inspect", str(recipe), *flags], stdout=out) == EXIT_OK
+    assert main(["show", str(recipe), *flags], stdout=out) == EXIT_OK
     return out.getvalue()
 
 
@@ -489,7 +489,7 @@ def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
     assert f"tool  git {REPO}  ref=main  pinned=-" in _inspect(path)
     locked = lock(load_recipe(path), resolver=_Fixed(SHA_A))
     write_lock(locked, tmp_path / "build" / "tundravm.lock")  # where the CLI looks
-    info = json.loads(_inspect(path, "--format", "json"))["variants"]["default"]
+    info = json.loads(_inspect(path, "--json"))["variants"]["default"]
     assert info["sources"] == [
         {
             "build": "script",
@@ -509,20 +509,18 @@ def test_explain_lists_sources_with_pin(tmp_path: Path) -> None:
 def test_inspect_renders_hooks_at_the_pins_it_shows(tmp_path: Path) -> None:
     path = tmp_path / "recipe.py"
     path.write_text(RECIPE_FILE.format(repo=REPO), encoding="utf-8")
-    write_lock(lock(load_recipe(path), resolver=_Fixed(SHA_A)), tmp_path / "pins.lock")
+    pins = lock(load_recipe(path), resolver=_Fixed(SHA_A))
 
-    def shown(*flags: str) -> tuple[str, object]:
-        info = json.loads(_inspect(path, "--format", "json", *flags))["variants"]["default"]
+    def shown() -> tuple[str, object]:
+        info = json.loads(_inspect(path, "--json"))["variants"]["default"]
         return info["hooks"]["build"][0], info["sources"][0]["pinned"]
 
     hook, pinned = shown()
     assert "not pinned" in hook and pinned is None
-    hook, pinned = shown("--lockfile", str(tmp_path / "pins.lock"))
+    write_lock(pins, tmp_path / "build" / "tundravm.lock")  # the one lockfile the CLI reads
+    hook, pinned = shown()
     assert "not pinned" not in hook and pinned == SHA_A[:7]
     assert re.search(r"build\}/tool-[0-9a-f]{16}", hook)
-    (tmp_path / "build").mkdir()
-    (tmp_path / "pins.lock").rename(tmp_path / "build" / "tundravm.lock")
-    assert shown() == (hook, pinned)
     text = _inspect(path)
     assert f"pinned={SHA_A[:7]}" in text and re.search(r"build\}/tool-[0-9a-f]{16}", text)
 
@@ -538,10 +536,10 @@ def test_check_rule_source_unpinned() -> None:
     assert not [d for d in lint(recipe) if d.code == "source-unpinned"]
 
 
-def test_cli_lock_offline_fails_clearly(tmp_path: Path) -> None:
+def test_cli_offline_build_without_a_lock_fails_clearly(tmp_path: Path) -> None:
     recipe = tmp_path / "recipe.py"
     recipe.write_text(RECIPE_FILE.format(repo="https://x/y.git"), encoding="utf-8")
     out = io.StringIO()
-    code = main(["lock", str(recipe), "--offline"], stdout=out)
+    code = main(["build", str(recipe), "--offline"], stdout=out)
     assert code != EXIT_OK
     assert not (tmp_path / "build" / "tundravm.lock").exists()

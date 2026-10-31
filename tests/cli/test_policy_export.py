@@ -1,4 +1,4 @@
-"""``measure --export-policy`` and ``Tdxs.from_policy``: the measurement to verifier handoff."""
+"""Verifier policies (``policy_payload``, ``read_policy``) and ``Tdxs.from_policy``."""
 
 from __future__ import annotations
 
@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import REPO_ROOT, run_main, write_recipe_file
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tests.helpers import REPO_ROOT
 from tundravm.declarative import File, Measurements
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import MeasurementError, ValidationError
@@ -40,67 +39,6 @@ def _policy(unverifiable: dict[str, str] | None = None, **registers: object) -> 
         "registers": {k: [v] if isinstance(v, str) else v for k, v in registers.items()},
         "unverifiable": QEMU_GAPS if unverifiable is None else unverifiable,
     }
-
-
-@pytest.fixture
-def manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    recipe = write_recipe_file(tmp_path, RECIPE, monkeypatch)
-    assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
-    return tmp_path / "build"
-
-
-def test_export_writes_a_marked_placeholder_policy(manifest: Path, tmp_path: Path) -> None:
-    target = tmp_path / "peer.json"
-    code, _ = run_main(
-        "measure", "--build", str(manifest), "--allow-placeholder", "--export-policy", str(target)
-    )
-    assert code == EXIT_OK
-    policy = json.loads(target.read_text(encoding="utf-8"))
-    assert sorted(policy) == [
-        "artifact",
-        "boot_payload",
-        "note",
-        "registers",
-        "schema",
-        "schema_version",
-        "scheme",
-        "tool",
-        "tool_version",
-        "unverifiable",
-    ]
-    assert (policy["schema_version"], policy["schema"], policy["scheme"], policy["tool"]) == (
-        2,
-        "tundravm.policy/2",
-        "qemu",
-        "placeholder",
-    )
-    assert policy["tool_version"] is None
-    assert policy["note"] == PLACEHOLDER_NOTE and policy["note"].startswith("PLACEHOLDER")
-    assert policy["artifact"]["path"] == str(manifest / "default" / "disk.qcow2")
-    assert len(policy["artifact"]["sha256"]) == 64
-    assert policy["boot_payload"]["path"] == str(manifest / "default" / "disk.efi")
-    assert sorted(policy["registers"]) == ["RTMR1", "RTMR2"]
-    assert sorted(policy["unverifiable"]) == ["MRTD", "RTMR0"]
-    assert read_policy(target)["registers"] == policy["registers"]
-
-
-def test_export_refuses_placeholders_without_the_flag(
-    manifest: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    target = tmp_path / "peer.json"
-    code, _ = run_main("measure", "--build", str(manifest), "--export-policy", str(target))
-    assert code == EXIT_SDK_ERROR
-    assert "E_MEASUREMENT" in capsys.readouterr().err
-    assert not target.exists()
-    with pytest.raises(MeasurementError, match="placeholder measurements as a verifier policy"):
-        policy_payload(
-            scheme="qemu",
-            tool="placeholder",
-            registers={"RTMR0": [R0], "RTMR1": [R1], "RTMR2": [R2]},
-            unverifiable=QEMU_GAPS,
-            artifact_path="x",
-            artifact_sha256="f" * 64,
-        )
 
 
 def test_export_rejects_uncovered_registers_and_unknown_schemes() -> None:
@@ -155,7 +93,7 @@ def test_schema_1_policies_are_refused_with_a_re_export_hint() -> None:
     old = {**_policy(RTMR0=R0, RTMR1=R1, RTMR2=R2), "schema_version": 1, "scheme": "rtmr"}
     with pytest.raises(ValidationError, match="no longer read") as caught:
         read_policy(old)
-    assert caught.value.hint is not None and "--export-policy" in caught.value.hint
+    assert caught.value.hint is not None and "measurements.json" in caught.value.hint
 
 
 def test_from_policy_normalises_registers_for_the_validator() -> None:
@@ -253,17 +191,3 @@ def test_the_committed_example_policy_is_a_marked_placeholder() -> None:
     assert policy["tool"] == "placeholder" and policy["note"] == PLACEHOLDER_NOTE
     with pytest.raises(MeasurementError):
         Tdxs.from_policy(REPO_ROOT / "examples" / "peer.policy.json")
-
-
-def test_export_keeps_the_operator_platform_approval(manifest: Path, tmp_path: Path) -> None:
-    target = tmp_path / "peer.json"
-    base = ("measure", "--build", str(manifest), "--allow-placeholder")
-    approve = ("--approve-mrtd", MRTD.upper(), "--approve-rtmr0", R0)
-    code, _ = run_main(*base, "--export-policy", str(target), *approve)
-    assert code == EXIT_OK
-    policy = json.loads(target.read_text(encoding="utf-8"))
-    assert policy["platform_approval"] == {"MRTD": [MRTD], "RTMR0": [R0]}
-    assert read_policy(target)["platform_approval"] == {"MRTD": [MRTD], "RTMR0": [R0]}
-    assert run_main(*base, *approve)[0] == EXIT_SDK_ERROR  # no --export-policy to keep it in
-    code, _ = run_main(*base, "--export-policy", str(target), "--approve-mrtd", "zz")
-    assert code == EXIT_SDK_ERROR

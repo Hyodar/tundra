@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
+from tests.helpers import write_recipe_file
 from tundravm import declarative as tv
-from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative import Declaration, File, Fragment, Package, Recipe, Variant, lower
 from tundravm.diff import FileChange, TreeDiff, diff_against, diff_trees
 
@@ -201,56 +200,3 @@ def test_diff_leaves_the_tree_alone_until_written(tmp_path: Path) -> None:
 def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The recipe file, run from *tmp_path* so its build dir is ``tmp_path / "build"``."""
     return write_recipe_file(tmp_path, RECIPE, monkeypatch)
-
-
-def test_compile_check_detects_stale_tree(recipe: Path, tmp_path: Path) -> None:
-    tree = tmp_path / "tree"
-    code, out = run_main("compile", str(recipe), "--check", "--tree", str(tree))
-    assert code == EXIT_FAILURE and "A  payload/mkosi.conf" in out
-    assert not tree.exists()
-
-    assert run_main("compile", str(recipe), "--tree", str(tree))[0] == EXIT_OK
-    code, out = run_main("compile", str(recipe), "--tree", str(tree), "--check")
-    assert (code, out) == (EXIT_OK, "tree is up to date with the recipe\n")
-
-    text = recipe.read_text()
-    recipe.write_text(
-        text.replace('Package("jq"),', 'Package("jq"),\n            Package("htop"),')
-    )
-    code, out = run_main("compile", str(recipe), "--tree", str(tree), "--check")
-    assert code == EXIT_FAILURE
-    # every variant boots the one payload: one file changes for all of them
-    assert out == "M  payload/mkosi.conf\n1 file changed\n"
-    code, out = run_main(
-        "compile", str(recipe), "--tree", str(tree), "--check", "--variant", "default"
-    )
-    # what every variant shares does not depend on the variants compiled
-    assert out == "M  payload/mkosi.conf\n1 file changed\n"
-
-
-def test_diff_command(recipe: Path, tmp_path: Path) -> None:
-    tree = tmp_path / "tree"
-    both = ("--variant", "default", "--variant", "azure")
-    run_main("compile", str(recipe), "--tree", str(tree), *both)
-    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--stat")
-    assert (code, out) == (EXIT_OK, "tree is up to date with the recipe\n")
-    code, out = run_main("diff", str(recipe), "--tree", str(tree), *both)
-    assert code == EXIT_OK
-
-    recipe.write_text(recipe.read_text().replace("hello", "goodbye"))
-    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--stat", *both)
-    assert (tree / "mkosi.images" / "azure" / "mkosi.conf").is_file()
-    assert (code, out) == (EXIT_FAILURE, "M  payload/mkosi.extra/etc/motd\n1 file changed\n")
-
-    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--color", "never")
-    assert code == EXIT_FAILURE
-    assert "-hello\n+goodbye\n" in out and "\x1b[" not in out
-    code, out = run_main("diff", str(recipe), "--tree", str(tree), "--color", "always")
-    assert "\x1b[31m-hello\x1b[0m" in out
-
-
-def test_diff_command_defaults_to_build_dir(recipe: Path) -> None:
-    code, out = run_main("diff", str(recipe), "--stat")
-    assert code == EXIT_FAILURE and "A  payload/mkosi.conf" in out
-    run_main("compile", str(recipe))
-    assert run_main("diff", str(recipe))[0] == EXIT_OK

@@ -1,4 +1,4 @@
-"""The image and tests ``tundravm init --app go`` writes: one Go program as a service.
+"""An image and its tests for one Go program run as a service (:func:`render_app_recipe`).
 
 The image builds the program with ``GoBinary``, runs it as its own system user with a
 state directory, and optionally keeps that state on a :class:`~tundravm.Volume` an
@@ -104,11 +104,10 @@ def check_spec(spec: AppSpec) -> None:
 
 _HEADER = r'''"""$title image ($app as a service, built from its Go source).
 
-Inspect:  tundravm inspect $filename
-Lint:     tundravm lint $filename
-Lock:     tundravm lock $filename
-Compile:  tundravm compile $filename --tree mkosi
-Build:    tundravm bake $filename --build build
+Check:  tundravm check $filename
+Lock:   tundravm lock $filename
+Build:  tundravm build $filename
+Run:    tundravm run --mode simulated --dev
 """
 
 '''

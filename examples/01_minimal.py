@@ -7,9 +7,9 @@ system user per service, and the evidence service. ``Image``'s docstring lists e
 implied item with its one escape hatch. With no ``profiles`` it builds one
 ``production`` profile for QEMU.
 
-    tundravm inspect examples/01_minimal.py
-    tundravm compile examples/01_minimal.py --tree build/minimal/mkosi
-    tundravm bake examples/01_minimal.py --build build/minimal
+    tundravm show examples/01_minimal.py
+    tundravm build examples/01_minimal.py --tree-only build/minimal/mkosi
+    tundravm build examples/01_minimal.py
 """
 
 from tundravm import TCP, File, Image, Service

@@ -83,17 +83,17 @@ def test_load_image_lowers_and_wires_the_backend(recipe_file: Path) -> None:
     assert img.targets["azure"] == ("azure",) and img.clouds("azure") == ("azure",)
 
 
-def test_cli_inspect_and_compile_a_declarative_recipe(recipe_file: Path, tmp_path: Path) -> None:
-    code, out = run_main("inspect", str(recipe_file), "--format", "json")
+def test_cli_shows_and_compiles_a_declarative_recipe(recipe_file: Path, tmp_path: Path) -> None:
+    code, out = run_main("show", str(recipe_file), "--json")
     assert code == EXIT_OK
     payload = json.loads(out)["variants"]
     assert set(payload) == {"default", "azure"}
     assert payload["default"]["base"] == "debian/bookworm"
 
-    code, out = run_main("inspect", str(recipe_file), "--variant", "azure")
+    code, out = run_main("show", str(recipe_file), "--profile", "azure")
     assert code == EXIT_OK and "azure" in out
 
-    code, _ = run_main("compile", str(recipe_file), "--tree", str(tmp_path / "tree"))
+    code, _ = run_main("build", str(recipe_file), "--tree-only", str(tmp_path / "tree"))
     assert code == EXIT_OK
     motd = tmp_path / "tree" / "payload" / "mkosi.extra" / "etc" / "motd"
     assert motd.read_text() == "hello\n"
@@ -106,10 +106,10 @@ def test_cli_reports_resolution_errors(tmp_path: Path, capsys: pytest.CaptureFix
         "recipe = Recipe('b', items=(Disk('d', '/data', key=Key('k')),))\n",
         encoding="utf-8",
     )
-    code, _ = run_main("inspect", str(broken))
+    code, _ = run_main("show", str(broken))
     assert code == EXIT_SDK_ERROR
     assert "disk-key-undefined" in capsys.readouterr().err
 
-    code, out = run_main("lint", str(broken))
+    code, out = run_main("check", str(broken))
     assert code == EXIT_FAILURE
     assert "error disk-key-undefined [default]" in out

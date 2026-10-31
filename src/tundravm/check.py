@@ -1,4 +1,4 @@
-"""Compiler diagnostics on a lowered recipe, reported by ``lint()`` and ``tundravm lint``.
+"""Compiler diagnostics on a lowered recipe, reported by ``lint()`` and ``tundravm check``.
 
 Each rule is a small function ``(image, profile_name, state) -> Iterator[Diagnostic]``
 registered in ``RULES``; ``_rule_module_checks`` adds each applied module's own
@@ -450,7 +450,7 @@ def _rule_source_unpinned(
 def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
     """The ``source-unpinned`` message and hint for the unpinned lockable source *spec*."""
     source = spec.source
-    fetch = " and `tundravm fetch RECIPE` to check it out on the host (`bake` fetches too)"
+    fetch = " (`tundravm build` then checks it out on the host)"
     if isinstance(spec, KernelSource):
         return (
             f"kernel {spec.version} ({source.kind} {source.url} @ {source.requested}) "
@@ -466,8 +466,8 @@ def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
     if isinstance(spec, DebFile):
         return (
             f"EfiStub package ({source.kind} {source.url}) is not pinned in the lockfile",
-            f"Run `tundravm lock RECIPE` to pin its sha256 as {spec.name!r} and "
-            "`tundravm fetch RECIPE` to download it on the host (`bake` fetches too). "
+            f"Run `tundravm lock RECIPE` to pin its sha256 as {spec.name!r} "
+            "(`tundravm build` then downloads it on the host). "
             "Unpinned, the postinst hook downloads it in the build sandbox.",
         )
     return (

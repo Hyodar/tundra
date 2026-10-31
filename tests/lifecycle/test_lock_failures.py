@@ -116,8 +116,8 @@ def test_other_resolver_errors_are_collected_too(recipe_file: Path) -> None:
 def test_cli_lock_failure_exits_2_and_writes_nothing(
     recipe_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    target = recipe_file.parent / "out" / "tundravm.lock"
-    code, out = _cli(monkeypatch, _Upstream(), str(recipe_file), "--lockfile", str(target))
+    target = recipe_file.parent / "build" / "tundravm.lock"
+    code, out = _cli(monkeypatch, _Upstream(), str(recipe_file))
     assert (code, out) == (EXIT_SDK_ERROR, "")
     assert not target.exists()
     err = capsys.readouterr().err
@@ -129,34 +129,20 @@ def test_cli_lock_failure_exits_2_and_writes_nothing(
 def test_cli_lock_failure_keeps_the_existing_lockfile(
     recipe_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    target = recipe_file.parent / "tundravm.lock"
+    target = recipe_file.parent / "build" / "tundravm.lock"
     write_lock(lock(load_recipe(recipe_file), resolver=_Upstream(broken=False)), target)
     before = target.read_bytes()
-    argv = (str(recipe_file), "--lockfile", str(target), "--update", "raiko")
+    argv = (str(recipe_file), "--update", "raiko")
     assert _cli(monkeypatch, _Upstream(), *argv)[0] == EXIT_SDK_ERROR
     assert target.read_bytes() == before
-
-
-def test_cli_lock_github_format_annotates_each_failed_source(
-    recipe_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = recipe_file.parent / "tundravm.lock"
-    argv = (str(recipe_file), "--lockfile", str(target), "--format", "github")
-    code, out = _cli(monkeypatch, _Upstream(), *argv)
-    assert code == EXIT_SDK_ERROR
-    assert out.splitlines() == [
-        f"::error file=image.py,title=E_SOURCE::{RAIKO_LINE.strip()}",
-        f"::error file=image.py,title=E_SOURCE::{TOOL_LINE.strip()}",
-    ]
-    assert not target.exists()
 
 
 def test_cli_lock_success_path_is_unchanged(
     recipe_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    target = recipe_file.parent / "tundravm.lock"
+    target = Path("build") / "tundravm.lock"
     upstream = _Upstream(broken=False)
-    code, out = _cli(monkeypatch, upstream, str(recipe_file), "--lockfile", str(target))
+    code, out = _cli(monkeypatch, upstream, str(recipe_file))
     assert (code, out) == (EXIT_OK, f"locked {target}\n")
     pins = {pin.identity: pin.digest for pin in read_lock(target).pins}
     assert pins == {"nethermind": SHA, "raiko": SHA, "tool": DIGEST}
@@ -182,14 +168,14 @@ def test_lock_check_names_unpinned_sources_without_the_network(
     recipe_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recipe = load_recipe(recipe_file)
-    target = recipe_file.parent / "tundravm.lock"
+    target = recipe_file.parent / "build" / "tundravm.lock"
     full = lock(recipe, resolver=_Upstream(broken=False))
     write_lock(read_lock_without(full, "raiko", tmp=recipe_file.parent), target)
     found = {d.subject: d.message for d in lock_status(recipe, read_lock(target))}
     assert found == {"sources.raiko": "source raiko is not pinned"}
     # conftest refuses network resolution; --check must not need it.
     out = io.StringIO()
-    code = main(["lock", str(recipe_file), "--lockfile", str(target), "--check"], stdout=out)
+    code = main(["lock", str(recipe_file), "--check"], stdout=out)
     assert (code, out.getvalue()) == (
         EXIT_FAILURE,
         "+ sources.raiko: source raiko is not pinned\n",

@@ -465,12 +465,12 @@ def test_recipe_file_and_run_cli(tmp_path: Path) -> None:
     assert path == tmp_path / "recipe.py"
     assert path.read_text(encoding="utf-8").startswith("from tundravm.declarative import Fragment")
 
-    code, out, err = run_cli("lint", path)
+    code, out, err = run_cli("check", path)
     assert code == 0
     assert "no findings" in out
-    assert err == ""
+    assert "no lockfile" in err  # a note, not a finding
 
-    code, out, _ = run_cli("compile", path, "--tree", tmp_path / "tree")
+    code, out, _ = run_cli("build", path, "--tree-only", tmp_path / "tree")
     assert code == 0, out
     assert (tmp_path / "tree" / "payload" / "mkosi.conf").is_file()
 
@@ -483,7 +483,7 @@ def test_run_cli_captures_usage_errors_and_sdk_errors(tmp_path: Path) -> None:
 
     broken = recipe_file(tmp_path, "recipe = 42\n", name="sub/broken.py")
     assert broken == tmp_path / "sub" / "broken.py"
-    code, _, err = run_cli("lint", broken)
+    code, _, err = run_cli("check", broken)
     assert code != 0
     assert "error [" in err
     assert "does not define an Image" in err

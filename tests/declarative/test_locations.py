@@ -11,7 +11,7 @@ from tundravm.check import render, render_github
 from tundravm.declarative import Diagnostic, Recipe, lint, lower
 from tundravm.declarative.resolve import provenance, resolve
 from tundravm.errors import ValidationError
-from tundravm.explore import explore
+from tundravm.explain import explain_why
 from tundravm.recipe import load_recipe
 
 RECIPE = """
@@ -112,15 +112,16 @@ def test_a_step_cycle_points_at_a_step_in_it(tmp_path: Path) -> None:
     assert cycle.location == f"{tmp_path}/cycle.py:9"  # outside the working directory
 
 
-def test_explore_json_carries_origin_locations(recipe_path: Path) -> None:
+def test_provenance_carries_origin_locations(recipe_path: Path) -> None:
     source = RECIPE.replace(', user="ghost"', "").replace(
         'changes=(Unit.ref("gone.service").remove(),)', "changes=(app.ref.edit(user=None),)"
     )
-    data = explore(load_recipe(_write(recipe_path.parent / "explored.py", source))).to_dict()
-    assert data["schema"] == "tundravm.explore/5"
-    (row,) = (r for r in data["declarations"] if r["declaration"] == "Service(app.service)")
-    origins = row["variants"]["dev"]["origins"]
-    assert [(o["action"], o["location"]) for o in origins] == [
+    recipe = load_recipe(_write(recipe_path.parent / "explored.py", source))
+    data = explain_why(recipe, "dev", "unit:app.service").to_dict()
+    declarations = data["declarations"]
+    assert isinstance(declarations, list)
+    (row,) = (r for r in declarations if r["declaration"] == "Service(app.service)")
+    assert [(o["action"], o["location"]) for o in row["origins"]] == [
         ("declared", "explored.py:4"),
         ("edited", "explored.py:13"),
     ]

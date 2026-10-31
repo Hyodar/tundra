@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.cli import EXIT_OK, main
 from tundravm.declarative import (
     Backend,
     Build,
@@ -14,7 +14,9 @@ from tundravm.declarative import (
     bake,
     lock,
 )
-from tundravm.errors import LockfileError
+from tundravm.declarative.lifecycle import bake_image
+from tundravm.declarative.lower import lower
+from tundravm.errors import LockfileError, PolicyError
 from tundravm.recipe import load_recipe
 
 FROZEN_RECIPE = """
@@ -33,19 +35,15 @@ backend = InProcessBackend()
 def test_policy_requires_frozen_lock_for_bake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.chdir(tmp_path)  # the CLI's default lockfile is ./build/tundravm.lock
+    monkeypatch.chdir(tmp_path)  # the CLI's lockfile is ./build/tundravm.lock
     path = tmp_path / "recipe.py"
     path.write_text(FROZEN_RECIPE, encoding="utf-8")
-    out = tmp_path / "out"
-    lock_path = tmp_path / "frozen.lock"
 
-    # Without a lockfile the CLI bakes unfrozen, which the policy refuses.
-    assert main(["bake", str(path), "--build", str(out)], stdout=io.StringIO()) == EXIT_SDK_ERROR
-    assert "error [E_POLICY]" in capsys.readouterr().err
-
-    assert main(["lock", str(path), "--lockfile", str(lock_path)], stdout=io.StringIO()) == EXIT_OK
-    argv = ["bake", str(path), "--lockfile", str(lock_path), "--build", str(out)]
-    assert main(argv, stdout=io.StringIO()) == EXIT_OK
+    # The API refuses an unfrozen bake; the CLI never bakes one: it writes the lock first.
+    with pytest.raises(PolicyError):
+        bake_image(lower(load_recipe(path)), None, locked=None, backend=None, build=tmp_path / "x")
+    assert main(["build", str(path)], stdout=io.StringIO()) == EXIT_OK
+    assert (tmp_path / "build" / "tundravm.lock").is_file()
 
     recipe = load_recipe(path)
     assert isinstance(recipe.policy, Policy) and recipe.policy.require_frozen_lock

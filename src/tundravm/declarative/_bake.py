@@ -95,8 +95,8 @@ def bake(
             raise ValidationError(
                 "No build backend configured.",
                 hint=(
-                    "Pass --backend (lima or local), or bind "
-                    "`backend = LimaMkosiBackend()` in the recipe file."
+                    "Set TUNDRAVM_BACKEND (lima or local) or [tool.tundravm] backend, or "
+                    "bind `backend = LimaMkosiBackend()` in the image file."
                 ),
             )
         backend = lowered.backend
@@ -211,7 +211,7 @@ def _lint(lowered: Lowered, progress: Progress) -> None:
     if errors:
         raise LintError(
             f"Recipe has {len(errors)} error-level diagnostics.",
-            hint="Run `tundravm lint RECIPE` to see them.",
+            hint="Run `tundravm check RECIPE` to see them.",
             context={"codes": ", ".join(d.code for d in errors[:3])},
         )
 
@@ -367,8 +367,8 @@ def _fetched_sources(
             raise StateError(
                 f"{what} {name!r} is not pinned, so nothing is fetched to build it from.",
                 hint=(
-                    "Run `tundravm lock RECIPE` and `tundravm fetch RECIPE`, or bake "
-                    "without --no-fetch."
+                    "Run `tundravm lock RECIPE`, then `tundravm build`: it fetches what the "
+                    "lock pins."
                 ),
                 context={"source": f"{spec.source.kind} {spec.source.url}"},
             )
@@ -377,8 +377,8 @@ def _fetched_sources(
             raise StateError(
                 f"{what} {name!r} is not fetched: {checkout} is missing or incomplete.",
                 hint=(
-                    f"Run `tundravm fetch RECIPE --build {destination}` first, or bake "
-                    "without --no-fetch."
+                    f"Run `tundravm build` once with the network: it fetches into "
+                    f"{destination}/.sources, which `tundravm build --offline` reuses."
                 ),
                 context={"pin": pin},
             )
@@ -394,9 +394,9 @@ def _fetched_sources(
                 f"Source build {name!r} has no prefetched {recipe.kind} dependencies, "
                 "and an offline bake gives the build no network to download them.",
                 hint=(
-                    f"Run `tundravm fetch RECIPE --build {destination}` on a host with "
+                    f"Run `tundravm build` once with the network on a host with "
                     f"`{recipe.tool}` on PATH (it fills {root / DEPS_DIRNAME / recipe.deps}), "
-                    "or bake without --offline."
+                    "or build without --offline."
                 ),
                 context={"marker": marker},
             )
@@ -404,9 +404,9 @@ def _fetched_sources(
             f"Source build {name!r} has an incomplete {recipe.kind} dependency cache: "
             f"{problem}, and an offline bake gives the build no network to download it.",
             hint=(
-                f"Run `tundravm fetch RECIPE --build {destination}` on a host with "
-                f"`{recipe.tool}` on PATH: it prefetches the dependencies again "
-                "(`--force` refills every cache). Or bake without --offline."
+                f"Run `tundravm build --clean-cache` with the network on a host with "
+                f"`{recipe.tool}` on PATH: it prefetches the dependencies again. Or build "
+                "without --offline."
             ),
             context={"marker": marker},
         )

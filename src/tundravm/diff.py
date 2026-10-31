@@ -1,4 +1,4 @@
-"""Compiled-tree diffing: ``tundravm diff`` and ``compile --check``."""
+"""Compiled-tree diffing: ``tundravm check --tree`` and ``show --diff``."""
 
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ class TreeDiff:
         if len(lines) > max_lines:
             parts.append(
                 f"_Diff truncated: showing {max_lines} of {len(lines)} lines. "
-                "Run `tundravm diff` locally for the rest._"
+                "Run `tundravm check --tree DIR` locally for the rest._"
             )
         return "\n\n".join(parts) + "\n"
 

@@ -48,7 +48,7 @@ _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PLAIN_ENV_VALUE = re.compile(r"^[A-Za-z0-9_@%+=:,./-]*$")
 _ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar.zst")
 SOURCES_DIRNAME = ".sources"
-"""Directory of the build output that ``tundravm fetch`` writes the checkouts to."""
+"""Directory of the build output that ``tundravm build`` fetches the checkouts into."""
 SOURCES_MOUNT = "tundravm-sources"
 """Where a mounted hook finds the host-fetched checkouts: ``$SRCDIR/tundravm-sources``."""
 FETCH_MARKER = ".tundravm-complete"
@@ -57,7 +57,7 @@ MOUNTED_CACHE_ROOT = "${BUILDDIR:-$BUILDROOT/build}"
 """The build cache of a mounted hook: mkosi's ``$BUILDDIR`` when ``BuildDirectory=`` is
 configured (kept across builds), else the build overlay (discarded after the build)."""
 DEPS_DIRNAME = "deps"
-"""``<out>/.sources/deps``: the dependency caches ``tundravm fetch`` fills with the host's
+"""``<out>/.sources/deps``: the dependency caches ``tundravm build`` fills with the host's
 toolchains (``go``, ``cargo``, ``nuget``), mounted with the checkouts."""
 DEPS_BUILD_DIR = ".tundravm-deps"
 """Where a mounted hook copies a dependency cache: ``$BUILDROOT/build/.tundravm-deps/<cache>``
@@ -237,7 +237,7 @@ class GoBuild:
 
     kind: Literal["go"] = field(default="go", init=False, repr=False)
     tool: ClassVar[str] = "go"
-    """The host executable ``tundravm fetch`` prefetches the dependencies with."""
+    """The host executable ``tundravm build`` prefetches the dependencies with."""
     deps: ClassVar[str] = "go"
     """The dependency cache, ``<out>/.sources/deps/go``: a ``GOMODCACHE``."""
 
@@ -297,8 +297,8 @@ class CargoBuild:
     """``cargo fetch && cargo build --frozen``; *bin* or *package* selects the target.
 
     ``auditable`` builds with ``cargo auditable`` (adding the ``cargo-auditable``
-    package), which embeds the crate list in a ``.dep-v0`` section ``tundravm sbom``
-    reads. ``reproducible`` adds :data:`CARGO_RUSTFLAGS` and the path remap to the
+    package), which embeds the crate list in a ``.dep-v0`` section the SBOM ``tundravm
+    build`` writes reads. ``reproducible`` adds :data:`CARGO_RUSTFLAGS` and the path remap to the
     project's ``build.rustflags`` (``--config``; prepended to an ``env`` ``RUSTFLAGS``,
     which would replace them), one codegen unit, no incremental build and
     ``SOURCE_DATE_EPOCH`` (the build's, else ``0``). ``None`` (the default) is on.
@@ -316,7 +316,7 @@ class CargoBuild:
 
     kind: Literal["cargo"] = field(default="cargo", init=False, repr=False)
     tool: ClassVar[str] = "cargo"
-    """The host executable ``tundravm fetch`` prefetches the dependencies with."""
+    """The host executable ``tundravm build`` prefetches the dependencies with."""
     deps: ClassVar[str] = "cargo"
     """The dependency cache, ``<out>/.sources/deps/cargo``: a ``CARGO_HOME`` registry cache."""
 
@@ -396,7 +396,7 @@ class DotnetBuild:
 
     kind: Literal["dotnet"] = field(default="dotnet", init=False, repr=False)
     tool: ClassVar[str] = "dotnet"
-    """The host executable ``tundravm fetch`` prefetches the dependencies with."""
+    """The host executable ``tundravm build`` prefetches the dependencies with."""
     deps: ClassVar[str] = "nuget"
     """The dependency cache, ``<out>/.sources/deps/nuget``: a NuGet global packages folder."""
 
@@ -474,7 +474,7 @@ class ScriptBuild:
 
 BuildRecipe = GoBuild | CargoBuild | DotnetBuild | ScriptBuild
 LanguageBuild = GoBuild | CargoBuild | DotnetBuild
-"""The build recipes whose dependencies ``tundravm fetch`` prefetches on the host."""
+"""The build recipes whose dependencies ``tundravm build`` prefetches on the host."""
 
 
 def resolve_recipe(build: BuildRecipe) -> BuildRecipe:
@@ -891,7 +891,7 @@ class SourceBuild(NamedSource):
 
         *copy* (``&&``-joined after the checkout copy) copies
         ``$SRCDIR/tundravm-sources/deps/<cache>`` to ``$BUILDROOT/build/.tundravm-deps``
-        once, when ``tundravm fetch`` filled it; *exports* (inside mkosi-chroot) point
+        once, when ``tundravm build`` filled it; *exports* (inside mkosi-chroot) point
         the toolchain at that copy, offline when mkosi runs the build without network.
         Both are empty for a script build.
         """
@@ -911,7 +911,7 @@ class SourceBuild(NamedSource):
     def deps_marker(self, pin: str) -> str | None:
         """``<pin_dir>.<cache>.json``: the file in ``.sources/deps`` that records a prefetch.
 
-        ``tundravm fetch`` writes it once the host toolchain filled the cache for
+        ``tundravm build`` writes it once the host toolchain filled the cache for
         *pin*'s checkout; ``None`` for a script build, which has no dependency cache.
         """
         if not isinstance(self.build, LanguageBuild):
@@ -1069,12 +1069,12 @@ def is_fetched(
         return True
     label = name or checkout.name
     raise SourceError(
-        f"source {label} checkout modified/incomplete: run tundravm fetch --force",
+        f"source {label} checkout modified/incomplete: run tundravm build --clean-cache",
         source=source.describe(),
         reason=problem,
         hint=(
-            f"{problem}. Run `tundravm fetch RECIPE --force` to check {label} out again "
-            "(it replaces the checkout)."
+            f"{problem}. Run `tundravm build --clean-cache` to check {label} out again "
+            "(it drops the image's workspace, sources included)."
         ),
         context={"path": str(checkout)},
     )
@@ -1424,7 +1424,7 @@ def _git(source: GitSource, *args: str) -> None:
             f"Cannot fetch {described}: {reason}.",
             source=described,
             reason=reason,
-            hint="Install git on the host that runs `tundravm fetch`.",
+            hint="Install git on the host that runs `tundravm lock` and `tundravm build`.",
         ) from exc
     if completed.returncode != 0:
         reason = _git_error(completed)
@@ -1434,7 +1434,7 @@ def _git(source: GitSource, *args: str) -> None:
             reason=reason,
             hint=(
                 "Check the repository URL and that git on this host can read it "
-                "(credentials, network), then run `tundravm fetch RECIPE` again."
+                "(credentials, network), then run `tundravm build` again."
             ),
             context={"argv": " ".join(command)},
         )

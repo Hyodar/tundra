@@ -7,7 +7,7 @@ import re
 
 import tundravm
 from tests.helpers import REPO_ROOT
-from tundravm.cli import build_parser
+from tundravm.cli import COMMANDS, build_parser
 from tundravm.declarative import utils
 from tundravm.errors import ErrorCode
 
@@ -48,12 +48,26 @@ def _documented(name: str, text: str) -> bool:
     return any(re.search(rf"^{re.escape(name)}\(", block, re.M) for block in blocks)
 
 
-def _subcommands() -> dict[str, argparse.ArgumentParser]:
-    parser = build_parser()
+def _children(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
             return dict(action.choices)
-    raise AssertionError("tundravm's parser has no subcommands")
+    return {}
+
+
+def _subcommands() -> dict[str, argparse.ArgumentParser]:
+    """Every command, and every action of a command with its own (``secrets deliver``)."""
+    found: dict[str, argparse.ArgumentParser] = {}
+    for verb, parser in _children(build_parser()).items():
+        found[verb] = parser
+        found.update({f"{verb} {name}": child for name, child in _children(parser).items()})
+    assert found, "tundravm's parser has no subcommands"
+    return found
+
+
+def test_the_parser_has_exactly_the_twelve_commands() -> None:
+    assert tuple(_children(build_parser())) == COMMANDS
+    assert len(COMMANDS) == 12
 
 
 def _long_flags(parser: argparse.ArgumentParser) -> set[str]:
@@ -95,7 +109,8 @@ def test_every_cli_verb_is_in_the_cli_reference() -> None:
     missing = sorted(
         verb
         for verb in _subcommands()
-        if re.search(rf"`{re.escape(verb)}[`\s]", text) is None
+        if re.search(rf"^tundravm {re.escape(verb)}\b", text, re.M) is None
+        and re.search(rf"`{re.escape(verb)}[`\s]", text) is None
         and re.search(rf"^\|\s*`?{re.escape(verb)}`?\s*\|", text, re.M) is None
     )
     assert missing == [], f"CLI verbs missing from docs/cli.md: {missing}"

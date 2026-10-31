@@ -1004,7 +1004,7 @@ Unit text (every unit and drop-in a variant ships, parsed with systemd 257's dir
 
 Lock drift (from `lint(lock=)` and `lock_status`): `lock-changed`, `lock-added`, `lock-removed` (each with the section as `subject`), and `lock-stale` when every section matches but the whole-recipe digest does not. Host tools (from `doctor`): `tool-missing`.
 
-Toolchain drift (from `tundravm lint --lockfile` and `lock --check`): `toolchain-drift`, one per toolchain field (`subject` `toolchain.<field>`) the running toolchain differs on from the lockfile's; a warning, an error with `--strict` or `strict_toolchain = true`. Witness toolchains (from `verify_witnesses`, `toolchains="same"` by default): `witness-toolchain-different` (matched on another toolchain than the release's; not counted under `"same"`), `witness-toolchain-unknown` (no toolchain recorded), `witness-toolchain-repeated` (under `"distinct"`, a toolchain already counted).
+Toolchain drift (from `check` with a lockfile): `toolchain-drift`, one per toolchain field (`subject` `toolchain.<field>`) the running toolchain differs on from the lockfile's; a warning. Tree drift (from `check --tree DIR`): `tree-drift`, one error per file of DIR that differs from what the image compiles to.
 
 ## Policy
 

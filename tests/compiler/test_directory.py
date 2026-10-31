@@ -177,7 +177,7 @@ def test_inspect_lists_modes_links_and_directories(tmp_path: Path) -> None:
         "FileTree('/etc/app', Path(__file__).parent / 'app')))\n",
         encoding="utf-8",
     )
-    code, out = run_main("inspect", str(recipe))
+    code, out = run_main("show", str(recipe))
     assert code == 0
     lines = {line.split()[0]: line.split()[1:] for line in out.splitlines() if "/etc/app/" in line}
     assert lines["/etc/app/token"][0] == "0600"

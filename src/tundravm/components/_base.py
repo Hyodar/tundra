@@ -417,8 +417,9 @@ class Tdxs(Component):
     ) -> Tdxs:
         """A verifier whose ``expected_measurements`` are *policy*'s registers.
 
-        *policy* is the file ``tundravm measure --export-policy`` wrote for the image you
-        trust (or its dict); a placeholder policy is refused unless *allow_placeholder*.
+        *policy* is the verifier policy (a ``measurements.json`` record's ``policy``) of
+        the image you trust (or its dict); a placeholder policy is refused unless
+        *allow_placeholder*.
         Other keyword arguments are fields of this class.
         """
         fields = {k: kwargs.pop(k) for k in ("source", "issuer") if k in kwargs}

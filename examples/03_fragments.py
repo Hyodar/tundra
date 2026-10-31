@@ -12,9 +12,9 @@ Teaches:
 - ``compose()`` may still yield an internal declaration (``Repository``, ``Unit``,
   ``Task``, ``ConfigFile``, ``Run``) while those concerns have no public spelling.
 
-    tundravm inspect examples/03_fragments.py
-    tundravm lint examples/03_fragments.py
-    tundravm compile examples/03_fragments.py --tree build/fragments/mkosi
+    tundravm show examples/03_fragments.py
+    tundravm check examples/03_fragments.py
+    tundravm build examples/03_fragments.py --tree-only build/fragments/mkosi
 """
 
 from __future__ import annotations

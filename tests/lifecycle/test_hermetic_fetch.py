@@ -15,11 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import source_dir, write_recipe_file
+from tests.helpers import source_dir
 from tundravm import _source
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.backends.base import MountSpec, Requirement
-from tundravm.cli import EXIT_OK, main
 from tundravm.declarative import (
     Build,
     Cargo,
@@ -250,27 +249,6 @@ def test_script_builds_and_kernels_have_no_dependency_cache(
     assert fetched.deps is None and tools.calls == []
 
 
-def test_cli_fetch_lists_the_dependency_outcome(
-    tmp_path: Path,
-    repo: tuple[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    url, first = repo
-    _Toolchain(monkeypatch, [])
-    path = write_recipe_file(
-        tmp_path,
-        "from tundravm.declarative import Build, Fragment, Git, Go, Install, Package, Recipe\n"
-        "recipe = Recipe('tool', items=(Package('linux-image-amd64'), "
-        f"Build('tool', Git({url!r}, {first!r}), using=Go(output='tool'), "
-        "install=(Install('tool', '/t'),))))\n",
-    )
-    assert main(["fetch", str(path), "--build", str(tmp_path / "out")]) == EXIT_OK
-    captured = capsys.readouterr()
-    assert "deps: skipped (no host go)" in captured.out
-    assert "tool: deps: skipped (no host go)" in captured.err
-
-
 MODULE = "example.com/Dep"
 MODULE_DIR = "example.com/!dep@v1.2.0"
 """The module ``go.sum`` names, and its directory in the module cache (case-encoded)."""
@@ -451,7 +429,7 @@ def test_offline_bake_refuses_a_build_without_prefetched_deps(
             offline=True,
         )
     assert missing.value.code == ErrorCode.STATE
-    assert "tundravm fetch" in str(missing.value.hint) and "`go`" in str(missing.value.hint)
+    assert "tundravm build" in str(missing.value.hint) and "`go`" in str(missing.value.hint)
     assert backend.requests == []
 
 
@@ -476,7 +454,7 @@ def test_offline_bake_names_the_missing_cache_entry(
             fetch=False,
         )
     assert f"deps/go/{MODULE_DIR} is missing or changed" in str(incomplete.value)
-    assert f"tundravm fetch RECIPE --build {out}" in str(incomplete.value.hint)
+    assert "tundravm build --clean-cache" in str(incomplete.value.hint)
     assert backend.requests == []
 
 

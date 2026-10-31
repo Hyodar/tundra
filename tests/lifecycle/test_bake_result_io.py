@@ -85,7 +85,7 @@ def test_load_missing_file_raises_state_error(tmp_path: Path) -> None:
     with pytest.raises(StateError) as excinfo:
         BakeResult.load(tmp_path)
     assert excinfo.value.code == "E_STATE"
-    assert excinfo.value.hint == "Run bake() / tundravm bake first."
+    assert excinfo.value.hint == "Run bake() / tundravm build first."
 
 
 def test_load_corrupt_file_raises_state_error(tmp_path: Path) -> None:

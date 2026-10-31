@@ -15,11 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import source_dir, write_recipe_file
+from tests.helpers import source_dir
 from tundravm._source import GitSource, fetch_source
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.backends.base import MountSpec, Requirement
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.declarative import (
     Build,
     Git,
@@ -32,12 +31,10 @@ from tundravm.declarative import (
     lifecycle,
     lock,
     lower,
-    write_lock,
 )
 from tundravm.declarative.lifecycle import FetchedSource, bake_image, fetch
 from tundravm.errors import ErrorCode, PolicyError, SourceError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
-from tundravm.recipe import load_recipe
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
@@ -281,7 +278,7 @@ def test_bake_without_fetch_fails_fast_naming_tundravm_fetch(
             fetch=False,
         )
     assert missing.value.code == ErrorCode.STATE
-    assert "tundravm fetch" in str(missing.value.hint)
+    assert "tundravm build" in str(missing.value.hint)
     assert backend.requests == []
     fetch(recipe, lock=_locked(recipe, first), build=tmp_path / "out")
     bake_image(
@@ -362,31 +359,6 @@ recipe = Recipe(
 """
 
 
-def test_cli_fetch_and_bake_no_fetch(
-    tmp_path: Path,
-    repo: tuple[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    url, first = repo
-    path = write_recipe_file(tmp_path, RECIPE.format(url=url), monkeypatch)
-    write_lock(_locked(load_recipe(path), first), tmp_path / "build" / "tundravm.lock")
-    out = io.StringIO()
-    assert main(["fetch", str(path)], stdout=out) == EXIT_OK
-    assert out.getvalue().splitlines() == [
-        f"fetched {Path('build') / '.sources'}",
-        f"  tool  {first[:12]}  fetched",
-    ]
-    out = io.StringIO()
-    assert main(["fetch", str(path)], stdout=out) == EXIT_OK
-    assert out.getvalue().splitlines()[1] == f"  tool  {first[:12]}  kept"
-    bake = ["bake", str(path), "--backend", "local", "--no-fetch", "--build", "elsewhere", "-q"]
-    assert main(bake, stdout=io.StringIO()) == EXIT_SDK_ERROR
-    error = capsys.readouterr().err
-    assert "error [E_STATE]: Source build 'tool' is not fetched" in error
-    assert "tundravm fetch RECIPE --build elsewhere" in error
-
-
 # ── checkout verification ────────────────────────────────────────────
 
 
@@ -401,7 +373,7 @@ def test_a_modified_git_checkout_fails_until_fetch_force_repairs_it(
     with pytest.raises(SourceError) as modified:
         fetch(recipe, lock=locked, build=tmp_path)
     assert str(modified.value.args[0]) == (
-        "source tool checkout modified/incomplete: run tundravm fetch --force"
+        "source tool checkout modified/incomplete: run tundravm build --clean-cache"
     )
     assert modified.value.code == ErrorCode.SOURCE
     assert modified.value.reason == "1 file changed since the fetch: main.go"
@@ -466,25 +438,3 @@ def test_checkouts_are_keyed_by_the_source_identity(tmp_path: Path, repo: tuple[
     assert one.path != two.path
     assert two.path.name == source_dir("tool", first, url, submodules=True)
     assert not two.cached
-
-
-def test_cli_fetch_force_repairs_a_modified_checkout(
-    tmp_path: Path,
-    repo: tuple[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    url, first = repo
-    path = write_recipe_file(tmp_path, RECIPE.format(url=url), monkeypatch)
-    write_lock(_locked(load_recipe(path), first), tmp_path / "build" / "tundravm.lock")
-    assert main(["fetch", str(path)], stdout=io.StringIO()) == EXIT_OK
-    checkout = tmp_path / "build" / ".sources" / source_dir("tool", first, url)
-    (checkout / "main.go").write_text("package evil\n", encoding="utf-8")
-    assert main(["fetch", str(path)], stdout=io.StringIO()) == EXIT_SDK_ERROR
-    error = capsys.readouterr().err
-    assert "error [E_SOURCE]: source tool checkout modified/incomplete" in error
-    assert "tundravm fetch RECIPE --force" in error
-    out = io.StringIO()
-    assert main(["fetch", str(path), "--force"], stdout=out) == EXIT_OK
-    assert out.getvalue().splitlines()[1] == f"  tool  {first[:12]}  fetched"
-    assert (checkout / "main.go").read_text(encoding="utf-8") == "package main\n"

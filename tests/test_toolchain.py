@@ -11,7 +11,7 @@ import pytest
 from tests.helpers import write_recipe_file
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, main
+from tundravm.cli import EXIT_OK, main
 from tundravm.measure import MEASURE_VERSION
 from tundravm.toolchain import (
     MKOSI_PIN,
@@ -126,13 +126,15 @@ def _other_mkosi(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_lock_records_the_toolchain_and_lint_reports_drift(
+def test_lock_records_the_toolchain_and_check_reports_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recipe = recipe_file(tmp_path)
-    lock = tmp_path / "app.lock"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TUNDRAVM_BACKEND")  # the file's own LocalLinuxBackend, not in-process
+    lock = tmp_path / "build" / "tundravm.lock"
 
-    code, text = cli("lock", str(recipe), "--lockfile", str(lock))
+    code, text = cli("lock", str(recipe))
     assert code == EXIT_OK
     # the tools tree is the one the tree pins: the platform's release (no snapshot here)
     assert (
@@ -150,37 +152,11 @@ def test_lock_records_the_toolchain_and_lint_reports_drift(
     }
 
     _other_mkosi(monkeypatch)
-    code, text = cli("lock", str(recipe), "--lockfile", str(lock), "--check")
-    assert code == EXIT_OK
-    assert (
-        f"warning: toolchain-drift: toolchain mkosi: locked 27.1 @{MKOSI_PIN.commit[:12]}, "
-        f"running 28 @{'b' * 12}"
-    ) in text
-    code, _ = cli("lock", str(recipe), "--lockfile", str(lock), "--check", "--strict")
-    assert code == EXIT_FAILURE
-
-    args = ("lint", str(recipe), "--lockfile", str(lock), "--format", "json")
-    code, text = cli(*args)
+    assert cli("lock", str(recipe), "--check")[0] == EXIT_OK  # the lock itself is current
+    code, text = cli("check", str(recipe), "--json")
     drift = [d for d in json.loads(text)["diagnostics"] if d["code"] == "toolchain-drift"]
     assert [d["severity"] for d in drift] == ["warning"]
     assert code == EXIT_OK
-    assert cli(*args, "--strict")[0] == EXIT_FAILURE
-
-
-def test_strict_toolchain_in_pyproject_makes_drift_an_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    recipe = recipe_file(tmp_path)
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.tundravm]\nrecipe = "recipe.py"\nlockfile = "app.lock"\nstrict_toolchain = true\n',
-        encoding="utf-8",
+    assert drift[0]["message"].startswith(
+        f"toolchain mkosi: locked 27.1 @{MKOSI_PIN.commit[:12]}, running 28 @{'b' * 12}"
     )
-    monkeypatch.chdir(tmp_path)
-    assert cli("lock")[0] == EXIT_OK
-    _other_mkosi(monkeypatch)
-
-    code, text = cli("lock", "--check")
-
-    assert code == EXIT_FAILURE
-    assert "error: toolchain-drift: toolchain mkosi: locked 27.1" in text
-    assert recipe.is_file()

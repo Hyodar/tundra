@@ -1,10 +1,10 @@
-"""Verifier policy files: the TDX registers a quote may hold, handed from ``measure`` to verifiers.
+"""Verifier policy files: the TDX registers a quote may hold, handed from a build to verifiers.
 
-``tundravm measure --export-policy FILE`` writes one (``schema_version`` 2,
-``tundravm.policy/2``); ``Tdxs.from_policy``, ``attest``, ``evidence`` and ``verify``
-read it. ``registers`` maps ``MRTD``/``RTMR0``..``RTMR3`` to the list of values a
-genuine quote may hold: a hex string, or ``{"value": hex, "firmware": ..., "label": ...}``
-naming what the value belongs to. A register matches when the quote holds any accepted
+A build's ``measurements.json`` holds one per record (``schema_version`` 2,
+``tundravm.policy/2``); ``Tdxs.from_policy`` and ``attest`` read it. ``registers`` maps
+``MRTD``/``RTMR0``..``RTMR3`` to the list of values a genuine quote may hold: a hex
+string, or ``{"value": hex, "firmware": ..., "label": ...}`` naming what the value
+belongs to. A register matches when the quote holds any accepted
 value. ``unverifiable`` maps each of ``MRTD``/``RTMR0``..``RTMR2`` the scheme cannot
 predict offline to the reason; every one of them is either accepted or unverifiable.
 ``scheme``, ``tool``/``tool_version``, ``artifact``/``boot_payload`` (``path``,
@@ -41,10 +41,10 @@ APPROVED_LABEL = "operator-approved"
 PLACEHOLDER_TOOL = "placeholder"
 PLACEHOLDER_NOTE = (
     "PLACEHOLDER: these registers are derived from artifact digests, not measured; "
-    "no TEE reproduces them. Replace this file with `tundravm measure --export-policy` "
-    "output from a real bake before trusting a verifier built from it."
+    "no TEE reproduces them. Replace this file with a policy from a real build's "
+    "measurements.json before trusting a verifier built from it."
 )
-REEXPORT_HINT = "Export the policy again: `tundravm measure --scheme SCHEME --export-policy FILE`."
+REEXPORT_HINT = "Take the policy again from a build's measurements.json (`tundravm build`)."
 
 _HEX = re.compile(r"[0-9a-f]+")
 _SHA384_HEX = 96
@@ -146,7 +146,7 @@ def policy_payload(
     if placeholder and not allow_placeholder:
         raise MeasurementError(
             "Refusing to export placeholder measurements as a verifier policy.",
-            hint="Measure a real bake, or pass --allow-placeholder for a test policy "
+            hint="Measure a real build, or pass allow_placeholder=True for a test policy "
             "(marked as a placeholder in its note).",
         )
     payload: dict[str, object] = {
@@ -188,16 +188,17 @@ def read_policy(source: str | Path | Mapping[str, object]) -> dict[str, object]:
         except OSError as exc:
             raise ValidationError(
                 f"Cannot read policy {source}: {exc.strerror or exc}.",
-                hint="Write one with `tundravm measure --export-policy FILE`.",
+                hint="Pass a record's `policy` from a build's measurements.json.",
             ) from exc
         except json.JSONDecodeError as exc:
             raise ValidationError(
                 f"Policy {source} is not JSON ({exc.msg}).",
-                hint="Write one with `tundravm measure --export-policy FILE`.",
+                hint="Pass a record's `policy` from a build's measurements.json.",
             ) from exc
     if not isinstance(data, dict):
         raise ValidationError(
-            f"{where} is not a JSON object.", hint="Pass a file `--export-policy` wrote."
+            f"{where} is not a JSON object.",
+            hint="Pass a record's `policy` from a build's measurements.json.",
         )
     return _checked(data, where=where)
 
@@ -257,7 +258,7 @@ def _approval(raw: object, *, where: str) -> dict[str, list[str | dict[str, str]
     """A ``platform_approval`` checked: ``MRTD``/``RTMR0`` to non-empty lists of values."""
     hint = (
         "platform_approval maps MRTD and/or RTMR0 to the values you approve, e.g. "
-        "`tundravm measure --export-policy FILE --approve-mrtd HEX --approve-rtmr0 HEX`."
+        '{"MRTD": ["HEX"], "RTMR0": ["HEX"]}.'
     )
     if not isinstance(raw, dict) or not raw:
         raise ValidationError(f"{where}: platform_approval is not a non-empty object.", hint=hint)

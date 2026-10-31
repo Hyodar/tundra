@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -16,7 +15,6 @@ import pytest
 from tundravm.backends.base import StreamResult, failure_message, run_streaming
 from tundravm.backends.inprocess import InProcessBackend
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
 from tundravm.declarative import Backend, File, Package, Recipe, bake, lock, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.errors import BackendExecutionError, LintError
@@ -399,149 +397,6 @@ def test_render_bake_summary_aligns_columns(tmp_path: Path) -> None:
     assert lines[1].split() == ["default", "qemu", str(disk), "2.0", "KiB", "abababababab", "1m15s"]
     assert lines[2].split() == ["empty", "-", "(no", "artifacts)", "-", "-", "-"]
     assert lines[0].index("target") == lines[1].index("qemu") == lines[2].index("-")
-
-
-# -- CLI ----------------------------------------------------------------------
-
-RECIPE = """
-from tundravm.declarative import Fragment, Package, Recipe
-from tundravm.backends.inprocess import InProcessBackend
-
-backend = InProcessBackend()
-recipe = Recipe("bake", items=(Package("curl"), Package("linux-image-amd64")))
-"""
-
-FAILING_RECIPE = """
-from tundravm.declarative import Fragment, Package, Recipe
-from tundravm.backends.inprocess import InProcessBackend
-from tundravm.errors import BackendExecutionError
-
-
-class FlakyBackend(InProcessBackend):
-    def execute(self, request):
-        for index in range(1, 9):
-            request.on_output(f"mkosi line {index}")
-        raise BackendExecutionError("mkosi build failed. (exit 1)", context={"backend": "flaky"})
-
-
-backend = FlakyBackend(name="flaky")
-recipe = Recipe("flaky", items=(Package("linux-image-amd64"),))
-"""
-
-
-def _write_recipe(tmp_path: Path, body: str) -> Path:
-    path = tmp_path / "recipe.py"
-    path.write_text(body, encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run from *tmp_path*: recipe files build into ``build/`` under the working directory."""
-    monkeypatch.chdir(tmp_path)
-
-
-def _run(*argv: str) -> tuple[int, str]:
-    out = io.StringIO()
-    return main(list(argv), stdout=out), out.getvalue()
-
-
-@pytest.mark.usefixtures("in_tmp_path")
-def test_cli_bake_default_prints_progress_and_summary(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    recipe = _write_recipe(tmp_path, RECIPE)
-    code, out = _run("bake", str(recipe))
-    err = capsys.readouterr().err
-    assert code == EXIT_OK
-    assert re.search(r"^\[default\] build via inprocess \.\.\. ok \(\d+\.\ds\)$", err, re.M)
-    assert re.search(r"^\[default\] artifact qemu \S+disk\.qcow2 \(\d+ B\)$", err, re.M)
-    assert "[default] | " not in err
-    lines = out.splitlines()
-    header = next(i for i, line in enumerate(lines) if line.startswith("variant"))
-    assert lines[header].split() == ["variant", "target", "artifact", "size", "sha256", "time"]
-    assert re.match(
-        r"default\s+qemu\s+\S+disk\.qcow2\s+\d+ B\s+[0-9a-f]{12}\s+\d+\.\ds$", lines[header + 1]
-    )
-    assert lines[-1] == "next: tundravm deploy qemu --build build --variant default"
-
-
-@pytest.mark.usefixtures("in_tmp_path")
-def test_cli_bake_verbose_echoes_backend_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    recipe = _write_recipe(tmp_path, RECIPE)
-    code, _ = _run("bake", str(recipe), "-v")
-    err = capsys.readouterr().err
-    assert code == EXIT_OK
-    assert "[default] | inprocess: wrote qemu artifact disk.qcow2" in err
-    assert "[default] Starting variant bake via inprocess backend." in err
-
-
-@pytest.mark.usefixtures("in_tmp_path")
-def test_cli_bake_quiet_prints_only_the_summary(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    recipe = _write_recipe(tmp_path, RECIPE)
-    assert _run("lock", str(recipe))[0] == EXIT_OK
-    code, out = _run("bake", str(recipe), "-q")
-    assert code == EXIT_OK
-    assert capsys.readouterr().err == ""
-    assert out.splitlines()[0].startswith("variant  target")
-    assert out.splitlines()[-1].startswith("next: tundravm deploy")
-
-
-@pytest.mark.usefixtures("in_tmp_path")
-def test_cli_bake_json_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    recipe = _write_recipe(tmp_path, RECIPE)
-    assert _run("lock", str(recipe))[0] == EXIT_OK
-    code, out = _run("bake", str(recipe), "--json-logs")
-    assert code == EXIT_OK
-    assert capsys.readouterr().err == ""
-    events = [json.loads(line) for line in out.splitlines()]
-    assert events[0]["message"].startswith("frozen against ")
-    assert events[-1]["kind"] == "done"
-    assert events[-1]["extra"]["status"] == "ok"
-    assert any(e["extra"].get("source") == "backend" for e in events)
-    assert "next:" not in out
-
-
-@pytest.mark.usefixtures("in_tmp_path")
-def test_cli_bake_flags_are_mutually_exclusive(tmp_path: Path) -> None:
-    recipe = _write_recipe(tmp_path, RECIPE)
-    with pytest.raises(SystemExit):
-        _run("bake", str(recipe), "-v", "-q")
-
-
-@pytest.mark.usefixtures("in_tmp_path")
-def test_cli_bake_failure_shows_output_tail_and_error_code(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    recipe = _write_recipe(tmp_path, FAILING_RECIPE)
-    code, out = _run("bake", str(recipe))
-    err = capsys.readouterr().err
-    assert code == EXIT_SDK_ERROR
-    assert out == ""
-    assert re.search(r"^\[default\] build via flaky \.\.\. FAILED \(\d+\.\ds\)$", err, re.M)
-    for index in range(4, 9):
-        assert f"[default] | mkosi line {index}\n" in err
-    assert "mkosi line 3" not in err
-    assert re.search(r"^\[default\] failed after \d+\.\ds$", err, re.M)
-    assert "error [E_BACKEND_EXECUTION]: mkosi build failed. (exit 1)" in err
-    assert err.index("mkosi line 8") < err.index("error [E_BACKEND_EXECUTION]")
-
-
-@pytest.mark.usefixtures("in_tmp_path")
-def test_cli_bake_failure_in_quiet_mode_still_shows_tail(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    recipe = _write_recipe(tmp_path, FAILING_RECIPE)
-    assert _run("lock", str(recipe))[0] == EXIT_OK
-    code, _ = _run("bake", str(recipe), "-q")
-    err = capsys.readouterr().err
-    assert code == EXIT_SDK_ERROR
-    assert err.splitlines()[0].startswith("[default] build via flaky ... FAILED")
-    assert "[default] | mkosi line 8" in err
 
 
 def test_backend_notices_show_unless_quiet() -> None:

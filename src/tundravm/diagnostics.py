@@ -2,8 +2,8 @@
 
 Resolution and fragment checks (``tundravm.lint``), the compiler's rules
 (:mod:`tundravm.check`), each module's own checks, lock drift and ``doctor``
-all report it; ``tundravm lint``, ``watch``, ``ci`` and ``inspect`` render it
-and ``lint --format json`` prints :meth:`Diagnostic.to_dict` for each.
+all report it; ``tundravm check`` renders it and ``check --json`` prints
+:meth:`Diagnostic.to_dict` for each.
 """
 
 from __future__ import annotations

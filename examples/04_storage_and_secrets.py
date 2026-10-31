@@ -19,9 +19,9 @@ Teaches:
   delivered again, ``"none"`` leaves it running.
 - ``/etc/tundravm/runtime.json``: what the image records for the tools that deliver.
 
-    tundravm inspect examples/04_storage_and_secrets.py
-    tundravm lint examples/04_storage_and_secrets.py   # source-unpinned
-    tundravm compile examples/04_storage_and_secrets.py --tree build/storage/mkosi
+    tundravm show examples/04_storage_and_secrets.py
+    tundravm check examples/04_storage_and_secrets.py   # source-unpinned
+    tundravm build examples/04_storage_and_secrets.py --tree-only build/storage/mkosi
 """
 
 from tundravm import Image, OperatorKey, Package, Secret, Service, TpmSeal, Volume

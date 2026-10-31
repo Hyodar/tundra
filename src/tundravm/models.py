@@ -820,7 +820,7 @@ class BakeResult:
         if not path.is_file():
             raise StateError(
                 "No bake result found.",
-                hint="Run bake() / tundravm bake first.",
+                hint="Run bake() / tundravm build first.",
                 context=context,
             )
         try:
@@ -829,7 +829,7 @@ class BakeResult:
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             raise StateError(
                 f"Unreadable bake result: {exc}",
-                hint="Run bake() / tundravm bake again to regenerate it.",
+                hint="Run bake() / tundravm build again to regenerate it.",
                 context=context,
             ) from exc
 

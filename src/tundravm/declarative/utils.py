@@ -176,7 +176,7 @@ class EfiStub(Composite):
     carry *version*: the pool keeps only what some suite listed at that time, so
     pick the version a suite of that snapshot ships. The
     package (:attr:`deb_url`) is a source named ``efi-stub``: ``tundravm lock`` pins
-    its sha256, ``tundravm fetch`` downloads it on the host and the postinst hook
+    its sha256, ``tundravm build`` downloads it on the host and the postinst hook
     installs the mounted copy with ``dpkg -i``, so the build sandbox downloads
     nothing. Compiled without a pin, the hook downloads it instead and fails the
     build with that advice when the download fails (see :meth:`render_script`).
@@ -266,13 +266,13 @@ class Tdxs(Composite):
     ) -> Tdxs:
         """A verifier whose ``expected_measurements`` are *policy*'s registers.
 
-        *policy* is a file ``tundravm measure --export-policy`` wrote (or its
-        dict). Registers become the validator's lower-case keys (``rtmr0``..), one value
-        each: the tdxs validator compares a single expected value per register, so a
-        register the policy accepts several values for (a gcp policy's per-firmware MRTD
-        and RTMR0) is narrowed with *firmware* and *label*.
+        *policy* is a verifier policy (a record's ``policy`` in a build's
+        ``measurements.json``), or its dict. Registers become the validator's lower-case
+        keys (``rtmr0``..), one value each: the tdxs validator compares a single expected
+        value per register, so a register the policy accepts several values for (a gcp
+        policy's per-firmware MRTD and RTMR0) is narrowed with *firmware* and *label*.
         Unverifiable registers are not checked unless the policy's ``platform_approval``
-        (``measure --approve-mrtd/--approve-rtmr0``) approves values for them, which are
+        (``MRTD``, ``RTMR0``) approves values for them, which are
         checked like measured ones; *mrtd* overrides the MRTD to check (a qemu host you
         trust).
         A placeholder policy is refused unless *allow_placeholder*. Other

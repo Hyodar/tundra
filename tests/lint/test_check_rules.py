@@ -1,4 +1,4 @@
-"""Tests for the recipe linter (``tundravm.lint`` / ``tundravm lint``).
+"""Tests for the recipe linter (``tundravm.lint`` / ``tundravm check``).
 
 The compiler rules in ``tundravm.check`` run on the lowered recipe: ``report``
 is the CLI's lint report (resolution diagnostics, then the compiler rules);
@@ -580,7 +580,7 @@ def write_recipe(tmp_path: Path, extra: str = "") -> Path:
 
 def run(*argv: str) -> tuple[int, str]:
     out = io.StringIO()
-    return main(["lint", *argv], stdout=out), out.getvalue()
+    return main(["check", *argv], stdout=out), out.getvalue()
 
 
 def test_cli_clean_recipe(tmp_path: Path) -> None:
@@ -596,26 +596,26 @@ def test_cli_error_exit_and_json(tmp_path: Path) -> None:
     assert out.startswith("error service-user-missing [default] w:")
     assert out.rstrip().endswith("1 error, 0 warnings, 0 infos")
 
-    code, out = run(str(recipe_path), "--format", "json")
+    code, out = run(str(recipe_path), "--json")
     assert code == 1
     payload = json.loads(out)
+    assert payload["schema"] == "tundravm.check/1" and payload["passed"] is False
     assert payload["summary"] == {"errors": 1, "warnings": 0, "infos": 0}
     assert payload["diagnostics"][0]["code"] == "service-user-missing"
 
 
-def test_cli_strict_fails_on_warnings(tmp_path: Path) -> None:
+def test_cli_warnings_are_reported_without_failing(tmp_path: Path) -> None:
     extra = 'items.append(Unit("x.service", "[Unit]\\n", enabled=True, needs=[RUNTIME_INIT]))\n'
-    recipe_path = write_recipe(tmp_path, extra)
-    assert run(str(recipe_path))[0] == 0
-    assert run(str(recipe_path), "--strict")[0] == 1
+    code, out = run(str(write_recipe(tmp_path, extra)))
+    assert code == 0 and "warning" in out
 
 
 def test_cli_variant_selection(tmp_path: Path) -> None:
     recipe_path = write_recipe(tmp_path, 'variants.append(Variant("bare"))\n')
-    code, out = run(str(recipe_path), "--variant", "default", "--variant", "bare")
+    code, out = run(str(recipe_path), "--profile", "default", "--profile", "bare")
     assert code == 0
     assert "info variant-empty [bare]" in out
-    assert run(str(recipe_path), "--variant", "default")[1] == "no findings\n"
+    assert run(str(recipe_path), "--profile", "default")[1] == "no findings\n"
 
 
 # bake pre-flight

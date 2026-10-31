@@ -1,0 +1,138 @@
+"""``check`` (declarations, lint, lock drift, tree drift) and ``lock`` (write, ``--check``,
+``--update``)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from tests.cli.conftest import STARTER, Cli
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+
+BROKEN = """\
+from tundravm.declarative import Disk, Key, Recipe
+
+recipe = Recipe("b", items=(Disk("d", "/data", key=Key("k")),))
+"""
+
+
+def _change(project: Path) -> None:
+    (project / "demo.py").write_text(
+        STARTER.replace('packages=["busybox"]', 'packages=["busybox", "jq"]'), encoding="utf-8"
+    )
+
+
+def test_a_clean_image_checks_clean_and_says_there_is_no_lock(project: Path, cli: Cli) -> None:
+    result = cli("check")
+    assert result.code == EXIT_OK, result.out
+    assert "0 errors" in result.out
+    assert "no lockfile at build/tundravm.lock" in result.err
+
+
+def test_errors_exit_1_in_text_and_json(
+    tmp_path: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "broken.py").write_text(BROKEN, encoding="utf-8")
+    result = cli("check", "broken.py")
+    assert result.code == EXIT_FAILURE
+    assert "error disk-key-undefined [default]" in result.out
+    result = cli("check", "broken.py", "--json")
+    assert result.code == EXIT_FAILURE
+    payload = json.loads(result.out)
+    assert payload["schema"] == "tundravm.check/1" and payload["passed"] is False
+    assert payload["summary"]["errors"] >= 1 and payload["tree"] is None
+    assert [d["code"] for d in payload["diagnostics"]][0] == "disk-key-undefined"
+
+
+def test_an_unknown_profile_is_refused(project: Path, cli: Cli) -> None:
+    result = cli("check", "--profile", "staging")
+    assert result.code == EXIT_SDK_ERROR
+    assert "Unknown profile(s): staging" in result.err
+
+
+def test_a_drifted_lock_fails_check(project: Path, cli: Cli) -> None:
+    assert cli("lock").code == EXIT_OK
+    assert cli("check").code == EXIT_OK
+    _change(project)
+    result = cli("check")
+    assert result.code == EXIT_FAILURE
+    assert "lock-changed" in result.out
+
+
+def test_tree_drift(project: Path, cli: Cli) -> None:
+    written = cli("build", "--tree-only", "mkosi")
+    assert written.code == EXIT_OK, written.err
+    assert "wrote mkosi" in written.out and "production: mkosi -C mkosi build" in written.out
+    assert "dev: mkosi -C mkosi --profile=dev build" in written.out
+    assert not Path("build/demo").exists()
+    clean = cli("check", "--tree", "mkosi")
+    assert clean.code == EXIT_OK and "tree mkosi is up to date" in clean.out
+    page = project / "mkosi/payload/mkosi.extra/srv/www/index.html"
+    page.write_text("<h1>edited</h1>\n", encoding="utf-8")
+    drifted = cli("check", "--tree", "mkosi", "--json")
+    assert drifted.code == EXIT_FAILURE
+    payload = json.loads(drifted.out)
+    assert payload["tree"]["clean"] is False
+    assert {d["code"] for d in payload["diagnostics"]} >= {"tree-drift"}
+    text = cli("check", "--tree", "mkosi")
+    assert "payload/mkosi.extra/srv/www/index.html: modified" in text.out
+
+
+def test_lock_writes_then_check_reports_drift(project: Path, cli: Cli) -> None:
+    result = cli("lock")
+    assert result.code == EXIT_OK
+    assert result.out.startswith("locked build/tundravm.lock")
+    assert (project / "build" / "tundravm.lock").is_file()
+    clean = cli("lock", "--check")
+    assert clean.code == EXIT_OK and "up to date" in clean.out
+    _change(project)
+    before = (project / "build" / "tundravm.lock").read_bytes()
+    stale = cli("lock", "--check")
+    assert stale.code == EXIT_FAILURE
+    assert "packages" in stale.out
+    assert (project / "build" / "tundravm.lock").read_bytes() == before
+    report = json.loads(cli("lock", "--check", "--json").out)
+    assert report["schema"] == "tundravm.lock/1" and report["clean"] is False
+
+
+def test_lock_check_without_a_lock_is_a_lockfile_error(project: Path, cli: Cli) -> None:
+    result = cli("lock", "--check")
+    assert result.code == EXIT_SDK_ERROR
+    assert result.err.startswith("error [E_LOCKFILE]: No lockfile at build/tundravm.lock")
+
+
+def test_lock_update_resolves_again(
+    project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert cli("lock").code == EXIT_OK
+    import tundravm._source as source_module
+
+    monkeypatch.setattr(source_module, "default_resolver", lambda source: "2" * 40)
+    kept = cli("lock")
+    assert kept.code == EXIT_OK
+    assert "1" * 40 in (project / "build" / "tundravm.lock").read_text()
+    named = json.loads(cli("lock", "--update", "tdxs", "--json").out)
+    assert named["updated"] == ["tdxs"]
+    assert "2" * 40 in (project / "build" / "tundravm.lock").read_text()
+
+
+def test_lock_update_without_names_updates_every_input(
+    project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert cli("lock").code == EXIT_OK
+    import tundravm._source as source_module
+
+    monkeypatch.setattr(source_module, "default_resolver", lambda source: "3" * 40)
+    result = cli("lock", "--update", "--json")
+    assert result.code == EXIT_OK, result.err
+    assert json.loads(result.out)["updated"]
+    assert "3" * 40 in (project / "build" / "tundravm.lock").read_text()
+
+
+def test_lock_and_check_together_is_a_usage_error(project: Path, cli: Cli) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        cli("lock", "--check", "--update")
+    assert exit_.value.code == EXIT_SDK_ERROR

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -19,12 +18,9 @@ from tests.cli.test_attest import (
     UNAPPROVED,
     FakeIssuer,
     FakeValidator,
-    _tcp,
     policy,
 )
-from tests.helpers import run_main
-from tundravm.attestation import PARTIAL_NOTE, attest, read_attestation
-from tundravm.cli import EXIT_FAILURE, EXIT_OK
+from tundravm.attestation import attest, read_attestation
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import AttestationError, ValidationError
 
@@ -113,19 +109,6 @@ def test_a_wrong_platform_approval_is_a_mismatch() -> None:
 def test_a_malformed_platform_approval_is_refused(approval: object) -> None:
     with pytest.raises(ValidationError, match="platform_approval|MRTD"):
         attest("unix:/x", {**UNAPPROVED, "platform_approval": approval}, transport=FakeIssuer())
-
-
-def test_cli_partial_exits_1_unless_accept_partial(tmp_path: Path) -> None:
-    path = tmp_path / "policy.json"
-    path.write_text(json.dumps(UNAPPROVED), encoding="utf-8")
-    with _tcp(FakeIssuer()) as issuer, _tcp(FakeValidator()) as validator:
-        argv = ("attest", "--issuer", issuer, "--validator", validator, "--policy", str(path))
-        code, out = run_main(*argv)
-        assert code == EXIT_FAILURE, out
-        assert out.splitlines()[-1] == "verdict: partial"
-        assert f"note: {PARTIAL_NOTE}" in out and "reasons: platform-unverified" in out
-        code, out = run_main(*argv, "--accept-partial")
-        assert code == EXIT_OK and out.splitlines()[-1] == "verdict: partial"
 
 
 def test_a_version_1_record_is_refused_with_a_re_attest_hint() -> None:

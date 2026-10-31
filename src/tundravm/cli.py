@@ -1,179 +1,68 @@
-"""Command-line interface for recipe files: ``tundravm <command> RECIPE``.
+"""The ``tundravm`` command line: the operator's loop in twelve commands.
 
-Every recipe command loads the ``Recipe`` a Python file binds (see
-:func:`tundravm.recipe.load_file`) and runs one lifecycle step from
-:mod:`tundravm.declarative.lifecycle` on the selected variants: repeat
-``--variant NAME``, or omit it for every declared variant. Destinations follow
-one convention: ``--tree DIR`` is the compiled mkosi tree, ``--build DIR`` the
-build directory holding ``bake-result.json`` (``measure``, ``deploy``, ``sbom``
-and ``evidence`` read the artifacts a ``bake`` recorded there) and ``--output
-FILE`` a document written. ``init`` bootstraps a recipe project and ``ci``
-runs lint, compile and lock checks in one go; ``watch`` re-runs lint and the
-tree check whenever the recipe changes; ``preview`` serves the ``explore`` page
-and reloads it as the recipe changes; ``status`` reports where the project
-stands and ``clean`` removes build output; ``completion`` prints a shell
-completion script. With no arguments the help and a quickstart are printed.
-Every ``--format json`` report carries ``"schema": "tundravm.<verb>/N"``.
-Exit codes: 0 success, 2 SDK error (``E_*`` codes; under every machine-readable
-format, ``--format json`` and sbom's ``spdx-json``/``cyclonedx-json``, one
-``tundravm.error/1`` JSON line on stderr) or a usage error (unknown verbs
-and flags get a "did you mean"), 1 for a failed check (``lint``, ``compile
---check``, ``lock --check``, ``diff``, ``ci``, ``doctor``, an untrusted
-``attest``, a failing ``evidence``, a failing ``verify``) or an unexpected
-failure. A recipe file that fails to import (syntax error, missing module, an
-exception while it runs) is an ``E_VALIDATION`` error naming ``file:line``;
-``--traceback`` raises SDK errors with the Python traceback.
+``new`` scaffolds a project; ``check`` validates an image without building it; ``lock``
+pins its inputs; ``build`` makes an immutable build directory (``tundravm.builds``); ``show``
+reads an image or a build back, and diffs two builds; ``run`` starts a local instance and
+``deploy`` a cloud one, each with a receipt (``tundravm.instances``); ``attest`` checks an
+instance's evidence and ``secrets`` delivers credentials and unlocks volumes after a fresh
+check (``tundravm.bootstrap``); ``verify`` checks a build directory against its manifest;
+``convert`` turns an mkosi tree or unit files into source; ``doctor`` says what this host
+can do.
+
+Exit codes: 0 success; 1 a failed check (``check`` errors, ``lock --check`` drift, a
+failing ``verify``, an ``attest`` that does not pass, a ``build --reproduce`` that differs,
+a blocked ``doctor`` row); 2 an SDK error (``error [E_CODE]: message`` on stderr, one
+``tundravm.error/1`` JSON line with ``--json``) or a usage error. Every ``--json`` report
+carries ``"schema": "tundravm.<command>/1"``. Shell completion scripts are generated from
+this parser: ``python -m tundravm.completion bash|zsh|fish``.
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import difflib
 import json
 import os
 import re
 import sys
-import traceback
-import warnings
-import webbrowser
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import MISSING, dataclass, fields, replace
-from datetime import UTC, datetime
+import textwrap
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO, cast, get_args
+from typing import TextIO, cast
 
-from . import __version__, app_template
+from . import __version__, bootstrap, builds, deployments, instances, show
+from . import manifest as mf
 from . import templates as scaffold
-from ._source import SOURCES_DIRNAME
-from .attestation import attest, parse_time, render_attestation
-from .backends import LimaMkosiBackend, LocalLinuxBackend
+from .attestation import render_attestation
 from .backends.base import BuildBackend
-from .capabilities import AREAS, Area, BuildBackendKind, Host, capabilities, default_backend, failed
-from .changes import CHANGES_FORMATS, changes
+from .capabilities import AREAS, Capability, Host, capabilities, failed
 from .check import failing, render_as, render_summary
-from .clean import (
-    EVIDENCE_DIRNAME,
-    PARTS,
-    TREE_DIRNAME,
-    clean_paths,
-    holds_release,
-    owner_hint,
-    remove,
-    sudo_runner,
-)
-from .completion import SHELLS, Shell, render_completion
-from .declarative._compile import emit
 from .declarative._lowered import Lowered
-from .declarative.bom import SBOM_FORMATS, sbom
-from .declarative.inputs import recipe_inputs
 from .declarative.lifecycle import (
-    DEPLOY_TARGETS,
     NO_LOCK,
-    Artifact,
     Backend,
     BackendKind,
-    Deployment,
-    DeployTarget,
     Lock,
-    Measurements,
-    NoLock,
     ProbeRunner,
-    Qemu,
-    Scheme,
-    bake_image,
     check_report,
-    deploy,
-    fetch_image,
     lock_image,
     lock_status,
-    measure,
-    read_artifacts,
     read_lock,
-    read_variant_tree,
-    run_probe,
-    select_artifact,
-    using_lock,
-    variant_provenance,
     write_lock,
 )
-from .declarative.model import Target
 from .declarative.resolve import resolve
-from .declarative.resources import resource_reads
 from .diagnostics import Diagnostic
-from .diff import _wants_color, cmd_diff, diff_against
-from .errors import LockfileError, ReproducibilityError, StateError, TdxError, ValidationError
-from .evidence import (
-    DEFAULT_MAX_AGE,
-    EVIDENCE_FORMATS,
-    EVIDENCE_REQUIREMENTS,
-    INDEX_NAME,
-    SIGNATURE_NAME,
-    evidence,
-    parse_duration,
-)
-from .explain import (
-    describe,
-    diff_variants,
-    explain_why,
-    render,
-    render_markdown,
-    render_variant_diff,
-    render_variant_diff_markdown,
-    render_why,
-    render_why_markdown,
-)
-from .explore import EXPLORE_FORMATS, PAGE_NAME, Exploration, explore
-from .formats import (
-    annotation_path,
-    format_help,
-    md_cell,
-    md_table,
-    resolve_format,
-    workflow_command,
-)
-from .lockfile import LockDrift
-from .measure import PlaceholderMeasurementWarning
-from .measure.policy import write_policy
-from .models import BAKE_RESULT_FILENAME
-from .observability import Event, JsonReporter, TextReporter, render_bake_summary
-from .preview import Preview, is_loopback, serve, url_of
-from .project import (
-    DEFAULTS,
-    PATH_KEYS,
-    PYPROJECT,
-    RESOLUTION_HELP,
-    TABLE,
-    ConfigKey,
-    ProjectConfig,
-    find_project,
-    render_table,
-)
-from .recipe import BACKEND_ENV, RecipeFile, load_file
-from .release import (
-    RELEASE_FORMATS,
-    STAGES,
-    STATE_NAME,
-    is_release,
-    release_image,
-    release_name,
-    verify_release,
-)
-from .status import (
-    ATTESTATION_NAME,
-    BLOCKED,
-    DEFAULT_REQUIRE,
-    Invocation,
-    project_status,
-    render_status,
-)
+from .diff import diff_against
+from .errors import LockfileError, TdxError, ValidationError
+from .explain import describe
+from .formats import resolve_format
+from .observability import TextReporter
+from .project import RESOLUTION_HELP, Settings, settings
+from .recipe import RecipeFile, load_file
 from .templates import (
-    DEFAULT_TEMPLATE,
     GITIGNORE_BLOCK,
-    GITIGNORE_MARKER,
-    TEMPLATES,
     WORKFLOW_PATH,
-    TundravmSource,
     render_pyproject,
     render_readme,
     render_recipe_template,
@@ -181,26 +70,36 @@ from .templates import (
     render_workflow,
 )
 from .toolchain import running_toolchain, toolchain_drift
-from .verify import VERIFY_FORMATS, verify_evidence
-from .watch import Sources, Watch, lint_failure, tree_verdict, verdict
-from .witness import WITNESS_FORMATS, verify_witnesses, witness_image, witnesses_dir
-
-if TYPE_CHECKING:
-    from tundravm._units.parse import Conversion
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_SDK_ERROR = 2
 
-MEASUREMENT_SCHEMES: tuple[Scheme, ...] = ("qemu", "gcp", "azure", "portable")
-BACKEND_KINDS: tuple[BackendKind, ...] = get_args(BackendKind)
+COMMANDS = (
+    "new",
+    "check",
+    "lock",
+    "build",
+    "show",
+    "run",
+    "deploy",
+    "attest",
+    "secrets",
+    "verify",
+    "convert",
+    "doctor",
+)
+RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode")
+DEPLOY_ACTIONS = ("status", "logs", "mode", "upgrade", "rollback")
+NEW_TEMPLATES = ("service", "prover")
+DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
 
 QUICKSTART = """\
 quickstart:
-  tundravm init . --name node                 scaffold node.py, its tests and pyproject.toml
-  tundravm inspect node.py                    show what the image will contain
-  tundravm lint node.py                       report every recipe diagnostic
-  tundravm bake node.py --backend inprocess   simulated build, no VM or root needed"""
+  tundravm new demo && cd demo           a project: demo.py, its tests, pyproject.toml
+  tundravm build                         lock, build, measure: build/demo/production/<id>/
+  tundravm run --mode simulated --dev    boot the dev build locally: instance demo-1
+  tundravm run stop demo-1"""
 
 
 def main(
@@ -208,13 +107,11 @@ def main(
     *,
     stdout: TextIO | None = None,
     runner: ProbeRunner | None = None,
-    ticks: Iterable[object] | None = None,
 ) -> int:
     """Run the CLI and return an exit code (never raises for SDK errors).
 
-    *runner* replaces the host-tool probe ``doctor`` and ``init`` run (tests);
-    *ticks* bounds ``watch``'s and ``preview``'s polling loop to one poll per item (tests).
-    Usage errors exit 2 through argparse's ``SystemExit``.
+    *runner* replaces the host-tool probe ``doctor`` and ``new`` run (tests). Usage errors
+    exit 2 through argparse's ``SystemExit``.
     """
     out = stdout if stdout is not None else sys.stdout
     parser = build_parser()
@@ -225,15 +122,13 @@ def main(
         return EXIT_OK
     args = _parse(parser, tokens)
     args.runner = runner
-    args.ticks = ticks
     handler: Callable[[argparse.Namespace, TextIO], int] = args.handler
     try:
-        _apply_project(parser, args)
         return handler(args, out)
     except TdxError as exc:
         if getattr(args, "traceback", False):
             raise
-        if _wants_json(args):
+        if getattr(args, "json", False):
             print(json.dumps(error_payload(exc), separators=(",", ":")), file=sys.stderr)
         else:
             print(f"error [{exc.code}]: {exc}", file=sys.stderr)
@@ -243,26 +138,16 @@ def main(
         return 130
 
 
-REPORT_VERSIONS = {"lint": 2, "config": 2, "inspect": 4, "attest": 2}
-"""Verbs whose ``--format json`` report moved past version 1: attest's verdict can be
-``partial`` (trust needs MRTD, RTMR0, RTMR1 and RTMR2 each matched); lint's diagnostics carry
-``variant`` beside ``location``; config's ``values`` hold ``require``, a list; inspect
-names what a variant ``inherits`` and a variant diff's ``outputs``, and its origins carry
-``fields`` with the action ``edited`` (no longer ``replaced``) and the ``location``
-(``file:line``) that declared, edited or removed it."""
-
-
 def schema(verb: str) -> str:
-    """The ``schema`` key of *verb*'s ``--format json`` report: ``tundravm.<verb>/1`` (or the
-    version :data:`REPORT_VERSIONS` names)."""
-    return f"tundravm.{verb}/{REPORT_VERSIONS.get(verb, 1)}"
+    """The ``schema`` key of *verb*'s ``--json`` report."""
+    return f"tundravm.{verb}/1"
 
 
 ERROR_SCHEMA = schema("error")
 
 
 def error_payload(exc: TdxError) -> dict[str, object]:
-    """The JSON line an SDK error prints to stderr under ``--format json``."""
+    """The JSON line an SDK error prints to stderr under ``--json``."""
     return {
         "schema": ERROR_SCHEMA,
         "code": exc.code,
@@ -272,40 +157,35 @@ def error_payload(exc: TdxError) -> dict[str, object]:
     }
 
 
-def json_report(verb: str, payload: Mapping[str, object] | str) -> str:
-    """*payload* (or the JSON text of one) as *verb*'s report, with its ``schema`` key."""
-    data = json.loads(payload) if isinstance(payload, str) else dict(payload)
-    return json.dumps({"schema": schema(verb), **data}, indent=2, sort_keys=True)
-
-
-def _wants_json(args: argparse.Namespace) -> bool:
-    """Whether the command prints a machine-readable format (``--format json``, and sbom's
-    ``spdx-json`` and ``cyclonedx-json``): its SDK errors are then one ``tundravm.error/1``
-    JSON line on stderr."""
-    fmt = getattr(args, "format", None)
-    return isinstance(fmt, str) and (fmt == "json" or fmt.endswith("-json"))
+def json_report(verb: str, payload: Mapping[str, object]) -> str:
+    return json.dumps({"schema": schema(verb), **payload}, indent=2, sort_keys=True)
 
 
 def _parse(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse.Namespace:
-    """``parse_args`` with "did you mean" for an unknown verb or flag."""
+    """``parse_args`` with "did you mean" for an unknown command or flag."""
     verbs = _subcommands(parser)
-    for token in tokens:
-        if token == "--" or token in verbs:
-            break
-        if token.startswith("-"):
-            if not any(
-                flag.startswith(token.split("=")[0]) for flag in parser._option_string_actions
-            ):
-                parser.error(f"unrecognized arguments: {token}{_did_you_mean([token], parser)}")
-            continue
-        choices = ", ".join(verbs)
-        match = difflib.get_close_matches(token, list(verbs), n=1)
-        hint = f"did you mean {match[0]!r}?" if match else f"choose from {choices}"
-        parser.error(f"unknown command {token!r} ({hint})")
+    first = next((t for t in tokens if not t.startswith("-")), None)
+    if first is not None and first not in verbs and tokens.index(first) == 0:
+        match = difflib.get_close_matches(first, list(verbs), n=1)
+        hint = f"did you mean {match[0]!r}?" if match else f"choose from {', '.join(verbs)}"
+        parser.error(f"unknown command {first!r} ({hint})")
     args, extras = parser.parse_known_args(tokens)
+    if isinstance(getattr(args, "rest", None), list):
+        # `deploy upgrade INSTANCE --build B NAME=@FILE`: argparse gives a `*` positional
+        # only the words before the first option; the credentials after it are its too
+        args.rest += [token for token in extras if not token.startswith("-")]
+        extras = [token for token in extras if token.startswith("-")]
     if extras:
         command = verbs[args.command]
-        command.error(f"unrecognized arguments: {' '.join(extras)}{_did_you_mean(extras, command)}")
+        flags = list(command._option_string_actions)
+        found = [
+            m[0]
+            for token in extras
+            if token.startswith("-")
+            and (m := difflib.get_close_matches(token.split("=")[0], flags, n=1))
+        ]
+        hint = f" (did you mean {', '.join(dict.fromkeys(found))}?)" if found else ""
+        command.error(f"unrecognized arguments: {' '.join(extras)}{hint}")
     return args
 
 
@@ -316,2125 +196,712 @@ def _subcommands(parser: argparse.ArgumentParser) -> dict[str, argparse.Argument
     return {}
 
 
-def _did_you_mean(extras: Sequence[str], parser: argparse.ArgumentParser) -> str:
-    """`` (did you mean --format?)`` for the unknown flags in *extras* with a close match."""
-    flags = list(parser._option_string_actions)
-    found = [
-        match[0]
-        for token in extras
-        if token.startswith("-")
-        and (match := difflib.get_close_matches(token.split("=")[0], flags, n=1))
-    ]
-    return f" (did you mean {', '.join(dict.fromkeys(found))}?)" if found else ""
+# ── parser ───────────────────────────────────────────────────────────────
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tundravm",
-        description="Inspect, lint, compile, lock, bake, measure, and deploy TDX VM image recipes.",
-        epilog=(
-            "RECIPE is a Python file that binds a tundravm.Recipe to `recipe` or defines a "
-            "zero-argument `build() -> Recipe` function; --attr picks another name. A "
-            "module-level `backend` is the build backend `bake` uses unless --backend is given. "
-            "`tundravm completion bash|zsh|fish` prints a shell completion script. "
-            + RESOLUTION_HELP
-        ),
+        description="Build, run and verify confidential VM images declared as one Image.",
+        epilog=RESOLUTION_HELP,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
-    _add_init(sub)
-
-    inspect = _add_command(
-        sub, "inspect", _cmd_inspect, help="Show what the recipe will produce (dry run)."
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--traceback", action="store_true", help="Raise errors with the Python traceback."
     )
-    inspect.add_argument(
-        "--why",
-        default=None,
-        metavar="SUBJECT",
-        help=(
-            "Explain one emitted object of one --variant instead: an absolute image path, "
-            "unit:NAME, package:NAME, hook:NAME or init:NAME. Prints the declarations that "
-            "produce it with the fragment chain and overlay steps (declared, added, "
-            "edited, removed), the compiled-tree files that hold it and the lines the "
-            "compiler generated for it (runtime-init ordering, enablement links, drop-ins)."
-        ),
-    )
-    inspect.add_argument(
-        "--format",
-        choices=("text", "json", "markdown"),
-        default=None,
-        help=(
-            "Output format (default: text). json holds the recipe digest the lockfile "
-            "records and one entry per variant; markdown renders one section per variant "
-            "with tables, ready for $GITHUB_STEP_SUMMARY."
-        ),
-    )
-    _add_lockfile(inspect)
-    inspect.add_argument(
-        "--diff-variants",
-        nargs=2,
-        default=None,
-        metavar=("A", "B"),
-        help=(
-            "Print which declarations differ between variants A and B after resolution "
-            "(added, removed or changed, matched by identity) instead of describing them."
-        ),
-    )
-
-    lint = _add_command(
-        sub,
-        "lint",
-        _cmd_lint,
-        help="Report every recipe diagnostic: declarations, fragment checks, compiler rules.",
-    )
-    lint.add_argument(
-        "--format",
-        choices=("auto", "text", "json", "github", "markdown"),
-        default=None,
-        help=(
-            "Output format (default: auto). github prints `::error file=RECIPE,title=CODE::"
-            "message` lines that show inline on the pull request; markdown prints a table. "
-            + format_help()
-        ),
-    )
-    lint.add_argument("--strict", action="store_true", help="Treat warnings as errors (exit 1).")
-    _add_lockfile(lint)
-
-    compile_cmd = _add_command(
-        sub, "compile", _cmd_compile, help="Emit the mkosi project tree for the recipe."
-    )
-    _add_tree(compile_cmd, "Compiled mkosi tree to write (default: build/mkosi).")
-    _add_lockfile(compile_cmd)
-    compile_cmd.add_argument(
-        "--check",
-        action="store_true",
-        help="Do not write; exit 1 if the tree at --tree is stale relative to the recipe.",
-    )
-    compile_cmd.add_argument(
-        "--format",
-        choices=("auto", "text", "markdown", "github"),
-        default=None,
-        help=(
-            "Report format for --check (default: auto); text lists the changed files. "
-            + format_help()
-        ),
-    )
-
-    diff = _add_command(
-        sub, "diff", _cmd_diff, help="Show how the recipe differs from a compiled tree."
-    )
-    _add_tree(diff, "Compiled mkosi tree to compare with (default: build/mkosi).")
-    _add_lockfile(diff)
-    diff_format = diff.add_mutually_exclusive_group()
-    diff_format.add_argument(
-        "--format",
-        choices=("auto", "text", "stat", "markdown", "github"),
-        default=None,
-        help=(
-            "Output format (default: auto). text is a unified diff, stat lists changed "
-            "files, markdown wraps both for a PR comment, github annotates each changed "
-            "file. " + format_help("--stat")
-        ),
-    )
-    diff_format.add_argument(
-        "--stat", action="store_true", help="Only list changed files (--format stat)."
-    )
-    diff.add_argument(
-        "--color",
-        choices=("auto", "always", "never"),
-        default="auto",
-        help="Colorize output (default: %(default)s).",
-    )
-
-    lock = _add_command(sub, "lock", _cmd_lock, help="Write the lockfile for the recipe.")
-    lock.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "Pins already in the lockfile are kept while their source is unchanged; "
-            "--update NAME resolves that source again. Drift is reported one section per "
-            "line: `~` changed, `+` only in the recipe, `-` only in the lockfile, e.g. "
-            "`~ variants.default.packages: +htop -jq`. Source builds are pinned under "
-            "`fetches` and drift as `+ sources.<name>: source <name> is not pinned` or "
-            "`~ sources.<name>: <old> -> <new>`; --check never touches the network. Locking "
-            "tries every source and writes nothing unless all resolve: the error lists each "
-            "failed source as `<name>: git <url> @ <ref>: <reason>` and exits 2."
-        )
-    )
-    lock.add_argument(
-        "--lockfile",
+    image = argparse.ArgumentParser(add_help=False)
+    image.add_argument(
+        "image",
         type=Path,
+        nargs="?",
         default=None,
-        help="Lockfile to write or check (default: build/tundravm.lock).",
+        metavar="IMAGE",
+        help="The image file (default: [tool.tundravm] image, or $TUNDRAVM_IMAGE).",
     )
-    lock.add_argument(
-        "--update",
+    loading = image.add_argument_group("loading the image file")
+    loading.add_argument(
+        "--attr",
+        default=None,
+        metavar="NAME",
+        help="The name the image (or a zero-argument factory) is bound to in the file.",
+    )
+    loading.add_argument(
+        "--pythonpath",
         action="append",
         default=None,
-        metavar="SOURCE",
-        help="Resolve this source build again even if it is pinned (repeatable); "
-        "`--update toolchain` records the running toolchain.",
+        metavar="DIR",
+        help="Extra import directory for the file (repeatable); the working directory is one.",
     )
-    lock.add_argument(
-        "--strict",
-        action="store_true",
-        help="With --check, toolchain drift fails too (as [tool.tundravm] strict_toolchain = "
-        "true); without it, it is a warning.",
+    as_json = argparse.ArgumentParser(add_help=False)
+    as_json.add_argument("--json", action="store_true", help="Print a JSON report.")
+
+    def command(
+        name: str,
+        handler: Callable[[argparse.Namespace, TextIO], int],
+        help: str,
+        description: str,
+        *parents: argparse.ArgumentParser,
+    ) -> argparse.ArgumentParser:
+        found = sub.add_parser(
+            name,
+            help=help,
+            description=description,
+            parents=[*parents, common],
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        found.set_defaults(handler=handler)
+        return found
+
+    new = command(
+        "new",
+        _cmd_new,
+        "Create a project: an image file, its tests, pyproject.toml.",
+        "Write NAME/NAME.py from a template, tests/test_NAME.py, pyproject.toml with\n"
+        '[tool.tundravm] image = "NAME.py", README.md and .gitignore; --ci adds a GitHub\n'
+        "workflow that runs check, lock --check and build. The prover template also makes\n"
+        "policies/, where the operator-approved verifier policies go.",
     )
-    lock_mode = lock.add_mutually_exclusive_group()
-    lock_mode.add_argument(
-        "--check",
-        action="store_true",
-        help=(
-            "Do not write; print the drift and exit 1 if the lockfile is stale, "
-            "or print `lock is up to date` and exit 0."
-        ),
+    new.add_argument("name", metavar="NAME", help="Project directory and image name.")
+    new.add_argument(
+        "--template",
+        choices=NEW_TEMPLATES,
+        default="service",
+        help="service: one sandboxed web service and a dev profile (default); prover: a "
+        "service behind attested TLS, its state on an operator-unlocked volume, a secret.",
     )
-    lock_mode.add_argument(
-        "--offline",
-        action="store_true",
-        help=(
-            "Do not touch the network: reuse the existing lockfile's source pins and fail "
-            "if a source build would need resolving."
-        ),
+    new.add_argument("--ci", action="store_true", help=f"Also write {WORKFLOW_PATH}.")
+
+    check = command(
+        "check",
+        _cmd_check,
+        "Check the image: declarations, lint, lock drift, tree drift.",
+        "Everything short of a build: resolution and declaration errors, every lint rule,\n"
+        "drift from BUILD/tundravm.lock when it exists, the toolchain against the lock's,\n"
+        "and with --tree a committed mkosi tree against what the image compiles to.\n"
+        "Exit 1 on an error (or a drifted lock or tree); warnings are reported only.\n"
+        "In GitHub Actions the findings are workflow annotations.",
+        image,
+        as_json,
     )
-    lock.add_argument(
-        "--format",
-        choices=("auto", "text", "github", "markdown"),
+    check.add_argument(
+        "--profile",
+        action="append",
         default=None,
-        help=(
-            "Drift report format for --check (default: auto): github prints one ::error "
-            "per drifted section, markdown a table. When sources fail to resolve, github "
-            "also prints one ::error per failed source. " + format_help()
-        ),
+        metavar="P",
+        help="Check this profile (repeatable; default: every profile).",
     )
-    lock.add_argument(
-        "--explain",
-        action="store_true",
-        help=(
-            "Print which sections changed since the existing lockfile before writing it "
-            "(with --check, print the drift without writing)."
-        ),
+    check.add_argument(
+        "--tree", type=Path, default=None, metavar="DIR", help="A committed tree to compare."
     )
 
-    fetch_cmd = _add_command(
-        sub,
-        "fetch",
-        _cmd_fetch,
-        help="Check out the recipe's source builds on this host, at their lockfile pins.",
+    lock = command(
+        "lock",
+        _cmd_lock,
+        "Resolve or check the lock: snapshot, sources, toolchain.",
+        "Write BUILD/tundravm.lock: the image's section digests, a pin per source, the\n"
+        "toolchain. Pins already locked are kept while their source is unchanged; --update\n"
+        "resolves the named inputs again (every one when none is named; `toolchain` records\n"
+        "the running toolchain). --check never writes and never touches the network: it\n"
+        "prints the drift and exits 1 when the lock is stale. A build never changes the lock.",
+        image,
+        as_json,
     )
-    fetch_cmd.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "A built kernel's source (Kernel with config=) is fetched too, as `kernel` "
-            "(`kernel-<variant>` where a variant's kernel source differs). "
-            "Each source lands in BUILD/.sources/<name>-<pin12>-<id8>, fetched as the invoking "
-            "user (git credentials and SSH agent apply); a complete checkout is verified and "
-            "kept (git: HEAD is the pin and the tree is clean, submodules initialised when "
-            "asked for; http: the files match the manifest written at fetch time), and one "
-            "that changed fails until --force checks it out again. Sources the "
-            "lockfile does not pin are resolved first, as `lock` would, unless the recipe's "
-            "policy forbids unpinned sources. `bake` fetches the same way before it builds "
-            "and mounts BUILD/.sources into the build."
-        )
+    mode = lock.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--update",
+        nargs="*",
+        default=None,
+        metavar="INPUT",
+        help="Resolve these inputs again (no name: all of them).",
     )
-    fetch_cmd.add_argument(
-        "--lockfile",
+    mode.add_argument("--check", action="store_true", help="Report drift; exit 1 when stale.")
+
+    build = command(
+        "build",
+        _cmd_build,
+        "Build into an immutable build directory, with its manifest.",
+        "Build one profile into BUILD/<image>/production/<id>/ (development/ for a\n"
+        "non-production profile): payload.efi, qemu.raw and each --target's disk,\n"
+        "measurements.json, sbom.spdx.json, inputs/, tree/, manifest.json (the identity;\n"
+        "<id> is its digest), manifest.sig with --sign, observations.json. The directory\n"
+        "appears atomically and is never written again; latest-production points at the\n"
+        "newest. A stale lock is refused; a missing one is written first. --tree-only\n"
+        "writes the standalone mkosi project instead and builds nothing.",
+        image,
+    )
+    which = build.add_mutually_exclusive_group()
+    which.add_argument(
+        "--profile", default=None, metavar="P", help="The profile (default: production)."
+    )
+    which.add_argument(
+        "--dev", action="store_true", help="The dev profile (DevAccess): non-production."
+    )
+    build.add_argument(
+        "--target",
+        action="append",
+        default=None,
+        metavar="T[,T]",
+        help="Build these of the image's targets= (default: all of them); qemu is always built.",
+    )
+    build.add_argument(
+        "--reproduce",
+        action="store_true",
+        help="Build again in an independent workspace and record the comparison; exit 1 "
+        "when an artifact differs.",
+    )
+    build.add_argument(
+        "--tree-only",
         type=Path,
         default=None,
-        help="Fetch this lockfile's pins (default: build/tundravm.lock when it exists).",
+        metavar="DIR",
+        help="Only write the mkosi tree to DIR.",
     )
-    _add_build(fetch_cmd, "Build directory whose .sources holds the checkouts (default: build).")
-    fetch_cmd.add_argument(
-        "--force",
-        action="store_true",
-        help=(
-            "Check every source out again, replacing its checkout (repairs one that was "
-            "modified or left incomplete)."
-        ),
+    build.add_argument(
+        "--offline", action="store_true", help="No network: build only what the lock pins."
     )
-
-    bake = _add_command(sub, "bake", _cmd_bake, help="Compile and build the image.")
-    _add_build(
-        bake, "Build directory the tree, artifacts and bake-result.json go to (default: build)."
-    )
-    bake.add_argument(
-        "--lockfile",
+    build.add_argument(
+        "--sign",
         type=Path,
         default=None,
-        help=(
-            "Bake frozen against this lockfile (default: the [tool.tundravm] lockfile, "
-            "which must exist; else build/tundravm.lock when it exists; without one the "
-            "bake is unpinned)."
-        ),
+        metavar="KEY",
+        help="Sign the manifest with this SSH key.",
     )
-    bake.add_argument(
-        "--backend",
-        choices=BACKEND_KINDS,
+    build.add_argument(
+        "--clean-cache",
+        action="store_true",
+        help="Drop the image's workspace first (fetched sources, mkosi's tools tree and cache).",
+    )
+    build.add_argument("-v", "--verbose", action="store_true", help="Echo mkosi's output.")
+
+    show_cmd = command(
+        "show",
+        _cmd_show,
+        "Show the resolved image or a build; --diff two builds.",
+        "Without BUILD: the image as it resolves (every profile's packages, files, units,\n"
+        "sources, kernel, and where each declaration came from). With BUILD (a build\n"
+        "directory, an id prefix, or `latest`): its manifest, provenance and unchecked\n"
+        "guarantees. --units, --tree and --measurements narrow it. --diff OLD NEW compares\n"
+        "two builds: packages, files, units, boot payload, measurements, policy coverage.",
+        as_json,
+    )
+    show_cmd.add_argument(
+        "subject", nargs="?", default=None, metavar="BUILD", help="A build, or an image file."
+    )
+    part = show_cmd.add_mutually_exclusive_group()
+    part.add_argument("--units", action="store_true", help="The unit files.")
+    part.add_argument("--tree", action="store_true", help="The tree's files.")
+    part.add_argument(
+        "--measurements", action="store_true", help="The measurement records (a build)."
+    )
+    part.add_argument(
+        "--diff", nargs=2, default=None, metavar=("OLD", "NEW"), help="Compare two builds."
+    )
+    show_cmd.add_argument(
+        "--profile",
+        action="append",
         default=None,
-        help="Build backend (default: the recipe file's `backend`).",
+        metavar="P",
+        help="Profiles of an image (default: all).",
     )
-    bake.add_argument(
-        "--no-fetch",
-        action="store_true",
-        help=(
-            "Do not fetch the source builds first; build from the checkouts already in "
-            "BUILD/.sources (e.g. copied to an air-gapped host) and fail if one is missing."
-        ),
-    )
-    bake.add_argument(
-        "--offline",
-        action="store_true",
-        help=(
-            "Give the build sandbox no network (mkosi --with-network=no): build only from "
-            "what `tundravm fetch` put in BUILD/.sources, including the Go/Cargo/.NET "
-            "dependency caches, and fail before mkosi when one is missing."
-        ),
-    )
-    bake.add_argument(
-        "--verify-reproducible",
-        action="store_true",
-        help=(
-            "Bake the same variants a second time into BUILD/.reproduce (same lockfile, same "
-            "fetched sources, compiled and built again) and compare every artifact's sha256; "
-            "a mismatch prints a table per artifact and fails with E_REPRODUCIBILITY (exit 1), "
-            "keeping the second build. bake-result.json, complete before the second build "
-            "starts, records declarative.reproducibility: running, then matched, different, "
-            "error or interrupted."
-        ),
-    )
-    bake.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "Progress goes to stderr as `[variant] step ... ok (1.2s)` lines (a live timer on a "
-            "terminal); the summary table goes to stdout. Backend output is hidden unless "
-            "--verbose, but its last lines are shown when the build fails. The artifact "
-            "manifest is BUILD/bake-result.json, which `measure`, `deploy`, `sbom` and "
-            "`evidence` read (their --build)."
-        )
-    )
-    output = bake.add_mutually_exclusive_group()
-    output.add_argument(
-        "-v", "--verbose", action="store_true", help="Echo every backend output line."
-    )
-    output.add_argument(
-        "-q", "--quiet", action="store_true", help="Print only the final summary and errors."
-    )
-    output.add_argument(
-        "--json-logs",
-        action="store_true",
-        help="Write progress events to stdout as JSON lines (no summary).",
-    )
-    bake.add_argument(
-        "--color",
-        choices=("auto", "always", "never"),
-        default="auto",
-        help="Colorize progress output (default: %(default)s).",
+    show_cmd.add_argument("--dev", action="store_true", help="The latest development build.")
+    show_cmd.add_argument(
+        "--attr", default=None, metavar="NAME", help="The image's name in its file."
     )
 
-    measure_cmd = _add_artifact_command(
-        sub, "measure", _cmd_measure, help="Derive expected TDX measurements of a baked variant."
+    run = command(
+        "run",
+        _cmd_run,
+        "Run a build locally as a named instance; status|logs|stop|ssh|mode.",
+        "tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach]\n"
+        "    boot qemu.raw through OVMF from its ESP on a snapshot (the build is never\n"
+        "    written), forward every TCP port the image's firewall accepts or its services\n"
+        "    declare, and the management port :8745, from 127.0.0.1, and write\n"
+        "    .tundravm/instances/<image>-<n>/.\n"
+        "    simulated: no TDX (KVM if usable, else TCG), verdicts are `simulated`.\n"
+        "    tdx: TDVF and a tdx-guest object; refused unless `doctor --for tdx` is ready.\n"
+        "tundravm run status INSTANCE   the process, control-plane and application readiness\n"
+        "tundravm run logs INSTANCE     the serial console\n"
+        "tundravm run stop INSTANCE     quit QEMU\n"
+        "tundravm run ssh INSTANCE      a shell, only on a development build that runs SSH\n"
+        "tundravm run mode INSTANCE     the security mode and what it means for evidence",
+        as_json,
     )
-    measure_cmd.add_argument(
-        "--scheme",
-        default="qemu",
-        choices=MEASUREMENT_SCHEMES,
-        help=(
-            "Host family (default: %(default)s): qemu and portable predict RTMR1/RTMR2, gcp "
-            "adds Google's MRTD/RTMR0 sets, azure records vTPM PCRs (no TDX register)."
-        ),
+    run.add_argument(
+        "subject", nargs="?", default=None, metavar="BUILD|ACTION", help="A build, or an action."
     )
-    measure_cmd.add_argument(
-        "--format",
-        choices=("text", "json", "markdown"),
-        default="text",
-        help=(
-            "Output format (default: %(default)s). json holds artifact, artifact_digest, "
-            "scheme, tool, values and variant; markdown is a table of the registers."
-        ),
+    run.add_argument(
+        "instance", nargs="?", default=None, metavar="INSTANCE", help="The instance of an action."
     )
-    measure_cmd.add_argument(
-        "--export-policy",
+    run.add_argument(
+        "--mode", choices=instances.MODES, default=None, help="Security mode (required to start)."
+    )
+    run.add_argument(
+        "--dev", action="store_true", help="The latest development build (default: production)."
+    )
+    run.add_argument(
+        "--detach", action="store_true", help="Return once QEMU runs (default: show the console)."
+    )
+    run.add_argument("--memory", default="2G", help="Guest memory (default: %(default)s).")
+    run.add_argument("--cpus", type=int, default=2, help="Guest CPUs (default: %(default)s).")
+    run.add_argument(
+        "--identity", type=Path, default=None, metavar="KEY", help="SSH key for `run ssh`."
+    )
+
+    deploy = command(
+        "deploy",
+        _cmd_deploy,
+        "Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.",
+        "tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID]\n"
+        "    publish the build's disk and start a TDX VM from it, with a receipt; every\n"
+        "    volume the image declares needs --volume (GCP attaches it as tundravm-NAME;\n"
+        "    Azure is refused: its disks have no name the image can find). Settings come\n"
+        "    from [tool.tundravm.gcp] (project, bucket, zone, machine_type) and\n"
+        "    [tool.tundravm.azure] (storage_account, resource_group, location, vm_size,\n"
+        "    gallery), or TUNDRAVM_GCP_* / TUNDRAVM_AZURE_*. BUILD is never guessed.\n"
+        "tundravm deploy status|logs|mode INSTANCE\n"
+        "tundravm deploy upgrade INSTANCE --build BUILD --policy FILE [NAME=@FILE...]\n"
+        "    the replacement workflow (GCP): launch the candidate, attest it and deliver its\n"
+        "    credentials, stop the old one, move the volumes, unlock, wait for readiness\n"
+        "tundravm deploy rollback INSTANCE --policy FILE [NAME=@FILE...]\n"
+        "    the same back to the instance it replaced",
+        as_json,
+    )
+    deploy.add_argument(
+        "action",
+        metavar="azure|gcp|ACTION",
+        choices=(*deployments.CLOUDS, *DEPLOY_ACTIONS),
+        help="Where to deploy, or an action.",
+    )
+    deploy.add_argument(
+        "rest", nargs="*", metavar="ARG", help="INSTANCE, then NAME=@FILE credentials."
+    )
+    deploy.add_argument(
+        "--build", default=None, metavar="BUILD", help="The build to deploy (required)."
+    )
+    deploy.add_argument(
+        "--volume",
+        action="append",
+        default=[],
+        metavar="NAME=create:SIZE|existing:ID",
+        help="A disk for the image's volume NAME (repeatable).",
+    )
+    deploy.add_argument(
+        "--policy",
         type=Path,
         default=None,
         metavar="FILE",
-        help=(
-            "Also write a verifier policy (tundravm.policy/2) for Tdxs.from_policy() and "
-            "attest: registers with their accepted values, unverifiable registers with the "
-            "reason, artifact {path, sha256}; placeholder values need --allow-placeholder "
-            "and carry a note saying they are placeholders."
-        ),
+        help="The verifier policy (upgrade, rollback).",
     )
-    for register in ("MRTD", "RTMR0"):
-        measure_cmd.add_argument(
-            f"--approve-{register.lower()}",
-            action="append",
-            default=None,
-            metavar="HEX",
-            help=(
-                f"With --export-policy: approve this {register} for the platform (repeatable), "
-                "kept as the policy's platform_approval. Take it from a quote of a host you "
-                "trust; attest is trusted only when MRTD and RTMR0 match approved values "
-                "(qemu and portable cannot predict them)."
-            ),
-        )
-    measure_cmd.add_argument(
-        "--allow-placeholder",
-        action="store_true",
-        help=(
-            "Without measured-boot/dstack-mr (and always for azure/gcp), print placeholder "
-            "values derived from artifact digests instead of failing. Not real measurements. "
-            "Also required to measure a simulated (in-process) artifact."
+    deploy.add_argument(
+        "--identity", type=Path, default=None, metavar="KEY", help="The operator's SSH key."
+    )
+    deploy.add_argument("--validator", default=None, metavar="ENDPOINT", help="A tdxs validator.")
+
+    attest = command(
+        "attest",
+        _cmd_attest,
+        "Verify an instance's evidence against a policy; delivers nothing.",
+        "Ask the instance's tdxs issuer for a quote bound to a fresh nonce and check MRTD and\n"
+        "RTMR0..2 against FILE: an operator-approved tundravm.policy/2 file, or a build's\n"
+        "measurements.json (the record for the instance's platform). With --validator a tdxs\n"
+        "validator judges the quote's signature and collateral; only then can it be\n"
+        "`trusted`. Verdicts: trusted, partial, measurements-match, measurements-mismatch,\n"
+        "simulated (accepted for a simulated instance), untrusted. Exit 0 when it passes.\n\n"
+        + _wrapped(
+            f"Channel: {bootstrap.UNVERIFIED}. The first contact POSTs the operator's SSH "
+            "public key to :8745; the quote then comes over that SSH session. --issuer names "
+            "an endpoint the operator relays instead."
         ),
+        as_json,
+    )
+    attest.add_argument("instance", metavar="INSTANCE")
+    attest.add_argument(
+        "--policy", type=Path, required=True, metavar="FILE", help="The verifier policy."
+    )
+    attest.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        metavar="REPORT",
+        help="Write the record (tundravm.attestation/2).",
+    )
+    attest.add_argument(
+        "--identity",
+        type=Path,
+        default=None,
+        metavar="KEY",
+        help="The operator's SSH key (default: ~/.ssh/id_ed25519).",
+    )
+    attest.add_argument(
+        "--issuer",
+        default=None,
+        metavar="ENDPOINT",
+        help="unix:PATH or tcp://HOST:PORT instead of the SSH relay.",
+    )
+    attest.add_argument(
+        "--validator",
+        default=None,
+        metavar="ENDPOINT",
+        help="A tdxs validator (unix:PATH or tcp://HOST:PORT).",
     )
 
-    deploy_cmd = _add_artifact_command(
-        sub, "deploy", _cmd_deploy, help="Deploy the baked artifact of one variant."
+    secrets = command(
+        "secrets",
+        _cmd_secrets_help,
+        "Deliver credentials or unlock a volume after a fresh attestation.",
+        "tundravm secrets deliver INSTANCE --policy FILE NAME=@FILE...\n"
+        "    attest again, then write each value to /run/tundravm/credentials/NAME (0600);\n"
+        "    a production build needs `trusted`.\n"
+        "tundravm secrets unlock INSTANCE VOLUME\n"
+        "    attest again with the policy of the last `attest`, then hand the passphrase\n"
+        "    (typed, or piped on stdin) to the OperatorKey() volume.\n\n"
+        + _wrapped(
+            f"Channel: {bootstrap.UNVERIFIED}. Values travel on the SSH command's stdin only: "
+            "never on argv, in a log, a tree, a manifest or a receipt."
+        ),
     )
-    deploy_cmd.add_argument(
-        "target",
-        metavar="TARGET",
-        choices=tuple(DEPLOY_TARGETS),
-        help=f"Deploy target: {', '.join(DEPLOY_TARGETS)} (the variant's artifact for it).",
+    verbs = secrets.add_subparsers(dest="secrets_command", required=True, metavar="deliver|unlock")
+    for name, help_text in (
+        ("deliver", "Deliver NAME=@FILE credentials."),
+        ("unlock", "Unlock an OperatorKey() volume."),
+    ):
+        action = verbs.add_parser(
+            name,
+            help=help_text,
+            description=_wrapped(f"{help_text} Channel: {bootstrap.UNVERIFIED}."),
+            parents=[common],
+        )
+        action.add_argument("instance", metavar="INSTANCE")
+        if name == "deliver":
+            action.set_defaults(handler=_cmd_deliver)
+            action.add_argument(
+                "--policy", type=Path, required=True, metavar="FILE", help="The verifier policy."
+            )
+            action.add_argument(
+                "values", nargs="+", metavar="NAME=@FILE", help="A secret and the file holding it."
+            )
+        else:
+            action.set_defaults(handler=_cmd_unlock)
+            action.add_argument("volume", metavar="VOLUME")
+        action.add_argument(
+            "--identity", type=Path, default=None, metavar="KEY", help="The operator's SSH key."
+        )
+        action.add_argument(
+            "--validator", default=None, metavar="ENDPOINT", help="A tdxs validator."
+        )
+
+    verify = command(
+        "verify",
+        _cmd_verify,
+        "Check a build directory against its manifest.",
+        "Offline: the manifest is canonical and its id is its digest and the directory's\n"
+        "name; every artifact, input and the tree hash to what it records, and nothing else\n"
+        "is there; the UKI and its root hash are the recorded ones. Each check is ok, failed,\n"
+        "missing or unchecked. A signature is checked with --allowed-signers (an OpenSSH\n"
+        "allowed-signers file, namespace tundravm-manifest); --require-signature fails\n"
+        "without a good one. --rebuild builds the recorded inputs again in an independent\n"
+        "workspace and compares (it runs the project's code). Exit 1 when a check fails.",
+        as_json,
     )
-    deploy_cmd.add_argument(
-        "--param",
+    verify.add_argument(
+        "build", metavar="BUILD", help="A build directory, an id prefix, or `latest`."
+    )
+    verify.add_argument(
+        "--require-signature", action="store_true", help="Fail without a valid signature."
+    )
+    verify.add_argument(
+        "--allowed-signers", type=Path, default=None, metavar="FILE", help="Who may sign."
+    )
+    verify.add_argument("--rebuild", action="store_true", help="Rebuild independently and compare.")
+    verify.add_argument(
+        "--attr", default=None, metavar="NAME", help="--rebuild: the image's name in its file."
+    )
+    verify.add_argument(
+        "--pythonpath",
         action="append",
         default=None,
-        metavar="KEY=VALUE",
-        help=(
-            "Target setting (repeatable). qemu: memory, cpus, ssh_port, tdx, daemonize, "
-            "forward (HOST:GUEST[,HOST:GUEST...]), firmware (a TDVF or OVMF image path), "
-            "data_disk_size (each data disk the image's Disk serials get, e.g. 16G); "
-            "azure: storage_account, resource_group, location, vm_size, gallery, secure_boot "
-            "(needs signed=true), signed; "
-            "gcp: project, bucket, zone, machine_type."
-        ),
-    )
-    deploy_cmd.add_argument(
-        "--attach",
-        action="store_true",
-        help=(
-            "qemu only: run QEMU in the foreground with the serial console on this terminal "
-            "(Ctrl-A X quits, Ctrl-A C toggles the monitor) instead of detaching it."
-        ),
-    )
-    deploy_cmd.add_argument(
-        "--allow-simulated-artifact",
-        action="store_true",
-        help="Deploy a simulated (in-process) artifact anyway.",
+        metavar="DIR",
+        help="--rebuild: extra import directory for the image file (repeatable).",
     )
 
-    _add_attest(sub)
-
-    _add_sbom(sub)
-
-    _add_evidence(sub)
-
-    _add_verify(sub)
-
-    _add_changes(sub)
-
-    _add_release(sub)
-
-    _add_witness(sub)
-
-    _add_explore(sub)
-
-    doctor_cmd = sub.add_parser(
-        "doctor",
-        help="Report what this host can build, run, deploy and verify.",
-        description=(
-            "Print one row per capability (build:x86-64, run:simulated, run:tdx, "
-            "deploy:gcp, deploy:azure, verify:*): ready, blocked (with the fix), "
-            "unavailable or unsupported. --for limits the rows to one area; --backend "
-            "chooses the build backend (default: the recipe's, else local on x86-64 "
-            "Linux and lima elsewhere); with RECIPE, lint it too. Exit 1 if a build row "
-            "(or, with --for, a row of that area) is blocked."
-        ),
-    )
-    doctor_cmd.set_defaults(handler=_cmd_doctor)
-    doctor_cmd.add_argument(
-        "recipe", type=Path, nargs="?", default=None, help="Optional recipe .py file."
-    )
-    doctor_cmd.add_argument(
-        "--backend", choices=BACKEND_KINDS, default=None, help="Build backend to check."
-    )
-    doctor_cmd.add_argument(
-        "--for",
-        dest="areas",
-        choices=AREAS,
-        default=None,
-        help="Only this area's capabilities.",
-    )
-    _add_import_options(doctor_cmd)
-
-    ci = _add_command(
-        sub,
-        "ci",
-        _cmd_ci,
-        help="Run lint --strict, compile --check and lock --check; stop at the first failure.",
-    )
-    ci.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "Prints `ok STEP: ...` or `FAIL STEP: ...` per step (and `skip STEP` after a "
-            "failure) and exits 1 on the first failure, including a missing lockfile."
-        )
-    )
-    _add_tree(ci, "Committed mkosi tree to check (default: build/mkosi).")
-    ci.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help="Lockfile to check (default: build/tundravm.lock).",
-    )
-    ci.add_argument(
-        "--format",
-        choices=("auto", "text", "github"),
-        default=None,
-        help="Report format for failing steps (default: auto). " + format_help(),
-    )
-
-    _add_watch(sub)
-    _add_preview(sub)
-    _add_status(sub)
-    _add_clean(sub)
-    _add_config(sub)
-    _add_units(sub)
-
-    completion = sub.add_parser(
-        "completion",
-        help="Print a shell completion script (bash, zsh or fish).",
-        description=(
-            "Print a static completion script for the verbs, flags and flag choices of "
-            "this tundravm version; its header says where to install it."
-        ),
-        epilog=(
-            "bash: source <(tundravm completion bash) in ~/.bashrc. "
-            "zsh: source <(tundravm completion zsh) in ~/.zshrc after compinit. "
-            "fish: tundravm completion fish > ~/.config/fish/completions/tundravm.fish."
-        ),
-    )
-    completion.set_defaults(handler=_cmd_completion)
-    completion.add_argument("shell", choices=SHELLS, help="Shell to generate the script for.")
-    return parser
-
-
-def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    init = sub.add_parser(
-        "init",
-        help="Scaffold a recipe project: recipe, tests, pyproject.toml, README and CI.",
-        description=(
-            "Write <name>.py from a starter template (--template; --list-templates shows "
-            "them), tests/test_<name>.py using tundravm.testing, a pyproject.toml and a "
-            "README.md when the directory has none, and a .gitignore block for build/ that "
-            f"keeps build/tundravm.lock committed. With --ci github, also write {WORKFLOW_PATH}, "
-            "which posts `inspect --format markdown` to the job summary and runs `tundravm ci`. "
-            "Then lint the new recipe and probe the chosen backend. On an existing project "
-            "(DIR's pyproject.toml has a [tool.tundravm] table, or --recipe names the recipe), "
-            "--ci github writes only the workflow and the .gitignore block when missing."
-        ),
-    )
-    init.set_defaults(handler=_cmd_init)
-    init.add_argument(
-        "dir", type=Path, nargs="?", default=Path("."), help="Project directory (default: .)."
-    )
-    init.add_argument(
-        "--name",
-        default=None,
-        help="Recipe name; writes NAME.py (default: the directory name).",
-    )
-    init.add_argument(
-        "--template",
-        choices=tuple(TEMPLATES),
-        default=None,
-        help=f"Starter recipe (default: {DEFAULT_TEMPLATE}); see --list-templates.",
-    )
-    init.add_argument(
-        "--list-templates",
-        action="store_true",
-        help="Print the templates with a one-line description each, then exit.",
-    )
-    init.add_argument("--release", default="trixie", help="Debian release (default: %(default)s).")
-    app = init.add_argument_group(
-        "app",
-        "--app go writes a recipe that builds one Go program and runs it as a service, "
-        "and tests that check the planned image (instead of --template).",
-    )
-    app.add_argument("--app", choices=app_template.APP_LANGUAGES, default=None, help="Language.")
-    where = app.add_mutually_exclusive_group()
-    where.add_argument("--source", metavar="URL@REF", help="Git repository and ref to build.")
-    where.add_argument(
-        "--path", type=Path, metavar="DIR", help="Local git checkout to build (its HEAD branch)."
-    )
-    app.add_argument(
-        "--package", default=".", help="Go package to build, in the source (default: .)."
-    )
-    app.add_argument(
-        "--port",
-        type=int,
-        default=app_template.DEFAULT_PORT,
-        help="Port the service listens on (default: %(default)s).",
-    )
-    app.add_argument(
-        "--disk",
-        metavar="NAME",
-        help="Keep the state on volume NAME, which an operator unlocks after attestation.",
-    )
-    app.add_argument(
-        "--secret",
-        metavar="NAME",
-        help="The service reads secret NAME, delivered after attestation, as a credential.",
-    )
-    init.add_argument(
-        "--backend",
-        choices=sorted(BACKEND_KINDS),
-        default=None,
-        help="Build backend the project file names (default: none, so every command uses "
-        f"this host's: local on Linux x86-64, Lima elsewhere, unless {BACKEND_ENV} says).",
-    )
-    init.add_argument(
-        "--ci",
-        choices=("github", "none"),
-        default="none",
-        help="CI workflow to write (default: %(default)s).",
-    )
-    tests = init.add_mutually_exclusive_group()
-    tests.add_argument(
-        "--with-tests",
-        dest="tests",
-        action="store_true",
-        default=True,
-        help="Write tests/test_<name>.py: lint, compile and golden-tree tests (default).",
-    )
-    tests.add_argument(
-        "--no-tests", dest="tests", action="store_false", help="Do not write the tests module."
-    )
-    init.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite the recipe, tests module and workflow if they exist "
-        "(an existing pyproject.toml or README.md is always kept; on an existing "
-        "project, only the workflow).",
-    )
-    init.add_argument(
-        "--recipe",
-        dest="existing",
-        type=Path,
-        default=None,
-        metavar="RECIPE",
-        help="With --ci github: the existing project's recipe, relative to DIR (default: "
-        "the [tool.tundravm] recipe); write only the workflow for it.",
-    )
-    init.add_argument(
-        "--no-doctor",
-        action="store_true",
-        help="Skip probing the chosen backend's host tools (`tundravm doctor --backend`).",
-    )
-
-
-def _add_units(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Convert systemd unit text to typed declarations, or show a recipe's units."
-    units = sub.add_parser("units", help=help_text, description=help_text)
-    verbs = units.add_subparsers(dest="units_command", required=True, metavar="VERB")
-    convert_help = "Print the typed declarations (Service, Task, Mount, ...) unit FILEs convert to."
-    convert = verbs.add_parser(
+    convert = command(
         "convert",
-        help=convert_help,
-        description=convert_help
-        + " x.socket + x.service become Service(socket=Listen(...)), x.timer + a oneshot "
-        "x.service a scheduled Task, DIR.d/NAME.conf a Unit(dropin=DropIn(...)). Every "
-        "field whose default would render differently is written out (hardening=, "
-        "restart=, needs=() ...); a unit no typed shape renders stays Unit(name, text) and "
-        "the directives that blocked it are listed.",
+        _cmd_convert,
+        "Turn an mkosi tree or systemd unit files into source.",
+        "--from systemd: unit files (a file, or a directory) as typed declarations; units no\n"
+        "typed shape renders stay text, with what blocked them. --from mkosi: the tree\n"
+        "resolved by mkosi itself, as an Image file; every setting it cannot carry is\n"
+        "reported. Parsing a tree runs its executable mkosi.version or mkosi.configure:\n"
+        "refused unless --allow-scripts.",
     )
-    convert.set_defaults(handler=_cmd_units_convert)
-    convert.add_argument("files", nargs="+", type=Path, metavar="FILE", help="Unit files.")
+    convert.add_argument("path", type=Path, metavar="PATH")
     convert.add_argument(
-        "--name",
-        default=None,
-        help="Unit file name of a single FILE (default: its file name; DIR.d/NAME.conf for a "
-        "drop-in).",
+        "--from", dest="source", choices=("mkosi", "systemd"), required=True, help="What PATH is."
+    )
+    convert.add_argument(
+        "--allow-scripts",
+        action="store_true",
+        help="Let mkosi run the tree's scripts while parsing.",
     )
     convert.add_argument(
         "--mode",
         choices=("exact", "semantic"),
         default="exact",
-        help="exact: typed only when it renders FILE byte for byte (default); semantic: the "
-        "same directives and values, order and comments aside (unowned ones go to extra=).",
-    )
-    convert.add_argument(
-        "--adopt-defaults",
-        action="store_true",
-        help="Also print each declaration without its opt-outs and what the defaults add.",
-    )
-    render_help = "Print the unit text (and drop-ins) one variant of RECIPE generates for UNIT."
-    render = verbs.add_parser("render", help=render_help, description=render_help)
-    render.set_defaults(handler=_cmd_units_render)
-    render.add_argument("recipe", type=Path, help="Path to the recipe .py file.")
-    _add_import_options(render)
-    render.add_argument(
-        "--variant", default=None, metavar="NAME", help="Variant (default: the only one)."
-    )
-    render.add_argument("--unit", required=True, metavar="NAME", help="Unit name (app.service).")
-
-
-def _interval(raw: str) -> float:
-    try:
-        value = float(raw)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{raw!r} is not a number of seconds") from None
-    if not value > 0:
-        raise argparse.ArgumentTypeError(f"{raw!r} must be more than 0 seconds")
-    return value
-
-
-def _add_watch(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    watch = _add_command(
-        sub,
-        "watch",
-        _cmd_watch,
-        help="Re-run lint and the compiled-tree check whenever the recipe or its modules change.",
-    )
-    watch.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "Polls the mtimes of RECIPE, every .py under its directory (hidden "
-            "directories, __pycache__ and the build output left out), every host file "
-            "and FileTree tree its declarations read (File, Unit and Template sources, "
-            "Kernel configs, Tdxs.from_policy policies), the selected lockfile, "
-            "pyproject.toml (its [tool.tundravm] table is read again) and the checked "
-            "tree, so an external compile refreshes the verdict. Checks once at "
-            "start, then once per change, printing `HH:MM:SS lint N errors N warnings; "
-            "tree up to date` (or `tree stale (N files)`, `tree missing (N files to "
-            "write)`, or with --write `wrote TREE`). The counts are `tundravm "
-            "lint`'s, drift against the selected lockfile included; when drift is every "
-            "error, `; lock drifted (N sections)` precedes the tree. Lint errors that keep "
-            "the recipe from lowering (an error-level fragment check) print `HH:MM:SS lint "
-            "N errors (code: first message)`; a recipe that fails to load (a syntax or "
-            "import error) prints `HH:MM:SS error [E_CODE] message`; both are watched on. "
-            "Never writes unless --write. Ctrl-C stops it with exit 0."
-        )
-    )
-    _add_tree(watch, "Compiled mkosi tree to check (default: BUILD/mkosi).")
-    _add_build(watch, "Build directory left out of the polling (default: build).")
-    watch.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help=(
-            "Lockfile whose pins lint and the tree apply and whose drift lint reports, "
-            "as `lint --lockfile` (default: build/tundravm.lock, pins only)."
-        ),
-    )
-    watch.add_argument(
-        "--interval",
-        type=_interval,
-        default=1.0,
-        metavar="SECONDS",
-        help="Seconds between polls (default: %(default)s).",
-    )
-    watch.add_argument(
-        "--write",
-        action="store_true",
-        help="Recompile into the --tree when it is stale instead of only comparing.",
+        help="systemd: exact renders the file byte for byte (default); semantic the same "
+        "directives.",
     )
 
-
-def _add_status(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    status = _add_command(
-        sub,
-        "status",
-        _cmd_status,
-        help="Report where the project stands: lock, sources, tree, artifacts, release readiness.",
-    )
-    status.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "Read-only and network-free; always exits 0. One line per item with a verdict "
-            "(ok, stale, missing, n/a; lint says error when the recipe has errors), then "
-            "`next: COMMAND`, the single most useful command to run. Artifacts are stale when "
-            "the recipe or the tree they were baked from changed since, or (with --verify) "
-            "when their bytes no longer match the sha256 the bake recorded. Then one `release` "
-            "line per variant eligible for release: ok (ready) or blocked, with the reason "
-            "codes `evidence --require` would give for its bake (hashing its artifacts) "
-            f"against [{TABLE}] require (default: {','.join(DEFAULT_REQUIRE)}), reading "
-            f"BUILD/<variant>/policy.json and BUILD/<variant>/{ATTESTATION_NAME}; and one "
-            "pending line per unfinished release of the recipe in RELEASES, with its "
-            "`resume with:` command. Past the bake, next follows a second build, measure, "
-            "attest and release; `everything is up to date` only when every eligible "
-            "variant is ready and the newest finished release was cut from this recipe and "
-            f"lockfile, and `{BLOCKED}: ...` when no single command clears a reason."
-        )
-    )
-    _add_build(status, "Build directory holding the sources and artifacts (default: build).")
-    _add_tree(status, "Compiled mkosi tree to report on (default: BUILD/mkosi).")
-    status.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help="Lockfile to report on (default: build/tundravm.lock).",
-    )
-    status.add_argument(
-        "--verify",
-        action="store_true",
-        help=(
-            "Hash each artifact and compare it with the sha256 the bake recorded "
-            "(integrity verified or mismatch); without it integrity is unchecked."
-        ),
-    )
-    status.add_argument(
-        "--releases",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help="Directory of releases (default: releases beside pyproject.toml, else ./releases).",
-    )
-    status.add_argument(
-        "--format",
-        choices=("text", "json", "markdown"),
-        default="text",
-        help=(
-            "Output format (default: %(default)s). json is one object per section, each "
-            "with a `verdict`; markdown is a table per section."
-        ),
-    )
-
-
-def _add_config(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    config = sub.add_parser(
-        "config",
-        help="Print the project configuration the commands resolve and where each value came from.",
-        description=(
-            "Print recipe, tree, build, lockfile and backend as every command would use "
-            "them here, each with its origin: flag (given on this command line), "
-            f"pyproject (the [{TABLE}] table), default (built in) or, for backend, recipe "
-            "(the kind of the `backend` the recipe file binds, loaded to find it). A "
-            "recipe or lockfile that does not exist is marked so."
-        ),
-        epilog=RESOLUTION_HELP,
-    )
-    config.set_defaults(handler=_cmd_config)
-    config.add_argument(
-        "recipe", type=Path, nargs="?", default=None, help="Recipe .py file (overrides the table)."
-    )
-    _add_tree(config, "Compiled mkosi tree.")
-    _add_build(config, "Build directory holding bake-result.json.")
-    config.add_argument("--lockfile", type=Path, default=None, help="Lockfile.")
-    config.add_argument("--backend", choices=BACKEND_KINDS, default=None, help="Build backend.")
-    config.add_argument(
-        "--format",
-        choices=("text", "json"),
-        default="text",
-        help=(
-            "Output format (default: %(default)s); json maps each key to value and origin, "
-            "plus exists for recipe and lockfile."
-        ),
-    )
-    _add_import_options(config)
-
-
-def _add_clean(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    clean = sub.add_parser(
-        "clean",
-        help="Remove build output: checkouts, the tree, artifacts, evidence, mkosi state.",
-        description=(
-            "Remove the parts --what names of the build directory (--build, default: the "
-            "[tool.tundravm] build, else the recipe's build directory, else build): "
-            "sources (BUILD/.sources), tree (BUILD/mkosi, the bake's own tree, never the "
-            "committed one), artifacts (each BUILD/<variant>/ and BUILD/bake-result.json), "
-            "evidence (BUILD/evidence), state (BUILD/.mkosi, the mkosi state in "
-            "BUILD/mkosi and BUILD/.tundravm-hashes.json, status's hash cache), reproduce "
-            "(BUILD/.reproduce, the second build of bake "
-            "--verify-reproducible), or all. Without --what, list what --what all would "
-            "remove and exit 0. The lockfile is removed only when --remove-lockfile names "
-            "it. A release directory is never removed: a part that holds one (`release "
-            "--releases` inside the build directory) is refused, and clean exits 1."
-        ),
-        epilog=(
-            "A path this user cannot delete (root-owned mkosi output) is removed with "
-            "`sudo rm -rf` when sudo is available; otherwise it is reported and clean "
-            "exits 1."
-        ),
-    )
-    clean.set_defaults(handler=_cmd_clean)
-    clean.add_argument(
-        "recipe",
-        type=Path,
-        nargs="?",
-        default=None,
-        help="Recipe .py file (optional; names the variants whose artifact directories go).",
-    )
-    _add_import_options(clean)
-    _add_build(clean, "Build directory to clean.")
-    clean.add_argument(
-        "--what",
-        type=_clean_parts,
-        default=(),
-        metavar="LIST",
-        help=f"Comma-separated parts to remove: {', '.join(PARTS)} or all.",
-    )
-    clean.add_argument(
-        "--remove-lockfile",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="Also remove this lockfile (never removed otherwise).",
-    )
-    clean.add_argument(
-        "--dry-run", action="store_true", help="Print what would be removed; remove nothing."
-    )
-
-
-def _add_attest(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Check a running image's TDX quote against a verifier policy."
-    attest_cmd = sub.add_parser(
-        "attest",
-        help=help_text,
-        description=(
-            help_text + " Asks the image's tdxs issuer for a quote bound to a nonce, reads "
-            "MRTD and RTMR0..RTMR3 from it and compares them with the policy `measure "
-            "--export-policy` wrote. With --validator a tdxs validator checks the quote's "
-            "signature, certificate chain and collateral; only then can the verdict be "
-            "trusted."
-        ),
-        epilog=(
-            "Prints the signature status, the nonce check (the quote's 64-byte report_data "
-            "must be SHA-256(nonce) followed by 32 zero bytes), one line per register "
-            "(match, mismatch, or unchecked when the policy does not hold it) and the "
-            "verdict: trusted or untrusted with --validator, measurements-match or "
-            "measurements-mismatch without one, simulated for a simulator issuer, partial "
-            "when nothing disagreed but MRTD, RTMR0 (the platform: approve them with `measure "
-            "--approve-mrtd/--approve-rtmr0`), RTMR1 or RTMR2 went unchecked. An azure policy "
-            "is refused (its image is measured into the vTPM, not verified here). Exit 0 "
-            "for trusted or measurements-match (simulated with --allow-simulated, partial "
-            "with --accept-partial), 1 for "
-            "every other verdict, 2 on an SDK error (unreachable issuer or validator, not a "
-            "TDX quote, a bad or placeholder policy)."
-        ),
-    )
-    attest_cmd.set_defaults(handler=_cmd_attest)
-    attest_cmd.add_argument(
-        "--issuer",
-        required=True,
-        metavar="ENDPOINT",
-        help=(
-            "The tdxs issuer, which speaks JSON lines: unix:PATH or a path (the image's "
-            "/var/tdxs.sock, e.g. forwarded with `ssh -L ./tdxs.sock:/var/tdxs.sock`) or "
-            "tcp://HOST:PORT."
-        ),
-    )
-    attest_cmd.add_argument(
-        "--validator",
-        default=None,
-        metavar="ENDPOINT",
-        help=(
-            "A tdxs validator (unix:PATH or tcp://HOST:PORT) that judges the quote's "
-            "signature, certificate chain and collateral. Without it the signature is "
-            "unchecked and the verdict is never trusted."
-        ),
-    )
-    attest_cmd.add_argument(
-        "--policy",
-        type=Path,
-        required=True,
-        metavar="FILE",
-        help="Verifier policy from `tundravm measure --export-policy FILE`.",
-    )
-    attest_cmd.add_argument(
-        "--nonce",
-        default=None,
-        metavar="HEX",
-        help="Challenge the quote must bind, as hex (default: 32 random bytes).",
-    )
-    attest_cmd.add_argument(
-        "--allow-simulated",
-        action="store_true",
-        help="Exit 0 for a simulator issuer whose measurements match (verdict: simulated).",
-    )
-    attest_cmd.add_argument(
-        "--accept-partial",
-        action="store_true",
-        help=(
-            "Exit 0 for a partial verdict: nothing disagreed, but MRTD/RTMR0 (the platform) "
-            "or RTMR1/RTMR2 (the image) had no accepted value to check. Never trusted."
-        ),
-    )
-    attest_cmd.add_argument(
-        "--record",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help=(
-            "Also keep the attestation as a tundravm.attestation/2 record in FILE: the "
-            "document as received, nonce, report_data, registers, the policy's sha256 and "
-            "artifact, the validator's whole reply, the verdict and observed_at. "
-            "`evidence --attestation FILE` bundles it and `verify` re-derives it offline."
-        ),
-    )
-    attest_cmd.add_argument(
-        "--format",
-        choices=("text", "json", "markdown"),
-        default="text",
-        help=(
-            "Output format (default: %(default)s). json holds issuer, validator, platform, "
-            "source, quote_version, signature_status, validator_error, nonce {value, "
-            "report_data, expected_report_data, verdict}, registers {NAME: {actual, "
-            "expected, verdict}}, reasons, verdict, trusted and passed; markdown is a table."
-        ),
-    )
-    attest_cmd.add_argument(
-        "--traceback",
-        action="store_true",
-        help="On an error, raise it with the full Python traceback instead of one message.",
-    )
-
-
-def _add_sbom(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Write the software bill of materials of a baked variant."
-    sbom_cmd = _add_artifact_command(sub, "sbom", _cmd_sbom, help=help_text)
-    sbom_cmd.description = (
-        help_text + " It merges mkosi's package manifest next to the artifact (every "
-        "installed distribution package and version), the lockfile's source pins (each "
-        "source build, kernel and efi-stub with URL, ref, commit or sha256, and the "
-        "paths a build installs) and the recipe metadata (base, arch, snapshot, mirror, "
-        "recipe, tree and artifact digests, tundravm version)."
-    )
-    sbom_cmd.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "The artifact is hashed first (E_ARTIFACT_CHANGED when it changed). The lockfile "
-            "and the manifest must be the ones the bake recorded in bake-result.json, else "
-            "E_ARTIFACT_CHANGED unless --allow-unbound. Without a manifest (a simulated "
-            "bake) the document says so and lists the packages the recipe declares, "
-            "unversioned. Paths are relative to the build directory and lists are sorted; "
-            "set SOURCE_DATE_EPOCH to fix the creation time."
-        )
-    )
-    sbom_cmd.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help=(
-            "Lockfile with the source pins (default: the one the bake recorded, else "
-            "BUILD/tundravm.lock; without one sources are not listed)."
-        ),
-    )
-    sbom_cmd.add_argument(
-        "--format",
-        choices=SBOM_FORMATS,
-        default="spdx-json",
-        help="Document format (default: %(default)s).",
-    )
-    sbom_cmd.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Write the document to FILE instead of stdout.",
-    )
-    sbom_cmd.add_argument(
-        "--allow-unbound",
-        action="store_true",
-        help=(
-            "Write the document even when the lockfile or manifest is not the one the bake "
-            "recorded; it is marked incomplete with a note."
-        ),
-    )
-    sbom_cmd.add_argument(
-        "--binaries",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help=(
-            "Directory with the built binaries at their image paths (an unpacked root) or "
-            "by file name: each source build's binary adds the Go modules or cargo "
-            "auditable crates it records as nested components, when its sha256 is the one "
-            "the bake recorded from the UKI's initrd. Any other binary (or one the bake "
-            "could not record) is listed as unbound with its path and sha256, its "
-            "dependencies are not components and the document is marked incomplete."
-        ),
-    )
-
-
-def _add_evidence(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Assemble auditor-facing evidence of a bake: digests, lock, integrity, SBOM."
-    cmd = _add_command(sub, "evidence", _cmd_evidence, help=help_text)
-    cmd.description = (
-        help_text + " For each baked variant (--variant, default: every one in "
-        "BUILD/bake-result.json) it records the recipe and tree digests, the lockfile "
-        "(verbatim, with its version and drift), each artifact with a fresh sha256 "
-        "check, the recorded reproducibility verdict, the measurements policy "
-        "(BUILD/<variant>/policy.json or --policy), an SPDX SBOM, the lint summary, a "
-        "provenance summary and the tool versions, and writes them to BUILD/evidence "
-        "with an evidence.json index holding every member's sha256."
-    )
-    cmd.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "Prints the index; exits 1 when the verdict is fail (an artifact changed or "
-            "is gone, the recipe or tree changed, the lockfile drifted, lint errors, a "
-            "second build that differed, a placeholder or mismatched policy) or incomplete "
-            "(a --require check is missing); the reasons say which. Set SOURCE_DATE_EPOCH "
-            "to fix the timestamps."
-        )
-    )
-    _add_build(cmd, "Build directory holding bake-result.json (default: build).")
-    cmd.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help=(
-            "Lockfile to record and check for drift (default: the one the bake recorded, "
-            "else BUILD/tundravm.lock)."
-        ),
-    )
-    cmd.add_argument(
-        "--policy",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help=(
-            "Measurements policy from `measure --export-policy` for every selected variant "
-            "(default: BUILD/<variant>/policy.json when it exists)."
-        ),
-    )
-    cmd.add_argument(
-        "--bundle",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Also write the evidence as a deterministic FILE.tar.gz.",
-    )
-    cmd.add_argument(
-        "--html",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Also write a self-contained HTML report with a verdict banner.",
-    )
-    cmd.add_argument(
-        "--format",
-        choices=EVIDENCE_FORMATS,
-        default="text",
-        help="Index format (default: %(default)s); json is evidence.json.",
-    )
-    cmd.add_argument(
-        "--require",
-        type=_evidence_requirements,
-        default=None,
-        metavar="LIST",
-        help=(
-            f"Comma-separated checks that must be present ({', '.join(EVIDENCE_REQUIREMENTS)}): "
-            f"a missing one makes the verdict incomplete (exit 1) instead of a note "
-            f"(default: [{TABLE}] require, else {','.join(DEFAULT_REQUIRE)}; '' requires none)."
-        ),
-    )
-    cmd.add_argument(
-        "--allow-unbound",
-        action="store_true",
-        help=(
-            "Record a lockfile or mkosi manifest that is not the one the bake recorded "
-            "instead of failing with E_ARTIFACT_CHANGED; the verdict is incomplete."
-        ),
-    )
-    _add_attestation_options(cmd)
-    cmd.add_argument(
-        "--sign",
-        type=Path,
-        default=None,
-        metavar="KEY",
-        help=(
-            "Sign evidence.json with this SSH private key (ssh-keygen -Y sign -n "
-            "tundravm-evidence) and write evidence.json.sig beside it and into --bundle."
-        ),
-    )
-
-
-def _add_attestation_options(cmd: argparse.ArgumentParser) -> None:
-    """``--attestation FILE`` (repeatable) and ``--max-age DURATION``, for evidence and release."""
-    cmd.add_argument(
-        "--attestation",
-        type=Path,
-        action="append",
-        default=None,
-        metavar="FILE",
-        help=(
-            "Bundle this record from `attest --record FILE` (repeatable) as "
-            "variants/<variant>/attestation-<n>.json of the variant holding the artifact its "
-            "policy measured; it is re-derived against that variant's policy."
-        ),
-    )
-    cmd.add_argument(
-        "--max-age",
-        type=_duration,
-        default=None,
-        metavar="DURATION",
-        help=(
-            "For --require attested: how far a record's observed_at may be from the moment "
-            "the evidence judges it, the wall clock (45s, 30m, 24h, 7d; default 24h)."
-        ),
-    )
-
-
-def _moment(value: str) -> datetime:
-    if value == "now":
-        return datetime.now(UTC)
-    moment = parse_time(value)
-    if moment is None:
-        message = f"{value!r} is not a time: pass `now` or UTC like 2026-10-17T12:00:00Z"
-        raise argparse.ArgumentTypeError(message)
-    return moment
-
-
-def _duration(value: str) -> int:
-    try:
-        return parse_duration(value)
-    except ValidationError as exc:
-        raise argparse.ArgumentTypeError(f"{exc.args[0]} {exc.hint}") from exc
-
-
-def _add_verify(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Check an evidence bundle or directory on its own, without the recipe."
-    cmd = sub.add_parser(
-        "verify",
-        help=help_text,
-        description=(
-            help_text + " Every member against the sha256 evidence.json lists; the index "
-            "against its members (the lockfile against the lock_sha256 bake-result.json "
-            "records, each SBOM, manifest, policy and tree.json against the artifact and "
-            "digests the index names, every fact the verdict uses derived from its member "
-            "and the recorded verdict recomputed from them); "
-            "the artifacts in --build re-hashed against the index; the signature against "
-            "--allowed-signers; the --require checks."
-        ),
-        epilog=(
-            "Prints one line per check kind, then every check that did not pass with its "
-            "reason code; exits 0 only when every check passes, 1 otherwise."
-        ),
-    )
-    cmd.set_defaults(handler=_cmd_verify)
-    cmd.add_argument(
-        "evidence",
-        type=Path,
-        help="The evidence: a bundle from `evidence --bundle`, its BUILD/evidence directory, "
-        "or that directory's evidence.json; or a release directory (one holding "
-        "release.json), checked against its release-manifest.json.",
-    )
-    _add_build(
-        cmd,
-        "Re-hash the artifacts in this build (or release) directory against the index: "
-        "as the bake laid them out, <variant>/<file>, or by target or file name "
-        "(default: not re-hashed).",
-    )
-    cmd.add_argument(
-        "--require",
-        type=_evidence_requirements,
-        default=(),
-        metavar="LIST",
-        help=(
-            f"Comma-separated checks that must be present ({', '.join(EVIDENCE_REQUIREMENTS)}), "
-            "as for `evidence --require`."
-        ),
-    )
-    cmd.add_argument(
-        "--allowed-signers",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Check evidence.json.sig against this OpenSSH allowed-signers file.",
-    )
-    cmd.add_argument(
-        "--signer",
-        default=None,
-        metavar="PRINCIPAL",
-        help="The principal to check the signature for (default: the file's for the key).",
-    )
-    cmd.add_argument(
-        "--max-age",
-        type=_duration,
-        default=None,
-        metavar="DURATION",
-        help="Judge bundled attestation records with this freshness window (e.g. 24h, 30m) "
-        "instead of the one the evidence recorded.",
-    )
-    cmd.add_argument(
-        "--now",
-        type=_moment,
-        default=None,
-        metavar="TIME",
-        help="Judge attestation freshness at TIME (`now`, or UTC like 2026-10-17T12:00:00Z) "
-        "instead of the moment the evidence recorded evaluating it.",
-    )
-    cmd.add_argument(
-        "--witnesses",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help="A release's witness files (default with --min-witnesses: "
-        "RELEASES/<name>.witnesses/).",
-    )
-    cmd.add_argument(
-        "--min-witnesses",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Require N distinct signed witnesses that rebuilt every artifact of the release "
-        "(the publisher excluded); signatures are checked with --allowed-signers.",
-    )
-    toolchains = cmd.add_mutually_exclusive_group()
-    toolchains.add_argument(
-        "--same-toolchain",
-        dest="toolchains",
-        action="store_const",
-        const="same",
-        default="same",
-        help="Count only witnesses that built with the release's toolchain (the default): "
-        "the lockfile pins the toolchain, so --min-witnesses tests that anyone with this "
-        "lockfile reproduces the release; a match on another toolchain is noted as "
-        "strengthening it, not counted.",
-    )
-    toolchains.add_argument(
-        "--distinct-toolchains",
-        dest="toolchains",
-        action="store_const",
-        const="distinct",
-        help="Count the distinct toolchains among the matching witnesses instead: the "
-        "stronger claim that independent toolchains agree.",
-    )
-    cmd.add_argument(
-        "--allow-simulated",
-        action="store_true",
-        help="Count witnesses that rebuilt with the in-process backend.",
-    )
-    cmd.add_argument(
-        "--format",
-        choices=VERIFY_FORMATS,
-        default="text",
-        help="Report format (default: %(default)s).",
-    )
-    cmd.add_argument(
-        "--html",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Also write a self-contained HTML report.",
-    )
-    cmd.add_argument(
-        "--traceback",
-        action="store_true",
-        help="On an error, raise it with the full Python traceback instead of one message.",
-    )
-
-
-def _add_changes(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Show what changed since a previous evidence bundle, for a release review."
-    cmd = _add_command(sub, "changes", _cmd_changes, help=help_text)
-    cmd.description = (
-        help_text + " Compares the evidence (--since) with the recipe and lockfile as they "
-        "are now: the recipe and tree digests, the lockfile's sections, the source pins, "
-        "the declared packages, the installed packages, the emitted files of each "
-        "variant's tree (each with the declarations behind it) and the measured "
-        "registers. A comparison one side has no data for is reported unknown."
-    )
-    cmd.add_argument(
-        "--since",
-        type=Path,
-        required=True,
-        metavar="EVIDENCE",
-        help="The previous evidence: a bundle from `evidence --bundle`, its directory, or a "
-        "release directory (release.json beside evidence.tar.gz).",
-    )
-    _add_build(
-        cmd,
-        "Bake directory of the current recipe, used only when its recipe, tree and lockfile "
-        "are the current ones: its bound SBOMs give the installed packages and "
-        "BUILD/<variant>/policy.json, when it measured one of its artifacts, the current "
-        "registers (default: none; installed packages and registers are unknown).",
-    )
-    cmd.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help="The current lockfile (default: build/tundravm.lock when it exists).",
-    )
-    cmd.add_argument(
-        "--format",
-        choices=CHANGES_FORMATS,
-        default="text",
-        help="Report format (default: %(default)s); markdown is meant for a pull request.",
-    )
-
-
-def _add_witness(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Rebuild a release from this checkout and say whether the bytes agree."
-    cmd = sub.add_parser(
-        "witness",
-        help=help_text,
-        description=(
-            help_text + " The recipe's digest must be the release's recipe_digest and the "
-            "lockfile is the release's own, from its evidence bundle (its sha256 must be the "
-            "release's lock_sha256). The released variants are baked into the witness's own "
-            "build directory and every artifact's sha256 is compared with the release's. The "
-            "witness file, witness-<builder>.json, goes beside the release in "
-            "RELEASES/<name>.witnesses/ (a release directory is immutable), with --sign also "
-            "its .sig in the tundravm-witness namespace; `tundravm verify RELEASE_DIR "
-            "--min-witnesses N` counts them."
-        ),
-        epilog=(
-            "Exits 0 when every artifact matches, 1 when one differs (the witness build is "
-            "kept for comparison), 2 when the rebuild could not run."
-        ),
-    )
-    cmd.set_defaults(handler=_cmd_witness)
-    cmd.add_argument(
-        "release", type=Path, metavar="RELEASE_DIR", help="The release directory to rebuild."
-    )
-    cmd.add_argument(
-        "recipe",
-        type=Path,
-        nargs="?",
-        default=None,
-        help=f"This checkout's recipe .py file (default: recipe in [{TABLE}] of pyproject.toml).",
-    )
-    _add_import_options(cmd)
-    _add_build(
-        cmd,
-        "Witness build directory (default: build/witness-<release>, removed when every "
-        "artifact matches).",
-    )
-    cmd.add_argument(
-        "--backend",
-        choices=BACKEND_KINDS,
-        default=None,
-        help="Build backend (default: the recipe file's `backend`).",
-    )
-    cmd.add_argument(
-        "--builder",
-        default=None,
-        metavar="NAME",
-        help="The witness's name, and its principal when signing (default: <user>@<host>).",
-    )
-    cmd.add_argument(
-        "--sign",
-        type=Path,
-        default=None,
-        metavar="KEY",
-        help="Sign the witness file with this SSH private key (ssh-keygen -Y sign).",
-    )
-    cmd.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Where to write the witness file (default: "
-        "RELEASES/<name>.witnesses/witness-<builder>.json).",
-    )
-    cmd.add_argument(
-        "--format",
-        choices=WITNESS_FORMATS,
-        default="text",
-        help="Report format (default: %(default)s); json prints the witness file.",
-    )
-
-
-def _add_release(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Cut an immutable release directory from the locked recipe, stage by stage."
-    cmd = _add_command(sub, "release", _cmd_release, help=help_text)
-    cmd.description = (
-        help_text + f" The stages: {', '.join(STAGES)}. lock-check refuses a drifted "
-        "lockfile (a release never relocks); bake builds twice and compares the "
-        "artifacts; measure exports BUILD/<variant>/policy.json (skipped for simulated "
-        "artifacts); evidence is bundled, rendered and, with --sign, signed; verify checks "
-        "the bundle just written; changes compares with the previous release; notes "
-        "writes RELEASE.md. Everything lands in RELEASES/<recipe>-<version>/: the artifacts "
-        "(copied from BUILD), evidence.tar.gz, evidence.html, <variant>/policy.json, "
-        "<variant>/sbom-<target>.spdx.json, RELEASE.md, release.json and "
-        "release-manifest.json (every file with its sha256 and size; with --sign also "
-        "release-manifest.json.sig), which `tundravm verify RELEASES/<recipe>-<version>` "
-        "checks. Without --variant, every variant not marked Variant(release=False) is "
-        "released; naming one that is needs --allow-ineligible."
-    )
-    cmd.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            f"Until the release passes, its directory holds {STATE_NAME}: the release's "
-            "specification (variants, --require, the signing key, --since, the backend's "
-            "settings, the build directory, --attestation records and --max-age) and each "
-            "completed stage with the sha256 of its "
-            "inputs and outputs. Running it again resumes and inherits every option it "
-            "omits; a different one fails with E_STATE unless --change-spec is given. "
-            "Stages whose inputs and outputs are unchanged are kept, the first stage whose "
-            "inputs changed runs with every stage after it. A release "
-            "that passed is immutable: releasing its version again fails with E_STATE. "
-            "Prints one line per stage and a last line with the release path and verdict; "
-            "exits 0 when it passes, 1 when the evidence, its verification or a --require "
-            "check fails (the in-process backend's artifacts are simulated: `real` fails), "
-            "2 on an SDK error, after `resume with: COMMAND`."
-        )
-    )
-    cmd.add_argument(
-        "--version",
-        required=True,
-        metavar="VERSION",
-        help="The release's version; the directory is RELEASES/<recipe>-<VERSION>.",
-    )
-    signing = cmd.add_mutually_exclusive_group()
-    signing.add_argument(
-        "--sign",
-        type=Path,
-        default=None,
-        metavar="KEY",
-        help=(
-            "Sign the evidence and release-manifest.json with this SSH private key, as "
-            "`evidence --sign`; verify then checks the signature with its public half."
-        ),
-    )
-    signing.add_argument(
-        "--no-sign",
-        action="store_true",
-        help="Drop the signing key a resumed release started with (needs --change-spec).",
-    )
-    cmd.add_argument(
-        "--require",
-        type=_evidence_requirements,
-        default=None,
-        metavar="LIST",
-        help=(
-            f"Comma-separated checks the evidence must hold ({', '.join(EVIDENCE_REQUIREMENTS)}); "
-            f"a missing one fails the release (default: a resumed release's own, else [{TABLE}] "
-            f"require, else {','.join(DEFAULT_REQUIRE)}). '' requires none (on a resume: with "
-            "--change-spec)."
-        ),
-    )
-    cmd.add_argument(
-        "--change-spec",
-        action="store_true",
-        help=(
-            f"Let a resumed release change what it started with ({STATE_NAME}'s spec: "
-            "--variant, --require, --sign/--no-sign, --since, --allow-ineligible, the "
-            "backend's settings, --build, --attestation, --max-age); recorded in "
-            "release.json's spec_history."
-        ),
-    )
-    cmd.add_argument(
-        "--allow-ineligible",
-        action="store_true",
-        help="Release a --variant marked Variant(release=False) (recorded in release.json).",
-    )
-    cmd.add_argument(
-        "--since",
-        type=Path,
-        default=None,
-        metavar="PREVIOUS",
-        help=(
-            "The previous release directory (or an evidence bundle) to list the changes "
-            "since (default: the newest finished release of the recipe in RELEASES)."
-        ),
-    )
-    _add_attestation_options(cmd)
-    cmd.add_argument(
-        "--releases",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help="Directory of releases (default: releases beside pyproject.toml, else ./releases).",
-    )
-    _add_build(cmd, "Build directory to fetch and bake into (default: build).")
-    cmd.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help="The lockfile to release from (default: build/tundravm.lock, which must exist).",
-    )
-    cmd.add_argument(
-        "--backend",
-        choices=BACKEND_KINDS,
-        default=None,
-        help="Build backend (default: the recipe file's `backend`).",
-    )
-    mode = cmd.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--resume",
-        action="store_true",
-        help=f"Resume the release in progress (the default when {STATE_NAME} exists); "
-        "fails when there is none.",
-    )
-    mode.add_argument(
-        "--restart",
-        action="store_true",
-        help=f"Discard the release in progress ({STATE_NAME} and its files) and start over.",
-    )
-    cmd.add_argument(
-        "--format",
-        choices=RELEASE_FORMATS,
-        default="text",
-        help=(
-            "Output format (default: %(default)s); json prints release.json and moves the "
-            "stage lines to stderr."
-        ),
-    )
-
-
-def _clean_parts(value: str) -> tuple[str, ...]:
-    names = {name.strip() for name in value.split(",") if name.strip()}
-    unknown = sorted(names - {*PARTS, "all"})
-    if unknown or not names:
-        raise argparse.ArgumentTypeError(
-            f"unknown part(s) {', '.join(unknown) or '(none)'}; "
-            f"choose from {', '.join(PARTS)} or all"
-        )
-    return PARTS if "all" in names else tuple(part for part in PARTS if part in names)
-
-
-def _evidence_requirements(value: str) -> tuple[str, ...]:
-    names = tuple(name.strip() for name in value.split(",") if name.strip())
-    unknown = [name for name in names if name not in EVIDENCE_REQUIREMENTS]
-    if unknown:
-        raise argparse.ArgumentTypeError(
-            f"unknown requirement(s) {', '.join(unknown)}; "
-            f"choose from {', '.join(EVIDENCE_REQUIREMENTS)}"
-        )
-    return names
-
-
-def _add_import_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--attr",
-        default=None,
-        help="Name of the Recipe (or zero-argument factory) inside RECIPE.",
-    )
-    parser.add_argument(
-        "--pythonpath",
-        action="append",
-        default=None,
-        metavar="DIR",
-        help="Extra import directory for the recipe (repeatable). CWD is always included.",
-    )
-    parser.add_argument(
-        "--traceback",
-        action="store_true",
-        help="On an error, raise it with the full Python traceback instead of one message.",
-    )
-
-
-def _add_command(
-    sub: argparse._SubParsersAction[argparse.ArgumentParser],
-    name: str,
-    handler: Callable[[argparse.Namespace, TextIO], int],
-    *,
-    help: str,
-) -> argparse.ArgumentParser:
-    parser = sub.add_parser(name, help=help, description=help, epilog=RESOLUTION_HELP)
-    parser.set_defaults(handler=handler)
-    parser.add_argument(
-        "recipe",
-        type=Path,
-        nargs="?",
-        default=None,
-        help=f"Path to the recipe .py file (default: recipe in [{TABLE}] of pyproject.toml).",
-    )
-    _add_import_options(parser)
-    parser.add_argument(
-        "--variant",
-        action="append",
-        default=None,
-        metavar="NAME",
-        help="Variant to operate on (repeatable; default: every declared variant).",
+    doctor = command(
+        "doctor",
+        _cmd_doctor,
+        "Report what this host can build, run, deploy and verify.",
+        "One row per capability: ready, blocked (with the fix), unavailable or unsupported.\n"
+        "--for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1 when a\n"
+        "build row (or, with --for, a row of that area) is blocked.",
+        as_json,
+    )
+    doctor.add_argument(
+        "--for", dest="area", choices=DOCTOR_AREAS, default=None, help="One capability."
     )
     return parser
 
 
-def _add_artifact_command(
-    sub: argparse._SubParsersAction[argparse.ArgumentParser],
-    name: str,
-    handler: Callable[[argparse.Namespace, TextIO], int],
-    *,
-    help: str,
-) -> argparse.ArgumentParser:
-    """A verb that reads one baked artifact from ``BUILD/bake-result.json``; no RECIPE."""
-    parser = sub.add_parser(name, help=help, description=help, epilog=RESOLUTION_HELP)
-    parser.set_defaults(handler=handler)
-    _add_build(parser, "Build directory holding bake-result.json (default: build).")
-    parser.add_argument(
-        "--variant",
-        default=None,
-        metavar="NAME",
-        help="Baked variant (default: the only one baked).",
-    )
-    return parser
+# ── shared ───────────────────────────────────────────────────────────────
 
 
-def _add_tree(parser: argparse.ArgumentParser, help: str) -> None:
-    """``--tree DIR``: the compiled mkosi tree (``[tool.tundravm]`` ``tree``)."""
-    parser.add_argument("--tree", type=Path, default=None, metavar="DIR", help=help)
+def _wrapped(text: str) -> str:
+    """*text* wrapped for a raw-formatted description."""
+    return textwrap.fill(text, width=86)
 
 
-def _add_build(parser: argparse.ArgumentParser, help: str) -> None:
-    """``--build DIR``: the build directory holding ``bake-result.json`` (``build``)."""
-    parser.add_argument("--build", type=Path, default=None, metavar="DIR", help=help)
+def _settings(args: argparse.Namespace) -> Settings:
+    return settings(getattr(args, "image", None))
 
 
-def _add_lockfile(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help=(
-            "Apply this lockfile's source pins (default: build/tundravm.lock if present); "
-            "lint also reports drift against it, as lint(recipe, lock=...) does."
+def _loaded(args: argparse.Namespace, found: Settings) -> RecipeFile:
+    if found.image is None:
+        raise ValidationError(
+            "No image file: pass IMAGE.",
+            hint='Or name it in pyproject.toml ([tool.tundravm] image = "image.py"), or set '
+            "TUNDRAVM_IMAGE.",
+        )
+    extra = [os.getcwd(), *(getattr(args, "pythonpath", None) or [])]
+    loaded = load_file(found.image, attribute=getattr(args, "attr", None), extra_paths=extra)
+    if found.backend is not None and (
+        loaded.backend is None or loaded.backend.name != found.backend
+    ):
+        loaded.backend = Backend(cast(BackendKind, found.backend)).build_backend()
+        loaded.image = None
+    return loaded
+
+
+def _lowered(loaded: RecipeFile, found: Settings) -> Lowered:
+    return replace(loaded.lowered(), lock_file=found.lockfile, build_dir=found.build)
+
+
+def _locked(found: Settings) -> Lock | None:
+    return read_lock(found.lockfile) if found.lockfile.is_file() else None
+
+
+def _profiles(img: Lowered, given: Sequence[str] | None) -> tuple[str, ...]:
+    if not given:
+        return img.profile_names
+    img.select(given)
+    return tuple(dict.fromkeys(given))
+
+
+def _err(text: str) -> None:
+    print(text, file=sys.stderr)
+
+
+# ── new ──────────────────────────────────────────────────────────────────
+
+
+def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
+    name = args.name
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", name):
+        raise ValidationError(
+            f"Invalid project name {name!r}.",
+            hint="Use lowercase letters, digits, `-` and `_`, starting with a letter.",
+        )
+    root = Path(name)
+    if root.exists() and any(root.iterdir()):
+        raise ValidationError(f"{root} exists and is not empty.", hint="Pick another NAME.")
+    stem = name.replace("-", "_")
+    filename = f"{stem}.py"
+    template = args.template
+    source = scaffold.tundravm_source()
+    files: dict[Path, str] = {
+        root / filename: render_recipe_template(
+            title=name, filename=filename, release="trixie", template=template
         ),
-    )
-
-
-_PROJECT_FLAGS: dict[str, tuple[tuple[str, ConfigKey], ...]] = {
-    "inspect": (("lockfile", "lockfile"),),
-    "lint": (("lockfile", "lockfile"),),
-    "compile": (("tree", "tree"), ("lockfile", "lockfile")),
-    "diff": (("tree", "tree"), ("lockfile", "lockfile")),
-    "lock": (("lockfile", "lockfile"),),
-    "fetch": (("build", "build"), ("lockfile", "lockfile")),
-    "bake": (("build", "build"), ("lockfile", "lockfile"), ("backend", "backend")),
-    "measure": (("build", "build"),),
-    "deploy": (("build", "build"),),
-    "sbom": (("build", "build"),),
-    "ci": (("tree", "tree"), ("lockfile", "lockfile")),
-    "watch": (("build", "build"), ("tree", "tree"), ("lockfile", "lockfile")),
-    "status": (("build", "build"), ("tree", "tree"), ("lockfile", "lockfile")),
-    "evidence": (("build", "build"), ("lockfile", "lockfile")),
-    "changes": (("lockfile", "lockfile"),),
-    "explore": (("build", "build"), ("lockfile", "lockfile")),
-    "preview": (("build", "build"), ("lockfile", "lockfile")),
-    "release": (("build", "build"), ("lockfile", "lockfile"), ("backend", "backend")),
-    "witness": (("backend", "backend"),),
-    "clean": (("build", "build"),),
-    "doctor": (("backend", "backend"),),
-    "config": (
-        ("tree", "tree"),
-        ("build", "build"),
-        ("lockfile", "lockfile"),
-        ("backend", "backend"),
-    ),
-}
-"""Per verb: the argument each ``[tool.tundravm]`` key defaults (``--tree``, ``--build``...)."""
-
-_RECIPE_OPTIONAL = frozenset({"doctor", "clean", "config"})
-
-MISSING_RECIPE = (
-    "the following arguments are required: recipe (no pyproject.toml with a "
-    f"[{TABLE}] table in this directory or its parents; pass RECIPE, or add "
-    f'[{TABLE}] recipe = "image.py" as `tundravm init` does)'
-)
-
-
-def _apply_project(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Fill RECIPE, --tree, --build, --lockfile and --backend from ``[tool.tundravm]``.
-
-    Every verb with RECIPE or a configurable flag reads the table, whether or not
-    it takes RECIPE. Records each value's origin (``flag``/``pyproject``) in
-    ``args.origins``. For a verb with RECIPE the table's paths apply only when
-    RECIPE is omitted or names the table's recipe. A configured lockfile stays
-    selected when it does not exist: its readers say so (:func:`_missing_lock`)
-    and never fall back to ``build/tundravm.lock``.
-    """
-    verb: str = args.command
-    args.origins = {}
-    args.project = None
-    if verb not in _PROJECT_FLAGS and not hasattr(args, "recipe"):
-        return
-    project = find_project()
-    args.project = project
-    origins: dict[str, str] = args.origins
-    if hasattr(args, "recipe"):
-        configured = None if project is None else project.path_of("recipe")
-        if args.recipe is not None:
-            origins["recipe"] = "flag"
-            if configured is None or not _same_path(args.recipe, configured):
-                project = None
-        elif configured is not None:
-            args.recipe = configured
-            origins["recipe"] = "pyproject"
-        elif verb not in _RECIPE_OPTIONAL:
-            _subcommands(parser)[verb].error(MISSING_RECIPE)
-    for attr, key in _PROJECT_FLAGS.get(verb, ()):
-        if getattr(args, attr, None) is not None:
-            origins[key] = "flag"
-            continue
-        if project is None or project.get(key) is None:
-            continue
-        value: object = project.path_of(key) if key in PATH_KEYS else project.get(key)
-        if key == "backend" and value not in BACKEND_KINDS:
-            raise ValidationError(
-                f"[{TABLE}] backend {value!r} in {project.path} is not a build backend.",
-                hint=f"Use one of: {', '.join(BACKEND_KINDS)}",
-            )
-        setattr(args, attr, value)
-        origins[key] = "pyproject"
-    if verb in _REQUIRE_VERBS:
-        _apply_require(args, project)
-
-
-_REQUIRE_VERBS = frozenset({"status", "evidence", "release", "config"})
-"""The verbs that judge evidence against one requirement set: ``--require``, else the table's."""
-
-
-def _apply_require(args: argparse.Namespace, project: ProjectConfig | None) -> None:
-    """Set ``args.require``: ``--require``, else *project*'s ``require``, else
-    :data:`DEFAULT_REQUIRE`; its origin goes in ``args.origins["require"]``."""
-    origins: dict[str, str] = args.origins
-    if getattr(args, "require", None) is not None:
-        origins["require"] = "flag"
-    elif project is not None and project.require is not None:
-        args.require = project.require
-        origins["require"] = "pyproject"
-    else:
-        args.require = DEFAULT_REQUIRE
-        origins["require"] = "default"
-
-
-def _same_path(a: Path, b: Path) -> bool:
-    return a.resolve() == b.resolve()
-
-
-def _build_dir(args: argparse.Namespace) -> Path:
-    """``--build``, else the configured ``build``, else ``build`` beside the pyproject.toml.
-
-    Without a ``[tool.tundravm]`` table: ``build`` in the working directory.
-    """
-    given: Path | None = args.build
-    if given is not None:
-        return given
-    project: ProjectConfig | None = args.project
-    return Path(DEFAULTS["build"]) if project is None else project.default_path("build")
-
-
-def _cmd_config(args: argparse.Namespace, out: TextIO) -> int:
-    project: ProjectConfig | None = args.project
-    values = _config_values(args)
-    source = None if project is None else str(project.path)
-    if args.format == "json":
-        print(json_report("config", {"pyproject": source, "values": values}), file=out)
-        return EXIT_OK
-    print(f"pyproject: {source or f'none (no [{TABLE}] table here or above)'}", file=out)
-    width = max(len(_config_shown(entry)) for entry in values.values())
-    for key, entry in values.items():
-        shown = _config_shown(entry)
-        loaded = values["recipe"]["exists"] is True
-        print(f"  {key:<8}  {shown:<{width}}  {_config_origin(key, entry, loaded)}", file=out)
-    return EXIT_OK
-
-
-def _config_values(args: argparse.Namespace) -> dict[str, dict[str, object]]:
-    """Each key as the commands resolve it: value, origin and, for recipe and lockfile, existence.
-
-    ``backend`` without ``--backend`` or the table's is the kind of the instance
-    the recipe file binds (origin ``recipe``), loaded as ``bake`` loads it.
-    """
-    origins: dict[str, str] = args.origins
-    recipe: Path | None = args.recipe
-    values: dict[str, dict[str, object]] = {
-        "recipe": {
-            "value": None if recipe is None else str(recipe),
-            "origin": origins.get("recipe", "default"),
-            "exists": recipe is not None and recipe.is_file(),
-        }
+        root / "tests" / f"test_{stem}.py": render_test_module(
+            filename=filename, template=template
+        ),
+        root / "pyproject.toml": render_pyproject(name=name, recipe=filename, source=source),
+        root / "README.md": render_readme(
+            title=name, filename=filename, template=template, tests=True
+        ),
+        root / ".gitignore": GITIGNORE_BLOCK,
     }
-    for key in ("tree", "build", "lockfile"):
-        value = getattr(args, key)
-        values[key] = (
-            {"value": str(value), "origin": origins.get(key, "flag")}
-            if value is not None
-            else {"value": DEFAULTS[key], "origin": "default"}
-        )
-    values["lockfile"]["exists"] = Path(str(values["lockfile"]["value"])).is_file()
-    if args.backend is not None:
-        values["backend"] = {"value": args.backend, "origin": origins.get("backend", "flag")}
-    elif recipe is not None and recipe.is_file():
-        loaded = _load(args)
-        bound = loaded.backend
-        kind = None if bound is None else _backend_kind(bound)
-        origin = "recipe" if loaded.backend_origin == "recipe" else "default"
-        values["backend"] = {"value": kind, "origin": origin}
-    else:
-        values["backend"] = {"value": None, "origin": "default"}
-    values["require"] = {"value": list(args.require), "origin": origins["require"]}
-    return values
-
-
-def _config_shown(entry: dict[str, object]) -> str:
-    """*entry*'s value as ``config`` prints it: ``-`` when unset, ``require`` comma-joined."""
-    value = entry["value"]
-    if isinstance(value, list):
-        return ",".join(str(item) for item in value) or "'' (none)"
-    return str(value or "-")
-
-
-def _backend_kind(backend: BuildBackend) -> str:
-    """The ``--backend`` kind that builds *backend*'s class, else its ``name``."""
-    for kind in BACKEND_KINDS:
-        if type(Backend(kind).build_backend()) is type(backend):
-            return kind
-    return backend.name
-
-
-def _config_origin(key: str, entry: dict[str, object], loaded: bool) -> str:
-    """*entry*'s origin as ``config`` prints it, noting a path that does not exist.
-
-    *loaded*: the recipe file exists, so an unset backend is one it does not bind.
-    """
-    origin = str(entry["origin"])
-    if key == "backend" and origin == "recipe":
-        return "recipe (the recipe file's `backend`)"
-    if key == "backend" and origin == "default":
-        if loaded:
-            return f"default (the recipe file binds no `backend`: {BACKEND_ENV}, else this host's)"
-        return "default (the recipe file's `backend`, else this host's)"
-    if entry.get("exists") is False and entry["value"] is not None:
-        origin += "; does not exist" + ("; run `tundravm lock`" if key == "lockfile" else "")
-    return origin
-
-
-def _load(args: argparse.Namespace) -> RecipeFile:
-    extra: list[str] = [os.getcwd(), *(args.pythonpath or [])]
-    return load_file(args.recipe, attribute=args.attr, extra_paths=extra)
-
-
-def _variants(loaded: RecipeFile, args: argparse.Namespace) -> tuple[str, ...]:
-    """The requested variants: ``--variant`` names, else every declared variant."""
-    names: list[str] | None = args.variant
-    if not names:
-        return loaded.variants
-    _require_variants(loaded, names, args.recipe)
-    return tuple(dict.fromkeys(names))
-
-
-def _require_variants(loaded: RecipeFile, names: Sequence[str], recipe: Path) -> None:
-    unknown = [name for name in names if name not in loaded.variants]
-    if unknown:
-        raise ValidationError(
-            f"Unknown variant(s): {', '.join(unknown)}.",
-            hint=f"Declared variants: {', '.join(loaded.variants)}",
-            context={"recipe": str(recipe)},
-        )
-
-
-def _listed(img: Lowered, names: tuple[str, ...] | None) -> tuple[str, ...]:
-    return names if names is not None else (img.default_profile,)
-
-
-def _cmd_inspect(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    fmt = args.format or "text"
-    if args.diff_variants is not None:
-        return _inspect_diff(loaded, args, fmt, out)
-    if args.why is not None:
-        return _inspect_why(loaded, args, fmt, out)
-    names = _variants(loaded, args)
-    img = _with_lockfile(loaded.lowered(), args)
-    variants = _listed(img, names)
-    described = {name: _describe(loaded, img, name) for name in variants}
-    if fmt == "json":
-        payload = {"digest": img.select(variants).digest(), "variants": described}
-        print(json_report("inspect", payload), file=out)
-        return EXIT_OK
-    if fmt == "markdown":
-        print(f"# tundravm: `{args.recipe.name}`\n", file=out)
-        sections = [render_markdown(description) for description in described.values()]
-        print("\n".join(sections).rstrip(), file=out)
-        return EXIT_OK
-    print("\n\n".join(render(d).rstrip() for d in described.values()), file=out)
-    return EXIT_OK
-
-
-def _inspect_diff(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: TextIO) -> int:
-    if args.variant:
-        raise ValidationError(
-            "--diff-variants and --variant cannot be combined.",
-            hint="--diff-variants A B already names both variants; drop --variant.",
-        )
-    a, b = args.diff_variants
-    _require_variants(loaded, (a, b), args.recipe)
-    diff = diff_variants(resolve(loaded.recipe, variant=a), resolve(loaded.recipe, variant=b))
-    if fmt == "json":
-        print(json_report("inspect", diff.to_dict()), file=out)
-    elif fmt == "markdown":
-        print(render_variant_diff_markdown(diff, recipe=args.recipe.name), file=out)
-    else:
-        print(render_variant_diff(diff), file=out)
-    return EXIT_OK
-
-
-def _inspect_why(loaded: RecipeFile, args: argparse.Namespace, fmt: str, out: TextIO) -> int:
-    names = _variants(loaded, args)
-    if len(names) != 1:
-        raise ValidationError(
-            "--why explains one variant at a time.",
-            hint=f"Pass --variant NAME (declared: {', '.join(loaded.variants)}).",
-        )
-    why = explain_why(
-        loaded.recipe, names[0], args.why, lowered=_with_lockfile(loaded.lowered(), args)
+    if template == "prover":
+        files[root / "policies" / "README.md"] = POLICIES_README
+    if args.ci:
+        files[root / WORKFLOW_PATH] = render_workflow(recipe=filename)
+    for path, text in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        print(f"created {path}", file=out)
+    if source.note is not None:
+        print(f"note: {source.note}", file=out)
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        loaded = load_file(root / filename, extra_paths=[os.getcwd()])
+    finally:
+        sys.dont_write_bytecode = keep
+    report = check_report(loaded.recipe, loaded.image, variants=loaded.variants)
+    codes = sorted({d.code for d in report})
+    detail = f" ({', '.join(codes)})" if codes else ""
+    print(f"check {filename}: {render_summary(report)}{detail}", file=out)
+    print(
+        f"next:\n  cd {name}\n  uv sync\n  uv run tundravm build                     "
+        "lock, build and measure the production profile\n"
+        "  uv run tundravm run --mode simulated --dev  boot the dev build locally",
+        file=out,
     )
-    if fmt == "json":
-        print(json_report("inspect", why.to_dict()), file=out)
-    elif fmt == "markdown":
-        print(render_why_markdown(why), file=out)
-    else:
-        print(render_why(why), file=out)
     return EXIT_OK
 
 
-def _describe(loaded: RecipeFile, img: Lowered, name: str) -> dict[str, object]:
-    """*name*'s dry-run description with what it inherits and its resolved fragment names."""
-    fragments = resolve(loaded.recipe, variant=name).fragments
-    inherits = loaded.recipe.variant(name).inherits
-    return describe(img, profile=name, inherits=inherits, fragments=fragments)
+POLICIES_README = """\
+# Verifier policies
+
+The operator-approved copies of a build's predictions: `attest` and `secrets deliver`
+check an instance against one of these files.
+
+    tundravm build --target gcp
+    jq '.records[] | select(.target == "gcp" and .boot == "disk") | .policy' \\
+        build/prover/latest-production/measurements.json > policies/prover-gcp.json
+
+Review it, add the platform registers you approve from a quote of a host you trust
+(`platform_approval`: MRTD, RTMR0), and commit it. A policy without them verifies as
+`partial` at best.
+"""
 
 
-def _cmd_lint(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args)
-    diagnostics = _lint_findings(loaded, names, args, missing=_missing_lock(args))
-    fmt = resolve_format(args.format)
-    report = render_as(diagnostics, fmt, recipe_path=args.recipe, strict=args.strict)
-    print(json_report("lint", report) if fmt == "json" else report, file=out)
-    return EXIT_FAILURE if failing(diagnostics, strict=args.strict) else EXIT_OK
+# ── check ────────────────────────────────────────────────────────────────
 
 
-def _lint_findings(
-    loaded: RecipeFile, names: tuple[str, ...], args: argparse.Namespace, *, missing: bool
-) -> list[Diagnostic]:
-    """What ``tundravm lint`` reports for *names*, as ``lint`` and ``watch`` share it.
-
-    The selected lockfile (``--lockfile`` or ``[tool.tundravm]``'s) pins the sources
-    and drift against it is a finding, as ``lint(recipe, lock=...)``; *missing*: it is
-    the configured one and does not exist, so nothing is pinned. Without one, the
-    image's own ``build/tundravm.lock`` pins the sources and drift is not checked.
-    """
-    selected: Lock | NoLock | None = None
-    if args.lockfile is not None:
-        selected = NO_LOCK if missing else read_lock(args.lockfile)
-    diagnostics = check_report(loaded.recipe, loaded.image, variants=names, lock=selected)
-    if isinstance(selected, Lock) and not any(d.severity == "error" for d in diagnostics):
-        diagnostics.extend(lock_status(loaded.recipe, selected, variants=names))
-    if isinstance(selected, Lock):
-        diagnostics.extend(_toolchain_findings(loaded.backend, selected, args))
-    return diagnostics
-
-
-def _with_lockfile(img: Lowered, args: argparse.Namespace) -> Lowered:
-    """*img* reading the selected lockfile instead of ``build/tundravm.lock``.
-
-    ``--lockfile`` must be readable; a configured one that does not exist is
-    reported and read as no lockfile (:func:`_missing_lock`).
-    """
-    path: Path | None = getattr(args, "lockfile", None)
-    if path is None:
-        return img
-    if not _missing_lock(args):
-        read_lock(path)
-    return replace(img, lock_file=path)
-
-
-def _missing_lock(args: argparse.Namespace, then: str = "") -> bool:
-    """Whether the selected lockfile is ``[tool.tundravm]``'s and does not exist; says so.
-
-    The note goes to stderr; *then* says what the command does without it. A
-    missing ``--lockfile`` is not this case: :func:`read_lock` fails on it.
-    """
-    if not _configured_lock_missing(args):
-        return False
-    print(f"note: {missing_lock_message(args.lockfile)}{then}", file=sys.stderr)
-    return True
-
-
-def _configured_lock_missing(args: argparse.Namespace) -> bool:
-    """:func:`_missing_lock` without the note (``watch`` would repeat it every check)."""
-    path: Path | None = getattr(args, "lockfile", None)
-    return path is not None and args.origins.get("lockfile") == "pyproject" and not path.is_file()
-
-
-def missing_lock_message(path: Path) -> str:
-    """What every reader of a configured lockfile *path* that does not exist reports."""
-    return f"configured lockfile {path} does not exist; run `tundravm lock` to create it"
+def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
+    found = _settings(args)
+    loaded = _loaded(args, found)
+    names = loaded.variants
+    if args.profile:
+        unknown = [name for name in args.profile if name not in loaded.variants]
+        if unknown:
+            raise ValidationError(
+                f"Unknown profile(s): {', '.join(unknown)}.",
+                hint=f"Profiles: {', '.join(loaded.variants)}.",
+            )
+        names = tuple(dict.fromkeys(args.profile))
+    locked = _locked(found)
+    diagnostics = check_report(
+        loaded.recipe, None, variants=names, lock=found.lockfile if locked else NO_LOCK
+    )
+    resolved = not any(d.severity == "error" for d in diagnostics)
+    if locked is None:
+        _err(
+            f"note: no lockfile at {found.lockfile}: `tundravm lock` (or the first build) writes it"
+        )
+    elif resolved:
+        diagnostics.extend(lock_status(loaded.recipe, locked, variants=names))
+        diagnostics.extend(_toolchain(loaded.backend, locked))
+    drift = None
+    if args.tree is not None and resolved:
+        img = _lowered(loaded, found)
+        drift = diff_against(img, args.tree, profiles=names)
+        for change in drift.changes:
+            diagnostics.append(
+                Diagnostic(
+                    "tree-drift",
+                    "error",
+                    f"{args.tree}/{change.path}: {change.status} relative to what the image "
+                    "compiles to",
+                    subject=change.path,
+                    hint=f"Rewrite it with `tundravm build --tree-only {args.tree}` and review "
+                    "the diff.",
+                )
+            )
+    bad = failing(diagnostics)
+    if args.json:
+        payload = json.loads(render_as(diagnostics, "json", recipe_path=found.image or ""))
+        payload["tree"] = None if drift is None else drift.to_dict()
+        payload["passed"] = not bad
+        print(json_report("check", payload), file=out)
+        return EXIT_FAILURE if bad else EXIT_OK
+    fmt = resolve_format(None)
+    print(render_as(diagnostics, fmt, recipe_path=found.image or ""), file=out)
+    if drift is not None and drift.is_clean:
+        print(f"tree {args.tree} is up to date", file=out)
+    return EXIT_FAILURE if bad else EXIT_OK
 
 
-def _cmd_diff(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    img = loaded.lowered()
-    if args.tree is None:
-        args.tree = Path(img.build_dir) / TREE_DIRNAME
-    return _cmd_diff_loaded(args, out, img, _variants(loaded, args))
+def _toolchain(backend: BuildBackend | None, locked: Lock) -> tuple[Diagnostic, ...]:
+    recorded = locked.lockfile.toolchain
+    if recorded is None:
+        return ()
+    return toolchain_drift(recorded, running_toolchain(backend, locked=recorded), strict=False)
 
 
-def _cmd_compile(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    img = loaded.lowered()
-    destination = args.tree if args.tree is not None else Path(img.build_dir) / TREE_DIRNAME
-    if args.check:
-        fmt = resolve_format(args.format)
-        args.tree = destination
-        args.format = "stat" if fmt == "text" else fmt
-        args.stat = False
-        args.color = "never"
-        return _cmd_diff_loaded(args, out, img, _variants(loaded, args))
-    names = _variants(loaded, args)
-    selected = _with_lockfile(img, args).select(names)
-    result, _ = emit(selected, destination)
-    tree = read_variant_tree(destination, result.profiles)
-    print(f"compiled {result.path}", file=out)
-    print(f"  variants:      {', '.join(result.profiles)}", file=out)
-    print(f"  recipe_digest: {selected.digest()}", file=out)
-    print(f"  tree_digest:   {tree.digest}", file=out)
-    return EXIT_OK
-
-
-def _cmd_diff_loaded(
-    args: argparse.Namespace, out: TextIO, img: Lowered, names: tuple[str, ...] | None
-) -> int:
-    return cmd_diff(args, out, _with_lockfile(img, args), profiles=names)
+# ── lock ─────────────────────────────────────────────────────────────────
 
 
 def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args)
-    img = loaded.lowered()
-    path = _lock_path(img, args.lockfile)
+    found = _settings(args)
+    loaded = _loaded(args, found)
+    img = _lowered(loaded, found)
+    path = found.lockfile
     if args.check:
-        drift = img.select(names).lock_status(path)
-        print(render_drift(drift, resolve_format(args.format), path), file=out)
-        toolchain = _toolchain_findings(img.backend, read_lock(path), args)
-        for finding in toolchain:
-            print(f"{finding.severity}: {finding.code}: {finding.message}", file=out)
-        failed = not drift.is_clean or any(d.severity == "error" for d in toolchain)
-        return EXIT_FAILURE if failed else EXIT_OK
-    previous = read_lock(path) if path.exists() else None
-    if args.explain:
-        if previous is not None:
-            print(img.select(names).lock_status(path).render(), file=out)
+        if not path.is_file():
+            raise LockfileError(
+                f"No lockfile at {path}.",
+                hint="Run `tundravm lock` to write it, and commit it.",
+                context={"path": str(path)},
+            )
+        drift = img.select(img.profile_names).lock_status(path)
+        if args.json:
+            print(
+                json_report(
+                    "lock",
+                    {
+                        "path": str(path),
+                        "clean": drift.is_clean,
+                        "drift": drift.render().splitlines(),
+                    },
+                ),
+                file=out,
+            )
         else:
-            print(f"no lockfile at {path}; every section is new", file=out)
-    try:
-        locked = lock_image(
-            img,
-            names,
-            previous=previous,
-            update=tuple(args.update or ()),
-            offline=args.offline,
-        )
-    except LockfileError as exc:
-        if exc.failures and resolve_format(args.format) == "github":
-            print(_failure_annotations(exc, args.recipe), file=out)
-        raise
+            print(
+                drift.github(path) if resolve_format(None) == "github" else drift.render(), file=out
+            )
+        return EXIT_OK if drift.is_clean else EXIT_FAILURE
+    previous = read_lock(path) if path.is_file() else None
+    update: tuple[str, ...] = ()
+    if args.update is not None:
+        update = tuple(args.update) or tuple(img.lock_sources())
+    locked = lock_image(img, img.profile_names, previous=previous, update=update)
     write_lock(locked, path)
+    if args.json:
+        print(
+            json_report(
+                "lock",
+                {"path": str(path), "recipe_digest": locked.recipe_digest, "updated": list(update)},
+            ),
+            file=out,
+        )
+        return EXIT_OK
     print(f"locked {path}", file=out)
     recorded = locked.lockfile.toolchain
     if recorded is not None and recorded.mkosi is not None:
@@ -2442,1666 +909,600 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
-def _toolchain_findings(
-    backend: BuildBackend | None, locked: Lock, args: argparse.Namespace
-) -> tuple[Diagnostic, ...]:
-    """``toolchain-drift`` between *locked*'s toolchain and the one *backend* runs here.
-
-    A warning, or an error with ``--strict`` or ``[tool.tundravm] strict_toolchain``.
-    """
-    recorded = locked.lockfile.toolchain
-    if recorded is None:
-        return ()
-    running = running_toolchain(backend, locked=recorded)
-    project: ProjectConfig | None = getattr(args, "project", None)
-    strict = bool(getattr(args, "strict", False)) or (
-        project is not None and project.strict_toolchain
-    )
-    return toolchain_drift(recorded, running, strict=strict)
+# ── build ────────────────────────────────────────────────────────────────
 
 
-def _failure_annotations(exc: LockfileError, recipe: str | Path) -> str:
-    """One ``::error`` per source build *exc* could not resolve, on the recipe file."""
-    path = annotation_path(recipe)
-    return "\n".join(
-        workflow_command(
-            "error", f"{name}: {error.source}: {error.reason}", file=path, title=error.code
-        )
-        for name, error in exc.failures.items()
-    )
+def _service_ports(loaded: RecipeFile, profile: str) -> tuple[int, ...]:
+    """The TCP ports *profile*'s services and units say they listen on (``ports=``)."""
+    found: set[int] = set()
+    for item in resolve(loaded.recipe, variant=profile).items:
+        for port in getattr(item, "ports", ()) or ():
+            number = port if isinstance(port, int) else getattr(port, "number", None)
+            if isinstance(number, int) and getattr(port, "protocol", "tcp") == "tcp":
+                found.add(number)
+    return tuple(sorted(found))
 
 
-def _lock_path(img: Lowered, path: Path | None) -> Path:
-    return path if path is not None else img.lock_path
-
-
-def render_drift(drift: LockDrift, fmt: str, lock_path: Path) -> str:
-    """Render a lock drift report in a resolved format: text, github or markdown."""
-    if fmt == "github":
-        return drift.github(lock_path)
-    if fmt == "markdown":
-        return drift.markdown()
-    return drift.render()
-
-
-def _cmd_fetch(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args)
-    img = loaded.lowered()
-    destination: Path = args.build if args.build is not None else Path(img.build_dir)
-    lock_path = _lock_path(img, args.lockfile)
-    missing = _missing_lock(args, "; fetching the refs as they resolve now")
-    present = args.lockfile is not None or lock_path.exists()
-    locked = read_lock(lock_path) if present and not missing else None
-    err = sys.stderr
-    reporter = TextReporter(err, color=_wants_color("auto", err))
-    try:
-        fetched = fetch_image(
-            img, names, locked=locked, build=destination, reporter=reporter, force=args.force
-        )
-    finally:
-        reporter.close()
-    if not fetched:
-        print("no source builds to fetch", file=out)
-        return EXIT_OK
-    print(f"fetched {destination / SOURCES_DIRNAME}", file=out)
-    width = max(len(source.name) for source in fetched)
-    for source in fetched:
-        state = "kept" if source.cached else "fetched"
-        deps = f"  deps: {source.deps}" if source.deps is not None else ""
-        print(f"  {source.name:<{width}}  {source.pin[:12]}  {state:<7}{deps}".rstrip(), file=out)
-    if locked is None and not missing:
-        print(f"note: no lockfile at {lock_path}; fetched the refs as they resolve now", file=out)
-    return EXIT_OK
-
-
-def _cmd_bake(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args)
-    img = loaded.lowered()
-    destination: Path = args.build if args.build is not None else Path(img.build_dir)
-    lock_path = _lock_path(img, args.lockfile)
-    if args.origins.get("lockfile") == "pyproject" and not lock_path.is_file():
-        # frozen against the configured lockfile, never another one or none
-        raise LockfileError(
-            f"Configured lockfile {lock_path} does not exist.",
-            hint="Run `tundravm lock` to create it; bake freezes against the configured lockfile.",
-            context={"path": str(lock_path)},
-        )
-    if args.lockfile is not None or lock_path.exists():
-        locked: Lock | None = read_lock(lock_path)
-    else:
-        locked = None
-        if not (args.quiet or args.json_logs):
-            print(
-                f"note: no lockfile at {lock_path}; baking unpinned "
-                f"(run `tundravm lock {args.recipe}` to freeze the bake)",
-                file=sys.stderr,
-            )
-    backend = None if args.backend is None else Backend(args.backend).build_backend()
-    if (
-        backend is not None
-        and args.origins.get("backend") == "pyproject"
-        and loaded.backend is not None
-        and loaded.backend.name == backend.name
-    ):
-        backend = None  # the recipe file's own instance carries its settings
-    err = sys.stderr
-    reporter = (
-        JsonReporter(out)
-        if args.json_logs
-        else TextReporter(
-            err, verbose=args.verbose, quiet=args.quiet, color=_wants_color(args.color, err)
-        )
-    )
-    differed: ReproducibilityError | None = None
-    try:
-        if locked is not None and args.json_logs:
-            extra = {"source": "cli", "path": str(lock_path)}
-            reporter.emit(Event("log", None, f"frozen against {lock_path}", 0.0, extra))
-        result, artifacts = bake_image(
-            img,
-            names,
-            locked=locked,
-            backend=backend,
-            build=destination,
-            reporter=reporter,
-            lock_source=None if locked is None else lock_path,
-            fetch=not args.no_fetch,
-            offline=args.offline,
-            verify_reproducible=args.verify_reproducible,
-        )
-    except ReproducibilityError as exc:
-        differed = exc
-    finally:
-        reporter.close()
-    if differed is not None:
-        # a completed comparison that differs is a failed check (1), not an SDK error (2)
-        if getattr(args, "traceback", False):
-            raise differed
-        print(f"error [{differed.code}]: {differed}", file=sys.stderr)
-        return EXIT_FAILURE
-    if args.json_logs:
-        return EXIT_OK
-    if not args.quiet:
-        print(file=out)
-    print(render_bake_summary(result), file=out)
-    if args.verify_reproducible:
-        print(f"reproducible: yes ({len(artifacts)} artifacts match a second build)", file=out)
-    if artifacts:
-        first = artifacts[0]
-        build = "" if args.origins.get("build") == "pyproject" else f" --build {destination}"
-        print(
-            f"next: tundravm deploy {first.target}{build} --variant {first.variant}",
-            file=out,
-        )
-    return EXIT_OK
-
-
-def _artifact(args: argparse.Namespace, target: Target | None) -> Artifact:
-    """The artifact of ``--variant`` (else the only variant baked) in the build directory."""
-    build = _build_dir(args)
-    artifacts = read_artifacts(build)
-    variant: str | None = args.variant
-    if variant is None:
-        baked = sorted({a.variant for a in artifacts})
-        if len(baked) != 1:
+def _cmd_build(args: argparse.Namespace, out: TextIO) -> int:
+    found = _settings(args)
+    loaded = _loaded(args, found)
+    img = _lowered(loaded, found)
+    targets = builds.parse_targets(args.target)
+    if args.tree_only is not None:
+        if args.reproduce or args.sign or args.offline or args.clean_cache:
             raise ValidationError(
-                f"{build / BAKE_RESULT_FILENAME} holds {len(baked)} variants; pass --variant NAME.",
-                hint=f"Baked variants: {', '.join(baked) or '(none)'}",
-                context={"build": str(build)},
+                "--tree-only builds nothing: --reproduce, --sign, --offline and --clean-cache "
+                "do not apply.",
+                hint="Drop them, or drop --tree-only.",
             )
-        variant = baked[0]
-    return select_artifact(artifacts, variant=variant, target=target)
-
-
-def _cmd_measure(args: argparse.Namespace, out: TextIO) -> int:
-    scheme = cast(Scheme, args.scheme)
-    artifact = _artifact(args, cast(Target, scheme) if scheme in ("gcp", "azure") else None)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", PlaceholderMeasurementWarning)
-        measurements = measure(artifact, scheme=scheme, allow_placeholder=args.allow_placeholder)
-    if measurements.tool == "placeholder":
-        print(PLACEHOLDER_BANNER, file=sys.stderr)
-    if (args.approve_mrtd or args.approve_rtmr0) and args.export_policy is None:
-        raise ValidationError(
-            "--approve-mrtd/--approve-rtmr0 approve values in an exported policy.",
-            hint="Add --export-policy FILE.",
-        )
-    if args.export_policy is not None:
-        approval: dict[str, Sequence[str]] = {
-            name: values
-            for name, values in (("MRTD", args.approve_mrtd), ("RTMR0", args.approve_rtmr0))
-            if values
-        }
-        policy = measurements.to_policy(
-            allow_placeholder=args.allow_placeholder, platform_approval=approval or None
-        )
-        write_policy(policy, args.export_policy)
-        print(f"wrote policy {args.export_policy}", file=sys.stderr)
-    covers = covered_outputs(read_artifacts(_build_dir(args)), artifact, measurements)
-    if args.format == "json":
-        payload = {**measurements.to_dict(), "variant": artifact.variant, "covers": covers}
-        print(json_report("measure", payload), file=out)
-        return EXIT_OK
-    if args.format == "markdown":
-        print(render_measurements_markdown(measurements, artifact=artifact), file=out)
-        return EXIT_OK
-    print(render_measurements(measurements, artifact=artifact, covers=covers), file=out)
-    return EXIT_OK
-
-
-def covered_outputs(
-    artifacts: Sequence[Artifact], artifact: Artifact, measurements: Measurements
-) -> list[str]:
-    """The outputs of *artifact*'s variant that boot the UKI *measurements* measured: the UKI
-    itself (``qemu``) and every disk whose bake recorded it as the boot payload. A variant
-    with ``outputs=("qemu", "azure", "gcp")`` builds one UKI, so one measurement covers all."""
-    uki = measurements.boot_payload_digest
-    if not uki:
-        return [artifact.target]
-    return sorted(
-        a.target
-        for a in artifacts
-        if a.variant == artifact.variant and uki in (a.sha256, a.boot_payload_sha256)
-    )
-
-
-PLACEHOLDER_BANNER = (
-    "PLACEHOLDER: not real measurements. These values are derived from artifact digests; "
-    "never put them in an attestation policy."
-)
-
-
-def render_measurements(
-    measurements: Measurements, *, artifact: Artifact, covers: Sequence[str] = ()
-) -> str:
-    """Human-readable ``Measurements``: header, ``source:`` provenance line, the outputs that
-    boot the measured UKI (when more than one), aligned values."""
-    lines = [
-        f"measurements {artifact.variant} ({measurements.scheme})",
-        f"source: {measurements.tool} ({artifact.path})",
-    ]
-    if len(covers) > 1:
-        lines.append(f"one UKI, {len(covers)} outputs: {', '.join(covers)}")
-    rows = _measurement_rows(measurements)
-    width = max((len(key) for key, _ in rows), default=0)
-    lines.extend(f"  {key:<{width}}  {value}" for key, value in rows)
-    return "\n".join(lines)
-
-
-def _measurement_rows(measurements: Measurements) -> list[tuple[str, str]]:
-    """One row per register: its value, ``N accepted values (firmware sets)`` or
-    ``unverifiable: <reason>``; then the scheme's vTPM PCRs."""
-    single = dict(measurements.values)
-    rows = []
-    for name, entries in measurements.registers:
-        rows.append((name, single.get(name) or f"{len(entries)} accepted values (see the policy)"))
-    rows.extend((name, f"unverifiable: {why}") for name, why in measurements.unverifiable)
-    pcrs = dict(measurements.extra).get("vtpm_pcrs")
-    if isinstance(pcrs, dict):
-        rows.extend((f"vTPM {name}", str(value)) for name, value in sorted(pcrs.items()))
-    return rows
-
-
-def render_measurements_markdown(measurements: Measurements, *, artifact: Artifact) -> str:
-    """``Measurements`` as Markdown: a heading, the provenance line and a register table."""
-    rows = [
-        (md_cell(key), md_cell(value, code=value.isalnum()))
-        for key, value in _measurement_rows(measurements)
-    ]
-    return "\n\n".join(
-        (
-            f"# tundravm measure: `{artifact.variant}` ({measurements.scheme})",
-            f"Source: {measurements.tool} (`{artifact.path}`).",
-            md_table(("Register", "Value"), rows),
-        )
-    )
-
-
-def _parse_params(raw: Sequence[str] | None) -> dict[str, str]:
-    params: dict[str, str] = {}
-    for item in raw or ():
-        key, sep, value = item.partition("=")
-        if not sep or not key:
-            raise ValidationError(
-                f"Invalid --param {item!r}.",
-                hint="Use --param KEY=VALUE.",
-            )
-        params[key] = value
-    return params
-
-
-_TRUE = frozenset({"1", "true", "yes", "on"})
-_FALSE = frozenset({"0", "false", "no", "off"})
-
-
-def parse_deploy_target(target: Target, params: dict[str, str]) -> DeployTarget:
-    """``--param`` values as the target's ``Qemu``/``Azure``/``Gcp`` settings."""
-    kind = DEPLOY_TARGETS[target]
-    known = {item.name: item for item in fields(kind)}
-    unknown = sorted(set(params) - set(known))
-    if unknown:
-        raise ValidationError(
-            f"Unknown {target} parameter(s): {', '.join(unknown)}.",
-            hint=f"{target} accepts: {', '.join(known)}",
-        )
-    values: dict[str, object] = {}
-    for name, raw in params.items():
-        kind_name = str(known[name].type)
-        if kind_name.startswith("tuple[tuple[int, int]"):
-            values[name] = _parse_forward(target, name, raw)
-        elif kind_name == "int":
-            try:
-                values[name] = int(raw)
-            except ValueError:
-                raise ValidationError(
-                    f"{target} parameter {name} must be an integer.",
-                    hint=f"Pass a whole number, e.g. --param {name}=2",
-                ) from None
-        elif kind_name == "bool":
-            if raw.lower() not in _TRUE | _FALSE:
-                raise ValidationError(
-                    f"{target} parameter {name} must be true or false.",
-                    hint=f"Use one of: {', '.join(sorted(_TRUE | _FALSE))}",
+        profiles = None
+        if args.profile or args.dev:
+            profiles = [builds.choose_profile(img, args.profile, dev=args.dev)]
+        if targets is not None:
+            for name in profiles or img.profile_names:
+                img = replace(
+                    img,
+                    targets={**dict(img.targets), name: builds.choose_targets(img, name, targets)},
                 )
-            values[name] = raw.lower() in _TRUE
-        else:
-            values[name] = raw
-    missing = [n for n, f in known.items() if f.default is MISSING and n not in values]
-    if missing:
-        raise ValidationError(
-            f"Missing {target} parameter(s): {', '.join(missing)}.",
-            hint="Pass " + " ".join(f"--param {n}=..." for n in missing),
-        )
-    return kind(**values)  # type: ignore[arg-type]
-
-
-def _parse_forward(target: Target, name: str, raw: str) -> tuple[tuple[int, int], ...]:
-    pairs: list[tuple[int, int]] = []
-    for item in filter(None, (part.strip() for part in raw.split(","))):
-        host, sep, guest = item.partition(":")
-        if not (sep and host.isdigit() and guest.isdigit()):
-            raise ValidationError(
-                f"{target} parameter {name} must be HOST:GUEST port pairs.",
-                hint=f"Pass e.g. --param {name}=8443:443,9000:9000",
-            )
-        pairs.append((int(host), int(guest)))
-    return tuple(pairs)
-
-
-def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
-    target = cast(Target, args.target)
-    using = parse_deploy_target(target, _parse_params(args.param))
-    if args.attach:
-        if not isinstance(using, Qemu):
-            raise ValidationError(
-                f"--attach applies to the qemu target, not {target}.",
-                hint="Drop --attach; a cloud VM's console is read with the cloud's CLI.",
-            )
-        using = replace(using, daemonize=False)
-    artifact = _artifact(args, target)
-    result = deploy(artifact, using=using, allow_simulated=args.allow_simulated_artifact)
-    print(render_deployment(result, variant=artifact.variant), file=out)
-    return EXIT_OK
-
-
-def render_deployment(result: Deployment, *, variant: str) -> str:
-    """Human-readable ``Deployment``: header line plus aligned key/value rows."""
-    rows = [("deployment", result.id)]
-    if result.endpoint is not None:
-        rows.append(("endpoint", result.endpoint))
-    rows.extend(result.metadata)
-    width = max(len(key) for key, _ in rows)
-    lines = [f"deployed {variant} to {result.target}"]
-    lines.extend(f"  {key:<{width}}  {value}" for key, value in rows)
-    return "\n".join(lines)
-
-
-def _doctor_backend(backend: BuildBackend | None) -> BuildBackendKind | None:
-    """The doctor's name for *backend*'s kind; ``None`` to use this host's default."""
-    if isinstance(backend, LimaMkosiBackend):
-        return "lima"
-    if isinstance(backend, LocalLinuxBackend):
-        return "local"
-    if backend is not None and backend.name == "inprocess":
-        return "inprocess"
-    return None
-
-
-def doctor(
-    loaded: RecipeFile | None,
-    out: TextIO,
-    *,
-    runner: ProbeRunner | None = None,
-    backend: BuildBackend | None = None,
-    areas: Sequence[Area] | None = None,
-    host: Host | None = None,
-) -> int:
-    """Print one row per capability of *areas* (all without); exit 1 when one is blocked.
-
-    Without *areas* only a blocked ``build`` row fails. The build row is for *backend*
-    (``--backend``), else the recipe's, else this host's default. *host* replaces every
-    host fact and *runner* the commands it runs (tests). With a recipe, its lint summary
-    follows.
-    """
-    facts = host if host is not None else Host()
-    if runner is not None:
-        facts.runner = runner
-    chosen = backend if backend is not None else (None if loaded is None else loaded.backend)
-    rows = capabilities(facts, backend=_doctor_backend(chosen), areas=areas or AREAS)
-    width = max(16, *(len(row.name) for row in rows))
-    for row in rows:
-        print(row.render(width), file=out)
-    if loaded is not None:
-        report = check_report(loaded.recipe, loaded.image, variants=loaded.variants)
-        print(f"lint: {render_summary(report)}", file=out)
-    return EXIT_FAILURE if failed(rows, areas=areas) else EXIT_OK
-
-
-def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
-    result = attest(
-        args.issuer,
-        args.policy,
-        validator=args.validator,
-        nonce=args.nonce,
-        allow_simulated=args.allow_simulated,
-        accept_partial=args.accept_partial,
-    )
-    report = render_attestation(result, args.format)
-    print(json_report("attest", report) if args.format == "json" else report, file=out)
-    if args.record is not None:
-        print(f"wrote {result.save(args.record)}", file=sys.stderr)
-    return EXIT_OK if result.passed else EXIT_FAILURE
-
-
-def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args) if args.recipe is not None else None
-    backend = None if args.backend is None else Backend(args.backend).build_backend()
-    areas = None if args.areas is None else [args.areas]
-    return doctor(loaded, out, runner=args.runner, backend=backend, areas=areas)
-
-
-def _cmd_sbom(args: argparse.Namespace, out: TextIO) -> int:
-    artifact = _artifact(args, None)
-    document = sbom(
-        artifact,
-        lock=_sbom_lock(_build_dir(args), args.lockfile, artifact.variant),
-        allow_unbound=args.allow_unbound,
-        binaries=args.binaries,
-    )
-    text = document.render(args.format)
-    if args.output is not None or args.format.endswith("-json"):
-        for note in document.notes:
-            print(f"note: {note}", file=sys.stderr)
-    if args.output is None:
-        out.write(text)
+        locked = _locked(found)
+        if locked is not None:
+            img = replace(img, lock_file=found.lockfile)
+        argv = builds.export_tree(img, profiles, args.tree_only)
+        print(f"wrote {args.tree_only}", file=out)
+        for name, options in zip(profiles or img.profile_names, argv, strict=True):
+            words = ("mkosi -C", str(args.tree_only), options, "build")
+            print(f"  {name}: {' '.join(word for word in words if word)}", file=out)
         return EXIT_OK
-    target: Path = args.output
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
-    print(f"wrote {args.format} {target}", file=sys.stderr)
-    return EXIT_OK
-
-
-def _sbom_lock(base: Path, flag: Path | None, variant: str) -> Lock | None:
-    """``--lockfile``, else the lockfile the bake of *variant* in *base* recorded, else its
-    tundravm.lock."""
-    if flag is not None:
-        return read_lock(flag)
-    try:
-        payload = json.loads((base / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
-        recorded = variant_provenance(payload, variant).get("lockfile")
-    except (OSError, ValueError, AttributeError):
-        recorded = None
-    for candidate in (recorded and Path(recorded), base / "tundravm.lock"):
-        if candidate and candidate.is_file():
-            return read_lock(candidate)
-    return None
-
-
-def _cmd_evidence(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args) if args.variant else None
-    base: Path = args.build if args.build is not None else Path(loaded.lowered().build_dir)
-    lockfile = None if _missing_lock(args) else args.lockfile
-    found = evidence(
-        loaded.recipe,
-        build=base,
-        variants=names,
-        lock=lockfile,
-        policy=args.policy,
-        recipe_path=args.recipe,
-        runner=args.runner,
-        require=args.require,
-        allow_unbound=args.allow_unbound,
-        attestations=args.attestation or (),
-        max_age=DEFAULT_MAX_AGE if args.max_age is None else args.max_age,
-    )
-    if args.sign is not None:
-        found = found.sign(args.sign)
-    directory = found.write(base / EVIDENCE_DIRNAME)
-    print(found.render(args.format), file=out, end="")  # json: evidence.json, schema included
-    print(f"wrote {directory}", file=sys.stderr)
-    if args.sign is not None:
-        print(f"signed {INDEX_NAME} with {args.sign}: {SIGNATURE_NAME}", file=sys.stderr)
-    if args.bundle is not None:
-        print(f"wrote {found.bundle(args.bundle)}", file=sys.stderr)
-    if args.html is not None:
-        target: Path = args.html
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(found.html(), encoding="utf-8")
-        print(f"wrote {target}", file=sys.stderr)
-    return EXIT_OK if found.passed else EXIT_FAILURE
-
-
-def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
-    if is_release(args.evidence):
-        return _verify_release(args, out)
-    if args.witnesses is not None or args.min_witnesses is not None:
+    profile = builds.choose_profile(img, args.profile, dev=args.dev)
+    if img.backend is None:
         raise ValidationError(
-            f"--witnesses and --min-witnesses apply to a release directory, not {args.evidence}.",
-            hint="Verify the release directory (the one holding release.json) with them.",
-            context={"evidence": str(args.evidence)},
+            "No build backend.", hint="Set TUNDRAVM_BACKEND or [tool.tundravm] backend."
         )
-    result = verify_evidence(
-        args.evidence,
-        build=args.build,
-        require=args.require,
-        allowed_signers=args.allowed_signers,
-        signer=args.signer,
-        max_age=args.max_age,
-        now=args.now,
-    )
-    print(result.render(args.format), file=out, end="")
-    if args.html is not None:
-        target: Path = args.html
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(result.html(), encoding="utf-8")
-        print(f"wrote {target}", file=sys.stderr)
-    return EXIT_OK if result.passed else EXIT_FAILURE
-
-
-def _verify_release(args: argparse.Namespace, out: TextIO) -> int:
-    """``verify RELEASE_DIR``: the manifest, its signature, release.json and the evidence."""
-    for flag, value in (
-        ("--build", args.build),
-        ("--require", args.require),
-        ("--html", args.html),
-    ):
-        if value:
-            raise ValidationError(
-                f"{flag} does not apply to a release directory ({args.evidence}).",
-                hint="A release is checked against its own manifest, artifacts and recorded "
-                "requirements: drop the flag, or verify its evidence.tar.gz on its own.",
-                context={"release": str(args.evidence)},
-            )
-    found = verify_release(
-        args.evidence,
-        allowed_signers=args.allowed_signers,
-        signer=args.signer,
-        max_age=args.max_age,
-        now=args.now,
-    )
-    if args.witnesses is None and args.min_witnesses is None:
-        print(found.render(args.format), file=out, end="")
-        return EXIT_OK if found.passed else EXIT_FAILURE
-    witnessed = verify_witnesses(
-        args.evidence,
-        args.witnesses if args.witnesses is not None else witnesses_dir(args.evidence),
-        min_witnesses=1 if args.min_witnesses is None else args.min_witnesses,
-        allowed_signers=args.allowed_signers,
-        allow_simulated=args.allow_simulated,
-        toolchains=args.toolchains,
-    )
-    if args.format == "json":
-        report = json.loads(found.render("json"))
-        report["witnesses"] = witnessed.to_dict()
-        print(json.dumps(report, indent=2, sort_keys=True), file=out)
-    else:
-        print(found.render(args.format), file=out, end="")
-        print(witnessed.render("text"), file=out, end="")
-    return EXIT_OK if found.passed and witnessed.passed else EXIT_FAILURE
-
-
-def _cmd_changes(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args) if args.variant else None
-    lockfile = None if _missing_lock(args) else args.lockfile
-    report = changes(
-        loaded.recipe,
-        since=args.since,
-        lock=lockfile,
-        variants=names,
-        build=args.build,
-    )
-    print(report.render(args.format), file=out, end="")
-    return EXIT_OK
-
-
-def _add_explore(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Write one self-contained HTML page that explains the recipe."
-    cmd = _add_command(sub, "explore", _cmd_explore, help=help_text)
-    cmd.description = (
-        help_text + " Overview (settings, recipe digest, lint findings, lockfile state "
-        "with section digests and pins, the bake in --build when there is one), a "
-        "declarations x variants matrix with each declaration's fields and provenance, "
-        "every variant's compiled tree with each file's content and the declarations "
-        "behind it, and the hooks, runtime-init steps and source builds in run order; "
-        "declarations and files link to each other. No network, nothing baked."
-    )
-    _add_build(
-        cmd,
-        "Build directory whose bake-result.json lists the artifacts; the page goes to "
-        f"BUILD/{PAGE_NAME} (default: build).",
-    )
-    cmd.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help=(
-            "Lockfile whose pins apply and whose drift is shown (default: "
-            "build/tundravm.lock when it exists; else the lock shows as missing)."
-        ),
-    )
-    cmd.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help=f"Write the page (or the JSON) to FILE instead of BUILD/{PAGE_NAME}.",
-    )
-    cmd.add_argument(
-        "--format",
-        choices=EXPLORE_FORMATS,
-        default="html",
-        help=(
-            "html (default) writes the page and prints its path; json prints the same "
-            "model (to FILE with --output) with schema tundravm.explore/5."
-        ),
-    )
-
-
-def _cmd_explore(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args) if args.variant else None
-    base = _build_dir(args)
-    lock: Path = args.lockfile if args.lockfile is not None else loaded.lowered().lock_path
-    found = explore(loaded.recipe, variants=names, lock=lock, build=base)
-    if args.format == "json" and args.output is None:
-        print(found.json(), file=out)
-        return EXIT_OK
-    target: Path = args.output if args.output is not None else base / PAGE_NAME
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(found.json() + "\n" if args.format == "json" else found.html(), "utf-8")
-    print(target, file=out)
-    return EXIT_OK
-
-
-def _cmd_witness(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    img = loaded.lowered()
-    if args.backend is not None:
-        img = replace(img, backend=Backend(args.backend).build_backend())
-    steps = sys.stderr if args.format == "json" else out
-    result = witness_image(
-        loaded.recipe,
-        img,
-        args.release,
-        build=args.build,
-        builder=args.builder,
-        sign=args.sign,
-        output=args.output,
-        progress=lambda line: print(line, file=steps, flush=True),
-    )
-    print(result.render(args.format), file=out, end="")
-    written = [str(path) for path in (result.path, result.signature) if path is not None]
-    if written:
-        print(f"wrote {' and '.join(written)}", file=steps)
-    if result.verdict == "error":
-        return EXIT_SDK_ERROR
-    return EXIT_OK if result.matched else EXIT_FAILURE
-
-
-def _cmd_release(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args) if args.variant else None
-    img = loaded.lowered()
-    backend = None if args.backend is None else Backend(args.backend).build_backend()
-    if backend is not None and not (
-        args.origins.get("backend") == "pyproject"
-        and loaded.backend is not None
-        and loaded.backend.name == backend.name
-    ):
-        img = replace(img, backend=backend)  # else the recipe file's instance, with its settings
-    project: ProjectConfig | None = args.project
-    releases: Path = args.releases or (
-        Path("releases") if project is None else Path(os.path.relpath(project.root / "releases"))
-    )
-    root = releases / release_name(loaded.recipe.name, args.version)
-    if args.resume and not (root / STATE_NAME).is_file():
-        raise StateError(
-            f"No release in progress at {root}: nothing to resume.",
-            hint="Drop --resume to start the release.",
-            context={"release": str(root)},
-        )
-    stages = sys.stderr if args.format == "json" else out
-    resume = _release_command(args)
-    resuming = (root / STATE_NAME).is_file() and not args.restart
-    inherit = resuming and args.origins["require"] != "flag"  # a resume keeps its spec's
-    blocked = root.is_dir() and not (root / STATE_NAME).is_file() and any(root.iterdir())
+    reporter = TextReporter(sys.stderr, verbose=args.verbose)
     try:
-        result = release_image(
-            loaded.recipe,
+        outcome = builds.build(
             img,
-            version=args.version,
-            variants=names,
-            sign=args.sign,
-            unsigned=args.no_sign,
-            require=None if inherit else args.require,
-            since=args.since,
-            releases=releases,
-            build=args.build if args.build is not None else Path(img.build_dir),
-            lock=_lock_path(img, args.lockfile),
-            restart=args.restart,
-            change_spec=args.change_spec,
-            allow_ineligible=args.allow_ineligible,
-            recipe_path=args.recipe,
-            progress=lambda line: print(line, file=stages, flush=True),
-            attestations=args.attestation,
-            max_age=args.max_age,
+            root=found.build,
+            profile=profile,
+            targets=targets,
+            offline=args.offline,
+            reproduce=args.reproduce,
+            sign_key=args.sign,
+            clean_cache=args.clean_cache,
+            reporter=reporter,
+            ports=_service_ports(loaded, profile),
         )
-    except TdxError as exc:
-        if blocked or "changed" in exc.context:  # finished, not a release, or a refused spec
-            raise
-        if _wants_json(args):
-            exc.context = {**exc.context, "resume": resume}
-        else:
-            print(f"resume with: {resume}", file=sys.stderr)
-        raise
-    print(result.render(args.format), file=out, end="")
-    if not result.passed and args.format != "json":
-        print(f"resume with: {resume}", file=sys.stderr)
-    return EXIT_OK if result.passed else EXIT_FAILURE
-
-
-def _release_command(args: argparse.Namespace) -> str:
-    """The ``tundravm release`` command line that resumes this one."""
-    origins: dict[str, str] = args.origins
-    words = ["tundravm", "release"]
-    if origins.get("recipe") == "flag":
-        words.append(str(args.recipe))
-    words += ["--version", args.version]
-    for name in args.variant or ():
-        words += ["--variant", name]
-    require = (",".join(args.require) or "''") if origins.get("require") == "flag" else None
-    for flag, value in (
-        ("--sign", args.sign),
-        ("--require", require),
-        ("--since", args.since),
-        ("--releases", args.releases),
-    ):
-        if value is not None:
-            words += [flag, str(value)]
-    for path in args.attestation or ():
-        words += ["--attestation", str(path)]
-    if args.max_age is not None:
-        words += ["--max-age", f"{args.max_age}s"]
-    for flag, given in (("--no-sign", args.no_sign), ("--allow-ineligible", args.allow_ineligible)):
-        if given:
-            words.append(flag)
-    for flag, key in (("--build", "build"), ("--lockfile", "lockfile"), ("--backend", "backend")):
-        if origins.get(key) == "flag":
-            words += [flag, str(getattr(args, key))]
-    if args.attr is not None:
-        words += ["--attr", args.attr]
-    return " ".join(words)
-
-
-def _cmd_completion(args: argparse.Namespace, out: TextIO) -> int:
-    print(render_completion(build_parser(), cast(Shell, args.shell)), file=out, end="")
-    return EXIT_OK
-
-
-@dataclass(frozen=True, slots=True)
-class _CiRun:
-    """What every ``ci`` step shares: the recipe and the one lock loaded for every step.
-
-    The lockfile at :attr:`path` is ``--lockfile``, else the image's own
-    ``build/tundravm.lock``; it is read once into :attr:`locked` (``None``: there
-    is none, so lint and the tree check apply no pins and the lock step fails).
-    An unreadable one fails every step with :attr:`problem`.
-    """
-
-    loaded: RecipeFile
-    args: argparse.Namespace
-    fmt: str
-    path: Path
-    locked: Lock | None
-    problem: TdxError | None = None
-
-    @classmethod
-    def load(cls, args: argparse.Namespace) -> _CiRun:
-        loaded = _load(args)
-        path = _lock_path(loaded.lowered(), args.lockfile)
-        try:
-            return cls(loaded, args, resolve_format(args.format), path, _lock_at(path))
-        except TdxError as exc:
-            return cls(loaded, args, resolve_format(args.format), path, None, exc)
-
-    def lock(self) -> Lock | None:
-        """The shared lock; raises the error that kept it from loading."""
-        if self.problem is not None:
-            raise self.problem
-        return self.locked
-
-    def variants(self) -> tuple[str, ...]:
-        return _variants(self.loaded, self.args)
-
-
-def _lock_at(path: Path) -> Lock | None:
-    return read_lock(path) if path.is_file() else None
-
-
-CiStep = Callable[[_CiRun], tuple[bool, str, str]]
-
-
-def _ci_lint(run: _CiRun) -> tuple[bool, str, str]:
-    locked = run.lock()
-    diagnostics = check_report(
-        run.loaded.recipe, None, variants=run.variants(), lock=locked or run.path
-    )
-    report = render_as(diagnostics, run.fmt, recipe_path=run.args.recipe, strict=True)
-    return (
-        not failing(diagnostics, strict=True),
-        report if diagnostics else "",
-        render_summary(diagnostics),
-    )
-
-
-def _ci_compile(run: _CiRun) -> tuple[bool, str, str]:
-    locked = run.lock()
-    img = run.loaded.lowered()
-    tree: Path | None = run.args.tree
-    destination = tree if tree is not None else Path(img.build_dir) / TREE_DIRNAME
-    with using_lock(img, locked) as pinned:
-        result = diff_against(pinned, destination, profiles=run.variants())
-    if result.is_clean:
-        return True, "", f"{destination} is up to date"
-    fmt = "stat" if run.fmt == "text" else run.fmt
-    report = result.render(fmt, root=annotation_path(destination))
-    count = len(result.changes)
-    verdict = (
-        f"{count} file{'' if count == 1 else 's'} stale in {destination}; "
-        f"run `tundravm compile {run.args.recipe} --tree {destination}`"
-    )
-    return False, report.rstrip(), verdict
-
-
-def _ci_lock(run: _CiRun) -> tuple[bool, str, str]:
-    path = run.path
-    locked = run.lock() or read_lock(path)  # no lockfile: read_lock says so
-    img = run.loaded.lowered()
-    scoped = img.select(run.variants())
-    partial = not set(img.state.profiles) <= set(scoped.active)
-    drift = scoped.drift(locked.lockfile, resolver=None, partial=partial)
-    if drift.is_clean:
-        return True, "", f"{path} is up to date"
-    count = len(drift.sections) or 1
-    verdict = (
-        f"{count} section{'' if count == 1 else 's'} drifted from {path}; "
-        f"run `tundravm lock {run.args.recipe}`"
-    )
-    return False, render_drift(drift, run.fmt, path), verdict
-
-
-CI_STEPS: tuple[tuple[str, CiStep], ...] = (
-    ("lint", _ci_lint),
-    ("compile", _ci_compile),
-    ("lock", _ci_lock),
-)
-
-
-def _cmd_ci(args: argparse.Namespace, out: TextIO) -> int:
-    run = _CiRun.load(args)
-    fmt = run.fmt
-    for index, (name, step) in enumerate(CI_STEPS):
-        try:
-            ok, report, verdict = step(run)
-        except TdxError as exc:
-            hint = f" ({exc.hint})" if exc.hint else ""
-            ok, verdict = False, f"[{exc.code}] {exc.args[0]}{hint}"
-            report = (
-                workflow_command("error", verdict, title=f"tundravm ci: {name}")
-                if fmt == "github"
-                else ""
-            )
-        if report:
-            print(report, file=out)
-        print(f"{'ok' if ok else 'FAIL'} {name}: {verdict}", file=out)
-        if not ok:
-            for skipped, _step in CI_STEPS[index + 1 :]:
-                print(f"skip {skipped}", file=out)
+    finally:
+        reporter.close()
+    result = outcome.build
+    if outcome.lock_written:
+        print(f"lock written: {found.lockfile} (commit it)", file=out)
+    state = "built" if outcome.created else "already built (identical; left untouched)"
+    print(f"{state} {result.path}", file=out)
+    for name, record in sorted(result.manifest["artifacts"].items()):
+        if "/" not in name:
+            print(f"  {name:<20} {str(record.get('sha256', ''))[:16]}", file=out)
+    for item in result.manifest.get("unchecked", ()):
+        print(f"  unchecked: {item}", file=out)
+    if outcome.reproduction is not None:
+        rec = outcome.reproduction
+        detail = ", ".join(rec.get("differ") or ()) or rec.get("error", "")
+        print(f"reproduction: {rec['state']}" + (f" ({detail})" if detail else ""), file=out)
+        if rec["state"] != "matched":
             return EXIT_FAILURE
     return EXIT_OK
 
 
-def _cmd_watch(args: argparse.Namespace, out: TextIO) -> int:
-    recipe: Path = args.recipe
-    print(f"watching {recipe} every {args.interval:g}s (Ctrl-C stops)", file=out, flush=True)
-    sources = Sources.of(recipe)
-    flags = _flag_values(args, "watch")
-    loop = Watch(sources, lambda: _watch_check(args, sources, flags), out, interval=args.interval)
-    return loop.run(args.ticks)
+# ── show ─────────────────────────────────────────────────────────────────
 
 
-def _flag_values(args: argparse.Namespace, verb: str) -> dict[str, Path | None]:
-    """The RECIPE and *verb*'s configurable paths given on the command line (else ``None``)."""
-    origins: dict[str, str] = args.origins
-    flags = {"recipe": args.recipe if origins.get("recipe") == "flag" else None}
-    for attr, key in _PROJECT_FLAGS[verb]:
-        flags[attr] = getattr(args, attr, None) if origins.get(key) == "flag" else None
-    return flags
+def _is_image(subject: str | None) -> bool:
+    return subject is not None and subject.endswith(".py") and Path(subject).is_file()
 
 
-def _watch_project(args: argparse.Namespace, flags: dict[str, Path | None]) -> None:
-    """Resolve the ``[tool.tundravm]`` values again over the command line's *flags*.
-
-    A table that lost its ``recipe`` keeps the recipe being watched.
-    """
-    watched: Path = args.recipe
-    for attr, value in flags.items():
-        setattr(args, attr, value)
-    if args.recipe is None:
-        project = find_project()
-        if project is None or project.get("recipe") is None:
-            args.recipe = watched
-    _apply_project(build_parser(), args)
-
-
-def _watch_inputs(args: argparse.Namespace) -> set[Path]:
-    """The project files every check depends on: ``pyproject.toml`` and ``--lockfile``."""
-    project: ProjectConfig | None = args.project
-    inputs = {project.path if project is not None else Path.cwd() / PYPROJECT}
-    if args.lockfile is not None:
-        inputs.add(args.lockfile)
-    return inputs
-
-
-_DRIFT_CODES = frozenset({"lock-changed", "lock-added", "lock-removed", "lock-stale"})
-
-
-def _watch_check(args: argparse.Namespace, sources: Sources, flags: dict[str, Path | None]) -> str:
-    """One ``watch`` verdict: ``tundravm lint``'s counts and the tree against the recipe.
-
-    A recipe that does not load is ``error [E_CODE] message``; lint errors that keep
-    it from lowering (an error-level fragment check) are ``lint N errors (code: message)``.
-    Tracks what the verdict depends on in *sources*; a recipe that does not load keeps
-    the inputs of the last one that did.
-    """
-    try:
-        _watch_project(args, flags)
-        sources.recipe = args.recipe.resolve()
-        loaded = _load(args)
-        sources.track({*_watch_inputs(args), *recipe_inputs(loaded.recipe), *resource_reads()})
-        names = _variants(loaded, args)
-        diagnostics = _lint_findings(loaded, names, args, missing=_configured_lock_missing(args))
-    except TdxError as exc:
-        sources.track({*sources.inputs, *_watch_inputs(args)})
-        return _watch_error(args, exc)
-    errors = [d for d in diagnostics if d.severity == "error"]
-    warnings_ = sum(d.severity == "warning" for d in diagnostics)
-    try:
-        img = loaded.lowered()
-    except TdxError as exc:
-        if not errors:
-            return _watch_error(args, exc)
-        first = errors[0]
-        return lint_failure(errors=len(errors), code=first.code, message=first.message)
-    drifted = len(errors) if all(d.code in _DRIFT_CODES for d in errors) else 0
-    build: Path = args.build if args.build is not None else Path(img.build_dir)
-    tree: Path = args.tree if args.tree is not None else build / TREE_DIRNAME
-    sources.ignore(build, tree)
-    lock_path = _lock_path(img, args.lockfile)
-    sources.track({*sources.inputs, lock_path, tree})
-    try:
-        locked = _lock_at(lock_path)
-        line = _watch_tree(args, img, names, locked, tree, sources)
-    except TdxError as exc:
-        line = f"tree not checked ([{exc.code}] {exc.args[0]})"
-    return verdict(errors=len(errors), warnings=warnings_, tree=line, drifted=drifted)
-
-
-def _watch_tree(
-    args: argparse.Namespace,
-    img: Lowered,
-    names: tuple[str, ...],
-    locked: Lock | None,
-    destination: Path,
-    sources: Sources,
-) -> str:
-    exists = destination.is_dir()
-    with using_lock(img, locked) as pinned:
-        result = diff_against(pinned, destination, profiles=names)
-        if args.write and not result.is_clean:
-            sources.wrote(destination)
-            emit(pinned.select(names), destination)
-            return tree_verdict(changed=len(result.changes), exists=exists, wrote=destination)
-    return tree_verdict(changed=len(result.changes), exists=exists)
-
-
-def _watch_error(args: argparse.Namespace, exc: TdxError) -> str:
-    if args.traceback:
-        traceback.print_exception(exc, file=sys.stderr)
-    return f"error [{exc.code}] {exc.args[0]}"
-
-
-def _add_preview(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    help_text = "Serve the explore page on localhost and reload it whenever the recipe changes."
-    cmd = _add_command(sub, "preview", _cmd_preview, help=help_text)
-    cmd.epilog = (
-        RESOLUTION_HELP
-        + " "
-        + (
-            "Renders the `tundravm explore` page in memory and serves it at /, re-rendering "
-            "on every change `tundravm watch` polls for (RECIPE, the .py files under its "
-            "directory, the host files its declarations read, the lockfile, "
-            "pyproject.toml, BUILD/bake-result.json). The page polls /version every second "
-            "and reloads when it moves. A recipe that fails to load keeps the last good "
-            "page under an error banner (message, hint, file:line); lint errors show the "
-            "banner above the fresh page. Prints the URL, then one `HH:MM:SS vN ...` line "
-            "per rendering. Writes nothing. Ctrl-C stops it with exit 0."
-        )
-    )
-    _add_build(cmd, "Build directory whose bake-result.json lists the artifacts (default: build).")
-    cmd.add_argument(
-        "--lockfile",
-        type=Path,
-        default=None,
-        help="Lockfile whose pins apply and whose drift is shown, as `explore --lockfile`.",
-    )
-    cmd.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Address to bind (default: %(default)s; a non-loopback one needs --allow-remote).",
-    )
-    cmd.add_argument(
-        "--port",
-        type=int,
-        default=8765,
-        help="Port to bind; 0 picks a free one (default: %(default)s).",
-    )
-    cmd.add_argument(
-        "--allow-remote",
-        action="store_true",
-        help="Serve on a non-loopback --host: anyone who reaches it reads the recipe's contents.",
-    )
-    cmd.add_argument("--open", action="store_true", help="Open the page in the default browser.")
-    cmd.add_argument(
-        "--interval",
-        type=_interval,
-        default=1.0,
-        metavar="SECONDS",
-        help="Seconds between polls of the sources (default: %(default)s).",
-    )
-
-
-def _cmd_preview(args: argparse.Namespace, out: TextIO) -> int:
-    host: str = args.host
-    if not is_loopback(host):
-        if not args.allow_remote:
-            raise ValidationError(
-                f"Refusing to serve the preview on {host}: not a loopback address.",
-                hint="The page shows the recipe's contents; pass --allow-remote to serve "
-                "it there anyway, or drop --host for 127.0.0.1.",
-            )
+def _cmd_show(args: argparse.Namespace, out: TextIO) -> int:
+    if args.diff is not None:
+        found = settings(None)
+        old, new = (builds.resolve(ref, root=found.build, image=None) for ref in args.diff)
+        report = show.diff_builds(old, new)
         print(
-            f"warning: serving on {host}: anyone who can reach it reads the recipe's contents",
-            file=sys.stderr,
-        )
-    sources = Sources.of(args.recipe)
-    flags = _flag_values(args, "preview")
-    preview = Preview(lambda: _preview_load(args, sources, flags))
-    server = serve(preview, host, args.port)
-    try:
-        url = url_of(server)
-        print(f"previewing {args.recipe} at {url} (Ctrl-C stops)", file=out, flush=True)
-        if args.open:
-            webbrowser.open(url)
-        loop = Watch(sources, preview.render, out, interval=args.interval)
-        return loop.run(args.ticks)
-    finally:
-        with contextlib.suppress(KeyboardInterrupt):  # a second Ctrl-C while stopping
-            server.shutdown()
-        server.server_close()
-
-
-def _preview_load(
-    args: argparse.Namespace, sources: Sources, flags: dict[str, Path | None]
-) -> Exploration:
-    """One ``preview`` rendering: ``explore``'s model, tracking its inputs in *sources*.
-
-    A recipe that does not load keeps the inputs of the last one that did.
-    """
-    try:
-        _watch_project(args, flags)
-        sources.recipe = args.recipe.resolve()
-        loaded = _load(args)
-        sources.track({*_watch_inputs(args), *recipe_inputs(loaded.recipe), *resource_reads()})
-        names = _variants(loaded, args) if args.variant else None
-        base = _build_dir(args)
-        sources.ignore(base)
-        found = explore(loaded.recipe, variants=names, lock=args.lockfile, build=base)
-    except TdxError as exc:
-        sources.track({*sources.inputs, *_watch_inputs(args)})
-        if args.traceback:
-            traceback.print_exception(exc, file=sys.stderr)
-        raise
-    lock: str | None = found.model["lock"]["source"]
-    extra = {base / BAKE_RESULT_FILENAME, *(() if lock is None else (Path(lock),))}
-    sources.track({*sources.inputs, *extra})
-    return found
-
-
-def _cmd_status(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    names = _variants(loaded, args)
-    img = loaded.lowered()
-    origins: dict[str, str] = args.origins
-    project: ProjectConfig | None = args.project
-    configured = project if origins.get("recipe") != "flag" or _table_recipe(args) else None
-    backend = None if configured is None else configured.get("backend")
-    if backend is None and loaded.backend is not None:
-        backend = loaded.backend.name
-    call = Invocation(
-        recipe="" if origins.get("recipe") == "pyproject" else str(args.recipe),
-        build=args.build if origins.get("build") == "flag" else None,
-        lockfile=args.lockfile if origins.get("lockfile") == "flag" else None,
-        lock_configured=origins.get("lockfile") == "pyproject",
-        variants=names if args.variant else (),
-        tree_flag=origins.get("tree") != "pyproject",
-        recipe_path=str(args.recipe),
-        releases=args.releases,
-        backend=backend,
-    )
-    status = project_status(
-        loaded,
-        names,
-        build=args.build if args.build is not None else Path(img.build_dir),
-        lock_path=_lock_path(img, args.lockfile),
-        runner=args.runner if args.runner is not None else run_probe,
-        invocation=call,
-        verify=args.verify,
-        tree=args.tree,
-        require=args.require,
-        releases=args.releases
-        or (
-            Path("releases")
-            if project is None
-            else Path(os.path.relpath(project.root / "releases"))
-        ),
-    )
-    report = render_status(status, args.format)
-    print(json_report("status", report) if args.format == "json" else report, file=out)
-    return EXIT_OK
-
-
-def _table_recipe(args: argparse.Namespace) -> bool:
-    """Whether RECIPE, given on the command line, is the ``[tool.tundravm]`` table's."""
-    project: ProjectConfig | None = args.project
-    configured = None if project is None else project.path_of("recipe")
-    return configured is None or _same_path(args.recipe, configured)
-
-
-def _cmd_clean(args: argparse.Namespace, out: TextIO) -> int:
-    variants: tuple[str, ...] = ()
-    destination: Path | None = args.build
-    if args.recipe is not None:
-        loaded = _load(args)
-        variants = loaded.variants
-        if destination is None:
-            destination = Path(loaded.lowered().build_dir)
-    if destination is None:
-        destination = _build_dir(args)
-    chosen: tuple[str, ...] = args.what
-    lockfile: Path | None = args.remove_lockfile
-    listing = not chosen and lockfile is None
-    paths = clean_paths(destination, PARTS if listing else chosen, variants=variants)
-    refused = [(path, found) for path in paths if (found := holds_release(path)) is not None]
-    paths = [path for path in paths if all(path != held for held, _ in refused)]
-    for path, found in refused:
-        print(f"refused {path}: it holds release {found}; clean never removes a release", file=out)
-    if refused:
-        print("hint: keep --releases outside the build directory", file=out)
-    if lockfile is not None and lockfile.is_file():
-        paths.append(lockfile)
-    if not paths:
-        if not refused:
-            print(f"nothing to clean in {destination}", file=out)
-        return EXIT_FAILURE if refused else EXIT_OK
-    if args.dry_run or listing:
-        for path in paths:
-            print(f"would remove {path}", file=out)
-        if listing:
-            print(
-                f"pass --what all to remove them, or --what with some of {', '.join(PARTS)} "
-                "(the lockfile stays unless --remove-lockfile names it)",
-                file=out,
-            )
-        return EXIT_FAILURE if refused and not listing else EXIT_OK
-    sudo = sudo_runner()
-    failed: list[Path] = []
-    for path in paths:
-        problem = remove(path, sudo=sudo)
-        if problem is None:
-            print(f"removed {path}", file=out)
-        else:
-            print(f"not removed {path}: {problem}", file=out)
-            failed.append(path)
-    if failed:
-        print(owner_hint(failed), file=out)
-        return EXIT_FAILURE
-    return EXIT_FAILURE if refused else EXIT_OK
-
-
-def _unit_file_name(path: Path) -> str:
-    """``x.service``, or ``x.service.d/NAME.conf`` for a drop-in."""
-    return f"{path.parent.name}/{path.name}" if path.parent.name.endswith(".d") else path.name
-
-
-def _cmd_units_convert(args: argparse.Namespace, out: TextIO) -> int:
-    from tundravm._units.parse import convert
-    from tundravm.declarative._writer import declarations_source
-
-    if args.name is not None and len(args.files) != 1:
-        raise ValidationError("--name names one FILE.", hint="Drop --name, or pass one FILE.")
-    texts: dict[str, str] = {}
-    for path in args.files:
-        name = args.name or _unit_file_name(path)
-        try:
-            texts[name] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            raise ValidationError(
-                f"cannot read {path}: {error}", hint="Pass a readable UTF-8 unit file."
-            ) from None
-    conversions = convert(texts, mode=args.mode, init=True)
-    for conversion in conversions:
-        units = " + ".join(conversion.units)
-        if conversion.typed:
-            kind = type(conversion.declaration).__name__
-            moved = f"; extra= holds {', '.join(conversion.extra)}" if conversion.extra else ""
-            print(f"# {units}: {kind} ({args.mode}){moved}", file=out)
-        else:
-            print(f"# {units}: kept as text, blocked by {'; '.join(conversion.blockers)}", file=out)
-    out.write(declarations_source([c.declaration for c in conversions]))
-    if args.adopt_defaults:
-        for conversion in conversions:
-            _adopt_defaults(conversion, out)
-    return EXIT_OK
-
-
-def _adopt_defaults(conversion: Conversion, out: TextIO) -> None:
-    """The declaration with its opt-outs reset to the defaults, and the unit lines that
-    changes (``tundravm units convert --adopt-defaults``)."""
-    import difflib
-
-    from tundravm._units.parse import rendered, with_defaults
-    from tundravm.declarative._writer import declarations_source
-
-    decl = conversion.declaration
-    if not conversion.typed or not conversion.absent:
-        return
-    units = " + ".join(conversion.units)
-    try:
-        adopted = with_defaults(decl, conversion.absent)
-        after = rendered(adopted, init=True)
-    except (ValidationError, ValueError, TypeError) as error:
-        print(f"\n# {units}: the defaults do not apply: {error}", file=out)
-        return
-    print(f"\n# {units} with the defaults ({', '.join(conversion.absent)}):", file=out)
-    out.write(declarations_source([adopted], names=["adopted"]))
-    before = rendered(decl, init=True)
-    if after.pop("!", None):
-        print("# also declares the service's system user", file=out)
-    for name in sorted(set(before) | set(after)):
-        old = before.get(name, "").splitlines(keepends=True)
-        new = after.get(name, "").splitlines(keepends=True)
-        out.writelines(difflib.unified_diff(old, new, f"{name} (converted)", f"{name} (defaults)"))
-
-
-def _cmd_units_render(args: argparse.Namespace, out: TextIO) -> int:
-    loaded = _load(args)
-    variant = args.variant or (loaded.variants[0] if len(loaded.variants) == 1 else None)
-    if variant is None:
-        raise ValidationError(
-            f"{args.recipe} declares {len(loaded.variants)} variants.",
-            hint=f"Pass --variant NAME (declared: {', '.join(loaded.variants)}).",
-        )
-    _require_variants(loaded, [variant], args.recipe)
-    from tundravm.declarative import compile as compile_tree
-
-    tree = compile_tree(loaded.recipe, variants=[variant])
-    unit = args.unit
-    found = [
-        entry
-        for entry in tree.entries
-        if entry.content is not None
-        and entry.symlink is None
-        and (f"/systemd/system/{unit}" in f"/{entry.path}")
-        and (entry.path.endswith(f"/{unit}") or f"/{unit}.d/" in entry.path)
-    ]
-    if not found:
-        raise ValidationError(
-            f"variant {variant!r} of {args.recipe} generates no unit {unit!r}.",
-            hint="Name the unit file with its suffix (app.service, app.timer).",
-        )
-    for index, entry in enumerate(found):
-        print(("\n" if index else "") + f"# {entry.path}", file=out)
-        out.write(entry.content.decode("utf-8") if entry.content else "")
-    return EXIT_OK
-
-
-def _cmd_init(args: argparse.Namespace, out: TextIO) -> int:
-    if args.list_templates:
-        width = max(map(len, TEMPLATES))
-        for template, summary in TEMPLATES.items():
-            default = " (default)" if template == DEFAULT_TEMPLATE else ""
-            print(f"{template:<{width}}  {summary}{default}", file=out)
-        return EXIT_OK
-    root: Path = args.dir
-    ci_only = _init_existing(args, root)
-    if ci_only is not None:
-        return _init_ci_only(args, root, *ci_only, out)
-    name = _init_name(args.name, root)
-    title = name.replace("_", "-")
-    recipe = root / f"{name}.py"
-    tests = root / "tests" / f"test_{re.sub(r'[^A-Za-z0-9_]', '_', name)}.py"
-    app = _init_app(args, title)
-    template = f"{args.app}-app" if app else args.template or DEFAULT_TEMPLATE
-    if app is not None:
-        files = {
-            recipe: app_template.render_app_recipe(
-                app,
-                title=title,
-                filename=recipe.name,
-                release=args.release,
-            )
-        }
-        if args.tests:
-            files[tests] = app_template.render_app_tests(app, filename=recipe.name)
-    else:
-        files = {
-            recipe: render_recipe_template(
-                title=title,
-                filename=recipe.name,
-                release=args.release,
-                template=template,
-            )
-        }
-        if args.tests:
-            files[tests] = render_test_module(filename=recipe.name, template=template)
-    if args.ci == "github":
-        files[root / WORKFLOW_PATH] = render_workflow(recipe=recipe.name)
-    existing = [path for path in files if path.exists()]
-    if existing and not args.force:
-        raise ValidationError(
-            f"Refusing to overwrite existing file(s): {', '.join(map(str, existing))}",
-            hint="Pass --force to overwrite them.",
-            context={"dir": str(root)},
-        )
-    pyproject = root / "pyproject.toml"
-    had_pyproject = pyproject.exists()
-    source = scaffold.tundravm_source()
-    files_if_absent = {
-        pyproject: render_pyproject(
-            name=_project_name(name), recipe=recipe.name, backend=args.backend, source=source
-        ),
-        root / "README.md": render_readme(
-            title=title, filename=recipe.name, template=template, tests=args.tests
-        ),
-    }
-    for path, text in files.items():
-        _init_write(path, text, "overwrote" if path in existing else "created", out)
-    for path, text in files_if_absent.items():
-        if path.exists():
-            print(f"kept {path} (already exists)", file=out)
-        else:
-            _init_write(path, text, "created", out)
-    print(_init_gitignore(root / ".gitignore"), file=out)
-    if had_pyproject:
-        print(
-            f"note: {pyproject} already exists; add the dependencies with "
-            f"`{source.install}` and `uv add --dev pytest`",
+            json_report("show", {"diff": report}) if args.json else show.render_diff(report),
             file=out,
         )
-        if "[tool.tundravm]" not in pyproject.read_text(encoding="utf-8"):
-            print(
-                "note: add this table to it so commands run without RECIPE:\n"
-                + render_table(recipe=recipe.name, backend=args.backend).rstrip(),
-                file=out,
-            )
-    if source.note is not None:
-        print(f"note: {source.note}", file=out)
-    _init_lint(recipe, out)
-    synced = None if had_pyproject else source
-    tested = tests if args.tests else None
-    _init_next(root, recipe, tested, args.ci == "github", synced, out, golden=app is None)
-    if not args.no_doctor:
-        _init_doctor(args.backend or default_backend(Host()), args.runner, out)
-    return EXIT_OK
-
-
-def _init_app(args: argparse.Namespace, title: str) -> app_template.AppSpec | None:
-    """What ``--app`` asks for; ``None`` scaffolds a ``--template`` recipe."""
-    given = {
-        "--source": args.source,
-        "--path": args.path,
-        "--disk": args.disk,
-        "--secret": args.secret,
-    }
-    if args.app is None:
-        flag = next((flag for flag, value in given.items() if value is not None), None)
-        if flag is not None:
-            raise ValidationError(
-                f"{flag} configures the app recipe and needs --app go.",
-                hint="Pass --app go, or drop the app options for a --template recipe.",
-            )
-        return None
-    if args.template is not None:
+        return EXIT_OK
+    if _is_image(args.subject) or (args.subject is None and not args.dev and _project_image()):
+        return _show_image(args, out)
+    if args.profile:
         raise ValidationError(
-            "--app and --template choose different starter recipes.",
-            hint="Pass one of them.",
+            "--profile selects profiles of an image file, not of a build.", hint="Drop it."
         )
-    if args.source is not None:
-        url, ref = app_template.parse_source(args.source)
-    elif args.path is not None:
-        url, ref = app_template.local_source(args.path)
+    found = settings(None)
+    build = _resolve_build(args.subject, found, dev=args.dev)
+    if args.units:
+        units = show.build_units(build)
+        print(
+            json_report("show", {"units": units}) if args.json else show.render_units(units),
+            file=out,
+        )
+    elif args.tree:
+        rows = show.build_tree(build)
+        print(
+            json_report("show", {"tree": rows}) if args.json else show.render_files(rows), file=out
+        )
+    elif args.measurements:
+        records = show.build_measurements(build)
+        print(
+            json_report("show", {"measurements": records})
+            if args.json
+            else show.render_measurements(records),
+            file=out,
+        )
     else:
-        raise ValidationError(
-            f"--app {args.app} needs the program's source.",
-            hint="Pass --source URL@REF (a git repository) or --path DIR (a local checkout).",
+        print(
+            json_report("show", show.build_report(build))
+            if args.json
+            else show.render_build(build),
+            file=out,
         )
-    name = re.sub(r"[^a-z0-9_-]+", "-", title.lower()).strip("-_")
-    spec = app_template.AppSpec(
-        name if re.match(r"[a-z]", name) else f"app-{name}".rstrip("-"),
-        url,
-        ref,
-        package=args.package,
-        port=args.port,
-        disk=args.disk,
-        secret=args.secret,
-        local=args.path is not None,
-    )
-    app_template.check_spec(spec)
-    return spec
-
-
-def _init_existing(args: argparse.Namespace, root: Path) -> tuple[str, str] | None:
-    """The recipe and tree, relative to *root*, of the project ``--ci github`` adds CI to.
-
-    ``None`` scaffolds a new project: no ``--recipe`` and no ``[tool.tundravm]`` table
-    in *root*'s own ``pyproject.toml``. The tree is the table's, else ``mkosi``.
-    """
-    given: Path | None = args.existing
-    if args.ci != "github":
-        if given is not None:
-            raise ValidationError(
-                "--recipe adds CI to an existing project and needs --ci github.",
-                hint="Pass --ci github with --recipe, or drop --recipe to scaffold a project.",
-            )
-        return None
-    project = find_project(root)
-    if project is not None and project.root != root.resolve():
-        project = None
-    if given is None and project is None:
-        return None
-    if given is None:
-        assert project is not None
-        configured = project.get("recipe")
-        if configured is None:
-            raise ValidationError(
-                f"[{TABLE}] in {project.path} names no recipe.",
-                hint="Pass --recipe RECIPE naming the project's recipe, relative to DIR.",
-            )
-        given = Path(configured)
-    recipe = root / given
-    if not recipe.is_file():
-        raise ValidationError(
-            f"Recipe file not found: {recipe}",
-            hint="Pass --recipe RECIPE naming the project's existing recipe, relative to DIR.",
-            context={"dir": str(root)},
-        )
-    try:
-        relative = recipe.resolve().relative_to(root.resolve())
-    except ValueError:
-        raise ValidationError(
-            f"Recipe {recipe} is outside {root}.",
-            hint="The workflow runs from DIR; pass a recipe inside it.",
-            context={"dir": str(root)},
-        ) from None
-    tree = None if project is None else project.get("tree")
-    return relative.as_posix(), tree or "mkosi"
-
-
-def _init_ci_only(args: argparse.Namespace, root: Path, recipe: str, tree: str, out: TextIO) -> int:
-    """Write the workflow (and the ``.gitignore`` block) into an existing project."""
-    workflow = root / WORKFLOW_PATH
-    replaced = workflow.exists()
-    if replaced and not args.force:
-        raise ValidationError(
-            f"Refusing to overwrite existing file(s): {workflow}",
-            hint="Pass --force to overwrite the workflow; the project's other files are kept.",
-            context={"dir": str(root)},
-        )
-    print(f"adding CI for {recipe} to the existing project in {root}", file=out)
-    verb = "overwrote" if replaced else "created"
-    _init_write(workflow, render_workflow(recipe=recipe, tree=tree), verb, out)
-    print(_init_gitignore(root / ".gitignore"), file=out)
-    print(
-        f"next: `tundravm ci {recipe} --tree {tree}` runs the workflow's checks; "
-        f"commit {tree}/ and the lockfile they compare against",
-        file=out,
-    )
     return EXIT_OK
 
 
-def _init_write(path: Path, text: str, verb: str, out: TextIO) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    print(f"{verb} {path}", file=out)
+def _resolve_build(ref: str | None, found: Settings, *, dev: bool) -> builds.Build:
+    """BUILD, else the latest production (with *dev*, development) build."""
+    if dev and ref is not None:
+        raise ValidationError(
+            "--dev picks the latest development build; BUILD already names one.",
+            hint="Drop --dev, or drop BUILD.",
+        )
+    return builds.resolve(ref, root=found.build, image=None, dev=dev)
 
 
-def _init_lint(recipe: Path, out: TextIO) -> None:
-    """Lint the new recipe and print the summary; findings never fail ``init``."""
-    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no __pycache__ in DIR
-    try:
-        loaded = load_file(recipe, extra_paths=[os.getcwd()])
-    finally:
-        sys.dont_write_bytecode = keep
-    report = check_report(loaded.recipe, loaded.image, variants=loaded.variants)
-    codes = sorted({diagnostic.code for diagnostic in report})
-    detail = f" ({', '.join(codes)}; `tundravm lint {recipe.name}` lists them)" if codes else ""
-    print(f"lint {recipe.name}: {render_summary(report)}{detail}", file=out)
-    if "source-unpinned" in codes:
-        print(f"  `tundravm lock {recipe.name}` pins the source builds", file=out)
+def _project_image() -> bool:
+    return settings(None).image is not None
 
 
-def _init_next(
-    root: Path,
-    recipe: Path,
-    tests: Path | None,
-    github: bool,
-    synced: TundravmSource | None,
+def _show_image(args: argparse.Namespace, out: TextIO) -> int:
+    if args.measurements:
+        raise ValidationError(
+            "An image has no measurements until it is built.",
+            hint="Run `tundravm build`, then `tundravm show latest --measurements`.",
+        )
+    args.image = Path(args.subject) if args.subject else None
+    found = _settings(args)
+    loaded = _loaded(args, found)
+    img = _lowered(loaded, found)
+    names = _profiles(img, args.profile)
+    locked = _locked(found)
+    if args.units:
+        units = show.image_units(img, names, locked)
+        print(
+            json_report("show", {"units": units}) if args.json else show.render_units(units),
+            file=out,
+        )
+        return EXIT_OK
+    if args.tree:
+        rows = show.image_tree(img, names, locked)
+        print(
+            json_report("show", {"tree": rows}) if args.json else show.render_files(rows), file=out
+        )
+        return EXIT_OK
+    described = {}
+    for name in names:
+        declared = name in loaded.variants
+        fragments = resolve(loaded.recipe, variant=name).fragments if declared else ()
+        inherits = loaded.recipe.variant(name).inherits if declared else None
+        described[name] = describe(img, profile=name, inherits=inherits, fragments=fragments)
+    report = show.image_report(img, names, described)
+    if args.json:
+        report["provenance"] = show.provenance(loaded.recipe, names)
+    print(json_report("show", report) if args.json else show.render_image(report), file=out)
+    return EXIT_OK
+
+
+# ── run ──────────────────────────────────────────────────────────────────
+
+
+def _instance(found: Settings, name: str | None, verb: str, action: str) -> instances.Instance:
+    if not name:
+        raise ValidationError(
+            f"`{verb} {action}` needs INSTANCE.", hint=f"tundravm {verb} {action} INSTANCE"
+        )
+    return instances.open_instance(found.instances, name)
+
+
+def _cmd_run(args: argparse.Namespace, out: TextIO) -> int:
+    found = settings(None)
+    if args.subject in RUN_ACTIONS:
+        instance = _instance(found, args.instance, "run", args.subject)
+        if instance.platform != "qemu":
+            raise ValidationError(
+                f"{instance.id} is a {instance.platform} deployment.",
+                hint=f"Use `tundravm deploy {args.subject} {instance.id}`.",
+            )
+        return _run_action(args.subject, instance, args, out)
+    if args.instance is not None:
+        raise ValidationError(
+            f"Unknown run action {args.subject!r}.", hint=f"Actions: {', '.join(RUN_ACTIONS)}."
+        )
+    if args.mode is None:
+        raise ValidationError(
+            "run needs --mode simulated or --mode tdx.",
+            hint="The security mode is always explicit: simulated (no TDX) or tdx (a TDX host).",
+        )
+    build = _resolve_build(args.subject, found, dev=args.dev)
+    instance = instances.launch(
+        found.instances,
+        build,
+        mode=args.mode,
+        detach=args.detach,
+        out=out,
+        memory=args.memory,
+        cpus=args.cpus,
+    )
+    if args.detach:
+        print(f"stop it with `tundravm run stop {instance.id}`", file=out)
+    return EXIT_OK
+
+
+def _run_action(
+    action: str, instance: instances.Instance, args: argparse.Namespace, out: TextIO
+) -> int:
+    if action == "status":
+        report = instances.status(instance)
+        if args.json:
+            print(json_report("run", report), file=out)
+        else:
+            for key in ("id", "mode", "state", "control_plane", "application"):
+                if key in report:
+                    print(f"{key:<14} {report[key]}", file=out)
+            build = cast(Mapping[str, object], report["build"])
+            print(f"{'build':<14} {build['id']} ({build['kind']})", file=out)
+        return EXIT_OK
+    if action == "logs":
+        for line in instances.logs(instance):
+            print(line, file=out)
+        return EXIT_OK
+    if action == "stop":
+        stopped = instances.stop(instance)
+        print(f"{'stopped' if stopped else 'was not running:'} {instance.id}", file=out)
+        return EXIT_OK
+    if action == "mode":
+        return _mode(instance, args, out)
+    instances.ssh_permitted(instance)
+    session = bootstrap.Session(instance, bootstrap.identity_path(args.identity))
+    argv = session.argv("")[:-1]
+    print(
+        f"note: host key not verified through the attested endpoint ({bootstrap.UNVERIFIED})",
+        file=sys.stderr,
+    )
+    os.execvp(argv[0], argv)
+
+
+def _mode(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -> int:
+    build = instance.data["build"]
+    production = instance.mode == "tdx" and build["kind"] == "production"
+    report = {
+        "id": instance.id,
+        "mode": instance.mode,
+        "platform": instance.platform,
+        "build_kind": build["kind"],
+        "production_evidence": production,
+        "meaning": "a TDX guest whose evidence a production policy can accept"
+        if production
+        else (
+            "no TDX: evidence is `simulated`, never production"
+            if instance.mode == "simulated"
+            else "a TDX guest of a development build: never production"
+        ),
+    }
+    if args.json:
+        print(json_report(args.command, report), file=out)
+    else:
+        print(
+            f"{instance.id}: {instance.mode} on {instance.platform}, {build['kind']} build: "
+            f"{report['meaning']}",
+            file=out,
+        )
+    return EXIT_OK
+
+
+# ── deploy ───────────────────────────────────────────────────────────────
+
+
+def _credentials(values: Sequence[str]) -> list[str]:
+    bad = [v for v in values if "=@" not in v]
+    if bad:
+        raise ValidationError(f"{bad[0]!r} is not NAME=@FILE.", hint="Credentials are NAME=@FILE.")
+    return list(values)
+
+
+def _passphrases(build: builds.Build) -> Callable[[str], bytes]:
+    """Each operator-key volume's passphrase, asked for when the workflow reaches its
+    unlock (a refused upgrade never prompts)."""
+    del build
+    return bootstrap.read_passphrase
+
+
+def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
+    found = settings(None)
+    action = args.action
+    if action in deployments.CLOUDS:
+        if args.rest:
+            raise ValidationError(
+                f"Unexpected {' '.join(args.rest)}.", hint=f"tundravm deploy {action} --build BUILD"
+            )
+        if args.build is None:
+            raise ValidationError(
+                f"deploy {action} needs --build BUILD.",
+                hint="A deployment names its build explicitly: "
+                "--build build/<image>/production/<id>.",
+            )
+        build = builds.resolve(args.build, root=found.build, image=None)
+        instance = deployments.deploy(
+            found.instances, action, build, deployments.parse_volumes(args.volume), out=out
+        )
+        if args.json:
+            print(json_report("deploy", instance.data), file=out)
+        else:
+            print(f"deployed {build.id} to {action}: instance {instance.id}", file=out)
+            print(f"  address   {instance.data.get('address') or 'unknown'}", file=out)
+            print(f"  firewall  {instance.data['firewall']}", file=out)
+            print(f"  receipt   {instance.path / instances.INSTANCE}", file=out)
+        return EXIT_OK
+    instance = _instance(found, args.rest[0] if args.rest else None, "deploy", action)
+    rest = args.rest[1:]
+    if action in ("status", "logs", "mode") and rest:
+        raise ValidationError(
+            f"Unexpected {' '.join(rest)}.", hint=f"tundravm deploy {action} INSTANCE"
+        )
+    if action == "status":
+        report = deployments.status(instance)
+        if args.json:
+            print(json_report("deploy", report), file=out)
+        else:
+            for key, value in report.items():
+                if key != "build":
+                    print(f"{key:<14} {value}", file=out)
+        return EXIT_OK
+    if action == "logs":
+        out.write(deployments.logs(instance))
+        return EXIT_OK
+    if action == "mode":
+        return _mode(instance, args, out)
+    if args.policy is None:
+        raise ValidationError(
+            f"deploy {action} needs --policy FILE.",
+            hint="The candidate is attested before it gets anything.",
+        )
+    credentials = _credentials(rest)
+    if action == "upgrade":
+        if args.build is None:
+            raise ValidationError(
+                "deploy upgrade needs --build BUILD.", hint="Name the new build explicitly."
+            )
+        build = builds.resolve(args.build, root=found.build, image=None)
+        candidate = deployments.upgrade(
+            found.instances,
+            instance,
+            build,
+            policy=args.policy,
+            credentials=credentials,
+            passphrases=_passphrases(build),
+            identity=args.identity,
+            validator=args.validator,
+            out=out,
+        )
+        print(f"upgraded {instance.id} -> {candidate.id}", file=out)
+        return EXIT_OK
+    previous = deployments.rollback(
+        found.instances,
+        instance,
+        policy=args.policy,
+        credentials=credentials,
+        passphrases=_passphrases(instance.build),
+        identity=args.identity,
+        validator=args.validator,
+        out=out,
+    )
+    print(f"rolled back {instance.id} -> {previous.id}", file=out)
+    return EXIT_OK
+
+
+# ── attest, secrets ──────────────────────────────────────────────────────
+
+
+def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
+    found = settings(None)
+    instance = instances.open_instance(found.instances, args.instance)
+    result = bootstrap.attest(
+        instance, args.policy, identity=args.identity, issuer=args.issuer, validator=args.validator
+    )
+    if args.json:
+        print(
+            json_report(
+                "attest",
+                {
+                    **json.loads(render_attestation(result, "json")),
+                    "channel": bootstrap.UNVERIFIED if args.issuer is None else args.issuer,
+                },
+            ),
+            file=out,
+        )
+    else:
+        print(render_attestation(result, "text"), file=out)
+        if args.issuer is None:
+            print(f"channel: {bootstrap.UNVERIFIED}", file=out)
+    if args.output is not None:
+        result.save(args.output)
+        _err(f"wrote {args.output}")
+    return EXIT_OK if result.passed else EXIT_FAILURE
+
+
+def _cmd_secrets_help(args: argparse.Namespace, out: TextIO) -> int:
+    del args
+    print("tundravm secrets deliver|unlock: see `tundravm secrets --help`", file=out)
+    return EXIT_SDK_ERROR
+
+
+def _cmd_deliver(args: argparse.Namespace, out: TextIO) -> int:
+    found = settings(None)
+    instance = instances.open_instance(found.instances, args.instance)
+    result, names = bootstrap.deliver(
+        instance, args.policy, args.values, identity=args.identity, validator=args.validator
+    )
+    print(f"delivered {', '.join(names)} to {instance.id} (verdict {result.verdict})", file=out)
+    print(f"channel: {bootstrap.UNVERIFIED}", file=out)
+    return EXIT_OK
+
+
+def _cmd_unlock(args: argparse.Namespace, out: TextIO) -> int:
+    found = settings(None)
+    instance = instances.open_instance(found.instances, args.instance)
+    result = bootstrap.unlock(
+        instance,
+        args.volume,
+        lambda: bootstrap.read_passphrase(args.volume),
+        identity=args.identity,
+        validator=args.validator,
+    )
+    print(f"unlocked {args.volume} on {instance.id} (verdict {result.verdict})", file=out)
+    print(f"channel: {bootstrap.UNVERIFIED}", file=out)
+    return EXIT_OK
+
+
+# ── verify ───────────────────────────────────────────────────────────────
+
+
+def _cmd_verify(args: argparse.Namespace, out: TextIO) -> int:
+    found = _settings(args)
+    build = builds.resolve(args.build, root=found.build, image=None)
+    result = mf.verify(
+        build.path, require_signature=args.require_signature, allowed_signers=args.allowed_signers
+    )
+    checks = list(result.checks)
+    if args.rebuild:
+        checks.append(_rebuild(args, found, build))
+        result = replace(result, checks=tuple(checks))
+    print(json_report("verify", result.to_dict()) if args.json else result.render(), file=out)
+    return EXIT_OK if result.passed else EXIT_FAILURE
+
+
+def _rebuild(args: argparse.Namespace, found: Settings, build: builds.Build) -> mf.Check:
+    """Build the recorded profile and targets again, against the recorded lock, in a
+    fresh build root, and compare every artifact with the manifest."""
+    import tempfile
+
+    loaded = _loaded(args, found)
+    with tempfile.TemporaryDirectory(prefix="tundravm-rebuild-") as scratch:
+        root = Path(scratch)
+        (root / "tundravm.lock").write_bytes(
+            (build.path / mf.INPUTS / "tundravm.lock").read_bytes()
+        )
+        img = replace(loaded.lowered(), lock_file=root / "tundravm.lock", build_dir=root)
+        reporter = TextReporter(sys.stderr)
+        try:
+            again = builds.build(
+                img,
+                root=root,
+                profile=build.profile,
+                targets=build.targets,
+                reporter=reporter,
+                ports=_service_ports(loaded, build.profile),
+            )
+        finally:
+            reporter.close()
+        want = {
+            k: v
+            for k, v in build.manifest["artifacts"].items()
+            if "/" not in k and k not in (mf.MEASUREMENTS, mf.SBOM)
+        }
+        have = again.build.manifest["artifacts"]
+        differ = sorted(
+            k for k, v in want.items() if (have.get(k) or {}).get("sha256") != v.get("sha256")
+        )
+    if differ:
+        return mf.Check(
+            "rebuild", "failed", f"{', '.join(differ)} differ from an independent rebuild"
+        )
+    return mf.Check("rebuild", "ok", f"an independent rebuild matched {len(want)} artifacts")
+
+
+# ── convert ──────────────────────────────────────────────────────────────
+
+
+def _cmd_convert(args: argparse.Namespace, out: TextIO) -> int:
+    from . import convert
+
+    if args.source == "systemd":
+        if args.allow_scripts:
+            raise ValidationError("--allow-scripts applies to --from mkosi.", hint="Drop it.")
+        converted = convert.from_systemd(args.path, mode=args.mode)
+    else:
+        converted = convert.from_mkosi(args.path, allow_scripts=args.allow_scripts)
+    out.write(converted.source)
+    for line in convert.render(converted):
+        print(line, file=out)
+    return EXIT_OK
+
+
+# ── doctor ───────────────────────────────────────────────────────────────
+
+
+def _rows(area: str | None, host: Host) -> list[Capability]:
+    rows = list(capabilities(host, backend=None, areas=AREAS))
+    if area is None:
+        return rows
+    if area == "build":
+        return [row for row in rows if row.area == "build"]
+    if area in ("run", "tdx"):
+        name = "run:simulated" if area == "run" else "run:tdx"
+        return [row for row in rows if row.name == name]
+    return [row for row in rows if row.name.endswith(f":{area}")]
+
+
+def doctor(
     out: TextIO,
     *,
-    golden: bool = True,
-) -> None:
-    """Print the numbered follow-up commands, run from *root*; *synced*: the tundravm
-    dependency the pyproject.toml ``init`` wrote holds; *golden*: the tests compare mkosi/."""
-    name = recipe.name
-    against = " against mkosi/" if golden else " on the planned image"
-    steps = [
-        (
-            f"tundravm lock {name}",
-            "record recipe sections and pin source repositories/downloads in build/tundravm.lock",
-        ),
-        (f"tundravm compile {name} --tree mkosi", "write the mkosi tree; commit it"),
-        *(
-            [(f"uv run pytest {tests.parent.name}", f"run {tests.name}{against}")]
-            if tests is not None
-            else []
-        ),
-        (f"tundravm ci {name} --tree mkosi", "the lint, tree and lockfile checks CI runs"),
-        (f"tundravm bake {name} --build build", "build the image"),
-    ]
-    width = max(len(command) for command, _ in steps)
-    where = "" if root.resolve() == Path.cwd().resolve() else f" (from {root})"
-    print(f"next{where}:", file=out)
-    for number, (command, why) in enumerate(steps, 1):
-        print(f"  {number}. {command:<{width}}  {why}", file=out)
-    if synced is not None:
-        pinned = "pinned dependency" if synced.pinned else "dependency"
-        rev = synced.rev[:12] if synced.pinned else synced.rev
-        print(f"  `uv sync` installs the {pinned}, tundravm at {rev}", file=out)
-    if github:
-        print("then commit mkosi/ and build/tundravm.lock; the workflow checks both", file=out)
+    area: str | None = None,
+    runner: ProbeRunner | None = None,
+    host: Host | None = None,
+    as_json: bool = False,
+) -> int:
+    """Print one row per capability (of *area*); exit 1 when a relevant one is blocked."""
+    facts = host if host is not None else Host()
+    if runner is not None:
+        facts.runner = runner
+    rows = _rows(area, facts)
+    if as_json:
+        payload = {
+            "rows": [{"name": r.name, "verdict": r.verdict, "detail": r.detail} for r in rows]
+        }
+        print(json_report("doctor", payload), file=out)
+    else:
+        width = max(16, *(len(row.name) for row in rows))
+        for row in rows:
+            print(row.render(width), file=out)
+    blocked = any(r.verdict == "blocked" for r in rows) if area else failed(rows, areas=None)
+    return EXIT_FAILURE if blocked else EXIT_OK
 
 
-def _init_doctor(kind: BackendKind, runner: ProbeRunner | None, out: TextIO) -> None:
-    """Check the backend ``init`` wired in can build; a blocked build is reported, never fatal."""
-    print(
-        f"\nchecking the {kind} backend (tundravm doctor --for build --backend {kind}):",
-        file=out,
-    )
-    backend = Backend(kind).build_backend()
-    if doctor(None, out, runner=runner, backend=backend, areas=["build"]) != EXIT_OK:
-        print(
-            f"the {kind} backend is not ready: install the missing tools above, or bake "
-            "with --backend inprocess for a simulated build",
-            file=out,
-        )
-
-
-def _init_name(requested: str | None, root: Path) -> str:
-    raw = requested if requested is not None else root.resolve().name
-    raw = raw.removesuffix(".py")
-    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-.")
-    if requested is not None and (not name or name != raw):
-        raise ValidationError(
-            f"Invalid recipe name: {requested!r}",
-            hint="Use letters, digits, `-`, `_` and `.` only.",
-        )
-    return name or "image"
-
-
-def _project_name(name: str) -> str:
-    """*name* as a PEP 508 project name: it starts and ends with a letter or digit."""
-    return re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", name) or "image"
-
-
-def _init_gitignore(path: Path) -> str:
-    """Append the build/ block to *path* unless present; return the report line."""
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(GITIGNORE_BLOCK, encoding="utf-8")
-        return f"created {path}"
-    text = path.read_text(encoding="utf-8")
-    lines = {line.strip() for line in text.splitlines()}
-    if GITIGNORE_MARKER in lines:
-        return f"kept {path} (already ignores build output)"
-    separator = (
-        "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-    )
-    path.write_text(text + separator + GITIGNORE_BLOCK, encoding="utf-8")
-    report = f"updated {path}"
-    if lines & {"build/", "/build/", "build", "/build"}:
-        report += (
-            "\nwarning: an existing `build/` rule also hides build/tundravm.lock;"
-            " remove it or `git add -f build/tundravm.lock`"
-        )
-    return report
+def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
+    return doctor(out, area=args.area, runner=args.runner, as_json=args.json)
 
 
 __all__ = [
-    "BACKEND_KINDS",
+    "COMMANDS",
+    "DEPLOY_ACTIONS",
+    "ERROR_SCHEMA",
     "EXIT_FAILURE",
     "EXIT_OK",
-    "ERROR_SCHEMA",
     "EXIT_SDK_ERROR",
-    "MEASUREMENT_SCHEMES",
-    "PLACEHOLDER_BANNER",
-    "ProbeRunner",
+    "QUICKSTART",
+    "RUN_ACTIONS",
     "build_parser",
     "doctor",
     "error_payload",
     "json_report",
     "main",
-    "parse_deploy_target",
-    "render_deployment",
-    "render_drift",
-    "render_measurements",
-    "render_measurements_markdown",
-    "render_recipe_template",
-    "run_probe",
     "schema",
 ]

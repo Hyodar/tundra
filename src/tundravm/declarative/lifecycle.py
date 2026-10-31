@@ -625,7 +625,7 @@ def check_report(
     variants: Sequence[str] | None,
     lock: Lock | Path | NoLock | None = None,
 ) -> list[Diagnostic]:
-    """Declarative and compiler diagnostics, as ``tundravm lint`` reports them.
+    """Declarative and compiler diagnostics, as ``tundravm check`` reports them.
 
     The recipe's resolution diagnostics come first, in resolution order. When
     none is an error, the lowered image's ``check()`` findings follow, sorted.
@@ -689,7 +689,7 @@ def lint(
 ) -> tuple[Diagnostic, ...]:
     """Every problem with *variants* (default: all): resolution, fragment checks, compiler rules.
 
-    The same :class:`Diagnostic` values ``tundravm lint`` reports, hints included.
+    The same :class:`Diagnostic` values ``tundravm check`` reports, hints included.
     With *lock*, its source pins apply before the compiler rules run (a pinned
     source never reports ``source-unpinned``) and drift against it is reported
     too (:func:`lock_status`).
@@ -1066,7 +1066,7 @@ def _checkout(
     if offline and donor is None:
         raise PolicyError(
             f"Cannot fetch {build.name!r}: policy network_mode is offline.",
-            hint=f"Populate {path} on a connected host (`tundravm fetch`), or relax network_mode.",
+            hint=f"Populate {path} on a connected host (`tundravm build`), or relax network_mode.",
             context={"operation": "fetch", "source": build.source.describe()},
         )
     root.mkdir(parents=True, exist_ok=True)
@@ -1405,8 +1405,7 @@ def _rebake(
     except OSError as exc:
         raise StateError(
             f"Cannot reset {scratch} for the second build: {exc.strerror or exc}.",
-            hint=f"Remove it as its owner (`sudo rm -rf -- {scratch}`, or "
-            "`tundravm clean --what reproduce`), then bake again.",
+            hint=f"Remove it as its owner (`sudo rm -rf -- {scratch}`), then build again.",
             context={"path": str(exc.filename or scratch)},
         ) from exc
     sources = Path(baking.build_dir) / SOURCES_DIRNAME
@@ -1416,8 +1415,8 @@ def _rebake(
         except (OSError, shutil.Error) as exc:
             raise StateError(
                 f"Cannot link the fetched sources into {scratch} for the second build: {exc}",
-                hint="Make BUILD/.sources readable by this user (`tundravm fetch RECIPE --force` "
-                "checks it out again), then bake again.",
+                hint="Make BUILD/.sources readable by this user (`tundravm build --clean-cache` "
+                "checks it out again), then build again.",
                 context={"sources": str(sources)},
             ) from exc
     if reporter is not None:
@@ -1474,7 +1473,7 @@ def _report_reproducibility(
         "between two builds.\n" + "\n".join(lines),
         hint=(
             f"The second build is kept in {scratch}. Compare the compiled trees with "
-            f"`tundravm diff RECIPE --tree {scratch / 'mkosi'}` and the images with "
+            f"`tundravm check RECIPE --tree {scratch / 'mkosi'}` and the images with "
             "diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and "
             "packages installed without a snapshot (Debian(snapshot=...))."
         ),
@@ -1595,7 +1594,7 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
     except (OSError, ValueError) as exc:
         raise StateError(
             f"Unreadable bake result: {exc}",
-            hint="Run `tundravm bake RECIPE` again to rewrite bake-result.json.",
+            hint="Run `tundravm build` again to rewrite bake-result.json.",
             context={"path": str(path)},
         ) from exc
     artifacts: list[Artifact] = []

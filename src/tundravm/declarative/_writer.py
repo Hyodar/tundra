@@ -1,4 +1,4 @@
-"""Declarations as Python source: what ``tundravm units convert`` prints."""
+"""Declarations as Python source: what ``tundravm convert --from systemd`` prints."""
 
 from __future__ import annotations
 
@@ -161,7 +161,7 @@ def _hint(obj: object) -> str:
 
 
 def declarations_source(decls: Sequence[object], *, names: Sequence[str] = ()) -> str:
-    """Python source binding each of *decls* (``tundravm units convert``), ruff-formatted;
+    """Python source binding each of *decls* (``tundravm convert --from systemd``), ruff-formatted;
     *names* are the variable names (default: ``unit``, ``unit_2`` ...)."""
     writer = _Writer(tree=Path.cwd())
     body = [

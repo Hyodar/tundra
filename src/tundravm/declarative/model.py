@@ -225,7 +225,7 @@ class Variant(Located):
     changes: tuple[VariantChange, ...] = ()
     outputs: tuple[Target, ...] = ()
     release: bool = True
-    """Whether ``tundravm release`` ships it by default; ``False`` for a development variant
+    """Whether its builds are production builds; ``False`` for a development variant
     (``DevTools``), which ``release`` then skips unless named with ``--allow-ineligible``.
     Only ``False`` is part of the recipe digest."""
 
@@ -307,7 +307,7 @@ class Mkosi:
     compiler's fixed seed; set it only to reproduce a tree built with another one."""
     output_dir: str | None = None
     """Where mkosi writes the images, relative to the tree (``OutputDirectory=``). ``None``:
-    ``mkosi.output``, which ``tundravm bake`` overrides with its build directory."""
+    ``mkosi.output``, which ``tundravm build`` overrides with its workspace."""
     package_cache: str | None = None
     """mkosi's package cache directory, relative to the tree (``PackageCacheDirectory=``).
     ``None``: mkosi's default."""
@@ -1059,7 +1059,7 @@ class Unit(Declared):
         ``app.service.d/20-x.conf``) converts to: ``Service``, ``Task``, ``Mount`` or
         ``Unit(dropin=DropIn(...))``. ``exact`` is typed only when it renders *text* byte
         for byte, else ``Unit(name, text)``; ``semantic`` keeps the directives and values
-        (unowned ones in ``extra=``). ``tundravm units convert`` prints it, and pairs
+        (unowned ones in ``extra=``). ``tundravm convert --from systemd`` prints it, and pairs
         sockets and timers with their services."""
         from tundravm._units.parse import parse
 
@@ -2017,7 +2017,7 @@ class DebianConfig:
     *version* is the Debian ``linux`` package version (``apt-cache policy
     linux-config-6.12``); the config is ``config.<arch>_none_<flavor>.xz`` of
     ``linux-config-<major.minor>`` in the pool of *snapshot* (default: the platform's).
-    ``tundravm lock`` pins the package's sha256, ``tundravm fetch`` downloads it on the host.
+    ``tundravm lock`` pins the package's sha256, ``tundravm build`` downloads it on the host.
     """
 
     version: str

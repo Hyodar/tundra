@@ -72,7 +72,7 @@ def test_a_schema_1_policy_is_refused_with_a_re_export_hint() -> None:
     old = {"schema_version": 1, "scheme": "rtmr", "registers": {"RTMR0": A}}
     with pytest.raises(ValidationError, match="schema_version 1") as caught:
         read_policy(old)
-    assert "--export-policy" in str(caught.value.hint)
+    assert "measurements.json" in str(caught.value.hint)
 
 
 def test_the_validator_gets_one_value_per_register() -> None:

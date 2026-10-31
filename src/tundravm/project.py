@@ -1,79 +1,71 @@
-"""Project configuration: the ``[tool.tundravm]`` table of the nearest ``pyproject.toml``.
+"""Project configuration: ``[tool.tundravm]`` of the nearest ``pyproject.toml`` and ``TUNDRAVM_*``.
 
-``tundravm init`` writes the table; every recipe command reads it so RECIPE and
-the build paths can be omitted. Lookup starts in the working directory and
-walks up to the first ``pyproject.toml`` that has a ``[tool.tundravm]`` table;
-relative paths in it are relative to that file's directory. Precedence per
-value: an explicit command-line flag, then the table, then the built-in default.
+Three values, each resolved the same way: an explicit command-line argument, then the
+environment (``TUNDRAVM_IMAGE``, ``TUNDRAVM_BUILD``, ``TUNDRAVM_BACKEND``), then the table,
+then the built-in default. ``image`` is the image file (``image = "prover.py"``), ``build``
+the build root (``build = "build"``: the lockfile ``build/tundravm.lock``, the build
+directories ``build/<image>/production/<build-id>/``), ``backend`` the build backend
+(``local``, ``lima``, ``inprocess``). Relative paths in the table are relative to the
+``pyproject.toml``; in the environment, to the working directory. Lookup walks up from the
+working directory to the first ``pyproject.toml`` that has the table. Instances live in
+``.tundravm/instances/`` beside it (in the working directory without one).
 """
 
 from __future__ import annotations
 
+import os
 import tomllib
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
 from .errors import ValidationError
-from .evidence import EVIDENCE_REQUIREMENTS
 
 PYPROJECT = "pyproject.toml"
 TABLE = "tool.tundravm"
 
-ConfigKey = Literal["recipe", "tree", "build", "lockfile", "backend"]
+ConfigKey = Literal["image", "build", "backend"]
 CONFIG_KEYS: tuple[ConfigKey, ...] = get_args(ConfigKey)
-PATH_KEYS: frozenset[str] = frozenset({"recipe", "tree", "build", "lockfile"})
-RENAMED_KEYS: dict[str, ConfigKey] = {"out": "build"}
-"""Keys earlier versions read, with the key that replaced each."""
-
-Origin = Literal["flag", "pyproject", "default", "recipe"]
-"""Where a value came from; ``recipe``: the kind of the recipe file's ``backend``."""
-
-DEFAULTS: dict[ConfigKey, str] = {
-    "tree": "build/mkosi",
-    "build": "build",
-    "lockfile": "build/tundravm.lock",
+PATH_KEYS: frozenset[str] = frozenset({"image", "build"})
+ENVIRONMENT: dict[ConfigKey, str] = {
+    "image": "TUNDRAVM_IMAGE",
+    "build": "TUNDRAVM_BUILD",
+    "backend": "TUNDRAVM_BACKEND",
 }
-"""Built-in defaults, relative to the recipe's directory (``backend``: the recipe file's)."""
+"""The variable that sets each key for one shell or CI job."""
+
+RENAMED_KEYS: dict[str, str] = {"recipe": "image", "out": "build"}
+"""Keys earlier versions read, with the key that replaced each."""
+REMOVED_KEYS: dict[str, str] = {
+    "tree": "pass the committed tree to `tundravm check --tree DIR`",
+    "lockfile": "the lockfile is BUILD/tundravm.lock, beside the build directories",
+    "require": "a build directory records what was checked; `tundravm verify` checks it",
+    "strict_toolchain": "`tundravm check` reports toolchain drift; the lock pins the toolchain",
+}
+"""Keys that no longer exist, with where their job went."""
+
+BACKEND_KINDS: tuple[str, ...] = ("local", "lima", "inprocess")
+
+Origin = Literal["argument", "environment", "pyproject", "default"]
+
+DEFAULT_BUILD = "build"
+INSTANCES = Path(".tundravm") / "instances"
+"""Where ``run`` and ``deploy`` keep one directory per instance, under the project root."""
 
 RESOLUTION_HELP = (
-    "Project configuration: RECIPE may be omitted when a pyproject.toml with a "
-    "[tool.tundravm] table is found in the working directory or a parent (the "
-    "nearest one with the table wins; `tundravm init` writes it). Its keys: recipe, "
-    "tree (the compiled mkosi tree, every --tree), build (the build directory holding "
-    "bake-result.json, every --build), lockfile (--lockfile; not clean's), backend "
-    "(bake and doctor --backend) and require (a list of evidence checks, such as "
-    '["reproducible", "lock"]: what status judges release readiness against and what '
-    "evidence and release require when --require is omitted; default reproducible and "
-    "lock; --require '' requires none) and strict_toolchain (true: `toolchain-drift`, the "
-    "running build toolchain differing from the lockfile's, is an error in lint and lock "
-    "--check, not a warning), with paths relative to the pyproject.toml. They apply "
-    "to every command when RECIPE is omitted or names the table's recipe; commands "
-    "without RECIPE (measure, deploy, sbom) always apply them. An explicit RECIPE or flag "
-    "always wins; then the table; then the built-in default. A configured lockfile is "
-    "never replaced by build/tundravm.lock: until `tundravm lock` writes it, commands say "
-    "it does not exist and bake refuses. `tundravm config` prints the values the "
-    "commands resolve (the recipe file's backend kind when none is set; whether the "
-    "recipe and lockfile exist) and where each came from."
+    "IMAGE defaults to [tool.tundravm] image in the nearest pyproject.toml, or "
+    "$TUNDRAVM_IMAGE; the build root to its `build` key or $TUNDRAVM_BUILD (default: "
+    "build); the backend to $TUNDRAVM_BACKEND or its `backend` key (default: local on "
+    "Linux x86-64, lima elsewhere)."
 )
-
-
-REQUIRE_KEY = "require"
-"""The table's one list: the evidence checks ``status`` judges release readiness against
-and ``evidence`` and ``release`` require when ``--require`` is omitted."""
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectConfig:
-    """The ``[tool.tundravm]`` table of *path*, with its paths made absolute."""
+    """The ``[tool.tundravm]`` table of *path*."""
 
     path: Path
-    values: Mapping[str, str] = field(default_factory=dict)
-    require: tuple[str, ...] | None = None
-    """``require``: the checks a release must hold, in the order given; ``None`` when unset."""
-    strict_toolchain: bool = False
-    """``strict_toolchain = true``: ``toolchain-drift`` is an error, not a warning."""
+    values: dict[str, str] = field(default_factory=dict)
 
     @property
     def root(self) -> Path:
@@ -82,26 +74,26 @@ class ProjectConfig:
     def get(self, key: ConfigKey) -> str | None:
         return self.values.get(key)
 
-    def path_of(self, key: ConfigKey) -> Path | None:
-        """*key*'s value as a path relative to the working directory when inside it."""
-        value = self.values.get(key)
-        if value is None:
-            return None
-        return _shown(self.root / value)
 
-    def default_path(self, key: ConfigKey) -> Path:
-        """*key*'s path (:meth:`path_of`), else its built-in default beside the pyproject.toml."""
-        configured = self.path_of(key)
-        return configured if configured is not None else _shown(self.root / DEFAULTS[key])
+@dataclass(frozen=True, slots=True)
+class Settings:
+    """What a command runs against: the image file, the build root, the backend kind, and
+    where each came from; *root* is the project directory (instances live there)."""
 
+    image: Path | None
+    build: Path
+    backend: str | None
+    root: Path
+    origins: dict[str, Origin] = field(default_factory=dict)
 
-def _shown(path: Path) -> Path:
-    """*path* relative to the working directory when it is below it, else absolute."""
-    absolute = path if path.is_absolute() else Path.cwd() / path
-    try:
-        return absolute.relative_to(Path.cwd())
-    except ValueError:
-        return absolute
+    @property
+    def lockfile(self) -> Path:
+        """``BUILD/tundravm.lock``: the one lockfile every command reads."""
+        return self.build / "tundravm.lock"
+
+    @property
+    def instances(self) -> Path:
+        return self.root / INSTANCES
 
 
 def find_project(start: Path | None = None) -> ProjectConfig | None:
@@ -112,16 +104,57 @@ def find_project(start: Path | None = None) -> ProjectConfig | None:
         if candidate.is_file():
             table = _table(candidate)
             if table is not None:
-                values, require, strict = table
-                return ProjectConfig(candidate, values, require, strict)
+                return ProjectConfig(candidate, table)
     return None
 
 
-STRICT_TOOLCHAIN_KEY = "strict_toolchain"
-"""The table's one boolean: ``toolchain-drift`` is an error when true."""
+def settings(image: Path | None = None, *, start: Path | None = None) -> Settings:
+    """Resolve the image, build root and backend for a command given *image* (or none)."""
+    project = find_project(start)
+    origins: dict[str, Origin] = {}
+    base = Path.cwd() if project is None else project.root
+
+    def chosen(key: ConfigKey) -> tuple[str | None, Origin, Path]:
+        env = os.environ.get(ENVIRONMENT[key], "").strip()
+        if env:
+            return env, "environment", Path.cwd()
+        value = None if project is None else project.get(key)
+        if value is not None:
+            return value, "pyproject", base
+        return None, "default", base
+
+    found_image: Path | None = image
+    if image is not None:
+        origins["image"] = "argument"
+    else:
+        value, origin, where = chosen("image")
+        if value is not None:
+            found_image = _shown(where / value)
+            origins["image"] = origin
+    value, origin, where = chosen("build")
+    build = _shown(where / (value or DEFAULT_BUILD))
+    origins["build"] = origin
+    backend, origin, _ = chosen("backend")
+    if backend is not None and backend not in BACKEND_KINDS:
+        source = ENVIRONMENT["backend"] if origin == "environment" else f"[{TABLE}] backend"
+        raise ValidationError(
+            f"{source} = {backend!r} is not a build backend.",
+            hint=f"Use one of: {', '.join(BACKEND_KINDS)}.",
+        )
+    origins["backend"] = origin
+    return Settings(found_image, build, backend, base, origins)
 
 
-def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None, bool] | None:
+def _shown(path: Path) -> Path:
+    """*path* relative to the working directory when it is below it, else absolute."""
+    absolute = path if path.is_absolute() else Path.cwd() / path
+    try:
+        return absolute.resolve().relative_to(Path.cwd().resolve())
+    except ValueError:
+        return absolute.resolve()
+
+
+def _table(path: Path) -> dict[str, str] | None:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -144,29 +177,27 @@ def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None, bool] | 
     if renamed:
         raise ValidationError(
             f"[{TABLE}] key(s) {', '.join(renamed)} in {path} were renamed.",
-            hint="Rename "
-            + ", ".join(f"{old} to {RENAMED_KEYS[old]}" for old in renamed)
-            + f' (e.g. {RENAMED_KEYS[renamed[0]]} = "build").',
+            hint="Rename " + ", ".join(f"{old} to {RENAMED_KEYS[old]}" for old in renamed) + ".",
             context={"path": str(path)},
         )
-    unknown = sorted(set(table) - {*CONFIG_KEYS, REQUIRE_KEY, STRICT_TOOLCHAIN_KEY})
-    if unknown:
+    removed = sorted(set(table) & set(REMOVED_KEYS))
+    if removed:
         raise ValidationError(
-            f"Unknown [{TABLE}] key(s) in {path}: {', '.join(unknown)}.",
-            hint=f"[{TABLE}] accepts: "
-            + ", ".join((*CONFIG_KEYS, REQUIRE_KEY, STRICT_TOOLCHAIN_KEY)),
-            context={"path": str(path)},
-        )
-    require = _require(table.pop(REQUIRE_KEY), path) if REQUIRE_KEY in table else None
-    strict = table.pop(STRICT_TOOLCHAIN_KEY, False)
-    if not isinstance(strict, bool):
-        raise ValidationError(
-            f"[{TABLE}] {STRICT_TOOLCHAIN_KEY} in {path} must be true or false.",
-            hint=f"Write it as {STRICT_TOOLCHAIN_KEY} = true",
+            f"[{TABLE}] key(s) {', '.join(removed)} in {path} no longer exist.",
+            hint="; ".join(f"{key}: {REMOVED_KEYS[key]}" for key in removed) + ".",
             context={"path": str(path)},
         )
     values: dict[str, str] = {}
     for key, value in table.items():
+        if key not in CONFIG_KEYS and not isinstance(value, dict):
+            raise ValidationError(
+                f"Unknown [{TABLE}] key {key!r} in {path}.",
+                hint=f"[{TABLE}] accepts {', '.join(CONFIG_KEYS)} and the [{TABLE}.azure] and "
+                f"[{TABLE}.gcp] deployment tables.",
+                context={"path": str(path)},
+            )
+        if isinstance(value, dict):
+            continue
         if not isinstance(value, str) or not value:
             raise ValidationError(
                 f"[{TABLE}] {key} in {path} must be a non-empty string.",
@@ -174,55 +205,50 @@ def _table(path: Path) -> tuple[dict[str, str], tuple[str, ...] | None, bool] | 
                 context={"path": str(path)},
             )
         values[key] = value
-    return values, require, strict
+    return values
 
 
-def _require(value: object, path: Path) -> tuple[str, ...]:
-    """``require`` as given: a list of evidence checks, each one known."""
-    known = ", ".join(EVIDENCE_REQUIREMENTS)
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValidationError(
-            f"[{TABLE}] {REQUIRE_KEY} in {path} must be a list of strings.",
-            hint=f'Write it as {REQUIRE_KEY} = ["reproducible", "lock"], from: {known}.',
-            context={"path": str(path)},
-        )
-    unknown = [item for item in value if item not in EVIDENCE_REQUIREMENTS]
-    if unknown:
-        raise ValidationError(
-            f"[{TABLE}] {REQUIRE_KEY} in {path} names unknown check(s): {', '.join(unknown)}.",
-            hint=f"Require any of: {known}.",
-            context={"path": str(path)},
-        )
-    return tuple(dict.fromkeys(value))
+def deployment_table(target: str, start: Path | None = None) -> dict[str, str]:
+    """``[tool.tundravm.<target>]`` (``azure``, ``gcp``): the cloud settings ``deploy`` uses
+    (``project``, ``bucket``, ``zone`` ...), overridden by ``TUNDRAVM_<TARGET>_<KEY>``."""
+    found: dict[str, str] = {}
+    project = find_project(start)
+    if project is not None:
+        data = tomllib.loads(project.path.read_text(encoding="utf-8"))
+        table = data.get("tool", {}).get("tundravm", {}).get(target, {})
+        if isinstance(table, dict):
+            found.update({str(k): str(v) for k, v in table.items()})
+    prefix = f"TUNDRAVM_{target.upper()}_"
+    for name, value in os.environ.items():
+        if name.startswith(prefix) and value:
+            found[name.removeprefix(prefix).lower()] = value
+    return found
 
 
-def render_table(*, recipe: str, backend: str | None = None) -> str:
-    """The ``[tool.tundravm]`` table ``init`` writes (a TOML snippet, trailing newline).
-
-    Without *backend* the table names none, and commands use this host's.
-    """
-    return (
-        f"[{TABLE}]\n"
-        f'recipe = "{recipe}"\n'
-        f'tree = "mkosi"\n'
-        f'build = "build"\n'
-        f'lockfile = "build/tundravm.lock"\n'
-        + ("" if backend is None else f'backend = "{backend}"\n')
+def render_table(*, image: str, backend: str | None = None) -> str:
+    """The ``[tool.tundravm]`` table ``new`` writes (a TOML snippet, trailing newline)."""
+    return f'[{TABLE}]\nimage = "{image}"\nbuild = "build"\n' + (
+        "" if backend is None else f'backend = "{backend}"\n'
     )
 
 
 __all__ = [
+    "BACKEND_KINDS",
     "CONFIG_KEYS",
-    "DEFAULTS",
+    "ENVIRONMENT",
+    "INSTANCES",
     "PATH_KEYS",
     "PYPROJECT",
+    "REMOVED_KEYS",
     "RENAMED_KEYS",
-    "REQUIRE_KEY",
     "RESOLUTION_HELP",
     "TABLE",
     "ConfigKey",
     "Origin",
     "ProjectConfig",
+    "Settings",
+    "deployment_table",
     "find_project",
     "render_table",
+    "settings",
 ]

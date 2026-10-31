@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tests.helpers import write_recipe_file
 from tundravm.declarative import (
     Backend,
     Diagnostic,
@@ -238,64 +237,6 @@ def test_drift_ignores_embedded_recipe_that_does_not_match_section_digest() -> N
     )
 
 
-def test_cli_lock_check_exit_codes(recipe: Path) -> None:
-    lock_path = recipe.parent / "app.lock"
-    code, out = run_main("lock", str(recipe), "--lockfile", str(lock_path), "--check")
-    assert code == EXIT_SDK_ERROR
-    assert out == ""
-
-    assert run_main("lock", str(recipe), "--lockfile", str(lock_path))[0] == EXIT_OK
-    code, out = run_main("lock", str(recipe), "--lockfile", str(lock_path), "--check")
-    assert (code, out) == (EXIT_OK, "lock is up to date\n")
-
-    _add_htop(recipe)
-    before = lock_path.read_text()
-    code, out = run_main("lock", str(recipe), "--lockfile", str(lock_path), "--check")
-    assert code == EXIT_FAILURE
-    assert out == "~ variants.default.packages: +htop\n"
-    assert lock_path.read_text() == before
-
-
-def test_cli_lock_explain_prints_drift_then_writes(recipe: Path) -> None:
-    path = str(recipe.parent / "app.lock")
-    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain")
-    assert code == EXIT_OK
-    assert out.startswith("no lockfile at ")
-    assert "locked " in out
-
-    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain")
-    assert code == EXIT_OK
-    assert out.splitlines()[0] == "lock is up to date"
-
-    _add_htop(recipe)
-    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain", "--check")
-    assert code == EXIT_FAILURE
-    assert out == "~ variants.default.packages: +htop\n"
-
-    code, out = run_main("lock", str(recipe), "--lockfile", path, "--explain")
-    assert code == EXIT_OK
-    assert out.splitlines()[0] == "~ variants.default.packages: +htop"
-    assert run_main("lock", str(recipe), "--lockfile", path, "--check") == (
-        EXIT_OK,
-        "lock is up to date\n",
-    )
-
-
-def test_cli_bake_frozen_surfaces_drift(recipe: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    lock_path = str(recipe.parent / "app.lock")
-    run_main("lock", str(recipe), "--lockfile", lock_path)
-    _add_htop(recipe)
-
-    code, _ = run_main(
-        "bake", str(recipe), "--lockfile", lock_path, "--build", str(recipe.parent / "out")
-    )
-
-    assert code == EXIT_SDK_ERROR
-    err = capsys.readouterr().err
-    assert "error [E_LOCKFILE]" in err
-    assert "~ variants.default.packages: +htop" in err
-
-
 # ── variant subsets and lockfile versions ───────────────────────────────
 
 
@@ -338,31 +279,6 @@ def test_lockfile_round_trips_its_toolchain() -> None:
     assert parsed == current
     assert LOCKFILE_VERSION == 5
     assert parsed.toolchain is not None and parsed.toolchain.tundravm
-
-
-def test_cli_lock_check_of_one_variant_against_a_full_lock(tmp_path: Path) -> None:
-    path = tmp_path / "recipe.py"
-    path.write_text(VARIANTS_RECIPE, encoding="utf-8")
-    lock_path = tmp_path / "app.lock"
-    assert run_main("lock", str(path), "--lockfile", str(lock_path))[0] == EXIT_OK
-
-    assert run_main(
-        "lock", str(path), "--lockfile", str(lock_path), "--check", "--variant", "dev"
-    ) == (
-        EXIT_OK,
-        "lock is up to date\n",
-    )
-    path.write_text(VARIANTS_RECIPE.replace('Package("vim")', 'Package("vim"), Package("gdb")'))
-    assert run_main(
-        "lock", str(path), "--lockfile", str(lock_path), "--check", "--variant", "default"
-    ) == (
-        EXIT_OK,
-        "lock is up to date\n",
-    )
-    code, out = run_main(
-        "lock", str(path), "--lockfile", str(lock_path), "--check", "--variant", "dev"
-    )
-    assert (code, out) == (EXIT_FAILURE, "~ variants.dev.packages: +gdb\n")
 
 
 VARIANTS_RECIPE = """

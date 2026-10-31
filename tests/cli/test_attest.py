@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import socket
 import socketserver
 import struct
 import threading
@@ -16,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main
 from tundravm.attestation import (
     ATTESTATION_SCHEMA,
     CHECKS_NOTE,
@@ -30,7 +28,6 @@ from tundravm.attestation import (
     render_attestation,
     report_data_for,
 )
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 from tundravm.errors import AttestationError, MeasurementError, ValidationError
 
 MRTD, R0, R1, R2, R3 = (bytes([n]) * 48 for n in (0x11, 0x20, 0x21, 0x22, 0x23))
@@ -93,7 +90,7 @@ PEER = {
 }
 """A qemu policy whose platform registers the operator approved: fully covered."""
 UNAPPROVED = policy(RTMR1=R1, RTMR2=R2)
-"""The same policy as ``measure --export-policy`` writes it for qemu: no platform approval."""
+"""The same policy as a qemu measurement record holds it: no platform approval."""
 
 
 class FakeIssuer:
@@ -423,185 +420,6 @@ def _tcp(answer: Answer) -> Iterator[str]:
         server.server_close()
 
 
-@pytest.fixture
-def tcp_endpoint() -> Iterator[tuple[str, FakeIssuer]]:
-    issuer = FakeIssuer()
-    with _tcp(issuer) as url:
-        yield url, issuer
-
-
-@pytest.fixture
-def unix_endpoint(tmp_path: Path) -> Iterator[tuple[str, FakeIssuer]]:
-    issuer = FakeIssuer()
-    path = tmp_path / "tdxs.sock"
-    server = socketserver.ThreadingUnixStreamServer(str(path), _handler(issuer))
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        yield f"unix:{path}", issuer
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-@pytest.fixture
-def peer_file(tmp_path: Path) -> Path:
-    path = tmp_path / "peer.json"
-    path.write_text(json.dumps(PEER), encoding="utf-8")
-    return path
-
-
-@pytest.mark.parametrize("endpoint", ["tcp_endpoint", "unix_endpoint"])
-def test_cli_attest_without_a_validator_is_measurements_match(
-    endpoint: str, peer_file: Path, request: pytest.FixtureRequest
-) -> None:
-    url, issuer = request.getfixturevalue(endpoint)
-    code, out = run_main(
-        "attest", "--issuer", url, "--policy", str(peer_file), "--nonce", NONCE.hex()
-    )
-    assert code == EXIT_OK, out
-    lines = out.splitlines()
-    assert lines[0] == f"attestation {url} (tdx, quote v4)"
-    assert lines[1] == f"policy: {peer_file}"
-    assert lines[2] == "signature unchecked (no --validator)"
-    assert lines[3] == f"nonce  match      {NONCE.hex()}"
-    assert lines[4] == f"MRTD   match      {MRTD.hex()}  (operator-approved)"
-    assert lines[5] == f"RTMR0  match      {R0.hex()}  (operator-approved)"
-    assert lines[-2] == f"note: {CHECKS_NOTE}"
-    assert lines[-1] == "verdict: measurements-match"
-    assert [r["method"] for r in issuer.requests] == ["issue"]
-
-
-@pytest.mark.parametrize(
-    ("mode", "code", "verdict"),
-    [("accept", EXIT_OK, "trusted"), ("reject", EXIT_FAILURE, "untrusted")],
-)
-def test_cli_attest_with_a_validator_socket(
-    tcp_endpoint: tuple[str, FakeIssuer], peer_file: Path, mode: str, code: int, verdict: str
-) -> None:
-    url, _ = tcp_endpoint
-    validator = FakeValidator(mode)
-    with _tcp(validator) as checker:
-        got, out = run_main(
-            "attest", "--issuer", url, "--validator", checker, "--policy", str(peer_file)
-        )
-    assert got == code, out
-    assert out.rstrip().endswith(f"verdict: {verdict}")
-    assert [r["method"] for r in validator.requests] == ["validate"]
-    if mode == "accept":
-        assert f"signature valid ({checker})" in out
-        assert "note:" not in out
-    else:
-        assert "signature invalid" in out and "quote signature invalid" in out
-        assert "reasons: validator-rejected" in out
-
-
-def test_cli_attest_exits_1_on_a_mismatch_and_prints_both_values(
-    tcp_endpoint: tuple[str, FakeIssuer], peer_file: Path
-) -> None:
-    url, issuer = tcp_endpoint
-    issuer.quote = {"rtmrs": (R0, b"\x77" * 48, R2, R3)}
-    code, out = run_main("attest", "--issuer", url, "--policy", str(peer_file))
-    assert code == EXIT_FAILURE
-    assert f"RTMR1  mismatch   {'77' * 48}\n       policy     {R1.hex()}" in out
-    assert "reasons: register-mismatch" in out
-    assert out.rstrip().endswith("verdict: measurements-mismatch")
-
-
-def test_cli_attest_simulated_exits_1_unless_allowed(tmp_path: Path) -> None:
-    zero = bytes(48)
-    path = tmp_path / "zero.json"
-    path.write_text(json.dumps(policy(RTMR0=zero, RTMR1=zero, RTMR2=zero)), encoding="utf-8")
-    with _tcp(FakeIssuer("simulator")) as url:
-        code, out = run_main("attest", "--issuer", url, "--policy", str(path))
-        assert code == EXIT_FAILURE
-        assert out.rstrip().endswith("verdict: simulated")
-        code, out = run_main("attest", "--issuer", url, "--policy", str(path), "--allow-simulated")
-        assert code == EXIT_OK
-        assert out.rstrip().endswith("verdict: simulated")
-
-
-def test_cli_attest_json_and_markdown(
-    tcp_endpoint: tuple[str, FakeIssuer], peer_file: Path
-) -> None:
-    url, _ = tcp_endpoint
-    code, out = run_main("attest", "--issuer", url, "--policy", str(peer_file), "--format", "json")
-    assert code == EXIT_OK
-    payload = json.loads(out)
-    assert payload["schema"] == "tundravm.attest/2"
-    assert payload["verdict"] == "measurements-match" and payload["trusted"] is False
-    assert payload["passed"] is True and payload["signature_status"] == "unchecked"
-    assert payload["policy"] == str(peer_file) and payload["issuer"] == url
-    assert payload["registers"]["RTMR3"] == {
-        "actual": R3.hex(),
-        "expected": [],
-        "matched": None,
-        "verdict": "unchecked",
-    }
-    code, out = run_main(
-        "attest", "--issuer", url, "--policy", str(peer_file), "--format", "markdown"
-    )
-    assert code == EXIT_OK
-    assert out.startswith(f"# tundravm attest: `{url}`")
-    assert "**Verdict:** `measurements-match`" in out
-    assert "| Register | Verdict | Quote | Policy |" in out
-    assert f"| RTMR0 | match | `{R0.hex()}` | `operator-approved` |" in out
-
-
-def test_cli_attest_exits_2_when_the_issuer_is_unreachable(
-    tmp_path: Path, peer_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    code, _ = run_main("attest", "--issuer", f"tcp://127.0.0.1:{port}", "--policy", str(peer_file))
-    assert code == EXIT_SDK_ERROR
-    err = capsys.readouterr().err
-    assert "error [E_ATTESTATION]: Cannot reach the tdxs endpoint" in err
-    assert "ssh -p 2222 -N -L ./tdxs.sock:/var/tdxs.sock" in err
-    with _tcp(FakeIssuer()) as url:
-        code, _ = run_main(
-            "attest",
-            "--issuer",
-            url,
-            "--validator",
-            f"tcp://127.0.0.1:{port}",
-            "--policy",
-            str(peer_file),
-        )
-    assert code == EXIT_SDK_ERROR
-    assert f"error [E_ATTESTATION]: Cannot reach the tdxs endpoint at tcp://127.0.0.1:{port}" in (
-        capsys.readouterr().err
-    )
-    code, _ = run_main("attest", "--issuer", "ftp://x", "--policy", str(peer_file))
-    assert code == EXIT_SDK_ERROR
-    assert "Unsupported endpoint" in capsys.readouterr().err
-    for url in ("http://127.0.0.1:7000/tdxs", "https://gateway.example/tdxs"):
-        code, _ = run_main("attest", "--issuer", url, "--policy", str(peer_file))
-        assert code == EXIT_SDK_ERROR
-        err = capsys.readouterr().err
-        assert f"error [E_VALIDATION]: Endpoint {url!r} is http" in err
-        assert (
-            "tdxs serves a unix socket or tcp; forward it with ssh -L ./tdxs.sock:/var/tdxs.sock"
-            in " ".join(err.split())
-        )
-    code, _ = run_main(
-        "attest", "--issuer", "tcp://h:1", "--policy", str(tmp_path / "missing.json")
-    )
-    assert code == EXIT_SDK_ERROR
-    assert "error [E_VALIDATION]: Cannot read policy" in capsys.readouterr().err
-
-
-def test_cli_attest_help_says_only_a_validator_makes_it_trusted(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit):
-        run_main("attest", "--help")
-    text = " ".join(capsys.readouterr().out.split())
-    assert "With --validator a tdxs validator checks the quote's signature" in text
-    assert "--endpoint" not in text and "--insecure" not in text
-
-
 # ── retained records ─────────────────────────────────────────────────────
 
 OBSERVED = datetime(2026, 10, 17, 9, 30, 5, tzinfo=UTC)
@@ -724,23 +542,6 @@ def test_records_that_are_not_records_are_refused(tmp_path: Path) -> None:
         read_attestation(record)
 
 
-def test_cli_attest_record_writes_the_record(
-    peer_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    target = tmp_path / "att.json"
-    with _tcp(FakeIssuer()) as url:
-        code, _ = run_main(
-            "attest", "--issuer", url, "--policy", str(peer_file), "--record", str(target)
-        )
-    assert code == EXIT_OK
-    assert f"wrote {target}" in capsys.readouterr().err
-    found = read_attestation(target, policy=peer_file)
-    assert found.consistent and found.policy_matches is True
-    assert found.verdict == "measurements-match" and found.record["validator"] is None
-    assert found.record["policy"]["path"] == str(peer_file)
-    assert found.record["policy"]["sha256"] == hashlib.sha256(peer_file.read_bytes()).hexdigest()
-
-
 # ── schema 2: several accepted values per register ──────────────────────
 
 OTHER = b"\x77" * 48
@@ -828,4 +629,4 @@ def test_a_schema_1_policy_is_refused_with_a_re_export_hint() -> None:
     }
     with pytest.raises(ValidationError, match="schema_version 1") as exc:
         attest("tcp://h:1", old, nonce=NONCE, transport=FakeIssuer())
-    assert exc.value.hint is not None and "--export-policy" in exc.value.hint
+    assert exc.value.hint is not None and "measurements.json" in exc.value.hint

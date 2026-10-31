@@ -1,202 +1,160 @@
-"""Tests for the ``tundravm`` command-line interface."""
+"""The command surface: twelve commands, nothing else, and how a usage error reads."""
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
-from tundravm import declarative
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR, main
+from tests.cli.conftest import Cli
+from tundravm import __version__
+from tundravm.cli import COMMANDS, EXIT_OK, EXIT_SDK_ERROR, build_parser
+from tundravm.completion import verbs_of
 
-RECIPE = """
-from tundravm.declarative import File, Fragment, Package, Recipe, Service, User, Variant
-from tundravm.backends.inprocess import InProcessBackend
-
-backend = InProcessBackend()
-recipe = Recipe(
-    "cli",
-    items=(
-        Package("curl"),
-        Package("jq"),
-        Package("linux-image-amd64"),
-        File("/etc/motd", "hello\\n"),
-        User("app", system=True),
-        Service("app", "/usr/bin/app"),
-    ),
-    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
+TWELVE = (
+    "new",
+    "check",
+    "lock",
+    "build",
+    "show",
+    "run",
+    "deploy",
+    "attest",
+    "secrets",
+    "verify",
+    "convert",
+    "doctor",
 )
-"""
+REMOVED = (
+    "init",
+    "inspect",
+    "lint",
+    "compile",
+    "diff",
+    "fetch",
+    "bake",
+    "measure",
+    "sbom",
+    "evidence",
+    "changes",
+    "release",
+    "witness",
+    "explore",
+    "preview",
+    "watch",
+    "status",
+    "clean",
+    "config",
+    "ci",
+    "completion",
+    "units",
+    "import",
+)
 
 
-@pytest.fixture
-def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The recipe file, run from *tmp_path* so its build dir is ``tmp_path / "build"``."""
-    return write_recipe_file(tmp_path, RECIPE, monkeypatch)
+def test_the_parser_has_exactly_the_twelve_commands() -> None:
+    assert COMMANDS == TWELVE
+    assert tuple(verb.name for verb in verbs_of(build_parser())) == TWELVE
 
 
-def test_inspect_json_holds_the_sha256_digest(recipe: Path) -> None:
-    code, out = run_main("inspect", str(recipe), "--format", "json")
-    assert code == EXIT_OK
-    assert re.fullmatch(r"[0-9a-f]{64}", json.loads(out)["digest"])
+def test_help_lists_the_twelve_commands(cli: Cli) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        cli("--help")
+    assert exit_.value.code == 0
 
 
-def test_digest_is_stable_and_variant_sensitive(recipe: Path) -> None:
-    def digest(*extra: str) -> str:
-        return str(
-            json.loads(run_main("inspect", str(recipe), "--format", "json", *extra)[1])["digest"]
-        )
-
-    a, b, c = digest(), digest(), digest("--variant", "azure")
-    assert a == b
-    assert a != c
-    assert digest("--variant", "default", "--variant", "azure") == a
+def test_no_arguments_prints_help_and_the_quickstart(cli: Cli) -> None:
+    result = cli()
+    assert result.code == EXIT_OK
+    for name in TWELVE:
+        assert f"    {name} " in result.out
+    assert "quickstart:" in result.out and "tundravm new demo" in result.out
 
 
-def test_inspect_text_and_json(recipe: Path) -> None:
-    code, out = run_main("inspect", str(recipe))
-    assert code == EXIT_OK
-    assert "curl" in out
-    assert "/etc/motd" in out
-
-    code, out = run_main(
-        "inspect", str(recipe), "--format", "json", "--variant", "default", "--variant", "azure"
-    )
-    assert code == EXIT_OK
-    payload = json.loads(out)["variants"]
-    assert set(payload) == {"default", "azure"}
-    assert "curl" in payload["default"]["packages"]
+def test_version(capsys: pytest.CaptureFixture[str], cli: Cli) -> None:
+    with pytest.raises(SystemExit):
+        cli("--version")
+    assert capsys.readouterr().out.strip() == f"tundravm {__version__}"
 
 
-def test_compile_writes_tree(recipe: Path, tmp_path: Path) -> None:
-    out_dir = tmp_path / "mkosi-out"
-    code, out = run_main("compile", str(recipe), "--tree", str(out_dir))
-    assert code == EXIT_OK
-    assert f"compiled {out_dir}" in out
-    assert "  variants:      default, azure\n" in out
-    assert out_dir.exists()
-    assert any(out_dir.rglob("mkosi.conf"))
-    labels = dict(line.split(":", 1) for line in out.splitlines()[1:])
-    loaded = declarative.load(recipe, attribute=None)
-    assert labels["  recipe_digest"].strip() == declarative.lock(loaded).recipe_digest
-    assert labels["  tree_digest"].strip() == declarative.compile(loaded).digest
-
-
-def test_compile_defaults_to_build_dir(recipe: Path, tmp_path: Path) -> None:
-    code, out = run_main("compile", str(recipe), "--variant", "default")
-    assert code == EXIT_OK
-    assert f"compiled {Path('build') / 'mkosi'}\n" in out
-    assert "variants:      default\n" in out
-    assert (tmp_path / "build" / "mkosi" / "payload" / "mkosi.conf").is_file()
-
-
-def test_lock_then_frozen_bake(recipe: Path, tmp_path: Path) -> None:
-    code, out = run_main("lock", str(recipe))
-    assert code == EXIT_OK
-    lock_path = Path(out.split("locked ", 1)[1].strip())
-    assert lock_path.exists()
-
-    code, out = run_main("bake", str(recipe), "--lockfile", str(lock_path))
-    assert code == EXIT_OK
-    assert re.search(r"^default\s+qemu\s+\S+disk\.qcow2\s", out, re.M)
-
-
-def test_frozen_bake_without_lock_fails_with_code(
-    recipe: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("verb", REMOVED)
+def test_every_removed_verb_is_an_unknown_command(
+    verb: str, cli: Cli, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, _ = run_main("bake", str(recipe), "--lockfile", str(tmp_path / "missing.lock"))
-    assert code == EXIT_SDK_ERROR
-    assert "E_LOCKFILE" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as exit_:
+        cli(verb, "image.py")
+    assert exit_.value.code == EXIT_SDK_ERROR
+    assert f"unknown command {verb!r}" in capsys.readouterr().err
 
 
-def test_lock_then_bake_every_variant(recipe: Path) -> None:
-    variants = ("--variant", "default", "--variant", "azure")
-    code, out = run_main("lock", str(recipe), *variants)
-    assert code == EXIT_OK
-    assert "locked " in out
-    code, out = run_main("bake", str(recipe), *variants)
-    assert code == EXIT_OK
-    assert re.search(r"^azure\s+azure\s", out, re.M)
-    assert re.search(r"^default\s+qemu\s", out, re.M)
+def test_a_typo_suggests_the_closest_command(cli: Cli, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        cli("biuld")
+    assert exit_.value.code == EXIT_SDK_ERROR
+    assert "did you mean 'build'?" in capsys.readouterr().err
 
 
-def test_unknown_variant_is_reported(recipe: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    code, _ = run_main("inspect", str(recipe), "--variant", "gcp")
-    assert code == EXIT_SDK_ERROR
+def test_an_unknown_flag_suggests_the_closest_one(
+    cli: Cli, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        cli("build", "--reproducible")
+    assert exit_.value.code == EXIT_SDK_ERROR
     err = capsys.readouterr().err
-    assert "Unknown variant(s): gcp" in err
-    assert "azure" in err and "default" in err
+    assert "did you mean --reproduce?" in err
 
 
-def test_attr_flag_selects_factory(tmp_path: Path) -> None:
-    recipe = tmp_path / "r.py"
-    recipe.write_text(
-        "from tundravm.declarative import Fragment, Package, Recipe\n"
-        "def small():\n    return Recipe('r', items=(Package('a'),))\n"
-        "def big():\n    return Recipe('r', items=(Package('b'),))\n",
-        encoding="utf-8",
-    )
-    code, out = run_main("inspect", str(recipe), "--attr", "big", "--format", "json")
-    assert code == EXIT_OK
-    assert json.loads(out)["variants"]["default"]["packages"] == ["b"]
+def test_a_removed_flag_is_refused(cli: Cli, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        cli("build", "--variant", "default")
+    assert exit_.value.code == EXIT_SDK_ERROR
+    assert "unrecognized arguments: --variant" in capsys.readouterr().err
 
 
-def test_missing_recipe_exits_with_sdk_error(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_run_without_a_mode_is_a_validation_error(project: Path, cli: Cli) -> None:
+    result = cli("run")
+    assert result.code == EXIT_SDK_ERROR
+    assert result.err.startswith("error [E_VALIDATION]: run needs --mode simulated or --mode tdx")
+
+
+def test_deploy_without_a_build_is_refused(project: Path, cli: Cli) -> None:
+    result = cli("deploy", "gcp")
+    assert result.code == EXIT_SDK_ERROR
+    assert "deploy gcp needs --build BUILD" in result.err
+
+
+def test_an_unknown_deploy_target_is_a_usage_error(
+    cli: Cli, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, _ = run_main("inspect", str(tmp_path / "nope.py"), "--format", "json")
-    assert code == EXIT_SDK_ERROR
-    assert "E_VALIDATION" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as exit_:
+        cli("deploy", "aws", "--build", "x")
+    assert exit_.value.code == EXIT_SDK_ERROR
+    assert "invalid choice: 'aws'" in capsys.readouterr().err
 
 
-def test_version_flag() -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["--version"])
-    assert excinfo.value.code == 0
+def test_json_errors_are_one_error_line_on_stderr(project: Path, cli: Cli) -> None:
+    result = cli("show", "nonexistent-build", "--json")
+    assert result.code == EXIT_SDK_ERROR
+    [line] = result.err.splitlines()
+    payload = json.loads(line)
+    assert payload["schema"] == "tundravm.error/1"
+    assert payload["code"] == "E_STATE" and payload["hint"]
 
 
-def test_init_writes_loadable_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_missing_image_names_where_it_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli: Cli
+) -> None:
     monkeypatch.chdir(tmp_path)
-    target = tmp_path / "my_node.py"
-    code, out = run_main(
-        "init", str(tmp_path), "--name", "my_node", "--backend", "inprocess", "--release", "sid"
-    )
-    assert code == EXIT_OK
-    assert f"created {target}" in out
-    source = target.read_text(encoding="utf-8")
-    assert 'base=Debian("sid")' in source
-    assert "backend" not in source  # the project file names it
-
-    code, out = run_main("inspect", str(target), "--format", "json")
-    assert code == EXIT_OK
-    payload = json.loads(out)["variants"]
-    assert set(payload) == {"production", "dev"}
-    assert payload["production"]["base"] == "debian/sid"
-
-    assert run_main("lock", str(target))[0] == EXIT_OK
-    code, out = run_main("bake", str(target), "--build", str(tmp_path / "out"))
-    assert code == EXIT_OK
-    assert re.search(r"^production\s+qemu\s", out, re.M)
+    monkeypatch.delenv("TUNDRAVM_IMAGE", raising=False)
+    result = cli("check")
+    assert result.code == EXIT_SDK_ERROR
+    assert "No image file: pass IMAGE." in result.err
+    assert "[tool.tundravm] image" in result.err
 
 
-def test_init_refuses_overwrite_without_force(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    target = tmp_path / "r.py"
-    target.write_text("x = 1\n", encoding="utf-8")
-    code, _ = run_main("init", str(tmp_path), "--name", "r")
-    assert code == EXIT_SDK_ERROR
-    assert "Refusing to overwrite" in capsys.readouterr().err
-    code, _ = run_main("init", str(tmp_path), "--name", "r", "--force")
-    assert code == EXIT_OK
-    assert "image = Image(" in target.read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("backend", ["lima", "local", "inprocess"])
-def test_init_templates_compile_for_every_backend(tmp_path: Path, backend: str) -> None:
-    target = tmp_path / f"{backend}.py"
-    assert run_main("init", str(tmp_path), "--name", backend, "--backend", backend)[0] == EXIT_OK
-    compile(target.read_text(encoding="utf-8"), str(target), "exec")
+def test_secrets_needs_an_action(cli: Cli, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        cli("secrets")
+    assert exit_.value.code == EXIT_SDK_ERROR
+    assert "deliver" in capsys.readouterr().err

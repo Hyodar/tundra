@@ -41,6 +41,7 @@ class GcpDeployAdapter:
         zone = params.pop("zone", "us-central1-a")
         machine_type = params.pop("machine_type", DEFAULT_MACHINE_TYPE)
         bucket = params.pop("bucket", "")
+        volumes = volume_flags(params.pop("volumes", ""), prefix=request.profile)
 
         # Check if gcloud is available
         if self.runner is None and shutil.which("gcloud") is None:
@@ -88,6 +89,7 @@ class GcpDeployAdapter:
             f"--image={image_name}",
             "--confidential-compute-type=TDX",
             "--maintenance-policy=TERMINATE",
+            *volumes,
             "--format=json",
         ]
         result = self._run(cmd)
@@ -164,3 +166,30 @@ class GcpDeployAdapter:
                     "command": " ".join(cmd),
                 },
             )
+
+
+def volume_flags(text: str, *, prefix: str) -> list[str]:
+    """``NAME=create:SIZE;NAME=existing:ID`` as ``gcloud compute instances create`` flags.
+
+    Each disk's device name is ``tundravm-NAME``, which the guest sees as
+    ``/dev/disk/by-id/google-tundravm-NAME`` and the image's volume matches
+    (``/dev/disk/by-id/*-tundravm-NAME``); neither is deleted with the VM.
+    """
+    flags: list[str] = []
+    for item in filter(None, (part.strip() for part in text.split(";"))):
+        name, _, spec = item.partition("=")
+        how, _, value = spec.partition(":")
+        device = f"tundravm-{name}"
+        if how == "create":
+            flags.append(
+                f"--create-disk=name={prefix}-{name}-{uuid.uuid4().hex[:6]},size={value},"
+                f"device-name={device},auto-delete=no"
+            )
+        elif how == "existing":
+            flags.append(f"--disk=name={value},device-name={device},mode=rw,auto-delete=no")
+        else:
+            raise DeploymentError(
+                f"Invalid volume {item!r}.",
+                hint="Write NAME=create:SIZE or NAME=existing:ID.",
+            )
+    return flags

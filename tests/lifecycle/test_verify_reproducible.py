@@ -8,10 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import run_main, write_recipe_file
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.backends.inprocess import InProcessBackend
-from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.declarative import (
     Backend,
     Package,
@@ -156,7 +154,7 @@ def test_a_differing_second_build_fails_with_a_table_and_keeps_it(tmp_path: Path
     assert qemu.split()[:2] == ["default", "qemu"] and qemu.split()[-1] == "mismatch"
     assert qemu.split()[2] != qemu.split()[3]
     assert error.hint is not None
-    assert f"tundravm diff RECIPE --tree {scratch / 'mkosi'}" in error.hint
+    assert f"tundravm check RECIPE --tree {scratch / 'mkosi'}" in error.hint
     assert "SOURCE_DATE_EPOCH" in error.hint and "snapshot" in error.hint
     assert error.context == {"second_build": str(scratch), "differ": "default/qemu"}
     assert _declarative(out)["reproducibility"] == {
@@ -208,48 +206,3 @@ def test_a_failed_second_build_keeps_the_first_builds_record(
         k: v for k, v in running.items() if k != "reproducibility"
     }
     assert [a.target for a in read_artifacts(out)] == ["azure", "qemu"]
-
-
-def test_cli_bake_verify_reproducible_and_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    recipe = write_recipe_file(tmp_path, RECIPE, monkeypatch)
-    code, out = run_main("bake", str(recipe), "-q", "--verify-reproducible")
-    assert code == EXIT_OK, out
-    assert "reproducible: yes (2 artifacts match a second build)" in out
-    code, out = run_main("status", str(recipe))
-    assert code == EXIT_OK
-    artifact_lines = [line for line in out.splitlines() if line.startswith("artifact")]
-    assert len(artifact_lines) == 2
-    assert all("  reproducibility matched  " in line for line in artifact_lines)
-    code, out = run_main("status", str(recipe), "--format", "json")
-    items = json.loads(out)["artifacts"]["items"]
-    assert [item["reproducibility"] for item in items] == ["matched", "matched"]
-    assert run_main("bake", str(recipe), "-q")[0] == EXIT_OK
-    code, out = run_main("status", str(recipe), "--format", "json")
-    assert [item["reproducibility"] for item in json.loads(out)["artifacts"]["items"]] == [
-        None,
-        None,
-    ]
-
-
-def test_cli_reports_e_reproducibility(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = RECIPE.replace(
-        "backend = InProcessBackend()",
-        "from tests.lifecycle.test_verify_reproducible import FlippingBackend\n"
-        "backend = FlippingBackend()",
-    )
-    recipe = write_recipe_file(tmp_path, source, monkeypatch)
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
-    code, _ = run_main("bake", str(recipe), "-q", "--verify-reproducible")
-    assert code == EXIT_FAILURE  # a completed comparison that differs: a failed check
-    err = capsys.readouterr().err
-    assert "error [E_REPRODUCIBILITY]: The bake is not reproducible" in err
-    assert "default  qemu" in err and "mismatch" in err
-    code, out = run_main("status", str(recipe))
-    lines = [line for line in out.splitlines() if line.startswith("artifact")]
-    qemu = next(line for line in lines if "default/qemu" in line)
-    azure = next(line for line in lines if "default/azure" in line)
-    assert "reproducibility different" in qemu and "reproducibility matched" in azure

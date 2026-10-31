@@ -15,6 +15,13 @@ CORE_MODULES = [
     "tundravm.check",
     "tundravm.diff",
     "tundravm.explain",
+    "tundravm.builds",
+    "tundravm.manifest",
+    "tundravm.instances",
+    "tundravm.bootstrap",
+    "tundravm.deployments",
+    "tundravm.show",
+    "tundravm.convert",
     "tundravm.declarative",
     "tundravm.testing",
 ]

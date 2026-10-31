@@ -540,9 +540,9 @@ def _of_artifact(
             + "; ".join(unbound)
             + ".",
             hint=(
-                "Pass the lockfile the bake recorded (--lockfile) and keep mkosi's manifest "
-                "beside the artifact, or bake again. --allow-unbound (allow_unbound=True) "
-                "writes the document anyway, marked incomplete."
+                "Pass the lockfile the bake recorded and keep mkosi's manifest beside the "
+                "artifact, or build again. allow_unbound=True writes the document anyway, "
+                "marked incomplete."
             ),
             context={"variant": artifact.variant, "target": artifact.target},
         )

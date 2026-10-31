@@ -15,9 +15,9 @@ replaces openntpd, systemd-networkd and the firewall replace the custom ``/init`
 network script, and the evidence service is ``Tdxs()``. The surge prover
 (``surge-tdx-prover/image.py``) builds on Debian's tested kernel instead.
 
-    tundravm inspect examples/nethermind_base.py
-    tundravm lint examples/nethermind_base.py   # source-unpinned until locked
-    tundravm compile examples/nethermind_base.py --tree build/nethermind-base/mkosi
+    tundravm show examples/nethermind_base.py
+    tundravm check examples/nethermind_base.py   # source-unpinned until locked
+    tundravm build examples/nethermind_base.py --tree-only build/nethermind-base/mkosi
 """
 
 from __future__ import annotations

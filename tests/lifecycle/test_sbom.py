@@ -339,7 +339,7 @@ def test_a_lockfile_the_bake_did_not_read_is_refused_unless_allowed(
         sbom(artifact, lock=locked)
     assert raised.value.code == "E_ARTIFACT_CHANGED"
     assert "the bake read no lockfile" in str(raised.value)
-    assert raised.value.hint is not None and "--allow-unbound" in raised.value.hint
+    assert raised.value.hint is not None and "allow_unbound=True" in raised.value.hint
     document = sbom(artifact, lock=locked, allow_unbound=True)
     assert not document.bound
     assert document.notes[0].startswith("unbound, the document is incomplete: the bake read")

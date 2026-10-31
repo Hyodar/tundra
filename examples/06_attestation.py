@@ -6,7 +6,7 @@ Teaches:
   socket-activated on ``/var/tdxs.sock``), which produces the quote an attestation is
   checked against. Passing a ``Tdxs`` in ``components=`` replaces it: here one that also
   validates peers' quotes against the measurements of a policy file
-  (``Tdxs.from_policy()``; ``tundravm measure --export-policy`` writes one). The same
+  (``Tdxs.from_policy()``; a build's ``measurements.json`` holds one). The same
   component's ``source=`` points the build at a mirror or a vendored checkout of
   tundra-tools.
 - a service that asks for quotes joins the ``tdx`` group and requires ``EVIDENCE``, the
@@ -15,19 +15,19 @@ Teaches:
   loopback, the only way requests reach it; gate 3 binds its key to the quote.
 
 The committed ``peer.policy.json`` came from a simulated (in-process) bake with
-``--allow-placeholder``: its ``note`` marks it as a placeholder, and the verifier below
+``allow_placeholder=True``: its ``note`` marks it as a placeholder, and the verifier below
 accepts it only because it passes ``allow_placeholder=True``.
 
     tundravm lock examples/06_attestation.py      # pin tundra-tools (network)
-    tundravm compile examples/06_attestation.py --tree build/attestation/mkosi
-    tundravm bake examples/06_attestation.py --build build/attestation
+    tundravm build examples/06_attestation.py --tree-only build/attestation/mkosi
+    tundravm build examples/06_attestation.py
 """
 
 from tundravm import AttestedTLS, Endpoint, Image, Package, Service, TcpProbe
 from tundravm.components import EVIDENCE, Tdxs
 from tundravm.declarative import Resources
 
-# What a trusted peer measures to: `tundravm measure --export-policy` output.
+# What a trusted peer measures to: a verifier policy (a measurements.json record's `policy`).
 PEER_POLICY = Resources.from_module(__name__).file("peer.policy.json")
 
 # The app asks tdxs for quotes over its socket and answers on the loopback only.
