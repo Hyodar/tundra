@@ -12,7 +12,8 @@ implied item with its one escape hatch. With no ``profiles`` it builds one
     tundravm build examples/01_minimal.py
 """
 
-from tundravm import TCP, File, Image, Service
+from tundravm import File, Image, Service
+from tundravm.ports import TCP
 
 image = Image(
     "minimal",

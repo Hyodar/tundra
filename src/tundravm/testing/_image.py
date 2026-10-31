@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import Literal
 
+from tundravm._image._image import Image as PublicImage
 from tundravm.declarative import lifecycle
 from tundravm.declarative.lifecycle import Entry, Lock, Tree
 from tundravm.declarative.model import (
@@ -36,7 +37,6 @@ from tundravm.declarative.resolve import (
 )
 from tundravm.declarative.utils import Network
 from tundravm.diagnostics import Diagnostic
-from tundravm.image._image import Image as PublicImage
 from tundravm.models import unit_name
 
 from ._units import UnitView, parse_conf
@@ -327,7 +327,7 @@ def plan(
     The tree compiles in memory on the first query that reads it; *lock*'s source pins
     apply to the compile and to :meth:`PlannedImage.lint`.
     """
-    from tundravm.image import recipe_of
+    from tundravm._image import recipe_of
 
     recipe = recipe_of(subject) if isinstance(subject, PublicImage) else subject
     return PlannedImage(recipe, variant or recipe.variants[0].name, lock=lock)

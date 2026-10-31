@@ -6,26 +6,21 @@ from collections.abc import Iterator
 
 import pytest
 
-from tundravm import (
-    TCP,
+from tundravm import File, Image, Mkosi, Package, Profile, Service
+from tundravm._image import recipe_of
+from tundravm._image._values import RESERVED_SETTINGS
+from tundravm.components import (
     Component,
     DevAccess,
     Diagnostic,
     Egress,
     Endpoint,
-    File,
-    Image,
-    Mkosi,
     Network,
-    Package,
-    Profile,
     Resolved,
-    Service,
-    TcpProbe,
-    ValidationError,
 )
-from tundravm.image import recipe_of
-from tundravm.image._values import RESERVED_SETTINGS
+from tundravm.errors import ValidationError
+from tundravm.ports import TCP
+from tundravm.systemd import TcpProbe
 from tundravm.testing import plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")

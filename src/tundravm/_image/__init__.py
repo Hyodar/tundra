@@ -1,12 +1,10 @@
-"""The public SDK: an :class:`Image` of :class:`Service` values, :class:`Component`
-groups and :class:`Profile` variations.
+"""Where the SDK's values are defined: an :class:`Image` of :class:`Service` values,
+:class:`Component` groups and :class:`Profile` variations, and the values they take.
 
-Everything an image author writes lives here; :mod:`tundravm.declarative` is the
-internal model the image lowers onto. The package is named after its one entry point:
-an image is what you declare. The runtime contracts are values here too
-(:class:`Volume`, :class:`Secret`, :class:`AttestedTLS`, :class:`TLS`, :class:`RootFS`);
-the components an image holds by default, and the shipped workloads, are in
-:mod:`tundravm.components`.
+This package is private. Each public name is imported from its one home (:mod:`tundravm`,
+:mod:`tundravm.ports`, :mod:`tundravm.systemd`, :mod:`tundravm.components`,
+:mod:`tundravm.storage`, :mod:`tundravm.secrets`, :mod:`tundravm.sources`);
+:mod:`tundravm.declarative` is the internal model the image lowers onto.
 """
 
 from __future__ import annotations

@@ -5,15 +5,15 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
-from tundravm.compiler import GCP_CONVERTER
-from tundravm.declarative import Recipe, Variant, compile, resolve
-from tundravm.platforms.gcp import (
+from tundravm._platforms.gcp import (
     GCE_DISK_NAMING_RULES,
     GCP_HOSTS,
     GCP_RESOLV_CONF,
     GCP_RESOLV_CONF_PATH,
     GOOGLE_NVME_ID,
 )
+from tundravm.compiler import GCP_CONVERTER
+from tundravm.declarative import Recipe, Variant, compile, resolve
 from tundravm.testing import CompiledTree, compile_tree
 
 HOSTS = "mkosi.extra/etc/hosts"

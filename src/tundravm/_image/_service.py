@@ -312,7 +312,7 @@ class Service(Located):
 
     @property
     def ref(self) -> Ref:
-        """What a :class:`~tundravm.image.Profile` change targets."""
+        """What a :class:`~tundravm.Profile` change targets."""
         return Ref("Service", (self.unit_name,))
 
     @property

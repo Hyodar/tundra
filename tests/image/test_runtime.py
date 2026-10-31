@@ -11,25 +11,16 @@ from collections.abc import Sequence
 
 import pytest
 
-from tundravm import (
-    TCP,
-    TLS,
-    AttestedTLS,
-    BrokerKey,
-    Endpoint,
-    Image,
-    OperatorKey,
-    RootFS,
-    Secret,
-    Service,
-    TcpProbe,
-    TpmSeal,
-    ValidationError,
-    Volume,
-)
+from tundravm import Image, RootFS, Service
+from tundravm._image import lower, recipe_of
+from tundravm._image._values import MANAGEMENT_PORT
+from tundravm.components import Endpoint
 from tundravm.declarative import Disk, Key, Secrets
-from tundravm.image import lower, recipe_of
-from tundravm.image._values import MANAGEMENT_PORT
+from tundravm.errors import ValidationError
+from tundravm.ports import TCP, TLS, AttestedTLS
+from tundravm.secrets import Secret
+from tundravm.storage import BrokerKey, OperatorKey, TpmSeal, Volume
+from tundravm.systemd import TcpProbe
 from tundravm.testing import PlannedImage, assert_clean, plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")

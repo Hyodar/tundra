@@ -14,7 +14,9 @@ from tundravm.cli import main
 from tundravm.templates import render_recipe_template
 
 STARTER = """\
-from tundravm import TCP, DevAccess, File, Image, Service
+from tundravm import File, Image, Service
+from tundravm.components import DevAccess
+from tundravm.ports import TCP
 
 image = Image(
     "demo",

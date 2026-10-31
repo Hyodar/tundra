@@ -1,83 +1,29 @@
-"""The public surface: ``tundravm.__all__`` is frozen and every exported name imports."""
+"""The public surface: one frozen ``__all__`` per namespace, and one home per name."""
 
 from __future__ import annotations
 
 import importlib
+import pkgutil
 
 import pytest
 
 import tundravm
-from tundravm import components, declarative, image
+from tundravm import _reference, declarative
 
-# Changing this list changes the public API: update it deliberately, in review.
-EXPECTED_TOP_LEVEL = [
-    "ArtifactError",
-    "AttestationError",
-    "AttestedTLS",
-    "BackendExecutionError",
-    "BrokerKey",
-    "Build",
-    "Calendar",
-    "CargoBinary",
-    "Component",
-    "ComponentReady",
-    "Credential",
+# Changing one of these lists changes the public API: update it deliberately, in review.
+ROOT = [
     "Debian",
-    "DeploymentError",
-    "DevAccess",
-    "Diagnostic",
-    "DropIn",
-    "Egress",
-    "Endpoint",
-    "Every",
     "File",
-    "Git",
-    "GoBinary",
     "Group",
-    "Hardening",
-    "Http",
-    "HttpProbe",
-    "IMAGE_OBJECT_NAMES",
     "Image",
-    "Install",
-    "JournalExport",
     "Kernel",
-    "LintError",
-    "Listen",
-    "LockfileError",
-    "MeasurementError",
     "Mkosi",
-    "Network",
-    "Notify",
-    "Observability",
-    "OperatorKey",
     "Package",
-    "PolicyError",
     "Profile",
-    "PrometheusRemoteWrite",
-    "ReproducibilityError",
-    "Resolved",
-    "Resources",
     "RootFS",
-    "Secret",
     "Service",
-    "ServiceReady",
-    "ServiceRef",
-    "Shutdown",
-    "SourceError",
-    "StateError",
-    "StaticAddress",
-    "TCP",
-    "TLS",
-    "TcpProbe",
-    "TdxError",
-    "TpmSeal",
     "Tree",
-    "UDP",
     "User",
-    "ValidationError",
-    "Volume",
-    "VolumeDirectory",
     "__version__",
     "bake",
     "compile",
@@ -85,6 +31,74 @@ EXPECTED_TOP_LEVEL = [
     "load",
     "lower",
 ]
+PORTS = ["TCP", "TLS", "UDP", "AttestedTLS"]
+SYSTEMD = [
+    "Calendar",
+    "DropIn",
+    "Every",
+    "Hardening",
+    "HttpProbe",
+    "Listen",
+    "Notify",
+    "Resources",
+    "Shutdown",
+    "TcpProbe",
+]
+COMPONENTS = [
+    "EVIDENCE",
+    "Component",
+    "ComponentReady",
+    "DevAccess",
+    "Diagnostic",
+    "Egress",
+    "Endpoint",
+    "Firewall",
+    "JournalExport",
+    "Nethermind",
+    "Network",
+    "Observability",
+    "PrometheusRemoteWrite",
+    "Raiko",
+    "Resolved",
+    "ServiceReady",
+    "ServiceRef",
+    "SshAccess",
+    "StaticAddress",
+    "TaikoClient",
+    "Tdxs",
+    "TeeBase",
+]
+STORAGE = ["BrokerKey", "OperatorKey", "TpmSeal", "Volume", "VolumeDirectory"]
+SECRETS = ["Credential", "Secret"]
+SOURCES = ["Build", "CargoBinary", "Git", "GoBinary", "Http", "Install"]
+ERRORS = [
+    "ArtifactError",
+    "AttestationError",
+    "BackendExecutionError",
+    "DeploymentError",
+    "ErrorCode",
+    "LintError",
+    "LockfileError",
+    "MeasurementError",
+    "PolicyError",
+    "ReproducibilityError",
+    "SourceError",
+    "StateError",
+    "TdxError",
+    "ValidationError",
+]
+
+NAMESPACES = {
+    "tundravm": ROOT,
+    "tundravm.ports": PORTS,
+    "tundravm.systemd": SYSTEMD,
+    "tundravm.components": COMPONENTS,
+    "tundravm.storage": STORAGE,
+    "tundravm.secrets": SECRETS,
+    "tundravm.sources": SOURCES,
+    "tundravm.errors": ERRORS,
+}
+"""Every public namespace but ``tundravm.testing`` (frozen by its own tests) and its names."""
 
 REUSED_FROM_DECLARATIVE = [
     "Build",
@@ -104,66 +118,58 @@ REUSED_FROM_DECLARATIVE = [
     "StaticAddress",
     "User",
 ]
-"""Names the new surface keeps rather than re-spells: the same objects, under the same name.
+"""Names the public surface keeps rather than re-spells: the internal model's own objects.
 
-Everything else a recipe writes is a new value in :mod:`tundravm.image`; the internal
-``Recipe``, ``Variant``, ``Fragment`` and the 43-field ``Service`` are not exported at all.
+Everything else an image file writes is a value of the private ``tundravm._image``; the
+internal ``Recipe``, ``Variant``, ``Fragment`` and the 43-field ``Service`` are not exported.
 """
 
-NEW_IN_IMAGE = [
-    "AttestedTLS",
-    "BrokerKey",
-    "Component",
-    "Debian",
-    "Egress",
-    "Endpoint",
-    "File",
-    "Image",
-    "Kernel",
-    "Mkosi",
-    "Notify",
-    "OperatorKey",
-    "Package",
-    "Profile",
-    "Resources",
-    "RootFS",
-    "Secret",
-    "Service",
-    "Shutdown",
-    "TCP",
-    "TLS",
-    "TpmSeal",
-    "Tree",
-    "UDP",
-    "Volume",
-    "VolumeDirectory",
-]
 
-FROM_COMPONENTS = [
-    "DevAccess",
-    "JournalExport",
-    "Network",
-    "Observability",
-    "PrometheusRemoteWrite",
-]
-"""Values an image slot takes that are components of the shipped library: the same objects
-as :mod:`tundravm.components` exports (``network=``, ``dev=``, ``observability=``)."""
+def _home(name: str) -> object:
+    (module,) = [module for module, names in NAMESPACES.items() if name in names]
+    return getattr(importlib.import_module(module), name)
 
 
-def test_top_level_all_is_frozen() -> None:
-    assert sorted(tundravm.__all__) == sorted(EXPECTED_TOP_LEVEL)
+def test_the_reference_covers_every_namespace() -> None:
+    assert _reference.MODULES == (*NAMESPACES, "tundravm.testing")
+
+
+def test_root_all_is_frozen() -> None:
+    assert sorted(tundravm.__all__) == sorted(ROOT)
     assert len(tundravm.__all__) == len(set(tundravm.__all__))
+
+
+def test_ports_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.ports").__all__) == sorted(PORTS)
+
+
+def test_systemd_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.systemd").__all__) == sorted(SYSTEMD)
+
+
+def test_components_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.components").__all__) == sorted(COMPONENTS)
+
+
+def test_storage_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.storage").__all__) == sorted(STORAGE)
+
+
+def test_secrets_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.secrets").__all__) == sorted(SECRETS)
+
+
+def test_sources_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.sources").__all__) == sorted(SOURCES)
+
+
+def test_errors_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.errors").__all__) == sorted(ERRORS)
 
 
 @pytest.mark.parametrize(
     "module",
-    [
-        "tundravm",
-        "tundravm.image",
-        "tundravm.components",
-        "tundravm.declarative",
-        "tundravm.declarative.utils",
-    ],
+    [*NAMESPACES, "tundravm.testing", "tundravm.declarative", "tundravm.declarative.utils"],
 )
 def test_every_exported_name_imports(module: str) -> None:
     imported = importlib.import_module(module)
@@ -177,54 +183,69 @@ def test_every_exported_name_imports(module: str) -> None:
     assert set(exported) <= set(namespace), module
 
 
+def test_every_public_object_has_one_home() -> None:
+    homes: dict[int, list[str]] = {}
+    for module in _reference.MODULES:
+        imported = importlib.import_module(module)
+        for name in imported.__all__:
+            value = getattr(imported, name)
+            if isinstance(value, type) or callable(value):
+                homes.setdefault(id(value), []).append(f"{module}.{name}")
+    assert [paths for paths in homes.values() if len(paths) > 1] == []
+
+
+def test_the_root_does_not_spell_a_namespaced_name() -> None:
+    for module, names in NAMESPACES.items():
+        if module == "tundravm":
+            continue
+        for name in names:
+            assert not hasattr(tundravm, name), f"tundravm.{name} is a second home of {module}"
+
+
+def test_no_private_module_looks_like_a_namespace() -> None:
+    public = {name.removeprefix("tundravm.") for name in _reference.MODULES}
+    # The internal modules a reader could take for a namespace of the SDK are private.
+    for gone in ("image", "observability", "platforms"):
+        assert gone not in public
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(f"tundravm.{gone}")
+    components = importlib.import_module("tundravm.components")
+    submodules = [m.name for m in pkgutil.iter_modules(components.__path__)]
+    assert submodules and all(name.startswith("_") for name in submodules), submodules
+
+
 def test_reused_names_are_the_declarative_objects() -> None:
     for name in REUSED_FROM_DECLARATIVE:
-        assert getattr(tundravm, name) is getattr(declarative, name, None) or getattr(
-            tundravm, name
-        ) is getattr(declarative.utils, name), name
-
-
-def test_the_new_values_come_from_the_image_package() -> None:
-    for name in NEW_IN_IMAGE:
-        value = getattr(tundravm, name)
-        assert value is getattr(image, name), name
-        assert value.__module__.startswith("tundravm.image"), name
-
-
-def test_the_slot_components_come_from_the_component_library() -> None:
-    for name in FROM_COMPONENTS:
-        value = getattr(tundravm, name)
-        assert value is getattr(components, name), name
-        assert value.__module__.startswith("tundravm.components"), name
+        value = _home(name)
+        assert value is getattr(declarative, name, None) or value is getattr(
+            declarative.utils, name
+        ), name
 
 
 def test_the_component_library_is_components() -> None:
-    assert sorted(components.__all__) == sorted(
-        [
-            "DevAccess",
-            "EVIDENCE",
-            "Firewall",
-            "JournalExport",
-            "Nethermind",
-            "Network",
-            "Observability",
-            "PrometheusRemoteWrite",
-            "Raiko",
-            "SshAccess",
-            "TaikoClient",
-            "Tdxs",
-            "TeeBase",
-        ]
-    )
-    for name in components.__all__:
+    components = importlib.import_module("tundravm.components")
+    shipped = [
+        "DevAccess",
+        "Firewall",
+        "Nethermind",
+        "Network",
+        "Observability",
+        "Raiko",
+        "SshAccess",
+        "TaikoClient",
+        "Tdxs",
+        "TeeBase",
+    ]
+    for name in shipped:
         value = getattr(components, name)
-        if isinstance(value, type) and name not in ("JournalExport", "PrometheusRemoteWrite"):
-            assert issubclass(value, tundravm.Component), name
+        assert issubclass(value, components.Component), name
+        assert value.__module__.startswith("tundravm.components._"), name
 
 
 def test_the_internal_model_is_not_exported() -> None:
-    gone = ["Recipe", "Variant", "Fragment", "Task", "Unit", "Disk", "Key", "Secrets", "Firewall"]
+    gone = ["Recipe", "Variant", "Fragment", "Task", "Unit", "Disk", "Key", "Secrets"]
+    exported = {name for names in NAMESPACES.values() for name in names}
     for name in gone:
-        assert name not in tundravm.__all__, name
+        assert name not in exported, name
         assert not hasattr(tundravm, name), name
         assert hasattr(declarative, name), f"{name} must stay importable from the internals"

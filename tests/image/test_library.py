@@ -5,33 +5,29 @@ from __future__ import annotations
 
 import pytest
 
-from tundravm import (
-    TCP,
-    Endpoint,
-    Git,
-    Image,
-    JournalExport,
-    Network,
-    Observability,
-    OperatorKey,
-    PrometheusRemoteWrite,
-    Secret,
-    Service,
-    ValidationError,
-    Volume,
-)
+from tundravm import Image, Service
+from tundravm._image import lower, recipe_of
 from tundravm.components import (
     EVIDENCE,
     DevAccess,
+    Endpoint,
     Firewall,
+    JournalExport,
     Nethermind,
+    Network,
+    Observability,
+    PrometheusRemoteWrite,
     Raiko,
     SshAccess,
     TaikoClient,
     Tdxs,
     TeeBase,
 )
-from tundravm.image import lower, recipe_of
+from tundravm.errors import ValidationError
+from tundravm.ports import TCP
+from tundravm.secrets import Secret
+from tundravm.sources import Git
+from tundravm.storage import OperatorKey, Volume
 from tundravm.testing import PlannedImage, plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
@@ -157,7 +153,7 @@ def test_an_explicit_tdxs_builds_the_evidence_and_the_volume_tools_from_its_sour
 
 
 def test_an_explicit_firewall_and_network_replace_the_defaults() -> None:
-    from tundravm import Egress
+    from tundravm.components import Egress
 
     image = Image(
         "x",

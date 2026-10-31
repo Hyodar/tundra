@@ -1,4 +1,4 @@
-"""Building the internal ``Recipe`` from an :class:`~tundravm.image.Image`.
+"""Building the internal ``Recipe`` from an :class:`~tundravm.Image`.
 
 This is the only place that knows both the public values and the declarations
 :func:`tundravm.declarative.resolve` and :func:`tundravm.declarative.lower` consume.

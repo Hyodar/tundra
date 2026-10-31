@@ -1,163 +1,57 @@
 """tundravm: confidential VM images declared as one :class:`Image`.
 
-An :class:`Image` names what it runs — :class:`Service` values, :class:`Component`
-groups, :class:`Profile` variations — and nothing about how it is built. Everything a
-confidential image needs and no one wants to repeat is implied: Debian trixie from the
-locked snapshot, a measured UKI, NTS time, a volatile journal, a firewall that opens
-only what a service exposed, one hardened system user per service, and the evidence
-service the attestation reads. ``Image``'s docstring lists each implied item with its
-one escape hatch. The runtime contracts are slots of their own: :class:`Volume`,
-:class:`Secret`, :class:`AttestedTLS` (or :class:`TLS`), :class:`RootFS` and
-:class:`Observability`; :mod:`tundravm.components` is the shipped component library.
+An :class:`Image` names what it runs (:class:`Service` values, components, :class:`Profile`
+variations), what it contains (:class:`Package`, :class:`File`, :class:`Tree`,
+:class:`User`, :class:`Group`) and its foundation (:class:`Debian`, :class:`Kernel`,
+:class:`RootFS`, the :class:`Mkosi` escape), and nothing about how it is built. Everything
+a confidential image needs and no one wants to repeat is implied: Debian trixie from the
+locked snapshot, a measured UKI, NTS time, a volatile journal, a firewall that opens only
+what a service exposed, one hardened system user per service, and the evidence service the
+attestation reads. ``Image``'s docstring lists each implied item with its one escape hatch.
 
-``load`` reads an image file, ``lower`` hands it to the compiler, ``compile`` writes
-the mkosi tree, ``bake`` builds the artifacts and ``doctor`` checks the host.
+``load`` reads an image file, ``lower`` hands it to the compiler, ``compile`` writes the
+mkosi tree, ``bake`` builds the artifacts and ``doctor`` checks the host. Every other public
+name has one home: :mod:`tundravm.ports`, :mod:`tundravm.systemd`,
+:mod:`tundravm.components`, :mod:`tundravm.storage`, :mod:`tundravm.secrets`,
+:mod:`tundravm.sources`, :mod:`tundravm.errors` and :mod:`tundravm.testing`.
 :mod:`tundravm.declarative` is the internal model those lower onto; it is not the API.
 """
 
 __version__ = "0.1.0"
 
-from .components import DevAccess, JournalExport, Network, Observability, PrometheusRemoteWrite
-from .declarative.lifecycle import doctor
-from .errors import (
-    ArtifactError,
-    AttestationError,
-    BackendExecutionError,
-    DeploymentError,
-    LintError,
-    LockfileError,
-    MeasurementError,
-    PolicyError,
-    ReproducibilityError,
-    SourceError,
-    StateError,
-    TdxError,
-    ValidationError,
-)
-from .image import (
-    TCP,
-    TLS,
-    UDP,
-    AttestedTLS,
-    BrokerKey,
-    Build,
-    Calendar,
-    CargoBinary,
-    Component,
-    ComponentReady,
-    Credential,
+from ._image import (
     Debian,
-    Diagnostic,
-    DropIn,
-    Egress,
-    Endpoint,
-    Every,
     File,
-    Git,
-    GoBinary,
     Group,
-    Hardening,
-    Http,
-    HttpProbe,
     Image,
-    Install,
     Kernel,
-    Listen,
     Mkosi,
-    Notify,
-    OperatorKey,
     Package,
     Profile,
-    Resolved,
-    Resources,
     RootFS,
-    Secret,
     Service,
-    ServiceReady,
-    ServiceRef,
-    Shutdown,
-    StaticAddress,
-    TcpProbe,
-    TpmSeal,
     Tree,
     User,
-    Volume,
-    VolumeDirectory,
     bake,
     compile,
     load,
     lower,
 )
-from .image._api import IMAGE_OBJECT_NAMES
+from .declarative.lifecycle import doctor
 
 __all__ = [
-    "IMAGE_OBJECT_NAMES",
-    "TCP",
-    "TLS",
-    "UDP",
-    "ArtifactError",
-    "AttestedTLS",
-    "AttestationError",
-    "BackendExecutionError",
-    "BrokerKey",
-    "Build",
-    "Calendar",
-    "CargoBinary",
-    "Component",
-    "ComponentReady",
-    "Credential",
     "Debian",
-    "DeploymentError",
-    "DevAccess",
-    "Diagnostic",
-    "DropIn",
-    "Egress",
-    "Endpoint",
-    "Every",
     "File",
-    "Git",
-    "GoBinary",
     "Group",
-    "Hardening",
-    "Http",
-    "HttpProbe",
     "Image",
-    "Install",
-    "JournalExport",
     "Kernel",
-    "LintError",
-    "Listen",
-    "LockfileError",
-    "MeasurementError",
     "Mkosi",
-    "Network",
-    "Notify",
-    "Observability",
-    "OperatorKey",
     "Package",
-    "PolicyError",
     "Profile",
-    "PrometheusRemoteWrite",
-    "ReproducibilityError",
-    "Resolved",
-    "Resources",
     "RootFS",
-    "Secret",
     "Service",
-    "ServiceReady",
-    "ServiceRef",
-    "Shutdown",
-    "SourceError",
-    "StateError",
-    "StaticAddress",
-    "TcpProbe",
-    "TdxError",
-    "TpmSeal",
     "Tree",
     "User",
-    "ValidationError",
-    "Volume",
-    "VolumeDirectory",
     "__version__",
     "bake",
     "compile",

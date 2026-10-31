@@ -1,6 +1,7 @@
 """Every example is a documented recipe that loads, lints clean and compiles deterministically."""
 
 import ast
+import importlib
 import json
 import re
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, run_main
+from tundravm._reference import MODULES
 from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import Recipe, compile, lint, lock, write_lock
 from tundravm.recipe import load_file, load_recipe
@@ -54,6 +56,37 @@ def test_examples_use_only_the_public_or_internal_api() -> None:
             )
             for module in modules:
                 assert not module.startswith(INTERNAL_MODULES), f"{path} imports {module}"
+
+
+def _public_homes() -> dict[int, str]:
+    """``id(object) -> namespace`` for every public object: each has exactly one."""
+    homes: dict[int, str] = {}
+    for module in MODULES:
+        imported = importlib.import_module(module)
+        for name in imported.__all__:
+            value = getattr(imported, name)
+            if isinstance(value, type) or callable(value):
+                homes[id(value)] = module
+    return homes
+
+
+def test_examples_import_each_public_name_from_its_home() -> None:
+    homes = _public_homes()
+    found = []
+    for path in sorted(Path("examples").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not (node.module or "").startswith(
+                "tundravm"
+            ):
+                continue
+            module = importlib.import_module(node.module or "")
+            for alias in node.names:
+                value = getattr(module, alias.name)
+                home = homes.get(id(value))
+                if home is not None and home != node.module:
+                    found.append(f"{path}: {alias.name} from {node.module}, not {home}")
+    assert found == []
 
 
 @EXAMPLES

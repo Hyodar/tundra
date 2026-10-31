@@ -24,7 +24,9 @@ Teaches:
     tundravm build examples/04_storage_and_secrets.py --tree-only build/storage/mkosi
 """
 
-from tundravm import Image, OperatorKey, Package, Secret, Service, TpmSeal, Volume
+from tundravm import Image, Package, Service
+from tundravm.secrets import Secret
+from tundravm.storage import OperatorKey, TpmSeal, Volume
 
 # The data an operator protects: it opens only once they have attested this instance.
 data = Volume("data", mount="/persistent", unlock=OperatorKey())

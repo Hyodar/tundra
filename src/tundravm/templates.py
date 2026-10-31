@@ -53,7 +53,9 @@ Run:    tundravm run --mode simulated --dev
 
 '''
 
-_MINIMAL = r"""from tundravm import TCP, DevAccess, File, Image, Service
+_MINIMAL = r"""from tundravm import File, Image, Service
+from tundravm.components import DevAccess
+from tundravm.ports import TCP
 
 image = Image(
     "$title",
@@ -70,58 +72,23 @@ image = Image(
 )
 """
 
+_SERVICE_IMPORTS = (
+    "from tundravm import Debian, File, Image, Package, Service\n"
+    "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
+    "from tundravm.ports import TCP\n"
+    "from tundravm.systemd import TcpProbe\n"
+)
+
 _APP_IMPORTS = {
-    "service": (
-        "from tundravm import (\n"
-        "    TCP,\n"
-        "    Component,\n"
-        "    Debian,\n"
-        "    DevAccess,\n"
-        "    Diagnostic,\n"
-        "    Endpoint,\n"
-        "    File,\n"
-        "    Image,\n"
-        "    Package,\n"
-        "    Resolved,\n"
-        "    Service,\n"
-        "    TcpProbe,\n"
-        ")\n"
-    ),
-    "cloud": (
-        "from tundravm import (\n"
-        "    TCP,\n"
-        "    Component,\n"
-        "    Debian,\n"
-        "    DevAccess,\n"
-        "    Diagnostic,\n"
-        "    Endpoint,\n"
-        "    File,\n"
-        "    Image,\n"
-        "    Package,\n"
-        "    Resolved,\n"
-        "    Service,\n"
-        "    TcpProbe,\n"
-        ")\n"
-    ),
+    "service": _SERVICE_IMPORTS,
+    "cloud": _SERVICE_IMPORTS,
     "prover": (
-        "from tundravm import (\n"
-        "    AttestedTLS,\n"
-        "    Component,\n"
-        "    Debian,\n"
-        "    DevAccess,\n"
-        "    Diagnostic,\n"
-        "    Endpoint,\n"
-        "    File,\n"
-        "    Image,\n"
-        "    OperatorKey,\n"
-        "    Package,\n"
-        "    Resolved,\n"
-        "    Secret,\n"
-        "    Service,\n"
-        "    TcpProbe,\n"
-        "    Volume,\n"
-        "    VolumeDirectory,\n"
-        ")\n"
+        "from tundravm import Debian, File, Image, Package, Service\n"
+        "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
+        "from tundravm.ports import AttestedTLS\n"
+        "from tundravm.secrets import Secret\n"
+        "from tundravm.storage import OperatorKey, Volume, VolumeDirectory\n"
+        "from tundravm.systemd import TcpProbe\n"
     ),
 }
 

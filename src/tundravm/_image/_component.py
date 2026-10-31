@@ -6,7 +6,7 @@ components) it stands for, and an optional ``check(self, resolved)`` returns
 diagnostics. Its **exports** are the typed values a caller references without
 knowing any of that: :class:`ServiceReady` ("it is up"), :class:`Endpoint` ("it
 answers here, and here is its readiness") and :class:`ServiceRef` (the service a
-caller may depend on or edit from a :class:`~tundravm.image.Profile`).
+caller may depend on or edit from a :class:`~tundravm.Profile`).
 """
 
 from __future__ import annotations
@@ -177,7 +177,7 @@ class Endpoint:
 class ServiceRef:
     """A service a component composed, named from outside: ``raiko.service("raiko")``.
 
-    ``.ready`` waits for it and ``.ref`` is what a :class:`~tundravm.image.Profile`
+    ``.ready`` waits for it and ``.ref`` is what a :class:`~tundravm.Profile`
     edits or removes, so a caller changes one service of a component without the
     component exposing its unit file.
     """

@@ -7,7 +7,8 @@ it and resolves the tree under ``mkosi summary --json`` for each profile: ``work
 leaves the shared payload for the overlays of the two profiles that keep it.
 """
 
-from tundravm import TCP, File, Image, Profile, Service
+from tundravm import File, Image, Profile, Service
+from tundravm.ports import TCP
 
 web = Service(
     "web",

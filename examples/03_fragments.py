@@ -21,18 +21,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tundravm import (
-    Component,
-    Diagnostic,
-    Endpoint,
-    Every,
-    File,
-    Image,
-    Package,
-    Resolved,
-)
+from tundravm import File, Image, Package
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved
 from tundravm.declarative import Repository, Task, Unit
 from tundravm.declarative.utils import ConfigFile, Run
+from tundravm.systemd import Every
 
 SYSCTL = "kernel.kptr_restrict=2\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1\n"
 

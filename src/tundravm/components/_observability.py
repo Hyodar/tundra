@@ -14,13 +14,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from tundravm._image._component import Component
+from tundravm._image._secrets import Secret
+from tundravm._image._service import Service
+from tundravm._image._values import Package
 from tundravm.declarative import model as dm
 from tundravm.declarative.config import ConfigFile
 from tundravm.errors import ValidationError
-from tundravm.image._component import Component
-from tundravm.image._secrets import Secret
-from tundravm.image._service import Service
-from tundravm.image._values import Package
 
 __all__ = ["JournalExport", "Observability", "PrometheusRemoteWrite"]
 
@@ -56,7 +56,7 @@ def _check_credential(owner: object, credential: object) -> None:
 class JournalExport:
     """Ship the journal to *url* (a ``systemd-journal-remote`` receiver) over HTTPS.
 
-    *credential* is a :class:`~tundravm.image.Secret` holding the client's PEM key and
+    *credential* is a :class:`~tundravm.secrets.Secret` holding the client's PEM key and
     certificate, which the receiver authenticates; without it the upload is anonymous.
     The upload's cursor lives in its state directory, so a restart resumes rather than
     resends, and journald's volatile, capped storage is the buffer.
@@ -91,7 +91,7 @@ class JournalExport:
 class PrometheusRemoteWrite:
     """Send node metrics to *url*, a Prometheus remote-write receiver.
 
-    *credential* is a :class:`~tundravm.image.Secret` holding a bearer token. The agent
+    *credential* is a :class:`~tundravm.secrets.Secret` holding a bearer token. The agent
     scrapes the node exporter on the loopback every *interval* and keeps at most *buffer*
     of samples it could not send.
     """

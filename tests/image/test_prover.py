@@ -13,10 +13,11 @@ from tests.compiler.test_native_tree import by_image, mkosi_summary
 from tests.conftest import TUNDRA_TOOLS_COMMIT
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
 from tundravm import capabilities
+from tundravm._image import recipe_of
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.capabilities import Host
 from tundravm.declarative import lock
-from tundravm.image import recipe_of
+from tundravm.errors import ValidationError
 from tundravm.recipe import BACKEND_ENV, load_file
 from tundravm.testing import assert_clean, compile_tree, plan
 
@@ -24,8 +25,11 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
 PROVER_SOURCE = '''"""Plan section 3.1's prover.py."""
 
-from tundravm import AttestedTLS, DevAccess, Image, OperatorKey, RootFS, Secret, Volume
-from tundravm.components.taiko import Raiko
+from tundravm import Image, RootFS
+from tundravm.components import DevAccess, Raiko
+from tundravm.ports import AttestedTLS
+from tundravm.secrets import Secret
+from tundravm.storage import OperatorKey, Volume
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 config = Secret("raiko-config", rotation="restart")
@@ -160,5 +164,5 @@ def test_tundravm_backend_and_an_explicit_backend_win(
     bound = load_file(prover_file)
     assert isinstance(bound.backend, LimaMkosiBackend) and bound.backend_origin == "recipe"
     monkeypatch.setenv(BACKEND_ENV, "docker")
-    with pytest.raises(tundravm.ValidationError, match="not a build backend"):
+    with pytest.raises(ValidationError, match="not a build backend"):
         load_file(REPO_ROOT / "examples" / "01_minimal.py")

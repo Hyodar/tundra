@@ -11,13 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.backends.base import StreamResult, failure_message, run_streaming
-from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import Backend, File, Package, Recipe, bake, lock, lower
-from tundravm.declarative.lifecycle import bake_image
-from tundravm.errors import BackendExecutionError, LintError
-from tundravm.models import BakeRequest, BakeResult
-from tundravm.observability import (
+from tundravm._reporting import (
     Event,
     Progress,
     StructuredLogger,
@@ -25,6 +19,12 @@ from tundravm.observability import (
     format_duration,
     format_size,
 )
+from tundravm.backends.base import StreamResult, failure_message, run_streaming
+from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.declarative import Backend, File, Package, Recipe, bake, lock, lower
+from tundravm.declarative.lifecycle import bake_image
+from tundravm.errors import BackendExecutionError, LintError
+from tundravm.models import BakeRequest, BakeResult
 from tundravm.testing import FakeMkosi
 
 

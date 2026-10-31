@@ -1,7 +1,7 @@
-"""The small typed values an :class:`~tundravm.image.Image` is written with.
+"""The small typed values an :class:`~tundravm.Image` is written with.
 
 Each one stands for one concern and lowers onto the internal declarations in
-:mod:`tundravm.image._lower`: ports (:class:`TCP`, :class:`UDP`), content
+:mod:`tundravm._image._lower`: ports (:class:`TCP`, :class:`UDP`), content
 (:class:`Package`, :class:`File`, :class:`Tree`), the machine around the services
 (:class:`Debian`, :class:`Kernel`, :class:`Egress`, :class:`Mkosi`) and the grouped service options
 (:class:`Resources`, :class:`Shutdown`, :class:`HttpProbe`, :class:`TcpProbe`,

@@ -9,8 +9,11 @@ import pytest
 
 import tundravm
 from tests.compiler.test_native_tree import by_image, mkosi_summary
-from tundravm import TCP, File, Image, Service
-from tundravm.image._values import MANAGEMENT_PORT
+from tundravm import File, Image, Service
+from tundravm._image._values import MANAGEMENT_PORT
+from tundravm.components import Component
+from tundravm.errors import ValidationError
+from tundravm.ports import TCP
 from tundravm.testing import PlannedImage, assert_clean, compile_tree, plan
 
 from .conftest import STARTER_SOURCE, starter
@@ -35,19 +38,19 @@ def test_load_refuses_a_file_that_only_binds_a_recipe(tmp_path: Path) -> None:
     path.write_text(
         "from tundravm.declarative import Recipe\n\nrecipe = Recipe('old')\n", encoding="utf-8"
     )
-    with pytest.raises(tundravm.ValidationError) as caught:
+    with pytest.raises(ValidationError) as caught:
         tundravm.load(path)
     assert "not an Image" in str(caught.value)
     assert "`image`" in str(caught.value)
 
 
 def test_the_starter_lints_clean_apart_from_the_unpinned_evidence_service() -> None:
-    assert_clean(tundravm.image.recipe_of(starter()), allow=("source-unpinned",))
+    assert_clean(tundravm._image.recipe_of(starter()), allow=("source-unpinned",))
 
 
 def test_the_starter_compiles_to_a_tree_mkosi_resolves(tmp_path: Path) -> None:
     tree = tmp_path / "mkosi"
-    compile_tree(tundravm.image.recipe_of(starter()), path=tree)
+    compile_tree(tundravm._image.recipe_of(starter()), path=tree)
     summary = by_image(mkosi_summary(tree))
     assert set(summary) >= {"main", "payload"}
     assert summary["payload"]["Bootable"] in ("yes", "auto")
@@ -108,7 +111,7 @@ def test_the_file_lands_where_it_was_declared(planned: PlannedImage) -> None:
 def test_plan_accepts_an_image_and_the_recipe_it_lowers_to() -> None:
     image = starter()
     from_image = plan(image, "production")
-    from_recipe = plan(tundravm.image.recipe_of(image), "production")
+    from_recipe = plan(tundravm._image.recipe_of(image), "production")
     assert (
         from_image.file("/srv/www/index.html").text == from_recipe.file("/srv/www/index.html").text
     )
@@ -122,23 +125,23 @@ def test_the_default_target_is_the_qemu_disk() -> None:
 
 
 def test_a_component_in_services_is_refused() -> None:
-    class App(tundravm.Component):
+    class App(Component):
         def compose(self) -> list[Service]:
             return [Service("app", ["/usr/bin/true"])]
 
-    with pytest.raises(tundravm.ValidationError) as caught:
+    with pytest.raises(ValidationError) as caught:
         Image("x", services=[App()])  # type: ignore[list-item]
     assert "components=" in str(caught.value)
 
 
 def test_a_service_in_components_is_refused() -> None:
-    with pytest.raises(tundravm.ValidationError) as caught:
+    with pytest.raises(ValidationError) as caught:
         Image("x", components=[Service("app", ["/usr/bin/true"])])  # type: ignore[list-item]
     assert "not a Component" in str(caught.value)
 
 
 def test_files_takes_file_and_tree_only() -> None:
-    with pytest.raises(tundravm.ValidationError) as caught:
+    with pytest.raises(ValidationError) as caught:
         Image("x", files=["/etc/motd"])  # type: ignore[list-item]
     assert "not a File or Tree" in str(caught.value)
     only = Image("x", files=[File.text("/etc/motd", "hi\n")]).files[0]
@@ -146,7 +149,7 @@ def test_files_takes_file_and_tree_only() -> None:
 
 
 def test_an_unknown_target_is_named() -> None:
-    with pytest.raises(tundravm.ValidationError) as caught:
+    with pytest.raises(ValidationError) as caught:
         Image("x", targets=("aws",))  # type: ignore[arg-type]
     assert "qemu, azure, gcp" in str(caught.value)
 

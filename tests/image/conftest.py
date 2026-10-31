@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import TCP, File, Image, Service
+from tundravm import File, Image, Service
+from tundravm.ports import TCP
 from tundravm.testing import PlannedImage, plan
 
 STARTER_SOURCE = '''"""The starter: plan section 3.1's demo.py."""
 
-from tundravm import TCP, File, Image, Service
+from tundravm import File, Image, Service
+from tundravm.ports import TCP
 
 image = Image(
     "demo",

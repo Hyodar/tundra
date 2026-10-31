@@ -23,9 +23,11 @@ reproduces its registers), and the verifier below accepts it only because it pas
     tundravm build examples/06_attestation.py
 """
 
-from tundravm import AttestedTLS, Endpoint, Image, Package, Service, TcpProbe
-from tundravm.components import EVIDENCE, Tdxs
+from tundravm import Image, Package, Service
+from tundravm.components import EVIDENCE, Endpoint, Tdxs
 from tundravm.declarative import Resources
+from tundravm.ports import AttestedTLS
+from tundravm.systemd import TcpProbe
 
 # What a trusted peer measures to: a verifier policy (a measurements.json record's `policy`).
 PEER_POLICY = Resources.from_module(__name__).file("peer.policy.json")

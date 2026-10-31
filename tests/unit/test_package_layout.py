@@ -8,7 +8,7 @@ CORE_MODULES = [
     "tundravm.measure",
     "tundravm.deploy",
     "tundravm.policy",
-    "tundravm.observability",
+    "tundravm._reporting",
     "tundravm._modules",
     "tundravm.cli",
     "tundravm.recipe",

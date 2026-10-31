@@ -20,19 +20,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tundravm import (
-    TCP,
-    Build,
-    Component,
-    Endpoint,
-    GoBinary,
-    Http,
-    Image,
-    Install,
-    Service,
-    TcpProbe,
-)
-from tundravm.declarative import Git
+from tundravm import Image, Service
+from tundravm.components import Component, Endpoint
+from tundravm.ports import TCP
+from tundravm.sources import Build, Git, GoBinary, Http, Install
+from tundravm.systemd import TcpProbe
 
 NODE_EXPORTER = "1.8.2"
 PROMETHEUS = "v2.53.0"

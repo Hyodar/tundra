@@ -29,7 +29,8 @@ comes with it.
 ## Quickstart
 
 ```python
-from tundravm import TCP, File, Image, Service
+from tundravm import File, Image, Service
+from tundravm.ports import TCP
 
 image = Image(
     "demo",

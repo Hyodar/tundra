@@ -9,8 +9,11 @@ attested TLS ingress. One verity-rooted payload boots on QEMU, Azure and GCP.
     tundravm build examples/surge-tdx-prover/image.py --tree-only examples/surge-tdx-prover/mkosi
 """
 
-from tundravm import AttestedTLS, DevAccess, Image, OperatorKey, RootFS, Secret, Volume
-from tundravm.components import Nethermind, Raiko, TaikoClient
+from tundravm import Image, RootFS
+from tundravm.components import DevAccess, Nethermind, Raiko, TaikoClient
+from tundravm.ports import AttestedTLS
+from tundravm.secrets import Secret
+from tundravm.storage import OperatorKey, Volume
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 jwt = Secret("jwt")

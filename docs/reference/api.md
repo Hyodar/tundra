@@ -1,9 +1,15 @@
 # API reference
 
-Generated from the `__all__` of `tundravm`, `tundravm.components`, `tundravm.testing` by `uv run python -m tundravm._reference docs/reference` (Python 3.12). Do not edit it by hand: `tests/docs/test_reference.py` fails when it is stale.
+Generated from the `__all__` of `tundravm`, `tundravm.ports`, `tundravm.systemd`, `tundravm.components`, `tundravm.storage`, `tundravm.secrets`, `tundravm.sources`, `tundravm.errors`, `tundravm.testing` by `uv run python -m tundravm._reference docs/reference` (Python 3.12). Do not edit it by hand: `tests/docs/test_reference.py` fails when it is stale.
 
 - [`tundravm`](#tundravm)
+- [`tundravm.ports`](#tundravmports)
+- [`tundravm.systemd`](#tundravmsystemd)
 - [`tundravm.components`](#tundravmcomponents)
+- [`tundravm.storage`](#tundravmstorage)
+- [`tundravm.secrets`](#tundravmsecrets)
+- [`tundravm.sources`](#tundravmsources)
+- [`tundravm.errors`](#tundravmerrors)
 - [`tundravm.testing`](#tundravmtesting)
 
 ## tundravm
@@ -17,51 +23,6 @@ tundravm: confidential VM images declared as one `Image`.
 ```python
 __version__ = '0.1.0'
 ```
-
-### `ArtifactError`
-
-*exception*
-
-```python
-class ArtifactError(TdxError)
-```
-
-A built artifact's bytes no longer match the sha256 its build's manifest records. Code `E_ARTIFACT_CHANGED`.
-
-### `AttestationError`
-
-*exception*
-
-```python
-class AttestationError(TdxError)
-```
-
-`attest` could not complete: a tdxs issuer or validator is unreachable or failed. Code `E_ATTESTATION`.
-
-### `AttestedTLS`
-
-*dataclass*
-
-```python
-AttestedTLS(port: int, *, upstream: Endpoint)
-```
-
-The confidential ingress: TLS on *port*, relayed to *upstream* on the loopback.
-
-| Member | Does |
-|---|---|
-| `AttestedTLS.manifest() -> dict[str, object]` | The ingress as the runtime manifest records it. |
-| `AttestedTLS.unit` | The relay's unit. |
-
-### `BackendExecutionError`
-
-*exception*
-
-```python
-class BackendExecutionError(TdxError)
-```
-
- Code `E_BACKEND_EXECUTION`.
 
 ### `bake`
 
@@ -82,78 +43,6 @@ bake(
 
 Build *image*'s artifacts into *build*, for *profiles* (default: all).
 
-### `BrokerKey`
-
-*dataclass*
-
-```python
-BrokerKey(url: str, *, audience: str)
-```
-
-A key broker that releases a value after it has verified this image's attestation.
-
-| Member | Does |
-|---|---|
-| `BrokerKey.manifest() -> dict[str, object]` | The broker as the runtime manifest records it. |
-
-### `Build`
-
-*dataclass*
-
-```python
-Build(
-    name: str,
-    source: Git | Http,
-    script: str | None = None,
-    install: tuple[Install, ...] = (),
-    packages: tuple[str, ...] = (),
-    env: Mapping[str, str] = FrozenMap(),
-    cache_namespace: str | None = None,
-    using: Go | Cargo | Dotnet | None = None,
-)
-```
-
-### `Calendar`
-
-*dataclass*
-
-```python
-Calendar(spec: str, *, persistent: bool = True, jitter: str | None = None)
-```
-
-`Service(timer=Calendar("daily"))`: run at calendar times (`OnCalendar=`, a shorthand such as `daily` or `*-*-* 03:00:00`). *persistent* catches up on a run missed while the machine was off (`Persistent=yes`); *jitter* spreads the start.
-
-| Member | Does |
-|---|---|
-| `Calendar.entries() -> Pairs` | The `[Timer]` directives. |
-
-### `CargoBinary`
-
-*dataclass*
-
-```python
-CargoBinary(
-    name: str,
-    source: Git | Http,
-    *,
-    bin: str | None = None,
-    package: str | None = None,
-    install: str | None = None,
-    features: tuple[str, ...] = (),
-    profile: str = 'release',
-    env: Mapping[str, str] = FrozenMap(),
-    auditable: bool | None = None,
-    cache_namespace: str | None = None,
-)
-```
-
-A Rust program built from *source* and installed at `executable`.
-
-| Member | Does |
-|---|---|
-| `CargoBinary.compose() -> Fragment` |  |
-| `CargoBinary.executable` | The absolute path the binary is installed at. |
-
 ### `compile`
 
 *function*
@@ -168,50 +57,6 @@ compile(
 ```
 
 The mkosi tree *image* compiles to, with *lock*'s source pins applied.
-
-### `Component`
-
-*class*
-
-```python
-Component(*args: object, **kwargs: object)
-```
-
-A named group of declarations, written as a class, with typed exports.
-
-| Member | Does |
-|---|---|
-| `Component.compose() -> Iterable[object]` | The declarations and nested components this component stands for. |
-| `Component.name` | The component's name, as `show` and its diagnostics print it. |
-| `Component.readiness() -> tuple[Readied, ...]` | What `ready` waits for: the readiness of each service it composes that declares one. A component whose readiness is not a service of its own (one that wraps a packaged or internal unit) overrides this. |
-| `Component.ready` | "Every service this component declares readiness for is ready". |
-| `Component.service(name: str) -> ServiceRef` | The service called *name*, for `requires=` and for a profile's `changes=`. |
-| `Component.services() -> tuple[Service, ...]` | Every service this component composes, nested components included. |
-
-### `ComponentReady`
-
-*dataclass*
-
-```python
-ComponentReady(component: Component)
-```
-
-"That component is up": `component.ready`.
-
-| Member | Does |
-|---|---|
-| `ComponentReady.handles() -> tuple[Readied, ...]` | What proves the component ready, one handle per unit. |
-| `ComponentReady.name` | The component's name. |
-
-### `Credential`
-
-*dataclass*
-
-```python
-Credential(name: str, source: str)
-```
-
-A systemd credential a service reads: `Credential("jwt", "/etc/app/jwt")`.
 
 ### `Debian`
 
@@ -232,56 +77,6 @@ The distribution an image is built from: `Debian("trixie")`, the tested baseline
 |---|---|
 | `Debian.archive` | The snapshot the image reads: *snapshot*, else `LOCKED_SNAPSHOT`. |
 
-### `DeploymentError`
-
-*exception*
-
-```python
-class DeploymentError(TdxError)
-```
-
- Code `E_DEPLOYMENT`.
-
-### `DevAccess`
-
-*dataclass*
-
-```python
-DevAccess(*, ssh_keys: Sequence[str] = (), password: str | None = None)
-```
-
-Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`.
-
-| Member | Does |
-|---|---|
-| `DevAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `dev-access-rsa-key`: an RSA key where every current client makes ed25519. |
-| `DevAccess.compose() -> Iterator[object]` |  |
-| `DevAccess.public_keys() -> tuple[str, ...]` | The public key lines, reading every entry that names a `.pub` file. |
-| `DevAccess.tools() -> tuple[object, ...]` | The debugging tools and, with *password*, the console login. |
-
-### `Diagnostic`
-
-*dataclass*
-
-```python
-Diagnostic(
-    code: str,
-    severity: Severity,
-    message: str,
-    subject: str = '',
-    variant: str = '',
-    location: str = '',
-    hint: str | None = None,
-    context: Context = (),
-)
-```
-
-One finding: a lint *code*, its *severity* and a one-line *message*.
-
-| Member | Does |
-|---|---|
-| `Diagnostic.to_dict() -> dict[str, object]` | The JSON form `check --json` prints: every field, *context* as an object. |
-
 ### `doctor`
 
 *function*
@@ -291,6 +86,328 @@ doctor(backend: Backend, *, runner: ProbeRunner | None = None) -> tuple[Diagnost
 ```
 
 One diagnostic per host tool *backend* needs that is missing (warning when optional).
+
+### `File`
+
+*dataclass*
+
+```python
+File(
+    path: str,
+    content: str | bytes | Path,
+    *,
+    mode: int | None = 420,
+    owner: str | None = None,
+)
+```
+
+A file in the image: `File.text(path, text)` or `File.copy(src, dst)`.
+
+| Member | Does |
+|---|---|
+| `File.copy(src: str \| Path, dst: str, *, mode: int \| None = None, owner: str \| None = None) -> File` | The host file *src*, read when the image lowers, shipped at *dst*. |
+| `File.ref` | What a `Profile` change targets. |
+| `File.text(path: str, text: str, *, mode: int = 420, owner: str \| None = None) -> File` | The UTF-8 text *text* at *path*. |
+
+### `Group`
+
+*dataclass*
+
+```python
+Group(name: str, system: bool = True, gid: int | None = None)
+```
+
+### `Image`
+
+*dataclass*
+
+```python
+Image(
+    name: str,
+    *,
+    base: Debian = Debian(release='trixie', snapshot=None, efi_stub=None),
+    packages: Sequence[str | Package] = (),
+    files: Sequence[File | Tree] = (),
+    services: Sequence[Service] = (),
+    components: Sequence[Component] = (),
+    volumes: Sequence[Volume] = (),
+    secrets: Sequence[Secret] = (),
+    ingress: Sequence[Ingress] = (),
+    network: Network | None = None,
+    users: Sequence[User] = (),
+    groups: Sequence[Group] = (),
+    kernel: Kernel = Kernel.default(),
+    rootfs: RootFS = RootFS.initramfs(),
+    observability: Observability | None = None,
+    targets: Sequence[Target] = ('qemu',),
+    dev: DevAccess | None = None,
+    profiles: Mapping[str, Profile] = FrozenMap(),
+    mkosi: Mkosi | None = None,
+)
+```
+
+A confidential VM image: what it runs, and nothing about how it is built.
+
+### `Kernel`
+
+*dataclass*
+
+```python
+Kernel(
+    version: str | None = None,
+    source: Git | Http | None = None,
+    *,
+    config: Path | None = None,
+    patches: Sequence[Path] = (),
+    modules: Sequence[str] = (),
+)
+```
+
+The kernel: `Kernel.default()` (the distribution's, tested) or `Kernel.build(...)`.
+
+| Member | Does |
+|---|---|
+| `Kernel.build(version: str, source: Git \| Http, *, config: Path, patches: Sequence[Path] = ()) -> Kernel` | Compile *version* from *source* with *config* and *patches*. |
+| `Kernel.built` | Whether the build compiles this kernel. |
+| `Kernel.default(*, modules: Sequence[str] = ()) -> Kernel` | Debian's kernel with the curated module set, plus *modules*. |
+
+### `load`
+
+*function*
+
+```python
+load(
+    path: str | Path,
+    *,
+    attribute: str | None = None,
+    extra_paths: Sequence[str | Path] = (),
+) -> Image
+```
+
+The `Image` the file at *path* defines.
+
+### `lower`
+
+*function*
+
+```python
+lower(image: Image, *, profiles: Sequence[str] | None = None) -> Lowered
+```
+
+*image* as the compiler's value, with *profiles* (default: all) lowered.
+
+### `Mkosi`
+
+*dataclass*
+
+```python
+Mkosi(
+    *,
+    settings: Mapping[str, str] | None = None,
+    scripts: Sequence[tuple[str, str]] = (),
+)
+```
+
+mkosi settings and scripts the image adds verbatim, recorded in the manifest.
+
+### `Package`
+
+*dataclass*
+
+```python
+Package(name: str, *, backports: bool = False)
+```
+
+A runtime package: `Package("curl")`, `Package("nftables", backports=True)`.
+
+| Member | Does |
+|---|---|
+| `Package.ref` | What a `Profile` change targets. |
+
+### `Profile`
+
+*dataclass*
+
+```python
+Profile(
+    *,
+    extends: str | None = None,
+    add: Sequence[Content] = (),
+    changes: Sequence[Edit | Remove] = (),
+    production: bool = True,
+)
+```
+
+A named variation on the image: what it adds, and what it changes.
+
+### `RootFS`
+
+*dataclass*
+
+```python
+RootFS(
+    layout: Literal['initramfs', 'verity'] = 'initramfs',
+    filesystem: Literal['erofs'] | None = None,
+)
+```
+
+Where the OS lives: `RootFS.initramfs()` (the default) or `RootFS.verity()`.
+
+| Member | Does |
+|---|---|
+| `RootFS.initramfs() -> RootFS` | The OS in the UKI's initrd. |
+| `RootFS.verity(*, filesystem: Literal['erofs'] = 'erofs') -> RootFS` | A read-only *filesystem* root verified by dm-verity. |
+
+### `Service`
+
+*dataclass*
+
+```python
+Service(
+    name: str,
+    argv: Sequence[Argument],
+    *,
+    requires: Sequence[Requirement] = (),
+    readiness: Readiness | None = None,
+    state: str | VolumeDirectory | None = None,
+    credentials: Sequence[Binding] = (),
+    expose: Sequence[PortValue] = (),
+    resources: Resources | None = None,
+    shutdown: Shutdown | None = None,
+    hardening: Hardening = Hardening.preset("static"),
+    timer: Every | Calendar | None = None,
+    socket: Listen | None = None,
+    unit: DropIn | None = None,
+    user: str | None = None,
+    groups: Sequence[str] = (),
+    working_directory: str | None = None,
+    environment: Mapping[str, str] = FrozenMap(),
+    logs: str | None = None,
+    runtime: str | None = None,
+)
+```
+
+A program the image runs, as its own user, in a tested sandbox.
+
+| Member | Does |
+|---|---|
+| `Service.binaries() -> tuple[Any, ...]` | The built binary declarations this service's argv pulls in. |
+| `Service.command() -> tuple[str, ...]` | The argv as words: a built first element becomes its installed path, an `Endpoint` its URL. |
+| `Service.probe_unit` | The bounded probe unit a dependent waits for, when readiness needs one. |
+| `Service.ready` | "This service is ready": what another service's `requires=` takes. |
+| `Service.ref` | What a `Profile` change targets. |
+| `Service.secrets` | The delivered secrets this service binds. |
+| `Service.state_directory` | The working directory a `state=` implies. |
+| `Service.stem` | The unit name without its suffix: the generated user's name. |
+| `Service.unit_name` | The `.service` unit this lowers to. |
+
+### `Tree`
+
+*dataclass*
+
+```python
+Tree(
+    src: str | Path,
+    dst: str,
+    *,
+    exclude: Sequence[str] = (),
+    owner: str | None = None,
+)
+```
+
+The host directory *src* shipped at *dst*, keeping each file's permission bits.
+
+| Member | Does |
+|---|---|
+| `Tree.ref` | What a `Profile` change targets. |
+
+### `User`
+
+*dataclass*
+
+```python
+User(
+    name: str,
+    system: bool = True,
+    home: str | None = None,
+    shell: str = '/usr/sbin/nologin',
+    uid: int | None = None,
+    primary_group: str | int | None = None,
+    groups: tuple[str, ...] = (),
+)
+```
+
+## tundravm.ports
+
+Ports: what a service exposes and how traffic reaches it.
+
+### `AttestedTLS`
+
+*dataclass*
+
+```python
+AttestedTLS(port: int, *, upstream: Endpoint)
+```
+
+The confidential ingress: TLS on *port*, relayed to *upstream* on the loopback.
+
+| Member | Does |
+|---|---|
+| `AttestedTLS.manifest() -> dict[str, object]` | The ingress as the runtime manifest records it. |
+| `AttestedTLS.unit` | The relay's unit. |
+
+### `TCP`
+
+*dataclass*
+
+```python
+TCP(port: int)
+```
+
+An inbound TCP port: `Service(expose=[TCP(8080)])` opens it in the firewall.
+
+### `TLS`
+
+*dataclass*
+
+```python
+TLS(port: int, *, upstream: Endpoint, certificate: Secret)
+```
+
+Ordinary HTTPS on *port*, relayed to *upstream*, with a *certificate* you deliver.
+
+| Member | Does |
+|---|---|
+| `TLS.manifest() -> dict[str, object]` | The ingress as the runtime manifest records it. |
+| `TLS.unit` | The relay's unit. |
+
+### `UDP`
+
+*dataclass*
+
+```python
+UDP(port: int)
+```
+
+An inbound UDP port: `Service(expose=[UDP(53)])` opens it in the firewall.
+
+## tundravm.systemd
+
+The values `Service` keywords take, each rendered as systemd unit directives.
+
+### `Calendar`
+
+*dataclass*
+
+```python
+Calendar(spec: str, *, persistent: bool = True, jitter: str | None = None)
+```
+
+`Service(timer=Calendar("daily"))`: run at calendar times (`OnCalendar=`, a shorthand such as `daily` or `*-*-* 03:00:00`). *persistent* catches up on a run missed while the machine was off (`Persistent=yes`); *jitter* spreads the start.
+
+| Member | Does |
+|---|---|
+| `Calendar.entries() -> Pairs` | The `[Timer]` directives. |
 
 ### `DropIn`
 
@@ -340,40 +457,6 @@ A typed drop-in over a service's unit: `Service(..., unit=DropIn(...))`.
 |---|---|
 | `DropIn.sections() -> tuple[str, ...]` | The sections this drop-in writes (`Unit`, `Service` and `extra`'s). |
 
-### `Egress`
-
-*dataclass*
-
-```python
-Egress(ports: Sequence[PortValue] = (), hosts: Sequence[str] = ())
-```
-
-Outbound traffic the image may send; everything else is dropped.
-
-### `Endpoint`
-
-*dataclass*
-
-```python
-Endpoint(
-    host: str,
-    port: int,
-    path: str = '/',
-    scheme: str = 'http',
-    ready: ServiceReady | None = None,
-    provider: str | Component | None = None,
-)
-```
-
-Where a component answers, with its readiness: an export a caller can wire.
-
-| Member | Does |
-|---|---|
-| `Endpoint.address` | `host:port`, with an IPv6 host in brackets. |
-| `Endpoint.loopback` | Whether only the image itself can reach it (`127.0.0.0/8`, `::1`, `localhost`). |
-| `Endpoint.url` | `scheme://host:port/path`. |
-| `Endpoint.with_scheme(scheme: str) -> Endpoint` | The same address under *scheme* (`ws` for a JSON-RPC server's WebSocket). |
-
 ### `Every`
 
 *dataclass*
@@ -387,70 +470,6 @@ Every(interval: str, *, first: str | None = None, jitter: str | None = None)
 | Member | Does |
 |---|---|
 | `Every.entries() -> Pairs` | The `[Timer]` directives. |
-
-### `File`
-
-*dataclass*
-
-```python
-File(
-    path: str,
-    content: str | bytes | Path,
-    *,
-    mode: int | None = 420,
-    owner: str | None = None,
-)
-```
-
-A file in the image: `File.text(path, text)` or `File.copy(src, dst)`.
-
-| Member | Does |
-|---|---|
-| `File.copy(src: str \| Path, dst: str, *, mode: int \| None = None, owner: str \| None = None) -> File` | The host file *src*, read when the image lowers, shipped at *dst*. |
-| `File.ref` | What a `Profile` change targets. |
-| `File.text(path: str, text: str, *, mode: int = 420, owner: str \| None = None) -> File` | The UTF-8 text *text* at *path*. |
-
-### `Git`
-
-*dataclass*
-
-```python
-Git(url: str, ref: str, subdir: str | None = None, submodules: bool = False)
-```
-
-### `GoBinary`
-
-*dataclass*
-
-```python
-GoBinary(
-    name: str,
-    source: Git | Http,
-    *,
-    package: str,
-    install: str | None = None,
-    env: Mapping[str, str] = FrozenMap(),
-    tags: tuple[str, ...] = (),
-    ldflags: str = '-s -w -buildid=',
-    cgo: bool = False,
-    cache_namespace: str | None = None,
-)
-```
-
-A Go program built from *source* and installed at `executable`.
-
-| Member | Does |
-|---|---|
-| `GoBinary.compose() -> Fragment` |  |
-| `GoBinary.executable` | The absolute path the binary is installed at. |
-
-### `Group`
-
-*dataclass*
-
-```python
-Group(name: str, system: bool = True, gid: int | None = None)
-```
 
 ### `Hardening`
 
@@ -486,14 +505,6 @@ The sandbox a generated unit runs in: one field per knob, and reviewed presets.
 | `Hardening.relaxed(**overrides: Any) -> Hardening` | `ProtectSystem=full`, `PrivateTmp`, `NoNewPrivileges`, the kernel knobs; no syscall filter, no device, capability or address-family limits. |
 | `Hardening.strict(**overrides: Any) -> Hardening` | The default, reviewed profile (the field defaults), with *overrides*. |
 
-### `Http`
-
-*dataclass*
-
-```python
-Http(url: str, sha256: str | None = None)
-```
-
 ### `HttpProbe`
 
 *dataclass*
@@ -507,106 +518,6 @@ Readiness: the service answers *url* with a 2xx, polled until *timeout*.
 | Member | Does |
 |---|---|
 | `HttpProbe.command() -> tuple[str, ...]` | The argv of the probe unit. |
-
-### `Image`
-
-*dataclass*
-
-```python
-Image(
-    name: str,
-    *,
-    base: Debian = Debian(release='trixie', snapshot=None, efi_stub=None),
-    packages: Sequence[str | Package] = (),
-    files: Sequence[File | Tree] = (),
-    services: Sequence[Service] = (),
-    components: Sequence[Component] = (),
-    volumes: Sequence[Volume] = (),
-    secrets: Sequence[Secret] = (),
-    ingress: Sequence[Ingress] = (),
-    network: Network | None = None,
-    users: Sequence[User] = (),
-    groups: Sequence[Group] = (),
-    kernel: Kernel = Kernel.default(),
-    rootfs: RootFS = RootFS.initramfs(),
-    observability: Observability | None = None,
-    targets: Sequence[Target] = ('qemu',),
-    dev: DevAccess | None = None,
-    profiles: Mapping[str, Profile] = FrozenMap(),
-    mkosi: Mkosi | None = None,
-)
-```
-
-A confidential VM image: what it runs, and nothing about how it is built.
-
-### `IMAGE_OBJECT_NAMES`
-
-*value*
-
-```python
-IMAGE_OBJECT_NAMES = ('image', 'IMAGE')
-```
-
-### `Install`
-
-*dataclass*
-
-```python
-Install(
-    source: str,
-    destination: str,
-    mode: int | None = 493,
-    directory: bool = False,
-    artifact: bool = False,
-)
-```
-
-### `JournalExport`
-
-*dataclass*
-
-```python
-JournalExport(url: str, credential: Secret | None = None)
-```
-
-Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
-
-| Member | Does |
-|---|---|
-| `JournalExport.service() -> Service` | The `journal-export` service. |
-
-### `Kernel`
-
-*dataclass*
-
-```python
-Kernel(
-    version: str | None = None,
-    source: Git | Http | None = None,
-    *,
-    config: Path | None = None,
-    patches: Sequence[Path] = (),
-    modules: Sequence[str] = (),
-)
-```
-
-The kernel: `Kernel.default()` (the distribution's, tested) or `Kernel.build(...)`.
-
-| Member | Does |
-|---|---|
-| `Kernel.build(version: str, source: Git \| Http, *, config: Path, patches: Sequence[Path] = ()) -> Kernel` | Compile *version* from *source* with *config* and *patches*. |
-| `Kernel.built` | Whether the build compiles this kernel. |
-| `Kernel.default(*, modules: Sequence[str] = ()) -> Kernel` | Debian's kernel with the curated module set, plus *modules*. |
-
-### `LintError`
-
-*exception*
-
-```python
-class LintError(TdxError)
-```
-
-`build` refused: the image's checks reported error-level diagnostics. Code `E_LINT`.
 
 ### `Listen`
 
@@ -631,88 +542,6 @@ Listen(
 | `Listen.entries() -> Pairs` | The `[Socket]` directives. |
 | `Listen.is_path` | Whether the socket is a file in the filesystem. |
 
-### `load`
-
-*function*
-
-```python
-load(
-    path: str | Path,
-    *,
-    attribute: str | None = None,
-    extra_paths: Sequence[str | Path] = (),
-) -> Image
-```
-
-The `Image` the file at *path* defines.
-
-### `LockfileError`
-
-*exception*
-
-```python
-class LockfileError(TdxError)
-```
-
-A lockfile is missing, unreadable or stale, or locking failed. Code `E_LOCKFILE`.
-
-### `lower`
-
-*function*
-
-```python
-lower(image: Image, *, profiles: Sequence[str] | None = None) -> Lowered
-```
-
-*image* as the compiler's value, with *profiles* (default: all) lowered.
-
-### `MeasurementError`
-
-*exception*
-
-```python
-class MeasurementError(TdxError)
-```
-
- Code `E_MEASUREMENT`.
-
-### `Mkosi`
-
-*dataclass*
-
-```python
-Mkosi(
-    *,
-    settings: Mapping[str, str] | None = None,
-    scripts: Sequence[tuple[str, str]] = (),
-)
-```
-
-mkosi settings and scripts the image adds verbatim, recorded in the manifest.
-
-### `Network`
-
-*dataclass*
-
-```python
-Network(
-    *,
-    dhcp: bool = True,
-    static: StaticAddress | None = None,
-    egress: Egress | None = None,
-    interfaces: Sequence[str] = ('en*', 'eth*'),
-)
-```
-
-How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
-
-| Member | Does |
-|---|---|
-| `Network.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
-| `Network.compose() -> Iterator[object]` |  |
-| `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
-| `Network.readiness() -> tuple[Readied, ...]` |  |
-
 ### `Notify`
 
 *dataclass*
@@ -722,128 +551,6 @@ Notify()
 ```
 
 Readiness: the program itself reports `READY=1` on `$NOTIFY_SOCKET`.
-
-### `Observability`
-
-*dataclass*
-
-```python
-Observability(
-    *,
-    logs: JournalExport | None = None,
-    metrics: PrometheusRemoteWrite | None = None,
-)
-```
-
-The export path for logs and metrics: `image.observability` takes it.
-
-| Member | Does |
-|---|---|
-| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear. |
-| `Observability.compose() -> Iterator[object]` |  |
-
-### `OperatorKey`
-
-*dataclass*
-
-```python
-OperatorKey()
-```
-
-Unlock with a passphrase an operator supplies on every boot (flashbots' model).
-
-| Member | Does |
-|---|---|
-| `OperatorKey.manifest() -> dict[str, object]` | The unlock as the runtime manifest records it. |
-
-### `Package`
-
-*dataclass*
-
-```python
-Package(name: str, *, backports: bool = False)
-```
-
-A runtime package: `Package("curl")`, `Package("nftables", backports=True)`.
-
-| Member | Does |
-|---|---|
-| `Package.ref` | What a `Profile` change targets. |
-
-### `PolicyError`
-
-*exception*
-
-```python
-class PolicyError(TdxError)
-```
-
- Code `E_POLICY`.
-
-### `Profile`
-
-*dataclass*
-
-```python
-Profile(
-    *,
-    extends: str | None = None,
-    add: Sequence[Content] = (),
-    changes: Sequence[Edit | Remove] = (),
-    production: bool = True,
-)
-```
-
-A named variation on the image: what it adds, and what it changes.
-
-### `PrometheusRemoteWrite`
-
-*dataclass*
-
-```python
-PrometheusRemoteWrite(
-    url: str,
-    credential: Secret | None = None,
-    interval: str = '30s',
-    buffer: str = '1h',
-)
-```
-
-Send node metrics to *url*, a Prometheus remote-write receiver.
-
-| Member | Does |
-|---|---|
-| `PrometheusRemoteWrite.config() -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*. |
-| `PrometheusRemoteWrite.service() -> Service` | The `metrics-export` service: Prometheus in agent mode. |
-
-### `ReproducibilityError`
-
-*exception*
-
-```python
-class ReproducibilityError(TdxError)
-```
-
- Code `E_REPRODUCIBILITY`.
-
-### `Resolved`
-
-*dataclass*
-
-```python
-Resolved(
-    variant: str,
-    outputs: tuple[Target, ...],
-    items: tuple[Declaration, ...],
-    fragments: tuple[str, ...],
-)
-```
-
-One profile of the image after expansion, profile changes and reference checks.
-
-| Member | Does |
-|---|---|
-| `Resolved.bind(ref: Ref) -> Declaration` | The profile's final declaration *ref* names; `ValidationError` when absent. |
 
 ### `Resources`
 
@@ -867,115 +574,6 @@ What a service may use: `Resources(memory_max="8G", tasks_max=4096)`.
 |---|---|
 | `Resources.entries() -> tuple[tuple[str, str], ...]` | The `[Service]` directives this value renders. |
 
-### `RootFS`
-
-*dataclass*
-
-```python
-RootFS(
-    layout: Literal['initramfs', 'verity'] = 'initramfs',
-    filesystem: Literal['erofs'] | None = None,
-)
-```
-
-Where the OS lives: `RootFS.initramfs()` (the default) or `RootFS.verity()`.
-
-| Member | Does |
-|---|---|
-| `RootFS.initramfs() -> RootFS` | The OS in the UKI's initrd. |
-| `RootFS.verity(*, filesystem: Literal['erofs'] = 'erofs') -> RootFS` | A read-only *filesystem* root verified by dm-verity. |
-
-### `Secret`
-
-*dataclass*
-
-```python
-Secret(
-    name: str,
-    *,
-    required: bool = True,
-    rotation: Literal['restart', 'none'] = 'restart',
-    source: BrokerKey | None = None,
-)
-```
-
-A secret the image needs at run time and never contains: `Secret("jwt")`.
-
-| Member | Does |
-|---|---|
-| `Secret.credential` | The `LoadCredential=` binding a service gets. |
-| `Secret.location` | Where the delivered value lands: `/run/tundravm/credentials/<name>`. |
-| `Secret.path` | Where a bound service reads it: `${CREDENTIALS_DIRECTORY}/<name>`, an argv word. |
-| `Secret.ready` | "It has been delivered": what `requires=` takes for a secret. |
-
-### `Service`
-
-*dataclass*
-
-```python
-Service(
-    name: str,
-    argv: Sequence[Argument],
-    *,
-    requires: Sequence[Requirement] = (),
-    readiness: Readiness | None = None,
-    state: str | VolumeDirectory | None = None,
-    credentials: Sequence[Binding] = (),
-    expose: Sequence[PortValue] = (),
-    resources: Resources | None = None,
-    shutdown: Shutdown | None = None,
-    hardening: Hardening = Hardening.preset("static"),
-    timer: Every | Calendar | None = None,
-    socket: Listen | None = None,
-    unit: DropIn | None = None,
-    user: str | None = None,
-    groups: Sequence[str] = (),
-    working_directory: str | None = None,
-    environment: Mapping[str, str] = FrozenMap(),
-    logs: str | None = None,
-    runtime: str | None = None,
-)
-```
-
-A program the image runs, as its own user, in a tested sandbox.
-
-| Member | Does |
-|---|---|
-| `Service.binaries() -> tuple[Any, ...]` | The built binary declarations this service's argv pulls in. |
-| `Service.command() -> tuple[str, ...]` | The argv as words: a built first element becomes its installed path, an `Endpoint` its URL. |
-| `Service.probe_unit` | The bounded probe unit a dependent waits for, when readiness needs one. |
-| `Service.ready` | "This service is ready": what another service's `requires=` takes. |
-| `Service.ref` | What a `Profile` change targets. |
-| `Service.secrets` | The delivered secrets this service binds. |
-| `Service.state_directory` | The working directory a `state=` implies. |
-| `Service.stem` | The unit name without its suffix: the generated user's name. |
-| `Service.unit_name` | The `.service` unit this lowers to. |
-
-### `ServiceReady`
-
-*dataclass*
-
-```python
-ServiceReady(unit: str, probe: Readiness | None = None)
-```
-
-"That service is ready": `service.ready`, what `requires=` takes.
-
-### `ServiceRef`
-
-*dataclass*
-
-```python
-ServiceRef(unit: str, probe: Readiness | None = None)
-```
-
-A service a component composed, named from outside: `raiko.service("raiko")`.
-
-| Member | Does |
-|---|---|
-| `ServiceRef.ready` | The readiness handle of that service. |
-| `ServiceRef.ref` | The reference a profile change targets. |
-
 ### `Shutdown`
 
 *dataclass*
@@ -995,50 +593,6 @@ How a service is stopped: `Shutdown(timeout="120s", signal="SIGINT")`.
 | Member | Does |
 |---|---|
 | `Shutdown.entries() -> tuple[tuple[str, str], ...]` | The `[Service]` directives beyond `TimeoutStopSec=` and `KillMode=`. |
-
-### `SourceError`
-
-*exception*
-
-```python
-class SourceError(TdxError)
-```
-
-A source build's source could not be resolved to a pin.
-
-### `StateError`
-
-*exception*
-
-```python
-class StateError(TdxError)
-```
-
-Persisted state (a build directory, an instance receipt, a checkout) is missing or unreadable. Code `E_STATE`.
-
-### `StaticAddress`
-
-*dataclass*
-
-```python
-StaticAddress(address: str, gateway: str | None = None)
-```
-
-A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")`.
-
-| Member | Does |
-|---|---|
-| `StaticAddress.version` | 4 or 6. |
-
-### `TCP`
-
-*dataclass*
-
-```python
-TCP(port: int)
-```
-
-An inbound TCP port: `Service(expose=[TCP(8080)])` opens it in the firewall.
 
 ### `TcpProbe`
 
@@ -1060,149 +614,117 @@ Readiness: *host* accepts a TCP connection on *port*, polled until *timeout*.
 |---|---|
 | `TcpProbe.command() -> tuple[str, ...]` | The argv of the probe unit. |
 
-### `TdxError`
-
-*exception*
-
-```python
-class TdxError(Exception)
-```
-
-Base error class that carries code, optional hint, and context.
-
-### `TLS`
-
-*dataclass*
-
-```python
-TLS(port: int, *, upstream: Endpoint, certificate: Secret)
-```
-
-Ordinary HTTPS on *port*, relayed to *upstream*, with a *certificate* you deliver.
-
-| Member | Does |
-|---|---|
-| `TLS.manifest() -> dict[str, object]` | The ingress as the runtime manifest records it. |
-| `TLS.unit` | The relay's unit. |
-
-### `TpmSeal`
-
-*dataclass*
-
-```python
-TpmSeal(
-    *,
-    platform: Literal['azure', 'gcp', 'swtpm'],
-    pcrs: Sequence[int],
-    recovery: Literal['none'],
-)
-```
-
-Unlock with a random key sealed to a vTPM the operator trusts.
-
-| Member | Does |
-|---|---|
-| `TpmSeal.manifest() -> dict[str, object]` | The unlock as the runtime manifest records it. |
-| `TpmSeal.refusal(targets: Sequence[str]) -> str \| None` | Why *targets* cannot boot a volume sealed this way, or `None` when they can. |
-
-### `Tree`
-
-*dataclass*
-
-```python
-Tree(
-    src: str | Path,
-    dst: str,
-    *,
-    exclude: Sequence[str] = (),
-    owner: str | None = None,
-)
-```
-
-The host directory *src* shipped at *dst*, keeping each file's permission bits.
-
-| Member | Does |
-|---|---|
-| `Tree.ref` | What a `Profile` change targets. |
-
-### `UDP`
-
-*dataclass*
-
-```python
-UDP(port: int)
-```
-
-An inbound UDP port: `Service(expose=[UDP(53)])` opens it in the firewall.
-
-### `User`
-
-*dataclass*
-
-```python
-User(
-    name: str,
-    system: bool = True,
-    home: str | None = None,
-    shell: str = '/usr/sbin/nologin',
-    uid: int | None = None,
-    primary_group: str | int | None = None,
-    groups: tuple[str, ...] = (),
-)
-```
-
-### `ValidationError`
-
-*exception*
-
-```python
-class ValidationError(TdxError)
-```
-
- Code `E_VALIDATION`.
-
-### `Volume`
-
-*dataclass*
-
-```python
-Volume(name: str, *, mount: str, unlock: Unlock, filesystem: Literal['ext4'] = 'ext4')
-```
-
-A persistent, encrypted volume: `Volume("data", mount="/persistent", unlock=...)`.
-
-| Member | Does |
-|---|---|
-| `Volume.device` | The `/dev/disk/by-id/` glob that finds the attachment on every target. |
-| `Volume.directory(name: str, *, mode: int = 488, group: str \| None = None) -> VolumeDirectory` | The directory *name* on this volume, for a service's (or component's) state. |
-| `Volume.manifest() -> dict[str, object]` | The volume as the runtime manifest records it. |
-| `Volume.pipe` | The FIFO an operator (or a broker client) writes the passphrase into. |
-| `Volume.ready` | "It is open, mounted, and its directories exist". |
-| `Volume.serial` | The attachment name: QEMU's `serial=`, GCP's device name. |
-| `Volume.step` | The runtime-init step that prepares the volume's directories once it is open. |
-
-### `VolumeDirectory`
-
-*dataclass*
-
-```python
-VolumeDirectory(volume: Volume, name: str, *, mode: int = 488, group: str | None = None)
-```
-
-A directory on a `Volume`: `data.directory("raiko")`, bound as a state.
-
-| Member | Does |
-|---|---|
-| `VolumeDirectory.path` | The absolute path: the volume's mount plus `name`. |
-| `VolumeDirectory.ready` | The volume's readiness: it exists once the volume is open. |
-
 ## tundravm.components
 
-The shipped component library: the baseline every image implies, and the workloads the Surge prover composes.
+Components: the `Component` base class, what a component exports, and the shipped library.
+
+### `Component`
+
+*class*
+
+```python
+Component(*args: object, **kwargs: object)
+```
+
+A named group of declarations, written as a class, with typed exports.
+
+| Member | Does |
+|---|---|
+| `Component.compose() -> Iterable[object]` | The declarations and nested components this component stands for. |
+| `Component.name` | The component's name, as `show` and its diagnostics print it. |
+| `Component.readiness() -> tuple[Readied, ...]` | What `ready` waits for: the readiness of each service it composes that declares one. A component whose readiness is not a service of its own (one that wraps a packaged or internal unit) overrides this. |
+| `Component.ready` | "Every service this component declares readiness for is ready". |
+| `Component.service(name: str) -> ServiceRef` | The service called *name*, for `requires=` and for a profile's `changes=`. |
+| `Component.services() -> tuple[Service, ...]` | Every service this component composes, nested components included. |
+
+### `ComponentReady`
+
+*dataclass*
+
+```python
+ComponentReady(component: Component)
+```
+
+"That component is up": `component.ready`.
+
+| Member | Does |
+|---|---|
+| `ComponentReady.handles() -> tuple[Readied, ...]` | What proves the component ready, one handle per unit. |
+| `ComponentReady.name` | The component's name. |
 
 ### `DevAccess`
 
-The same object as `tundravm.DevAccess`.
+*dataclass*
+
+```python
+DevAccess(*, ssh_keys: Sequence[str] = (), password: str | None = None)
+```
+
+Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`.
+
+| Member | Does |
+|---|---|
+| `DevAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `dev-access-rsa-key`: an RSA key where every current client makes ed25519. |
+| `DevAccess.compose() -> Iterator[object]` |  |
+| `DevAccess.public_keys() -> tuple[str, ...]` | The public key lines, reading every entry that names a `.pub` file. |
+| `DevAccess.tools() -> tuple[object, ...]` | The debugging tools and, with *password*, the console login. |
+
+### `Diagnostic`
+
+*dataclass*
+
+```python
+Diagnostic(
+    code: str,
+    severity: Severity,
+    message: str,
+    subject: str = '',
+    variant: str = '',
+    location: str = '',
+    hint: str | None = None,
+    context: Context = (),
+)
+```
+
+One finding: a lint *code*, its *severity* and a one-line *message*.
+
+| Member | Does |
+|---|---|
+| `Diagnostic.to_dict() -> dict[str, object]` | The JSON form `check --json` prints: every field, *context* as an object. |
+
+### `Egress`
+
+*dataclass*
+
+```python
+Egress(ports: Sequence[PortValue] = (), hosts: Sequence[str] = ())
+```
+
+Outbound traffic the image may send; everything else is dropped.
+
+### `Endpoint`
+
+*dataclass*
+
+```python
+Endpoint(
+    host: str,
+    port: int,
+    path: str = '/',
+    scheme: str = 'http',
+    ready: ServiceReady | None = None,
+    provider: str | Component | None = None,
+)
+```
+
+Where a component answers, with its readiness: an export a caller can wire.
+
+| Member | Does |
+|---|---|
+| `Endpoint.address` | `host:port`, with an IPv6 host in brackets. |
+| `Endpoint.loopback` | Whether only the image itself can reach it (`127.0.0.0/8`, `::1`, `localhost`). |
+| `Endpoint.url` | `scheme://host:port/path`. |
+| `Endpoint.with_scheme(scheme: str) -> Endpoint` | The same address under *scheme* (`ws` for a JSON-RPC server's WebSocket). |
 
 ### `EVIDENCE`
 
@@ -1229,7 +751,17 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 
 ### `JournalExport`
 
-The same object as `tundravm.JournalExport`.
+*dataclass*
+
+```python
+JournalExport(url: str, credential: Secret | None = None)
+```
+
+Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
+
+| Member | Does |
+|---|---|
+| `JournalExport.service() -> Service` | The `journal-export` service. |
 
 ### `Nethermind`
 
@@ -1258,15 +790,65 @@ Nethermind(
 
 ### `Network`
 
-The same object as `tundravm.Network`.
+*dataclass*
+
+```python
+Network(
+    *,
+    dhcp: bool = True,
+    static: StaticAddress | None = None,
+    egress: Egress | None = None,
+    interfaces: Sequence[str] = ('en*', 'eth*'),
+)
+```
+
+How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
+
+| Member | Does |
+|---|---|
+| `Network.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
+| `Network.compose() -> Iterator[object]` |  |
+| `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
+| `Network.readiness() -> tuple[Readied, ...]` |  |
 
 ### `Observability`
 
-The same object as `tundravm.Observability`.
+*dataclass*
+
+```python
+Observability(
+    *,
+    logs: JournalExport | None = None,
+    metrics: PrometheusRemoteWrite | None = None,
+)
+```
+
+The export path for logs and metrics: `image.observability` takes it.
+
+| Member | Does |
+|---|---|
+| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear. |
+| `Observability.compose() -> Iterator[object]` |  |
 
 ### `PrometheusRemoteWrite`
 
-The same object as `tundravm.PrometheusRemoteWrite`.
+*dataclass*
+
+```python
+PrometheusRemoteWrite(
+    url: str,
+    credential: Secret | None = None,
+    interval: str = '30s',
+    buffer: str = '1h',
+)
+```
+
+Send node metrics to *url*, a Prometheus remote-write receiver.
+
+| Member | Does |
+|---|---|
+| `PrometheusRemoteWrite.config() -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*. |
+| `PrometheusRemoteWrite.service() -> Service` | The `metrics-export` service: Prometheus in agent mode. |
 
 ### `Raiko`
 
@@ -1289,6 +871,50 @@ Raiko(
 | `Raiko.compose() -> Iterator[object]` |  |
 | `Raiko.http` | Raiko's HTTP API. |
 
+### `Resolved`
+
+*dataclass*
+
+```python
+Resolved(
+    variant: str,
+    outputs: tuple[Target, ...],
+    items: tuple[Declaration, ...],
+    fragments: tuple[str, ...],
+)
+```
+
+One profile of the image after expansion, profile changes and reference checks.
+
+| Member | Does |
+|---|---|
+| `Resolved.bind(ref: Ref) -> Declaration` | The profile's final declaration *ref* names; `ValidationError` when absent. |
+
+### `ServiceReady`
+
+*dataclass*
+
+```python
+ServiceReady(unit: str, probe: Readiness | None = None)
+```
+
+"That service is ready": `service.ready`, what `requires=` takes.
+
+### `ServiceRef`
+
+*dataclass*
+
+```python
+ServiceRef(unit: str, probe: Readiness | None = None)
+```
+
+A service a component composed, named from outside: `raiko.service("raiko")`.
+
+| Member | Does |
+|---|---|
+| `ServiceRef.ready` | The readiness handle of that service. |
+| `ServiceRef.ref` | The reference a profile change targets. |
+
 ### `SshAccess`
 
 *dataclass*
@@ -1309,6 +935,20 @@ Root logs in over SSH with a public key, and with nothing else.
 | `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them. |
 | `SshAccess.compose() -> Iterator[object]` |  |
 | `SshAccess.port` | The port `sshd` listens on. |
+
+### `StaticAddress`
+
+*dataclass*
+
+```python
+StaticAddress(address: str, gateway: str | None = None)
+```
+
+A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")`.
+
+| Member | Does |
+|---|---|
+| `StaticAddress.version` | 4 or 6. |
 
 ### `TaikoClient`
 
@@ -1384,6 +1024,378 @@ The confidential-VM baseline: authenticated time, a volatile journal, sysctl har
 |---|---|
 | `TeeBase.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
 | `TeeBase.compose() -> Iterator[object]` |  |
+
+## tundravm.storage
+
+Persistent storage: encrypted volumes, the directories services keep on them, and how each volume unlocks.
+
+### `BrokerKey`
+
+*dataclass*
+
+```python
+BrokerKey(url: str, *, audience: str)
+```
+
+A key broker that releases a value after it has verified this image's attestation.
+
+| Member | Does |
+|---|---|
+| `BrokerKey.manifest() -> dict[str, object]` | The broker as the runtime manifest records it. |
+
+### `OperatorKey`
+
+*dataclass*
+
+```python
+OperatorKey()
+```
+
+Unlock with a passphrase an operator supplies on every boot (flashbots' model).
+
+| Member | Does |
+|---|---|
+| `OperatorKey.manifest() -> dict[str, object]` | The unlock as the runtime manifest records it. |
+
+### `TpmSeal`
+
+*dataclass*
+
+```python
+TpmSeal(
+    *,
+    platform: Literal['azure', 'gcp', 'swtpm'],
+    pcrs: Sequence[int],
+    recovery: Literal['none'],
+)
+```
+
+Unlock with a random key sealed to a vTPM the operator trusts.
+
+| Member | Does |
+|---|---|
+| `TpmSeal.manifest() -> dict[str, object]` | The unlock as the runtime manifest records it. |
+| `TpmSeal.refusal(targets: Sequence[str]) -> str \| None` | Why *targets* cannot boot a volume sealed this way, or `None` when they can. |
+
+### `Volume`
+
+*dataclass*
+
+```python
+Volume(name: str, *, mount: str, unlock: Unlock, filesystem: Literal['ext4'] = 'ext4')
+```
+
+A persistent, encrypted volume: `Volume("data", mount="/persistent", unlock=...)`.
+
+| Member | Does |
+|---|---|
+| `Volume.device` | The `/dev/disk/by-id/` glob that finds the attachment on every target. |
+| `Volume.directory(name: str, *, mode: int = 488, group: str \| None = None) -> VolumeDirectory` | The directory *name* on this volume, for a service's (or component's) state. |
+| `Volume.manifest() -> dict[str, object]` | The volume as the runtime manifest records it. |
+| `Volume.pipe` | The FIFO an operator (or a broker client) writes the passphrase into. |
+| `Volume.ready` | "It is open, mounted, and its directories exist". |
+| `Volume.serial` | The attachment name: QEMU's `serial=`, GCP's device name. |
+| `Volume.step` | The runtime-init step that prepares the volume's directories once it is open. |
+
+### `VolumeDirectory`
+
+*dataclass*
+
+```python
+VolumeDirectory(volume: Volume, name: str, *, mode: int = 488, group: str | None = None)
+```
+
+A directory on a `Volume`: `data.directory("raiko")`, bound as a state.
+
+| Member | Does |
+|---|---|
+| `VolumeDirectory.path` | The absolute path: the volume's mount plus `name`. |
+| `VolumeDirectory.ready` | The volume's readiness: it exists once the volume is open. |
+
+## tundravm.secrets
+
+Secrets: values an image needs at run time and never contains.
+
+### `Credential`
+
+*dataclass*
+
+```python
+Credential(name: str, source: str)
+```
+
+A systemd credential a service reads: `Credential("jwt", "/etc/app/jwt")`.
+
+### `Secret`
+
+*dataclass*
+
+```python
+Secret(
+    name: str,
+    *,
+    required: bool = True,
+    rotation: Literal['restart', 'none'] = 'restart',
+    source: BrokerKey | None = None,
+)
+```
+
+A secret the image needs at run time and never contains: `Secret("jwt")`.
+
+| Member | Does |
+|---|---|
+| `Secret.credential` | The `LoadCredential=` binding a service gets. |
+| `Secret.location` | Where the delivered value lands: `/run/tundravm/credentials/<name>`. |
+| `Secret.path` | Where a bound service reads it: `${CREDENTIALS_DIRECTORY}/<name>`, an argv word. |
+| `Secret.ready` | "It has been delivered": what `requires=` takes for a secret. |
+
+## tundravm.sources
+
+Software built from source: what `tundravm lock` pins.
+
+### `Build`
+
+*dataclass*
+
+```python
+Build(
+    name: str,
+    source: Git | Http,
+    script: str | None = None,
+    install: tuple[Install, ...] = (),
+    packages: tuple[str, ...] = (),
+    env: Mapping[str, str] = FrozenMap(),
+    cache_namespace: str | None = None,
+    using: Go | Cargo | Dotnet | None = None,
+)
+```
+
+### `CargoBinary`
+
+*dataclass*
+
+```python
+CargoBinary(
+    name: str,
+    source: Git | Http,
+    *,
+    bin: str | None = None,
+    package: str | None = None,
+    install: str | None = None,
+    features: tuple[str, ...] = (),
+    profile: str = 'release',
+    env: Mapping[str, str] = FrozenMap(),
+    auditable: bool | None = None,
+    cache_namespace: str | None = None,
+)
+```
+
+A Rust program built from *source* and installed at `executable`.
+
+| Member | Does |
+|---|---|
+| `CargoBinary.compose() -> Fragment` |  |
+| `CargoBinary.executable` | The absolute path the binary is installed at. |
+
+### `Git`
+
+*dataclass*
+
+```python
+Git(url: str, ref: str, subdir: str | None = None, submodules: bool = False)
+```
+
+### `GoBinary`
+
+*dataclass*
+
+```python
+GoBinary(
+    name: str,
+    source: Git | Http,
+    *,
+    package: str,
+    install: str | None = None,
+    env: Mapping[str, str] = FrozenMap(),
+    tags: tuple[str, ...] = (),
+    ldflags: str = '-s -w -buildid=',
+    cgo: bool = False,
+    cache_namespace: str | None = None,
+)
+```
+
+A Go program built from *source* and installed at `executable`.
+
+| Member | Does |
+|---|---|
+| `GoBinary.compose() -> Fragment` |  |
+| `GoBinary.executable` | The absolute path the binary is installed at. |
+
+### `Http`
+
+*dataclass*
+
+```python
+Http(url: str, sha256: str | None = None)
+```
+
+### `Install`
+
+*dataclass*
+
+```python
+Install(
+    source: str,
+    destination: str,
+    mode: int | None = 493,
+    directory: bool = False,
+    artifact: bool = False,
+)
+```
+
+## tundravm.errors
+
+Typed SDK error model with stable, machine-readable error codes.
+
+### `ArtifactError`
+
+*exception*
+
+```python
+class ArtifactError(TdxError)
+```
+
+A built artifact's bytes no longer match the sha256 its build's manifest records. Code `E_ARTIFACT_CHANGED`.
+
+### `AttestationError`
+
+*exception*
+
+```python
+class AttestationError(TdxError)
+```
+
+`attest` could not complete: a tdxs issuer or validator is unreachable or failed. Code `E_ATTESTATION`.
+
+### `BackendExecutionError`
+
+*exception*
+
+```python
+class BackendExecutionError(TdxError)
+```
+
+ Code `E_BACKEND_EXECUTION`.
+
+### `DeploymentError`
+
+*exception*
+
+```python
+class DeploymentError(TdxError)
+```
+
+ Code `E_DEPLOYMENT`.
+
+### `ErrorCode`
+
+*enum*
+
+```python
+ErrorCode(*values)
+```
+
+Stable error identifiers used across API surfaces.
+
+### `LintError`
+
+*exception*
+
+```python
+class LintError(TdxError)
+```
+
+`build` refused: the image's checks reported error-level diagnostics. Code `E_LINT`.
+
+### `LockfileError`
+
+*exception*
+
+```python
+class LockfileError(TdxError)
+```
+
+A lockfile is missing, unreadable or stale, or locking failed. Code `E_LOCKFILE`.
+
+### `MeasurementError`
+
+*exception*
+
+```python
+class MeasurementError(TdxError)
+```
+
+ Code `E_MEASUREMENT`.
+
+### `PolicyError`
+
+*exception*
+
+```python
+class PolicyError(TdxError)
+```
+
+ Code `E_POLICY`.
+
+### `ReproducibilityError`
+
+*exception*
+
+```python
+class ReproducibilityError(TdxError)
+```
+
+ Code `E_REPRODUCIBILITY`.
+
+### `SourceError`
+
+*exception*
+
+```python
+class SourceError(TdxError)
+```
+
+A source build's source could not be resolved to a pin.
+
+### `StateError`
+
+*exception*
+
+```python
+class StateError(TdxError)
+```
+
+Persisted state (a build directory, an instance receipt, a checkout) is missing or unreadable. Code `E_STATE`.
+
+### `TdxError`
+
+*exception*
+
+```python
+class TdxError(Exception)
+```
+
+Base error class that carries code, optional hint, and context.
+
+### `ValidationError`
+
+*exception*
+
+```python
+class ValidationError(TdxError)
+```
+
+ Code `E_VALIDATION`.
 
 ## tundravm.testing
 

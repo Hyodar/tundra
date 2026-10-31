@@ -15,13 +15,8 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
-from tundravm._modules import tdxs as _tdxs
-from tundravm._source import FrozenMap
-from tundravm.declarative import model as dm
-from tundravm.declarative import utils as du
-from tundravm.errors import ValidationError
-from tundravm.image._component import Component, Readied, ServiceReady
-from tundravm.image._values import (
+from tundravm._image._component import Component, Readied, ServiceReady
+from tundravm._image._values import (
     MANAGEMENT_PORT,
     TCP,
     UDP,
@@ -30,6 +25,11 @@ from tundravm.image._values import (
     PortValue,
     StaticAddress,
 )
+from tundravm._modules import tdxs as _tdxs
+from tundravm._source import FrozenMap
+from tundravm.declarative import model as dm
+from tundravm.declarative import utils as du
+from tundravm.errors import ValidationError
 
 __all__ = [
     "EVIDENCE",
@@ -177,7 +177,7 @@ class Firewall(Component):
     """The inbound (and optionally outbound) packet filter, nftables in the image.
 
     Inbound it drops everything except the ports services ``expose=``, an ingress's port,
-    the management ingress on :data:`~tundravm.image._values.MANAGEMENT_PORT` and *allow*
+    the management ingress on :data:`~tundravm._image._values.MANAGEMENT_PORT` and *allow*
     (ports something other than a ``Service`` listens on: a packaged daemon). Outbound it
     filters only with *egress*. The image holds ``Firewall()`` by default;
     ``network=Network(egress=...)`` is the usual way to set *egress*. Component name:

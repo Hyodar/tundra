@@ -1,6 +1,6 @@
 """The runtime contracts (volumes, secrets, ingress) checked and lowered onto today's stack.
 
-An image's :class:`~tundravm.image.Volume`, :class:`~tundravm.image.Secret` and ingress
+An image's :class:`~tundravm.storage.Volume`, :class:`~tundravm.secrets.Secret` and ingress
 values become the declarations tundra-tools and systemd already understand:
 
 - a volume is a ``Key`` (``key-gen``: a FIFO for ``OperatorKey``/``BrokerKey``, a

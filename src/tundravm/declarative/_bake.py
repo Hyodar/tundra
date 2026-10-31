@@ -12,6 +12,14 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+from tundravm._reporting import (
+    Progress,
+    Reporter,
+    StructuredLogger,
+    display_path,
+    format_duration,
+    format_size,
+)
 from tundravm._source import (
     DEPS_DIRNAME,
     NOT_PREFETCHED,
@@ -36,14 +44,6 @@ from tundravm.models import (
     OutputTarget,
     Phase,
     ProfileBuildResult,
-)
-from tundravm.observability import (
-    Progress,
-    Reporter,
-    StructuredLogger,
-    display_path,
-    format_duration,
-    format_size,
 )
 from tundravm.policy import ensure_bake_policy
 from tundravm.toolchain import Toolchain

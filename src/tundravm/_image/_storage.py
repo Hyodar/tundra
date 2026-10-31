@@ -4,7 +4,7 @@ A volume is a logical disk with a stable identity (plan section 6.2): the image 
 what it is called, where it mounts and how its LUKS2 key arrives; capacity and the
 attachment itself are deployment configuration. Today's ``key-gen`` and ``disk-setup``
 (tundra-tools) are the in-image half: the volume lowers onto them in
-:mod:`tundravm.image._runtime`.
+:mod:`tundravm._image._runtime`.
 """
 
 from __future__ import annotations

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,9 +12,23 @@ import pytest
 
 import tundravm
 from tests.helpers import REPO_ROOT
+from tundravm._reference import MODULES
 
 PACKAGE = Path(tundravm.__file__).parent
 EXAMPLES = REPO_ROOT / "examples"
+
+NAMESPACED = sorted(
+    (
+        name
+        for module in MODULES
+        if module != "tundravm"
+        for name in importlib.import_module(module).__all__
+        if name[:1].isupper()
+    ),
+    key=len,
+    reverse=True,
+)
+"""Public names whose one home is a namespace, so the root never spells them."""
 
 REMOVED_VERB = "removed CLI verb (new, check, lock, build, show, run, deploy, attest, ...)"
 """The verbs folded into the twelve commands (plan 3.4): no hint, template or doc names one."""
@@ -84,6 +99,19 @@ RENAMED = {
     "after_init (needs=)": re.compile(r"\bafter_init\b"),
     "BUILTIN_INITS priorities (BUILTIN_STEPS, readiness handles)": re.compile(
         r"\bBUILTIN_INITS\b|\binit-priority-collision\b"
+    ),
+    "flat import of a namespaced name (its namespace)": re.compile(
+        rf"\bfrom tundravm import (?:\([^)]*|[^\n]*)\b(?:{'|'.join(NAMESPACED)})\b"
+    ),
+    "tundravm.<namespaced name> (its namespace)": re.compile(
+        rf"\btundravm\.(?:{'|'.join(NAMESPACED)})\b"
+    ),
+    "tundravm.image (the public namespaces)": re.compile(r"\btundravm\.image\b"),
+    "tundravm.components.<workload> (tundravm.components)": re.compile(
+        r"\btundravm\.components\.(?:nethermind|taiko)\b"
+    ),
+    "tundravm.observability/platforms (internal: _reporting, _platforms)": re.compile(
+        r"\btundravm\.(?:observability|platforms)\b"
     ),
 }
 """Removed recipe-authoring spellings, by their replacement."""
@@ -269,6 +297,42 @@ def test_denylist_catches_fluent_hints(source: str) -> None:
 def test_bare_string_statements_are_documentation() -> None:
     tree = ast.parse('"""Call img.apply(x)."""\nNAME = 1\n"""Attribute doc: Image()."""\n')
     assert list(_runtime_strings(tree)) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "what"),
+    [
+        (
+            "from tundravm import TCP, File, Image",
+            "flat import of a namespaced name (its namespace)",
+        ),
+        (
+            "from tundravm import (\n    Image,\n    Volume,\n)",
+            "flat import of a namespaced name (its namespace)",
+        ),
+        ("a tundravm.Secret holding the key", "tundravm.<namespaced name> (its namespace)"),
+        ("from tundravm.image import Image", "tundravm.image (the public namespaces)"),
+        (
+            "from tundravm.components.taiko import Raiko",
+            "tundravm.components.<workload> (tundravm.components)",
+        ),
+    ],
+)
+def test_namespaced_spellings_are_caught(text: str, what: str) -> None:
+    assert what in _renamed(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from tundravm import File, Image, Service\nfrom tundravm.ports import TCP",
+        "from tundravm import secrets",
+        "Bind a tundravm.Image to `image`.",
+        "from tundravm.components import Component, DevAccess",
+    ],
+)
+def test_namespaced_spellings_pass(text: str) -> None:
+    assert _renamed(text) == []
 
 
 def test_package_strings_use_the_current_recipe_spellings() -> None:

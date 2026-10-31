@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from tundravm._reporting import Event
 from tundravm.backends.base import collect_artifacts, is_mkosi_state, mkosi_setting
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Package, Recipe, lower
 from tundravm.declarative.lifecycle import bake_image, read_tree
 from tundravm.diff import diff_trees
 from tundravm.models import BakeRequest, BakeResult
-from tundravm.observability import Event
 
 STATE = ("mkosi.tools", "mkosi.cache", "mkosi.builddir", ".mkosi-private")
 

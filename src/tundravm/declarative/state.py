@@ -36,6 +36,7 @@ from tundravm._modules.secret_delivery import (
     BUILTIN_SECRET_PROVIDER,
     SECRET_DELIVERY_BUILD_PACKAGES,
 )
+from tundravm._platforms import azure, gcp
 from tundravm._source import BuildRecipe, GitSource, HttpSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as SourceInstall
 from tundravm._units.render import activation_unit, dropin_unit, render
@@ -69,7 +70,6 @@ from tundravm.models import (
     ships_unit,
     unit_name,
 )
-from tundravm.platforms import azure, gcp
 
 from .model import (
     BootStep,

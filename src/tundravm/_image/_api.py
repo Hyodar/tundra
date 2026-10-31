@@ -1,7 +1,7 @@
 """Loading an image file, and the lifecycle functions that take an :class:`Image`.
 
 The image is the public value; the compiler still works on the internal recipe, so
-each function here converts once (:func:`~tundravm.image._lower.recipe_of`) and then
+each function here converts once (:func:`~tundravm._image._lower.recipe_of`) and then
 calls the lifecycle unchanged.
 """
 

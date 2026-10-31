@@ -4,24 +4,23 @@ from __future__ import annotations
 
 import pytest
 
-from tundravm import (
-    TCP,
-    Credential,
+from tundravm import Image, Service
+from tundravm.components import Endpoint
+from tundravm.declarative.systemd import PRESETS
+from tundravm.errors import ValidationError
+from tundravm.ports import TCP
+from tundravm.secrets import Credential
+from tundravm.systemd import (
     DropIn,
-    Endpoint,
     Every,
     Hardening,
     HttpProbe,
-    Image,
     Listen,
     Notify,
     Resources,
-    Service,
     Shutdown,
     TcpProbe,
-    ValidationError,
 )
-from tundravm.declarative.systemd import PRESETS
 from tundravm.testing import PlannedImage, plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")

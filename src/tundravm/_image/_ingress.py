@@ -2,7 +2,7 @@
 
 ``Service(expose=[TCP(8080)])`` opens a port and protects nothing. An ingress is the
 other way in: a TLS listener on a public port that relays to an upstream
-:class:`~tundravm.image.Endpoint` on the loopback interface, so the listener is the only
+:class:`~tundravm.components.Endpoint` on the loopback interface, so the listener is the only
 path to it. :class:`AttestedTLS` is the confidential one, :class:`TLS` ordinary HTTPS.
 """
 
@@ -95,7 +95,7 @@ class AttestedTLS(Located):
 class TLS(Located):
     """Ordinary HTTPS on *port*, relayed to *upstream*, with a *certificate* you deliver.
 
-    *certificate* is a :class:`~tundravm.image.Secret` holding the PEM private key and
+    *certificate* is a :class:`~tundravm.secrets.Secret` holding the PEM private key and
     certificate chain, delivered like any secret (``tundravm secrets deliver INSTANCE
     tls=@bundle.pem``): the key never enters the image. Nothing about it is attested;
     use :class:`AttestedTLS` when the client must know what it is talking to.

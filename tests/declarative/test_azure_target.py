@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
+from tundravm._platforms.azure import AZURE_PROVISIONING_SCRIPT, provisioning_task
 from tundravm._units.parse import rendered
 from tundravm.compiler import AZURE_CONVERTER
 from tundravm.declarative import Fragment, Recipe, Unit, Variant, compile, resolve
-from tundravm.platforms.azure import AZURE_PROVISIONING_SCRIPT, provisioning_task
 from tundravm.testing import CompiledTree, compile_tree
 
 SCRIPT = "mkosi.extra/usr/bin/azure-complete-provisioning"

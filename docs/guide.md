@@ -121,7 +121,8 @@ verify:azure     unsupported: Azure evidence is vTPM-bound: no TDX register can 
 An image file binds an `Image` to the name `image`. This is a complete one:
 
 ```python
-from tundravm import TCP, File, Image, Service
+from tundravm import File, Image, Service
+from tundravm.ports import TCP
 
 image = Image(
     "demo",
@@ -161,23 +162,25 @@ Passing one of them in `components=` replaces the default one.
 
 ### The slots
 
-| Slot | Takes |
-|---|---|
-| `base` | `Debian(release, snapshot=, efi_stub=)` |
-| `packages` | package names, or `Package(name, backports=True)`: runtime packages only |
-| `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst, exclude=)` |
-| `services` | `Service` |
-| `components` | `Component` instances |
-| `volumes`, `secrets`, `ingress` | `Volume`, `Secret`, `AttestedTLS` or `TLS`: see [Volumes, secrets and ingress](#volumes-secrets-and-ingress) |
-| `network` | `Network(dhcp=, static=, egress=, interfaces=)` |
-| `users`, `groups` | `User`, `Group` for resources several services share |
-| `kernel` | `Kernel.default()` or `Kernel.build(version, source, config=, patches=)` |
-| `rootfs` | `RootFS.initramfs()` (default) or `RootFS.verity()` |
-| `observability` | `Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(...))` |
-| `targets` | a subset of `("qemu", "azure", "gcp")`; `qemu` is always built |
-| `dev` | `DevAccess(ssh_keys=, password=)`: the non-production `dev` profile |
-| `profiles` | `{"name": Profile(...)}` |
-| `mkosi` | `Mkosi(settings={...}, scripts=[...])`: see [The escape to mkosi](#the-escape-to-mkosi) |
+| Slot | Takes | From |
+|---|---|---|
+| `base` | `Debian(release, snapshot=, efi_stub=)` | `tundravm` |
+| `packages` | package names, or `Package(name, backports=True)`: runtime packages only | `tundravm` |
+| `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst, exclude=)` | `tundravm` |
+| `services` | `Service` | `tundravm` |
+| `components` | `Component` instances | `tundravm.components` |
+| `volumes` | `Volume`: see [Volumes](#volumes) | `tundravm.storage` |
+| `secrets` | `Secret`: see [Secrets](#secrets) | `tundravm.secrets` |
+| `ingress` | `AttestedTLS` or `TLS`: see [Ingress](#ingress) | `tundravm.ports` |
+| `network` | `Network(dhcp=, static=, egress=, interfaces=)` | `tundravm.components` |
+| `users`, `groups` | `User`, `Group` for resources several services share | `tundravm` |
+| `kernel` | `Kernel.default()` or `Kernel.build(version, source, config=, patches=)` | `tundravm` |
+| `rootfs` | `RootFS.initramfs()` (default) or `RootFS.verity()` | `tundravm` |
+| `observability` | `Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(...))` | `tundravm.components` |
+| `targets` | a subset of `("qemu", "azure", "gcp")`; `qemu` is always built | |
+| `dev` | `DevAccess(ssh_keys=, password=)`: the non-production `dev` profile | `tundravm.components` |
+| `profiles` | `{"name": Profile(...)}` | `tundravm` |
+| `mkosi` | `Mkosi(settings={...}, scripts=[...])`: see [The escape to mkosi](#the-escape-to-mkosi) | `tundravm` |
 
 `File.copy` and `Tree` read host files when the image lowers. Build their paths from
 `Path(__file__).parent`, so the result does not depend on the working directory. A file is
@@ -185,12 +188,34 @@ root-owned unless `owner=` says otherwise; systemd-tmpfiles applies the owner at
 boot. Build dependencies are not image packages: they belong to the `GoBinary`,
 `CargoBinary` or `Build` that needs them.
 
+### Imports
+
+Every public name has one home, so an image file's imports say which parts of tundravm it
+uses:
+
+| Namespace | Holds |
+|---|---|
+| `tundravm` | `Image`, `Profile`, `Service`, the contents (`Package`, `File`, `Tree`, `User`, `Group`), the foundation (`Debian`, `Kernel`, `RootFS`, `Mkosi`), and `load`, `lower`, `compile`, `bake`, `doctor` |
+| `tundravm.ports` | `TCP`, `UDP`, `AttestedTLS`, `TLS` |
+| `tundravm.systemd` | what `Service` keywords take: `Hardening`, `Resources`, `Shutdown`, `Notify`, `TcpProbe`, `HttpProbe`, `Every`, `Calendar`, `Listen`, `DropIn` |
+| `tundravm.components` | `Component`, its exports (`Endpoint`, `ServiceRef`, `ServiceReady`, `ComponentReady`), `Resolved` and `Diagnostic` for `check()`, and the [shipped library](#the-shipped-library) with `StaticAddress` and `Egress` |
+| `tundravm.storage` | `Volume`, `VolumeDirectory` and the unlock policies `OperatorKey`, `TpmSeal`, `BrokerKey` |
+| `tundravm.secrets` | `Secret`, `Credential` |
+| `tundravm.sources` | `GoBinary`, `CargoBinary`, `Build`, `Install`, `Git`, `Http` |
+| `tundravm.errors` | the exceptions, each with a stable code |
+| `tundravm.testing` | see [Testing a project](#testing-a-project) |
+
+There are no aliases: importing `TCP` from the root is an `ImportError`. The
+[API reference](reference/api.md) has one section per namespace.
+
 ## Services
 
 A `Service` is an argv, never a command line:
 
 ```python
-from tundravm import TCP, HttpProbe, Resources, Service, Shutdown
+from tundravm import Service
+from tundravm.ports import TCP
+from tundravm.systemd import HttpProbe, Resources, Shutdown
 
 api = Service(
     "api",
@@ -258,7 +283,8 @@ cannot fix.
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
-A built binary is a valid first argv element. `GoBinary`, `CargoBinary` and `Build` pull
+These values come from `tundravm.systemd`. A built binary is a valid first argv element:
+`GoBinary`, `CargoBinary` and `Build` (from `tundravm.sources`) pull
 their build and install into the image, and `binary.executable` is the installed path. Go
 builds with `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with
 `cargo auditable build --frozen` and reproducible `rustflags`, so the SBOM can read the crate
@@ -272,8 +298,10 @@ A `Component` is a class that groups declarations and exports typed values. This
 ```python
 from collections.abc import Iterator
 
-from tundravm import TCP, Component, Diagnostic, Endpoint, File, Image, Package, Resolved
-from tundravm import Service, TcpProbe
+from tundravm import File, Image, Package, Service
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved
+from tundravm.ports import TCP
+from tundravm.systemd import TcpProbe
 
 
 class App(Component):
@@ -345,8 +373,11 @@ The surge prover in `examples/surge-tdx-prover/image.py` is the three workloads 
 through their exports:
 
 ```python
-from tundravm import AttestedTLS, DevAccess, Image, OperatorKey, RootFS, Secret, Volume
-from tundravm.components import Nethermind, Raiko, TaikoClient
+from tundravm import Image, RootFS
+from tundravm.components import DevAccess, Nethermind, Raiko, TaikoClient
+from tundravm.ports import AttestedTLS
+from tundravm.secrets import Secret
+from tundravm.storage import OperatorKey, Volume
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 jwt = Secret("jwt")
@@ -376,7 +407,8 @@ The image itself is the `production` profile. `dev=DevAccess(...)` adds a non-pr
 else is a `Profile`:
 
 ```python
-from tundravm import TCP, File, Image, Profile, Service
+from tundravm import File, Image, Profile, Service
+from tundravm.ports import TCP
 
 web = Service(
     "web",
@@ -429,8 +461,11 @@ These are the runtime contracts of a confidential service. The prover template i
 shortest image that uses all three:
 
 ```python
-from tundravm import AttestedTLS, DevAccess, Image, OperatorKey, RootFS, Secret, Volume
-from tundravm.components import Raiko
+from tundravm import Image, RootFS
+from tundravm.components import DevAccess, Raiko
+from tundravm.ports import AttestedTLS
+from tundravm.secrets import Secret
+from tundravm.storage import OperatorKey, Volume
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 config = Secret("raiko-config", rotation="restart")
@@ -824,7 +859,8 @@ replaced. The [trust page](trust.md#recovery) has the recovery rules.
 `tests/test_NAME.py` uses it; so can any test:
 
 ```python
-from tundravm import TCP, File, Image, Service
+from tundravm import File, Image, Service
+from tundravm.ports import TCP
 from tundravm.testing import assert_clean, assert_diagnostic, plan
 
 image = Image(

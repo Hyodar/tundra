@@ -35,6 +35,7 @@ from . import __version__, bootstrap, builds, deployments, instances, show
 from . import manifest as mf
 from . import templates as scaffold
 from ._describe import describe
+from ._reporting import TextReporter
 from .attestation import render_attestation
 from .backends.base import BuildBackend
 from .capabilities import AREAS, Capability, Host, capabilities, failed
@@ -57,7 +58,6 @@ from .diagnostics import Diagnostic
 from .diff import diff_against
 from .errors import LockfileError, TdxError, ValidationError
 from .formats import resolve_format
-from .observability import TextReporter
 from .project import RESOLUTION_HELP, Settings, settings
 from .recipe import RecipeFile, load_file
 from .templates import (

@@ -12,9 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import DevAccess, Image, Profile
+from tundravm import Image, Profile
 from tundravm import Service as ImageService
 from tundravm._modules import execution as gate
+from tundravm.components import DevAccess
 from tundravm.declarative import (
     BootStep,
     Calendar,

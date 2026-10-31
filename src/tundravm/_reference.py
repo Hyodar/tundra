@@ -2,10 +2,11 @@
 and ``DIR/api.md``.
 
 ``cli.md`` is every command's ``--help`` (and every ``secrets`` action's) exactly as the
-parser prints it at a fixed width. ``api.md`` is every name of ``tundravm.__all__``,
-``tundravm.components.__all__`` and ``tundravm.testing.__all__``: its signature (a
+parser prints it at a fixed width. ``api.md`` has one section per public namespace
+(:data:`MODULES`), each listing every name of its ``__all__``: its signature (a
 dataclass's is its fields with their defaults), the first paragraph of its docstring, and
-a class's public methods and properties. Both are pure functions of the installed tundravm
+a class's public methods and properties. A name has one home, so an object exported by
+two namespaces is an error, not a cross-reference. Both are pure functions of the installed tundravm
 and the Python minor version (argparse's layout changes between them), so a committed copy
 is compared with a fresh one the way ``check --tree`` compares an mkosi tree.
 """
@@ -41,8 +42,19 @@ __all__ = [
 HELP_WIDTH = 100
 """The terminal width argparse formats the help for."""
 
-MODULES: tuple[str, ...] = ("tundravm", "tundravm.components", "tundravm.testing")
-"""The modules whose ``__all__`` the API reference covers, in order."""
+MODULES: tuple[str, ...] = (
+    "tundravm",
+    "tundravm.ports",
+    "tundravm.systemd",
+    "tundravm.components",
+    "tundravm.storage",
+    "tundravm.secrets",
+    "tundravm.sources",
+    "tundravm.errors",
+    "tundravm.testing",
+)
+"""The public namespaces, in the order an image author meets them: the API reference
+covers each one's ``__all__``, and every public name is in exactly one of them."""
 
 REGENERATE = "uv run python -m tundravm._reference docs/reference"
 """The command that rewrites the committed reference."""
@@ -338,7 +350,10 @@ def _entry(name: str, obj: object) -> list[str]:
 
 
 def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
-    """``api.md``: one section per module, its ``__all__`` sorted, each object documented once."""
+    """``api.md``: one section per module, its ``__all__`` sorted.
+
+    An object two modules export is a :class:`ValueError`: each public name has one home.
+    """
     loaded = [importlib.import_module(name) for name in modules]
     lines = _header("API reference", "the `__all__` of `" + "`, `".join(modules) + "`")
     lines += [f"- [`{module.__name__}`](#{slug(module.__name__)})" for module in loaded]
@@ -350,10 +365,12 @@ def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
         for name in names:
             obj = getattr(module, name)
             if _kind(obj) != "value" and id(obj) in seen:
-                lines += [f"### `{name}`", "", f"The same object as {seen[id(obj)]}.", ""]
-                continue
+                raise ValueError(
+                    f"{module.__name__}.{name} is the same object as {seen[id(obj)]}: "
+                    "a public name has one home."
+                )
             if _kind(obj) != "value":
-                seen[id(obj)] = f"`{module.__name__}.{name}`"
+                seen[id(obj)] = f"{module.__name__}.{name}"
             lines += _entry(name, obj)
     return "\n".join(lines)
 

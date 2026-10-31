@@ -13,7 +13,10 @@ image builds: one UKI wrapped for QEMU and for each cloud, whose glue is gated a
     tundravm build examples/02_variants.py --profile production
 """
 
-from tundravm import TCP, DevAccess, File, Image, Profile, Resources, Service
+from tundravm import File, Image, Profile, Service
+from tundravm.components import DevAccess
+from tundravm.ports import TCP
+from tundravm.systemd import Resources
 
 motd = File.text("/etc/motd", "production\n")
 

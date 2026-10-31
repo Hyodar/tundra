@@ -22,8 +22,9 @@ network script, and the evidence service is ``Tdxs()``. The surge prover
 
 from __future__ import annotations
 
-from tundravm import Debian, Git, Image, Kernel
+from tundravm import Debian, Image, Kernel
 from tundravm.declarative import Resources
+from tundravm.sources import Git
 
 ASSETS = Resources.from_module(__name__)
 

@@ -102,7 +102,7 @@ class Image(Located):
 
     **Implied, with no further words, and the one escape hatch for each:**
 
-    - *Debian trixie from the locked snapshot* (:data:`~tundravm.image._values.LOCKED_SNAPSHOT`),
+    - *Debian trixie from the locked snapshot* (:data:`~tundravm._image._values.LOCKED_SNAPSHOT`),
       the one tested baseline. Escape: ``base=Debian("trixie", snapshot="...")``.
     - *A measured UKI* with the curated module set: ``tdx_guest``, virtio, NVMe, Hyper-V,
       gVNIC, plus whatever each target needs. Escape: ``kernel=Kernel.default(modules=...)``
@@ -113,7 +113,7 @@ class Image(Located):
       is an ordinary declaration, so a ``Profile`` change removes or edits it by reference.
     - *A firewall that drops inbound traffic* except the ports services declare with
       ``expose=`` and the management port
-      :data:`~tundravm.image._values.MANAGEMENT_PORT` (8745), which every image reserves;
+      :data:`~tundravm._image._values.MANAGEMENT_PORT` (8745), which every image reserves;
       ``secret-delivery`` listens on it in an image with an operator- or broker-unlocked
       volume, or with secrets. Escape: ``expose=`` to open a port,
       ``network=Network(egress=Egress(...))`` to filter outbound too.

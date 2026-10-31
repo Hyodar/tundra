@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Final, Literal, get_args
 
 from tundravm import check as _check
+from tundravm._reporting import Event, Progress, Reporter, TextReporter
 from tundravm._source import (
     SOURCES_DIRNAME,
     GitSource,
@@ -43,12 +44,7 @@ from tundravm.backends import (
     Requirement,
 )
 from tundravm.backends.base import BuildBackend, is_mkosi_state
-from tundravm.errors import (
-    ArtifactError,
-    LockfileError,
-    PolicyError,
-    ValidationError,
-)
+from tundravm.errors import ArtifactError, LockfileError, PolicyError, ValidationError
 from tundravm.lockfile import (
     LockedFetch,
     Lockfile,
@@ -62,7 +58,6 @@ from tundravm.models import (
     BakeResult,
     ProfileBuildResult,
 )
-from tundravm.observability import Event, Progress, Reporter, TextReporter
 from tundravm.toolchain import TOOLCHAIN_UPDATE, lock_toolchain
 
 from . import _bake, _compile

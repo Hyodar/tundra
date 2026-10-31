@@ -19,10 +19,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, cast
 
+from ._reporting import display_path
 from .backends.base import BuildBackend
 from .declarative.model import Recipe
 from .errors import TdxError, ValidationError
-from .observability import display_path
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -246,7 +246,7 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Recipe:
 
 def _as_recipe(value: object) -> Recipe | None:
     """*value* as the internal recipe when it is an ``Image`` or already a recipe."""
-    from tundravm.image import Image, recipe_of
+    from tundravm._image import Image, recipe_of
 
     if isinstance(value, Recipe):
         return value
@@ -257,7 +257,7 @@ def _as_recipe(value: object) -> Recipe | None:
 
 def _discover_image(module: ModuleType, recipe_path: Path) -> Recipe | None:
     """The ``Image`` the file binds, as the internal recipe; ``None`` when it binds none."""
-    from tundravm.image import Image, recipe_of
+    from tundravm._image import Image, recipe_of
 
     for name in IMAGE_NAMES:
         value = getattr(module, name, None)
@@ -385,7 +385,7 @@ def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) 
 
 
 def _public_names(module: ModuleType) -> list[str]:
-    from tundravm.image import Image
+    from tundravm._image import Image
 
     return sorted(
         name

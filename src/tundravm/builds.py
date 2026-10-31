@@ -48,6 +48,7 @@ from typing import Any, Literal, cast
 
 from . import __version__
 from . import manifest as mf
+from ._reporting import Reporter
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
 from .declarative._compile import emit, mkosi_argv
@@ -71,7 +72,6 @@ from .errors import (
     ValidationError,
 )
 from .models import OutputTarget
-from .observability import Reporter
 
 Kind = Literal["production", "development"]
 KINDS: tuple[Kind, ...] = ("production", "development")
