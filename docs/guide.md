@@ -56,7 +56,8 @@ $ uv run tundravm check
 | `policies/README.md` | with `--template prover`: where approved verifier policies go |
 | `.github/workflows/tundravm.yml` | with `--ci`: see [CI](#ci) |
 
-Run the commands with `uv run` inside the project. The examples below leave it out.
+Run the commands with `uv run` inside the project. The examples below leave it out. Commit
+`uv.lock`. `uv add --editable PATH/TO/tundravm` works against a local checkout instead.
 
 ### `[tool.tundravm]`
 
@@ -256,7 +257,10 @@ cannot fix.
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
 A built binary is a valid first argv element. `GoBinary`, `CargoBinary` and `Build` pull
-their build and install into the image, and `binary.executable` is the installed path.
+their build and install into the image, and `binary.executable` is the installed path. Go
+builds with `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with
+`cargo auditable build --frozen` and reproducible `rustflags`, so the SBOM can read the crate
+graph from the binary.
 
 ## Components
 
@@ -609,6 +613,13 @@ distribution, release and snapshot, tundravm, the measurement tools). Commit it.
 
 `check` reports a `source-unpinned` warning for each source the lock does not pin yet.
 
+The build sandbox never fetches a pinned source. `build` checks each one out on the host, as
+you, into `build/<image>/.work/`, verifies a reused checkout against its pin, and mounts the
+checkouts into the build. When the host has the toolchain, Go, Cargo and .NET dependencies
+are prefetched there too, so `build --offline` can run on a machine without network once a
+connected build filled the workspace. A modified checkout fails with `E_SOURCE`;
+`build --clean-cache` starts the workspace afresh.
+
 ## Build
 
 ```console
@@ -883,7 +894,7 @@ the pull request. The `build` job needs read access to tundra-tools.
 ## When something fails
 
 Every error prints `error [CODE]: message`, an optional `Hint:` and context, and exits 2.
-A failed check exits 1. With `--json`, stderr gets one JSON line instead
+A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did you mean". With `--json`, stderr gets one JSON line instead
 (`tundravm.error/1`). `--traceback` raises with the Python traceback.
 
 | Code | Usually | Do |

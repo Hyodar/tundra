@@ -68,9 +68,3 @@ def test_policy_network_offline_locks_without_the_network() -> None:
 
     with pytest.raises(LockfileError, match="Cannot lock offline"):
         lock(recipe)
-
-
-def test_policy_doc_includes_ci_guidance() -> None:
-    doc = Path("docs/policy.md").read_text(encoding="utf-8")
-    assert "require_frozen_lock" in doc
-    assert "mutable_ref_policy" in doc

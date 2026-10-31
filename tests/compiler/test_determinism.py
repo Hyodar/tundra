@@ -1,4 +1,4 @@
-"""What the tree normalizes for reproducible images (docs/reproducibility.md).
+"""What the tree normalizes for reproducible images (docs/guide.md, "The mkosi tree").
 
 The payload's finalize ends with the deterministic accounts step; repart builds every
 disk from the tree's fixed ``Seed=``; the azure and gcp wrappers' postoutput converters

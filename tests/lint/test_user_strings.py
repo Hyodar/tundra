@@ -100,9 +100,13 @@ RENAMED_KEYWORDS = {
 """Keyword arguments of these calls that no longer exist, with their replacement."""
 DOCS = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
 """The current docs; ``docs/design`` keeps the dated design records as written."""
-CLI_DOCS = [REPO_ROOT / "README.md", REPO_ROOT / "docs" / "cli.md"]
-"""The docs rewritten around the twelve commands (the guide, API and tutorial follow in
-gate 6)."""
+CLI_DOCS = [
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "docs" / "guide.md",
+    REPO_ROOT / "docs" / "trust.md",
+    REPO_ROOT / "docs" / "reference" / "cli.md",
+]
+"""The docs that name commands: the README, the guide, the trust page, the CLI reference."""
 
 
 def _runtime_strings(tree: ast.Module) -> Iterator[tuple[int, str]]:
